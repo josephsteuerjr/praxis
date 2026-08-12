@@ -47,13 +47,19 @@ cp env.bundle.example .env
 
 ### 4. Обновление
 
+`git pull` обновляет только отслеживаемый код. `.env`, Telegram-сессия и каталоги
+`memory/`, `soul/`, `workspace/` намеренно игнорируются Git и остаются на машине.
+Если ты правил отслеживаемые файлы сам, сначала проверь `git status` и разрули
+конфликт, затем:
+
 ```bash
 cd /opt/praxis
-git pull
+git pull --ff-only
 docker compose -f docker-compose.bundle.yml up -d --build
 ```
 
-Каталог с состоянием при `git pull` не трогается (всё в `.gitignore`).
+`--ff-only` не создаёт неожиданный merge-коммит: при расхождении истории команда
+остановится и попросит сначала разобраться.
 
 ---
 

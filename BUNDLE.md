@@ -132,7 +132,13 @@ docker compose -f docker-compose.bundle.yml exec ollama ollama pull nomic-embed-
 люди), `soul/` (её самоописание), `workspace/` (рабочие файлы и inbox), `praxis.session`
 (вход в Telegram). Удалить контейнер безопасно; удалить каталог — значит стереть её.
 
-Обновление: `git pull && docker compose -f docker-compose.bundle.yml up -d --build`.
+## Перед обновлением
+
+`git pull` трогает только отслеживаемые файлы. Если ты сам правил `soul/`, `workspace/`,
+`memory/` или compose-конфигурацию, сначала сохрани их отдельно или проверь
+`git status --ignored`: эти каталоги и `.env` намеренно остаются локальным состоянием.
+
+После этого обновление — `git pull && docker compose -f docker-compose.bundle.yml up -d --build`.
 Каталог с состоянием при этом не трогается.
 
 ## Если не поднялось
