@@ -25,6 +25,7 @@ PASS 16.3: рельсы этой мастерской продублирован
 
 from __future__ import annotations
 
+import praxis_time
 import ast
 import datetime as _dt
 import hashlib
@@ -193,7 +194,7 @@ def inbox_accept(name: str, size_bytes: int, day: str | None = None, *,
     if used + size_mb > INBOX_TOTAL_MB:
         return None, (f"квота inbox исчерпана ({used:.0f}МБ из {INBOX_TOTAL_MB}МБ) — "
                       "не качаю, пора прибраться в workspace/inbox")
-    stamp = day or _dt.date.today().strftime("%Y%m%d")
+    stamp = day or praxis_time.today().strftime("%Y%m%d")
     safe = inbox_safe_name(name)
     directory = _inbox_chat_directory(scope=scope, chat_id=chat_id,
                                       chat_kind=chat_kind, chat_label=chat_label)
@@ -292,7 +293,7 @@ def project_create(name: str, brief: str = "") -> str:
     d.mkdir(parents=True)
     (d / "README.md").write_text(
         f"# {name}\n\n{(brief or '').strip() or '(бриф не задан)'}\n\n"
-        f"_создан {_dt.date.today().isoformat()} мастерской Praxis_\n", encoding="utf-8")
+        f"_создан {praxis_time.day_key()} мастерской Praxis_\n", encoding="utf-8")
     r = _git(d, "init", "-q")
     if r.returncode == 0:
         _git(d, "add", "-A")

@@ -14,6 +14,8 @@ import os
 import shutil
 import tempfile
 import unittest
+
+import praxis_time
 from pathlib import Path
 
 import appetite
@@ -54,7 +56,7 @@ class Base(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _write_usage(self, role="voice", t_in=0, t_out=0, calls=1, models=None):
-        day = _dt.date.today().isoformat()
+        day = praxis_time.day_key()
         rec = {"in": t_in, "out": t_out, "calls": calls, "fallback": 0}
         if models:
             rec["models"] = models
@@ -102,7 +104,8 @@ class TestHerHand(Base):
         self.assertIn("моё принятое состояние", hold)        # теперь это ЕЁ состояние
         md = appetite.CONTRACT_MD.read_text(encoding="utf-8")
         self.assertIn("моё толкование", md)
-        j = appetite.JOURNAL_DIR / f"{_dt.date.today().isoformat()}.md"
+        # День дневника — её, а не системный (окно 00:00–04:00 по Самаре).
+        j = appetite.JOURNAL_DIR / f"{praxis_time.day_key()}.md"
         self.assertIn("[аппетит]", j.read_text(encoding="utf-8"))
 
     def test_interpret_rejects_alien_mode(self):

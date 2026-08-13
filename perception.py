@@ -25,6 +25,7 @@ praxis | egor.
 from __future__ import annotations
 
 import datetime as _dt
+import praxis_time
 import json
 import logging
 import os
@@ -222,11 +223,16 @@ def reset_knob(knob: str, *, by: str = "praxis") -> dict:
 def _journal(msg: str) -> None:
     try:
         JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
-        p = JOURNAL_DIR / f"{_dt.date.today().isoformat()}.md"
+        # ⚠ ДЕНЬ И ЧАС — ЕЁ, а не контейнера. `date.today()` и `datetime.now()` читают
+        # СИСТЕМНЫЙ пояс, а в контейнере задан только PRAXIS_TZ: с 00:00 до 04:00 по
+        # Самаре запись уходила во ВЧЕРАШНИЙ файл, а час внутри строки был UTC.
+        # Имя файла и штамп строки берутся из ОДНОГО источника: иначе расхождение
+        # переезжает внутрь файла, где его труднее заметить.
+        p = JOURNAL_DIR / f"{praxis_time.day_key()}.md"
         if not p.exists():
-            p.write_text(f"# {_dt.date.today().isoformat()}\n\n", encoding="utf-8")
+            p.write_text(f"# {praxis_time.day_key()}\n\n", encoding="utf-8")
         with p.open("a", encoding="utf-8") as fh:
-            fh.write(f"- {_dt.datetime.now():%H:%M} [восприятие] {msg}\n")
+            fh.write(f"- {praxis_time.now():%H:%M} [восприятие] {msg}\n")
     except Exception:
         log.debug("journal perception не удался", exc_info=True)
 
@@ -314,7 +320,7 @@ def _maybe_compact_skips() -> None:
 def note_ambient(chat_id) -> None:
     """Фоновый групповой поток: среда, не пропуск. RAM-счётчик, персист раз в минуту."""
     try:
-        day = _dt.date.today().isoformat()
+        day = praxis_time.day_key()
         d = _AMBIENT.setdefault(day, {})
         d[str(chat_id)] = d.get(str(chat_id), 0) + 1
         for stale in [k for k in _AMBIENT if k != day]:
@@ -330,7 +336,7 @@ def note_ambient(chat_id) -> None:
 
 
 def ambient_today() -> dict:
-    day = _dt.date.today().isoformat()
+    day = praxis_time.day_key()
     ram = _AMBIENT.get(day) or {}
     disk = (_state().get("ambient") or {}).get(day) or {}
     out = dict(disk)
@@ -356,7 +362,8 @@ def recent_skips(n: int = 12) -> list[dict]:
 
 def skips_today() -> dict:
     """Счёт пропусков за сегодня по классам (по записям кольца; схлопнутые — по счётчику)."""
-    midnight = _dt.datetime.combine(_dt.date.today(), _dt.time.min).timestamp()
+    # ⚠ Полночь ЕЁ суток, а не контейнера: граница «сегодня» уезжала на четыре часа.
+    midnight = praxis_time.day_start().timestamp()
     acc: dict[str, int] = {}
     for rec in recent_skips(SKIPS_KEEP):
         if float(rec.get("ts") or 0) >= midnight:

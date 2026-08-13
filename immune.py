@@ -25,6 +25,7 @@ warn честно означает «не смог оценить; разбер�
 from __future__ import annotations
 
 import datetime as _dt
+import praxis_time
 import json
 import logging
 import os
@@ -221,11 +222,13 @@ def _journal(msg: str) -> None:
     """След в её дневнике (s2, [иммунитет]) — видно в «Мыслях»/«Пульсе»."""
     try:
         JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
-        p = JOURNAL_DIR / f"{_dt.date.today().isoformat()}.md"
+        # ⚠ День и час — ЕЁ: см. praxis_time. Имя файла и штамп строки из одного
+        # источника, иначе расхождение переезжает внутрь файла.
+        p = JOURNAL_DIR / f"{praxis_time.day_key()}.md"
         if not p.exists():
-            p.write_text(f"# {_dt.date.today().isoformat()}\n\n", encoding="utf-8")
+            p.write_text(f"# {praxis_time.day_key()}\n\n", encoding="utf-8")
         with p.open("a", encoding="utf-8") as fh:
-            fh.write(f"- {_dt.datetime.now():%H:%M} (s2) [иммунитет] {msg}\n")
+            fh.write(f"- {praxis_time.now():%H:%M} (s2) [иммунитет] {msg}\n")
     except Exception:
         log.debug("journal иммунитета не удался", exc_info=True)
 

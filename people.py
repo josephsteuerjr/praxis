@@ -17,6 +17,7 @@ Markdown остаётся источником правды, человекоч�
 
 from __future__ import annotations
 
+import praxis_time
 import os
 
 import datetime as _dt
@@ -55,7 +56,9 @@ _BULLET = re.compile(r"^[-*]\s+")
 
 
 def _today() -> str:
-    return _dt.date.today().isoformat()
+    # ⚠ Общий день модуля: им же датируются факты досье. Считается ЕЁ сутками —
+    # иначе ночная запись получает вчерашнее число, а возраст нити врёт на день.
+    return praxis_time.day_key()
 
 
 def _slug(name: str) -> str:
@@ -589,7 +592,7 @@ def unpark_loops(slug: str, only_expired: bool = False) -> int:
 
 def loops_stats() -> dict:
     """Сводка нитей по всем людям: {open, parked, oldest_open_days|None} — для STATE."""
-    today = _dt.date.today()
+    today = praxis_time.today()
     open_n = parked = 0
     oldest: int | None = None
     date_re = re.compile(r"_\((\d{4}-\d{2}-\d{2})\)_")

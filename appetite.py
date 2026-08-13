@@ -24,6 +24,7 @@ memory/.state/appetite.json — учёт, пересобираемый; атом
 from __future__ import annotations
 
 import datetime as _dt
+import praxis_time
 import json
 import logging
 import os
@@ -169,7 +170,7 @@ def observed_today() -> dict:
     """Локальный usage и фактические окна Codex, если relay смог их прочитать."""
     tokens_in = tokens_out = calls = 0
     try:
-        day = llm.usage_days(1).get(_dt.date.today().isoformat(), {})
+        day = llm.usage_days(1).get(praxis_time.day_key(), {})
         for rec in day.values():
             tokens_in += int(rec.get("in", 0))
             tokens_out += int(rec.get("out", 0))
@@ -191,7 +192,7 @@ def estimated_cost_today() -> float | None:
         pricing = llm.pricing()
         if not pricing:
             return None
-        day = llm.usage_days(1).get(_dt.date.today().isoformat(), {})
+        day = llm.usage_days(1).get(praxis_time.day_key(), {})
         if not day:
             return 0.0
         snap = llm.snapshot()
@@ -560,11 +561,16 @@ def _contract_append(title: str, body: str) -> None:
 def _journal(msg: str) -> None:
     try:
         JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
-        p = JOURNAL_DIR / f"{_dt.date.today().isoformat()}.md"
+        # ⚠ ДЕНЬ И ЧАС — ЕЁ, а не контейнера. `date.today()` и `datetime.now()` читают
+        # СИСТЕМНЫЙ пояс, а в контейнере задан только PRAXIS_TZ: с 00:00 до 04:00 по
+        # Самаре запись уходила во ВЧЕРАШНИЙ файл, а час внутри строки был UTC.
+        # Имя файла и штамп строки берутся из ОДНОГО источника: иначе расхождение
+        # переезжает внутрь файла, где его труднее заметить.
+        p = JOURNAL_DIR / f"{praxis_time.day_key()}.md"
         if not p.exists():
-            p.write_text(f"# {_dt.date.today().isoformat()}\n\n", encoding="utf-8")
+            p.write_text(f"# {praxis_time.day_key()}\n\n", encoding="utf-8")
         with p.open("a", encoding="utf-8") as f:
-            f.write(f"- {_dt.datetime.now():%H:%M} (s2) [аппетит] {msg}\n")
+            f.write(f"- {praxis_time.now():%H:%M} (s2) [аппетит] {msg}\n")
     except Exception:
         log.debug("appetite: дневник не дописался", exc_info=True)
 

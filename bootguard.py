@@ -20,6 +20,7 @@ Praxis — boot-супервизор для безопасного само-из
 from __future__ import annotations
 
 import datetime as _dt
+import praxis_time
 import json
 import logging
 import os
@@ -107,12 +108,13 @@ def journal(msg: str) -> None:
     """Внятная строка ей в дневник (она читает его на старте). Не зависит от ядра."""
     try:
         JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
-        day = _dt.date.today().isoformat()
+        # ⚠ День — ЕЁ: см. praxis_time.
+        day = praxis_time.day_key()
         p = JOURNAL_DIR / f"{day}.md"
         if not p.exists():
             p.write_text(f"# {day}\n\n", encoding="utf-8")
         with p.open("a", encoding="utf-8") as fh:
-            fh.write(f"- {_dt.datetime.now():%H:%M} (s3) [boot] {msg}\n")
+            fh.write(f"- {praxis_time.now():%H:%M} (s3) [boot] {msg}\n")
     except Exception:
         log.debug("journal не удался", exc_info=True)
 

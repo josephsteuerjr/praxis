@@ -2066,11 +2066,18 @@ class RunManager:
                     else:
                         target = "paused"
                         reason = "process restarted; no uncertain side effect observed"
+                    # Машинный вид паузы едет рядом с прозой. `work_loop` — источник этих
+                    # двух слов, здесь они литералами намеренно: хранилище не должно
+                    # зависеть от политики. Расхождение стережёт тест (test_work_loop:
+                    # словарь видов паузы совпадает с тем, что пишет хранилище).
+                    details = {"outstanding_call_ids": sorted(outstanding),
+                               "uncertain_call_ids": sorted(uncertain),
+                               "trailing_status_flips": flips}
+                    if target == "paused":
+                        details["pause_kind"] = "process_recovery"
                     recovered = self.transition(
                         run_id, target, expected="running", reason=reason,
-                        details={"outstanding_call_ids": sorted(outstanding),
-                                 "uncertain_call_ids": sorted(uncertain),
-                                 "trailing_status_flips": flips},
+                        details=details,
                     )
                     report = {"run_id": run_id, "from": "running", "to": target,
                               "revision": recovered.get("revision")}

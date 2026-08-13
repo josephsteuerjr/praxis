@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import social_pulse
 
@@ -104,11 +105,42 @@ class SocialPulseTests(unittest.TestCase):
             self.assertIn("same_peer_last_hours=", reason)
             self.assertTrue(social_pulse.allow_outbound(99, now=3700, path=self.path)[0])
 
-    def test_goal_is_active_but_silence_is_not_failure(self):
+    def test_goal_is_her_own_hour_and_silence_needs_no_report(self):
+        """Час просит ЕЁ ПЛАН, а не социального исхода.
+
+        ⚠ Прежняя редакция теста пиняла дословно «несколько разговоров» и «ничего не
+        отправлять» — то есть закрепляла контрактом ровно ту рамку, которая заставляла
+        каждый час производить социальный исход. Теперь пиним СВОЙСТВО, а не слова:
+        отправка названа возможным исходом, молчание не требует отчёта, обстановка
+        доезжает справкой.
+        """
         text = social_pulse.goal("- tgfu_1 [pending]")
-        self.assertIn("несколько разговоров", text)
-        self.assertIn("ничего не отправлять", text)
+        # обстановка по-прежнему доезжает
         self.assertIn("tgfu_1", text)
+        # час не называет себя социальным и не предлагает написать первым делом
+        self.assertNotIn("социальный импульс", text.lower())
+        head = text.split("\n\n", 1)[0]
+        self.assertNotIn("писать", head)
+        # молчание — полноценный исход, отчёта не требует
+        self.assertIn("молчание", text)
+        self.assertIn("не нужно", text)
+        # отправка осталась возможной, но как исход, а не задание
+        self.assertIn("один из", text)
+        # справка, а не лимит и не мораль — это свойство не менялось
+        self.assertIn("не лимит", text)
+        self.assertIn("Автор решения — ты", text)
+
+    def test_goal_carries_her_plan_when_the_ledger_has_one(self):
+        """План берётся из её леджера намерений; леджера нет — блока просто нет."""
+        with mock.patch.object(social_pulse, "_plan_block", return_value=""):
+            bare = social_pulse.goal("")
+        self.assertNotIn("Твои живые намерения", bare)
+        with mock.patch.object(social_pulse, "_plan_block",
+                               return_value="- довести прибор\n  следующий шаг: перемерить"):
+            with_plan = social_pulse.goal("")
+        self.assertIn("Твои живые намерения", with_plan)
+        self.assertIn("довести прибор", with_plan)
+        self.assertIn("следующий шаг: перемерить", with_plan)
 
     def test_recovery_projection_is_idempotent_without_active_context(self):
         pulse = social_pulse.begin(now=100, path=self.path)

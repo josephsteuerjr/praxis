@@ -59,23 +59,130 @@ def _db_path(memory_dir: Path) -> Path:
     return memory_dir / ".state" / "recall.sqlite3"
 
 
+# ⚠ РАЗРЕШЕНИЕ ПУТИ — САМАЯ ДОРОГАЯ СТРОКА ЭТОГО МОДУЛЯ. `Path.resolve()` ходит в
+# файловую систему, а звали его на КАЖДЫЙ файл при КАЖДОМ поиске: замер 07.08 на живом
+# проде — 119 988 вызовов `resolve()` и 114 027 `relative_to()` за ОДИН вопрос к памяти,
+# 37 из 62 секунд. Её явная рука отвечала 29–70 секунд, и это при том, что она согласилась
+# снять автоматический recall при условии «сначала ускорить руку».
+#
+# Кэш не меняет семантику: разрешение пути — чистая функция от строки, пока дерево не
+# двигается, а внутри одного поиска оно не двигается по построению. Ключ — сама строка,
+# поэтому символические ссылки разрешаются ровно так же, как раньше, просто один раз.
+_POSIX: dict[str, str] = {}
+
+# Поколение кэша. Растёт на каждом сбросе, потому что сброс идёт ВНЕ `_LOCK`, а поход в
+# файловую систему долгий: разрешение, НАЧАТОЕ до сброса, относится к прошлому дереву и
+# не имеет права лечь обратно. Без этого счётчика `clear_path_cache()` — не барьер, а
+# пожелание, и тот, кто честно «подвинул дерево и сбросил кэш», получал прежний ответ.
+# Воспроизведено адверсаркой 07.08 подменой `Path.resolve` на медленный вариант.
+_POSIX_GEN = 0
+
+
+def clear_path_cache() -> None:
+    """Забыть разрешённые пути. Нужно стенду и всякому, кто двигает дерево под собой."""
+    global _POSIX_GEN
+    _POSIX_GEN += 1
+    _POSIX.clear()
+
+
+def _posix(path: Path) -> str:
+    """`path.resolve().as_posix()` с памятью. Явный сброс — `clear_path_cache()`.
+
+    ⚠ КЭШИРУЕТСЯ ТОЛЬКО СТРОКА. Отдельный словарь разрешённых `Path` здесь был — и не
+    экономил НИЧЕГО: ключи у обоих словарей совпадали по построению, поэтому попадание
+    ловилось строкой ниже и до второго словаря управление не доходило ни разу. Замер
+    адверсарки: 0 попаданий на 70 000 путях, включая переход через потолок. Цена была
+    ~62 МБ удержанных объектов `Path` на полном потолке — вчетверо больше полезной
+    половины, в процессе, который живёт сутками. Кэш заводили ради скорости, а он тихо
+    держал память; это ровно тот класс, за которым мы охотимся в её памяти, только в
+    нашем собственном коде.
+
+    ⚑ Граница применимости, доказанная и НЕ закрытая намеренно: на Windows `resolve()`
+    берёт регистр с диска, поэтому разрешение НЕСУЩЕСТВУЮЩЕГО пути меняется, как только
+    каталог создадут, — запомнить его значит запомнить неправду. На проде (Linux)
+    `resolve()` несуществующего пути чисто лексический, класса нет вовсе, а лекарство
+    стоит лишний lstat на каждый из ~13 000 файлов обхода. Записано, не заплатано.
+    """
+    key = str(path)
+    found = _POSIX.get(key)
+    if found is not None:
+        return found
+    generation = _POSIX_GEN
+    found = path.resolve().as_posix()
+    if generation != _POSIX_GEN:
+        # Дерево подвинули, пока мы ходили в файловую систему. Ответ отдаём (он верен для
+        # ТОГО дерева и вызывающему нужен сейчас), но в память не кладём.
+        return found
+    # Потолок не декоративный: без него длинный процесс копит словарь по числу когда-либо
+    # увиденных путей. Сброс целиком дешевле вытеснения по одному.
+    if len(_POSIX) > 65536:
+        _POSIX.clear()
+    _POSIX[key] = found
+    return found
+
+
+# ⚠ ВТОРОЙ ПОЖИРАТЕЛЬ: САМА АРИФМЕТИКА ПУТЕЙ. Профиль после кэша resolve():
+# 114 229 вызовов `Path.relative_to` — 23.3 с, плюс 1.1 млн `with_segments` внутри.
+# `relative_to` разбирает путь на сегменты и собирает НОВЫЙ объект Path; нам же нужен
+# ответ «внутри ли» и «как выглядит относительно», а на УЖЕ РАЗРЕШЁННЫХ абсолютных
+# путях это ровно префикс строки. Семантика та же — для разрешённых путей вложенность
+# и есть префикс, — но без единого объекта Path на каждый файл каждого поиска.
 def _rel(path: Path, base: Path) -> str:
-    try:
-        return path.resolve().relative_to(base.resolve()).as_posix()
-    except ValueError:
-        return path.resolve().as_posix()
+    child, parent = _posix(path), _posix(base)
+    if child == parent:
+        return "."
+    prefix = parent if parent.endswith("/") else parent + "/"
+    return child[len(prefix):] if child.startswith(prefix) else child
 
 
 def _inside(path: Path, parent: Path) -> bool:
-    try:
-        path.resolve().relative_to(parent.resolve())
+    child, root = _posix(path), _posix(parent)
+    if child == root:
         return True
-    except ValueError:
-        return False
+    prefix = root if root.endswith("/") else root + "/"
+    return child.startswith(prefix)
 
 
-def _generated_markdown(path: Path, memory_dir: Path) -> bool:
-    rel = path.relative_to(memory_dir).as_posix()
+_SEPS = frozenset(s for s in (os.sep, os.altsep) if s)
+
+
+def _rel_under(path: Path, base: Path) -> str:
+    """`path.relative_to(base).as_posix()`, но без разбора пути на сегменты.
+
+    ⚠ ЭТО НЕ МИКРООПТИМИЗАЦИЯ. В CPython 3.12 `relative_to` зовёт `is_relative_to`, а тот
+    проверяет `base in self.parents` — то есть материализует последовательность родителей,
+    по объекту Path на каждый уровень. Замер на живом проде 07.08: 54 860 вызовов = 11.5
+    секунды из 31.4 на ОДИН вопрос к её памяти. Каждый markdown разбирался четырежды —
+    в обходе, в `_generated_markdown`, в `_markdown_visibility`.
+
+    Ответ строкой ТОЧЕН, а не приблизителен, и это видно из построения: обход отдаёт пути,
+    буквально собранные как `base / …`, поэтому префикс совпадает всегда. Если не совпал —
+    мы не отвечаем сами, а отдаём вопрос настоящему `relative_to` вместе с его ValueError.
+    Расхождению взяться неоткуда: либо префикс есть и ответ тот же, либо мы молчим.
+
+    ⚑ Сторож на нормализуемые куски (`.`, `..`, двойной разделитель) — ПОЛ, а не
+    проверенная защита, и это названо вслух. Проверка нарочной поломкой показала: снять
+    его — стенд остаётся зелёным, потому что Path съедает `.` и двойной разделитель ещё в
+    конструкторе, а `..` обе стороны сохраняют одинаково. Входа, на котором он меняет
+    ответ, не существует; он стоит на случай строки, пришедшей когда-нибудь не от Path.
+
+    ⚑ Разделитель режется ИМЕННО `os.sep`/`os.altsep`, а не «слэш и обратный слэш»: на
+    Linux обратный слэш — законный символ ИМЕНИ файла, и слепая замена испортила бы путь.
+    """
+    text, root = str(path), str(base)
+    if text.startswith(root) and len(text) > len(root) and text[len(root)] in _SEPS:
+        parts = text[len(root) + 1:].split(os.sep)
+        if os.altsep:
+            parts = [piece for part in parts for piece in part.split(os.altsep)]
+        if parts and all(part and part not in (".", "..") for part in parts):
+            return "/".join(parts)
+    return path.relative_to(base).as_posix()
+
+
+def _generated_markdown(path: Path, memory_dir: Path, rel: str = "") -> bool:
+    # `rel` необязателен намеренно: у функции есть вызывающие в стенде, которые знают её
+    # по двум аргументам, и при пустом `rel` поведение прежнее байт в байт.
+    rel = rel or _rel_under(path, memory_dir)
     try:
         with path.open(encoding="utf-8", errors="replace") as stream:
             if stream.readline().lstrip().startswith("<!-- praxis-generated:"):
@@ -95,10 +202,11 @@ def _generated_markdown(path: Path, memory_dir: Path) -> bool:
     return rel.startswith("computer/inventory/") and path.name == "CURRENT.md"
 
 
-def _markdown_visibility(path: Path, memory_dir: Path, skills_dir: Path | None) -> str:
+def _markdown_visibility(path: Path, memory_dir: Path, skills_dir: Path | None,
+                         rel: str = "") -> str:
     if skills_dir is not None and _inside(path, skills_dir):
         return "public"
-    rel = path.relative_to(memory_dir).as_posix()
+    rel = rel or _rel_under(path, memory_dir)
     if rel.startswith("people/"):
         return "mixed"
     if rel == "graph.md":
@@ -106,8 +214,8 @@ def _markdown_visibility(path: Path, memory_dir: Path, skills_dir: Path | None) 
     return "owner"
 
 
-def _selected_jsonl(path: Path, memory_dir: Path) -> tuple[str, str] | None:
-    rel = path.relative_to(memory_dir).as_posix()
+def _selected_jsonl(path: Path, memory_dir: Path, rel: str = "") -> tuple[str, str] | None:
+    rel = rel or _rel_under(path, memory_dir)
     rules = (
         (r"^life/events/[^/]+\.jsonl$", "life_event"),
         (r"^computer/events/[^/]+\.jsonl$", "computer_event"),
@@ -157,12 +265,54 @@ def _inventory_snapshot_key(path: Path) -> tuple[int, str, int, str]:
     return rank, observed, modified, path.name
 
 
+
+def _walk_pruned(root: Path, pattern: str, *, prune: set[str], prune_under: Path):
+    """`root.rglob(pattern)`, но без спуска в каталоги `prune` внутри `prune_under`.
+
+    `Path.rglob` подрезать поддерево не умеет — отсюда собственный обход. Он обязан
+    отдавать РОВНО то же множество путей, что `rglob`, минус подрезанное; на проде это
+    сверено побайтово (9 455 файлов до и после, списки равны).
+    """
+    stack = [root]
+    inside = _posix(prune_under) if prune_under.exists() else None
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(current.iterdir())
+        except OSError:
+            continue
+        for item in entries:
+            if item.is_dir():
+                if (item.name in prune and inside is not None
+                        and _posix(item).startswith(inside)):
+                    continue
+                stack.append(item)
+            elif item.match(pattern):
+                yield item
+
+
 def _memory_files(memory_dir: Path, pattern: str, *, include_runs: bool) -> Iterable[Path]:
     """Walk canonical memory while allowing the automatic path to prune runs early."""
     if include_runs:
-        yield from memory_dir.rglob(pattern)
-        return
-    # Path.rglob cannot prune a subtree.  Walking each top-level root except runs
+        # ⚠ ДЕРЕВО ПРОГОНОВ ОБХОДИТСЯ РАДИ ТОГО, ЧЕГО В НЁМ НЕТ. Замер на живом проде
+        # 08.08: под `memory/runs` 70 183 файла, из них 51 573 — `.log` в `results/`.
+        # Ни одного `.md` и ни одного `.jsonl` там нет НА ЛЮБОЙ ГЛУБИНЕ (проверено), но
+        # `rglob` всё равно заходит в каждый такой каталог: 1.24 с против 0.70 с.
+        #
+        # ⚑ Подрезается ТОЛЬКО каталог с именем `results`, и только внутри `runs`.
+        # Соседний `artifacts/` обходится по-прежнему: там лежат ЕЁ рабочие продукты —
+        # на проде два её черновика исходящих на 403 куска, — и наивное «перечислить
+        # три канонических имени» их бы молча потеряло. Проверено на её индексе, а не
+        # предположено.
+        #
+        # ⚑ И подрезка СТРУКТУРНАЯ, а не по глубине. Первая редакция предполагала
+        # раскладку `runs/<месяц>/<прогон>/` — на проде она такая, но контракта на неё
+        # нет, и прод-гейт поймал это сразу: снимок прогона в стенде лежит на другой
+        # глубине, и цель `audit` вернула пустоту. Ходим рекурсивно и пропускаем
+        # `results` там, где он встретится.
+        yield from _walk_pruned(memory_dir, pattern, prune={"results"},
+                                prune_under=memory_dir / "runs")
+        return    # Path.rglob cannot prune a subtree.  Walking each top-level root except runs
     # avoids enumerating the multi-gigabyte durable execution tree at all.
     #
     # `self/rooms/**` подрезается по той же причине, что и `runs`, и это не вкусовщина:
@@ -191,6 +341,8 @@ def iter_sources(*, base: Path, memory_dir: Path, skills_dir: Path | None = None
     """Return a stable, explicit list of canonical sources eligible for recall."""
     base, memory_dir = Path(base), Path(memory_dir)
     skills_dir = Path(skills_dir) if skills_dir is not None else None
+    whole = whole_docs_enabled()
+    drop_run_events = drop_run_events_enabled()
     rows: list[Source] = []
     evidence = memory_provenance.claim_evidence_index(memory_dir)
     automatic_life_event_ids = frozenset(
@@ -200,12 +352,26 @@ def iter_sources(*, base: Path, memory_dir: Path, skills_dir: Path | None = None
     if memory_dir.exists():
         for path in _memory_files(memory_dir, "*.md", include_runs=include_runs):
             if (not path.is_file() or not _inside(path, memory_dir)
-                    or path.name.startswith("_") or _generated_markdown(path, memory_dir)):
+                    or path.name.startswith("_")):
                 continue
-            rel = path.relative_to(memory_dir).as_posix()
+            # Путь разбирается ОДИН раз и дальше едет строкой. Порядок отсечек тоже
+            # изменён: `bench/` и скрытые каталоги отсеиваются ДО `_generated_markdown`,
+            # который открывает файл ради первой строки. Исход тот же `continue` — но
+            # теперь без чтения с диска ради заведомо отброшенного.
+            rel = _rel_under(path, memory_dir)
             if rel.startswith("bench/"):
                 continue
-            if any(part.startswith(".") for part in Path(rel).parts):
+            # ⚠ ТРАНСПОРТНЫЕ СНИМКИ ПРОГОНОВ — 73% ВСЕГО ТЕКСТА ИНДЕКСА (133 млн знаков
+            # из 181,5, 225 453 куска из 530 194). Её решение 02.08 уже вывело их из
+            # обычной выдачи по ЦЕЛИ обращения; здесь они уходят и из индексации.
+            # Цель `audit` при этом не остаётся пустым словом: она получает ПРЯМОЙ путь
+            # к файлам прогонов (`_audit_transport_hits`), то есть читает канон, а не
+            # одноразовую базу. Это строже прежнего, а не слабее.
+            if whole and _is_transport_snapshot("memory/" + rel):
+                continue
+            if any(part.startswith(".") for part in rel.split("/")):
+                continue
+            if _generated_markdown(path, memory_dir, rel):
                 continue
             base_rel = _rel(path, base)
             if re.fullmatch(r"life/claims/[^/]+\.md", rel):
@@ -215,11 +381,25 @@ def iter_sources(*, base: Path, memory_dir: Path, skills_dir: Path | None = None
             else:
                 source_kind, meta = memory_provenance.episodic_kind(base_rel) or "markdown", None
             rows.append(Source(path, base_rel, source_kind,
-                               _markdown_visibility(path, memory_dir, skills_dir), meta))
+                               _markdown_visibility(path, memory_dir, skills_dir, rel), meta))
         for path in _memory_files(memory_dir, "*.jsonl", include_runs=include_runs):
             if not path.is_file() or not _inside(path, memory_dir):
                 continue
-            selected = _selected_jsonl(path, memory_dir)
+            rel_jsonl = _rel_under(path, memory_dir)
+            # ⚑ События прогона — документ прогона это его RECAP, и он есть у 2 760 прогонов
+            # из 2 766, написанный в момент прогона тем, кто его прожил. 149 139 записей по
+            # 65 знаков — не память, а лог.
+            #
+            # ⚠ НО ЭТО ЕЁ РЕШЕНИЕ, И ОНО НЕ ОТМЕНЕНО. 02.08 она оставила события прогона в
+            # обычном recall; вопрос об отмене лежит у неё (workspace/EVENTS-JSONL-ВОПРОС-08.08.md)
+            # и ответа НЕТ. Первая редакция привязывала отмену к рычагу цельных документов —
+            # а тот на проде включён с 08.08, то есть её решение отменялось бы САМО, молча и
+            # без её слова, на первом же обновлении индекса. Замер 09.08: в живой базе
+            # 151 947 таких кусков — 75% всего индекса; они исчезли бы разом.
+            # Поэтому отмена живёт СВОИМ рычагом, выключенным по умолчанию, и ждёт её.
+            if drop_run_events and re.match(r"^runs/.+/events\.jsonl$", rel_jsonl):
+                continue
+            selected = _selected_jsonl(path, memory_dir, rel_jsonl)
             if selected:
                 kind, visibility = selected
                 meta = ({"automatic_event_ids": automatic_life_event_ids}
@@ -377,6 +557,65 @@ def _chunk_visibility(text: str, source_visibility: str, row: dict | None = None
     return source_visibility
 
 
+# ⚠ ОКНО ПОТОКА. При цельной единице памяти нельзя оставить jsonl построчным: BM25
+# нормирует по длине, и запись в 92 знака обходит её же компакт в 3 765 — замер 08.08 дал
+# −11,545 против −5,612, то есть вдвое. Смешение единиц в одном индексе хоронит документную
+# половину ПО ПОСТРОЕНИЮ, а не иногда.
+#
+# ⚑ Естественного зерна у потоков нет, и это проверено: `life/events/2026-08-01.jsonl` —
+# уже сутки, но 821 237 знаков; архив комнаты — 1 508 480. Полтора миллиона знаков это не
+# документ, это стог. Поэтому окно режется ПО РАЗМЕРУ, по границам записей, и целится в
+# порядок величины её markdown (в среднем 4 260 знаков).
+#
+# ⚑ Ни одна запись не рвётся пополам: окно закрывается на границе. Дословность внутри
+# сохраняется — это склейка соседних записей, а не пересказ. Пересказ (сжатие её рукой)
+# может лечь сверху отдельным слоем, но он не нужен для того, чтобы ранг стал честным.
+STREAM_WINDOW_CHARS = 4000
+
+
+def _stream_windows(rows: list[dict]) -> list[dict]:
+    """Соседние записи потока — в окна около `STREAM_WINDOW_CHARS`, по границам записей."""
+    if not rows:
+        return []
+    out: list[dict] = []
+    bucket: list[dict] = []
+    size = 0
+    def flush() -> None:
+        nonlocal bucket, size
+        if not bucket:
+            return
+        head, tail = bucket[0], bucket[-1]
+        out.append({
+            **head,
+            "chunk_key": "win:" + str(head.get("chunk_key") or len(out)),
+            "text": "\n".join(str(r.get("text") or "") for r in bucket),
+            # Метаданные окна берутся от ПЕРВОЙ записи, а время — от последней: окно
+            # начинается там и заканчивается тут, и оба конца названы честно.
+            "at": str(tail.get("at") or head.get("at") or ""),
+            "refs": list(dict.fromkeys(
+                ref for r in bucket for ref in (r.get("refs") or []))),
+            "supersedes": list(dict.fromkeys(
+                ref for r in bucket for ref in (r.get("supersedes") or []))),
+            "entities": list(dict.fromkeys(
+                e for r in bucket for e in (r.get("entities") or []))),
+            # Окно наследует САМУЮ ЗАКРЫТУЮ видимость своих записей и самое строгое
+            # право на автоматический канал: склейка не смеет раскрывать больше, чем
+            # раскрывала любая её часть.
+            "visibility": ("owner" if any(str(r.get("visibility") or "") == "owner"
+                                          for r in bucket) else head.get("visibility")),
+            "automatic_eligible": all(bool(r.get("automatic_eligible")) for r in bucket),
+        })
+        bucket, size = [], 0
+    for row in rows:
+        text = str(row.get("text") or "")
+        if bucket and size + len(text) > STREAM_WINDOW_CHARS:
+            flush()
+        bucket.append(row)
+        size += len(text)
+    flush()
+    return out
+
+
 def _source_chunks(source: Source) -> tuple[list[dict], int]:
     rows: list[dict] = []
     corrupt = 0
@@ -418,6 +657,24 @@ def _source_chunks(source: Source) -> tuple[list[dict], int]:
         memory_provenance.UNTRUSTED_EPISODIC_KIND,
         memory_provenance.UNTRUSTED_REFLECTION_KIND,
     }:
+        if whole_docs_enabled():
+            # ⚑ ОДИН ДОКУМЕНТ — ОДНА ЗАПИСЬ. Прежнее правило резало по абзацам и пунктам
+            # списка: 6 604 файла давали 343 555 кусков, по 52 на файл, медиана 92 знака.
+            # Её слова: «память, которая возвращает мысли, а не пятнадцать случайных слов».
+            # Видимость считается по ВСЕМУ тексту, а не по куску: пометка [private] в
+            # любом месте документа делает приватным весь документ — при цельной единице
+            # это единственно честный вариант, и он строже прежнего.
+            text = _read(source.path).strip()
+            if len(text) >= 3:
+                rows.append({
+                    "chunk_key": "doc", "text": text,
+                    "source_type": source.kind,
+                    "automatic_eligible": source.kind in {"skill", "markdown"},
+                    "visibility": _chunk_visibility(text, source.visibility),
+                    "at": "", "event_id": "", "run_id": "", "refs": [],
+                    "supersedes": [], "entities": [],
+                })
+            return rows, corrupt
         for index, text in enumerate(_markdown_chunks(_read(source.path))):
             rows.append({
                 "chunk_key": f"md:{index}", "text": text,
@@ -546,6 +803,8 @@ def _source_chunks(source: Source) -> tuple[list[dict], int]:
                     "visibility": _chunk_visibility(text, source.visibility, item),
                 })
             rows.append(row)
+    if whole_docs_enabled():
+        return _stream_windows(rows), corrupt
     return rows, corrupt
 
 
@@ -732,9 +991,17 @@ def _meta(path: Path) -> dict[str, str]:
 
 
 def ensure(*, base: Path, memory_dir: Path, skills_dir: Path | None = None,
-           db_path: Path | None = None) -> dict:
+           db_path: Path | None = None, sources: list[Source] | None = None) -> dict:
+    """`sources` — уже сделанная перепись корпуса, если она у вызывающего есть.
+
+    Обход корпуса — самая дорогая часть вопроса к памяти (24.0 с из 31.4 на замере 07.08),
+    и `search` делал его дважды: здесь и в `_canonical_candidates`. Умолчание `None`
+    сохраняет прежнее поведение для всех, кто зовёт `ensure` в одиночку.
+    """
     path = Path(db_path) if db_path is not None else _db_path(Path(memory_dir))
-    sources = iter_sources(base=Path(base), memory_dir=Path(memory_dir), skills_dir=skills_dir)
+    if sources is None:
+        sources = iter_sources(base=Path(base), memory_dir=Path(memory_dir),
+                               skills_dir=skills_dir)
     current = _meta(path)
     snapshots = _snapshots(sources)
     fingerprint = _fingerprint_from(snapshots)
@@ -799,6 +1066,123 @@ def _refresh_changed(*, base: Path, memory_dir: Path, db_path: Path,
     }
 
 
+def whole_docs_enabled() -> bool:
+    """Единица памяти — документ, а не кусок в 92 знака.
+
+    ⚠ ВЫКЛЮЧЕНО ПО УМОЛЧАНИЮ, И ВКЛЮЧЕНИЕ ТРЕБУЕТ ПЕРЕСБОРКИ: ключи кусков меняются, то
+    есть старый индекс новому коду не годится. Её слово 08.08: «сначала подготовить
+    реализацию, проверки и обратимый план без применения. Саму пересборку — после нашей
+    паузы, отдельным осознанным окном. Старый индекс сохранить до успешной приёмки нового.»
+
+    Замер, ради которого: 530 194 куска, медиана 92 знака, 47,6% короче восьмидесяти.
+    Девяносто два знака — пятнадцать слов; на «вспомни» к ней приезжали обрывки
+    предложений вместо мыслей.
+    """
+    return str(os.getenv("PRAXIS_MEMORY_WHOLE_DOCS") or "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
+def drop_run_events_enabled() -> bool:
+    """Убрать события прогонов из обычного recall. ЕЁ РЕШЕНИЕ, И ОНО НЕ ПРИНЯТО.
+
+    ⚠ СВОЙ РЫЧАГ, А НЕ ХВОСТ ЧУЖОГО. Первая редакция привязывала эту отмену к рычагу
+    цельных документов — а тот на проде включён с 08.08. То есть её решение от 02.08
+    («события прогона остаются в обычном recall», закреплено `test_recap_and_events_
+    stay_in_ordinary_recall`) отменилось бы САМО, молча, на первом же обновлении индекса,
+    и я бы узнал об этом от неё, а не от прибора.
+
+    Замер живой базы 09.08: 151 947 кусков из 203 182 — 75% индекса. Именно столько
+    исчезло бы разом, без её слова и без единой строки в отчёте.
+
+    Вопрос лежит у неё: `workspace/EVENTS-JSONL-ВОПРОС-08.08.md`. До ответа — выключено.
+    """
+    return str(os.getenv("PRAXIS_MEMORY_DROP_RUN_EVENTS") or "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
+def lazy_canon_enabled() -> bool:
+    """Сверять канон по мере надобности вместо «все 240 строк заранее».
+
+    ⚠ ВЫКЛЮЧЕНО ПО УМОЛЧАНИЮ, И ЭТО НЕ ОСТОРОЖНОСТЬ РАДИ ОСТОРОЖНОСТИ. Свойство «ни одна
+    строка не попадает в её промпт без сверки с каноном» ленивый путь сохраняет ДОСЛОВНО:
+    он сверяет ровно те строки, которые дойдут до выдачи, и ни одной несверенной не
+    пропускает. Меняется другое следствие: строка, которую всё равно выбросят фильтры,
+    больше не сверяется — а значит её расхождение с одноразовой базой больше не запускает
+    пересборку индекса. Это край договора о доверии к её памяти, и решение здесь ЕЁ.
+
+    Замер, ради которого рычаг заведён (прод, «провенанс кадра», её рука целиком):
+    240 строк из базы → 191 исходный файл перечитан ЦЕЛИКОМ → до неё доехало шесть.
+    """
+    return str(os.getenv("PRAXIS_RECALL_LAZY_CANON") or "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
+def _select(candidates: list[dict], *, cap: int, purpose: str) -> list[dict]:
+    """Фильтры выдачи. Одно тело на оба пути — иначе ленивый отдавал бы ДРУГОЙ ответ."""
+    selected: list[dict] = []
+    seen_desires: set[str] = set()
+    for row in candidates:
+        if purpose != "audit" and _is_transport_snapshot(str(row.get("path") or "")):
+            continue
+        desire_id = str(row.get("desire_id") or "")
+        if row.get("source_type") == "desire_event" and desire_id:
+            if desire_id in seen_desires:
+                continue
+            seen_desires.add(desire_id)
+        selected.append(row)
+        if len(selected) >= cap:
+            break
+    return selected
+
+
+def _select_lazily(*, base: Path, memory_dir: Path, skills_dir: Path | None,
+                   rows: list[dict], sources: list[Source] | None,
+                   cap: int, purpose: str) -> tuple[list[dict], bool]:
+    """Тот же отбор, но исходный файл перечитывается только когда до него дошла очередь.
+
+    Порядок строк, поля и сама сверка — те же самые (`_canonical_row_ok`, одно тело на
+    оба пути). Разница только в том, КОГДА платится чтение канона.
+    """
+    walked = sources if sources is not None else iter_sources(
+        base=base, memory_dir=memory_dir, skills_dir=skills_dir,
+    )
+    by_rel = {source.rel: source for source in walked}
+    parsed: dict[str, dict[str, tuple[Source, dict]]] = {}
+    selected: list[dict] = []
+    seen_desires: set[str] = set()
+    mismatch = False
+    for row in rows:
+        rel = str(row.get("path") or "")
+        # Транспорт и повтор желания отсеиваются ДО чтения канона: сверять то, что
+        # заведомо не доедет до неё, — ровно та работа, ради отказа от которой всё это.
+        if purpose != "audit" and _is_transport_snapshot(rel):
+            continue
+        desire_id = str(row.get("desire_id") or "")
+        if row.get("source_type") == "desire_event" and desire_id and desire_id in seen_desires:
+            continue
+        known = parsed.get(rel)
+        if known is None:
+            source = by_rel.get(rel)
+            known = ({} if source is None
+                     else {str(chunk.get("chunk_key") or ""): (source, chunk)
+                           for chunk in _source_chunks(source)[0]})
+            parsed[rel] = known
+        canonical = known.get(str(row.get("chunk_key") or ""))
+        if canonical is None or not _canonical_row_ok(row, canonical[0], canonical[1],
+                                                      memory_dir):
+            mismatch = True
+            continue
+        if row.get("source_type") == "desire_event" and desire_id:
+            seen_desires.add(desire_id)
+        selected.append(row)
+        if len(selected) >= cap:
+            # Набрали. Расхождения ДАЛЬШЕ по списку до неё не доехали бы в любом случае,
+            # поэтому и пересборку они больше не запускают — вот вся разница с прежним
+            # путём, и она названа вслух здесь, а не спрятана в «оптимизации».
+            return selected, False
+    return selected, mismatch
+
+
 def _match_query(query: str) -> str:
     stems = []
     for token in _WORD_RE.findall(str(query or "")):
@@ -811,7 +1195,8 @@ def _match_query(query: str) -> str:
 
 
 def _canonical_candidates(*, base: Path, memory_dir: Path, skills_dir: Path | None,
-                          rows: list[dict]) -> tuple[list[dict], bool]:
+                          rows: list[dict],
+                          sources: list[Source] | None = None) -> tuple[list[dict], bool]:
     """Rebind cache locators to current canonical chunks.
 
     The SQLite file is disposable and may be stale or tampered with.  A returned row
@@ -819,11 +1204,16 @@ def _canonical_candidates(*, base: Path, memory_dir: Path, skills_dir: Path | No
     chunk re-derived from the current source file.
     """
     wanted = {str(row.get("path") or "") for row in rows}
-    sources = {
-        source.rel: source for source in iter_sources(
-            base=base, memory_dir=memory_dir, skills_dir=skills_dir,
-        ) if source.rel in wanted
-    }
+    # ⚑ Разделяемая перепись НЕ ослабляет сверку. Подлинность строки решает не список
+    # источников, а `_source_chunks` ниже: он перечитывает БАЙТЫ файла. Список — только
+    # перечисление, и здесь это ровно то же перечисление, которым `ensure` секундой раньше
+    # сверял индекс, то есть сверка идёт против того же среза мира, а не против двух
+    # разных. Файл, исчезнувший между шагами, по-прежнему даёт mismatch и уводит в
+    # пересборку; после пересборки вызывающий обязан передать `sources=None`.
+    walked = sources if sources is not None else iter_sources(
+        base=base, memory_dir=memory_dir, skills_dir=skills_dir,
+    )
+    sources = {source.rel: source for source in walked if source.rel in wanted}
     chunks: dict[tuple[str, str], tuple[Source, dict]] = {}
     for rel, source in sources.items():
         for chunk in _source_chunks(source)[0]:
@@ -837,31 +1227,41 @@ def _canonical_candidates(*, base: Path, memory_dir: Path, skills_dir: Path | No
             mismatch = True
             continue
         source, chunk = canonical
-        expected = {
-            "source": chunk.get("source") or source.path.stem,
-            "source_type": chunk.get("source_type") or source.kind,
-            "visibility": chunk.get("visibility") or source.visibility,
-            "automatic_eligible": int(bool(chunk.get("automatic_eligible"))
-                and memory_provenance.automatic_recall_allowed(
-                    source_type=chunk.get("source_type") or source.kind,
-                    path=source.rel, text=chunk.get("text") or "", memory_dir=memory_dir,
-                )),
-            "at": chunk.get("at") or "", "event_id": chunk.get("event_id") or "",
-            "desire_id": chunk.get("desire_id") or "", "run_id": chunk.get("run_id") or "",
-            "refs_json": json.dumps(chunk.get("refs") or [], ensure_ascii=False,
-                                    separators=(",", ":")),
-            "supersedes_json": json.dumps(chunk.get("supersedes") or [], ensure_ascii=False,
-                                           separators=(",", ":")),
-            "entities": " ".join(chunk.get("entities") or []),
-            "terms": _terms(chunk.get("text") or ""),
-            "text": chunk.get("text") or "",
-        }
-        if any(str(row.get(field) if row.get(field) is not None else "") != str(value)
-               for field, value in expected.items()):
+        if not _canonical_row_ok(row, source, chunk, memory_dir):
             mismatch = True
             continue
         valid.append(row)
     return valid, mismatch
+
+
+def _canonical_row_ok(row: dict, source: Source, chunk: dict, memory_dir: Path) -> bool:
+    """Совпадает ли строка одноразовой базы с куском, перечитанным из канона.
+
+    Вынесено из тела `_canonical_candidates` ради ленивого пути: два способа сверки в
+    двух телах разошлись бы молча, и разошлись бы именно там, где цена ошибки — её промпт.
+    Одно тело, два вызывающих.
+    """
+    expected = {
+        "source": chunk.get("source") or source.path.stem,
+        "source_type": chunk.get("source_type") or source.kind,
+        "visibility": chunk.get("visibility") or source.visibility,
+        "automatic_eligible": int(bool(chunk.get("automatic_eligible"))
+            and memory_provenance.automatic_recall_allowed(
+                source_type=chunk.get("source_type") or source.kind,
+                path=source.rel, text=chunk.get("text") or "", memory_dir=memory_dir,
+            )),
+        "at": chunk.get("at") or "", "event_id": chunk.get("event_id") or "",
+        "desire_id": chunk.get("desire_id") or "", "run_id": chunk.get("run_id") or "",
+        "refs_json": json.dumps(chunk.get("refs") or [], ensure_ascii=False,
+                                separators=(",", ":")),
+        "supersedes_json": json.dumps(chunk.get("supersedes") or [], ensure_ascii=False,
+                                       separators=(",", ":")),
+        "entities": " ".join(chunk.get("entities") or []),
+        "terms": _terms(chunk.get("text") or ""),
+        "text": chunk.get("text") or "",
+    }
+    return not any(str(row.get(field) if row.get(field) is not None else "") != str(value)
+                   for field, value in expected.items())
 
 
 _CANON_CACHE: dict[str, tuple[str, list[dict]]] = {}
@@ -1127,6 +1527,48 @@ def _is_transport_snapshot(rel: str) -> bool:
     return rel.startswith("memory/runs/") and rel.endswith("/context.md")
 
 
+def _audit_transport_hits(query: str, *, base: Path, memory_dir: Path,
+                          limit: int) -> list[dict]:
+    """Транспортные снимки прогонов для цели `audit` — ПРЯМЫМ чтением канона.
+
+    ⚠ Это половина, без которой правка «не индексировать context.md» нарушила бы её
+    контракт от 02.08, закреплённый тестом `test_nothing_left_the_index`: «ничего не
+    удалено и не разындексировано, иначе аудит был бы пустым словом».
+
+    Здесь аудит не слабее, а СТРОЖЕ прежнего: он больше не спрашивает одноразовую базу,
+    он читает сами файлы. Цена — обход дерева прогонов при аудите; она уместна, потому
+    что аудит редок и точен, а recall част и широк.
+    """
+    stems = [s for s in (_stem(t) for t in _WORD_RE.findall(str(query or "")))
+             if len(s) > 1]
+    if not stems:
+        return []
+    runs = Path(memory_dir) / "runs"
+    if not runs.is_dir():
+        return []
+    hits: list[dict] = []
+    for path in sorted(runs.rglob("context.md"), key=lambda p: p.name, reverse=True):
+        if len(hits) >= limit:
+            break
+        text = _read(path)
+        if not text:
+            continue
+        terms = _terms(text)
+        if not all(stem in terms for stem in stems):
+            continue
+        rel = _rel(path, Path(base))
+        # Форма записи — ТА ЖЕ, что у индексных: сборщик выдачи ниже читает `chunk_key`
+        # и `refs_json`, и вторая форма молча упала бы KeyError'ом на первом же аудите.
+        hits.append({
+            "path": rel, "chunk_key": "doc", "text": text,
+            "source": path.parent.name, "source_type": "run_context",
+            "visibility": "owner", "automatic_eligible": 0, "at": "",
+            "event_id": "", "run_id": path.parent.name, "desire_id": "",
+            "refs_json": "[]", "supersedes_json": "[]", "rank": 0.0,
+        })
+    return hits
+
+
 def search(query: str, *, base: Path, memory_dir: Path, skills_dir: Path | None = None,
            limit: int = 30, scope: str = "owner", purpose: str = "explicit",
            db_path: Path | None = None) -> list[dict]:
@@ -1149,8 +1591,12 @@ def search(query: str, *, base: Path, memory_dir: Path, skills_dir: Path | None 
             query, base=base, memory_dir=memory_dir, skills_dir=skills_dir,
             limit=limit, scope=scope, db_path=db_path,
         )
+    # ⚠ ОДИН ОБХОД КОРПУСА НА ПОИСК, А НЕ ДВА. Профиль 07.08 на живом проде: `iter_sources`
+    # 24.0 с из 31.4, при ДВУХ вызовах — сначала из `ensure`, потом из
+    # `_canonical_candidates`. Перечисление между ними одно и то же.
+    sources = iter_sources(base=base, memory_dir=memory_dir, skills_dir=skills_dir)
     state = ensure(base=base, memory_dir=memory_dir, skills_dir=skills_dir,
-                   db_path=db_path)
+                   db_path=db_path, sources=sources)
     path = Path(db_path) if db_path is not None else _db_path(Path(memory_dir))
     match = _match_query(query)
     if not match:
@@ -1167,38 +1613,47 @@ def search(query: str, *, base: Path, memory_dir: Path, skills_dir: Path | None 
         LIMIT ?
     """
     candidates: list[dict] = []
+    selected: list[dict] = []
     for attempt in range(2):
         with contextlib.closing(sqlite3.connect(path, timeout=15)) as db:
             db.row_factory = sqlite3.Row
             cached = [dict(row) for row in db.execute(
                 sql, (match, min(2000, max(80, cap * 8))),
             ).fetchall()]
-        candidates, mismatch = _canonical_candidates(
-            base=Path(base), memory_dir=Path(memory_dir), skills_dir=skills_dir, rows=cached,
-        )
+        if lazy_canon_enabled():
+            selected, mismatch = _select_lazily(
+                base=Path(base), memory_dir=Path(memory_dir), skills_dir=skills_dir,
+                rows=cached, sources=sources, cap=cap, purpose=purpose,
+            )
+        else:
+            candidates, mismatch = _canonical_candidates(
+                base=Path(base), memory_dir=Path(memory_dir), skills_dir=skills_dir,
+                rows=cached, sources=sources,
+            )
+            selected = _select(candidates, cap=cap, purpose=purpose)
         if not mismatch:
             break
         if attempt == 0:
             state = rebuild(base=Path(base), memory_dir=Path(memory_dir),
                             skills_dir=skills_dir, db_path=path)
+            # Расхождение означает, что мир поехал под нами. Вторая попытка обязана
+            # смотреть ЗАНОВО — переиспользовать перепись, которая уже соврала, нельзя.
+            sources = None
             continue
         # Canon changed twice during one read or the cache cannot be reconciled.
         # Fail closed instead of letting a disposable row become prompt authority.
-        candidates = []
-    if purpose != "audit":
-        candidates = [row for row in candidates
-                      if not _is_transport_snapshot(str(row.get("path") or ""))]
-    selected = []
-    seen_desires: set[str] = set()
-    for row in candidates:
-        desire_id = str(row.get("desire_id") or "")
-        if row.get("source_type") == "desire_event" and desire_id:
-            if desire_id in seen_desires:
-                continue
-            seen_desires.add(desire_id)
-        selected.append(row)
-        if len(selected) >= cap:
-            break
+        selected = []
+    if purpose == "audit" and whole_docs_enabled():
+        # Транспорт больше не в индексе — аудит добирает его прямым чтением канона.
+        # Дописывается В КОНЕЦ: индексные попадания ранжированы, эти нет, и смешивать
+        # два порядка молча нельзя.
+        # ⚠ Раньше здесь стоял ОСТАТОК бюджета — и индексные попадания съедали его
+        # целиком, отчего аудит возвращал ноль транспортных строк. Поймано приёмкой
+        # 08.08. Теперь у транспорта своя доля: аудит за ним и ходит.
+        share = max(1, cap // 2)
+        transport = _audit_transport_hits(
+            query, base=Path(base), memory_dir=Path(memory_dir), limit=share)
+        selected = (selected[:max(0, cap - len(transport))] + transport) if transport else selected
     strengths = [max(0.0, -float(row.get("rank") or 0.0)) for row in selected]
     strongest = max(strengths, default=0.0)
     out = []

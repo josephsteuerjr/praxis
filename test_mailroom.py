@@ -212,7 +212,18 @@ class TestAgentMailTools(Base):
         h = self._one()
         _, system, evidence = agent._build_prompt_parts(owner=True, is_dm=True, scope="owner")
         self.assertNotIn(h, system, "строки ящика не должны получать SYSTEM-authority")
-        self.assertIn(h, evidence, "честный индекс ящика должен быть в lower-role контексте")
+        # ⚑ 09.08: индекс ящика ушёл из ПОСТОЯННОГО кадра — её четвёртый пункт:
+        # «подгружать при почтовом событии, адресном намерении или моём явном обращении
+        # к ящику». Замер: индекс лежал в каждом ходе. Проверяются ОБЕ стороны.
+        self.assertIn("ЛОКАТОР", evidence, "без обращения обязан ехать локатор")
+        self.assertIn("mail_read", evidence, "рука в кадре не названа")
+        self.assertNotIn(h, evidence, "индекс приехал без обращения к почте")
+        asked_ctx = agent.ChannelContext(is_dm=True, owner=True, known=True,
+                                         origin_text="что там в почте?")
+        _p, asked_system, asked = agent._build_prompt_parts(
+            owner=True, is_dm=True, scope="owner", ctx=asked_ctx)
+        self.assertIn(h, asked, "при обращении к почте честный индекс обязан приехать")
+        self.assertNotIn(h, asked_system, "и там он тоже не системная власть")
         # ⚠ Ярлык тира приезжает в кадр ЗАГОЛОВКОМ секции — капсом, между правилами
         # `────`. Литерал ярлыка в кадре больше не встречается, и это не пропажа:
         # заголовок виден сильнее прежней JSON-строки.

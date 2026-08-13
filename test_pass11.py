@@ -10,6 +10,8 @@ from __future__ import annotations
 import datetime as _dt
 import unittest
 
+import praxis_time
+
 from test_perceive import Base, FakeClient, FakeResp  # noqa: F401  (герметичный харнесс)
 import heartbeat
 import people
@@ -17,7 +19,8 @@ import llm  # noqa: F401
 
 
 def _iso(days_from_today: int = 0) -> str:
-    return (_dt.date.today() + _dt.timedelta(days=days_from_today)).isoformat()
+    # ⚠ День — ЕЁ: нити и парковки живут её сутками, а не сутками контейнера.
+    return praxis_time.day_key(praxis_time.today() + _dt.timedelta(days=days_from_today))
 
 
 # --------------------------------------------------------------------------- #

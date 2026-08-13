@@ -14,6 +14,8 @@ import time
 import types
 import unittest
 
+import praxis_time
+
 import bufstore
 import unanswered
 import agent
@@ -266,7 +268,9 @@ class FakeClientUsage:
 
 class TestUsageMeter(BufBase):
     def _today(self):
-        return _dt.date.today().isoformat()
+        # ⚠ День расхода — ЕЁ, а не системный: с 00:00 до 04:00 по Самаре они разные,
+        # и тест сверял бы свою правду с чужой. Источник тот же, что у кода.
+        return praxis_time.day_key()
 
     def test_chat_accumulates(self):
         llm.use_test_client(FakeClientUsage(tin=100, tout=20))
@@ -283,8 +287,9 @@ class TestUsageMeter(BufBase):
         self.assertEqual(sum(m["in"] for m in models.values()), 200)
 
     def test_rotation_drops_old_days(self):
-        old = (_dt.date.today() - _dt.timedelta(days=llm.USAGE_KEEP_DAYS + 5)).isoformat()
-        keep = (_dt.date.today() - _dt.timedelta(days=3)).isoformat()
+        # ⚠ Фикстура ключует дни ЕЁ сутками — тем же источником, что и код.
+        old = praxis_time.day_key(praxis_time.today() - _dt.timedelta(days=llm.USAGE_KEEP_DAYS + 5))
+        keep = praxis_time.day_key(praxis_time.today() - _dt.timedelta(days=3))
         llm.USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
         llm.USAGE_PATH.write_text(json.dumps({
             old: {"voice": {"in": 1, "out": 1, "calls": 1, "fallback": 0}},
@@ -361,7 +366,7 @@ class TestUsageMeter(BufBase):
         self.assertNotIn("свежего входа", line)
 
     def test_usage_days_window(self):
-        old = (_dt.date.today() - _dt.timedelta(days=10)).isoformat()
+        old = praxis_time.day_key(praxis_time.today() - _dt.timedelta(days=10))
         llm.USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
         llm.USAGE_PATH.write_text(json.dumps({
             old: {"voice": {"in": 1, "out": 1, "calls": 1, "fallback": 0}}}), encoding="utf-8")
@@ -387,7 +392,7 @@ class TestUsageMeter(BufBase):
         self.assertEqual(llm.pricing().get(model), {"in_per_1m": 1.0, "out_per_1m": 2.0})
         u = panel.llm_usage()
         self.assertTrue(u["priced"])
-        today = _dt.date.today().isoformat()
+        today = praxis_time.day_key()
         self.assertAlmostEqual(u["cost"][today]["voice"], 1.2, places=3)
 
 

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import collections
 import tempfile
 import time
 import unittest
@@ -100,9 +101,6 @@ class ScratchClockTests(unittest.TestCase):
         self.assertEqual(round((samara.utcoffset() - utc.utcoffset()).total_seconds() / 3600), 4)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
 
 class RepeatEchoIsAdviceNotFenceTests(unittest.TestCase):
     """`said_recently` существует, ничего не запрещает и до 01.08 из боевого кода не
@@ -163,6 +161,27 @@ class SendsDigestSeesHerAutonomousVoiceTests(unittest.TestCase):
         fu.LEDGER.path = Path(self.tmp.name) / "followups.json"
         self.addCleanup(lambda: setattr(fu.LEDGER, "path", self._orig))
         self.now = time.time()
+        # ⚠ ВТОРОЙ ИСТОЧНИК, КОТОРЫЙ ЗДЕСЬ НЕ ИЗОЛИРОВАЛСЯ, И ЭТО СТОИЛО КРАСНОГО ГЕЙТА.
+        #
+        # `my_sends_today_digest()` читает ДВА источника: след нитей (он изолирован строкой
+        # выше) и ПРОЦЕСС-ГЛОБАЛЬНОЕ кольцо прожитых ходов `turns._RING`. При `scope="owner"`
+        # фильтр видимости пропускает АБСОЛЮТНО все ходы, а тесты ниже сверяют ТОЧНОЕ число
+        # строк — значит любой сосед по шарду, записавший ход, красит их. Порядок шардов
+        # задаётся составом прогона, поэтому падение выглядело плавающим: модуль в одиночку
+        # зелёный, в общем прогоне красный. Поймано 08.08 добавлением нового тестового
+        # модуля, которое сдвинуло состав шарда, — сам дефект старше.
+        import turns
+
+        self._ring = turns._RING
+        self._ring_lines = turns._FILE_LINES
+        turns._RING = collections.deque(maxlen=turns.KEEP)
+        turns._FILE_LINES = 0
+
+        def _restore() -> None:
+            turns._RING = self._ring
+            turns._FILE_LINES = self._ring_lines
+
+        self.addCleanup(_restore)
 
     def _sent(self, peer: str, text: str, *, purpose: str = "tool:send_message",
               at: float | None = None) -> dict:
@@ -211,3 +230,12 @@ class SendsDigestSeesHerAutonomousVoiceTests(unittest.TestCase):
         self.assertEqual(len([ln for ln in digest.splitlines() if ln.startswith("- ")]), 1)
         self.assertIn("последнее", digest)
         self.assertNotIn("первое", digest)
+
+# ⚠ Страж запуска стоит В КОНЦЕ намеренно. Он был выше двух классов ниже, и при
+# прямом `python test_owner_thread_trace.py` они не объявлялись вовсе: файл говорил
+# «OK» по четырём тестам из двенадцати. Через praxis_test.py это не проявлялось —
+# там модуль импортируется целиком, — поэтому дефект и дожил.
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

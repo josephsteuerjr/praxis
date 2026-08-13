@@ -16,6 +16,7 @@ git-история с диффами. Всё вычисляется из АКТ�
 """
 from __future__ import annotations
 
+import praxis_time
 import ast
 import datetime as _dt
 import hashlib
@@ -1531,11 +1532,16 @@ def _journal_panel(msg: str) -> None:
     try:
         jd = BASE / "memory" / "journal"
         jd.mkdir(parents=True, exist_ok=True)
-        p = jd / f"{_dt.date.today().isoformat()}.md"
+        # ⚠ ДЕНЬ И ЧАС — ЕЁ, а не контейнера. `date.today()` и `datetime.now()` читают
+        # СИСТЕМНЫЙ пояс, а в контейнере задан только PRAXIS_TZ: с 00:00 до 04:00 по
+        # Самаре запись уходила во ВЧЕРАШНИЙ файл, а час внутри строки был UTC.
+        # Имя файла и штамп строки берутся из ОДНОГО источника: иначе расхождение
+        # переезжает внутрь файла, где его труднее заметить.
+        p = jd / f"{praxis_time.day_key()}.md"
         if not p.exists():
-            p.write_text(f"# {_dt.date.today().isoformat()}\n\n", encoding="utf-8")
+            p.write_text(f"# {praxis_time.day_key()}\n\n", encoding="utf-8")
         with p.open("a", encoding="utf-8") as fh:
-            fh.write(f"- {_dt.datetime.now():%H:%M} (s2) [пульт] {msg}\n")
+            fh.write(f"- {praxis_time.now():%H:%M} (s2) [пульт] {msg}\n")
     except Exception:
         log.debug("journal панели не удался", exc_info=True)
 

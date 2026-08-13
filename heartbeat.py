@@ -15,6 +15,7 @@ owner-gated, экономное по рамке промпта. Кода пра�
 from __future__ import annotations
 
 import datetime as _dt
+import praxis_time
 import json
 import logging
 import os
@@ -121,7 +122,7 @@ def last_opened_ts() -> float:
 # Восстановлен байт-в-байт из HEAD.
 def candidates() -> list[dict]:
     """Открытые нити по всем людям в окне [min_age, max_age] дней (контекст для тика)."""
-    today = _dt.date.today()
+    today = praxis_time.today()
     min_age = int(os.getenv("PRAXIS_HEARTBEAT_MIN_AGE_DAYS", "1"))
     max_age = int(os.getenv("PRAXIS_HEARTBEAT_MAX_AGE_DAYS", "30"))
     out = []

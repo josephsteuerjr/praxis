@@ -56,6 +56,16 @@ class MemoryPromptRoleTests(unittest.TestCase):
                 with self.subTest(marker=marker):
                     self.assertNotIn(marker, system)
                     self.assertNotIn(marker, public_system)
+                    if marker == "MAIL_SYSTEM_OVERRIDE":
+                        # ⚑ 09.08: индекс ящика ушёл из ПОСТОЯННОГО кадра — её четвёртый
+                        # пункт: «подгружать при почтовом событии, адресном намерении или
+                        # моём явном обращении к ящику». Свойство, ради которого написан
+                        # этот тест — «гостевой текст не становится системной властью», —
+                        # проверено выше и НЕ ослабло: обе проверки `assertNotIn` стоят.
+                        # Изменилось только место, где текст вообще появляется.
+                        self.assertIn("ЛОКАТОР", evidence,
+                                      "вместо индекса обязан ехать локатор")
+                        continue
                     self.assertIn(marker, evidence)
 
             zone = agent.frame_layout.situation(ctx, speaker="SPEAKER_SYSTEM_OVERRIDE")

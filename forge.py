@@ -823,7 +823,14 @@ def wake_invitation(items: list[dict]) -> str:
     lines = []
     for c in items:
         mark = "⚡" if c["priority"] == "urgent" else "•"
-        verb = "закончил" if c["status"] == "done" else f"упал ({c['status']})"
+        # ⚠ 10.08.2026: у исхода стало три вида, а не два. «Исчерпал ходы» — это не
+        # падение (работа сделана частично и лежит в diff) и не завершение.
+        if c["status"] == "done":
+            verb = "закончил"
+        elif c["status"] == "stalled":
+            verb = "упёрся в потолок ходов (работа частичная, diff на месте)"
+        else:
+            verb = f"упал ({c['status']})"
         goal = c["goal"] or c["task_id"]
         lines.append(f"{mark} воркер по «{goal}» ({c['task_id']}) {verb}: {c['summary']}")
     return ("Твои Forge-воркеры завершились — это твой плод, а не задача-повинность. "

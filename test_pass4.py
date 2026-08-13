@@ -71,7 +71,11 @@ class TestClock(unittest.TestCase):
                           "owner_delivery",
                           "durable_resume", "computer_inventory",
                           "group_context_backfill", "reap_orphans",
-                          "selfdev_reconcile", "forge_wake", "forge_events"})
+                          "selfdev_reconcile", "forge_wake", "forge_events",
+                          # Оборот 3, 12.08: часы спрашивают «есть ли созревшая работа»,
+                          # а что именно созрело — решает её леджер желаний. Рычаг
+                          # `PRAXIS_WORK_ENGINE` опущен: без него забота выходит сразу.
+                          "work_engine"})
 
     def test_startup_deadlines_only_run_persisted_catchup_checks(self):
         fired = []

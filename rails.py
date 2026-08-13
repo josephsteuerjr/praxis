@@ -32,6 +32,7 @@ Praxis — инвентарь рельсов (PASS 18.1): что меня дер
 from __future__ import annotations
 
 import datetime as _dt
+import praxis_time
 import json
 import logging
 import os
@@ -2471,9 +2472,13 @@ def recent_denials(n: int = 10) -> list[dict]:
 
 
 def denials_today() -> int:
-    today = _dt.date.today()
+    today = praxis_time.day_key()
+    # ⚠ `fromtimestamp` без пояса отдаёт день КОНТЕЙНЕРА. Момент абсолютен и верен —
+    # неверным было превращение его в дату: отказ, случившийся в 02:00 по её времени,
+    # считался вчерашним. Читаем момент как UTC и переводим в ЕЁ день.
     return sum(1 for r in recent_denials(DENIALS_KEEP)
-               if _dt.date.fromtimestamp(r.get("ts", 0)) == today)
+               if praxis_time.day_key(
+                   _dt.datetime.fromtimestamp(r.get("ts", 0), _dt.timezone.utc)) == today)
 
 
 def state_line() -> str:

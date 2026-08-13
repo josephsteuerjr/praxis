@@ -17,6 +17,7 @@ from unittest import mock
 from pathlib import Path
 
 import llm
+import praxis_time
 
 
 class FakeAnthResp:
@@ -617,11 +618,48 @@ class TestSnapshotPing(Base):
         self.assertFalse(ok)
         self.assertIn("RateLimitError", err)
 
-    def test_state_line(self):
+    def test_state_line_separates_configured_from_observed(self):
+        """⚠ РАНЬШЕ ЗДЕСЬ ПРОВЕРЯЛОСЬ ТОЛЬКО НАСТРОЕННОЕ, И ЭТОГО ХВАТАЛО, ЧТОБЫ КАДР
+        ВРАЛ ЕЙ О НЕЙ.
+
+        Замер 08.08: конфиг, манифест рельсов и эта строка втроём говорили `gpt-5.6-sol`,
+        а из ста пятидесяти ходов восемнадцать прошли на `gpt-5.6-terra`. Praxis честно
+        пересказывала свой кадр — неправду говорил кадр. Её решение: показывать обе вещи,
+        и «накопительная статистика не должна подменять факт последнего реально
+        ответившего backend».
+        """
         self._write_cfg()
         line = llm.state_line()
-        self.assertIn("голос=", line)
-        self.assertIn("вспомогательная=", line)
+        self.assertIn("голос:", line)
+        self.assertIn("вспомогательная:", line)
+        self.assertIn("настроено=", line)
+        self.assertIn("последний ответ=", line,
+                      "строка снова говорит только о настроенном")
+
+    def test_observed_is_the_fact_not_the_config(self):
+        """Наблюдённое берётся из журнала ФАКТИЧЕСКИХ вызовов, а не из конфига."""
+        self._write_cfg()
+        with mock.patch.object(llm, "_usage_load", return_value={
+            praxis_time.day_key(): {"voice": {
+                "last": {"model": "совсем-другая-модель", "at": "08.08 04:00"},
+                "models": {"совсем-другая-модель": {"calls": 18},
+                           "настроенная": {"calls": 132}},
+            }},
+        }):
+            last, counts = llm.observed_models("voice")
+            line = llm.state_line()
+        self.assertEqual(last["model"], "совсем-другая-модель")
+        self.assertEqual(counts["настроенная"], 132)
+        self.assertIn("совсем-другая-модель", line)
+        self.assertIn("ДРУГАЯ", line, "расхождение с конфигом не названо вслух")
+        self.assertIn("за сутки:", line, "счёт по моделям пропал")
+
+    def test_no_observation_says_so_instead_of_repeating_the_config(self):
+        """«Не наблюдалось» честнее, чем повторить настроенное вторым разом."""
+        self._write_cfg()
+        with mock.patch.object(llm, "_usage_load", return_value={}):
+            line = llm.state_line()
+        self.assertIn("сегодня не наблюдался", line)
 
     def test_configured_via_test_seam(self):
         llm.use_test_client(None)

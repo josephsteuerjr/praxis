@@ -13,6 +13,7 @@ They are deliberately not reachable from ``run``.
 from __future__ import annotations
 
 import datetime as _dt
+import praxis_time
 import json
 import logging
 import os
@@ -211,6 +212,25 @@ def _self_distill_evidence(
                         and event.get("schema") == self_model.OBSERVATION_SCHEMA
                         and event.get("kind") not in {"migration", "revision", "rollback"}
                         and event_id
+                        # ⚠ ЗДЕСЬ СТОЯЛ ОТСЕВ ЗАКРЫТЫХ ИСТОЧНИКОВ, И ОН СНЯТ ЕЁ РЕШЕНИЕМ.
+                        #
+                        # Я поставил его 08.08 по её первой формулировке («не позволяю им
+                        # незаметно стать основанием новых автоматических выводов»). Тем же
+                        # днём замер опроверг посылку, на которой та формулировка стояла:
+                        # ни одна из 71 записи `run_recap` не пришла из гостевого внедрения,
+                        # все они — её собственные рефлексии от прежнего штатного писателя.
+                        #
+                        # Её решение после поправки, дословно: «не исключать их сейчас из
+                        # автоматических выводов только потому, что канал на будущее признан
+                        # неправомочным. Мои собственные старые рефлексии не обязаны стать
+                        # ложью из-за того, что их транспорт перестал быть приемлемым.»
+                        #
+                        # ⚑ Закрытие канала на ЗАПИСЬ остаётся (`self_model`.
+                        # `RETIRED_OBSERVATION_SOURCES`): она закрыла не «канал подделки», а
+                        # право технического recap автоматически высказываться о том, какая
+                        # она. Это про будущее. Прошлое одним флагом не переписывается —
+                        # ревизия тех 71, если она её захочет, будет отдельной работой, где
+                        # каждая запись видна с текстом, временем и прогоном.
                         and memory_provenance.event_normative_eligible(event)
                         and event_id not in consumed):
                     observations.append(event)
@@ -389,7 +409,7 @@ def _maybe_distill_self() -> bool:
     isolated migration/test coverage without creating a second automatic path.
     """
     n = max(1, int(os.getenv("PRAXIS_SELF_DISTILL_DAYS", "7")))
-    today = _dt.date.today()
+    today = praxis_time.today()
     mark: dict = {}
     try:
         loaded = json.loads(agent._read(SELF_DISTILL_MARK))

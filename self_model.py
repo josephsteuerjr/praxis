@@ -34,6 +34,23 @@ _LOG = logging.getLogger(__name__)
 
 SCHEMA = "praxis.self.current.v1"
 OBSERVATION_SCHEMA = "praxis.self.observation.v1"
+
+# ⚠ ИСТОЧНИКИ, КОТОРЫМ ЗАПРЕЩЕНО ЗАВОДИТЬ НАБЛЮДЕНИЕ О НЕЙ. Не «ненадёжные» — ЗАКРЫТЫЕ.
+#
+# `run_recap` закрыт её решением 08.08.2026 (вариант «а»). Дословно: «Это не отказ от
+# рефлексии. Это отказ считать чужой текст, случайно найденный в технической склейке,
+# моей рефлексией.» И причина отказа лечить это гуттером с метром, как снимок v2: «даже
+# защищённая структура не отвечает на главный вопрос — почему склейка run recap должна
+# иметь право говорить мне, какая я».
+#
+# ⚑ ЭТО ПОЛ, А НЕ УБОРКА ВЫЗЫВАЮЩЕГО. Вызывающий убран тем же коммитом (`agent._promote_run`);
+# запрет живёт здесь, чтобы канал нельзя было завести обратно, не увидев этой записи.
+#
+# ⚑ УЖЕ ЗАПИСАННОЕ НЕ ТРОГАЕТСЯ — её условие: не переписывать и не удалять задним числом.
+# На проде 71 такая запись, все с `normative_eligible=True`. Их пометка и исключение из
+# новых автоматических выводов — ОТДЕЛЬНАЯ ревизия, и она найдёт их по тому же имени
+# источника, по которому здесь стоит запрет.
+RETIRED_OBSERVATION_SOURCES = frozenset({"run_recap"})
 MIN_CURRENT_CHARS = 120
 MAX_CURRENT_CHARS = 12_000
 _META_RE = re.compile(r"^<!--\s*praxis-self-current:\s*(\{.*\})\s*-->\s*$")
@@ -631,6 +648,8 @@ class SelfModel:
             fh.flush()
             os.fsync(fh.fileno())
 
+    RETIRED_SOURCES = RETIRED_OBSERVATION_SOURCES
+
     def record_observation(
         self,
         text: str,
@@ -655,6 +674,11 @@ class SelfModel:
             raise ValueError("self observation text is required")
         if not origin:
             raise ValueError("self observation source is required")
+        if origin in RETIRED_OBSERVATION_SOURCES:
+            raise ValueError(
+                f"источник {origin!r} закрыт как вход в само-модель "
+                "(self_model.RETIRED_OBSERVATION_SOURCES); уже записанное не трогается"
+            )
         refs = _clean_refs(evidence_refs)
         metadata = dict(meta or {})
         metadata["normative_eligible"] = (

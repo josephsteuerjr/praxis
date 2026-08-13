@@ -7,6 +7,8 @@ import os
 import tempfile
 import time
 import unittest
+
+import praxis_time
 from pathlib import Path
 
 import heartbeat
@@ -96,7 +98,8 @@ class KnobTests(Pass21Base):
                    STATE_DIR=self.mem / ".state" / "life")
         (self.mem / "life" / "events").mkdir(parents=True)
         perception.set_knob("group_ack_max_len", "0", reason="имя не шум")
-        j = (self.mem / "journal" / f"{_dt.date.today().isoformat()}.md").read_text(encoding="utf-8")
+        # День дневника — её, а не системный (окно 00:00–04:00 по Самаре).
+        j = (self.mem / "journal" / f"{praxis_time.day_key()}.md").read_text(encoding="utf-8")
         self.assertIn("group_ack_max_len", j)
         evs = []
         for p in (self.mem / "life" / "events").glob("*.jsonl"):
@@ -169,7 +172,7 @@ class SkipTests(Pass21Base):
         # персист не чаще раза в минуту, но первый флаш уже случился (ts=0 в setUp)
         perception._CACHE.update(mtime=None, data={})
         disk = (perception._state().get("ambient") or {})
-        self.assertIn(_dt.date.today().isoformat(), disk)
+        self.assertIn(praxis_time.day_key(), disk)
 
     def test_never_raises(self):
         blocker = self.tmp / "not-a-directory"

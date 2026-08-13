@@ -19,6 +19,7 @@ stdlib; каждый вызов перечитывает файлы, правд�
 from __future__ import annotations
 
 import datetime as _dt
+import praxis_time
 import difflib
 import os
 import re
@@ -43,7 +44,8 @@ _PAIR_LINE = re.compile(
 
 
 def _today() -> str:
-    return _dt.date.today().isoformat()
+    """ЕЁ день: этой датой подписаны узлы и связи её графа."""
+    return praxis_time.day_key()
 
 
 def _read(path: Path) -> str:

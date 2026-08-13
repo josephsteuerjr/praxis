@@ -5,6 +5,8 @@ import datetime as _dt
 import json
 import tempfile
 import unittest
+
+import praxis_time
 from pathlib import Path
 
 import brain
@@ -102,7 +104,8 @@ class SwitchTests(Pass22Base):
         rc = llm._config()["roles"]["evaluator"]
         self.assertEqual((rc["framework"], rc["model"]), ("openai", "gpt-5.5"))
         self.assertEqual(rc["fallback_model"], "glm-4.7")  # фолбэк не тронут
-        j = (self.mem / "journal" / f"{_dt.date.today().isoformat()}.md").read_text(encoding="utf-8")
+        # День дневника — её, а не системный (окно 00:00–04:00 по Самаре).
+        j = (self.mem / "journal" / f"{praxis_time.day_key()}.md").read_text(encoding="utf-8")
         self.assertIn("свитч мозга", j)
 
     def test_switch_cross_framework_keeps_trio(self):
@@ -152,7 +155,8 @@ class ChatHookTests(Pass22Base):
         resp = llm.chat("voice", messages=[{"role": "user", "content": "hi"}])
         self.assertEqual(resp.text, "ok")
         usage = json.loads(llm.USAGE_PATH.read_text(encoding="utf-8"))
-        day = usage[_dt.date.today().isoformat()]["voice"]
+        # День расхода — её: тот же источник, что у кода.
+        day = usage[praxis_time.day_key()]["voice"]
         self.assertIn("glm-5.2-rotated", day["models"])
         self.assertIn("anthropic/glm-5.2-rotated", brain.model_stats())
 
@@ -166,12 +170,34 @@ class ChatHookTests(Pass22Base):
             return llm.LLMResponse(text="спасена", usage={"in": 1, "out": 1},
                                    framework=fw, model=model)
 
-        self.patch(llm, _call=flaky, _client_for=lambda fw: object())
+        # ⚠ 10.08.2026, её решение: одиночный пустой ответ — сбой ТРАНСПОРТА, а не
+        # повод менять мозг. Он лечится повтором по тому же каналу, и фолбэка тут больше
+        # нет. Проверяем оба конца: одиночный — своим каналом; упорный — фолбэком.
+        self.patch(llm, _call=flaky, _client_for=lambda fw: object(),
+                   EMPTY_RETRY_PAUSE_SEC=0.0)
         resp = llm.chat("voice", messages=[{"role": "user", "content": "hi"}])
         self.assertEqual(resp.text, "спасена")
+        self.assertEqual(calls["n"], 2, "одиночный пустой не был повторён по своему каналу")
         stats = brain.model_stats()
-        self.assertEqual(stats["anthropic/glm-5.2"]["empty"], 1)          # сбой основной
-        self.assertEqual(stats["openai/gpt-5.6-sol"]["fallback_used"], 1)  # успех запасной
+        self.assertNotIn("openai/gpt-5.6-sol", stats,
+                         "одиночный пустой всё ещё уводит на другой фреймворк")
+
+        calls["n"] = 0
+
+        def always_empty(fw, model, **kw):
+            calls["n"] += 1
+            if fw == "anthropic":
+                raise llm.EmptyResponseError("пустой стрим relay")
+            return llm.LLMResponse(text="запасная", usage={"in": 1, "out": 1},
+                                   framework=fw, model=model)
+
+        self.patch(llm, _call=always_empty, _client_for=lambda fw: object(),
+                   EMPTY_RETRY_PAUSE_SEC=0.0)
+        resp2 = llm.chat("voice", messages=[{"role": "user", "content": "hi"}])
+        self.assertEqual(resp2.text, "запасная", "упорный пустой не ушёл на фолбэк")
+        self.assertEqual(calls["n"], llm.EMPTY_RETRIES + 2,
+                         "фолбэк случился раньше, чем исчерпаны повторы своего канала")
+        self.assertEqual(brain.model_stats()["openai/gpt-5.6-sol"]["fallback_used"], 1)
 
 
 class ToolTests(Pass22Base):

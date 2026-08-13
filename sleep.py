@@ -11,6 +11,7 @@ all.  REM output is written only as labelled episodic candidate material.
 from __future__ import annotations
 
 import datetime as _dt
+import praxis_time
 import difflib
 import json
 import logging
@@ -160,7 +161,9 @@ def merge_dossiers(keep: str, absorb: str) -> bool:
     pk, pa = people.path_for(keep), people.path_for(absorb)
     if not pk.exists() or not pa.exists():
         return False
-    day_dir = TRASH_DIR / _dt.date.today().strftime("%Y%m%d")
+    # ⚠ Каталог корзины называется ЕЁ днём. Иначе поглощённое ночью досье ложится в
+    # каталог вчерашнего числа, и «вернуть одной командой» начинается с поиска.
+    day_dir = TRASH_DIR / praxis_time.today().strftime("%Y%m%d")
     day_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(pa, day_dir / pa.name)  # бэкап ДО любых мутаций
 
@@ -271,7 +274,7 @@ def svs_dossier_pass(*, allow_merge: bool = True) -> tuple[int, int]:
                 state.pop(key, None)
                 _journal(f"слила досье {c['keep']}.md ← {c['absorb']}.md ({c['why']}; "
                          f"повторное совпадение, бэкап в memory/.trash/"
-                         f"{_dt.date.today():%Y%m%d}/).", salience=3)
+                         f"{praxis_time.today():%Y%m%d}/).", salience=3)
             continue
         if not prev:
             common, uniq = _common_and_unique(c["keep"], c["absorb"])
@@ -384,7 +387,8 @@ def add_hypothesis(a_ref: str, b_ref: str, why: str = "") -> bool:
     text = graph._read(graph.GRAPH_MD)
     if not text.strip():
         text = graph._GRAPH_HEADER
-    line = f"- [[{a}]] ↔ [[{b}]] — {label} _({_dt.date.today().isoformat()})_"
+    # Дата связи — часть её утверждения о людях, а не служебная метка.
+    line = f"- [[{a}]] ↔ [[{b}]] — {label} _({praxis_time.day_key()})_"
     graph.GRAPH_MD.write_text(text.rstrip() + "\n" + line + "\n", encoding="utf-8")
     return True
 
@@ -472,7 +476,7 @@ def _journal_entries(days: int) -> list[dict]:
     """Стандартные записи дневника за окно дней: [{file, time, line, text}].
     Служебные записи сна ([сон]/(сон)) не берём — иначе его же отчёты слипнутся в группу."""
     out = []
-    cutoff = _dt.date.today() - _dt.timedelta(days=max(1, days))
+    cutoff = praxis_time.today() - _dt.timedelta(days=max(1, days))
     if not agent.JOURNAL_DIR.exists():
         return out
     for p in sorted(agent.JOURNAL_DIR.glob("*.md")):

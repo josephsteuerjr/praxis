@@ -13,6 +13,8 @@ import sys
 import tempfile
 import types
 import unittest
+
+import praxis_time
 from pathlib import Path
 
 _fa = types.ModuleType("anthropic")
@@ -96,7 +98,8 @@ class Base(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _loop(self, slug, text, days_ago):
-        d = (dt.date.today() - dt.timedelta(days=days_ago)).isoformat()
+        # День — её: возраст нити считается её сутками.
+        d = praxis_time.day_key(praxis_time.today() - dt.timedelta(days=days_ago))
         (people.PEOPLE_DIR / f"{slug}.md").write_text(
             f"# {slug}\n\n## Открытые нити\n- [ ] {text} _({d})_\n", encoding="utf-8")
 

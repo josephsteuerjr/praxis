@@ -6,6 +6,8 @@ import json
 import tempfile
 import time
 import unittest
+
+import praxis_time
 from pathlib import Path
 
 import formation
@@ -120,7 +122,8 @@ class ReviseTests(Pass20Base):
         self.assertIn("clm-1", evs[0]["refs"])
         self.assertEqual(evs[0]["meta"]["version"], 0)
         self.assertTrue(evs[0]["meta"]["legacy_untouched"])
-        j = (self.mem / "journal" / f"{_dt.date.today().isoformat()}.md").read_text(encoding="utf-8")
+        # День дневника — её, а не системный (окно 00:00–04:00 по Самаре).
+        j = (self.mem / "journal" / f"{praxis_time.day_key()}.md").read_text(encoding="utf-8")
         self.assertIn("ревизия compact self", j)
         self.assertEqual(self.immune_q[0][0], "abc1234")
         state = json.loads(identity.STATE_PATH.read_text(encoding="utf-8"))

@@ -33,6 +33,7 @@ model сохраняется как provenance-rich совет рядом с т�
 from __future__ import annotations
 
 import datetime as _dt
+import praxis_time
 import hashlib
 import json
 import logging
@@ -145,11 +146,16 @@ def _atomic_write(path: Path, text: str) -> None:
 def _journal(msg: str, marker: str = "[личность]") -> None:
     try:
         JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
-        p = JOURNAL_DIR / f"{_dt.date.today().isoformat()}.md"
+        # ⚠ ДЕНЬ И ЧАС — ЕЁ, а не контейнера. `date.today()` и `datetime.now()` читают
+        # СИСТЕМНЫЙ пояс, а в контейнере задан только PRAXIS_TZ: с 00:00 до 04:00 по
+        # Самаре запись уходила во ВЧЕРАШНИЙ файл, а час внутри строки был UTC.
+        # Имя файла и штамп строки берутся из ОДНОГО источника: иначе расхождение
+        # переезжает внутрь файла, где его труднее заметить.
+        p = JOURNAL_DIR / f"{praxis_time.day_key()}.md"
         if not p.exists():
-            p.write_text(f"# {_dt.date.today().isoformat()}\n\n", encoding="utf-8")
+            p.write_text(f"# {praxis_time.day_key()}\n\n", encoding="utf-8")
         with p.open("a", encoding="utf-8") as fh:
-            fh.write(f"- {_dt.datetime.now():%H:%M} {marker} {msg}\n")
+            fh.write(f"- {praxis_time.now():%H:%M} {marker} {msg}\n")
     except Exception:
         log.debug("journal identity не удался", exc_info=True)
 
@@ -658,7 +664,7 @@ def _stale_bullets() -> list[dict]:
     """Датированные выводы из CURRENT — кандидаты «всё ещё так?» (анти-охрупчивание)."""
     state = _load_state()
     reviewed = set(state.get("reviewed_bullets") or [])
-    cutoff = (_dt.date.today() - _dt.timedelta(days=STALE_BULLET_DAYS)).isoformat()
+    cutoff = praxis_time.day_key(praxis_time.today() - _dt.timedelta(days=STALE_BULLET_DAYS))
     out = []
     for line in read("self").splitlines():
         m = _BULLET_RE.match(line.strip())

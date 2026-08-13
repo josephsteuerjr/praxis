@@ -24,6 +24,7 @@ Stdlib + git, без новых зависимостей. Модель здес�
 from __future__ import annotations
 
 import datetime as _dt
+import praxis_time
 import fnmatch
 import hashlib
 import json
@@ -145,11 +146,13 @@ def _journal(msg: str) -> None:
     """Строка ей в дневник (как bootguard): она читает его и видит судьбу предложений."""
     try:
         JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
-        p = JOURNAL_DIR / f"{_dt.date.today().isoformat()}.md"
+        # ⚠ День и час — ЕЁ: см. praxis_time. Имя файла и штамп строки из одного
+        # источника, иначе расхождение переезжает внутрь файла.
+        p = JOURNAL_DIR / f"{praxis_time.day_key()}.md"
         if not p.exists():
-            p.write_text(f"# {_dt.date.today().isoformat()}\n\n", encoding="utf-8")
+            p.write_text(f"# {praxis_time.day_key()}\n\n", encoding="utf-8")
         with p.open("a", encoding="utf-8") as fh:
-            fh.write(f"- {_dt.datetime.now():%H:%M} (s3) [предложение] {msg}\n")
+            fh.write(f"- {praxis_time.now():%H:%M} (s3) [предложение] {msg}\n")
     except Exception:
         log.debug("journal selfdev не удался", exc_info=True)
 

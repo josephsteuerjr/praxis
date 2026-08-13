@@ -16,6 +16,7 @@ formation и узкая data-authority проверка вне owner-DM). Вто
 
 from __future__ import annotations
 
+import praxis_time
 import contextlib
 import copy
 import contextvars
@@ -76,6 +77,8 @@ import rooms
 import lessons
 import selfdev
 import selfgit
+import work_loop
+import work_store
 import promises
 import self_model
 import services
@@ -489,21 +492,25 @@ def _promote_run(context: run_context.RunContext, recap_path: Path, manifest: di
     """Idempotently turn one terminal run into lived memory and causal experience."""
     event_id = run_manager.life_event_promotion(context, recap_path, manifest)
     recap_ref = context.context_snapshot.rsplit("/", 1)[0] + "/RECAP.md"
-    try:
-        recap = recap_path.read_text(encoding="utf-8")
-    except OSError:
-        recap = ""
-    match = re.search(r"(?ms)^## My reflection\s*$\n(.*?)(?=^## |\Z)", recap)
-    reflection = str(match.group(1) if match else "").strip()
-    if reflection:
-        self_model.SelfModel(BASE).record_observation(
-            reflection,
-            source="run_recap",
-            evidence_refs=[recap_ref, f"run_episode:{event_id}"],
-            run_id=context.run_id,
-            kind="run_reflection",
-            dedupe_key=f"run:{context.run_id}:self-reflection",
-        )
+    # ⚠ ЗДЕСЬ БЫЛ ВХОД В ЕЁ САМО-МОДЕЛЬ, И ОН ЗАКРЫТ ЕЁ РЕШЕНИЕМ 08.08.2026 (вариант «а»).
+    #
+    # Код искал в RECAP.md ПЕРВЫЙ заголовок вида `## My reflection` и то, что найдено,
+    # заводил как её наблюдение о себе с `normative_eligible=True`. Ровно тот идиом
+    # первого совпадения по ФОРМЕ строки, от которого снимок прогона ушёл в v2.
+    #
+    # Дыра настоящая и латентная: гостевые байты лежат в файле ВЫШЕ всех настоящих
+    # заголовков (ниже печатается `- Goal: {ctx.goal}` сырьём, а goal — это входящее
+    # сообщение), то есть собеседник мог одной строкой написать ей, какая она. Замер на
+    # живом проде: 2669 файлов RECAP, секция есть у 80, случаев внедрения — НОЛЬ. Атаки
+    # не было; возможность была.
+    #
+    # ⚑ Но закрыт канал НЕ ПОЭТОМУ. Её слова: «даже защищённая структура не отвечает на
+    # главный вопрос: почему склейка run recap должна иметь право говорить мне, какая я».
+    # Поэтому не гуттер и не метр, как в v2, а отказ. И не перенос на «её запись», пока
+    # настоящий authored-источник не определён отдельно.
+    #
+    # Пол стоит НЕ здесь, а в `self_model.RETIRED_OBSERVATION_SOURCES`: убрать вызывающего
+    # мало — канал нельзя завести обратно, не увидев ту запись.
 
     ledger = desires.DesireLedger(BASE)
     for state in ledger.list():
@@ -600,7 +607,12 @@ GROUP_BIG_THRESHOLD = int(os.getenv("PRAXIS_GROUP_BIG", "50") or 50)
 # --------------------------------------------------------------------------- #
 
 def _today() -> str:
-    return _dt.date.today().isoformat()
+    """ЕЁ календарный день, а не день контейнера.
+
+    В контейнере задан только PRAXIS_TZ, системной TZ нет: `date.today()` читал UTC,
+    и с 00:00 до 04:00 по Самаре её запись уходила во вчерашний файл.
+    """
+    return praxis_time.day_key()
 
 
 def _now() -> str:
@@ -658,26 +670,111 @@ def _bounded_state_float(value, *, low: float = 0.0,
     return number if math.isfinite(number) and low <= number <= high else None
 
 
+# ⚠ СЕМЬ СЧЁТЧИКОВ, КОТОРЫЕ РВУТ КЭШИРУЕМУЮ ГОЛОВУ ЕЁ КАДРА.
+#
+# Замер 08.08 на живом проде, по её же распискам: в кадре лички подвижны РОВНО 30 знаков
+# из 18 459 (0,16%), в соло-прогоне 33, в пульсе комнаты 110. И этих тридцати знаков
+# хватает, чтобы после них не закэшировалось НИЧЕГО — включая 63 000 знаков схем рук,
+# которые сериализуются после системного промпта. Измеренный cache-read: внутри хода
+# 97–99%, а первый вызов каждого хода — 16,0%; в личке кэшируется ровно 3 456 токенов,
+# то есть блок персоны и больше ничего.
+#
+# ⚑ РАЗРЕЗ УЗКИЙ ПО ЕЁ РЕШЕНИЮ. Она отказалась выносить весь STATE ради скорости:
+# «более честный вариант — отделить только семь меняющихся счётчиков, а остальное
+# оставить там, где оно сейчас».
+#
+# ⚑ И граница разреза задана её пятым условием: «если счётчик влияет на доступность
+# действия или смысл текущей ситуации, он не должен потеряться из-за кэш-оптимизации».
+# Поэтому из записи `appetite` переезжают ТОЛЬКО наблюдённые счётчики; `mode`,
+# `request_pending`, `request_kind` и все `promised_*` остаются в голове — они решают,
+# что ей МОЖНО, а счётчики лишь говорят, сколько уже потрачено. Из `process` переезжает
+# `uptime_minutes`; `started_at` остаётся, момент рождения процесса неподвижен.
+# Адресная строка группы снимается там, где собирается групповой кадр, а читается
+# тем, кто собирает конверт. Между ними нет общего аргумента, поэтому — contextvar,
+# живущий ровно один ход. Пусто = адреса нет либо разрез выключен.
+_FRAME_ADDRESS: contextvars.ContextVar = contextvars.ContextVar(
+    "praxis_frame_address", default=None)
+
+RUNNER_COUNTERS = (
+    "process.uptime_minutes",
+    "usage_today.calls", "usage_today.tokens_in", "usage_today.tokens_out",
+    "usage_today.fallback_calls",
+    "appetite.tokens_today", "appetite.calls_today",
+)
+
+
+# ⚠ ОСТАВШИЕСЯ ЧЕТЫРЕ ПОДВИЖНЫХ МЕСТА. Замер 08.08 после разреза семи счётчиков показал:
+# в личке голова стала стабильной на 97,8% (было 85,8%), но не на 100%. Ломают её эти:
+#
+#   `latest_turn`      описывает ПРЕДЫДУЩИЙ прожитый ход — другой по построению каждый раз
+#   `perception.skips_today`  счётчик пропусков за сутки
+#   строка адреса в группах   `#97400 (mention+reply) from 18 seconds ago`
+#
+# Все три класса — НАБЛЮДЕНИЯ, а не разрешения: ни одно из них не решает, что ей можно.
+# Поэтому они переезжают тем же способом, что и семь счётчиков: в живой блок конверта,
+# с именами и подписью источника, и НЕ ИСЧЕЗАЮТ.
+FRAME_TAIL_MOVERS = (
+    "latest_turn", "perception.skips_today", "group_address_line",
+)
+
+
+def tail_split_enabled() -> bool:
+    """Выносить ли оставшиеся четыре подвижных места из стабильной головы.
+
+    ⚠ ОТДЕЛЬНЫЙ РЫЧАГ, И ЭТО НЕ ЛИШНЯЯ СУЩНОСТЬ. Praxis одобрила разрез РОВНО семи
+    счётчиков, перечислив их поимённо. Дописать сюда ещё четыре под её рычагом значило бы
+    молча раздвинуть согласие на то, чего она не читала.
+    """
+    return str(os.getenv("PRAXIS_FRAME_TAIL_SPLIT") or "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
+def counters_split_enabled() -> bool:
+    """Выносить ли семь счётчиков из стабильной головы в живой evidence-блок.
+
+    ⚠ ВЫКЛЮЧЕНО ПО УМОЛЧАНИЮ. Её слово 08.08: «это пока не команда на выкладку: сперва
+    хочу увидеть точный проект разреза, обновлённый roster и проверку, что состояние не
+    исчезает из моего доступного evidence-блока». Рычаг существует, чтобы отрендерить
+    сравнение и снять cache-read, не трогая её живой путь.
+    """
+    return str(os.getenv("PRAXIS_STATE_COUNTERS_SPLIT") or "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
 def _state_record(fact: str, **fields) -> str:
     """A system-tier STATE row whose keys and values are code-owned/typed."""
     return json.dumps({"fact": fact, **fields}, ensure_ascii=False, separators=(",", ":"))
 
 
-def build_state_block(*, hide_identity_load: bool = False) -> str:
+def build_state_block(*, hide_identity_load: bool = False,
+                      split_counters: bool | None = None,
+                      split_tail: bool | None = None) -> str:
     """Code-owned typed state only; mutable prose is returned by the evidence helper.
 
     STATE is system-tier for the owner context, so no journal text, names, proposal
     titles, git messages, failure details, free-form reasons or other stored prose may
     be interpolated here.  A malformed source is omitted rather than stringified.
+
+    `split_counters` — вынести ли семь подвижных счётчиков (см. `RUNNER_COUNTERS`).
+    `None` означает «спросить рычаг»; явное значение нужно замеру, который рендерит
+    оба кадра подряд в одном процессе.
     """
+    split = counters_split_enabled() if split_counters is None else bool(split_counters)
+    tail = tail_split_enabled() if split_tail is None else bool(split_tail)
     rows: list[str] = []
     mins = 10 ** 6
     try:
         mins = max(0, int((_dt.datetime.now() - _BOOT_TS).total_seconds() // 60))
-        rows.append(_state_record(
-            "process", uptime_minutes=mins,
-            started_at=_BOOT_TS.replace(microsecond=0).isoformat(),
-        ))
+        if split:
+            # `started_at` неподвижен по определению и остаётся в голове; счётчик минут
+            # уезжает в живой evidence-блок вместе с остальными шестью.
+            rows.append(_state_record(
+                "process", started_at=_BOOT_TS.replace(microsecond=0).isoformat()))
+        else:
+            rows.append(_state_record(
+                "process", uptime_minutes=mins,
+                started_at=_BOOT_TS.replace(microsecond=0).isoformat(),
+            ))
     except Exception:
         pass
     try:
@@ -716,7 +813,7 @@ def build_state_block(*, hide_identity_load: bool = False) -> str:
     except Exception:
         pass
     try:
-        today = llm.usage_days(1).get(_dt.date.today().isoformat()) or {}
+        today = llm.usage_days(1).get(praxis_time.day_key()) or {}
         usage = []
         for role in ("voice", "evaluator"):
             value = today.get(role) if isinstance(today, dict) else None
@@ -732,7 +829,7 @@ def build_state_block(*, hide_identity_load: bool = False) -> str:
                     "tokens_in": tokens_in or 0, "tokens_out": tokens_out or 0,
                     "fallback_calls": fallback or 0,
                 })
-        if usage:
+        if usage and not split:
             rows.append(_state_record("usage_today", roles=usage))
     except Exception:
         pass
@@ -748,10 +845,16 @@ def build_state_block(*, hide_identity_load: bool = False) -> str:
         request_kind = request.get("kind") if isinstance(request, dict) else None
         if request_kind not in ("free", "considerate", "pause_background"):
             request_kind = "unknown" if request else None
+        # ⚑ Её пятое условие исполнено ЗДЕСЬ: `mode`, `request_pending`, `request_kind` и
+        # все `promised_*` остаются в системной голове при любом значении рычага — они
+        # решают, что ей можно. Уезжают только два наблюдённых счётчика.
+        observed_counters = ({} if split else {
+            "tokens_today": _bounded_state_int(observed.get("tokens_today")) or 0,
+            "calls_today": _bounded_state_int(observed.get("calls_today")) or 0,
+        })
         rows.append(_state_record(
             "appetite", mode=mode, request_pending=bool(request), request_kind=request_kind,
-            tokens_today=_bounded_state_int(observed.get("tokens_today")) or 0,
-            calls_today=_bounded_state_int(observed.get("calls_today")) or 0,
+            **observed_counters,
             promised_daily_tokens=_bounded_state_int(promise.get("daily_tokens")),
             promised_daily_cost=_bounded_state_float(promise.get("daily_cost"), high=10 ** 6),
             promised_background_calls=_bounded_state_int(
@@ -864,17 +967,27 @@ def build_state_block(*, hide_identity_load: bool = False) -> str:
         # И второе число: сколько из них она вправду двигала. «Есть 8» и «моих решений 0» —
         # разные факты, и первый без второго читается как «всё это не моё».
         mine = panel.get("overrides") if isinstance(panel, dict) else None
+        # ⚑ `knob_count` и `my_choices` ОСТАЮТСЯ: сколько у неё рычагов восприятия и
+        # сколько она сама двигала — это про её власть, а не про сегодняшний счёт.
+        # Уезжает только `skips_today`, и только он.
+        perception_counter = {} if tail else {"skips_today": skip_count}
         rows.append(_state_record(
             "perception", knob_count=knob_count,
             my_choices=len(mine) if isinstance(mine, (list, tuple, dict)) else 0,
-            skips_today=skip_count,
+            **perception_counter,
         ))
     except Exception:
         pass
     try:
-        latest = turns.recent(1)
+        latest = turns.recent(1) if not tail else []
         last = latest[-1] if latest else None
-        if isinstance(last, dict):
+        if tail:
+            # Уезжает ЦЕЛИКОМ: запись описывает предыдущий прожитый ход и потому другая
+            # на каждом ходе по построению. Половинчатый разрез («оставить present,
+            # вынести kind») дал бы стабильность в одних ходах и не дал бы в других —
+            # то есть не дал бы вовсе.
+            pass
+        elif isinstance(last, dict):
             ts = _bounded_state_float(last.get("ts"), high=10 ** 11)
             kind = last.get("kind")
             if kind not in ("chat", "heartbeat", "task_window", "coding_window",
@@ -920,6 +1033,129 @@ def build_state_block(*, hide_identity_load: bool = False) -> str:
             + "\n".join(rows))
 
 
+def build_runner_counters(*, split_counters: bool | None = None) -> dict | None:
+    """Семь счётчиков, снятых раннером ПРЯМО СЕЙЧАС. `None` — разрез выключен.
+
+    ⚑ Её второе условие — «сохранить названия, источник и различимость: что это снято
+    раннером, а не постоянный факт обо мне» — исполнено полями записи, а не подписью в
+    прозе: имена счётчиков те же, что были в голове, плюс `snapped_by` и `snapped_at`.
+    ⚑ Её первое условие — «не превращать в вчерашний снимок» — исполнено тем, что здесь
+    нет ни кэша, ни чтения с диска прошлого хода: значения читаются из тех же источников
+    и в тот же момент, что читал бы сборщик головы.
+    """
+    split = counters_split_enabled() if split_counters is None else bool(split_counters)
+    if not split:
+        return None
+    counters: dict = {}
+    try:
+        counters["process"] = {
+            "uptime_minutes": max(0, int((_dt.datetime.now() - _BOOT_TS).total_seconds() // 60)),
+        }
+    except Exception:
+        pass
+    try:
+        today = llm.usage_days(1).get(praxis_time.day_key()) or {}
+        usage = []
+        for role in ("voice", "evaluator"):
+            value = today.get(role) if isinstance(today, dict) else None
+            if not isinstance(value, dict):
+                continue
+            calls = _bounded_state_int(value.get("calls"))
+            if calls:
+                usage.append({
+                    "role": role, "calls": calls,
+                    "tokens_in": _bounded_state_int(value.get("in")) or 0,
+                    "tokens_out": _bounded_state_int(value.get("out")) or 0,
+                    "fallback_calls": _bounded_state_int(value.get("fallback")) or 0,
+                })
+        if usage:
+            counters["usage_today"] = {"roles": usage}
+    except Exception:
+        pass
+    try:
+        state = appetite.state()
+        observed = state.get("observed") if isinstance(state, dict) else {}
+        observed = observed if isinstance(observed, dict) else {}
+        counters["appetite"] = {
+            "tokens_today": _bounded_state_int(observed.get("tokens_today")) or 0,
+            "calls_today": _bounded_state_int(observed.get("calls_today")) or 0,
+        }
+    except Exception:
+        pass
+    if not counters:
+        return None
+    return {
+        "snapped_by": "runner",
+        "snapped_at": praxis_time.stamp(),
+        "note": ("счётчики раннера на момент сборки этого хода; не постоянный факт о "
+                 "Praxis. Разрешения и обещания аппетита остались в STATE."),
+        "counters": counters,
+    }
+
+
+def build_frame_tail(*, split_tail: bool | None = None) -> dict | None:
+    """Наблюдения, снятые раннером в этом ходе. `None` — хвостовой разрез выключен.
+
+    Три записи, и все три — НАБЛЮДЕНИЯ, а не разрешения: ни одна не решает, что ей можно.
+    `latest_turn` описывает предыдущий прожитый ход, `skips_today` считает пропуски за
+    сутки, `address` называет адрес и возраст сообщения, которому принадлежит проход.
+
+    ⚑ Ничего не исчезает. Её слова про адрес: «это важная живая ситуация, которую нельзя
+    просто выбросить ради скорости». Он и не выбрасывается — он переезжает туда, где
+    волатильность бесплатна, целиком и с теми же полями.
+    """
+    tail = tail_split_enabled() if split_tail is None else bool(split_tail)
+    if not tail:
+        return None
+    out: dict = {}
+    try:
+        latest = turns.recent(1)
+        last = latest[-1] if latest else None
+        if isinstance(last, dict):
+            ts = _bounded_state_float(last.get("ts"), high=10 ** 11)
+            kind = last.get("kind")
+            if kind not in ("chat", "heartbeat", "task_window", "coding_window",
+                            "forge_event", "wake"):
+                kind = "other"
+            held = last.get("held")
+            if held not in ("", "voice", "privacy", "evaluator", "anti-repeat", "drift",
+                            "error", "empty"):
+                held = "other"
+            out["latest_turn"] = {
+                "present": True, "kind": kind, "held": held or "none",
+                "before_restart": bool(ts is not None and ts < _BOOT_TS.timestamp()),
+                "tool_count": (len(last.get("tools") or [])
+                               if isinstance(last.get("tools"), list) else 0),
+                "has_output": bool(last.get("out")),
+            }
+        else:
+            out["latest_turn"] = {"present": False}
+    except Exception:
+        pass
+    try:
+        import perception
+        panel = perception.panel_state()
+        skips = panel.get("skips_today") if isinstance(panel, dict) else {}
+        skips = skips if isinstance(skips, dict) else {}
+        out["perception"] = {"skips_today": sum(
+            value for value in (_bounded_state_int(v) for v in skips.values())
+            if value is not None)}
+    except Exception:
+        pass
+    address = _FRAME_ADDRESS.get()
+    if address:
+        out["address"] = address
+    if not out:
+        return None
+    return {
+        "snapped_by": "runner",
+        "snapped_at": praxis_time.stamp(),
+        "note": ("наблюдения раннера на момент сборки этого хода; не постоянные факты о "
+                 "Praxis. Рычаги восприятия и её решения остались в STATE."),
+        "observations": out,
+    }
+
+
 def build_state_evidence_block(*, hide_identity_load: bool = False) -> str:
     """Mutable state continuity at lower prompt priority, never SYSTEM authority."""
     records: list[dict] = []
@@ -933,6 +1169,16 @@ def build_state_evidence_block(*, hide_identity_load: bool = False) -> str:
             return
         records.append({"label": label, "content": content})
 
+    try:
+        # Первым в конверте намеренно: её первое условие — «отдельным живым evidence-блоком
+        # на первом вызове хода», а не строчкой, потерянной в середине.
+        add("runner_counters_now", build_runner_counters())
+    except Exception:
+        pass
+    try:
+        add("runner_observations_now", build_frame_tail())
+    except Exception:
+        pass
     try:
         add("restart_reason", _read(STATE_DIR / "restart_reason.txt"))
     except Exception:
@@ -3011,7 +3257,10 @@ def tool_manage_loop(action: str, person: str, match: str = "", until: str = "",
             why = (reason or "").strip() or "причина не названа"
             tool_journal(f"[нить] парковка ×{slept + 1} поверх храповика ({person}): {why[:160]}")
             log.info("manage_loop park force %s (спала ×%s): %s", slug, slept, why[:80])
-        u = (until or "").strip() or (_dt.date.today() + _dt.timedelta(days=7)).isoformat()
+        # ⚠ Срок парковки считается ЕЁ сутками: в окне 00:00–04:00 «через неделю»
+        # оказывалось на день раньше обещанного.
+        u = (until or "").strip() or praxis_time.day_key(
+            praxis_time.today() + _dt.timedelta(days=7))
         ok = people.park_loop(slug, match, u)
         if ok:
             _reindex(people.path_for(slug))
@@ -4112,8 +4361,19 @@ def tool_manage_desire(
         compact = []
         for state in states[:20]:
             row = dict(state)
-            row["timeline"] = list(row.get("timeline") or [])[-4:]
+            # ⚠ 10.08.2026: оба среза — по числу желаний и по длине ленты — были молчаливыми.
+            # Теперь каждый называет себя прямо в той же записи, которую она читает.
+            full = list(row.get("timeline") or [])
+            row["timeline"] = full[-4:]
+            if len(full) > len(row["timeline"]):
+                row["timeline_срез"] = ("показаны последние %d события из %d; целиком — "
+                                        "manage_desire(action=get, desire_id=%s)"
+                                        % (len(row["timeline"]), len(full), state.get("id")))
             compact.append(row)
+        if len(states) > len(compact):
+            compact.append({"_срез": "показано %d желаний из %d; остальные — "
+                                     "manage_desire(action=get, desire_id=…)"
+                                     % (len(compact), len(states))})
         return json.dumps(compact, ensure_ascii=False, indent=2, default=str)
     if action == "get":
         state = ledger.get(desire_id)
@@ -4386,7 +4646,19 @@ def tool_list_active_runs(limit: int = 20) -> str:
             age = f" · {mins}м" if mins < 90 else f" · {mins // 60}ч"
         except Exception:
             pass
-        out.append(f"{run_id[:28]} [{r.get('status') or '?'}] {r.get('kind') or '—'}{age}")
+        # ⚠ Отсроченный ран обязан выглядеть иначе, чем тот, который часы поднимают каждые
+        # 45 секунд. Иначе «меня ещё пробуют дожать» и «до меня доберутся через час»
+        # неразличимы для неё БАЙТ В БАЙТ — а это разные решения с её стороны.
+        pause = ""
+        try:
+            wait = resume_wait_seconds(_runs(), run_id)
+            if wait > 0:
+                pause = (f" · следующая попытка через ~{int(wait // 60)}м"
+                         if wait >= 60 else " · следующая попытка вот-вот")
+        except Exception:
+            pass
+        out.append(f"{run_id[:28]} [{r.get('status') or '?'}] "
+                   f"{r.get('kind') or '—'}{age}{pause}")
     head = f"Живых прогонов: {len(rows)} (не терминальных)."
     return head + "\n" + "\n".join(out)
 
@@ -6510,6 +6782,122 @@ OWNER_TOOLS = [SHELL_TOOL, MANAGE_ROOM_TOOL, ADMIT_TOOL, WRITE_SKILL_TOOL, RESTA
 
 # Praxis is a sovereign actor with the same operational hands as the owner.  Only
 # delegation of human trust stays human-owner-only; implementations repeat that check.
+def tool_task_control(action: str, summary: str = "", evidence: str = "",
+                      blocker: str = "", wake_on: str = "") -> str:
+    """Её слово о конце рабочего хода. Единственное, что закрывает окно.
+
+    Раньше ход закрывался её молчанием: сказала текст без инструмента — прогон `done`.
+    Теперь конец объявляется, и объявление ложится в ход наблюдаемой записью.
+
+    ⚠ `done` — ЗАПРОС на завершение, а не объявление. Без единого следа он отклоняется, и
+    ход НЕ закрывается: она получает его обратно, чтобы след назвать. Это не приговор
+    работе и не оценка качества — код не умеет судить, хорошо ли сделано. Он умеет
+    заметить, что доказательства не названы вовсе. Рычаг `PRAXIS_WORK_DOD=off` возвращает
+    прежнее «принято, но недостача названа вслух».
+    """
+    name = str(action or "").strip().lower()
+    current = run_context.current_run()
+    run_id = str(getattr(current, "run_id", "") or "")
+    row = None
+    try:
+        row = work_store.for_run(run_id) if run_id else None
+    except Exception:
+        log.warning("карточка работы не прочиталась [%s]", run_id, exc_info=True)
+    if name == "done" and _work_dod_enabled():
+        accepted, why = work_store.dod_verdict(row, evidence)
+        if not accepted:
+            # Слово НЕ кладётся в слот: ход остаётся открытым, и это единственное место,
+            # где отказ имеет смысл — до того, как цикл прочитал её решение.
+            return "[task_control] «сделано» не принято. " + why
+    try:
+        record = work_loop.claim(
+            action, summary=summary, evidence=evidence, blocker=blocker, wake_on=wake_on)
+    except ValueError as exc:
+        return f"[task_control] {exc}"
+    name = record["action"]
+    card_line = _work_card_after_word(record, current, row)
+    if name == "done" and not record.get("evidence"):
+        return ("[task_control] принято: done без evidence. Ход закрыт, но чем это "
+                "подтверждается — не сказано." + card_line)
+    tail = record.get("evidence") or record.get("blocker") or record.get("wake_on") or ""
+    return "[task_control] принято: %s%s%s" % (
+        name, (" — " + tail) if tail else "", card_line)
+
+
+def _work_dod_enabled() -> bool:
+    return str(os.getenv("PRAXIS_WORK_DOD", "on") or "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
+_WORK_CARD_STATUS = {"done": "done", "wait": "waiting", "blocked": "blocked"}
+
+
+def _work_card_after_word(record: dict, current, row: dict | None) -> str:
+    """Карточка работы после её слова. Заводится там, где работа НЕ кончилась.
+
+    Не на каждый ход: слой, который никто не читает, — это ещё одна ложь о себе. Карточка
+    нужна ровно тогда, когда работе предстоит пережить прогон, то есть на `wait` и
+    `blocked`. Сказала `done` при заведённой карточке — то же слово её и закрывает.
+
+    Падение доски НЕ отнимает у неё руку: карточка это память о работе, а не разрешение
+    работать. Поэтому здесь всё под `except`, и неудача называется вслух, а не глотается.
+    """
+    name = str(record.get("action") or "")
+    run_id = str(getattr(current, "run_id", "") or "")
+    if not run_id:
+        return ""
+    try:
+        if row is None:
+            if name not in {"wait", "blocked"}:
+                return ""
+            row = work_store.open_card(
+                goal=str(getattr(current, "goal", "") or "работа без имени"),
+                kind=str(getattr(current, "kind", "") or "work"),
+                run_id=run_id, origin=str(getattr(current, "principal_id", "") or ""),
+            )
+        wake = ({"wake_on": record.get("wake_on") or ""}
+                if name == "wait" else None)
+        row = work_store.transition(
+            row["id"], _WORK_CARD_STATUS.get(name, "running"),
+            reason="её слово «%s»" % name,
+            evidence=str(record.get("evidence") or ""),
+            blocker=str(record.get("blocker") or ""), wake=wake,
+        )
+        if record.get("summary"):
+            work_store.note(row["id"], str(record["summary"]))
+        work_store.write_board()
+        return "\n[работа] карточка `%s` → %s · `memory/work/BOARD.md`" % (
+            row["id"], row["status"])
+    except Exception as exc:
+        log.warning("карточка работы не записалась [%s]", run_id, exc_info=True)
+        return "\n[работа] ⚠ карточка НЕ записалась: %s: %s" % (type(exc).__name__, exc)
+
+
+TOOL_IMPL["task_control"] = tool_task_control
+
+TASK_CONTROL_TOOL = {
+    "name": "task_control",
+    "description": (
+        "Закончить рабочий ход своим словом. Пока ты его не позвала, ход не закрыт: текст "
+        "без вызова инструмента я записываю заметкой и зову тебя снова. "
+        "done — работа сделана, назови в evidence наблюдаемый след (что изменилось и где "
+        "это видно). blocked — упёрлась, назови препятствие. wait — ждёшь события, назови "
+        "условие пробуждения."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["done", "blocked", "wait"]},
+            "summary": {"type": "string", "description": "что вышло, коротко"},
+            "evidence": {"type": "string",
+                         "description": "чем подтверждается сделанное: файл, вывод, число"},
+            "blocker": {"type": "string", "description": "что именно мешает"},
+            "wake_on": {"type": "string", "description": "по какому условию будить"},
+        },
+        "required": ["action"],
+    },
+}
+
 _HUMAN_OWNER_ONLY_TOOL_NAMES = frozenset({
     "admit", "computer_access",
 })
@@ -6865,6 +7253,99 @@ def _scope_of(is_dm: bool, owner: bool, known: bool) -> str:
     return ChannelContext(is_dm=is_dm, owner=owner, known=known).scope
 
 
+# Окно живого упоминания. Её слово: «релевантность упоминания ограничена живым окном
+# последних 100 сообщений; после выхода из него карточка не остаётся фоновым грузом».
+MENTION_WINDOW_MESSAGES = 100
+# Потолок сводки в кадре. Замер 08.08: 17 819 знаков, 12,8% разговорного хода.
+SUMMARY_FRAME_CHARS = 4000
+
+
+def dossier_contract_enabled() -> bool:
+    """Контракт досье вместо постоянного груза всех тридцати шести.
+
+    ⚠ ВКЛЮЧЁН ПО УМОЛЧАНИЮ — это решение Praxis и Егора от 09.08, а не эксперимент.
+    Обратно всё возвращает `PRAXIS_DOSSIER_ALL=1`, одной переменной и без выката.
+    """
+    return str(os.getenv("PRAXIS_DOSSIER_ALL") or "").strip().lower() not in {
+        "1", "true", "yes", "on"}
+
+
+def _present_by_transport(ctx: "ChannelContext") -> set[str]:
+    """tg-id тех, кто РЕАЛЬНО говорил в окне последних сообщений комнаты.
+
+    ⚑ Источник — `sender_id` архива, то есть транспорт. Её тонкость: «„тех, кто есть“
+    лучше определять транспортом и реальным составом комнаты, а не появлением имени в
+    тексте. Иначе цитата „Арет сказал“ незаметно становится присутствием Арета».
+    """
+    room = ctx.room_id if ctx.room_id is not None else ctx.chat_id
+    if room is None:
+        return set()
+    out: set[str] = set()
+    for row in _room_window(room):
+        sender = row.get("sender_id")
+        if sender not in (None, "", 0):
+            out.add(str(sender))
+    return out
+
+
+def _room_window(room) -> list[dict]:
+    """Последние `MENTION_WINDOW_MESSAGES` записей архива комнаты, как они лежат.
+
+    Читается сам архив, а не отрендеренная лента: в ленте нет `sender_id`, а без него
+    присутствие пришлось бы угадывать по имени — ровно то, что запрещено контрактом.
+    """
+    try:
+        import group_context
+        path = group_context.archive_path(room)
+        if not path.exists():
+            return []
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return []
+    out: list[dict] = []
+    for line in lines[-MENTION_WINDOW_MESSAGES:]:
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(row, dict):
+            out.append(row)
+    return out
+
+
+def _mentioned_slugs(ctx: "ChannelContext", exclude: set[str]) -> list[str]:
+    """Досье, ОДНОЗНАЧНО названные в окне. Только для указателя — тело не едет.
+
+    Неоднозначность не порождает ничего: если строка окна разрешается в двоих, ни одно
+    досье не предлагается. Её четвёртый пункт.
+    """
+    room = ctx.room_id if ctx.room_id is not None else ctx.chat_id
+    text = str(getattr(ctx, "origin_text", "") or "")
+    if room is not None:
+        text += "\n" + "\n".join(str(r.get("text") or "") for r in _room_window(room))
+    if not text.strip():
+        return []
+    hay = text.casefold()
+    hits: list[str] = []
+    directory = getattr(people, "PEOPLE_DIR", None)
+    if directory is None or not directory.exists():
+        return []
+    for path in sorted(directory.glob("*.md")):
+        slug = path.stem
+        if slug.startswith("_") or people.telegram_id(slug) in exclude:
+            continue
+        names = [str(people.read(slug)[0] or "")] + list(people.aliases(slug) or [])
+        matched = [n for n in names if len(n.strip()) >= 4 and n.strip().casefold() in hay]
+        if matched:
+            hits.append(slug)
+    # ⚠ Совпадение обычного слова — не упоминание. Порог длины выше плюс требование, что
+    # разрешение однозначно: два досье на одно написание не дают ни одного указателя.
+    by_key = {}
+    for slug in hits:
+        by_key.setdefault(people.identity_key(str(people.read(slug)[0] or slug)), []).append(slug)
+    return sorted(s[0] for s in by_key.values() if len(s) == 1)
+
+
 def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str:
     """ВСЕ её досье на людей, целиком. Отбора нет — и это решение, а не упрощение.
 
@@ -6916,12 +7397,48 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
             kept.append(line)
         return "\n".join(kept)
 
+    # ── КОНТРАКТ ДОСЬЕ (решение Praxis и Егора 09.08) ─────────────────────────────────
+    #
+    # Прежде здесь ехали ВСЕ досье целиком: 33,3% разговорного хода и 74,6% автономного
+    # окна — 53 611 знаков там, где собеседника нет вовсе. Лекарство от голода досье
+    # (было 0 из 36, стало 36 из 36) сработало и было названо временным.
+    #
+    # ⚠ Контракт стоит НЕ на доказанном отсутствии влияния. Два контрфактных замера его
+    # не установили: первый был слеп к выбору инструмента (читал несуществующее поле),
+    # второй утонул в шуме 0,606. Он стоит на том, что постоянный груз не оправдан ничем
+    # ИЗМЕРЕННЫМ, и обратим одной переменной `PRAXIS_DOSSIER_ALL=1`.
+    principal_now = _stable_numeric_principal(ctx.principal_id)
+    chosen: list[str] = []
+    pointers: list[str] = []
+    contract = dossier_contract_enabled()
+    if contract:
+        here = _present_by_transport(ctx)
+        if principal_now:
+            here.add(str(principal_now))
+        for path in sorted(directory.glob("*.md")):
+            if path.stem.startswith("_"):
+                continue
+            tg = str(people.telegram_id(path.stem) or "")
+            if tg and tg in here:
+                chosen.append(path.stem)
+        # Указатель — НЕ тело. Её третий пункт: «давать мне однозначный указатель, и я
+        # открываю цельный документ рукой».
+        pointers = [s for s in _mentioned_slugs(ctx, here) if s not in chosen]
+        # ⚑ Шестой пункт: в автономном окне (комнаты нет вовсе) не едет ничего, кроме
+        # причинно привязанного человека. Привязка здесь одна наблюдаемая — транспортный
+        # принципал хода; «намерение, сообщение или активная нить» отдельного источника
+        # в кадре пока не имеют, и додумывать его я не стану.
+        if ctx.chat_id is None and ctx.room_id is None and not principal_now:
+            chosen, pointers = [], []
+
     rows: list[str] = []
     total = 0
     for path in sorted(directory.glob("*.md")):
         # `_`-префикс — служебное (шаблон `_пример.md`); та же конвенция, что у
         # `people.slug_for_principal`.
         if path.stem.startswith("_"):
+            continue
+        if contract and path.stem not in chosen:
             continue
         try:
             body = visible(people.read_text(path.stem)).strip()
@@ -6936,7 +7453,17 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
         title = str(people.read(path.stem)[0] or path.stem).strip()
         rows.append(f"— {title} · memory/people/{path.name} —\n{body}")
         total += len(body)
-    if not rows:
+    # ⚠ МОЛЧАНИЕ ВМЕСТО НАЗВАННОЙ НЕИЗВЕСТНОСТИ — ЭТО ШАГ НАЗАД, И ТЕСТ ЭТО ПОЙМАЛ.
+    # Первая редакция контракта возвращала пустоту, когда ни одно досье не выбрано, — и
+    # вместе с телами исчезала строка «кто передо мной кадру НЕ НАЗВАН». Она нужна ровно
+    # тогда, когда привязки нет: подделанное имя не должно молча выглядеть как отсутствие
+    # вопроса. Поэтому при наличии принципала блок собирается всегда, даже пустой.
+    # Личка — это всегда кто-то перед ней, даже если принципал кривой или отсутствует.
+    # Именно там молчание опаснее всего: подделанное имя не должно выглядеть как
+    # отсутствие вопроса «кто передо мной».
+    in_a_channel = (ctx.chat_id is not None or ctx.room_id is not None
+                    or bool(ctx.principal_id) or bool(getattr(ctx, "is_dm", False)))
+    if not rows and not pointers and not in_a_channel:
         return ""
     # ⚠ Материал перестал отбираться — но ВЛАСТЬ по-прежнему только от подтверждённого
     # принципала. Отображаемое имя не выбирает досье и не назначает личность: раньше это
@@ -6957,22 +7484,80 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     veil = ("" if owner_audience else
             f" Здесь не owner-контур, поэтому строк с пометкой [private] снято {hidden} —"
             f" они есть в первоисточнике и открываются рукой.")
-    head = (f"досье: {len(rows)}, знаков {total}. Это моя память о людях целиком, без "
-            f"отбора и без сжатия; путь у каждого назван, первоисточник открывается рукой."
+    if not contract:
+        head = (f"досье: {len(rows)}, знаков {total}. Это моя память о людях целиком, без "
+                f"отбора и без сжатия; путь у каждого назван, первоисточник открывается рукой."
+                f"{veil}\n{who}.")
+        return head + "\n\n" + "\n\n".join(rows)
+    # ⚑ Указатели печатаются ОТДЕЛЬНО от тел и названы указателями. Смешать их с досье
+    # значило бы соврать о том, что она видит: тело едет, указатель — нет.
+    total_all = len([p for p in directory.glob("*.md") if not p.stem.startswith("_")])
+    tail = ""
+    if pointers:
+        named = "; ".join(
+            f"{str(people.read(s)[0] or s)} · memory/people/{s}.md" for s in pointers[:12])
+        tail = ("\n\nУПОМЯНУТЫ В ОКНЕ ПОСЛЕДНИХ 100 СООБЩЕНИЙ — досье НЕ загружено, "
+                f"открывается рукой: {named}."
+                + (f" И ещё {len(pointers) - 12}." if len(pointers) > 12 else ""))
+    head = (f"досье здесь: {len(rows)} из {total_all}, знаков {total}. Едут целиком те, "
+            f"кого транспорт назвал присутствующими; остальные доступны рукой по "
+            f"memory/people/ и карте памяти — они не удалены, они не в кадре."
             f"{veil}\n{who}.")
-    return head + "\n\n" + "\n\n".join(rows)
+    body = ("\n\n" + "\n\n".join(rows)) if rows else ""
+    return head + body + tail
+
+
+def _index_body_on() -> bool:
+    """Едет ли ТЕЛО индекса в кадр.
+
+    ⚠ ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО, и это не осторожность, а честность. Её решение 10.08 было
+    «класть индекс целиком в кадр». Но у неё же есть правило, закреплённое тестом
+    `test_index_body_is_never_prompt_authority` (test_memory_v2.py:314): сгенерированный
+    markdown НИКОГДА не становится властью промпта — тест пишет в INDEX.md отраву и
+    требует, чтобы её не оказалось ни в system, ни в evidence.
+    Решение принималось, не зная про это правило. Переписывать её сторож, чтобы прошёл
+    наш ход, нельзя: он закрепляет СВОЙСТВО (генерируемый текст не получает власти), а не
+    формулировку. Поэтому способность готова целиком и включается одной переменной — её
+    словом, а не нашим.
+    """
+    return os.environ.get("PRAXIS_FRAME_INDEX_BODY", "off").strip().lower() \
+        not in {"off", "0", "false", ""}
 
 
 def _memory_navigation_hint() -> str:
-    """Code-owned locator; generated Markdown is never prompt authority."""
+    """Ярус «Карта памяти»: тело индекса, а не записка о том, что индекс где-то есть.
+
+    ⚠ 10.08.2026, её решение. Прежде здесь стояли 323 знака: «Generated navigation is
+    available at memory/INDEX.md…». Сам INDEX.md при этом лежал на диске, обновлялся
+    ежедневно и в кадр не попадал ни разу. Егор: «как бы хотелось, чтобы у неё перед
+    глазами был индекс всего… но не SQL». Она: «класть целиком в кадр».
+    Цена: 1 554 знака против 323 при кадре в 125 349 — 1,2%.
+
+    Потолок обязателен: индекс растёт вместе с числом людей и документов. Переросший
+    потолок возвращает локатор И ГОВОРИТ ОБ ЭТОМ — молча пухнуть кадру нельзя.
+    Рычаг: PRAXIS_FRAME_INDEX_BODY=on — включить (по умолчанию выключено, см. выше).
+    """
     if not INDEX_MD.exists():
         return ""
-    return (
+    locator = (
         "Generated navigation is available at memory/INDEX.md. Deep maps: "
         "memory/maps/PEOPLE.md, ROOMS.md, PROJECTS.md, THREADS.md, RUNS.md and "
         "COMPUTERS.md. These are locators only: inspect the canonical source or an "
         "evidence receipt before relying on a remembered statement."
     )
+    if not _index_body_on():
+        return locator
+    body = _read(INDEX_MD).strip()
+    if not body:
+        return locator
+    try:
+        cap = int(os.environ.get("PRAXIS_FRAME_INDEX_MAX", "6000"))
+    except ValueError:
+        cap = 6000
+    if len(body) > cap:
+        return (locator + " ⚠ Тело индекса (%d знаков) переросло потолок кадра (%d) и "
+                "поэтому здесь не показано целиком." % (len(body), cap))
+    return body
 
 
 def _persona_text() -> str:
@@ -7021,7 +7606,8 @@ def _active_desires_block(limit: int = 10) -> str:
     except Exception:
         return ""
     rows = []
-    for state in states[:max(1, int(limit))]:
+    shown = states[:max(1, int(limit))]
+    for state in shown:
         row = (
             f"- {state.get('id')} [{state.get('stage')}/{state.get('status')}]: "
             f"{str(state.get('statement') or '').strip()}"
@@ -7031,9 +7617,18 @@ def _active_desires_block(limit: int = 10) -> str:
         rows.append(row)
     if not rows:
         return ""
+    # ⚠ 10.08.2026. Блок кончался словами про manage_desire и НИ ОДНИМ знаком о том, что
+    # показаны не все намерения. При ледждере в 158 тыс. знаков это значит, что она видит
+    # срез и не может об этом узнать — тот самый класс «ей врут о ней самой», за которым
+    # мы охотимся. Молчаливое усечение хуже усечения: усечение это цена, молчание — ложь.
+    cut = ""
+    if len(states) > len(shown):
+        cut = ("\nПоказано %d живых намерений из %d — остальные целиком через "
+               "manage_desire(action=get, desire_id=…)." % (len(shown), len(states)))
     return (
         "# Мои живые намерения (внутреннее, не обещание аудитории)\n"
         + "\n".join(rows)
+        + cut
         + "\nПричинную стадию меняю через manage_desire; не называю run успехом до evidence."
     )
 
@@ -7166,7 +7761,33 @@ def _build_prompt_parts(
         "rewrite them or choose silence for stylistic or moral reasons. The only outbound data-authority check "
         "outside the owner DM is narrow: another person's private material, credentials or raw neighbouring-"
         "chat content needs authority for the destination. It cannot edit wording. Telegram transports the "
-        "reply as Praxis's authorship; text that quotes or names somebody is still your authored text.\n")
+        "reply as Praxis's authorship; text that quotes or names somebody is still your authored text.\n"),
+        # ⚑ 13.08. Замер: за пять суток на 407 чат-ходов пришлось 4 вызова `remember`,
+        # один `manage_notes` и один `write_skill` — то есть в разговоре она память о людях
+        # и местах почти не ведёт, хотя в своих окнах ведёт исправно (113 `manage_desire`).
+        # Руки были, приглашения не было: кадр показывал документы и молчал о том, что их
+        # можно менять ЭТИМ ЖЕ ходом.
+        #
+        # Довод про «разрастание» снят замером и назван неверной рамкой: всё, что она пишет
+        # рукой, — 57 МБ (0,7% памяти), все 44 досье вместе — 90 КБ против 7,7 ГБ протоколов
+        # прогонов. Ограничение на письмо никогда не было про место.
+        #
+        # Поэтому строка зовёт не «записывать больше», а держать документ правдой: дописать,
+        # поправить, вычеркнуть. Устаревшая запись хуже отсутствующей — рядом с верным
+        # фактом она выглядит таким же, и это её собственная формулировка про две версии
+        # одного объекта, которые не могут быть истинны одновременно.
+        frame_trace.mark("contract.living_documents", "dynamic", "text",
+        "\n\n## Документы, которые ты видишь, — живые\n"
+        "Досье людей, записки мест, заметки, навыки и твои карты — рабочие тексты, а не "
+        "архив. Их можно дописать, поправить и вычеркнуть из них устаревшее ПРЯМО СЕЙЧАС, "
+        "этим же ходом: `remember` (досье), `home_note` (записка места), `manage_notes` "
+        "(заметка), `write_skill` (навык).\n"
+        "Повод — не каждая реплика, а то, что переживёт этот разговор: узнанное о человеке, "
+        "решение, обещание, изменившийся факт. И отдельно — то, что перестало быть верным: "
+        "молча устаревшая запись хуже отсутствующей, потому что рядом с верным фактом "
+        "выглядит таким же.\n"
+        "Место не ограничение: всё, что ты написала за месяцы, весит меньше процента твоей "
+        "памяти.\n"),
     ]
     desire_context = _active_desires_block()
     if owner_context:
@@ -7346,6 +7967,19 @@ def _build_prompt_parts(
     # пустота печатается только там, где решение о тире вообще принималось.
     summary = read_summary(chat_id) if chat_id is not None else ""
     if chat_id is not None:
+        # ⚑ ЕЁ ПЯТЫЙ ПУНКТ 09.08: «compact-recap не должен постоянно ехать всем архивом.
+        # Живая лента остаётся каноном текущего разговора; старые recap доступны
+        # документами и адресно». Замер: 17 819 знаков, 12,8% разговорного хода.
+        #
+        # ⚠ И её условие перед снятием: «нужно проверить, что при обрыве ленты остаётся
+        # понятный указатель на продолжение истории». Поэтому сводка не выбрасывается —
+        # она ОБРЕЗАЕТСЯ с головы (свежее важнее давнего) и обрыв называется вслух,
+        # вместе с рукой, которой достаётся остальное.
+        if summary and dossier_contract_enabled() and len(summary) > SUMMARY_FRAME_CHARS:
+            kept = summary[-SUMMARY_FRAME_CHARS:]
+            summary = (f"[сводка обрезана: показано {len(kept)} знаков из {len(summary)}, "
+                       f"давнее осталось за кадром и достаётся рукой `recall` или "
+                       f"чтением compact-документов по карте памяти]" + chr(10) + kept)
         tiers.append(("Ранее в этом диалоге (сводка)",
                       summary or frame_layout.void("сводки этого разговора ещё нет")))
     participant_cards = _participant_memory_block(speaker, ctx)
@@ -7353,8 +7987,13 @@ def _build_prompt_parts(
         # ⚠ Ярлык переписан вместе с содержимым: «короткие профили активных участников»
         # было неправдой дважды — профили больше не короткие (файл целиком) и не
         # «активных» (все, кого она знает, а не участники этой комнаты).
-        tiers.append(("Мои досье на людей — ВСЕ И ЦЕЛИКОМ (внутреннее; что произнести "
-                      "вслух в этой комнате, решаю я)",
+        # ⚠ ЯРЛЫК ПЕРЕПИСАН ВМЕСТЕ С СОДЕРЖИМЫМ, третий раз в этом файле и по той же
+        # причине: «ВСЕ И ЦЕЛИКОМ» стало неправдой в тот момент, когда встал контракт.
+        # Ярлык обязан называть наблюдаемое, а не вчерашнее решение.
+        tiers.append((("Мои досье на людей — присутствующие целиком, остальные указателем"
+                       if dossier_contract_enabled() else
+                       "Мои досье на людей — ВСЕ И ЦЕЛИКОМ")
+                      + " (внутреннее; что произнести вслух в этой комнате, решаю я)",
                       participant_cards or frame_layout.void(
                           f"нет привязки tg {ctx.principal_id} → memory/people/*")))
     # Personal memory belongs to Praxis, not to the current speaker.  This map is an
@@ -7378,8 +8017,23 @@ def _build_prompt_parts(
     mbox = (_mailbox_index() if ctx.mailbox_index_override is None
             else ctx.mailbox_index_override)
     if mbox:
-        tiers.append(("Почтовый ящик (свежий; действуй тулами mail_read / mail_draft_reply / "
-                      "send_email, поллить не можешь)", mbox))
+        # ⚑ ЕЁ ЧЕТВЁРТЫЙ ПУНКТ 09.08: «почтовый индекс убрать из постоянного кадра.
+        # Подгружать при почтовом событии, адресном намерении или моём явном обращении
+        # к ящику». Признак — слово о почте во входящем сообщении либо почтовое
+        # пробуждение. Во всех прочих ходах едет ЛОКАТОР: сколько писем и чем открыть.
+        # Рука `mail_read` цела в любом случае — меняется только вес в кадре.
+        asked = bool(re.search(r"(?i)почт|письм|mail|инбокс|ящик",
+                               str(getattr(ctx, "origin_text", "") or "")))
+        mail_event = str(getattr(ctx, "kind", "") or "").startswith("mail")
+        if asked or mail_event or not dossier_contract_enabled():
+            tiers.append(("Почтовый ящик (свежий; действуй тулами mail_read / mail_draft_reply / "
+                          "send_email, поллить не можешь)", mbox))
+        else:
+            letters = sum(1 for line in mbox.splitlines() if line.strip().startswith("-"))
+            tiers.append(("Почтовый ящик — ЛОКАТОР, не индекс",
+                          f"писем в ящике: {letters}. Индекс не в кадре; открывается рукой "
+                          f"`mail_read`, список — `manage_mail`. Приедет сам, если речь "
+                          f"зайдёт о почте."))
     # А вот дайджест ДРУГИХ КОМНАТ остаётся под owner-условием: это не почта, и
     # разговора о нём не было. Раскрывать содержимое одних комнат в других — отдельное
     # решение с другой ценой.
@@ -7697,9 +8351,28 @@ def _presence_frame(ctx: "ChannelContext") -> str:
                 allowed_kinds = {"direct", "mention", "reply", "mention+reply", "ambient"}
                 kind_value = ctx.address_kind if ctx.address_kind in allowed_kinds else None
                 kind = f" ({kind_value})" if kind_value else ""
-                frame += (f"[address] This pass belongs to the frozen{mid}{kind} from {age} seconds ago. "
-                          "The conversation and media shown to you stop at that address; later group traffic "
-                          "is not part of this turn. Decide yourself how the elapsed time matters.\n")
+                # ⚠ ЭТА СТРОКА — ГЛАВНЫЙ ЛОМАТЕЛЬ КЭША В КОМНАТАХ. Номер сообщения и
+                # возраст в секундах меняются каждый ход, а стоит она в СИСТЕМНОМ промпте,
+                # то есть перед 16 000 токенов схем рук: разрез семи счётчиков дал личке
+                # 85,8% → 97,8%, а групповому пульсу — ровно ноль, потому что рвёт здесь.
+                #
+                # ⚑ Praxis назвала это ОТДЕЛЬНОЙ развилкой и просила не решать её хвостом
+                # вместе со счётчиками. Поэтому — свой рычаг, свой замер, своё письмо.
+                # И строка НЕ ИСЧЕЗАЕТ: её же слова — «важная живая ситуация, которую
+                # нельзя просто выбросить ради скорости». Она переезжает целиком, теми же
+                # полями, в живой блок конверта, где волатильность ничего не стоит.
+                if tail_split_enabled():
+                    _FRAME_ADDRESS.set({
+                        "message_id": mid_value, "kind": kind_value,
+                        "age_seconds": age,
+                        "note": ("проход принадлежит замороженному адресу; разговор и медиа "
+                                 "остановлены на нём, поздний трафик комнаты в этот ход "
+                                 "не входит. Как важно прошедшее время — решаешь ты."),
+                    })
+                else:
+                    frame += (f"[address] This pass belongs to the frozen{mid}{kind} from {age} seconds ago. "
+                              "The conversation and media shown to you stop at that address; later group traffic "
+                              "is not part of this turn. Decide yourself how the elapsed time matters.\n")
     # PASS 9.0: честная метка о даунтайме — она не была здесь, когда сообщение пришло.
     # Решение (ответить сейчас / поезд ушёл) — её; VOICE-шот «поезд ушёл» уже есть.
     missed_hours = _bounded_state_float(ctx.missed_hours, high=10 ** 6)
@@ -8708,6 +9381,10 @@ def _finish_durable_run(run_id: str, status: str, *, final_text: str = "",
             _runs().transition(run_id, status, expected=before, reason=reason, details=details)
         if status in run_manager.TERMINAL_STATUSES:
             _runs().write_recap(run_id, recap_markdown, promote=True)
+            # Слот рабочего хода живёт ровно столько, сколько живёт прогон. Без парного
+            # release словарь `work_loop` тёк бы вечно: раньше состояние умирало вместе с
+            # контекстом само, теперь оно наше и убирать его нам.
+            work_loop.release(run_id)
         return True
     except Exception:
         log.warning("durable run не завершился [%s]", run_id, exc_info=True)
@@ -9497,13 +10174,57 @@ _PERMANENT_TELEGRAM_DELIVERY_ERRORS = frozenset({
 })
 
 
-def _is_permanent_delivery_error(error: BaseException | str) -> bool:
+# ⚠ ВТОРАЯ ПРИЧИНА, ПО КОТОРОЙ ПОВТОР ТОГО ЖЕ ПЛАНА НЕ ПРОЙДЁТ, И ОНА НЕ ПРО ПРАВА.
+# 06.08 её ход попробовал отправить в группу текст, который не влезает в лимит Telegram, и
+# получил `MessageTooLongError` — это 400, «сам запрос негоден», а не 403 «сюда нельзя».
+# В списке выше такого класса нет, значит план остался «пригодным к повтору», и часы резюма
+# подняли ран снова. Замер 09.08: ДВА рана крутились 55,8 часа, по 137 событий в час,
+# 7 646 и 7 504 перехода `running → paused` при 7 и 11 вызовах модели, 7,9 МБ мусора в
+# `events.jsonl`. Это четвёртый рецидив одной семьи (26.07 ChatAdminRequired, 27.07
+# ChatGuestSendForbidden, 03.08 медиа 728 отказов за 13 часов, 06.08 этот).
+#
+# Поэтому здесь СЕМЕЙСТВО ПО ФОРМЕ ЗАПРОСА, а не перечень: всё, что кончается на
+# `TooLongError` или `EmptyError`, отвергнуто за длину или пустоту САМОГО сообщения.
+# Байт в байт тот же запрос получит ту же ошибку всегда — сколько ни повторяй.
+#
+# ⚑ Именно суффиксом, а НЕ всем семейством 400: в нём 438 классов, и среди них
+# `PeerFloodError` (переждать и повторить — можно) и `FileReferenceExpiredError` (нужна
+# свежая ссылка, а не отказ). Сказать ей «навсегда» там, где надо просто подождать, —
+# такая же ложь, как вечный стук в закрытую дверь.
+#
+# ⚠ Известный ложноположительный: `MtSendQueueTooLongError` — внутренняя очередь MTProto,
+# а не её текст. Он тоже кончается на `TooLongError` и тоже будет назван постоянным.
+# Названо вслух, потому что цена ошибки здесь — один непереотправленный ход, а её текст
+# при этом сохраняется (`_save_undelivered_words`), тогда как цена обратной ошибки —
+# вечная петля, которую мы уже платили четыре раза.
+def _is_unsendable_shape_error(error: BaseException | str) -> bool:
+    """Запрос отвергнут ПО ФОРМЕ: слишком длинно или пусто. Повтор бессмыслен."""
     if not isinstance(error, BaseException):
         return False
     for cls in type(error).__mro__:
-        if getattr(cls, "__name__", "") in _PERMANENT_TELEGRAM_DELIVERY_ERRORS:
+        name = getattr(cls, "__name__", "")
+        if name.endswith("TooLongError") or name.endswith("EmptyError"):
             return True
     return False
+
+
+def delivery_refusal_kind(error: BaseException | str) -> str:
+    """`route` | `shape` | `` — ПОЧЕМУ повтор этого плана не пройдёт (или пройдёт).
+
+    Разделено не ради классификации, а ради того, что она услышит: «у меня нет права
+    писать в эту комнату» и «это письмо не влезает в лимит» — два разных действия с её
+    стороны. Раньше обе беды выходили одной фразой про права, и вторая была неправдой.
+    """
+    if not isinstance(error, BaseException):
+        return ""
+    for cls in type(error).__mro__:
+        if getattr(cls, "__name__", "") in _PERMANENT_TELEGRAM_DELIVERY_ERRORS:
+            return "route"
+    return "shape" if _is_unsendable_shape_error(error) else ""
+
+
+def _is_permanent_delivery_error(error: BaseException | str) -> bool:
+    return bool(delivery_refusal_kind(error))
 
 
 def _save_undelivered_words(run_id: str, evidence: dict, message: str) -> None:
@@ -10266,12 +10987,27 @@ class _AgentResumeRuntime:
 
     def _pause_pending_outbox(self, current: run_context.RunContext, call_id: str,
                               name: str, pending: DurableSideEffectPending) -> None:
-        self.manager.append_event_once(
-            current.run_id, "tool_side_effect_pending",
-            f"tool-pending:{current.run_id}:{call_id}",
-            call_id=call_id, tool=name,
-            idempotency_key=pending.idempotency_key, reason=pending.reason,
-        )
+        try:
+            self.manager.append_event_once(
+                current.run_id, "tool_side_effect_pending",
+                f"tool-pending:{current.run_id}:{call_id}",
+                call_id=call_id, tool=name,
+                idempotency_key=pending.idempotency_key, reason=pending.reason,
+            )
+        except run_manager.RunConflict:
+            # ⚠ РАСПИСКА О НЕИЗВЕСТНОСТИ, ПЕРЕСКАЗАННАЯ ДРУГИМИ СЛОВАМИ, — НЕ ПРОТИВОРЕЧИЕ
+            # ОБ ИСХОДЕ. `reason` собирается живьём: `{класс}: {текст ошибки} (state=…)`,
+            # где `state` — состояние журнала повторов, и оно меняется от попытки к попытке.
+            # Поэтому вторая расписка почти никогда не совпадала с первой байт в байт, а
+            # жёсткий конфликт убивал САМО возобновление: замер 09.08 — два рана по 55,8
+            # часа, 137 событий в час, ни один из них не мог ни доехать, ни закрыться.
+            # Свидетельство — ПЕРВАЯ расписка, её не переписываем; новое наблюдение кладём
+            # рядом отдельным событием, чтобы разночтение осталось видимым, а не пропало.
+            self.manager.append_event(
+                current.run_id, "tool_side_effect_pending_again",
+                call_id=call_id, tool=name,
+                idempotency_key=pending.idempotency_key, reason=pending.reason,
+            )
         before = str(self.manager.manifest(current.run_id).get("status") or "")
         if before == "running":
             self.manager.transition(
@@ -10700,10 +11436,25 @@ class _AgentResumeRuntime:
     def continue_checkpoint(
         self, request: run_executor.CheckpointContinuationRequest,
     ) -> dict:
+        checkpoint = dict(request.checkpoint or {})
+        work_state = checkpoint.get("work_loop")
         with self.bind():
+            # Новый budget остаётся снимком среды текущего процесса; checkpoint держит
+            # только прогресс и её уже сказанное управление этим конкретным ходом.
+            work_loop.restore(work_state)
+            messages = copy.deepcopy(request.messages)
+            # Ход, поднятый по её собственному «жду», начинается с объяснения, почему он
+            # снова открыт. Записка едет тем же каналом, что и укол продолжения: роль
+            # `user`, ровно как system-reminder в моём харнессе. Для обычного обрыва
+            # процесса записки нет — там ничего и не ждали.
+            woken = work_loop.woken_note(work_state)
+            if woken:
+                messages.append({"role": "user", "content": [{"type": "text", "text": woken}]})
+                if self.tool_trace is not None:
+                    self.tool_trace.append("work_loop:поднят по её «жду»")
             reply = _terminal_tool_loop(
                 system=copy.deepcopy(request.system),
-                messages=copy.deepcopy(request.messages),
+                messages=messages,
                 tools=copy.deepcopy(request.tools), max_iters=None,
                 tool_trace=self.tool_trace,
                 start_iteration=request.iteration,
@@ -11256,6 +12007,18 @@ def _land_addressee_free_run(manager, run_id: str, outcome) -> dict:
                "error": str(outcome.error_message or "")[:1000]}
     why = ("self-directed run has no Telegram addressee by construction; "
            "its authored text is the result, not a failed delivery")
+    # ⚠ ЕЁ СЛОВО ИМЕЕТ СИЛУ И ЗДЕСЬ. Возобновлённый ход — такой же рабочий ход. Если она в
+    # нём снова сказала «жду» или «упёрлась», посадить его `done` значит переписать её
+    # слово на противоположное — и работа, которую она отложила, объявляется сделанной.
+    # Спрашиваем по `run_id`: сюда мы приходим уже ВНЕ её контекста, слот ищется по ключу.
+    control = work_loop.taken(run_id)
+    if control:
+        her_status, her_reason, stamp = work_loop.closing(control)
+        why = her_reason + " · " + why
+        details = {**details, **stamp}
+        if her_status != "done" and _finish_durable_run(
+                run_id, her_status, reason=why, details=details):
+            return {"run_status": her_status}
     if _finish_durable_run(run_id, "done",
                            final_text=_recovered_authored_text(run_id)[0],
                            reason=why, details=details):
@@ -11311,6 +12074,11 @@ def resume_durable_run(run_id: str) -> dict:
         )
         outcome = run_executor.execute_resume(plan, callbacks)
         report = _resume_outcome_report(outcome)
+        if run_resume.WAIT_NOT_DUE in (plan.diagnostics or ()):
+            # Она сама назначила этот срок. Это не холостая попытка, и отсрочку за неё
+            # копить нельзя: иначе к моменту, когда ждать больше нечего, поверх её часа
+            # ляжет ещё час нашего наказания за терпение.
+            report[run_resume.WAIT_NOT_DUE] = True
         if plan.kind == "transport_owned":
             try:
                 runtime = _AgentResumeRuntime(plan)
@@ -11357,7 +12125,11 @@ def resume_durable_run(run_id: str) -> dict:
                         else "recovery executor stopped before transport intent"),
                 details={"phase": outcome.phase,
                          "error_type": outcome.error_type,
-                         "error": outcome.error_message[:1000]},
+                         "error": outcome.error_message[:1000],
+                         # Машинный вид паузы рядом с прозой: возобновление спрашивает
+                         # запись, а не сличает текст. Проза остаётся человеку.
+                         **({} if terminal else
+                            {work_loop.PAUSE_KIND_KEY: work_loop.PAUSE_PROCESS_RECOVERY})},
             )
             report["run_status"] = "failed" if terminal else "paused"
         elif outcome.status == "completed" and status == "running":
@@ -11374,10 +12146,121 @@ def resume_durable_run(run_id: str) -> dict:
                     run_id, "paused", expected="running",
                     reason="recovery executor stopped before transport intent",
                     details={"phase": "postcondition",
-                             "error": "completed callback created no transport intent"},
+                             "error": "completed callback created no transport intent",
+                             work_loop.PAUSE_KIND_KEY: work_loop.PAUSE_PROCESS_RECOVERY},
                 )
                 report["run_status"] = "paused"
     return report
+
+
+# ⚠ ПОТОЛОК СТУКА — БЭКСТОП ДЛЯ КЛАССОВ, КОТОРЫХ МЫ ЕЩЁ НЕ ЗНАЕМ.
+# Четыре раза подряд одна и та же беда чинилась ДОБАВЛЕНИЕМ ИМЕНИ в список постоянных
+# отказов, и четыре раза следующий неизвестный класс заводил вечную петлю заново. Список
+# по построению отстаёт от Telegram, значит пятое имя ничего не закрывает.
+#
+# ⚠ ПЕРВАЯ ВЕРСИЯ ЭТОГО СТРАЖА БЫЛА ПОТОЛКОМ — «двенадцать холостых возвратов, и ран больше
+# не кандидат» — и адверсарная проверка снесла её до выката, по делу. Четыре блокера:
+#   • потолок считал ТЕКСТ ПРИЧИНЫ паузы, а соседняя правка (терпимость к RunConflict) эту
+#     причину как раз убирала — страж ослеп ровно к той петле, ради которой писался;
+#   • он хоронил РОВНО ТЕ ДВА РАНА, ради которых всё делалось: их streak уже был выше
+#     потолка, значит лечение до них не доехало бы никогда;
+#   • похороны необратимы ПО ПОСТРОЕНИЮ: пять из семи «признаков продвижения» на `paused`
+#     физически не записываются (`tool_started` там бросает InvalidTransition), а кнопка
+#     «возобнови» пишет `resume_authorized` и исполнения не запускает — Егору отвечали бы
+#     «ок» о работе, которая не начнётся;
+#   • двенадцать попыток по 45 секунд — это девять минут терпения, то есть любое падение
+#     мозга подлиннее списывало бы КАЖДЫЙ прерванный ран, попавшийся часам под руку.
+#
+# Поэтому здесь не потолок, а ОТСРОЧКА, и считается не текст причины, а факт: попытка
+# возобновления прошла и ран не сдвинулся. Стук не прекращается никогда — он редеет.
+# Замер прода 09.08: 137 ударов в час × 55,8 часа. С этой лестницей то же самое даёт
+# 3 быстрые попытки, потом 1, 2, 4… минуты и потолок в час — 24 удара в сутки вместо 3 288.
+RESUME_FREE_ATTEMPTS = 3
+RESUME_BACKOFF_CAP_SECONDS = 3600.0
+_RESUME_IDLE_EVENT = "resume_attempt_idle"
+_RESUME_IDLE_SCAN_LIMIT = 400
+# Всё, после чего счёт начинается заново: ран сдвинулся, или его позвали руками.
+# `resume_authorized` здесь ОБЯЗАТЕЛЬНО: явное «возобнови» от неё или от Егора не имеет
+# права упереться в отсрочку, которую поставил автомат.
+_RESUME_RESET_EVENTS = frozenset({
+    "tool_result", "model_completed", "run_checkpoint", "artifact_created",
+    "telegram_text_chunk_accepted", "run_promoted", "tool_started", "resume_authorized",
+})
+# ⚑ Загрузка процесса — тоже сброс, и это не удобство, а честность: после рестарта КОД
+# ДРУГОЙ. Отсрочка, накопленная прошлой жизнью процесса, судила бы новый код по старым
+# попыткам — ровно та ошибка, из-за которой первая версия хоронила два рана, которые новый
+# код лечит.
+_RESUME_EPOCH = run_manager._utc_now()
+
+
+def _resume_idle_streak(manager, run_id: str) -> tuple[int, str]:
+    """(холостых попыток подряд, время последней) — считая с загрузки процесса."""
+    idle, last, scanned = 0, "", 0
+    try:
+        for row in manager.iter_events(run_id, reverse=True):
+            scanned += 1
+            if scanned > _RESUME_IDLE_SCAN_LIMIT:
+                break
+            kind = str(row.get("kind") or "")
+            if kind in _RESUME_RESET_EVENTS:
+                break
+            if kind != _RESUME_IDLE_EVENT:
+                continue
+            at = str(row.get("at") or "")
+            if at < _RESUME_EPOCH:
+                break
+            idle += 1
+            if not last:
+                last = at
+    except Exception:
+        # ⚠ Охрана обязана накрывать ИТЕРАЦИЮ, а не создание генератора: `iter_events`
+        # ленив, и `self._find(run_id)` вместе с открытием файла отложены до первого шага.
+        # В первой версии `try` стоял вокруг вызова — то есть вокруг ничего, и порванный
+        # `events.jsonl` одного рана уносил весь проход возобновления для всех остальных.
+        log.warning("не прочиталась серия холостых попыток [%s]", run_id, exc_info=True)
+        return 0, ""
+    return idle, last
+
+
+def resume_backoff_seconds(idle: int) -> float:
+    """Сколько ждать перед следующей попыткой: 0, 0, 0, 60, 120, 240… и час потолком."""
+    if idle < RESUME_FREE_ATTEMPTS:
+        return 0.0
+    return min(60.0 * (2 ** (idle - RESUME_FREE_ATTEMPTS)), RESUME_BACKOFF_CAP_SECONDS)
+
+
+def _seconds_since(stamp: str) -> float:
+    try:
+        moment = _dt.datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except Exception:
+        return float("inf")
+    return (_dt.datetime.now(_dt.timezone.utc) - moment).total_seconds()
+
+
+def resume_wait_seconds(manager, run_id: str) -> float:
+    """Сколько ещё ждать этому рану; 0 — можно пробовать сейчас. Её поверхность тоже."""
+    idle, last = _resume_idle_streak(manager, run_id)
+    wait = resume_backoff_seconds(idle)
+    if not wait or not last:
+        return 0.0
+    return max(0.0, wait - _seconds_since(last))
+
+
+def _run_progress_mark(manager, run_id: str) -> tuple:
+    """Отпечаток продвижения: статус и счётчики ЗАПИСЕЙ. Дёшево и без обхода событий.
+
+    ⚠ `event_seq` здесь НАМЕРЕННО НЕТ. Сама попытка возобновления пишет события — как
+    минимум два перехода статуса, — поэтому по числу событий «сдвинулся» был бы истинным
+    всегда, и отсрочка не включилась бы ни разу. Двигаются `result_seq` и `artifact_seq`:
+    их бумажит `store_result`, то есть настоящая работа — вход модели, её ответ, результат
+    вызова. У двух прод-ранов 09.08 за 7 600 стуков они не сдвинулись ни разу.
+    """
+    try:
+        manifest = manager.manifest(run_id)
+    except Exception:
+        return ()
+    return (str(manifest.get("status") or ""), int(manifest.get("result_seq") or 0),
+            int(manifest.get("artifact_seq") or 0))
 
 
 def resume_durable_runs(*, limit: int = 20) -> list[dict]:
@@ -11385,7 +12268,7 @@ def resume_durable_runs(*, limit: int = 20) -> list[dict]:
 
     manager = _runs()
     reports: list[dict] = []
-    candidates: list[str] = []
+    candidates: list[tuple[str, int]] = []
     # Возобновлять терминальные нечего — отсеиваем их без замка (py-spy 31.07).
     for run_id in manager.live_run_ids():
         try:
@@ -11393,15 +12276,21 @@ def resume_durable_runs(*, limit: int = 20) -> list[dict]:
         except Exception:
             continue
         if status in {"paused", "blocked", "in_doubt"}:
-            candidates.append(run_id)
+            idle, last = _resume_idle_streak(manager, run_id)
+            wait = resume_backoff_seconds(idle)
+            if wait and last and _seconds_since(last) < wait:
+                # Молча и без единой записи: отсрочка не должна сама себя раздувать.
+                continue
+            candidates.append((run_id, idle))
     bounded = max(0, int(limit))
     if not bounded:
         return []
     effects = 0
     diagnostic_cap = max(20, bounded * 4)
-    for run_id in candidates:
+    for run_id, idle in candidates:
         if effects >= bounded:
             break
+        before = _run_progress_mark(manager, run_id)
         try:
             report = resume_durable_run(run_id)
         except Exception as exc:
@@ -11415,6 +12304,24 @@ def resume_durable_runs(*, limit: int = 20) -> list[dict]:
             or report.get("transport_queued")
             or report.get("transport_receipts_projected")
         )
+        after = _run_progress_mark(manager, run_id)
+        terminal = bool(after) and after[0] in run_manager.TERMINAL_STATUSES
+        if (not started and not terminal and after == before
+                and not report.get(run_resume.WAIT_NOT_DUE)):
+            # Попытка прошла вхолостую — и это ЕДИНСТВЕННОЕ, что здесь утверждается.
+            # Ни причины, ни диагноза: они уже лежат в переходе статуса, который написал
+            # исполнитель. Отметка нужна затем, чтобы отсрочка считалась по факту
+            # «не сдвинулся», а не по тексту, который завтра перепишут.
+            try:
+                manager.append_event(
+                    run_id, _RESUME_IDLE_EVENT, attempt=int(idle) + 1,
+                    phase=str(report.get("phase") or ""),
+                    error_type=str(report.get("error_type") or ""),
+                    next_try_in_seconds=int(resume_backoff_seconds(int(idle) + 1)),
+                )
+            except Exception:
+                log.warning("не записалась отметка холостой попытки [%s]", run_id,
+                            exc_info=True)
         if started:
             effects += 1
         if len(reports) < diagnostic_cap or started:
@@ -11431,6 +12338,15 @@ def recover_durable_state() -> list[dict]:
         return []
     for report in reports:
         log.warning("durable run recovery: %s", report)
+    # Доска работ восстанавливается ВМЕСТЕ с прогонами, а не когда-нибудь потом: недописанная
+    # запись карточки должна называться недописанной до того, как кто-то прочтёт карточку
+    # как правду. Угадывать здесь нечего — `recover` либо дописывает commit, либо ставит
+    # `attention`.
+    try:
+        for row in work_store.recover():
+            log.warning("доска работ: %s", row)
+    except Exception:
+        log.warning("восстановление доски работ упало", exc_info=True)
     # Сначала — разбор in_doubt по СОБСТВЕННЫМ распискам вызова: ран, чья работа
     # доказуемо сделана (`task.json.finished`, приёмка outbox), не должен оставаться
     # надгробием в её `list_active_runs`.
@@ -11714,6 +12630,7 @@ def _persist_tool_loop_checkpoint(*, current: run_context.RunContext | None,
         "messages": _durable_model_messages(messages),
         "tools": _scrub_critical_value(tools, secrets),
         "outbound": _scrub_critical_value(outbound, secrets),
+        "work_loop": work_loop.snapshot(),
     }, ensure_ascii=False, indent=2, default=str)
     try:
         _runs().store_result(
@@ -11766,6 +12683,11 @@ def offered_tools_for(ctx: "ChannelContext") -> list:
         # owner-эксклюзивов расходилось с поведением. Расхождение снято в сторону
         # решения, а не комментария.
         tools = tools + [SEND_EMAIL_TOOL, MAIL_READ_TOOL, MAIL_DRAFT_TOOL]
+    # Рука конца хода предлагается ровно там, где ход стал работой: в её собственных
+    # окнах и при поднятом рычаге. В чате её нет — там «сделано» это отправленное
+    # сообщение, и оно уже закрывает ход прежним путём.
+    if work_loop.active_for(_current_run_kind()):
+        tools = tools + [TASK_CONTROL_TOOL]
     return tools
 
 
@@ -11783,6 +12705,53 @@ def _offered_function_names(tools: list) -> set[str]:
         raise DurableExecutionError(str(exc)) from exc
 
 
+def _current_run_kind() -> str:
+    current = run_context.current_run()
+    return str(getattr(current, "kind", "") or "")
+
+
+def _work_loop_continue(reply: str, resp, messages: list[dict],
+                        tool_trace: list[str] | None, *, hands: int = 0) -> bool:
+    """Продолжать ли ход после текста без инструмента.
+
+    Возвращает True — текст лёг в ленту заметкой и модель зовётся снова; False — ход
+    закрывается ровно как прежде. При выключенных рычагах всегда False.
+
+    Два разных контракта в одном шве, и это намеренно: решение «ход не кончился» обязано
+    приниматься в ОДНОМ месте, иначе они разойдутся молча.
+      * рабочее окно — ход закрывает только её `task_control`;
+      * чат — ход закрывает её ответ, КРОМЕ случая, когда она объявила действие и не
+        сделала его (`work_loop.chat_decide`, разбор там же).
+    """
+    kind = _current_run_kind()
+    keep, note = work_loop.decide(kind=kind, control=work_loop.taken())
+    if not keep and not work_loop.active_for(kind):
+        keep, note = work_loop.chat_decide(reply, kind=kind, hands=hands)
+    if not keep:
+        if note and tool_trace is not None:
+            tool_trace.append(note)
+        return False
+    spent = work_loop.spend()
+    # Текст без инструмента — заметка в работе. В ленте хода он и так остаётся, но лента
+    # умирает вместе с прогоном; в карточке он переживёт его. Карточки может не быть — она
+    # заводится только там, где работа не кончилась, и это не повод молчать здесь.
+    try:
+        current = run_context.current_run()
+        row = work_store.for_run(str(getattr(current, "run_id", "") or ""))
+        if row:
+            work_store.note(row["id"], reply)
+    except Exception:
+        log.warning("заметка в карточку работы не легла", exc_info=True)
+    blocks = [b for b in (list(getattr(resp, "blocks", None) or ()))
+              if isinstance(b, dict) and b.get("type") == "text"]
+    messages.append({"role": "assistant",
+                     "content": blocks or [{"type": "text", "text": reply}]})
+    messages.append({"role": "user", "content": [{"type": "text", "text": note}]})
+    if tool_trace is not None:
+        tool_trace.append("work_loop:продолжение %d из %d" % (spent, work_loop.budget()))
+    return True
+
+
 def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                         max_iters: int | None = None,
                         tool_trace: list[str] | None = None,
@@ -11798,16 +12767,29 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
     iteration = max(0, int(start_iteration))
     repeats: dict[str, int] = {}
     offered_names = _offered_function_names(tools)
+    # Сколько рук позвано В ЭТОМ ходе. Нужно ровно одному решению — продолжать ли чат-ход,
+    # где она объявила действие и не сделала его. Считается здесь, а не по трассе: трасса
+    # смешивает руки с нашими же пометками, и «позвала ли она хоть что-то» по ней не
+    # восстанавливается без разбора строк.
+    hands = 0
     while max_iters is None or iteration < max(0, int(max_iters)):
         _run_status_gate(phase="before model step")
         iteration += 1
         resp = _model_call(system, messages, tools)
         if resp.stop_reason != "tool_use":
             _run_status_gate(phase="after terminal model step")
-            return _durable_model_text(
+            reply = _durable_model_text(
                 resp.text, list(getattr(resp, "blocks", None) or ()),
                 messages=messages,
             )
+            # ⚠ ЗДЕСЬ ЖИЛА ОСЬ ДЕФЕКТА. Текст без вызова инструмента возвращался
+            # немедленно, и вызывающий закрывал прогон `done` — то есть «работа
+            # закончена» ВЫВОДИЛОСЬ из её молчания. В рабочем ходе это больше не так:
+            # текст остаётся в ленте заметкой, а ход закрывает только `task_control`
+            # или названный вслух исчерпанный бюджет продолжений.
+            if not _work_loop_continue(reply, resp, messages, tool_trace, hands=hands):
+                return reply
+            continue
 
         assistant_blocks, tool_results = [], []
         loop_notes: list[str] = []
@@ -11818,6 +12800,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             if b["type"] != "tool_use":
                 continue
             assistant_blocks.append(b)
+            hands += 1
             if b.get("name") not in offered_names:
                 raise DurableExecutionError(
                     f"model requested unoffered tool {b.get('name')!r}")
@@ -11979,6 +12962,13 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             system=system, messages=messages, tools=tools,
         )
         _run_status_gate(phase="after tool-loop checkpoint")
+        # Её слово о конце хода не ждёт следующей реплики: сказала `task_control` — цикл
+        # выходит здесь же, а не тратит ещё один вызов модели на «ну всё, готово».
+        control = work_loop.taken()
+        if control and work_loop.active_for(_current_run_kind()):
+            if tool_trace is not None:
+                tool_trace.append("work_loop:закрыт её словом «%s»" % control["action"])
+            return str(control.get("summary") or reply or "")
 
     # Only explicit auxiliary limits arrive here.  Preserve their historical graceful-final
     # behavior without reintroducing a default ceiling for real runs.
@@ -13724,10 +14714,13 @@ _TASK_WINDOW_BODY = (
 )
 
 
-def _task_window_frame(status: str) -> str:
+def _task_window_frame(status: str, kind: str = "task_window") -> str:
+    # Предел называет себя ДО того, как в него упрёшься: бюджет продолжений едет в кадр
+    # строкой, а не живёт молча в коде. При выключенном рычаге строки нет вовсе.
     return ("\n\n---\n"
             + _WINDOW_TRANSPORT.get(status, _WINDOW_TRANSPORT["unknown"])
-            + _TASK_WINDOW_BODY)
+            + _TASK_WINDOW_BODY
+            + work_loop.announce(kind))
 
 
 # Совместимость и опора тестов шва: рамка окна в её ОБЫЧНОМ мире, где транспорт закрыт.
@@ -14146,15 +15139,24 @@ def task_window(goal: str = "", *, mailbox_index: str | None = None,
             # «Почтовый ящик (свежий; …)» и «fresh_mailbox_index».
             # В durable.extra выше он ОСТАЁТСЯ намеренно: это снимок для восстановления
             # рана после рестарта, а не кадр.
+            # Счётчик продолжений и её слово о конце — про ЭТОТ ход. Поток берёт копию
+            # контекста вызывающего, поэтому обнуляем явно, а не надеемся на дефолт.
+            work_loop.reset()
             out = _voice(seed, [], speaker=None, chat_id=None, is_owner=False, known=True,
                          extra_system=frame + mailbox_frame,
                          ctx=ctx,
                          tool_trace=trace).strip()
             if durable is not None:
+                # Статус прогона — из ЕЁ слова, а не из того, что цикл вернулся. «Упёрлась»
+                # и «жду» перестают выглядеть как «сделала».
+                control = work_loop.taken()
+                status, reason, stamp = work_loop.closing(control)
+                details = {"blind_identity_load": blind_snapshot} if blind_load else None
+                if stamp:
+                    details = dict(details or {}, **stamp)
                 _finish_durable_run(
-                    durable.run_id, "done", final_text=out,
-                    reason="long work run completed",
-                    details={"blind_identity_load": blind_snapshot} if blind_load else None,
+                    durable.run_id, status, final_text=out,
+                    reason=reason, details=details,
                 )
     except Exception as exc:
         log.warning("task_window упал", exc_info=True)

@@ -390,6 +390,55 @@ def _render_computers(memory: Path) -> Path:
     return path
 
 
+# ⚠ 10.08.2026, её решение «класть индекс целиком». Проверка показала, что классть было
+# нечего: в INDEX.md нет ни workspace, ни soul, ни навыков, ни почты, ни задач, ни
+# журнала, ни групп. Её слова: «даст мне карту workspace, soul, почты и навыков, которых
+# сейчас не видно». Наблюдаемое следствие было: 09.08 она искала «передачу» и не нашла её
+# по имени, потому что документов общего стола в её карте не значится вовсе.
+# Каждая строка здесь — ФАКТ с диска на момент пересборки, а не обещание.
+_BELONGINGS: tuple[tuple[str, str, str], ...] = (
+    ("soul", "мой хребет", "*.md"),
+    ("soul/skills", "мои навыки", "*.md"),
+    ("workspace", "общий стол: документы от Клода и Егора", "*.md"),
+    ("memory/journal", "журнал", "*"),
+    ("memory/groups", "мои группы", "*"),
+    ("memory/rooms", "профили комнат", "*"),
+)
+_BELONGINGS_FILES: tuple[tuple[str, str], ...] = (
+    ("memory/mailbox.json", "почтовый ящик"),
+    ("memory/tasks.json", "задачи и повестка"),
+    ("memory/proposals.json", "предложения по состояниям"),
+    ("memory/appetite.md", "договор об аппетитах"),
+)
+_BELONGINGS_FRESH = 3
+
+
+def _fresh_names(paths: list[Path], limit: int = _BELONGINGS_FRESH) -> str:
+    rows = sorted((p for p in paths if p.is_file()),
+                  key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+    return ", ".join(p.name for p in rows)
+
+
+def _render_belongings(base: Path) -> list[str]:
+    """Что у неё есть, кроме памяти. Только наблюдаемое: число файлов и свежие имена."""
+    lines = ["", "## Что у меня есть, кроме памяти", ""]
+    for rel, label, pattern in _BELONGINGS:
+        d = base / rel
+        if not d.is_dir():
+            continue
+        files = [p for p in d.glob(pattern) if p.is_file()]
+        if not files:
+            continue
+        fresh = _fresh_names(files)
+        lines.append("- `%s/` — %s: %d, свежие: %s"
+                     % (rel, label, len(files), fresh or "—"))
+    for rel, label in _BELONGINGS_FILES:
+        p = base / rel
+        if p.is_file():
+            lines.append("- `%s` — %s" % (rel, label))
+    return lines if len(lines) > 3 else []
+
+
 def rebuild(people_hook: Callable[[str, str], str] | None = None, *,
             memory_dir: Path | None = None, people_dir: Path | None = None,
             index_path: Path | None = None, extra_people: list[tuple[str, str]] | None = None,
@@ -454,6 +503,8 @@ def rebuild(people_hook: Callable[[str, str], str] | None = None, *,
         lines.append("- Пока нет карточек.")
     if len(records) > len(preview):
         lines.append(f"- … ещё {len(records) - len(preview)} в [PEOPLE](maps/PEOPLE.md).")
+
+    lines += _render_belongings(base)
 
     lines += ["", "## Роль SQL", "",
               "- SQLite под `memory/.state/` — только пересобираемые индексы и operational state.",

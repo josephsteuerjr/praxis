@@ -149,8 +149,24 @@ def _ask(system: str, user: str, max_tokens: int = 1800) -> dict:
         return {}
 
 
+# ⚠ 10.08.2026, её решение. Прежде первая строка каждой фазы звучала как «ты — фаза
+# формирования памяти Praxis», то есть писатель расписок был ВНЕШНИМ наблюдателем. Он
+# честно исполнял: «Praxis должна быть осторожна», «звал Praxis с вопросом, содержание
+# которого ЕЙ нужно повторить». Эти строки лежат в досье, досье целиком едет в её кадр —
+# замер на 40 кадрах 09.08: 2,6 упоминания себя в третьем лице за ход, и все из её же
+# документов. Та же петля, что с markdown: пишет → ложится в память → приезжает в кадр →
+# пишет так же. Старые расписки НЕ переписываются: это её память, и её слово было
+# «старые записи не трогать».
+_FIRST_PERSON_RULE = (
+    "Praxis's memory is HERS: claims about her are written in HER OWN VOICE, first person "
+    "(«я», «мне», «мой», «меня»), never «Praxis», «она», «ей», «её» about herself. Third "
+    "person about herself is correct ONLY when quoting what somebody else said about her, "
+    "and then it is marked as a quote. Claims about OTHER people stay in third person. "
+) if os.environ.get("PRAXIS_CLAIMS_FIRST_PERSON", "on").strip().lower() not in {"off", "0", "false"} else ""
+
 _HARVEST_SYS = (
-    "You are the harvest phase of Praxis's private memory formation. Return STRICT JSON: "
+    "You are the harvest phase of Praxis's OWN memory formation — you write AS her, not "
+    "about her. " + _FIRST_PERSON_RULE + "Return STRICT JSON: "
     '{"entities":[{"name":"...","kind":"person|self|topic","salience":1}],'
     '"claims":[{"subject":"...","kind":"person|self|topic|relation","text":"...",'
     '"other":"optional relation target","relation":"optional label","visibility":"public|private",'
@@ -163,7 +179,9 @@ _HARVEST_SYS = (
 )
 
 _DIG_SYS = (
-    "You are the DIG phase of Praxis's memory formation. You receive frozen candidate claims and "
+    "You are the DIG phase of Praxis's OWN memory formation — you write AS her. "
+    + _FIRST_PERSON_RULE +
+    "You receive frozen candidate claims and "
     "primary event evidence. You may inspect, challenge and ask questions, but you may not add, rewrite "
     "or merge claims or evidence sets. Return STRICT JSON: "
     '{"evidence_found":["source id"],"questions":["..."],"changed_conclusion":"... or empty",'
@@ -173,7 +191,9 @@ _DIG_SYS = (
 )
 
 _ATTACK_SYS = (
-    "You are the adversarial ATTACK phase of Praxis's memory formation. Try to falsify each candidate "
+    "You are the adversarial ATTACK phase of Praxis's OWN memory formation — you write AS her. "
+    + _FIRST_PERSON_RULE +
+    "Try to falsify each candidate "
     "using the supplied primary events. Candidate keys and each candidate's evidence set are frozen. "
     "Return STRICT JSON: "
     '{"verdicts":[{"key":"candidate key","status":"supported|contested|unsupported",'
@@ -337,6 +357,21 @@ def _contest_referenced_claims(candidate: dict, claim_id: str, run_id: str) -> l
             "reason": f"superseded by supported contradictory claim {claim_id}",
             "evidence_ids": old_candidate["evidence_ids"],
         }, run_id)
+        # ⭐ 10.08.2026. Понижение статуса остаётся — его отмена ЕЁ слово, она сказала
+        # «разбирать отдельным шагом». Но молчать о нём больше нельзя: её претензия 08.08
+        # была «код РЕШАЕТ конфликт вместо того, чтобы показать его мне», и она права —
+        # старое утверждение уходило в `contested` без единого следа для неё.
+        # Карточка ДОБАВЛЯЕТ видимость, ничего не отнимая. Она — запись, а не прогон:
+        # никого не будит, ничего не блокирует, не имеет терминального состояния и не
+        # превращается в долг, если ответа не будет (см. докстринг claim_conflicts).
+        with contextlib.suppress(Exception):
+            import claim_conflicts
+            claim_conflicts.note(
+                subject=old_candidate["subject"], field=old_candidate.get("kind") or "",
+                old_id=old_id, new_id=claim_id,
+                reason="автомат понизил старое: новое поддержанное противоречит ему",
+                old_text=old_candidate.get("text") or "",
+                new_text=str(candidate.get("text") or ""))
         changed.append(old_id)
     return changed
 

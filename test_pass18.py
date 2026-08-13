@@ -15,6 +15,8 @@ import os
 import time
 import types
 import unittest
+
+import praxis_time
 from pathlib import Path
 
 from test_perceive import Base, FakeClient, FakeResp  # noqa: F401
@@ -191,7 +193,7 @@ class TestUsageByModel(AppetiteBase):
     def test_usage_add_records_models(self):
         llm._usage_add("voice", {"in": 100, "out": 50}, model="glm-5.2")
         llm._usage_add("voice", {"in": 10, "out": 5}, fallback=True, model="gpt-5.5")
-        day = llm.usage_days(1)[_dt.date.today().isoformat()]["voice"]
+        day = llm.usage_days(1)[praxis_time.day_key()]["voice"]
         self.assertEqual(day["in"], 110)
         self.assertEqual(day["calls"], 2)
         self.assertEqual(day["models"]["glm-5.2"]["in"], 100)
@@ -206,7 +208,7 @@ class TestUsageByModel(AppetiteBase):
             u = panel.llm_usage()
         finally:
             llm.pricing = orig
-        day = _dt.date.today().isoformat()
+        day = praxis_time.day_key()
         self.assertAlmostEqual(u["cost"][day]["voice"], 1.0,
                                msg="cost должен считаться по фактической модели вызова")
 

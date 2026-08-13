@@ -204,11 +204,20 @@ def run(request_path: Path) -> int:
         max_iters = int(request.get("max_iters") or 0) or max(20, llm.limits().max_tool_iters * 2)
         reply = ""
         final_model = ""
+        # ⚠ 10.08.2026. Цикл мог кончиться ДВУМЯ разными способами, а запись знала только
+        # один. Если модель остановилась сама — это «сделано». Если кончились ходы —
+        # это «упёрся в потолок», и воркеру при этом сказано «use as many tool turns as
+        # the job needs». Дальше forge.py:826 читал `status == "done"` и говорил ей
+        # «воркер закончил». Она узнавала о завершении там, где было исчерпание.
+        stopped_himself = False
+        used = 0
         for _ in range(max_iters):
+            used += 1
             response = llm.chat("voice", system=_system(request), messages=messages, tools=tools)
             final_model = response.model
             if response.stop_reason != "tool_use":
                 reply = response.text.strip()
+                stopped_himself = True
                 break
             assistant_blocks, tool_results = [], []
             for block in response.blocks:
@@ -232,17 +241,31 @@ def run(request_path: Path) -> int:
                              tools=None).text.strip()
         diff = forge.inspect(request["task_id"], "diff")
         data = {
-            "status": "done", "finished": _now(), "role": role, "model": final_model,
+            "status": "done" if stopped_himself else "stalled",
+            "complete": bool(stopped_himself),
+            "stop": ("модель остановилась сама" if stopped_himself else
+                     "кончились ходы: %d из %d" % (used, max_iters)),
+            "iters_used": used, "iters_max": max_iters,
+            # Упавшие руки не делают прогон ошибкой — падение руки это сведение, а не
+            # провал. Но «done при десяти подряд упавших руках» — тоже неправда, поэтому
+            # число едет в запись и видно рядом со статусом.
+            "tool_errors": sum(1 for t in trace
+                               if str(t.get("output") or "").startswith("Tool error")),
+            "finished": _now(), "role": role, "model": final_model,
             "result": reply, "tool_calls": len(trace), "trace": trace[-30:],
             "diff_tail": diff[-8000:],
         }
         _write(result_path, data)
         forge._event(request["task_id"], "agent_finished", agent_id=request["id"], role=role,
-                     summary=f"{request['id']} done; tools={len(trace)}")
+                     summary=(f"{request['id']} done; tools={len(trace)}" if stopped_himself
+                              else f"{request['id']} исчерпал ходы {used}/{max_iters}; "
+                                   f"tools={len(trace)}"))
         # PASS 30 Этап 1: завершение — входящее событие родительской петли, не повод
         # ждать таймера. Пишем из СВОЕГО процесса, durable; best-effort (не роняет выход).
         forge.emit_unit_event(request["task_id"], request["id"], data, request=request)
-        print(f"{request['id']} done; tools={len(trace)}", flush=True)
+        print(f"{request['id']} " + ("done" if stopped_himself
+                                          else f"исчерпал ходы {used}/{max_iters}")
+              + f"; tools={len(trace)}", flush=True)
         return 0
     except Exception as exc:
         data = {"status": "error", "finished": _now(),

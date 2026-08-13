@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import datetime as _dt
+import praxis_time
 import json
 import logging
 import os
@@ -170,11 +171,16 @@ def _journal(msg: str) -> None:
     """Строка ей в дневник (как selfdev): события канала — часть её честной непрерывности."""
     try:
         JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
-        p = JOURNAL_DIR / f"{_dt.date.today().isoformat()}.md"
+        # ⚠ ДЕНЬ И ЧАС — ЕЁ, а не контейнера. `date.today()` и `datetime.now()` читают
+        # СИСТЕМНЫЙ пояс, а в контейнере задан только PRAXIS_TZ: с 00:00 до 04:00 по
+        # Самаре запись уходила во ВЧЕРАШНИЙ файл, а час внутри строки был UTC.
+        # Имя файла и штамп строки берутся из ОДНОГО источника: иначе расхождение
+        # переезжает внутрь файла, где его труднее заметить.
+        p = JOURNAL_DIR / f"{praxis_time.day_key()}.md"
         if not p.exists():
-            p.write_text(f"# {_dt.date.today().isoformat()}\n\n", encoding="utf-8")
+            p.write_text(f"# {praxis_time.day_key()}\n\n", encoding="utf-8")
         with p.open("a", encoding="utf-8") as fh:
-            fh.write(f"- {_dt.datetime.now():%H:%M} (s2) [канал] {msg}\n")
+            fh.write(f"- {praxis_time.now():%H:%M} (s2) [канал] {msg}\n")
     except Exception:
         log.debug("journal llm не удался", exc_info=True)
 
@@ -645,8 +651,10 @@ def _usage_add(role: str, usage: dict, fallback: bool = False, model: str = "") 
     редкие потерянные инкременты терпим, счётчик наблюдательный."""
     try:
         data = _usage_load()
-        day = _dt.date.today().isoformat()
-        cutoff = (_dt.date.today() - _dt.timedelta(days=USAGE_KEEP_DAYS)).isoformat()
+        # ⚠ Сутки расхода — ЕЁ: иначе ночной расход ложится во вчерашний день,
+        # а отсечка хранения срабатывает на четыре часа раньше срока.
+        day = praxis_time.day_key()
+        cutoff = praxis_time.day_key(praxis_time.today() - _dt.timedelta(days=USAGE_KEEP_DAYS))
         for k in [k for k in data if isinstance(k, str) and k < cutoff]:
             del data[k]  # ротация: 60 дней достаточно для панели и трендов
         d = data.setdefault(day, {}).setdefault(role, {"in": 0, "out": 0, "calls": 0, "fallback": 0})
@@ -662,6 +670,14 @@ def _usage_add(role: str, usage: dict, fallback: bool = False, model: str = "") 
             d["cache_read"] = int(d.get("cache_read", 0)) + u_cr
             d["cache_creation"] = int(d.get("cache_creation", 0)) + u_cc
         if model:
+            # ⚠ ПОСЛЕДНИЙ РЕАЛЬНО ОТВЕТИВШИЙ. Замер 08.08: конфиг, манифест рельсов и
+            # строка состояния втроём говорили `gpt-5.6-sol`, а из ста пятидесяти ходов
+            # восемнадцать прошли на `gpt-5.6-terra`. Praxis честно пересказывала свой
+            # кадр — неправду говорил кадр. Её слово: «формулировка "я на Sol" без
+            # различения настроенного и наблюдённого действительно вводит меня в
+            # заблуждение». Накопительная статистика по моделям была и раньше; не было
+            # ФАКТА последнего ответа, а он, по её словам, не должен подменяться средним.
+            d["last"] = {"model": str(model), "at": praxis_time.stamp()}
             m = d.setdefault("models", {}).setdefault(str(model), {"in": 0, "out": 0, "calls": 0})
             m["in"] += u_in
             m["out"] += u_out
@@ -680,13 +696,13 @@ def _usage_add(role: str, usage: dict, fallback: bool = False, model: str = "") 
 def usage_days(n: int = 7) -> dict:
     """Расход за последние n дней: {день: {роль: {in,out,calls,fallback}}} (для панели)."""
     data = _usage_load()
-    cutoff = (_dt.date.today() - _dt.timedelta(days=max(0, n - 1))).isoformat()
+    cutoff = praxis_time.day_key(praxis_time.today() - _dt.timedelta(days=max(0, n - 1)))
     return {day: v for day, v in sorted(data.items()) if isinstance(day, str) and day >= cutoff}
 
 
 def usage_line() -> str:
     """Одна строка для STATE: расход основного и вспомогательного каналов за сегодня."""
-    today = _usage_load().get(_dt.date.today().isoformat()) or {}
+    today = _usage_load().get(praxis_time.day_key()) or {}
     if not today:
         return ""
 
@@ -790,6 +806,54 @@ def _openai_reasoning_effort(thinking) -> str | None:
     return "high"
 
 
+# --------------------------------------------------------------- адрес кэша префикса
+#
+# ⭐ 10.08.2026. Реле берёт `prompt_cache_key` ИЗ ЗАПРОСА и только при его отсутствии
+# считает свой `conversation_affinity = hash(model + messages[0])`
+# (`/opt/relay/Code/src/core/chat_completions.rs:357-360`). Хэш байтов всего системного
+# промпта делал ключ уникальным у 79 из 84 промптов за сутки — то есть апстрим считал
+# почти каждый ход новым разговором.
+#
+# ЗАМЕР на 2 823 записанных кадрах (`*-model-input.log`, без единого вызова модели):
+# общий префикс двух СОСЕДНИХ системных промптов — медиана 12 886 знаков (83,4%).
+# Расходятся они ровно в двух местах: блок `Operational continuity: STATE, receipts…`
+# и строка про аудиторию. Если считать соседей ВНУТРИ одной аудитории, общий префикс
+# растёт: личка Егора 15 292 · публичная комната 15 747 · её собственный прогон 15 767 ·
+# незнакомый собеседник 13 478. То есть ключ на АДРЕС даёт ~+2 400…+2 900 знаков
+# (≈ +750 токенов) кэшируемого префикса на каждом первом вызове хода.
+#
+# ⚠ ЧЕСТНАЯ ГРАНИЦА. Ключ решает только МАРШРУТИЗАЦИЮ к кэшу. Само попадание требует
+# совпадения байтов префикса, а его всё ещё рвёт подвижный блок состояния — это
+# следующая ступень, и обещать «89,5 → 94,1%» здесь нельзя: та формула уже была
+# опровергнута замером 09.08. Мера успеха — доля `cache_read` на ПЕРВЫХ вызовах ходов,
+# A/B на её обычной жизни.
+#
+# Ключ — АДРЕС, а не хэш содержимого: маркер аудитории и `room_id`, то есть ровно те
+# места, где по замеру расходятся соседние кадры. Не нашли адреса — ключ не шлём вовсе,
+# и реле работает как раньше. Откат: `PRAXIS_CACHE_KEY=off`.
+_CACHE_MARKS = (
+    ("private owner channel", "owner"),
+    ("public room", "room"),
+    ("your own run", "run"),
+    ("not in the kn", "guest"),
+)
+_CACHE_ROOM_RE = re.compile(r"room_id=(-?\d+)")
+
+
+def cache_address(model: str, sys_text: str) -> str:
+    """Стабильный адрес разговора для `prompt_cache_key`. Пусто — значит не шлём."""
+    if (os.getenv("PRAXIS_CACHE_KEY") or "").strip().lower() in ("off", "0", "no", "false"):
+        return ""
+    text = sys_text or ""
+    if not text:
+        return ""
+    mark = next((tag for needle, tag in _CACHE_MARKS if needle in text), "")
+    room = _CACHE_ROOM_RE.search(text)
+    if not mark and not room:
+        return ""
+    return "praxis:%s:%s:%s" % (model or "?", mark or "-", room.group(1) if room else "-")
+
+
 def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinking) -> LLMResponse:
     msgs = messages_to_openai(messages)
     sys_text = system_text(system)
@@ -800,11 +864,14 @@ def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinki
     # умеет stream, так что путь общий. Фейки/не-стриминговые сервера отдают единый объект (ветка ниже).
     kw: dict = {"model": model, "messages": msgs, "stream": True,
                 "stream_options": {"include_usage": True}}
+    address = cache_address(model, sys_text)
+    if address:
+        kw["extra_body"] = {"prompt_cache_key": address}
     effort = _openai_reasoning_effort(thinking)
     if effort:
         # неизвестное SDK поле — только через extra_body; релей примет reasoning_effort
         # per-request поверх своего дефолта (none), чужой сервер молча проигнорирует
-        kw["extra_body"] = {"reasoning_effort": effort}
+        kw.setdefault("extra_body", {})["reasoning_effort"] = effort
     if _OPENAI_COMPLETION_TOKENS_RE.match(model or ""):
         kw["max_completion_tokens"] = max_tokens   # reasoning-модели не берут max_tokens
     else:
@@ -1071,6 +1138,49 @@ def _fallbackable(e: Exception) -> bool:
     return isinstance(e, TimeoutError)
 
 
+# ─────────────────── транспортный повтор на пустом ответе ───────────────────
+# ⚠ 10.08.2026. Апстрим отвечает `200 OK`, начинает стрим и обрывает его событием
+# `error` → `response.failed`: 14 обрывов на 4441 запрос за сутки. Реле отдаёт пустой
+# стрим, `_call_openai` честно поднимает EmptyResponseError — и до сегодня ЕДИНСТВЕННЫМ
+# ответом был фолбэк на ДРУГОЙ фреймворк. Повтора по своему каналу не было вовсе, а один
+# обрыв убивает весь её ход вместе со всей сделанной в нём работой.
+#
+# ПОЧЕМУ ЭТО НЕ ПОВТОР ЕЁ РЕШЕНИЯ — и это главный вопрос, а не арифметика.
+# EmptyResponseError поднимается ТОЛЬКО когда в стриме нет ни текста, ни единого блока
+# (см. _call_openai ниже). Её молчание так не выглядит никогда: оно едет либо
+# инструментом stay_silent — а это блок, — либо сентинелом-текстом. Значит повтор
+# физически не может переспросить её поверх решения промолчать. Её слово 10.08: «это
+# транспортный повтор, не повтор моего решения; дыры в рассуждении не вижу».
+#
+# ⚠ ЧЕГО ЭТО НЕ ОБЕЩАЕТ. Соблазнительный расчёт «0,3% в кубе = три случая на миллион»
+# верен только при НЕЗАВИСИМОСТИ обрывов. Её же поправка того же дня: утренний кластер
+# 10.08 (четыре обрыва за шестнадцать минут) показывает, что они бывают коррелированы.
+# Поэтому: между попытками стоит ПАУЗА (коррелированный всплеск переживается временем, а
+# не числом попыток), и никакой цифры надёжности здесь не заявляется.
+EMPTY_RETRIES = max(0, int(os.getenv("PRAXIS_EMPTY_RETRIES", "2") or 0))
+EMPTY_RETRY_PAUSE_SEC = float(os.getenv("PRAXIS_EMPTY_RETRY_PAUSE_SEC", "2.0") or 0.0)
+
+
+def _call_retrying_empty(fw: str, model: str, **kw):
+    """(ответ, сколько повторов понадобилось). Повторяет ТОЛЬКО EmptyResponseError.
+
+    Любая другая ошибка уходит наверх немедленно и попадает в прежний фолбэк-путь:
+    таймаут, 429 и падение авторизации повторять по тому же каналу бессмысленно.
+    """
+    last = None
+    for attempt in range(EMPTY_RETRIES + 1):
+        try:
+            return _call(fw, model, **kw), attempt
+        except EmptyResponseError as exc:
+            last = exc
+            if attempt >= EMPTY_RETRIES:
+                break
+            _time.sleep(EMPTY_RETRY_PAUSE_SEC * (attempt + 1))
+            log.warning("llm: пустой ответ %s/%s — повтор %d из %d по тому же каналу",
+                        fw, model, attempt + 1, EMPTY_RETRIES)
+    raise last
+
+
 def chat(role: str, *, system=None, messages: list, tools: list | None = None,
          max_tokens: int | None = None, thinking: int | None = None) -> LLMResponse:
     """Вызов модели по роли. Фолбэк на противоположный фреймворк — один повтор, честно в дневник."""
@@ -1083,8 +1193,14 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     st = _STATE[role]
     t0 = _time.time()
     try:
-        resp = _call(fw, model, system=system, messages=messages, tools=tools,
-                     max_tokens=mt, thinking=thinking)
+        resp, empty_retries = _call_retrying_empty(
+            fw, model, system=system, messages=messages, tools=tools,
+            max_tokens=mt, thinking=thinking)
+        if empty_retries:
+            # Повтор — не бесплатная тишина: он попадает в её журнал, иначе «стало реже
+            # падать» будет неотличимо от «мы это спрятали».
+            _journal("%s: канал отдал пустой ответ, помог повтор №%d по тому же каналу"
+                     % (_ROLE_RU[role], empty_retries))
         # Обрыв потолком — факт этой роли. Раньше он ставился внутри `_call_openai`, то
         # есть anthropic-путь обрыва не замечал вовсе, а `ping()` замечал лишний.
         _note_truncation(resp, role)
@@ -1184,8 +1300,36 @@ def clear_test_clients() -> None:
     _TEST_CLIENTS.clear()
 
 
+def observed_models(role: str) -> tuple[dict, dict]:
+    """(последний реально ответивший, счёт по моделям за сегодня) для одной роли.
+
+    Оба берутся из того же журнала расхода, куда `_usage_add` пишет ФАКТИЧЕСКУЮ модель
+    каждого успешного вызова. Пусто — значит сегодня по этой роли ответов ещё не было,
+    и так и надо сказать: «не наблюдалось» честнее, чем повторить настроенное.
+    """
+    try:
+        today = _usage_load().get(praxis_time.day_key()) or {}
+        row = today.get(role) if isinstance(today, dict) else None
+        if not isinstance(row, dict):
+            return {}, {}
+        last = row.get("last") if isinstance(row.get("last"), dict) else {}
+        models = row.get("models") if isinstance(row.get("models"), dict) else {}
+        counts = {name: int((data or {}).get("calls") or 0)
+                  for name, data in models.items() if isinstance(data, dict)}
+        return dict(last), {k: v for k, v in counts.items() if v}
+    except Exception:
+        return {}, {}
+
+
 def state_line() -> str:
-    """Одна строка для STATE: основной и вспомогательный модельные каналы."""
+    """Одна строка для кадра: НАСТРОЕННЫЙ канал и то, что РЕАЛЬНО отвечало.
+
+    ⚠ Раньше здесь стояло только настроенное, и этого хватало, чтобы кадр врал ей о ней:
+    конфиг говорил `gpt-5.6-sol`, а восемнадцать ходов из ста пятидесяти шли на
+    `gpt-5.6-terra`. Её решение 08.08 — показывать обе вещи, причём накопительная
+    статистика «не должна подменять факт последнего реально ответившего backend».
+    Поэтому порядок именно такой: настроено → последний ответ → счёт за сутки.
+    """
     try:
         snap = snapshot()
     except Exception:
@@ -1194,5 +1338,18 @@ def state_line() -> str:
     for role in ROLES:
         s = snap[role]
         mark = " ⚠ фолбэк" if s["on_fallback"] else ""
-        parts.append(f"{_ROLE_RU[role]}={s['model']} ({s['framework']}){mark}")
-    return ", ".join(parts)
+        chunk = f"{_ROLE_RU[role]}: настроено={s['model']} ({s['framework']}){mark}"
+        last, counts = observed_models(role)
+        name = str(last.get("model") or "")
+        if name:
+            when = str(last.get("at") or "")
+            same = " — тот же" if name == s["model"] else " ⚠ ДРУГАЯ"
+            chunk += f"; последний ответ={name}{same}" + (f" ({when})" if when else "")
+        else:
+            chunk += "; последний ответ=сегодня не наблюдался"
+        if len(counts) > 1 or (counts and name and name not in counts):
+            spread = " / ".join(f"{n} {c}" for n, c in
+                                sorted(counts.items(), key=lambda kv: -kv[1]))
+            chunk += f"; за сутки: {spread}"
+        parts.append(chunk)
+    return " · ".join(parts)

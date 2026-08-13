@@ -210,34 +210,59 @@ class TestIndexMd(Base):
 
 
 class TestSystemPrompt(Base):
-    def test_loads_every_dossier_but_never_into_system_authority(self):
-        """⚠ 06.08 доктрина сменилась: досье едут ВСЕ и целиком.
+    def test_dossiers_follow_the_contract_and_never_enter_system_authority(self) -> None:
+        """⚠ ДОКТРИНА СМЕНИЛАСЬ ТРЕТИЙ РАЗ, И ЭТО НАЗВАНО, А НЕ ПЕРЕПИСАНО МОЛЧА.
 
-        Прежнее имя `test_loads_speaker_not_all_memory` и проверка «чужая
-        память в кадр не попала» описывали политику, отменённую владельцем:
-        «там внутри пусто, пока она не будет видеть абсолютно весь контекст».
-        Основание — замер: отбор досье по привязке возвращал пустоту ВСЕГДА
-        (привязок ноль из 36), то есть 170 КБ её записей о людях не доезжали
-        до неё ни разу, включая 10 КБ о владельце.
+        Было: одно досье по привязке — и привязок ноль из тридцати шести, то есть в кадр
+        не доезжало НИЧЕГО. Стало (06.08): все и целиком — лекарство от голода, названное
+        временным. Стало (09.08, решение Praxis и Егора): присутствующие по ТРАНСПОРТУ
+        целиком, упомянутые — указателем, остальные рукой.
 
-        Неприкосновенным осталось и проверяется здесь: досье живут в
-        evidence, а НЕ в системной власти, и карта памяти на месте.
+        Замер, на котором стоит смена: досье занимали 33,3% разговорного хода и 74,6%
+        автономного окна. ⚠ И то, на чём она НЕ стоит: два контрфактных замера влияния
+        досье на выбор не установили — первый был слеп к инструментам, второй утонул в
+        шуме 0,606. Контракт обратим переменной `PRAXIS_DOSSIER_ALL=1`.
+
+        Свойство, которое здесь стерегут при ЛЮБОЙ доктрине: её память живёт в evidence,
+        а не в системной власти.
         """
-        self._person("егор", "# Егор\n\n- СЕКРЕТ_ЕГОРА альпинист\n")
-        self._person("мария", "# Мария\n\n- СЕКРЕТ_МАРИИ скрипачка\n")
+        self._person("егор", "# Егор\n\ntelegram_id: 809306689\n\n- СЕКРЕТ_ЕГОРА альпинист\n")
+        self._person("мария", "# Мария\n\ntelegram_id: 700000001\n\n- СЕКРЕТ_МАРИИ скрипачка\n")
         mi.ensure_index_line("егор", "Егор — альпинист")
         mi.ensure_index_line("мария", "Мария — скрипачка")
-        _persona, system, evidence = agent._build_prompt_parts(speaker="Егор", owner=True)
-        self.assertNotIn("СЕКРЕТ_ЕГОРА", system)
-        self.assertNotIn("СЕКРЕТ_МАРИИ", system,
-                         "досье уехало в системную власть")
-        self.assertIn("СЕКРЕТ_ЕГОРА", evidence,
-                      "её собственная память снова не доехала")
-        self.assertIn("СЕКРЕТ_МАРИИ", evidence,
-                      "досье третьего человека не доехало")
-        # Ярлык приезжает ЗАГОЛОВКОМ секции, капсом: литерала в кадре больше нет.
-        self.assertIn("КАРТА ПАМЯТИ", evidence, "нет INDEX.md")
-        self.assertIn("memory/maps/PEOPLE.md", evidence)
+
+        # Транспорт назвал Егора — его досье едет целиком, Марии нет.
+        bound_ctx = agent.ChannelContext(principal_id="809306689", is_dm=True,
+                                         owner=True, known=True)
+        _p0, system_bound, evidence_bound = agent._build_prompt_parts(
+            speaker="Егор", owner=True, ctx=bound_ctx)
+        self.assertIn("СЕКРЕТ_ЕГОРА", evidence_bound,
+                      "досье подтверждённого собеседника не доехало")
+        self.assertNotIn("СЕКРЕТ_МАРИИ", evidence_bound,
+                         "поехало досье человека, которого здесь нет")
+        self.assertNotIn("СЕКРЕТ_ЕГОРА", system_bound)
+        self.assertIn("КАРТА ПАМЯТИ", evidence_bound, "нет INDEX.md")
+        self.assertIn("memory/maps/PEOPLE.md", evidence_bound)
+
+        # Без подтверждённого принципала и без говоривших в комнате контракт не везёт
+        # ничьё досье — и это ровно то, ради чего он сделан.
+        _persona, system, evidence = agent._build_prompt_parts(speaker="Егор", chat_id="777")
+        self.assertNotIn("СЕКРЕТ_ЕГОРА", evidence,
+                         "досье приехало без транспортного основания")
+        self.assertNotIn("СЕКРЕТ_ЕГОРА", system, "досье просочилось в системную власть")
+        # Рычаг возвращает прежнее поведение целиком — и там оно тоже не системная власть.
+        with mock.patch.dict(os.environ, {"PRAXIS_DOSSIER_ALL": "1"}):
+            _p2, system_all, evidence_all = agent._build_prompt_parts(
+                speaker="Егор", owner=True)
+        # Ярлык приезжает ЗАГОЛОВКОМ секции, капсом — литерала в смешанном регистре
+        # в кадре нет; та же ловушка, что ловила этот файл в августе.
+        self.assertIn("МОИ ДОСЬЕ НА ЛЮДЕЙ", evidence_all, "тир досье исчез вовсе")
+        self.assertIn("СЕКРЕТ_МАРИИ", evidence_all,
+                      "рычаг не вернул досье третьего человека")
+        self.assertIn("СЕКРЕТ_ЕГОРА", evidence_all,
+                      "рычаг не вернул прежнее поведение — контракт стал необратимым")
+        self.assertNotIn("СЕКРЕТ_ЕГОРА", system_all,
+                         "и при возврате прежнего досье не смеет быть системной властью")
 
     def test_owner_hint(self):
         self.assertIn("shell", agent.build_system_prompt(speaker="Егор", owner=True))

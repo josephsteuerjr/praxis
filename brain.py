@@ -24,6 +24,7 @@ swap_fallback-семантику — тройка framework/model/fallback_model
 from __future__ import annotations
 
 import datetime as _dt
+import praxis_time
 import json
 import logging
 import os
@@ -152,9 +153,17 @@ def catalog() -> dict:
         out["usage_7d"] = {}
     try:
         import appetite
-        out["provider_remaining"] = appetite.provider_remaining_text() or "unknown"
+        # ⚠ ЗДЕСЬ ГОД ЛЕЖАЛ МЁРТВЫЙ ПРИБОР. Вызов шёл БЕЗ обязательного аргумента
+        # (`provider_remaining_text(data)`, appetite.py:146), поднимал TypeError, и голый
+        # `except Exception: pass` ниже съедал его вместе с ключом: строка про остаток
+        # провайдера не появлялась в каталоге ВООБЩЕ, ни разу, ни при каком ответе реле.
+        # Соседний правильный вызов всё это время стоял в двадцати строках отсюда —
+        # `appetite.py:184`: `provider_remaining_text(limits)`. Один из двух её приборов
+        # про топливо не работал, и именно им предлагалось наблюдать миграцию транспорта.
+        out["provider_remaining"] = appetite.provider_remaining_text(
+            appetite.provider_limits()) or "unknown"
     except Exception:
-        pass
+        log.debug("остаток провайдера не собрался", exc_info=True)
     return out
 
 
@@ -228,11 +237,16 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis") -> dict:
 def _journal(msg: str) -> None:
     try:
         JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
-        p = JOURNAL_DIR / f"{_dt.date.today().isoformat()}.md"
+        # ⚠ ДЕНЬ И ЧАС — ЕЁ, а не контейнера. `date.today()` и `datetime.now()` читают
+        # СИСТЕМНЫЙ пояс, а в контейнере задан только PRAXIS_TZ: с 00:00 до 04:00 по
+        # Самаре запись уходила во ВЧЕРАШНИЙ файл, а час внутри строки был UTC.
+        # Имя файла и штамп строки берутся из ОДНОГО источника: иначе расхождение
+        # переезжает внутрь файла, где его труднее заметить.
+        p = JOURNAL_DIR / f"{praxis_time.day_key()}.md"
         if not p.exists():
-            p.write_text(f"# {_dt.date.today().isoformat()}\n\n", encoding="utf-8")
+            p.write_text(f"# {praxis_time.day_key()}\n\n", encoding="utf-8")
         with p.open("a", encoding="utf-8") as fh:
-            fh.write(f"- {_dt.datetime.now():%H:%M} [мозг] {msg}\n")
+            fh.write(f"- {praxis_time.now():%H:%M} [мозг] {msg}\n")
     except Exception:
         log.debug("journal brain не удался", exc_info=True)
 

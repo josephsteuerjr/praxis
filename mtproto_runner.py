@@ -24,6 +24,7 @@ from pathlib import Path
 from telethon import TelegramClient, events
 from dotenv import load_dotenv
 
+import praxis_time
 import agent
 import bufstore
 import context_envelope
@@ -1626,7 +1627,7 @@ async def on_new(event) -> None:
     # отмечается в её собственной памяти; заморозить неприятный чат она может сама.
     admission = None
     if is_private and not is_owner and cat == "unknown":
-        today = datetime.date.today().isoformat()
+        today = praxis_time.day_key()
         first, count = social.note_unknown(sender_id, today)
         admission = {"first": first, "count": count, "over_cap": False}
 
@@ -4849,6 +4850,14 @@ def _sync_send_message(to, text) -> str:
             # почему, и не могла поправить адрес. Возвращаем словами, как любой другой
             # честный отказ тула, — дальше решает она.
             log.warning("send_message %r: постоянный отказ, повторять нечего: %s", to, exc)
+            if agent.delivery_refusal_kind(exc) == "shape":
+                # ⚠ Про ФОРМУ, а не про права: 06.08 её текст не влез в лимит Telegram, и
+                # фраза «у меня нет права писать» была бы прямой неправдой о причине.
+                return agent.DirectSendRefusal(
+                    f"не отправила: Telegram отверг само сообщение — "
+                    f"{type(exc).__name__}. Дело не в правах и не в адресе: этот текст "
+                    f"не проходит по форме (чаще всего — длина). Разбей на части или "
+                    f"сократи и отправь снова; повторять этот же кусок я не буду.")
             return agent.DirectSendRefusal(
                 f"не отправила: Telegram отказал навсегда — {type(exc).__name__}. "
                 f"Похоже, у меня нет права писать в «{to}» (частая причина: это канал, а "
@@ -5024,6 +5033,12 @@ def _sync_send_file(path, caption="", to="") -> str:
             )
         if permanent:
             log.warning("send_file %r: постоянный отказ, повторять нечего: %s", label, exc)
+            if agent.delivery_refusal_kind(exc) == "shape":
+                return agent.DirectSendRefusal(
+                    f"не отправила файл: Telegram отверг сам запрос — "
+                    f"{type(exc).__name__}. Дело не в правах и не в адресе: не проходит "
+                    f"форма (чаще всего — длина подписи или пустое вложение). Поправь "
+                    f"подпись или файл и отправь снова; повторять этот же я не буду.")
             return agent.DirectSendRefusal(
                 f"не отправила файл: Telegram отказал навсегда — {type(exc).__name__}. "
                 f"Похоже, у меня нет права слать в «{label}». Проверь адрес и попробуй "
@@ -6013,12 +6028,36 @@ async def _computer_inventory_once() -> None:
         log.info("computer inventory отложен: %s", result.get("code") or result.get("error"))
 
 
+RESUME_BACKOFF_BASE_SEC = 45.0    # первая неудача стоит один такт часов...
+RESUME_BACKOFF_MAX_SEC = 900.0    # ...а потолок отсрочки — четверть часа
+# Что именно проваливалось в прошлый раз и сколько раз подряд.
+_resume_failures: dict = {"ids": frozenset(), "n": 0, "not_before": 0.0}
+
+
+def _resume_backoff_delay(misses: int) -> float:
+    """Отсрочка РАСТЁТ, а не остаётся тактом часов.
+
+    ⚠ ИСТОРИЯ ДЕФЕКТА, ЗАМЕР ПРОДА 10.08.2026.  Такт был фиксированные 45 секунд, потолка
+    попыток не было вовсе, и когда апстрим ответил 401 на всё, один и тот же прогон
+    `cb4898bf` повторил `continue_checkpoint -> failed` **165 раз за 2 часа 20 минут** —
+    по три вызова модели на попытку, каждый с полным префиксом. Ни одна строка при этом не
+    сказала «я упёрлась»: в логе была ровно та же INFO, что и при здоровой работе.
+    Всплеск переживается ВРЕМЕНЕМ, а не числом попыток.
+    """
+    if misses <= 0:
+        return 0.0
+    return min(RESUME_BACKOFF_BASE_SEC * (2 ** (misses - 1)), RESUME_BACKOFF_MAX_SEC)
+
+
 async def _durable_resume_once() -> None:
     """Advance exact interrupted runs; never invent a new model task or prompt.
 
     ``agent.resume_durable_runs`` owns strict planning, cursor-CAS leases and
     owner-control noops.  The clock merely gives accepted transport receipts
     and other recovery evidence another chance to continue after startup.
+
+    Повторная неудача ТЕХ ЖЕ прогонов отодвигает следующую попытку и называет себя в
+    логе. Появился новый прогон или хоть один сдвинулся — отсрочка снимается сразу.
     """
 
     # A resume runs the full model+tool loop, so it MUST hold single-flight, or
@@ -6027,8 +6066,12 @@ async def _durable_resume_once() -> None:
     # busy with a live pass -> skip; the 45s clock retries and the run stays durably paused.
     if _ONE_MIND.locked():
         return
+    now = time.time()
+    if now < float(_resume_failures["not_before"]):
+        return
     async with _ONE_MIND:
         reports = await asyncio.to_thread(agent.resume_durable_runs, limit=20)
+    failed_ids = set()
     for report in reports:
         status = str(report.get("status") or "")
         if status not in {"noop", "not_resumable"}:
@@ -6037,6 +6080,21 @@ async def _durable_resume_once() -> None:
                 report.get("run_id"), report.get("plan_kind"), status,
                 report.get("phase"),
             )
+        if status == "failed":
+            failed_ids.add(str(report.get("run_id") or ""))
+    failed = frozenset(failed_ids)
+    if failed and failed == _resume_failures["ids"]:
+        misses = int(_resume_failures["n"]) + 1
+        delay = _resume_backoff_delay(misses)
+        _resume_failures.update(ids=failed, n=misses, not_before=time.time() + delay)
+        log.warning(
+            "durable resume: те же %d прогон(а) падают %d раз подряд — следующая попытка "
+            "через %.0fс (%s)", len(failed), misses, delay, ", ".join(sorted(failed))[:200])
+    elif failed:
+        _resume_failures.update(ids=failed, n=1,
+                                not_before=time.time() + _resume_backoff_delay(1))
+    else:
+        _resume_failures.update(ids=frozenset(), n=0, not_before=0.0)
 
 
 BACKFILL_ROOMS_PER_TICK = 50
@@ -6442,6 +6500,49 @@ async def _forge_events_once() -> None:
     _FORGE_EVENTS_TASK = asyncio.create_task(_run_forge_event_pass())
 
 
+async def _work_engine_once() -> None:
+    """Оборот 3: работу поднимает РАБОТА, а не расписание.
+
+    Часы здесь спрашивают ровно один вопрос — «есть ли созревшая работа» — и всё. Что
+    именно созрело и почему остальное ждёт, решает `work_engine` по её леджеру желаний
+    (`work_source` — единственное место, где назван источник правды). Разница не
+    стилистическая: час, который сам придумывает задание, мы уже чинили 09.08.
+
+    ⚠ Одна работа за тик. Не из осторожности, а потому что открытых ходов у неё столько
+    же, сколько внимания: очередь с названной причиной честнее пяти окон разом.
+
+    ⚠ Попытка записывается ДО постановки окна. Упавший посреди хода процесс обязан
+    оставить след подъёма, иначе счёт холостых начнётся с нуля и петля вернётся пятый раз.
+    """
+    try:
+        import work_engine
+        import work_source
+    except Exception:
+        return
+    if not work_engine.enabled():
+        return
+    if _ONE_MIND.locked():
+        return
+    try:
+        raised, _held = await asyncio.to_thread(work_source.plan_now)
+    except Exception:
+        log.debug("движок работ: план не собрался", exc_info=True)
+        return
+    if not raised:
+        return
+    verdict = raised[0]
+    try:
+        import tasks
+        await asyncio.to_thread(work_source.note_attempt, verdict.work)
+        goal = await asyncio.to_thread(work_source.goal_for, verdict.work)
+        await asyncio.to_thread(
+            lambda: tasks.add("window", goal[:2000], when="in 0m", author="praxis"))
+        log.info("движок работ: поднял «%s» [%s] — %s",
+                 verdict.work.goal[:60], verdict.work.id, verdict.reason)
+    except Exception:
+        log.warning("движок работ: подъём не удался [%s]", verdict.work.id, exc_info=True)
+
+
 def _clock_jobs() -> dict:
     """Таблица забот часов: имя -> (период в секундах, корутина). Период <= 0 — выключена."""
     return {
@@ -6471,6 +6572,9 @@ def _clock_jobs() -> dict:
         "forge_wake": (max(CLOCK_TICK, 30.0), _forge_wake_once),  # urgent Forge-завершения -> немедленное окно
         # PASS 30 Этап 1: завершения субагентов будят её ходом (события, не поллинг)
         "forge_events": (max(CLOCK_TICK, 5.0), _forge_events_once),
+        # Оборот 3: движок работ. Часы только спрашивают «созрело ли»; что именно —
+        # решает её леджер желаний. Рычаг опущен по умолчанию (PRAXIS_WORK_ENGINE).
+        "work_engine": (300.0, _work_engine_once),
     }
 
 

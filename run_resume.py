@@ -27,6 +27,7 @@ from typing import Any, Literal, Protocol, Sequence
 
 from run_context import RunContext
 import tool_offerings
+import work_loop
 
 
 PLAN_SCHEMA = "praxis.run.resume-plan.v1"
@@ -50,6 +51,11 @@ DEFAULT_MAX_EVIDENCE_BYTES = 512 * 1024 * 1024
 DEFAULT_MAX_EVENTS = 250_000
 DEFAULT_MAX_PLANNING_SECONDS = 60.0
 
+# Метка в диагностике плана: «работа ждёт СВОЕГО срока», а не «работа застряла». Разница
+# не косметическая — за «застряла» полагается растущая отсрочка, и ожидание, назначенное её
+# же словом, накапливало бы себе наказание до часа сверху.
+WAIT_NOT_DUE = "work_wait_not_due"
+
 PlanKind = Literal[
     "transport_owned",
     "authored_output",
@@ -71,6 +77,14 @@ _KNOWN_STATUSES = frozenset({
     "pending", "running", "paused", "blocked", "in_doubt",
     "done", "cancelled", "failed",
 })
+# ⚠ ЭТО НАСЛЕДИЕ, А НЕ ПРОТОКОЛ, И ОНО СТОИЛО ЕЙ ДВУХ СЛОВ ИЗ ТРЁХ.
+# Множество дословных английских строк было ЕДИНСТВЕННЫМ способом узнать «эту паузу можно
+# продолжить». Пока паузу ставил только код, это работало. 11.08 рычаг рабочего хода
+# подняли — и её собственное «жду» стало паузой с причиной по-русски, в множество не
+# входящей: план `blocked`, noop без эффекта, работа не поднимается уже никогда.
+# Теперь решение принимает машинная запись `details.pause_kind` (см. `work_loop`), а этот
+# набор остаётся ТОЛЬКО ради событий, записанных до 12.08: переписывать историю задним
+# числом нельзя, а читать её надо.
 _RECOVERY_PAUSE_REASONS = frozenset({
     "process restarted; no uncertain side effect observed",
     "recovery executor stopped before transport intent",
@@ -880,6 +894,37 @@ def _guarded_media_ids(
     return receipt_ids if receipt_ids is not None else input_ids
 
 
+def _utc_now_iso() -> str:
+    """Сейчас в том же виде, в каком `work_loop` записывает срок. Одна форма на обе стороны:
+    сравнение строк работает только пока формат один, и это не совпадение, а решение."""
+    return work_loop.iso_utc(time.time())
+
+
+def _checkpoint_after_her_word(checkpoint: dict, wake: dict | None = None,
+                               parked_at: str = "") -> dict:
+    """Ход, отданный исполнителю, начинается БЕЗ её уже исполненного слова.
+
+    `work_loop.restore()` поднимает из точки продолжения и прогресс, и её управление ЭТИМ
+    ходом. Для обрыва процесса это верно: слово ещё не сработало. Для «жду» — наоборот:
+    слово сработало, прогон был припаркован и вот разбужен. Оставить его значит закрыть
+    возобновлённый ход тем же словом на первом же тексте, не сделав ничего, — и так каждый
+    час, вечно. Это была бы пятая петля возобновления в этом доме, просто медленная.
+
+    Бюджет продолжений тоже с нуля: он про ОДИН ход, а это уже следующий.
+
+    Сужение точки продолжения перед передачей исполнителю — не новость: рядом ровно этим
+    занят `_checkpoint_for_media_ids`.
+    """
+    state = checkpoint.get("work_loop")
+    if not isinstance(state, dict):
+        return checkpoint
+    woken = {"wake_on": str((wake or {}).get("wake_on") or ""),
+             "not_before": str((wake or {}).get("not_before") or ""),
+             "parked_at": str(parked_at or "")}
+    return {**checkpoint,
+            "work_loop": {**state, "control": None, "used": 0, "woken": woken}}
+
+
 def _checkpoint_for_media_ids(checkpoint: dict, queue_ids: Sequence[str]) -> dict:
     wanted = list(queue_ids)
     wanted_set = set(wanted)
@@ -931,6 +976,37 @@ def _latest_status_change(events: list[dict], status: str) -> dict | None:
     return None
 
 
+def _pause_kind(row: dict | None) -> str:
+    """Машинный вид паузы из события перехода. Пусто — событие старше протокола."""
+    details = (row or {}).get("details")
+    if not isinstance(details, dict):
+        return ""
+    return str(details.get(work_loop.PAUSE_KIND_KEY) or "")
+
+
+def _her_word_wait(row: dict | None) -> dict | None:
+    """Её «жду» → условие возврата, или None, если пауза не её.
+
+    Читается ЗАПИСЬ, а не проза: `details.task_control.action == "wait"`. Поле `wake`
+    может отсутствовать у прогонов, припаркованных до 12.08 — тогда пола нет и работа
+    поднимается на ближайшем проходе. Это осознанно: у них уже отнят день, добавлять им
+    ещё час ожидания не за что.
+    """
+    details = (row or {}).get("details")
+    if not isinstance(details, dict):
+        return None
+    control = details.get("task_control")
+    said_wait = isinstance(control, dict) and str(control.get("action") or "") == "wait"
+    if _pause_kind(row) != work_loop.PAUSE_HER_WAIT and not said_wait:
+        return None
+    if row.get("control_action") or row.get("requested_by"):
+        # Пауза, поставленная пультом ПОВЕРХ её слова, остаётся владельческой: автомат её
+        # не поднимает. Иначе «останови» от Егора снималось бы её же прошлым «жду».
+        return None
+    wake = details.get("wake")
+    return dict(wake) if isinstance(wake, dict) else {}
+
+
 def _is_recovery_pause(events: list[dict], status: str, control: dict) -> bool:
     if status != "paused" or control:
         return False
@@ -940,7 +1016,8 @@ def _is_recovery_pause(events: list[dict], status: str, control: dict) -> bool:
         row
         and not row.get("control_action")
         and not row.get("requested_by")
-        and (reason in _RECOVERY_PAUSE_REASONS
+        and (_pause_kind(row) == work_loop.PAUSE_PROCESS_RECOVERY
+             or reason in _RECOVERY_PAUSE_REASONS
              or _DIRECT_OUTBOX_PAUSE.fullmatch(reason))
     )
     if recovered:
@@ -1294,12 +1371,39 @@ def plan_resume(manager: RunManagerReader, run_id: str, *,
                 diagnostics=tuple(sorted(outstanding)),
             )
         if status == "blocked":
+            # Её «упёрлась» автомат не поднимает намеренно: препятствие никуда не делось
+            # оттого, что прошёл час. Но и молчать о нём нельзя — план называет её словами
+            # то, чем именно она упёрлась, иначе `blocked` неотличим от сбоя планировщика.
+            blocked_row = _latest_status_change(events, "blocked")
+            said = (((blocked_row or {}).get("details") or {}).get("task_control")
+                    if isinstance((blocked_row or {}).get("details"), dict) else None)
+            blocker = str((said or {}).get("blocker") or "") if isinstance(said, dict) else ""
             return _base_plan(
                 run_id, "blocked", status,
+                ("она сказала «упёрлась»: " + blocker) if blocker else
                 "run is blocked without a transport-owned recovery intent",
                 manifest=manifest, context=context,
             )
-        if status != "paused" or not recovery_pause:
+        her_wait = _her_word_wait(pause_row) if status == "paused" else None
+        if her_wait is not None:
+            # ⚠ ЗДЕСЬ КОНЧАЛАСЬ ЕЁ РАБОТА. Пауза, поставленная её же словом «жду», не
+            # входила в множество дословных строк ниже — и ход уходил в `blocked`, то есть
+            # в noop навсегда. Теперь у «жду» есть срок, и до срока это ВИДИМОЕ ожидание с
+            # названным моментом, а не тишина.
+            due = str(her_wait.get("not_before") or "")
+            if due and _utc_now_iso() < due:
+                waiting_for = str(her_wait.get("wake_on") or "")
+                return _base_plan(
+                    run_id, "blocked", status,
+                    "её «жду» ещё не наступило: не раньше %s%s" % (
+                        due, (" · ждёт: " + waiting_for) if waiting_for else ""),
+                    manifest=manifest, context=context,
+                    # Машинная метка, а не текст: по ней возобновление отличает «работа
+                    # ждёт своего срока» от «работа застряла» и не копит ей отсрочку за
+                    # ожидание, которое само же и назначило.
+                    diagnostics=(WAIT_NOT_DUE,),
+                )
+        elif status != "paused" or not recovery_pause:
             return _base_plan(
                 run_id, "blocked", status,
                 "pause is not an automatic process-recovery pause",
@@ -1316,6 +1420,30 @@ def plan_resume(manager: RunManagerReader, run_id: str, *,
             checkpoint = _checkpoint_value(
                 manager, run_id, latest_checkpoint,
                 max_result_bytes=max_result_bytes, budget=budget,
+            )
+
+        if her_wait is not None:
+            # Её «жду» дождалось срока. Продолжать надо РАБОТУ, а не доставлять последнюю
+            # реплику: ниже её ждал бы `authored_output` — «текст готов, осталось отдать»,
+            # то самое третье место, где её заметку принимали за ответ.
+            if checkpoint is None:
+                return _base_plan(
+                    run_id, "not_resumable", status,
+                    "её «жду» продолжать неоткуда: у хода нет ни одной точки продолжения",
+                    manifest=manifest, context=context,
+                )
+            if outstanding:
+                raise ResumeEvidenceError("her wait coexists with unfinished tool calls")
+            outbound = restore_outbound_descriptors(
+                checkpoint, run_id=run_id, allowed_roots=outbound_roots, budget=budget,
+            )
+            return _base_plan(
+                run_id, "continue_checkpoint", status,
+                "её «жду» дождалось срока: продолжаем ТУ ЖЕ работу с последней точки",
+                manifest=manifest, context=context, auto_resume=True,
+                checkpoint=_checkpoint_after_her_word(
+                    checkpoint, her_wait, str((pause_row or {}).get("at") or "")),
+                outbound=outbound,
             )
 
         # A model_input/model_started newer than the latest durable output is a
