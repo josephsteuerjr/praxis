@@ -1,3 +1,10 @@
+Praxis — AGPL-3.0-or-later
+Copyright (C) 2026 Praxis contributors
+
+LICENSE рядом — дословный текст GNU AGPL v3 без единой правки: любая приписка в
+нём ломает автоматическое определение лицензии, и репозиторий начинает значиться
+«Other». Поэтому всё, что авторы хотят сказать сами, живёт здесь.
+
 # Third-Party Notices
 
 Praxis consists of components under distinct licenses:
