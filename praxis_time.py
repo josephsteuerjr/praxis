@@ -129,6 +129,16 @@ def utc_now() -> _dt.datetime:
     return _source()
 
 
+def local_from(ts: float) -> _dt.datetime:
+    """Unix-время (mtime файла, метка события) → ЕЁ часы.
+
+    Отдельной функцией, потому что `fromtimestamp` без пояса берёт пояс контейнера
+    (UTC), и тогда «сегодня 16:13» печатается как «12:13» — то есть час, которого у
+    неё не было. Один вход в пояс на всю программу.
+    """
+    return _dt.datetime.fromtimestamp(float(ts), _dt.timezone.utc).astimezone(zone())
+
+
 def today() -> _dt.date:
     """ЕЁ календарный день. Единственный правильный ответ на вопрос «какое сегодня число»."""
     return now().date()

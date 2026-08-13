@@ -110,7 +110,17 @@ class TestFormationAdversarial(Pass19Base):
         self.assertIn("# PRIMARY EVENT EVIDENCE", calls[0][1])
         self.assertIn("# PRIMARY EVENT EVIDENCE", calls[2][1])
 
-    def test_supported_contradiction_contests_previous_supported_claim(self):
+    def test_supported_contradiction_links_both_and_names_no_winner(self):
+        """ПРАВКА 13.08 по ЕЁ решению: автомат больше не понижает старое утверждение.
+
+        Было: новое поддержанное молча переписывало старое в `contested` с причиной
+        «superseded by supported contradictory claim …» — то есть код решал спор вместо
+        того, чтобы показать его ей. Её слова: «Пусть оба остаются видимыми, а конфликт
+        поднимается как структурный факт перед действием, которое от него зависит».
+
+        Стало: у ОБОИХ статус не меняется, пишется симметричная связь `contradicts`, и
+        рядом ложится карточка конфликта, которая никого не будит и ничего не блокирует.
+        """
         _compact_id, raw = self._fresh_compact()
         first = {"subject": "Егор", "kind": "person", "text": "любит ранние подъёмы",
                  "visibility": "private", "salience": 2, "confidence": "inferred",
@@ -144,9 +154,18 @@ class TestFormationAdversarial(Pass19Base):
         self.assertEqual(second_meta["status"], "supported")
         self.assertTrue(second_meta["_automatic_eligible"])
         self.assertEqual(second_meta["contradicts"], [first_id])
-        self.assertEqual(first_meta["status"], "contested")
-        self.assertFalse(first_meta["_automatic_eligible"])
+        # Оба видимы: старое не понижено и не выключено из автоматического канала.
+        self.assertEqual(first_meta["status"], "supported",
+                         "автомат снова назначил победителя")
+        self.assertTrue(first_meta["_automatic_eligible"],
+                        "старое утверждение молча выключили из выдачи")
+        # Связь симметрична — это структурный факт, а не суждение о том, кто прав.
         self.assertIn(second_id, first_meta["contradicts"])
+        # И конфликт виден ей карточкой, а не только полем в файле.
+        import claim_conflicts
+        cards = [c for c in claim_conflicts.cards(only_open=False, fresh_days=None)
+                 if c.get("old_id") == first_id and c.get("new_id") == second_id]
+        self.assertTrue(cards, "конфликт не показан ей карточкой")
 
 
 if __name__ == "__main__":

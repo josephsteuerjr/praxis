@@ -112,6 +112,47 @@ pub enum IdTokenInfoError {
     Json(#[from] serde_json::Error),
 }
 
+/// Seconds since the epoch at which this JWT stops being accepted upstream.
+///
+/// ⚠ WHY THIS EXISTS.  `last_refresh` in auth.json says when we last talked to the token
+/// endpoint; it says nothing about how long the issued access token lives.  Those two
+/// drifted apart: the refresh gate waited 28 days while the access token lived ~10.  On
+/// 2026-08-10 the secondary slot's token expired at 09:34 UTC, the relay kept presenting it,
+/// upstream answered 401 to every single call, and the whole companion went mute for hours.
+/// The expiry is written inside the token itself — so read it instead of guessing.
+pub(crate) fn jwt_expires_at(token: &str) -> Option<i64> {
+    #[derive(Deserialize)]
+    struct ExpClaim {
+        #[serde(default)]
+        exp: Option<i64>,
+    }
+
+    let mut parts = token.split('.');
+    let payload_b64 = match (parts.next(), parts.next(), parts.next()) {
+        (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => p,
+        _ => return None,
+    };
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .ok()?;
+    serde_json::from_slice::<ExpClaim>(&payload_bytes)
+        .ok()
+        .and_then(|claims| claims.exp)
+}
+
+impl TokenData {
+    /// True when the access token is already dead or dies within `skew_secs`.
+    ///
+    /// An opaque (non-JWT) token has no readable expiry; treat it as fresh so this never
+    /// turns into a refresh storm against an upstream that never told us anything.
+    pub(crate) fn access_token_expiring(&self, now_secs: i64, skew_secs: i64) -> bool {
+        match jwt_expires_at(&self.access_token) {
+            Some(exp) => exp <= now_secs.saturating_add(skew_secs),
+            None => false,
+        }
+    }
+}
+
 pub(crate) fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoError> {
     // JWT format: header.payload.signature
     let mut parts = id_token.split('.');
@@ -177,5 +218,62 @@ mod tests {
             info.chatgpt_plan_type,
             Some(PlanType::Known(KnownPlan::Pro))
         );
+    }
+
+    fn jwt_with_exp(exp: Option<i64>) -> String {
+        fn b64url_no_pad(bytes: &[u8]) -> String {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+        }
+        let payload = match exp {
+            Some(value) => serde_json::json!({ "exp": value }),
+            None => serde_json::json!({}),
+        };
+        #[expect(clippy::unwrap_used)]
+        let payload_b64 = b64url_no_pad(&serde_json::to_vec(&payload).unwrap());
+        format!("{}.{}.{}", b64url_no_pad(b"{}"), payload_b64, b64url_no_pad(b"sig"))
+    }
+
+    fn token_with(access: String) -> TokenData {
+        TokenData {
+            id_token: IdTokenInfo::default(),
+            access_token: access,
+            refresh_token: "r".to_string(),
+            account_id: Some("acct".to_string()),
+        }
+    }
+
+    /// ЗАМЕР ПРОДА 10.08.2026.  Токен слота `secondary`: выдан 31.07 09:34, истёк 10.08
+    /// 09:34 — ровно десять дней.  Гейт рефреша ждал двадцать восьмого дня, поэтому
+    /// протухший токен предъявлялся апстриму как ни в чём не бывало, и тот отвечал 401 на
+    /// каждый вызов.  Срок живёт ВНУТРИ токена; читаем его, а не календарь.
+    #[test]
+    fn an_expired_access_token_is_seen_before_upstream_says_401() {
+        let issued = 1_785_490_483_i64; // 2026-07-31T09:34:43Z
+        let expires = 1_786_354_483_i64; // 2026-08-10T09:34:43Z
+        let token = token_with(jwt_with_exp(Some(expires)));
+
+        assert!(!token.access_token_expiring(issued, 3600), "свежий токен не трогаем");
+        assert!(
+            !token.access_token_expiring(expires - 7200, 3600),
+            "за два часа до срока запаса ещё хватает"
+        );
+        assert!(
+            token.access_token_expiring(expires - 600, 3600),
+            "за десять минут до срока обязаны обновиться заранее"
+        );
+        assert!(
+            token.access_token_expiring(expires + 1, 3600),
+            "истёкший токен обязан читаться как истёкший"
+        );
+    }
+
+    #[test]
+    fn a_token_without_a_readable_expiry_is_left_alone() {
+        // Иначе непрозрачный токен превратился бы в бесконечный шторм рефрешей против
+        // апстрима, который нам ничего про срок не говорил.
+        assert!(!token_with("opaque-not-a-jwt".to_string()).access_token_expiring(0, 3600));
+        assert!(!token_with(jwt_with_exp(None)).access_token_expiring(0, 3600));
+        assert!(jwt_expires_at("a.b").is_none());
+        assert!(jwt_expires_at("").is_none());
     }
 }

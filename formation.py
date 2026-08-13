@@ -328,8 +328,28 @@ def _write_claim(candidate: dict, verdict: dict, run_id: str) -> tuple[str, bool
     return cid, created
 
 
-def _contest_referenced_claims(candidate: dict, claim_id: str, run_id: str) -> list[str]:
-    """Update contradictory receipts so two opposing claims cannot stay automatic."""
+def _link_contradicting_claims(candidate: dict, claim_id: str, run_id: str) -> list[str]:
+    """Записать ВЗАИМНОЕ противоречие, не назначая победителя.
+
+    ЕЁ РЕШЕНИЕ 13.08.2026, дословно: «Код не должен сам решать, что старое утверждение
+    проиграло новому. Пусть оба остаются видимыми, а конфликт поднимается как структурный
+    факт перед действием, которое от него зависит. Без текстового ранжирования по слову
+    "противоречие" и без тайного "победителя".»
+
+    ЧТО БЫЛО. Прежняя редакция при новом поддержанном утверждении молча переписывала
+    старое в `contested` с причиной «superseded by supported contradictory claim …».
+    Позже (10.08) рядом появилась карточка конфликта — видимость добавили, а понижение
+    оставили, потому что отменять его было её словом. Слово сказано.
+
+    ЧТО ТЕПЕРЬ. Статус старого утверждения **не меняется ни при каких условиях**. Пишется
+    только симметричная связь `contradicts` — это наблюдаемый структурный факт («эти двое
+    несовместимы»), а не суждение о том, кто прав. И пишется карточка, которая ничего не
+    блокирует и никого не будит.
+
+    ⚠ Победителя здесь нет и быть не может: у автомата нет основания предпочесть новое
+    старому. «Новее» — не «вернее». Разбирает она, и разбирает тогда, когда спор упирается
+    в конкретное действие, а не в момент записи.
+    """
     changed: list[str] = []
     for old_id in candidate.get("contradicts") or []:
         if old_id == claim_id:
@@ -352,15 +372,16 @@ def _contest_referenced_claims(candidate: dict, claim_id: str, run_id: str) -> l
             "evidence_ids": list(meta.get("evidence_ids") or []),
             "contradicts": sorted(set([*(meta.get("contradicts") or []), claim_id])),
         }
+        # Статус берётся ИЗ САМОГО утверждения и переписывается сам в себя. Это не
+        # формальность: `_write_claim` — единственный писатель, и раньше именно здесь
+        # подставлялось `contested`. Теперь подставить его неоткуда.
+        kept = str(meta.get("status") or "supported").lower()
         _write_claim(old_candidate, {
-            "status": "contested",
-            "reason": f"superseded by supported contradictory claim {claim_id}",
+            "status": kept,
+            "reason": (f"противоречит утверждению {claim_id}; статус не менялся, "
+                       f"победителя не назначено — оба видимы"),
             "evidence_ids": old_candidate["evidence_ids"],
         }, run_id)
-        # ⭐ 10.08.2026. Понижение статуса остаётся — его отмена ЕЁ слово, она сказала
-        # «разбирать отдельным шагом». Но молчать о нём больше нельзя: её претензия 08.08
-        # была «код РЕШАЕТ конфликт вместо того, чтобы показать его мне», и она права —
-        # старое утверждение уходило в `contested` без единого следа для неё.
         # Карточка ДОБАВЛЯЕТ видимость, ничего не отнимая. Она — запись, а не прогон:
         # никого не будит, ничего не блокирует, не имеет терминального состояния и не
         # превращается в долг, если ответа не будет (см. докстринг claim_conflicts).
@@ -369,7 +390,7 @@ def _contest_referenced_claims(candidate: dict, claim_id: str, run_id: str) -> l
             claim_conflicts.note(
                 subject=old_candidate["subject"], field=old_candidate.get("kind") or "",
                 old_id=old_id, new_id=claim_id,
-                reason="автомат понизил старое: новое поддержанное противоречит ему",
+                reason="два утверждения несовместимы; статусы не менялись, разбирает она",
                 old_text=old_candidate.get("text") or "",
                 new_text=str(candidate.get("text") or ""))
         changed.append(old_id)
@@ -528,9 +549,10 @@ def run(depth: str = "full", *, force: bool = False, reason: str = "сон") -> 
                 claim_ids.append(cid)
                 if v.get("status") == "supported" and c["key"] not in applied_keys:
                     applied_keys.add(c["key"])
-                    contested = _contest_referenced_claims(c, cid, run_id)
+                    linked = _link_contradicting_claims(c, cid, run_id)
                     ops += _apply_supported(c, cid)
-                    ops += [f"claim {old_id} contested by {cid}" for old_id in contested]
+                    ops += [f"claim {old_id} contradicts {cid}; both stay visible"
+                            for old_id in linked]
                     changed_claims.append(c)
                 elif v.get("status") != "supported":
                     rejected += 1

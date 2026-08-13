@@ -45,6 +45,14 @@ pub struct AccountLease {
     pub account_id: String,
 }
 
+/// One slot as seen from outside.  Carries no credential material by design.
+#[derive(Clone, Debug, Serialize)]
+pub struct SlotView {
+    pub slot: String,
+    pub active: bool,
+    pub cooldown_seconds_left: i64,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 struct PersistentState {
     schema: String,
@@ -200,6 +208,75 @@ impl AccountRouter {
         Ok(standby)
     }
 
+    /// Every configured slot, which one is active, and how long a slot stays
+    /// parked after its quota ran out.  Read-only: this is what an operator —
+    /// or Praxis herself — needs before deciding anything.
+    pub async fn describe(&self) -> Vec<SlotView> {
+        let now = Utc::now().timestamp();
+        let state = self.state.lock().await;
+        self.accounts
+            .iter()
+            .map(|account| {
+                let until = state
+                    .exhausted_until
+                    .get(&account.slot)
+                    .copied()
+                    .unwrap_or(0);
+                SlotView {
+                    slot: account.slot.clone(),
+                    active: account.slot == state.active,
+                    cooldown_seconds_left: (until - now).max(0),
+                }
+            })
+            .collect()
+    }
+
+    /// A deliberate move to a named slot.
+    ///
+    /// `switch_after_quota` answers "the current subscription is spent"; this
+    /// answers "I want the other one now" — the two must not be the same door.
+    /// The standby is validated and refreshed BEFORE global state moves, exactly
+    /// as on the quota path, so a broken profile cannot take the live one down.
+    ///
+    /// A deliberate switch also clears that slot's cooldown: the timer was our
+    /// guess about when the subscription might be usable again, and an explicit
+    /// decision outranks a guess.  Genuine exhaustion re-arms it on the next 429.
+    pub async fn switch_to(&self, slot: &str) -> Result<AccountLease> {
+        let wanted = slot.trim();
+        if !self.accounts.iter().any(|account| account.slot == wanted) {
+            let configured: Vec<&str> = self
+                .accounts
+                .iter()
+                .map(|account| account.slot.as_str())
+                .collect();
+            bail!(
+                "account slot {:?} is not configured (configured: {})",
+                wanted,
+                configured.join(", ")
+            );
+        }
+        if self.active_slot().await == wanted {
+            return self.lease_slot(wanted).await;
+        }
+        let target = self
+            .lease_slot(wanted)
+            .await
+            .context("requested ChatGPT account is unusable")?;
+
+        let mut state = self.state.lock().await;
+        let previous = state.active.clone();
+        let mut next = state.clone();
+        next.active = target.slot.clone();
+        next.exhausted_until.remove(&target.slot);
+        self.persist(&next)?;
+        *state = next;
+        info!(
+            "subscription switched deliberately: {} -> {}",
+            previous, target.slot
+        );
+        Ok(target)
+    }
+
     async fn lease_slot(&self, slot: &str) -> Result<AccountLease> {
         let account = self
             .accounts
@@ -310,6 +387,90 @@ mod tests {
 
         let reloaded = AccountRouter::load(root.path()).await.unwrap();
         assert_eq!(reloaded.lease_active().await.unwrap().slot, "secondary");
+    }
+
+    #[tokio::test]
+    async fn a_deliberate_switch_moves_and_persists_the_active_slot() {
+        let root = tempdir().unwrap();
+        write_account(root.path(), "primary", "acct-primary");
+        write_account(root.path(), "secondary", "acct-secondary");
+        let router = AccountRouter::load(root.path()).await.unwrap();
+        assert_eq!(router.active_slot().await, "primary");
+
+        let moved = router.switch_to("secondary").await.unwrap();
+        assert_eq!(moved.slot, "secondary");
+        assert_eq!(router.active_slot().await, "secondary");
+
+        let reloaded = AccountRouter::load(root.path()).await.unwrap();
+        assert_eq!(reloaded.active_slot().await, "secondary");
+    }
+
+    #[tokio::test]
+    async fn switching_to_the_active_slot_changes_nothing() {
+        let root = tempdir().unwrap();
+        write_account(root.path(), "primary", "acct-primary");
+        write_account(root.path(), "secondary", "acct-secondary");
+        let router = AccountRouter::load(root.path()).await.unwrap();
+        let same = router.switch_to("primary").await.unwrap();
+        assert_eq!(same.slot, "primary");
+        assert_eq!(router.active_slot().await, "primary");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_slot_is_named_rather_than_silently_ignored() {
+        let root = tempdir().unwrap();
+        write_account(root.path(), "primary", "acct-primary");
+        let router = AccountRouter::load(root.path()).await.unwrap();
+        let error = match router.switch_to("tertiary").await {
+            Ok(_) => panic!("an unconfigured slot was accepted"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("not configured"), "{error}");
+        assert!(error.contains("primary"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_deliberate_switch_clears_the_slot_cooldown() {
+        let root = tempdir().unwrap();
+        write_account(root.path(), "primary", "acct-primary");
+        write_account(root.path(), "secondary", "acct-secondary");
+        let router = AccountRouter::load(root.path()).await.unwrap();
+        let exhausted = router.lease_active().await.unwrap();
+        router.switch_after_quota(&exhausted).await.unwrap();
+        assert_eq!(router.active_slot().await, "secondary");
+        assert!(
+            router
+                .describe()
+                .await
+                .iter()
+                .any(|view| view.slot == "primary" && view.cooldown_seconds_left > 0),
+            "quota exhaustion must park the spent slot"
+        );
+
+        router.switch_to("primary").await.unwrap();
+        let parked = router
+            .describe()
+            .await
+            .into_iter()
+            .find(|view| view.slot == "primary")
+            .unwrap();
+        assert!(parked.active);
+        assert_eq!(parked.cooldown_seconds_left, 0);
+    }
+
+    #[tokio::test]
+    async fn describe_names_every_slot_and_which_one_is_live() {
+        let root = tempdir().unwrap();
+        write_account(root.path(), "primary", "acct-primary");
+        write_account(root.path(), "secondary", "acct-secondary");
+        let router = AccountRouter::load(root.path()).await.unwrap();
+        let views = router.describe().await;
+        assert_eq!(views.len(), 2);
+        assert_eq!(
+            views.iter().filter(|view| view.active).count(),
+            1,
+            "exactly one slot is live at a time"
+        );
     }
 
     #[tokio::test]

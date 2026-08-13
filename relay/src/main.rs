@@ -251,6 +251,8 @@ async fn run_server() -> anyhow::Result<()> {
         )
         .route("/v1/models", get(models_handler))
         .route("/v1/limits", get(limits_handler))
+        .route("/v1/account", get(account_handler))
+        .route("/v1/account/switch", post(account_switch_handler))
         .route("/health", get(health_handler))
         .layer(CorsLayer::permissive())
         .with_state(app_state);
@@ -562,6 +564,78 @@ async fn limits_handler(State(state): State<AppState>) -> Response {
                         "type": "upstream_error",
                         "code": "limits_unavailable"
                     }
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Which subscriptions exist and which one is live right now.
+///
+/// The active slot lives in the router's memory, so editing auth files on a
+/// running relay changes nothing until a restart.  Without this pair of
+/// endpoints "switch me to the other subscription" had no executor at all —
+/// only an instruction telling a human to do it by hand.
+async fn account_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "active_slot": state.accounts.active_slot().await,
+        "configured_slots": state.accounts.account_count(),
+        "slots": state.accounts.describe().await,
+    }))
+}
+
+#[derive(serde::Deserialize)]
+struct AccountSwitchRequest {
+    slot: String,
+}
+
+async fn account_switch_handler(
+    State(state): State<AppState>,
+    payload: Result<Json<AccountSwitchRequest>, JsonRejection>,
+) -> Response {
+    let requested = match payload {
+        Ok(Json(request)) => request.slot,
+        Err(rejection) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": {
+                        "message": format!("expected {{\"slot\": \"...\"}}: {rejection}"),
+                        "type": "invalid_request_error",
+                        "code": "invalid_json"
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+    let previous = state.accounts.active_slot().await;
+    match state.accounts.switch_to(&requested).await {
+        Ok(lease) => {
+            info!("account switch requested: {} -> {}", previous, lease.slot);
+            // No cache to clear: LimitsCache is keyed by account, and `get`
+            // leases the active slot first — so "how much is left?" already
+            // answers about the subscription that is now live.
+            Json(serde_json::json!({
+                "previous_slot": previous,
+                "active_slot": lease.slot,
+                "slots": state.accounts.describe().await,
+            }))
+            .into_response()
+        }
+        Err(error) => {
+            warn!("account switch refused: {}", error);
+            (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": {
+                        "message": error.to_string(),
+                        "type": "account_switch_refused",
+                        "code": "switch_refused"
+                    },
+                    "active_slot": state.accounts.active_slot().await,
+                    "slots": state.accounts.describe().await,
                 })),
             )
                 .into_response()

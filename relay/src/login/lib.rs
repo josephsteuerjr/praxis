@@ -74,7 +74,17 @@ impl CodexAuth {
                 last_refresh: Some(last_refresh),
                 ..
             }) => {
-                if last_refresh < Utc::now() - chrono::Duration::days(28) {
+                // ⚠ ДВА РАЗНЫХ СРОКА, И РАНЬШЕ ЖИЛ ТОЛЬКО ОДИН.  `last_refresh` — когда мы
+                // в последний раз ходили за токеном; срок жизни самого access-токена
+                // короче примерно втрое (28 дней против ~10).  10.08.2026 это стоило
+                // компаньону нескольких часов немоты: токен слота протух в 09:34 UTC,
+                // реле продолжало его предъявлять, апстрим отвечал 401 на КАЖДЫЙ вызов, а
+                // рефреш ждал двадцать восьмого дня. Теперь смотрим на оба: календарь
+                // ИЛИ собственный `exp` токена, с запасом в час.
+                let now_secs = Utc::now().timestamp();
+                let stale_by_calendar = last_refresh < Utc::now() - chrono::Duration::days(28);
+                let expiring_soon = tokens.access_token_expiring(now_secs, 3600);
+                if stale_by_calendar || expiring_soon {
                     let refresh_response = tokio::time::timeout(
                         Duration::from_secs(60),
                         try_refresh_token(tokens.refresh_token.clone()),

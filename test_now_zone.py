@@ -110,7 +110,12 @@ PARAGRAPH = ("Он сказал, что архитектура памяти об
 #
 # Отсюда и асимметрия, которая иначе выглядела бы ошибкой прибора: итого и провенанс выросли
 # на 61, а подписи упали на 26 = +61 − 87. Сумма сходится, остатка нет.
-PRICE_ZONE, PRICE_PROVENANCE, PRICE_TAIL, PRICE_SIGNATURES = 716, 1128, 1880, 893
+# 13.08: 716/1128/1880 -> 718/1190/1944. Цена выросла на 64 знака, потому что в кадр
+# НЕвладельческой комнаты вернулись факты о ней самой (agent.SELF_FACT_LABELS): модель,
+# руки, непрерывность, живой коммит. Повод — живая конфабуляция 13.08 в AbstractDL:
+# спросили про архитектуру, в кадре не было ни одного факта о себе, зато было чужое
+# слово «DeepSeek» из ленты — им она и ответила. Число перемерено, а не обещано.
+PRICE_ZONE, PRICE_PROVENANCE, PRICE_TAIL, PRICE_SIGNATURES = 718, 1190, 1944, 968
 # Третье слагаемое живёт константой рядом с остальными, а не выводится в тесте: если гуттер
 # реплики однажды подорожает, это обязано краснить именно здесь.
 PRICE_REPLY = 2
@@ -929,7 +934,10 @@ class ThePriceIsMeasuredNotPromised(ZoneBase):
                          "часы другой ширины: цена зоны сдвинулась не из-за формы")
         new, old = self.measure()
         tiers, signs = self.signatures(new)
-        self.assertEqual(len(tiers), 9, "форма не та, на которой считали цену")
+        # 9 -> 10, 13.08: в НЕвладельческий кадр вернулись факты о ней самой
+        # (SELF_FACT_LABELS). Ярус «Mutable operational continuity» больше не выключен
+        # по признаку собеседника — оракулом здесь служит замер, а не память о форме.
+        self.assertEqual(len(tiers), 10, "форма не та, на которой считали цену")
         measured = {
             "зона": new["zones"]["situation"]["chars"],
             "провенанс": new["zones"]["evidence"]["chars"] - old["zones"]["evidence"]["chars"],
@@ -1325,7 +1333,8 @@ class SevenLiveBypassesEachClosedByConstruction(GutterBase):
                          f"пар кавычек в строке больше одной: {work!r}")
         outside = outside_quotes(work)
         self.assertNotIn("99", outside, f"поддельный показатель встал в нашу часть: {outside!r}")
-        self.assertIn("тиров 3 из 3", outside, "настоящее число тиров пропало из зоны")
+        # 3 -> 4 по той же причине: у неё в группе появился ярус знания о себе.
+        self.assertIn("тиров 4 из 4", outside, "настоящее число тиров пропало из зоны")
 
     def test_bypass_6_a_filename_with_a_bracket_cannot_forge_a_passport(self):
         """Обход 6: имя файла со скобкой подделывает автора, дату, токен и путь разом.

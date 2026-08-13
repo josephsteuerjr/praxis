@@ -113,6 +113,34 @@ def _optional_body_text(value: object, label: str, *, maximum: int) -> str:
     return value
 
 
+MEDIA_KINDS = ("photo", "audio", "document")
+LEGACY_MEDIA_KIND = "document"
+
+
+def _media_kind(value: object) -> str:
+    """Тип вложения — часть НАМЕРЕНИЯ, а не решение транспорта.
+
+    13.08.2026. До этой строки durable-путь адресной отправки знал только «файл» и
+    строил `OutboundMedia(kind="document")` жёстко. Значит фото, отправленное по
+    явному адресу, приезжало к человеку документом, а голосовое теряло `voice_note`
+    — и никакая квитанция не могла этого показать, потому что тип нигде не хранился.
+    Теперь он записан до сети и переживает падение вместе с остальным намерением.
+    """
+    text = str(value or "").strip().lower()
+    if text not in MEDIA_KINDS:
+        raise TelegramOutboxValidationError(
+            f"media_kind must be one of {', '.join(MEDIA_KINDS)}")
+    return text
+
+
+def _file_payload_with_kind(payload: dict[str, Any]) -> dict[str, Any]:
+    """Читать старую запись файла так, как она и означала: документ, не голосовое."""
+    filled = dict(payload)
+    filled.setdefault("media_kind", LEGACY_MEDIA_KIND)
+    filled.setdefault("voice_note", False)
+    return filled
+
+
 def _telegram_id(value: object, label: str, *, positive: bool) -> int:
     if isinstance(value, bool):
         raise TelegramOutboxValidationError(f"{label} must be an integer")
@@ -500,9 +528,14 @@ class TelegramOutbox:
                 raise ValueError("text is empty or exceeds configured byte limit")
             canonical_payload = {"text": text}
         else:
-            if set(payload) != {
-                "staged_relpath", "visible_filename", "mime", "sha256", "size", "caption"
-            }:
+            # `media_kind`/`voice_note` появились 13.08.2026. Записи старше их не несут,
+            # и это не порча: тогда адресный путь умел ровно документ. Читаем такие
+            # записи умолчанием, новые — требуем полными.
+            if set(payload) not in (
+                {"staged_relpath", "visible_filename", "mime", "sha256", "size", "caption"},
+                {"staged_relpath", "visible_filename", "mime", "sha256", "size", "caption",
+                 "media_kind", "voice_note"},
+            ):
                 raise ValueError("invalid file payload")
             expected_relpath = f"files/{row['entry_id']}.blob"
             if payload.get("staged_relpath") != expected_relpath:
@@ -523,6 +556,8 @@ class TelegramOutbox:
                 "sha256": sha256,
                 "size": size,
                 "caption": caption,
+                "media_kind": _media_kind(payload.get("media_kind", LEGACY_MEDIA_KIND)),
+                "voice_note": bool(payload.get("voice_note", False)),
             }
         return {
             "id": row["entry_id"],
@@ -558,18 +593,32 @@ class TelegramOutbox:
         if kind == "intent":
             raise ValueError("duplicate intent")
         if kind == "accepted":
-            if set(data) != {"message_id", "random_id"}:
+            # ⚠ У файла расписка шире: она обязана называть АДРЕС и ВИД вложения, иначе
+            # «что-то ушло» неотличимо от «ушла картинка кому надо» — 13.08.2026 именно
+            # на этой неразличимости она отчиталась о неотправленном фото. Поля доказа-
+            # тельства не принимаются на веру из журнала: они пересобираются из самого
+            # намерения, и запись, спорящая со своим намерением, — порча, а не расписка.
+            proof = self._file_receipt_proof(state)
+            # Расписка, выписанная до 13.08, короче — но это та же отправка. Журнал с
+            # такой записью обязан читаться: иначе «мы расширили расписку» означало бы
+            # «уже доставленные файлы стали нечитаемы», а это потеря, а не строгость.
+            if set(data) == {"message_id", "random_id"}:
+                proof = {}
+            elif set(data) != {"message_id", "random_id"} | set(proof):
                 raise ValueError("invalid acceptance receipt")
             message_id = _telegram_id(data.get("message_id"), "message_id", positive=True)
             random_id = _telegram_id(data.get("random_id"), "random_id", positive=False)
             if random_id != state["random_id"]:
                 raise ValueError("acceptance random id mismatch")
+            if any(data.get(name) != value for name, value in proof.items()):
+                raise ValueError("acceptance receipt disagrees with its intent")
+            receipt = {"message_id": message_id, "random_id": random_id, **proof}
             if state["state"] == "accepted":
-                if state["receipt"] != {"message_id": message_id, "random_id": random_id}:
+                if state["receipt"] != receipt:
                     raise ValueError("conflicting acceptance receipt")
                 return state
             result["state"] = "accepted"
-            result["receipt"] = {"message_id": message_id, "random_id": random_id}
+            result["receipt"] = receipt
             result["next_attempt_at"] = None
             result["last_error"] = ""
         elif kind == "retry":
@@ -717,6 +766,29 @@ class TelegramOutbox:
         }
 
     @staticmethod
+    def _file_receipt_proof(state: dict[str, Any]) -> dict[str, Any]:
+        """Что расписка о файле обязана доказывать сверх «что-то ушло».
+
+        13.08.2026. Пробел здесь дал «пересылка успешно ушла Насте, message_id=2049» о
+        картинке, которой в том сообщении не было: id принадлежал тексту, а расписка не
+        различала ни адресата, ни вида вложения. Поля берутся из НЕИЗМЕНЯЕМОГО намерения
+        — расписка не может согласиться с отправкой, которой не заказывали.
+
+        Одно место на два входа (`mark_accepted` и разбор журнала): разъехавшись, они
+        дали бы запись, которая читается, но не выписывается — или наоборот.
+        """
+        if state["kind"] != "file":
+            return {}
+        payload = _file_payload_with_kind(state["payload"])
+        return {
+            "peer_id": state["peer_id"],
+            "topic_id": state["topic_id"],
+            "media_kind": payload["media_kind"],
+            "voice_note": bool(payload["voice_note"]),
+            "sha256": payload["sha256"],
+        }
+
+    @staticmethod
     def _immutable_view(state: dict[str, Any]) -> dict[str, Any]:
         return {
             "key": state["key"],
@@ -849,6 +921,8 @@ class TelegramOutbox:
         purpose: str,
         topic_id: int | str | None = None,
         reply_to: int | str | None = None,
+        media_kind: str = "document",
+        voice_note: bool = False,
     ) -> dict[str, Any]:
         key = _key(idempotency_key)
         entry_id = _entry_id(key)
@@ -856,6 +930,8 @@ class TelegramOutbox:
         filename = self._visible_filename(visible_filename or raw_source.name)
         mime_value = self._mime(mime)
         caption_value = _optional_body_text(caption, "caption", maximum=4096)
+        kind_value = _media_kind(media_kind)
+        voice_value = bool(voice_note) and kind_value == "audio"
         common = self._base_intent(
             key=key, kind="file", peer_id=peer_id, topic_id=topic_id,
             reply_to=reply_to, run_id=run_id, call_id=call_id, purpose=purpose,
@@ -874,9 +950,17 @@ class TelegramOutbox:
                     "sha256": sha256,
                     "size": size,
                     "caption": caption_value,
+                    "media_kind": kind_value,
+                    "voice_note": voice_value,
                 }
                 common["payload"] = expected_payload
-                if self._immutable_view(state) != common:
+                stored = self._immutable_view(state)
+                # Записи, сделанные до того, как тип вложения стал частью намерения,
+                # означали ровно «документ»: тогда другого пути не было. Дочитываем их
+                # умолчанием, а не объявляем конфликтом — иначе повтор уже стоящей в
+                # очереди отправки упал бы на нашей же новой строчке.
+                stored["payload"] = _file_payload_with_kind(stored["payload"])
+                if stored != common:
                     raise TelegramOutboxConflict("idempotency key already owns another intent")
                 return self._public(state, verify_file=True)
             blob = self._blob_path(entry_id)
@@ -899,6 +983,8 @@ class TelegramOutbox:
                 "sha256": sha256,
                 "size": size,
                 "caption": caption_value,
+                "media_kind": kind_value,
+                "voice_note": voice_value,
             }
             row = self._new_event(entry_id, "intent", common)
             self._append_event_locked(self._event_path(entry_id), row)
@@ -974,9 +1060,17 @@ class TelegramOutbox:
             random_value = state["random_id"] if random_id is None else _telegram_id(
                 random_id, "random_id", positive=False
             )
-            receipt = {"message_id": message, "random_id": random_value}
+            receipt = {"message_id": message, "random_id": random_value,
+                       **self._file_receipt_proof(state)}
             if state["state"] == "accepted":
-                if state["receipt"] != receipt:
+                stored = dict(state["receipt"] or {})
+                # Расписка, выписанная до 13.08, короче нынешней — но она про ту же
+                # отправку. Сверяем её по тем полям, которые в ней БЫЛИ; дописывать
+                # заднем числом нечего, а объявлять конфликт — значит уронить
+                # восстановление на уже доставленном файле.
+                if stored != receipt and any(
+                        key_name not in receipt or receipt[key_name] != value
+                        for key_name, value in stored.items()):
                     raise TelegramOutboxConflict("accepted receipt is immutable")
                 return self._public(state)
             if random_value != state["random_id"]:

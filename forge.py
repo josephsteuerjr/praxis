@@ -1040,6 +1040,67 @@ def _root_state_line(task: dict) -> str:
             f"продолжение по этому id начнётся с пустого места.")
 
 
+#: Задача жива, пока не вынесен исход. `submitted` тоже жива: её предложение ещё ждёт
+#: решения Praxis, и рабочее дерево под ним трогать нельзя.
+LIVE_TASK_STATUSES = frozenset({"active", "submitted", "lost"})
+
+
+def active_proposal_ids() -> frozenset[str]:
+    """Предложения, за которыми стоит незакрытая coding-задача.
+
+    Нужен уборщику оболочек `selfdev.reconcile`: рабочее дерево живой задачи и брошенная
+    оболочка выглядят для него одинаково, а цена ошибки — потерянный код (13.08.2026,
+    `code-eeb2f170`). Чтение, без побочных эффектов; форж — источник правды о том, кто
+    сейчас в дереве.
+    """
+    if not TASKS_DIR.is_dir():
+        return frozenset()
+    live: set[str] = set()
+    for path in TASKS_DIR.glob("*/task.json"):
+        try:
+            task = _read_json(path)
+        except Exception:
+            continue
+        if not isinstance(task, dict):
+            continue
+        if str(task.get("status") or "") not in LIVE_TASK_STATUSES:
+            continue
+        proposal_id = str(task.get("proposal_id") or "").strip()
+        if proposal_id:
+            live.add(proposal_id)
+    return frozenset(live)
+
+
+def live_tasks_brief() -> list[str]:
+    """Незакрытые coding-задачи одной строкой каждая: id, статус, агенты, цель.
+
+    Читается из того же `task.json`, что и всё остальное про задачу; вычислений нет,
+    поэтому вызывать можно из любого прибора, который отвечает на «что сейчас во мне».
+    """
+    if not TASKS_DIR.is_dir():
+        return []
+    rows: list[tuple[str, str]] = []
+    for path in TASKS_DIR.glob("*/task.json"):
+        try:
+            task = _read_json(path)
+        except Exception:
+            continue
+        if not isinstance(task, dict):
+            continue
+        status = str(task.get("status") or "")
+        if status not in LIVE_TASK_STATUSES:
+            continue
+        task_id = str(task.get("id") or path.parent.name)
+        agents = len(list((path.parent / "agents").glob("*"))) if (
+            path.parent / "agents").is_dir() else 0
+        done = len(list((path.parent / "agents").glob("*/result.json"))) if (
+            path.parent / "agents").is_dir() else 0
+        goal = str(task.get("goal") or "").strip().replace("\n", " ")[:70]
+        rows.append((str(task.get("created") or ""),
+                     f"{task_id} [{status}] агентов {done}/{agents} · {goal}"))
+    return [line for _, line in sorted(rows)]
+
+
 def reconcile_submitted_tasks() -> int:
     """Сданная задача узнаёт судьбу своего предложения. -> сколько закрыто.
 

@@ -262,6 +262,95 @@ def _spine(text: str, meta: dict) -> None:
 
 
 # --------------------------------------------------------------------------- #
+#  Подписки: два слота одного провайдера
+# --------------------------------------------------------------------------- #
+
+#: Реле держит активный слот В ПАМЯТИ и переносит его в файл состояния само. Значит
+#: править файлы подписок на живом реле бесполезно — правку затрёт следующая запись, и
+#: это была настоящая причина, по которой у «переключи меня на вторую подписку» до
+#: 13.08.2026 не было исполнителя вовсе: только инструкция человеку сделать руками.
+ACCOUNTS_PATH = "/v1/account"
+ACCOUNTS_TIMEOUT = 12.0
+
+
+def _relay_base() -> str:
+    """Адрес реле — тот же, по которому она и так думает. Второго источника правды нет."""
+    import llm
+    fw = (llm._config().get("frameworks") or {}).get("openai") or {}
+    base = str(fw.get("base_url") or "").rstrip("/")
+    return base[:-3] if base.endswith("/v1") else base
+
+
+def _relay_call(path: str, payload: dict | None = None) -> dict:
+    import urllib.error
+    import urllib.request
+    base = _relay_base()
+    if not base:
+        raise RuntimeError("адрес реле не настроен — смотреть memory/llm.json")
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(base + path, data=body,
+                                 headers={"Content-Type": "application/json"},
+                                 method="POST" if body is not None else "GET")
+    try:
+        with urllib.request.urlopen(req, timeout=ACCOUNTS_TIMEOUT) as resp:
+            return json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        # Отказ реле — это ЕГО слова о том, почему нельзя. Пересказывать их своими
+        # значило бы снова отвечать за прибор вместо прибора.
+        try:
+            return json.loads(exc.read() or b"{}")
+        except Exception:
+            raise RuntimeError(f"реле отказало: HTTP {exc.code}") from exc
+
+
+def _slots_text(slots: list) -> str:
+    parts = []
+    for row in slots or ():
+        if not isinstance(row, dict):
+            continue
+        mark = " ← активна" if row.get("active") else ""
+        cooldown = int(row.get("cooldown_seconds_left") or 0)
+        parked = f", отдыхает ещё {cooldown // 60}м" if cooldown > 0 else ""
+        parts.append(f"{row.get('slot')}{mark}{parked}")
+    return "; ".join(parts) or "(реле не назвало ни одного слота)"
+
+
+def accounts() -> str:
+    """Какие подписки настроены и какая работает прямо сейчас."""
+    try:
+        data = _relay_call(ACCOUNTS_PATH)
+    except Exception as exc:
+        return (f"Не спросила реле о подписках: {type(exc).__name__}: {str(exc)[:160]}. "
+                f"Это факт о канале до реле, а не о подписках.")
+    return (f"Подписки: {_slots_text(data.get('slots') or [])}. "
+            f"Активна «{data.get('active_slot')}», настроено {data.get('configured_slots')}.")
+
+
+def use_account(slot: str, *, why: str = "") -> str:
+    """Перевести провайдера на названный слот. Решение её; отказ — словами реле."""
+    wanted = str(slot or "").strip()
+    if not wanted:
+        return "Нужно имя слота: primary или secondary (accounts покажет настроенные)."
+    try:
+        data = _relay_call(f"{ACCOUNTS_PATH}/switch", {"slot": wanted})
+    except Exception as exc:
+        return (f"Переключение не состоялось: {type(exc).__name__}: {str(exc)[:160]}. "
+                f"Активная подписка не менялась.")
+    error = data.get("error")
+    if isinstance(error, dict):
+        return (f"Реле отказало: {error.get('message')}. Осталась «{data.get('active_slot')}»; "
+                f"{_slots_text(data.get('slots') or [])}.")
+    previous, active = data.get("previous_slot"), data.get("active_slot")
+    _journal(f"подписка: {previous} → {active}" + (f" — {why}" if why.strip() else ""))
+    _spine(f"Перевела провайдера с подписки «{previous}» на «{active}».",
+           {"kind": "account_switch", "from": previous, "to": active, "why": why})
+    if previous == active:
+        return f"Уже была «{active}» — ничего не меняла. {_slots_text(data.get('slots') or [])}."
+    return (f"Перевела: «{previous}» → «{active}». {_slots_text(data.get('slots') or [])}. "
+            f"Реле держит слот в памяти, поэтому это работает сразу, без перезапуска.")
+
+
+# --------------------------------------------------------------------------- #
 #  наружу: тул, пульт
 # --------------------------------------------------------------------------- #
 def describe() -> str:

@@ -478,6 +478,32 @@ pub struct ModelList {
     pub data: Vec<Model>,
 }
 
+/// Машинное имя того, ЧЕМ кончился ход, — рядом с чанком, а не вместо него.
+///
+/// 11.08.2026. Замер за восемь суток: 81 упавший прогон, 51 из них — один и тот же
+/// `EmptyResponseError`. Внутри этого имени сидели ТРИ разные болезни, и клиент не мог
+/// их различить физически: исчерпанная подписка (лечится часом сброса или другим
+/// слотом), протухшие учётные данные (лечится логином — 10.08 стоило часов немоты) и
+/// порванный апстрим (лечится повтором). Все три уезжали одинаковым чанком
+/// `finish_reason:"error"` с английской прозой в `content`, и на каждый из них клиент
+/// тратил два полных повтора по ~25к токенов и шесть секунд сна — в том числе в
+/// заведомо закрытое шестичасовое окно, где повторять нечего.
+///
+/// Поля необязательные по одной причине: час открытия окна пишется ТОЛЬКО если его
+/// назвал вендор. Выдуманное число хуже отсутствующего — на нём строится план хода.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayTerminal {
+    pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_in_seconds: Option<i64>,
+}
+
 // Response events for streaming
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseEvent {
@@ -490,6 +516,10 @@ pub struct ResponseEvent {
     // meter is not blind (reasoning tokens are included in completion_tokens).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub usage: Option<Usage>,
+    // Терминал — последним полем и со `skip_serializing_if`: пока его нет, байты чанка
+    // совпадают с сегодняшними ровно, и выключенный рычаг ничего не меняет на проводе.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub relay_terminal: Option<RelayTerminal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

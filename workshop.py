@@ -223,6 +223,33 @@ def _resolve_inbox(path: str) -> Path | None:
     return cand
 
 
+def when(path: Path) -> str:
+    """Когда файл менялся — ЕЁ часами, а не UTC и не «неизвестно».
+
+    ⚠ 13.08.2026, дословно от Егора: «у тебя не отображается время создания и изменения
+    файла по ходу, поэтому так». Он прислал архив, спросил про него минутой позже — а в
+    её листинге стояли только имя и размер. Файл, положенный только что, выглядел ровно
+    как файл из июля, и «самое свежее» приходилось угадывать по названию.
+
+    Сегодняшнее печатается часами («сегодня 16:13»), вчерашнее — словом, остальное
+    датой. Год добавляется только когда он не этот: иначе строка растёт на 250 строк
+    листинга ради того, что и так известно.
+    """
+    try:
+        moment = praxis_time.local_from(path.stat().st_mtime)
+    except OSError:
+        return ""
+    today = praxis_time.today()
+    day = moment.date()
+    if day == today:
+        return f"сегодня {moment:%H:%M}"
+    if (today - day).days == 1:
+        return f"вчера {moment:%H:%M}"
+    if day.year == today.year:
+        return f"{moment:%d.%m %H:%M}"
+    return f"{moment:%d.%m.%Y}"
+
+
 def inbox_list(path: str = "") -> str:
     """Read-only listing exposed in every Telegram channel."""
     p = _resolve_inbox(path)
@@ -232,7 +259,9 @@ def inbox_list(path: str = "") -> str:
     for child in sorted(p.iterdir(), key=lambda item: (not item.is_dir(), item.name.casefold())):
         mark = "/" if child.is_dir() else ""
         size = "" if child.is_dir() else f" · {child.stat().st_size}Б"
-        rows.append(f"{child.relative_to(BASE).as_posix()}{mark}{size}")
+        stamp = when(child)
+        rows.append(f"{child.relative_to(BASE).as_posix()}{mark}{size}"
+                    + (f" · {stamp}" if stamp else ""))
     return "\n".join(rows[:250]) or "(пусто)"
 
 
@@ -582,7 +611,8 @@ def fs_ls(path: str = "") -> str:
             continue
         mark = "/" if c.is_dir() else ""
         size = "" if c.is_dir() else f" · {c.stat().st_size}Б"
-        out.append(f"{c.name}{mark}{size}")
+        stamp = when(c)
+        out.append(f"{c.name}{mark}{size}" + (f" · {stamp}" if stamp else ""))
     return "\n".join(out[:200]) or "(пусто)"
 
 
@@ -730,7 +760,11 @@ def send_file(path: str, caption: str = "", to: str = "") -> str:
         return "Недоступно (нет связи с Telethon)."
     try:
         if str(to or "").strip():
-            return str(fn(str(p), caption or "", str(to).strip()))
+            # ⚠ 13.08.2026. Здесь адресное фото становилось документом: явный `to` уводил
+            # мимо типизированного пути, а durable-намерение знало только «файл». Тип
+            # теперь едет с намерением, поэтому «отправь ему этот скрин» приходит скрином.
+            return str(fn(str(p), caption or "", str(to).strip(),
+                          kind if kind in ("photo", "audio") else "document", False))
         return str(fn(str(p), caption or ""))
     except Exception as e:
         if isinstance(e, agent.DurableSideEffectPending):

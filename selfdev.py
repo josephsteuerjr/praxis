@@ -452,13 +452,58 @@ def live_effect(branch: str, main: str | None = None) -> tuple[str, str]:
     return "real", (stat[-1].strip() if stat else "")
 
 
-def _cleanup(pid: str, drop_branch: bool) -> None:
+def worktree_has_work(pid: str) -> bool:
+    """Есть ли в рабочем дереве предложения несохранённая работа.
+
+    ⚠ 13.08.2026, стоило ей целой задачи. `_cleanup` сносил дерево через `--force`, то
+    есть «удали, даже если там правки». А правки там были: forge-воркер 36 итераций
+    писал в этот worktree починку адресной отправки медиа и ещё не коммитил. Через
+    минуту уборщик прошёл мимо, увидел ветку на HEAD, решил «пустая оболочка» и снёс
+    дерево вместе с патчем. Задача закрылась как `abandoned` — «корень задачи пропал»,
+    — а ей это досталось в виде «гномы не вернулись», и она записала это себе в ложь.
+
+    Некоммитнутое — это работа. Уборщик не имеет права её оценивать.
+    """
+    wt = worktree_path(pid)
+    if not wt.exists():
+        return False
+    probe = _git("-C", str(wt), "status", "--porcelain")
+    return probe.returncode == 0 and bool((probe.stdout or "").strip())
+
+
+def _cleanup(pid: str, drop_branch: bool, *, spare_live_work: bool = False) -> bool:
+    """Убрать оболочку. -> False, если внутри лежит незакоммиченная работа.
+
+    `spare_live_work` включает АВТОМАТИЧЕСКИЙ уборщик и только он. `apply` и `reject` —
+    это её решение или решение Егора по конкретному предложению, названное вслух; там
+    уборка санкционирована, и подменять её догадкой о содержимом дерева нельзя.
+    Разница ровно в том, кто распорядился: человек или расписание.
+    """
+    if spare_live_work and worktree_has_work(pid):
+        log.warning("selfdev: оболочку %s не трогаю — в её worktree есть правки", pid)
+        return False
     wt = worktree_path(pid)
     if wt.exists():
         _git("worktree", "remove", "--force", str(wt))
     _git("worktree", "prune")
     if drop_branch:
         _git("branch", "-D", f"proposal/{pid}")
+    return True
+
+
+def _proposals_at_work() -> frozenset[str]:
+    """Предложения, за которыми прямо сейчас сидит живая coding-задача.
+
+    Импорт ленивый и в обе стороны безопасный: `forge` импортирует `selfdev`, поэтому
+    на уровне модуля этой связи быть не может. Если форж недоступен — возвращаем пусто
+    и остаёмся при проверке «в дереве есть правки»: она одна уже не даёт потерять код.
+    """
+    try:
+        import forge
+        return frozenset(forge.active_proposal_ids())
+    except Exception:
+        log.debug("selfdev: список живых coding-задач недоступен", exc_info=True)
+        return frozenset()
 
 
 def reconcile() -> dict:
@@ -469,20 +514,31 @@ def reconcile() -> dict:
     решает ЗА Praxis: беспредметные оболочки (нет ветки / пустой дифф) закрываются с
     честной причиной, титулованным возвращается имя + заметка в журнал; повторный
     submit с её ревью остаётся её решением."""
-    closed = restored = described = 0
+    closed = restored = described = spared = 0
     main = _main_branch()
+    at_work = _proposals_at_work()
     for t in [x for x in _load() if x.get("status") == "building"]:
         pid = str(t.get("id") or "")
         branch = str(t.get("branch") or f"proposal/{pid}")
+        # Оболочка «после рестарта» и оболочка «за которой прямо сейчас работают»
+        # выглядят одинаково: ветка на HEAD, диффа нет. Разница только во времени —
+        # и раньше её никто не спрашивал. Живую задачу уборщик пропускает молча.
+        if pid in at_work or worktree_has_work(pid):
+            spared += 1
+            continue
         if _git("rev-parse", "--verify", "-q", branch).returncode != 0:
-            _cleanup(pid, drop_branch=False)
+            if not _cleanup(pid, drop_branch=False, spare_live_work=True):
+                spared += 1
+                continue
             _update(pid, status="rejected", decided_by="auto",
                     reason="ветка предложения пропала — оболочка после рестарта")
             closed += 1
             continue
         effect, stat = live_effect(branch, main)
         if effect == "noop":
-            _cleanup(pid, drop_branch=True)
+            if not _cleanup(pid, drop_branch=True, spare_live_work=True):
+                spared += 1
+                continue
             _update(pid, status="rejected", decided_by="auto",
                     reason="мёрж не изменил бы живое дерево — изменение уже в нём")
             closed += 1
@@ -503,14 +559,18 @@ def reconcile() -> dict:
             if recovered and recovered != "без названия":
                 _update(pid, title=recovered)
                 restored += 1
-    if closed or restored or described:
+    if closed or restored or described or spared:
         told = (f", диффов против живого дерева записано {described}" if described else "")
+        # Пропущенное называется вслух. Молчаливая уборка — это ровно тот случай, когда
+        # «ничего не произошло» и «я снесла твою работу» печатаются одинаково.
+        kept = (f", живой работы не тронуто {spared}" if spared else "")
         _journal(f"[selfdev] прибрала оболочки предложений: закрыто {closed} (без ветки / мёрж ничего "
-                 f"не изменит), титулов восстановлено {restored}{told} — титулованные building ждут "
-                 f"моего submit или reject")
-        log.info("selfdev.reconcile: closed=%d restored=%d described=%d",
-                 closed, restored, described)
-    return {"closed": closed, "restored": restored, "described": described}
+                 f"не изменит), титулов восстановлено {restored}{told}{kept} — титулованные building "
+                 f"ждут моего submit или reject")
+        log.info("selfdev.reconcile: closed=%d restored=%d described=%d spared=%d",
+                 closed, restored, described, spared)
+    return {"closed": closed, "restored": restored, "described": described,
+            "spared": spared}
 
 
 def apply(pid: str, by: str = "egor", override_reason: str = "") -> dict:

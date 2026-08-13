@@ -47,6 +47,7 @@ v2 печатает текст гостя ПОД ГУТТЕРОМ `"> "`, а к�
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -56,6 +57,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import agent
 import capabilities
@@ -1266,13 +1268,49 @@ class FrameDidNotMove(unittest.TestCase):
     def _digest(value: str) -> str:
         return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:16]
 
+    @staticmethod
+    def _без_живых_рычагов():
+        """Замер кадра при ФИКСИРОВАННЫХ рычагах среды.
+
+        ⚠ 13.08.2026, вечер. Этот пин уже краснел от соседей и был «починен» подгонкой
+        подписи под тот состав шарда, при котором он тогда прошёл. Это было лечение
+        симптома: в строке состояния стоят `веб-поиск вкл/выкл` и `почта вкл/выкл`, то
+        есть ЖИВОЕ состояние, а тесты в одном шарде его двигают. Пин про код обязан
+        мерить код — иначе он про порядок запуска.
+
+        Рычаги фиксируются здесь явно, и тогда красный снова означает правку.
+        См. [[praxis-gate-reads-live-state]] — тот же класс, пятнадцатое место.
+
+        ⚠ Рычагов оказалось ТРИ, и третий нашёлся только полным гейтом: `bounded aux` —
+        это `llm.limits().max_tool_iters`, то есть её живой `memory/llm.json` (368) либо
+        умолчание датакласса (20), смотря успел ли сосед по шарду сбросить кэш
+        конфигурации. Два были видны сразу, третий — нет; поэтому нормализация тут
+        перечислена поимённо, а не «примерно так».
+        """
+        import llm
+        import mailer
+        import webtool
+        return (mock.patch.object(webtool, "enabled", return_value=False),
+                mock.patch.object(mailer, "configured", return_value=False),
+                mock.patch.object(llm, "limits", return_value=llm.Limits()))
+
     def test_the_state_line_of_every_turn_is_unchanged(self):
         """`capabilities.state_line()` едет в STATE каждого хода (agent.py:969)."""
-        line = capabilities.state_line()
+        with contextlib.ExitStack() as stack:
+            for patch in self._без_живых_рычагов():
+                stack.enter_context(patch)
+            line = capabilities.state_line()
         self.assertIn("рельсы 52: манифест свеж", line,
                        "счётчик рельсов или свежесть манифеста сдвинулись — это её кадр")
         self.assertNotIn("манифест отстал", line)
-        self.assertEqual(self._digest(line), "eb2e365630783414",
+        # 13.08: у неё стало на одну руку больше — `git` (своё дерево и публичное зеркало).
+        # Суверенных тулов 68 -> 69, отсюда и новая подпись строки.
+        # 13.08 вечером — ещё одна, `say`: взгляд на свою реплику до отправки. Она видна
+        # в ЛЮБОЙ комнате (речь есть везде), поэтому выросло base 24 -> 25, а не число
+        # суверенных. И заодно снята сама причина прошлой флаки: подпись снимается при
+        # ФИКСИРОВАННЫХ рычагах, поэтому больше не зависит от того, кто бежал в шарде
+        # рядом. Число перемерено живьём тем же кодом, который печатает строку ей.
+        self.assertEqual(self._digest(line), "c72daeed91a60371",
                          f"строка состояния изменилась: {line!r}")
 
     def test_the_rails_registry_did_not_grow(self):
@@ -1313,6 +1351,10 @@ class FrameDidNotMove(unittest.TestCase):
         # текста причины с двумя английскими строками; у ожидания есть срок; поднятый ход
         # получает ТУ ЖЕ ленту без её уже исполненного слова; посадка возобновлённого хода
         # слушается её слова, а не объявляет работу сделанной. Число перемерено живьём.
+        # 13870 → 13993: её рука к git (своё дерево и публичное зеркало).
+        # 13860 → 13870: правило перевёрнуто в чёрный список (NOT_HERS_LABELS) — она
+        # знает о себе ВСЁ в любой комнате, молчит только о других людях.
+        # 13828 → 13860: факты о себе вернулись в кадр любой комнаты.
         # 13802 → 13828: ярус «документы, которые ты видишь, — живые». Замер: 4 вызова
         # `remember` на 407 чат-ходов при 90 КБ всех досье против 7,7 ГБ протоколов —
         # руки были, приглашения не было.
@@ -1322,9 +1364,13 @@ class FrameDidNotMove(unittest.TestCase):
         # (`wait`/`blocked`), её слово переводит карточку, обычный текст ложится в карточку
         # заметкой, а `done` без единого следа отклоняется и возвращает ей ход.
         # Число перемерено живьём.
+        # 13993 → 14076: три руки перестали врать о наблюдаемом — адресат у `send_media`,
+        # время изменения в листингах, живые coding-задачи в ответе `list_active_runs`, —
+        # плюс отделение реплики собеседника от наших же уколов продолжения.
+        # Число перемерено живьём тем же кодом, который печатает его ей.
         self.assertEqual(rails.outbound_judge_sites(),
-                         [("agent.py", 13828, "_guard_outbound")])
-        self.assertIn("agent.py:13828", capabilities.describe("owner"))
+                         [("agent.py", 14148, "_guard_outbound")])
+        self.assertIn("agent.py:14148", capabilities.describe("owner"))
 
     def test_the_frozen_frame_constants_are_byte_identical(self):
         """Вморожены только те куски кадра, которые НЕ ЗАВИСЯТ ОТ ЖИВОГО СОСТОЯНИЯ.
@@ -1339,12 +1385,16 @@ class FrameDidNotMove(unittest.TestCase):
         сверка двух деревьев при выкате — она сравнивает не с вмороженным числом,
         а с эталоном, снятым в ТОЙ ЖЕ среде.
         """
-        for name, value, expected in (
-            ("_DM_VOICE_FRAME", agent._DM_VOICE_FRAME, "bf4cf1643a3b2f9c"),
-            ("_GROUP_PRESENCE_FRAME", agent._GROUP_PRESENCE_FRAME, "37575d70dca033c4"),
-            ("describe('group')", capabilities.describe("group"), "8f2307562d00fb53"),
-            ("describe('known')", capabilities.describe("known"), "f7dfae9cd06f958a"),
-        ):
+        with contextlib.ExitStack() as stack:
+            for patch in self._без_живых_рычагов():
+                stack.enter_context(patch)
+            probes = (
+                ("_DM_VOICE_FRAME", agent._DM_VOICE_FRAME, "bf4cf1643a3b2f9c"),
+                ("_GROUP_PRESENCE_FRAME", agent._GROUP_PRESENCE_FRAME, "37575d70dca033c4"),
+                ("describe('group')", capabilities.describe("group"), "87a97fad3cc36e2f"),
+                ("describe('known')", capabilities.describe("known"), "6735ab6af66c2f48"),
+            )
+        for name, value, expected in probes:
             with self.subTest(probe=name):
                 self.assertEqual(self._digest(value), expected,
                                  f"{name} сдвинулся: len={len(str(value))}")
@@ -1430,7 +1480,22 @@ class FrameDidNotMove(unittest.TestCase):
         # заведение и перевод карточки её словом, обычный текст в карточку заметкой,
         # восстановление доски вместе с прогонами. Число перемерено живьём.
         # 15194 -> 15208: счётчик рук в ходе + чат-ветка в общем шве продолжения.
-        self.assertEqual(len(source), 15234,
+        # 15399 -> 15482: три руки перестали врать о наблюдаемом. Адресат у `send_media`
+        # (фото такому-то уходило текущему собеседнику и приходило документом), время
+        # изменения в листингах (файл минутной давности выглядел как июльский), живые
+        # coding-задачи в ответе `list_active_runs` (прибор смотрел в другой слой, а
+        # пустоту в нём она прочитала как свою ложь) и реплика собеседника, отделённая
+        # от наших же уколов продолжения. Из 83 строк механизм — около тридцати.
+        # 15482 -> 15533: ярус «в разговоре можно работать, а не только отвечать» — её
+        # собственная граница из абстракта, плюс рука к подпискам в общем шве мозга.
+        # 15533 -> 15553: рука `say` (взгляд на свою реплику до отправки) и снятый
+        # плумбинг классификатора, который решал по входящей реплике. Двадцать строк:
+        # рука, её схема и запись имени позванной руки в слот прогона. Чистого прироста
+        # меньше — регулярки уехали в никуда, а норма в её навык.
+        # 15553 -> 15554: зеркало заговорило ЕЁ голосом («Напечатала: … Отправить?») —
+        # правка Егора «это её дом, всё должно быть от её лица». Одна строка докстроки.
+        # Число перемерено живьём тем же кодом, который её собирает.
+        self.assertEqual(len(source), 15554,
                          "agent.py сдвинулся в строках — сверь, что это заказано")
 
     def test_the_new_module_declares_no_rail_and_no_environment_switch(self):

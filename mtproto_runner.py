@@ -2044,9 +2044,17 @@ def _direct_outbox_result(entry: dict, *, label: str = "") -> str:
                 if topic_id is not None else str(peer_id))
     destination = str(label or selector)
     if entry.get("kind") == "file":
-        filename = str((entry.get("payload") or {}).get("visible_filename") or "file")
+        payload = dict(entry.get("payload") or {})
+        filename = str(payload.get("visible_filename") or "file")
+        # Расписка называет ВИД вложения, а не «файл» вообще. 13.08 именно неразличимость
+        # видов дала ход, в котором отправленный текст был прочитан как ушедшая картинка.
+        kind = str(receipt.get("media_kind")
+                   or payload.get("media_kind")
+                   or telegram_outbox.LEGACY_MEDIA_KIND)
+        noun = {"photo": "фото", "audio": "голосовое" if receipt.get("voice_note")
+                or payload.get("voice_note") else "аудио"}.get(kind, "документ")
         return (
-            f"Отправила файл → {destination} "
+            f"Отправила {noun} → {destination} "
             f"(chat_id={selector}, message_id={message_id}): {filename}"
         )
     text = str((entry.get("payload") or {}).get("text") or "")
@@ -2084,8 +2092,13 @@ async def _send_direct_outbox_entry(entry: dict, *, entity=None) -> dict:
             random_id=int(entry["random_id"]),
         )
     elif entry.get("kind") == "file":
+        # ⚠ Здесь стояло `kind="document"` константой. Намерение могло говорить «фото»
+        # или «голосовое», транспорт умел и то и другое (`_send_file_idempotent` читает
+        # `item.kind` и `item.voice_note`) — а между ними лежала эта строка и делала
+        # документом всё. 13.08.2026: тип читается из durable-намерения, поэтому и
+        # первая отправка, и повтор после падения дают ОДИН И ТОТ ЖЕ вид вложения.
         item = media_core.OutboundMedia(
-            kind="document",
+            kind=str(payload.get("media_kind") or telegram_outbox.LEGACY_MEDIA_KIND),
             path=Path(str(payload["staged_path"])),
             mime=str(payload["mime"]),
             size=int(payload["size"]),
@@ -2093,6 +2106,7 @@ async def _send_direct_outbox_entry(entry: dict, *, entity=None) -> dict:
             scope=("group" if peer_id < 0 else "known"),
             caption=str(payload.get("caption") or ""),
             reply_to_message_id=reply_to,
+            voice_note=bool(payload.get("voice_note")),
             queue_id=str(entry["id"]),
             run_id=str(entry.get("run_id") or ""),
             sha256=str(payload.get("sha256") or ""),
@@ -4890,8 +4904,14 @@ def _sync_send_message(to, text) -> str:
     return _direct_outbox_result(entry, label=who) + echo + pulse_note
 
 
-def _sync_send_file(path, caption="", to="") -> str:
-    """Durable document send; staging hides private blob names from Telegram."""
+def _sync_send_file(path, caption="", to="", media_kind="document",
+                    voice_note=False) -> str:
+    """Durable addressed send; staging hides private blob names from Telegram.
+
+    `media_kind` доехал сюда 13.08.2026 вместе с `send_media(to=…)`. До него адресный
+    путь существовал только для документа, поэтому «отправь Насте этот скрин» не имело
+    исполнителя вовсе — и выбиралась рука, которая умела адрес, но не умела картинку.
+    """
 
     execution = _direct_tool_execution("send_file")
     key = _direct_tool_key(execution)
@@ -4964,6 +4984,10 @@ def _sync_send_file(path, caption="", to="") -> str:
     mime = (media_core.sniff_mime(path)
             or mimetypes.guess_type(str(path))[0]
             or "application/octet-stream")
+    wanted_kind = str(media_kind or telegram_outbox.LEGACY_MEDIA_KIND).strip().lower()
+    if wanted_kind not in telegram_outbox.MEDIA_KINDS:
+        return f"kind должен быть {', '.join(telegram_outbox.MEDIA_KINDS)}."
+    wanted_voice = bool(voice_note) and wanted_kind == "audio"
     outbox = _direct_outbox()
     entry = outbox.get(key, verify_file=True)
     if entry is not None:
@@ -4979,7 +5003,10 @@ def _sync_send_file(path, caption="", to="") -> str:
         payload = dict(entry.get("payload") or {})
         if (actual != expected
                 or payload.get("visible_filename") != media_core.delivery_basename(path)
-                or payload.get("caption") != str(caption or "")[:900]):
+                or payload.get("caption") != str(caption or "")[:900]
+                or (payload.get("media_kind") or telegram_outbox.LEGACY_MEDIA_KIND)
+                != wanted_kind
+                or bool(payload.get("voice_note")) != wanted_voice):
             raise telegram_outbox.TelegramOutboxConflict(
                 "durable send_file key already owns another intent"
             )
@@ -4992,6 +5019,8 @@ def _sync_send_file(path, caption="", to="") -> str:
             source=path,
             visible_filename=media_core.delivery_basename(path),
             mime=mime,
+            media_kind=wanted_kind,
+            voice_note=wanted_voice,
             caption=str(caption or "")[:900],
             run_id=str(execution["run_id"]),
             call_id=str(execution["call_id"]),
@@ -5113,7 +5142,7 @@ async def _fire_task(t: dict) -> bool | None:
     """Исполнить сработавшую задачу. Модель зовётся только здесь, не на каждом тике."""
     kind, goal, target = t.get("kind"), t.get("goal", ""), t.get("target", "")
     log.info("НАМЕРЕНИЕ #%s [%s] -> %s", t.get("id"), kind, (goal or target)[:60])
-    if kind in ("window", "wake"):
+    if kind in ("window", "wake", "note"):
         # 18.4: ПОВТОРЯЮЩЕЕСЯ расписание при паузе фона не поднимается (слово Егора /
         # её состояние); разовые (focus, повод с пульта) — текущее дело, идут как шли.
         # Дыра «__auto__ мимо гейтов» закрыта ровно для recur-пути.
@@ -5157,7 +5186,18 @@ async def _fire_task(t: dict) -> bool | None:
                 # следующее), как раньше делал mark-до-исполнения в _fire_due_tasks.
                 await _consume()
                 return
-        if kind == "wake":
+        if kind in ("wake", "note"):
+            # ⚠ 13.08.2026. `note` вела СЮДА НЕ ВСЕГДА: ниже стояла ветка, которая слала
+            # «[напоминание] {goal}» прямо Егору в личку. Живой случай в 17:19 — её
+            # инженерная заметка себе («вернуться к починке медиа только при новом
+            # подтверждённом дефекте: спроектировать read-after-write, писать RPC
+            # acceptance, не допускать дубликатов при таймаутах») ушла ему сообщением
+            # с машинным префиксом. Она писала себе; прочитал он.
+            #
+            # Корень был в самом словаре видов: `note` описан как «напоминание
+            # себе/владельцу», то есть с двумя адресатами сразу, — и раннер разрешал эту
+            # двусмысленность в пользу владельца ВСЕГДА. А сказать что-то человеку к сроку
+            # уже умеет `message`, у которого есть `target`. Значит `note` — про неё.
             await _wake_pass(goal, on_open=_claim, on_run=_confirm)
         else:
             await _task_window(goal, on_open=_claim, on_run=_confirm)
@@ -5168,9 +5208,13 @@ async def _fire_task(t: dict) -> bool | None:
             await _claim_scheduled_text(
                 t,
                 peer_id=OWNER_ID,
+                # ⚑ Её голосом, а не машинным. В её канале говорит она — правка Егора
+                # 13.08: «это её харнесс, её дом, это всё она». Квадратные машинные
+                # префиксы (`[задача]`, `[напоминание]`, `[отложенное письмо]`) читались
+                # как служебка системы в её личке.
                 text=(
-                    f"[отложенное письмо → {target}] {goal}\n"
-                    "(автоотправка выключена — скажи, и отправлю)"
+                    f"Я наметила письмо на {target}: {goal}\n"
+                    "Автоотправка писем у меня выключена — скажи, и отправлю."
                 ),
                 purpose="email-disabled",
                 entity=OWNER_ID,
@@ -5189,7 +5233,8 @@ async def _fire_task(t: dict) -> bool | None:
                 await _claim_scheduled_text(
                     t,
                     peer_id=OWNER_ID,
-                    text=f"[задача] не отправила: {e}\nТекст был: {goal}",
+                    text=(f"Не смогла отправить то, что наметила: {e}\n"
+                          f"Текст был такой: {goal}"),
                     purpose="message-resolution-failure",
                     entity=OWNER_ID,
                 )
@@ -5213,22 +5258,12 @@ async def _fire_task(t: dict) -> bool | None:
             await _claim_scheduled_text(
                 t,
                 peer_id=OWNER_ID,
-                text=f"[задача] не нашла {target}, чтобы написать: {goal}",
+                text=(f"Не нашла, кому писать — «{target}» не опознаётся.\n"
+                      f"Я собиралась сказать: {goal}"),
                 purpose="message-target-missing",
                 entity=OWNER_ID,
             )
             return True
-        return False
-    elif kind == "note" and OWNER_ID:
-        await _claim_scheduled_text(
-            t,
-            peer_id=OWNER_ID,
-            text=f"[напоминание] {goal}",
-            purpose="note",
-            entity=OWNER_ID,
-        )
-        return True
-    elif kind == "note":
         return False
     return None
 

@@ -27,14 +27,26 @@ def _on(**extra):
     return mock.patch.dict("os.environ", {"PRAXIS_CHAT_FOLLOW_THROUGH": "on", **extra})
 
 
-class OrdinaryTalkIsUntouched(unittest.TestCase):
-    def test_a_plain_reply_ends_the_turn_exactly_as_before(self):
+class OrdinaryTalkIsNotAccused(unittest.TestCase):
+    """⚠ КОНТРАКТ ИЗМЕНЁН 13.08 ВЕЧЕРОМ, И ЭТО ЗАКАЗАНО.
+
+    Раньше обычная реплика без рук закрывала ход молча. Теперь она получает ОДИН взгляд:
+    свой же текст плюс факт «рук в этом ходе: ни одной». Разбор — в `work_loop.mirror` и
+    в `test_answer_from_the_source`.
+
+    Но охраняемое здесь не изменилось ни на букву: обычную речь нельзя ОБВИНЯТЬ в
+    невыполненном обещании. Зеркало показывает; укол про обещание — только там, где
+    обещание было.
+    """
+
+    def test_a_plain_reply_gets_the_mirror_and_not_an_accusation(self):
         with _on():
             keep, note = work_loop.chat_decide(
                 "Да, согласна. Мне ближе второй вариант, потому что он проще.",
                 kind="chat_turn", hands=0, spent=0)
-        self.assertFalse(keep)
-        self.assertEqual(note, "")
+        self.assertTrue(keep)
+        self.assertNotIn("и не сделала", note)
+        self.assertIn("Напечатала", note)
 
     def test_conversational_filler_is_not_a_promise(self):
         """Адверсарная прополка `promises` 23.07: «возвращаюсь к твоему вопросу» — речь."""
@@ -42,8 +54,9 @@ class OrdinaryTalkIsUntouched(unittest.TestCase):
                      "Вернусь к сказанному выше — там я ошиблась.",
                      "Сейчас объясню, почему это не так."):
             with _on():
-                keep, _ = work_loop.chat_decide(text, kind="chat_turn", hands=0, spent=0)
-            self.assertFalse(keep, "обычная речь принята за обещание: %r" % text)
+                _, note = work_loop.chat_decide(text, kind="chat_turn", hands=0, spent=0)
+            self.assertNotIn("объявила действие", note,
+                             "обычная речь принята за обещание: %r" % text)
 
     def test_a_speech_act_is_fulfilled_by_the_message_itself(self):
         """«Сейчас расскажу» исполняется ЭТИМ ЖЕ сообщением: рассказ и есть рассказывание.
@@ -52,8 +65,9 @@ class OrdinaryTalkIsUntouched(unittest.TestCase):
                      "Покажу на примере: вот тут ломается.",
                      "Сейчас объясню короче."):
             with _on():
-                keep, _ = work_loop.chat_decide(text, kind="chat_turn", hands=0, spent=0)
-            self.assertFalse(keep, "речевой акт принят за невыполненное действие: %r" % text)
+                _, note = work_loop.chat_decide(text, kind="chat_turn", hands=0, spent=0)
+            self.assertNotIn("объявила действие", note,
+                             "речевой акт принят за невыполненное действие: %r" % text)
 
     def test_a_turn_that_already_used_a_hand_is_left_alone(self):
         """Работа пошла — решать, договорила ли она, не наше дело."""
@@ -85,8 +99,8 @@ class AnAnnouncedActionDoesNotEndTheTurn(unittest.TestCase):
                 "Поняла. Исправляю: сейчас напишу в AbstractDL Chat.",
                 kind="chat_turn", hands=0, spent=0)
         self.assertTrue(keep)
-        self.assertIn("не сделала его", note)
-        self.assertIn("Сделай его сейчас", note)
+        self.assertIn("и не сделала", note)
+        self.assertIn("Могу сделать прямо сейчас", note)
 
     def test_the_живой_случай_from_the_dm_is_caught(self):
         """Дословно из лички 12.08 — тот самый ход, который кончился обещанием."""
@@ -104,7 +118,9 @@ class AnAnnouncedActionDoesNotEndTheTurn(unittest.TestCase):
                                                hands=0, spent=2)
         self.assertFalse(keep)
         self.assertIn("продолжения кончились", note)
-        self.assertIn("осталось словом", note)
+        # Причина назвалась вслух — ход закрыт по бюджету, а не тихо. Формулировка сменилась
+        # вместе с признаком: продолжение больше не про одно лишь объявленное действие.
+        self.assertIn("сказано как есть", note)
 
     def test_the_nudge_quotes_her_own_words_back(self):
         with _on():

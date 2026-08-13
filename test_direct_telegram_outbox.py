@@ -238,32 +238,73 @@ class DirectOutboxReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emit.call_args.kwargs["transports"], ("pwa",))
         self.assertEqual(emit.call_args.kwargs["correlation"]["run_id"], "run-owner-file")
 
-    async def test_scheduled_note_is_durably_claimed_before_mark_fired(self):
+    async def test_a_note_to_herself_wakes_her_and_never_reaches_the_owner(self):
+        """⚠ КОНТРАКТ ИЗМЕНЁН 13.08, И ЭТО ПОЧИНКА ЖИВОГО ДЕФЕКТА.
+
+        Раньше `note` уходил Егору в личку текстом «[напоминание] {goal}». 13.08 в 17:19
+        так к нему приехала её инженерная заметка СЕБЕ: «вернуться к предложенной починке
+        отправки медиа только при новом подтверждённом дефекте — спроектировать
+        read-after-write проверку message.media/type, отдельно записывать RPC acceptance
+        и не допускать дубликатов при таймаутах». Она писала себе; прочитал он, да ещё с
+        машинным префиксом в её собственном канале.
+
+        Корень был в словаре видов: `note` описан как «напоминание себе/владельцу», то
+        есть с двумя адресатами разом, — и раннер разрешал двусмысленность в пользу
+        владельца ВСЕГДА. Сказать что-то человеку к сроку уже умеет `message` со своим
+        `target`. Значит `note` — про неё: он будит её, как `wake`.
+        """
         task = {
             "id": "note-1",
             "kind": "note",
-            "goal": "remember this",
+            "goal": "вернуться к починке медиа при новом подтверждённом дефекте",
             "when": "2030-01-01T10:00",
             "created": "2029-12-01T10:00",
         }
-        observed = []
+        woken = []
+        send = AsyncMock(side_effect=AssertionError("заметка себе ушла человеку"))
 
-        def mark_fired(task_id):
-            rows = runner._direct_outbox().accepted()
-            observed.append((task_id, len(rows), rows[0]["purpose"] if rows else ""))
+        async def _wake(goal, **kwargs):
+            woken.append(goal)
+            await kwargs["on_open"]()
+            kwargs["on_run"]("run-note")
 
+        with (
+            patch.object(runner, "OWNER_ID", 42),
+            patch.object(runner, "_send_message_idempotent", send),
+            patch.object(runner, "_wake_pass", side_effect=_wake),
+            patch.object(tasks, "due", return_value=[task]),
+            patch.object(tasks, "claim_open"),
+            patch.object(tasks, "mark_fired"),
+        ):
+            await runner._fire_due_tasks()
+
+        self.assertEqual(woken, [task["goal"]])
+        self.assertEqual(send.await_count, 0)
+        self.assertEqual(runner._direct_outbox().accepted(), ())
+
+    async def test_a_timed_word_to_a_person_still_has_its_own_kind(self):
+        """Обратная сторона: `message` с адресатом никуда не делся и по-прежнему шлёт."""
+        task = {
+            "id": "msg-1",
+            "kind": "message",
+            "goal": "напомнить про отчёт",
+            "target": "owner",
+            "when": "2030-01-01T10:00",
+            "created": "2029-12-01T10:00",
+        }
         send = AsyncMock(side_effect=lambda _entity, _text, **kwargs: (
-            types.SimpleNamespace(id=94), kwargs["random_id"],
+            types.SimpleNamespace(id=95), kwargs["random_id"],
         ))
         with (
             patch.object(runner, "OWNER_ID", 42),
             patch.object(runner, "_send_message_idempotent", send),
+            patch.object(runner, "_route_from_reference",
+                         side_effect=lambda _ref: runner.telegram_topics.TopicRoute("42", None)),
+            patch.object(runner, "_resolve_entity", AsyncMock(return_value=None)),
             patch.object(tasks, "due", return_value=[task]),
-            patch.object(tasks, "mark_fired", side_effect=mark_fired),
+            patch.object(tasks, "mark_fired"),
         ):
             await runner._fire_due_tasks()
-
-        self.assertEqual(observed, [("note-1", 1, "task:note")])
         self.assertEqual(send.await_count, 1)
 
     async def test_email_disabled_notification_is_claimed_before_mark_fired(self):

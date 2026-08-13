@@ -9,8 +9,8 @@ use url::Url;
 use crate::core::account_router::AccountRouter;
 use crate::core::config::Config;
 use crate::core::models::{
-    ChatRequest, ImageUrlContent, Message, MessageContent, MessageContentPart, ResponseChoice,
-    ResponseDelta, ResponseEvent, Tool,
+    ChatRequest, ImageUrlContent, Message, MessageContent, MessageContentPart, RelayTerminal,
+    ResponseChoice, ResponseDelta, ResponseEvent, Tool,
 };
 
 const MAX_VISIBLE_CITATIONS: usize = 12;
@@ -21,6 +21,245 @@ const CODEX_ORIGINATOR: &str = "codex_cli_rs";
 const CODEX_USER_AGENT: &str = "codex_cli_rs/0.144.0";
 // Efforts the Responses API can accept; anything else is dropped rather than sent.
 const REASONING_EFFORTS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh"];
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ТЕРМИНАЛЫ: чем именно кончился ход — машинным именем, а не английской прозой.
+//
+//  ⚠ ИСТОРИЯ ДЕФЕКТА (замер за восемь суток к 11.08.2026). 81 упавший прогон, 51 из
+//  них — один и тот же `EmptyResponseError` «пустой ответ, идти некуда». Внутри
+//  этого имени сидели ТРИ разные болезни, и различить их клиент не мог физически:
+//    * подписка исчерпана (429 usage_limit_reached) — лечится ЧАСОМ СБРОСА или другим слотом;
+//    * учётные данные протухли (401) — лечится ЛОГИНОМ (10.08 стоило часов немоты);
+//    * апстрим порвал стрим (200 OK, затем обрыв байтов или битый JSON) — лечится ПОВТОРОМ.
+//  Все три уезжали клиенту одинаковым чанком `finish_reason:"error"`, и на каждый из
+//  них он тратил `PRAXIS_EMPTY_RETRIES`: два полных повтора по ~25к токенов и шесть
+//  секунд сна — в том числе в заведомо закрытое шестичасовое окно.
+//
+//  ⚠ ПОЧЕМУ КОД ЕДЕТ ОТДЕЛЬНЫМ ПОЛЕМ, А НЕ ВМЕСТО `finish_reason`. В живом клиенте
+//  (llm.py:891) стоит:
+//
+//      if out.stop_reason == "error" or (not out.blocks and not out.text.strip()):
+//          raise EmptyResponseError(...)
+//
+//  а `_openai_from_stream` кладёт `finish_reason` в `stop_reason` как есть. Напиши мы
+//  туда `subscription_window_exhausted` — для СЕГОДНЯШНЕГО клиента терминал перестанет
+//  быть сбоем: английская фраза реле станет её репликой и уедет в Telegram, а
+//  оборванный посреди фразы ход станет «законченным» коротким ответом. То есть рычаг
+//  реле пришлось бы выкатывать атомарно с питоном, чего живая система не даёт.
+//  Поэтому: `finish_reason` остаётся `"error"` (значение «это НЕ ответ»), КЛАСС едет
+//  рядом в `relay_terminal`, и реле можно включить и наблюдать сутки до правки клиента.
+//  Третья зарубка рычага (`finish_reason`) переписывает и его — включать её можно
+//  только после того, как клиент научится читать класс.
+pub const TERMINAL_QUOTA: &str = "subscription_window_exhausted";
+pub const TERMINAL_NEEDS_LOGIN: &str = "subscription_needs_login";
+pub const TERMINAL_TORN: &str = "upstream_torn";
+pub const TERMINAL_UPSTREAM_ERROR: &str = "upstream_error";
+
+/// RELAY_TYPED_TERMINAL: `off` (дефолт) | `field` | `finish_reason`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalNaming {
+    /// Сегодняшний чанк байт-в-байт: `finish_reason:"error"`, лишних полей нет.
+    Off,
+    /// Добавляется `relay_terminal`; `finish_reason` не трогаем — старый клиент не замечает.
+    Field,
+    /// Плюс `finish_reason` = машинный код. ТОЛЬКО вместе с клиентом, читающим класс.
+    FinishReason,
+}
+
+/// Неизвестное значение = сегодняшнее поведение. Опечатка в docker-compose не имеет
+/// права включить то, к чему клиент не готов.
+pub fn terminal_naming_from_env(raw: Option<&str>) -> TerminalNaming {
+    match raw
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("field") | Some("1") | Some("on") | Some("true") | Some("yes") => TerminalNaming::Field,
+        Some("finish_reason") | Some("finish-reason") | Some("2") => TerminalNaming::FinishReason,
+        _ => TerminalNaming::Off,
+    }
+}
+
+const NAMING_UNREAD: u8 = 0;
+static TERMINAL_NAMING: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(NAMING_UNREAD);
+
+fn naming_code(value: TerminalNaming) -> u8 {
+    match value {
+        TerminalNaming::Off => 1,
+        TerminalNaming::Field => 2,
+        TerminalNaming::FinishReason => 3,
+    }
+}
+
+fn naming_of(code: u8) -> TerminalNaming {
+    match code {
+        2 => TerminalNaming::Field,
+        3 => TerminalNaming::FinishReason,
+        _ => TerminalNaming::Off,
+    }
+}
+
+/// Читается из окружения один раз на процесс: SSE-события идут сотнями на ход.
+fn terminal_naming() -> TerminalNaming {
+    use std::sync::atomic::Ordering;
+    let cached = TERMINAL_NAMING.load(Ordering::Relaxed);
+    if cached != NAMING_UNREAD {
+        return naming_of(cached);
+    }
+    let value = terminal_naming_from_env(std::env::var("RELAY_TYPED_TERMINAL").ok().as_deref());
+    TERMINAL_NAMING.store(naming_code(value), Ordering::Relaxed);
+    value
+}
+
+#[cfg(test)]
+fn force_terminal_naming(value: TerminalNaming) {
+    TERMINAL_NAMING.store(naming_code(value), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Адрес апстрима. В релизной сборке это КОНСТАНТА — подменить её нечем.
+///
+/// Шов существует только в тестовой сборке. Без него ни один тест не может пройти ТЕМ
+/// ЖЕ путём, которым ходит она (spawn → запрос → SSE → терминал), и пришлось бы звать
+/// конструктор чанка напрямую — то есть проверять не то. Урок ночи 11.08: девятнадцать
+/// зелёных тестов не поймали дефект ровно потому, что звали функцию мимо пути.
+#[cfg(test)]
+static TEST_UPSTREAM_URL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+fn responses_url() -> String {
+    #[cfg(test)]
+    {
+        if let Ok(guard) = TEST_UPSTREAM_URL.lock() {
+            if let Some(url) = guard.as_ref() {
+                return url.clone();
+            }
+        }
+    }
+    CHATGPT_CODEX_RESPONSES_URL.to_string()
+}
+
+/// Один терминал: код, человеческая причина, слот и час открытия — если он назван.
+pub struct Terminal {
+    code: &'static str,
+    message: String,
+    slot: Option<String>,
+    resets_at: Option<i64>,
+    resets_in_seconds: Option<i64>,
+}
+
+impl Terminal {
+    fn new(code: &'static str, message: String) -> Self {
+        Self {
+            code,
+            message,
+            slot: None,
+            resets_at: None,
+            resets_in_seconds: None,
+        }
+    }
+
+    fn on_slot(mut self, slot: &str) -> Self {
+        self.slot = Some(slot.to_string());
+        self
+    }
+
+    fn resets(mut self, at: Option<i64>, within: Option<i64>) -> Self {
+        self.resets_at = at;
+        self.resets_in_seconds = within;
+        self
+    }
+}
+
+/// Единственное место, где рождается терминальный чанк. Раньше их было три копии, и
+/// каждая независимо решала, что написать в `content` и в `finish_reason`.
+fn terminal_event(model: &str, terminal: Terminal) -> ResponseEvent {
+    let naming = terminal_naming();
+    let finish_reason = match naming {
+        TerminalNaming::FinishReason => terminal.code.to_string(),
+        _ => "error".to_string(),
+    };
+    let relay_terminal = match naming {
+        TerminalNaming::Off => None,
+        _ => Some(RelayTerminal {
+            code: terminal.code.to_string(),
+            message: bounded_error_text(&terminal.message),
+            slot: terminal.slot.clone(),
+            resets_at: terminal.resets_at,
+            resets_in_seconds: terminal.resets_in_seconds,
+        }),
+    };
+    println!(
+        "⛔ terminal: {} (slot {}, resets_at {:?}, resets_in {:?})",
+        terminal.code,
+        terminal.slot.as_deref().unwrap_or("-"),
+        terminal.resets_at,
+        terminal.resets_in_seconds
+    );
+    ResponseEvent {
+        id: format!("error-{}", uuid::Uuid::new_v4()),
+        object: "chat.completion.chunk".to_string(),
+        created: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64,
+        model: model.to_string(),
+        usage: None,
+        choices: vec![ResponseChoice {
+            index: 0,
+            delta: ResponseDelta {
+                role: Some("assistant".to_string()),
+                content: Some(terminal.message),
+                tool_calls: None,
+            },
+            finish_reason: Some(finish_reason),
+        }],
+        relay_terminal,
+    }
+}
+
+/// Час открытия окна — ТОЛЬКО словами вендора. Ничего не досчитываем и не выдумываем:
+/// неверное названное число хуже отсутствующего, потому что на нём строится план хода.
+fn quota_reset_from_body(body: &str) -> (Option<i64>, Option<i64>) {
+    let Ok(parsed) = serde_json::from_str::<Value>(body) else {
+        return (None, None);
+    };
+    let mut at = None;
+    let mut within = None;
+    for scope in [Some(&parsed), parsed.get("error"), parsed.get("detail")]
+        .into_iter()
+        .flatten()
+    {
+        if at.is_none() {
+            at = scope
+                .get("resets_at")
+                .or_else(|| scope.get("reset_at"))
+                .and_then(Value::as_i64)
+                .filter(|value| *value > 0);
+        }
+        if within.is_none() {
+            within = scope
+                .get("resets_in_seconds")
+                .or_else(|| scope.get("reset_after_seconds"))
+                .and_then(Value::as_i64)
+                .filter(|value| *value >= 0);
+        }
+    }
+    (at, within)
+}
+
+/// Причина обрыва словами апстрима — обрезанная, без приватных полей.
+fn upstream_failure_detail(event: &Value) -> String {
+    let error = event
+        .get("error")
+        .or_else(|| event.get("response").and_then(|value| value.get("error")));
+    match error
+        .and_then(|value| value.get("message"))
+        .and_then(Value::as_str)
+        .and_then(bounded_error_text)
+    {
+        Some(message) => format!("Upstream stream failed: {message}"),
+        None => format!("Upstream stream failed ({})", safe_event_type(event)),
+    }
+}
 
 /// Decode one SSE chunk, carrying an *incomplete* trailing UTF-8 sequence over to the
 /// next chunk instead of mangling it.
@@ -291,7 +530,7 @@ fn build_codex_request(
     payload: &Value,
 ) -> RequestBuilder {
     client
-        .post(CHATGPT_CODEX_RESPONSES_URL)
+        .post(responses_url())
         .bearer_auth(access_token)
         .header("chatgpt-account-id", account_id)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -460,6 +699,34 @@ pub async fn stream_chat_completions(
                         }
                     }
 
+                    // ⚠ ВТОРАЯ ПРИЧИНА УЙТИ НА ЗАПАСНУЮ ПОДПИСКУ, И ЕЁ ЗДЕСЬ НЕ БЫЛО.
+                    // Переключение умело только «кончилась квота». Протухший токен даёт
+                    // 401, и реле продолжало долбиться в мёртвый слот: 10.08.2026 оно
+                    // отвечало 401 на каждый вызов, пока живой слот стоял рядом
+                    // нетронутым. У клиента фолбэка нет вовсе, поэтому один мёртвый слот
+                    // означал полную немоту. Пробуем ровно один раз, как и с квотой:
+                    // 401 приходит ДО начала SSE, повтор не может задвоить текст.
+                    if subscription_auth_error(status) && !account_failover_done {
+                        match account_router.switch_after_quota(&account).await {
+                            Ok(standby) => {
+                                println!(
+                                    "Subscription auth failed ({}); retrying on active slot {}",
+                                    status, standby.slot
+                                );
+                                account = standby;
+                                account_failover_done = true;
+                                continue;
+                            }
+                            Err(error) => {
+                                println!(
+                                    "Subscription auth failover unavailable: {}; the active \
+                                     slot needs a fresh login",
+                                    error
+                                );
+                            }
+                        }
+                    }
+
                     // Optional knobs (reasoning, prompt_cache_key, minimal instructions)
                     // may be rejected by an upstream quirk; retry once in the maximally
                     // conservative shape so the worst case equals the pre-knob relay.
@@ -484,37 +751,63 @@ pub async fn stream_chat_completions(
 
                     // Send properly formatted error response as SSE
                     // Transform specific error messages for better user experience
-                    let user_friendly_message = if subscription_quota_error(status, &response_body) {
-                        "Both OpenAI subscriptions are currently unavailable because of usage limits."
-                            .to_string()
+                    //
+                    // ⚠ Сюда втекают ТРИ разные болезни, и до 11.08.2026 все три уезжали
+                    // клиенту одним и тем же `finish_reason:"error"`. Теперь у каждой своё
+                    // машинное имя: «жди часа сброса», «нужен логин», «апстрим ответил
+                    // ошибкой». Текст `content` остаётся прежним — на нём стоит поведение
+                    // живого клиента, и менять его до шага в питоне нельзя.
+                    let terminal = if subscription_quota_error(status, &response_body) {
+                        let (resets_at, resets_in) = quota_reset_from_body(&response_body);
+                        Terminal::new(
+                            TERMINAL_QUOTA,
+                            "Both OpenAI subscriptions are currently unavailable because of usage limits."
+                                .to_string(),
+                        )
+                        .on_slot(&account.slot)
+                        .resets(resets_at, resets_in)
+                    } else if subscription_auth_error(status) {
+                        // Дойти сюда с 401 можно только после того, как запасной слот тоже
+                        // отказал: иначе выше уже случилось переключение. Значит нужен
+                        // логин, и сказать об этом надо прямым текстом, а не «ошибкой 401».
+                        Terminal::new(
+                            TERMINAL_NEEDS_LOGIN,
+                            "Both OpenAI subscriptions rejected the credentials (401). Sign in again \
+                         to refresh the tokens."
+                                .to_string(),
+                        )
+                        .on_slot(&account.slot)
                     } else {
-                        upstream_error_message(status, &response_body)
+                        Terminal::new(
+                            TERMINAL_UPSTREAM_ERROR,
+                            upstream_error_message(status, &response_body),
+                        )
+                        .on_slot(&account.slot)
                     };
 
-                    let error_event = ResponseEvent {
-                        id: format!("error-{}", uuid::Uuid::new_v4()),
-                        object: "chat.completion.chunk".to_string(),
-                        created: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64,
-                        model: request.model.clone(),
-                        usage: None,
-                        choices: vec![ResponseChoice {
-                            index: 0,
-                            delta: ResponseDelta {
-                                role: Some("assistant".to_string()),
-                                content: Some(user_friendly_message),
-                                tool_calls: None,
-                            },
-                            finish_reason: Some("error".to_string()),
-                        }],
-                    };
-                    let _ = tx.send(Ok(error_event)).await;
+                    let _ = tx.send(Ok(terminal_event(&request.model, terminal))).await;
                     return;
                 }
                 Err(e) => {
                     println!("❌ Request failed: {}", e);
+                    // ⚠ ЭТО ТОТ ЖЕ ОБРЫВ, ПОЙМАННЫЙ СЛОЕМ РАНЬШЕ. Найдено стендом
+                    // 11.08.2026: когда апстрим рвёт соединение, ошибка выходит либо
+                    // здесь (`send()` не успел дочитать заголовки), либо ниже из
+                    // `bytes_stream()` — решает гонка миллисекунд, событие одно.
+                    // Старый путь отдавал её как `Err`, а он превращается в SSE-строку
+                    // `{"error":...}` без `choices`: openai-SDK поднимает APIError, а не
+                    // EmptyResponseError, — то есть обрыв терял и повтор, и имя.
+                    // Под выключенным рычагом всё остаётся как было.
+                    if terminal_naming() != TerminalNaming::Off {
+                        let _ = tx
+                            .send(Ok(terminal_event(
+                                &request.model,
+                                Terminal::new(TERMINAL_TORN, format!("Request failed: {}", e))
+                                    .on_slot(&account.slot),
+                            )))
+                            .await;
+                        return;
+                    }
                     let _ = tx
                         .send(Err(anyhow::anyhow!("Request failed: {}", e)))
                         .await;
@@ -537,26 +830,18 @@ pub async fn stream_chat_completions(
             let chunk = match chunk {
                 Ok(chunk) => chunk,
                 Err(e) => {
-                    let error_event = ResponseEvent {
-                        id: format!("error-{}", uuid::Uuid::new_v4()),
-                        object: "chat.completion.chunk".to_string(),
-                        created: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64,
-                        model: request.model.clone(),
-                        usage: None,
-                        choices: vec![ResponseChoice {
-                            index: 0,
-                            delta: ResponseDelta {
-                                role: Some("assistant".to_string()),
-                                content: Some(format!("Stream error: {}", e)),
-                                tool_calls: None,
-                            },
-                            finish_reason: Some("error".to_string()),
-                        }],
-                    };
-                    let _ = tx.send(Ok(error_event)).await;
+                    // ⚠ ЭТО ОБРЫВ, А НЕ ОТКАЗ ПОДПИСКИ. Апстрим отдал 200 OK, начал стрим
+                    // и порвал его на середине (0,3% ходов, кластерами). До 11.08.2026 он
+                    // уезжал тем же `finish_reason:"error"`, что и исчерпанное окно, —
+                    // и клиент лечил их одинаково: повтором в закрытую дверь.
+                    // Здесь повтор как раз уместен, и код это говорит вслух.
+                    let _ = tx
+                        .send(Ok(terminal_event(
+                            &request.model,
+                            Terminal::new(TERMINAL_TORN, format!("Stream error: {}", e))
+                                .on_slot(&account.slot),
+                        )))
+                        .await;
                     break;
                 }
             };
@@ -650,26 +935,19 @@ pub async fn stream_chat_completions(
                         Err(e) => {
                             println!("⚠️  JSON parse error in upstream SSE event: {}", e);
                             // Send a structured error response for malformed JSON
-                            let error_event = ResponseEvent {
-                                id: format!("error-{}", uuid::Uuid::new_v4()),
-                                object: "chat.completion.chunk".to_string(),
-                                created: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs() as i64,
-                                model: request.model.clone(),
-                        usage: None,
-                                choices: vec![ResponseChoice {
-                                    index: 0,
-                                    delta: ResponseDelta {
-                                        role: Some("assistant".to_string()),
-                                        content: Some(format!("JSON parse error: {}", e)),
-                                        tool_calls: None,
-                                    },
-                                    finish_reason: Some("error".to_string()),
-                                }],
-                            };
-                            let _ = tx.send(Ok(error_event)).await;
+                            //
+                            // Битый JSON в середине стрима — тоже РАЗРЫВ разговора, а не
+                            // отказ подписки: лечится повтором, а не ожиданием часа сброса.
+                            let _ = tx
+                                .send(Ok(terminal_event(
+                                    &request.model,
+                                    Terminal::new(
+                                        TERMINAL_TORN,
+                                        format!("JSON parse error: {}", e),
+                                    )
+                                    .on_slot(&account.slot),
+                                )))
+                                .await;
                             continue;
                         }
                     }
@@ -699,6 +977,30 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
         == Some("web_search_call")
     {
         return None;
+    }
+
+    // ⚠ ПОРВАННЫЙ АПСТРИМ БЫЛ НЕВИДИМ. Апстрим отвечает 200 OK, начинает стрим и рвёт
+    // его событием `error`/`response.failed` — 14 обрывов на 4441 запрос за сутки 10.08.
+    // Эти события не несут ни текста, ни `finish_reason`, поэтому разбор ниже отдавал
+    // `choices: []`, а `_openai_from_stream` такие чанки МОЛЧА глотает (llm.py:988-990).
+    // То есть порванный апстрим был байт-в-байт неотличим от «модель ответила пусто» —
+    // корень 51 падения из 81 за восемь суток. Под выключенным рычагом ведём себя
+    // по-старому: событие остаётся невидимым, и ни один клиент ничего не замечает.
+    if terminal_naming() != TerminalNaming::Off
+        && matches!(
+            event_type,
+            Some("response.failed" | "response.error" | "error")
+        )
+    {
+        let model = event
+            .get("response")
+            .and_then(|response| response.get("model"))
+            .and_then(Value::as_str)
+            .unwrap_or("gpt-4");
+        return Some(terminal_event(
+            model,
+            Terminal::new(TERMINAL_TORN, upstream_failure_detail(event)),
+        ));
     }
 
     // Streaming Responses API: a finished output item. A function_call item must be surfaced as an
@@ -749,6 +1051,7 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
                         },
                         finish_reason: Some("tool_calls".to_string()),
                     }],
+                    relay_terminal: None,
                 });
             }
         }
@@ -771,6 +1074,7 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
 
     // Create OpenAI-compatible response
     Some(ResponseEvent {
+        relay_terminal: None,
         usage: extract_completed_usage(event),
         id: event
             .get("id")
@@ -1082,6 +1386,15 @@ fn upstream_error_message(status: reqwest::StatusCode, body: &str) -> String {
     }
 }
 
+/// Upstream refused the credentials themselves, not the request.
+///
+/// Deliberately status-only: the body of a 401 is redacted before it reaches this code, and
+/// an expired token, a revoked session and a rotated account all look the same from here —
+/// in every one of those cases the honest move is the same, try the other subscription.
+fn subscription_auth_error(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::UNAUTHORIZED
+}
+
 fn subscription_quota_error(status: reqwest::StatusCode, body: &str) -> bool {
     if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
         return false;
@@ -1113,7 +1426,418 @@ fn bounded_error_text(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
     use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+    use std::sync::{Arc, Mutex as StdMutex};
+    use tempfile::tempdir;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  РЕАЛЬНЫЙ ПУТЬ. Здесь поднимается настоящий HTTP-апстрим на 127.0.0.1, а ход
+    //  идёт через настоящий `stream_chat_completions`: его `tokio::spawn`, его
+    //  reqwest, его SSE-разбор, его аккаунт-роутер. Проверяются ровно те байты,
+    //  которые main.rs положит в SSE (`serde_json::to_string(&event)`).
+    //
+    //  ⚠ УРОК НОЧИ 11.08.2026: девятнадцать зелёных тестов не поймали дефект,
+    //  потому что звали функцию НАПРЯМУЮ, а не тем путём, которым ходит она.
+    //  Тест на `terminal_event(...)` был бы зелёным по построению и не заметил бы
+    //  ни того, что реле не доходит до этой ветки, ни того, что чанк по дороге
+    //  теряет поле.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Рычаг и адрес апстрима — глобальные на процесс, поэтому такие тесты идут по одному.
+    static LEVER: StdMutex<()> = StdMutex::new(());
+
+    fn lever_guard() -> std::sync::MutexGuard<'static, ()> {
+        LEVER.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn set_upstream_url(url: Option<String>) {
+        let mut guard = TEST_UPSTREAM_URL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = url;
+    }
+
+    fn write_account(root: &std::path::Path, slot: &str, account_id: &str) {
+        let home = root.join("accounts").join(slot);
+        std::fs::create_dir_all(&home).unwrap();
+        let payload = json!({
+            "email": format!("{slot}@example.test"),
+            "https://api.openai.com/auth": {"chatgpt_plan_type": "pro"}
+        });
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&payload).unwrap());
+        let jwt = format!("e30.{encoded}.c2ln");
+        let auth = json!({
+            "OPENAI_API_KEY": null,
+            "tokens": {
+                "id_token": jwt,
+                "access_token": format!("access-{slot}"),
+                "refresh_token": format!("refresh-{slot}"),
+                "account_id": account_id
+            },
+            "last_refresh": chrono::Utc::now().to_rfc3339()
+        });
+        std::fs::write(
+            home.join("auth.json"),
+            serde_json::to_vec_pretty(&auth).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// Чем апстрим отвечает: отказом со статусом, порванным байтовым стримом,
+    /// битым JSON внутри SSE или событием `response.failed` поверх 200 OK.
+    ///
+    /// ⚠ Обрыв соединения даёт ДВА разных исхода в зависимости от гонки миллисекунд:
+    /// если заголовки успели дойти — ошибка приходит из `bytes_stream()`
+    /// (`TornAfterText`), если нет — падает сам `send()` (`TornAtConnect`).
+    /// Стенд ловит оба, потому что событие одно и то же.
+    #[derive(Clone)]
+    enum Upstream {
+        Status(u16, String),
+        TornAfterText,
+        TornAtConnect,
+        BadJson,
+        FailedEvent,
+    }
+
+    async fn spawn_upstream(mode: Upstream) -> (String, Arc<AtomicUsize>) {
+        use axum::body::Body;
+        use axum::response::Response;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let app = axum::Router::new().fallback(axum::routing::any(move || {
+            let mode = mode.clone();
+            let counter = counter.clone();
+            async move {
+                counter.fetch_add(1, AtomicOrdering::SeqCst);
+                match mode {
+                    Upstream::Status(code, body) => Response::builder()
+                        .status(code)
+                        .header("content-type", "application/json")
+                        .body(Body::from(body))
+                        .unwrap(),
+                    Upstream::TornAfterText => {
+                        // Сначала кусок настоящего текста, затем обрыв: это тот самый
+                        // случай, где ответ уже начался, а канал умер на середине.
+                        // Пауза между ними обязательна — без неё hyper успевает
+                        // оборвать соединение раньше, чем отдаст заголовки, и ошибка
+                        // выходит не там (см. TornAtConnect).
+                        let chunks = async_stream::stream! {
+                            yield Ok::<_, std::io::Error>(bytes::Bytes::from_static(
+                                b"data: {\"type\":\"response.output_text.delta\",\"delta\":{\"text\":\"\xd1\x87\xd0\xb0\"}}\n\n",
+                            ));
+                            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+                            yield Err(std::io::Error::other("upstream tore the byte stream"));
+                        };
+                        Response::builder()
+                            .status(200)
+                            .header("content-type", "text/event-stream")
+                            .body(Body::from_stream(chunks))
+                            .unwrap()
+                    }
+                    Upstream::TornAtConnect => {
+                        let chunks = futures_util::stream::iter(vec![Err::<
+                            bytes::Bytes,
+                            std::io::Error,
+                        >(
+                            std::io::Error::other("upstream closed before the head"),
+                        )]);
+                        Response::builder()
+                            .status(200)
+                            .header("content-type", "text/event-stream")
+                            .body(Body::from_stream(chunks))
+                            .unwrap()
+                    }
+                    Upstream::BadJson => Response::builder()
+                        .status(200)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from("data: {\"type\": broken\n\n"))
+                        .unwrap(),
+                    Upstream::FailedEvent => Response::builder()
+                        .status(200)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from(
+                            "data: {\"type\":\"response.failed\",\"response\":{\"model\":\"gpt-5.6-sol\",\
+                             \"error\":{\"message\":\"internal stream failure\"}}}\n\n",
+                        ))
+                        .unwrap(),
+                }
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (format!("http://{addr}/responses"), hits)
+    }
+
+    /// Один ход целиком: настоящий роутер, настоящий запрос, настоящий SSE.
+    /// Возвращает ровно те чанки, которые уедут клиенту, — и строкой, и разобранными.
+    /// Строка нужна отдельно: `serde_json::Value` сортирует ключи, а порядок полей на
+    /// проводе — часть обещания «выключенный рычаг = сегодняшний чанк».
+    async fn run_turn(mode: Upstream, naming: TerminalNaming) -> Vec<(String, Value)> {
+        let root = tempdir().unwrap();
+        write_account(root.path(), "primary", "acct-primary");
+        let router = AccountRouter::load(root.path()).await.unwrap();
+        let (url, _hits) = spawn_upstream(mode).await;
+        set_upstream_url(Some(url));
+        force_terminal_naming(naming);
+
+        let config = Config {
+            codex_home: root.path().to_path_buf(),
+            chatgpt_base_url: "https://chatgpt.com/backend-api/codex".to_string(),
+            model: "gpt-5.6-sol".to_string(),
+            user_instructions: None,
+            reasoning_effort: None,
+            instructions_mode: Some("minimal".to_string()),
+            parallel_tool_calls: false,
+        };
+        let request: ChatRequest = serde_json::from_value(json!({
+            "model": "gpt-5.6-sol",
+            "messages": [{"role": "user", "content": "привет"}]
+        }))
+        .unwrap();
+
+        let mut rx = stream_chat_completions(&config, router, request, Client::new())
+            .await
+            .unwrap();
+        let mut wire = Vec::new();
+        while let Some(item) = rx.recv().await {
+            match item {
+                // Ровно то, что делает main.rs перед отправкой в SSE.
+                Ok(event) => {
+                    let raw = serde_json::to_string(&event).unwrap();
+                    let parsed = serde_json::from_str(&raw).unwrap();
+                    wire.push((raw, parsed));
+                }
+                Err(error) => {
+                    let raw = json!({"transport_error": error.to_string()}).to_string();
+                    let parsed = serde_json::from_str(&raw).unwrap();
+                    wire.push((raw, parsed));
+                }
+            }
+        }
+        set_upstream_url(None);
+        wire
+    }
+
+    fn last(wire: &[(String, Value)]) -> &Value {
+        &wire.last().expect("реле обязано сказать хоть что-то").1
+    }
+
+    fn last_raw(wire: &[(String, Value)]) -> &str {
+        &wire.last().expect("реле обязано сказать хоть что-то").0
+    }
+
+    /// Три смерти получают три разных имени — и ни одна не притворяется ответом.
+    #[tokio::test]
+    async fn the_three_deaths_get_three_different_names() {
+        let _guard = lever_guard();
+
+        let quota = run_turn(
+            Upstream::Status(
+                429,
+                r#"{"error":{"code":"usage_limit_reached","resets_in_seconds":3600}}"#.to_string(),
+            ),
+            TerminalNaming::Field,
+        )
+        .await;
+        let event = last(&quota);
+        assert_eq!(event["relay_terminal"]["code"], TERMINAL_QUOTA);
+        assert_eq!(event["relay_terminal"]["slot"], "primary");
+        assert_eq!(event["relay_terminal"]["resets_in_seconds"], 3600);
+        // Час, которого вендор не назвал, остаётся НЕНАЗВАННЫМ, а не выдуманным.
+        assert!(event["relay_terminal"].get("resets_at").is_none());
+
+        let needs_login = run_turn(
+            Upstream::Status(401, r#"{"error":{"message":"expired"}}"#.to_string()),
+            TerminalNaming::Field,
+        )
+        .await;
+        assert_eq!(
+            last(&needs_login)["relay_terminal"]["code"],
+            TERMINAL_NEEDS_LOGIN
+        );
+
+        let broken = run_turn(
+            Upstream::Status(500, r#"{"error":{"message":"boom"}}"#.to_string()),
+            TerminalNaming::Field,
+        )
+        .await;
+        assert_eq!(
+            last(&broken)["relay_terminal"]["code"],
+            TERMINAL_UPSTREAM_ERROR
+        );
+
+        let torn = run_turn(Upstream::TornAfterText, TerminalNaming::Field).await;
+        assert_eq!(last(&torn)["relay_terminal"]["code"], TERMINAL_TORN);
+
+        let torn_early = run_turn(Upstream::TornAtConnect, TerminalNaming::Field).await;
+        assert_eq!(
+            last(&torn_early)["relay_terminal"]["code"],
+            TERMINAL_TORN,
+            "обрыв до заголовков — тот же обрыв, и он обязан получить то же имя"
+        );
+
+        let bad_json = run_turn(Upstream::BadJson, TerminalNaming::Field).await;
+        assert_eq!(last(&bad_json)["relay_terminal"]["code"], TERMINAL_TORN);
+
+        let failed = run_turn(Upstream::FailedEvent, TerminalNaming::Field).await;
+        assert_eq!(last(&failed)["relay_terminal"]["code"], TERMINAL_TORN);
+    }
+
+    /// ⚠ ПИН-РЕГРЕССИЯ, ради которой всё и сделано именно так.
+    ///
+    /// Живой клиент (llm.py:891) считает ответом всё, у чего `stop_reason != "error"`.
+    /// Перенеси мы машинный код В `finish_reason` — английская фраза реле стала бы её
+    /// репликой, а оборванный посреди слова ход — «законченным» коротким ответом.
+    /// При зарубке `field` обе двери обязаны остаться закрытыми.
+    #[tokio::test]
+    async fn a_named_terminal_never_starts_looking_like_an_answer() {
+        let _guard = lever_guard();
+
+        let quota = run_turn(
+            Upstream::Status(
+                429,
+                r#"{"error":{"code":"usage_limit_reached"}}"#.to_string(),
+            ),
+            TerminalNaming::Field,
+        )
+        .await;
+        assert_eq!(last(&quota)["choices"][0]["finish_reason"], "error");
+
+        // И у обрыва ПОСЛЕ уже сказанного текста тоже: иначе клиент выдал бы
+        // оборванную фразу как целую — молчаливый потолок ровно там, где его нет.
+        let torn = run_turn(Upstream::TornAfterText, TerminalNaming::Field).await;
+        assert_eq!(last(&torn)["choices"][0]["finish_reason"], "error");
+        let said: String = torn
+            .iter()
+            .filter_map(|(_, chunk)| chunk["choices"][0]["delta"]["content"].as_str())
+            .collect();
+        assert!(
+            said.contains("ча"),
+            "сказанное до обрыва не должно теряться: {said}"
+        );
+    }
+
+    /// Выключенный рычаг = сегодняшний чанк. Не «примерно», а по составу полей и тексту.
+    #[tokio::test]
+    async fn the_lever_off_reproduces_todays_chunk() {
+        let _guard = lever_guard();
+        let wire = run_turn(
+            Upstream::Status(
+                429,
+                r#"{"error":{"code":"usage_limit_reached","resets_in_seconds":3600}}"#.to_string(),
+            ),
+            TerminalNaming::Off,
+        )
+        .await;
+        let event = last(&wire);
+        let raw = last_raw(&wire);
+        // Порядок и состав полей на проводе — те же, что вчера, без единого лишнего.
+        assert!(
+            raw.starts_with(r#"{"id":"error-"#),
+            "порядок полей чанка изменился: {raw}"
+        );
+        assert!(
+            !raw.contains("relay_terminal"),
+            "под выключенным рычагом лишнего поля быть не должно: {raw}"
+        );
+        let mut keys: Vec<&str> = event
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["choices", "created", "id", "model", "object"]);
+        assert_eq!(event["object"], "chat.completion.chunk");
+        assert_eq!(event["model"], "gpt-5.6-sol");
+        assert_eq!(event["choices"][0]["index"], 0);
+        assert_eq!(event["choices"][0]["finish_reason"], "error");
+        assert_eq!(event["choices"][0]["delta"]["role"], "assistant");
+        assert_eq!(
+            event["choices"][0]["delta"]["content"],
+            "Both OpenAI subscriptions are currently unavailable because of usage limits."
+        );
+        assert!(event["id"].as_str().unwrap().starts_with("error-"));
+
+        // И событие обрыва остаётся невидимым ровно как вчера — то есть болезнь,
+        // которую мы лечим, под выключенным рычагом воспроизводится один в один.
+        let failed = run_turn(Upstream::FailedEvent, TerminalNaming::Off).await;
+        assert!(
+            failed
+                .iter()
+                .all(|(_, chunk)| chunk["choices"].as_array().is_none_or(|c| c.is_empty())),
+            "под выключенным рычагом response.failed не порождает чанков: {failed:?}"
+        );
+
+        // И обрыв соединения по-прежнему уезжает `Err`-строкой, а не чанком.
+        let torn = run_turn(Upstream::TornAtConnect, TerminalNaming::Off).await;
+        assert!(
+            last(&torn).get("transport_error").is_some(),
+            "выключенный рычаг обязан сохранять прежний путь обрыва: {torn:?}"
+        );
+    }
+
+    /// Третья зарубка переписывает и `finish_reason` — её включают только после того,
+    /// как клиент научился читать класс.
+    #[tokio::test]
+    async fn the_third_notch_renames_finish_reason_too() {
+        let _guard = lever_guard();
+        let wire = run_turn(
+            Upstream::Status(401, r#"{"error":{"message":"expired"}}"#.to_string()),
+            TerminalNaming::FinishReason,
+        )
+        .await;
+        assert_eq!(
+            last(&wire)["choices"][0]["finish_reason"],
+            TERMINAL_NEEDS_LOGIN
+        );
+        assert_eq!(
+            last(&wire)["relay_terminal"]["code"],
+            TERMINAL_NEEDS_LOGIN,
+            "класс обязан ехать и полем: на нём стоит разбор клиента"
+        );
+        force_terminal_naming(TerminalNaming::Off);
+    }
+
+    #[test]
+    fn an_unknown_lever_value_means_todays_behaviour() {
+        assert_eq!(terminal_naming_from_env(None), TerminalNaming::Off);
+        assert_eq!(terminal_naming_from_env(Some("0")), TerminalNaming::Off);
+        assert_eq!(terminal_naming_from_env(Some("off")), TerminalNaming::Off);
+        assert_eq!(
+            terminal_naming_from_env(Some("галактика")),
+            TerminalNaming::Off
+        );
+        assert_eq!(terminal_naming_from_env(Some(" Field ")), TerminalNaming::Field);
+        assert_eq!(terminal_naming_from_env(Some("1")), TerminalNaming::Field);
+        assert_eq!(
+            terminal_naming_from_env(Some("finish_reason")),
+            TerminalNaming::FinishReason
+        );
+    }
+
+    #[test]
+    fn the_reset_hour_is_the_vendors_or_nobodys() {
+        assert_eq!(
+            quota_reset_from_body(r#"{"error":{"resets_in_seconds":900}}"#),
+            (None, Some(900))
+        );
+        assert_eq!(
+            quota_reset_from_body(r#"{"detail":{"resets_at":1900000000}}"#),
+            (Some(1900000000), None)
+        );
+        // Ни числа, ни JSON — значит час НЕ НАЗВАН. Придумывать пять минут нельзя:
+        // на выдуманном часе она построит план хода.
+        assert_eq!(quota_reset_from_body("{}"), (None, None));
+        assert_eq!(quota_reset_from_body("not json at all"), (None, None));
+        assert_eq!(quota_reset_from_body(r#"{"error":{"resets_at":0}}"#), (None, None));
+    }
 
     #[test]
     fn only_explicit_subscription_exhaustion_triggers_failover() {
@@ -1675,5 +2399,36 @@ mod tests {
             upstream_error_message(reqwest::StatusCode::BAD_GATEWAY, "raw private response"),
             "Upstream error 502 Bad Gateway"
         );
+    }
+
+    /// 10.08.2026: протухший токен слота дал 401 на каждый вызов, реле продолжало
+    /// предъявлять его, живой слот стоял рядом нетронутым, и компаньон замолчал на часы.
+    /// Отказ в САМИХ УЧЁТНЫХ ДАННЫХ — такой же повод уйти на запасную подписку, как и
+    /// кончившаяся квота.
+    #[test]
+    fn credentials_refused_is_a_reason_to_switch_subscriptions() {
+        assert!(subscription_auth_error(reqwest::StatusCode::UNAUTHORIZED));
+
+        // И ровно это — НЕ повод: свои пути уже есть, чужие трогать нельзя.
+        for status in [
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            reqwest::StatusCode::BAD_REQUEST,
+            reqwest::StatusCode::FORBIDDEN,
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            reqwest::StatusCode::BAD_GATEWAY,
+            reqwest::StatusCode::OK,
+        ] {
+            assert!(
+                !subscription_auth_error(status),
+                "{status} не должен двигать активный слот"
+            );
+        }
+    }
+
+    #[test]
+    fn both_slots_refusing_credentials_asks_for_a_login_in_plain_words() {
+        let status = reqwest::StatusCode::UNAUTHORIZED;
+        assert!(subscription_auth_error(status));
+        assert!(!subscription_quota_error(status, "{}"));
     }
 }

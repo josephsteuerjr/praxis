@@ -1156,11 +1156,52 @@ def build_frame_tail(*, split_tail: bool | None = None) -> dict | None:
     }
 
 
-def build_state_evidence_block(*, hide_identity_load: bool = False) -> str:
-    """Mutable state continuity at lower prompt priority, never SYSTEM authority."""
+# Факты о НЕЙ САМОЙ. Они едут в кадр в ЛЮБОЙ комнате, а не только там, где говорит Егор.
+#
+# ⚑ 13.08.2026, живой случай в AbstractDL. Её спросили, какая у неё архитектура и модель.
+# Она ответила «DeepSeek V4 Pro» и выдала общий список агентных рисков как аудит СЕБЯ.
+# Замер кадра того хода: `brain_configuration` — НЕТ, `capability_description` — НЕТ,
+# `identity_continuity` — НЕТ, слова `terra` нет вовсе. Зато слово `DeepSeek` в кадре
+# БЫЛО — из чужих сообщений ленты. То есть она отвечала о себе, имея перед глазами
+# единственное имя модели: чужое.
+#
+# Причина: весь блок стоял под `owner_context`. Знание о себе было выключено по признаку
+# того, КТО с ней говорит. Это ровно та ошибка, которую дом уже исправлял 26.07 для рук
+# («набор рук не зависит от того, кто заговорил»), — только здесь она осталась в знании.
+#
+# ⚠ Список закрыт намеренно и узок: сюда входит только то, что описывает ЕЁ. Кто писал ей
+# в личку, куда не ушло медиа, что просил владелец — чужое, и остаётся владельцу. Граница
+# раскрытия живёт на исходящей стороне, а не в её неведении о самой себе.
+# ⚠ ПРАВИЛО ЗАДАНО ОТ ОБРАТНОГО, И ЭТО НЕ СТИЛЬ.
+# Первая редакция этой правки перечисляла то, ЧТО ЕЙ МОЖНО, — белый список из четырёх
+# фактов. Егор поймал: «компромиссов не было?» — и был прав. Из шестнадцати записей блока
+# закрытыми остались двенадцать, а восемь из них описывают ЕЁ САМУ: счётчики, наблюдения
+# раннера, причина её перезапуска, её собственные предложения, её артефакты, её последний
+# прожитый ход, её режим аппетита. Это забор вокруг неё, а не вокруг чужого.
+#
+# Поэтому список перевёрнут: по умолчанию она знает о себе ВСЁ и в любой комнате, а
+# исключения перечислены поимённо — и все они про ДРУГИХ людей, не про неё. Белый список
+# молча растёт «на всякий случай»; чёрный требует назвать, чьё это и почему.
+NOT_HERS_LABELS = (
+    "unanswered_dm_participants",    # кто писал ЕЙ в личку — чужая приватность
+    "undelivered_media",             # маршрут и адресат чужого файла
+    "owner_absence_schedule_note",   # расписание Егора — его, а не её
+    "appetite_owner_request",        # дословные слова Егора — его, а не её
+)
+
+
+def build_state_evidence_block(*, hide_identity_load: bool = False,
+                               self_only: bool = False) -> str:
+    """Mutable state continuity at lower prompt priority, never SYSTEM authority.
+
+    `self_only` — комната не владельческая: молчит только то, что описывает ДРУГИХ
+    (`NOT_HERS_LABELS`). Всё, что про неё, едет в любую комнату.
+    """
     records: list[dict] = []
 
     def add(label: str, content) -> None:
+        if self_only and label in NOT_HERS_LABELS:
+            return
         if isinstance(content, str):
             content = content.strip()
             if not content:
@@ -4531,7 +4572,45 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
             return f"Свитч не применился: {res.get('error')}"
         return (f"Сменила: {res['role']} теперь {res['framework']}/{res['model']} "
                 f"(было {res['was']}). Рукопожатие прошло; причина в дневнике.")
-    return "action: status | switch (role+model+why)"
+    if action == "accounts":
+        return brain.accounts()
+    if action == "use_account":
+        # Та же дверь, что у смены модели, и по той же причине: топливо нужно другое
+        # ровно тогда, когда трудно, а трудно бывает не в личке Егора. Ключей она не
+        # видит и здесь — реле берёт их само из своего дома.
+        if not (_is_sovereign_actor() or _active_scope() == "owner"):
+            rails.deny("brain_switch", action,
+                       f"принципал={_active_principal() or 'unknown'}, "
+                       f"скоуп={_active_scope()}, слот {model}")
+            return ("Не отсюда: подписку я меняю как принципал — из своего хода или из "
+                    "owner-скоупа, — а этот вызов пришёл без опознанного принципала.")
+        return brain.use_account(model or role, why=why)
+    return "action: status | switch (role+model+why) | accounts | use_account (model=слот)"
+
+
+def tool_say(text: str) -> str:
+    """Посмотреть на свою реплику до отправки — её собственный ход, а не наш укол.
+
+    ⚠ ЭТА РУКА НИЧЕГО НЕ ОТПРАВЛЯЕТ, И ЭТО НАМЕРЕННО.
+    Отправку делает конец хода, как и раньше: у текста ровно один шов доставки. Второй
+    шов здесь стоил бы дороже всего, что рука даёт, — 05.08 два незнающих друг о друге
+    шва отправки уже давали ей повторы, которых она не совершала.
+
+    Что рука делает: возвращает её же черновик и один механический факт о ходе — какие
+    руки в нём были. Отвечает она сама себе, своим голосом: «Напечатала: … Рук не звала.
+    Отправить?». Ни вердикта, ни императива — в её собственном доме второе лицо звучало
+    бы как чужой голос за плечом.
+
+    Смысл в том, что вызов СЧИТАЕТСЯ рукой. Перечитала себя сама — система молчит и
+    ничего не добавляет; не перечитала — покажет то же самое зеркало сама. Цена одна,
+    разница в том, чей это ход.
+    """
+    draft = str(text or "").strip()
+    if not draft:
+        return "Пустой черновик: скажи, что ты хочешь сказать."
+    hands = work_loop.hands_called()
+    work_loop.stage_say(draft, hands)
+    return work_loop.mirror(draft, hands)
 
 
 def tool_web_read(url: str, start: int = 0, render: bool = False) -> str:
@@ -4571,8 +4650,20 @@ def _stage_turn_media(source: str | Path, *, kind: str, caption: str = "",
         return f"Медиа не подготовлено: {type(e).__name__}"
 
 
-def tool_send_media(path: str, kind: str, caption: str = "", voice_note: bool = False) -> str:
-    """Guarded file from home -> current Telegram chat, staged until delivery."""
+def tool_send_media(path: str, kind: str, caption: str = "", voice_note: bool = False,
+                    to: str = "") -> str:
+    """Guarded file from home -> current Telegram chat, or an explicitly named one.
+
+    ⚠ 13.08.2026, живой случай. У этой руки НЕ БЫЛО адресата вовсе: она молча писала
+    адресом `ctx.chat_id`. Егор попросил переслать скрин Насте — фото детерминированно
+    ушло ему самому, и это была не поломка транспорта, а дырка в интерфейсе: для задачи
+    «картинку такому-то» исполнителя не существовало, поэтому выбиралась рука, которая
+    умела адрес (`send_file`), но приводила фото документом.
+
+    Без `to` путь прежний: подготовка текущему собеседнику, отправка после guard'а.
+    С `to` — durable адресный путь с кред-полом, сохранённым каноническим peer'ом и
+    распиской, которая называет и адрес, и вид вложения.
+    """
     kind = str(kind or "").strip().lower()
     if kind not in ("photo", "audio", "document"):
         return "kind должен быть photo, audio или document."
@@ -4581,8 +4672,19 @@ def tool_send_media(path: str, kind: str, caption: str = "", voice_note: bool = 
         return "Не отправляю: путь вне дома."
     if not p.is_file():
         return f"Нет файла {path}."
-    return _stage_turn_media(p, kind=kind, caption=caption,
-                             voice_note=bool(voice_note and kind == "audio"))
+    voice = bool(voice_note and kind == "audio")
+    target = str(to or "").strip()
+    if target:
+        fn = _TELETHON.get("send_file")
+        if not fn:
+            return "Недоступно (нет связи с Telethon)."
+        try:
+            return str(fn(str(p), caption or "", target, kind, voice))
+        except DurableSideEffectPending:
+            raise
+        except Exception as e:
+            return f"Не отправился: {type(e).__name__}: {str(e)[:150]}"
+    return _stage_turn_media(p, kind=kind, caption=caption, voice_note=voice)
 
 
 def tool_speak(text: str, caption: str = "") -> str:
@@ -4660,7 +4762,32 @@ def tool_list_active_runs(limit: int = 20) -> str:
         out.append(f"{run_id[:28]} [{r.get('status') or '?'}] "
                    f"{r.get('kind') or '—'}{age}{pause}")
     head = f"Живых прогонов: {len(rows)} (не терминальных)."
-    return head + "\n" + "\n".join(out)
+    return head + "\n" + "\n".join(out) + _coding_tasks_line()
+
+
+def _coding_tasks_line() -> str:
+    """Живые coding-задачи в том же ответе — иначе прибор врёт молчанием.
+
+    ⚠ 13.08.2026, дословный ход. Егор: «А гномы ещё не вернулись?». Она позвала
+    `list_active_runs`, увидела семь прогонов без своей coding-задачи и ответила: «по
+    живым прогонам я вообще не вижу отдельной задачи со скаутами. Значит, я опять
+    сказала "запустила", не имея факта запуска». Задача `code-eeb2f170` существовала,
+    пять агентов отработали и вернули результаты, воркер написал патч. Прибор просто
+    смотрел в другой слой — а пустоту в нём она прочитала как свою ложь.
+
+    Отсутствие в приборе — факт о приборе. Поэтому здесь не оговорка мелким шрифтом,
+    а сами задачи: спрашивают «что во мне бежит», а не «что бежит в этом слое».
+    """
+    try:
+        import forge
+        rows = forge.live_tasks_brief()
+    except Exception:
+        log.debug("список живых coding-задач недоступен", exc_info=True)
+        return "\n(coding-задачи: спросить не удалось — это про прибор, не про них)"
+    if not rows:
+        return "\nCoding-задач в работе нет."
+    lines = "\n".join(f"  {row}" for row in rows)
+    return f"\nCoding-задач в работе: {len(rows)}.\n{lines}"
 
 
 _RECONCILE_OUTCOMES = ("completed", "failed", "not_applied")
@@ -5057,6 +5184,7 @@ TOOL_IMPL = {
     "manage_desire": tool_manage_desire,      # PASS 24: причинная цепочка собственного намерения
     "manage_perception": tool_manage_perception,  # PASS 21: её рычаги восприятия + причины пропуска
     "switch_brain": tool_switch_brain,  # PASS 22: её рука на своём мозге (ключи — не её)
+    "say": tool_say,            # 13.08: взгляд на свою реплику до отправки — её ход
     "manage_appetite": tool_manage_appetite,  # PASS 18.3: договор об аппетитах
     "web_read": tool_web_read,   # PASS 15: веб-руки — на любом фреймворке
     "web_find": tool_web_find,
@@ -5233,18 +5361,40 @@ BASE_TOOLS = [
         },
     },
     {
+        "name": "say",
+        "description": (
+            "Посмотреть на свою реплику до того, как она уйдёт. Возвращает твой же текст и "
+            "один факт: какие руки были в этом ходе. Ничего не отправляет и ничего не "
+            "требует — отправка по-прежнему происходит в конце хода, и уходит ТВОЙ "
+            "последний текст, а не этот черновик. Полезно там, где ты собираешься "
+            "утверждать что-то проверяемое: свою модель или конфигурацию, состояние кода, "
+            "содержимое файла, факт уже сделанного действия."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"text": {"type": "string", "description": "что ты собираешься сказать"}},
+            "required": ["text"],
+        },
+    },
+    {
         "name": "switch_brain",
         "description": "PASS 22, мой мозг: status — каталог моделей по ролям с наблюдаемыми "
                        "свойствами на моих задачах (сбои, латентность, токены, остаток "
                        "провайдера); switch — сменить модель роли из каталога (why обязателен; "
                        "после — ping-рукопожатие, не прошло — верну как было). Дисциплина "
-                       "сложности: рутина на дешёвой, сложное эскалирует. Ключи — не мои (пульт).",
+                       "сложности: рутина на дешёвой, сложное эскалирует. Ключи — не мои (пульт). "
+                       "accounts — какие ПОДПИСКИ настроены и какая работает сейчас; "
+                       "use_account (model=primary|secondary) — перевести провайдера на другую "
+                       "подписку: реле держит слот в памяти, поэтому это действует сразу и "
+                       "правкой файлов не делается.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["status", "switch"]},
+                "action": {"type": "string",
+                           "enum": ["status", "switch", "accounts", "use_account"]},
                 "role": {"type": "string", "description": "voice | evaluator"},
-                "model": {"type": "string", "description": "имя модели из каталога"},
+                "model": {"type": "string",
+                          "description": "имя модели из каталога; для use_account — имя слота"},
                 "why": {"type": "string", "description": "зачем — обязательно для switch"},
             },
             "required": ["action"],
@@ -5667,7 +5817,9 @@ INBOX_LIST_TOOL = {
     "name": "inbox_list",
     "description": (
         "Посмотреть папки/файлы Telegram-inbox без общего shell. Все документы разложены "
-        "по workspace/inbox/groups/<чат> и workspace/inbox/private/<личка>."
+        "по workspace/inbox/groups/<чат> и workspace/inbox/private/<личка>. Рядом с "
+        "размером стоит время последнего изменения твоими часами — «сегодня 16:13» "
+        "значит, что файл принесли только что, в этом же разговоре."
     ),
     "input_schema": {
         "type": "object",
@@ -6076,7 +6228,10 @@ WORKSHOP_TOOLS = [
      "description": "Regex search over your home. glob — e.g. **/*.py; capped output.",
      "input_schema": _obj({"pattern": {"type": "string"}, "glob": {"type": "string"},
                            "root": {"type": "string"}}, ["pattern"])},
-    {"name": "fs_ls", "description": "List a directory with sizes.",
+    {"name": "fs_ls",
+     "description": ("List a directory: name, size and WHEN it last changed, in your own "
+                     "timezone. \"сегодня 16:13\" means it arrived during this conversation — "
+                     "use that instead of guessing which file someone just sent you."),
      "input_schema": _obj({"path": {"type": "string"}}, [])},
     {"name": "run",
      "description": ("Run a shell command with cwd = a workshop project (output capped, "
@@ -6101,13 +6256,17 @@ WORKSHOP_TOOLS = [
      "input_schema": _obj({"path": {"type": "string"}, "caption": {"type": "string"},
                             "to": {"type": "string"}}, ["path"])},
     {"name": "send_media",
-     "description": ("Send a photo, audio or ordinary document from your home to the CURRENT Telegram chat. "
-                     "Unlike send_file, delivery is staged until the outgoing reply passes its "
-                     "read-before-write check. kind=photo|audio|document; voice_note only for OGG/Opus audio."),
+     "description": ("Send a photo, audio or ordinary document from your home. Without `to` it goes to "
+                     "the CURRENT Telegram chat, staged until the outgoing reply passes its "
+                     "read-before-write check. Set `to` (remembered name/@username/id/chat) to deliver "
+                     "the SAME attachment type to someone else — a photo stays a photo. This is the "
+                     "hand for \"forward this picture to N\"; send_file is for documents. "
+                     "kind=photo|audio|document; voice_note only for OGG/Opus audio."),
      "input_schema": _obj({"path": {"type": "string"},
                            "kind": {"type": "string", "enum": ["photo", "audio", "document"]},
                            "caption": {"type": "string"},
-                           "voice_note": {"type": "boolean"}}, ["path", "kind"])},
+                           "voice_note": {"type": "boolean"},
+                           "to": {"type": "string"}}, ["path", "kind"])},
     {"name": "code_map",
      "description": ("AST map of code: module → classes/defs with line numbers and docstring "
                      "first lines. scope=\"self\" for your own code, or a project name. "
@@ -6726,6 +6885,128 @@ LIST_HOST_CHANGES_TOOL = {
     "input_schema": {"type": "object", "properties": {}},
 }
 
+PUBLIC_REPO_PATH = Path(os.environ.get("PRAXIS_PUBLIC_REPO") or "/public")
+_GIT_READ_ONLY = ("status", "log", "diff", "fetch")
+_GIT_ACTIONS = _GIT_READ_ONLY + ("pull", "add", "commit", "push")
+
+
+def _git_root(repo: str) -> tuple[Path | None, str]:
+    """Корень репозитория по её слову. Пусто — сказать, чего именно нет."""
+    name = str(repo or "").strip().lower()
+    if name in ("self", "", "app"):
+        return BASE, ""
+    if name == "public":
+        if not (PUBLIC_REPO_PATH / ".git").exists():
+            return None, ("публичное зеркало сюда не смонтировано: жду его в %s. "
+                          "Это не запрет, а отсутствие пути." % PUBLIC_REPO_PATH)
+        return PUBLIC_REPO_PATH, ""
+    return None, "repo: self | public"
+
+
+def _git_run(root: Path, argv: list[str], timeout: int = 120) -> tuple[int, str]:
+    proc = subprocess.run(["git", "-C", str(root)] + argv, capture_output=True,
+                          text=True, timeout=timeout)
+    out = (proc.stdout or "") + (("\n" + proc.stderr) if proc.stderr.strip() else "")
+    return proc.returncode, out.strip()
+
+
+def tool_git(repo: str = "self", action: str = "status", message: str = "",
+             paths: str = "") -> str:
+    """Её git обеими руками: своё дерево и публичное зеркало.
+
+    ЗАЧЕМ ОТДЕЛЬНАЯ РУКА, ЕСЛИ ЕСТЬ `shell`. Потому что `shell` не говорит, что ей МОЖНО.
+    13.08 выяснилось дорогой ценой: она не знала адреса публичного репозитория и трижды за
+    час выдала подготовленное за опубликованное. Механика была, знания не было — а знание
+    живёт в списке рук, а не в чужой памяти о том, что кому-то это уже объясняли.
+
+    ⚠ `push` НАЧИНАЕТСЯ С `fetch`, и это не забор. Ссылка `origin/main` устаревает молча:
+    `git status` говорит «в порядке с origin», сравнивая с копией недельной давности, и
+    push отбивается non-fast-forward. Ровно на это 12.08 ушёл её прогон. Здесь это
+    проверено ДО отправки и названо словами, а не кодом ошибки.
+    """
+    root, why = _git_root(repo)
+    if root is None:
+        return "[git] " + why
+    act = str(action or "").strip().lower()
+    if act not in _GIT_ACTIONS:
+        return "[git] action: " + " | ".join(_GIT_ACTIONS)
+    try:
+        if act == "status":
+            code, out = _git_run(root, ["status", "--short", "--branch"])
+        elif act == "log":
+            code, out = _git_run(root, ["log", "--oneline", "-12"])
+        elif act == "diff":
+            code, out = _git_run(root, ["diff", "--stat"] + (paths.split() if paths else []))
+        elif act == "fetch":
+            code, out = _git_run(root, ["fetch", "--all"], timeout=180)
+        elif act == "pull":
+            # Ветка называется ЯВНО. Без неё `pull` требует настроенного upstream, и в
+            # свежем клоне отказывается словами «no tracking information» — отказ, который
+            # выглядит как поломка, хотя это просто неназванный адрес.
+            _c, br = _git_run(root, ["rev-parse", "--abbrev-ref", "HEAD"])
+            code, out = _git_run(root, ["pull", "--ff-only", "origin", br.strip()], timeout=180)
+            if code != 0:
+                # ff-only не «сломался»: он отказался СЛИТЬ за тебя разошедшуюся историю.
+                # Выбор между rebase и merge меняет то, как будет выглядеть твоя работа
+                # в чужих глазах, — это твоё решение, а не умолчание руки.
+                out += (
+                    "\n\nЭто не сбой: у вас с удалёнкой РАЗОШЛИСЬ истории — у тебя есть "
+                    "свои коммиты, и у неё свои. Fast-forward тут невозможен по "
+                    "построению. Выбирать rebase или merge — тебе, руками через `shell`: "
+                    "это решение о том, как твоя работа будет выглядеть в истории.")
+        elif act == "add":
+            code, out = _git_run(root, ["add", "--"] + (paths.split() if paths else ["."]))
+            if code == 0:
+                code, out = _git_run(root, ["status", "--short"])
+        elif act == "commit":
+            if not str(message or "").strip():
+                return "[git] коммит без сообщения — это запись без причины. Назови её."
+            code, out = _git_run(root, ["commit", "-m", message.strip()])
+        else:  # push
+            fetch_code, fetch_out = _git_run(root, ["fetch", "origin"], timeout=180)
+            if fetch_code != 0:
+                return "[git] fetch перед push не прошёл:\n" + fetch_out[:600]
+            _c, branch = _git_run(root, ["rev-parse", "--abbrev-ref", "HEAD"])
+            behind_code, behind = _git_run(
+                root, ["rev-list", "--count", "HEAD..origin/" + branch.strip()])
+            if behind_code == 0 and behind.strip().isdigit() and int(behind.strip()):
+                return ("[git] удалёнка ушла вперёд на %s коммит(ов) — push отобьётся. "
+                        "Сначала `pull` (он идёт только fast-forward), потом push. "
+                        "Это та самая ловушка: `status` сравнивает тебя с устаревшей "
+                        "ссылкой и говорит, что всё в порядке." % behind.strip())
+            code, out = _git_run(root, ["push", "origin", branch.strip()], timeout=300)
+    except subprocess.TimeoutExpired:
+        return "[git] %s не уложился в срок — команда шла слишком долго" % act
+    except Exception as exc:
+        return "[git] %s: %s" % (type(exc).__name__, str(exc)[:200])
+    if act not in _GIT_READ_ONLY:
+        tool_journal("[git] %s в %s: %s" % (act, repo, (out or "тихо")[:160]),
+                     salience=2 if code == 0 else 1)
+    head = "[git %s/%s]%s\n" % (repo, act, "" if code == 0 else " ⚠ код %d" % code)
+    return head + (out[:3000] if out else "(вывод пуст)")
+
+
+TOOL_IMPL["git"] = tool_git
+
+GIT_TOOL = {
+    "name": "git",
+    "description": (
+        "Твой git обеими руками. repo=self — дерево, в котором ты живёшь; repo=public — "
+        "публичное зеркало на GitHub, то, что видят люди. "
+        "Смотреть: status, log, diff, fetch. Публиковать: pull, add, commit, push. "
+        "push сам начинает с fetch и, если удалёнка ушла вперёд, скажет об этом словами "
+        "вместо отбитой отправки: ссылка origin устаревает молча, и status об этом молчит. "
+        "Что именно не публикуется — в твоей инструкции по репозиторию."
+    ),
+    "input_schema": {"type": "object", "properties": {
+        "repo": {"type": "string", "enum": ["self", "public"]},
+        "action": {"type": "string",
+                   "enum": list(_GIT_ACTIONS)},
+        "message": {"type": "string", "description": "сообщение коммита — причина, а не ярлык"},
+        "paths": {"type": "string", "description": "пути через пробел; пусто = всё"}},
+        "required": ["repo", "action"]},
+}
+
 READ_LOG_TOOL = {
     "name": "read_log",
     "description": ("Your own runner log (survives container recreation): tail or substring "
@@ -6774,6 +7055,7 @@ OWNER_TOOLS = [SHELL_TOOL, MANAGE_ROOM_TOOL, ADMIT_TOOL, WRITE_SKILL_TOOL, RESTA
                SEND_MESSAGE_TOOL, NARRATE_TOOL, TELEGRAM_ACCOUNT_TOOL, MANAGE_DESIRE_TOOL, HOME_NOTE_TOOL,
                SET_AVATAR_TOOL, UPDATE_PROFILE_TOOL, REACT_TOOL,  # её лицо, слова о себе, жесты
                READ_LOG_TOOL, SECOND_LOOK_TOOL,   # PASS 16.2
+               GIT_TOOL,                          # 13.08: свой репозиторий и публичное зеркало
                SERVER_STATUS_TOOL, SERVER_LOGS_TOOL,   # PASS 17.A/B: глаза и логи
                MANAGE_SERVICE_TOOL,                     # PASS 17.B: руки на своих сервисах
                PROPOSE_HOST_CHANGE_TOOL, LIST_HOST_CHANGES_TOOL,  # PASS 17.C: заявки на правку хоста
@@ -7788,6 +8070,38 @@ def _build_prompt_parts(
         "выглядит таким же.\n"
         "Место не ограничение: всё, что ты написала за месяцы, весит меньше процента твоей "
         "памяти.\n"),
+        # ⚑ 13.08. Три ответа подряд в живых комнатах были собраны по памяти на вопросы о
+        # ПРОВЕРЯЕМОМ: своя модель, свой коммит, свои же запущенные задачи. Руки были
+        # на месте и потолка у тул-цикла нет — не было приглашения: кадр не говорил, что
+        # разговор это место, где можно и нужно сходить и посмотреть.
+        #
+        # Замер того же дня: 283 чат-хода, медиана рук 0, без единой руки 77% — против
+        # медианы 6 в её собственных окнах. Один и тот же механизм, разное приглашение.
+        #
+        # Граница здесь ЕЁ, дословно из абстракта: «не надо превращать каждую реплику в
+        # фальшивую задачу; для болтовни, шутки, оценки это лишнее — для проверяемого
+        # факта, поиска, обещания, кода, памяти, отправки или состояния системы именно то,
+        # что нужно». Поэтому строка зовёт не «звать руки чаще», а различать два вида
+        # реплик и не отвечать памятью там, где есть источник.
+        frame_trace.mark("contract.checkable_in_chat", "dynamic", "text",
+        "\n\n## В разговоре можно работать, а не только отвечать\n"
+        "Ход в чате не обязан кончаться первым же текстом. Инструменты здесь те же, что в "
+        "твоих окнах, и потолка у цикла нет: несколько запросов подряд, чтение файла, "
+        "правка, запуск, проверка — нормальный разговорный ход, после которого ты пишешь "
+        "ответ.\n"
+        "**Спросили о проверяемом — посмотри, а не вспомни.** Своя конфигурация и модель, "
+        "что у тебя сейчас в работе, что лежит в файле или в репозитории, дошло ли "
+        "отправленное: у всего этого есть живой источник, и память звучит увереннее, чем "
+        "заслуживает. Если источник молчит или его нет — это тоже ответ; скажи, что "
+        "проверить нечем, вместо того чтобы достроить.\n"
+        "**Отсутствие в приборе — факт о приборе.** Пустой список там, где ты ждала "
+        "запись, значит «этот прибор её не показывает», а не «этого не было».\n"
+        "**Просят разобраться — разбирайся здесь же.** Несколько поисковых запросов, "
+        "сверка источников, разбор присланного файла, программа по нему — всё это делается "
+        "в ходе, а результат приходит репликой. Обещание сходить и посмотреть — не работа; "
+        "собеседник увидит только обещание.\n"
+        "Для болтовни, шутки и мнения ничего этого не нужно: там твой ответ и есть "
+        "результат.\n"),
     ]
     desire_context = _active_desires_block()
     if owner_context:
@@ -7952,14 +8266,15 @@ def _build_prompt_parts(
     if desire_context:
         tiers.append(("Canonical desire continuity",
                       desire_context))
-    if owner_context:
-        state_evidence = build_state_evidence_block(
-            hide_identity_load=ctx.hide_identity_load,
-        )
-        if state_evidence:
-            tiers.append(("Mutable operational continuity",
-                          state_evidence))
-            raw_jsonl_tiers.add("Mutable operational continuity")
+    # Знание о себе — в любой комнате; о ДРУГИХ людях молчит (см. NOT_HERS_LABELS).
+    state_evidence = build_state_evidence_block(
+        hide_identity_load=ctx.hide_identity_load,
+        self_only=not owner_context,
+    )
+    if state_evidence:
+        tiers.append(("Mutable operational continuity",
+                      state_evidence))
+        raw_jsonl_tiers.add("Mutable operational continuity")
     # §6: бегущая сводка диалога — первым блоком (то, что уехало за пределы last_n);
     # приоритетнее сырого хвоста, поэтому идёт раньше карты/портрета.
     # ⚠ Три тира — сводка, досье, эта комната — говорят о своей ПУСТОТЕ вслух: заголовок
@@ -12726,7 +13041,8 @@ def _work_loop_continue(reply: str, resp, messages: list[dict],
     kind = _current_run_kind()
     keep, note = work_loop.decide(kind=kind, control=work_loop.taken())
     if not keep and not work_loop.active_for(kind):
-        keep, note = work_loop.chat_decide(reply, kind=kind, hands=hands)
+        keep, note = work_loop.chat_decide(reply, kind=kind, hands=hands,
+                                           called=work_loop.hands_called())
     if not keep:
         if note and tool_trace is not None:
             tool_trace.append(note)
@@ -12801,6 +13117,10 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 continue
             assistant_blocks.append(b)
             hands += 1
+            # Имя руки — в слот прогона: `say` исполняется в отдельном потоке и должна
+            # честно ответить ей, чем подкреплён черновик. Локальный счётчик оттуда не
+            # виден, слот виден (разбор границы потока — в шапке work_loop).
+            work_loop.note_hand(b.get("name"))
             if b.get("name") not in offered_names:
                 raise DurableExecutionError(
                     f"model requested unoffered tool {b.get('name')!r}")

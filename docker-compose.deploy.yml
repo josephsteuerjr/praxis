@@ -44,6 +44,14 @@ services:
     command: python bootguard.py
     volumes:
       - ./:/app
+      # 13.08: публичное зеркало — её рука к нему прямая, без root-демона.
+      # Повод: 13.08 она трижды за час выдала подготовленное за опубликованное,
+      # потому что путь до GitHub шёл через чужой контур и она его не знала.
+      - /opt/praxis-public:/public
+      # gh и его вход — только чтение. Своего секрета не заводим: у токена уже
+      # есть дом на хосте, вторая копия была бы вторым местом, где он утекает.
+      - /usr/bin/gh:/usr/bin/gh:ro
+      - /root/.config/gh:/root/.config/gh:ro
       # Модели тяжёлые и живут вне git/дерева Praxis; в рантайме только читаются.
       - /opt/praxis-models:/models:ro
       # Dedicated socket directory plus a read-only client secret. Hardbot

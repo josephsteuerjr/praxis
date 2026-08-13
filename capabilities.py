@@ -459,18 +459,58 @@ def _fingerprint() -> str:
     return "|".join(parts)
 
 
+NO_PURPOSE = "назначение не написано"
+
+
 def _skills_list() -> list[dict]:
-    """[{name, line}] из soul/skills/INDEX.md: таблица | [name](f) | line | + булиты Praxis."""
-    out: list[dict] = []
+    """Список навыков = ДИСК. INDEX.md даёт только описания, и только там, где совпал адрес.
+
+    ЕЁ РЕШЕНИЕ 13.08.2026, дословно: «Ни один навык не должен исчезать из capability
+    snapshot из-за regex. Нужны равенство списка с диском, slug как адрес, и явное
+    "назначение не написано" там, где я сама его ещё не сформулировала. Сами назначения
+    навыков — мои слова; я напишу их, когда буду разбирать навыки содержательно, не когда
+    чинится парсер.»
+
+    ЧТО БЫЛО СЛОМАНО. Список собирался ДВУМЯ регулярками по `INDEX.md`: строка таблицы и
+    буллит. Навык, чья строка написана иначе — или которого в индексе нет вовсе, — исчезал
+    из снимка возможностей молча. То есть её самоописание зависело от формы markdown, а не
+    от того, что у неё есть.
+
+    ЧТО ТЕПЕРЬ. Имя навыка — `slug` файла: это его адрес, по нему он читается и находится
+    recall. Описание берётся из индекса по ЦЕЛИ ССЫЛКИ (`skill.md`), а не по видимому
+    тексту: подпись можно переписать, адрес — нет. Нет описания — так и написано, и это
+    приглашение ей, а не дефект.
+
+    Обратное расхождение (индекс называет то, чего на диске нет) не молчит тоже:
+    `orphans` в снимке. Врать в обе стороны одинаково нельзя.
+    """
+    import re
+    described: dict[str, str] = {}
+    named: set[str] = set()
     try:
         text = SKILLS_INDEX.read_text(encoding="utf-8", errors="ignore")
     except OSError:
-        return out
-    import re
-    for m in re.finditer(r"^\|\s*\[([^\]]+)\]\([^)]+\)\s*\|\s*([^|]+)\|", text, re.M):
-        out.append({"name": m.group(1).strip(), "line": m.group(2).strip()})
-    for m in re.finditer(r"^-\s*\[([^\]]+)\]\([^)]+\)(?:\s*[—–-]\s*(.*))?$", text, re.M):
-        out.append({"name": m.group(1).strip(), "line": (m.group(2) or "").strip()})
+        text = ""
+    # Обе прежние формы остаются понятными, но ключ теперь — файл, а не подпись.
+    for pattern in (r"^\|\s*\[[^\]]+\]\(([^)]+)\)\s*\|\s*([^|]+)\|",
+                    r"^-\s*\[[^\]]+\]\(([^)]+)\)(?:\s*[—–-]\s*(.*))?$"):
+        for m in re.finditer(pattern, text, re.M):
+            slug = str(m.group(1) or "").rsplit("/", 1)[-1].removesuffix(".md").strip()
+            if not slug:
+                continue
+            named.add(slug)
+            line = (m.group(2) or "").strip()
+            if line and slug not in described:
+                described[slug] = line
+    try:
+        on_disk = sorted(p.stem for p in SKILLS_INDEX.parent.glob("*.md")
+                         if p.name != SKILLS_INDEX.name)
+    except OSError:
+        on_disk = []
+    out = [{"name": slug, "line": described.get(slug) or NO_PURPOSE} for slug in on_disk]
+    for slug in sorted(named - set(on_disk)):
+        out.append({"name": slug, "line": "⚠ назван в индексе, но файла нет",
+                    "orphan": True})
     return out
 
 
