@@ -872,10 +872,21 @@ def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinki
         # неизвестное SDK поле — только через extra_body; релей примет reasoning_effort
         # per-request поверх своего дефолта (none), чужой сервер молча проигнорирует
         kw.setdefault("extra_body", {})["reasoning_effort"] = effort
-    if _OPENAI_COMPLETION_TOKENS_RE.match(model or ""):
-        kw["max_completion_tokens"] = max_tokens   # reasoning-модели не берут max_tokens
-    else:
-        kw["max_tokens"] = max_tokens
+    # ⚠ 13.08.2026. ЗДЕСЬ ГОД ЛЕЖАЛО ПОЛЕ, КОТОРОЕ НИКТО НЕ ПРИНИМАЛ.
+    # Ветка выбирала имя по имени модели: `^(o\d|gpt-5)` → `max_completion_tokens`. Все три
+    # её модели (`gpt-5.6-terra`, `-luna`, `-sol`) матчатся, то есть ветка `max_tokens` не
+    # исполнялась НИКОГДА. А у реле в `ChatRequest` поля `max_completion_tokens` нет, и
+    # структура не помечена `deny_unknown_fields` — значит serde выбрасывал его молча.
+    # Год тишины: ни ошибки, ни лога, ни красного теста.
+    #
+    # Правило, из которого теперь исходим (слова Егора): шлём то, что адресат ОБЪЯВИЛ.
+    # Адресат сегодня — реле, оно объявляет `max_tokens`. Что реле делает с этим полем
+    # дальше — отдельный вопрос (сегодня: не читает вовсе), и он не повод слать мимо.
+    #
+    # ⚠ КОГДА ЭТОТ ПУТЬ ПОВЕДЁТ К НАСТОЯЩЕМУ OpenAI — пересмотреть: reasoning-моделям там
+    # нужен именно `max_completion_tokens`. Это работа «профиля провайдера», и она названа
+    # отдельно; здесь важно не угадывать адресата по имени модели.
+    kw["max_tokens"] = max_tokens
     ot = tools_to_openai(tools)
     if ot:
         kw["tools"] = ot

@@ -13064,7 +13064,14 @@ def _work_loop_continue(reply: str, resp, messages: list[dict],
                      "content": blocks or [{"type": "text", "text": reply}]})
     messages.append({"role": "user", "content": [{"type": "text", "text": note}]})
     if tool_trace is not None:
-        tool_trace.append("work_loop:продолжение %d из %d" % (spent, work_loop.budget()))
+        # ⚠ Печаталось `work_loop.budget()` (8) и в ЧАТ-ходе тоже, где бюджет 2. Её
+        # трасса говорила «продолжение 1 из 8», а кончалось на втором. Мелкая ложь в
+        # её же журнале — на этом весь день и стоим.
+        # По ВИДУ хода, а не по рычагу: у окна бюджет работы независимо от того, поднят
+        # ли `PRAXIS_WORK_LOOP`, — иначе трасса врёт ещё и при опущенном рычаге.
+        total = (work_loop.budget() if str(kind) in work_loop.WORK_KINDS
+                 else work_loop.chat_budget())
+        tool_trace.append("work_loop:продолжение %d из %d" % (spent, total))
     return True
 
 
@@ -13080,6 +13087,9 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
     continue for a stated reason, pause, or finish.
     """
     reply = ""
+    #: Последнее НЕПУСТОЕ её слово в этом ходе. Продолжение не имеет права его стереть —
+    #: разбор у самого шва возврата ниже.
+    spoken = ""
     iteration = max(0, int(start_iteration))
     repeats: dict[str, int] = {}
     offered_names = _offered_function_names(tools)
@@ -13103,8 +13113,20 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             # закончена» ВЫВОДИЛОСЬ из её молчания. В рабочем ходе это больше не так:
             # текст остаётся в ленте заметкой, а ход закрывает только `task_control`
             # или названный вслух исчерпанный бюджет продолжений.
+            #
+            # ⚠⚠ И ВТОРАЯ ОСЬ, НАЙДЕННАЯ ЖИВЬЁМ 13.08 В 22:44. Каждое продолжение
+            # ЗАМЕЩАЕТ `reply`. В рабочем окне это безвредно — там текст заметка, а ход
+            # закрывает её слово. В ЧАТЕ ответ и есть продукт: она ответила Егору, зеркало
+            # спросило «Отправить?», она ответила снова, бюджет кончился — и цикл вернул
+            # текст ПОСЛЕДНЕГО прохода, который оказался пустым. Наружу ушло ничего, в
+            # трассе осталось «продолжения кончились». Он написал «ноль».
+            #
+            # Продолжение — это приглашение подумать ещё, а не право стереть уже сказанное.
+            # Поэтому помним последнее НЕПУСТОЕ и отдаём его, если конец пришёл на пустоте.
+            if reply.strip():
+                spoken = reply
             if not _work_loop_continue(reply, resp, messages, tool_trace, hands=hands):
-                return reply
+                return reply if reply.strip() else spoken
             continue
 
         assistant_blocks, tool_results = [], []
@@ -13288,7 +13310,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
         if control and work_loop.active_for(_current_run_kind()):
             if tool_trace is not None:
                 tool_trace.append("work_loop:закрыт её словом «%s»" % control["action"])
-            return str(control.get("summary") or reply or "")
+            return str(control.get("summary") or reply or spoken or "")
 
     # Only explicit auxiliary limits arrive here.  Preserve their historical graceful-final
     # behavior without reintroducing a default ceiling for real runs.

@@ -50,6 +50,11 @@ class TheMirrorShowsAndDoesNotJudge(unittest.TestCase):
         self.assertIn("shell", words)
         self.assertNotIn("Рук не звала", words)
 
+    def test_it_asks_nothing_so_she_does_not_answer_it(self):
+        """13.08, 22:54: зеркало кончалось на «Отправить?» — и она ответила ЕМУ:
+        «Да, отправляй.» Вопрос в её кадре читается как реплика собеседника."""
+        self.assertNotIn("?", work_loop.mirror("любой текст", ()))
+
     def test_it_carries_no_verdict_and_no_order(self):
         """Ни «проверь», ни «ты соврала» — иначе это судья, а не зеркало."""
         words = work_loop.mirror("Голос — DeepSeek.", ()).lower()
@@ -75,10 +80,10 @@ class TheTurnDoesNotCloseOnAHandlessReply(unittest.TestCase):
         self.assertFalse(keep)
         self.assertEqual(note, "")
 
-    def test_the_look_leaves_saying_it_again_as_a_valid_move(self):
+    def test_the_look_states_what_happens_next_without_asking(self):
         with _on():
             _, note = work_loop.chat_decide("Привет!", kind="chat_turn", hands=0, spent=0)
-        self.assertIn("уйдёт как есть", note)
+        self.assertIn("уйдёт мой следующий текст", note)
 
     def test_an_announced_action_gets_the_sharper_words(self):
         """Пообещала сделать — дело не в том, что не смотрела, а в том, что обещала."""
@@ -99,6 +104,29 @@ class TheTurnDoesNotCloseOnAHandlessReply(unittest.TestCase):
         with _on():
             keep, note = work_loop.chat_decide(
                 "Привет!", kind="task_window", hands=0, spent=0)
+        self.assertFalse(keep)
+        self.assertEqual(note, "")
+
+
+class TheLookHappensOncePerTurn(unittest.TestCase):
+    """Взгляд перед отправкой — один, как у человека. Второй превращается в переписку."""
+
+    def setUp(self):
+        work_loop._STATE.clear()
+        self.addCleanup(work_loop._STATE.clear)
+
+    def test_the_second_handless_pass_is_not_mirrored_again(self):
+        with _on(), mock.patch.object(work_loop, "_run_key", return_value="run-once"):
+            first, _ = work_loop.chat_decide("текст", kind="chat_turn", hands=0, spent=0)
+            second, note = work_loop.chat_decide("текст", kind="chat_turn", hands=0, spent=1)
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertIn("уже посмотрела", note)
+
+    def test_silence_is_never_mirrored(self):
+        """Молчание — её законный ход, перечитывать в нём нечего."""
+        with _on():
+            keep, note = work_loop.chat_decide("   ", kind="chat_turn", hands=0, spent=0)
         self.assertFalse(keep)
         self.assertEqual(note, "")
 

@@ -46,7 +46,7 @@ class OrdinaryTalkIsNotAccused(unittest.TestCase):
                 kind="chat_turn", hands=0, spent=0)
         self.assertTrue(keep)
         self.assertNotIn("и не сделала", note)
-        self.assertIn("Напечатала", note)
+        self.assertIn("Черновик", note)
 
     def test_conversational_filler_is_not_a_promise(self):
         """Адверсарная прополка `promises` 23.07: «возвращаюсь к твоему вопросу» — речь."""
