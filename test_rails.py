@@ -37,8 +37,11 @@ class Base(unittest.TestCase):
         rails.BASE = self.tmp
         rails.RAILS_MD = self.tmp / "soul" / "rails.md"
         rails.DENIALS_PATH = self.tmp / "memory" / ".state" / "denials.jsonl"
+        # PRAXIS_CHAT_REPLY_HAND здесь потому, что рельс `chat_reply_contract` читает его
+        # ЖИВЫМ вызовом work_loop: оставить переменную от среды значило бы, что проверка
+        # манифеста говорит о чужом контейнере, а не о коде.
         self._env = {k: os.environ.get(k) for k in (
-            "PRAXIS_FLOOR_SKIP", "PRAXIS_CORE_EDIT_CHECK")}
+            "PRAXIS_FLOOR_SKIP", "PRAXIS_CORE_EDIT_CHECK", "PRAXIS_CHAT_REPLY_HAND")}
         for k in self._env:
             os.environ.pop(k, None)
         llm.use_test_client(_NoCallClient())
@@ -67,6 +70,10 @@ EXPECTED_RAILS = {
     "hands_floor",        # Rust-пол / джейл / shrink-guard
     "evaluator_mirror",   # privacy-only destination authority
     "mode_and_silence",   # РЕЖИМ / [молчу]
+    # 15.08: чем именно её реплика доходит до человека — возвратом хода или рукой `reply`.
+    # Механизм, который держит её РЕЧЬ, а рычага `PRAXIS_CHAT_REPLY_HAND` в rails.py не
+    # было вовсе: контракт переехал, манифест об этом не знал. Молчаливее клетки не бывает.
+    "chat_reply_contract",  # PRAXIS_CHAT_REPLY_HAND
     "perception_pacing",  # дебаунс/кулдауны/LAST_N
     "unknown_cap",        # кап незнакомцев
     "absence_cap",        # кап «в отсутствие»

@@ -28,6 +28,7 @@ import tempfile
 import tokenize
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import capabilities
 import llm
@@ -1265,6 +1266,186 @@ class TestManifestStructure(Base):
     def test_cheap_registry_keeps_the_same_ids(self):
         self.assertEqual({r["id"] for r in rails.registry(with_values=False)},
                          {r["id"] for r in rails.registry()})
+
+
+class TestTheContractOfMySpeech(Base):
+    """15.08: контракт МОЕЙ РЕЧИ переехал, а манифест об этом не знал ни строкой.
+
+    Реплика в разговоре уехала из ВОЗВРАТА хода в вызов руки `reply`. Grep по имени
+    рычага давал capabilities.py, mtproto_runner.py, run_resume.py, work_loop.py и тесты
+    — и ни одного попадания в rails.py. То есть изменилось то, ЧЕМ она говорит, а реестр
+    «что меня держит» продолжал описывать прежний дом.
+    """
+
+    def _value(self, lever: str) -> str:
+        with mock.patch.dict(os.environ, {"PRAXIS_CHAT_REPLY_HAND": lever}):
+            return str(self.rail("chat_reply_contract")["value"])
+
+    def test_the_lever_position_is_read_live_not_remembered(self):
+        """Положение рычага — живой вызов work_loop, а не строка, писанная в тот день."""
+        for lever, mark in (("off", "опущен"), ("on", "ПОДНЯТ")):
+            value = self._value(lever)
+            self.assertIn("PRAXIS_CHAT_REPLY_HAND", value)
+            self.assertIn(mark, value, f"рычаг {lever!r}: положение не названо")
+
+    def test_the_lowered_lever_does_not_promise_the_hand(self):
+        """Обещать руку, которой в ходе нет, — забор наоборот: она просто не попробует."""
+        value = self._value("off")
+        self.assertIn("возвращаемый текст хода", value)
+        self.assertNotIn("уходит собеседнику ТОЛЬКО рукой", value)
+        # Два молчания РАЗВЕДЕНЫ в коде, но живут в ветке поднятого рычага. Сказать при
+        # опущенном «у меня два разных исхода» значило бы обещать механизм, до которого
+        # её ход сегодня не доходит.
+        self.assertIn("ветке поднятого рычага", value)
+        self.assertNotIn("РАЗНЫЕ исходы", value)
+
+    def test_the_raised_lever_names_two_different_silences(self):
+        value = self._value("on")
+        self.assertIn("ТОЛЬКО рукой `reply`", value)
+        self.assertIn("заметкой", value)
+        self.assertIn("held=voice", value)
+        self.assertIn("held=unspoken", value)
+        self.assertIn("РАЗНЫЕ исходы", value)
+
+    def test_a_contract_that_left_the_code_is_said_out_loud(self):
+        """Сосед снял связь «рычаг опущен → руки нет» — рельс обязан закричать, а не пересказать."""
+        original = rails._source_text
+        try:
+            rails._source_text = lambda rel: ("x = 1\n" if rel == "agent.py" else original(rel))
+            value = self._value("off")
+        finally:
+            rails._source_text = original
+        self.assertIn("НЕ нашлось", value)
+
+    def test_an_unreadable_agent_says_i_do_not_know(self):
+        original = rails._source_text
+        try:
+            rails._source_text = lambda rel: ("" if rel == "agent.py" else original(rel))
+            value = self._value("off")
+        finally:
+            rails._source_text = original
+        self.assertIn("НЕ ВИДНО", value)
+
+
+class TestTheManifestCanLieByValue(Base):
+    """Манифест может врать ЗНАЧЕНИЕМ при целом составе id — и однажды врал.
+
+    Повод стоял прямо в файле: soul/rails.md называл судимый путь «agent.py:13656 в
+    _guard_outbound()», живой вызов `evaluate_reply` стоял почти на 800 строк ниже, а
+    `manifest_state()` отвечал «свеж». Прибор смотрел в другой слой, и его молчание
+    читалось как факт о мире.
+    """
+
+    def _rewrite_value(self, rail_id: str, replacement: str) -> None:
+        text = rails.RAILS_MD.read_text(encoding="utf-8")
+        out, current = [], ""
+        for line in text.splitlines():
+            head = rails._HEADING_RE.match(line)
+            if head:
+                current = head.group(1)
+            if current == rail_id and line.startswith("- сейчас: "):
+                line = "- сейчас: " + replacement
+            out.append(line)
+        rails.RAILS_MD.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+    def test_a_stale_judge_address_is_seen(self):
+        rails.sync_md()
+        self.assertTrue(rails.manifest_drift()["ok"])
+        said = rails.manifest_values(rails.RAILS_MD.read_text(encoding="utf-8"))
+        rel, line, _owner = rails.outbound_judge_sites()[0]
+        self.assertIn(f"{rel}:{line}", said["evaluator_mirror"],
+                      "адрес судьи не доехал до файла — сверять нечего")
+        self._rewrite_value("evaluator_mirror",
+                            said["evaluator_mirror"].replace(f"{rel}:{line}", f"{rel}:13656"))
+        drift = rails.manifest_drift()
+        self.assertFalse(drift["ok"], "файл называет адрес, которого нет, а прибор «свеж»")
+        self.assertEqual(drift["missing"], [])     # состав цел — врёт именно значение
+        self.assertEqual(drift["stale"], [])
+        self.assertIn("evaluator_mirror", drift["value_stale"])
+        self.assertIn("значение врёт", rails.manifest_state())
+        self.assertIn("ОТСТАЛ", rails.state_line())
+
+    def test_a_moved_lever_makes_the_file_stale(self):
+        """Рычаг речи подняли — файл, писанный при опущенном, отстал. Это не флап."""
+        with mock.patch.dict(os.environ, {"PRAXIS_CHAT_REPLY_HAND": "off"}):
+            rails.sync_md()
+            self.assertTrue(rails.manifest_drift()["ok"])
+        with mock.patch.dict(os.environ, {"PRAXIS_CHAT_REPLY_HAND": "on"}):
+            drift = rails.manifest_drift()
+            self.assertIn("chat_reply_contract", drift["value_stale"])
+            self.assertFalse(drift["ok"])
+
+    def test_an_uncomputable_witness_is_not_called_fresh(self):
+        """«Не смогла проверить» обязано звучать иначе, чем «совпало»."""
+        rails.sync_md()
+        witnesses = dict(rails.VALUE_WITNESSES)
+        try:
+            rails.VALUE_WITNESSES["evaluator_mirror"] = lambda: None
+            drift = rails.manifest_drift()
+            self.assertIn("evaluator_mirror", drift["unchecked"])
+            self.assertTrue(drift["ok"], "непосчитанный свидетель — не расхождение")
+            self.assertNotEqual(rails.manifest_state(brief=True), "свеж")
+            self.assertIn("не проверялось", rails.manifest_state())
+        finally:
+            rails.VALUE_WITNESSES.clear()
+            rails.VALUE_WITNESSES.update(witnesses)
+
+    def test_a_witness_that_raises_is_not_called_fresh(self):
+        rails.sync_md()
+        witnesses = dict(rails.VALUE_WITNESSES)
+
+        def _boom():
+            raise RuntimeError("свидетель упал")
+
+        try:
+            rails.VALUE_WITNESSES["evaluator_mirror"] = _boom
+            self.assertIn("evaluator_mirror", rails.manifest_drift()["unchecked"])
+        finally:
+            rails.VALUE_WITNESSES.clear()
+            rails.VALUE_WITNESSES.update(witnesses)
+
+    def test_every_witness_points_at_a_living_rail(self):
+        ids = {row["id"] for row in rails.registry(with_values=False)}
+        orphan = sorted(set(rails.VALUE_WITNESSES) - ids)
+        self.assertEqual(orphan, [], f"свидетель сторожит рельс, которого нет: {orphan}")
+
+    def test_the_witness_reads_the_same_function_that_writes_the_file(self):
+        """Два прибора над одним фактом расходятся молча — здесь он обязан быть один."""
+        rails.sync_md()
+        said = rails.manifest_values(rails.RAILS_MD.read_text(encoding="utf-8"))
+        for rail_id in rails.VALUE_WITNESSES:
+            self.assertEqual(said.get(rail_id), rails._fresh_value(rail_id),
+                             f"{rail_id}: файл и свидетель считают значение разными путями")
+
+    def test_the_boundary_of_the_check_is_named_in_the_manifest_itself(self):
+        """Сверка частичная — и говорит об этом там, где её читают, а не в комментарии."""
+        rails.sync_md()
+        text = rails.RAILS_MD.read_text(encoding="utf-8")
+        self.assertIn("сверяется СОСТАВ рельсов целиком", text)
+        for rail_id in rails.VALUE_WITNESSES:
+            self.assertIn(f"`{rail_id}`", text)
+        self.assertIn("может разойтись с кодом молча", text)
+
+    def test_values_are_read_only_for_the_named_rails(self):
+        """`only=` не имеет права утащить за собой поход к демону за чужим значением."""
+        calls = []
+        original = rails._serverd_value
+        try:
+            rails._serverd_value = lambda: calls.append(1) or "x"
+            rows = {r["id"]: str(r["value"])
+                    for r in rails.registry(only=("chat_reply_contract",))}
+        finally:
+            rails._serverd_value = original
+        self.assertEqual(calls, [], "сверка значений полезла к serverd за чужим рельсом")
+        self.assertNotIn("(не читалось)", rows["chat_reply_contract"])
+        self.assertEqual(rows["server_eyes"], "(не читалось)")
+
+    def test_manifest_values_reads_the_line_render_writes(self):
+        text = ("## 🔓 rail_a\n- держит: x\n- сейчас: первое\n- почему: y\n\n"
+                "## 🎒 rail_b\n- сейчас: второе\n")
+        self.assertEqual(rails.manifest_values(text),
+                         {"rail_a": "первое", "rail_b": "второе"})
+        self.assertEqual(rails.manifest_values(""), {})
 
 
 class TestRetractedPromises(Base):

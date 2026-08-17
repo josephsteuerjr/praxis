@@ -20,6 +20,17 @@ delivery of the already persisted answer.  It must never call a model.
 the planner's hash-verified outbound descriptors.  It is the only callback in
 that branch which may continue model authoring.
 
+⚠ «Терминальный текст = готовый ответ» — свойство КОНТРАКТА ХОДА, а не этого модуля.
+У хода, рождённого контрактом руки `reply` (чат), реплика уходит рукой, а последний
+текст — заметка себе. Планировщик такой ход в `authored_output` больше не отдаёт вовсе
+(`run_resume._authored_under_reply_hand`), поэтому здесь ничего не меняется: сюда
+по-прежнему приходит ровно то, что подлежит доставке без переавторства.
+
+Из этого следует одно требование к интеграции, и оно не косметическое: в
+`continue_checkpoint` теперь приходят и ходы, чей последний ответ модели был
+ТЕРМИНАЛЬНЫМ, а не оборванным. Колбэк не имеет права считать, что текст продолжения
+всегда подлежит отправке, — чем его считать, решает контракт хода, тот же самый.
+
 For a replayed tool response, completed calls are supplied as their existing
 ResultRefs and are never executed.  An outstanding call reaches the replay
 callback only when the planner marked it read-only or keyed-idempotent.  A
@@ -67,6 +78,7 @@ INTEGRATION_CONTRACT = (
     "lease acquisition is one atomic compare-and-claim on revision and event_seq",
     "authored_output is postprocessed without another model call",
     "checkpoint continuation receives exact persisted system messages tools and outbound",
+    "checkpoint continuation may resume a turn whose last model output was terminal",
     "completed tool calls reuse durable ResultRefs without implementation execution",
     "only planner-marked read-only or keyed-idempotent outstanding calls are replayed",
     "pending tool callbacks persist intent before implementation and all callbacks journal outcomes",

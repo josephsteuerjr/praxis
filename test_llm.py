@@ -554,6 +554,99 @@ class TestFallback(Base):
         self.assertEqual(resp.framework, "anthropic")
         self.assertNotIn("Error: 400", resp.text, "сырая ошибка релея не должна стать репликой")
 
+    def test_same_framework_fallback_goes_through_the_same_relay(self):
+        # 17.08.2026: fallback_framework="openai" при framework=openai — фолбэк ЧЕРЕЗ ТО ЖЕ
+        # реле другой моделью (terra → luna). Обрывы апстрима спорадические (2,1% на terra),
+        # повтор другой моделью почти всегда проходит — вторая подписка не нужна.
+        # Это не «повтор поверх сказанного»: модель другая, канал тот же.
+        cfg = llm._from_env()
+        cfg["frameworks"]["openai"]["api_key"] = "sk-test"
+        cfg["roles"]["voice"].update(framework="openai", model="gpt-terra",
+                                     fallback_model="gpt-luna",
+                                     fallback_framework="openai")
+        llm.save_config(cfg)
+
+        class TerraTearsLunaAnswers(FakeStreamOpenAI):
+            """terra пуста ВСЕГДА (и первый вызов, и повтор по своему каналу),
+            отвечает только luna — иначе ретрай той же моделью съедает сценарий
+            раньше фолбэка, и тест меряет не то."""
+            def create(self, **kw):
+                self.calls.append(kw)
+                if kw.get("model") == "gpt-terra":
+                    return iter([_chunk(finish="stop")])
+                return iter([_chunk(content="лунный ответ", finish="stop")])
+
+        fo = TerraTearsLunaAnswers([])
+        llm.use_test_client(fo, "openai")
+        resp = llm.chat("voice", messages=[{"role": "user", "content": "hi"}])
+        self.assertEqual(resp.text, "лунный ответ")
+        self.assertEqual(resp.framework, "openai", "фолбэк остался на том же фреймворке")
+        self.assertEqual(fo.calls[0]["model"], "gpt-terra")
+        self.assertEqual(fo.calls[-1]["model"], "gpt-luna",
+                         "после пустой терры (со всеми её ретраями) ответ обязан прийти луной")
+        self.assertTrue(llm.snapshot()["voice"]["on_fallback"])
+
+    def test_fallback_framework_survives_normalize_and_arms_state(self):
+        # Поле обязано пережить _normalize (роль переписывается целиком) и взводить
+        # fallback_armed по НАСТОЯЩЕМУ фреймворку фолбэка, а не по противоположному.
+        cfg = llm._from_env()
+        cfg["frameworks"]["openai"]["api_key"] = "sk-test"
+        # anthropic без ключа: старая логика считала бы фолбэк невзведённым
+        cfg["roles"]["voice"].update(framework="openai", model="gpt-terra",
+                                     fallback_model="gpt-luna",
+                                     fallback_framework="openai")
+        llm.save_config(cfg)
+        rc = llm._config()["roles"]["voice"]
+        self.assertEqual(rc.get("fallback_framework"), "openai")
+        snap = llm.snapshot()["voice"]
+        self.assertTrue(snap["fallback_armed"],
+                        "same-framework фолбэк с живым ключом обязан считаться взведённым")
+
+    def test_empty_after_spoken_gets_one_retry_then_ends_the_turn(self):
+        # Контракт v3, её решение №3: пустота — всегда аномалия с ОДНИМ ретраем своим
+        # каналом; после сказанного второй пустой ответ — конец хода, не фолбэк.
+        # 17.08 без этого пустота терры уходила в фолбэк, и луна слала ту же реплику
+        # заново — четыре копии за две минуты.
+        self._arm_openai_primary()  # фолбэк ВЗВЕДЁН — и всё равно не смеет сработать
+        fo = FakeStreamOpenAI([_chunk(finish="stop")])
+        llm.use_test_client(fo, "openai")
+        fa = FakeAnthropic([FakeAnthResp("не должна прозвучать")])
+        llm.use_test_client(fa)
+        resp = llm.chat("voice", messages=[{"role": "user", "content": "hi"}],
+                        end_after_spoken=True)
+        self.assertEqual(resp.text, "")
+        self.assertEqual(resp.stop_reason, "end_turn")
+        self.assertEqual(len(fo.calls), 2,
+                         "пустоте положен РОВНО ОДИН ретрай своим каналом (её решение №3)")
+        self.assertEqual(getattr(fa, "calls", []), [],
+                         "фолбэк переисполнил уже принятое решение — петля 17.08 не закрыта")
+        self.assertFalse(llm.snapshot()["voice"]["on_fallback"])
+
+    def test_a_torn_stream_after_spoken_also_ends_instead_of_fallback(self):
+        # v3: после доставленной реплики ЛЮБАЯ смерть канала закрывает ход сказанным.
+        # Анти-повтор руки держит только байт-в-байт копию; вторая модель могла бы
+        # сказать ту же мысль другими словами — и для человека это снова дубль.
+        self._arm_openai_primary()
+        errchunk = [_chunk(content="Error: 400 Bad Request - {invalid}", finish="error")]
+        llm.use_test_client(FakeStreamOpenAI(errchunk), "openai")
+        fa = FakeAnthropic([FakeAnthResp("не должна прозвучать")])
+        llm.use_test_client(fa)
+        resp = llm.chat("voice", messages=[{"role": "user", "content": "hi"}],
+                        end_after_spoken=True)
+        self.assertEqual(resp.text, "", "обрыв после сказанного обязан закрывать ход")
+        self.assertEqual(getattr(fa, "calls", []), [],
+                         "фолбэк после доставки — переисполнение решения")
+
+    def test_a_torn_stream_before_delivery_still_falls_back(self):
+        # Граница флага: ДО первой доставки фолбэк — страховка доставки, он остаётся.
+        self._arm_openai_primary()
+        errchunk = [_chunk(content="Error: 400 Bad Request - {invalid}", finish="error")]
+        llm.use_test_client(FakeStreamOpenAI(errchunk), "openai")
+        llm.use_test_client(FakeAnthropic([FakeAnthResp("живой ответ с glm")]))
+        resp = llm.chat("voice", messages=[{"role": "user", "content": "hi"}])
+        self.assertEqual(resp.text, "живой ответ с glm",
+                         "обрыв до доставки перестал лечиться фолбэком")
+
     def test_empty_openai_stream_without_fallback_raises(self):
         # нет fallback_model — пустой ответ релея честно поднимается как ошибка (не тихая пустота)
         cfg = llm._from_env()

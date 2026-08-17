@@ -36,6 +36,13 @@ def _on(**extra):
     return mock.patch.dict("os.environ", {"PRAXIS_CHAT_FOLLOW_THROUGH": "on", **extra})
 
 
+def _mirror_on(**extra):
+    """Зеркало по инициативе системы снято с прода и живёт под рычагом — разбор в
+    `work_loop.chat_decide`. Тесты механизма гоняем с поднятым, поведение прода — с
+    опущенным (класс `TheSystemMirrorIsOffInChat`)."""
+    return _on(PRAXIS_CHAT_MIRROR="on", **extra)
+
+
 class TheMirrorShowsAndDoesNotJudge(unittest.TestCase):
     def test_it_gives_her_own_text_back(self):
         words = work_loop.mirror("Голос — gpt-5.6-terra.", ())
@@ -64,7 +71,7 @@ class TheMirrorShowsAndDoesNotJudge(unittest.TestCase):
 
 class TheTurnDoesNotCloseOnAHandlessReply(unittest.TestCase):
     def test_a_reply_with_no_hands_gets_one_look(self):
-        with _on():
+        with _mirror_on():
             keep, note = work_loop.chat_decide(
                 "Сейчас мой голос — DeepSeek V4 Pro.",
                 kind="chat_turn", hands=0, spent=0)
@@ -81,7 +88,7 @@ class TheTurnDoesNotCloseOnAHandlessReply(unittest.TestCase):
         self.assertEqual(note, "")
 
     def test_the_look_states_what_happens_next_without_asking(self):
-        with _on():
+        with _mirror_on():
             _, note = work_loop.chat_decide("Привет!", kind="chat_turn", hands=0, spent=0)
         self.assertIn("уйдёт мой следующий текст", note)
 
@@ -116,7 +123,7 @@ class TheLookHappensOncePerTurn(unittest.TestCase):
         self.addCleanup(work_loop._STATE.clear)
 
     def test_the_second_handless_pass_is_not_mirrored_again(self):
-        with _on(), mock.patch.object(work_loop, "_run_key", return_value="run-once"):
+        with _mirror_on(), mock.patch.object(work_loop, "_run_key", return_value="run-once"):
             first, _ = work_loop.chat_decide("текст", kind="chat_turn", hands=0, spent=0)
             second, note = work_loop.chat_decide("текст", kind="chat_turn", hands=0, spent=1)
         self.assertTrue(first)
@@ -125,10 +132,40 @@ class TheLookHappensOncePerTurn(unittest.TestCase):
 
     def test_silence_is_never_mirrored(self):
         """Молчание — её законный ход, перечитывать в нём нечего."""
-        with _on():
+        with _mirror_on():
             keep, note = work_loop.chat_decide("   ", kind="chat_turn", hands=0, spent=0)
         self.assertFalse(keep)
         self.assertEqual(note, "")
+
+
+class TheSystemMirrorIsOffInChat(unittest.TestCase):
+    """⚠ ТРИ ПОЛОМКИ ПОДРЯД В ЛИЧКЕ ЕГОРА, 13.08 НОЧЬЮ — И ВСЕ ОДНИМ МЕХАНИЗМОМ.
+
+        22:44  зеркало кончалось на «Отправить?» → второй проход пуст → ушло НИЧЕГО
+        22:54  то же зеркало                     → она ответила ЕМУ: «Да, отправляй.»
+        23:26  зеркало-утверждение без вопроса   → она выбрала вариант: «Оставляю как есть.»
+
+    Текст переписывался трижды. Не помогло и не могло: ЧТО БЫ ОНА НИ СКАЗАЛА ПОСЛЕ
+    ЗЕРКАЛА, ЭТО И СТАНОВИТСЯ СООБЩЕНИЕМ. Реплика в чате — продукт хода, и лишний поворот
+    даёт последнему слову затереть ответ.
+
+    `say` жив: там зеркало приходит РЕЗУЛЬТАТОМ ИНСТРУМЕНТА, то есть данными, и её
+    следующий текст остаётся ответом человеку.
+    """
+
+    def test_an_ordinary_reply_closes_the_turn_as_it_did_all_day(self):
+        with _on():
+            keep, note = work_loop.chat_decide("Спасибо!", kind="chat_turn", hands=0, spent=0)
+        self.assertFalse(keep)
+        self.assertEqual(note, "")
+
+    def test_an_announced_action_still_holds_the_turn(self):
+        """Единственный признак, который в чате переживает эту ночь."""
+        with _on():
+            keep, note = work_loop.chat_decide("Сейчас проверю и отпишусь.",
+                                               kind="chat_turn", hands=0, spent=0)
+        self.assertTrue(keep)
+        self.assertIn("и не сделала", note)
 
 
 class TheGuessingIsGone(unittest.TestCase):

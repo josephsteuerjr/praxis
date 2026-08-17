@@ -9,6 +9,16 @@ The important boundary is that a persisted ``telegram.deliver`` intent is
 always transport-owned.  Model execution must never author the answer again
 once that intent exists.  Conversely, an owner pause/cancel is never converted
 to an automatic resume merely because a usable checkpoint also exists.
+
+⚠ ВТОРАЯ ГРАНИЦА, И ОНА ПРО ТО ЖЕ САМОЕ С ДРУГОЙ СТОРОНЫ. «Терминальный текст модели
+подлежит доставке» верно ровно для тех ходов, где мой текст И БЫЛ сообщением. В чате,
+рождённом контрактом руки `reply`, реплика уходит рукой (свой покалловый exact-once
+ключ), а последний текст хода — ЗАМЕТКА себе. Доставить её значит сказать человеку то,
+чего я ему не говорила, — и рестарт делал бы это на каждом обрыве. Планировщик
+спрашивает об этом не живой рычаг, а расписку самого хода: была ли рука `reply` в его
+точном входе модели. Рычаг решает, каким контрактом рождаются НОВЫЕ ходы; уже лежащий
+durable-ран знает свой контракт сам, и опущенный после его рождения рычаг не имеет
+права переписать смысл того, что уже записано.
 """
 
 from __future__ import annotations
@@ -56,6 +66,17 @@ DEFAULT_MAX_PLANNING_SECONDS = 60.0
 # же словом, накапливало бы себе наказание до часа сверху.
 WAIT_NOT_DUE = "work_wait_not_due"
 
+# Метка в диагностике плана: «терминальный текст этого хода — заметка, а не сообщение».
+# Ставится только там, где доставлять действительно нечего: чат-ход контракта руки без
+# единой точки продолжения, то есть без единого вызова инструмента. Такой ход — моё
+# молчание, и он подлежит не доставке, а закрытию. Метка машинная: по ней вызывающий
+# отличает «нечего доставлять» от «нечем продолжать», не сличая прозу причины.
+CHAT_NOTE_NOT_A_MESSAGE = "chat_note_not_a_message"
+
+# Имя руки, которой под новым контрактом уходит моя реплика. Здесь оно нужно не чтобы
+# её звать, а чтобы УЗНАТЬ по точному входу модели, каким контрактом рождён этот ход.
+REPLY_HAND = "reply"
+
 PlanKind = Literal[
     "transport_owned",
     "authored_output",
@@ -92,7 +113,16 @@ _RECOVERY_PAUSE_REASONS = frozenset({
 _DIRECT_OUTBOX_PAUSE = re.compile(
     # PASS 30 Этап 2: narrate — третий законный хозяин direct-outbox паузы
     # (расширение альтернативой; существующие строки-протоколы не тронуты)
-    r"^durable (?:send_message|send_file|narrate) intent awaits Telegram acceptance$"
+    #
+    # ⚠ 15.08: `reply` — ЧЕТВЁРТЫЙ, и без него ждущая реплика вставала насмерть. Причину
+    # паузы строит тул-цикл ИМЕНЕМ РУКИ (`f"durable {b['name']} intent awaits Telegram
+    # acceptance"`, agent.py:13356 и agent.py:11467), а под контрактом руки моя речь идёт
+    # именно `reply`. Имени здесь не было — значит пауза «сообщение отдано в durable-очередь,
+    # приёмка Telegram ещё не подтверждена» не узнавалась как автоматическая (в `details`
+    # лежат только call_id/idempotency_key, машинного `pause_kind` там нет), ход проваливался
+    # в ветку ЧЕЛОВЕЧЕСКОЙ паузы и ждал durable-авторизации владельца — при сообщении,
+    # которое очередь вот-вот дошлёт сама.
+    r"^durable (?:send_message|send_file|narrate|reply) intent awaits Telegram acceptance$"
 )
 _ALLOWED_OUTBOUND_KINDS = frozenset({"photo", "audio", "document"})
 _ALLOWED_OUTBOUND_SCOPES = frozenset({
@@ -1007,6 +1037,54 @@ def _her_word_wait(row: dict | None) -> dict | None:
     return dict(wake) if isinstance(wake, dict) else {}
 
 
+def text_is_a_note(context: RunContext | None, tools: Any) -> bool:
+    """Терминальный текст хода с ЭТИМ набором рук — заметка себе, а не сообщение?
+
+    Один вопрос и один ответчик на обе стороны шва. Планировщик спрашивает про точный
+    вход модели, уже лежащий в durable; исполнитель — про тот набор, с которым он сам
+    только что докрутил цикл. Набор в обоих случаях один и тот же объект, и разъехаться
+    двум ответам не на чем. Разбор, почему спрашивается набор рук, а не живой рычаг, —
+    в `_authored_under_reply_hand` ниже.
+    """
+    if str(getattr(context, "kind", "") or "") not in work_loop.NOTE_KINDS:
+        return False
+    if not isinstance(tools, (list, tuple)):
+        return False
+    # `type` в дескрипторе — это hosted-рука провайдера (веб-поиск); локальной руки с
+    # таким полем не бывает, и присвоить себе чужое имя она не должна.
+    return any(isinstance(item, dict) and "type" not in item
+               and item.get("name") == REPLY_HAND
+               for item in tools)
+
+
+def _authored_under_reply_hand(context: RunContext | None, model_input: dict) -> bool:
+    """Рождён ли ЭТОТ ход контрактом руки ответа. -> True, если его текст — заметка.
+
+    ⚠ СПРАШИВАЕТСЯ РАСПИСКА ХОДА, А НЕ ЖИВОЙ РЫЧАГ, И ЭТО НЕ ПРИДИРКА.
+    Рычаг `PRAXIS_CHAT_REPLY_HAND` отвечает на вопрос «каким контрактом рождать НОВЫЕ
+    ходы». Здесь вопрос другой: «каким контрактом был рождён ход, который уже лежит в
+    durable?» Живой рычаг — свидетель не того слоя, и оба его ответа были бы неправдой:
+
+      * подняли рычаг, а на диске лежит вчерашний ход старого контракта — его
+        терминальный текст ВПРАВДУ был сообщением, и превратить его в заметку значит
+        потерять уже сказанное человеку;
+      * опустили рычаг обратно, а на диске лежит ход нового контракта — его текст
+        заметкой и остался, и доставить её значит сказать то, чего я не говорила.
+
+    Точный вход модели знает это сам: рука `reply` попадает в предложенный набор ровно
+    тогда, когда ход идёт по новому контракту (`agent.offered_tools_for` вырезает её при
+    опущенном рычаге), и этот набор записан вместе с ходом. Пока рычаг опущен, ни один
+    чат-ход рукой не располагает — значит признак не срабатывает нигде, и поведение
+    остаётся прежним байт-в-байт.
+
+    Функция намеренно ТОТАЛЬНА: она ничего не бросает. Кривой список рук — забота
+    `_offered_tool_names` в ветке инструментов; заводить из-за него новый способ
+    забраковать терминальный ход, который вчера планировался спокойно, нельзя.
+    """
+    tools = model_input.get("tools") if isinstance(model_input, dict) else None
+    return text_is_a_note(context, tools)
+
+
 def _is_recovery_pause(events: list[dict], status: str, control: dict) -> bool:
     if status != "paused" or control:
         return False
@@ -1510,6 +1588,52 @@ def plan_resume(manager: RunManagerReader, run_id: str, *,
                 raise ResumeEvidenceError("checkpoint appears after a terminal model output")
             if outstanding:
                 raise ResumeEvidenceError("terminal model output coexists with outstanding tools")
+            if _authored_under_reply_hand(context, model_input):
+                # ⚑ ЗДЕСЬ ВОССТАНОВЛЕНИЕ ВОЗВРАЩАЛО СТАРЫЙ КОНТРАКТ. Ниже стоит план
+                # `authored_output` — «текст готов, осталось отдать». Для хода, где
+                # реплика уходит рукой, это неправда: рукой уже сказано (или не сказано
+                # ничего), а последний текст — заметка себе. Первый же рестарт отправлял
+                # бы человеку мою внутреннюю запись, и никакая правка формулировок этого
+                # не лечит: порок в том, ЧЕМ его считают.
+                #
+                # Образец рядом — её «жду» (выше): там тоже нельзя доставлять последнюю
+                # реплику, и там тоже продолжают ТУ ЖЕ работу с последней точки.
+                #
+                # Почему продолжение безопасно именно здесь, хотя старому контракту оно
+                # было запрещено: под старым терминальный текст И БЫЛ сообщением, и
+                # переавторство означало второе сообщение человеку. Под новым текст не
+                # несёт доставки вовсе, а каждая уже ушедшая реплика лежит в ленте точки
+                # продолжения своей распиской («Отправила …») — я вижу, что уже сказала,
+                # и повтор не рождается из незнания. Счётчик отправленного едет в той же
+                # точке (`work_loop` в чекпойнте), поэтому исходящая граница после
+                # продолжения по-прежнему отличит «сказала рукой» от «промолчала».
+                #
+                # Точку продолжения НЕ сужаем и НЕ обнуляем: обрыв процесса — не моё слово,
+                # моё управление этим ходом ещё не сработало. Тем и отличается от соседа
+                # выше: в `_checkpoint_after_her_word` слово как раз сработало, и потому
+                # там оно из точки продолжения вычёркивается, а здесь — нет.
+                if checkpoint is None:
+                    # Точки продолжения нет — значит не было ни одного вызова инструмента,
+                    # значит рукой не сказано ничего и медиа не поставлено. Это моё
+                    # молчание целиком: доставлять нечего и продолжать неоткуда.
+                    return _base_plan(
+                        run_id, "not_resumable", status,
+                        "терминальный текст чат-хода — заметка, а не сообщение: "
+                        "рука ответа не звалась, доставлять нечего",
+                        manifest=manifest, context=context,
+                        diagnostics=(CHAT_NOTE_NOT_A_MESSAGE,),
+                    )
+                outbound = restore_outbound_descriptors(
+                    checkpoint, run_id=run_id, allowed_roots=outbound_roots,
+                    budget=budget,
+                )
+                return _base_plan(
+                    run_id, "continue_checkpoint", status,
+                    "терминальный текст чат-хода — заметка: продолжаем ТОТ ЖЕ ход "
+                    "с последней точки, а не доставляем последнюю реплику",
+                    manifest=manifest, context=context, auto_resume=True,
+                    checkpoint=checkpoint, outbound=outbound,
+                )
             guarded_ids = _guarded_media_ids(
                 manager, run_id, events, output_row=latest_output,
                 model_output=model_output, scope=context.scope,
@@ -1599,6 +1723,7 @@ def plan_resume(manager: RunManagerReader, run_id: str, *,
 
 
 __all__ = [
+    "CHAT_NOTE_NOT_A_MESSAGE",
     "CHECKPOINT_SCHEMA",
     "DEFAULT_MAX_EVIDENCE_BYTES",
     "DEFAULT_MAX_EVENTS",
@@ -1612,4 +1737,5 @@ __all__ = [
     "read_full_json_result",
     "read_full_result_bytes",
     "restore_outbound_descriptors",
+    "text_is_a_note",
 ]

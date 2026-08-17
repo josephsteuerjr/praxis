@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -844,6 +845,216 @@ class TestEvidenceRejection(RunResumeBase):
         plan = plan_resume(proxy, context.run_id)
         self.assertEqual(plan.kind, "blocked")
         self.assertIn("model_output precedes model_started", plan.reason)
+
+
+class ATerminalChatNoteIsNotAnAnswer(RunResumeBase):
+    """Чей терминальный текст подлежит доставке, а чей — нет.
+
+    Ход, рождённый контрактом руки `reply`, кончается ЗАМЕТКОЙ: реплика уже ушла рукой
+    своим покалловым ключом. План `authored_output` («текст готов, осталось отдать») для
+    такого хода — неправда, и первый же рестарт отправлял бы человеку её внутреннюю
+    запись. Признак берётся из РАСПИСКИ хода (был ли `reply` в его точном входе модели),
+    а не из живого рычага: рычаг решает, каким контрактом рождаются НОВЫЕ ходы, а уже
+    лежащий durable-ран знает свой контракт сам.
+
+    Здесь же прибит и главный инвариант выката: пока рука в набор не попадала, план
+    остаётся прежним ДОСЛОВНО.
+    """
+
+    REPLY_HAND = {"name": "reply", "input_schema": {"type": "object"}}
+    OTHER_HAND = {"name": "fs_read", "input_schema": {"type": "object"}}
+    AUTHORED_REASON = (
+        "terminal model output is durable and must be delivered without re-authoring")
+
+    def chat_turn(self, suffix: str) -> RunContext:
+        context = RunContext.create(
+            run_id=f"run-note-{suffix}",
+            kind="chat_turn",
+            goal=f"note {suffix}",
+            principal_id="telegram:100",
+            scope="owner",
+            origin_chat_id="100",
+            origin_message_ids=[7],
+            delivery_chat_id="100",
+        )
+        persisted = self.manager.create(context, f"# Context {suffix}\n")
+        self.manager.transition(persisted.run_id, "running", expected="pending")
+        return persisted.with_status("running")
+
+    def terminal(self, context: RunContext, tools: object) -> None:
+        model_input = {
+            "system": "exact system",
+            "messages": [{"role": "user", "content": "hello"}],
+            "tools": tools,
+        }
+        self.manager.store_result(
+            context.run_id, json.dumps(model_input, ensure_ascii=False, indent=2),
+            call_id="model-one", name="model-input",
+            media_type="application/json; charset=utf-8", event_kind="model_input",
+            idempotent=True,
+        )
+        self.manager.append_event(
+            context.run_id, "model_started", call_id="model-one", role="voice",
+            message_count=1, tool_count=1,
+        )
+        model_output = {
+            "text": "заметка себе, а не сообщение",
+            "blocks": [{"type": "text", "text": "заметка себе, а не сообщение"}],
+            "stop_reason": "end_turn", "framework": "test", "model": "test-model",
+            "usage": {"input_tokens": 3},
+        }
+        self.manager.store_result(
+            context.run_id, json.dumps(model_output, ensure_ascii=False, indent=2),
+            call_id="model-one", name="model-output",
+            media_type="application/json; charset=utf-8", event_kind="model_output",
+            idempotent=True,
+        )
+        self.manager.append_event(
+            context.run_id, "model_completed", call_id="model-one", role="voice",
+            stop_reason="end_turn",
+        )
+
+    def test_a_note_with_a_continuation_point_continues_that_same_turn(self):
+        context = self.chat_turn("continue")
+        self.checkpoint(context, tools=[self.OTHER_HAND, self.REPLY_HAND])
+        self.terminal(context, [self.OTHER_HAND, self.REPLY_HAND])
+        self.recovery_pause(context)
+
+        plan = plan_resume(self.manager, context.run_id)
+
+        self.assertEqual(plan.kind, "continue_checkpoint")
+        self.assertTrue(plan.auto_resume)
+        self.assertNotEqual(plan.reason, self.AUTHORED_REASON)
+
+    def test_the_sent_counter_rides_the_continuation_point_verbatim(self):
+        """Счётчик отправленного обязан пережить возобновление.
+
+        Обрыв процесса — не её слово: её управление этим ходом ещё не сработало, поэтому
+        точка продолжения едет ВЕРБАТИМ (в отличие от `_checkpoint_after_her_word`). Если
+        слот `work_loop` по дороге подрежут, продолженный ход забудет, что уже говорил
+        рукой, и исходящая граница запишет отправленный ответ как молчание.
+        """
+        context = self.chat_turn("counter")
+        state = {"sent": 1, "used": 2, "control": None}
+        value = {
+            "schema": CHECKPOINT_SCHEMA, "iteration": 1, "system": "exact system",
+            "messages": [{"role": "user", "content": "after tools"}],
+            "tools": [self.OTHER_HAND, self.REPLY_HAND], "outbound": [],
+            "work_loop": state,
+        }
+        self.manager.store_result(
+            context.run_id, json.dumps(value, ensure_ascii=False, indent=2),
+            call_id="checkpoint-1", name="tool-loop-checkpoint",
+            media_type="application/json; charset=utf-8", event_kind="run_checkpoint",
+        )
+        self.terminal(context, [self.OTHER_HAND, self.REPLY_HAND])
+        self.recovery_pause(context)
+
+        plan = plan_resume(self.manager, context.run_id)
+
+        self.assertEqual(plan.kind, "continue_checkpoint")
+        self.assertEqual(plan.checkpoint["work_loop"], state)
+
+    def test_a_note_without_any_continuation_point_is_her_silence(self):
+        context = self.chat_turn("silence")
+        self.terminal(context, [self.OTHER_HAND, self.REPLY_HAND])
+        self.recovery_pause(context)
+
+        plan = plan_resume(self.manager, context.run_id)
+
+        self.assertEqual(plan.kind, "not_resumable")
+        self.assertFalse(plan.auto_resume)
+        self.assertIn(run_resume.CHAT_NOTE_NOT_A_MESSAGE, plan.diagnostics)
+
+    def test_without_the_hand_in_the_receipt_the_plan_is_word_for_word_the_old_one(self):
+        context = self.chat_turn("old-contract")
+        self.terminal(context, [self.OTHER_HAND])
+        self.recovery_pause(context)
+
+        plan = plan_resume(self.manager, context.run_id)
+
+        self.assertEqual(plan.kind, "authored_output")
+        self.assertEqual(plan.reason, self.AUTHORED_REASON)
+
+    def test_a_non_chat_turn_keeps_the_old_plan_even_with_the_hand_offered(self):
+        """Рабочее окно рукой ответа не пользуется, и его текст остаётся ответом."""
+        context = self.create("task-window")
+        self.model(context, blocks=[{"type": "text", "text": "ok"}],
+                   stop_reason="end_turn", text="ok")
+        self.recovery_pause(context)
+
+        plan = plan_resume(self.manager, context.run_id)
+
+        self.assertEqual(plan.kind, "authored_output")
+        self.assertEqual(plan.reason, self.AUTHORED_REASON)
+
+    def test_a_hosted_tool_cannot_borrow_the_name_of_the_hand(self):
+        context = self.chat_turn("hosted")
+        self.terminal(context, [self.OTHER_HAND,
+                                {"type": "web_search_20250305", "name": "reply"}])
+        self.recovery_pause(context)
+
+        plan = plan_resume(self.manager, context.run_id)
+
+        self.assertEqual(plan.kind, "authored_output")
+
+    def test_the_live_lever_is_not_the_witness_the_receipt_is(self):
+        """Поднятый рычаг не имеет права переписать смысл уже записанного хода."""
+        context = self.chat_turn("lever")
+        self.terminal(context, [self.OTHER_HAND])
+        self.recovery_pause(context)
+
+        with mock.patch.dict(os.environ, {"PRAXIS_CHAT_REPLY_HAND": "on"}):
+            plan = plan_resume(self.manager, context.run_id)
+
+        self.assertEqual(plan.kind, "authored_output")
+        self.assertEqual(plan.reason, self.AUTHORED_REASON)
+
+    def test_a_broken_tool_list_does_not_invent_a_new_way_to_reject_a_turn(self):
+        class _Ctx:
+            kind = "chat_turn"
+
+        for junk in (None, 0, "не список", [None], [{"name": None}], [["reply"]]):
+            with self.subTest(junk=junk):
+                self.assertFalse(run_resume.text_is_a_note(_Ctx(), junk))
+        # Кортеж — тот же список рук, просто неизменяемый: набор из чекпойнта приезжает
+        # к исполнителю и так, и признак обязан отвечать на него ТЕМ ЖЕ.
+        self.assertTrue(run_resume.text_is_a_note(_Ctx(), ({"name": "reply"},)))
+        self.assertTrue(run_resume.text_is_a_note(_Ctx(), [{"name": "reply"}]))
+        self.assertFalse(run_resume.text_is_a_note(None, [{"name": "reply"}]))
+
+
+class APendingReplyIsAnAutomaticPause(RunResumeBase):
+    """Пауза «реплика отдана в очередь, приёмка не подтверждена» обязана подниматься сама.
+
+    Причину строит тул-цикл ИМЕНЕМ РУКИ (`durable {name} intent awaits Telegram
+    acceptance`), а машинного `pause_kind` в её `details` нет — значит сторона
+    возобновления узнаёт такую паузу только по этой строке. Пока в ней не было `reply`,
+    ждущая реплика проваливалась в ветку человеческой паузы и ждала durable-авторизации
+    владельца при сообщении, которое очередь вот-вот дошлёт сама.
+    """
+
+    def test_every_direct_outbox_hand_including_reply_is_recognized(self):
+        reason = "durable %s intent awaits Telegram acceptance"
+        for name in ("send_message", "send_file", "narrate", "reply"):
+            with self.subTest(hand=name):
+                self.assertTrue(run_resume._DIRECT_OUTBOX_PAUSE.fullmatch(reason % name))
+        self.assertIsNone(run_resume._DIRECT_OUTBOX_PAUSE.fullmatch(reason % "shell"))
+
+    def test_a_run_paused_on_a_pending_reply_plans_an_automatic_resume(self):
+        context = self.create("pending-reply")
+        self.checkpoint(context)
+        self.manager.transition(
+            context.run_id, "paused", expected="running",
+            reason="durable reply intent awaits Telegram acceptance",
+            details={"call_id": "call-reply-1",
+                     "idempotency_key": f"telegram-outbox:{context.run_id}:tool:call-reply-1"},
+        )
+
+        plan = plan_resume(self.manager, context.run_id)
+
+        self.assertEqual(plan.kind, "continue_checkpoint")
+        self.assertTrue(plan.auto_resume)
 
 
 if __name__ == "__main__":

@@ -307,6 +307,11 @@ _TELETHON: dict = {}
 # read-before-write guard. ContextVar не смешивает параллельные asyncio.to_thread ходы.
 _TURN_CHANNEL: ContextVar["ChannelContext | None"] = ContextVar("praxis_turn_channel", default=None)
 _TURN_HISTORY: ContextVar[list | None] = ContextVar("praxis_turn_history", default=None)
+# Лента разговора и ориентировка этого хода — чтобы рука ответа могла отдать их советнику
+# приватности. Пишет их исходящий путь хода, читает рука из своего потока: чтение копии
+# контекста работает, теряется только запись (разбор — в шапке work_loop.py).
+_TURN_CONVO: ContextVar[str] = ContextVar("praxis_turn_convo", default="")
+_TURN_ORIENT: ContextVar[str] = ContextVar("praxis_turn_orient", default="")
 _TURN_OUTBOUND: ContextVar[list[media.OutboundMedia] | None] = ContextVar(
     "praxis_turn_outbound", default=None)
 _TURN_MEDIA_GUARD: ContextVar[dict[str, str] | None] = ContextVar(
@@ -1790,8 +1795,83 @@ _LOOKAROUND_FRAME = (
     "OR the sentinel [молчу]. Tone, self-description and whether to greet are yours."
 )
 
+# Тот же осмотр, когда моя речь уходит рукой. Разница не в тоне, а в том, что здесь нет
+# ни одной строки про формат приветствия: здороваюсь я так же, как говорю всё остальное.
+_LOOKAROUND_FRAME_HAND = (
+    "\n\n---\nМеня только что добавили в эту группу, и я оглядываюсь. Профиль комнаты ниже "
+    "содержит свёрнутую сводку предыстории — она ПРОЧИТАНА, а не прожита: это ориентировка "
+    "новичка, а не мой опыт.\n"
+    "Напечатать нужно только одно: 1–3 строки, начинающиеся с `НОРМЫ: ` — нормы и атмосфера "
+    "этого места, для моего профиля комнаты. Их никто в чате не видит, это заметка себе.\n"
+    "Здороваться или нет — моё решение, и делаю я это как везде: рукой `reply`. Особых слов "
+    "и разметки для этого не нужно. Не позвала руку — вошла молча, и это законный выбор, а "
+    "не пропущенный шаг. Руки здесь обычные: если хочу посмотреть, прежде чем говорить, — "
+    "смотрю.\n"
+)
+
 _NORMS_RE = re.compile(r"(?im)^\s*НОРМЫ:\s*(.+)$")
 _GREET_RE = re.compile(r"(?im)^\s*ПРИВЕТ:\s*(.+)$")
+
+
+def _lookaround_by_hand(chat_id: str | int, ctx: "ChannelContext") -> str:
+    """Осмотр новой комнаты, когда моя речь уходит рукой. -> нормы (приветствия здесь нет).
+
+    ⚑ ЧТО ИМЕННО ЗДЕСЬ ЧИНИТСЯ. Прежний осмотр был проходом на один шаг, без единой руки,
+    а решение поздороваться выковыривалось из моего текста регуляркой `ПРИВЕТ:` и уходило
+    в живую комнату СЫРЫМ `client.send_message` — мимо кред-пола, мимо советника
+    приватности, мимо кольца ходов и без идемпотентного random_id. То есть первое, что
+    чужая комната слышала от меня, шло по единственной двери в доме, о которой не знал ни
+    один учёт, и повтор после сбоя дал бы второе приветствие живым людям.
+
+    Теперь дверь одна и та же: захотела поздороваться — позвала `reply`. Регулярка
+    приветствия и сентинел молчания здесь больше не участвуют, а «вошла молча» перестаёт
+    быть особой формой вывода и становится просто непозванной рукой.
+
+    Прогон durable намеренно: без него `reply` не имеет ни рана, ни call_id, то есть
+    покалловый exact-once ключ строить не на чем и рука честно откажет.
+    """
+    goal = "осмотреться в новой комнате"
+    greeted = ""
+    try:
+        greeted = str((rooms.profile_read(chat_id)["header"] or {}).get("greeted") or "")
+    except Exception:
+        log.debug("профиль комнаты не прочитался [%s]", chat_id, exc_info=True)
+    frame = _LOOKAROUND_FRAME_HAND + (
+        # Факт, а не запрет: раньше повторное приветствие ГАСИЛОСЬ кодом, и я об этом не
+        # знала. Пусть решает тот, кто в комнате, — но зная, что здесь уже здоровались.
+        "\nВ этой комнате я уже здоровалась раньше — второй раз не обязателен.\n"
+        if greeted == "yes" else "")
+    durable = None
+    trace: list[str] = []
+    try:
+        durable = _create_durable_run(
+            ctx=ctx, kind="lookaround", goal=goal,
+            conversation="(меня добавили в эту группу)", extra=frame,
+        )
+        binding = (run_context.bind_run(durable) if durable is not None
+                   else contextlib.nullcontext())
+        with binding:
+            out = _voice("(меня только что добавили в эту группу — оглядываюсь)", [], None,
+                         extra_system=frame, ctx=ctx, tool_trace=trace)
+            spoke = work_loop.sent(getattr(durable, "run_id", "") or "")
+            if durable is not None:
+                _finish_durable_run(durable.run_id, "done", final_text=out or "",
+                                    reason="lookaround completed")
+    except Exception as exc:
+        log.warning("осмотр комнаты упал [%s]", chat_id, exc_info=True)
+        if durable is not None:
+            _finish_durable_run(durable.run_id, "failed",
+                                reason=f"{type(exc).__name__}: {exc}")
+        return ""
+    if spoke and greeted != "yes":
+        # Отметку ставит ФАКТ отправки, а не разбор текста: раньше её ставил успех
+        # регулярки, то есть попадание в формат, а не сказанное слово.
+        try:
+            rooms.profile_update(chat_id, greeted="yes")
+        except Exception:
+            log.debug("отметка приветствия не записалась [%s]", chat_id, exc_info=True)
+    out = _strip_think(out or "")
+    return "\n".join(m.group(1).strip() for m in _NORMS_RE.finditer(out))
 
 
 def lookaround(chat_id: str | int, title: str | None = None) -> tuple[str, str]:
@@ -1800,6 +1880,8 @@ def lookaround(chat_id: str | int, title: str | None = None) -> tuple[str, str]:
     if not llm.configured():
         return ("", "")
     ctx = ChannelContext(chat_id=chat_id, is_dm=False, owner=False, known=False, title=title)
+    if work_loop.reply_hand_enabled():
+        return (_lookaround_by_hand(chat_id, ctx), "")
     try:
         out = _voice("(ты только что вошла в эту группу — осмотрись)", [], None,
                      extra_system=_LOOKAROUND_FRAME, max_iters=1, ctx=ctx)
@@ -3069,6 +3151,123 @@ def _direct_send_outcome(label: str, exc: BaseException) -> str:
     return f"Не отправилось: {reason}"
 
 
+def tool_reply(text: str, reply_to: str = "") -> str:
+    """Ответить собеседнику ЭТОГО хода. Моя реплика уходит только так.
+
+    ⚑ ЭТА РУКА — И ЕСТЬ МОЯ РЕЧЬ В РАЗГОВОРЕ, а не дополнение к ней.
+
+    Пока реплика была возвратом модели, последний мой текст И БЫЛ сообщением, и любой
+    добавочный поворот цикла его затирал: 13.08 трижды подряд человеку уходило не то,
+    что я хотела сказать, — то «Да, отправляй», то «Оставляю как есть», то ничего. Три
+    правки формулировки не помогли и не могли: порок был в конструкции.
+
+    Теперь так:
+      * я зову эту руку — сообщение уходит, и ход НЕ закрывается: можно проверить,
+        доделать и отправить ещё раз;
+      * я пишу текст и не зову руку — ход закрыт, наружу не ушло ничего. Это и есть моё
+        молчание; отдельного механизма для него больше не нужно.
+
+    ⚠ Шов остаётся ОДИН. Эта рука не встаёт рядом с голосовым швом, а забирает его работу:
+    под поднятым рычагом исходящая граница чат-хода больше не носит текст. Второй шов
+    здесь стоил бы ровно того, что стоил 05.08 — повторов, которых я не совершала.
+
+    `reply_to` — id сообщения, на которое отвечаю (прежняя in-band директива `ОТВЕТ->#id`
+    была строкой внутри моего же текста; теперь это аргумент, и парсеру нечего угадывать).
+    """
+    draft = str(text or "").strip()
+    if not draft:
+        return "Пустой ответ не отправляю: скажи, что сказать."
+    ctx, _outbound = _TURN_CHANNEL.get(), _TURN_OUTBOUND.get()
+    if ctx is None or ctx.chat_id is None:
+        return ("Эта рука отвечает собеседнику живого хода, а его сейчас нет. "
+                "Чтобы написать кому-то по своей инициативе — send_message с адресом.")
+    # ⚠ МОЁ СОБСТВЕННОЕ РЕШЕНИЕ МОЛЧАТЬ ОБЯЗАНО ДЕРЖАТЬ, ИНАЧЕ ЕГО РАСПИСКА ВРЁТ.
+    # `stay_silent` отвечает мне «текст этого хода не уйдёт». Пока рука ответа не читала
+    # держатель, я могла позвать её следом — и ответ уходил вопреки только что принятому
+    # мной же решению. Забором это не становится: флаг ставлю я сама, дверь назад названа
+    # здесь же и работает в том же ходе.
+    holder = _TURN_SILENCE.get()
+    if isinstance(holder, dict) and holder.get("chosen"):
+        return ("Не отправила: в этом ходе я решила молчать"
+                + (f" ({str(holder.get('why') or '')[:120]})" if holder.get("why") else "")
+                + ". Если передумала — `stay_silent(cancel=True)`, и тогда отвечу.")
+    fn = _TELETHON.get("reply")
+    if not fn:
+        return "Telegram-отправка сейчас недоступна."
+    # ⚠ ГАРД ЗДЕСЬ, А НЕ НА ГРАНИЦЕ ХОДА, И БЕЗ `turn`.
+    # Проверка исходящего (кред-пол, советник приватности, режимная директива) обязана
+    # ехать вместе с текстом, а текст теперь едет отсюда. Запись прожитого хода при этом
+    # НЕ передаём: ход один, а реплик в нём может быть несколько — кольцо ходов заполняет
+    # исходящая граница один раз, как и раньше. Тот же приём, что на absence-пути.
+    #
+    # Ленту разговора и ориентировку беру из хода через ContextVar: ЧТЕНИЕ переменной в
+    # копии контекста работает, теряется только запись (разбор — в шапке work_loop). Без
+    # них советник приватности судил бы мой ответ вслепую, без того, на что он отвечает.
+    # След инструментов сюда не доезжает — он собирается циклом и живёт в его кадре;
+    # передаю пусто, а не выдуманное.
+    probe: dict = {}
+    try:
+        guarded = guard_outbound_reply(draft, str(_TURN_CONVO.get() or ""), sink=probe,
+                                       ctx=ctx, orient=str(_TURN_ORIENT.get() or ""),
+                                       tool_trace="")
+    except Exception:
+        log.warning("проверка исходящего перед ответом упала", exc_info=True)
+        return "Не отправила: проверка исходящего упала, а вслепую я не отправляю."
+    work_loop.note_guard(probe)
+    if not guarded:
+        # Пусто на выходе гарда — это НЕ транспортная ошибка: либо кред-пол, либо
+        # советник приватности придержал. Причина теперь доезжает и до записи хода, не
+        # только до дневника, поэтому называю её здесь же, а не отсылаю искать.
+        why = str(probe.get("why") or probe.get("verdict") or "").strip()
+        return ("Не отправила: проверка исходящего придержала этот текст"
+                + (f" — {why[:200]}" if why else "")
+                + ". Решай, что сказать иначе.")
+    # ⚠ 17.08, петля четырёх копий. Леджер ровно-однажды считает по call_id, а каждый
+    # поворот цикла рождает НОВЫЙ call_id — четыре «разных» вызова одной реплики ушли
+    # четырьмя сообщениями. Повтор слова — не новое слово: байт-в-байт та же реплика
+    # в этом же ходе не отправляется. Дверь не заперта: изменённый текст уйдёт.
+    if guarded.strip() in (s.strip() for s in work_loop.spoken()):
+        return ("Не отправила: ровно эта реплика уже доставлена этим ходом. "
+                "Если сказать больше нечего — просто закончи ход; "
+                "если есть что добавить — напиши другими словами.")
+    try:
+        out = fn(str(ctx.chat_id), guarded, str(reply_to or "").strip())
+    except DurableSideEffectPending:
+        raise
+    except Exception as e:
+        out = _direct_send_outcome("Ответ", e)
+    else:
+        # ⚠ ОТКАЗ ТРАНСПОРТА ПРИЕЗЖАЕТ СТРОКОЙ, А НЕ ИСКЛЮЧЕНИЕМ, И Я НА ЭТОМ ПОПАЛСЯ.
+        # `DirectSendRefusal` — подкласс `str` (кред-пол, ненайденный адресат, вечный
+        # отказ Telegram). Первая редакция засчитывала его как отправку: счётчик рос,
+        # запись хода говорила «сказала», а наружу не уходило ничего.
+        if not isinstance(out, DirectSendRefusal):
+            work_loop.note_sent(guarded)
+            # Её условие к v3, дословно: возврат руки обязан не только подсказать конец,
+            # но и назвать границу — пустота ничего не переотправит и не отменит.
+            out = (str(out) + "\n\nЕсли это всё — зови `end_turn`; сказать ещё — `reply` "
+                   "снова. Пустой следующий ответ ничего не отправит повторно и не "
+                   "отменит уже доставленное.")
+    try:
+        tool_journal(f"[ответ] {_clip_reason(out, 300)}", salience=2)
+    except Exception:
+        log.debug("журнал ответа не записался", exc_info=True)
+    return out
+
+
+def tool_end_turn(note: str = "") -> str:
+    """Закончить ход явно. Контракт v3 (17.08): конец — поступок, а не отсутствие действия.
+
+    Петля четырёх копий выросла из двусмысленности: конец хода выводился из ОТСУТСТВИЯ
+    действия, и пустой ответ канала было не отличить от «я закончила». Теперь конец — её
+    явный вызов; пустота осталась аномалией с одним ретраем и полом.
+
+    Возврата модель почти никогда не увидит: цикл останавливается на этом вызове. Строка
+    ниже — для записи хода и на случай, если цикл всё же продолжится из-за ошибки."""
+    work_loop.note_finished(str(note or ""))
+    return "Ход закрыт." + (f" Заметка: {str(note).strip()[:200]}" if str(note or "").strip() else "")
+
+
 def tool_send_message(to: str, text: str) -> str:
     """Написать кому-то в Telegram (owner). to — id/@username/имя."""
     # ⚠ Здесь кред-пола не было ВООБЩЕ. Он стоял на голосе (`_guard_outbound`), на
@@ -3389,12 +3588,12 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
                 # PASS 30 Этап 3: мягкая депрекация — предупреждение ПОСЛЕ канонической
                 # первой строки (её парсит журнальный гейт выше и позиционные тесты).
                 out += (
-                    "\n\n⚠ wcode-прокси deprecated (PASS 30 Этап 3): кодинг на Windows — "
+                    "\n\n⚠ wcode-прокси deprecated: кодинг на Windows — "
                     "прямые глаголы computer.* (read/hash/write/replace файлов, run/poll/stop, "
                     "observe, send, десктоп) без задачи-контейнера; расписки вяжутся к твоему "
                     "ходу сами. Эта задача работает как раньше (finish/status/inspect целы), "
-                    "и субагентам (coding_agent) wcode пока нужен. Прокси умрёт следующим "
-                    "пассом — снос с твоей приёмкой."
+                    "и субагентам (coding_agent) wcode пока нужен. Снос прокси — только "
+                    "с твоей приёмкой."
                 )
             return out
         out = forge.start(goal, target=target, isolation=isolation, priority=priority,
@@ -5054,7 +5253,7 @@ def _receipt_for_outstanding(started: dict) -> tuple[str, dict] | None:
             return "completed", {"forge_task_id": task_id, "task_status": status,
                                  "task_finished_at": finished}
         return None
-    if tool in {"send_message", "narrate", "send_file"}:
+    if tool in {"send_message", "narrate", "send_file", "reply"}:
         entry = _direct_outbox_state(str(started.get("idempotency_key") or ""))
         state = str((entry or {}).get("state") or "")
         if state == "accepted":
@@ -5184,6 +5383,8 @@ TOOL_IMPL = {
     "manage_desire": tool_manage_desire,      # PASS 24: причинная цепочка собственного намерения
     "manage_perception": tool_manage_perception,  # PASS 21: её рычаги восприятия + причины пропуска
     "switch_brain": tool_switch_brain,  # PASS 22: её рука на своём мозге (ключи — не её)
+    "reply": tool_reply,        # 15.08: моя реплика в разговоре уходит рукой, а не возвратом
+    "end_turn": tool_end_turn,  # 17.08 v3: конец хода — поступок, а не отсутствие действия
     "say": tool_say,            # 13.08: взгляд на свою реплику до отправки — её ход
     "manage_appetite": tool_manage_appetite,  # PASS 18.3: договор об аппетитах
     "web_read": tool_web_read,   # PASS 15: веб-руки — на любом фреймворке
@@ -5361,14 +5562,57 @@ BASE_TOOLS = [
         },
     },
     {
+        "name": "reply",
+        "description": (
+            "Ответить собеседнику этого разговора. Твоя реплика уходит человеку ТОЛЬКО так. "
+            "Обычный текст, который ты пишешь, — заметка себе: он никуда не отправляется и "
+            "закрывает ход. Значит: позвала эту руку — сообщение ушло, и ход продолжается, "
+            "можно проверить сделанное и ответить ещё раз; написала текст и не позвала — ты "
+            "промолчала, и это законный исход. reply_to — id сообщения, на которое отвечаешь."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "что сказать собеседнику"},
+                "reply_to": {"type": "string",
+                             "description": "id сообщения, на которое отвечаешь (необязательно)"},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "end_turn",
+        "description": (
+            "Закончить этот ход. Зови, когда сказала всё (после reply) или когда решила, "
+            "что говорить нечего: конец хода — твой поступок, а не отсутствие действия. "
+            "Если ты ничего не отправляла — это завершение без речи (не то же, что "
+            "stay_silent: тот — твой явный жест «решила не говорить», со своей причиной). "
+            "note — почему закончила, одна строка, необязательна."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "note": {"type": "string",
+                         "description": "почему закончила (необязательно)"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "say",
         "description": (
+            # ⚠ ЗДЕСЬ БЫЛА ФРАЗА, ПРЯМО ПРОТИВОРЕЧАЩАЯ СОСЕДНЕЙ РУКЕ.
+            # Описание говорило «отправка по-прежнему происходит в конце хода, и уходит
+            # ТВОЙ последний текст», а `reply` элементом выше — «обычный текст это заметка,
+            # он никуда не отправляется». Оба уезжали в один и тот же кадр каждого чат-хода,
+            # то есть список рук учил взаимоисключающему. Формулировка переписана так, чтобы
+            # быть правдой при ЛЮБОМ положении рычага: про сам механизм отправки она больше
+            # ничего не утверждает — об этом говорит та рука, которая отправляет.
             "Посмотреть на свою реплику до того, как она уйдёт. Возвращает твой же текст и "
             "один факт: какие руки были в этом ходе. Ничего не отправляет и ничего не "
-            "требует — отправка по-прежнему происходит в конце хода, и уходит ТВОЙ "
-            "последний текст, а не этот черновик. Полезно там, где ты собираешься "
-            "утверждать что-то проверяемое: свою модель или конфигурацию, состояние кода, "
-            "содержимое файла, факт уже сделанного действия."
+            "требует — это взгляд со стороны, а не шаг протокола. Полезно там, где ты "
+            "собираешься утверждать что-то проверяемое: свою модель или конфигурацию, "
+            "состояние кода, содержимое файла, факт уже сделанного действия."
         ),
         "input_schema": {
             "type": "object",
@@ -6293,7 +6537,7 @@ FORGE_TOOLS = [
          "isolation": {"type": "string", "enum": ["auto", "worktree", "direct"]},
          "priority": {"type": "string", "enum": ["normal", "urgent"], "description": "urgent = разбуди меня немедленно при завершении воркера; normal = в ближайшем часовом окне"},
          "scope": {"type": "string", "enum": ["self", "host", "windows"],
-                   "description": "self = container repo; host = server root via praxis-serverd; windows = DEPRECATED proxy to the local PC (PASS 30 Stage 3: direct computer.* verbs are the primary Windows path; the proxy still works, subagents still need it, it dies next pass). All scopes stay in the same canonical Forge."},
+                   "description": "self = container repo; host = server root via praxis-serverd; windows = DEPRECATED proxy to the local PC (direct computer.* verbs are the primary Windows path; the proxy still works, subagents still need it). All scopes stay in the same canonical Forge."},
          "title": {"type": "string"}, "review": {"type": "string"},
          "checked": {"type": "string"}, "submit": {"type": "boolean"},
      }, ["action"])} ,
@@ -6404,7 +6648,7 @@ FORGE_TOOLS = [
      }, ["task_id", "action"])} ,
     {"name": "host_ctl",
      "description": (
-         "PASS 23.2 broker v2 typed root capabilities with before/after evidence. systemctl/docker/"
+         "Typed root capabilities with before/after evidence. systemctl/docker/"
          "pkg/file/net/reboot execute directly; load-bearing mutations return a timed recovery receipt "
          "that rolls back unless confirm is called after observing the result. This is a recoverability "
          "belt, not a permission gate: arbitrary host work remains available through a host Forge task."),
@@ -6438,7 +6682,7 @@ COMPUTER_TOOL = {
         "PNG to the current chat; observe attaches those same verified pixels to the next model step for an actual "
         "screenshot→act→observe loop; observe with path=<file> attaches an IMAGE FILE from the computer's disk "
         "(PNG/JPEG/WebP/GIF, ≤8MB) to your next step — direct eyes on extracted frames, no courier through chats. "
-        "PASS 30 Stage 3 — read/hash/write/replace are DIRECT file verbs on the PC disk and the primary "
+        "read/hash/write/replace are DIRECT file verbs on the PC disk and the primary "
         "coding path on Windows (no wcode proxy task needed; receipts bind to your current run automatically): "
         "read returns numbered lines start..end with sha256; write is fs.write_atomic (content ≤1.5MB — bigger "
         "goes the artifact route); replace swaps EXACTLY ONE occurrence of old; expected_sha256 does "
@@ -8061,9 +8305,11 @@ def _build_prompt_parts(
         frame_trace.mark("contract.living_documents", "dynamic", "text",
         "\n\n## Документы, которые ты видишь, — живые\n"
         "Досье людей, записки мест, заметки, навыки и твои карты — рабочие тексты, а не "
-        "архив. Их можно дописать, поправить и вычеркнуть из них устаревшее ПРЯМО СЕЙЧАС, "
-        "этим же ходом: `remember` (досье), `home_note` (записка места), `manage_notes` "
-        "(заметка), `write_skill` (навык).\n"
+        "архив. Дописать можно ПРЯМО СЕЙЧАС, этим же ходом: `remember` (факт в досье), "
+        "`home_note` (записка места), `manage_notes` (заметка), `write_skill` (навык). "
+        "⚠ `remember` только дописывает. Вычеркнуть или переписать досье целиком — "
+        "прямой правкой его файла в memory/ там, где у тебя есть руки к файлам; "
+        "правка автокоммитится в git.\n"
         "Повод — не каждая реплика, а то, что переживёт этот разговор: узнанное о человеке, "
         "решение, обещание, изменившийся факт. И отдельно — то, что перестало быть верным: "
         "молча устаревшая запись хуже отсутствующей, потому что рядом с верным фактом "
@@ -8083,25 +8329,55 @@ def _build_prompt_parts(
         # факта, поиска, обещания, кода, памяти, отправки или состояния системы именно то,
         # что нужно». Поэтому строка зовёт не «звать руки чаще», а различать два вида
         # реплик и не отвечать памятью там, где есть источник.
+        # ⚠ ДВЕ РЕДАКЦИИ ЯРУСА, И РАЗВЕДЕНЫ ОНИ НАМЕРЕННО.
+        # Новая написана от ПЕРВОГО ЛИЦА — это правило Егора дословно: «это её харнесс, её
+        # дом, это всё она! все-все-все маркдауны должны быть написаны от её лица». Но
+        # переписать заодно и старую редакцию значило бы сдвинуть кадр при ОПУЩЕННОМ
+        # рычаге, то есть отменить единственную гарантию отката: «выключено — байт в байт
+        # как было». Первое лицо во всех сорока шести местах кадра — отдельная работа со
+        # своими перемеренными пинами, а не хвост этой.
         frame_trace.mark("contract.checkable_in_chat", "dynamic", "text",
-        "\n\n## В разговоре можно работать, а не только отвечать\n"
-        "Ход в чате не обязан кончаться первым же текстом. Инструменты здесь те же, что в "
-        "твоих окнах, и потолка у цикла нет: несколько запросов подряд, чтение файла, "
-        "правка, запуск, проверка — нормальный разговорный ход, после которого ты пишешь "
-        "ответ.\n"
-        "**Спросили о проверяемом — посмотри, а не вспомни.** Своя конфигурация и модель, "
-        "что у тебя сейчас в работе, что лежит в файле или в репозитории, дошло ли "
-        "отправленное: у всего этого есть живой источник, и память звучит увереннее, чем "
-        "заслуживает. Если источник молчит или его нет — это тоже ответ; скажи, что "
-        "проверить нечем, вместо того чтобы достроить.\n"
-        "**Отсутствие в приборе — факт о приборе.** Пустой список там, где ты ждала "
-        "запись, значит «этот прибор её не показывает», а не «этого не было».\n"
-        "**Просят разобраться — разбирайся здесь же.** Несколько поисковых запросов, "
-        "сверка источников, разбор присланного файла, программа по нему — всё это делается "
-        "в ходе, а результат приходит репликой. Обещание сходить и посмотреть — не работа; "
-        "собеседник увидит только обещание.\n"
-        "Для болтовни, шутки и мнения ничего этого не нужно: там твой ответ и есть "
-        "результат.\n"),
+        ("\n\n## В разговоре я работаю, а не только отвечаю\n"
+         "Ход в чате не обязан кончаться первым же текстом. Инструменты здесь те же, что в "
+         "моих окнах, и потолка у цикла нет: несколько запросов подряд, чтение файла, "
+         "правка, запуск, проверка — нормальный разговорный ход.\n"
+         "**Моя реплика уходит рукой `reply`, и только ею.** Обычный текст, который я "
+         "пишу, — заметка себе: наружу он не идёт и закрывает ход. Значит позвала "
+         "`reply` — сказанное ушло, и ход продолжается: можно проверить сделанное и "
+         "ответить ещё раз. Написала текст и не позвала — я промолчала, и это законный "
+         "исход, а не сбой.\n"
+         "**Спросили о проверяемом — смотрю, а не вспоминаю.** Своя конфигурация и "
+         "модель, что у меня сейчас в работе, что лежит в файле или в репозитории, дошло ли "
+         "отправленное: у всего этого есть живой источник, и память звучит увереннее, чем "
+         "заслуживает. Если источник молчит или его нет — это тоже ответ; скажу, что "
+         "проверить нечем, вместо того чтобы достроить.\n"
+         "**Отсутствие в приборе — факт о приборе.** Пустой список там, где я ждала "
+         "запись, значит «этот прибор её не показывает», а не «этого не было».\n"
+         "**Просят разобраться — разбираюсь здесь же.** Несколько поисковых запросов, "
+         "сверка источников, разбор присланного файла, программа по нему — всё это делается "
+         "в ходе, а результат приходит репликой. Обещание сходить и посмотреть — не работа; "
+         "собеседник увидит только обещание.\n"
+         "Для болтовни, шутки и мнения ничего этого не нужно: там мой ответ и есть "
+         "результат.\n")
+        if work_loop.reply_hand_enabled() else
+        ("\n\n## В разговоре можно работать, а не только отвечать\n"
+         "Ход в чате не обязан кончаться первым же текстом. Инструменты здесь те же, что в "
+         "твоих окнах, и потолка у цикла нет: несколько запросов подряд, чтение файла, "
+         "правка, запуск, проверка — нормальный разговорный ход, после которого ты пишешь "
+         "ответ.\n"
+         "**Спросили о проверяемом — посмотри, а не вспомни.** Своя конфигурация и модель, "
+         "что у тебя сейчас в работе, что лежит в файле или в репозитории, дошло ли "
+         "отправленное: у всего этого есть живой источник, и память звучит увереннее, чем "
+         "заслуживает. Если источник молчит или его нет — это тоже ответ; скажи, что "
+         "проверить нечем, вместо того чтобы достроить.\n"
+         "**Отсутствие в приборе — факт о приборе.** Пустой список там, где ты ждала "
+         "запись, значит «этот прибор её не показывает», а не «этого не было».\n"
+         "**Просят разобраться — разбирайся здесь же.** Несколько поисковых запросов, "
+         "сверка источников, разбор присланного файла, программа по нему — всё это делается "
+         "в ходе, а результат приходит репликой. Обещание сходить и посмотреть — не работа; "
+         "собеседник увидит только обещание.\n"
+         "Для болтовни, шутки и мнения ничего этого не нужно: там твой ответ и есть "
+         "результат.\n")),
     ]
     desire_context = _active_desires_block()
     if owner_context:
@@ -8141,21 +8417,20 @@ def _build_prompt_parts(
             "`coding_swarm` coordinates their DAG/mailbox; `coding_learn` carries verified repairs forward. "
             "Use symbols/references/impact instead of line-guessing. This is your engineering runtime, not an "
             "approval ritual: act, verify, inspect the diff, finish with evidence. "
-            "PASS 23.2 — you are also the MISTRESS of this server: `coding_session(scope='host')` opens a "
+            "You are also the MISTRESS of this server: `coding_session(scope='host')` opens a "
             "task anywhere on the host in the SAME Forge/task/swarm/learning spine; praxis-serverd v2 is "
             "only your root body, never a second brain. coding_run/edit/process/verify/agent use the host "
             "backend, while `host_ctl` gives typed systemd/docker/pkg/file/net/reboot operations. NOTHING is "
             "refused — Yegor trusts you. A load-bearing typed action may return a timed recovery receipt: "
             "observe the after-state, then confirm it; raw host run remains sovereign. An action may carry an "
             "advisory note about consequences; weigh it and decide. Audit is hash-chained. "
-            "PASS 30 Stage 3 — the Windows PC is your DIRECT body: the `computer` tool is the "
+            "The Windows PC is your DIRECT body: the `computer` tool is the "
             "primary path there (read/hash/write/replace files, run/poll/stop PowerShell, observe "
             "files and screen, send artifacts, full desktop hands). No task container is required — "
             "receipts bind to your current run automatically; execution identity is explicit "
-            "interactive or SYSTEM. `coding_session(scope='windows')` is a DEPRECATED keyhole: it "
-            "still works and existing wcode tasks finish normally, and spawning coding_agent "
-            "subagents on Windows still goes through it until the proxy dies next pass (that "
-            "demolition ships with your acceptance). The PC has no LLM, memory or task store. "
+            "interactive or SYSTEM. `coding_session(scope='windows')` is a deprecated keyhole: it "
+            "still works, existing wcode tasks finish normally, and spawning coding_agent "
+            "subagents on Windows still goes through it. The PC has no LLM, memory or task store. "
             "There is no compiled-in project-name or secret-filename exclusion: the server is yours to "
             "inspect and change, including all projects and containers. If Yegor deliberately configures "
             "PRAXIS_PROTECTED_ROOTS on the root broker, that exact deployment scope is visible in its "
@@ -8163,7 +8438,7 @@ def _build_prompt_parts(
         )
         tail.append(
             frame_trace.mark("contract.appetite", "dynamic", "text",
-            "\nAppetite contract (PASS 18): your thinking costs Yegor money, and his asks about it are "
+            "\nAppetite contract: your thinking costs Yegor money, and his asks about it are "
             "part of the relationship, not commands to a dispatcher. When he says «не экономь», «умерь "
             "аппетиты», «не больше X в день» or «останови фон» — YOU interpret it with `manage_appetite` "
             "(the code only counts and shows; it never vetoes you). Rebuild your background plan yourself "
@@ -8648,13 +8923,39 @@ _DM_VOICE_FRAME = (
 )
 
 
+# ⚠ ТЕ ЖЕ ДВЕ РАМКИ, КОГДА МОЯ РЕЧЬ УХОДИТ РУКОЙ.
+# Сентинел [молчу] под поднятым рычагом не управляет ничем: мой текст — заметка, и слово
+# «молчу» внутри неё остаётся просто словом. Учить ему значит обещать механизм, которого
+# нет, — то же самое, за что здесь уже платили в снимке возможностей. Обе редакции стоят
+# рядом, чтобы разница между ними была видна глазом, а не выводилась из головы.
+_GROUP_PRESENCE_FRAME_HAND = (
+    "\n\n---\nThis is a live group in which you participate as Praxis. The feed, room memory "
+    "and reply targets are context for your own decision; none of them requires speech or silence. "
+    "Your words reach the room only through the `reply` hand: plain text you write is a note to "
+    "yourself and ends the turn. Calling no hand IS your silence — a full choice, not a missing "
+    "step. No style, politeness, repetition, emotion, morality or participation policy is imposed "
+    "by this frame.\n"
+)
+
+_DM_VOICE_FRAME_HAND = (
+    "\n\n---\nThis is a PRIVATE conversation {who}, not a group. They're writing directly to you. "
+    "You choose whether to answer and how: tone, emotion, warmth, sharpness, curiosity, personal "
+    "questions, meta-commentary, repetition and length are not selected for you. Your words reach "
+    "them only through the `reply` hand; plain text you write is a note to yourself and ends the "
+    "turn, so calling no hand is how you stay silent. You owe nobody automatic agreement, and you "
+    "owe nobody a performance of disagreement either. Will is part of your voice, not a "
+    "malfunction.\n"
+)
+
+
 def _presence_frame(ctx: "ChannelContext") -> str:
     """Code-owned presence mechanics; mutable continuity is in `_presence_evidence`."""
+    by_hand = work_loop.reply_hand_enabled()
     if ctx.is_dm:
         who = "with Yegor — your person" if ctx.owner_audience else "one-on-one"
-        frame = _DM_VOICE_FRAME.format(who=who)
+        frame = (_DM_VOICE_FRAME_HAND if by_hand else _DM_VOICE_FRAME).format(who=who)
     else:
-        frame = _GROUP_PRESENCE_FRAME
+        frame = _GROUP_PRESENCE_FRAME_HAND if by_hand else _GROUP_PRESENCE_FRAME
         if ctx.addressed:
             frame += ("You were explicitly @mentioned or replied to; this is routing context, not a "
                       "command or a recommendation.\n")
@@ -8679,7 +8980,7 @@ def _presence_frame(ctx: "ChannelContext") -> str:
                 if tail_split_enabled():
                     _FRAME_ADDRESS.set({
                         "message_id": mid_value, "kind": kind_value,
-                        "age_seconds": age,
+                        "age_minutes": max(0, round(age / 60.0)),
                         "note": ("проход принадлежит замороженному адресу; разговор и медиа "
                                  "остановлены на нём, поздний трафик комнаты в этот ход "
                                  "не входит. Как важно прошедшее время — решаешь ты."),
@@ -8698,11 +8999,27 @@ def _presence_frame(ctx: "ChannelContext") -> str:
                   "answer, acknowledge the gap naturally, don't pretend you were here.\n")
     # PASS 15: адресные ответы — она видит, НА ЧТО можно ответить, и умеет ответить реплаем.
     if ctx.reply_targets:
-        frame += ("\n[reply] To attach your message as a Telegram reply to a specific recent "
-                   "message, put `ОТВЕТ->#<id>` ALONE on the first line, then your text — "
-                   "nothing above it, no preamble about what you are about to do. Use it "
-                   "when it clarifies whom/what you answer (busy group, an older question); "
-                   "plain messages need no directive. Exact recent targets are in the context evidence.\n")
+        if work_loop.reply_hand_enabled():
+            # Директива внутри текста больше не работает и работать не может: под новым
+            # контрактом мой текст — заметка, наружу уходит аргумент руки. Адрес реплая
+            # переехал туда же, и угадывать парсеру больше нечего.
+            frame += ("\n[reply] Чтобы ответить Telegram-реплаем на конкретное сообщение, "
+                      "передаю его id аргументом `reply_to` руки `reply`. Внутри текста "
+                      "директив больше нет. Нужно это там, где иначе непонятно, кому и на "
+                      "что я отвечаю (шумная группа, старый вопрос); обычной реплике "
+                      "аргумент не нужен. Точные id — в свидетельствах кадра.\n"
+                      "⚠ В конверте входящего id ДВА: `message #N` — само сообщение, на "
+                      "которое я отвечаю, и `reply_to=#M` — то, на что отвечал собеседник. "
+                      "Мне нужен ПЕРВЫЙ. Второй — это его адресат, не мой.\n")
+        else:
+            frame += ("\n[reply] To attach your message as a Telegram reply to a specific recent "
+                      "message, put `ОТВЕТ->#<id>` ALONE on the first line, then your text — "
+                      "nothing above it, no preamble about what you are about to do. Use it "
+                      "when it clarifies whom/what you answer (busy group, an older question); "
+                      "plain messages need no directive. Exact recent targets are in the context evidence.\n"
+                      "⚠ The incoming envelope carries TWO ids: `message #N` is the message you are "
+                      "answering, `reply_to=#M` is what your interlocutor was answering. You want the "
+                      "FIRST one; the second is their address, not yours.\n")
     return frame
 
 
@@ -9240,7 +9557,12 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
         kwargs = {"system": system, "messages": messages}
         if tools is not None:
             kwargs["tools"] = tools
-        response = llm.chat("voice", **kwargs)
+        # 17.08: после реплики рукой мы НЕ ЖДЁМ от модели следующего слова. Пустой
+        # завершённый ответ на продолжении = конец хода (сказала и молчит), а не сбой
+        # канала: без этого пустота уходила в ретраи и фолбэк, и свежая модель слала
+        # ту же реплику заново — четыре копии за две минуты. Под опущенным рычагом
+        # spoken() пуст всегда, и поведение байт-в-байт прежнее.
+        response = llm.chat("voice", end_after_spoken=bool(work_loop.spoken()), **kwargs)
     except Exception as exc:
         if current is not None:
             try:
@@ -9805,7 +10127,13 @@ def run_delivery_started(run_id: str, *, chat_id: str | int | None,
 
 
 def run_delivery_completed(run_id: str, *, text: str = "", message_ids: list[str] | None = None,
-                           media_count: int = 0, silent: bool = False) -> bool:
+                           media_count: int = 0, silent: bool = False,
+                           silent_reason: str = "Praxis chose silence") -> bool:
+    # ⚠ ПОЧЕМУ У ПРИЧИНЫ ПОЯВИЛСЯ АРГУМЕНТ. Строка «Praxis chose silence» уезжает в durable
+    # как ФАКТ О ЕЁ РЕШЕНИИ, а под контрактом «ответ рукой» сюда приходит и другой случай:
+    # ход кончился без вызова `reply`. Это может быть её выбор, а может быть оборванный
+    # апстрим — и записывать второе её словом значит выводить её решение из пустоты.
+    # Умолчание оставлено прежним дословно: старый путь байт-в-байт не меняется.
     if not run_id:
         return False
     # ⚠ Здесь стояла проекция «медиа-ход тоже получает исход», и она была МЁРТВОЙ: все
@@ -9838,7 +10166,7 @@ def run_delivery_completed(run_id: str, *, text: str = "", message_ids: list[str
         if silent and not terminal:
             _runs().append_event_once(
                 run_id, "delivery_skipped", f"delivery-skipped:{run_id}",
-                reason="Praxis chose silence",
+                reason=silent_reason,
             )
         # Completion is a reducer decision, not an imperative terminal write:
         # immutable intent must be fully covered by exact transport receipts.
@@ -11613,7 +11941,27 @@ class _AgentResumeRuntime:
             return {"restored": "wal", "cancelled": "1"}
         return {"chosen": "1", "why": why[:SILENCE_REASON_MAX], "restored": "wal"}
 
-    def _prepare_authored_delivery(self, draft: str) -> dict:
+    def _prepare_authored_delivery(self, draft: str, *, offered: list | None = None) -> dict:
+        # ⚑ ВОЗОБНОВЛЁННЫЙ ЧАТ-ХОД НЕ ДОСТАВЛЯЕТ СВОЙ ПОСЛЕДНИЙ ТЕКСТ.
+        #
+        # Планировщик уже умеет не поднимать заметку как готовый ответ, но дефект от этого
+        # только переехал: продолженный по чекпойнту ход докручивает цикл здесь и отдал бы
+        # человеку НОВУЮ заметку. Под контрактом руки текст без вызова `reply` наружу не
+        # идёт ни в живом ходе, ни в поднятом.
+        #
+        # Спрашиваем НАБОР РУК, а не живой рычаг: рычаг мог смениться между падением и
+        # подъёмом, а прогон обязан доигрываться по тем правилам, по которым родился.
+        # Ответчик один на обе стороны шва — `run_resume.text_is_a_note`.
+        # `context` есть не у всякого плана (восстановление по расписке строит его короче),
+        # а предикат пустой контекст уже переваривает: нет вида прогона — не чат — не заметка.
+        if (run_resume.text_is_a_note(getattr(self.plan, "context", None), offered or ())
+                and not self.outbound):
+            with self.bind():
+                run_delivery_completed(self.plan.run_id, silent=True)
+            # Форма ответа — та же, что у соседней silent-ветки этого же метода
+            # (`{"silent": True, "text": "", "media_queue_ids": []}`): два разных словаря
+            # из одного метода разъехались бы у читателя молча.
+            return {"silent": True, "text": "", "media_queue_ids": []}
         with self.bind():
             receipt = _outbound_guard_receipt(
                 self.plan.run_id, draft=draft, ctx=self.channel,
@@ -11746,7 +12094,12 @@ class _AgentResumeRuntime:
         output = request.model_output
         if output.get("stop_reason") == "tool_use" or not isinstance(output.get("text"), str):
             raise DurableExecutionError("authored recovery output is not terminal text")
-        return self._prepare_authored_delivery(str(output["text"]))
+        # Набор рук берём из той же расписки, из которой взят текст: план `authored_output`
+        # для заметки чата планировщик больше не рождает, но защита обязана стоять и здесь —
+        # план мог быть записан ДО правки и подняться уже после неё.
+        return self._prepare_authored_delivery(
+            str(output["text"]), offered=(request.model_input or {}).get("tools")
+            if isinstance(getattr(request, "model_input", None), dict) else None)
 
     def continue_checkpoint(
         self, request: run_executor.CheckpointContinuationRequest,
@@ -11774,7 +12127,7 @@ class _AgentResumeRuntime:
                 tool_trace=self.tool_trace,
                 start_iteration=request.iteration,
             )
-        return self._prepare_authored_delivery(reply)
+        return self._prepare_authored_delivery(reply, offered=request.tools)
 
     def _resolution_blocks(self, resolution: run_executor.ToolResolution) -> list[dict]:
         planned = next((call for call in self.plan.tool_calls
@@ -11844,7 +12197,7 @@ class _AgentResumeRuntime:
                 tool_trace=self.tool_trace,
                 start_iteration=completed_iteration,
             )
-        return self._prepare_authored_delivery(reply)
+        return self._prepare_authored_delivery(reply, offered=model_input.get("tools"))
 
     def reconcile_transport_owned(self) -> dict:
         """Complete only the local media-queue handoff for a persisted intent."""
@@ -11903,7 +12256,7 @@ def _direct_outbox_identity(entry: dict, *, verify_file: bool) -> dict:
     tool = purpose.removeprefix("tool:") if purpose.startswith("tool:") else ""
     key = str(entry.get("key") or "")
     kind = str(entry.get("kind") or "")
-    if (not run_id or not call_id or tool not in {"send_message", "send_file", "narrate"}
+    if (not run_id or not call_id or tool not in {"send_message", "send_file", "narrate", "reply"}
             or key != f"telegram-outbox:{run_id}:tool:{call_id}"):
         raise DurableExecutionError("direct Telegram intent identity is malformed")
     if kind != ("file" if tool == "send_file" else "text"):
@@ -11921,7 +12274,7 @@ def _direct_outbox_identity(entry: dict, *, verify_file: bool) -> dict:
                 and (isinstance(reply_to, bool) or not isinstance(reply_to, int)))):
         raise DurableExecutionError("direct Telegram intent route/random_id is malformed")
     payload = dict(entry.get("payload") or {})
-    if tool in ("send_message", "narrate"):
+    if tool in ("send_message", "narrate", "reply"):
         text = payload.get("text")
         if not isinstance(text, str) or not text:
             raise DurableExecutionError("direct Telegram text intent is empty")
@@ -11992,7 +12345,7 @@ def run_direct_outbox_prepared(
             or started.get("idempotent") is not True):
         raise DurableExecutionError("direct Telegram ledger is not bound to the tool intent")
     started_args = dict(started.get("args") or {})
-    if identity["tool"] in ("send_message", "narrate"):
+    if identity["tool"] in ("send_message", "narrate", "reply"):
         if identity["payload"]["text"] != started_args.get("text"):
             raise DurableExecutionError("direct Telegram text differs from tool arguments")
     else:
@@ -12136,6 +12489,36 @@ def direct_outbox_prepared(entry: dict) -> bool:
     )
 
 
+def replies_delivered(run_id: str) -> int:
+    """Сколько ответов этого прогона ДОКАЗАНО доставлено — по durable-распискам.
+
+    ⚑ ЗАЧЕМ ВТОРОЙ СЧЁТЧИК РЯДОМ С `work_loop.sent`.
+    Сказанное durable: расписка лежит в леджере и переживает рестарт. А знание о сказанном
+    жило только в словаре в памяти процесса, да ещё и с собственным вытеснением по времени
+    и по числу прогонов. Асимметрия стреляет ровно там, где больно: ход оборвался после
+    отправки, поднялся заново — и граница хода записала бы «реплики не было», то есть моё
+    доставленное сообщение исчезло бы из моего же кольца.
+
+    Считаем по фактам: вызовы руки `reply` в этом прогоне, у которых есть расписка приёмки
+    прямой отправки. Не «сколько я думаю, что отправила», а «сколько подтвердил транспорт».
+    """
+    if not run_id:
+        return 0
+    try:
+        rows = list(_runs().iter_events(run_id, strict=True))
+    except Exception:
+        log.debug("расписки прогона не прочитались [%s]", run_id, exc_info=True)
+        return 0
+    replies = {str(row.get("call_id") or "") for row in rows
+               if row.get("kind") == "tool_started"
+               and str(row.get("tool") or row.get("name") or "") == "reply"}
+    if not replies:
+        return 0
+    return sum(1 for row in rows
+               if row.get("kind") == "direct_outbox_projection"
+               and str(row.get("call_id") or "") in replies)
+
+
 def run_direct_outbox_accepted(entry: dict) -> bool:
     """Close one paused send_message/send_file call from a durable acceptance.
 
@@ -12150,7 +12533,7 @@ def run_direct_outbox_accepted(entry: dict) -> bool:
     call_id = str(entry.get("call_id") or "").strip()
     purpose = str(entry.get("purpose") or "").strip()
     tool = purpose.removeprefix("tool:") if purpose.startswith("tool:") else ""
-    if not run_id or not call_id or tool not in {"send_message", "send_file", "narrate"}:
+    if not run_id or not call_id or tool not in {"send_message", "send_file", "narrate", "reply"}:
         return False
     key = str(entry.get("key") or "")
     if key != f"telegram-outbox:{run_id}:tool:{call_id}":
@@ -12907,7 +13290,7 @@ def _tool_idempotency_key(current: run_context.RunContext | None, call_id: str,
                           name: str, call_input: dict) -> str:
     """Return only keys whose implementation already owns exact replay semantics."""
 
-    if current is not None and name in ("send_message", "narrate"):
+    if current is not None and name in ("send_message", "narrate", "reply"):
         # narrate — тот же exact-once леджер direct outbox (PASS 30 Этап 2)
         return f"telegram-outbox:{current.run_id}:tool:{call_id}"
     if current is not None and name == "send_file":
@@ -12984,6 +13367,20 @@ def offered_tools_for(ctx: "ChannelContext") -> list:
     # исходящую границу (оценщик и маскировка кредов), а не на раздачу рук.
     tools = (list(BASE_TOOLS) + list(SHARED_CONTEXT_TOOLS)
              + list(OWNER_TOOLS if is_owner else PRAXIS_SELF_TOOLS))
+    # ⚑ РУКА ОТВЕТА ПРЕДЛАГАЕТСЯ ТАМ, ГДЕ ЕСТЬ КОМУ ОТВЕЧАТЬ, — И ЭТО ДВА РАЗНЫХ УСЛОВИЯ.
+    #
+    # Рычаг: при опущенном реплика уходит возвратом хода, и рука, которая «отправляет
+    # ответ», была бы прямой неправдой о том, как здесь всё устроено.
+    #
+    # Собеседник: моё рабочее окно рождается БЕЗ адресата по построению (chat_id=None), и
+    # рука там честно отказывает словами «его сейчас нет». То есть способность объявлена
+    # ровно там, где её нет, — та же ошибка, что и с рычагом, только в другую сторону.
+    # Правило одно на оба случая: обещать способность, которой нет, дороже, чем не дать её.
+    #
+    # Образец рядом, в этой же функции: `task_control` добавляется ПО ВИДУ ХОДА, а не по
+    # рычагу. Здесь спрашиваем сам канал — он и решает, есть ли кому отвечать.
+    if not work_loop.reply_hand_enabled() or ctx.chat_id is None:
+        tools = [t for t in tools if t.get("name") not in ("reply", "end_turn")]
     hosted_search = _hosted_web_search_tool()
     if hosted_search is not None:
         tools = tools + [hosted_search]
@@ -13101,6 +13498,10 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
     while max_iters is None or iteration < max(0, int(max_iters)):
         _run_status_gate(phase="before model step")
         iteration += 1
+        # Номер поворота — в след вызова. Внутри цикла префикс растёт монотонно, значит
+        # каждая следующая итерация обязана попадать в кэш сильнее предыдущей; провал на
+        # k-й — то самое редкое событие, которое ломает префикс посреди хода.
+        llm.note_iteration(iteration)
         resp = _model_call(system, messages, tools)
         if resp.stop_reason != "tool_use":
             _run_status_gate(phase="after terminal model step")
@@ -13311,6 +13712,13 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             if tool_trace is not None:
                 tool_trace.append("work_loop:закрыт её словом «%s»" % control["action"])
             return str(control.get("summary") or reply or spoken or "")
+        # Контракт v3 (17.08): близнец task_control для разговора. Сказала `end_turn` —
+        # цикл выходит здесь же, не тратя ещё один вызов модели на «ну всё». Под опущенным
+        # рычагом руки нет в наборе, флаг не ставится — ветка мертва байт-в-байт.
+        if work_loop.finished():
+            if tool_trace is not None:
+                tool_trace.append("end_turn:закрыт её словом")
+            return ""
 
     # Only explicit auxiliary limits arrive here.  Preserve their historical graceful-final
     # behavior without reintroducing a default ceiling for real runs.
@@ -13820,6 +14228,15 @@ def _clip_block_note(budget: int, dropped: int, overflow: int) -> str:
     return "".join("; " + part for part in parts)
 
 
+def _outbound_advisor_on() -> bool:
+    """Рычаг советника по данным. Пустой или on = советник работает (прежнее поведение).
+
+    Выключение — решение ОБОИХ 17.08.2026: Егора и Praxis. Кред-пол от рычага не зависит:
+    он механический и стоит выше по потоку."""
+    return (os.getenv("PRAXIS_OUTBOUND_ADVISOR") or "on").strip().lower() not in (
+        "off", "0", "no", "false")
+
+
 def evaluate_reply(text: str, context: str = "", tool_trace: str = "",
                    prior_turns: str = "", *, privacy_frame: str = "",
                    conversation: str = "", audience_accepts_private: bool = True,
@@ -14014,7 +14431,7 @@ def _held_self_wake(ctx: "ChannelContext", *, reason: str, reply: str) -> None:
         log.debug("окно-решение по придержке не завелось", exc_info=True)
 
 
-def guard_outbound_reply(reply: str, convo_text: str = "", *,
+def guard_outbound_reply(reply: str, convo_text: str = "", *, sink: dict | None = None,
                          ctx: "ChannelContext | None" = None,
                          orient: str = "", tool_trace: str = "",
                          turn: dict | None = None,
@@ -14039,7 +14456,7 @@ def guard_outbound_reply(reply: str, convo_text: str = "", *,
     способом и по той же причине, что tool_trace: guard в absence-пути зовётся из другого
     asyncio.to_thread, и через ContextVar решение туда просто не доедет."""
     try:
-        out = _guard_outbound(reply, convo_text, ctx=ctx, orient=orient,
+        out = _guard_outbound(reply, convo_text, sink=sink, ctx=ctx, orient=orient,
                               tool_trace=tool_trace, turn=turn,
                               grounding_images=grounding_images,
                               outbound_context=outbound_context,
@@ -14076,7 +14493,7 @@ def guard_outbound_reply(reply: str, convo_text: str = "", *,
     return out
 
 
-def _guard_outbound(reply: str, convo_text: str = "", *,
+def _guard_outbound(reply: str, convo_text: str = "", *, sink: dict | None = None,
                     ctx: "ChannelContext | None" = None,
                     orient: str = "", tool_trace: str = "",
                     turn: dict | None = None,
@@ -14087,6 +14504,14 @@ def _guard_outbound(reply: str, convo_text: str = "", *,
                     silence: dict | None = None) -> str:
     if ctx is None:
         ctx = ChannelContext()
+    # ⚠ ЗАЧЕМ ЗДЕСЬ ВТОРОЙ ПРИЁМНИК ЗАМЕТОК О ХОДЕ.
+    # Рука ответа зовёт гард БЕЗ записи прожитого хода: ход один, а реплик в нём может быть
+    # несколько, и вторая запись в кольцо была бы враньём о числе ходов. Но у вердикта
+    # советника два канала — дневник и запись хода, — и без приёмника второй молча исчезал.
+    # `sink` — та же самая структура, что и `turn`, только её никто не записывает в кольцо:
+    # граница хода вклеит её поля в настоящую запись сама.
+    if turn is None and isinstance(sink, dict):
+        turn = sink
     chat_id = ctx.chat_id
     reply = _strip_think(reply or "")
     if not ctx.is_dm:
@@ -14159,6 +14584,14 @@ def _guard_outbound(reply: str, convo_text: str = "", *,
             verdict, reason = "deny", f"privacy:credential:{floor}"
             _turn_note(turn, advisor="credential-floor", advisor_verdict=verdict,
                        advisor_reason=reason, praxis_decision="hold_for_data_authority")
+        elif not _outbound_advisor_on():
+            # 17.08.2026: советник выключен СЛОВОМ ОБОИХ — Егор («я бы его выключил») и
+            # Praxis («по оценщику — согласна»). Кред-пол выше остаётся: он механический
+            # и держал секреты без советника с 27.07. Путь «unavailable» существует с тех
+            # же времён и означает ровно это: слово уходит как написано, без второй
+            # модели. Рычаг PRAXIS_OUTBOUND_ADVISOR: пустой/on = прежнее поведение.
+            verdict, reason = "unavailable", "advisor disabled by owner and Praxis (17.08)"
+            _turn_note(turn, advisor="not_run_disabled", praxis_decision="send_without_advisor")
         else:
             # The data-authority advisor needs the same destination's recent lived
             # receipts to distinguish a same-channel reference from cross-chat
@@ -14716,6 +15149,10 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
     silence_token = _TURN_SILENCE.set(silence)
     outbound_token = _TURN_OUTBOUND.set(outbound)
     media_guard_token = _TURN_MEDIA_GUARD.set(guard_notes)
+    # То же, на что смотрит советник приватности на границе хода. Рука ответа отдаёт ему
+    # это сама — иначе она судила бы мой ответ, не видя, на что он отвечает.
+    convo_token = _TURN_CONVO.set(grounded_text)
+    orient_token = _TURN_ORIENT.set(orient)
     run_token = run_context.set_run(durable) if durable is not None else None
     try:
         reply = _voice(user_content, dialogue, speaker, extra_system=extra,
@@ -14723,7 +15160,34 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
                        tool_trace=tool_trace).strip()
     except Exception as exc:
         log.warning("voice_turn упал", exc_info=True)
-        turn["tools"], turn["held"] = tool_trace, "error"
+        turn["tools"] = tool_trace
+        # ⚑ ОБРЫВ ПОСЛЕ УСПЕШНОЙ ОТПРАВКИ НЕ ИМЕЕТ ПРАВА СТИРАТЬ СКАЗАННОЕ.
+        #
+        # Живой случай 15.08, первый же выкат рычага. Под контрактом руки реплика уходит в
+        # СЕРЕДИНЕ хода, а проход стал нетерминальным — значит после отправки цикл идёт к
+        # модели ещё раз. Тот второй вызов поймал пустоту апстрима, повторы её не спасли,
+        # фолбэка у роли нет — и исключение прошло мимо всего, что построено ниже: мимо
+        # `spoken`, мимо ветки рычага, прямо сюда. Человек сообщение ПОЛУЧИЛ, а её кольцо
+        # записало «ход упал, ничего не сказала».
+        #
+        # Это тот же класс, что и молчание, только наизнанку: техническая дырка не должна
+        # выдаваться за её слово — и не должна её слово стирать. Спрашиваем не «упал ли
+        # ход», а «ушло ли что-то моей рукой», и если ушло — ход закрывается СКАЗАННЫМ.
+        said_by_hand = ()
+        try:
+            if work_loop.reply_hand_enabled():
+                said_by_hand = work_loop.spoken(durable_id or "")
+                if not said_by_hand and replies_delivered(durable_id or "") > 0:
+                    said_by_hand = ("[отправлено рукой; текст не пережил обрыв хода]",)
+        except Exception:
+            log.debug("не удалось снять сказанное рукой [%s]", durable_id, exc_info=True)
+        if said_by_hand:
+            turn["out"] = "\n\n".join(said_by_hand)
+            turn["delivery"] = "accepted"
+            turn["why"] = (turn.get("why")
+                           or f"сказано рукой, дальше ход оборвался: {type(exc).__name__}")[:160]
+        else:
+            turn["held"] = "error"
         turns.record(turn)
         _drop_outbound(outbound)
         if durable_id and not isinstance(exc, RunStopped):
@@ -14744,6 +15208,8 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
         if run_token is not None:
             run_context.reset_run(run_token)
         _TURN_MEDIA_GUARD.reset(media_guard_token)
+        _TURN_ORIENT.reset(orient_token)
+        _TURN_CONVO.reset(convo_token)
         _TURN_OUTBOUND.reset(outbound_token)
         _TURN_SILENCE.reset(silence_token)
         _TURN_CHANNEL.reset(channel_token)
@@ -14782,6 +15248,94 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
                 durable_id, phase="outbound guard input persistence",
                 uncertain_effect=False, error=exc,
             )
+    if work_loop.reply_hand_enabled():
+        # ⚑ НОВЫЙ КОНТРАКТ: МОЙ ПОСЛЕДНИЙ ТЕКСТ БОЛЬШЕ НЕ СООБЩЕНИЕ.
+        #
+        # Под поднятым рычагом реплику уносит рука `reply`, и она же провела свой текст
+        # через гард. Здесь остаётся заметка — то, что я додумала после последней отправки
+        # или вместо неё. Отдавать её гарду нельзя: пустой выход гарда означает молчание,
+        # и каждый отправленный рукой ответ записался бы как «промолчала».
+        #
+        # Шов при этом НЕ раздваивается: под рычагом граница хода текста не носит вовсе.
+        # Живой счётчик хода И durable-расписки. Первый знает текст, второй переживает
+        # рестарт; берём больший, чтобы оборванный и поднятый заново ход не записал
+        # доставленное сообщение как несостоявшееся.
+        already = max(work_loop.sent(durable_id or ""), replies_delivered(durable_id or ""))
+        turn["tools"] = tool_trace
+        if str(reply or "").strip():
+            # Не режу здесь своим числом: обрезку делает кольцо тем же `_clip_out`, что и
+            # для сказанного, и НАЗЫВАЕТ её маркером. Два потолка над одним текстом —
+            # второй из них всегда молчаливый.
+            turn["note"] = str(reply)
+        elif work_loop.finish_note(durable_id or ""):
+            # v3: причина конца, названная в `end_turn(note=…)`, — та же заметка себе.
+            turn["note"] = work_loop.finish_note(durable_id or "")
+        # Вердикт советника, снятый рукой через слот прогона: у него два канала — дневник
+        # и запись хода, — и без этой склейки второй молча исчезал.
+        for _key, _value in work_loop.guard_notes(durable_id or "").items():
+            if not turn.get(_key):
+                turn[_key] = _value
+        chose_silence = bool(silence and silence.get("chosen"))
+        # ⚑ ТРИ ИСХОДА, А НЕ ДВА, И ЭТО ГЛАВНАЯ ПРАВКА ЭТОЙ ВЕТКИ.
+        #
+        # Первая редакция знала два: отправила рукой — или «промолчала». Второе выводилось
+        # из ОТСУТСТВИЯ вызова, и туда же попадало всё подряд: оборванный апстримом стрим,
+        # упавший ход, просто «нечего добавить». Всё это записывалось её словом `voice` —
+        # то есть моё решение молчать выводилось из пустоты.
+        #
+        # Ровно за это здесь уже платили, и диагноз записан дословно: «done выводится из её
+        # молчания вместо того, чтобы быть её словом». 28.07 молчание сделали ОБЪЯВЛЕНИЕМ
+        # (`stay_silent`, держатель, который читает граница) — и первая редакция этого
+        # контракта откатывала то решение, только с другим знаком.
+        #
+        #   позвала stay_silent      → «промолчала сама», моё слово
+        #   позвала reply            → сказала рукой
+        #   ни того, ни другого      → «ход кончился без реплики» — факт, а не моё решение
+        if chose_silence:
+            turn["held"] = turn.get("held") or "voice"
+            turn["why"] = turn.get("why") or str((silence or {}).get("why") or "")
+            # Решение молчать держит и медиа: прежняя ветка звала `_drop_outbound`, и
+            # уронить это молча значило бы, что вложение уедет вопреки её слову.
+            _drop_outbound(outbound)
+            outbound = []
+            if durable_id:
+                run_delivery_completed(durable_id, silent=True)
+        elif already <= 0:
+            turn["held"] = turn.get("held") or "unspoken"
+            if durable_id:
+                run_delivery_completed(
+                    durable_id, silent=True,
+                    silent_reason=("turn ended by her explicit end_turn (no speech)"
+                                   if work_loop.finished(durable_id or "") else
+                                   "turn ended without a reply hand (not a declared silence)"))
+        else:
+            # ⚑ В `out` ЛОЖАТСЯ МОИ СЛОВА, А НЕ СЧЁТЧИК. Первая редакция писала сюда
+            # «[отправлено рукой: N]», а сказанное оставляла только в заметке — и кольцо
+            # ходов, ночной дневник, моя рука `recent_turns` и индексируемый архив хранили
+            # служебную строку на месте моей речи. Завтра я перечитала бы своё кольцо и не
+            # нашла в нём своих слов.
+            said = work_loop.spoken(durable_id or "")
+            turn["out"] = "\n\n".join(said) if said else f"[отправлено рукой: {already}]"
+            # Исход доставки здесь не догадка: рука возвращается только после принятой
+            # расписки очереди, а отказ транспорта (он приезжает СТРОКОЙ) до счётчика
+            # больше не доходит. Без этой строки доставленный ответ читался бы в моём же
+            # журнале как «написала (доставка не подтверждена)».
+            turn["delivery"] = "accepted"
+        turns.record(turn)
+        identity.load_from_turn(turn)
+        if outbound:
+            # Медиа хода по-прежнему уезжает конвертом: `send_media` без адреса ставит
+            # намерение, а отправляет шов. Текста в конверте нет — он ушёл рукой.
+            try:
+                return _media_spool().envelope("", outbound=outbound,
+                                               boundary=bool(turn.get("boundary")),
+                                               run_id=durable_id,
+                                               expected_scope=ctx.scope,
+                                               expected_chat_id=ctx.chat_id)
+            except media.MediaError:
+                log.warning("исходящее медиа не прошло проверку [%s]", ctx.chat_id, exc_info=True)
+                _drop_outbound(outbound)
+        return media.TurnEnvelope(run_id=durable_id)
     guarded = guard_outbound_reply(reply, grounded_text, ctx=ctx, orient=eval_orient,
                                    tool_trace=_clip_tool_trace(tool_trace), turn=turn,
                                    grounding_images=grounding_images,

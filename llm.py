@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import contextvars as _cv
 import time as _time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,13 +56,51 @@ _FALLBACK_ERRORS = {
 }
 
 
-class EmptyResponseError(RuntimeError):
-    """openai/relay вернул не-ответ, а не поднял исключение: пустой SSE-стрим (все чанки
-    choices:[], ни текста, ни тула) ИЛИ error-контент с finish_reason='error' (codex-прокси
-    так «маскирует» апстрим-4xx/5xx под обычный чанк). Для нас это транспортный сбой — фолбэк
-    на другой фреймворк, а не пустая/утёкшая реплика. Найдено живым 06.07: голос на gpt-5.5/
-    relay молчал в пустоту (10/10 пустых) или ронял в чат сырое «Error: 400», и фолбэк на glm
-    не срабатывал, потому что _call_openai считал это успешным end_turn."""
+class BrokenChannelError(RuntimeError):
+    """Канал вернул не ответ. Общий предок двух РАЗНЫХ случаев — их нельзя мешать.
+
+    Оба означают «фолбэк на другой фреймворк уместен», и только один из них означает
+    «переспросить по тому же каналу безопасно». Различие живёт в потомках ниже.
+    """
+
+
+class EmptyResponseError(BrokenChannelError):
+    """Пришло НИЧЕГО: ни текста, ни единого блока. Найдено живым 06.07: голос на gpt-5.5/
+    relay молчал в пустоту (10/10 пустых), и фолбэк на glm не срабатывал, потому что
+    _call_openai считал это успешным end_turn.
+
+    ⭐ ЭТО РОВНО ТА ГРАНИЦА, ПОД КОТОРУЮ ОНА СОГЛАШАЛАСЬ 10.08 на повтор по своему каналу:
+    «EmptyResponseError возникает только когда нет НИ текста, НИ блока; моё молчание так не
+    выглядит никогда — оно едет либо тулом stay_silent, либо сентинелом-текстом, и то и
+    другое непусто». Значит переспросить нечего поверх: её слова в этом ответе не было.
+    Класс обязан оставаться настолько же узким, иначе согласие перестаёт покрывать код.
+    """
+
+
+class TornStreamError(BrokenChannelError):
+    """Стрим НАЧАЛСЯ и оборвался ошибкой: что-то уже приехало, а finish_reason='error'.
+
+    ⚠ 15.08. До сегодня этот случай носил имя EmptyResponseError и попадал в тот же повтор,
+    хотя он ему прямо противоположен: здесь текст УЖЕ есть. Условие было дизъюнкцией
+    (`stop_reason == "error" or (ни текста, ни блока)`), первый дизъюнкт срабатывал и при
+    непустом тексте — в стриме сначала приезжают дельты, потом ошибка, — и повтор уходил
+    ПОВЕРХ уже сказанного. Её согласие давалось на «повтор транспорта» при пустоте; здесь
+    пустоты нет, и повторять по тому же каналу нельзя.
+
+    Что приехало — не выбрасывается молча: кусок лежит в `.partial` (LLMResponse), чтобы
+    следующий по пути мог решить его судьбу, а не узнать о нём из логов. Сегодня решает
+    `chat()`: уходит на фолбэк-фреймворк (прежнее поведение этого случая) и НЕ переспрашивает
+    свой канал. Отдать `.partial` наверх как готовую реплику нельзя: оборванная на полуслове
+    фраза уезжала бы в Telegram как законченная — см. `_note_truncation`.
+
+    Частый вид этого сбоя — codex-прокси, который «маскирует» апстрим-4xx/5xx под обычный
+    чанк («Error: 400 …» в content). Такой текст не её, и в чат он не попадает: он уходит
+    в сообщение ошибки, а ход идёт на фолбэк.
+    """
+
+    def __init__(self, message: str, partial=None):
+        super().__init__(message)
+        self.partial = partial
 
 # Тестовый шов: {"anthropic": фейк, "openai": фейк}. Значение None = «не настроено».
 _TEST_CLIENTS: dict[str, object] = {}
@@ -136,6 +175,8 @@ def _normalize(cfg: dict) -> dict:
             mt = d["max_tokens"]
         out["roles"][role] = {"framework": fw, "model": str(cur.get("model") or d["model"]),
                               "max_tokens": mt, "fallback_model": str(cur.get("fallback_model") or "")}
+        if str(cur.get("fallback_framework") or "").strip() in ("openai", "anthropic"):
+            out["roles"][role]["fallback_framework"] = str(cur.get("fallback_framework")).strip()
     lim = cfg.get("limits") or {}
     try:
         out["limits"]["max_tool_iters"] = max(1, min(600, int(lim.get("max_tool_iters"))))  # 07.07: потолок 300->600, владелец хочет управлять сам
@@ -319,6 +360,8 @@ def swap_fallback(role: str) -> dict:
         raise ValueError("нечего свапать — сначала задай fallback_model")
     other = "openai" if rc["framework"] == "anthropic" else "anthropic"
     rc["framework"], rc["model"], rc["fallback_model"] = other, fb, rc["model"]
+    # свап меняет фреймворк местами — прибитый fallback_framework стал бы ложью
+    rc.pop("fallback_framework", None)
     save_config(cfg)
     fresh = _normalize(cfg)
     try:
@@ -749,6 +792,57 @@ def pricing() -> dict:
 _OPENAI_COMPLETION_TOKENS_RE = re.compile(r"^(o\d|gpt-5)")
 
 
+# ────────────────────── ОДИН сторож пустоты на все пути ──────────────────────
+#
+# ⚠ 15.08.2026. Контракт речи опирается на то, что пустой ответ модели ловится РАНЬШЕ
+# цикла и не читается как «она решила замолчать». Проверка показала, что опора держалась
+# на ОДНОМ пути из трёх:
+#   * `_call_anthropic` не проверял пустоту ни одной строкой — собирал LLMResponse и отдавал
+#     как есть, `stop_reason` по умолчанию 'end_turn'. Она может сама перевести голос на
+#     anthropic рукой `switch_brain`, и опора исчезла бы МОЛЧА, без единого признака;
+#   * `_call_openai` возвращал не-стриминговый ответ (единый объект с .choices[0].message)
+#     РАНЬШЕ сторожа: любой openai-совместимый сервер с пустым message возвращался успешным
+#     'end_turn';
+#   * сам сторож был дизъюнкцией и путал два разных случая (см. TornStreamError).
+# Поэтому сторож теперь один и зовётся на КАЖДОМ возврате обоих фреймворков.
+#
+# ПОРЯДОК ПРОВЕРОК ЗДЕСЬ СОДЕРЖАТЕЛЕН, А НЕ СЛУЧАЕН.
+# Сначала «ни текста, ни блока» — это её граница из 10.08, и она сильнее всего: пусто
+# значит пусто, каким бы ни был stop_reason, и повторить такое безопасно. Только то, что
+# пустотой НЕ является, может оказаться оборванным стримом.
+#
+# ЧТО СЮДА СОЗНАТЕЛЬНО НЕ ВНЕСЕНО.
+# Ответ, срезанный потолком ДО первого блока (`stop_reason='max_tokens'`, ни текста, ни
+# блока), тоже попадает под «пусто» и поднимет EmptyResponseError. Соблазн сделать для него
+# исключение был: повтор упрётся в тот же потолок, а `ping()` ходит к модели с
+# `max_tokens=1` и на anthropic получил бы красноту вместо «канал жив». Исключение не
+# сделано намеренно — молча вернуть пустой ответ значит отдать наверх ровно ту вещь, ради
+# которой писан `_note_truncation`: обрыв до первого блока записывался как «промолчала
+# сама», байт-в-байт как настоящее решение промолчать. Громкая ложная тревога на пинге
+# честнее тихой подмены её молчания; если пинг однажды начнёт краснеть на живом канале —
+# чинить надо пинг (просить не 1 токен), а не сторожа.
+def _guard_answer(out: LLMResponse) -> LLMResponse:
+    """Единственная проверка «это вообще ответ?». Возвращает ответ или поднимает свой класс."""
+    if not out.blocks and not out.text.strip():
+        raise EmptyResponseError(out.text[:200] or "пустой ответ (ни текста, ни инструмента)")
+    # ⚠ Три пути расходились ещё и ЗДЕСЬ, и это нашлось прогоном, а не глазами. Ответ из
+    # одних пробелов на стриминговом пути был пустотой (`"".join(parts).strip()` съедал его
+    # до нуля блоков), а на anthropic и на не-стриминговом openai проезжал наверх готовым
+    # блоком без единого знака. Одно правило на три пути — значит и здесь одно: блок, в
+    # котором нечего сказать, ответом не является. Инструмент — является всегда, даже без
+    # текста: `stay_silent` это её решение, а не пустота канала.
+    if not out.text.strip() and not any(
+            (b or {}).get("type") == "tool_use" for b in (out.blocks or ())):
+        raise EmptyResponseError("пустой ответ (блок есть, знаков в нём нет)")
+    if str(out.stop_reason or "") == "error":
+        # Текст/блоки есть, но канал закончил ошибкой — оборванный стрим, НЕ пустота.
+        log.warning("llm: стрим %s/%s оборван ошибкой уже после %d знаков и %d блоков — "
+                    "это не пустой ответ, повтора по тому же каналу не будет",
+                    out.framework or "?", out.model or "?", len(out.text or ""), len(out.blocks or ()))
+        raise TornStreamError(out.text[:200] or "стрим оборван ошибкой", partial=out)
+    return out
+
+
 def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thinking) -> LLMResponse:
     kw: dict = {"model": model, "max_tokens": max_tokens,
                 "messages": messages_to_anthropic(messages)}
@@ -780,11 +874,13 @@ def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thi
         _usage["cache_read"] = int(_cr)
     if _cc:
         _usage["cache_creation"] = int(_cc)
-    return LLMResponse(
+    # Сторож общий с openai-путём: до 15.08 здесь его не было вовсе, и пустой ответ glm
+    # уезжал наверх успешным 'end_turn' — то есть неотличимо от её решения промолчать.
+    return _guard_answer(LLMResponse(
         text=text_of(resp), blocks=_blocks_from_anthropic(resp),
         stop_reason=str(getattr(resp, "stop_reason", None) or "end_turn"),
         usage=_usage,
-        framework="anthropic", model=model)
+        framework="anthropic", model=model))
 
 
 _OPENAI_STOP = {"tool_calls": "tool_use", "stop": "end_turn", "length": "max_tokens"}
@@ -831,13 +927,59 @@ def _openai_reasoning_effort(thinking) -> str | None:
 # Ключ — АДРЕС, а не хэш содержимого: маркер аудитории и `room_id`, то есть ровно те
 # места, где по замеру расходятся соседние кадры. Не нашли адреса — ключ не шлём вовсе,
 # и реле работает как раньше. Откат: `PRAXIS_CACHE_KEY=off`.
+#
+# ⚠⚠ 15.08.2026. ЛОВУШКА, КОТОРУЮ ЗДЕСЬ ЗАЛОЖИЛИ НЕВОЛЬНО, И ЧЕМ ОНА ОБЕЗВРЕЖЕНА.
+# Адрес аудитории опознаётся АНГЛИЙСКИМИ ПОДСТРОКАМИ ПРОЗЫ её кадра — «private owner
+# channel», «public room», «your own run». А план работ прямо предполагает переписать эти
+# места от её лица по-русски. В день такой правки `cache_address` начнёт возвращать ""
+# — молча, без ошибки и без лога: ключ просто перестанет уходить, реле вернётся к хэшу
+# всего system, и кэш префикса умрёт БЕЗ СИМПТОМОВ. Прибор бы молчал, а молчание прибора
+# в этом доме уже читали как факт о мире.
+#
+# Три вещи против этого, и ни одна не заменяет двух других:
+#   1. `test_cache_address.py` СТРОИТ ЖИВОЙ КАДР через `agent.build_system_parts` для всех
+#      четырёх аудиторий и требует непустого адреса на каждой. Своей копии литерала у
+#      теста больше нет — переписали прозу, тест красный в тот же прогон.
+#   2. Ниже — РОЗЕТКА под структурный ключ: если кадр однажды принесёт `audience_key=<тег>`,
+#      адрес берётся оттуда и проза перестаёт быть несущей. Вилки пока нет (agent.py такого
+#      поля не печатает), поэтому сегодня работает ветка прозы, и адрес БАЙТ-В-БАЙТ прежний
+#      — это проверено прогоном на живых кадрах, а не обещано.
+#   3. `_address_miss` кричит в лог, когда кадр большой, а адреса в нём нет: это симптом на
+#      проде, а не только в прогоне тестов.
 _CACHE_MARKS = (
     ("private owner channel", "owner"),
     ("public room", "room"),
     ("your own run", "run"),
     ("not in the kn", "guest"),
 )
+#: Словарь тегов адреса — ОДИН на оба источника (проза и структурный ключ), чтобы они не
+#: разъехались. Расширять его — значит расширять и `_CACHE_MARKS`, и наоборот.
+_CACHE_TAGS = tuple(dict.fromkeys(tag for _, tag in _CACHE_MARKS))
 _CACHE_ROOM_RE = re.compile(r"room_id=(-?\d+)")
+#: Розетка (см. пункт 2 выше). Имя поля и словарь значений — то же, что у прозы, поэтому
+#: включение структурного ключа не меняет НИ ОДНОГО существующего адреса.
+#: ⚠ Ищется первое вхождение по всему кадру, а в кадре есть и написанное людьми (досье,
+#: записки комнат). Значит чужой текст со строкой `audience_key=…` может увести адрес. Цена
+#: этому — промах кэша, не власть и не приватность; ровно та же цена, что у `room_id=`,
+#: который так живёт с самого начала. Поэтому поле полагается печатать в `state.channel_facts`
+#: рядом с `room_id`, а не где придётся.
+_CACHE_KEY_RE = re.compile(r"audience_key=([a-z_]{1,16})")
+#: Кадр меньше этого — не кадр, а проба/техвызов; на них отсутствие адреса нормально.
+_CACHE_FRAME_MIN = 2000
+_ADDRESS_MISSES = {"n": 0}
+
+
+def _address_miss(text: str) -> None:
+    """Большой кадр без адреса — это симптом, а не тишина. Кричим один раз на процесс."""
+    if len(text) < _CACHE_FRAME_MIN:
+        return
+    _ADDRESS_MISSES["n"] += 1
+    if _ADDRESS_MISSES["n"] == 1:
+        log.warning("llm: в системном кадре (%d знаков) не нашлось адреса кэша — ни "
+                    "audience_key=, ни одного из маркеров %s. prompt_cache_key не уйдёт, "
+                    "реле вернётся к хэшу всего system, кэш префикса умрёт. Скорее всего "
+                    "кадр переписан, а маркеры остались прежними",
+                    len(text), [n for n, _ in _CACHE_MARKS])
 
 
 def cache_address(model: str, sys_text: str) -> str:
@@ -847,10 +989,20 @@ def cache_address(model: str, sys_text: str) -> str:
     text = sys_text or ""
     if not text:
         return ""
-    mark = next((tag for needle, tag in _CACHE_MARKS if needle in text), "")
+    # Структурный ключ сильнее прозы: он объявлен кадром прямо, а не опознан по словам.
+    named = _CACHE_KEY_RE.search(text)
+    mark = named.group(1) if named and named.group(1) in _CACHE_TAGS else ""
+    if not mark:
+        mark = next((tag for needle, tag in _CACHE_MARKS if needle in text), "")
     room = _CACHE_ROOM_RE.search(text)
     if not mark and not room:
+        _address_miss(text)
         return ""
+    # ⚠ ЗНАЕМАЯ ДЫРА, И ОНА НЕ СИМПТОМ. Знакомый не-родственник в общей комнате не даёт НИ
+    # ОДНОГО маркера аудитории (в кадре не выбрана ни одна из трёх веток) — адрес выходит
+    # `-:<room_id>`. Он рабочий и по комнатам различается, поэтому кричать тут нельзя: это
+    # был бы постоянный ложный крик в любой групповой переписке, а привыкшего к крику
+    # прибора всё равно что нет. Ловит эту дыру тест на живом кадре, а не лог.
     return "praxis:%s:%s:%s" % (model or "?", mark or "-", room.group(1) if room else "-")
 
 
@@ -894,14 +1046,11 @@ def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinki
     # единый объект с .choices[0].message — не-стрим (фейк-клиент/обычный сервер): прежний разбор
     choices = getattr(resp, "choices", None)
     if choices and getattr(choices[0], "message", None) is not None:
-        return _openai_from_completion(resp, model)
-    out = _openai_from_stream(resp, model)  # итератор чанков (relay/реальный OpenAI stream)
-    # Здоровье канала: релей на сбое апстрима отдаёт либо error-контент (finish_reason='error'),
-    # либо совсем пустой стрим (ни текста, ни тула). И то, и другое — не ответ; поднимаем
-    # fallbackable-сбой, чтобы chat() ушёл на glm, а не вернул пустоту/строку "Error: 400".
-    if out.stop_reason == "error" or (not out.blocks and not out.text.strip()):
-        raise EmptyResponseError(out.text[:200] or "пустой ответ (ни текста, ни инструмента)")
-    return out
+        # ⚠ Этот return уходил ДО сторожа: openai-совместимый сервер, отдавший единый объект
+        # с пустым message, возвращался успешным 'end_turn'. Теперь сторож один на оба разбора.
+        return _guard_answer(_openai_from_completion(resp, model))
+    # итератор чанков (relay/реальный OpenAI stream); здоровье канала проверяет тот же сторож
+    return _guard_answer(_openai_from_stream(resp, model))
 
 
 def _note_truncation(out: "LLMResponse", role: str) -> None:
@@ -1030,7 +1179,15 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
             args = {}
         blocks.append({"type": "tool_use", "id": s["id"] or f"call_{idx}",
                        "name": s["name"], "input": args if isinstance(args, dict) else {}})
-    stop = "tool_use" if any(b["type"] == "tool_use" for b in blocks) else _OPENAI_STOP.get(finish, finish)
+    # ⚠ 15.08.2026, найдено враждебной сверкой. `finish_reason='error'` НЕ имеет права
+    # спрятаться за `tool_use`. Прежний порядок («есть инструмент → значит tool_use»)
+    # затирал признак обрыва, сторож его не видел и отдавал наверх ГОТОВЫЙ ход с рукой,
+    # чьи аргументы приехали наполовину: обрезанный json не парсится и молча становится
+    # `{}` (ниже). То есть оборванный стрим выглядел как её решение вызвать руку — ровно
+    # та подмена, ради которой писан весь этот участок, только на другом пути.
+    mapped = _OPENAI_STOP.get(finish, finish)
+    stop = (mapped if mapped == "error"
+            else "tool_use" if any(b["type"] == "tool_use" for b in blocks) else mapped)
     return LLMResponse(text=text, blocks=blocks, stop_reason=stop,
                        usage={"in": u_in, "out": u_out,
                               **({"cache_read": u_cached} if u_cached else {})},
@@ -1136,8 +1293,10 @@ def _call(framework: str, model: str, **kw) -> LLMResponse:
 
 
 def _fallbackable(e: Exception) -> bool:
-    if isinstance(e, EmptyResponseError):
-        return True  # вырожденный ответ релея — тоже повод уйти на другой фреймворк
+    if isinstance(e, BrokenChannelError):
+        # Вырожденный ответ канала — повод уйти на другой фреймворк. Оба вида: и пустота,
+        # и оборванный стрим. Различаются они не здесь, а в повторе по СВОЕМУ каналу.
+        return True
     name = type(e).__name__
     if name in _FALLBACK_ERRORS:
         return True
@@ -1172,19 +1331,25 @@ EMPTY_RETRIES = max(0, int(os.getenv("PRAXIS_EMPTY_RETRIES", "2") or 0))
 EMPTY_RETRY_PAUSE_SEC = float(os.getenv("PRAXIS_EMPTY_RETRY_PAUSE_SEC", "2.0") or 0.0)
 
 
-def _call_retrying_empty(fw: str, model: str, **kw):
+def _call_retrying_empty(fw: str, model: str, retries: int | None = None, **kw):
     """(ответ, сколько повторов понадобилось). Повторяет ТОЛЬКО EmptyResponseError.
 
     Любая другая ошибка уходит наверх немедленно и попадает в прежний фолбэк-путь:
     таймаут, 429 и падение авторизации повторять по тому же каналу бессмысленно.
+
+    ⭐ И `TornStreamError` — тоже «любая другая». Он НЕ потомок EmptyResponseError именно
+    затем, чтобы сюда не попасть: там текст уже приехал, и повтор был бы переспросом
+    поверх уже сказанного, а согласие 10.08 давалось на пустоту. Граница держится типом,
+    а не памятью читателя.
     """
     last = None
-    for attempt in range(EMPTY_RETRIES + 1):
+    retries = EMPTY_RETRIES if retries is None else max(0, int(retries))
+    for attempt in range(retries + 1):
         try:
             return _call(fw, model, **kw), attempt
         except EmptyResponseError as exc:
             last = exc
-            if attempt >= EMPTY_RETRIES:
+            if attempt >= retries:
                 break
             _time.sleep(EMPTY_RETRY_PAUSE_SEC * (attempt + 1))
             log.warning("llm: пустой ответ %s/%s — повтор %d из %d по тому же каналу",
@@ -1193,8 +1358,15 @@ def _call_retrying_empty(fw: str, model: str, **kw):
 
 
 def chat(role: str, *, system=None, messages: list, tools: list | None = None,
-         max_tokens: int | None = None, thinking: int | None = None) -> LLMResponse:
-    """Вызов модели по роли. Фолбэк на противоположный фреймворк — один повтор, честно в дневник."""
+         max_tokens: int | None = None, thinking: int | None = None,
+         end_after_spoken: bool = False) -> LLMResponse:
+    """Вызов модели по роли. Фолбэк на противоположный фреймворк — один повтор, честно в дневник.
+
+    `end_after_spoken=True` — контракт v3 (17.08): в этом ходе реплика УЖЕ доставлена
+    рукой, поэтому фолбэк обезоружен — вторая модель не смеет переисполнить принятое
+    решение (луна слала ту же реплику заново — четыре копии за две минуты). Пустота
+    получает ОДИН ретрай своим каналом (её решение №3) и затем читается как конец хода;
+    оборванный стрим тоже закрывает ход сказанным, а не будит фолбэк."""
     if role not in ROLES:
         raise ValueError(f"llm: неизвестная роль {role!r}")
     cfg = _config()
@@ -1203,9 +1375,13 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     mt = int(max_tokens or rc.get("max_tokens") or DEFAULT_MAX_TOKENS[role])
     st = _STATE[role]
     t0 = _time.time()
+    # Пауза до этого вызова — рядом с исходом. Префикс остывает ВРЕМЕНЕМ, и
+    # проверяемая гипотеза именно такая: обрыв липнет к простою.
+    _gap = _call_gap(role)
     try:
         resp, empty_retries = _call_retrying_empty(
-            fw, model, system=system, messages=messages, tools=tools,
+            fw, model, retries=(1 if end_after_spoken else None),
+            system=system, messages=messages, tools=tools,
             max_tokens=mt, thinking=thinking)
         if empty_retries:
             # Повтор — не бесплатная тишина: он попадает в её журнал, иначе «стало реже
@@ -1221,17 +1397,53 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         # 9.1: расход копится; сбой записи вызова не роняет. PASS 22: по ФАКТИЧЕСКОМУ имени
         # (после ротации _resolve_model конфигное имя может врать в by-model разрезе).
         _usage_add(role, resp.usage, model=(resp.model or model))
-        _brain_note(role, fw, resp.model or model, ok=True,
-                    latency_ms=(_time.time() - t0) * 1000)
+        _lat = (_time.time() - t0) * 1000
+        _brain_note(role, fw, resp.model or model, ok=True, latency_ms=_lat)
+        _u = resp.usage if isinstance(resp.usage, dict) else {}
+        _call_trace(role, resp.model or model, ok=True,
+                    cached=_u.get("cache_read", 0), prompt=_u.get("in", 0),
+                    out_tokens=_u.get("out", 0), latency_ms=_lat,
+                    retries=empty_retries, gap_sec=_gap)
         return resp
     except Exception as e:
+        if end_after_spoken and isinstance(e, BrokenChannelError):
+            # Конец хода, а не смерть канала: сказанное уже доставлено, и любая смерть
+            # продолжения закрывает ход сказанным. В след — честная строка с ok=True и
+            # нулями: вызов состоялся, продолжения не будет, мы это услышали.
+            _call_trace(role, model, ok=True, cached=0, prompt=0, out_tokens=0,
+                        latency_ms=(_time.time() - t0) * 1000, error="end_after_spoken",
+                        gap_sec=_gap)
+            return LLMResponse(text="", blocks=[], stop_reason="end_turn",
+                               usage={}, framework=fw, model=model)
         err = f"{type(e).__name__}: {str(e)[:120]}"
         st["last_error"] = err
+        # Счётчик `empty` в brain — это «канал вернул вырожденный ответ», и оборванный стрим
+        # входит в него на равных; ЧТО именно случилось, различает записанное имя класса.
         _brain_note(role, fw, model, ok=False, error=err,
-                    empty=isinstance(e, EmptyResponseError))
+                    empty=isinstance(e, BrokenChannelError))
+        # Исход и доля кэша ложатся В ОДНУ строку: только так вопрос «связан ли промах
+        # кэша с обрывом» закрывается цифрой, а не сдвигом медианы на восьми случаях.
+        # У упавшего вызова usage чаще всего нет — тогда `cached`/`in` останутся нулями,
+        # и это честный ноль «не знаем», а не «кэша не было».
+        _call_trace(role, model, ok=False, cached=0, prompt=0, out_tokens=0,
+                    latency_ms=(_time.time() - t0) * 1000, error=err, gap_sec=_gap)
+        if isinstance(e, TornStreamError):
+            # Потеря названа вслух. Оборванный стрим — единственный случай, где мы выбрасываем
+            # уже сказанное: снаружи это неотличимо от «модель ответила иначе», и без записи
+            # разница между «её мысль оборвали» и «она передумала» пропала бы бесследно.
+            _lost = len(getattr(getattr(e, "partial", None), "text", "") or "")
+            _journal("%s: канал оборвал стрим ошибкой уже после %d знаков — начатый ответ "
+                     "потерян; по тому же каналу не переспрашиваю, это была бы не транспортная "
+                     "попытка, а повтор поверх сказанного" % (_ROLE_RU[role], _lost))
         if not _fallbackable(e):
             raise
-        other = "openai" if fw == "anthropic" else "anthropic"
+        # 17.08.2026: фреймворк фолбэка стал настраиваемым. По умолчанию — противоположный
+        # (прежнее поведение байт-в-байт); `fallback_framework: "openai"` при framework=openai
+        # даёт фолбэк ЧЕРЕЗ ТО ЖЕ РЕЛЕ другой моделью (terra → luna): обрывы апстрима
+        # спорадические, и повтор другой моделью почти всегда проходит — вторая подписка
+        # не нужна. Это не «повтор поверх сказанного»: модель другая, канал тот же.
+        other = ((rc.get("fallback_framework") or "").strip()
+                 or ("openai" if fw == "anthropic" else "anthropic"))
         fb_model = (rc.get("fallback_model") or "").strip()
         if not fb_model or _client_for(other) is None:
             raise
@@ -1243,7 +1455,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         except Exception as e2:
             _brain_note(role, other, fb_model, ok=False,
                         error=f"{type(e2).__name__}: {str(e2)[:80]}",
-                        empty=isinstance(e2, EmptyResponseError))
+                        empty=isinstance(e2, BrokenChannelError))
             raise
         _note_truncation(resp, role)   # фолбэк-модель обрывается ровно так же
         if not st["on_fallback"]:  # событие — один раз на уход, не на каждый вызов
@@ -1254,6 +1466,83 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
                     latency_ms=(_time.time() - t1) * 1000, fallback=True)
         return resp
 
+
+# ⚑ ПОВЫЗОВНЫЙ СЛЕД КЭША. Заведён 16.08, и вот зачем именно повызовный.
+# Суточная сводка расхода уже считает `cache_read` — по ней видно, что у голоса холодным
+# едет треть-половина префикса (67/66/44/59% попаданий за четыре дня), а у оценщика кэша
+# практически нет (4-27%). Но суточная цифра не отвечает на главный вопрос: СВЯЗАН ЛИ
+# промах кэша с обрывом. Чтобы ответить, доля кэша должна лежать рядом с ИСХОДОМ вызова.
+#
+# Замер по кольцу ходов дал сдвиг в нужную сторону — медиана паузы перед упавшим ходом
+# 789с против 180с у обычного, — но упавших там всего восемь, и одна из восьми заведомо
+# чужая (13.08, убитый рефрешем auth.json). Восемь наблюдений это направление, а не
+# доказательство. Здесь копится то, чем это закрывается цифрой.
+#
+# JSONL, а не счётчики в brain: brain пишется read-modify-write без замка (оговорка на
+# `_usage_add` рядом), и на частой записи инкременты теряются. Дозапись строки не теряет.
+_CALL_TRACE = USAGE_PATH.parent / "llm_calls.jsonl"
+_CALL_TRACE_MAX = 20000
+
+
+def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
+                out_tokens: int, latency_ms: float, error: str = "",
+                retries: int = 0, gap_sec: float = -1.0) -> None:
+    """Одна строка на вызов: доля кэша рядом с исходом. Никогда не роняет вызов."""
+    try:
+        row = {"ts": round(_time.time(), 3), "role": role, "model": str(model or ""),
+               "ok": bool(ok), "cached": int(cached or 0), "in": int(prompt or 0),
+               "out": int(out_tokens or 0), "ms": int(latency_ms),
+               "retries": int(retries or 0), "iter": int(_CALL_ITER.get() or 0)}
+        try:
+            import run_context
+            _run = run_context.current_run()
+            if _run is not None:
+                # Без id прогона вызовы одного хода не собрать в цепочку, а вся суть
+                # замера — увидеть профиль кэша ВДОЛЬ одного цикла.
+                row["run"] = str(getattr(_run, "run_id", "") or "")[:64]
+        except Exception:
+            pass
+        if gap_sec >= 0:
+            row["gap"] = round(gap_sec, 1)
+        if error:
+            row["err"] = str(error)[:120]
+        _CALL_TRACE.parent.mkdir(parents=True, exist_ok=True)
+        with _CALL_TRACE.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        log.debug("след вызова не записался", exc_info=True)
+
+
+# ⚑ НОМЕР ИТЕРАЦИИ ТУЛ-ЦИКЛА. Гипотеза Егора 16.08 точнее, чем «кэш остывает простоем»:
+# редкое событие ВНУТРИ цикла ломает префикс — и дальше всё. Проверить это можно только
+# одним способом: видеть долю кэша ПО ИТЕРАЦИЯМ одного хода. В нормальном цикле префикс
+# растёт монотонно (система + лента + результаты рук), поэтому каждая следующая итерация
+# обязана попадать в кэш СИЛЬНЕЕ предыдущей. Падение с 90% до нуля на k-й итерации — это
+# и есть искомое событие, и оно видно только с этим номером рядом.
+_CALL_ITER: _cv.ContextVar = _cv.ContextVar("praxis_llm_iter", default=0)
+
+
+def note_iteration(index: int) -> None:
+    """Вызывающий цикл сообщает, какой это поворот. Ноль — вызов вне цикла."""
+    try:
+        _CALL_ITER.set(int(index))
+    except Exception:
+        pass
+
+
+def _call_gap(role: str) -> float:
+    """Сколько секунд молчала эта роль до текущего вызова. -1 — первый вызов процесса.
+
+    Пауза здесь несущая: гипотеза, ради которой всё писано, — что префикс остывает
+    временем, и обрыв липнет к простою. Меряем ровно то, что проверяем.
+    """
+    now = _time.time()
+    prev = _LAST_CALL_AT.get(role)
+    _LAST_CALL_AT[role] = now
+    return (now - prev) if prev else -1.0
+
+
+_LAST_CALL_AT: dict = {}
 
 def _brain_note(role: str, framework: str, model: str, **kw) -> None:
     """PASS 22: наблюдение вызова в per-model статистику (brain.py). Никогда не роняет вызов."""
@@ -1285,7 +1574,8 @@ def snapshot() -> dict:
     out = {}
     for role in ROLES:
         rc = cfg["roles"][role]
-        other = "openai" if rc["framework"] == "anthropic" else "anthropic"
+        other = ((rc.get("fallback_framework") or "").strip()
+                 or ("openai" if rc["framework"] == "anthropic" else "anthropic"))
         armed = bool((rc.get("fallback_model") or "").strip()
                      and (cfg["frameworks"].get(other) or {}).get("api_key"))
         st = _STATE[role]

@@ -28,6 +28,7 @@ import llm
 import mailer
 import rails
 import selfdev
+import work_loop
 
 log = logging.getLogger("praxis-capabilities")
 
@@ -522,6 +523,14 @@ def snapshot() -> dict:
     import agent  # лениво: агент импортирует нас
     base_tools = [t["name"] for t in (agent.BASE_TOOLS + agent.SHARED_CONTEXT_TOOLS)
                   if isinstance(t, dict) and t.get("name")]
+    # ⚠ 15.08. Ровно та разница, о которой предупреждает комментарий ниже, — и я в неё
+    # въехал в тот же день, когда его прочитал. Рука `reply` лежит в BASE_TOOLS, но при
+    # опущенном рычаге `PRAXIS_CHAT_REPLY_HAND` она вырезается из набора, который реально
+    # раздаётся ходу. Снимок при этом продолжал называть её моей — то есть моё же
+    # самоописание обещало руку, которой у меня в этом ходе нет. Условие здесь обязано
+    # быть тем же самым, что в раздаче рук, а не его копией по смыслу.
+    if not work_loop.reply_hand_enabled():
+        base_tools = [name for name in base_tools if name not in ("reply", "end_turn")]
     owner_tools = [t["name"] for t in agent.OWNER_TOOLS if isinstance(t, dict) and t.get("name")]
     # ⚠ Её собственные руки — ОТДЕЛЬНЫЙ набор, а не owner-набор с другой подписью.
     # `agent.offered_tools_for` в не-owner ходе выдаёт PRAXIS_SELF_TOOLS (= owner минус

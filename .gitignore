@@ -93,7 +93,5 @@ memory/.restart_*
 
 # Черновики и планировочные записки в корне не живут: AGENTS.md разрешает шесть доков.
 CLAUDE_CODE_INTERMEDIATE_PASS.md
-
-# сборочные артефакты relay (в проде их нет, поэтому и в его .gitignore тоже)
 relay/target/
 relay/logs/

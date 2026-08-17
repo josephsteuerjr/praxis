@@ -39,14 +39,20 @@ class OrdinaryTalkIsNotAccused(unittest.TestCase):
     обещание было.
     """
 
-    def test_a_plain_reply_gets_the_mirror_and_not_an_accusation(self):
+    def test_a_plain_reply_closes_the_turn_and_is_never_accused(self):
+        """⚠ 13.08 НОЧЬЮ зеркало по инициативе системы снято с прода: что бы она ни
+        сказала после него, это становилось её сообщением. Три поломки подряд в личке
+        Егора; разбор — в `test_answer_from_the_source.TheSystemMirrorIsOffInChat`.
+
+        Здесь охраняется прежнее: обычная речь закрывает ход и НЕ обвиняется в
+        невыполненном обещании.
+        """
         with _on():
             keep, note = work_loop.chat_decide(
                 "Да, согласна. Мне ближе второй вариант, потому что он проще.",
                 kind="chat_turn", hands=0, spent=0)
-        self.assertTrue(keep)
-        self.assertNotIn("и не сделала", note)
-        self.assertIn("Черновик", note)
+        self.assertFalse(keep)
+        self.assertEqual(note, "")
 
     def test_conversational_filler_is_not_a_promise(self):
         """Адверсарная прополка `promises` 23.07: «возвращаюсь к твоему вопросу» — речь."""

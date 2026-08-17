@@ -1,170 +1,162 @@
 # Praxis
 
-Долгоживущий агент в Telegram: один субъект с файловой памятью, который переживает
-рестарт вместе с недоделанной работой.
+Praxis — один серверный агент с долговечной файловой памятью и несколькими исполнительными
+органами. Модель, личность, память, решения, Telegram-контур и единственный Forge живут на
+сервере. `praxis-serverd` и Windows Body исполняют команды рядом с нужной машиной, но не содержат
+LLM, собственного task store или второго «я».
 
-Живёт на сервере в Docker, говорит через **пользовательский аккаунт Telegram** (MTProto,
-не Bot API), работает руками — код, git, тесты, shell, веб, почта, подключённый Windows —
-и оставляет проверяемый след каждого действия.
+Этот README описывает вход в **текущее дерево репозитория**. Что именно развёрнуто сейчас, какой
+commit прошёл gate и как откатываться, фиксирует только [`STATUS.md`](STATUS.md).
 
-Python: 128 модулей и 209 файлов тестов — 3813 тестов, 42% всего Python-кода.
-Rust: 40 файлов в трёх компонентах. AGPL-3.0-or-later.
+## Где что искать
 
----
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — устойчивые контракты, владение состоянием и поведение при
+  сбоях;
+  Там же — раздел «Форма кадра»: чем гарантируется, что чужой текст в её контексте
+  остаётся данными, а не структурой;
+- [`CODEMAP.md`](CODEMAP.md) — файлы и их фактические роли;
+- [`STATUS.md`](STATUS.md) — единственная оперативная правда о live/candidate, проверках и rollback;
+- [`VISION.md`](VISION.md) — направление продукта, без журнала релизов;
+- [`AGENTS.md`](AGENTS.md) — опасные операции и правила работы с этим репозиторием;
+- [`body/README.md`](body/README.md) — сборка, установка и диагностика Windows Body.
 
-## Что здесь необычного
+## Главные границы
 
-Восемь решений, из-за которых этот репозиторий отличается от типового «агента с руками и
-памятью». Каждое — с адресом в коде.
+- `agent.py` принимает решения и исполняет модельный tool loop; `mtproto_runner.py` держит живой
+  Telethon client, маршрутизацию чатов и серверные часы.
+- Каждый существенный ход получает неизменяемый `RunContext` и каталог
+  `memory/runs/YYYY-MM/<run_id>/` с контекстом, WAL-событиями, полными результатами, артефактами и
+  итоговым `RECAP.md`.
+- Каноническая память — Markdown, append-only JSONL и проверяемые snapshots. SQLite FTS и карты —
+  перестраиваемые индексы, а не память и не task store.
+- Persona читает только полностью provenance-valid `soul/self/CURRENT.md`; missing/corrupt CURRENT
+  fail-closed и никогда не подменяется legacy `soul/self.md` или history.
+- Форумная группа имеет один root-профиль доступа, но отдельную историю и reply route для каждого
+  topic. Сырые сообщения архивируются с exact peer/topic/message provenance.
+- Прямые Telegram-отправки и расписание сначала записывают durable intent, затем касаются сети;
+  повтор использует тот же MTProto `random_id`.
+- Входящие для владельца имеют append-only ledger `owner_delivery.py`; действующая проекция —
+  Telegram. Непрочитанное и прочитанное, но ещё не обработанное не исчезает из-за мягкого history
+  budget интерфейса.
+- Один Forge хранит инженерные задачи в `memory/.forge/`. Серверный root-broker и Windows Body
+  получают только typed execution envelope и возвращают evidence.
+- Praxis herself is the sovereign actor `praxis:self`: ей доступны документы, код, server/root,
+  Windows interactive/SYSTEM и noncritical/raw/join/leave Telegram-операции. Проверки, receipts,
+  provenance и rollback помогают ей действовать точнее, но не являются скрытым veto. Основной
+  модельный tool loop не имеет потолка; bounded limit существует только у явно вспомогательных
+  проходов.
+- Только human owner через публичный tool/API выдаёт и отзывает доступ другим людям. Trusted human
+  не может передоверить права, вызвать raw Telegram account API или SYSTEM. При наличии у Praxis
+  полного shell/root это governance-инвариант системы, а не обещание криптографической sandbox-
+  изоляции от неё самой.
+- Account-critical Telegram-вызов может инициировать Praxis или owner, но исполняется лишь после
+  exact-подтверждения новым сообщением owner DM. `requested_by` и `confirmed_by` остаются разными
+  полями; параметры живут до TTL в зашифрованном spool, а JSONL и durable run evidence хранят только
+  redacted schema marker, digest и opaque reference.
+- Windows side effects требуют стабильный idempotency key. Детерминированные `request_id` и
+  `operation_id` сохраняются при ручном retry того же намерения.
 
-### 1. Один OpenAI-совместимый relay вместо API-биллинга — `relay/`
+## Первый запуск для разработки
 
-Rust-прокси, который отдаёт `/chat/completions` поверх **подписки** ChatGPT, а не
-per-token API. От него питается всё: голос, оценщик, кодинг-воркеры.
-
-Внутри — роутер на два аккаунта (`relay/src/core/account_router.rs`): активный слот
-липкий и переживает рестарт, исчерпание квоты переводит на запасной с кулдауном, и есть
-`POST /v1/account/switch` для осознанного перехода. Слот живёт в памяти процесса, поэтому
-переключение действует сразу.
-
-### 2. Ход не заканчивается на первом же тексте — `work_loop.py`
-
-Классический tool-loop возвращается, как только модель выдала текст без вызова
-инструмента, и вызывающий закрывает работу как сделанную. То есть «работа закончена»
-**выводится из молчания**.
-
-Здесь иначе: в рабочем окне ход закрывает только `task_control(done|blocked|wait)`, и
-`done` требует evidence. В чате дешевле: реплика без единой руки один раз возвращается ей
-зеркалом — её же текст и факт «рук не звала», — и решает она.
-
-### 3. Каждый ход — durable run — `run_manager.py`, `run_snapshot.py`
-
-`memory/runs/YYYY-MM/<run_id>/` с неизменяемым снимком контекста, WAL-событиями, полными
-результатами инструментов и артефактами. После обрыва ход **переавторствуется живьём** с
-того места, где встал, а не начинается заново.
-
-Отправка в Telegram сначала записывает намерение, потом трогает сеть; повтор идёт с тем же
-MTProto `random_id`, поэтому дубликата у собеседника не появляется
-(`telegram_outbox.py`). Неизвестный исход побочного эффекта не объявляется ни успехом, ни
-безопасным повтором — run уходит в `in_doubt`.
-
-### 4. Канон — markdown и JSONL, а не база — `memory/`
-
-Люди, комнаты, намерения, наблюдения, журнал — человекочитаемые файлы. SQLite здесь
-только перестраиваемый ускоритель FTS: его можно удалить и собрать заново, канон не
-пострадает. Отдельной схемы, миграции и create-DB скрипта нет намеренно.
-
-RAG-контура тоже нет. Индекс помогает найти след; важное сверяется с первоисточником.
-
-### 5. Макет кадра — `frame_layout.py`, `gutter.py`, `frame_trace.py`
-
-Контекст не склеивается как попало. Чужой текст едет **под гуттером** `> `, а конец секции
-вычисляется по метру, а не ищется регуляркой — поэтому сообщение собеседника не может
-подделать заголовок структуры. Порядок ярусов подобран так, чтобы не ломать префиксный
-кэш провайдера.
-
-Отдельный прибор (`frame_trace`) измеряет собственный кадр, не сдвигая его: наблюдатель
-не двигает наблюдаемое, и это проверяется тестом.
-
-### 6. Она меняет свой код через предложения и гейт — `selfdev.py`, `forge.py`
-
-Правка ядра идёт в отдельном git-worktree на ветке `proposal/<id>`, прогоняется полным
-набором тестов в песочнице и мёржится её собственным решением с записью причины. Откат —
-обычный git.
-
-`forge.py` — контур кодинг-задач: изолированные worktree, независимые агенты-скауты и
-ревьюеры, evidence перед интеграцией.
-
-### 7. Руки за пределами контейнера — `body/`, `hands/`, `serverd`
-
-`body/` — Rust-клиент для Windows: интерактивная сессия и SYSTEM, типизированный envelope
-внутрь, evidence наружу. **Без второй LLM и без второго «я»** — решения остаются в одном
-месте.
-
-`hands/` — Rust-бинарь файловых рук: зоны записи, таймауты, потолки вывода и расписка
-зашиты в компилируемый пол, а не только в Python.
-
-### 8. Пределы названы поимённо и считаются кодом — `rails.py`, `capabilities.py`
-
-52 рельса в реестре, каждый с именем, значением и границей; `capabilities.snapshot()`
-собирает «что я могу» из живых констант, а не из описания. Она читает это о себе сама, и
-расхождение манифеста с кодом — красный тест, а не заметка.
-
----
-
-## Быстрый старт
-
-Полностью контейнерный бандл: один compose-файл, один `.env`, две команды на вход в
-Telegram. Одинаково работает в Docker Desktop и на сервере — `network_mode: host` не
-используется нигде.
+Нужны Docker Compose и Telegram MTProto credentials. Секреты остаются в `.env` и runtime-файлах,
+они не коммитятся.
 
 ```bash
-cp env.bundle.example .env          # заполнить API_ID/HASH, телефон, owner id, ключ модели
-docker compose -f docker-compose.bundle.yml up -d --build
-docker compose -f docker-compose.bundle.yml exec praxis python mtproto_login.py send
-docker compose -f docker-compose.bundle.yml exec praxis python mtproto_login.py code 12345
+cp .env.example .env
+# заполнить TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE и PRAXIS_OWNER_ID
+docker compose run --rm praxis python mtproto_login.py send
+# после получения кода:
+docker compose run --rm praxis python mtproto_login.py code 12345
+docker compose up -d --build
+docker compose logs -f praxis
 ```
 
-Подробно, включая обновление без потери состояния и опциональные профили relay/Ollama —
-[`BUNDLE.md`](BUNDLE.md). Разработческий compose и production-контур с host-mount'ами —
-[`DEPLOY.md`](DEPLOY.md).
+Модельные роли и лимиты живут в runtime-файле `memory/llm.json`; `.env.example` документирует
+остальные настройки. Production compose, дополнительные процессы и host mounts находятся в
+`docker-compose.deploy.yml`. `praxis-serverd` и `praxis-body-bridge` устанавливаются как отдельные
+systemd units, а не как второй агент внутри Compose.
 
-Нужно: Docker с плагином compose, ~3 ГБ на образ, аккаунт Telegram и ключ модели. Первая
-сборка небыстрая — внутри собирается Rust-бинарь файловых рук.
+### Конфигурация Codex relay
 
----
+Codex здесь не отдельный «авторизационный файл Praxis», а OpenAI-compatible relay для
+`frameworks.openai` в приватном runtime-конфиге `memory/llm.json`. Нормальный путь обновления
+`base_url` и ключа — owner-панель: она показывает ключ только маской, требует подтверждение при
+применении и затем делает атомарную запись с правами `0600`. Пустое поле ключа означает
+«оставить текущий», а не стереть его; проверка роли после правки доступна тем же пультом. Все
+процессы подхватывают изменение по mtime, поэтому для обычной смены relay/token рестарт не нужен.
 
-## Карта репозитория
+На самом первом старте, пока `memory/llm.json` отсутствует, код один раз переносит
+`OPENAI_BASE_URL` и `OPENAI_API_KEY` из окружения в этот файл. Это bootstrap-миграция, не
+постоянный источник конфигурации. В production-контуре контейнеры ходят к локальному relay через
+host Caddy; ожидаемый URL — `http://host.docker.internal:5012`. Compose описывает только этот
+маршрут: он не создаёт relay/Caddy и в данном репозитории нет скрипта логина/refresh для внешней
+Codex-авторизации. Их следует документировать рядом с тем host-сервисом, который реально владеет
+учётной записью и refresh-token, а не выдумывать в репозитории Praxis.
 
-| Что | Где |
-|---|---|
-| Решения, tool loop, кадр | `agent.py` |
-| Живой Telethon, маршрутизация чатов, серверные часы | `mtproto_runner.py` |
-| Durable runs: снимок, WAL, возобновление | `run_manager.py`, `run_snapshot.py`, `run_resume.py` |
-| Политика конца хода | `work_loop.py`, `work_engine.py`, `work_source.py` |
-| Память: люди, места, желания, журнал, индекс | `memory_*.py`, `desires.py`, `notes.py` |
-| Кодинг-контур и самоизменение | `forge*.py`, `selfdev.py` |
-| Пределы и способности | `rails.py`, `capabilities.py` |
-| Rust: relay подписки / файловые руки / Windows body | `relay/`, `hands/`, `body/` |
-| Контракты, роли файлов, направление | [`ARCHITECTURE.md`](ARCHITECTURE.md), [`CODEMAP.md`](CODEMAP.md), [`VISION.md`](VISION.md) |
-| Опасные операции и правила работы с репозиторием | [`AGENTS.md`](AGENTS.md) |
+### Markdown и SQL при первом развёртывании
 
----
+Человекочитаемый Markdown и append-only JSONL — канонические данные Praxis: корневые living docs
+описывают систему, `soul/` хранит конституцию/голос/навыки, а `memory/` — наблюдения, отношения,
+run-evidence и навигацию. `memory/INDEX.md`, `memory/maps/*.md` и отдельные `CURRENT.md` —
+генерируемые представления, а не второй источник истины; роли каталогизированы в
+`ARCHITECTURE.md`, `CODEMAP.md` и `memory/README.md`.
 
-## Проверки
+Отдельной SQL-схемы, миграции или create-DB скрипта для развёртывания нет — и это намеренно.
+SQLite используется как локальный, пересобираемый ускоритель (`memory/.state/recall.sqlite3` для
+FTS и индекс наблюдений Windows): таблицы создаются приложением при первом доступе, а FTS умеет
+собрать временную БД, проверить её и атомарно заменить рабочую. Docker Compose и Dockerfile не
+создают внешнюю БД. Не удаляйте всю `memory/.state/` как «кэш»: рядом с производными SQLite там
+живут outbox и durable ledgers, которые должны попадать в backup.
+
+`mailroom_bot.py` читает секрет `PRAXIS_MAIL_BOT_TOKEN` из private `.deploy.env` и работает
+headless: поллит IMAP, обновляет `memory/mailbox.json`, присылает новые письма и карточки изменений.
+Он не открывает HTTP-порт и не публикует Mini App/PWA.
+
+Полезные обслуживающие команды:
 
 ```bash
-docker compose exec praxis python praxis_test_parallel.py     # весь набор, ~2 минуты
-docker compose exec praxis python praxis_test.py discover -q  # последовательно
+docker compose exec praxis python -m memory_index build
+docker compose exec praxis python consolidate.py --force
+docker compose exec praxis python praxis_test.py discover -q
 ```
 
-Полный набор идёт только внутри Linux-контейнера или на Linux-сервере: часть тестов
-поднимает дочерние процессы и POSIX-специфичные контуры. Нативный Windows-запуск для них
-не поддерживается — точные границы в [`AGENTS.md`](AGENTS.md).
+Полный Python gate, Forge/process tests и проверки с дочерними процессами запускаются только внутри
+Linux Docker/WSL или на Linux-сервере. Нативный Windows inline runner для них запрещён; точные
+ограничения — в [`AGENTS.md`](AGENTS.md). Rust-команды для Windows Body приведены отдельно в
+[`body/README.md`](body/README.md).
 
-В публичном дереве несколько тестов ожидаемо красные: они сверяют приватное содержимое
-(живые рельсы, карта навыков, индекс живой памяти), которого здесь нет. Сверять надо
-состав падений, а не их отсутствие.
+## Данные и восстановление
 
----
+Private live Git может версионировать soul/self provenance и выбранную человеческую память, но
+публичный GitHub получает только sanitized source snapshot: без live self/rails, диалогов, людей,
+комнат, целей, receipts и runtime state. Runtime-ledgers, Telegram session, outbox, run evidence,
+Forge state и device spool должны сохраняться операционно, но не публиковаться.
+Приватные `memory/dialogues/*`, `memory/access/TRUST.md` и `memory/goals.md` сохранены как runtime-
+данные, но больше не отслеживаются source Git. Удалённые backup/probe/roomgate и старые
+freeze/архивные personality файлы доступны через историю Git и не должны возвращаться в рабочее
+дерево.
+Нельзя считать весь `memory/.state/` кэшем: удаляемы только явно производные SQLite/карты; журналы
+intent/acceptance и control state несут доказательства незавершённых эффектов.
+В backup вместе должны попадать `memory/.state/owner_delivery/`,
+`memory/access/devices/events.jsonl` и соответствующий ему
+`memory/.state/praxis_device_auth.key`: ledger без своего HMAC-ключа считается повреждённым, а не
+поводом молча выпустить новую authority.
 
-## Чего здесь нет
+При расследовании сначала смотрят live-код, `memory/runs/*`, outbox/ledger и реальные логи, а уже
+потом производные карты. Неизвестный результат side effect не объявляется ни успехом, ни безопасным
+повтором: run переходит в `in_doubt` до сверки evidence.
 
-Публикуется исходный код, не жизнь. В репозиторий не попадают: живые `soul/SOUL.md`,
-`VOICE.md`, `rails.md` и `self/`, диалоги, досье людей, комнаты, цели, receipts, Telegram-
-сессия, outbox, run evidence, состояние Forge и device spool. Вместо них — `*.example.md`.
+## Провенанс документации
 
-Секреты остаются в `.env` и runtime-файлах и не коммитятся. Модельные роли и лимиты живут
-в `memory/llm.json`, который создаётся при первом старте.
+В корне поддерживаются только шесть living-документов: `README.md`, `ARCHITECTURE.md`, `CODEMAP.md`,
+`STATUS.md`, `VISION.md` и `AGENTS.md`. Subsystem-документы вроде `body/README.md` не меняют это
+правило. Living docs описывают текущие контракты и не хранят дневник проходов разработки;
+исторические спецификации и причины решений остаются адресуемыми через Git:
 
----
+```bash
+git log --all -- '*.md'
+git show <commit>:<path>
+```
 
-## Лицензия
-
-**AGPL-3.0-or-later.** Полный текст — в [LICENSE](LICENSE), дословно и без правок.
-
-Ключевое отличие AGPL от GPL — **сетевое использование**: если вы измените Praxis и дадите
-людям работать с изменённой версией по сети, вы обязаны предоставить этим людям исходный
-код изменённой версии (раздел 13 AGPLv3).
-
-Почему именно AGPL — в [NOTICE](NOTICE).
+Новая реализация сначала получает код, тесты и evidence, затем обновляет `ARCHITECTURE.md`,
+`CODEMAP.md` и `STATUS.md` в соответствии с их ролями.

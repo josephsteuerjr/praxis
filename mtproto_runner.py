@@ -69,7 +69,6 @@ _STARTED_AT = time.time()
 # Legacy selector heartbeat is kept as a callable compatibility helper, but the clock has
 # one autonomous wake source: durable social_pulse.  Two hourly jobs used to race and could
 # open two independent task windows for the same hour.
-HEARTBEAT_HOURS = float(os.getenv("PRAXIS_HEARTBEAT_HOURS", "0"))
 DEBOUNCE_SEC = float(os.getenv("PRAXIS_DEBOUNCE_SEC", "4"))
 COOLDOWN_DM = float(os.getenv("PRAXIS_COOLDOWN_DM", "8"))
 COOLDOWN_GROUP = float(os.getenv("PRAXIS_COOLDOWN_GROUP", "300"))  # PASS 8.1: кост-гард групп
@@ -930,6 +929,11 @@ async def _initialize_joined_room(chat_id: str, entity, *, title: str | None = N
     if norms:
         rooms.section_set(chat_id, "Нормы и атмосфера", norms)
     greeted = rooms.profile_read(chat_id)["header"].get("greeted") == "yes"
+    # ⚠ Под контрактом «ответ рукой» `greeting` приходит ПУСТЫМ всегда, и эта ветка не
+    # берётся: приветствие она отправляет сама, своей рукой, через ту же исходящую границу,
+    # что и всё остальное. Ветка ниже — прежний путь для опущенного рычага: сырой
+    # `send_message` мимо гарда, кольца и идемпотентности. Второй такой двери здесь больше
+    # не появится; когда рычаг поднимут насовсем, ветка уходит целиком.
     if greeting and not greeted:
         try:
             await client.send_message(entity, greeting)
@@ -1063,7 +1067,8 @@ async def _backfill_group_context(peer_id: str, entity, *, limit: int) -> dict:
         mid = getattr(msg, "id", None)
         if mid is None:
             continue
-        route = telegram_topics.route_for_message(peer, msg, is_private=False)
+        route = telegram_topics.route_for_message(
+            peer, msg, is_private=False, is_forum=_known_forum(peer, msg))
         opener = telegram_topics.topic_opener_title(msg)
         topic_title = opener
         if route.topic_id is not None and not topic_title:
@@ -1370,7 +1375,8 @@ async def on_edited(event) -> None:
         return
 
     route = telegram_topics.route_for_message(
-        event.chat_id, msg, is_private=False)
+        event.chat_id, msg, is_private=False,
+        is_forum=_known_forum(event.chat_id, msg, getattr(event, "chat", None)))
     peer_id = route.peer_id
     chat_id = route.conversation_id
     if rooms.is_frozen(peer_id):
@@ -1465,6 +1471,62 @@ def mid_of(message) -> int | None:
     return int(value) if isinstance(value, int) else None
 
 
+def _known_forum(peer_id, message, chat_obj=None) -> bool | None:
+    """Природа комнаты ПО ЗНАНИЮ: True/False, либо None — «не знаем».
+
+    ⚑ СПРАШИВАЕМ СНАЧАЛА ОБЪЕКТ АПДЕЙТА, И ЭТО НЕ ОПТИМИЗАЦИЯ.
+    Природа комнаты приезжает вместе с сообщением и стоит ноль: `event.chat` —
+    синхронное свойство, сети не будет. Реестр с эпохами и весами строили, чтобы
+    ответить на вопрос, ответ на который уже лежит в контейнере обновления. Прямой
+    ответ Telegram и сам реестр считает высшим свидетельством — так что спрашивать
+    накопленный вердикт там, где есть прямой, значит отвечать вчерашним днём.
+
+    ⚠ Кроме одного случая: объект с флагом `min` документирован как ненадёжный —
+    урезанная сущность может не нести `forum` или нести его неверно. Такой объект не
+    смеет перебить реестр, и мы уходим к накопленному знанию.
+
+    Реестр при этом не лишний, у него своя работа: комната может СМЕНИТЬ природу, а
+    историю нельзя роутить сегодняшним флагом — добивке архива нужен режим ЕЁ времени.
+    Поэтому исторические пути объект не передают и спрашивают эпохи.
+
+    ⚑ ЗАЧЕМ ЭТА ФУНКЦИЯ ВООБЩЕ ПОЯВИЛАСЬ.
+    `route_for_message` умеет главное с 25.07: `is_forum is False` → обычная супергруппа
+    это ОДНА комната, и цепочка ответов не становится ключом хранения. Там же записан
+    живой случай ровно из этой комнаты: «observed 23.07.2026 in -1001240718803: „у меня в
+    топик попал только твой ответ, без сообщения #93708"».
+
+    Но знание в эту функцию не доезжало. Раннер копил свидетельства о природе комнаты в
+    реестр и честно писал рядом: «Маршрутизацию НЕ трогаем — только копим свидетельства,
+    чтобы перекладка ключа однажды делалась по знанию». Чтение перевели на реестр 06.08
+    (`read_scope`), а построение ключа осталось тенью — и продолжало резать комнату на
+    псевдоветки `<peer>__topic__<корень>`.
+
+    Цена этого разрыва, живьём 16.08: лента комнаты в кадре была ПОЛНОЙ (53 упоминания
+    Арета, 47 корневых строк, 182 тредовых), а адрес хода говорил
+    `origin_chat_id: "-1001240718803__topic__98994"` — псевдоветка из одного сообщения.
+    Она ответила про ветку и сказала «контекста до этого сообщения в ветке нет»: для
+    ветки это правда, для комнаты — нет.
+
+    Спрашиваем `status_at`, а не `current`: у комнаты бывают эпохи, и сообщение из
+    прошлого должно роутиться режимом СВОЕГО времени, а не сегодняшним.
+    """
+    if chat_obj is not None and not getattr(chat_obj, "min", False):
+        flag = getattr(chat_obj, "forum", None)
+        if flag is not None:
+            return bool(flag)
+    try:
+        status, _epoch = telegram_routes.status_at(peer_id, mid_of(message))
+    except Exception:
+        log.debug("реестр маршрутов не ответил о природе комнаты [%s]", peer_id,
+                  exc_info=True)
+        return None
+    if status == telegram_routes.FALSE:
+        return False
+    if status == telegram_routes.TRUE:
+        return True
+    return None  # «не знаем» — прежнее поведение по заголовку, байт-в-байт
+
+
 def _note_room_mode_skip(peer_id, chat_id, mode: str, *, stage: str) -> None:
     profile = {}
     try:
@@ -1505,7 +1567,9 @@ async def on_new(event) -> None:
         return
     name = _sender_label(sender)
     route = telegram_topics.route_for_message(
-        event.chat_id, msg, is_private=bool(is_private))
+        event.chat_id, msg, is_private=bool(is_private),
+        is_forum=(None if is_private else
+                  _known_forum(event.chat_id, msg, getattr(event, "chat", None))))
     peer_id = route.peer_id
     # All conversational state is topic-local.  Access/room policy below deliberately
     # continues to use peer_id: a topic is not a second Telegram room or authority.
@@ -4559,23 +4623,41 @@ def _project_direct_outbox_acceptance(proof: dict, entry: dict) -> str:
         raise agent.DurableExecutionError("direct outbox acceptance time is missing")
     if not (0 < accepted_at < float("inf")):
         raise agent.DurableExecutionError("direct outbox acceptance time is out of range")
-    telegram_contacts.mark_outbound(
-        contact_id, idempotency_key=key, at=accepted_at,
-    )
+    # ⚑ ОТВЕТ СОБЕСЕДНИКУ — НЕ ИНИЦИАТИВНАЯ ОТПРАВКА, И УЧЁТ У НЕГО ДРУГОЙ.
+    #
+    # Проектор один на все прямые отправки, и он таким и остаётся: второй развёл бы швы
+    # заново. Но три записи ниже описывают ИНИЦИАТИВУ — «я пошла и написала человеку»:
+    # леджер контактов, социальный пульс и след нити с отчётом. Реплика в разговоре, где
+    # человек только что написал сам, ничего из этого не означает.
+    #
+    # Решение Егора 15.08, дословно: «ни ограничений, ни пульса пока что». Голосовой шов
+    # сегодня в пульс и контакты не пишет вовсе (у обоих по одному вызывающему на всё
+    # дерево — этот), и перенос ответа в руку НЕ ДОЛЖЕН включить их молча: это было бы
+    # изменение поведения под видом рефакторинга.
+    #
+    # Что остаётся ответу и почему: снятие неотвеченности, возврат своей реплики в буфер,
+    # записка «сказала» и архив комнаты — без них она перестала бы видеть в разговоре
+    # собственные слова, а это ровно та дыра, которую здесь закрывали 26.07.
+    is_reply = str(entry.get("purpose") or "") == "tool:reply"
+    if not is_reply:
+        telegram_contacts.mark_outbound(
+            contact_id, idempotency_key=key, at=accepted_at,
+        )
     try:
         unanswered.resolve(str(contact_id))
     except Exception:
         pass
-    social_pulse.note_outbound(
-        peer_id, message_id=message_id,
-        label=str(projection.get("target_label") or ""), now=accepted_at,
-        pulse_id_override=str(projection.get("pulse_id") or ""),
-        idempotency_key=key,
-    )
+    if not is_reply:
+        social_pulse.note_outbound(
+            peer_id, message_id=message_id,
+            label=str(projection.get("target_label") or ""), now=accepted_at,
+            pulse_id_override=str(projection.get("pulse_id") or ""),
+            idempotency_key=key,
+        )
     followup_request = str(projection.get("followup_request") or "")
     said_text = str((entry.get("payload") or {}).get("text") or "").strip()
     is_owner_peer = bool(OWNER_ID) and str(peer_id) == str(OWNER_ID)
-    if message_id is not None and str(entry.get("kind") or "") == "text":
+    if message_id is not None and str(entry.get("kind") or "") == "text" and not is_reply:
         # ⚠ 27.07: здесь были слиты два разных понятия, и из-за этого Егору в ЛС уехала
         # его же реплика из AbstractDL под заголовком «AbstractDL Chat ответил(а)».
         # Разделяю:
@@ -4902,6 +4984,100 @@ def _sync_send_message(to, text) -> str:
     log.info("SENT → %s chat_id=%s message_id=%s: %s",
              who, peer_id, sent_id, str(text)[:60])
     return _direct_outbox_result(entry, label=who) + echo + pulse_note
+
+
+def _sync_reply(chat_id, text, reply_to="") -> str:
+    """Её ответ собеседнику живого хода. Та же durable-очередь, что у прямой отправки.
+
+    ⚑ ЭТО НЕ ВТОРОЙ ШОВ, А ПЕРЕЕХАВШИЙ ПЕРВЫЙ. Под поднятым рычагом
+    `PRAXIS_CHAT_REPLY_HAND` исходящая граница хода текста больше не носит: реплику
+    уносит рука, и уносит вот отсюда. Два шва одновременно здесь были бы ровно тем, чего
+    вслух боится докстринг `say`, — повторами, которых она не совершала.
+
+    Почему очередь та же, что у `send_message`, а учёт другой: очередь даёт покалловый
+    exact-once (`telegram-outbox:{run}:tool:{call_id}`), то есть несколько ответов в одном
+    ходе различимы, а обрыв между отправкой и чекпойнтом переигрывается из расписки, а не
+    вторым сообщением человеку. Учёт же разведён внутри одного проектора: ответу не
+    полагаются ни леджер контактов, ни социальный пульс, ни след нити с отчётом — они
+    описывают инициативу, а не реплику. Решение Егора 15.08: «ни ограничений, ни пульса».
+
+    Гард здесь НЕ зовётся намеренно: его уже позвала рука, вместе с лентой разговора и
+    ориентировкой. Кред-пол всё равно стоит — этот путь durable и однажды будет вызван не
+    только оттуда, а кред наружу не уходит ни одной дверью.
+    """
+    from core import secrets as _secrets
+    _floor = _secrets.credential_floor(str(text or ""))
+    if _floor:
+        log.warning("ответ придержан кред-полом: %s", _floor)
+        return agent.DirectSendRefusal(
+            f"не отправила: в тексте {_floor}; креды наружу не уходят")
+    execution = _direct_tool_execution(("reply",))
+    key = _direct_tool_key(execution)
+    target_route = _route_from_reference(chat_id)
+    try:
+        ent = _threadsafe_result(
+            lambda: _resolve_entity(target_route.peer_id), DIALOG_WARMUP_WAIT_SEC + 30)
+    except ResolveDenied as e:
+        return agent.DirectSendRefusal(str(e))
+    except Exception:
+        log.warning("ответ %r: резолв не уложился/упал", chat_id)
+        raise
+    if ent is None:
+        return agent.DirectSendRefusal(f"(не нашла, куда отвечать: {chat_id})")
+    peer_id = _marked_peer_id(ent)
+    who = _ent_label(ent)
+    target_user_id = (getattr(ent, "id", None)
+                      if _entity_kind(ent) == "user" else None)
+    # Явный адрес реплая важнее маршрута темы: в форуме `reply_to` темы — это способ
+    # попасть в саму тему, а названный ею id сообщения — ответ конкретному человеку.
+    explicit = str(reply_to or "").strip()
+    reply_target = target_route.topic_id
+    if explicit.lstrip("#").isdigit():
+        reply_target = int(explicit.lstrip("#"))
+    outbox = _direct_outbox()
+    entry = outbox.prepare_text(
+        key,
+        peer_id=peer_id,
+        topic_id=target_route.topic_id,
+        reply_to=reply_target,
+        text=str(text),
+        run_id=str(execution["run_id"]),
+        call_id=str(execution["call_id"]),
+        purpose="tool:reply",
+    )
+    agent.run_direct_outbox_prepared(entry, **_durable_outbox_projection(execution, {
+        "target_label": who,
+        "target_user_id": target_user_id,
+        "pulse_id": "",
+        "followup_request": "",
+    }))
+    try:
+        if entry.get("state") != "accepted":
+            entry = _threadsafe_result(
+                lambda: _send_direct_outbox_entry(entry, entity=ent), 30,
+            )
+    except Exception as exc:
+        permanent = False
+        try:
+            permanent, state = _record_direct_outbox_failure(key, exc)
+            reason = f"{type(exc).__name__}: {str(exc)[:300]} (state={state.get('state')})"
+        except Exception as journal_exc:
+            reason = (f"{type(exc).__name__}: {str(exc)[:200]}; retry journal failed: "
+                      f"{type(journal_exc).__name__}: {str(journal_exc)[:120]}")
+        if permanent:
+            if agent.delivery_refusal_kind(exc) == "shape":
+                return agent.DirectSendRefusal(
+                    f"не отправила: Telegram отверг само сообщение — {type(exc).__name__}. "
+                    f"Дело не в правах: этот текст не проходит по форме (чаще всего — "
+                    f"длина). Разбей на части и ответь снова; этот же кусок я не повторю.")
+            return agent.DirectSendRefusal(
+                f"не отправила: Telegram отказал навсегда — {type(exc).__name__}. "
+                f"Проверь, могу ли я писать в «{chat_id}»; повторять этот я не буду.")
+        raise agent.DurableSideEffectPending(key, reason) from exc
+    agent.project_direct_outbox_acceptance(entry)
+    log.info("REPLY → %s chat_id=%s message_id=%s: %s", who, peer_id,
+             (entry.get("receipt") or {}).get("message_id"), str(text)[:60])
+    return _direct_outbox_result(entry, label=who)
 
 
 def _sync_send_file(path, caption="", to="", media_kind="document",
@@ -6788,6 +6964,7 @@ async def main() -> None:
     agent._TELETHON["read_chat"] = _sync_read_chat
     agent._TELETHON["fetch_context"] = _sync_fetch_context
     agent._TELETHON["send_message"] = _sync_send_message
+    agent._TELETHON["reply"] = _sync_reply
     agent._TELETHON["send_file"] = _sync_send_file
     agent._TELETHON["project_direct_outbox_acceptance"] = (
         _project_direct_outbox_acceptance
