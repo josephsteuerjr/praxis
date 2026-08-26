@@ -784,6 +784,28 @@ class OwnerDeliveryLedger:
             }
             return self._public(self._advance_unlocked(state, "delivered", detail))
 
+    def current_for_transport(
+        self, delivery_id: str, *, transport: str,
+        expected_revision: int | None = None,
+    ) -> dict | None:
+        """Return one still-sendable delivery under the ledger lock.
+
+        Delivery workers receive snapshots from ``pending()``.  A coalescing edit or
+        deletion may supersede that snapshot before Telegram transport begins; checking
+        the durable row here closes that stale-snapshot window.  ``expected_revision``
+        also rejects a row replaced between scheduling and send.
+        """
+        wanted_transport = _text(transport, limit=40, required=True)
+        with self._lock():
+            state = self._states_unlocked().get(str(delivery_id or ""))
+            if state is None or state.get("status") != "queued":
+                return None
+            if wanted_transport not in (state.get("transports") or ()):
+                return None
+            if expected_revision is not None and state.get("revision") != expected_revision:
+                return None
+            return self._public(state)
+
     def get(self, delivery_id: str) -> dict | None:
         with self._lock():
             state = self._states_unlocked().get(str(delivery_id or ""))

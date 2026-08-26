@@ -103,6 +103,64 @@ class TestEventSpine(Pass19Base):
         rebuilt = life.rebuild_state("7")
         self.assertEqual([x["id"] for x in rebuilt["hot"]], [one["id"]])
 
+    def test_revision_projection_survives_state_rebuild(self):
+        life.record_message(
+            "7", "Alice: obsolete secret", actor="Alice", direction="in",
+            source_id="41", ts=100.0, dedupe_key="telegram:7:41:in",
+        )
+        life.record_message(
+            "7", "Alice [edited #41]: corrected text", actor="Alice", direction="in",
+            source_id="41:edit:1970-01-01T00:03:20Z:abc", ts=200.0,
+            dedupe_key="telegram:7:41:edit:1970-01-01T00:03:20Z:abc:in",
+        )
+        life.note_message_revision("7", 41, "Alice: corrected text")
+        life._state_path("7").unlink()
+
+        rebuilt = life.rebuild_state("7")
+        self.assertEqual([row["line"] for row in rebuilt["hot"]], [
+            "Alice [edited #41]: corrected text",
+        ])
+
+    def test_original_arriving_after_edit_does_not_duplicate_live_hot(self):
+        life.record_message(
+            "7", "Alice [edited #41]: newest text", actor="Alice", direction="in",
+            source_id="41:edit:1970-01-01T00:03:20Z:abc", ts=200.0,
+            dedupe_key="telegram:7:41:edit:1970-01-01T00:03:20Z:abc:in",
+        )
+        life.record_message(
+            "7", "Alice: delayed old body", actor="Alice", direction="in",
+            source_id="41", ts=100.0, dedupe_key="telegram:7:41:in",
+        )
+
+        rows = life.hot_records("7")
+        self.assertEqual([(row["source_id"], row["line"]) for row in rows], [
+            ("41:edit:1970-01-01T00:03:20Z:abc", "Alice [edited #41]: newest text"),
+        ])
+
+    def test_delete_invalidates_compact_of_the_old_message(self):
+        old = life.record_message(
+            "7", "Alice: obsolete compact secret", actor="Alice", direction="in",
+            source_id="41", ts=100.0, dedupe_key="telegram:7:41:in",
+        )
+        compact = life._write_compact(
+            "7", {"summary": "obsolete compact secret", "open_threads": [],
+                  "claims": [], "episodes": []},
+            tier=1, depth=1, source_events=[old["id"]], source_compacts=[],
+            event_count=1, continued=False, first_ts=old["ts"], last_ts=old["ts"],
+        )
+        self.assertIn(compact["id"], life.context_summary("7"))
+
+        life.record_message(
+            "7", "Telegram [deleted #41]: message removed", actor="Telegram",
+            direction="in", source_id="41:delete", ts=200.0,
+            dedupe_key="telegram:7:41:delete:in",
+        )
+        life.note_message_revision("7", 41, "Telegram [deleted #41]: message removed")
+
+        self.assertNotIn(compact["id"], life.context_summary("7"))
+        rebuilt = life.rebuild_state("7")
+        self.assertEqual([row["source_id"] for row in rebuilt["hot"]], ["41:delete"])
+
     def test_legacy_bootstrap_is_idempotent_and_honest(self):
         out = life.bootstrap_legacy("7", ["Егор: один", "Praxis: два"], summary="Старая сводка")
         again = life.bootstrap_legacy("7", ["Егор: один", "Praxis: два"], summary="Старая сводка")

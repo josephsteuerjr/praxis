@@ -12,6 +12,7 @@ import telegram_followups as followups
 
 ABSTRACT_DL = -1001240718803
 OWNER_ID = 555000100
+VIKA_ID = 555000333
 
 
 class _Clock:
@@ -198,6 +199,166 @@ class FollowUpLedgerTests(unittest.TestCase):
         self.assertIn(created["id"], ids)
         self.assertEqual(len(items), followups._SETTLED_KEEP)
         self.assertIn(old_pending["id"], self.ledger.context(limit=3))
+
+    def test_response_edit_projects_current_text_and_preserves_revision_audit(self):
+        item = self._group_thread(
+            55, notify_owner=True, notice_source="owner",
+            request_text="сообщи, когда ответит")
+        matched = self.ledger.observe_incoming(
+            peer_id=ABSTRACT_DL, sender_id=7, message_id=57, text="A",
+            reply_to_message_id=55, received_at=12)
+        self.assertEqual(matched["id"], item["id"])
+
+        revision = "57:edit:2026-08-20T08:00:02Z:bbbb"
+        changed = self.ledger.revise_response(
+            peer_id=ABSTRACT_DL, message_id=57, text="B",
+            revision_source_id=revision, observed_at=13)
+        self.assertEqual(changed["response"]["text"], "B")
+        self.assertNotIn(": A", self.ledger.context())
+        self.assertIn(": B", self.ledger.context())
+        self.assertEqual(self.ledger.pending_notifications()[0]["response"]["text"], "B")
+
+        durable = followups.FollowUpLedger(self.ledger.path).get(item["id"])
+        self.assertEqual(durable["response"]["text"], "B")
+        self.assertEqual(
+            [(row["kind"], row.get("text"))
+             for row in durable["response"]["revisions"]],
+            [("message", "A"), ("edit", "B")],
+            "append-only audit keeps corrected-away text outside current consumers",
+        )
+
+    def test_duplicate_and_older_response_edits_are_rejected(self):
+        item = self._group_thread(55)
+        self.ledger.observe_incoming(
+            peer_id=ABSTRACT_DL, sender_id=7, message_id=57, text="A",
+            reply_to_message_id=55, received_at=12)
+        newer = "57:edit:2026-08-20T08:00:02Z:new"
+        older = "57:edit:2026-08-20T08:00:01Z:old"
+        self.assertIsNotNone(self.ledger.revise_response(
+            peer_id=ABSTRACT_DL, message_id=57, text="B",
+            revision_source_id=newer, observed_at=13))
+        self.assertIsNone(self.ledger.revise_response(
+            peer_id=ABSTRACT_DL, message_id=57, text="duplicate",
+            revision_source_id=newer, observed_at=14))
+        self.assertIsNone(self.ledger.revise_response(
+            peer_id=ABSTRACT_DL, message_id=57, text="OLD",
+            revision_source_id=older, observed_at=15))
+        current = self.ledger.get(item["id"])
+        self.assertEqual(current["response"]["text"], "B")
+        self.assertEqual(len(current["response"]["revisions"]), 2)
+
+    def test_response_delete_tombstones_current_text_and_suppresses_unsent_notice(self):
+        item = self._group_thread(
+            55, notify_owner=True, notice_source="owner",
+            request_text="сообщи, когда ответит")
+        self.ledger.observe_incoming(
+            peer_id=ABSTRACT_DL, sender_id=7, message_id=57, text="A",
+            reply_to_message_id=55, received_at=12)
+        self.assertEqual(len(self.ledger.pending_notifications()), 1)
+
+        deleted = self.ledger.delete_response(
+            peer_id=ABSTRACT_DL, message_id=57, observed_at=13)
+        self.assertEqual(deleted["status"], "response_deleted")
+        self.assertEqual(self.ledger.pending_notifications(), [])
+        self.assertNotIn(": A", self.ledger.context())
+        self.assertIn("ответ удалён до отправки отчёта", self.ledger.context())
+
+        durable = followups.FollowUpLedger(self.ledger.path).get(item["id"])
+        self.assertTrue(durable["response"]["deleted"])
+        self.assertEqual(durable["response"]["text"], "")
+        self.assertEqual(durable["response"]["revisions"][0]["text"], "A")
+        self.assertEqual(durable["response"]["revisions"][-1]["kind"], "deletion")
+        self.assertIsNone(self.ledger.revise_response(
+            peer_id=ABSTRACT_DL, message_id=57, text="resurrected",
+            revision_source_id="57:edit:2026-08-20T08:00:10Z:late",
+            observed_at=14))
+
+    def test_edit_before_delayed_group_original_projects_corrected_text(self):
+        item = self._group_thread(
+            55, notify_owner=True, notice_source="owner",
+            request_text="сообщи, когда ответит")
+        revision = "57:edit:2026-08-20T08:00:02Z:new"
+        self.assertIsNone(self.ledger.revise_response(
+            peer_id=ABSTRACT_DL, message_id=57, text="B",
+            revision_source_id=revision, observed_at=13, revision_order=2))
+
+        matched = self.ledger.observe_incoming(
+            peer_id=ABSTRACT_DL, sender_id=7, message_id=57, text="A",
+            reply_to_message_id=55, received_at=12)
+        self.assertEqual(matched["id"], item["id"])
+        self.assertEqual(matched["response"]["text"], "B")
+        self.assertEqual(matched["response"]["revision_source_id"], revision)
+        self.assertNotIn(": A", self.ledger.context())
+        self.assertEqual(self.ledger.pending_notifications()[0]["response"]["text"], "B")
+
+    def test_delete_before_delayed_group_original_never_resurrects_notice(self):
+        item = self._group_thread(
+            55, notify_owner=True, notice_source="owner",
+            request_text="сообщи, когда ответит")
+        self.assertIsNone(self.ledger.delete_response(
+            peer_id=ABSTRACT_DL, message_id=57, observed_at=13))
+
+        matched = self.ledger.observe_incoming(
+            peer_id=ABSTRACT_DL, sender_id=7, message_id=57, text="STALE",
+            reply_to_message_id=55, received_at=12)
+        self.assertEqual(matched["id"], item["id"])
+        self.assertEqual(matched["status"], "response_deleted")
+        self.assertTrue(matched["response"]["deleted"])
+        self.assertEqual(matched["response"]["text"], "")
+        self.assertNotIn("STALE", self.ledger.context())
+        self.assertEqual(self.ledger.pending_notifications(), [])
+
+    def test_delete_before_delayed_dm_original_binds_to_the_pending_thread(self):
+        item = self.ledger.create(
+            target_ref="@vika", target_label="Vika", target_peer_id=VIKA_ID,
+            target_user_id=VIKA_ID, sent_message_id=100,
+            request_text="сообщи, когда ответит", sent_at=1,
+            notify_owner=True, notice_source="owner")
+        changed = self.ledger.delete_response(
+            peer_id=VIKA_ID, message_id=101, observed_at=3)
+        self.assertEqual(changed["id"], item["id"])
+        self.assertEqual(changed["status"], "response_deleted")
+
+        matched = self.ledger.observe_incoming(
+            peer_id=VIKA_ID, sender_id=VIKA_ID, message_id=101,
+            text="STALE DM", received_at=2)
+        self.assertEqual(matched["status"], "response_deleted")
+        self.assertNotIn("STALE DM", self.ledger.context())
+        self.assertEqual(self.ledger.pending_notifications(), [])
+
+    def test_pending_dm_tombstone_survives_compaction_pressure(self):
+        item = self.ledger.create(
+            target_ref="@vika", target_label="Vika", target_peer_id=VIKA_ID,
+            target_user_id=VIKA_ID, sent_message_id=100,
+            request_text="сообщи, когда ответит", sent_at=1,
+            notify_owner=True, notice_source="owner")
+        self.ledger.delete_response(peer_id=VIKA_ID, message_id=101, observed_at=3)
+        for index in range(followups._SETTLED_KEEP + 20):
+            self.ledger.create(
+                target_ref=f"@u{index}", target_label=f"U{index}",
+                target_peer_id=10_000 + index, target_user_id=10_000 + index,
+                sent_message_id=1, request_text="", sent_at=10 + index)
+            created = self.ledger.list(status="pending")[0]
+            self.ledger.cancel(created["id"])
+        durable = self.ledger.get(item["id"])
+        self.assertIsNotNone(durable)
+        self.assertEqual(durable["status"], "response_deleted")
+        self.assertIsInstance(durable.get("pending_response_revision"), dict)
+
+    def test_delete_does_not_claim_an_already_sent_notice_was_recalled(self):
+        item = self._group_thread(
+            55, notify_owner=True, notice_source="owner",
+            request_text="сообщи, когда ответит")
+        self.ledger.observe_incoming(
+            peer_id=ABSTRACT_DL, sender_id=7, message_id=57, text="A",
+            reply_to_message_id=55, received_at=12)
+        self.assertTrue(self.ledger.mark_notified(item["id"], at=13))
+        deleted = self.ledger.delete_response(
+            peer_id=ABSTRACT_DL, message_id=57, observed_at=14)
+        self.assertEqual(deleted["status"], "notified")
+        self.assertEqual(deleted["notified_at"], 13)
+        self.assertNotEqual(deleted.get("notice_skipped"),
+                            "ответ удалён до отправки отчёта")
 
     # --- 27.07: след нити ≠ почта Егору ------------------------------------
 

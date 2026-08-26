@@ -19,6 +19,29 @@ trafilatura>=1.12
 charset-normalizer>=3.3
 pypdf>=4.3
 brotli>=1.1
+
+# Таблицы: pandas для анализа, два зрелых OOXML writer/reader и быстрый Rust-backed
+# calamine для чтения больших xls/xlsx/xlsb/ods. Это разные, дополняющие друг друга роли.
+pandas==3.0.5
+openpyxl==3.1.5
+XlsxWriter==3.2.9
+python-calamine==0.8.2
+
+# Office OOXML: программное редактирование/шаблоны DOCX и создание/правка PPTX.
+python-docx==1.2.0
+docxtpl==0.20.2
+python-pptx==1.0.2
+
+# PDF: pypdf выше отвечает за структуру/merge; pdfplumber — текст и таблицы;
+# pdfium — надёжный renderer; reportlab — генерация. Pillow общий для PDF и PPTX.
+pdfplumber==0.11.10
+pypdfium2==5.13.0
+reportlab==5.0.0
+
+# Безопасный XML parser и чтение зашифрованных Office-файлов. msoffcrypto использует
+# уже ограниченный выше cryptography и не добавляет второй crypto backend.
+defusedxml==0.7.1
+msoffcrypto-tool==6.0.0
 # Картинка ИЗ ДАННЫХ — график своей же жизни, схема, SVG→PNG. Рисует она сама, своим
 # shell'ом; отдельного тула нет. Системную половину (libcairo2, chromium, шрифты)
 # ставит Dockerfile. Локальной генерации моделью здесь быть не может: GPU нет,

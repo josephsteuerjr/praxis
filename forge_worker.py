@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import traceback
@@ -138,13 +139,19 @@ CHECKPOINT_TOOL = {
 
 def _system(request: dict) -> str:
     role = request["role"]
+    # prompt_cache_key must stay stable across the turns of ONE fresh context, but two
+    # concurrent scouts/reviewers must not share affinity merely because their role matches.
+    identity = f"{request.get('task_id') or ''}:{request.get('id') or ''}"
+    cache_scope = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
     stance = {
         "scout": "You are a reconnaissance agent. Inspect broadly, run non-mutating probes when useful, and return concrete evidence and file/line references.",
         "reviewer": "You are an adversarial code reviewer. Read the actual diff and relevant code, run focused checks, and identify real defects or explicitly clear it.",
         "worker": "You are an implementation agent. Orient, edit the real isolated working tree, run checks, and leave it materially closer to done. Do not stop at recommendations when you can act.",
     }[role]
     orientation = forge.inspect(request["task_id"], "orientation")
-    return f"""You are a fresh-context coding subagent created by Praxis, not a conversational assistant.
+    return f"""audience_key=forge_{role}
+cache_scope={cache_scope}
+You are a fresh-context coding subagent created by Praxis, not a conversational assistant.
 
 Overall goal: {request.get('goal')}
 Your brief: {request.get('brief')}

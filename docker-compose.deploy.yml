@@ -2,13 +2,10 @@ services:
   praxis:
     build: .
     container_name: praxis
-    # Declarative parity with the currently running container: keep resident
-    # Whisper inside a 5.5 GiB RAM / 7 GiB RAM+swap envelope. Поднято 31.07 с 4.5:
-    # контейнер круглосуточно упирался в прежний потолок (memory.peak == memory.max,
-    # 7594 события reclaim) — то есть жил в постоянной отдаче кэша, и любой всплеск
-    # неотдаваемой памяти означал бы cgroup-OOM посреди её хода.
-    mem_limit: 5632m
-    memswap_limit: 7168m
+    # No cgroup memory ceiling: Yegor explicitly chose host-wide headroom over a
+    # per-container cap on 20.08.2026. The trajectory collector remains useful
+    # for RSS/swap/PSI/kernel behaviour, but memory.max events no longer measure
+    # pressure against a Praxis-specific boundary.
     env_file: .env
     environment:
       - PYTHONUNBUFFERED=1

@@ -125,6 +125,25 @@ class CompleteForgeCase(unittest.TestCase):
                          {"green": 0, "red": 3})
         self.assertIn("42", (directory / "logs" / "01-green.log").read_text(encoding="utf-8"))
 
+    def test_verification_runner_treats_timeout_as_skipped_not_failed(self):
+        directory = self.base / "timeout-matrix"
+        request = {
+            "root": str(self.project), "max_parallel": 1, "timeout": 1,
+            "checks": [
+                {"id": "slow", "command": f"{_PY} -c \"import time; time.sleep(5)\"",
+                 "kind": "test"},
+            ],
+        }
+        request_path = directory / "request.json"
+        directory.mkdir()
+        request_path.write_text(json.dumps(request), encoding="utf-8")
+        self.assertEqual(forge_verify.run(request_path), 0)
+        result = json.loads((directory / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["status"], "passed_with_skips")
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(result["checks"][0]["status"], "timed_out")
+
     def test_swarm_dag_mailbox_and_advisory_claim_conflict(self):
         task_id = self._start()
         plan = json.dumps({"nodes": [

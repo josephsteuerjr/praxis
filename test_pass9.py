@@ -42,6 +42,29 @@ class BufBase(Base):
                 self._orig.append((module, k, getattr(module, k)))
                 setattr(module, k, val)
 
+class TestSaveUnchangedNoRewrite(BufBase):
+    """Шаг 6: идентичное содержимое не переписывает файл — mtime честен."""
+
+    def test_identical_save_leaves_file_untouched(self):
+        bufstore.save("555", ["Егор: привет", "Praxis: здравствуй"])
+        f = bufstore.path_for("555")
+        first = f.read_text(encoding="utf-8")
+        mtime = f.stat().st_mtime_ns
+        bufstore.save("555", ["Егор: привет", "Praxis: здравствуй"])
+        self.assertEqual(f.read_text(encoding="utf-8"), first)
+        self.assertEqual(f.stat().st_mtime_ns, mtime)
+
+    def test_changed_save_rewrites(self):
+        bufstore.save("556", ["a"])
+        f = bufstore.path_for("556")
+        bufstore.save("556", ["a", "b"])
+        self.assertEqual(json.loads(f.read_text(encoding="utf-8")), ["a", "b"])
+
+    def test_first_save_creates_and_load_roundtrip(self):
+        bufstore.save("557", ["x: 1"])
+        self.assertEqual(bufstore.load("557"), ["x: 1"])
+
+
 
 # --------------------------------------------------------------------------- #
 #  buf_meta: время/автор последней строки буфера
@@ -551,14 +574,13 @@ class TestImmuneAutoZone(ImmuneBase):
         # журнал selfdev пишет в песочницу PRAXIS_BASE — проверяем через леджер
         self.assertEqual(selfdev.get(pid)["immune"], {"verdict": "warn", "why": "вкусовщина"})
 
-    def test_egor_apply_never_reviews(self):
+    def test_red_tests_still_reach_advisory_review_but_do_not_wait_for_egor(self):
         pid, title = self._proposal(rel="core.py", content="VALUE = 99\n")
-        calls = self._stub_review("red", "не должно быть позвано")
-        selfdev.submit(pid, title, review=RV_16_4)  # red tests: self-merge awaits explicit override
-        self.assertEqual(calls, [], "красные тесты не доходят до merge review без override")
-        res = selfdev.apply(pid, by="egor")
-        self.assertTrue(res["ok"], res)
-        self.assertEqual(calls, [], "мёрж руками Егора иммунитет не ревьюит")
+        calls = self._stub_review("red", "не должно владеть решением")
+        msg = selfdev.submit(pid, title, review=RV_16_4)
+        self.assertEqual(len(calls), 1, "красный test verdict не должен выключать advisory review")
+        self.assertEqual(selfdev.get(pid)["status"], "merged")
+        self.assertIn("предупреждение постфактум", msg)
 
 
 class TestImmuneQueue(ImmuneBase):

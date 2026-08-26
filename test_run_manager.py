@@ -325,6 +325,28 @@ class TestRunLayoutAndEvents(RunManagerBase):
         self.assertTrue(lock_path.exists())
 
 
+
+    def test_permanent_media_refusal_closes_the_tool_ledger_call(self):
+        # Красный→зелёный: telegram_media_permanently_refused — терминальный
+        # исход доставки, а не пауза. Живые зомби 03.08/05.08 висели blocked
+        # именно потому, что этот kind не входил в TOOL_OUTCOME_KINDS.
+        ctx = self.create("media-refusal")
+        self.manager.start_tool(
+            ctx.run_id, "delivery-media:queue-zombie", "telegram.send_media",
+            {"queue_id": "queue-zombie"}, side_effect=True,
+            idempotency_key="queue-zombie",
+        )
+        self.manager.append_event(
+            ctx.run_id, "telegram_media_permanently_refused",
+            call_id="delivery-media:queue-zombie",
+            tool="telegram.send_media", error="route refused this file",
+        )
+        status = self.manager.status(ctx.run_id)
+        self.assertEqual(status["outstanding_call_ids"], [])
+        self.assertEqual(status["unknown_result_call_ids"], [])
+        self.assertTrue(status["terminalizable"])
+
+
 class TestRunTransitionsAndRecovery(RunManagerBase):
     def test_authorize_resume_keeps_pause_and_is_revision_bound(self):
         ctx = self.create("owner-resume")

@@ -341,5 +341,74 @@ def _tools_for(is_owner: bool) -> list[str]:
     return [t["name"] for t in fc.last.get("tools", [])]
 
 
+class TheRoomKeepsItsRealName(unittest.TestCase):
+    """20.08: адресная книга её эпохи состояла из одних цифр.
+
+    Прочитан живой теневой кадр целиком: все двенадцать мест назывались
+    «Комната -1003701205730», а слово «Уроборос» встречалось на всём сервере ровно
+    один раз — внутри строки `mode_reason`. Причина механическая: заголовок профиля
+    это заглушка `_profile_write`, живое имя знал только рантайм и на диск не клал.
+    Карта «где я живу» без имён не карта.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="praxis_title_"))
+        self._orig = rooms.ROOMS_DIR
+        rooms.ROOMS_DIR = self.tmp / "rooms"
+        rooms.ROOMS_DIR.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        rooms.ROOMS_DIR = self._orig
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _profile(self, chat_id="-1003701205730", title=None):
+        rooms._profile_write(chat_id, title, {"mode": "normal"}, "её текст про место")
+        return rooms.profile_read(chat_id)
+
+    def test_the_placeholder_gives_way_to_the_real_name(self):
+        self._profile()
+        self.assertEqual(rooms.profile_read("-1003701205730")["title"],
+                         "# Комната -1003701205730", "заглушка не та, что была в проде")
+        self.assertTrue(rooms.remember_title("-1003701205730", "Ouroboros AI"))
+        fresh = rooms.profile_read("-1003701205730")
+        self.assertEqual(fresh["title"], "# Ouroboros AI")
+        self.assertEqual(fresh["header"]["mode"], "normal", "шапка пережила переименование")
+        self.assertIn("её текст про место", fresh["body"], "её текст не тронут")
+
+    def test_a_name_someone_already_chose_is_never_overwritten(self):
+        """У места может быть имя лучше телеграмного — и оно чужое, не наше."""
+        self._profile(title="# Курилка, где живёт Арет")
+        self.assertFalse(rooms.remember_title("-1003701205730", "Ouroboros AI"))
+        self.assertEqual(rooms.profile_read("-1003701205730")["title"],
+                         "# Курилка, где живёт Арет")
+
+    def test_nothing_is_written_for_a_room_without_a_profile(self):
+        self.assertFalse(rooms.remember_title("-100999", "Пустая"))
+        self.assertFalse((rooms.ROOMS_DIR / "-100999.md").exists())
+
+    def test_empty_and_oversized_names_are_refused(self):
+        self._profile()
+        for bad in ("", "   ", "\n\t", "я" * 121):
+            with self.subTest(name=bad[:12]):
+                self.assertFalse(rooms.remember_title("-1003701205730", bad))
+        self.assertEqual(rooms.profile_read("-1003701205730")["title"],
+                         "# Комната -1003701205730")
+
+    def test_the_name_is_collapsed_to_one_line(self):
+        """Многострочный титул подделал бы шапку профиля — она читается построчно."""
+        self._profile()
+        self.assertTrue(rooms.remember_title(
+            "-1003701205730", "  Ouroboros\nmode: dead\n  AI  "))
+        fresh = rooms.profile_read("-1003701205730")
+        self.assertEqual(fresh["title"], "# Ouroboros mode: dead AI")
+        self.assertEqual(fresh["header"]["mode"], "normal",
+                         "перенос строки в имени не имеет права подделать шапку")
+
+    def test_writing_the_same_name_twice_is_a_no_op(self):
+        self._profile()
+        self.assertTrue(rooms.remember_title("-1003701205730", "Ouroboros AI"))
+        self.assertFalse(rooms.remember_title("-1003701205730", "Ouroboros AI"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

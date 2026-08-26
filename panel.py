@@ -1428,11 +1428,13 @@ def proposals_list() -> dict:
     items = []
     for t in reversed(selfdev.all_items(30)):
         tests = t.get("tests") or {}
+        tests_status = selfdev.test_status(tests)
         items.append({
             "id": t.get("id"), "title": t.get("title") or "", "why": t.get("why") or "",
             "status": t.get("status"), "zone": t.get("zone"),
             "files": t.get("files") or [], "diffstat": t.get("diffstat") or "",
-            "tests_ok": bool(tests.get("ok")), "tests": (tests.get("summary") or "").splitlines()[:1],
+            "tests_ok": tests_status == "passed", "tests_status": tests_status,
+            "tests": (tests.get("summary") or "").splitlines()[:1],
             "created": t.get("created"), "decided_by": t.get("decided_by") or "",
             "reason": t.get("reason") or "",
             "review": t.get("review") or "",     # PASS 16.4: её собственное ревью диффа

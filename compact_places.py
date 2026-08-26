@@ -47,13 +47,19 @@ def drain(place: str, *, limit: int) -> dict:
     for _ in range(limit):
         out = ml.compact_if_due(place)
         folded = int(out.get("folded") or 0)
+        deg_tiers = [str(x) for x in (out.get("degraded_tiers") or ()) if str(x)]
+        if out.get("degraded") or deg_tiers:
+            # 25.08: проверка стоит ДО выхода folded==0 — дозревание ярусов
+            # случается и без свёртки горячего, и молчать о нём нельзя.
+            return {"place": place, "folded": folded_total, "compacts": compacts,
+                    "stopped": "DEGRADED",
+                    "degraded_id": (out.get("compact_id") if out.get("degraded")
+                                    else deg_tiers[0]),
+                    "degraded_tier_ids": deg_tiers,
+                    "hot": out.get("hot"), "sec": round(time.time() - started, 1)}
         if not folded:
             return {"place": place, "folded": folded_total, "compacts": compacts,
                     "stopped": (out.get("plan") or {}).get("reason") or "нечего сворачивать",
-                    "hot": out.get("hot"), "sec": round(time.time() - started, 1)}
-        if out.get("degraded"):
-            return {"place": place, "folded": folded_total, "compacts": compacts,
-                    "stopped": "DEGRADED", "degraded_id": out.get("compact_id"),
                     "hot": out.get("hot"), "sec": round(time.time() - started, 1)}
         folded_total += folded
         compacts += 1

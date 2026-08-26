@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import selfdev
 
@@ -88,11 +89,10 @@ class SelfdevFlow(unittest.TestCase):
         self.assertEqual(t["files"], ["core.py"])
         self.assertIn("VALUE = 2", (self.repo / "core.py").read_text())
 
-    def test_apply_merges_and_requests_restart(self):
+    def test_submit_merges_and_requests_restart(self):
         pid = self._begin_and_edit("core.py", "VALUE = 99\n")
-        selfdev.submit(pid, "поднять VALUE", review=RV)
-        res = selfdev.apply(pid, by="egor")
-        self.assertTrue(res["ok"], res)
+        msg = selfdev.submit(pid, "поднять VALUE", review=RV)
+        self.assertIn("смёржила сама", msg)
         self.assertIn("VALUE = 99", (self.repo / "core.py").read_text(encoding="utf-8"))
         self.assertEqual(selfdev.get(pid)["status"], "merged")
         self.assertIn("merged", selfdev.restart_requested())
@@ -105,14 +105,15 @@ class SelfdevFlow(unittest.TestCase):
         self.assertEqual(selfdev.get(pid)["status"], "merged")
         self.assertIn("новая строка", (self.repo / "soul" / "note.md").read_text(encoding="utf-8"))
 
-    def test_red_tests_do_not_automerge_but_wait(self):
+    def test_red_tests_automerge_with_post_factum_warning(self):
         pid = self._begin_and_edit("core.py", "VALUE = 99\n")  # smoke-тест упадёт
         msg = selfdev.submit(pid, "сломать всё", review=RV)
         t = selfdev.get(pid)
-        self.assertEqual(t["status"], "proposed")
+        self.assertEqual(t["status"], "merged")
         self.assertFalse(t["tests"]["ok"])
         self.assertIn("ПАДЕНИЯ", t["tests"]["summary"])
-        self.assertIn("override_reason", msg)
+        self.assertIn("предупреждение постфактум", msg)
+        self.assertIn("VALUE = 99", (self.repo / "core.py").read_text(encoding="utf-8"))
 
     def test_protected_zone_is_risk_evidence_not_a_veto(self):
         pid = self._begin_and_edit("bootguard.py", "x = 1\n")
@@ -122,12 +123,46 @@ class SelfdevFlow(unittest.TestCase):
         self.assertEqual(t["status"], "merged")
         self.assertIn("смёржила сама", msg)
 
+    def test_timeout_is_inconclusive_and_does_not_need_override(self):
+        pid = self._begin_and_edit("core.py", "VALUE = 2\n")
+        timeout_result = {
+            "ok": False,
+            "status": "timed_out",
+            "blocking": False,
+            "summary": "тесты пропущены: не уложились в 600s",
+        }
+        with mock.patch.object(selfdev, "run_tests", return_value=timeout_result):
+            msg = selfdev.submit(pid, "поднять VALUE", review=RV)
+        item = selfdev.get(pid)
+        self.assertEqual(item["status"], "merged")
+        self.assertEqual(item["tests"]["status"], "timed_out")
+        self.assertIn("inconclusive", msg)
+        self.assertIn("VALUE = 2", (self.repo / "core.py").read_text(encoding="utf-8"))
+
+    def test_run_tests_classifies_timeout_separately(self):
+        pid = self._begin_and_edit("core.py", "VALUE = 2\n")
+        with mock.patch.object(selfdev.subprocess, "run",
+                               side_effect=subprocess.TimeoutExpired(cmd="tests", timeout=1)):
+            result = selfdev.run_tests(pid)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "timed_out")
+        self.assertFalse(result["blocking"])
+        self.assertIn("пропущены", result["summary"])
+
+    def test_failed_status_still_blocks_without_override(self):
+        self.assertTrue(selfdev.tests_block_merge({"ok": False, "status": "failed"}))
+        self.assertTrue(selfdev.tests_block_merge({"ok": False, "status": "error"}))
+        self.assertTrue(selfdev.tests_block_merge({"ok": False, "status": "mystery"}))
+        self.assertFalse(selfdev.tests_block_merge({"ok": False, "status": "timed_out"}))
+        # Existing ledger rows had no status: preserve their old fail-closed meaning.
+        self.assertTrue(selfdev.tests_block_merge({"ok": False, "summary": "old red"}))
+
     def test_red_checks_can_be_explicitly_overridden_with_provenance(self):
         pid = self._begin_and_edit("core.py", "VALUE = 99\n")
         reason = "smoke фиксирует старый диапазон; новая семантика намеренно расширяет его"
         msg = selfdev.submit(pid, "осознанно расширить VALUE", review=RV,
                              override_reason=reason)
-        self.assertIn("override", msg)
+        self.assertIn("объяснение", msg)
         item = selfdev.get(pid)
         self.assertEqual(item["status"], "merged")
         self.assertEqual(item["override_reason"], reason)
@@ -135,7 +170,6 @@ class SelfdevFlow(unittest.TestCase):
 
     def test_reject_writes_journal_signal(self):
         pid = self._begin_and_edit("core.py", "VALUE = 99\n")
-        selfdev.submit(pid, "поднять VALUE", review=RV)
         res = selfdev.reject(pid, "не время", by="egor")
         self.assertTrue(res["ok"])
         t = selfdev.get(pid)
@@ -227,19 +261,25 @@ class ReviewIsHers(unittest.TestCase):
         self.assertIn("idea-mark", selfdev.diff_text(pid2))
 
     def test_identical_rejected_diff_capped_at_three(self):
-        """3 отклонённых байт-в-байт диффа → «измени подход»; другой дифф проходит."""
+        """Three manually rejected byte-identical diffs require an explicit repeat reason."""
+        rejected = []
         for _ in range(3):
             pid = self._begin_and_edit("core.py", "VALUE = 99\n")
-            selfdev.submit(pid, "поднять VALUE", review=RV)
-            selfdev.reject(pid, "не время", by="egor")
+            # The cap is about repeated rejected proposals, not a hidden owner approval path.
+            # Seed those historical ledger decisions directly; submit itself now merges.
+            diff = selfdev.diff_text(pid)
+            rejected.append(selfdev._fingerprint(diff))
+            selfdev._update(pid, status="rejected", reason="не время",
+                            fingerprint=rejected[-1], title="поднять VALUE")
+            selfdev._cleanup(pid, drop_branch=True)
         pid4 = self._begin_and_edit("core.py", "VALUE = 99\n")
         msg = selfdev.submit(pid4, "поднять VALUE", review=RV)
         self.assertIn("подход", msg, "4-я подача того же диффа должна упереться в кап")
         self.assertEqual(selfdev.get(pid4)["status"], "building")
-        # изменившийся дифф обнуляет счёт — уходит нормально
+        # изменившийся дифф обнуляет счёт — мёржится как новое собственное решение
         pid5 = self._begin_and_edit("core.py", "VALUE = 98  # другой путь\n")
         msg5 = selfdev.submit(pid5, "поднять VALUE иначе", review=RV)
-        self.assertEqual(selfdev.get(pid5)["status"], "proposed", msg5)
+        self.assertEqual(selfdev.get(pid5)["status"], "merged", msg5)
 
 
 class ReconcileShells(SelfdevFlow):

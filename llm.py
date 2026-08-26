@@ -30,6 +30,7 @@ import os
 import re
 import contextvars as _cv
 import time as _time
+import tool_offerings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -177,6 +178,12 @@ def _normalize(cfg: dict) -> dict:
                               "max_tokens": mt, "fallback_model": str(cur.get("fallback_model") or "")}
         if str(cur.get("fallback_framework") or "").strip() in ("openai", "anthropic"):
             out["roles"][role]["fallback_framework"] = str(cur.get("fallback_framework")).strip()
+        # 19.08: ЕЁ фоновая ступень рассуждения (switch_brain action=reasoning).
+        # Нормализация фиксированным набором ключей молча съедала бы её решение —
+        # ровно класс HEADER_KEYS из реестра переноса днём раньше.
+        effort = str(cur.get("reasoning_effort") or "").strip().lower()
+        if effort in REASONING_EFFORTS:
+            out["roles"][role]["reasoning_effort"] = effort
     lim = cfg.get("limits") or {}
     try:
         out["limits"]["max_tool_iters"] = max(1, min(600, int(lim.get("max_tool_iters"))))  # 07.07: потолок 300->600, владелец хочет управлять сам
@@ -612,8 +619,28 @@ def messages_to_openai(messages: list) -> list:
     return out
 
 
+#: Ключ пометки «аргументы не прочитались как JSON». Здесь стояло `args = {}` — и для
+#: руки, у которой все параметры опциональны (`check_email`, `my_agenda`,
+#: `recent_turns`), пустой словарь это не ошибка, а ВЫПОЛНЕНИЕ ДРУГОГО ДЕЙСТВИЯ с
+#: дефолтами: намерение модели исчезало без следа. На реле обрыв длинных `arguments`
+#: реален, поэтому битый JSON теперь остаётся видимым фактом, а решение о нём
+#: принимает тул-цикл, а не парсер.
+MALFORMED_JSON_KEY = "__malformed_json__"
+#: Сколько сырых знаков аргументов оставляем в пометке — для диагноза, не для хранения.
+MALFORMED_JSON_KEEP = 2000
+
+
+def is_malformed_json_input(call_input: object) -> bool:
+    """Это блок, у которого аргументы не прочитались как JSON?"""
+    return isinstance(call_input, dict) and MALFORMED_JSON_KEY in call_input
+
+
 def blocks_from_openai(msg) -> list:
-    """openai message -> блоки anthropic-формы (text + tool_use, JSON-аргументы распарсены)."""
+    """openai message -> блоки anthropic-формы (text + tool_use, JSON-аргументы распарсены).
+
+    Аргументы, которые не читаются как JSON-объект, НЕ подменяются пустым словарём:
+    блок помечается `MALFORMED_JSON_KEY`, и исполнять его нечем (разбор — выше).
+    """
     blocks: list[dict] = []
     text = getattr(msg, "content", None)
     if text:
@@ -621,12 +648,13 @@ def blocks_from_openai(msg) -> list:
     for tc in getattr(msg, "tool_calls", None) or []:
         fn = getattr(tc, "function", None)
         raw = getattr(fn, "arguments", "") or ""
+        malformed = {MALFORMED_JSON_KEY: str(raw)[:MALFORMED_JSON_KEEP]}
         try:
-            args = json.loads(raw) if raw.strip() else {}
+            args = json.loads(raw) if str(raw).strip() else {}
         except Exception:
-            args = {}
+            args = malformed
         if not isinstance(args, dict):
-            args = {}
+            args = malformed
         blocks.append({"type": "tool_use", "id": str(getattr(tc, "id", "")),
                        "name": str(getattr(fn, "name", "")), "input": args})
     return blocks
@@ -843,7 +871,11 @@ def _guard_answer(out: LLMResponse) -> LLMResponse:
     return out
 
 
-def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thinking) -> LLMResponse:
+def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thinking,
+                    reasoning_effort: str | None = None) -> LLMResponse:
+    # reasoning_effort — словарь реле (openai-путь). Здесь глубину задаёт thinking-бюджет;
+    # для glm-* ступень роли проецируется в z.ai-диалект (25.08, см. _GLM_EFFORT),
+    # для остальных моделей принимается-и-игнорируется, а не роняет вызов на общем kw-пути.
     kw: dict = {"model": model, "max_tokens": max_tokens,
                 "messages": messages_to_anthropic(messages)}
     if system:
@@ -854,6 +886,14 @@ def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thi
     if thinking:
         kw["thinking"] = {"type": "enabled", "budget_tokens": int(thinking)}
         kw["max_tokens"] = max(int(max_tokens), int(thinking) + 1024)
+    elif reasoning_effort and model.strip().lower().startswith("glm-"):
+        # 25.08: у GLM-5.3 thinking обязателен, глубину задаёт ступень; без неё
+        # z.ai молча думает на max каждый вызов (замер 24.08: 10-15с на ответ).
+        # Поле не из словаря Anthropic SDK — едет через extra_body. Явный
+        # thinking-бюджет вызова по-прежнему сильнее ступени роли.
+        kw["thinking"] = {"type": "enabled"}
+        kw["extra_body"] = {"reasoning_effort": _GLM_EFFORT.get(
+            str(reasoning_effort).strip().lower(), "low")}
     # PASS 10.0: всегда стримом — SDK кидает «Streaming is required for operations that
     # may take longer than 10 minutes» на больших max_tokens (ночные окна умирали, кап
     # сгорал впустую). get_final_message() возвращает тот же Message (blocks/usage/
@@ -876,11 +916,17 @@ def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thi
         _usage["cache_creation"] = int(_cc)
     # Сторож общий с openai-путём: до 15.08 здесь его не было вовсе, и пустой ответ glm
     # уезжал наверх успешным 'end_turn' — то есть неотличимо от её решения промолчать.
+    actual_model = str(getattr(resp, "model", None) or model)
+    if actual_model != model:
+        # Anthropic-compatible providers may accept one catalogue alias and serve another
+        # model without an error. Preserve what the response says: usage/brain telemetry
+        # downstream is explicitly defined as the actually observed backend, not config.
+        log.warning("llm: запросила %s/%s, ответ пришёл от %s", "anthropic", model, actual_model)
     return _guard_answer(LLMResponse(
         text=text_of(resp), blocks=_blocks_from_anthropic(resp),
         stop_reason=str(getattr(resp, "stop_reason", None) or "end_turn"),
         usage=_usage,
-        framework="anthropic", model=model))
+        framework="anthropic", model=actual_model))
 
 
 _OPENAI_STOP = {"tool_calls": "tool_use", "stop": "end_turn", "length": "max_tokens"}
@@ -900,6 +946,29 @@ def _openai_reasoning_effort(thinking) -> str | None:
     if budget <= 8192:
         return "medium"
     return "high"
+
+
+# Словарь ступеней — ДОСЛОВНО словарь реле (REASONING_EFFORTS в chat_completions.rs):
+# своя копия имён разъехалась бы молча, поэтому список закреплён тестом на исходник
+# реле в _relay_prod_src. Реле по умолчанию гасит рассуждение (effort=none);
+# per-request поле сильнее его дефолта, чужой openai-сервер молча проигнорирует.
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+# 25.08: проекция ступеней реле в словарь z.ai для glm-* (GLM-5.3: low/high/max,
+# СЕРВЕРНЫЙ ДЕФОЛТ — max на каждый вызов; thinking обязателен и невыключаем,
+# поэтому «none/minimal» глубже low не проецируются — выключить нечего).
+_GLM_EFFORT = {"none": "low", "minimal": "low", "low": "low",
+               "medium": "high", "high": "high", "xhigh": "max"}
+
+
+def _effective_effort(thinking, role_effort) -> str | None:
+    """Чья ступень едет в запрос. Явный thinking кода (просьба подумать в конкретном
+    месте) сильнее фоновой ступени роли; ступень роли — ЕЁ рычаг (switch_brain
+    action=reasoning), и неизвестное значение честно отбрасывается, а не угадывается."""
+    explicit = _openai_reasoning_effort(thinking)
+    if explicit:
+        return explicit
+    value = str(role_effort or "").strip().lower()
+    return value if value in REASONING_EFFORTS else None
 
 
 # --------------------------------------------------------------- адрес кэша префикса
@@ -952,10 +1021,18 @@ _CACHE_MARKS = (
     ("your own run", "run"),
     ("not in the kn", "guest"),
 )
-#: Словарь тегов адреса — ОДИН на оба источника (проза и структурный ключ), чтобы они не
-#: разъехались. Расширять его — значит расширять и `_CACHE_MARKS`, и наоборот.
-_CACHE_TAGS = tuple(dict.fromkeys(tag for _, tag in _CACHE_MARKS))
+#: Теги живого разговорного кадра приходят и из прозы, и из будущей структурной розетки.
+#: Технические свежие контексты Forge не проходят через agent.build_system_parts и потому
+#: объявляют отдельный структурный адрес по роли. Держать их в `_CACHE_MARKS` нельзя:
+#: там тест требует, чтобы каждому ПРОЗОВОМУ маркеру соответствовал живой основной кадр.
+_CACHE_STRUCTURAL_TAGS = ("forge_scout", "forge_worker", "forge_reviewer")
+_CACHE_TAGS = tuple(dict.fromkeys(
+    [tag for _, tag in _CACHE_MARKS] + list(_CACHE_STRUCTURAL_TAGS)))
 _CACHE_ROOM_RE = re.compile(r"room_id=(-?\d+)")
+#: Дополнительная область технического диалога. Сегодня её печатает Forge: роли мало,
+#: потому что два scout-а разных задач иначе разделили бы affinity; scope — короткий digest
+#: task_id+agent_id и потому стабилен внутри одного свежего контекста, но не склеивает соседей.
+_CACHE_SCOPE_RE = re.compile(r"cache_scope=([a-z0-9_-]{1,32})")
 #: Розетка (см. пункт 2 выше). Имя поля и словарь значений — то же, что у прозы, поэтому
 #: включение структурного ключа не меняет НИ ОДНОГО существующего адреса.
 #: ⚠ Ищется первое вхождение по всему кадру, а в кадре есть и написанное людьми (досье,
@@ -995,6 +1072,9 @@ def cache_address(model: str, sys_text: str) -> str:
     if not mark:
         mark = next((tag for needle, tag in _CACHE_MARKS if needle in text), "")
     room = _CACHE_ROOM_RE.search(text)
+    # scope принадлежит только объявленному техническому кадру. Чужая строка
+    # `cache_scope=...` внутри досье/комнаты не должна менять обычный разговорный адрес.
+    scope = (_CACHE_SCOPE_RE.search(text) if mark in _CACHE_STRUCTURAL_TAGS else None)
     if not mark and not room:
         _address_miss(text)
         return ""
@@ -1003,10 +1083,16 @@ def cache_address(model: str, sys_text: str) -> str:
     # `-:<room_id>`. Он рабочий и по комнатам различается, поэтому кричать тут нельзя: это
     # был бы постоянный ложный крик в любой групповой переписке, а привыкшего к крику
     # прибора всё равно что нет. Ловит эту дыру тест на живом кадре, а не лог.
+    if scope:
+        return "praxis:%s:%s:%s:%s" % (
+            model or "?", mark or "-", room.group(1) if room else "-", scope.group(1))
+    # Существующие разговорные адреса сохраняются байт-в-байт: добавление технического
+    # scope не должно одним релизом обнулить их тёплый кэш.
     return "praxis:%s:%s:%s" % (model or "?", mark or "-", room.group(1) if room else "-")
 
 
-def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinking) -> LLMResponse:
+def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinking,
+                 reasoning_effort: str | None = None) -> LLMResponse:
     msgs = messages_to_openai(messages)
     sys_text = system_text(system)
     if sys_text:
@@ -1019,7 +1105,7 @@ def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinki
     address = cache_address(model, sys_text)
     if address:
         kw["extra_body"] = {"prompt_cache_key": address}
-    effort = _openai_reasoning_effort(thinking)
+    effort = _effective_effort(thinking, reasoning_effort)
     if effort:
         # неизвестное SDK поле — только через extra_body; релей примет reasoning_effort
         # per-request поверх своего дефолта (none), чужой сервер молча проигнорирует
@@ -1373,16 +1459,23 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     rc = cfg["roles"][role]
     fw, model = rc["framework"], rc["model"]
     mt = int(max_tokens or rc.get("max_tokens") or DEFAULT_MAX_TOKENS[role])
+    # ЕЁ фоновая ступень рассуждения роли (switch_brain action=reasoning, 19.08).
+    # Явный thinking вызывающего кода сильнее — правило в _effective_effort.
+    role_effort = str(rc.get("reasoning_effort") or "").strip() or None
     st = _STATE[role]
     t0 = _time.time()
     # Пауза до этого вызова — рядом с исходом. Префикс остывает ВРЕМЕНЕМ, и
     # проверяемая гипотеза именно такая: обрыв липнет к простою.
     _gap = _call_gap(role)
+    # Отпечаток набора рук снимается ОДИН раз на вызов и едет во все три следа
+    # этого хода — упавший вызов обязан быть сравним с удавшимся по тому же
+    # признаку.
+    _tools = tool_offerings.fingerprint(tools)[:16]
     try:
         resp, empty_retries = _call_retrying_empty(
             fw, model, retries=(1 if end_after_spoken else None),
             system=system, messages=messages, tools=tools,
-            max_tokens=mt, thinking=thinking)
+            max_tokens=mt, thinking=thinking, reasoning_effort=role_effort)
         if empty_retries:
             # Повтор — не бесплатная тишина: он попадает в её журнал, иначе «стало реже
             # падать» будет неотличимо от «мы это спрятали».
@@ -1403,7 +1496,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         _call_trace(role, resp.model or model, ok=True,
                     cached=_u.get("cache_read", 0), prompt=_u.get("in", 0),
                     out_tokens=_u.get("out", 0), latency_ms=_lat,
-                    retries=empty_retries, gap_sec=_gap)
+                    retries=empty_retries, gap_sec=_gap, tools_digest=_tools)
         return resp
     except Exception as e:
         if end_after_spoken and isinstance(e, BrokenChannelError):
@@ -1412,7 +1505,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             # нулями: вызов состоялся, продолжения не будет, мы это услышали.
             _call_trace(role, model, ok=True, cached=0, prompt=0, out_tokens=0,
                         latency_ms=(_time.time() - t0) * 1000, error="end_after_spoken",
-                        gap_sec=_gap)
+                        gap_sec=_gap, tools_digest=_tools)
             return LLMResponse(text="", blocks=[], stop_reason="end_turn",
                                usage={}, framework=fw, model=model)
         err = f"{type(e).__name__}: {str(e)[:120]}"
@@ -1426,7 +1519,8 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         # У упавшего вызова usage чаще всего нет — тогда `cached`/`in` останутся нулями,
         # и это честный ноль «не знаем», а не «кэша не было».
         _call_trace(role, model, ok=False, cached=0, prompt=0, out_tokens=0,
-                    latency_ms=(_time.time() - t0) * 1000, error=err, gap_sec=_gap)
+                    latency_ms=(_time.time() - t0) * 1000, error=err, gap_sec=_gap,
+                    tools_digest=_tools)
         if isinstance(e, TornStreamError):
             # Потеря названа вслух. Оборванный стрим — единственный случай, где мы выбрасываем
             # уже сказанное: снаружи это неотличимо от «модель ответила иначе», и без записи
@@ -1451,7 +1545,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         t1 = _time.time()
         try:
             resp = _call(other, fb_model, system=system, messages=messages, tools=tools,
-                         max_tokens=mt, thinking=None)
+                         max_tokens=mt, thinking=None, reasoning_effort=role_effort)
         except Exception as e2:
             _brain_note(role, other, fb_model, ok=False,
                         error=f"{type(e2).__name__}: {str(e2)[:80]}",
@@ -1486,13 +1580,22 @@ _CALL_TRACE_MAX = 20000
 
 def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
                 out_tokens: int, latency_ms: float, error: str = "",
-                retries: int = 0, gap_sec: float = -1.0) -> None:
-    """Одна строка на вызов: доля кэша рядом с исходом. Никогда не роняет вызов."""
+                retries: int = 0, gap_sec: float = -1.0,
+                tools_digest: str = "") -> None:
+    """Одна строка на вызов: доля кэша рядом с исходом. Никогда не роняет вызов.
+
+    `tools` рядом с `cached` — отпечаток набора рук этого вызова. Схемы едут ВЫШЕ
+    system и в `prompt_cache_key` не входят (`cache_address` ниже): без отпечатка
+    «префикс умер от простоя» и «префикс умер от смены набора рук» пишутся в журнал
+    одной и той же строкой, и промах нечем атрибутировать.
+    """
     try:
         row = {"ts": round(_time.time(), 3), "role": role, "model": str(model or ""),
                "ok": bool(ok), "cached": int(cached or 0), "in": int(prompt or 0),
                "out": int(out_tokens or 0), "ms": int(latency_ms),
                "retries": int(retries or 0), "iter": int(_CALL_ITER.get() or 0)}
+        if tools_digest:
+            row["tools"] = str(tools_digest)[:16]
         try:
             import run_context
             _run = run_context.current_run()
@@ -1554,15 +1657,23 @@ def _brain_note(role: str, framework: str, model: str, **kw) -> None:
 
 
 def ping(role: str) -> tuple[bool, str]:
-    """Проверка ОСНОВНОГО канала роли (без фолбэка): 1-токенный вызов. -> (ok, err)."""
+    """Проверка ОСНОВНОГО канала роли (без фолбэка): минимальный вызов. -> (ok, err).
+
+    GLM-5.3 на Anthropic-compatible API отклоняет запросы с выключенным thinking,
+    поэтому только её рукопожатие получает минимальный разрешённый бюджет. Остальные
+    модели сохраняют прежний одностокенный ping; общий guard ответа не обходится.
+    """
     try:
         rc = _config()["roles"][role]
     except KeyError:
         return (False, f"нет роли {role}")
     try:
-        resp = _call(rc["framework"], rc["model"], system="", messages=[{"role": "user", "content": "ping"}],
-                     tools=None, max_tokens=1, thinking=None)
-        _usage_add(role, resp.usage, model=rc["model"])  # 18.5: пинг — тоже расход, не мимо счётчика
+        framework = str(rc["framework"])
+        model = str(rc["model"])
+        thinking = 1024 if framework == "anthropic" and model.strip().lower() == "glm-5.3" else None
+        resp = _call(framework, model, system="", messages=[{"role": "user", "content": "ping"}],
+                     tools=None, max_tokens=1, thinking=thinking)
+        _usage_add(role, resp.usage, model=model)  # 18.5: пинг — тоже расход, не мимо счётчика
         return (True, "")
     except Exception as e:
         return (False, f"{type(e).__name__}: {str(e)[:200]}")
@@ -1581,6 +1692,7 @@ def snapshot() -> dict:
         st = _STATE[role]
         out[role] = {"framework": rc["framework"], "model": rc["model"],
                      "max_tokens": rc.get("max_tokens"),
+                     "reasoning_effort": rc.get("reasoning_effort") or "",
                      "fallback_model": rc.get("fallback_model") or "",
                      "fallback_armed": armed,
                      "on_fallback": bool(st["on_fallback"]),

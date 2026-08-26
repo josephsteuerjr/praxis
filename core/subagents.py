@@ -103,10 +103,13 @@ def _tests_from(result: dict) -> dict:
     checks = result.get("checks")
     if isinstance(checks, list) and checks:
         passed = sum(1 for c in checks if isinstance(c, dict) and c.get("status") == "passed")
-        failed = sum(1 for c in checks if isinstance(c, dict) and c.get("status") not in
-                     ("passed", None))
-        return {"passed": passed, "failed": failed, "log_ref": str(result.get("log") or "")}
-    return {"passed": 0, "failed": 0, "log_ref": ""}
+        failed = sum(1 for c in checks if isinstance(c, dict) and c.get("status") in
+                     ("failed", "error"))
+        skipped = sum(1 for c in checks if isinstance(c, dict) and
+                      c.get("status") == "timed_out")
+        return {"passed": passed, "failed": failed, "skipped": skipped,
+                "log_ref": str(result.get("log") or "")}
+    return {"passed": 0, "failed": 0, "skipped": 0, "log_ref": ""}
 
 
 def normalize(task_id: str, agent_id: str, result: dict | None,

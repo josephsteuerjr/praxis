@@ -357,17 +357,27 @@ class TestSuperviseConnection(Base):
         self.assertEqual(self.fake.connect_calls, 1)
         self.assertEqual(self.fake.disconnect_calls, 2)
 
-    def test_unexpected_disconnect_exits_supervise_like_before(self):
-        async def fake_real_drop():
+    def test_local_disconnect_without_flags_still_exits(self):
+        """Голый `disconnect()` без флагов — это стоп-кран (/panic) или чужой внешний стоп,
+        а НЕ обрыв сети: реконнектить его нельзя, иначе стоп-кран перестанет стопить.
+
+        Раньше этот же сценарий назывался «настоящий обрыв» и пинил выход процесса КАК НОРМУ
+        реакции на потерю сети. Форма обмана была в фейке: настоящий Telethon на потере сети
+        не возвращается из `run_until_disconnected()`, а бросает ConnectionError (см.
+        TestNetworkOutageIsSurvived). Имя поправлено, поведение оставлено — оно верное
+        для того, что здесь реально смоделировано."""
+        async def fake_stop_cock():
             await asyncio.sleep(0.02)
-            await self.fake.disconnect()  # ни один флаг не стоит -- настоящий обрыв
+            await self.fake.disconnect()  # локальный стоп: ни один флаг не стоит
 
         async def _run():
-            task = asyncio.get_event_loop().create_task(fake_real_drop())
-            await asyncio.wait_for(mtproto_runner._supervise_connection(), timeout=2.0)
+            task = asyncio.get_event_loop().create_task(fake_stop_cock())
+            out = await asyncio.wait_for(mtproto_runner._supervise_connection(), timeout=2.0)
             await task
+            return out
 
-        asyncio.run(_run())  # не должно зависнуть/бросить timeout -- supervise вышел сам
+        # не должно зависнуть -- supervise вышел сам и НЕ просит намеренного рестарта
+        self.assertFalse(asyncio.run(_run()))
 
     def test_expect_disconnect_reconnect_never_arrives_exits_after_timeout(self):
         mtproto_runner.RECONNECT_TIMEOUT_SEC = 0.2
@@ -384,6 +394,215 @@ class TestSuperviseConnection(Base):
             await task
 
         asyncio.run(_run())  # должно вернуться само по истечении RECONNECT_TIMEOUT_SEC, не зависнуть
+
+
+class FlakyNetClient(FakeTgClient):
+    """Сеть так, как её отдаёт Telethon 1.44: потеря связи — это НЕ «вернулся
+    run_until_disconnected()», а брошенный из него ConnectionError (клиент сдаётся сам за
+    ~10-15с: 5 попыток × 1с) при уже отключённом клиенте (`finally: await self.disconnect()`).
+    Пока сеть лежит, connect() тоже отказывает."""
+
+    def __init__(self, drops: int = 1, connect_failures: int = 0):
+        super().__init__()
+        self.drops = drops                        # сколько раз ронять связь
+        self.connect_failures = connect_failures  # сколько connect() подряд отказывают
+        self.dropped = 0
+
+    async def run_until_disconnected(self):
+        if self.dropped < self.drops:
+            self.dropped += 1
+            self.connected = False  # telethon дисконнектится сам ПЕРЕД тем как бросить
+            raise ConnectionError("Connection to Telegram failed 5 time(s)")
+        await super().run_until_disconnected()
+
+    async def connect(self):
+        self.connect_calls += 1
+        if self.connect_failures > 0:
+            self.connect_failures -= 1
+            raise ConnectionError("нет маршрута до Telegram (тест)")
+        self.connected = True
+
+
+class NetBase(Base):
+    """Тайминги ужаты до долей секунды: те же переходы, секунды вместо получаса."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_start = mtproto_runner.RECONNECT_BACKOFF_START
+        self._orig_max = mtproto_runner.RECONNECT_BACKOFF_MAX
+        mtproto_runner.RECONNECT_BACKOFF_START = 0.01
+        mtproto_runner.RECONNECT_BACKOFF_MAX = 0.04
+        mtproto_runner.RECONNECT_TIMEOUT_SEC = 5.0
+
+    def tearDown(self):
+        mtproto_runner.RECONNECT_BACKOFF_START = self._orig_start
+        mtproto_runner.RECONNECT_BACKOFF_MAX = self._orig_max
+        super().tearDown()
+
+    def use(self, client):
+        mtproto_runner.client = client
+        self.fake = client
+        return client
+
+
+class TestNetworkOutageIsSurvived(NetBase):
+    """Главное: потеря сети больше не убивает процесс. До 20.08 ConnectionError из
+    run_until_disconnected() не ловил никто — он улетал из main(), процесс падал секунд
+    через 15 после старта, bootguard видел rc≠0 при elapsed<grace(60с), и на третьем круге
+    откатывал ЗДОРОВЫЙ HEAD на last_good."""
+
+    def test_five_minute_outage_does_not_end_the_process(self):
+        # «сеть моргнула»: связь оборвалась, четыре попытки вернуться отказали, пятая взяла
+        net = self.use(FlakyNetClient(drops=1, connect_failures=4))
+
+        async def _run():
+            task = asyncio.get_event_loop().create_task(mtproto_runner._supervise_connection())
+            for _ in range(2000):
+                if net.connect_calls >= 5:
+                    break
+                # супервизор обязан быть ЖИВ всё время обрыва: ни возврата, ни исключения
+                self.assertFalse(task.done(), "супервизор вышел прямо посреди обрыва")
+                await asyncio.sleep(0.005)
+            else:
+                self.fail("реконнект так и не дошёл до пятой попытки")
+            await asyncio.sleep(0.05)
+            self.assertFalse(task.done(), "супервизор вышел, хотя связь уже вернулась")
+            self.assertTrue(net.is_connected(), "после возврата сети клиент обязан быть connected")
+            mtproto_runner._SHUTDOWN.set()  # закончить тест: обычный конец процесса
+            await net.disconnect()
+            return await asyncio.wait_for(task, timeout=2.0)
+
+        needs_restart = asyncio.run(_run())
+        self.assertFalse(needs_restart, "связь вернулась -- намеренный рестарт не нужен")
+        self.assertEqual(net.connect_calls, 5)
+        self.assertEqual(net.dropped, 1)
+
+    def test_in_memory_state_survives_the_outage(self):
+        """Главный выигрыш правки не «реконнект», а то, что ЖИВЁТ через обрыв: дедуп
+        catch_up, кулдауны, поколения преемников и уже взведённый дебаунс. Рестарт стирает
+        ровно это (на диске их нет), и она отвечала на доигранный backlog как на новое."""
+        net = self.use(FlakyNetClient(drops=1, connect_failures=3))
+        cid = "-100777"
+        fired = []
+
+        async def pending_debounce():
+            await asyncio.sleep(0.05)
+            fired.append(True)
+
+        async def _run():
+            mtproto_runner._seen_ids[cid].append(4242)
+            mtproto_runner._last_pass[cid] = 1234.5
+            mtproto_runner._supersede_gen[cid] = 7
+            mtproto_runner._debounce[cid] = asyncio.get_event_loop().create_task(pending_debounce())
+            task = asyncio.get_event_loop().create_task(mtproto_runner._supervise_connection())
+            for _ in range(2000):
+                if net.connect_calls >= 4 and fired:
+                    break
+                await asyncio.sleep(0.005)
+            mtproto_runner._SHUTDOWN.set()
+            await net.disconnect()
+            await asyncio.wait_for(task, timeout=2.0)
+
+        try:
+            asyncio.run(_run())
+            self.assertIn(4242, mtproto_runner._seen_ids[cid], "дедуп catch_up пережил обрыв")
+            self.assertEqual(mtproto_runner._last_pass[cid], 1234.5, "кулдаун пережил обрыв")
+            self.assertEqual(mtproto_runner._supersede_gen[cid], 7, "поколение пережило обрыв")
+            self.assertEqual(fired, [True], "взведённый дебаунс доехал, а не умер с процессом")
+        finally:
+            mtproto_runner._seen_ids.pop(cid, None)
+            mtproto_runner._last_pass.pop(cid, None)
+            mtproto_runner._supersede_gen.pop(cid, None)
+            mtproto_runner._debounce.pop(cid, None)
+
+    def test_grace_exhausted_is_an_honest_exit_asking_for_restart(self):
+        # сеть не вернулась НИКОГДА: прежний честный выход, но с просьбой о рестарте 42
+        net = self.use(FlakyNetClient(drops=1, connect_failures=10 ** 6))
+        mtproto_runner.RECONNECT_TIMEOUT_SEC = 0.2
+
+        needs_restart = asyncio.run(
+            asyncio.wait_for(mtproto_runner._supervise_connection(), timeout=5.0))
+        self.assertTrue(needs_restart, "исчерпанный грейс -- это выход 42, а не молчаливый ноль")
+        self.assertFalse(net.is_connected())
+        self.assertGreaterEqual(net.connect_calls, 2, "backoff обязан был попробовать не раз")
+
+    def test_flapping_link_cannot_renew_its_grace_forever(self):
+        # связь встаёт и тут же падает: каждый круг НЕ имеет права выдавать себе новый
+        # полный грейс, иначе «выход по исчерпанию» недостижим в принципе
+        net = self.use(FlakyNetClient(drops=10 ** 6, connect_failures=0))
+        mtproto_runner.RECONNECT_TIMEOUT_SEC = 0.15
+
+        needs_restart = asyncio.run(
+            asyncio.wait_for(mtproto_runner._supervise_connection(), timeout=5.0))
+        self.assertTrue(needs_restart)
+        self.assertGreater(net.dropped, 1, "флап должен был случиться не один раз")
+
+
+class TestStartupConnectSurvivesOutage(NetBase):
+    """Тот же helper на стартовом connect() в main(): подъём В МОМЕНТ обрыва — не «плохой код»."""
+
+    def tearDown(self):
+        mtproto_runner._LOOP = None
+        super().tearDown()
+
+    def test_main_exits_with_intentional_restart_code_when_network_never_comes(self):
+        net = self.use(FlakyNetClient(drops=0, connect_failures=10 ** 6))
+        mtproto_runner.RECONNECT_TIMEOUT_SEC = 0.2
+
+        class _Exit42(BaseException):
+            """Заменяет os._exit(42), чтобы тест пережил вызов."""
+
+        calls = []
+
+        def fake_exit():
+            calls.append(42)
+            raise _Exit42()
+
+        orig_exit = mtproto_runner.agent._exit_process
+        mtproto_runner.agent._exit_process = fake_exit
+        try:
+            with self.assertRaises(_Exit42):
+                asyncio.run(mtproto_runner.main())
+        finally:
+            mtproto_runner.agent._exit_process = orig_exit
+
+        self.assertEqual(calls, [42], "main() обязан просить намеренный рестарт, а не падать rc=1")
+        self.assertGreaterEqual(net.connect_calls, 2, "стартовый connect обязан был ретраиться")
+
+    def test_startup_connect_recovers_and_main_goes_on(self):
+        # сеть вернулась на третьей попытке -- main() идёт дальше своим ходом и спотыкается
+        # уже о СВОЮ следующую проверку (не залогинена), а не о сеть
+        net = self.use(FlakyNetClient(drops=0, connect_failures=2))
+
+        async def _not_authorized():
+            return False
+
+        net.is_user_authorized = _not_authorized
+
+        with self.assertRaises(SystemExit) as ctx:
+            asyncio.run(mtproto_runner.main())
+        self.assertIn("Не залогинен", str(ctx.exception))
+        self.assertEqual(net.connect_calls, 3)
+        self.assertTrue(net.is_connected())
+
+
+class TestBootguardTreatsRestartCodeAsIntent(unittest.TestCase):
+    """Зачем именно 42: bootguard.decide_after не считает его early_fail — значит долгий
+    обрыв сети больше не может откатить здоровый код на last_good."""
+
+    def test_restart_code_does_not_grow_early_fails(self):
+        import bootguard
+        d = bootguard.decide_after(bootguard.RESTART_CODE, elapsed=5.0, launch_sha="new",
+                                   last_good="old", early_fails=2, grace=60.0, max_fails=3)
+        self.assertEqual(d["action"], "relaunch")
+        self.assertEqual(d["early_fails"], 2, "намеренный рестарт не копит счётчик падений")
+
+    def test_plain_crash_at_the_same_point_would_have_rolled_back(self):
+        import bootguard
+        d = bootguard.decide_after(1, elapsed=5.0, launch_sha="new", last_good="old",
+                                   early_fails=2, grace=60.0, max_fails=3)
+        self.assertEqual(d["action"], "rollback", "именно так обрыв сети и откатывал здоровый код")
+        self.assertEqual(d["to"], "old")
 
 
 if __name__ == "__main__":

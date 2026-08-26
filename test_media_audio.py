@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
+from unittest import mock
 import wave
 from dataclasses import replace
 from pathlib import Path
@@ -297,6 +299,190 @@ class MediaAudioTests(unittest.TestCase):
 
         backend = media_audio.FallbackTTS(Broken(), Local())
         self.assertEqual(backend.synthesize("привет"), expected)
+
+    def test_silero_backend_is_opt_in_lazy_and_falls_back_to_piper(self) -> None:
+        import silero_tts_client
+
+        config = replace(self.config, tts_backend="silero")
+        expected_config = object()
+        fake_primary = SimpleNamespace(skip_warmup=True)
+        with mock.patch.object(
+            silero_tts_client.SileroTTSConfig,
+            "from_env",
+            return_value=expected_config,
+        ) as from_env, mock.patch.object(
+            silero_tts_client,
+            "SileroTTSClient",
+            return_value=fake_primary,
+        ) as client_factory:
+            backend = media_audio.MediaAudio(config, stt=SimpleNamespace())
+
+        self.assertIsInstance(backend.tts, media_audio.FallbackTTS)
+        self.assertIs(backend.tts.primary, fake_primary)
+        self.assertIsInstance(backend.tts.fallback, media_audio.PiperTTS)
+        self.assertTrue(backend.tts.skip_warmup)
+        from_env.assert_called_once_with(output_dir=self.output_dir)
+        client_factory.assert_called_once_with(expected_config)
+
+    def test_silero_warmup_never_starts_the_isolated_worker(self) -> None:
+        calls: list[str] = []
+
+        class LazyPrimary:
+            skip_warmup = True
+
+            def synthesize(self, _text: str) -> Path:
+                calls.append("synthesize")
+                raise AssertionError("isolated Silero must stay cold during boot warmup")
+
+        backend = SimpleNamespace(
+            stt=SimpleNamespace(_get_model=lambda: calls.append("stt")),
+            tts=media_audio.FallbackTTS(LazyPrimary(), SimpleNamespace()),
+        )
+        media_audio.set_default_backend(backend)
+
+        result = media_audio.warm()
+
+        self.assertEqual(result, {"stt": "loaded", "tts": "lazy-isolated"})
+        self.assertEqual(calls, ["stt"])
+
+    def test_fallback_clears_failed_primary_before_loading_local_voice(self) -> None:
+        expected = self.root / "fallback.wav"
+        events: list[str] = []
+
+        class Broken:
+            def synthesize(self, _text: str) -> Path:
+                events.append("primary")
+                raise media_audio.AudioProcessingError("boom")
+
+            def clear_cache(self) -> None:
+                events.append("clear")
+
+        class Local:
+            def synthesize(self, _text: str) -> Path:
+                events.append("fallback")
+                return expected
+
+        backend = media_audio.FallbackTTS(Broken(), Local())
+        self.assertEqual(backend.synthesize("привет"), expected)
+        self.assertEqual(events, ["primary", "clear", "fallback"])
+
+    def test_fallback_fails_closed_while_primary_cleanup_is_still_pending(self) -> None:
+        events: list[str] = []
+
+        class UncertainPrimary:
+            def synthesize(self, _text: str) -> Path:
+                events.append("primary")
+                raise media_audio.AudioProcessingError("startup timed out")
+
+            def prepare_fallback(self) -> bool:
+                events.append("prepare")
+                return False
+
+            def clear_cache(self) -> None:
+                raise AssertionError("prepare_fallback owns cleanup for this primary")
+
+        class ForbiddenFallback:
+            def synthesize(self, _text: str) -> Path:
+                events.append("fallback")
+                raise AssertionError("fallback must not load while cleanup is uncertain")
+
+        backend = media_audio.FallbackTTS(UncertainPrimary(), ForbiddenFallback())
+        with self.assertRaisesRegex(media_audio.AudioProcessingError, "startup timed out"):
+            backend.synthesize("привет")
+        self.assertEqual(events, ["primary", "prepare"])
+
+    def test_fallback_serializes_primary_cleanup_through_fallback(self) -> None:
+        fallback_result = self.root / "fallback.wav"
+        primary_result = self.root / "primary.wav"
+        fallback_started = threading.Event()
+        release_fallback = threading.Event()
+        second_entered_primary = threading.Event()
+        errors: list[BaseException] = []
+        results: dict[str, Path] = {}
+
+        class RestartablePrimary:
+            def __init__(self) -> None:
+                self.pid: int | None = None
+                self.state: object | None = None
+                self.calls = 0
+
+            def synthesize(self, _text: str) -> Path:
+                self.calls += 1
+                self.pid = 1000 + self.calls
+                self.state = object()
+                if self.calls == 1:
+                    raise media_audio.AudioProcessingError("boom")
+                second_entered_primary.set()
+                return primary_result
+
+            def clear_cache(self) -> None:
+                self.pid = None
+                self.state = None
+
+        primary = RestartablePrimary()
+
+        class BlockingFallback:
+            def synthesize(self, _text: str) -> Path:
+                # The failed primary has been fully cleared before fallback load.
+                self_test.assertIsNone(primary.pid)
+                self_test.assertIsNone(primary.state)
+                fallback_started.set()
+                if not release_fallback.wait(2):
+                    raise AssertionError("test did not release fallback")
+                # A concurrent request must not restart primary during Piper.
+                self_test.assertIsNone(primary.pid)
+                self_test.assertIsNone(primary.state)
+                return fallback_result
+
+        self_test = self
+        backend = media_audio.FallbackTTS(primary, BlockingFallback())
+
+        def run(name: str, text: str) -> None:
+            try:
+                results[name] = backend.synthesize(text)
+            except BaseException as exc:
+                errors.append(exc)
+
+        first = threading.Thread(target=run, args=("first", "один"))
+        second = threading.Thread(target=run, args=("second", "два"))
+        first.start()
+        self.assertTrue(fallback_started.wait(2), "fallback did not start")
+
+        class ObservedTransitionLock:
+            def __enter__(lock_self) -> object:
+                if threading.current_thread() is second:
+                    second_entered_transition.set()
+                return original_lock.__enter__()
+
+            def __exit__(lock_self, *exc: object) -> object:
+                return original_lock.__exit__(*exc)
+
+        original_lock = backend._transition_lock
+        second_entered_transition = threading.Event()
+        backend._transition_lock = ObservedTransitionLock()  # type: ignore[assignment]
+        second.start()
+        try:
+            self.assertTrue(
+                second_entered_transition.wait(2),
+                "second call did not reach transition serialization",
+            )
+            self.assertFalse(second_entered_primary.is_set())
+            self.assertIsNone(primary.pid)
+            self.assertIsNone(primary.state)
+        finally:
+            release_fallback.set()
+            first.join(2)
+            second.join(2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(results["first"], fallback_result)
+        self.assertEqual(results["second"], primary_result)
+        self.assertTrue(second_entered_primary.is_set())
+        self.assertIsNotNone(primary.pid)
+        self.assertIsNotNone(primary.state)
+        self.assertEqual(primary.calls, 2)
 
     def test_facade_is_pluggable(self) -> None:
         input_path = self.root / "voice.ogg"

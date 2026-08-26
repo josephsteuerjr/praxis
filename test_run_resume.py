@@ -524,6 +524,43 @@ class TestStrictResumeKinds(RunResumeBase):
         self.assertEqual([item.queue_id for item in plan.outbound], ["queue-two"])
         self.assertEqual(plan.outbound[0].path, str(second_path.resolve()))
 
+    def test_refused_media_does_not_require_its_deleted_staged_file(self):
+        # Зомби-сценарий: маршрут навсегда отказал файлу (403), spool честно удалил
+        # staged-копию, refusal закрыл леджерный вызов. Планирование обязано
+        # довести ран до transport_owned с пустым outbound, а не биться вечно
+        # об «checkpoint outbound file is missing».
+        context = self.create("transport-refused-media")
+        first, first_path = self.outbound(context, "first-refused.txt")
+        first["queue_id"] = "queue-one"
+        self.checkpoint(context, outbound=[first])
+        self.manager.start_tool(
+            context.run_id, f"delivery:{context.run_id}", "telegram.deliver",
+            {
+                "chat_id": "100", "text_chars": 0, "media_count": 1,
+                "media_queue_ids": ["queue-one"],
+            },
+            side_effect=True, idempotency_key=f"telegram-delivery:{context.run_id}",
+        )
+        self.manager.start_tool(
+            context.run_id, "delivery-media:queue-one", "telegram.send_media",
+            {"queue_id": "queue-one"}, side_effect=True,
+            idempotency_key="queue-one",
+        )
+        self.manager.append_event(
+            context.run_id, "telegram_media_permanently_refused",
+            call_id="delivery-media:queue-one",
+            tool="telegram.send_media", error="route refused this file",
+        )
+        first_path.unlink()
+        self.recovery_pause(context)
+
+        plan = plan_resume(
+            self.manager, context.run_id, outbound_roots=[self.spool],
+        )
+
+        self.assertEqual(plan.kind, "transport_owned")
+        self.assertEqual(list(plan.outbound), [])
+
     def test_media_transport_without_exact_checkpoint_fails_closed(self):
         context = self.create("transport-media-no-checkpoint")
         self.manager.start_tool(

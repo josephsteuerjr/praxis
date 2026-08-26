@@ -469,6 +469,63 @@ class TestStateLine(_Harness):
         self.assertIn("operations running 1", line)
         self.assertIn("audit verified", line)
 
+    def test_unknown_operations_are_not_rendered_as_an_exact_zero(self):
+        reply = {"ok": True, "protocol": serverd_client.PROTOCOL,
+                 "operations": [], "operations_unknown": True,
+                 "operations_error": "каталог операций не прочитан", "audit": {"ok": True}}
+        with mock.patch.object(serverd_client, "_exchange", lambda *a, **k: dict(reply)):
+            line = serverd_client.state_line()
+        self.assertIn("operations UNKNOWN", line)
+        self.assertIn("каталог операций не прочитан", line)
+        self.assertNotIn("operations running 0", line)
+
+    def test_truncated_operations_are_only_a_lower_bound(self):
+        reply = {"ok": True, "protocol": serverd_client.PROTOCOL,
+                 "operations": [{"status": "running"}, {"status": "done"}],
+                 "operations_total": 42,
+                 "operations_note": "список НЕ полный", "audit": {"ok": True}}
+        with mock.patch.object(serverd_client, "_exchange", lambda *a, **k: dict(reply)):
+            line = serverd_client.state_line()
+        self.assertIn("operations running at least 1", line)
+        self.assertIn("UNKNOWN", line)
+        self.assertNotIn("operations running 1;", line)
+
+    def test_bad_optional_counts_do_not_erase_valid_total_truncation(self):
+        """Каждый numeric-сигнал независим: мусорный shown не отменяет total > len."""
+        reply = {"ok": True, "protocol": serverd_client.PROTOCOL,
+                 "operations": [{"status": "done"}], "operations_total": 12,
+                 "operations_shown": "сломано", "operations_matched": 12,
+                 "audit": {"ok": True}}
+        with mock.patch.object(serverd_client, "_exchange", lambda *a, **k: dict(reply)):
+            line = serverd_client.state_line()
+        self.assertIn("operations running at least 0", line)
+        self.assertIn("shown 1 of 12", line)
+
+    def test_unowned_generic_truncated_flag_does_not_taint_operations(self):
+        reply = {"ok": True, "protocol": serverd_client.PROTOCOL,
+                 "operations": [], "truncated": True, "audit": {"ok": True}}
+        with mock.patch.object(serverd_client, "_exchange", lambda *a, **k: dict(reply)):
+            line = serverd_client.state_line()
+        self.assertIn("operations running 0", line)
+        self.assertNotIn("UNKNOWN beyond", line)
+
+    def test_the_word_shown_alone_is_not_evidence_of_incompleteness(self):
+        reply = {"ok": True, "protocol": serverd_client.PROTOCOL,
+                 "operations": [], "operations_note": "показаны операции этого корня",
+                 "audit": {"ok": True}}
+        with mock.patch.object(serverd_client, "_exchange", lambda *a, **k: dict(reply)):
+            line = serverd_client.state_line()
+        self.assertIn("operations running 0", line)
+        self.assertNotIn("UNKNOWN beyond", line)
+
+    def test_missing_status_sections_are_explicitly_unknown(self):
+        with mock.patch.object(serverd_client, "_exchange",
+                               lambda *a, **k: {"ok": True}):
+            line = serverd_client.state_line()
+        self.assertIn("protocol UNKNOWN", line)
+        self.assertIn("operations UNKNOWN", line)
+        self.assertIn("audit UNKNOWN", line)
+
 
 class TestAdviceReachesHer(_Harness):
     def test_run_no_longer_drops_the_advice(self):

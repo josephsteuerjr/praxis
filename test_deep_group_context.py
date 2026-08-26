@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 import contextlib
 import json
 import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 from collections import defaultdict, deque
@@ -42,6 +44,10 @@ class _ImportEvents:
         return object()
 
     @staticmethod
+    def MessageDeleted(*args, **kwargs):
+        return object()
+
+    @staticmethod
     def ChatAction(*args, **kwargs):
         return object()
 
@@ -75,6 +81,12 @@ class TempGroupMemory(unittest.TestCase):
             patch.object(group_context, "MEM_DIR", self.memory),
             patch.object(group_context, "GROUPS_DIR", self.groups),
             patch.object(group_context, "STATE_DIR", self.state),
+            # Реестр маршрутов тоже в песочницу: иначе свидетельство, записанное
+            # одним тестом, доживает до чужого и молча меняет place_of соседям
+            # (поймано 22.08: verdict от бэкфил-теста уводил tombstone удаления в
+            # комнатный hot, и он воскресал в буфере edit-тестов).
+            patch.object(runner.telegram_routes, "DIR",
+                         self.memory / ".state" / "group_context"),
         ]
         for item in self.patchers:
             item.start()
@@ -241,6 +253,22 @@ class TestCanonicalArchive(TempGroupMemory):
         self.assertEqual(group_context.search("-1001", "original"), [])
         self.assertEqual(len(group_context.search("-1001", "final")), 1)
 
+    def test_older_edit_appended_late_does_not_replace_newer_revision(self):
+        arguments = dict(
+            peer_id="-1001", topic_id=11, message_id=41,
+            sender_id=10, sender_name="Alice", reply_to_message_id=11,
+            timestamp="2026-07-14T12:00:00Z", media="",
+        )
+        self.assertTrue(group_context.observe_message(
+            **arguments, edited_at="2026-07-14T12:10:00Z", text="newer correction"))
+        self.assertTrue(group_context.observe_message(
+            **arguments, edited_at="2026-07-14T12:05:00Z", text="older delayed correction"))
+
+        rendered = group_context.context("-1001", topic_id=11, limit=10)
+        self.assertIn("newer correction", rendered)
+        self.assertNotIn("older delayed correction", rendered)
+        self.assertEqual(group_context.search("-1001", "older delayed"), [])
+
     def test_torn_tail_is_isolated_before_next_append(self):
         self.add("-1001", 11, 1, "first")
         path = group_context.archive_path("-1001")
@@ -276,6 +304,19 @@ class TestCanonicalArchive(TempGroupMemory):
         self.assertIn("aggregate only", value)
         self.assertIn("[CROSS-TOPIC EXCERPT]", value)
         self.assertIn("topic #22", value)
+
+    def test_legacy_invented_topic_title_is_not_a_name(self):
+        """Её регрессия 8 от 22.08: старый канон с topic_title="topic #N" не
+        показывается как имя — ни в строке ленты (`[topic #24255 «topic #24255»]`),
+        ни в карте/проекции. Канон append-only, лечится ЧТЕНИЕ."""
+        self.add("-1001", 24255, 1, "живой текст", title="topic #24255")
+        rendered = group_context.context("-1001", topic_id=24255, limit=10)
+        self.assertIn("topic #24255", rendered)       # адрес ветки остаётся
+        self.assertNotIn("«topic #24255»", rendered)  # но именем не притворяется
+        self.assertEqual(group_context.topic_title("-1001", 24255), "")
+        mapped = group_context.projection("-1001")["topics"]["24255"]
+        self.assertEqual(mapped["title"], "",
+                         "проекция не сохраняет выдуманный title как настоящий")
 
     def test_generated_group_map_is_bounded_and_rebuild_stable(self):
         with patch.object(group_context, "MAX_MAP_TOPICS", 3), \
@@ -368,6 +409,37 @@ class TestTopicRouting(unittest.TestCase):
         self.assertEqual(route.topic_id, 77)
         self.assertEqual(telegram_topics.topic_opener_title(message), "Introductions")
 
+    def test_pending_wake_revision_refreshes_payload_without_changing_authority(self):
+        original = runner.GroupWake(
+            message_id=41, message_ts=1.0, kind="mention", speaker="Alice",
+            sender_id=10, owner=True, known=True, family=False,
+            context_snapshot="old context",
+            reply_targets_snapshot=((41, "Alice", "old gist"), (42, "Bob", "other")),
+            media_snapshot=(), addressed=True, query="old query",
+            turns_snapshot=((False, "old", "old"),),
+        )
+        wakes = {"room": original}
+        revised_turns = ((False, "new", "new"),)
+        with (
+            patch.object(runner, "_group_wakes", wakes),
+            patch.object(runner, "_room_policy_for_state", return_value={}),
+            patch.object(runner, "_group_context_frozen",
+                         return_value=("new context", revised_turns)),
+        ):
+            self.assertTrue(runner._refresh_group_wake_context(
+                "room", message_id=41, query="new query", author="Alice Revised",
+            ))
+
+        current = wakes["room"]
+        self.assertEqual(current.context_snapshot, "new context")
+        self.assertEqual(current.turns_snapshot, revised_turns)
+        self.assertEqual(current.query, "new query")
+        self.assertEqual(current.speaker, "Alice Revised")
+        self.assertTrue(current.owner)
+        self.assertEqual(current.reply_targets_snapshot, (
+            (41, "Alice Revised", "new query"), (42, "Bob", "other"),
+        ))
+
     def test_reflective_wake_never_replaces_an_address(self):
         addressed = runner.GroupWake(
             message_id=1, message_ts=1.0, kind="mention", speaker="A",
@@ -432,25 +504,35 @@ class _EditedMessage(_LiveMessage):
         self.photo = object()
 
 
+class _BlockingEditedEvent(_LiveEvent):
+    def __init__(self, message, gate: asyncio.Event):
+        super().__init__(message)
+        self.gate = gate
+
+    async def get_sender(self):
+        await self.gate.wait()
+        return self.sender
+
+
 class TestEditedIncoming(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
     async def test_admitted_edit_is_one_archive_revision_and_one_topic_life_event(self):
         event = _LiveEvent(_EditedMessage(41, "corrected caption"))
         buffers = defaultdict(lambda: deque(maxlen=600))
         life = Mock(return_value={"id": "life-edit-41"})
+        hot_revision = Mock(return_value={"matched": True})
         meta_update = Mock()
-        capture = AsyncMock()
-        inbox = AsyncMock()
-        followups = Mock()
-        panic = Mock()
-        update_self = Mock()
-        manage_desire = Mock()
-        arms = Mock()
+        refresh = Mock(return_value=False)
         wakes = {}
 
         with (
             patch.object(runner.rooms, "is_frozen", return_value=False),
             patch.object(runner.rooms, "is_allowed", return_value=True),
             patch.object(runner.rooms, "effective_mode", return_value="normal"),
+            # С 22.08 тема — ключ хранения только по знанию: форум + каталог,
+            # каталог приезжает preflight'ом до фиксации маршрута.
+            patch.object(runner, "_known_forum", lambda *a, **k: True),
+            patch.object(runner, "_catalog_for_routing",
+                         AsyncMock(return_value=frozenset({77}))),
             patch.object(runner, "_group_archive_enabled", return_value=True),
             patch.object(runner.group_context, "topic_title", return_value="Ideas"),
             patch.object(runner, "_topic_titles", {}),
@@ -458,14 +540,9 @@ class TestEditedIncoming(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
             patch.object(runner, "_buf_dirty", set()),
             patch.object(runner, "_under_tests", return_value=False),
             patch.object(runner.memory_life, "record_message", life),
+            patch.object(runner.memory_life, "note_message_revision", hot_revision),
             patch.object(runner.bufstore, "meta_update", meta_update),
-            patch.object(runner, "_capture_typed_media", capture),
-            patch.object(runner, "_inbox_download", inbox),
-            patch.object(runner.telegram_followups.LEDGER, "observe_incoming", followups),
-            patch.object(runner.agent, "panic", panic),
-            patch.object(runner.agent, "tool_update_self", update_self),
-            patch.object(runner.agent, "tool_manage_desire", manage_desire),
-            patch.object(runner, "_arm", arms),
+            patch.object(runner, "_refresh_group_wake_context", refresh),
             patch.object(runner, "_group_wakes", wakes),
         ):
             await runner.on_edited(event)
@@ -505,14 +582,58 @@ class TestEditedIncoming(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
             f"telegram:-1001__topic__77:{source_id}:in",
         )
         meta_update.assert_called_once()
-        capture.assert_not_awaited()
-        inbox.assert_not_awaited()
-        followups.assert_not_called()
-        panic.assert_not_called()
-        update_self.assert_not_called()
-        manage_desire.assert_not_called()
-        arms.assert_not_called()
+        hot_revision.assert_called_once_with(
+            "-1001__topic__77", 41,
+            "Alice, reply to #77: [Изображение] corrected caption",
+            actor="Alice", ts=1784030400.0,
+        )
+        self.assertEqual(refresh.call_count, 1)
+        refresh.assert_called_with(
+            "-1001__topic__77", message_id=41,
+            query="[Изображение] corrected caption", author="Alice",
+            media_snapshot=(),
+        )
         self.assertEqual(wakes, {})
+
+    async def test_edit_stays_with_the_original_key_across_catalogue_arrival(self):
+        """Фан-аут 22.08 (P1): оригинал лёг в комнату до прихода каталога — правка
+        обязана лечь туда же, а не уехать в тему по сегодняшнему знанию. Одна
+        логическая запись не разъезжается по двум ключам."""
+        group_context.observe_message(
+            peer_id="-1001", topic_id=None, message_id=41, sender_id=10,
+            sender_name="Alice", reply_to_message_id=77,
+            timestamp="2026-07-14T12:00:00Z", text="original filed in the room")
+        event = _LiveEvent(_EditedMessage(41, "corrected later"))
+        buffers = defaultdict(lambda: deque(maxlen=600))
+
+        with (
+            patch.object(runner.rooms, "is_frozen", return_value=False),
+            patch.object(runner.rooms, "is_allowed", return_value=True),
+            patch.object(runner.rooms, "effective_mode", return_value="normal"),
+            patch.object(runner, "_known_forum", lambda *a, **k: True),
+            patch.object(runner, "_catalog_for_routing",
+                         AsyncMock(return_value=frozenset({77}))),
+            patch.object(runner, "_group_archive_enabled", return_value=True),
+            patch.object(runner.group_context, "topic_title", return_value="Ideas"),
+            patch.object(runner, "_topic_titles", {}),
+            patch.object(runner, "_buf", buffers),
+            patch.object(runner, "_buf_dirty", set()),
+            patch.object(runner, "_under_tests", return_value=False),
+            patch.object(runner.memory_life, "record_message",
+                         Mock(return_value={"id": "life-anchor-41"})),
+            patch.object(runner.memory_life, "note_message_revision",
+                         Mock(return_value={"matched": True})),
+            patch.object(runner, "_sync_buffer_from_hot", Mock()),
+            patch.object(runner.bufstore, "meta_update"),
+            patch.object(runner, "_group_wakes", {}),
+        ):
+            await runner.on_edited(event)
+
+        self.assertTrue(list(buffers["-1001"]),
+                        "правка легла к оригиналу — в комнату")
+        self.assertIn("corrected later", buffers["-1001"][0])
+        self.assertFalse(list(buffers["-1001__topic__77"]),
+                         "и не уехала в тему по сегодняшнему каталогу")
 
     async def test_two_payloads_with_same_edit_second_are_distinct_revisions(self):
         first = _LiveEvent(_EditedMessage(51, "first correction"))
@@ -546,17 +667,177 @@ class TestEditedIncoming(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row["text"] for row in rows], [
             "first correction", "second correction",
         ])
-        self.assertEqual(len(buffers["-1001__topic__77"]), 2)
         self.assertEqual(life.call_count, 2)
         source_ids = [call.kwargs["source_id"] for call in life.call_args_list]
         self.assertEqual(len(set(source_ids)), 2)
         self.assertTrue(all(":edit:2026-07-14T12:05:00Z:" in value
                             for value in source_ids))
 
+    async def test_same_second_concurrent_edits_follow_reception_not_completion(self):
+        gate = asyncio.Event()
+        first = _BlockingEditedEvent(_EditedMessage(52, "received first"), gate)
+        second = _LiveEvent(_EditedMessage(52, "received second"))
+        buffers = defaultdict(lambda: deque(maxlen=600))
+        message_ids = defaultdict(lambda: deque(maxlen=600))
+
+        with (
+            patch.object(runner.rooms, "is_frozen", return_value=False),
+            patch.object(runner.rooms, "is_allowed", return_value=True),
+            patch.object(runner.rooms, "effective_mode", return_value="normal"),
+            # С 22.08 тема — ключ хранения только по знанию: форум + каталог,
+            # каталог приезжает preflight'ом до фиксации маршрута.
+            patch.object(runner, "_known_forum", lambda *a, **k: True),
+            patch.object(runner, "_catalog_for_routing",
+                         AsyncMock(return_value=frozenset({77}))),
+            patch.object(runner, "_group_archive_enabled", return_value=True),
+            patch.object(runner.group_context, "topic_title", return_value="Ideas"),
+            patch.object(runner, "_topic_titles", {}),
+            patch.object(runner, "_buf", buffers),
+            patch.object(runner, "_buffer_message_ids", message_ids),
+            patch.object(runner, "_buf_dirty", set()),
+            patch.object(runner, "_under_tests", return_value=False),
+            patch.object(runner.memory_life, "note_message_revision", return_value={"matched": True}),
+            patch.object(runner.bufstore, "meta_update"),
+            patch.object(runner, "_group_wakes", {}),
+            patch.object(runner.telegram_followups.LEDGER, "revise_response", return_value=None),
+        ):
+            first_task = asyncio.create_task(runner.on_edited(first))
+            await asyncio.sleep(0)
+            await runner.on_edited(second)
+            gate.set()
+            await first_task
+
+        current = group_context.latest_message("-1001", 52)
+        self.assertEqual(current["text"], "received second")
+        self.assertEqual(len(buffers["-1001__topic__77"]), 1)
+        self.assertIn("received second", buffers["-1001__topic__77"][0])
+        hot = runner.memory_life.hot_records("-1001__topic__77")
+        self.assertEqual(len(hot), 1)
+        self.assertIn("received second", hot[0]["line"])
+
+    def test_route_drift_edit_collapses_stale_topic_copy(self):
+        self.add("-1001", 77, 53, "stale topic-routed original", reply=77)
+        group_context.observe_message(
+            peer_id="-1001", topic_id=None, message_id=53,
+            sender_id=10, sender_name="Alice", reply_to_message_id=None,
+            timestamp="2026-07-14T12:00:00Z",
+            edited_at="2026-07-14T12:05:00Z", revision_order=2,
+            text="current root-routed edit",
+        )
+
+        current = group_context.latest_message("-1001", 53)
+        self.assertEqual(current["text"], "current root-routed edit")
+        stale_hits = group_context.search("-1001", "stale topic-routed")
+        self.assertTrue(stale_hits)
+        self.assertTrue(all(row["text"] == "current root-routed edit" for row in stale_hits))
+        self.assertEqual(group_context.search("-1001", "current root-routed")[0]["text"],
+                         "current root-routed edit")
+        self.assertIn("current root-routed edit",
+                      group_context.context("-1001", topic_id=None, limit=10))
+
+    async def test_private_edit_replaces_current_dm_text(self):
+        event = _LiveEvent(_EditedMessage(61, "corrected privately"))
+        event.is_private = True
+        event.chat_id = 10
+        buffers = defaultdict(lambda: deque(maxlen=600))
+        buffers["10"].append("Alice: obsolete private text")
+        message_ids = defaultdict(lambda: deque(maxlen=600))
+        message_ids["10"].append("61")
+        hot = Mock(return_value={"matched": True})
+        arms = Mock()
+        meta = {"10": {
+            "is_dm": True, "origin_message_id": 61,
+            "origin_text": "obsolete private text", "name": "Alice",
+        }}
+
+        with (
+            patch.object(runner, "_buf", buffers),
+            patch.object(runner, "_buffer_message_ids", message_ids),
+            patch.object(runner, "_buf_dirty", set()),
+            patch.object(runner, "_pending_media", defaultdict(lambda: deque(maxlen=16))),
+            patch.object(runner, "_meta", meta),
+            patch.object(runner, "_under_tests", return_value=False),
+            patch.object(runner.memory_life, "record_message", return_value={"id": "dm-edit"}),
+            patch.object(runner.memory_life, "note_message_revision", hot),
+            patch.object(runner.bufstore, "meta_update"),
+            patch.object(runner, "_arm", arms),
+        ):
+            await runner.on_edited(event)
+
+        self.assertEqual(len(buffers["10"]), 1)
+        self.assertIn("corrected privately", buffers["10"][0])
+        self.assertNotIn("obsolete private text", buffers["10"][0])
+        self.assertEqual(meta["10"]["origin_text"], "corrected privately")
+        hot.assert_called_once()
+        arms.assert_called_once_with("10")
+
+    async def test_edit_replay_repairs_a_failed_life_append(self):
+        event = _LiveEvent(_EditedMessage(71, "repair durable edit"))
+        buffers = defaultdict(lambda: deque(maxlen=600))
+        source_ids = defaultdict(lambda: deque(maxlen=600))
+        life = Mock(side_effect=[OSError("disk unavailable"), {"id": "repaired"}])
+        hot = Mock(return_value={"matched": True})
+
+        with (
+            patch.object(runner.rooms, "is_allowed", return_value=True),
+            patch.object(runner.rooms, "effective_mode", return_value="normal"),
+            # С 22.08 тема — ключ хранения только по знанию: форум + каталог,
+            # каталог приезжает preflight'ом до фиксации маршрута.
+            patch.object(runner, "_known_forum", lambda *a, **k: True),
+            patch.object(runner, "_catalog_for_routing",
+                         AsyncMock(return_value=frozenset({77}))),
+            patch.object(runner, "_group_archive_enabled", return_value=True),
+            patch.object(runner.group_context, "topic_title", return_value="Ideas"),
+            patch.object(runner, "_topic_titles", {}),
+            patch.object(runner, "_buf", buffers),
+            patch.object(runner, "_buffer_message_ids", source_ids),
+            patch.object(runner, "_persisted_life_sources", set()),
+            patch.object(runner, "_buf_dirty", set()),
+            patch.object(runner, "_under_tests", return_value=False),
+            patch.object(runner.memory_life, "record_message", life),
+            patch.object(runner.memory_life, "note_message_revision", hot),
+            patch.object(runner.bufstore, "meta_update"),
+            patch.object(runner, "_group_wakes", {}),
+        ):
+            await runner.on_edited(event)
+            await runner.on_edited(event)
+
+        self.assertEqual(life.call_count, 2)
+        hot.assert_called_once()
+        self.assertEqual(len(buffers["-1001__topic__77"]), 1)
+        self.assertIn("repair durable edit", buffers["-1001__topic__77"][0])
+
+    async def test_expired_frozen_mode_does_not_block_an_edit(self):
+        event = _LiveEvent(_EditedMessage(43, "arrived after expiry"))
+        archive = Mock(return_value=True)
+        push = Mock()
+        runner.rooms.set_mode(
+            "-1001", "frozen", set_by="praxis", ttl_h=1,
+            now=time.time() - 2 * 3600,
+        )
+        self.assertTrue(runner.rooms.is_frozen("-1001"))
+
+        with (
+            patch.object(runner.rooms, "is_allowed", return_value=True),
+            patch.object(runner, "_group_archive_enabled", return_value=True),
+            patch.object(runner.group_context, "observe_message", archive),
+            patch.object(runner, "_buf_push", push),
+            patch.object(runner.group_context, "topic_title", return_value="Ideas"),
+            patch.object(runner, "_topic_titles", {}),
+            patch.object(runner, "_under_tests", return_value=False),
+            patch.object(runner.memory_life, "record_message", return_value={"id": "life-edit-43"}),
+            patch.object(runner.bufstore, "meta_update"),
+        ):
+            await runner.on_edited(event)
+
+        archive.assert_called_once()
+        self.assertFalse(runner.rooms.is_frozen("-1001"))
+        self.assertEqual(runner.rooms.effective_mode("-1001"), "normal")
+
     async def test_edit_obeys_frozen_allowlist_and_dead_room_gates(self):
         event = _LiveEvent(_EditedMessage(42, "must stay outside"))
         cases = (
-            (True, True, "normal"),
+            (True, True, "frozen"),
             (False, False, "normal"),
             (False, True, "dead"),
         )
@@ -577,6 +858,185 @@ class TestEditedIncoming(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
             push.assert_not_called()
 
 
+class _DeletedEvent:
+    def __init__(self, mids, *, chat_id=-1001):
+        self.deleted_ids = list(mids)
+        self.chat_id = chat_id
+
+
+class TestDeletedIncoming(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
+    def test_tombstone_hides_current_text_but_keeps_append_only_audit(self):
+        self.add("-1001", 77, 41, "secret text", reply=77, title="Ideas")
+        self.assertTrue(group_context.observe_deletion(
+            peer_id="-1001", message_id=41,
+            timestamp="2026-07-14T12:06:00Z",
+        ))
+        self.assertFalse(group_context.observe_deletion(
+            peer_id="-1001", message_id=41,
+            timestamp="2026-07-14T12:07:00Z",
+        ))
+
+        rows = list(group_context.iter_records("-1001", max_records=None))
+        self.assertEqual([row["kind"] for row in rows], ["message", "deletion"])
+        rendered = group_context.context("-1001", topic_id=77, limit=10)
+        self.assertIn("message #41", rendered)
+        self.assertIn("deleted=2026-07-14T12:06:00Z", rendered)
+        self.assertIn("[message deleted in Telegram]", rendered)
+        self.assertNotIn("secret text", rendered)
+        self.assertEqual(group_context.search("-1001", "secret"), [])
+        full = group_context.message_text("-1001", message_id=41)
+        self.assertIn("[message deleted in Telegram]", full)
+        self.assertNotIn("secret text", full)
+
+        # A later history backfill may append the old body after the tombstone.  Current
+        # surfaces must still treat deletion as terminal instead of resurrecting it.
+        self.add("-1001", 77, 41, "secret text resurrected", reply=77, title="Ideas")
+        rendered = group_context.context("-1001", topic_id=77, limit=10)
+        self.assertIn("[message deleted in Telegram]", rendered)
+        self.assertNotIn("resurrected", rendered)
+        self.assertIn("former sender=Alice", rendered)
+        rows = group_context.context_rows("-1001", topic_id=77, limit=10)
+        deleted = next(row for row in rows if "message #41" in row["line"])
+        self.assertFalse(deleted["self"], "Telegram tombstone must not become my assistant turn")
+        self.assertEqual(group_context.search("-1001", "resurrected"), [])
+
+    def test_unknown_deletion_binds_to_only_one_backfilled_topic(self):
+        self.assertTrue(group_context.observe_deletion(
+            peer_id="-1001", message_id=41,
+            timestamp="2026-07-14T12:06:00Z",
+        ))
+        self.add("-1001", 11, 41, "first backfilled body", reply=11)
+        self.add("-1001", 22, 41, "independent topic body", reply=22)
+
+        first = group_context.context("-1001", topic_id=11, limit=10)
+        second = group_context.context("-1001", topic_id=22, limit=10)
+        self.assertIn("[message deleted in Telegram]", first)
+        self.assertNotIn("first backfilled body", first)
+        self.assertIn("independent topic body", second)
+        self.assertNotIn("[message deleted in Telegram]", second)
+
+    async def test_admitted_deletion_archives_and_updates_live_context_without_wake(self):
+        self.add("-1001", 77, 41, "soon removed", reply=77, title="Ideas")
+        buffers = defaultdict(lambda: deque(maxlen=600))
+        life = Mock(return_value={"id": "life-delete-41"})
+        arms = Mock()
+        refresh = Mock(return_value=True)
+        wake = runner.GroupWake(
+            message_id=41, message_ts=1.0, kind="mention", speaker="Alice",
+            sender_id=10, owner=False, known=True, family=False,
+            context_snapshot="Alice: soon removed", reply_targets_snapshot=(),
+            media_snapshot=(), addressed=True, query="soon removed",
+        )
+        wakes = {"-1001__topic__77": wake}
+
+        with (
+            patch.object(runner.rooms, "is_allowed", return_value=True),
+            patch.object(runner.rooms, "effective_mode", return_value="normal"),
+            patch.object(runner, "_group_archive_enabled", return_value=True),
+            patch.object(runner, "_buf", buffers),
+            patch.object(runner, "_buf_dirty", set()),
+            patch.object(runner, "_meta", {}),
+            patch.object(runner, "_under_tests", return_value=False),
+            patch.object(runner.memory_life, "record_message", life),
+            patch.object(runner.bufstore, "meta_update"),
+            patch.object(runner, "_arm", arms),
+            patch.object(runner, "_refresh_group_wake_context", refresh),
+            patch.object(runner, "_group_wakes", wakes),
+            patch.object(runner.time, "time", return_value=1787170200.0),
+        ):
+            await runner.on_deleted(_DeletedEvent([41]))
+            await runner.on_deleted(_DeletedEvent([41]))
+
+        rows = [row for row in group_context.iter_records("-1001", max_records=None)
+                if row.get("message_id") == 41]
+        self.assertEqual([row["kind"] for row in rows], ["message", "deletion"])
+        self.assertEqual(len(buffers["-1001__topic__77"]), 1)
+        self.assertIn("deleted #41", buffers["-1001__topic__77"][0])
+        self.assertIn("former sender: Alice", buffers["-1001__topic__77"][0])
+        life.assert_called_once()
+        self.assertEqual(life.call_args.kwargs["source_id"], "41:delete")
+        arms.assert_called_once_with("-1001__topic__77")
+        refresh.assert_not_called()
+        self.assertEqual(wakes, {})
+
+    async def test_deletion_archive_retries_a_transient_first_failure(self):
+        self.add("-1001", 77, 42, "remove after transient failure", title="Ideas")
+        real = group_context.observe_deletion
+        attempts = 0
+
+        def flaky(**kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise OSError("temporary disk error")
+            return real(**kwargs)
+
+        with (
+            patch.object(runner.rooms, "is_allowed", return_value=True),
+            patch.object(runner.rooms, "effective_mode", return_value="normal"),
+            patch.object(runner, "_group_archive_enabled", return_value=True),
+            patch.object(runner.group_context, "observe_deletion", side_effect=flaky),
+            patch.object(runner, "_buf", defaultdict(lambda: deque(maxlen=600))),
+            patch.object(runner, "_buffer_message_ids", defaultdict(lambda: deque(maxlen=600))),
+            patch.object(runner, "_buf_dirty", set()),
+            patch.object(runner, "_meta", {}),
+            patch.object(runner, "_under_tests", return_value=False),
+            patch.object(runner.memory_life, "record_message", return_value={"id": "life-delete"}),
+            patch.object(runner.bufstore, "meta_update"),
+            patch.object(runner.telegram_followups.LEDGER, "delete_response", return_value=None),
+            patch.object(runner, "_group_wakes", {}),
+        ):
+            await runner.on_deleted(_DeletedEvent([42]))
+
+        self.assertEqual(attempts, 2)
+        current = group_context.latest_message("-1001", 42)
+        self.assertEqual(current["kind"], "deletion")
+
+    async def test_deletion_projects_followup_even_when_archive_tombstone_is_replayed(self):
+        ledger_path = self.base / "followups.json"
+        ledger = runner.telegram_followups.FollowUpLedger(ledger_path)
+        item = ledger.create(
+            target_ref="-1001", target_label="Ideas", target_peer_id=-1001,
+            target_user_id=None, sent_message_id=40,
+            request_text="сообщи, когда ответит", notify_owner=True,
+            notice_source="owner", sent_at=1)
+        ledger.observe_incoming(
+            peer_id=-1001, sender_id=10, message_id=41, text="STALE ANSWER",
+            reply_to_message_id=40, received_at=2)
+        # Archive already accepted deletion in an earlier partial attempt.  Handler must
+        # still repair the independently durable follow-up projection on replay.
+        group_context.observe_deletion(
+            peer_id="-1001", message_id=41, timestamp="2026-08-20T08:00:00Z")
+        suppress = AsyncMock(return_value=1)
+        with (
+            patch.object(runner.rooms, "is_allowed", return_value=True),
+            patch.object(runner.rooms, "effective_mode", return_value="normal"),
+            patch.object(runner, "_group_archive_enabled", return_value=True),
+            patch.object(runner.telegram_followups, "LEDGER", ledger),
+            patch.object(runner, "_supersede_pending_followup_deliveries", suppress),
+        ):
+            await runner.on_deleted(_DeletedEvent([41]))
+
+        current = ledger.get(item["id"])
+        self.assertEqual(current["status"], "response_deleted")
+        self.assertNotIn("STALE ANSWER", ledger.context())
+        suppress.assert_awaited_once_with(item["id"], reason="response_deleted")
+
+    async def test_deletion_without_peer_or_from_blocked_room_is_not_guessed(self):
+        archive = Mock(return_value=True)
+        push = Mock()
+        with (
+            patch.object(runner.rooms, "is_allowed", return_value=False),
+            patch.object(runner, "_group_archive_enabled", return_value=True),
+            patch.object(runner.group_context, "observe_deletion", archive),
+            patch.object(runner, "_buf_push", push),
+        ):
+            await runner.on_deleted(_DeletedEvent([41], chat_id=None))
+            await runner.on_deleted(_DeletedEvent([41]))
+        archive.assert_not_called()
+        push.assert_not_called()
+
+
 class TestReflectiveIncoming(unittest.IsolatedAsyncioTestCase):
     async def test_ambient_batches_but_address_wins_and_archive_sees_all(self):
         buffers = defaultdict(lambda: deque(maxlen=600))
@@ -591,6 +1051,11 @@ class TestReflectiveIncoming(unittest.IsolatedAsyncioTestCase):
             patch.object(runner.rooms, "is_frozen", return_value=False),
             patch.object(runner.rooms, "is_allowed", return_value=True),
             patch.object(runner.rooms, "effective_mode", return_value="normal"),
+            # С 22.08 тема — ключ хранения только по знанию: форум + каталог,
+            # каталог приезжает preflight'ом до фиксации маршрута.
+            patch.object(runner, "_known_forum", lambda *a, **k: True),
+            patch.object(runner, "_catalog_for_routing",
+                         AsyncMock(return_value=frozenset({77}))),
             patch.object(runner.rooms, "room_policy", return_value={
                 "engagement": "reflective", "context_hot": 0,
                 "context_summary_chars": 7000, "cross_topics": "off",
@@ -704,7 +1169,8 @@ class TestBoundedBackfill(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
         fake = _HistoryClient(messages)
         with (
             patch.object(runner, "client", fake),
-            patch.object(runner, "_forum_topic_catalog", AsyncMock(return_value=[])),
+            patch.object(runner, "_forum_topic_catalog",
+                         AsyncMock(return_value=([], True))),
             patch.object(agent, "voice_turn_envelope", Mock()) as voice,
         ):
             first = await runner._backfill_group_context("-1001", object(), limit=10)

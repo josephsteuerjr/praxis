@@ -48,6 +48,7 @@ import telegram_outbox
 import telegram_registry
 import telegram_routes
 import telegram_topics
+import history_scan
 import unanswered
 import workshop
 
@@ -104,7 +105,18 @@ IMMUNE_MINUTES = float(os.getenv("PRAXIS_IMMUNE_MINUTES", "15"))
 ABSENCE_TICK = float(os.getenv("PRAXIS_ABSENCE_TICK", "300"))
 # PASS 13.1 compatibility: timeout for an explicitly announced transport reconnect.
 # PASS 24 task runs never use this state: Telethon stays connected while they execute.
+# С 20.08 тот же бюджет — грейс ДЕГРАДИРОВАННОГО режима: сколько она держится без сети,
+# не умирая (см. _reconnect_with_backoff). Смысл один и тот же — «сколько терплю немоту
+# транспорта, прежде чем признать сбой», поэтому второго тумблера не завожу.
 RECONNECT_TIMEOUT_SEC = float(os.getenv("PRAXIS_RECONNECT_TIMEOUT_SEC", "1800"))
+# Обрыв сети — не повод умирать. Telethon 1.44 сдаётся сам за ~10-15с (5 попыток × 1с)
+# и бросает ConnectionError из run_until_disconnected(); до 20.08 это исключение не ловил
+# НИКТО — оно улетало из main(), процесс падал секунд через 15 после старта, bootguard видел
+# rc≠0 при elapsed<grace(60с) и на третьем круге откатывал ЗДОРОВЫЙ код на last_good.
+# ConnectionError и TimeoutError — подклассы OSError, перечисляю все три ради читаемости.
+_NET_ERRORS = (ConnectionError, OSError, asyncio.TimeoutError)
+RECONNECT_BACKOFF_START = float(os.getenv("PRAXIS_RECONNECT_BACKOFF_START", "5"))
+RECONNECT_BACKOFF_MAX = float(os.getenv("PRAXIS_RECONNECT_BACKOFF_MAX", "60"))
 # HOTFIX 07.07: сколько ждать фонового прогрева кэша диалогов при ХОЛОДНОМ резолве по имени.
 # Свой бюджет, не доля чужого: раньше холодный iter_dialogs() платился из общих 30 секунд
 # _sync_send_message — первый «напиши Евгению» после рестарта умирал TimeoutError'ом.
@@ -203,6 +215,13 @@ class _OneMind(asyncio.Lock):
 
 _ONE_MIND = _OneMind()
 _buf: dict[str, deque] = defaultdict(lambda: deque(maxlen=BUF_MAXLEN))
+_buffer_message_ids: dict[str, deque] = defaultdict(lambda: deque(maxlen=BUF_MAXLEN))
+_persisted_life_sources: set[tuple[str, str, object]] = set()
+# Per peer/message reception order captured before edit handlers await sender/routing work.
+# It breaks equal-second concurrent completion ties without changing the stable revision id.
+_revision_reception_counter = 0
+_revision_reception_orders: dict[tuple[str, int, str], int] = {}
+_revision_order_by_chat_source: dict[tuple[str, str], int] = {}
 _meta: dict[str, dict] = {}
 
 
@@ -293,6 +312,48 @@ _CLOCK_STARTUP_DUE = frozenset({
 _TURN_TOPIC_ROUTE: ContextVar[telegram_topics.TopicRoute | None] = ContextVar(
     "praxis_telegram_topic_route", default=None)
 _topic_titles: dict[tuple[str, int], str] = {}
+# Добыча durable-каталога тем (её блокер 5 от 22.08: никакого скрытого фан-аута и
+# синхронного диска в event loop): один tracked single-flight на комнату, короткий
+# in-memory кэш каталога, окно проверки давности/незнакомого корня — не чаще
+# кулдауна, повтор после неудачи — короче и отдельно. Кулдаун и давность — её числа.
+_topic_catalog_cache: dict[str, tuple[float, frozenset | None]] = {}
+_TOPIC_CATALOG_CACHE_TTL = 60.0
+_topic_catalog_flights: dict[str, asyncio.Task] = {}
+_topic_catalog_next_attempt: dict[str, float] = {}
+# Дисковая проверка давности живёт на СВОЁМ окне: фан-аут 22.08 поймал, что общее
+# окно сжигалось сообщением, которому рефреш не нужен, и глушило бесплатный
+# in-memory сигнал «незнакомый корень» на 15 минут (P0).
+_topic_catalog_stale_probe: dict[str, float] = {}
+# Корни, по которым свип уже летал и темы не нашёл (цепочки General): один корень —
+# одна разведка, чтобы болтливая ветка не жгла RPC. Кап — защита памяти, не политика.
+_topic_catalog_probed_roots: dict[str, set[int]] = {}
+_TOPIC_CATALOG_PROBED_CAP = 512
+# Анти-флуд на разведку незнакомых корней: поток РАЗНЫХ корней (враждебный или
+# просто болтливый) не смеет жечь RPC чаще раза в окно. Настоящая новая тема
+# попадает в первый же свободный запуск.
+_topic_catalog_unknown_gate: dict[str, float] = {}
+# Её гейт REPAIR2: холодное durable-чтение каталога — один read-flight на комнату
+# (P1-3, stampede), а корни, ради которых летал свип, хоронятся в probed ТОЛЬКО
+# после доказанно полного успеха (P0-1: transient не смеет хоронить навсегда).
+# Поколение кэша защищает от гонки «устаревший read-flight дописал старое знание
+# ПОВЕРХ свежего»: запись в кэш действительна только в том поколении, в котором
+# чтение началось; каждая инвалидация поколение двигает.
+_topic_catalog_read_flights: dict[str, asyncio.Task] = {}
+_topic_catalog_pending_roots: dict[str, set[int]] = {}
+_topic_catalog_cache_gen: dict[str, int] = {}
+# Бюджет сходимости чтения знания (её гейт REPAIR3): при непрерывном churn
+# опенеров/инвалидаций перечитывание ограничено временем, а не числом попыток —
+# лимит попыток не доказательство свежести. Число — её, как и остальные.
+_TOPIC_KNOWLEDGE_CONVERGE_BUDGET = 2.0
+
+
+def _invalidate_topic_cache(peer: str) -> None:
+    _topic_catalog_cache.pop(peer, None)
+    _topic_catalog_cache_gen[peer] = _topic_catalog_cache_gen.get(peer, 0) + 1
+_TOPIC_CATALOG_COOLDOWN = 900.0
+_TOPIC_CATALOG_RETRY = 60.0
+_TOPIC_CATALOG_REFRESH = 86_400.0
+_TOPIC_CATALOG_PREFLIGHT_TIMEOUT = 8.0
 
 
 def _media_spool() -> media_core.MediaSpool:
@@ -396,6 +457,37 @@ def _cooldown(is_dm: bool, room_mode: str = "normal", *, addressed: bool = False
     return base
 
 
+def _life_source_key(chat_id: str, source_id: str | int | None) -> tuple[str, str, object]:
+    return str(chat_id), str(source_id or ""), memory_life.record_message
+
+
+def _life_source_persisted(chat_id: str, source_id: str | int | None) -> bool:
+    return source_id is not None and _life_source_key(chat_id, source_id) in _persisted_life_sources
+
+
+def _record_life_message(chat_id: str, line: str, *, actor: str, direction: str,
+                         source_id: str | int | None, is_dm: bool | None,
+                         ts: float | None, dedupe_key: str,
+                         revision_order: int | None = None) -> bool:
+    """Persist one Telegram life event, retrying only until one append/dedupe succeeds."""
+
+    key = _life_source_key(chat_id, source_id)
+    if source_id is not None and key in _persisted_life_sources:
+        return True
+    try:
+        memory_life.record_message(
+            chat_id, line, actor=actor, direction=direction, source="telegram",
+            source_id=source_id, is_dm=is_dm, ts=ts, dedupe_key=dedupe_key,
+            revision_order=revision_order,
+        )
+    except Exception:
+        log.exception("life event не записался [%s]", chat_id)
+        return False
+    if source_id is not None:
+        _persisted_life_sources.add(key)
+    return True
+
+
 def _buf_push(chat_id: str, line: str, *, author: str = "",
               is_dm: bool | None = None, name: str | None = None,
               source_id: str | int | None = None, ts: float | None = None,
@@ -404,20 +496,26 @@ def _buf_push(chat_id: str, line: str, *, author: str = "",
 
     PASS 9.0: заодно фиксируем время/автора последней строки в buf_meta.json —
     буфер строк времени не хранит, а boot-sweep после рестарта должен знать возраст."""
-    _buf[chat_id].append(line)
+    buffer = _buf[chat_id]
+    message_ids = _buffer_message_ids[chat_id]
+    while len(message_ids) < len(buffer):
+        message_ids.appendleft("")
+    while len(message_ids) > len(buffer):
+        message_ids.popleft()
+    if buffer.maxlen is not None and len(buffer) >= buffer.maxlen and message_ids:
+        message_ids.popleft()
+    buffer.append(line)
+    message_ids.append(str(source_id) if source_id is not None else "")
     _buf_dirty.add(chat_id)
     if record_life and not _under_tests():
-        try:
-            actor = author or line.split(":", 1)[0]
-            direction = "out" if actor.strip().casefold() == "praxis" else "in"
-            dedupe = (f"telegram:{chat_id}:{source_id}:{direction}"
-                      if source_id is not None else "")
-            memory_life.record_message(
-                chat_id, line, actor=actor, direction=direction, source="telegram",
-                source_id=source_id, is_dm=is_dm, ts=ts, dedupe_key=dedupe)
-        except Exception:
-            # Event spine failing must be loud in logs, but never eat a Telegram message.
-            log.exception("life event не записался [%s]", chat_id)
+        actor = author or line.split(":", 1)[0]
+        direction = "out" if actor.strip().casefold() == "praxis" else "in"
+        dedupe = (f"telegram:{chat_id}:{source_id}:{direction}"
+                  if source_id is not None else "")
+        _record_life_message(
+            chat_id, line, actor=actor, direction=direction,
+            source_id=source_id, is_dm=is_dm, ts=ts, dedupe_key=dedupe,
+        )
     try:
         bufstore.meta_update(chat_id, author=author or line.split(":", 1)[0],
                              is_dm=is_dm, name=name)
@@ -761,6 +859,15 @@ async def _chat_descriptor(event, chat_id: str) -> dict:
         log.debug("chat descriptor [%s] не получен", chat_id, exc_info=True)
     d = {"title": title, "kind": kind, "size": size}
     _chat_desc[chat_id] = d
+    if title:
+        # Имя места живёт на диске, а не только в памяти процесса: без этого адресная
+        # книга её эпохи состоит из одних цифр (замер 20.08 — двенадцать «Комнат <id>»).
+        # Пишется один раз поверх машинной заглушки и никогда поверх живого имени.
+        try:
+            if rooms.remember_title(chat_id, title):
+                log.info("имя места записано в профиль [%s]: %s", chat_id, title)
+        except Exception:
+            log.debug("имя места [%s] не записалось", chat_id, exc_info=True)
     return d
 
 
@@ -947,22 +1054,38 @@ async def _initialize_joined_room(chat_id: str, entity, *, title: str | None = N
                      f"вошла в «{title or chat_id}», профиль готов, режим normal/reflective: {two}")
 
 
-async def _forum_topic_catalog(entity, peer_id: str, *, limit: int = 500) -> list[dict]:
-    """Read Telegram's forum map with this runner's already-connected client."""
+async def _forum_topic_catalog(entity, peer_id: str, *,
+                               hard_cap: int = 2000) -> tuple[list[dict], bool]:
+    """Каталог тем комнаты + ДОКАЗАНА ли его полнота. -> (rows, complete).
+
+    ⚠ Её блокер 2 от 22.08: раньше свип резался message-cap'ом бэкфила и безусловно
+    объявлялся полным — тема №501 «не существовала» и схлопывалась в комнату. Теперь
+    пагинация идёт до доказанного исчерпания (страница короче запрошенной или без
+    новых тем) и сверяется с server-side `count`; защитный `hard_cap` остался, но
+    упирание в него — явное «неполно»: неполное знание не рождает отрицательного.
+
+    ⚠ Её блокер 3: запись каталога строгая (межпроцессный замок в реестре, OSError
+    не глотается) и подтверждается re-read — без подтверждения полнота не заявляется
+    и успех не объявляется.
+    """
 
     from telethon.tl.functions.messages import GetForumTopicsRequest
 
-    cap = max(1, min(500, int(limit)))
     rows: list[dict] = []
     seen: set[int] = set()
     offset_date = None
     offset_id = offset_topic = 0
-    while len(rows) < cap:
-        page_size = min(100, cap - len(rows))
+    total: int | None = None
+    exhausted = False
+    while len(rows) < hard_cap:
+        page_size = 100
         result = await client(GetForumTopicsRequest(
             peer=entity, offset_date=offset_date, offset_id=offset_id,
             offset_topic=offset_topic, limit=page_size,
         ))
+        if total is None:
+            raw_count = getattr(result, "count", None)
+            total = raw_count if isinstance(raw_count, int) and raw_count >= 0 else None
         page = list(getattr(result, "topics", None) or ())
         fresh = []
         for item in page:
@@ -973,7 +1096,9 @@ async def _forum_topic_catalog(entity, peer_id: str, *, limit: int = 500) -> lis
             if topic_id <= 0 or topic_id in seen:
                 continue
             seen.add(topic_id)
-            title = str(getattr(item, "title", "") or f"topic #{topic_id}")
+            # Нет настоящего title — нет имени. Выдуманное «topic #N» здесь месяцами
+            # выглядело в её кадре как место с настоящим названием.
+            title = str(getattr(item, "title", "") or "").strip()
             date = getattr(item, "date", None)
             top_message = getattr(item, "top_message", None)
             row = {
@@ -986,14 +1111,35 @@ async def _forum_topic_catalog(entity, peer_id: str, *, limit: int = 500) -> lis
             await asyncio.to_thread(
                 group_context.record_topic, peer_id, topic_id, title,
                 timestamp=date, message_id=topic_id,
+                origin="forum_list",
             )
         if len(page) < page_size or not fresh:
+            exhausted = True
             break
         last = fresh[-1]
         offset_date = getattr(last, "date", None)
         offset_id = int(getattr(last, "top_message", 0) or 0)
         offset_topic = int(getattr(last, "id", 0) or 0)
-    return rows
+    complete = exhausted and (total is None or len(rows) >= total)
+    if not complete:
+        log.warning("каталог тем [%s]: свип НЕПОЛНЫЙ (собрано %d, count=%s, "
+                    "exhausted=%s) — полнота не заявляется", peer_id, len(rows),
+                    total, exhausted)
+    # Ответ на самый важный вопрос про комнату больше не выбрасывается в локальную
+    # переменную: свип уезжает в durable-карту реестра, и построение ключа хранения
+    # сверяется с ним, а не с заголовком ответа.
+    await asyncio.to_thread(
+        telegram_routes.observe_topics, peer_id,
+        {row["topic_id"]: {"title": row["title"], "top_message": row["top_message"]}
+         for row in rows},
+        source="get_forum_topics", complete=complete)
+    stored = await asyncio.to_thread(telegram_routes.topics_of, peer_id)
+    lost = [row["topic_id"] for row in rows if int(row["topic_id"]) not in stored]
+    if lost:
+        raise OSError(f"каталог тем [{peer_id}]: запись не подтвердилась re-read "
+                      f"(потеряно {len(lost)} тем)")
+    _invalidate_topic_cache(str(peer_id))
+    return rows, complete
 
 
 async def _backfill_group_context(peer_id: str, entity, *, limit: int) -> dict:
@@ -1014,10 +1160,14 @@ async def _backfill_group_context(peer_id: str, entity, *, limit: int) -> dict:
     # ответ), «сеть/флуд» (не говорит ничего) и «форум без тем». Ответ на самый важный
     # вопрос про комнату приходил сюда бесплатно и выбрасывался в локальную переменную.
     try:
-        topics = await _forum_topic_catalog(entity, peer, limit=min(500, cap))
+        # ⚠ Свип каталога больше НЕ связан message-cap'ом бэкфила (её блокер 2):
+        # маленький backfill_limit резал каталог, а срез объявлялся полным.
+        topics, catalog_complete = await _forum_topic_catalog(entity, peer)
         await asyncio.to_thread(
-            lambda: telegram_routes.observe(peer, kind="get_forum_topics_ok",
-                                            detail=f"тем: {len(topics)}"))
+            lambda: telegram_routes.observe(
+                peer, kind="get_forum_topics_ok",
+                detail=f"тем: {len(topics)}" + ("" if catalog_complete
+                                                else " (свип неполный)")))
     except Exception as exc:
         topics = []
         missing = type(exc).__name__ == "ChannelForumMissingError" or \
@@ -1048,19 +1198,32 @@ async def _backfill_group_context(peer_id: str, entity, *, limit: int) -> dict:
     ids = [int(m.id) for m in messages if getattr(m, "id", None) is not None]
     if ids:
         openers = sum(1 for m in messages if telegram_topics.is_topic_opener(m))
-        try:
-            await asyncio.to_thread(
-                lambda: telegram_routes.observe(
-                    peer,
-                    kind=("topic_opener_seen" if openers else "no_topic_openers_in_range"),
-                    since_message_id=min(ids), until_message_id=max(ids),
-                    detail=f"пройдено {len(ids)}, openers {openers}"))
-        except Exception:
-            log.debug("реестр маршрутов: историческое свидетельство не записалось [%s]",
-                      peer, exc_info=True)
+        # 25.08 transport-gate: тишина не свидетель. Ноль opener-ов в диапазоне —
+        # не «комната не форум» (General живёт без TopicCreate, стёртое не оставляет
+        # следа): воздерживаемся. Позитивное свидетельство пишет только genuine
+        # opener; полный честный проход живёт в history_scan.run_history_scan.
+        if openers:
+            try:
+                await asyncio.to_thread(
+                    lambda: telegram_routes.observe(
+                        peer,
+                        kind="topic_opener_seen",
+                        since_message_id=min(ids), until_message_id=max(ids),
+                        detail=f"пройдено {len(ids)}, openers {openers}"))
+            except Exception:
+                log.debug("реестр маршрутов: историческое свидетельство не записалось [%s]",
+                          peer, exc_info=True)
+        else:
+            log.info("group backfill [%s]: %d сообщений без opener-ов — воздерживаюсь "
+                     "от форумного вердикта (placement остаётся как есть)", peer, len(ids))
     added = 0
     count = before
     _archived_any = False
+    # Знание только что уехало в durable-карту (или было там раньше): ключи бэкфила
+    # строятся по POSITIVE-знанию, а не по заголовку. Один снимок на весь проход,
+    # через ту же кэш-машинерию — без синхронного диска в event loop и мимо
+    # анти-stampede контура (фан-аут REPAIR2).
+    catalog, _catalog_complete_known = await _topic_knowledge_cached(peer)
     for msg in reversed(messages):
         if count >= cap:
             break
@@ -1068,7 +1231,8 @@ async def _backfill_group_context(peer_id: str, entity, *, limit: int) -> dict:
         if mid is None:
             continue
         route = telegram_topics.route_for_message(
-            peer, msg, is_private=False, is_forum=_known_forum(peer, msg))
+            peer, msg, is_private=False, is_forum=_known_forum(peer, msg),
+            confirmed_topics=catalog)
         opener = telegram_topics.topic_opener_title(msg)
         topic_title = opener
         if route.topic_id is not None and not topic_title:
@@ -1077,6 +1241,7 @@ async def _backfill_group_context(peer_id: str, entity, *, limit: int) -> dict:
             await asyncio.to_thread(
                 group_context.record_topic, peer, route.topic_id, opener,
                 timestamp=getattr(msg, "date", None), message_id=mid,
+                origin="opener",
             )
         sender = getattr(msg, "sender", None)
         sender_id = getattr(msg, "sender_id", None) or getattr(sender, "id", None)
@@ -1116,7 +1281,13 @@ async def _backfill_group_context(peer_id: str, entity, *, limit: int) -> dict:
     # только что прошли: сегодняшний маршрут и тот, что был бы при is_forum=False.
     # Ничего не меняет; журнал лежит в .state (прибор, не память).
     try:
-        split = await asyncio.to_thread(telegram_topics.measure_split, peer, messages)
+        # Живой ряд датчика считается с ЖИВЫМ знанием: вердикт реестра + каталог.
+        status, _epoch = await asyncio.to_thread(telegram_routes.status_at, peer)
+        nature = (True if status == telegram_routes.TRUE
+                  else False if status == telegram_routes.FALSE else None)
+        split = await asyncio.to_thread(
+            telegram_topics.measure_split, peer, messages,
+            is_forum=nature, confirmed_topics=catalog)
         if split.get("messages"):
             context_envelope.record_probe("route_split", split)
             if split["keys_live"] > split["keys_if_not_forum"]:
@@ -1329,6 +1500,226 @@ def _install_group_wake(chat_id: str, wake: GroupWake) -> bool:
     return True
 
 
+def _revise_recent_message(chat_id: str, message_id: int, *,
+                           author: str = "", gist: str = "",
+                           deleted: bool = False) -> None:
+    """Keep Telegram reply targets aligned with the current message revision."""
+
+    ring = _recent_msgs[chat_id]
+    updated = []
+    for mid, old_author, old_gist in ring:
+        if int(mid) != int(message_id):
+            updated.append((mid, old_author, old_gist))
+        elif not deleted:
+            updated.append((mid, author or old_author, str(gist or old_gist)[:60]))
+    ring.clear()
+    ring.extend(updated)
+
+
+def _buffer_revision_source(chat_id: str, message_id: int) -> str:
+    token = str(int(message_id))
+    buffer = _buf.get(chat_id, ())
+    source_ids = _buffer_message_ids.get(chat_id, ())
+    if len(source_ids) != len(buffer):
+        return ""
+    for value in reversed(source_ids):
+        source_id = str(value or "")
+        if (source_id == token or source_id.startswith(f"{token}:edit:")
+                or source_id == f"{token}:delete"):
+            return source_id
+    return ""
+
+
+def _revision_source_rank(source_id: str, *, chat_id: str = "") -> tuple[int, float, int]:
+    value = str(source_id or "")
+    if ":delete" in value:
+        return 2, float("inf"), 0
+    if ":edit:" in value:
+        revision = value.split(":edit:", 1)[1].rsplit(":", 1)[0]
+        order = _revision_order_by_chat_source.get((str(chat_id), value), 0)
+        try:
+            stamp = datetime.datetime.fromisoformat(revision.replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+            return 1, stamp.timestamp(), order
+        except (TypeError, ValueError):
+            return 1, 0.0, order
+    return 0, 0.0, 0
+
+
+def _revision_is_stale(existing_source_id: str, incoming_source_id: str, *,
+                       chat_id: str = "") -> bool:
+    existing = _revision_source_rank(existing_source_id, chat_id=chat_id)
+    incoming = _revision_source_rank(incoming_source_id, chat_id=chat_id)
+    if existing[0] == 2 and incoming[0] < 2:
+        return True
+    if existing[0] == 1 and incoming[0] == 0:
+        return True
+    return existing[0] == incoming[0] == 1 and incoming[1:] < existing[1:]
+
+
+def _replace_buffer_message(chat_id: str, message_id: int, line: str, *,
+                            deleted: bool = False, source_id: str = "") -> None:
+    """Keep the restart-proof string buffer at one current line per Telegram message."""
+
+    token = str(int(message_id))
+    new_source_id = str(source_id or (
+        f"{token}:delete" if deleted else f"{token}:edit:current"
+    ))
+    original = list(_buf[chat_id])
+    meta = _buffer_message_ids[chat_id]
+    if len(meta) != len(original):
+        meta.clear()
+        meta.extend("" for _ in original)
+    filtered_lines = []
+    filtered_meta = []
+    for index, prior in enumerate(original):
+        prior_source_id = str(meta[index] if index < len(meta) else "")
+        if (prior_source_id == token or prior_source_id.startswith(f"{token}:edit:")
+                or prior_source_id == f"{token}:delete"):
+            continue
+        filtered_lines.append(prior)
+        filtered_meta.append(prior_source_id)
+    _buf[chat_id].clear()
+    _buf[chat_id].extend(filtered_lines)
+    _buffer_message_ids[chat_id].clear()
+    _buffer_message_ids[chat_id].extend(filtered_meta)
+    if line:
+        _buf[chat_id].append(str(line))
+        _buffer_message_ids[chat_id].append(new_source_id)
+    _buf_dirty.add(chat_id)
+
+
+def _drop_pending_message_media(chat_id: str, message_id: int) -> None:
+    queue = _pending_media.get(chat_id)
+    if not queue:
+        return
+    keep = [ref for ref in queue if int(getattr(ref, "message_id", -1) or -1) != int(message_id)]
+    queue.clear()
+    queue.extend(keep)
+    if not queue:
+        _pending_media.pop(chat_id, None)
+
+
+def _sync_buffer_from_hot(chat_id: str) -> bool:
+    """Rebuild the string mirror from current hot records after a revision."""
+
+    try:
+        rows = memory_life.hot_records(chat_id, BUF_MAXLEN)
+    except Exception:
+        log.debug("hot buffer sync failed [%s]", chat_id, exc_info=True)
+        return False
+    if not rows:
+        return False
+    _buf[chat_id].clear()
+    _buffer_message_ids[chat_id].clear()
+    for row in rows[-BUF_MAXLEN:]:
+        source_id = str(row.get("source_id") or "")
+        _buf[chat_id].append(str(row.get("line") or ""))
+        _buffer_message_ids[chat_id].append(source_id)
+        if source_id:
+            _persisted_life_sources.add(_life_source_key(chat_id, source_id))
+    _buf_dirty.add(chat_id)
+    return True
+
+
+def _group_message_conversations(peer_id: str, message_id: int) -> tuple[str, ...]:
+    """Known conversation keys that currently point at one peer/message."""
+
+    peer, mid = str(peer_id), int(message_id)
+    found: set[str] = set()
+    for chat_id, source_ids in list(_buffer_message_ids.items()):
+        buffer = _buf.get(chat_id)
+        if buffer is None or len(source_ids) != len(buffer):
+            continue
+        try:
+            same_peer = _route_from_state(chat_id).peer_id == peer
+        except Exception:
+            same_peer = False
+        token = str(mid)
+        if same_peer and any(
+            str(value or "") == token
+            or str(value or "").startswith(f"{token}:edit:")
+            or str(value or "") == f"{token}:delete"
+            for value in source_ids
+        ):
+            found.add(str(chat_id))
+    for chat_id, wake in list(_group_wakes.items()):
+        try:
+            same_peer = _route_from_state(chat_id).peer_id == peer
+        except Exception:
+            same_peer = False
+        if same_peer and (wake.message_id == mid
+                          or any(int(item[0]) == mid
+                                 for item in wake.reply_targets_snapshot)):
+            found.add(str(chat_id))
+    for chat_id, ring in list(_recent_msgs.items()):
+        try:
+            same_peer = _route_from_state(chat_id).peer_id == peer
+        except Exception:
+            same_peer = False
+        if same_peer and any(int(item[0]) == mid for item in ring):
+            found.add(str(chat_id))
+    for chat_id, refs in list(_pending_media.items()):
+        try:
+            same_peer = _route_from_state(chat_id).peer_id == peer
+        except Exception:
+            same_peer = False
+        if same_peer and any(int(getattr(ref, "message_id", -1) or -1) == mid
+                             for ref in refs):
+            found.add(str(chat_id))
+    return tuple(sorted(found))
+
+
+def _refresh_group_wake_context(chat_id: str, *, message_id: int | None = None,
+                                query: str | None = None,
+                                author: str | None = None,
+                                deleted: bool = False,
+                                media_snapshot: tuple[media_core.MediaRef, ...] | None = None) -> bool:
+    """Refresh the revision-sensitive fields of a pending wake.
+
+    Authority, media and the addressed message id remain frozen.  The conversation,
+    query text, speaker label and reply-target gists track an edit of that same message;
+    otherwise a delayed turn would reason over the new body while retrieval and
+    attribution still carried the old one.
+    """
+
+    wake = _group_wakes.get(chat_id)
+    if wake is None:
+        return False
+    try:
+        frozen_text, frozen_turns = _group_context_frozen(
+            chat_id, _room_policy_for_state(chat_id),
+        )
+    except Exception:
+        log.exception("group wake revision refresh failed [%s]", chat_id)
+        return False
+    if _group_wakes.get(chat_id) is not wake:
+        return False
+    targets = tuple(wake.reply_targets_snapshot)
+    if message_id is not None:
+        targets = tuple(
+            (mid, author or old_author, str(query or old_gist)[:60])
+            if int(mid) == int(message_id) else (mid, old_author, old_gist)
+            for mid, old_author, old_gist in targets
+            if not (deleted and int(mid) == int(message_id))
+        )
+    changes = {
+        "context_snapshot": frozen_text,
+        "turns_snapshot": frozen_turns,
+        "reply_targets_snapshot": targets,
+    }
+    if media_snapshot is not None:
+        changes["media_snapshot"] = tuple(media_snapshot)
+    if message_id is not None and wake.message_id == int(message_id):
+        if query is not None:
+            changes["query"] = str(query)[:4000]
+        if author is not None:
+            changes["speaker"] = str(author)
+    _group_wakes[chat_id] = replace(wake, **changes)
+    return True
+
+
 def _edit_revision_source_id(message_id: int, edited_at, *, text: str = "",
                              media: str = "") -> str:
     """Stable identity for one Telegram revision, including its visible payload.
@@ -1355,6 +1746,18 @@ def _edit_revision_source_id(message_id: int, edited_at, *, text: str = "",
     return f"{int(message_id)}:edit:{revision}:{payload_sha}"
 
 
+def _revision_reception_order(peer_id: str, message_id: int, source_id: str) -> int:
+    """Return one stable in-process reception order for a concrete edit revision."""
+    global _revision_reception_counter
+    key = (str(peer_id), int(message_id), str(source_id))
+    existing = _revision_reception_orders.get(key)
+    if existing is not None:
+        return existing
+    _revision_reception_counter += 1
+    _revision_reception_orders[key] = _revision_reception_counter
+    return _revision_reception_counter
+
+
 @client.on(getattr(events, "MessageEdited", events.NewMessage)(incoming=True))
 async def on_edited(event) -> None:
     """Archive an admitted group edit without turning it into a new voice turn.
@@ -1366,38 +1769,77 @@ async def on_edited(event) -> None:
     mutations, follow-up matching, panic handling, or any model/wake work.
     """
 
-    if bool(getattr(event, "is_private", False)):
-        return
+    is_private = bool(getattr(event, "is_private", False))
     msg = event.message
     mid = getattr(msg, "id", None)
     edited_at = getattr(msg, "edit_date", None)
-    if mid is None or edited_at is None or not _group_archive_enabled():
+    if mid is None or edited_at is None:
         return
 
-    route = telegram_topics.route_for_message(
-        event.chat_id, msg, is_private=False,
-        is_forum=_known_forum(event.chat_id, msg, getattr(event, "chat", None)))
-    peer_id = route.peer_id
-    chat_id = route.conversation_id
-    if rooms.is_frozen(peer_id):
-        return
-
+    # Корневая комната известна без маршрута; сам маршрут фиксируется НИЖЕ — после
+    # допуска и той же single-flight добычи каталога, что и в on_new (её регрессия 11:
+    # правка и оригинал не смеют разъехаться по ключам вокруг первой добычи).
+    peer_id = str(event.chat_id)
+    room_nature = (None if is_private else
+                   _known_forum(event.chat_id, msg, getattr(event, "chat", None)))
+    # Capture reception order before the first await.  Telegram edit_date is only
+    # second-granular, so two distinct edits in one second must follow arrival order,
+    # not whichever sender lookup happens to finish last.
+    text = str(getattr(msg, "message", "") or "")
+    media = _media_tag(msg)
+    base_source_id = _edit_revision_source_id(
+        int(mid), edited_at, text=text, media=media,
+    )
+    reception_order = _revision_reception_order(peer_id, int(mid), base_source_id)
     sender = await event.get_sender()
     if sender is not None and getattr(sender, "is_self", False):
         return
     sender_id = (getattr(event, "sender_id", None)
                  or getattr(sender, "id", None))
     is_owner = OWNER_ID != 0 and sender_id == OWNER_ID
-    if not rooms.is_allowed(peer_id, is_owner):
+    if not is_private and (not _group_archive_enabled()
+                           or not rooms.is_allowed(peer_id, is_owner)):
         return
-    try:
-        room_mode = rooms.effective_mode(peer_id)
-    except Exception:
-        log.debug("edited message room mode unavailable [%s]", chat_id,
-                  exc_info=True)
-        room_mode = "normal"
+
+    room_mode, _resolution_failed = _resolve_room_mode(
+        peer_id, peer_id, where="edited message",
+    )
     if room_mode in ("frozen", "dead"):
         return
+
+    catalog = None
+    if room_nature is True:
+        catalog = await _catalog_for_routing(
+            peer_id, getattr(event, "chat", None),
+            unknown_topic=(telegram_topics.thread_root_for_message(msg)
+                           if getattr(msg, "reply_to", None) is not None else None))
+    route = telegram_topics.route_for_message(
+        event.chat_id, msg, is_private=is_private, is_forum=room_nature,
+        confirmed_topics=catalog)
+    if not is_private:
+        # Правка живёт там, где живёт оригинал (фан-аут 22.08, P1): пересчёт места
+        # «по сегодняшнему каталогу» разводил правку и оригинал по разным ключам,
+        # когда каталог приезжал между ними. Якорь — archived topic_id оригинала,
+        # прогнанный через ТОТ ЖЕ каталожный гейт: фантом из старого канона не
+        # воскресает, настоящая тема остаётся собой, General — комнатой.
+        try:
+            prior = await asyncio.to_thread(
+                group_context.latest_message, peer_id, int(mid))
+        except Exception:
+            prior = None
+            log.debug("прежняя запись оригинала не прочиталась [%s] #%s",
+                      peer_id, mid, exc_info=True)
+        if isinstance(prior, dict) and prior.get("kind") == "message":
+            try:
+                prior_topic = int(prior.get("topic_id"))
+            except (TypeError, ValueError):
+                prior_topic = 0
+            if (prior_topic > telegram_topics.GENERAL_TOPIC_ID
+                    and catalog is not None and prior_topic in catalog):
+                route = telegram_topics.TopicRoute(peer_id, prior_topic)
+            else:
+                route = telegram_topics.TopicRoute(peer_id)
+    chat_id = route.conversation_id
 
     name = _sender_label(sender)
     text = str(getattr(msg, "message", "") or "")
@@ -1408,6 +1850,88 @@ async def on_edited(event) -> None:
     except Exception:
         message_ts = time.time()
 
+    if is_private:
+        body = " ".join(part for part in (media, text) if part).strip()
+        if not body:
+            body = "[empty message after edit]"
+        source_id = _edit_revision_source_id(
+            int(mid), edited_at, text=text, media=media,
+        )
+        _revision_order_by_chat_source[(chat_id, source_id)] = reception_order
+        revision = source_id.split(":edit:", 1)[-1]
+        marker = f"[edited #{mid} at {revision}]"
+        existing_source = _buffer_revision_source(chat_id, int(mid))
+        stale_revision = _revision_is_stale(
+            existing_source, source_id, chat_id=chat_id)
+        durable_seen = _life_source_persisted(chat_id, source_id)
+        volatile_seen = (
+            any(marker in prior for prior in _buf[chat_id])
+            or any(str(value or "") == source_id
+                   for value in _buffer_message_ids.get(chat_id, ()))
+        )
+        try:
+            edit_ts = float(edited_at.timestamp())
+        except Exception:
+            edit_ts = time.time()
+        try:
+            revised_followup = await asyncio.to_thread(
+                telegram_followups.LEDGER.revise_response,
+                peer_id=peer_id, message_id=int(mid), text=body,
+                revision_source_id=source_id, observed_at=edit_ts,
+                revision_order=reception_order,
+            )
+            if revised_followup:
+                await _supersede_pending_followup_deliveries(
+                    str(revised_followup.get("id") or ""), reason="response_edited")
+        except Exception:
+            log.exception("follow-up response edit projection failed [%s] #%s", chat_id, mid)
+        if durable_seen and volatile_seen:
+            return
+        buffer_line = f"{name} {marker}: {body}"
+        if stale_revision:
+            persisted = _record_life_message(
+                chat_id, buffer_line, actor=name, direction="in",
+                source_id=source_id, is_dm=True, ts=edit_ts,
+                dedupe_key=f"telegram:{chat_id}:{source_id}:in",
+                revision_order=reception_order,
+            )
+            if persisted:
+                await asyncio.to_thread(
+                    memory_life.note_message_revision,
+                    chat_id, int(mid), f"{name}: {body}", actor=name, ts=message_ts,
+                )
+            return
+        _replace_buffer_message(chat_id, int(mid), buffer_line, source_id=source_id)
+        persisted = _record_life_message(
+            chat_id, buffer_line, actor=name, direction="in",
+            source_id=source_id, is_dm=True, ts=edit_ts,
+            dedupe_key=f"telegram:{chat_id}:{source_id}:in",
+            revision_order=reception_order,
+        )
+        if persisted:
+            try:
+                await asyncio.to_thread(
+                    memory_life.note_message_revision,
+                    chat_id, int(mid), f"{name}: {body}", actor=name, ts=message_ts,
+                )
+                _sync_buffer_from_hot(chat_id)
+            except Exception:
+                log.exception("DM edit hot projection failed [%s] #%s", chat_id, mid)
+        _revise_recent_message(chat_id, int(mid), author=name, gist=body)
+        live_meta = _meta.get(chat_id)
+        if isinstance(live_meta, dict) and live_meta.get("origin_message_id") == int(mid):
+            live_meta.update({
+                "origin_text": text, "sender_id": sender_id, "name": name,
+                "title": live_meta.get("title") or name,
+            })
+            _arm(chat_id)
+        try:
+            bufstore.meta_update(chat_id, author=name, is_dm=True, name=name)
+        except Exception:
+            log.debug("buf_meta не записалась [%s]", chat_id, exc_info=True)
+        log.info("EDIT [DM %s] %s (id=%s): #%s", chat_id, name, sender_id, mid)
+        return
+
     raw_topic_title = ""
     if route.topic_id is not None:
         cache_key = (peer_id, int(route.topic_id))
@@ -1415,10 +1939,18 @@ async def on_edited(event) -> None:
         if not raw_topic_title:
             try:
                 raw_topic_title = await asyncio.to_thread(
+                    telegram_routes.topic_title, peer_id, route.topic_id)
+            except Exception:
+                log.debug("durable topic title unavailable [%s]", chat_id, exc_info=True)
+        if not raw_topic_title:
+            try:
+                raw_topic_title = await asyncio.to_thread(
                     group_context.topic_title, peer_id, route.topic_id)
             except Exception:
                 log.debug("edited message topic title unavailable [%s]", chat_id,
                           exc_info=True)
+        if raw_topic_title == f"topic #{route.topic_id}":
+            raw_topic_title = ""     # выдуманное имя из старых записей — не имя
         if raw_topic_title:
             _topic_titles[cache_key] = raw_topic_title
 
@@ -1429,11 +1961,12 @@ async def on_edited(event) -> None:
             sender_id=sender_id, sender_name=name,
             reply_to_message_id=reply_to_mid, timestamp=message_ts,
             edited_at=edited_at, text=text, topic_title=raw_topic_title,
-            media=media,
+            media=media, revision_order=reception_order,
         )
     except Exception:
-        log.exception("group edit archive failed [%s] #%s", chat_id, mid)
-        return
+        added = False
+        log.exception("group edit archive failed [%s] #%s; live revision continues",
+                      chat_id, mid)
     body = " ".join(part for part in (media, text) if part).strip()
     if not body:
         body = "[empty message after edit]"
@@ -1442,27 +1975,223 @@ async def on_edited(event) -> None:
     source_id = _edit_revision_source_id(
         int(mid), edited_at, text=text, media=media,
     )
+    _revision_order_by_chat_source[(chat_id, source_id)] = reception_order
     revision = source_id.split(":edit:", 1)[-1]
     marker = f"[edited #{mid} at {revision}{reply_mark}]"
-    # The archive is written first.  If the process died before this buffer/life
-    # append, Telethon replay sees ``added=False`` but can still repair the missing
-    # projection.  A persisted exact marker and memory_life's dedupe key prevent an
-    # ordinary duplicate delivery from creating a second revision line.
-    if any(marker in prior for prior in _buf[chat_id]):
-        return
     try:
         edit_ts = float(edited_at.timestamp())
     except Exception:
         edit_ts = time.time()
     live_meta = _meta.get(chat_id) or {}
-    _buf_push(
-        chat_id, f"{name} {marker}: {body}",
-        author=name, is_dm=False,
-        name=str(live_meta.get("title") or raw_topic_title or name),
-        source_id=source_id, ts=edit_ts,
+    buffer_line = f"{name} {marker}: {body}"
+    existing_source = _buffer_revision_source(chat_id, int(mid))
+    stale_revision = _revision_is_stale(
+        existing_source, source_id, chat_id=chat_id)
+    durable_seen = _life_source_persisted(chat_id, source_id)
+    volatile_seen = (
+        any(marker in prior for prior in _buf[chat_id])
+        or any(str(value or "") == source_id
+               for value in _buffer_message_ids.get(chat_id, ()))
     )
+    if not stale_revision:
+        try:
+            revised_followup = await asyncio.to_thread(
+                telegram_followups.LEDGER.revise_response,
+                peer_id=peer_id, message_id=int(mid), text=body,
+                revision_source_id=source_id, observed_at=edit_ts,
+                revision_order=reception_order,
+            )
+            if revised_followup:
+                await _supersede_pending_followup_deliveries(
+                    str(revised_followup.get("id") or ""), reason="response_edited")
+        except Exception:
+            log.exception("follow-up response edit projection failed [%s] #%s", chat_id, mid)
+    if durable_seen and volatile_seen:
+        return
+    if stale_revision:
+        persisted = _record_life_message(
+            chat_id, buffer_line, actor=name, direction="in",
+            source_id=source_id, is_dm=False, ts=edit_ts,
+            dedupe_key=f"telegram:{chat_id}:{source_id}:in",
+            revision_order=reception_order,
+        )
+        if persisted:
+            try:
+                await asyncio.to_thread(
+                    memory_life.note_message_revision,
+                    chat_id, int(mid), f"{name}{reply_mark}: {body}",
+                    actor=name, ts=message_ts,
+                )
+                _sync_buffer_from_hot(chat_id)
+            except Exception:
+                log.exception("stale edit hot projection failed [%s] #%s", chat_id, mid)
+        return
+    _replace_buffer_message(chat_id, int(mid), buffer_line, source_id=source_id)
+    persisted = _record_life_message(
+        chat_id, buffer_line, actor=name, direction="in",
+        source_id=source_id, is_dm=False, ts=edit_ts,
+        dedupe_key=f"telegram:{chat_id}:{source_id}:in",
+        revision_order=reception_order,
+    )
+    try:
+        bufstore.meta_update(
+            chat_id, author=name, is_dm=False,
+            name=str(live_meta.get("title") or raw_topic_title or name),
+        )
+    except Exception:
+        log.debug("buf_meta не записалась [%s]", chat_id, exc_info=True)
+    if persisted:
+        try:
+            await asyncio.to_thread(
+                memory_life.note_message_revision,
+                chat_id, int(mid), f"{name}{reply_mark}: {body}", actor=name, ts=message_ts,
+            )
+            _sync_buffer_from_hot(chat_id)
+        except Exception:
+            log.exception("edit hot projection failed [%s] #%s", chat_id, mid)
+    _revise_recent_message(chat_id, int(mid), author=name, gist=body)
+    if _refresh_group_wake_context(
+            chat_id, message_id=int(mid), query=body, author=name,
+            media_snapshot=tuple(_pending_media.get(chat_id, ()))):
+        # If a pass is already waiting/authoring, its local wake may have been read
+        # before this revision.  A successor generation cancels that stale pass and
+        # re-runs the same address with the corrected payload; without a wake this path
+        # remains silent.
+        _arm(chat_id)
     log.info("EDIT [%s] %s (id=%s): #%s archived=%s",
              chat_id, name, sender_id, mid, added)
+
+
+@client.on(getattr(events, "MessageDeleted", events.NewMessage)())
+async def on_deleted(event) -> None:
+    """Archive channel/supergroup deletions as terminal, append-only tombstones.
+
+    Telegram supplies the peer only for channels and supergroups.  A deletion without
+    ``chat_id`` is therefore left unnamed rather than guessed into a neighbouring chat.
+    Like edits, this updates the readable conversation but never wakes the model or
+    triggers follow-up/authority handlers.
+    """
+
+    peer_raw = getattr(event, "chat_id", None)
+    if peer_raw is None or not _group_archive_enabled():
+        return
+    peer_id = str(peer_raw)
+    if not rooms.is_allowed(peer_id, False):
+        return
+    room_mode, _resolution_failed = _resolve_room_mode(
+        peer_id, peer_id, where="deleted message",
+    )
+    if room_mode in ("frozen", "dead"):
+        return
+
+    try:
+        deleted_ids = [int(value) for value in (getattr(event, "deleted_ids", None) or ())
+                       if int(value) > 0]
+    except (TypeError, ValueError):
+        return
+    if not deleted_ids:
+        return
+
+    deleted_ts = time.time()
+    for mid in deleted_ids:
+        previous = {}
+        try:
+            observed = await asyncio.to_thread(
+                group_context.latest_message, peer_id, mid,
+            )
+            previous = observed if isinstance(observed, dict) else {}
+        except Exception:
+            log.exception("group deletion prior state unavailable [%s] #%s", peer_id, mid)
+        archive_failed = False
+        try:
+            added = await asyncio.to_thread(
+                group_context.append_deletion_retry,
+                peer_id=peer_id, message_id=mid, timestamp=deleted_ts,
+            )
+        except Exception:
+            added = False
+            archive_failed = True
+            log.exception("group deletion archive failed [%s] #%s; live withdrawal continues",
+                          peer_id, mid)
+        try:
+            deleted_followup = await asyncio.to_thread(
+                telegram_followups.LEDGER.delete_response,
+                peer_id=peer_id, message_id=mid, observed_at=deleted_ts,
+            )
+            if deleted_followup:
+                await _supersede_pending_followup_deliveries(
+                    str(deleted_followup.get("id") or ""), reason="response_deleted")
+        except Exception:
+            log.exception("follow-up response deletion projection failed [%s] #%s",
+                          peer_id, mid)
+        # A duplicate archive tombstone may be a replay after a partial durable write.
+        # Continue through every rebuildable projection: their own source/dedupe identity
+        # makes this idempotent, while returning here would strand stale life/recall state.
+
+        topic_id = previous.get("topic_id")
+        conversations = set(_group_message_conversations(peer_id, mid))
+        if previous:
+            conversations.add(
+                telegram_topics.TopicRoute(peer_id, topic_id).conversation_id)
+        conversations = sorted(conversations)
+        if not conversations:
+            continue
+        for chat_id in conversations:
+            sender_name = str(previous.get("sender_name") or "unknown")
+            reply_to_mid = previous.get("reply_to_message_id")
+            reply_mark = (f", reply to #{reply_to_mid}"
+                          if reply_to_mid is not None else "")
+            marker = f"[deleted #{mid}{reply_mark}]"
+            topic_title = str(previous.get("topic_title") or "")
+            live_meta = _meta.get(chat_id) or {}
+            buffer_line = (
+                f"Telegram {marker}: message removed"
+                + (f" (former sender: {sender_name})" if sender_name != "unknown" else "")
+            )
+            _replace_buffer_message(chat_id, mid, buffer_line, deleted=True,
+                                    source_id=f"{mid}:delete")
+            persisted = _record_life_message(
+                chat_id, buffer_line, actor="Telegram", direction="in",
+                source_id=f"{mid}:delete", is_dm=False, ts=deleted_ts,
+                dedupe_key=f"telegram:{chat_id}:{mid}:delete:in",
+            )
+            try:
+                bufstore.meta_update(
+                    chat_id, author="Telegram", is_dm=False,
+                    name=str(live_meta.get("title") or topic_title or peer_id),
+                )
+            except Exception:
+                log.debug("buf_meta не записалась [%s]", chat_id, exc_info=True)
+            if persisted:
+                try:
+                    await asyncio.to_thread(
+                        memory_life.note_message_revision,
+                        chat_id, mid, f"Telegram {marker}: message removed",
+                        actor="Telegram", ts=deleted_ts,
+                    )
+                    _sync_buffer_from_hot(chat_id)
+                except Exception:
+                    log.exception("deletion hot projection failed [%s] #%s", chat_id, mid)
+            _revise_recent_message(chat_id, mid, deleted=True)
+            _drop_pending_message_media(chat_id, mid)
+            if wake := _group_wakes.get(chat_id):
+                if wake.message_id == mid:
+                    _group_wakes.pop(chat_id, None)
+                    # A pass may already be waiting or authoring on the deleted address.
+                    # Re-arm one successor generation after withdrawing the wake: the old
+                    # pass is cancelled as superseded, while the successor is an explicit
+                    # no-op because there is no address left to answer.
+                    _arm(chat_id)
+                    perception.note_skip(
+                        "deleted_address", "отложила", chat_id=chat_id,
+                        detail=f"обращение #{mid} удалено до ответа",
+                    )
+                else:
+                    if _refresh_group_wake_context(
+                            chat_id, message_id=mid, deleted=True,
+                            media_snapshot=tuple(_pending_media.get(chat_id, ()))):
+                        _arm(chat_id)
+            log.info("DELETE [%s]: #%s archived=%s", chat_id, mid, added)
 
 
 def mid_of(message) -> int | None:
@@ -1524,26 +2253,387 @@ def _known_forum(peer_id, message, chat_obj=None) -> bool | None:
         return False
     if status == telegram_routes.TRUE:
         return True
-    return None  # «не знаем» — прежнее поведение по заголовку, байт-в-байт
+    return None  # «не знаем» — и для КЛЮЧА ХРАНЕНИЯ это теперь «не форум» (21.08.2026)
 
 
-def _note_room_mode_skip(peer_id, chat_id, mode: str, *, stage: str) -> None:
+def _read_topic_knowledge_versioned(peer: str):
+    """Синхронное чтение в потоке: ревизия ДО разбора → снимок → ревизия ПОСЛЕ.
+
+    -> (ids, complete, revision, snapshot_proven). Доказательство снимка (её гейт
+    REPAIR5, свойство 3): ревизии равны И чётны ⇒ за время разбора не завершился
+    и не шёл НИ ОДИН durable-коммит — ничей: seqlock-токен становится нечётным
+    ДО замены основного файла, поэтому окна «main сменился, токен прежний» нет.
+    Нечётная ревизия (чужой коммит идёт или упал посередине) — недоказанно.
+    """
+    before = telegram_routes.topic_revision(peer)
+    ids, complete = telegram_routes.topic_knowledge(peer)
+    after = telegram_routes.topic_revision(peer)
+    proven = (before == after and after % 2 == 0)
+    return ids, complete, after, proven
+
+
+async def _topic_knowledge_read_flight(peer: str):
+    """Одно холодное durable-чтение. -> (ids, complete, revision, proven).
+
+    ``proven`` — доказательство свежести: seqlock-снимок целостен (видит ВСЕХ
+    писателей, включая чужие процессы, без метаданных ФС — её REPAIR5) И
+    процесс-локальное поколение не изменилось за чтение. Кэшируется ТОЛЬКО
+    доказанный успех; кэш хранит ревизию для перепроверки на каждом хите.
+    """
+    generation = _topic_catalog_cache_gen.get(peer, 0)
+    ids, complete, revision, snapshot_proven = await asyncio.to_thread(
+        _read_topic_knowledge_versioned, peer)
+    proven = (snapshot_proven
+              and _topic_catalog_cache_gen.get(peer, 0) == generation)
+    if proven:
+        _topic_catalog_cache[peer] = (
+            time.time() + _TOPIC_CATALOG_CACHE_TTL, ids, complete, revision)
+    return ids, complete, revision, proven
+
+
+def _drop_read_flight(peer: str, task) -> None:
+    entry = _topic_catalog_read_flights.get(peer)
+    if entry is not None and entry[1] is task:
+        _topic_catalog_read_flights.pop(peer, None)
+
+
+def _reap_read_flight(peer: str, task) -> None:
+    """Снять полёт с реестра И забрать его исключение (её REPAIR5, P2 lifecycle):
+    единственный shielded-ждущий мог быть отменён, а полёт упасть позже — его
+    exception обязан быть retrieved, иначе loop получает фоновый мусор."""
+    _drop_read_flight(peer, task)
+    if not task.cancelled():
+        exc = task.exception()
+        if exc is not None:
+            log.debug("холодное чтение каталога упало без ждущих [%s]: %r",
+                      peer, exc)
+
+
+async def _topic_knowledge_cached(peer: str) -> tuple[frozenset, bool]:
+    """Знание о темах без синхронного диска в event loop и без stampede.
+
+    Её блокер 5 (сто чтений на сто сообщений) закрыт коротким кэшем; её P1-3
+    (25 холодных конкурентов = 25 чтений) — read-single-flight'ом: на комнату
+    одновременно идёт не более одного холодного чтения, остальные ждут его же.
+    Ошибка чтения не кэшируется и не отравляет полёт; отмена САМОГО чтения
+    (shutdown) отвечает ждущим fail-safe, а не роняет их ходы; отмена одного
+    ждущего (shield) не трогает остальных. Фан-аут REPAIR2: ждущий, пришедший
+    ПОСЛЕ инвалидации, не присоединяется к чтению из прошлого поколения и не
+    уносит досвежее знание — поколение сверяется и при выборе полёта, и после
+    ожидания.
+    """
+    # Протокол свежести (её гейты REPAIR3 + REPAIR4). Точка линеаризации — атомарное
+    # чтение route-файла. Доказательство свежести ДВУНОГОЕ: (1) durable-штамп файла
+    # (mtime_ns, size) не изменился за разбор — это видит ВСЕХ писателей, включая
+    # чужие процессы, потому что каждый коммит идёт atomic replace'ом под
+    # межпроцессным замком; (2) процесс-локальное поколение не изменилось за
+    # ожидание — внутрипроцессный конвейер. Кэш-хит перепроверяет durable-штамп
+    # против живого файла на КАЖДОМ обращении (os.stat, микросекунды): чужой коммит
+    # виден следующему же вызову, TTL-окна stale-complete нет. Поколение/штамп
+    # сдвинулись — перечитываем: магического лимита попыток нет, при конечном churn
+    # первое чтение после последнего коммита доказанно свежо. Граница бюджета —
+    # НЕ доказательство непрерывности churn (её блокер A): после дедлайна
+    # выполняется ровно ОДНО финальное чтение — оно начинается после последней
+    # замеченной инвалидации, и при конечном churn возвращает полный честный
+    # результат; при непрерывном — объединение всех прочитанных id с complete=False
+    # (append-only ⇒ каждый прочитанный id доказанно durable, минтить честно;
+    # полнота честно не заявляется; объединение не кэшируется), включающее все
+    # коммиты, завершённые до старта финального чтения. Ограниченность: ровно +1
+    # чтение после дедлайна, каждая итерация ждёт настоящий диск — busy-loop нет.
+    union_ids: set = set()
+    deadline = time.monotonic() + _TOPIC_KNOWLEDGE_CONVERGE_BUDGET
+    final_attempt = False
+    while True:
+        row = _topic_catalog_cache.get(peer)
+        now = time.time()
+        if row is not None and row[0] > now:
+            if telegram_routes.topic_revision(peer) == row[3]:
+                return row[1], row[2]
+            # Durable-ревизия сдвинулась под тёплым кэшем — межпроцессный писатель
+            # (её блокер B): кэш сбрасывается, чтение идёт заново. Монотонность
+            # токена исключает ABA (её REPAIR5, P0-A).
+            _invalidate_topic_cache(peer)
+        current_gen = _topic_catalog_cache_gen.get(peer, 0)
+        entry = _topic_catalog_read_flights.get(peer)
+        if entry is None or entry[1].done() or entry[0] != current_gen:
+            task = asyncio.create_task(_topic_knowledge_read_flight(peer))
+            _topic_catalog_read_flights[peer] = (current_gen, task)
+            task.add_done_callback(lambda t, p=peer: _reap_read_flight(p, t))
+        else:
+            task = entry[1]
+        try:
+            ids, complete, revision, proven = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                # Отменили само чтение (shutdown/чистка) — чужой ход не роняем.
+                return frozenset(), False
+            raise
+        except Exception:
+            log.debug("холодное чтение каталога не удалось [%s]", peer, exc_info=True)
+            return frozenset(), False
+        # Caller-local acceptance (её REPAIR5, P0-B): точка проверки свежести — не
+        # раньше СОБСТВЕННОГО начала. Caller, стартовавший после чужого коммита, не
+        # смеет унаследовать доказательство старого shared-полёта: живая ревизия
+        # обязана совпасть с ревизией снимка в момент принятия.
+        if (proven and _topic_catalog_cache_gen.get(peer, 0) == current_gen
+                and telegram_routes.topic_revision(peer) == revision):
+            return ids, complete
+        # Знание сдвинулось, пока читали (опенер/свип/чужой процесс) — перечитываем.
+        union_ids |= ids
+        if final_attempt:
+            log.warning("знание о темах [%s]: непрерывный churn, свежесть не "
+                        "доказана за %.1fс + финальное чтение — отдаю объединение "
+                        "%d id БЕЗ полноты", peer,
+                        _TOPIC_KNOWLEDGE_CONVERGE_BUDGET, len(union_ids))
+            return frozenset(union_ids), False
+        if time.monotonic() >= deadline:
+            # Дедлайн — не доказательство непрерывного churn: ровно одно финальное
+            # чтение, начатое ПОСЛЕ последней замеченной инвалидации.
+            final_attempt = True
+
+
+async def _catalog_is_stale(peer: str) -> bool:
+    """Пора ли плановое обновление полного свипа (раз в сутки)."""
+    raw = await asyncio.to_thread(telegram_routes.topics_seen_at, peer)
+    if not raw:
+        return True
+    try:
+        seen = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return True
+    return (time.time() - seen) >= _TOPIC_CATALOG_REFRESH
+
+
+async def _note_live_opener(peer_id, topic_id: int, title: str) -> None:
+    """Живой опенер: имя в durable-карту, вердикт «форум» в реестр, кэш — сброшен.
+
+    Сброс кэша обязателен (P1 фан-аута 22.08): без него ответы в только что
+    созданной теме до минуты падали в комнату — кэш ещё держал каталог без неё.
+    """
+    peer = str(peer_id)
+    try:
+        await asyncio.to_thread(
+            telegram_routes.observe_topics, peer,
+            {int(topic_id): {"title": title, "top_message": int(topic_id)}},
+            source="topic_opener", complete=False)
+        await asyncio.to_thread(
+            lambda: telegram_routes.observe(
+                peer, kind="topic_opener_seen",
+                message_id=int(topic_id), detail=title[:60]))
+        _invalidate_topic_cache(peer)
+    except Exception:
+        log.debug("опенер не записался в карту тем [%s]", peer, exc_info=True)
+
+
+def _spawn_catalog_flight(peer: str, entity=None) -> asyncio.Task:
+    """Один tracked-полёт добычи на комнату: параллельные просьбы ждут его же.
+
+    Завершённый таск снимается со словаря сам (done-callback): реестр полётов не
+    растёт по числу комнат и не держит отработавшие таски с их трейсбеками.
+    """
+    task = _topic_catalog_flights.get(peer)
+    if task is not None and not task.done():
+        return task
+    task = asyncio.create_task(_catalog_flight(peer, entity))
+    _topic_catalog_flights[peer] = task
+
+    def _reap_catalog_flight(done, p=peer):
+        if _topic_catalog_flights.get(p) is done:
+            _topic_catalog_flights.pop(p, None)
+        # Lifecycle (её REPAIR5, P2): исключение полёта всегда retrieved, даже если
+        # ждущих не осталось — фоновых «Task exception was never retrieved» нет.
+        if not done.cancelled() and done.exception() is not None:
+            log.debug("полёт каталога упал без ждущих [%s]: %r",
+                      p, done.exception())
+
+    task.add_done_callback(_reap_catalog_flight)
+    return task
+
+
+async def _catalog_flight(peer: str, entity=None):
+    """Полёт добычи каталога: свип → строгая запись → re-read → только потом успех.
+
+    Её блокер 3: успех, кулдаун успеха и лог «добыто» — только после ПОДТВЕРЖДЁННОЙ
+    записи (re-read внутри `_forum_topic_catalog`). Неудача — наблюдаемое событие
+    (свидетельство в реестр, warning из _save) и КОРОТКОЕ окно повтора, а не
+    15-минутный кулдаун поверх незаписанного знания. Полёт не бросает: ждущие
+    сообщения получают None и честно падают в комнату (fail-safe).
+    """
+    # Срез pending снимается ДО RPC (фан-аут REPAIR2, P0): полёт вправе судить
+    # только корни, заявленные до его снимка. Корень, заявленный уже летящему свипу,
+    # этот свип физически не мог видеть — он остаётся следующему полёту, а не
+    # хоронится свидетельством, добытым до его рождения. При любой неудаче или
+    # отмене срез просто пропадает: корни не похоронены и получат новую попытку.
+    claimed = _topic_catalog_pending_roots.pop(peer, set())
+    try:
+        if entity is None:
+            entity = await _resolve_entity(peer)
+        rows, complete = await _forum_topic_catalog(entity, peer)
+        await asyncio.to_thread(
+            lambda: telegram_routes.observe(
+                peer, kind="get_forum_topics_ok",
+                detail=f"тем: {len(rows)}" + ("" if complete else " (свип неполный)")))
+        _topic_catalog_next_attempt[peer] = time.time() + _TOPIC_CATALOG_COOLDOWN
+        # Кэш инвалидируется и здесь, не только внутри свипа, а свежее знание полёт
+        # читает НАПРЯМУЮ (мимо общего read-flight): решение о захоронении корней не
+        # имеет права опираться на чтение, начавшееся до записи свипа.
+        _invalidate_topic_cache(peer)
+        generation = _topic_catalog_cache_gen.get(peer, 0)
+        fresh_ids, fresh_complete, fresh_revision, snapshot_proven = (
+            await asyncio.to_thread(_read_topic_knowledge_versioned, peer))
+        proven = (snapshot_proven
+                  and _topic_catalog_cache_gen.get(peer, 0) == generation
+                  and telegram_routes.topic_revision(peer) == fresh_revision)
+        if proven:
+            _topic_catalog_cache[peer] = (
+                time.time() + _TOPIC_CATALOG_CACHE_TTL, fresh_ids, fresh_complete,
+                fresh_revision)
+            # Её P0-1: корень уходит в probed ТОЛЬКО после durable-успеха, и только
+            # ДОКАЗАННО ПОЛНОГО свипа (неполный не доказывает отсутствия — принцип
+            # её P0-2), и только если знание не сдвинулось, пока полёт дочитывал:
+            # опенер, приехавший в хвосте, не даёт хоронить по устаревшему снимку.
+            if complete and claimed:
+                still_unknown = {root for root in claimed if root not in fresh_ids}
+                if still_unknown:
+                    probed = _topic_catalog_probed_roots.setdefault(peer, set())
+                    if len(probed) + len(still_unknown) > _TOPIC_CATALOG_PROBED_CAP:
+                        probed.clear()
+                    probed.update(still_unknown)
+        log.info("каталог тем [%s]: %d настоящих тем в durable-карте (полнота: %s)",
+                 peer, len(rows), "да" if complete else "НЕТ")
+        return fresh_ids
+    except asyncio.CancelledError:
+        # Отмена (shutdown) — не успех: окно повтора взводится, срез не хоронится.
+        _topic_catalog_next_attempt[peer] = time.time() + _TOPIC_CATALOG_RETRY
+        raise
+    except Exception as exc:
+        missing = type(exc).__name__ == "ChannelForumMissingError" or \
+            "CHANNEL_FORUM_MISSING" in str(exc)
+        try:
+            await asyncio.to_thread(
+                lambda: telegram_routes.observe(
+                    peer,
+                    kind="channel_forum_missing" if missing else "rpc_unavailable",
+                    detail=type(exc).__name__))
+        except Exception:
+            log.debug("реестр маршрутов не принял свидетельство [%s]", peer, exc_info=True)
+        _topic_catalog_next_attempt[peer] = time.time() + _TOPIC_CATALOG_RETRY
+        log.info("каталог тем [%s]: добыча не удалась (%s) — ключи идут в комнату, "
+                 "повтор через %.0fс", peer, type(exc).__name__, _TOPIC_CATALOG_RETRY)
+        return None
+
+
+async def _catalog_for_routing(peer, entity=None, *,
+                               unknown_topic: int | None = None):
+    """Знание для ФИКСАЦИИ ключа хранения. -> frozenset засвидетельствованных id.
+
+    Возвращает POSITIVE durable-знание (её гейт REPAIR2, P0-2): ключ темы минтится
+    по membership — засвидетельствованный опенером id минтит и без полного свипа,
+    и после рестарта. Полнота решает только, надо ли ЖДАТЬ добычу. Зовётся ТОЛЬКО
+    после допуска и room-mode-гейта (замороженная/чужая комната не рождает ни RPC,
+    ни записи). Случаи:
+
+    * полнота доказана — ключ не ждёт; незнакомый корень из reply-заголовка
+      (бесплатный in-memory сигнал, НЕ дросселируется дисковым окном) открывает
+      фоновую разведку: один корень — одна разведка ПОСЛЕ полного успеха, transient
+      не хоронит (P0-1); давность каталога — своё окно и свой фоновый рефреш;
+    * полноты нет и корень ТЕКУЩЕГО хода неизвестен — single-flight добыча ДО
+      фиксации ключа, ограниченное ожидание; не успели/не смогли — сообщение
+      честно ложится в комнату (fail-safe — комната, не заголовок);
+    * полноты нет, но ключ хода от свипа не зависит (корень известен или его нет) —
+      добыча полноты идёт фоном, ход не ждёт;
+    * недавняя неудача — без новой долбёжки до конца окна повтора.
+    """
+    peer = str(peer)
+    ids, complete = await _topic_knowledge_cached(peer)
+    now = time.time()
+    candidate = None
+    if unknown_topic is not None:
+        try:
+            parsed = int(unknown_topic)
+            if parsed > telegram_topics.GENERAL_TOPIC_ID and parsed not in ids:
+                candidate = parsed
+        except (TypeError, ValueError):
+            candidate = None
+    if complete:
+        if candidate is not None:
+            probed = _topic_catalog_probed_roots.setdefault(peer, set())
+            if (candidate not in probed
+                    and now >= _topic_catalog_unknown_gate.get(peer, 0.0)):
+                _topic_catalog_unknown_gate[peer] = now + _TOPIC_CATALOG_RETRY
+                # В probed корень уйдёт только при полном успехе полёта (P0-1);
+                # здесь он лишь ЗАЯВЛЕН полёту через pending.
+                _topic_catalog_pending_roots.setdefault(peer, set()).add(candidate)
+                _spawn_catalog_flight(peer, entity)
+        elif now >= _topic_catalog_stale_probe.get(peer, 0.0):
+            # Плановая давность — единственное, что стоит дискового чтения; у неё
+            # своё окно, и оно ничего не решает за незнакомые корни.
+            _topic_catalog_stale_probe[peer] = now + _TOPIC_CATALOG_COOLDOWN
+            if await _catalog_is_stale(peer):
+                _spawn_catalog_flight(peer, entity)
+        return ids
+    # Полного свипа не было. Positive-знание уже минтит свои id; ждать добычу имеет
+    # смысл только когда корень ТЕКУЩЕГО хода неизвестен — иначе ключ от результата
+    # свипа не зависит, и полнота добывается фоном.
+    if candidate is None:
+        if now >= _topic_catalog_next_attempt.get(peer, 0.0):
+            _spawn_catalog_flight(peer, entity)
+        return ids
+    if now < _topic_catalog_next_attempt.get(peer, 0.0):
+        return ids
+    task = _spawn_catalog_flight(peer, entity)
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(task), _TOPIC_CATALOG_PREFLIGHT_TIMEOUT)
+    except asyncio.CancelledError:
+        if not task.cancelled():
+            raise                     # отменили НАС — пробрасываем честно
+        return ids                    # отменили полёт (shutdown) — fail-safe комната
+    except (asyncio.TimeoutError, Exception):
+        return ids
+    fresh_ids, _fresh_complete = await _topic_knowledge_cached(peer)
+    return fresh_ids
+
+
+def _resolve_room_mode(peer_id, chat_id, *, where: str) -> tuple[str, bool]:
+    """Return the live mode; a broken mode sensor closes the route instead of guessing normal."""
+    try:
+        return rooms.effective_mode(peer_id, strict=True), False
+    except Exception:
+        log.warning("room mode unavailable at %s [%s] — fail-closed", where, chat_id,
+                    exc_info=True)
+        return "frozen", True
+
+
+def _note_room_mode_skip(peer_id, chat_id, mode: str, *, stage: str,
+                         resolution_failed: bool = False) -> None:
     profile = {}
     try:
         profile = rooms.profile_read(peer_id)
     except Exception:
         log.debug("room profile provenance упал [%s]", chat_id, exc_info=True)
-    effective = str(profile.get("mode") or mode)
+    # `mode` уже вычислен effective_mode(): legacy sidecar может честно дать frozen при
+    # сыром profile.mode=normal. Сырой профиль — provenance, но не вправе перебить исход.
+    effective = str(mode or profile.get("mode") or "frozen")
     # Провенанс режима уже лежал в meta — и всё равно КЛАСС был жёстко «запретил_егор»,
     # включая случай mode_set_by == "praxis". То есть собственную границу она читала как
     # чужой запрет, а именно от этой подмены авторства словарь классов и защищает.
     set_by = str(profile.get("mode_set_by") or "")
-    klass = "мой_ритм" if set_by == "praxis" else "запретил_егор"
+    if resolution_failed or set_by in ("", "unknown", "protocol"):
+        klass = "не_увидела"
+    elif set_by == "praxis":
+        klass = "мой_ритм"
+    elif set_by == "owner":
+        klass = "запретил_егор"
+    else:
+        klass = "не_увидела"
+    detail = ("режим комнаты не прочитан — тракт закрыт" if resolution_failed
+              else f"режим {effective}")
     perception.note_skip(
         stage, klass, chat_id=chat_id,
-        detail=f"режим {effective}",
+        detail=detail,
         meta={
-            "mode": effective,
+            "mode": "unavailable" if resolution_failed else effective,
             "mode_set_by": profile.get("mode_set_by"),
             "mode_reason": profile.get("mode_reason"),
             "mode_until": profile.get("mode_until"),
@@ -1566,14 +2656,13 @@ async def on_new(event) -> None:
     if sender is not None and getattr(sender, "is_self", False):
         return
     name = _sender_label(sender)
-    route = telegram_topics.route_for_message(
-        event.chat_id, msg, is_private=bool(is_private),
-        is_forum=(None if is_private else
-                  _known_forum(event.chat_id, msg, getattr(event, "chat", None))))
-    peer_id = route.peer_id
-    # All conversational state is topic-local.  Access/room policy below deliberately
-    # continues to use peer_id: a topic is not a second Telegram room or authority.
-    chat_id = route.conversation_id
+    # Корневая комната известна без маршрута. САМ МАРШРУТ фиксируется НИЖЕ — после
+    # допуска, room-mode-гейта и preflight-каталога (её блокеры 1 и 5 от 22.08):
+    # замороженная/чужая комната не рождает RPC, а ключ хранения не строится раньше,
+    # чем добыто знание о настоящих темах.
+    peer_id = str(event.chat_id)
+    room_nature = (None if is_private else
+                   _known_forum(event.chat_id, msg, getattr(event, "chat", None)))
     # Пункт 5, ТЕНЬ. Природа комнаты лежит прямо здесь и бесплатно: `event.chat` —
     # синхронное свойство, объект уже пришёл в контейнере апдейта, сети не будет.
     # Маршрутизацию НЕ трогаем — только копим свидетельства, чтобы перекладка ключа
@@ -1645,14 +2734,9 @@ async def on_new(event) -> None:
         except Exception:
             log.debug("адресная книга: отправитель не сохранился", exc_info=True)
 
-    # PASS 9.0: catch_up может доиграть уже виденный апдейт — msg_id-сторож против дублей буфера
-    mid = getattr(msg, "id", None)
-    if mid is not None:
-        if mid in _seen_ids[chat_id]:
-            return
-        _seen_ids[chat_id].append(mid)
-
-    # Стоп-кран: /panic от владельца или хоста чужого пространства (PRAXIS_PANIC_IDS). Только стоп.
+    # Стоп-кран: /panic от владельца или хоста чужого пространства (PRAXIS_PANIC_IDS).
+    # Только стоп. Стоит ДО гейтов, как и раньше; сторож дублей теперь ниже (ему нужен
+    # финальный ключ) — повторный /panic из catch_up упрётся в уже идущий disconnect.
     if text.strip().lower() in ("/panic", "паника") and (is_owner or sender_id in PANIC_IDS):
         log.warning("PANIC от id=%s", sender_id)
         try:
@@ -1662,27 +2746,57 @@ async def on_new(event) -> None:
             log.exception("panic")
         return
 
-    if rooms.is_frozen(peer_id):
-        _note_room_mode_skip(peer_id, chat_id, "frozen", stage="frozen")
-        return  # пульт: чат заморожен — до неё не доходит (не бан)
-    room_mode = "normal"
     room_policy = rooms.default_policy()
+    # Гейты допуска и режима идут по КОРНЕВОЙ комнате и стоят ДО фиксации маршрута:
+    # заморож/чужое событие не рождает ни каталожного RPC, ни ключа (её блокер 5).
+    # Пометки пропуска поэтому тоже комнатные: сам гейт комнатный.
+    if not is_private and not rooms.is_allowed(peer_id, is_owner):
+        perception.note_skip("departed", "явный leave", chat_id=peer_id)
+        return
+    # Один живой режим, один гейт. Раньше отдельный legacy-флаг проверялся ПЕРВЫМ:
+    # истёкший frozen TTL не доходил до effective_mode(), который как раз снимает и
+    # профиль, и sidecar. Ошибка выглядела как свежая заморозка после срока.
+    room_mode, resolution_failed = _resolve_room_mode(
+        peer_id, peer_id, where="incoming message",
+    )
+    if room_mode in ("frozen", "dead"):
+        _note_room_mode_skip(
+            peer_id, peer_id, room_mode, stage="room_mode",
+            resolution_failed=resolution_failed,
+        )
+        return
     if not is_private:
-        if not rooms.is_allowed(peer_id, is_owner):
-            perception.note_skip("departed", "явный leave", chat_id=chat_id)
-            return
-        # 10.3: режим комнаты из профиля (TTL-спуск ленивый); frozen/dead — как freeze
-        try:
-            room_mode = rooms.effective_mode(peer_id)
-        except Exception:
-            log.debug("effective_mode упал [%s]", chat_id, exc_info=True)
-        if room_mode in ("frozen", "dead"):
-            _note_room_mode_skip(peer_id, chat_id, room_mode, stage="room_mode")
-            return
         try:
             room_policy = rooms.room_policy(peer_id)
         except Exception:
-            log.debug("room_policy упал [%s]", chat_id, exc_info=True)
+            log.debug("room_policy упал [%s]", peer_id, exc_info=True)
+
+    # ФИКСАЦИЯ МАРШРУТА — только теперь. Каталог настоящих тем добывается
+    # single-flight ДО ключа (первая живая реплика настоящей темы не теряется);
+    # не добыли — fail-safe комната, не заголовок (её блокер 1).
+    catalog = None
+    if room_nature is True:
+        catalog = await _catalog_for_routing(
+            peer_id, getattr(event, "chat", None),
+            unknown_topic=(telegram_topics.thread_root_for_message(msg)
+                           if getattr(msg, "reply_to", None) is not None else None))
+    route = telegram_topics.route_for_message(
+        event.chat_id, msg, is_private=bool(is_private), is_forum=room_nature,
+        confirmed_topics=catalog)
+    # All conversational state is topic-local.  Access/room policy above deliberately
+    # used peer_id: a topic is not a second Telegram room or authority.
+    chat_id = route.conversation_id
+
+    # PASS 9.0: catch_up может доиграть уже виденный апдейт — msg_id-сторож против
+    # дублей буфера. Считается по ФИНАЛЬНОМУ ключу и смотрит ещё в комнатное кольцо:
+    # сообщение, принятое ДО прихода каталога под ключом комнаты, при повторе уехало
+    # бы в тему и продублировало буфер (фан-аут 22.08).
+    mid = getattr(msg, "id", None)
+    if mid is not None:
+        if mid in _seen_ids[chat_id] or (
+                chat_id != peer_id and mid in _seen_ids[peer_id]):
+            return
+        _seen_ids[chat_id].append(mid)
 
     cat = social.category(sender_id)
     known = cat in ("owner", "known")
@@ -1744,19 +2858,132 @@ async def on_new(event) -> None:
     if route.topic_id is not None:
         cache_key = (peer_id, int(route.topic_id))
         raw_topic_title = opener_title or _topic_titles.get(cache_key, "")
+        if opener_title:
+            # Служебное «создана тема» — прямое свидетельство Telegram: тема и её
+            # настоящее имя уезжают в durable-карту, не дожидаясь полного свипа, а
+            # реестр получает вердикт «форум» — следующий ход роутится по знанию.
+            await _note_live_opener(peer_id, int(route.topic_id), opener_title)
+        if not raw_topic_title:
+            try:
+                raw_topic_title = await asyncio.to_thread(
+                    telegram_routes.topic_title, peer_id, route.topic_id)
+            except Exception:
+                log.debug("durable topic title не прочитался [%s]", chat_id, exc_info=True)
         if not raw_topic_title:
             try:
                 raw_topic_title = await asyncio.to_thread(
                     group_context.topic_title, peer_id, route.topic_id)
             except Exception:
                 log.debug("topic title не прочитался [%s]", chat_id, exc_info=True)
+        if raw_topic_title == f"topic #{route.topic_id}":
+            raw_topic_title = ""     # выдуманное имя из старых записей — не имя
         if raw_topic_title:
             _topic_titles[cache_key] = raw_topic_title
+    # Нет настоящего имени — нет имени: без синтетики «topic #N». Адрес темы честен
+    # и без имени — тем же селектором, которым её адресуют руки.
     topic_title = (
-        f"{desc.get('title')} · {raw_topic_title or f'topic #{route.topic_id}'}"
+        f"{desc.get('title')} · {raw_topic_title or f'#topic:{route.topic_id}'}"
         if route.topic_id is not None else desc.get("title")
     )
     buffer_name = name if route.topic_id is None else str(topic_title or name)
+
+    # Edit/delete updates can overtake NewMessage while handlers await sender/media work.
+    # Preserve the delayed original as audit evidence, but never let it resurrect into
+    # live buffer, follow-up matching or a wake when a newer current revision already exists.
+    current_revision = None
+    if mid is not None:
+        if is_private:
+            existing_source = _buffer_revision_source(chat_id, int(mid))
+            if _revision_is_stale(existing_source, str(mid), chat_id=chat_id):
+                current_revision = {"source_id": existing_source}
+        elif _group_archive_enabled():
+            try:
+                observed = await asyncio.to_thread(
+                    group_context.latest_message, peer_id, int(mid))
+                if (isinstance(observed, dict)
+                        and (observed.get("kind") == "deletion" or observed.get("edited_at"))):
+                    current_revision = observed
+                    await asyncio.to_thread(
+                        group_context.observe_message,
+                        peer_id=peer_id, topic_id=route.topic_id, message_id=mid,
+                        sender_id=sender_id, sender_name=name,
+                        reply_to_message_id=reply_to_mid, timestamp=message_ts,
+                        edited_at=getattr(msg, "edit_date", None),
+                        text=text, topic_title=raw_topic_title, media=media,
+                    )
+            except Exception:
+                log.exception("late original current-state check failed [%s] #%s", chat_id, mid)
+    if current_revision is not None:
+        _record_life_message(
+            chat_id, f"{name}{reply_mark}: {body}", actor=name, direction="in",
+            source_id=mid, is_dm=is_private, ts=message_ts,
+            dedupe_key=f"telegram:{chat_id}:{mid}:in",
+        )
+        if current_revision.get("kind") == "deletion":
+            marker = f"[deleted #{mid}]"
+            line = f"Telegram {marker}: message removed"
+            _record_life_message(
+                chat_id, line, actor="Telegram", direction="in",
+                source_id=f"{mid}:delete", is_dm=is_private, ts=time.time(),
+                dedupe_key=f"telegram:{chat_id}:{mid}:delete:in",
+            )
+        current_source = str(current_revision.get("source_id") or "")
+        if not current_source and current_revision.get("kind") == "deletion":
+            current_source = f"{mid}:delete"
+        if not current_source and current_revision.get("edited_at"):
+            current_source = _edit_revision_source_id(
+                int(mid), current_revision.get("edited_at"),
+                text=str(current_revision.get("text") or ""),
+                media=str(current_revision.get("media") or ""),
+            )
+        projection_chats = {chat_id}
+        if not is_private:
+            projection_chats.update(_group_message_conversations(peer_id, int(mid)))
+            topic_id = current_revision.get("topic_id")
+            projection_chats.add(
+                telegram_topics.TopicRoute(peer_id, topic_id).conversation_id)
+        current_line = (
+            f"Telegram [deleted #{mid}]: message removed"
+            if current_revision.get("kind") == "deletion" else
+            f"{current_revision.get('sender_name') or name} "
+            f"[edited #{mid} at {current_revision.get('edited_at')}]: "
+            f"{' '.join(part for part in (current_revision.get('media'), current_revision.get('text')) if part)}"
+        )
+        for projection_chat in projection_chats:
+            if current_source:
+                _replace_buffer_message(
+                    projection_chat, int(mid), current_line,
+                    deleted=current_revision.get("kind") == "deletion",
+                    source_id=current_source,
+                )
+                _record_life_message(
+                    projection_chat, current_line,
+                    actor=("Telegram" if current_revision.get("kind") == "deletion"
+                           else str(current_revision.get("sender_name") or name)),
+                    direction="in", source_id=current_source, is_dm=is_private,
+                    ts=(time.time() if current_revision.get("kind") == "deletion" else
+                        float(datetime.datetime.fromisoformat(
+                            str(current_revision.get("edited_at")).replace("Z", "+00:00")
+                        ).timestamp())),
+                    dedupe_key=f"telegram:{projection_chat}:{current_source}:in",
+                    revision_order=(int(current_revision.get("revision_order") or 0)
+                                    if current_revision.get("edited_at") else None),
+                )
+            else:
+                _sync_buffer_from_hot(projection_chat)
+        try:
+            matched = telegram_followups.LEDGER.observe_incoming(
+                peer_id=peer_id, sender_id=sender_id, message_id=mid, text=body,
+                reply_to_message_id=reply_to_mid, received_at=message_ts,
+                sender_name=name, sender_is_owner=bool(is_owner),
+            )
+            if matched:
+                log.info("FOLLOW-UP %s: delayed original #%s projected as current revision",
+                         matched.get("id"), mid)
+        except Exception:
+            log.exception("follow-up ledger не принял delayed original [%s] #%s", chat_id, mid)
+        return
+
     _buf_push(chat_id, f"{name}{reply_mark}: {body}", author=name, is_dm=is_private,
               name=buffer_name,
               source_id=mid, ts=message_ts)
@@ -1770,6 +2997,7 @@ async def on_new(event) -> None:
                     group_context.record_topic,
                     peer_id, route.topic_id, opener_title,
                     timestamp=message_ts, message_id=mid,
+                    origin="opener",
                 )
             await asyncio.to_thread(
                 group_context.observe_message,
@@ -1916,6 +3144,13 @@ def _defer_pass(chat_id: str, delay: float) -> None:
             await asyncio.sleep(max(0.0, delay))
         except asyncio.CancelledError:
             return
+        # Пока текущая задача числится живой в `_deferred`, повторный defer из
+        # `_run_pass` видит саму себя и ничего не ставит. Снимаем слот ПЕРЕД вызовом:
+        # тогда временная причина (например, недоступный mode-sensor) может честно
+        # перепланировать ещё один retry, не дожидаясь внешнего сообщения.
+        current = asyncio.current_task()
+        if _deferred.get(chat_id) is current:
+            _deferred.pop(chat_id, None)
         await _run_pass(chat_id)
 
     _deferred[chat_id] = asyncio.create_task(_later())
@@ -2136,6 +3371,14 @@ async def _send_direct_outbox_entry(entry: dict, *, entity=None) -> dict:
     if str(entry.get("purpose") or "").startswith("tool:"):
         prepared = await asyncio.to_thread(agent.direct_outbox_prepared, dict(entry))
         if not prepared:
+            # ⚠ 17.08: отсутствие proof бывает двух сортов. Гонка с ещё живым тул-вызовом
+            # (proof доедет через секунды) — ретраить законно. Терминальный прогон без
+            # proof — константа: proof пишет только сам тул-вызов, ретраи изображали
+            # надежду 2,5 часа и кончились тихим dead_letter. Различаем по прогону.
+            if await asyncio.to_thread(agent.direct_outbox_proof_unreachable, dict(entry)):
+                raise DirectOutboxUnsendable(
+                    "direct Telegram tool entry has no exact pre-network run proof "
+                    "and its run is terminal — the proof can never appear")
             raise agent.DurableExecutionError(
                 "direct Telegram tool entry has no exact pre-network run proof")
     peer_id = int(entry["peer_id"])
@@ -2193,6 +3436,59 @@ async def _send_direct_outbox_entry(entry: dict, *, entity=None) -> dict:
     )
 
 
+class DirectOutboxUnsendable(RuntimeError):
+    """Доставка этой записи невозможна по построению; повтор не поможет никогда."""
+
+
+def _outbox_run_call(entry: dict) -> tuple[str, str]:
+    """(run_id, call_id) записи — из полей, с фолбэком на разбор ключа."""
+    run_id = str(entry.get("run_id") or "")
+    call_id = str(entry.get("call_id") or "")
+    if not (run_id and call_id):
+        parts = str(entry.get("key") or "").split(":")
+        if len(parts) == 4 and parts[0] == "telegram-outbox" and parts[2] == "tool":
+            run_id, call_id = run_id or parts[1], call_id or parts[3]
+    return run_id, call_id
+
+
+def _announce_direct_outbox_dead_letter(entry: dict, error: BaseException | str) -> None:
+    """Мёртвая запись очереди обязана родить расписку, а не только строку WARNING.
+
+    ⚠ 17.08, живой инцидент: реплика ей в личку Егора умерла dead_letter'ом через
+    2,5 часа ретраев — ни записки владельцу, ни следа в прогоне. Егор узнал об отказе
+    по часу тишины, а RECAP прогона продолжал говорить Delivery `sent`. Слово не
+    имеет права исчезать беззвучно: текст сохраняется распиской владельцу (тот же
+    механизм, что у постоянного отказа Telegram в run_delivery_failed), а прогон
+    получает durable-событие. Обе расписки не смеют упасть громче самой потери.
+    """
+    payload = dict(entry.get("payload") or {})
+    text = str(payload.get("text") or "") or str(payload.get("caption") or "")
+    where = str(entry.get("peer_id") or "?")
+    reason = str(entry.get("last_error") or error or "")[:400]
+    run_id, call_id = _outbox_run_call(entry)
+    key = str(entry.get("key") or "")
+    try:
+        owner_delivery.LEDGER.emit(
+            "run_result",
+            title=f"Не доставлено ({where}) — очередь закрыла запись, текст сохранён",
+            body=text[:12000],
+            outcome="failure",
+            thread_key=f"run:{run_id}" if run_id else f"outbox:{entry.get('id')}",
+            reason=f"outbox dead_letter: {reason}",
+            correlation={"run_id": run_id, "peer_id": where, "outbox_key": key},
+            provenance={"source": "direct_telegram_outbox", "source_id": key},
+            expectation="Текст НЕ ушёл и сам уже не уйдёт; отправить можно только заново и осознанно.",
+            dedupe_key=f"outbox-dead:{key}",
+        )
+    except Exception:
+        log.warning("расписка владельцу о dead_letter не записалась [%s]", key, exc_info=True)
+    if run_id and call_id:
+        try:
+            agent.record_direct_outbox_dead_letter(run_id, call_id, dict(entry))
+        except Exception:
+            log.warning("durable-событие dead_letter не записалось [%s]", key, exc_info=True)
+
+
 def _record_direct_outbox_failure(key: str, error: BaseException) -> tuple[bool, dict]:
     """Отказ Telegram в журнал: (постоянный?, новое состояние записи).
 
@@ -2209,6 +3505,9 @@ def _record_direct_outbox_failure(key: str, error: BaseException) -> tuple[bool,
     который весь этот день и разбирали.
     """
     outbox = _direct_outbox()
+    if isinstance(error, DirectOutboxUnsendable):
+        return True, outbox.dead_letter(
+            key, f"unsendable by construction: {str(error)[:300]}")
     if agent._is_permanent_delivery_error(error):
         reason = (f"permanent Telegram refusal: {type(error).__name__}: "
                   f"{str(error)[:300]}")
@@ -2223,6 +3522,12 @@ async def _retry_direct_outbox_entry(entry: dict, error: BaseException) -> dict:
     if permanent:
         log.warning("direct Telegram outbox: постоянный отказ, больше не повторяю [%s]: %s",
                     entry.get("key"), error)
+    # Переход в dead_letter (постоянным отказом ЛИБО исчерпанием попыток в record_retry)
+    # объявляет себя расписками — см. _announce_direct_outbox_dead_letter (инцидент 17.08).
+    if (str(state.get("state") or "") == "dead_letter"
+            and str(entry.get("state") or "") != "dead_letter"):
+        await asyncio.to_thread(
+            _announce_direct_outbox_dead_letter, {**dict(entry), **dict(state)}, error)
     return state
 
 
@@ -2566,6 +3871,29 @@ async def _voice_turn_with_typing(entity, *args, **kwargs):
         return await _voice_turn_offloaded(*args, **kwargs)
 
 
+def _gate_group_wake_room_mode(peer_id, chat_id, wake: GroupWake, *, where: str) -> tuple[str, str]:
+    """Resolve one live group mode and settle this wake mechanically.
+
+    Returns ``(mode, outcome)`` where outcome is ``open``, ``retry`` or ``closed``.
+    A sensor failure keeps the immutable wake/media and schedules another read; a real
+    frozen/dead mode consumes only this wake generation so it cannot revive later.
+    """
+    room_mode, resolution_failed = _resolve_room_mode(peer_id, chat_id, where=where)
+    if room_mode not in ("frozen", "dead"):
+        return room_mode, "open"
+    _note_room_mode_skip(
+        peer_id, chat_id, room_mode, stage="room_mode",
+        resolution_failed=resolution_failed,
+    )
+    if resolution_failed:
+        _defer_pass(chat_id, 60.0)
+        return room_mode, "retry"
+    if _group_wakes.get(chat_id) is wake:
+        _group_wakes.pop(chat_id, None)
+    _consume_pending_media(chat_id, wake.media_snapshot)
+    return room_mode, "closed"
+
+
 async def _run_pass(chat_id: str) -> None:
     """Ход по чату (PASS 8.1): и личка, и группа — голос. Путь: reflex (в on_new) → voice →
     audience-aware finalizer (в owner-DM без оценки речи) → send | [молчу]. Фокус-окно она открывает
@@ -2592,6 +3920,13 @@ async def _run_pass(chat_id: str) -> None:
         perception.note_skip("stale_wake", "отложила", chat_id=chat_id,
                              detail="проход пережил свой wake")
         return
+    if not is_dm:
+        room_mode, room_outcome = _gate_group_wake_room_mode(
+            peer_id, chat_id, wake, where="delayed group pass",
+        )
+        if room_outcome != "open":
+            return
+        meta["room_mode"] = room_mode
     elapsed = time.time() - _last_pass[chat_id]
     addressed = bool(meta.get("addressed", False)) if is_dm else bool(wake.addressed)
     cd = _cooldown(is_dm, meta.get("room_mode", "normal"), addressed=addressed)
@@ -2607,6 +3942,7 @@ async def _run_pass(chat_id: str) -> None:
         wake.message_id if wake.addressed else None)
     terminal = False
     superseded_abandon = False  # PASS 29: этот черновик брошен в пользу преемника
+    group_retry_scheduled = False  # post-lock mode sensor already owns the next retry
     cancellation_seen = False
     delivery_run_id = ""
     delivery_message_ids: list[str] = []
@@ -2627,6 +3963,30 @@ async def _run_pass(chat_id: str) -> None:
         _passing.discard(chat_id)
         raise
     try:
+        if not is_dm:
+            # Edits can revise the immutable wake while this pass waits for the global
+            # lock; deletion can withdraw it entirely.  Rebind at the last safe point so
+            # local variables do not preserve a stale query/speaker or answer a removed
+            # address.  A genuinely newer message owns its own pass and is re-armed in
+            # finally; this old one becomes a no-op.
+            live_wake = _group_wakes.get(chat_id)
+            if live_wake is None:
+                return
+            if live_wake is not wake:
+                if live_wake.message_id != wake.message_id:
+                    return
+                wake = live_wake
+                addressed_mid = wake.message_id if wake.addressed else None
+            # The first read happened before a potentially minutes-long wait for the global
+            # cognitive lock. Re-read now, at the last safe point before context/model work:
+            # a room frozen while we waited must not receive a reply from the old wake.
+            room_mode, room_outcome = _gate_group_wake_room_mode(
+                peer_id, chat_id, wake, where="group pass after one-mind lock",
+            )
+            if room_outcome != "open":
+                group_retry_scheduled = room_outcome == "retry"
+                return
+            meta["room_mode"] = room_mode
         _last_pass[chat_id] = time.time()
         # Тот же разговор, но ролями: её реплики поедут в модель как ЕЁ реплики, а не
         # строками «Praxis: …» / «[…; Praxis [id …]] …» внутри чужого текста. Сплошная
@@ -3102,7 +4462,7 @@ async def _run_pass(chat_id: str) -> None:
         # об _passing, поэтом любой оставшийся wake generation-safe перевзводим.
         if not is_dm:
             current_wake = _group_wakes.get(chat_id)
-            if current_wake is not None:
+            if current_wake is not None and not group_retry_scheduled:
                 _arm(chat_id)
         elif chat_id in _dm_rearm:
             # PASS 21: ЛС-триггер, сгоревший об _passing, больше не теряется
@@ -3160,6 +4520,9 @@ async def _maybe_compact(chat_id: str) -> None:
             return
         for _ in range(min(cut, len(buf))):
             buf.popleft()
+            message_ids = _buffer_message_ids.get(chat_id)
+            if message_ids:
+                message_ids.popleft()
         _buf_dirty.add(chat_id)
         log.info("compact [%s]: %d событий → %s; hot=%s; причина=%s",
                  place, fold, result.get("compact_id"), result.get("hot"),
@@ -4182,6 +5545,84 @@ async def _apply_membership_acceptance(
     rooms.set_mode(chat_id, "dead", reason="вышла из Telegram", set_by=set_by)
     _entity_cache.pop(chat_id, None)
     return True
+
+
+def _sync_history_scan(target: str = "", params: dict | None = None,
+                       _principal: str | int = "unknown") -> str:
+    """Runtime-owned forum-history scan: единая дверь (TRANSPORT-GATE 25.08).
+
+    Исполняется в event-loop раннера через глобальный подключённый client;
+    caller не передаёт ни transport, ни receipt. apply=true допускает запись
+    evidence только внутри этого же вызова после complete-прохода.
+    """
+    if not OWNER_ID or str(_principal) not in {str(OWNER_ID), agent.PRAXIS_SELF_PRINCIPAL}:
+        return "Отказ: history_scan — суверенная дверь владельца и самой Praxis."
+    if client is None:
+        return "history_scan: Telethon-клиент не подключён"
+    cfg = dict(params or {})
+    try:
+        floor_id = int(cfg.get("floor_id"))
+        ceiling_id = int(cfg.get("ceiling_id"))
+    except (TypeError, ValueError):
+        return "history_scan: floor_id и ceiling_id обязательны и целые"
+    apply_flag = bool(cfg.get("apply", False))
+    page_size = int(cfg.get("page_size", 100))
+    max_pages = int(cfg.get("max_pages", 200))
+    try:
+        scan_range = history_scan.ScanRange(floor_id=floor_id, ceiling_id=ceiling_id)
+    except ValueError as exc:
+        return f"history_scan: {exc}"
+
+    async def _run() -> dict:
+        entity = await _resolve_entity(target)
+        if entity is None:
+            return {"error": f"target не резолвится: {target}"}
+        raw_id = getattr(entity, "id", None)
+        if raw_id is None:
+            return {"error": f"entity без id: {target}"}
+        resolved = int(raw_id)
+        # Peer identity check: fail closed при любом расхождении.
+        wanted = str(target).lstrip("-").removeprefix("100")
+        if str(resolved) != wanted:
+            return {"error": f"entity mismatch: target={target} resolved={resolved}"}
+
+        def _page(offset_id: int, size: int):
+            return client.iter_messages(
+                entity, limit=size, offset_id=offset_id
+            )
+
+        async def fetch_page(offset_id: int, size: int):
+            bucket: list = []
+            async for message in _page(offset_id, size):
+                bucket.append(message)
+            return bucket
+
+        result = await history_scan.run_history_scan(
+            f"-100{resolved}", scan_range, fetch_page,
+            page_size=page_size, max_pages=max_pages,
+        )
+        outcome = history_scan.observe_history_floor(result, apply=apply_flag)
+        return outcome
+
+    try:
+        outcome = asyncio.run_coroutine_threadsafe(_run(), _LOOP).result(timeout=900)
+    except TimeoutError:
+        return "history_scan: transport timeout (900s), ничего не записано"
+    if isinstance(outcome, dict) and outcome.get("error"):
+        return f"history_scan: {outcome['error']}"
+    return json.dumps(outcome, ensure_ascii=False, default=str)
+
+
+def _canonical_peer_id(entity) -> str | None:
+    """Канонический id пира из резолвнутой entity (без -100 префикса)."""
+    for attr in ("id",):
+        value = getattr(entity, attr, None)
+        if value is not None:
+            try:
+                return str(int(value))
+            except (TypeError, ValueError):
+                continue
+    return None
 
 
 def _membership_transaction(action: str, target: str, principal_id: object,
@@ -5988,18 +7429,61 @@ async def _media_cleanup_once() -> None:
                 )
 
 
+def _followup_delivery_projection(item: dict) -> dict:
+    """Small current-state fingerprint used immediately before owner transport."""
+    response = item.get("response") or {}
+    target = str(item.get("target_label") or "собеседник")[:240]
+    speaker = str(response.get("sender_name") or "").strip()
+    is_dm_thread = bool(item.get("target_user_id"))
+    if not speaker and is_dm_thread:
+        speaker = target
+    if not speaker:
+        sender = str(response.get("sender_id") or "").strip()
+        speaker = f"id {sender}" if sender else "не знаю кто"
+    return {
+        "status": str(item.get("status") or ""),
+        "revision_source_id": str(
+            response.get("revision_source_id") or response.get("message_id") or ""),
+        "title": (f"{speaker[:110]} ответил(а)" if is_dm_thread
+                  else f"{speaker[:110]} ответил(а) в {target[:120]}"),
+        "excerpt": str(response.get("text") or "(без текста)")[:1200],
+    }
+
+
 async def _deliver_owner_item(delivery: dict) -> dict:
     """Deliver one queued inbox item with a stable Telegram transport identity."""
     if (delivery.get("status") != "queued"
             or "telegram" not in (delivery.get("transports") or ())):
         return delivery
+    current = await asyncio.to_thread(
+        owner_delivery.LEDGER.current_for_transport,
+        str(delivery.get("id") or ""), transport="telegram",
+        expected_revision=int(delivery.get("revision") or 0),
+    )
+    if current is None:
+        return (await asyncio.to_thread(
+            owner_delivery.LEDGER.get, str(delivery.get("id") or "")) or delivery)
+    followup_id = str((current.get("correlation") or {}).get("followup_id") or "")
+    if current.get("type") == "followup_answer" and followup_id:
+        thread = await asyncio.to_thread(telegram_followups.LEDGER.get, followup_id)
+        if isinstance(thread, dict):
+            projection = _followup_delivery_projection(thread)
+            if (projection.get("status") != "answered"
+                    or projection.get("revision_source_id")
+                    != str((current.get("provenance") or {}).get("revision_source_id") or "")
+                    or projection.get("excerpt") != str(current.get("body") or "")
+                    or projection.get("title") != str(current.get("title") or "")):
+                await _supersede_pending_followup_deliveries(
+                    followup_id, reason="response_changed_at_transport_boundary")
+                return (await asyncio.to_thread(
+                    owner_delivery.LEDGER.get, str(current.get("id") or "")) or current)
     sent, random_id = await _send_message_idempotent(
-        OWNER_ID, owner_delivery.format_telegram(delivery),
-        delivery_key=f"owner-delivery:{delivery['id']}",
+        OWNER_ID, owner_delivery.format_telegram(current),
+        delivery_key=f"owner-delivery:{current['id']}",
     )
     return await asyncio.to_thread(
         owner_delivery.LEDGER.mark_delivered,
-        delivery["id"], transport="telegram",
+        current["id"], transport="telegram",
         receipt={
             "message_id": getattr(sent, "id", None),
             "random_id": str(random_id),
@@ -6014,6 +7498,38 @@ async def _owner_deliveries_once() -> None:
     pending = await asyncio.to_thread(owner_delivery.LEDGER.pending, limit=10)
     for delivery in pending:
         await _deliver_owner_item(delivery)
+
+
+async def _supersede_pending_followup_deliveries(followup_id: str, *, reason: str) -> int:
+    """Suppress queued (never sent) owner copies for a revised/deleted response.
+
+    Delivered/read items are immutable evidence: Telegram cannot recall them and this
+    helper deliberately makes no such claim.  A later accepted edit gets a fresh delivery
+    identity from its revision source id; deletion leaves no current notification.
+    """
+    if not followup_id:
+        return 0
+    changed = 0
+    rows = await asyncio.to_thread(
+        owner_delivery.LEDGER.list, limit=100_000, include_superseded=False)
+    for row in rows:
+        if (row.get("status") != "queued"
+                or str((row.get("correlation") or {}).get("followup_id") or "")
+                != followup_id):
+            continue
+        try:
+            await asyncio.to_thread(
+                owner_delivery.LEDGER.transition,
+                str(row.get("id") or ""), "superseded",
+                expected_revision=int(row.get("revision") or 0),
+                detail={"reason": reason, "followup_id": followup_id},
+            )
+            changed += 1
+        except (KeyError, ValueError):
+            # A concurrent delivery/transition won the race.  Already-sent Telegram
+            # cannot be recalled, and the durable state truthfully records that result.
+            log.info("follow-up owner delivery changed concurrently [%s]", followup_id)
+    return changed
 
 
 async def _followups_once() -> None:
@@ -6056,7 +7572,11 @@ async def _followups_once() -> None:
                 "sent_message_id": str(item.get("sent_message_id") or ""),
             },
             reason="Пришёл ответ в отслеживаемой Telegram-нити.",
-            provenance={"source": "telegram_followups", "source_id": followup_id},
+            provenance={
+                "source": "telegram_followups", "source_id": followup_id,
+                "revision_source_id": str(
+                    response.get("revision_source_id") or response.get("message_id") or ""),
+            },
             expectation="Прочитать ответ и решить, нужно ли продолжение.",
             action={
                 "label": "Открыть нить",
@@ -6066,10 +7586,32 @@ async def _followups_once() -> None:
             result=excerpt,
             dedupe_key=(
                 f"telegram-followup:{followup_id}:answer:"
-                f"{response.get('peer_id')}:{response.get('message_id')}"
+                f"{response.get('peer_id')}:{response.get('message_id')}:"
+                f"{response.get('revision_source_id') or response.get('message_id')}"
             ),
+            coalesce_key=f"telegram-followup:{followup_id}:answer",
         )
+        # The response may be edited/deleted after pending_notifications() but before
+        # transport send.  Re-read its lineage and never send a stale queued payload.
+        current = await asyncio.to_thread(
+            telegram_followups.LEDGER.get, followup_id)
+        if isinstance(current, dict):
+            current_response = current.get("response") or {}
+            if (current.get("status") != "answered"
+                    or str(current_response.get("revision_source_id")
+                           or current_response.get("message_id") or "")
+                    != str(response.get("revision_source_id")
+                           or response.get("message_id") or "")):
+                await _supersede_pending_followup_deliveries(
+                    followup_id, reason="response_changed_before_delivery")
+                continue
         delivery = await _deliver_owner_item(delivery)
+        if delivery.get("status") != "delivered":
+            log.info(
+                "FOLLOW-UP %s: owner-delivery=%s not delivered (state=%s)",
+                followup_id, delivery.get("id"), delivery.get("status"),
+            )
+            continue
         await asyncio.to_thread(telegram_followups.LEDGER.mark_notified, followup_id)
         log.info(
             "FOLLOW-UP %s: owner-delivery=%s state=%s",
@@ -6871,16 +8413,87 @@ async def _wait_reconnected(timeout: float | None = None) -> bool:
     return False
 
 
-async def _supervise_connection() -> None:
+async def _reconnect_with_backoff(reason: str, *, budget: float | None = None) -> bool:
+    """Пережить обрыв сети НА МЕСТЕ: connect() с backoff 5→60с, пока связь не вернётся.
+
+    -> True связь есть; False грейс исчерпан (дальше — честный выход, как раньше).
+
+    Ценность тут не в самом реконнекте (пять попыток Telethon делает и сам), а в том, что
+    процесс НЕ умирает. Рестарт стирает всё, чего нет на диске: `_seen_ids` — дедуп
+    catch_up, без него доигранный backlog читается как новые сообщения; взведённые
+    `_debounce`/`_deferred` — склеенный всплеск, который она уже собиралась ответить;
+    `_group_wakes` и `_supersede_gen`; кулдауны `_last_pass`; дедлайны забот внутри
+    `_clock`; `_entity_cache`/`_dialog_name_cache` (после рестарта — до 90с холодного
+    резолва на первом «напиши Евгению»); резидентные whisper/piper. И главное — живой
+    рабочий тред хода или `_task_window` под `_ONE_MIND`: рестарт рубит его посередине, и
+    durable-WAL честно помечает эффект `in_doubt`. Петля даёт всему этому дожить до сети.
+    """
+    grace = RECONNECT_TIMEOUT_SEC if budget is None else budget
+    started = time.time()
+    deadline = started + grace
+    delay = RECONNECT_BACKOFF_START
+    attempt = 0
+    log.warning("связь с Telegram оборвалась (%s) -- НЕ падаю: держу состояние и возвращаюсь "
+                "в сеть, грейс %.0fс", reason, grace)
+    while time.time() < deadline:
+        if _SHUTDOWN.is_set():
+            return False
+        attempt += 1
+        try:
+            await client.connect()
+        except Exception as exc:
+            log.warning("возврат в сеть: попытка %d не удалась (%s), следующая через %.0fс",
+                        attempt, type(exc).__name__, delay)
+        else:
+            if client.is_connected():
+                log.warning("связь вернулась за %.0fс и %d попыт(ок) -- без рестарта: буферы, "
+                            "дедуп, дебаунсы и открытые окна живы", time.time() - started, attempt)
+                return True
+            log.warning("возврат в сеть: попытка %d не подняла транспорт, следующая через %.0fс",
+                        attempt, delay)
+        await asyncio.sleep(max(0.0, min(delay, deadline - time.time())))
+        delay = min(delay * 2, RECONNECT_BACKOFF_MAX)
+    log.error("связь не вернулась за %.0fс (%s) -- честный выход, bootguard поднимет заново",
+              grace, reason)
+    return False
+
+
+async def _supervise_connection() -> bool:
     """PASS 13.1: держит процесс живым, пока Telethon не отключится по-настоящему.
+
+    -> True «сеть так и не вернулась, нужен намеренный рестарт (42)»; False — обычный конец.
 
     `run_until_disconnected()` returns on every disconnect. Work runs no longer disconnect at all.
     `_SHUTDOWN` is a real exit; `_EXPECT_DISCONNECT` remains only for an explicit transport-recovery
-    path. If neither flag is set, the disconnect is a real network/client failure and bootguard
-    can restart the process. No work state is encoded in the socket lifecycle.
+    path. No work state is encoded in the socket lifecycle.
+
+    20.08: ОБРЫВ СЕТИ больше не выход. Telethon отдаёт его исключением (ConnectionError из
+    `run_until_disconnected`), и здесь оно уходит в деградированную петлю: вернулась связь —
+    работаем дальше тем же процессом, со всей живой памятью. Локальный `disconnect()` без
+    флагов — это /panic и прочий стоп-кран; его реконнектить НЕЛЬЗЯ, он остался выходом.
     """
+    # Флап (связь встала и тут же упала) не имеет права выдавать себе новый полный грейс,
+    # иначе «выход по исчерпанию» недостижим в принципе. Полоса обрывов считается одной,
+    # пока связь между ними не продержалась дольше RECONNECT_BACKOFF_MAX.
+    outage_since = 0.0
     while not _SHUTDOWN.is_set():
-        await client.run_until_disconnected()
+        served_since = time.time()
+        try:
+            await client.run_until_disconnected()
+        except _NET_ERRORS as exc:
+            if _SHUTDOWN.is_set():
+                break
+            now = time.time()
+            if not outage_since or now - served_since > RECONNECT_BACKOFF_MAX:
+                outage_since = now
+            left = RECONNECT_TIMEOUT_SEC - (now - outage_since)
+            if left <= 0:
+                log.error("связь не держится дольше %.0fс подряд (%s) -- честный выход",
+                          RECONNECT_TIMEOUT_SEC, type(exc).__name__)
+                return True
+            if await _reconnect_with_backoff(type(exc).__name__, budget=left):
+                continue
+            return True
         if _SHUTDOWN.is_set():
             break
         if _EXPECT_DISCONNECT.is_set():
@@ -6890,8 +8503,10 @@ async def _supervise_connection() -> None:
             log.warning("не переподключилась за %.0fс после намеренного disconnect -- считаю сбоем, выхожу",
                         RECONNECT_TIMEOUT_SEC)
             break
-        log.warning("клиент отключился без явного намерения -- настоящий выход")
+        log.warning("клиент отключился локально и без объявления (стоп-кран/чужой disconnect) "
+                    "-- настоящий выход")
         break
+    return False
 
 
 def _bridge_canary() -> None:
@@ -6906,13 +8521,18 @@ def _bridge_canary() -> None:
 
 
 def _warm_media() -> None:
-    """Держать whisper (и локальный piper) резидентно С БУТА, а не лениво с первой голосовой.
-    Модели грузятся один раз в общий кэш media_audio backend'а; keep_loaded держит их дальше.
-    Строго best-effort: НЕ роняет старт раннера — при сбое модели подхватятся лениво."""
+    """Warm resident media only; isolated TTS workers deliberately stay cold.
+
+    Whisper and in-process Piper keep the historical boot-warm contract.  A
+    process-isolated backend (Silero) advertises ``skip_warmup`` and is launched
+    only by the first actual synthesis request, so PyTorch never enters the
+    Telegram runner and no child model exists merely because Praxis restarted.
+    Warmup is best-effort and never blocks boot.
+    """
     try:
         import media_audio
         result = media_audio.warm()
-        log.info("прогрев медиа-моделей на буте (whisper+piper резидентно): %s", result)
+        log.info("прогрев медиа-моделей на буте: %s", result)
     except Exception:
         log.warning("прогрев медиа-моделей упал (не критично — подхватится лениво)", exc_info=True)
 
@@ -6947,7 +8567,15 @@ async def main() -> None:
         log.exception("legacy moral goals could not be archived")
     if not API_ID or not API_HASH:
         raise SystemExit("Нет TELEGRAM_API_ID/TELEGRAM_API_HASH в .env")
-    await client.connect()
+    try:
+        await client.connect()
+    except _NET_ERRORS as exc:
+        # Подъём В МОМЕНТ обрыва — не «плохой код». Раньше это исключение улетало из main()
+        # насквозь: процесс жил ~15с, bootguard видел rc≠0 при elapsed<grace и на третьем
+        # круге откатывал ЗДОРОВЫЙ HEAD на last_good. Ждём сеть; не дождались — выходим 42,
+        # который decide_after читает как намеренный рестарт и early_fails не растит.
+        if not await _reconnect_with_backoff(f"стартовый connect: {type(exc).__name__}"):
+            agent._exit_process()
     if not await client.is_user_authorized():
         raise SystemExit("Не залогинен. Сначала: python mtproto_login.py send  -> потом ... code <код>")
     _start_dialog_warmup()  # HOTFIX 07.07: кэш имён диалогов греется фоном с самого коннекта
@@ -6975,6 +8603,10 @@ async def main() -> None:
     agent._TELETHON["leave_chat"] = _sync_leave_chat
     agent._TELETHON["followups"] = _sync_followups
     agent._TELETHON["telegram_account"] = _sync_telegram_account
+    # Transport gate (25.08): runtime-owned forum-history scan. Никакого client/
+    # entity от caller-а: transport closure строится здесь над module-global
+    # Telethon client. apply=true пишет evidence только внутри этого же вызова.
+    agent._TELETHON["history_scan"] = _sync_history_scan
     # Её лицо, слова о себе и жесты — тот же sovereign-гейт, что и остальной аккаунт.
     agent._TELETHON["set_profile_photo"] = _sync_set_avatar
     agent._TELETHON["update_profile"] = _sync_update_profile
@@ -7003,6 +8635,7 @@ async def main() -> None:
             if not migration.get("already"):
                 log.info("PASS19 bootstrap [%s]: events=%s legacy_compact=%s",
                          cid, migration.get("events"), migration.get("legacy_compact"))
+            _sync_buffer_from_hot(cid)
         except Exception:
             log.exception("PASS19 bootstrap не удался [%s]", cid)
     if restored:
@@ -7034,10 +8667,20 @@ async def main() -> None:
         _install_dead_room_filter()  # 10.8: banned/private-каналы → mode=dead, лог не спамится
         asyncio.create_task(_clock())  # PASS 4: буферы/расписание/«сон»/сердцебиение — один тик
         asyncio.create_task(_missed_dm_sweep())  # PASS 9.0: догнать ЛС, оборванные рестартом
-        await _supervise_connection()
+        needs_restart = await _supervise_connection()
     finally:
         if shared_stt is not None:
             await shared_stt.stop()
+        try:
+            import media_audio
+            media_audio.get_default_backend().clear_caches()
+        except Exception:
+            log.warning("очистка медиа-моделей при остановке не удалась", exc_info=True)
+    if needs_restart:
+        # Грейс деградированного режима исчерпан: сети нет по-настоящему. Выходим кодом 42 —
+        # bootguard.decide_after читает его как намеренный рестарт и НЕ считает early_fail,
+        # то есть долгий обрыв больше не может откатить здоровый код.
+        agent._exit_process()
 
 
 if __name__ == "__main__":

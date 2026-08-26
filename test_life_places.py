@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -117,6 +118,75 @@ class TestOneSpinePerPlace(Base):
         self.assertEqual(len(hot), 10, "прежнее кольцо не потерялось при переезде")
         self.assertIn("до того, как узнали про комнату 0", hot)
         self.assertIn("первая строка после переезда", hot)
+
+    def test_route_change_during_write_cannot_bypass_room_state_guard(self):
+        seed = self._say(ROOM, "seed")
+        holder_ready = threading.Event()
+        release_holder = threading.Event()
+        writer_keyed = threading.Event()
+        allow_writer = threading.Event()
+        writer_done = threading.Event()
+        errors = []
+        result = {}
+        original_lock = ml._state_write_lock
+        original_save = ml._save_state
+
+        def paused_lock(chat):
+            locked = original_lock(chat)
+            if threading.current_thread().name == "moving-writer":
+                result["locked"] = locked[0]
+                writer_keyed.set()
+                if not allow_writer.wait(3.0):
+                    raise TimeoutError("route observation was not released")
+            return locked
+
+        def paused_save(state):
+            if threading.current_thread().name == "room-rebuild" and not holder_ready.is_set():
+                holder_ready.set()
+                if not release_holder.wait(3.0):
+                    raise TimeoutError("room holder was not released")
+            return original_save(state)
+
+        def holder():
+            try:
+                ml.rebuild_state(ROOM)
+            except Exception as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        def writer():
+            try:
+                result["new"] = self._say(A, "arrived as route changed")
+            except Exception as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+            finally:
+                writer_done.set()
+
+        ml._state_write_lock = paused_lock
+        ml._save_state = paused_save
+        try:
+            holder_thread = threading.Thread(target=holder, name="room-rebuild")
+            holder_thread.start()
+            self.assertTrue(holder_ready.wait(1.0))
+            writer_thread = threading.Thread(target=writer, name="moving-writer")
+            writer_thread.start()
+            self.assertTrue(writer_keyed.wait(1.0))
+            self._one_room()
+            allow_writer.set()
+            self.assertFalse(writer_done.wait(0.2),
+                             "writer bypassed the room state transaction after route change")
+            release_holder.set()
+            holder_thread.join(5.0)
+            writer_thread.join(5.0)
+        finally:
+            allow_writer.set()
+            release_holder.set()
+            ml._state_write_lock = original_lock
+            ml._save_state = original_save
+        self.assertFalse(errors, errors)
+        final = ml._load_state(ROOM, rebuild=False)
+        final_ids = {row.get("id") for row in final.get("hot", [])}
+        self.assertIn(seed["id"], final_ids)
+        self.assertIn(result["new"]["id"], final_ids)
 
     def test_rebuild_keeps_every_event_exactly_once(self):
         self._one_room()

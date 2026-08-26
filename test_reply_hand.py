@@ -407,7 +407,8 @@ class MyReplyGoesOutByHand(_TurnHarness):
         """
         envelope, model = self.turn(
             _calls_reply("call-1", "Готово, проверила."),
-            _calls_tool("call-2", "end_turn", {"note": "сказала главное, ход закрываю"}))
+            _calls_tool("call-2", "end_turn",
+                        {"outcome": "done", "note": "сказала главное, ход закрываю"}))
         self.assertEqual(model.calls, 2, "end_turn не остановил цикл")
         self.assertEqual(len(self.bridge.calls), 1)
         self.assertEqual(envelope.text, "")
@@ -419,15 +420,42 @@ class MyReplyGoesOutByHand(_TurnHarness):
 
     def test_end_turn_without_speech_is_a_finished_turn_not_an_error(self):
         """`end_turn` без единой отправки — завершённый ход без речи (её решение №2:
-        это НЕ stay_silent — тот остаётся отдельным жестом «решила не говорить»)."""
+        это НЕ stay_silent — тот остаётся отдельным жестом «решила не говорить»).
+        18.08, её редакция №12: закрытие теперь требует явного исхода — done."""
         envelope, model = self.turn(
-            _calls_tool("call-1", "end_turn", {}))
+            _calls_tool("call-1", "end_turn", {"outcome": "done"}))
         self.assertEqual(model.calls, 1)
         self.assertEqual(self.bridge.calls, [], "конец без речи что-то отправил")
         self.assertEqual(envelope.text, "")
         recorded = self.recorded.rows[-1]
         self.assertEqual(recorded.get("held"), "unspoken",
                          "конец без речи обязан быть фактом «без реплики», а не ошибкой")
+
+    def test_end_turn_without_an_outcome_asks_and_does_not_close(self):
+        """Её редакция 18.08 (личка, №12): ход закрывается только явным done/wait/blocked.
+
+        Безымянное закрытие получает вопрос и ход ПРОДОЛЖАЕТСЯ — это совет по форме,
+        не забор по содержанию: done остаётся дешёвым и доступным всегда."""
+        envelope, model = self.turn(
+            _calls_tool("call-1", "end_turn", {}),
+            _calls_tool("call-2", "end_turn", {"outcome": "done"}))
+        self.assertEqual(model.calls, 2, "отказ руки не вернул ход модели")
+        refusals = [out for out in self.hands.by("end_turn") if "не закрыт" in out]
+        self.assertTrue(refusals, "рука закрыла ход без исхода")
+
+    def test_wait_requires_a_wake_condition_and_it_reaches_the_record(self):
+        """Её формулировка 18.08: «wait — условие пробуждения». Ожидание без условия
+        неотличимо от забвения — рука не закрывает ход, пока условие не названо;
+        названное условие обязано доехать до записи хода."""
+        envelope, model = self.turn(
+            _calls_tool("call-1", "end_turn", {"outcome": "wait"}),
+            _calls_tool("call-2", "end_turn",
+                        {"outcome": "wait", "note": "жду слова Егора по пакету эпохи"}))
+        self.assertEqual(model.calls, 2, "wait без условия закрыл ход")
+        recorded = self.recorded.rows[-1]
+        note = str(recorded.get("note") or "")
+        self.assertIn("wait", note, "исход wait не доехал до записи хода")
+        self.assertIn("жду слова Егора", note, "условие возврата потерялось из записи")
 
     def test_an_empty_terminal_note_after_a_reply_keeps_what_was_said(self):
         """reply → пустой терминальный текст: ход закрыт СКАЗАННЫМ, ничего не переслано.

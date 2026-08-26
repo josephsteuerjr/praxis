@@ -11,6 +11,7 @@ import datetime
 import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 from dataclasses import replace
@@ -189,13 +190,17 @@ def _run_here(factory, _timeout):
 
 
 class TestTopicContract(unittest.TestCase):
-    def test_message_shapes_and_private_chat(self):
+    def test_message_shapes_route_by_header_only_with_the_catalogue(self):
+        """Формы заголовка читаются как раньше, но минтят ключ только по каталогу."""
+        catalogue = {55, 77, 91}
         message = types.SimpleNamespace(
             reply_to=_ReplyHeader(top=77, immediate=88),
             reply_to_top_id=None,
         )
         self.assertEqual(
-            telegram_topics.route_for_message(-100123, message).conversation_id,
+            telegram_topics.route_for_message(
+                -100123, message, is_forum=True,
+                confirmed_topics=catalogue).conversation_id,
             "-100123__topic__77",
         )
         root_reply = types.SimpleNamespace(
@@ -203,11 +208,15 @@ class TestTopicContract(unittest.TestCase):
             reply_to_top_id=None,
         )
         self.assertEqual(
-            telegram_topics.route_for_message(-100123, root_reply).topic_id, 91)
+            telegram_topics.route_for_message(
+                -100123, root_reply, is_forum=True,
+                confirmed_topics=catalogue).topic_id, 91)
         projected = types.SimpleNamespace(
             reply_to=None, reply_to_top_id=55, forum_topic=False)
         self.assertEqual(
-            telegram_topics.route_for_message(-100123, projected).topic_id, 55)
+            telegram_topics.route_for_message(
+                -100123, projected, is_forum=True,
+                confirmed_topics=catalogue).topic_id, 55)
         self.assertIsNone(
             telegram_topics.route_for_message(123, projected, is_private=True).topic_id)
 
@@ -217,7 +226,9 @@ class TestTopicContract(unittest.TestCase):
             reply_to_top_id=0, reply_to_msg_id=77, forum_topic=True,
         )
         self.assertEqual(
-            telegram_topics.route_for_message(-100123, message).topic_id, 77,
+            telegram_topics.route_for_message(
+                -100123, message, is_forum=True,
+                confirmed_topics={77}).topic_id, 77,
         )
 
     def test_ordinary_supergroup_is_one_room_not_a_topic_per_reply_chain(self):
@@ -242,26 +253,127 @@ class TestTopicContract(unittest.TestCase):
         }
         self.assertEqual(keys, {"-1001240718803"})
 
-    def test_real_forum_keeps_its_topics(self):
-        """Грибница — настоящий форум: топики остаются отдельными местами."""
+    def test_real_forum_keeps_its_topics_only_by_catalogue(self):
+        """Грибница — настоящий форум: тема остаётся местом ТОЛЬКО по каталогу.
+
+        Её решение 22.08 отменило переходное «каталог не наблюдался — верим
+        заголовку»: первый же ход успевал навсегда оставить фантомный хвост
+        (`peer__topic__999` до свипа, комната после — одна логическая беседа в двух
+        ключах). Отсутствие полного знания означает комнату; первую реплику
+        настоящей темы спасает single-flight preflight вызывающего.
+        """
 
         deep_reply = types.SimpleNamespace(
             reply_to=_ReplyHeader(top=7849, immediate=7850), reply_to_top_id=None)
         self.assertEqual(
             telegram_topics.route_for_message(
                 -1001152779373, deep_reply, is_forum=True).conversation_id,
+            "-1001152779373",
+            "нет каталога — нет темы: fail-safe комната, не заголовок",
+        )
+        self.assertEqual(
+            telegram_topics.route_for_message(
+                -1001152779373, deep_reply, is_forum=True,
+                confirmed_topics={7849, 8000}).conversation_id,
             "-1001152779373__topic__7849",
         )
 
-    def test_unknown_room_nature_keeps_legacy_routing(self):
-        """``is_forum=None`` — «не знаю»: поведение обязано остаться байт-в-байт прежним."""
+    def test_unknown_room_nature_files_under_the_room(self):
+        """«Не знаю» для КЛЮЧА ХРАНЕНИЯ значит «не форум»: комната, не фантомная тема.
+
+        Прежде ``is_forum=None`` оставляло поведение по заголовку — так новая комната
+        минтила выдуманные места весь срок до вердикта (AbstractDL: три недели, 552
+        фантомные темы, 59% сообщений; замер 21.08.2026). Адрес ветки при этом жив:
+        ``thread_root_for_message`` считается отдельно и ключом не становится.
+        """
 
         message = types.SimpleNamespace(
             reply_to=_ReplyHeader(top=77, immediate=88), reply_to_top_id=None)
         self.assertEqual(
             telegram_topics.route_for_message(-100123, message).conversation_id,
+            "-100123",
+        )
+        self.assertEqual(
             telegram_topics.route_for_message(
                 -100123, message, is_forum=None).conversation_id,
+            "-100123",
+        )
+        self.assertEqual(telegram_topics.thread_root_for_message(message), 77)
+
+    def test_catalogue_gates_the_topic_key_in_a_real_forum(self):
+        """Тема — ключ хранения, только если её id есть в каталоге Telegram.
+
+        Ветка ответов в General несёт в заголовке корень цепочки — раньше он
+        объявлялся «темой» (в настоящих форумах так родилось 145 и 135 фантомов).
+        С каталогом такой корень честно падает в комнату, настоящая тема остаётся
+        собой, а General (id 1) — это сама комната, и второго хвоста у него нет.
+        """
+
+        general_chain = types.SimpleNamespace(
+            reply_to=_ReplyHeader(top=None, immediate=93707, forum=True),
+            reply_to_top_id=None)
+        self.assertEqual(
+            telegram_topics.route_for_message(
+                -1001152779373, general_chain, is_forum=True,
+                confirmed_topics={7849}).conversation_id,
+            "-1001152779373",
+        )
+        general_marker = types.SimpleNamespace(
+            reply_to=_ReplyHeader(top=1, immediate=42), reply_to_top_id=None)
+        self.assertEqual(
+            telegram_topics.route_for_message(
+                -1001152779373, general_marker, is_forum=True,
+                confirmed_topics={1, 7849}).conversation_id,
+            "-1001152779373",
+        )
+        junk_catalogue = types.SimpleNamespace(
+            reply_to=_ReplyHeader(top=7849, immediate=7850), reply_to_top_id=None)
+        self.assertEqual(
+            telegram_topics.route_for_message(
+                -1001152779373, junk_catalogue, is_forum=True,
+                confirmed_topics=["7849", "junk"]).conversation_id,
+            "-1001152779373__topic__7849",
+            "мусорная запись каталога пропускается по одной, настоящая тема живёт",
+        )
+        self.assertEqual(
+            telegram_topics.route_for_message(
+                -1001152779373, junk_catalogue, is_forum=True,
+                confirmed_topics=()).conversation_id,
+            "-1001152779373",
+            "пустой каталог — это ответ «тем нет», а не «не знаю»",
+        )
+
+    def test_topic_opener_mints_without_the_catalogue(self):
+        """Служебное «создана тема» — прямое свидетельство Telegram: каталог мог не успеть.
+
+        Её регрессия 3 от 22.08: опенер при unknown создаёт настоящую тему, но
+        опенер General (id=1) всё равно нормализуется в комнату — второй хвост
+        General не рождается ни одним путём (её блокер 6).
+        """
+
+        opener = types.SimpleNamespace(id=9100, reply_to=None, reply_to_top_id=None)
+        opener.action = type("MessageActionTopicCreate", (), {"title": "Новая тема"})()
+        self.assertEqual(
+            telegram_topics.route_for_message(
+                -1001152779373, opener, is_forum=True,
+                confirmed_topics={7849}).conversation_id,
+            "-1001152779373__topic__9100",
+        )
+        self.assertEqual(
+            telegram_topics.route_for_message(
+                -1001152779373, opener, is_forum=None).conversation_id,
+            "-1001152779373__topic__9100",
+            "опенер минтит и при «не знаю»: он сам — прямое свидетельство",
+        )
+        general_opener = types.SimpleNamespace(id=1, reply_to=None, reply_to_top_id=None)
+        general_opener.action = type(
+            "MessageActionTopicCreate", (), {"title": "General"})()
+        self.assertEqual(
+            telegram_topics.route_for_message(
+                -1001152779373, general_opener, is_forum=True,
+                confirmed_topics={1, 7849}).conversation_id,
+            "-1001152779373",
+            "опенер General — это сама комната, второго хвоста нет",
         )
 
     def test_thread_root_stays_available_as_behavioural_identity(self):
@@ -319,6 +431,13 @@ class TestIncomingTopicIsolation(unittest.IsolatedAsyncioTestCase):
                 (runner, "_arm", arms),
             ):
                 stack.enter_context(patch.object(target, name, value))
+            # Комната объявлена настоящим форумом с подтверждёнными темами: с 22.08
+            # ключ темы минтится только по каталогу, «не знаю» кладёт в комнату.
+            stack.enter_context(patch.object(
+                runner, "_known_forum", lambda *a, **k: True))
+            stack.enter_context(patch.object(
+                runner, "_catalog_for_routing",
+                AsyncMock(return_value=frozenset({101, 202}))))
             stack.enter_context(patch.object(runner, "_under_tests", return_value=True))
             stack.enter_context(patch.object(runner.bufstore, "meta_update", return_value=None))
             stack.enter_context(patch.object(runner.rooms, "is_frozen", return_value=False))
@@ -1492,6 +1611,420 @@ class TestFollowupDelivery(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Дальше:", text)
         self.assertNotIn("Действие:", text)
         self.assertEqual(ledger.mark_notified.call_count, 2)
+
+
+def _fake_telethon_functions():
+    class GetForumTopicsRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    fake_root = types.ModuleType("telethon")
+    fake_root.__path__ = []
+    fake_tl = types.ModuleType("telethon.tl")
+    fake_functions = types.ModuleType("telethon.tl.functions")
+    fake_messages = types.ModuleType("telethon.tl.functions.messages")
+    fake_messages.GetForumTopicsRequest = GetForumTopicsRequest
+    fake_functions.messages = fake_messages
+    fake_tl.functions = fake_functions
+    fake_root.tl = fake_tl
+    return {
+        "telethon": fake_root, "telethon.tl": fake_tl,
+        "telethon.tl.functions": fake_functions,
+        "telethon.tl.functions.messages": fake_messages,
+    }
+
+
+def _forum_item(topic_id, title=""):
+    return types.SimpleNamespace(id=topic_id, title=title, date=None,
+                                 top_message=topic_id)
+
+
+class _CatalogueEnv(unittest.IsolatedAsyncioTestCase):
+    """Общая песочница: реестр в tmp, вся in-memory машинерия добычи чистая."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory(prefix="praxis-topic-catalogue-")
+        self._orig_dir = runner.telegram_routes.DIR
+        runner.telegram_routes.DIR = (
+            Path(self.tempdir.name) / "memory" / ".state" / "group_context")
+        self._stores = (runner._topic_catalog_cache, runner._topic_catalog_flights,
+                        runner._topic_catalog_next_attempt,
+                        runner._topic_catalog_stale_probe,
+                        runner._topic_catalog_probed_roots,
+                        runner._topic_catalog_unknown_gate,
+                        runner._topic_catalog_read_flights,
+                        runner._topic_catalog_pending_roots,
+                        runner._topic_catalog_cache_gen)
+        self._saved = tuple(dict(store) for store in self._stores)
+        for store in self._stores:
+            store.clear()
+
+    def tearDown(self):
+        runner.telegram_routes.DIR = self._orig_dir
+        for store, saved in zip(self._stores, self._saved):
+            store.clear()
+            store.update(saved)
+        self.tempdir.cleanup()
+
+
+class TestTopicCatalogueAcquisition(_CatalogueEnv):
+    """Каталог добывается single-flight ДО фиксации ключа; полный свип уезжает в
+    durable-карту с подтверждением записи; неудача — наблюдаема и не косит под успех."""
+
+    async def test_full_sweep_persists_the_catalogue_durably(self):
+        result = types.SimpleNamespace(count=3, topics=[
+            _forum_item(1, "General"),
+            _forum_item(7849, "Открытые вопросы"),
+            _forum_item(9100, ""),
+        ])
+
+        async def fake_client(request):
+            return result
+
+        recorded = []
+        with (
+            patch.object(runner, "client", fake_client),
+            patch.dict(sys.modules, _fake_telethon_functions()),
+            patch.object(runner.group_context, "record_topic",
+                         lambda *a, **k: recorded.append(a) or True),
+        ):
+            rows, complete = await runner._forum_topic_catalog(object(), "-300")
+
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(complete, "короткая страница + count сошлись — полнота доказана")
+        self.assertEqual(runner.telegram_routes.confirmed_topics("-300"),
+                         frozenset({1, 7849, 9100}))
+        self.assertEqual(runner.telegram_routes.topic_title("-300", 7849),
+                         "Открытые вопросы")
+        self.assertEqual(runner.telegram_routes.topic_title("-300", 9100), "",
+                         "нет настоящего title — нет имени, синтетики тоже нет")
+        self.assertEqual(len(recorded), 3, "канон комнаты получает те же строки")
+
+    async def test_truncated_sweep_never_claims_completeness(self):
+        """Её регрессия 4: count>hard_cap / упирание в cap не включают ложный complete
+        и не рождают отрицательного знания (каталог остаётся «не наблюдался»)."""
+        pages = [
+            types.SimpleNamespace(
+                count=150, topics=[_forum_item(1000 + i) for i in range(100)]),
+            types.SimpleNamespace(
+                count=150, topics=[_forum_item(2000 + i) for i in range(100)]),
+        ]
+        calls = {"n": 0}
+
+        async def fake_client(request):
+            page = pages[min(calls["n"], len(pages) - 1)]
+            calls["n"] += 1
+            return page
+
+        with (
+            patch.object(runner, "client", fake_client),
+            patch.dict(sys.modules, _fake_telethon_functions()),
+            patch.object(runner.group_context, "record_topic",
+                         lambda *a, **k: True),
+        ):
+            rows, complete = await runner._forum_topic_catalog(
+                object(), "-301", hard_cap=100)
+
+        self.assertEqual(len(rows), 100)
+        self.assertFalse(complete, "упирание в защитный cap — явное «неполно»")
+        self.assertIsNone(runner.telegram_routes.confirmed_topics("-301"),
+                          "неполный свип не включает каталог: нет отрицательного знания")
+        self.assertEqual(runner.telegram_routes.topic_title("-301", 1005), "",
+                         "но добытые темы уже записаны durable")
+        self.assertIn(1005, runner.telegram_routes.topics_of("-301"))
+
+    async def test_short_count_with_exhausted_pages_stays_incomplete(self):
+        """count с сервера больше собранного при исчерпании — полноту не заявляем."""
+        result = types.SimpleNamespace(count=7, topics=[_forum_item(700, "Тема")])
+
+        async def fake_client(request):
+            return result
+
+        with (
+            patch.object(runner, "client", fake_client),
+            patch.dict(sys.modules, _fake_telethon_functions()),
+            patch.object(runner.group_context, "record_topic",
+                         lambda *a, **k: True),
+        ):
+            _rows, complete = await runner._forum_topic_catalog(object(), "-302")
+        self.assertFalse(complete)
+        self.assertIsNone(runner.telegram_routes.confirmed_topics("-302"))
+
+    async def test_preflight_acquires_before_the_key_is_fixed(self):
+        """Её регрессия 2: первая живая реплика настоящей темы не теряется —
+        `_catalog_for_routing` ждёт single-flight добычу и возвращает каталог,
+        по которому ключ минтится сразу верно."""
+        async def sweep(entity, peer, **kwargs):
+            runner.telegram_routes.observe_topics(
+                peer, {500: {"title": "Тема"}}, complete=True)
+            return [{"topic_id": 500, "title": "Тема", "top_message": 500}], True
+
+        with patch.object(runner, "_forum_topic_catalog", sweep):
+            catalog = await runner._catalog_for_routing(
+                "-300", object(), unknown_topic=500)
+        self.assertEqual(catalog, frozenset({500}))
+        message = types.SimpleNamespace(
+            reply_to=types.SimpleNamespace(
+                reply_to_top_id=500, reply_to_msg_id=501, forum_topic=True),
+            reply_to_top_id=None)
+        self.assertEqual(
+            telegram_topics.route_for_message(
+                -300, message, is_forum=True, confirmed_topics=catalog).conversation_id,
+            "-300__topic__500",
+        )
+
+    async def test_concurrent_callers_share_one_flight_and_one_key(self):
+        """Её регрессия 11: on_new и on_edited вокруг ПЕРВОЙ добычи ждут один и тот
+        же полёт и получают один и тот же каталог — одна логическая запись не
+        разъезжается по ключам."""
+        started = asyncio.Event()
+        release = asyncio.Event()
+        fetches = {"n": 0}
+
+        async def sweep(entity, peer, **kwargs):
+            fetches["n"] += 1
+            started.set()
+            await release.wait()
+            runner.telegram_routes.observe_topics(
+                peer, {500: {"title": "Тема"}}, complete=True)
+            return [{"topic_id": 500, "title": "Тема", "top_message": 500}], True
+
+        with patch.object(runner, "_forum_topic_catalog", sweep):
+            first = asyncio.create_task(
+                runner._catalog_for_routing("-300", object(), unknown_topic=500))
+            await started.wait()
+            second = asyncio.create_task(
+                runner._catalog_for_routing("-300", object(), unknown_topic=500))
+            await asyncio.sleep(0)
+            release.set()
+            catalog_new, catalog_edit = await asyncio.gather(first, second)
+
+        self.assertEqual(fetches["n"], 1, "один tracked-полёт на комнату")
+        self.assertEqual(catalog_new, catalog_edit)
+        self.assertEqual(catalog_new, frozenset({500}))
+
+    async def test_failed_commit_is_failure_not_success(self):
+        """Её регрессия 6: ошибка записи не ставит кулдаун успеха и не сообщает успех —
+        каталог остаётся «не наблюдался», окно повтора короткое."""
+        witnessed = {"oserror": False}
+
+        async def sweep(entity, peer, **kwargs):
+            try:
+                with patch.object(runner.telegram_routes, "_save",
+                                  lambda *a, **k: False):
+                    runner.telegram_routes.observe_topics(
+                        peer, {500: {"title": "Тема"}}, complete=True)
+            except OSError:
+                witnessed["oserror"] = True
+                raise
+            raise RuntimeError("observe_topics не поднял OSError при неудачной записи")
+
+        before = time.time()
+        with patch.object(runner, "_forum_topic_catalog", sweep):
+            catalog = await runner._catalog_for_routing(
+                "-300", object(), unknown_topic=500)
+        self.assertTrue(witnessed["oserror"],
+                        "потеря durable-записи обязана быть исключением, не тишиной")
+        self.assertFalse(catalog, "недобытое знание не притворяется добытым")
+        self.assertIsNone(runner.telegram_routes.confirmed_topics("-300"))
+        retry_at = runner._topic_catalog_next_attempt.get("-300", 0.0)
+        self.assertLessEqual(retry_at - before, runner._TOPIC_CATALOG_RETRY + 5.0,
+                             "после неудачи — короткое окно повтора, не кулдаун успеха")
+        self.assertGreater(retry_at, before, "но долбёжки без окна тоже нет")
+
+    async def test_fresh_catalogue_costs_no_disk_and_no_flights(self):
+        """Её регрессия 9: сто сообщений при свежем каталоге не рождают сто чтений
+        реестра и сто задач."""
+        runner.telegram_routes.observe_topics(
+            "-300", {700: {"title": "Тема"}}, complete=True)
+        reads = {"n": 0}
+        real_read = runner.telegram_routes.read
+
+        def counting_read(peer_id):
+            reads["n"] += 1
+            return real_read(peer_id)
+
+        fetch = AsyncMock()
+        with (
+            patch.object(runner.telegram_routes, "read", counting_read),
+            patch.object(runner, "_forum_topic_catalog", fetch),
+        ):
+            for _ in range(100):
+                catalog = await runner._catalog_for_routing("-300", object(),
+                                                            unknown_topic=700)
+        self.assertEqual(catalog, frozenset({700}))
+        self.assertEqual(fetch.await_count, 0, "знакомая тема и свежий каталог — без RPC")
+        self.assertLessEqual(reads["n"], 4,
+                             "кэш держит диск: не сто чтений на сто сообщений")
+        self.assertFalse(any(not t.done() for t in runner._topic_catalog_flights.values()))
+
+    async def test_forum_missing_answer_lands_in_the_registry(self):
+        fetch = AsyncMock(side_effect=RuntimeError("CHANNEL_FORUM_MISSING (400)"))
+        with patch.object(runner, "_forum_topic_catalog", fetch):
+            catalog = await runner._catalog_for_routing(
+                "-400", object(), unknown_topic=500)
+            for task in list(runner._topic_catalog_flights.values()):
+                try:
+                    await task
+                except Exception:
+                    pass
+        self.assertFalse(catalog)
+        self.assertEqual(runner.telegram_routes.current("-400")["forum_status"],
+                         runner.telegram_routes.FALSE,
+                         "прямой ответ «тут нет форума» не выбрасывается")
+
+    async def test_unknown_root_spawns_the_flight_immediately_once(self):
+        """P0 фан-аута 22.08: незнакомый корень — бесплатный in-memory сигнал, и он
+        НЕ дросселируется дисковым окном; один корень — одна разведка, болтливая
+        цепочка General не жжёт RPC."""
+        runner.telegram_routes.observe_topics(
+            "-300", {700: {"title": "Тема"}}, complete=True)
+        calls = {"n": 0}
+
+        async def sweep(entity, peer, **kwargs):
+            calls["n"] += 1
+            runner.telegram_routes.observe_topics(
+                peer, {9100: {"title": "Новая"}}, complete=True)
+            runner._topic_catalog_cache.pop(str(peer), None)
+            return [{"topic_id": 9100, "title": "Новая", "top_message": 9100}], True
+
+        with patch.object(runner, "_forum_topic_catalog", sweep):
+            known = await runner._catalog_for_routing(
+                "-300", object(), unknown_topic=9100)
+            self.assertEqual(known, frozenset({700}),
+                             "ключ текущего хода разведку не ждёт: комната честнее")
+            for task in list(runner._topic_catalog_flights.values()):
+                await task
+            after = await runner._catalog_for_routing(
+                "-300", object(), unknown_topic=9100)
+            self.assertEqual(calls["n"], 1, "разведка стартовала с ПЕРВОГО же корня")
+            self.assertIn(9100, after, "следующий ход уже видит новую тему")
+            runner._topic_catalog_unknown_gate.clear()
+            await runner._catalog_for_routing("-300", object(), unknown_topic=9999)
+            for task in list(runner._topic_catalog_flights.values()):
+                await task
+            self.assertEqual(calls["n"], 2, "новый незнакомый корень — новая разведка")
+            runner._topic_catalog_unknown_gate.clear()
+            await runner._catalog_for_routing("-300", object(), unknown_topic=9999)
+            self.assertEqual(calls["n"], 2,
+                             "разведанный корень (цепочка General) не жжёт RPC")
+
+    async def test_live_opener_refreshes_the_routing_cache(self):
+        """P1 фан-аута 22.08: опенер обязан сбрасывать кэш каталога — иначе ответы в
+        свежесозданной теме минуту падали в комнату."""
+        runner.telegram_routes.observe_topics(
+            "-300", {700: {"title": "Тема"}}, complete=True)
+        before = await runner._catalog_for_routing("-300", object())
+        self.assertEqual(before, frozenset({700}))
+        await runner._note_live_opener("-300", 9100, "Новая тема")
+        after = await runner._catalog_for_routing("-300", object())
+        self.assertIn(9100, after, "ответы в новой теме не ждут минуту кэша")
+        self.assertEqual(runner.telegram_routes.current("-300")["forum_status"],
+                         runner.telegram_routes.TRUE,
+                         "живой опенер — свидетельство «это форум»")
+
+
+class TestFrozenRoomStaysSilent(_CatalogueEnv):
+    """Её регрессия 10: замороженная/чужая комната не рождает каталожного RPC."""
+
+    async def _drive(self, *, mode="frozen", allowed=True):
+        peer = -1009990000077
+        preflight = AsyncMock(return_value=frozenset())
+        buf = collections.defaultdict(lambda: collections.deque(maxlen=100))
+        with contextlib.ExitStack() as stack:
+            for target, name, value in (
+                (runner, "OWNER_ID", 999),
+                (runner, "_buf", buf),
+                (runner, "_buf_dirty", set()),
+                (runner, "_meta", {}),
+                (runner, "_seen_ids", collections.defaultdict(
+                    lambda: collections.deque(maxlen=50))),
+                (runner, "_catalog_for_routing", preflight),
+            ):
+                stack.enter_context(patch.object(target, name, value))
+            stack.enter_context(patch.object(
+                runner, "_known_forum", lambda *a, **k: True))
+            stack.enter_context(patch.object(runner, "_under_tests", return_value=True))
+            stack.enter_context(patch.object(
+                runner.telegram_contacts, "observe", return_value=None))
+            stack.enter_context(patch.object(
+                runner.rooms, "is_allowed", return_value=allowed))
+            stack.enter_context(patch.object(
+                runner.rooms, "effective_mode", return_value=mode))
+            stack.enter_context(patch.object(runner, "_note_room_mode_skip", Mock()))
+            stack.enter_context(patch.object(runner.perception, "note_skip", Mock()))
+            await runner.on_new(_Event(peer, _Message(7, "живое сообщение", 101)))
+        return preflight
+
+    async def test_frozen_room_never_triggers_topic_rpc(self):
+        preflight = await self._drive(mode="frozen", allowed=True)
+        preflight.assert_not_awaited()
+
+    async def test_disallowed_room_never_triggers_topic_rpc(self):
+        preflight = await self._drive(mode="normal", allowed=False)
+        preflight.assert_not_awaited()
+
+
+class TestCatchupReplayAcrossCatalogueArrival(_CatalogueEnv):
+    """Фан-аут 22.08 (P1): сообщение, принятое под ключом комнаты ДО прихода
+    каталога, при catch_up-повторе после каталога не дублирует буфер — сторож
+    дублей смотрит и в комнатное кольцо."""
+
+    async def test_replay_is_deduped_across_key_transition(self):
+        peer = -1009990000088
+        buf = collections.defaultdict(lambda: collections.deque(maxlen=100))
+        preflight = AsyncMock(side_effect=[None, frozenset({101})])
+        with contextlib.ExitStack() as stack:
+            for target, name, value in (
+                (runner, "OWNER_ID", 999),
+                (runner, "_buf", buf),
+                (runner, "_buf_dirty", set()),
+                (runner, "_meta", {}),
+                (runner, "_pending_media", collections.defaultdict(
+                    lambda: collections.deque(maxlen=16))),
+                (runner, "_seen_ids", collections.defaultdict(
+                    lambda: collections.deque(maxlen=50))),
+                (runner, "_recent_msgs", collections.defaultdict(
+                    lambda: collections.deque(maxlen=12))),
+                (runner, "_recent_senders", collections.defaultdict(
+                    lambda: collections.deque(maxlen=40))),
+                (runner, "_group_wakes", {}),
+                (runner, "_entity_cache", {}),
+                (runner, "_catalog_for_routing", preflight),
+                (runner, "_capture_typed_media", AsyncMock(return_value=(None, ""))),
+                (runner, "_chat_descriptor", AsyncMock(return_value={
+                    "title": "Room", "kind": "group", "size": 20})),
+                (runner, "_arm", Mock()),
+            ):
+                stack.enter_context(patch.object(target, name, value))
+            stack.enter_context(patch.object(
+                runner, "_known_forum", lambda *a, **k: True))
+            stack.enter_context(patch.object(runner, "_under_tests", return_value=True))
+            stack.enter_context(patch.object(
+                runner.bufstore, "meta_update", return_value=None))
+            stack.enter_context(patch.object(
+                runner.rooms, "is_frozen", return_value=False))
+            stack.enter_context(patch.object(
+                runner.rooms, "is_allowed", return_value=True))
+            stack.enter_context(patch.object(
+                runner.rooms, "effective_mode", return_value="normal"))
+            stack.enter_context(patch.object(
+                runner.social, "category", return_value="known"))
+            stack.enter_context(patch.object(
+                runner.telegram_contacts, "observe", return_value=None))
+            stack.enter_context(patch.object(
+                runner.telegram_followups.LEDGER, "observe_incoming",
+                return_value=None))
+            stack.enter_context(patch.object(
+                runner.reflex, "triage", return_value="answer"))
+            await runner.on_new(_Event(peer, _Message(7, "первый приём", 101)))
+            await runner.on_new(_Event(peer, _Message(7, "catch_up повтор", 101)))
+
+        room_key = str(peer)
+        topic_key = f"{peer}__topic__101"
+        self.assertIn("первый приём", "\n".join(buf[room_key]))
+        self.assertFalse(list(buf[topic_key]),
+                         "повтор не смеет продублировать буфер под новым ключом")
 
 
 if __name__ == "__main__":

@@ -51,6 +51,12 @@ ATTENTION_STATUSES = frozenset({"paused", "blocked", "in_doubt", "failed"})
 NONTERMINAL_STATUSES = frozenset(RUN_STATUSES).difference(TERMINAL_STATUSES)
 TOOL_OUTCOME_KINDS = frozenset({
     "tool_result", "tool_completed", "tool_failed", "tool_reconciled",
+    # Отказ маршрута навсегда — терминальный исход доставки файла, а не пауза:
+    # этот же вид пишется с call_id delivery-media:*, и пока его не было в
+    # исходах, вызов висел outstanding вечно, прогон оставался blocked, а
+    # свести его было нечем (resolve_in_doubt требует in_doubt). Доказано
+    # двумя живыми зомби: run-20260803… (786 отказов) и run-20260805… .
+    "telegram_media_permanently_refused",
 })
 TOOL_RESOLUTION_OUTCOMES = frozenset({"completed", "failed", "not_applied"})
 # Сколько смен статуса подряд в хвосте журнала считаем качелями «recover -> resume -> recover».

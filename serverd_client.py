@@ -701,12 +701,60 @@ def state_line() -> str:
                     f"{FAST_TIMEOUT_SEC:.0f}с — что с ним и с операциями сейчас, мне "
                     f"НЕИЗВЕСТНО (заявка {result.get('request_id')})")
         return f"serverd broker is mounted but unavailable: {result.get('error') or 'no reason given'}"
-    operations = result.get("operations") or []
+    protocol = result.get("protocol") or "protocol UNKNOWN"
+    operations_value = result.get("operations")
+    operations = operations_value if isinstance(operations_value, list) else []
+    note = str(result.get("operations_note") or "")
+    error = str(result.get("operations_error") or "")
+    total = result.get("operations_total")
+    shown = result.get("operations_shown")
+    matched = result.get("operations_matched")
+    total_truncated = False
+    if total is not None:
+        try:
+            total_truncated = int(total) > len(operations)
+        except (TypeError, ValueError):
+            pass
+    shown_matched_truncated = False
+    if shown is not None and matched is not None:
+        try:
+            shown_matched_truncated = int(shown) < int(matched)
+        except (TypeError, ValueError):
+            pass
+    count_truncated = total_truncated or shown_matched_truncated
+    note_key = note.casefold()
+    note_truncated = any(marker in note_key for marker in
+                         ("truncat", "усеч", "не полн", "неполный"))
+    explicitly_truncated = bool(result.get("operations_truncated"))
+    operations_unknown = (bool(result.get("operations_unknown")) or bool(error)
+                          or "operations" not in result
+                          or not isinstance(operations_value, list))
     running = sum(1 for row in operations
-                  if row.get("status") in {"starting", "running", "finishing"})
-    audit = result.get("audit") or {}
-    return (f"serverd {result.get('protocol')}: root broker alive; operations running {running}; "
-            f"audit {'verified' if audit.get('ok') else 'BROKEN'}")
+                  if isinstance(row, dict)
+                  and row.get("status") in {"starting", "running", "finishing"})
+    if operations_unknown:
+        reason = error or note or "operations field is missing or incomplete"
+        operations_text = f"operations UNKNOWN ({reason})"
+    elif count_truncated or note_truncated or explicitly_truncated:
+        if shown_matched_truncated:
+            detail = f"shown {shown} of {matched}"
+        elif total_truncated:
+            detail = f"shown {len(operations)} of {total}"
+        else:
+            detail = "list marked incomplete"
+        operations_text = f"operations running at least {running}; UNKNOWN beyond {detail}"
+        if note:
+            operations_text += f" ({note})"
+    else:
+        # Сохраняем старую строку для полного штатного admin.status.
+        operations_text = f"operations running {running}"
+    audit_value = result.get("audit")
+    if not isinstance(audit_value, dict):
+        audit_text = "UNKNOWN (audit status missing)"
+    else:
+        audit_text = "verified" if audit_value.get("ok") else "BROKEN"
+    return (f"serverd {protocol}: root broker alive; {operations_text}; "
+            f"audit {audit_text}")
 
 
 # Compatibility names for code that has not migrated yet. They no longer create a second task store.

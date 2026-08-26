@@ -9,6 +9,7 @@ from unittest import mock
 
 import memory_fts
 import memory_index
+import memory_life
 
 
 class MemoryFtsTests(unittest.TestCase):
@@ -86,6 +87,126 @@ class MemoryFtsTests(unittest.TestCase):
         self.assertEqual(row["refs"], ["telegram:message:77"])
         self.assertEqual(row["supersedes"], ["evt-0"])
         self.assertEqual(row["provenance"], ["telegram:message:77", "evt-0"])
+
+    def test_life_revisions_remove_old_text_from_recall_and_stale_compacts(self):
+        for directory in (
+            self.memory / "life" / "events",
+            self.memory / "life" / "compacts" / "-1001",
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
+        with mock.patch.multiple(
+            memory_life,
+            BASE=self.base,
+            MEM_DIR=self.memory,
+            LIFE_DIR=self.memory / "life",
+            EVENTS_DIR=self.memory / "life" / "events",
+            COMPACTS_DIR=self.memory / "life" / "compacts",
+            EPISODES_DIR=self.memory / "life" / "episodes",
+            CLAIMS_DIR=self.memory / "life" / "claims",
+            PATCHES_DIR=self.memory / "life" / "patches",
+            REFLECTIONS_DIR=self.memory / "life" / "reflections",
+            STATE_DIR=self.memory / ".state" / "life",
+            LEGACY_SUMMARIES_DIR=self.memory / ".summaries",
+            DIALOGUES_DIR=self.memory / "dialogues",
+        ):
+            original = memory_life.record_message(
+                "-1001", "Alice: recall obsolete platypus", actor="Alice",
+                direction="in", source_id="41", ts=100.0,
+                dedupe_key="telegram:-1001:41:in",
+            )
+            memory_life._write_compact(
+                "-1001", {"summary": "recall obsolete platypus", "open_threads": [],
+                          "claims": [], "episodes": []},
+                tier=1, depth=1, source_events=[original["id"]], source_compacts=[],
+                event_count=1, continued=False,
+                first_ts=original["ts"], last_ts=original["ts"],
+            )
+            memory_life.record_message(
+                "-1001", "Alice [edited #41]: corrected narwhal", actor="Alice",
+                direction="in", source_id="41:edit:1970-01-01T00:03:20Z:abc",
+                ts=200.0,
+                dedupe_key="telegram:-1001:41:edit:1970-01-01T00:03:20Z:abc:in",
+            )
+            memory_life.note_message_revision("-1001", 41, "Alice: corrected narwhal")
+
+        memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
+        self.assertFalse(self.search("obsolete platypus"))
+        corrected = self.search("corrected narwhal")
+        self.assertTrue(corrected)
+        self.assertEqual(corrected[0]["source_type"], "life_event")
+
+    def test_automatic_cache_revalidates_an_unchanged_previous_day(self):
+        with mock.patch.multiple(
+            memory_life,
+            BASE=self.base,
+            MEM_DIR=self.memory,
+            LIFE_DIR=self.memory / "life",
+            EVENTS_DIR=self.memory / "life" / "events",
+            COMPACTS_DIR=self.memory / "life" / "compacts",
+            EPISODES_DIR=self.memory / "life" / "episodes",
+            CLAIMS_DIR=self.memory / "life" / "claims",
+            PATCHES_DIR=self.memory / "life" / "patches",
+            REFLECTIONS_DIR=self.memory / "life" / "reflections",
+            STATE_DIR=self.memory / ".state" / "life",
+            LEGACY_SUMMARIES_DIR=self.memory / ".summaries",
+            DIALOGUES_DIR=self.memory / "dialogues",
+        ):
+            memory_fts._CANON_CACHE.clear()
+            memory_fts._INDEX_CACHE.clear()
+            original = memory_life.record_message(
+                "-1001", "Alice: crossday obsolete pangolin", actor="Alice",
+                direction="in", source_id="41", ts=86_300.0,
+                dedupe_key="telegram:-1001:41:in",
+            )
+            self.assertTrue(self.search("obsolete pangolin", purpose="automatic"))
+            old_path = memory_life._event_file(86_300.0)
+            old_snapshot = old_path.stat().st_mtime_ns, old_path.stat().st_size
+
+            memory_life.record_message(
+                "-1001", "Alice [edited #41]: crossday corrected otter", actor="Alice",
+                direction="in", source_id="41:edit:1970-01-02T00:01:40Z:abc",
+                ts=86_500.0,
+                dedupe_key="telegram:-1001:41:edit:1970-01-02T00:01:40Z:abc:in",
+            )
+            memory_life.note_message_revision("-1001", 41, "Alice: crossday corrected otter")
+            self.assertEqual(
+                (old_path.stat().st_mtime_ns, old_path.stat().st_size), old_snapshot,
+                "the first day's bytes must remain unchanged for this cache regression",
+            )
+
+        self.assertFalse(self.search("obsolete pangolin", purpose="automatic"))
+        corrected = self.search("corrected otter", purpose="automatic")
+        self.assertTrue(corrected)
+        self.assertNotEqual(corrected[0]["event_id"], original["id"])
+
+    def test_group_deletion_tombstone_removes_old_text_from_recall_index(self):
+        archive = self.memory / "groups" / "room" / "archive.jsonl"
+        archive.parent.mkdir(parents=True)
+        message = {
+            "schema": "praxis.group.message.v1", "kind": "message",
+            "peer_id": "-1001", "topic_id": 77, "message_id": 41,
+            "sender_id": 10, "sender_name": "Alice", "reply_to_message_id": 77,
+            "timestamp": "2026-07-14T12:00:00Z", "edited_at": None,
+            "text": "recall tombstone secret", "media": "", "outgoing": False,
+            "topic_title": "Ideas",
+        }
+        deletion = {
+            "schema": "praxis.group.deletion.v1", "kind": "deletion",
+            "peer_id": "-1001", "topic_id": 77, "message_id": 41,
+            "sender_id": 10, "sender_name": "Alice", "reply_to_message_id": 77,
+            "timestamp": "2026-07-14T12:00:00Z",
+            "deleted_at": "2026-07-14T12:05:00Z", "original_known": True,
+            "outgoing": False, "topic_title": "Ideas",
+        }
+        archive.write_text(
+            json.dumps(message, ensure_ascii=False) + "\n"
+            + json.dumps(deletion, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+        memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
+
+        self.assertFalse(self.search("tombstone secret"))
 
     def test_generated_views_are_excluded_and_rebuild_is_logically_deterministic(self):
         canonical = self.memory / "home.md"

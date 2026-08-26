@@ -64,6 +64,99 @@ class TestPromptManifest(unittest.TestCase):
         self.assertIn("evt-000", body)
 
 
+class TestFoldPlanFitsOnePrompt(unittest.TestCase):
+    """Её решение 21.08, п.4: порог свёртки задаётся размером упакованного префикса,
+    а не числом событий.
+
+    Живой замер 21.08 по AbstractDL: кольцо 3 802 записи при потолке 125. План просил
+    свернуть `count - HOT_LO` = 3 752 события одним промптом; упаковщик брал префикс
+    на 48 000 знаков и честно объявлял остальное невлезшим; следующий проход планировал
+    те же 3 752. Сорок три вызова модели в сутки — ноль срезанных событий.
+    """
+
+    RING = 3802
+
+    def _ring(self, count=None, size=400, *, out_every=0):
+        count = self.RING if count is None else count
+        rows = []
+        for i in range(count):
+            row = {"id": f"evt-{i:05d}",
+                   "ts": f"2026-08-{1 + i // 1440:02d}T{(i // 60) % 24:02d}:{i % 60:02d}:00Z",
+                   "line": f"{i}: " + "я" * size, "salience": 2}
+            if out_every and i % out_every == 0:
+                row["direction"] = "out"
+            rows.append(row)
+        return rows
+
+    def test_the_planner_and_the_packer_measure_the_same_thing(self):
+        """Две формулы размера — и план снова разойдётся с тем, что влезает."""
+        ring = self._ring()
+        fit = ml.budget_prefix(ring)
+        _body, man = ml._pack_compact_prompt(ring[:fit])
+        self.assertEqual(man["omitted"], [], "планировщик считает не то, что упаковщик")
+        _body, man = ml._pack_compact_prompt(ring[:fit + 1])
+        self.assertEqual(man["omitted"], [ring[fit]["id"]],
+                         "префикс не максимальный: влезло бы ещё одно")
+
+    def test_the_plan_never_asks_for_more_than_one_prompt_holds(self):
+        ring = self._ring()
+        plan = ml.plan_hot_fold(ring)
+        self.assertTrue(plan["due"], plan)
+        self.assertLessEqual(plan["fold"], ml.budget_prefix(ring), plan)
+        _body, man = ml._pack_compact_prompt(ring[:plan["fold"]])
+        self.assertEqual(man["omitted"], [],
+                         "план отдал модели больше, чем она берёт — это и был тупик")
+
+    def test_progress_is_monotone_on_the_runaway_ring(self):
+        """Каждый успешный проход обязан уменьшать кольцо — её слово дословно."""
+        for out_every in (0, 7):
+            ring = self._ring(out_every=out_every)
+            sizes = [len(ring)]
+            for _ in range(15):
+                plan = ml.plan_hot_fold(ring)
+                if not plan.get("due"):
+                    break
+                self.assertGreaterEqual(plan["fold"], 1, plan)
+                ring = ring[plan["fold"]:]
+                sizes.append(len(ring))
+            self.assertGreater(len(sizes), 2, f"свёртка встала на месте: {sizes}")
+            self.assertEqual(sizes, sorted(sizes, reverse=True),
+                             f"кольцо не убывает монотонно: {sizes}")
+            self.assertEqual(len(set(sizes)), len(sizes),
+                             f"проход не сдвинул кольцо: {sizes}")
+
+    def test_the_runaway_ring_drains_to_its_window(self):
+        """Не «стало меньше», а сошлось: кольцо доходит до окна за конечное число
+        проходов. Именно это не происходило живьём сорок три раза в сутки."""
+        ring = self._ring()
+        passes = 0
+        while passes < 500:
+            plan = ml.plan_hot_fold(ring)
+            if not plan.get("due"):
+                break
+            ring = ring[plan["fold"]:]
+            passes += 1
+        self.assertLess(len(ring), ml.HOT_HI, f"кольцо не сошлось за {passes} проходов")
+        self.assertLess(passes, 500, "свёртка не сходится")
+
+    def test_one_oversized_event_does_not_jam_the_fold(self):
+        """Событие крупнее бюджета не имеет права заклинить свёртку навсегда:
+        правило «первая строка входит всегда» обязано доехать и до планировщика."""
+        ring = self._ring(count=300, size=200)
+        ring[0]["line"] = "гигант: " + "я" * (ml.PROMPT_BUDGET_CHARS * 3)
+        self.assertGreaterEqual(ml.budget_prefix(ring), 1)
+        plan = ml.plan_hot_fold(ring)
+        self.assertTrue(plan["due"], plan)
+        self.assertGreaterEqual(plan["fold"], 1, plan)
+        _body, man = ml._pack_compact_prompt(ring[:plan["fold"]])
+        self.assertEqual(man["omitted"], [], man)
+
+    def test_a_quiet_ring_is_untouched(self):
+        """Потолок бюджета не смеет сам по себе объявлять свёртку нужной."""
+        plan = ml.plan_hot_fold(self._ring(count=20, size=100))
+        self.assertFalse(plan.get("due"), plan)
+
+
 class TestContextSummaryPacksWholeBlocks(unittest.TestCase):
     def setUp(self):
         self._orig = ml._canonical_compact_graph

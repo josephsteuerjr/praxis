@@ -3153,9 +3153,11 @@ def _finish_survey(task_id: str, beat=None) -> dict:
     for row in unknown_units:
         notes.append(f"юнит {row.get('id')}: {row.get('liveness') or 'живость неизвестна'}")
     active_remote_ops = []
+    remote_ops_unknown = False
     if task.get("scope") == "host":
         beat(lease)
-        op_result = serverd_client.call("op.list", {"root_value": str(root), "limit": 100})
+        op_result = serverd_client.call(
+            "op.list", {"root_value": str(root), "limit": 100, "live_only": True})
         beat()
         if not op_result.get("ok"):
             # ⚠ Раньше здесь читалось `op_result.get("operations") or []` без проверки ok:
@@ -3164,8 +3166,44 @@ def _finish_survey(task_id: str, beat=None) -> dict:
             why = " ".join(str(op_result.get(k) or "") for k in ("code", "error")).strip()
             notes.append(f"живые операции на хосте НЕИЗВЕСТНЫ — демон не ответил ({why}). "
                          "Молчание не значит «операций нет».")
-        active_remote_ops = [row for row in op_result.get("operations") or []
-                             if row.get("status") in {"starting", "running", "finishing"}]
+        else:
+            # `op.list` упорядочен по времени и ограничен сверху. Поэтому сто новых
+            # terminal-записей могут вытеснить из ответа старую, всё ещё running
+            # операцию. Пустота среди ПОКАЗАННЫХ строк в усечённом ответе ничего не
+            # доказывает о непоказанном хвосте.
+            shown = op_result.get("shown")
+            matched = op_result.get("matched")
+            note = str(op_result.get("note") or "")
+            try:
+                count_truncated = (shown is not None and matched is not None
+                                   and int(shown) < int(matched))
+            except (TypeError, ValueError):
+                count_truncated = False
+            note_key = note.casefold()
+            note_truncated = any(marker in note_key for marker in
+                                 ("truncat", "усеч", "не полн", "неполный"))
+            if count_truncated or note_truncated:
+                remote_ops_unknown = True
+                detail = (f"shown={shown}, matched={matched}"
+                          if shown is not None or matched is not None else "счётчики не переданы")
+                notes.append("живые операции на хосте НЕИЗВЕСТНЫ — op.list усечён "
+                             f"({detail}{'; ' + note if note else ''}). Непоказанный хвост "
+                             "может содержать running-операцию.")
+        operation_rows_value = op_result.get("operations")
+        operation_rows = operation_rows_value if isinstance(operation_rows_value, list) else []
+        malformed_rows = [row for row in operation_rows if not isinstance(row, dict)]
+        if op_result.get("ok") and (not isinstance(operation_rows_value, list) or malformed_rows):
+            remote_ops_unknown = True
+            if not isinstance(operation_rows_value, list):
+                detail = f"поле operations имеет тип {type(operation_rows_value).__name__}, нужен list"
+            else:
+                detail = f"malformed строк не-object: {len(malformed_rows)}"
+            notes.append("живые операции на хосте НЕИЗВЕСТНЫ — успешный op.list вернул "
+                         f"повреждённый список ({detail}). Пропущенные строки нельзя считать "
+                         "завершёнными.")
+        active_remote_ops = [row for row in operation_rows
+                             if isinstance(row, dict)
+                             and row.get("status") in {"starting", "running", "finishing"}]
     elif task.get("scope") == "windows":
         beat(lease)
         with _remote_observations(task):
@@ -3181,12 +3219,14 @@ def _finish_survey(task_id: str, beat=None) -> dict:
         "changed": changed, "notes": notes,
         "verification_before": verification_rows[0] if verification_rows else {},
     }
-    if active_agents or active_jobs or active_checks or active_remote_ops:
+    if active_agents or active_jobs or active_checks or active_remote_ops or remote_ops_unknown:
         survey["blocked"] = (
             f"Задача ещё живая: agents running={len(active_agents)}, processes running="
             f"{len(active_jobs) + len(active_remote_ops)}, verification running="
             f"{len(active_checks)}. Дождись/останови их или продолжай работать; finish "
             "ничего не оборвал."
+            + (" Наличие живых host-операций не доказано из-за неполного op.list; "
+               "finish заблокирован до полного списка." if remote_ops_unknown else "")
             + ("\n" + "\n".join(notes) if notes else ""))
         return survey
     git_before = _git_root(root) if remote is None else None
@@ -3355,6 +3395,13 @@ def finish(task_id: str, title: str = "", review: str = "", checked: str = "",
             if survey.get("error"):
                 return str(survey["error"])
             if survey.get("blocked"):
+                # Блокировка сохраняет задачу active, но доказательство неполноты не должно
+                # жить только в одноразовом ответе finish. Иначе следующий исследователь
+                # увидит active без причины, почему закрытие было отвергнуто.
+                task, _root, _err = _task_root(task_id)
+                if task is not None:
+                    task["finish_unknowns"] = [str(n) for n in (survey.get("notes") or [])]
+                    _save_task(task)
                 return str(survey["blocked"])
             beat()          # осмотр кончился — дальше снова мерится тишина, не работа
             return _finish_unlocked(task_id, title=title, review=review, checked=checked,

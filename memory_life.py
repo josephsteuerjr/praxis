@@ -6,6 +6,7 @@ vector store is required for continuity.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import hashlib
 import json
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Iterable
 
 import memory_provenance
+from self_model import FileLock
 
 log = logging.getLogger("praxis-life")
 
@@ -33,6 +35,18 @@ CLAIMS_DIR = LIFE_DIR / "claims"
 PATCHES_DIR = LIFE_DIR / "patches"
 REFLECTIONS_DIR = LIFE_DIR / "reflections"
 STATE_DIR = MEM_DIR / ".state" / "life"
+# Сколько идентификаторов показывать в описи долга ремонта. Урезание всегда названо
+# флагом `sample_truncated`: нижняя граница не имеет права читаться как точное число.
+_REFRESH_SAMPLE = 20
+# Один ручной запуск ремонта не должен превращаться в неограниченную модельную
+# миграцию. Это hard cap публичного API/CLI, а не настройка фонового scheduler-а.
+_REFRESH_MAX_CHUNKS = 8
+_COMPACT_REFRESH_SCHEMA = "praxis.life.compact_refresh.v2"
+_COMPACT_REFRESH_META_KEYS = frozenset({
+    "schema", "group_id", "coverage_root_ids", "stale_compact_ids",
+    "logical_target_count", "logical_target_ids_sha256", "target_event_count",
+    "target_event_ids_sha256", "replacement_compact_ids",
+})
 LEGACY_SUMMARIES_DIR = MEM_DIR / ".summaries"
 DIALOGUES_DIR = MEM_DIR / "dialogues"
 
@@ -45,6 +59,83 @@ TIER_LO = max(1, int(os.getenv("PRAXIS_COMPACT_TIER_LO", "4") or 4))
 TIER_HI = max(TIER_LO + 1, int(os.getenv("PRAXIS_COMPACT_TIER_HI", "8") or 8))
 
 _WRITE_LOCK = threading.RLock()
+_REFRESH_LOCKS_LOCK = threading.Lock()
+_REFRESH_LOCKS: dict[str, threading.Lock] = {}
+_STATE_LOCKS_LOCK = threading.Lock()
+_STATE_LOCKS: dict[str, threading.RLock] = {}
+_STATE_GUARD_LOCAL = threading.local()
+
+
+def _refresh_commit_lock(chat_id: str | int) -> threading.Lock:
+    key = str(place_key(chat_id))
+    with _REFRESH_LOCKS_LOCK:
+        return _REFRESH_LOCKS.setdefault(key, threading.Lock())
+
+
+def _state_write_lock(chat_id: str | int) -> tuple[str, str, threading.RLock]:
+    """Return exact place, stable Telegram-room domain and its local lock."""
+    place = str(chat_id)
+    # A topic may become a room alias while a writer is waiting. Lock the immutable root
+    # domain so both the old topic path and the new room path serialize through one gate.
+    domain = place.split("__topic__", 1)[0]
+    key = f"{os.path.abspath(str(STATE_DIR))}\0{domain}"
+    with _STATE_LOCKS_LOCK:
+        return place, domain, _STATE_LOCKS.setdefault(key, threading.RLock())
+
+
+@contextlib.contextmanager
+def _state_write_guard(chat_id: str | int):
+    """Serialize one already-resolved place's state transaction.
+
+    Callers resolve/adopt the place before entering. ``rebuild_state`` is nested by the
+    live writers, so the local half is re-entrant and the file lock is acquired only by
+    the outermost call in this thread. Refresh commits acquire refresh first, state
+    second; state writers never acquire refresh, so the order has no cycle.
+    """
+    place, domain, lock = _state_write_lock(chat_id)
+    lock.acquire()
+    depths = getattr(_STATE_GUARD_LOCAL, "depths", None)
+    if depths is None:
+        depths = _STATE_GUARD_LOCAL.depths = {}
+    overrides = getattr(_STATE_GUARD_LOCAL, "place_overrides", None)
+    if overrides is None:
+        overrides = _STATE_GUARD_LOCAL.place_overrides = {}
+    key = f"{os.path.abspath(str(STATE_DIR))}\0{domain}"
+    depth = int(depths.get(key) or 0)
+    depths[key] = depth + 1
+    overrides[place] = int(overrides.get(place) or 0) + 1
+    try:
+        if depth:
+            yield
+        else:
+            lock_path = STATE_DIR / ".state-locks" / f"{_safe(domain)}.lock"
+            with FileLock(lock_path, timeout=30.0, stale_after=300.0, heartbeat=5.0):
+                yield
+    finally:
+        override_depth = int(overrides.get(place) or 0) - 1
+        if override_depth > 0:
+            overrides[place] = override_depth
+        else:
+            overrides.pop(place, None)
+        if depth:
+            depths[key] = depth
+        else:
+            depths.pop(key, None)
+        lock.release()
+
+
+@contextlib.contextmanager
+def _refresh_commit_guard(chat_id: str | int):
+    """Serialize compact/receipt commits per place across threads and processes."""
+    key = str(place_key(chat_id))
+    lock = _refresh_commit_lock(key)
+    lock.acquire()
+    try:
+        lock_path = STATE_DIR / ".refresh-locks" / f"{_safe(key)}.lock"
+        with FileLock(lock_path, timeout=30.0, stale_after=300.0, heartbeat=5.0):
+            yield
+    finally:
+        lock.release()
 _META_RE = re.compile(r"^<!--\s*praxis-(compact|episode):\s*(\{.*\})\s*-->$")
 _COMPACT_ID_RE = re.compile(r"cmp-\d{8}T\d{12}Z-[0-9a-f]{8}$")
 _EVENT_ID_RE = re.compile(r"evt-\d{8}T\d{12}Z-[0-9a-f]{8}$")
@@ -61,6 +152,19 @@ _CONTINUITY_WARNING = (
 
 def _safe(chat_id: str | int) -> str:
     return re.sub(r"[^\w-]", "_", str(chat_id)) or "chat"
+
+
+def _place_key_live(chat_id: str | int) -> str:
+    """Resolve mutable route knowledge without a transaction-local exact-place override."""
+    key = str(chat_id)
+    bound = bindings().get(key)
+    if bound:
+        return bound
+    try:
+        import telegram_routes
+        return telegram_routes.place_of(key) or key
+    except Exception:
+        return key
 
 
 def place_key(chat_id: str | int) -> str:
@@ -83,14 +187,10 @@ def place_key(chat_id: str | int) -> str:
     (холодное дерево, тесты, чужая база) — место равно ключу, всё как раньше.
     """
     key = str(chat_id)
-    bound = bindings().get(key)
-    if bound:
-        return bound
-    try:
-        import telegram_routes
-        return telegram_routes.place_of(key) or key
-    except Exception:
+    overrides = getattr(_STATE_GUARD_LOCAL, "place_overrides", None)
+    if overrides and int(overrides.get(key) or 0) > 0:
         return key
+    return _place_key_live(key)
 
 
 _BINDINGS_LOCK = threading.RLock()
@@ -122,6 +222,22 @@ def bindings() -> dict:
     return memory_provenance.places_index(MEM_DIR)
 
 
+@contextlib.contextmanager
+def _bindings_write_lock():
+    """Единая МЕЖПРОЦЕССНАЯ граница записи журнала привязок `places.json`.
+
+    Обязательна для КАЖДОГО writer'а журнала — и для рантайма (`bind_place`),
+    и для мигратора мест (канарейка 23.08: read-modify-write без общей границы
+    терял параллельную запись соседнего процесса — full-file replace мигратора
+    стирал привязку, которую `bind_place` успел положить между чтением и
+    заменой). Порядок замков — как у `_refresh_commit_guard`: процессный
+    `_BINDINGS_LOCK` снаружи, `FileLock` внутри.
+    """
+    lock_path = LIFE_DIR / ".journal-locks" / "places.lock"
+    with FileLock(lock_path, timeout=30.0, stale_after=300.0, heartbeat=5.0):
+        yield
+
+
 def bind_place(place: str, keys) -> int:
     """Записать, что эти ключи свёрнуты как одно место. Идемпотентно, только дописывает.
 
@@ -131,16 +247,17 @@ def bind_place(place: str, keys) -> int:
     place = str(place)
     added = 0
     with _BINDINGS_LOCK:
-        data = bindings()
-        for key in keys:
-            key = str(key)
-            if key and key != place and key not in data:
-                data[key] = place
-                added += 1
-        if added:
-            path = bindings_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            _atomic_json(path, data)
+        with _bindings_write_lock():
+            data = bindings()
+            for key in keys:
+                key = str(key)
+                if key and key != place and key not in data:
+                    data[key] = place
+                    added += 1
+            if added:
+                path = bindings_path()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                _atomic_json(path, data)
     return added
 
 
@@ -165,6 +282,10 @@ def _same_place(a, b) -> bool:
     """
     if str(a) == str(b):
         return True
+    # Once a place binding exists it is stronger than mutable route knowledge, including
+    # a transaction-local exact-place override used to keep one state path stable.
+    if memory_provenance.same_conversation(a, b, bindings()):
+        return True
     try:
         return place_key(a) == place_key(b)
     except Exception:
@@ -184,24 +305,24 @@ def adopt_place(chat_id: str | int) -> str:
     заводил ПУСТОЕ кольцо, и накопленное не сворачивалось никогда.
     """
     key = str(chat_id)
-    place = place_key(key)
-    if place == key:
+    with _state_write_guard(key), _WRITE_LOCK:
+        place = _place_key_live(key)
+        if place == key:
+            return place
+        if bindings().get(key) != place:
+            bind_place(place, [key])
+        orphan = STATE_DIR / f"{_safe(key)}.json"
+        if orphan.exists():
+            try:
+                _rebuild_state_locked(place)
+                attic = STATE_DIR / "_pre_places"
+                attic.mkdir(parents=True, exist_ok=True)
+                orphan.replace(attic / orphan.name)
+                log.info("место %s принято ключом %s: прежнее состояние слито и отодвинуто",
+                         place, key)
+            except OSError:
+                log.debug("состояние ключа %s не отодвинулось", key, exc_info=True)
         return place
-    if bindings().get(key) == place:
-        return place
-    bind_place(place, [key])
-    orphan = STATE_DIR / f"{_safe(key)}.json"
-    if orphan.exists():
-        try:
-            rebuild_state(place)
-            attic = STATE_DIR / "_pre_places"
-            attic.mkdir(parents=True, exist_ok=True)
-            orphan.replace(attic / orphan.name)
-            log.info("место %s принято ключом %s: прежнее состояние слито и отодвинуто",
-                     place, key)
-        except OSError:
-            log.debug("состояние ключа %s не отодвинулось", key, exc_info=True)
-    return place
 
 
 def _utc_iso(ts: float | None = None) -> str:
@@ -274,6 +395,28 @@ def _save_state(state: dict) -> None:
 def _event_file(ts: float | None = None) -> Path:
     d = _dt.datetime.fromtimestamp(ts if ts is not None else time.time(), tz=_dt.timezone.utc)
     return EVENTS_DIR / f"{d:%Y-%m-%d}.jsonl"
+
+
+def _conversation_hot_rows(rows: Iterable[dict]) -> list[dict]:
+    """Current-state hot projection over immutable conversation events."""
+
+    return [{
+        "id": row["id"], "ts": row.get("ts"), "line": row.get("text", ""),
+        "actor": row.get("actor", ""), "direction": row.get("direction", ""),
+        "salience": row.get("salience", 2),
+        "tokens": estimate_tokens(row.get("text", "")),
+        "source": row.get("source"), "source_id": row.get("source_id"),
+        "chat": row.get("chat_id"),
+    } for row in memory_provenance.current_conversation_events(rows)]
+
+
+def _telegram_lineage_event_ids(rows: Iterable[dict], message_id: int) -> list[str]:
+    target = int(message_id)
+    return [
+        str(row.get("id")) for row in rows
+        if (memory_provenance.telegram_message_key(row) or ("", -1))[1] == target
+        and str(row.get("id") or "")
+    ]
 
 
 def _append_record(record: dict) -> None:
@@ -376,14 +519,13 @@ def _recent_duplicate(chat_id, key: str, state: dict) -> dict | None:
 def record_message(chat_id: str | int, line: str, *, actor: str = "", direction: str = "in",
                    source: str = "telegram", source_id: str | int | None = None,
                    is_dm: bool | None = None, salience: int = 2, ts: float | None = None,
-                   time_quality: str = "observed", dedupe_key: str = "") -> dict:
-    with _WRITE_LOCK:
-        # Место закрепляется ДО записи: мы сейчас на нём подействуем. `adopt_place`
-        # сливает прежнее состояние ключа в состояние места и отодвигает его — иначе
-        # всё, что копилось под веткой, осталось бы сиротой и не свернулось никогда
-        # (адверсарка 25.07, обе волны).
-        adopt_place(chat_id)
-        state = _load_state(chat_id, rebuild=True)
+                   time_quality: str = "observed", dedupe_key: str = "",
+                   revision_order: int | None = None) -> dict:
+    place = adopt_place(chat_id)
+    with _state_write_guard(place), _WRITE_LOCK:
+        # Место закреплено ДО замка: один и тот же точный ключ используется для всего
+        # read/derive/save, даже если изменяемый реестр маршрутов уточнится посередине.
+        state = _load_state(place, rebuild=True)
         dup = _recent_duplicate(chat_id, dedupe_key, state)
         if dup:
             return dup
@@ -391,22 +533,94 @@ def record_message(chat_id: str | int, line: str, *, actor: str = "", direction:
             "conversation_message", chat_id=chat_id, actor=actor or str(line).split(":", 1)[0],
             direction=direction, text=str(line), source=source, source_id=source_id,
             salience=salience, ts=ts, dedupe_key=dedupe_key,
-            meta={"is_dm": is_dm, "time_quality": time_quality},
+            meta={
+                "is_dm": is_dm, "time_quality": time_quality,
+                "observed_at": _utc_iso(),
+                **({"revision_order": int(revision_order)}
+                   if revision_order is not None else {}),
+            },
         )
-        state["hot"].append({
-            "id": rec["id"], "ts": rec["ts"], "line": rec["text"],
-            "actor": rec["actor"], "direction": rec["direction"],
-            "salience": rec["salience"], "tokens": estimate_tokens(rec["text"]),
-            "source_id": rec.get("source_id"), "source": rec.get("source"),
-            # Ключ, под которым сказано. Горячая запись обязана его помнить: свёртка
-            # места должна записать привязку, не перечитывая всю ленту.
-            "chat": rec.get("chat_id"),
-        })
+        revision_kind = memory_provenance.telegram_revision_kind(rec)
+        lineage = []
+        telegram_key = memory_provenance.telegram_message_key(rec)
+        if telegram_key is not None:
+            lineage = _telegram_lineage_event_ids(
+                iter_events(chat_id=chat_id, kinds={"conversation_message"}),
+                telegram_key[1],
+            )
+        if revision_kind in {"edit", "delete"} or len(lineage) > 1:
+            state = rebuild_state(chat_id)
+        else:
+            state["hot"].append({
+                "id": rec["id"], "ts": rec["ts"], "line": rec["text"],
+                "actor": rec["actor"], "direction": rec["direction"],
+                "salience": rec["salience"], "tokens": estimate_tokens(rec["text"]),
+                "source_id": rec.get("source_id"), "source": rec.get("source"),
+                "chat": rec.get("chat_id"),
+            })
         if dedupe_key:
             state["dedupe"] = (state.get("dedupe") or [])[-399:] + [
                 {"key": dedupe_key, "id": rec["id"]}]
         _save_state(state)
         return rec
+
+
+def note_message_revision(chat_id: str | int, message_id: int, line: str, *,
+                          actor: str = "Telegram", ts: float | None = None) -> dict:
+    """Re-materialise one Telegram lineage after an append-only edit/delete event.
+
+    The event writer already appended the immutable revision.  Rebuilding the derived
+    hot state through the shared current-state projector makes restart recovery match the
+    live path and keeps the surviving row in chronological order.  A small state-only
+    fallback remains for legacy/test callers that predate append-only revision events.
+    """
+
+    place = adopt_place(chat_id)
+    with _state_write_guard(place), _WRITE_LOCK:
+        chat_id = place
+        messages = iter_events(chat_id=chat_id, kinds={"conversation_message"})
+        lineage_ids = _telegram_lineage_event_ids(messages, message_id)
+        state = _load_state(chat_id, rebuild=True)
+        if not lineage_ids:
+            target = str(message_id)
+            indexes = [
+                index for index, item in enumerate(state.get("hot") or [])
+                if (str(item.get("source_id") or "") == target
+                    or str(item.get("source_id") or "").startswith(f"{target}:edit:")
+                    or str(item.get("source_id") or "") == f"{target}:delete")
+            ]
+            if not indexes:
+                return {"chat_id": str(chat_id), "message_id": int(message_id),
+                        "matched": False}
+            keep = indexes[-1]
+            item = state["hot"][keep]
+            item["line"] = str(line)
+            item["actor"] = str(actor or item.get("actor") or "Telegram")
+            item["direction"] = "in"
+            item["tokens"] = estimate_tokens(item["line"])
+            if ts is not None:
+                item["ts"] = _utc_iso(float(ts))
+            remove = set(indexes[:-1])
+            state["hot"] = [row for index, row in enumerate(state["hot"])
+                            if index not in remove]
+            _save_state(state)
+            return {
+                "chat_id": str(chat_id), "message_id": int(message_id), "matched": True,
+                "collapsed": len(remove),
+            }
+        before = sum(
+            1 for item in state.get("hot") or []
+            if str(item.get("id") or "") in set(lineage_ids)
+        )
+        state = rebuild_state(chat_id)
+        after = sum(
+            1 for item in state.get("hot") or []
+            if str(item.get("id") or "") in set(lineage_ids)
+        )
+        return {
+            "chat_id": str(chat_id), "message_id": int(message_id), "matched": True,
+            "collapsed": max(0, before - after),
+        }
 
 
 def hot_records(chat_id: str | int, limit: int | None = None) -> list[dict]:
@@ -456,8 +670,9 @@ def _legacy_summary(chat_id: str | int) -> str:
 def bootstrap_legacy(chat_id: str | int, lines: list[str], *, summary: str = "",
                      last_ts: float | None = None) -> dict:
     """One honest migration: summary has limited provenance; persisted lines become raw events."""
-    with _WRITE_LOCK:
-        state = _load_state(chat_id)
+    place = adopt_place(chat_id)
+    with _state_write_guard(place), _WRITE_LOCK:
+        state = _load_state(place)
         if state.get("bootstrap_v1"):
             return {"chat_id": str(chat_id), "events": 0, "legacy_compact": False,
                     "already": True, "hot": len(state.get("hot") or [])}
@@ -548,6 +763,43 @@ EVENT_CLIP_CHARS = 1800
 PROMPT_BUDGET_CHARS = 48000
 
 
+def _compact_prompt_row(item: dict) -> str:
+    """Одна строка промпта свёртки — ЕДИНСТВЕННОЕ место, где известен её размер.
+
+    Упаковщик и планировщик обязаны считать по одной формуле. Пока планировщик
+    считал события, а упаковщик — символы, план был неисполним по построению:
+    он просил свернуть `count - HOT_LO`, упаковщик отбрасывал тысячи строк, и
+    следующая попытка планировала ровно то же самое.
+    """
+    ident = str(item.get("id") or "")
+    raw = str(item.get("line") or item.get("text") or "")
+    priority = float(item.get("preservation_priority") or 1.0)
+    return (f"<{ident}> [p={priority:.2f}; s={item.get('salience', 2)}] "
+            f"{raw[:EVENT_CLIP_CHARS]}")
+
+
+def budget_prefix(hot: list[dict], *, budget: int = PROMPT_BUDGET_CHARS) -> int:
+    """Сколько САМЫХ СТАРЫХ записей реально влезает в один промпт свёртки.
+
+    Считается той же формулой, что пакует `_pack_compact_prompt`, включая её
+    правило «первая строка входит всегда»: одно событие крупнее бюджета не имеет
+    права заклинить свёртку навсегда.
+
+    Её слово 21.08: «порог задаётся размером упакованного префикса, не числом
+    событий… планировщик обязан заранее выбрать максимальный непрерывный старый
+    префикс, который реально помещается в этот бюджет».
+    """
+    used = 0
+    fit = 0
+    for item in hot:
+        row = _compact_prompt_row(item)
+        if fit and used + len(row) + 1 > budget:
+            break
+        used += len(row) + 1
+        fit += 1
+    return fit
+
+
 def _pack_compact_prompt(inputs: list[dict]) -> tuple[str, dict]:
     """Собрать промпт свёртки и ТОЧНЫЙ манифест того, что в него реально вошло.
 
@@ -578,9 +830,7 @@ def _pack_compact_prompt(inputs: list[dict]) -> tuple[str, dict]:
         if full:
             omitted.append(ident)
             continue
-        priority = float(item.get("preservation_priority") or 1.0)
-        text = raw[:EVENT_CLIP_CHARS]
-        row = f"<{ident}> [p={priority:.2f}; s={item.get('salience', 2)}] {text}"
+        row = _compact_prompt_row(item)
         if rows and used + len(row) + 1 > PROMPT_BUDGET_CHARS:
             full = True                                 # дальше — только хвост, целиком
             omitted.append(ident)
@@ -938,11 +1188,19 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False) -> dict:
             if suffix_tokens <= HOT_TOKEN_CAP:
                 break
     count_target = max(1, count - HOT_LO) if count >= HOT_HI or force else 1
-    target = max(count_target, token_target)
+    # ПОТОЛОК ПЛАНА — сколько влезает в один промпт. Замер 21.08 по AbstractDL:
+    # кольцо 3802 при потолке 125, план просил свернуть 3752 события разом, модель
+    # брала префикс на 48 000 знаков, остальное честно объявлялось невлезшим — и
+    # следующий проход планировал те же 3752. Сорок три вызова модели в сутки, ноль
+    # срезанных событий. Теперь план и упаковка меряют одним и тем же.
+    budget_fit = budget_prefix(hot)
+    target = min(max(count_target, token_target), budget_fit)
     min_remaining = 1 if token_pressure or force else HOT_LO
     candidates = []
     for i in range(1, count):
         remaining = count - i
+        if i > budget_fit:
+            break
         if remaining < min_remaining or (token_pressure and i < token_target):
             continue
         gap = _epoch(hot[i].get("ts")) - _epoch(hot[i - 1].get("ts"))
@@ -951,17 +1209,22 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False) -> dict:
     if candidates:
         _, fold, gap = min(candidates)
         return {"due": True, "fold": fold, "continued": False, "reason": "episode_boundary",
-                "gap_sec": gap, "count": count, "tokens": tokens}
+                "gap_sec": gap, "count": count, "tokens": tokens,
+                "budget_fit": budget_fit}
     hard = token_pressure or count >= HOT_HARD_HI or force
     if not hard:
         return {"due": False, "reason": "open_episode", "count": count, "tokens": tokens}
     valid = [i for i in range(1, count)
              if count - i >= min_remaining and (not token_pressure or i >= token_target)
+             and i <= budget_fit
              and str(hot[i - 1].get("direction")) == "out"]
     fold = min(valid, key=lambda i: abs(i - target)) if valid else max(1, min(target, count - 1))
+    # Прогресс обязан быть монотонным: свернуть меньше одной записи нельзя, больше
+    # влезающего — бессмысленно. Между этими двумя границами план всегда исполним.
+    fold = max(1, min(fold, budget_fit))
     return {"due": True, "fold": fold, "continued": True,
             "reason": "token_cap" if tokens > HOT_TOKEN_CAP else "hard_window",
-            "count": count, "tokens": tokens}
+            "count": count, "tokens": tokens, "budget_fit": budget_fit}
 
 
 def _frontier_input(meta: dict, chat_id: str | int) -> dict:
@@ -1010,6 +1273,93 @@ def _fold_tiers(chat_id, state: dict) -> list[str]:
     return made
 
 
+def _tier_fold_candidate(chat_id: str | int, state: dict) -> dict | None:
+    """Describe the next higher-tier fold without writing or calling the model."""
+    tier = 1
+    for _ in range(16):
+        same = sorted(
+            [x for x in state.get("frontier", []) if int(x.get("tier") or 1) == tier],
+            key=lambda x: (
+                _epoch(x.get("first_ts")) or _epoch(x.get("created_at")),
+                x.get("id", ""),
+            ),
+        )
+        if len(same) >= TIER_HI:
+            count = min(len(same), max(1, TIER_HI - TIER_LO))
+            sources = same[:count]
+            continued = any(bool(x.get("continued")) for x in sources)
+            return {
+                "tier": tier,
+                "sources": sources,
+                "source_ids": [str(x.get("id")) for x in sources],
+                "inputs": [_frontier_input(x, chat_id) for x in sources],
+                "continued": continued,
+                "depth": max(int(x.get("depth") or tier) for x in sources) + 1,
+            }
+        if not any(int(x.get("tier") or 1) > tier for x in state.get("frontier", [])):
+            return None
+        tier += 1
+    return None
+
+
+def _fold_tiers_transactional(chat_id: str | int) -> list[str]:
+    """Fold warm tiers with evaluator work outside the derived-state transaction.
+
+    25.08: имена fallback-родителей возвращаются ВТОРЫМ списком. Раньше
+    деградация верхних ярусов записывалась в meta и событие memory_compact,
+    но не всплывала в возврат — стоп-кран compact_places видел только
+    degraded первого яруса, и обрыв модели посреди каскада молча клал
+    механическую выжимку в вершину пирамиды (живой пример: 0fcb8b61).
+    """
+    made: list[str] = []
+    degraded_made: list[str] = []
+    for _ in range(16):
+        with _state_write_guard(chat_id), _WRITE_LOCK:
+            state = _rebuild_state_locked(chat_id)
+            candidate = _tier_fold_candidate(chat_id, state)
+        if candidate is None:
+            break
+
+        result = _model_compact(
+            candidate["inputs"], tier=candidate["tier"] + 1,
+            depth=candidate["depth"], continued=candidate["continued"])
+        if not result:
+            result = _fallback_compact(
+                candidate["inputs"], continued=candidate["continued"])
+
+        with _state_write_guard(chat_id), _WRITE_LOCK:
+            state = _rebuild_state_locked(chat_id)
+            current = _tier_fold_candidate(chat_id, state)
+            if (current is None
+                    or current["tier"] != candidate["tier"]
+                    or current["source_ids"] != candidate["source_ids"]):
+                continue
+            sources = current["sources"]
+            parent = _write_compact(
+                chat_id, result, tier=current["tier"] + 1,
+                depth=current["depth"], source_events=[],
+                source_compacts=current["source_ids"],
+                event_count=sum(int(x.get("event_count") or 0) for x in sources),
+                continued=current["continued"],
+                first_ts=sources[0].get("first_ts") or "",
+                last_ts=sources[-1].get("last_ts") or "")
+            remove = set(current["source_ids"])
+            state["frontier"] = [
+                x for x in state["frontier"] if str(x.get("id")) not in remove
+            ] + [parent]
+            append_event(
+                "memory_compact", chat_id=chat_id,
+                text=f"Tier {current['tier'] + 1}: {parent['id']}",
+                source="memory_life", refs=parent["source_compact_ids"],
+                meta={"compact_id": parent["id"], "tier": current["tier"] + 1,
+                      "degraded": parent.get("degraded", False)})
+            _save_state(state)
+            made.append(parent["id"])
+            if parent.get("degraded"):
+                degraded_made.append(parent["id"])
+    return made, degraded_made
+
+
 def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
     """Compact one hot prefix and recursively fold warm tiers. Raw events are never removed.
 
@@ -1017,37 +1367,43 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
     иначе один разговор продолжал бы копить по свёртке на каждую свою ветку.
     """
     chat_id = adopt_place(chat_id)
-    with _WRITE_LOCK:
+    with _state_write_guard(chat_id), _WRITE_LOCK:
         state = _load_state(chat_id, rebuild=True)
         plan = plan_hot_fold(state.get("hot") or [], force=force)
         if not plan.get("due"):
             return {"ok": True, "folded": 0, "plan": plan,
-                    "hot": len(state.get("hot") or []), "tiers": []}
+                    "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
         fold = int(plan["fold"])
         inputs = list(state["hot"][:fold])
-        result = _model_compact(inputs, tier=1, depth=1, continued=bool(plan.get("continued")))
-        if not result:
-            result = _fallback_compact(inputs, continued=bool(plan.get("continued")))
-        manifest = result.get("_manifest") if isinstance(result, dict) else None
-        omitted = {str(i) for i in ((manifest or {}).get("omitted") or [])}
-        continued = bool(plan.get("continued"))
-        if omitted:
-            # Свёрнутым объявляем только непрерывный старый префикс, который реально
-            # дошёл до модели. Невлезший хвост остаётся горячим и попадёт в следующую
-            # свёртку — раньше он молча объявлялся покрытым и уходил из фронтира.
-            inputs = [x for x in inputs if str(x.get("id")) not in omitted]
-            fold = len(inputs)
-            # И вместе с границей обязана переехать ПРАВДА о ней. `plan["continued"]`
-            # посчитан для СТАРОЙ границы (например, реального разрыва в разговоре).
-            # Обрезанная бюджетом свёртка по построению в этот разрыв не попадает — она
-            # кончается посреди живой нити. Оставить continued=False значило бы записать
-            # в компакт и в артефакт эпизода, что разговор закончен там, где он идёт.
-            continued = True
-            log.warning("life compact [%s]: %s событий не влезли в промпт — оставлены "
-                        "горячими; эпизод помечен продолжающимся", chat_id, len(omitted))
-        if not inputs:
-            return {"ok": True, "folded": 0, "plan": plan,
-                    "hot": len(state.get("hot") or []), "tiers": []}
+    result = _model_compact(inputs, tier=1, depth=1, continued=bool(plan.get("continued")))
+    if not result:
+        result = _fallback_compact(inputs, continued=bool(plan.get("continued")))
+    manifest = result.get("_manifest") if isinstance(result, dict) else None
+    omitted = {str(i) for i in ((manifest or {}).get("omitted") or [])}
+    continued = bool(plan.get("continued"))
+    if omitted:
+        # Свёрнутым объявляем только непрерывный старый префикс, который реально
+        # дошёл до модели. Невлезший хвост остаётся горячим и попадёт в следующую
+        # свёртку — раньше он молча объявлялся покрытым и уходил из фронтира.
+        inputs = [x for x in inputs if str(x.get("id")) not in omitted]
+        fold = len(inputs)
+        # И вместе с границей обязана переехать ПРАВДА о ней. `plan["continued"]`
+        # посчитан для СТАРОЙ границы (например, реального разрыва в разговоре).
+        # Обрезанная бюджетом свёртка по построению в этот разрыв не попадает — она
+        # кончается посреди живой нити. Оставить continued=False значило бы записать
+        # в компакт и в артефакт эпизода, что разговор закончен там, где он идёт.
+        continued = True
+        log.warning("life compact [%s]: %s событий не влезли в промпт — оставлены "
+                    "горячими; эпизод помечен продолжающимся", chat_id, len(omitted))
+    if not inputs:
+        return {"ok": True, "folded": 0, "plan": plan,
+                "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
+
+    with _state_write_guard(chat_id), _WRITE_LOCK:
+        state = _rebuild_state_locked(chat_id)
+        if state.get("hot", [])[:fold] != inputs:
+            return {"ok": False, "reason": "state_changed", "folded": 0,
+                    "plan": plan, "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
         source_ids = [str(x.get("id")) for x in inputs]
         # Привязка пишется ДО компакта: компакт, чьи события ещё никуда не привязаны,
         # был бы неканоническим с первой секунды. Порядок здесь — не стиль, а условие
@@ -1077,22 +1433,18 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
                      source="memory_life", refs=source_ids,
                      meta={"compact_id": meta["id"], "tier": 1, "episodes": episodes,
                            "continued": meta["continued"], "degraded": meta["degraded"]})
-        higher = _fold_tiers(chat_id, state)
         _save_state(state)
-        return {"ok": True, "folded": fold, "compact_id": meta["id"], "episodes": episodes,
-                "plan": plan, "hot": len(state["hot"]), "tiers": higher,
-                "degraded": meta["degraded"],
-                "folded_lines": [str(item.get("line") or "") for item in inputs]}
+        hot_after = len(state["hot"])
+    higher, higher_degraded = _fold_tiers_transactional(chat_id)
+    return {"ok": True, "folded": fold, "compact_id": meta["id"], "episodes": episodes,
+            "plan": plan, "hot": hot_after, "tiers": higher, "degraded_tiers": higher_degraded,
+            "degraded": meta["degraded"],
+            "folded_lines": [str(item.get("line") or "") for item in inputs]}
 
 
-def _canonical_compact_graph(chat_id: str | int) -> tuple[dict[str, tuple[dict, str]], bool]:
-    """Return resolved non-legacy compacts bound to one place and its event spine.
-
-    Место может состоять из нескольких ключей: пока ключ расщеплялся, свёртки одной
-    комнаты писались под разными именами. Каждый компакт при этом проверяется под
-    СВОИМ ключом — привязка «лежит там, где заявляет» не ослабляется ни на шаг;
-    объединяется только результат.
-    """
+def _parse_place_compacts(chat_id: str | int) -> tuple[dict[str, tuple[dict, str]], bool]:
+    """Прочитать с диска все компакты места. Самая дорогая половина — и общая для
+    обоих графов, поэтому она отдельно: разбор один, фильтров два."""
     expected_chat = str(chat_id)
     parsed: dict[str, tuple[dict, str]] = {}
     legacy_seen = False
@@ -1106,19 +1458,71 @@ def _canonical_compact_graph(chat_id: str | int) -> tuple[dict[str, tuple[dict, 
                 legacy_seen = True
                 continue
             parsed[meta["id"]] = (meta, recap)
+    return parsed, legacy_seen
 
-    evidence = memory_provenance.claim_evidence_index(MEM_DIR)
+
+def _canonical_compact_graph(chat_id: str | int, *, presentable: bool = True,
+                             evidence: dict | None = None,
+                             parsed: tuple[dict[str, tuple[dict, str]], bool] | None = None
+                             ) -> tuple[dict[str, tuple[dict, str]], bool]:
+    """Return resolved non-legacy compacts bound to one place and its event spine.
+
+    Место может состоять из нескольких ключей: пока ключ расщеплялся, свёртки одной
+    комнаты писались под разными именами. Каждый компакт при этом проверяется под
+    СВОИМ ключом — привязка «лежит там, где заявляет» не ослабляется ни на шаг;
+    объединяется только результат.
+
+    `evidence` и `parsed` можно передать готовыми: тогда снимок индекса и разбор
+    файлов делаются ОДИН раз на весь ответ. Без этого два графа в одном вызове
+    означали два обхода диска и два глобальных отпечатка — замер 21.08: три
+    построения индекса на один `stream_status`, 0,96 с на 300 компактах, и путь
+    ЗАПИСИ сообщения дорожал вдвое, потому что `rebuild_state` зовётся из
+    `record_message` и `note_message_revision`.
+    """
+    parsed_pair = _parse_place_compacts(chat_id) if parsed is None else parsed
+    if evidence is None:
+        evidence = memory_provenance.claim_evidence_index(MEM_DIR)
+    return (_filter_compact_graph(parsed_pair[0], evidence, presentable=presentable),
+            parsed_pair[1])
+
+
+def _both_graphs(chat_id: str | int, *, evidence: dict | None = None
+                 ) -> tuple[dict[str, tuple[dict, str]], dict[str, tuple[dict, str]], bool]:
+    """(показ, покрытие, legacy) за ОДИН разбор файлов и ОДИН снимок индекса.
+
+    Оба графа обязаны быть из одной эпохи: иначе состояние склеивается из двух
+    разных моментов, а между ними успевает прийти сообщение.
+    """
+    parsed_pair = _parse_place_compacts(chat_id)
+    if evidence is None:
+        evidence = memory_provenance.claim_evidence_index(MEM_DIR)
+    return (_filter_compact_graph(parsed_pair[0], evidence, presentable=True),
+            _filter_compact_graph(parsed_pair[0], evidence, presentable=False),
+            parsed_pair[1])
+
+
+def _filter_compact_graph(parsed: dict[str, tuple[dict, str]], evidence: dict, *,
+                          presentable: bool) -> dict[str, tuple[dict, str]]:
     strict_compacts = evidence.get("compacts") or {}
     # One resolver owns the trust decision.  The local reader above is only a
     # presentation parser; it must not admit a compact that the global,
     # duplicate-aware provenance index rejected or interpreted differently.
+    # ДВА ГРАФА, ДВА ВОПРОСА — её решение 21.08.
+    #   presentable=True  — «можно ли это показать и процитировать»: строго к текущей
+    #                       ревизии. Живой кадр, formation, обычный recall/FTS.
+    #   presentable=False — «было ли это уже свёрнуто»: покрытие для пересборки.
+    # Сверка разобранной шапки с индексом провенанса остаётся в ОБОИХ режимах: она про
+    # то, что файл соответствует канону, а не про свежесть ревизии.
+    resolve = (memory_provenance.compact_evidence if presentable
+               else memory_provenance.compact_coverage)
     parsed = {
         compact_id: item
         for compact_id, item in parsed.items()
         if strict_compacts.get(compact_id) == item[0]
-        and memory_provenance.compact_evidence(compact_id, evidence).get("valid") is True
+        and resolve(compact_id, evidence).get("valid") is True
     }
     events = evidence.get("events") or {}
+    current_event_ids = set(evidence.get("current_event_ids") or ())
     resolved: dict[str, bool] = {}
 
     def valid(compact_id: str, stack: frozenset[str] = frozenset()) -> bool:
@@ -1132,9 +1536,14 @@ def _canonical_compact_graph(chat_id: str | int) -> tuple[dict[str, tuple[dict, 
             ok = True
             for event_id in meta["source_event_ids"]:
                 row = events.get(event_id)
+                # Свежесть ревизии — единственное, что различает два режима.
+                # Схема, идентичность, вид события и принадлежность месту проверяются
+                # ОДИНАКОВО: покрытие не значит «принимаем что попало», оно значит
+                # «правка не отменяет того, что событие уже свёрнуто».
                 if (not isinstance(row, dict)
                         or row.get("schema") != "praxis.life.event.v1"
                         or row.get("id") != event_id
+                        or (presentable and event_id not in current_event_ids)
                         or not _same_conversation(row.get("chat_id"), meta["chat_id"])
                         or row.get("kind") != "conversation_message"):
                     ok = False
@@ -1154,8 +1563,7 @@ def _canonical_compact_graph(chat_id: str | int) -> tuple[dict[str, tuple[dict, 
         resolved[compact_id] = bool(ok)
         return bool(ok)
 
-    canonical = {compact_id: item for compact_id, item in parsed.items() if valid(compact_id)}
-    return canonical, legacy_seen
+    return {compact_id: item for compact_id, item in parsed.items() if valid(compact_id)}
 
 
 def rebuild_state(chat_id: str | int) -> dict:
@@ -1166,7 +1574,14 @@ def rebuild_state(chat_id: str | int) -> dict:
     оказаться ни горячим, ни свёрнутым одновременно и не может пропасть — на этом
     инварианте держится вся миграция ключа.
     """
-    chat_id = place_key(chat_id)
+    place = str(place_key(chat_id))
+    with _state_write_guard(place):
+        return _rebuild_state_locked(place)
+
+
+def _rebuild_state_locked(chat_id: str | int) -> dict:
+    """Implementation of :func:`rebuild_state` under the exact-place state guard."""
+    chat_id = str(chat_id)
     # Состав места, на котором мы сейчас пересоберём курсор, закрепляется в журнале.
     # Иначе достижимость исторических компактов из комнаты держалась бы на одном
     # реестре: он вправе уточниться, и блок молча выпал бы из её сводки — при том что
@@ -1174,17 +1589,34 @@ def rebuild_state(chat_id: str | int) -> dict:
     bind_place(chat_id, _member_keys(chat_id))
     state = _default_state(chat_id)
     messages = iter_events(chat_id=chat_id, kinds={"conversation_message"})
-    canonical, legacy_seen = _canonical_compact_graph(chat_id)
-    metas = [item[0] for item in canonical.values()]
-    covered_events = {str(e) for m in metas for e in (m.get("source_event_ids") or [])}
-    consumed_compacts = {str(c) for m in metas for c in (m.get("source_compact_ids") or [])}
-    state["hot"] = [{"id": r["id"], "ts": r.get("ts"), "line": r.get("text", ""),
-                     "actor": r.get("actor", ""), "direction": r.get("direction", ""),
-                     "salience": r.get("salience", 2), "tokens": estimate_tokens(r.get("text", "")),
-                     "source": r.get("source"), "source_id": r.get("source_id"),
-                     "chat": r.get("chat_id")}
-                    for r in messages if str(r.get("id")) not in covered_events]
-    state["frontier"] = [m for m in metas if str(m.get("id")) not in consumed_compacts]
+    current_messages = memory_provenance.current_conversation_events(messages)
+    current_event_ids = {
+        str(row.get("id")) for row in current_messages if str(row.get("id") or "")
+    }
+    # ПОКРЫТИЕ считается по одному графу, ПОКАЗ — по другому (её решение 21.08).
+    #
+    # `covered_events` берётся из графа ПОКРЫТИЯ: правка одного сообщения больше не
+    # возвращает в горячее кольцо остальные девяносто девять событий свёртки. Новая
+    # ревизия при этом остаётся горячей сама — она не покрыта ничем.
+    #
+    # `frontier` берётся из СТРОГОГО графа: свёртка, чьё исходное сообщение потом
+    # правили, годна как покрытие, но её recap может нести прежний текст, и в текущей
+    # памяти ему не место. Такая свёртка становится `needs_refresh` — она наблюдаема
+    # через `refresh_debt`, не исчезает и не считается исправной.
+    presentable, coverage, legacy_seen = _both_graphs(chat_id)
+    covered_metas = [item[0] for item in coverage.values()]
+    shown_metas = [item[0] for item in presentable.values()]
+    covered_events = {str(e) for m in covered_metas
+                      for e in (m.get("source_event_ids") or [])}
+    consumed_compacts = {str(c) for m in shown_metas
+                         for c in (m.get("source_compact_ids") or [])}
+    state["hot"] = _conversation_hot_rows(
+        row for row in messages
+        if str(row.get("id")) in current_event_ids
+        and str(row.get("id")) not in covered_events
+    )
+    state["frontier"] = [m for m in shown_metas
+                         if str(m.get("id")) not in consumed_compacts]
     state["dedupe"] = [{"key": r.get("dedupe_key"), "id": r.get("id")} for r in messages
                        if r.get("dedupe_key")][-400:]
     state["bootstrap_v1"] = legacy_seen or any(
@@ -1250,10 +1682,22 @@ def retire_split_states(*, dry_run: bool = False) -> dict:
     return {"moved": moved, "kept": kept, "dry_run": dry_run}
 
 
+def has_life_memory(chat_id: str | int) -> bool:
+    """Есть ли у места уже современный PASS 19 контур.
+
+    Пустой current frontier внутри такого контура — осмысленная пустота: например,
+    прежняя свёртка стала stale после edit/delete. Это не повод оживлять плоскую
+    legacy-summary без ревизий. Legacy fallback допустим только пока ни state, ни
+    compact-tree этого места ещё не существуют.
+    """
+    if _state_path(chat_id).exists():
+        return True
+    return any(_compact_dir(member).exists() for member in _member_keys(chat_id))
+
+
 def context_summary(chat_id: str | int, max_chars: int = 7000) -> str:
     """Current logarithmic frontier for the prompt. No raw event is treated as more truthful."""
-    if not _state_path(chat_id).exists() and not any(
-            _compact_dir(member).exists() for member in _member_keys(chat_id)):
+    if not has_life_memory(chat_id):
         return ""  # cold pre-PASS19/test tree: do not create runtime state merely by reading
     canonical, _legacy_seen = _canonical_compact_graph(chat_id)
     consumed = {
@@ -1308,8 +1752,618 @@ def provenance_for_path(path: str | Path) -> list[str]:
             (meta.get("source_compact_ids") or [])]
 
 
-def stream_status(chat_id: str | int) -> dict:
-    state = _load_state(chat_id, rebuild=True)
+def _refresh_digest(values: Iterable[str]) -> str:
+    payload = json.dumps(list(values), ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _refresh_logical_id(row: dict) -> str:
+    lineage = memory_provenance.telegram_message_key(row)
+    if lineage is not None:
+        return f"telegram:{lineage[0]}:{lineage[1]}"
+    return f"event:{str(row.get('id') or '')}"
+
+
+def _refresh_graph_leaves(compact_id: str, graph: dict[str, tuple[dict, str]],
+                          memo: dict[str, tuple[str, ...]],
+                          stack: frozenset[str] = frozenset()) -> tuple[str, ...]:
+    if compact_id in memo:
+        return memo[compact_id]
+    if compact_id in stack or compact_id not in graph:
+        return ()
+    meta = graph[compact_id][0]
+    direct = tuple(str(x) for x in (meta.get("source_event_ids") or ()))
+    if direct:
+        memo[compact_id] = direct
+        return direct
+    leaves: list[str] = []
+    next_stack = stack | {compact_id}
+    for child_id in meta.get("source_compact_ids") or ():
+        leaves.extend(_refresh_graph_leaves(str(child_id), graph, memo, next_stack))
+    memo[compact_id] = tuple(leaves)
+    return memo[compact_id]
+
+
+def _refresh_stale_subtree(root_id: str, coverage: dict[str, tuple[dict, str]],
+                           stale: set[str]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def walk(compact_id: str) -> None:
+        if compact_id in seen:
+            return
+        seen.add(compact_id)
+        if compact_id in stale:
+            ordered.append(compact_id)
+        item = coverage.get(compact_id)
+        if item:
+            for child_id in item[0].get("source_compact_ids") or ():
+                walk(str(child_id))
+
+    walk(root_id)
+    return ordered
+
+
+def _refresh_roots(coverage: dict[str, tuple[dict, str]], stale: set[str]) -> list[str]:
+    consumed = {
+        str(child_id)
+        for compact_id in stale
+        for child_id in (coverage[compact_id][0].get("source_compact_ids") or ())
+        if str(child_id) in stale
+    }
+    return sorted(stale - consumed, reverse=True)
+
+
+def _refresh_candidate_positions(compact_id: str, target_pos: dict[str, int],
+                                 presentable_leaves: dict[str, tuple[str, ...]]) -> set[int] | None:
+    leaves = presentable_leaves.get(compact_id)
+    if not leaves:
+        return None
+    ordered = [target_pos[event_id] for event_id in leaves if event_id in target_pos]
+    if not ordered or ordered != sorted(ordered) or len(ordered) != len(set(ordered)):
+        return None
+    return set(ordered)
+
+
+def _refresh_choose_replacements(group: dict, snapshot: dict,
+                                 initial: Iterable[str] = ()) -> tuple[list[str], set[int]]:
+    target_ids = group["target_ids"]
+    target_pos = {event_id: index for index, event_id in enumerate(target_ids)}
+    chosen: list[str] = []
+    covered: set[int] = set()
+    for compact_id in dict.fromkeys(initial):
+        indexes = _refresh_candidate_positions(
+            compact_id, target_pos, snapshot["presentable_leaves"])
+        if indexes is None or indexes & covered:
+            continue
+        chosen.append(compact_id)
+        covered.update(indexes)
+    candidate_ids: set[str] = set()
+    for event_id in target_ids:
+        candidate_ids.update(snapshot["candidate_by_event"].get(event_id, ()))
+    candidate_ids.difference_update(chosen)
+    choices: list[tuple[int, int, str, set[int]]] = []
+    for compact_id in candidate_ids:
+        indexes = _refresh_candidate_positions(
+            compact_id, target_pos, snapshot["presentable_leaves"])
+        if indexes is not None:
+            choices.append((-len(indexes), min(indexes), compact_id, indexes))
+    for _neg_count, _first, compact_id, indexes in sorted(choices):
+        if indexes & covered:
+            continue
+        chosen.append(compact_id)
+        covered.update(indexes)
+    chosen.sort(key=lambda compact_id: (
+        min(_refresh_candidate_positions(
+            compact_id, target_pos, snapshot["presentable_leaves"]) or {10**18}),
+        compact_id,
+    ))
+    return chosen, covered
+
+
+def _refresh_validate_receipt(row: dict, group: dict, snapshot: dict) -> dict | None:
+    meta = row.get("meta")
+    group_id = group["group_id"]
+    allowed_keys = {
+        "schema", "id", "ts", "kind", "stream", "chat_id", "actor", "direction",
+        "text", "source", "source_id", "salience", "refs", "meta",
+    }
+    if (set(row) != allowed_keys
+            or row.get("schema") != "praxis.life.event.v1"
+            or not _EVENT_ID_RE.fullmatch(str(row.get("id") or ""))
+            or not _UTC_MILLIS_RE.fullmatch(str(row.get("ts") or ""))
+            or row.get("kind") != "memory_compact_refresh"
+            or str(row.get("chat_id") or "") != snapshot["chat_id"]
+            or row.get("stream") != _safe(snapshot["chat_id"])
+            or row.get("actor") != "Praxis"
+            or row.get("direction") != "internal"
+            or row.get("source") != "memory_life"
+            or row.get("salience") != 2
+            or str(row.get("source_id") or "") != group_id
+            or row.get("text") != f"Compact refresh group: {group_id}"
+            or not isinstance(meta, dict)
+            or set(meta) != _COMPACT_REFRESH_META_KEYS):
+        return None
+    replacements = meta.get("replacement_compact_ids")
+    if (meta.get("schema") != _COMPACT_REFRESH_SCHEMA
+            or meta.get("group_id") != group_id
+            or meta.get("coverage_root_ids") != group["root_ids"]
+            or meta.get("stale_compact_ids") != group["stale_ids"]
+            or type(meta.get("logical_target_count")) is not int
+            or meta.get("logical_target_count") != len(group["logical_ids"])
+            or meta.get("logical_target_ids_sha256") != _refresh_digest(group["logical_ids"])
+            or type(meta.get("target_event_count")) is not int
+            or meta.get("target_event_count") != len(group["target_ids"])
+            or meta.get("target_event_ids_sha256") != _refresh_digest(group["target_ids"])
+            or type(replacements) is not list or not replacements
+            or any(type(item) is not str or not _COMPACT_ID_RE.fullmatch(item)
+                   for item in replacements)
+            or len(replacements) != len(set(replacements))
+            or row.get("refs") != group["stale_ids"] + replacements):
+        return None
+    # Validate the exact structural choice the writer could have made when this receipt
+    # was appended.  Later strict compacts must not retroactively invalidate an older
+    # receipt, so candidates whose immutable id timestamp is newer than the receipt are
+    # excluded.  This proves canonical shape, not cryptographic caller identity.
+    receipt_stamp = str(row["id"]).split("-", 2)[1]
+    historical = dict(snapshot)
+    historical["candidate_by_event"] = {
+        event_id: {
+            compact_id for compact_id in compact_ids
+            if compact_id.split("-", 2)[1] <= receipt_stamp
+        }
+        for event_id, compact_ids in snapshot["candidate_by_event"].items()
+    }
+    initial = list((group.get("receipt") or {}).get("replacement_compact_ids") or ())
+    canonical, _canonical_covered = _refresh_choose_replacements(
+        group, historical, initial)
+    if replacements != canonical:
+        return None
+    target_pos = {event_id: index for index, event_id in enumerate(group["target_ids"])}
+    covered: set[int] = set()
+    previous_first = -1
+    for compact_id in replacements:
+        indexes = _refresh_candidate_positions(
+            compact_id, target_pos, snapshot["presentable_leaves"])
+        if indexes is None or indexes & covered:
+            return None
+        first = min(indexes)
+        # The writer emits replacement chunks in logical-target order. We require that
+        # stable shape, but deliberately do not require one globally optimal partition:
+        # a later strict compact must not retroactively invalidate an older receipt.
+        if first <= previous_first:
+            return None
+        previous_first = first
+        covered.update(indexes)
+    return {
+        "receipt_event_id": str(row.get("id") or ""),
+        "replacement_compact_ids": list(replacements),
+        "covered_positions": covered,
+        "refreshed_count": len(covered),
+        "remaining_count": len(group["target_ids"]) - len(covered),
+        "ts": str(row.get("ts") or ""),
+    }
+
+
+def _refresh_snapshot(chat_id: str, *, evidence: dict | None = None) -> dict:
+    """One near-linear exact view of stale logical groups and append-only receipts."""
+    chat = str(place_key(chat_id))
+    evidence = evidence or memory_provenance.claim_evidence_index(MEM_DIR)
+    presentable, coverage, _legacy = _both_graphs(chat, evidence=evidence)
+    events = evidence.get("events") or {}
+    current_ids = set(str(x) for x in (evidence.get("current_event_ids") or ()))
+    current_by_logical: dict[str, dict] = {}
+    for event_id in current_ids:
+        row = events.get(event_id)
+        if (isinstance(row, dict) and row.get("kind") == "conversation_message"
+                and _same_conversation(row.get("chat_id"), chat)):
+            current_by_logical[_refresh_logical_id(row)] = row
+
+    presentable_leaves: dict[str, tuple[str, ...]] = {}
+    coverage_leaves: dict[str, tuple[str, ...]] = {}
+    candidate_by_event: dict[str, set[str]] = {}
+    for compact_id in presentable:
+        leaves = _refresh_graph_leaves(compact_id, presentable, presentable_leaves)
+        for event_id in set(leaves):
+            candidate_by_event.setdefault(event_id, set()).add(compact_id)
+
+    stale = set(coverage) - set(presentable)
+    roots = _refresh_roots(coverage, stale)
+    infos: list[dict] = []
+    identity_owner: dict[str, int] = {}
+    parent = list(range(len(roots)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for index, root_id in enumerate(roots):
+        leaves = _refresh_graph_leaves(root_id, coverage, coverage_leaves)
+        logical_ids: list[str] = []
+        seen: set[str] = set()
+        error = ""
+        for event_id in leaves:
+            row = events.get(event_id)
+            if not isinstance(row, dict):
+                error = "missing_coverage_leaf"
+                break
+            logical_id = _refresh_logical_id(row)
+            if logical_id not in seen:
+                seen.add(logical_id)
+                logical_ids.append(logical_id)
+                if logical_id in identity_owner:
+                    union(index, identity_owner[logical_id])
+                else:
+                    identity_owner[logical_id] = index
+        meta = coverage[root_id][0]
+        infos.append({"root_id": root_id, "logical_ids": logical_ids, "error": error,
+                      "order": (str(meta.get("first_ts") or ""),
+                                str(meta.get("created_at") or ""), root_id)})
+
+    components: dict[int, list[dict]] = {}
+    for index, info in enumerate(infos):
+        components.setdefault(find(index), []).append(info)
+    groups: dict[str, dict] = {}
+    artifact_group: dict[str, str] = {}
+    for component in components.values():
+        component.sort(key=lambda item: item["order"])
+        logical_ids: list[str] = []
+        seen_logical: set[str] = set()
+        errors = [item["error"] for item in component if item["error"]]
+        for item in component:
+            for logical_id in item["logical_ids"]:
+                if logical_id not in seen_logical:
+                    seen_logical.add(logical_id)
+                    logical_ids.append(logical_id)
+        target_rows: list[dict] = []
+        if not errors:
+            for logical_id in logical_ids:
+                row = current_by_logical.get(logical_id)
+                if not isinstance(row, dict):
+                    errors.append("current_projection_unavailable")
+                    break
+                target_rows.append(row)
+        if not logical_ids:
+            errors.append("empty_current_projection")
+        root_ids = [item["root_id"] for item in component]
+        stale_ids: list[str] = []
+        seen_stale: set[str] = set()
+        for root_id in root_ids:
+            for compact_id in _refresh_stale_subtree(root_id, coverage, stale):
+                if compact_id not in seen_stale:
+                    seen_stale.add(compact_id)
+                    stale_ids.append(compact_id)
+        group_id = _refresh_digest(logical_ids)
+        group = {
+            "group_id": group_id, "root_ids": root_ids, "stale_ids": stale_ids,
+            "logical_ids": logical_ids, "target_rows": target_rows,
+            "target_ids": [str(row.get("id") or "") for row in target_rows],
+            "target_error": errors[0] if errors else "", "receipt": {},
+        }
+        groups[group_id] = group
+        for compact_id in stale_ids:
+            artifact_group[compact_id] = group_id
+
+    snapshot = {
+        "chat_id": chat, "evidence": evidence, "events": events,
+        "current_ids": current_ids, "presentable": presentable, "coverage": coverage,
+        "presentable_leaves": presentable_leaves, "coverage_leaves": coverage_leaves,
+        "candidate_by_event": candidate_by_event, "stale": stale, "groups": groups,
+        "artifact_group": artifact_group,
+    }
+    receipts_by_group: dict[str, list[dict]] = {}
+    for row in events.values():
+        if isinstance(row, dict) and row.get("kind") == "memory_compact_refresh":
+            receipts_by_group.setdefault(str(row.get("source_id") or ""), []).append(row)
+    resolved_stale: set[str] = set()
+    for group_id, group in groups.items():
+        valid_receipts: list[dict] = []
+        for row in sorted(receipts_by_group.get(group_id, ()),
+                          key=lambda item: str(item.get("id") or "")):
+            validation_group = dict(group)
+            if valid_receipts:
+                validation_group["receipt"] = max(
+                    valid_receipts,
+                    key=lambda item: (item["refreshed_count"], item["receipt_event_id"]),
+                )
+            receipt = _refresh_validate_receipt(row, validation_group, snapshot)
+            if receipt is not None:
+                valid_receipts.append(receipt)
+        if valid_receipts:
+            group["receipt"] = max(
+                valid_receipts,
+                key=lambda item: (item["refreshed_count"], item["receipt_event_id"]),
+            )
+        initial = list(group["receipt"].get("replacement_compact_ids") or ())
+        replacements, covered = _refresh_choose_replacements(group, snapshot, initial)
+        group["replacement_compact_ids"] = replacements
+        group["covered_positions"] = covered
+        group["refreshed_count"] = len(covered)
+        group["remaining_count"] = len(group["target_ids"]) - len(covered)
+        group["receipt_complete"] = bool(
+            group["receipt"] and group["receipt"].get("remaining_count") == 0)
+        if group["receipt_complete"]:
+            resolved_stale.update(group["stale_ids"])
+    snapshot["resolved_stale"] = resolved_stale
+    snapshot["unresolved_groups"] = [
+        group for group in groups.values() if not group["receipt_complete"]]
+    snapshot["unresolved_artifacts"] = stale - resolved_stale
+    return snapshot
+
+
+def _append_refresh_receipt(chat_id: str, group: dict,
+                            replacement_ids: list[str]) -> dict:
+    meta = {
+        "schema": _COMPACT_REFRESH_SCHEMA,
+        "group_id": group["group_id"],
+        "coverage_root_ids": list(group["root_ids"]),
+        "stale_compact_ids": list(group["stale_ids"]),
+        "logical_target_count": len(group["logical_ids"]),
+        "logical_target_ids_sha256": _refresh_digest(group["logical_ids"]),
+        "target_event_count": len(group["target_ids"]),
+        "target_event_ids_sha256": _refresh_digest(group["target_ids"]),
+        "replacement_compact_ids": list(replacement_ids),
+    }
+    return append_event(
+        "memory_compact_refresh", chat_id=chat_id,
+        text=f"Compact refresh group: {group['group_id']}", source="memory_life",
+        source_id=group["group_id"], refs=group["stale_ids"] + replacement_ids,
+        meta=meta,
+    )
+
+
+def _refresh_group(snapshot: dict, group_id: str) -> dict | None:
+    group = snapshot["groups"].get(group_id)
+    return group if isinstance(group, dict) else None
+
+
+def _refresh_api_result(snapshot: dict, group: dict, *, reason: str, ok: bool,
+                        chunk_limit: int, chunks_written: int = 0,
+                        new_compact_ids: list[str] | None = None,
+                        receipt: dict | None = None, scope: str = "target_group") -> dict:
+    return {
+        "ok": ok, "reason": reason, "scope": scope,
+        "group_id": group.get("group_id"), "coverage_root_ids": group.get("root_ids", []),
+        "max_chunks": chunk_limit, "chunks_written": chunks_written,
+        "new_compact_ids": list(new_compact_ids or ()),
+        "receipt_written": receipt is not None,
+        "receipt_event_id": str((receipt or group.get("receipt") or {}).get(
+            "id") or (group.get("receipt") or {}).get("receipt_event_id") or ""),
+        "target_count": len(group.get("target_ids") or ()),
+        "refreshed_count": int(group.get("refreshed_count") or 0),
+        "remaining_count": int(group.get("remaining_count") or 0),
+        "target_remaining_count": int(group.get("remaining_count") or 0),
+        "replacement_compact_ids": list(group.get("replacement_compact_ids") or ()),
+        "room_unresolved_group_count": len(snapshot.get("unresolved_groups") or ()),
+        "room_needs_refresh": len(snapshot.get("unresolved_artifacts") or ()),
+    }
+
+
+def refresh_compacts(chat_id: str | int, compact_id: str | None = None, *,
+                     max_chunks: int = 1) -> dict:
+    """Boundedly refresh one logical stale group; evaluator work stays unlocked.
+
+    An explicitly addressed stale compact is a repair of existing canonical
+    material: evaluator failure or a degraded result aborts the whole invocation
+    before any replacement compact or refresh receipt is written.  Ordinary
+    background refresh retains its deterministic fallback.
+    """
+    try:
+        requested_chunks = int(max_chunks)
+    except (TypeError, ValueError):
+        requested_chunks = 1
+    chunk_limit = max(0, min(_REFRESH_MAX_CHUNKS, requested_chunks))
+    chat = str(place_key(chat_id))
+    initial = _refresh_snapshot(chat)
+    target = str(compact_id or "")
+    scope = "target_group" if target else "one_group"
+    if target:
+        if not _COMPACT_ID_RE.fullmatch(target) or target not in initial["coverage"]:
+            return {"ok": False, "reason": "compact_not_in_coverage", "scope": scope,
+                    "compact_id": target, "max_chunks": chunk_limit,
+                    "room_unresolved_group_count": len(initial["unresolved_groups"]),
+                    "room_needs_refresh": len(initial["unresolved_artifacts"])}
+        group_id = initial["artifact_group"].get(target)
+        if not group_id:
+            return {"ok": True, "reason": "compact_is_presentable", "scope": scope,
+                    "compact_id": target, "max_chunks": chunk_limit,
+                    "room_unresolved_group_count": len(initial["unresolved_groups"]),
+                    "room_needs_refresh": len(initial["unresolved_artifacts"])}
+        group = initial["groups"][group_id]
+    elif initial["unresolved_groups"]:
+        group = max(initial["unresolved_groups"],
+                    key=lambda item: max(item.get("root_ids") or [""]))
+        group_id = group["group_id"]
+    else:
+        return {"ok": True, "reason": "no_refresh_debt", "scope": scope,
+                "chunks_written": 0, "receipt_written": False,
+                "max_chunks": chunk_limit, "room_unresolved_group_count": 0,
+                "room_needs_refresh": 0}
+    if group["target_error"]:
+        return _refresh_api_result(initial, group, reason=group["target_error"], ok=False,
+                                   chunk_limit=chunk_limit, scope=scope)
+    if group["receipt_complete"]:
+        # A receipt is durable before the rebuildable cursor. Retrying after a crash must
+        # repair that cursor instead of returning success over a double-present hot row.
+        rebuild_state(chat)
+        reconciled = _refresh_snapshot(chat)
+        reconciled_group = _refresh_group(reconciled, group_id) or group
+        return _refresh_api_result(reconciled, reconciled_group,
+                                   reason="already_refreshed", ok=True,
+                                   chunk_limit=chunk_limit, scope=scope)
+
+    virtual_covered = set(group["covered_positions"])
+    planned: list[tuple[dict, list[dict], bool]] = []
+    for _ in range(chunk_limit):
+        remaining_rows = [row for index, row in enumerate(group["target_rows"])
+                          if index not in virtual_covered]
+        if not remaining_rows:
+            break
+        fit = budget_prefix(remaining_rows, budget=PROMPT_BUDGET_CHARS)
+        inputs = remaining_rows[:fit]
+        if not inputs:
+            break
+        continued = fit < len(remaining_rows)
+        result = _model_compact(inputs, tier=1, depth=1, continued=continued)
+        model_result_valid = (
+            isinstance(result, dict)
+            and isinstance(result.get("summary"), str)
+            and bool(result["summary"].strip())
+            and not bool(result.get("degraded"))
+        )
+        if not model_result_valid:
+            if target:
+                return _refresh_api_result(
+                    initial, group, reason="model_required", ok=False,
+                    chunk_limit=chunk_limit, scope=scope,
+                )
+            result = _fallback_compact(inputs, continued=continued)
+        planned.append((result, [dict(row) for row in inputs], continued))
+        planned_ids = {str(row.get("id") or "") for row in inputs}
+        virtual_covered.update(
+            index for index, event_id in enumerate(group["target_ids"])
+            if event_id in planned_ids)
+
+    made: list[str] = []
+    receipt = None
+    # Refresh planning/model work remains outside state transactions.  The commit must,
+    # however, share the exact per-place writer domain with ordinary hot compaction so
+    # the two paths cannot both derive and persist overlapping compacts for one event.
+    with _refresh_commit_guard(chat), _state_write_guard(chat):
+        current = _refresh_snapshot(chat)
+        current_group = _refresh_group(current, group_id)
+        if (current_group is None
+                or current_group["logical_ids"] != group["logical_ids"]
+                or current_group["target_ids"] != group["target_ids"]):
+            return _refresh_api_result(current, current_group or group,
+                                       reason="target_changed", ok=False,
+                                       chunk_limit=chunk_limit, scope=scope)
+        if current_group["receipt_complete"]:
+            rebuild_state(chat)
+            observed = _refresh_snapshot(chat)
+            observed_group = _refresh_group(observed, group_id) or current_group
+            return _refresh_api_result(observed, observed_group,
+                                       reason="already_refreshed", ok=True,
+                                       chunk_limit=chunk_limit, scope=scope)
+
+        covered_ids = {
+            current_group["target_ids"][index]
+            for index in current_group["covered_positions"]
+        }
+        for result, inputs, continued in planned:
+            source_ids = [str(item.get("id") or "") for item in inputs]
+            if any(event_id in covered_ids for event_id in source_ids):
+                continue
+            timestamps = [str(item.get("ts") or "") for item in inputs]
+            with _WRITE_LOCK:
+                meta = _write_compact(
+                    chat, result, tier=1, depth=1, source_events=source_ids,
+                    source_compacts=[], event_count=len(source_ids), continued=continued,
+                    source_note=(f"Адресный refresh logical-group {group_id}; "
+                                 "только текущие события."),
+                    first_ts=min(timestamps), last_ts=max(timestamps),
+                    manifest=(result.get("_manifest") if isinstance(result, dict) else None),
+                )
+            made.append(str(meta["id"]))
+            covered_ids.update(source_ids)
+
+        written = _refresh_snapshot(chat)
+        written_group = _refresh_group(written, group_id)
+        if (written_group is None
+                or written_group["logical_ids"] != group["logical_ids"]
+                or written_group["target_ids"] != group["target_ids"]):
+            return _refresh_api_result(written, written_group or current_group,
+                                       reason="target_changed", ok=False,
+                                       chunk_limit=chunk_limit, chunks_written=len(made),
+                                       new_compact_ids=made, scope=scope)
+        replacements = list(written_group["replacement_compact_ids"])
+        prior = list((written_group.get("receipt") or {}).get(
+            "replacement_compact_ids") or ())
+        if replacements and replacements != prior:
+            receipt = _append_refresh_receipt(chat, written_group, replacements)
+
+        final = _refresh_snapshot(chat)
+        final_group = _refresh_group(final, group_id)
+        if (final_group is None
+                or final_group["logical_ids"] != group["logical_ids"]
+                or final_group["target_ids"] != group["target_ids"]):
+            return _refresh_api_result(final, final_group or written_group,
+                                       reason="target_changed", ok=False,
+                                       chunk_limit=chunk_limit, chunks_written=len(made),
+                                       new_compact_ids=made, receipt=receipt, scope=scope)
+        if made or receipt is not None:
+            rebuild_state(chat)
+        observed = _refresh_snapshot(chat)
+        observed_group = _refresh_group(observed, group_id)
+        if (observed_group is None
+                or observed_group["logical_ids"] != group["logical_ids"]
+                or observed_group["target_ids"] != group["target_ids"]):
+            return _refresh_api_result(observed, observed_group or final_group,
+                                       reason="target_changed", ok=False,
+                                       chunk_limit=chunk_limit, chunks_written=len(made),
+                                       new_compact_ids=made, receipt=receipt, scope=scope)
+
+    reason = ("target_refreshed" if observed_group["receipt_complete"]
+              else "target_progress")
+    return _refresh_api_result(observed, observed_group, reason=reason, ok=True,
+                               chunk_limit=chunk_limit, chunks_written=len(made),
+                               new_compact_ids=made, receipt=receipt, scope=scope)
+
+
+def refresh_debt(chat_id: str | int, *, evidence: dict | None = None) -> dict:
+    """Exact unresolved stale artifacts, grouped by their current logical target."""
+    snapshot = _refresh_snapshot(str(place_key(chat_id)), evidence=evidence)
+    stale = sorted(snapshot["unresolved_artifacts"], reverse=True)
+    rows = []
+    for compact_id in stale[:_REFRESH_SAMPLE]:
+        group = snapshot["groups"][snapshot["artifact_group"][compact_id]]
+        leaves = snapshot["coverage_leaves"].get(compact_id) or ()
+        superseded = [event_id for event_id in leaves
+                      if event_id not in snapshot["current_ids"]]
+        replacements = list(group["replacement_compact_ids"])
+        rows.append({
+            "compact_id": compact_id,
+            "coverage_root_id": group["root_ids"][0] if group["root_ids"] else compact_id,
+            "coverage_root_ids": list(group["root_ids"]),
+            "group_id": group["group_id"],
+            "reason": "superseded_source_revision" if superseded else "not_presentable",
+            "superseded_event_ids": superseded[:_REFRESH_SAMPLE],
+            "superseded_total": len(superseded),
+            "superseded_truncated": len(superseded) > _REFRESH_SAMPLE,
+            "target_count": len(group["target_ids"]),
+            "refreshed_count": group["refreshed_count"],
+            "remaining_count": group["remaining_count"],
+            "replacement_compact_ids": replacements[:_REFRESH_SAMPLE],
+            "replacement_total": len(replacements),
+            "replacement_truncated": len(replacements) > _REFRESH_SAMPLE,
+        })
+    return {
+        "chat_id": snapshot["chat_id"],
+        "covered": len(snapshot["coverage"]),
+        "presentable": len(snapshot["presentable"]),
+        "needs_refresh": len(stale),
+        "resolved_stale": len(snapshot["resolved_stale"]),
+        "unresolved_group_count": len(snapshot["unresolved_groups"]),
+        "sample": rows, "sample_order": "newest_first",
+        "sample_truncated": len(stale) > _REFRESH_SAMPLE,
+    }
+
+
+def _state_status(chat_id: str | int, *, state: dict | None = None) -> dict:
+    """Дешёвая агрегатная телеметрия из уже сохранённого курсора.
+
+    `status()` обслуживает панель по сотням streams и не должен синхронно доказывать
+    каждый compact. Exact covered/presentable/needs_refresh остаются в адресных
+    `stream_status()` / `refresh_debt()`.
+    """
+    state = state if isinstance(state, dict) else _load_state(chat_id, rebuild=True)
     tiers: dict[str, int] = {}
     for item in state.get("frontier") or []:
         key = str(item.get("tier") or 1)
@@ -1320,6 +2374,17 @@ def stream_status(chat_id: str | int) -> dict:
             "bootstrap": bool(state.get("bootstrap_v1"))}
 
 
+def stream_status(chat_id: str | int, *, evidence: dict | None = None) -> dict:
+    if evidence is None:
+        evidence = memory_provenance.claim_evidence_index(MEM_DIR)
+    out = _state_status(chat_id)
+    debt = refresh_debt(chat_id, evidence=evidence)
+    out["compacts"] = {"covered": debt["covered"],
+                       "presentable": debt["presentable"],
+                       "needs_refresh": debt["needs_refresh"]}
+    return out
+
+
 def status() -> dict:
     streams = []
     for p in sorted(STATE_DIR.glob("*.json")) if STATE_DIR.exists() else []:
@@ -1327,7 +2392,7 @@ def status() -> dict:
             continue
         try:
             st = json.loads(p.read_text(encoding="utf-8"))
-            streams.append(stream_status(st.get("chat_id") or p.stem))
+            streams.append(_state_status(st.get("chat_id") or p.stem, state=st))
         except Exception:
             continue
     events = iter_events()
@@ -1350,6 +2415,27 @@ def _cli() -> None:
         if len(sys.argv) < 3:
             raise SystemExit("usage: python -m memory_life compact <chat_id> [--force]")
         print(json.dumps(compact_if_due(sys.argv[2], force="--force" in sys.argv),
+                         ensure_ascii=False, indent=2))
+    elif cmd == "refresh":
+        if len(sys.argv) < 3:
+            raise SystemExit(
+                "usage: python -m memory_life refresh <chat_id> [compact_id] [--chunks N]")
+        args = list(sys.argv[3:])
+        chunks = 1
+        if "--chunks" in args:
+            index = args.index("--chunks")
+            if index + 1 >= len(args):
+                raise SystemExit("--chunks requires an integer")
+            try:
+                chunks = int(args[index + 1])
+            except ValueError as exc:
+                raise SystemExit("--chunks requires an integer") from exc
+            del args[index:index + 2]
+        if len(args) > 1 or any(arg.startswith("--") for arg in args):
+            raise SystemExit(
+                "usage: python -m memory_life refresh <chat_id> [compact_id] [--chunks N]")
+        print(json.dumps(refresh_compacts(sys.argv[2], args[0] if args else None,
+                                          max_chunks=chunks),
                          ensure_ascii=False, indent=2))
     else:
         print(json.dumps(status(), ensure_ascii=False, indent=2))

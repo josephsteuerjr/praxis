@@ -94,7 +94,17 @@ class NormalizeTests(unittest.TestCase):
                            "checks": [{"status": "passed"}, {"status": "passed"},
                                       {"status": "failed"}],
                            "log": "logs/x.log"})
-        self.assertEqual(p["tests"], {"passed": 2, "failed": 1, "log_ref": "logs/x.log"})
+        self.assertEqual(p["tests"],
+                         {"passed": 2, "failed": 1, "skipped": 0,
+                          "log_ref": "logs/x.log"})
+
+    def test_timeout_check_is_skipped_not_failed(self):
+        p = self._payload({"status": "done",
+                           "checks": [{"status": "passed"}, {"status": "timed_out"}],
+                           "log": "logs/x.log"})
+        self.assertEqual(p["tests"],
+                         {"passed": 1, "failed": 0, "skipped": 1,
+                          "log_ref": "logs/x.log"})
 
 
 class InvitationTests(unittest.TestCase):

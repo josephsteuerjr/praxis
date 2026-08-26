@@ -10,10 +10,14 @@
 
 from __future__ import annotations
 
+import json
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import telegram_routes as tr
 
@@ -185,6 +189,132 @@ class TestItIsShadowOnly(Base):
         self.assertIn("обычная супергруппа", tr.describe("-1001240718803"))
         tr.observe("-1004301095307", kind="topic_opener_seen", message_id=5)
         self.assertIn("форум", tr.describe("-1004301095307"))
+
+
+class TestTopicCatalogue(Base):
+    """Durable-карта настоящих тем: то, что Telegram отдавал бесплатно и что
+    выбрасывалось в локальную переменную все эти месяцы."""
+
+    def test_unobserved_catalogue_is_none_not_empty(self):
+        self.assertIsNone(tr.confirmed_topics("-300"),
+                          "«не наблюдали» и «тем нет» — разные ответы")
+        self.assertEqual(tr.topics_of("-300"), {})
+        self.assertEqual(tr.topics_seen_at("-300"), "")
+
+    def test_complete_sweep_turns_the_catalogue_on(self):
+        tr.observe_topics("-300", {
+            7849: {"title": "Открытые вопросы", "top_message": 7849},
+            1: {"title": "General", "top_message": 1},
+        }, complete=True)
+        self.assertEqual(tr.confirmed_topics("-300"), frozenset({1, 7849}))
+        self.assertEqual(tr.topic_title("-300", 7849), "Открытые вопросы")
+        self.assertNotEqual(tr.topics_seen_at("-300"), "")
+
+    def test_incremental_opener_does_not_claim_completeness(self):
+        """Один живой опенер не смеет объявить все остальные темы несуществующими."""
+        tr.observe_topics("-300", {9100: {"title": "Новая тема"}},
+                          source="topic_opener", complete=False)
+        self.assertIsNone(tr.confirmed_topics("-300"),
+                          "инкремент не включает каталог: полного свипа не было")
+        self.assertEqual(tr.topic_title("-300", 9100), "Новая тема",
+                         "но имя уже durable")
+        tr.observe_topics("-300", {7849: {"title": "Открытые вопросы"}}, complete=True)
+        self.assertEqual(tr.confirmed_topics("-300"), frozenset({7849, 9100}),
+                         "после свипа известное ранее не пропадает")
+
+    def test_knowledge_is_append_only_and_titles_refresh(self):
+        """Тема, однажды подтверждённая, остаётся известной: старые ключи легитимны,
+        а количество тем в минус не меняется (слово владельца 21.08.2026)."""
+        tr.observe_topics("-300", {700: {"title": "Старое имя"}}, complete=True)
+        tr.observe_topics("-300", {800: {"title": "Другая"}}, complete=True)
+        self.assertEqual(tr.confirmed_topics("-300"), frozenset({700, 800}))
+        tr.observe_topics("-300", {700: {"title": "Переименована"}}, complete=False)
+        self.assertEqual(tr.topic_title("-300", 700), "Переименована")
+        self.assertEqual(int(tr.topics_of("-300")[700]["top_message"]), 700,
+                         "id темы равен id её корневого сообщения")
+
+    def test_invented_names_never_cross_into_durable_knowledge(self):
+        tr.observe_topics("-300", {24255: {"title": "topic #24255"}}, complete=True)
+        self.assertEqual(tr.topic_title("-300", 24255), "",
+                         "выдуманное «topic #N» — не имя; пустота честнее")
+        self.assertIn(24255, tr.confirmed_topics("-300"),
+                      "сама тема при этом подтверждена — без имени, но местом")
+
+    def test_junk_ids_are_skipped_one_by_one(self):
+        tr.observe_topics("-300", {"мусор": {"title": "x"}, 0: {}, -5: {},
+                                   777: {"title": "Живая"}}, complete=True)
+        self.assertEqual(tr.confirmed_topics("-300"), frozenset({777}))
+
+    def test_malformed_stored_rows_are_repaired_not_confirmed(self):
+        """Её регрессия 7: malformed-записи в файле не подтверждаются как темы и не
+        ломают следующий append — чинятся по одной."""
+        tr.DIR.mkdir(parents=True, exist_ok=True)
+        tr._path("-300").write_text(json.dumps({
+            "schema": tr.SCHEMA, "peer_id": "-300", "epochs": [],
+            "topics_seen_at": "2026-08-20T00:00:00Z",
+            "topics": {
+                "junk": "не запись",
+                "0": {},
+                "700": {"title": 123, "top_message": "мусор"},
+                "800": "тоже не запись",
+                "900": {"title": "Живая", "top_message": 901},
+            },
+        }, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(tr.confirmed_topics("-300"), frozenset({700, 900}),
+                         "мусорные ключи не подтверждаются, кривые записи — чинятся")
+        self.assertEqual(tr.topics_of("-300")[700]["top_message"], 700)
+        # следующий append не падает и не теряет живое
+        tr.observe_topics("-300", {950: {"title": "Новая"}}, complete=False)
+        after = tr.confirmed_topics("-300")
+        self.assertEqual(after, frozenset({700, 800, 900, 950}))
+        # «800» после починки — валидная тема без имени: ключ был числом, запись мусором
+        self.assertEqual(tr.topic_title("-300", 800), "")
+
+    def test_commit_failure_raises_instead_of_pretending(self):
+        """Её блокер 3: неудача durable-записи — исключение, не тихий успех."""
+        with mock.patch.object(tr, "_save", lambda *a, **k: False):
+            with self.assertRaises(OSError):
+                tr.observe_topics("-300", {700: {"title": "Тема"}}, complete=True)
+        self.assertIsNone(tr.confirmed_topics("-300"),
+                          "незаписанное знание не существует")
+
+    def test_legacy_invented_title_is_hidden_on_read(self):
+        """Старый файл мог хранить «topic #N» — читатели его не показывают именем."""
+        tr.DIR.mkdir(parents=True, exist_ok=True)
+        tr._path("-300").write_text(json.dumps({
+            "schema": tr.SCHEMA, "peer_id": "-300", "epochs": [],
+            "topics_seen_at": "2026-08-20T00:00:00Z",
+            "topics": {"24255": {"title": "topic #24255", "top_message": 24255}},
+        }, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(tr.topic_title("-300", 24255), "")
+        self.assertIn(24255, tr.confirmed_topics("-300"))
+
+    def test_two_processes_keep_the_union(self):
+        """Её регрессия 5: два процесса одновременно добавляют разные темы — на диске
+        остаётся union. Без межпроцессного замка read-modify-write теряет добавления."""
+        base = str(self.tmp)
+        script = (
+            "import os, sys, time\n"
+            "os.environ['PRAXIS_BASE'] = sys.argv[1]\n"
+            "sys.path.insert(0, sys.argv[3])\n"
+            "import telegram_routes as tr\n"
+            "start = int(sys.argv[2])\n"
+            "for i in range(40):\n"
+            "    tr.observe_topics('-777', {start + i: {'title': f'T{start + i}'}},\n"
+            "                      complete=True)\n"
+            "    time.sleep(0.001)\n"
+        )
+        here = str(Path(tr.__file__).resolve().parent)
+        procs = [
+            subprocess.Popen([sys.executable, "-c", script, base, str(offset), here])
+            for offset in (1000, 5000)
+        ]
+        for proc in procs:
+            self.assertEqual(proc.wait(timeout=120), 0)
+        got = tr.confirmed_topics("-777")
+        expected = frozenset(range(1000, 1040)) | frozenset(range(5000, 5040))
+        self.assertEqual(got, expected,
+                         f"потеряно {sorted(expected - (got or frozenset()))[:8]}…")
 
 
 if __name__ == "__main__":

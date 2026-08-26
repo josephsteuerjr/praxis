@@ -187,13 +187,21 @@ def is_allowed(chat_id: str | int, is_owner: bool = False) -> bool:
 FROZEN = MEM_DIR / "frozen_chats.json"
 
 
-def _load_frozen(mem_dir: Path | None = None) -> set[str]:
+def _load_frozen(mem_dir: Path | None = None, *, strict: bool = False) -> set[str]:
     path = Path(mem_dir) / "frozen_chats.json" if mem_dir is not None else FROZEN
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return {str(x) for x in data} if isinstance(data, list) else set()
-    except Exception:
+    except FileNotFoundError:
         return set()
+    except Exception:
+        if strict:
+            raise
+        return set()
+    if isinstance(data, list):
+        return {str(x) for x in data}
+    if strict:
+        raise ValueError("frozen_chats.json must contain a JSON list")
+    return set()
 
 
 def frozen_ids(mem_dir: Path | None = None) -> set[str]:
@@ -203,9 +211,9 @@ def frozen_ids(mem_dir: Path | None = None) -> set[str]:
         return _load_frozen(mem_dir)
 
 
-def is_frozen(chat_id: str | int) -> bool:
+def is_frozen(chat_id: str | int, *, strict: bool = False) -> bool:
     with _LOCK:
-        return str(chat_id) in _load_frozen()
+        return str(chat_id) in _load_frozen(strict=strict)
 
 
 def freeze(chat_id: str | int) -> bool:
@@ -248,6 +256,13 @@ DISCLOSURE = ("standard", "open")
 MODE_REASON_MAX = 200
 ENGAGEMENTS = ("addressed", "reflective")
 CROSS_TOPICS = ("off", "map")
+# 19.08, ЕЁ словарь переноса (личка 18.08, ответ №2 к проекту эпохи): класс — СОВЕТ
+# её суждению о границе переноса смысла из этого места, не забор. `presence_hidden` —
+# отдельный флаг «нельзя подтверждать само существование источника», намеренно не
+# смешанный с секретностью содержания. Пишется только её рукой (set_own_transfer);
+# отсутствие записи означает умолчание по типу места, и умолчание обязано быть
+# помечено умолчанием везде, где показывается.
+TRANSFER_CLASSES = ("свободно", "только источник", "учитывать", "закрыто")
 CONTEXT_HOT_MAX = 500
 CONTEXT_SUMMARY_MAX = 40_000
 BACKFILL_MAX = 5_000
@@ -262,7 +277,11 @@ HEADER_KEYS = ("mode", "mode_reason", "mode_until", "mode_set_by",
                "greeted",                  # 10.7: one-shot приветствие уже было (yes|)
                # Deep-room policy belongs to the root peer, never to a topic state key.
                "engagement", "context_hot", "context_summary_chars",
-               "cross_topics", "backfill_limit")
+               "cross_topics", "backfill_limit",
+               # Реестр переноса — durable-дом ЕЁ слов о границе переноса (19.08):
+               # без носителя её формулировка жила бы только в байтах замороженной
+               # эпохи и стиралась бы первой же пересборкой (находка панели 18.08).
+               "transfer", "transfer_set_by", "transfer_at", "presence_hidden")
 SECTIONS = ("Нормы и атмосфера", "Люди здесь", "Сводка предыстории", "Наблюдения")
 QUARANTINE_H = 24.0     # legacy value retained for old profiles/tests; no sovereign gate
 _LEGACY_BEHAVIOR_HEADERS = ("drift", "drift_seen", "drift_sig")
@@ -277,7 +296,10 @@ _HEADER_RE = re.compile(
     # и «disclosure» съело бы префикс более длинного ключа.
     r"^(mode|mode_reason|mode_until|mode_set_by|disclosure_set_by|disclosure|"
     r"membership|left_at|drift|drift_seen|drift_sig|greeted|"
-    r"engagement|context_hot|context_summary_chars|cross_topics|backfill_limit):"
+    r"engagement|context_hot|context_summary_chars|cross_topics|backfill_limit|"
+    # transfer_set_by/transfer_at раньше transfer — то же правило префикса, что у
+    # disclosure_set_by выше: короткий ключ съел бы начало длинного.
+    r"transfer_set_by|transfer_at|transfer|presence_hidden):"
     r"\s*(.*)$")
 _SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")
 
@@ -461,11 +483,15 @@ def parse_profile(raw: str) -> dict:
     }
 
 
-def profile_read(chat_id: str | int) -> dict:
+def profile_read(chat_id: str | int, *, strict: bool = False) -> dict:
     p = profile_path(chat_id)
     try:
         raw = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raw = ""
     except OSError:
+        if strict:
+            raise
         raw = ""
     d = parse_profile(raw)
     d["exists"] = bool(raw.strip())
@@ -517,10 +543,22 @@ def _profile_update_unlocked(chat_id: str | int, **changes) -> dict:
     for k, v in changes.items():
         if k not in HEADER_KEYS:
             continue
-        if k in ("mode_set_by", "disclosure_set_by"):
+        if k in ("mode_set_by", "disclosure_set_by", "transfer_set_by"):
             # Провенанс не повод падать: вызывающий, который не назвал автора, получает
             # честное «unknown», а не исключение и не подставленного Егора.
             header[k] = _normalize_set_by(v) if str(v or "").strip() else ""
+        elif k == "transfer":
+            value = str(v or "").strip().casefold()
+            if value and value not in TRANSFER_CLASSES:
+                raise ValueError("transfer must be " + " | ".join(TRANSFER_CLASSES))
+            header[k] = value
+        elif k == "presence_hidden":
+            value = str(v or "").strip().casefold()
+            value = {"1": "yes", "true": "yes", "да": "yes",
+                     "0": "no", "false": "no", "нет": "no"}.get(value, value)
+            if value not in ("", "yes", "no"):
+                raise ValueError("presence_hidden must be yes | no")
+            header[k] = value
         elif k == "disclosure":
             value = str(v or "").strip().casefold() or "standard"
             if value not in DISCLOSURE:
@@ -559,6 +597,41 @@ def _profile_update_unlocked(chat_id: str | int, **changes) -> dict:
 def profile_update(chat_id: str | int, **changes) -> dict:
     with _LOCK:
         return _profile_update_unlocked(chat_id, **changes)
+
+
+#: Машинная заглушка заголовка из `_profile_write`: «# Комната <id>» и ничего больше.
+_PLACEHOLDER_TITLE_RE = re.compile(r"^#\s*Комната\s+-?\d+\s*$")
+
+
+def remember_title(chat_id: str | int, title: str) -> bool:
+    """Записать НАСТОЯЩЕЕ имя места в заголовок профиля. -> записали ли.
+
+    ⚠ 20.08, прочитано в живом кадре: адресная книга эпохи состояла из одних цифр —
+    все двенадцать мест назывались «Комната -1003701205730». Причина механическая:
+    заголовок «# Комната <id>» это заглушка `_profile_write`, а живое имя знал только
+    рантайм (`_chat_descriptor` кэширует его в памяти процесса) и на диск не клал
+    никогда. Карта «где я живу» без имён не карта: ни она, ни человек не отличат
+    Уроборос от Абстракта, а «недавнее» рапортует «Комната -1003701205730: сказала».
+
+    Пишем ТОЛЬКО поверх заглушки. Имя, которое уже кто-то поставил — она сама, Егор
+    или прошлый вызов, — чужая правка затирать не имеет права: у места может быть имя
+    лучше телеграмного.
+    """
+    name = " ".join(str(title or "").split())
+    if not name or len(name) > 120:
+        return False
+    with _LOCK:
+        d = profile_read(chat_id)
+        if not d["exists"]:
+            return False
+        current = str(d.get("title") or "").strip()
+        if current and not _PLACEHOLDER_TITLE_RE.match(current):
+            return False
+        heading = "# " + name
+        if heading == current:
+            return False
+        _profile_write(chat_id, heading, dict(d["header"]), d["body"])
+        return True
 
 
 # --- уход: одна маска, один ответ -------------------------------------------- #
@@ -727,6 +800,51 @@ def _set_mode_unlocked(chat_id: str | int, mode: str, reason: str = "", set_by: 
     return mode
 
 
+def transfer_of(chat_id: str | int) -> dict:
+    """ЕЁ слово о границе переноса из этого места — или честная пустота.
+
+    -> {"transfer": класс|"" , "set_by": ..., "at": ..., "presence_hidden": bool}
+    Пустой transfer означает «её слова нет, действует умолчание по типу места»;
+    показывающий обязан пометить умолчание умолчанием (её №2, 18.08)."""
+    header = profile_read(chat_id)["header"]
+    return {
+        "transfer": str(header.get("transfer") or "").strip().casefold(),
+        "set_by": str(header.get("transfer_set_by") or "").strip(),
+        "at": str(header.get("transfer_at") or "").strip(),
+        "presence_hidden": str(header.get("presence_hidden") or "").strip() == "yes",
+    }
+
+
+def set_own_transfer(chat_id: str | int, transfer: str,
+                     presence_hidden: str = "", now: float | None = None) -> tuple[bool, str]:
+    """Записать ЕЁ класс переноса для места. Пишет только её рука — авторство praxis.
+
+    Пустой transfer снимает её слово (возврат к умолчанию по типу места) — снятие
+    тоже её решение и тоже датируется."""
+    value = str(transfer or "").strip().casefold()
+    if value and value not in TRANSFER_CLASSES:
+        return False, ("нет такого класса переноса: "
+                       f"«{transfer}». Словарь: " + " | ".join(TRANSFER_CLASSES))
+    t = now if now is not None else time.time()
+    changes = dict(transfer=value, transfer_set_by="praxis", transfer_at=_iso(t))
+    if str(presence_hidden or "").strip():
+        changes["presence_hidden"] = presence_hidden
+    try:
+        profile_update(chat_id, **changes)
+    except ValueError as exc:
+        return False, str(exc)
+    hidden = transfer_of(chat_id)["presence_hidden"]
+    if value:
+        note = (f"Перенос для {chat_id}: «{value}» (моё слово)"
+                + (" · существование источника не подтверждается (presence_hidden)"
+                   if hidden else ""))
+    else:
+        note = (f"Моё слово о переносе для {chat_id} снято — действует умолчание "
+                "по типу места, и оно будет помечено умолчанием")
+    log.info("room %s: transfer=%s presence_hidden=%s by praxis", chat_id, value, hidden)
+    return True, note
+
+
 def set_mode(chat_id: str | int, mode: str, reason: str = "", set_by: str = "unknown",
              ttl_h: float | None = None, now: float | None = None) -> str:
     with _LOCK:
@@ -735,13 +853,19 @@ def set_mode(chat_id: str | int, mode: str, reason: str = "", set_by: str = "unk
         )
 
 
-def effective_mode(chat_id: str | int, now: float | None = None) -> str:
+def effective_mode(chat_id: str | int, now: float | None = None, *, strict: bool = False) -> str:
     """Живой режим комнаты: профиль + legacy flag; any TTL returns directly to normal."""
     t = now if now is not None else time.time()
-    d = profile_read(chat_id)
+    d = profile_read(chat_id, strict=strict)
+    # В strict-пути sidecar валидируется ДО любого TTL-ремонта. Иначе истёкший frozen
+    # успевал переписать профиль в normal через толерантный unfreeze(), а повреждение
+    # sidecar обнаруживалось только на СЛЕДУЮЩЕМ сообщении — один вход проходил открытым.
+    strict_frozen = _load_frozen(strict=True) if strict else None
     mode = d["mode"] if d["structured"] else "normal"
-    if not d.get("legacy_mode_retired") and mode in ("normal", "observer") and is_frozen(chat_id):
-        return "frozen"  # совместимость: старый флаг читается
+    if not d.get("legacy_mode_retired") and mode in ("normal", "observer"):
+        frozen = (str(chat_id) in strict_frozen) if strict else is_frozen(chat_id)
+        if frozen:
+            return "frozen"  # совместимость: старый флаг читается
     until = d["mode_until"]
     # observer тоже держит срок. Раньше «РЕЖИМ: наблюдай 3 ч» превращался в наблюдателя
     # НАВСЕГДА: срок молча отбрасывался при записи и не читался при чтении. Её намерение

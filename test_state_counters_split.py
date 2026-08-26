@@ -221,7 +221,7 @@ class TheFrameTailMovesToo(unittest.TestCase):
         """Её условие про адрес: он не выбрасывается, а переезжает ЦЕЛИКОМ."""
         token = agent._FRAME_ADDRESS.set({
             "message_id": 97400, "kind": "mention+reply", "age_seconds": 18,
-            "note": "проход принадлежит замороженному адресу",
+            "note": "проход привязан к сохранённому адресному снимку",
         })
         try:
             block = agent.build_frame_tail(split_tail=True)
@@ -231,7 +231,7 @@ class TheFrameTailMovesToo(unittest.TestCase):
         self.assertEqual(address["message_id"], 97400)
         self.assertEqual(address["kind"], "mention+reply")
         self.assertEqual(address["age_seconds"], 18)
-        self.assertIn("замороженному адресу", address["note"])
+        self.assertIn("сохранённому адресному снимку", address["note"])
 
     def test_no_address_no_slot(self) -> None:
         """Пустота лучше ассоциации: адреса нет — слота нет, а не «адрес неизвестен»."""

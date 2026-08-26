@@ -8,6 +8,7 @@ without ever treating the hosted tool as a locally replayable function.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable
 
 
@@ -70,4 +71,42 @@ def local_function_names(tools: Iterable[object]) -> frozenset[str]:
     return frozenset(names)
 
 
-__all__ = ["ToolOfferingError", "local_function_names"]
+def offered_names(tools: Iterable[object] | None) -> tuple[str, ...]:
+    """Имена предложенных рук В ПОРЯДКЕ ВЫДАЧИ — ровно то, что видит провайдер.
+
+    Порядок сохраняется, потому что он стоит денег: у Anthropic ``cache_control``
+    breakpoint висит на ПОСЛЕДНЕМ описании (её слово 18.08 — ``end_turn`` последний),
+    у OpenAI-совместимых схемы едут ВЫШЕ system. Реордер обходится ровно как смена
+    состава, и обе беды обязаны быть видны одним и тем же прибором.
+
+    Hosted-поиск в OpenAI-форме приезжает без ``name`` (только ``type``) — он
+    называется типом в квадратных скобках. Слить две формы одной способности в одно
+    имя значило бы соврать: у них разные байты. Ни один элемент не исчезает молча —
+    невнятный описатель называется ``[?]``.
+    """
+
+    names: list[str] = []
+    for schema in tools or ():
+        if not isinstance(schema, dict):
+            names.append("[?]")
+            continue
+        name = str(schema.get("name") or "").strip()
+        if not name:
+            name = f"[{str(schema.get('type') or '?').strip() or '?'}]"
+        names.append(name)
+    return tuple(names)
+
+
+def fingerprint(tools: Iterable[object] | None) -> str:
+    """sha256 набора рук в порядке выдачи — отпечаток, по которому эпоха видит смену.
+
+    Схемы рук едут выше system и в ``prompt_cache_key`` не входят: без отпечатка
+    смена набора убивает байтовый префикс молча.
+    """
+
+    joined = "\n".join(offered_names(tools))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+__all__ = ["ToolOfferingError", "local_function_names", "offered_names",
+           "fingerprint"]

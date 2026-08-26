@@ -1,0 +1,7 @@
+# Worker-only environment. Install into /models/audio/silero/.venv, never into
+# the main Praxis interpreter: mtproto_runner must remain free of PyTorch/Silero.
+# The accepted cold A/B on 20 August 2026 used these exact versions.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.13.0+cpu
+silero==0.5.5
+scipy==1.18.0

@@ -1264,6 +1264,11 @@ async function brainApply() {
 
 /* ---------- Коммиты ---------- */
 const PROP_MARK = { proposed: "🟡 ждёт", merged: "🟢 смёржено", rejected: "🔴 отклонено", building: "⚪ строится" };
+function testMark(status, ok) {
+  if (status === "timed_out") return "⏭";
+  if (status === "not_run") return "➖";
+  return ok ? "✅" : "❌";
+}
 async function loadProps() {
   const b = $("#b-props"); b.innerHTML = `<div class="skel"></div>`;
   let d; try { d = await api("/api/panel/proposals"); } catch (e) { b.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
@@ -1272,7 +1277,7 @@ async function loadProps() {
   b.innerHTML = items.map(p => `
     <div class="list-item" data-prop="${esc(p.id)}">
       <div>${PROP_MARK[p.status] || esc(p.status)} <b>${esc(p.title || p.why || p.id)}</b></div>
-      <div class="small muted">${esc(p.diffstat || "без диффа")} · тесты: ${p.tests_ok ? "✅" : "❌"}${p.zone === "protected" ? " · ⚠️ защищённая зона" : ""}${p.reason ? " · " + esc(p.reason) : ""}</div>
+      <div class="small muted">${esc(p.diffstat || "без диффа")} · тесты: ${testMark(p.tests_status, p.tests_ok)}${p.zone === "protected" ? " · ⚠️ защищённая зона" : ""}${p.reason ? " · " + esc(p.reason) : ""}</div>
     </div>`).join("");
   b.querySelectorAll("[data-prop]").forEach(el => el.onclick = () => openProp(el.dataset.prop));
 }
@@ -1304,7 +1309,7 @@ async function openProp(pid) {
         <div class="small">${esc(p.why || "—")}</div>
         <div class="small muted" style="margin-top:6px">${esc((p.files || []).join(", ") || "—")}<br>
           ${esc(p.diffstat || "")} · зона: ${esc(p.zone || "—")}${p.decided_by ? " · решил: " + esc(p.decided_by) : ""}${p.reason ? " · " + esc(p.reason) : ""}</div>
-        <div class="small" style="margin-top:6px">${tests.ok ? "✅" : "❌"} ${esc((tests.summary || "тесты не гонялись").split("\n")[0])}</div>
+        <div class="small" style="margin-top:6px">${testMark(tests.status, tests.ok)} ${esc((tests.summary || "тесты не гонялись").split("\n")[0])}</div>
       </div>
       ${act}
       <div class="card"><h3>Дифф</h3><div class="mono small" style="overflow-x:auto">${diffHtml(p.diff)}</div></div>`;

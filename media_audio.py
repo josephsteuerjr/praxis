@@ -525,18 +525,43 @@ class FallbackTTS:
     def __init__(self, primary: TextToSpeech, fallback: TextToSpeech) -> None:
         self.primary = primary
         self.fallback = fallback
+        self.skip_warmup = bool(getattr(primary, "skip_warmup", False))
+        # This is deliberately per facade rather than process-global: only the
+        # two backends which share this fallback lifecycle need one another's
+        # exclusion.  In particular, keep a failed isolated primary stopped for
+        # the whole time its heavier in-process fallback is synthesizing.
+        self._transition_lock = threading.RLock()
 
     def synthesize(self, text: str) -> Path:
-        try:
-            return self.primary.synthesize(text)
-        except AudioBackendError:
-            return self.fallback.synthesize(text)
+        with self._transition_lock:
+            try:
+                clear = getattr(self.primary, "clear_cache", None)
+                return self.primary.synthesize(text)
+            except AudioBackendError:
+                prepare = getattr(self.primary, "prepare_fallback", None)
+                if callable(prepare):
+                    fallback_is_safe = bool(prepare())
+                else:
+                    if callable(clear):
+                        clear()
+                    fallback_ready = getattr(self.primary, "fallback_ready", None)
+                    fallback_is_safe = (
+                        not callable(fallback_ready) or bool(fallback_ready())
+                    )
+                if not fallback_is_safe:
+                    # A timed-out subprocess launch may still own a child whose
+                    # Popen handle has not returned yet.  Starting an in-process
+                    # fallback in that uncertainty would violate the memory
+                    # isolation invariant; fail closed until containment finishes.
+                    raise
+                return self.fallback.synthesize(text)
 
     def clear_cache(self) -> None:
-        for backend in (self.primary, self.fallback):
-            clear = getattr(backend, "clear_cache", None)
-            if callable(clear):
-                clear()
+        with self._transition_lock:
+            for backend in (self.primary, self.fallback):
+                clear = getattr(backend, "clear_cache", None)
+                if callable(clear):
+                    clear()
 
 
 class MediaAudio:
@@ -555,11 +580,25 @@ class MediaAudio:
             self.tts = tts
         elif self.config.tts_backend == "piper":
             self.tts = PiperTTS(self.config)
+        elif self.config.tts_backend == "silero":
+            try:
+                from silero_tts_client import SileroTTSConfig, SileroTTSClient
+            except ImportError as exc:
+                raise AudioDependencyError(
+                    "isolated Silero TTS support is unavailable"
+                ) from exc
+            self.tts = FallbackTTS(
+                SileroTTSClient(
+                    SileroTTSConfig.from_env(output_dir=self.config.output_dir)
+                ),
+                PiperTTS(self.config),
+            )
         elif self.config.tts_backend == "edge":
             self.tts = FallbackTTS(EdgeTTS(self.config), PiperTTS(self.config))
         else:
             raise AudioConfigurationError(
-                f"PRAXIS_TTS_BACKEND must be edge or piper, got {self.config.tts_backend!r}"
+                "PRAXIS_TTS_BACKEND must be edge, piper, or silero, "
+                f"got {self.config.tts_backend!r}"
             )
 
     def transcribe(self, path: str | os.PathLike[str]) -> str:
@@ -629,6 +668,9 @@ def warm(*, stt: bool = True, tts: bool = True) -> dict[str, str]:
             result["stt"] = f"{type(exc).__name__}: {exc}"
     if tts:
         try:
+            if bool(getattr(backend.tts, "skip_warmup", False)):
+                result["tts"] = "lazy-isolated"
+                return result
             loader = getattr(backend.tts, "_get_model", None)
             if callable(loader):
                 loader()

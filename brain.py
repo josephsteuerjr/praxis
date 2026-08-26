@@ -133,7 +133,7 @@ def catalog() -> dict:
         for role, rc in snap.items():
             out["roles"][role] = {k: rc.get(k) for k in
                                   ("framework", "model", "fallback_model", "on_fallback",
-                                   "last_error", "fallback_armed")}
+                                   "last_error", "fallback_armed", "reasoning_effort")}
     except Exception:
         log.debug("brain.catalog: snapshot не собрался", exc_info=True)
     for fw in ("anthropic", "openai"):
@@ -353,13 +353,46 @@ def use_account(slot: str, *, why: str = "") -> str:
 # --------------------------------------------------------------------------- #
 #  наружу: тул, пульт
 # --------------------------------------------------------------------------- #
+def set_reasoning(role: str, effort: str, *, why: str = "") -> dict:
+    """Ступень рассуждения роли — ЕЁ рычаг (19.08, её же «reasoning лучше менять
+    не наугад» из Уробороса). Пишет roles.<role>.reasoning_effort в llm.json.
+
+    Словарь — дословно словарь реле (llm.REASONING_EFFORTS); pусто — снять ступень
+    (реле вернётся к своему умолчанию: рассуждение погашено). Явный thinking кода в
+    конкретном вызове сильнее фоновой ступени — это правило живёт в llm и здесь
+    только называется. Рукопожатия нет: канал не меняется, а чужой openai-сервер
+    незнакомое поле молча игнорирует — рычаг безопасен по построению."""
+    import llm
+    role = (role or "").strip()
+    value = (effort or "").strip().lower()
+    if role not in llm.ROLES:
+        return {"ok": False, "error": f"не знаю роли «{role}»; мои: {', '.join(llm.ROLES)}"}
+    if value and value not in llm.REASONING_EFFORTS:
+        return {"ok": False, "error": "ступень из словаря реле: "
+                                      + " | ".join(llm.REASONING_EFFORTS)
+                                      + "; пусто — снять"}
+    if not (why or "").strip():
+        return {"ok": False, "error": "смена глубины без «зачем» не имеет провенанса — назови причину"}
+    cfg = llm._config()
+    prev = str(((cfg.get("roles") or {}).get(role) or {}).get("reasoning_effort") or "")
+    try:
+        llm.update_config({"roles": {role: {"reasoning_effort": value}}})
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    _journal(f"ступень рассуждения {role}: «{prev or '—'}» → «{value or '—'}» — {why.strip()[:160]}")
+    return {"ok": True, "role": role, "effort": value, "was": prev}
+
+
 def describe() -> str:
     cat = catalog()
     lines = ["Мой мозг (каталог + наблюдаемые свойства на моих задачах):"]
     for role, rc in cat["roles"].items():
         fb = f", запасная {rc.get('fallback_model')}" if rc.get("fallback_model") else ""
         state = " [на фолбэке]" if rc.get("on_fallback") else ""
-        lines.append(f"- {role}: {rc.get('framework')}/{rc.get('model')}{fb}{state}")
+        depth = (f", рассуждение {rc.get('reasoning_effort')}"
+                 if rc.get("reasoning_effort")
+                 else ", рассуждение погашено (умолчание реле)")
+        lines.append(f"- {role}: {rc.get('framework')}/{rc.get('model')}{fb}{depth}{state}")
     for fw, d in cat["frameworks"].items():
         al = d.get("allowlist") or []
         al_text = ", ".join(al) if al else "(провайдер не ответил — наблюдаю только сконфигурированные имена)"

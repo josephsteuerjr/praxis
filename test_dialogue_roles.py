@@ -35,11 +35,34 @@ class HotRecordsKeepAuthorship(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self._state = {"schema": 1, "chat_id": "42", "hot": [], "frontier": [], "dedupe": []}
         self._orig = memory_life._load_state
+        self._orig_save = memory_life._save_state
+        self._orig_adopt = memory_life.adopt_place
         memory_life._load_state = lambda chat_id, rebuild=False: self._state
+        memory_life._save_state = lambda state: None
+        memory_life.adopt_place = lambda chat_id: str(chat_id)
         self.addCleanup(lambda: setattr(memory_life, "_load_state", self._orig))
+        self.addCleanup(lambda: setattr(memory_life, "_save_state", self._orig_save))
+        self.addCleanup(lambda: setattr(memory_life, "adopt_place", self._orig_adopt))
 
     def _hot(self, **row) -> None:
         self._state["hot"].append(row)
+
+    def test_revision_collapses_hot_projection_but_keeps_one_current_line(self):
+        self._hot(line="Alice: first", actor="Alice", direction="in", ts=1.0,
+                  source_id="41", tokens=3)
+        self._hot(line="Alice [edited #41]: second", actor="Alice", direction="in",
+                  ts=2.0, source_id="41:edit:now:abc", tokens=5)
+
+        result = memory_life.note_message_revision(
+            "42", 41, "Alice: corrected", actor="Alice", ts=3.0,
+        )
+
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["collapsed"], 1)
+        rows = memory_life.hot_records("42")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["line"], "Alice: corrected")
+        self.assertEqual(rows[0]["source_id"], "41:edit:now:abc")
 
     def test_direction_is_read_not_guessed(self):
         self._hot(line="Егор: привет", actor="Егор", direction="in", ts=1.0)

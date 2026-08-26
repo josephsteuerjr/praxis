@@ -1630,7 +1630,8 @@ def _proposal_card(t: dict) -> str:
     flist = ", ".join(files[:6]) + (f" (+{len(files) - 6})" if len(files) > 6 else "")
     zone = {"protected": "⚠️ защищённая зона (рельсы/секреты)", "review": "обычная",
             "auto": "авто"}.get(t.get("zone"), t.get("zone") or "—")
-    ok = tests.get("ok")
+    status = selfdev.test_status(tests)
+    test_icon = {"passed": "✅", "timed_out": "⏭", "not_run": "➖"}.get(status, "❌")
     im = t.get("immune") or {}
     im_line = ""
     if im.get("verdict"):
@@ -1648,7 +1649,7 @@ def _proposal_card(t: dict) -> str:
             f"Зачем: {t.get('why') or '—'}\n"
             f"Файлы: {flist or '—'}\n"
             f"Дифф: {t.get('diffstat') or '—'}\n"
-            f"Тесты: {'✅ ' if ok else '❌ '}{(tests.get('summary') or '—').splitlines()[0]}"
+            f"Тесты: {test_icon} {(tests.get('summary') or '—').splitlines()[0]}"
             f"{rv_line}{ck_line}\n"
             f"Зона: {zone}{im_line}")
 
@@ -1677,11 +1678,14 @@ async def _watch_proposals(bot: Bot) -> None:
                         rv = (t.get("review") or "").strip()   # PASS 16.4: ревью видно и здесь
                         rv_note = f"\nЕё ревью: {rv[:400]}" if rv else ""
                         tests = t.get("tests") or {}
-                        test_note = (
-                            "Тесты зелёные."
-                            if tests.get("ok") else
-                            f"Тесты красные: {(tests.get('summary') or 'без сводки').splitlines()[0]}."
-                        )
+                        state = selfdev.test_status(tests)
+                        test_note = {
+                            "passed": "Тесты зелёные.",
+                            "timed_out": (f"Тесты пропущены по таймауту: "
+                                          f"{(tests.get('summary') or 'без сводки').splitlines()[0]}."),
+                            "not_run": "Тесты не запускались.",
+                        }.get(state, f"Тесты красные: "
+                                     f"{(tests.get('summary') or 'без сводки').splitlines()[0]}.")
                         override = str(t.get("override_reason") or "").strip()
                         override_note = f"\nОсознанный override: {override[:500]}" if override else ""
                         await bot.send_message(

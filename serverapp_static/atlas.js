@@ -58,8 +58,11 @@ async function boot() {
   bootLog("> probing owner authority…");
   let ok = false;
   try { await api("/api/overview"); ok = true; } catch (e) { ok = false; }
-  if (ok && TG) { await ensureSession(); }
-  else if (ok && sessionTok) { installUrl = location.origin + "/#s=" + sessionTok; }
+  // Сессия установленной иконки живёт 30 дней и раньше НЕ продлевалась: через месяц
+  // standalone-апп снова просил ссылку связи. Теперь продлеваем на каждом входе — и из
+  // Telegram (initData), и с уже связанного устройства (Bearer): /api/session принимает оба.
+  if (ok && (TG || sessionTok)) { await ensureSession(); }
+  if (ok && !installUrl && sessionTok) { installUrl = location.origin + "/#s=" + sessionTok; }
   bootLog(ok ? "> authority: OWNER ✓" : "> authority: DENIED");
   setTimeout(() => {
     $("#boot").classList.add("gone");

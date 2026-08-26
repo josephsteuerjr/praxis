@@ -651,7 +651,8 @@ def dispatch(verb: str, args: dict, send_chunk=lambda _text: None, request_id: s
     if verb == "op.stop":
         return brokerops.op_stop(values.get("operation_id", ""))
     if verb == "op.list":
-        return brokerops.op_list(values.get("root_value", ""), int(values.get("limit") or 100))
+        return brokerops.op_list(values.get("root_value", ""), int(values.get("limit") or 100),
+                                 live_only=bool(values.get("live_only", False)))
     if verb.startswith("host."):
         return hostverbs.dispatch(verb, values)
 

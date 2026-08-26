@@ -17,12 +17,14 @@ import json
 import os
 import re
 import threading
+import time
 from collections import deque
 from pathlib import Path
 from typing import Iterable
 
 
 SCHEMA_MESSAGE = "praxis.group.message.v1"
+SCHEMA_DELETION = "praxis.group.deletion.v1"
 SCHEMA_TOPIC = "praxis.group.topic.v1"
 PROJECTION_SCHEMA = "praxis.group.map.v1"
 
@@ -135,8 +137,14 @@ def _iso(value=None) -> str:
 def _line_key(row: dict) -> tuple:
     kind = str(row.get("kind") or "message")
     if kind == "topic":
+        # REPAIR2 d2e (её P1 25.08): провенанс — часть личности записи. Иначе
+        # ранняя bare-строка навсегда глотала поздний authoritative opener
+        # (dedupe по (peer, topic, title)), и посев оставался UNKNOWN при
+        # живом настоящем свидетельстве.
         return (kind, str(row.get("peer_id")), int(row.get("topic_id") or 0),
-                str(row.get("title") or ""))
+                str(row.get("title") or ""), str(row.get("origin") or ""))
+    if kind == "deletion":
+        return (kind, str(row.get("peer_id")), int(row.get("message_id") or 0))
     # Telegram keeps the message id when text is edited.  The immutable archive
     # treats each edit timestamp as a revision event while ordinary replay of the
     # original message still collapses to the empty revision.
@@ -177,6 +185,23 @@ def _valid_record(row: dict, peer: str) -> bool:
             and isinstance(row.get("timestamp"), str)
             and (row.get("message_id") is None
                  or type(row.get("message_id")) is int and row["message_id"] > 0)
+        )
+    if kind == "deletion":
+        topic = row.get("topic_id")
+        sender = row.get("sender_id")
+        reply_to = row.get("reply_to_message_id")
+        return bool(
+            row.get("schema") == SCHEMA_DELETION
+            and type(row.get("message_id")) is int and row["message_id"] > 0
+            and (topic is None or type(topic) is int and topic > 0)
+            and (sender is None or type(sender) is int and sender != 0)
+            and (reply_to is None or type(reply_to) is int and reply_to > 0)
+            and isinstance(row.get("sender_name"), str)
+            and isinstance(row.get("timestamp"), str)
+            and isinstance(row.get("deleted_at"), str)
+            and type(row.get("original_known")) is bool
+            and isinstance(row.get("topic_title"), str)
+            and type(row.get("outgoing")) is bool
         )
     if kind != "message" or row.get("schema") != SCHEMA_MESSAGE:
         return False
@@ -261,7 +286,7 @@ def observe_message(*, peer_id: str | int, topic_id: int | None,
                     sender_name: str, reply_to_message_id: int | None,
                     timestamp, text: str, topic_title: str = "",
                     media: str = "", outgoing: bool = False,
-                    edited_at=None) -> bool:
+                    edited_at=None, revision_order: int | None = None) -> bool:
     """Append one exact admitted Telegram message, idempotently."""
 
     peer = _peer(peer_id)
@@ -281,6 +306,7 @@ def observe_message(*, peer_id: str | int, topic_id: int | None,
         "reply_to_message_id": reply_to,
         "timestamp": _iso(timestamp),
         "edited_at": (_iso(edited_at) if edited_at is not None else None),
+        "revision_order": (int(revision_order) if revision_order is not None else 0),
         "text": str(text or ""),
         "media": str(media or "")[:1000],
         "outgoing": bool(outgoing),
@@ -288,8 +314,172 @@ def observe_message(*, peer_id: str | int, topic_id: int | None,
     return _append(peer, row)
 
 
+def _state_rank(row: dict, index: int) -> tuple[int, float, int, int]:
+    kind = str(row.get("kind") or "message")
+    stamp = row.get("deleted_at") if kind == "deletion" else (
+        row.get("edited_at") or row.get("timestamp")
+    )
+    try:
+        epoch = _dt.datetime.fromisoformat(
+            str(stamp or "").replace("Z", "+00:00")
+        ).timestamp()
+    except (TypeError, ValueError):
+        epoch = 0.0
+    return (2 if kind == "deletion" else 1 if row.get("edited_at") else 0,
+            epoch, int(row.get("revision_order") or 0), index)
+
+
+def _merged_unknown_deletion(deletion: dict, message: dict) -> dict:
+    merged = dict(deletion)
+    merged.update({
+        "topic_id": message.get("topic_id"),
+        "topic_title": str(message.get("topic_title") or "")[:500],
+        "sender_id": message.get("sender_id"),
+        "sender_name": str(message.get("sender_name") or "")[:500],
+        "reply_to_message_id": message.get("reply_to_message_id"),
+        "timestamp": str(message.get("timestamp") or merged.get("timestamp") or ""),
+        "outgoing": bool(message.get("outgoing")),
+        "original_known": True,
+    })
+    return merged
+
+
+def _latest_message_states(peer_id: str | int) -> dict[tuple[int | None, int], dict]:
+    """Materialise current states by Telegram revision time, not delivery order.
+
+    Older edits can arrive after newer ones when async handlers finish out of order.  The
+    immutable archive keeps both, while current context selects the greatest edit/delete
+    timestamp.  An unknown-topic deletion still follows a later backfilled original to
+    its real topic without restoring the text.
+    """
+
+    latest: dict[tuple[int | None, int], tuple[tuple[int, float, int, int], dict]] = {}
+    unknown_deletions: dict[int, tuple[tuple[int, float, int, int], dict]] = {}
+    for index, row in enumerate(iter_records(peer_id)):
+        if row.get("kind") not in ("message", "deletion"):
+            continue
+        mid = int(row.get("message_id") or 0)
+        if not mid:
+            continue
+        topic = row.get("topic_id")
+        key = (topic, mid)
+        rank = _state_rank(row, index)
+        if row.get("kind") == "deletion":
+            if topic is None and not row.get("original_known"):
+                previous_unknown = unknown_deletions.get(mid)
+                if previous_unknown is None or rank >= previous_unknown[0]:
+                    unknown_deletions[mid] = (rank, row)
+            previous = latest.get(key)
+            if previous is None or rank >= previous[0]:
+                latest[key] = (rank, row)
+            continue
+
+        unknown = unknown_deletions.get(mid)
+        if unknown is not None and unknown[0] >= rank:
+            merged = _merged_unknown_deletion(unknown[1], row)
+            latest.pop((None, mid), None)
+            previous = latest.get(key)
+            if previous is None or unknown[0] >= previous[0]:
+                latest[key] = (unknown[0], merged)
+            unknown_deletions.pop(mid, None)
+            continue
+
+        previous = latest.get(key)
+        if previous is None or rank >= previous[0]:
+            latest[key] = (rank, row)
+        if unknown is not None:
+            unknown_deletions.pop(mid, None)
+
+    # Telegram message ids are peer-global.  Route drift is proven only by a concrete edit:
+    # collapse its stale copies across root/topic projections.  Unknown deletions remain
+    # deliberately bound to one backfilled topic by the loop above; two legacy originals
+    # with the same synthetic id may still be independent fixtures/history.
+    edited_messages = {
+        mid for (_topic, mid), (_rank, row) in latest.items() if row.get("edited_at")
+    }
+    for mid in edited_messages:
+        candidates = [(key, row) for key, (_rank, row) in latest.items() if key[1] == mid]
+        if len(candidates) < 2:
+            continue
+        winner_key = max(candidates, key=lambda pair: latest[pair[0]][0])[0]
+        for key, _row in candidates:
+            if key != winner_key:
+                latest.pop(key, None)
+    return {key: row for key, (_rank, row) in latest.items()}
+
+
+def latest_message(peer_id: str | int, message_id: int) -> dict | None:
+    """Return the current archived state for one Telegram message id."""
+
+    wanted = _positive(message_id, optional=False)
+    candidates = [row for (_topic, mid), row in _latest_message_states(_peer(peer_id)).items()
+                  if mid == wanted]
+    for row in reversed(candidates):
+        if row.get("kind") == "deletion":
+            return dict(row)
+    return dict(candidates[-1]) if candidates else None
+
+
+def observe_deletion(*, peer_id: str | int, message_id: int, timestamp,
+                     topic_id: int | None = None, topic_title: str = "",
+                     sender_id: int | None = None, sender_name: str = "",
+                     reply_to_message_id: int | None = None,
+                     outgoing: bool = False) -> bool:
+    """Append one terminal deletion tombstone without erasing the audit history."""
+
+    peer = _peer(peer_id)
+    message = _positive(message_id, optional=False)
+    previous = latest_message(peer, message)
+    if previous and previous.get("kind") == "deletion":
+        return False
+    if previous:
+        topic_id = previous.get("topic_id")
+        topic_title = str(previous.get("topic_title") or topic_title or "")
+        sender_id = previous.get("sender_id")
+        sender_name = str(previous.get("sender_name") or sender_name or "")
+        reply_to_message_id = previous.get("reply_to_message_id")
+        outgoing = bool(previous.get("outgoing"))
+    original_ts = (previous.get("timestamp") if isinstance(previous, dict) else None)
+    row = {
+        "schema": SCHEMA_DELETION,
+        "kind": "deletion",
+        "peer_id": peer,
+        "topic_id": (_positive(topic_id) if topic_id is not None else None),
+        "topic_title": str(topic_title or "").strip()[:500],
+        "message_id": message,
+        "sender_id": _signed_identifier(sender_id),
+        "sender_name": str(sender_name or "").strip()[:500],
+        "reply_to_message_id": (_positive(reply_to_message_id)
+                                if reply_to_message_id is not None else None),
+        "timestamp": (_iso(original_ts) if original_ts is not None else _iso(timestamp)),
+        "deleted_at": _iso(timestamp),
+        "original_known": bool(previous and previous.get("kind") == "message"),
+        "outgoing": bool(outgoing),
+    }
+    return _append(peer, row)
+
+
+def append_deletion_retry(
+    *, peer_id: str | int, message_id: int, timestamp, attempts: int = 3,
+    delay_sec: float = 0.02,
+) -> bool:
+    """Retry a canonical deletion append after a transient filesystem failure."""
+    last: Exception | None = None
+    for attempt in range(max(1, int(attempts))):
+        try:
+            return observe_deletion(
+                peer_id=peer_id, message_id=message_id, timestamp=timestamp)
+        except Exception as exc:
+            last = exc
+            if attempt + 1 < max(1, int(attempts)):
+                time.sleep(max(0.0, float(delay_sec)))
+    assert last is not None
+    raise last
+
+
 def record_topic(peer_id: str | int, topic_id: int, title: str, *,
-                 timestamp=None, message_id: int | None = None) -> bool:
+                 timestamp=None, message_id: int | None = None,
+                 origin: str = "") -> bool:
     """Persist topic metadata discovered from an opener or Telegram's forum list."""
 
     peer = _peer(peer_id)
@@ -300,10 +490,20 @@ def record_topic(peer_id: str | int, topic_id: int, title: str, *,
         "kind": "topic",
         "peer_id": peer,
         "topic_id": topic,
-        "title": str(title or "").strip()[:500] or f"topic #{topic}",
+        # Нет настоящего title — нет имени: пустая строка честнее выдуманного
+        # «topic #N», который в её кадре выглядел как настоящее название места.
+        "title": str(title or "").strip()[:500],
         "message_id": message,
         "timestamp": _iso(timestamp),
     }
+    # 25.08: происхождение записи — авторитетный источник Telegram
+    # ("opener" — MessageActionTopicCreate; "forum_list" — GetForumTopics)
+    # против записей без провенанса: весь исторический архив писался и
+    # фантомным путём, и для ПОСЕВА реестра такие строки не авторитетны.
+    # Пустой origin в строку не пишется — форма старых записей не меняется
+    # (и дедуп-ключ темы поле не учитывает: дублей не будет).
+    if str(origin or "").strip():
+        row["origin"] = str(origin).strip()[:32]
     return _append(peer, row)
 
 
@@ -326,18 +526,21 @@ def _projection_from_rows(peer_id: str | int) -> dict:
     for row in iter_records(peer, max_records=MAX_READ_RECORDS):
         topic_raw = row.get("topic_id")
         topic = str(int(topic_raw)) if topic_raw not in (None, "") else "root"
-        stamp = str(row.get("edited_at") or row.get("timestamp") or "")
+        stamp = str(row.get("deleted_at") or row.get("edited_at")
+                    or row.get("timestamp") or "")
         topics = result["topics"]
         state = topics.setdefault(topic, {
             "topic_id": None if topic == "root" else int(topic),
-            "title": "" if topic == "root" else f"topic #{topic}",
+            # Пустой заголовок распознаётся читателями как «имени нет»; выдуманный
+            # «topic #N» они распознавали лишь точным совпадением — и он утекал.
+            "title": "",
             "message_count": 0,
             "revision_count": 0,
             "participants": [],
             "last_timestamp": "",
             "last_message_id": None,
         })
-        title = str(row.get("title") or row.get("topic_title") or "").strip()
+        title = _real_title(row.get("title") or row.get("topic_title"))
         if title:
             state["title"] = title[:500]
         if stamp >= str(state.get("last_timestamp") or ""):
@@ -585,7 +788,7 @@ def branch_containers(peer_id: str | int) -> dict:
 
 def topic_title(peer_id: str | int, topic_id: int | None) -> str:
     key = "root" if topic_id is None else str(_positive(topic_id, optional=False))
-    return str(projection(peer_id).get("topics", {}).get(key, {}).get("title") or "")
+    return _real_title(projection(peer_id).get("topics", {}).get(key, {}).get("title"))
 
 
 def _tokens(value: str) -> tuple[str, ...]:
@@ -605,18 +808,18 @@ def search(peer_id: str | int, query: str, *, topic_id: int | None = None,
     wanted_topic = _positive(topic_id) if topic_id is not None else None
     cap = max(1, min(MAX_SEARCH_RESULTS, int(limit)))
     ranked: list[tuple[float, str, dict]] = []
-    latest: dict[tuple[int | None, int], dict] = {}
+    latest = _latest_message_states(peer_id)
     phrase = str(query or "").strip().casefold().replace("ё", "е")
-    for row in iter_records(peer_id):
-        if row.get("kind") != "message":
-            continue
+    # Search is an orientation surface, not the audit log: rank the latest known
+    # revision so text explicitly corrected away cannot return as a current fact.
+    # A deletion tombstone replaces that message in the current surface and is never
+    # itself a lexical hit: the removed text stays only in the append-only audit.
+    for row in latest.values():
         current_topic = row.get("topic_id")
         if topic_id is not None and current_topic != wanted_topic:
             continue
-        latest[(current_topic, int(row.get("message_id") or 0))] = row
-    # Search is an orientation surface, not the audit log: rank the latest known
-    # revision so text explicitly corrected away cannot return as a current fact.
-    for row in latest.values():
+        if row.get("kind") == "deletion":
+            continue
         hay = (str(row.get("text") or "") + " " + str(row.get("media") or "")
                + " " + str(row.get("sender_name") or "")).casefold().replace("ё", "е")
         hits = sum(hay.count(term) for term in terms)
@@ -632,6 +835,19 @@ def search(peer_id: str | int, query: str, *, topic_id: int | None = None,
         reverse=True,
     )
     return [dict(item[2]) for item in ranked[:cap]]
+
+
+# Выдуманный заголовок «topic #N» — артефакт нашего же кода до 22.08. Новые пути его
+# не пишут, но канон append-only: старые строки несут его вечно. Читатели обязаны
+# срезать его на ЧТЕНИИ — иначе `[topic #24255 «topic #24255»]` выглядит как место с
+# настоящим названием.
+_INVENTED_TITLE_RE = re.compile(r"^topic #\d+$")
+
+
+def _real_title(value) -> str:
+    """Настоящее имя из строки канона/проекции; выдуманное «topic #N» — не имя."""
+    title = str(value or "").strip()
+    return "" if _INVENTED_TITLE_RE.fullmatch(title) else title
 
 
 def _format_message(row: dict, *, max_text: int = 1200,
@@ -650,7 +866,7 @@ def _format_message(row: dict, *, max_text: int = 1200,
     остаётся на месте: это её координаты в комнате, а не украшение.
     """
     topic = row.get("topic_id")
-    title = str(row.get("topic_title") or "").strip()
+    title = _real_title(row.get("topic_title"))
     topic_mark = ("root" if topic is None
                   else f"{thread_word} #{topic}" + (f" «{title}»" if title else ""))
     sender = str(row.get("sender_name") or "unknown")
@@ -659,6 +875,14 @@ def _format_message(row: dict, *, max_text: int = 1200,
     reply = (f" reply_to=#{row['reply_to_message_id']}"
              if row.get("reply_to_message_id") is not None else "")
     edited = f" edited={row['edited_at']}" if row.get("edited_at") else ""
+    if row.get("kind") == "deletion":
+        deleted_by = ""
+        if sender and sender != "unknown":
+            deleted_by = f"; former sender={sender}"
+        head = (f"[{topic_mark}; message #{row.get('message_id')}; "
+                f"{row.get('timestamp')}; deleted={row.get('deleted_at')}"
+                f"{deleted_by}{reply}")
+        return f"{head}] [message deleted in Telegram]"
     text = str(row.get("text") or "")
     media = str(row.get("media") or "")
     body = " ".join(part for part in (media, text) if part).strip() or "[service event]"
@@ -768,10 +992,8 @@ def context_rows(peer_id: str | int, *, topic_id: int | None, limit: int = 80,
         return (int(row.get("message_id") or 0) == wanted
                 or row.get("reply_to_message_id") == wanted)
 
-    latest: dict[int, dict] = {}
-    for row in iter_records(peer_id):
-        if row.get("kind") == "message" and _in_branch(row):
-            latest[int(row.get("message_id") or 0)] = row
+    latest = {mid: row for (_topic, mid), row in _latest_message_states(peer_id).items()
+              if _in_branch(row)}
 
     # Порядок — по времени, КОГДА СКАЗАНО, а не когда отредактировано. Иначе правка
     # недельной давности переезжает в конец ленты и вытесняет сегодняшний разговор:
@@ -895,14 +1117,15 @@ def context_rows(peer_id: str | int, *, topic_id: int | None, limit: int = 80,
                         dropped_near = rest
                     break
             picked[mid] = {
-                "self": row.get("outgoing") is True,
+                "self": (row.get("outgoing") is True and row.get("kind") == "message"),
                 "line": line,
                 # Второй рендер снимается только с ЕЁ строк и тем же потолком, каким
                 # уже отрисована первая: иначе роль показывала бы больше или меньше
                 # текста, чем расписка.
                 "role_line": (_format_message(row, max_text=width, thread_word=word,
                                               as_self=True)
-                              if row.get("outgoing") is True else line),
+                              if (row.get("outgoing") is True
+                                  and row.get("kind") == "message") else line),
             }
             used += len(line) + 1
 
@@ -965,8 +1188,8 @@ def map_text(peer_id: str | int, *, current_topic: int | None = None,
         # Заголовок у настоящей темы форума — её имя; у нашей же ветки он синтетический
         # («topic #300») и повторяет ярлык другим словом. Такой заголовок не показываем:
         # он ничего не сообщает, а модель комнаты подменяет.
-        title = str(item.get("title") or "").strip()
-        if not title or title == f"topic #{topic}":
+        title = _real_title(item.get("title"))
+        if not title:
             title = mark
         rows.append(
             f"- {mark}{current}: {title}; "
@@ -1073,10 +1296,7 @@ def message_text(peer_id: str | int, *, message_id: int) -> str:
         wanted = _positive(message_id, optional=False)
     except ValueError as exc:
         return f"message: {exc}"
-    latest = None
-    for row in iter_records(peer_id):
-        if row.get("kind") == "message" and int(row.get("message_id") or 0) == wanted:
-            latest = row
+    latest = latest_message(peer_id, wanted)
     if latest is None:
         return f"(message #{wanted} is not in this group's archive)"
     return _format_message(latest, max_text=MAX_CONTEXT_CHARS)

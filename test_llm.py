@@ -21,10 +21,11 @@ import praxis_time
 
 
 class FakeAnthResp:
-    def __init__(self, text="ок", stop="end_turn"):
+    def __init__(self, text="ок", stop="end_turn", model=None):
         self.stop_reason = stop
         self.content = [types.SimpleNamespace(type="text", text=text)]
         self.usage = types.SimpleNamespace(input_tokens=10, output_tokens=3)
+        self.model = model
 
 
 class FakeAnthropic:
@@ -197,6 +198,33 @@ class TestConfig(Base):
 
 
 class TestTranslation(Base):
+    def test_anthropic_response_preserves_provider_reported_model(self):
+        """Каталог/запрос — не свидетель фактической модели: z.ai может подменить её в 200."""
+        resp = llm._call_anthropic(
+            FakeAnthropic([FakeAnthResp("ок", model="glm-5.3")]),
+            "glm-5.2", system=None, messages=[], tools=None,
+            max_tokens=16, thinking=None)
+        self.assertEqual(resp.model, "glm-5.3")
+
+    def test_anthropic_response_without_model_falls_back_to_requested_name(self):
+        """Сервер без поля model не стирает единственное доступное имя."""
+        resp = llm._call_anthropic(
+            FakeAnthropic([FakeAnthResp("ок")]),
+            "glm-5.2", system=None, messages=[], tools=None,
+            max_tokens=16, thinking=None)
+        self.assertEqual(resp.model, "glm-5.2")
+
+    def test_anthropic_actual_model_reaches_usage_telemetry(self):
+        """Нормализация должна донести resp.model до счётчиков, а не только до ответа."""
+        self._write_cfg(voice={"framework": "anthropic", "model": "glm-5.2"})
+        llm.use_test_client(FakeAnthropic([FakeAnthResp("ок", model="glm-5.3")]))
+        with mock.patch.object(llm, "_usage_add") as usage_add, \
+                mock.patch.object(llm, "_brain_note"), \
+                mock.patch.object(llm, "_call_trace"):
+            resp = llm.chat("voice", messages=[{"role": "user", "content": "hi"}])
+        self.assertEqual(resp.model, "glm-5.3")
+        self.assertEqual(usage_add.call_args.kwargs["model"], "glm-5.3")
+
     def test_system_blocks_to_text(self):
         blocks = [{"type": "text", "text": "a", "cache_control": {"type": "ephemeral"}},
                   {"type": "text", "text": "b"}]
@@ -370,6 +398,45 @@ class TestTranslation(Base):
         self.assertEqual(blocks[0], {"type": "text", "text": "запишу"})
         self.assertEqual(blocks[1]["type"], "tool_use")
         self.assertEqual(blocks[1]["input"], {"person": "Вика", "fact": "коллега"})
+
+    def test_blocks_from_openai_marks_unparsable_arguments(self):
+        """Обрыв длинных `arguments` больше не выглядит как вызов без аргументов.
+
+        Здесь стояло `args = {}` — и для руки, у которой все параметры опциональные
+        (`check_email`, `my_agenda`, `recent_turns`), это было не ошибкой, а ДРУГИМ
+        действием с дефолтами: намерение модели исчезало без следа.
+        """
+        tc = types.SimpleNamespace(id="c1", function=types.SimpleNamespace(
+            name="say", arguments='{"text": "привет'))
+        blocks = llm.blocks_from_openai(
+            types.SimpleNamespace(content=None, tool_calls=[tc]))
+        self.assertEqual(blocks[0]["input"],
+                         {llm.MALFORMED_JSON_KEY: '{"text": "привет'})
+        self.assertTrue(llm.is_malformed_json_input(blocks[0]["input"]))
+        self.assertEqual(blocks[0]["name"], "say", "имя руки обязано выжить")
+
+    def test_the_mark_keeps_only_a_diagnostic_head_of_the_raw_arguments(self):
+        long_tc = types.SimpleNamespace(id="c2", function=types.SimpleNamespace(
+            name="say", arguments='{"text": "' + "я" * 5000))
+        blocks = llm.blocks_from_openai(
+            types.SimpleNamespace(content=None, tool_calls=[long_tc]))
+        self.assertEqual(len(blocks[0]["input"][llm.MALFORMED_JSON_KEY]),
+                         llm.MALFORMED_JSON_KEEP)
+
+    def test_empty_arguments_stay_an_honest_empty_call(self):
+        """Пустая строка аргументов — это «без аргументов», а не битый JSON."""
+        calls = [types.SimpleNamespace(id=f"c{i}", function=types.SimpleNamespace(
+            name="my_agenda", arguments=raw))
+            for i, raw in enumerate(("", "   ", "{}"))]
+        calls.append(types.SimpleNamespace(id="c9", function=types.SimpleNamespace(
+            name="my_agenda", arguments="[1, 2]")))
+        blocks = llm.blocks_from_openai(
+            types.SimpleNamespace(content=None, tool_calls=calls))
+        for block in blocks[:3]:
+            self.assertEqual(block["input"], {})
+            self.assertFalse(llm.is_malformed_json_input(block["input"]))
+        self.assertEqual(blocks[3]["input"], {llm.MALFORMED_JSON_KEY: "[1, 2]"},
+                         "валидный JSON, но не объект — тоже непрочитанное намерение")
 
     def test_openai_call_maps_stop_reason_and_system(self):
         self._write_cfg(voice={"framework": "openai", "model": "gpt-x"})
@@ -702,14 +769,31 @@ class TestSnapshotPing(Base):
 
     def test_ping_ok_and_error(self):
         self._write_cfg()
-        llm.use_test_client(FakeAnthropic([FakeAnthResp("pong")]))
+        fake = FakeAnthropic([FakeAnthResp("pong")])
+        llm.use_test_client(fake)
         ok, err = llm.ping("voice")
         self.assertTrue(ok)
         self.assertEqual(err, "")
+        self.assertEqual(fake.calls[0]["max_tokens"], 1)
+        self.assertNotIn("thinking", fake.calls[0],
+                         "ordinary Anthropic ping must preserve the cheap legacy request")
         llm.use_test_client(FakeAnthropic(error=RateLimitError("429 dead")))
         ok, err = llm.ping("voice")
         self.assertFalse(ok)
         self.assertIn("RateLimitError", err)
+
+    def test_ping_glm_53_enables_required_thinking(self):
+        self._write_cfg(voice={"framework": "anthropic", "model": "glm-5.3"})
+        fake = FakeAnthropic([FakeAnthResp("pong")])
+        llm.use_test_client(fake)
+
+        ok, err = llm.ping("voice")
+
+        self.assertTrue(ok)
+        self.assertEqual(err, "")
+        self.assertEqual(fake.calls[0]["thinking"], {"type": "enabled", "budget_tokens": 1024})
+        self.assertEqual(fake.calls[0]["max_tokens"], 2048,
+                         "Anthropic thinking needs room for its budget plus the visible answer")
 
     def test_state_line_separates_configured_from_observed(self):
         """⚠ РАНЬШЕ ЗДЕСЬ ПРОВЕРЯЛОСЬ ТОЛЬКО НАСТРОЕННОЕ, И ЭТОГО ХВАТАЛО, ЧТОБЫ КАДР
@@ -863,6 +947,100 @@ class TestModelRotation(Base):
              mock.patch("urllib.request.urlopen") as opened:
             self.assertEqual(llm._available_models("anthropic"), [])
         self.assertFalse(opened.called, "под стендом каталог моделей не ходит наружу")
+
+
+
+class TestGlmEffortDialect(Base):
+    """glm-*: ступень роли обязана доезжать до запроса z.ai-диалектом.
+
+    Живой замер 24.08 после переключения голоса на glm-5.3: обычные вызовы шли
+    БЕЗ thinking-поля, глубину выбирал сервер (дефолт max) — 10-15с на ответ.
+    Ступень роли на anthropic-пути «принималась-и-игнорировалась», и владелец
+    не мог сделать reasoning low ни конфигом, ни рукой. Проекция словаря реле
+    в словарь glm (low/high/max) обязана: ехать в запрос thinking+extra_body,
+    уступать явному thinking-бюджету, не трогать не-glm модели и работать на
+    фолбэк-плече.
+    """
+
+    def _glm_cfg(self, effort="low"):
+        cfg = llm._from_env()
+        cfg["frameworks"]["anthropic"]["api_key"] = "zai-key"
+        cfg["roles"]["voice"].update({"framework": "anthropic", "model": "glm-5.3",
+                                       "reasoning_effort": effort})
+        llm.save_config(cfg)
+        return llm._config()
+
+    def test_role_effort_projects_into_request(self):
+        self._glm_cfg("low")
+        fake = FakeAnthropic([FakeAnthResp("ок")])
+        llm.use_test_client(fake)
+        llm.chat("voice", messages=[{"role": "user", "content": "привет"}])
+        kw = fake.calls[0]
+        self.assertEqual(kw.get("thinking"), {"type": "enabled"},
+                         "без thinking z.ai думает на серверном max")
+        self.assertEqual(kw.get("extra_body"), {"reasoning_effort": "low"})
+
+    def test_relay_steps_project_to_glm_dialect(self):
+        for step, glm_step in (("xhigh", "max"), ("high", "high"),
+                               ("minimal", "low")):
+            self._glm_cfg(step)
+            fake = FakeAnthropic([FakeAnthResp("ок")])
+            llm.use_test_client(fake)
+            llm.chat("voice", messages=[{"role": "user", "content": "привет"}])
+            self.assertEqual(
+                fake.calls[0].get("extra_body"), {"reasoning_effort": glm_step},
+                f"ступень реле {step!r} обязана проецироваться в {glm_step!r}")
+
+    def test_explicit_budget_beats_effort_step(self):
+        self._glm_cfg("low")
+        fake = FakeAnthropic([FakeAnthResp("ок")])
+        llm.use_test_client(fake)
+        llm.chat("voice", messages=[{"role": "user", "content": "подумай"}],
+                 thinking=2048)
+        kw = fake.calls[0]
+        self.assertEqual(kw.get("thinking"),
+                         {"type": "enabled", "budget_tokens": 2048})
+        self.assertNotIn("extra_body", kw,
+                         "две ручки глубины в одном запросе — неоднозначность")
+
+    def test_non_glm_model_keeps_effort_ignored(self):
+        cfg = llm._from_env()
+        cfg["frameworks"]["anthropic"]["api_key"] = "zai-key"
+        cfg["roles"]["voice"].update({"framework": "anthropic",
+                                       "model": "claude-4-sonnet",
+                                       "reasoning_effort": "low"})
+        llm.save_config(cfg)
+        fake = FakeAnthropic([FakeAnthResp("ок")])
+        llm.use_test_client(fake)
+        llm.chat("voice", messages=[{"role": "user", "content": "привет"}])
+        kw = fake.calls[0]
+        self.assertNotIn("thinking", kw, "не-glm модели — байт-в-байт как раньше")
+        self.assertNotIn("extra_body", kw)
+
+    def test_fallback_leg_to_glm_carries_effort_step(self):
+        cfg = llm._from_env()
+        cfg["frameworks"]["anthropic"]["api_key"] = "zai-key"
+        cfg["frameworks"]["openai"]["api_key"] = "sk-test"
+        cfg["roles"]["voice"].update({"framework": "openai", "model": "gpt-x",
+                                       "reasoning_effort": "low",
+                                       "fallback_framework": "anthropic",
+                                       "fallback_model": "glm-5.3"})
+        llm.save_config(cfg)
+        broken = FakeOpenAI()
+
+        def _boom(**kw):
+            raise RateLimitError("429 dead")
+
+        broken.create = _boom
+        llm.use_test_client(broken, "openai")
+        fake = FakeAnthropic([FakeAnthResp("ок")])
+        llm.use_test_client(fake)
+        resp = llm.chat("voice", messages=[{"role": "user", "content": "привет"}])
+        self.assertEqual(resp.framework, "anthropic")
+        kw = fake.calls[0]
+        self.assertEqual(kw.get("thinking"), {"type": "enabled"},
+                         "glm-5.3 как фолбэк мёртв без thinking на фолбэк-плече")
+        self.assertEqual(kw.get("extra_body"), {"reasoning_effort": "low"})
 
 
 if __name__ == "__main__":

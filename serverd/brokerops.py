@@ -1069,8 +1069,12 @@ def op_stop(operation_id: str) -> dict:
             "status_before": str(before.get("status") or "unknown")}
 
 
-def op_list(root_value: str = "", limit: int = 100) -> dict:
+def op_list(root_value: str = "", limit: int = 100, live_only: bool = False) -> dict:
     """Список операций — с признанием всего, чего в нём не хватает.
+
+    `live_only` — точный ответ на узкий вопрос о текущей живости: terminal history
+    не конкурирует с running-операциями за кап строк. Это не общий журнал операций,
+    поэтому обычный list сохраняет хронологический срез и его честную усечённость.
 
     ⚠ 27.07. Три молчания разом. (1) `except OSError: rows = []` — нерезолвящийся корень
     отвечал «операций нет» вместо «я не понял, про какой корень спрашиваешь». (2) Срез
@@ -1108,6 +1112,11 @@ def op_list(root_value: str = "", limit: int = 100) -> dict:
                 unknown_root += 1
                 kept.append({**row, "root_unknown": True})
         rows = kept
+    if live_only:
+        # Finish не просит историю: ему нужен ровно факт, есть ли сейчас что-то живое.
+        # Отбор делается ДО капа, иначе terminal churn снова способен вытеснить старую
+        # running-операцию и превратить «не знаю» в вечный ложный блок.
+        rows = [row for row in rows if str(row.get("status") or "") in LIVE_STATUSES]
     cap = max(1, min(int(limit or 100), OPERATION_LIST_CAP))
     shown = rows[:cap]
     answer = {"ok": True, "operations": shown, "total": total, "matched": len(rows),

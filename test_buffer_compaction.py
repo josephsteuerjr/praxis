@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from collections import deque
+from collections import defaultdict, deque
 from unittest import mock
 
 import mtproto_runner as runner
@@ -82,6 +82,34 @@ class CompactTrimsTheRingTests(unittest.TestCase):
         self._ring(ring)
         self._compact({"folded": 4, "compact_id": "cmp-w", "hot": 6, "reason": "тест"})
         self.assertEqual(list(runner._buf[self.CHAT]), ring[4:])
+
+    def test_buffer_ids_survive_deque_rollover_and_still_target_edits(self):
+        buffers = defaultdict(lambda: deque(maxlen=3))
+        source_ids = defaultdict(lambda: deque(maxlen=3))
+        with (
+            mock.patch.object(runner, "_buf", buffers),
+            mock.patch.object(runner, "_buffer_message_ids", source_ids),
+            mock.patch.object(runner, "_buf_dirty", set()),
+            mock.patch.object(runner, "_under_tests", return_value=True),
+            mock.patch.object(runner.bufstore, "meta_update"),
+        ):
+            for mid in range(1, 5):
+                runner._buf_push(self.CHAT, f"message {mid}", source_id=mid,
+                                 record_life=False)
+            self.assertEqual(list(buffers[self.CHAT]), [
+                "message 2", "message 3", "message 4",
+            ])
+            self.assertEqual(list(source_ids[self.CHAT]), ["2", "3", "4"])
+
+            runner._replace_buffer_message(
+                self.CHAT, 2, "message 2 corrected", source_id="2:edit:current",
+            )
+            self.assertEqual(list(buffers[self.CHAT]), [
+                "message 3", "message 4", "message 2 corrected",
+            ])
+            self.assertEqual(list(source_ids[self.CHAT]), [
+                "3", "4", "2:edit:current",
+            ])
 
     def test_nothing_folded_leaves_the_ring_alone(self):
         ring = [f"строка {i}" for i in range(5)]

@@ -207,5 +207,107 @@ class TerminalToolLoopTests(unittest.TestCase):
         self.assertEqual(mime, "image/png")
 
 
+class MalformedArgumentsBecomeARepairTurn(unittest.TestCase):
+    """Битый JSON аргументов — оборот починки, а не тихое другое действие.
+
+    ⚠ Прод живёт на реле, где обрыв длинных `arguments` реален. `blocks_from_openai`
+    подменял непрочитанные аргументы пустым словарём, и рука со всеми опциональными
+    параметрами (`check_email`, `my_agenda`, `recent_turns`) исполнялась с дефолтами:
+    вместо ошибки — ДРУГОЕ действие, а намерение модели терялось без следа.
+    """
+
+    def _torn_call_blocks(self, name="check_email", raw='{"unread_only": tru'):
+        """Ровно то, что приходит с реле: обрыв строки `arguments` в tool_call.
+
+        Блок строится ТЕМ ЖЕ парсером, что и в бою, — иначе тест проверял бы
+        собственную выдумку, а не путь модели.
+        """
+        call = types.SimpleNamespace(id="t1", function=types.SimpleNamespace(
+            name=name, arguments=raw))
+        blocks = agent.llm.blocks_from_openai(
+            types.SimpleNamespace(content=None, tool_calls=[call]))
+        self.assertNotEqual(blocks[0]["input"], {},
+                            "битые аргументы снова стали вызовом без аргументов")
+        return blocks
+
+    def test_the_hand_is_not_called_and_the_turn_stays_alive(self):
+        calls, steps = [], []
+
+        def check_email(unread_only=False, limit=20):
+            calls.append({"unread_only": unread_only, "limit": limit})
+            return "писем нет"
+
+        def fake_chat(*_args, **kwargs):
+            steps.append(len(kwargs.get("messages") or ()))
+            if len(steps) == 1:
+                return types.SimpleNamespace(stop_reason="tool_use", text="",
+                                             blocks=self._torn_call_blocks())
+            if len(steps) == 2:
+                return types.SimpleNamespace(stop_reason="tool_use", text="", blocks=[{
+                    "type": "tool_use", "id": "t2", "name": "check_email",
+                    "input": {"unread_only": True}}])
+            return types.SimpleNamespace(stop_reason="end_turn", text="готово", blocks=[])
+
+        trace, messages = [], [{"role": "user", "content": "го"}]
+        with mock.patch.object(agent.llm, "chat", side_effect=fake_chat), \
+                mock.patch.dict(agent.TOOL_IMPL, {"check_email": check_email}):
+            out = agent._terminal_tool_loop(
+                system="test", messages=messages, tools=[{"name": "check_email"}],
+                max_iters=None, tool_trace=trace,
+            )
+        self.assertEqual(out, "готово")
+        self.assertEqual(len(steps), 3, "ход обязан продолжиться, а не закрыться")
+        self.assertEqual(calls, [{"unread_only": True, "limit": 20}],
+                         "рука звалась только со прочитанными аргументами")
+        results = [message for message in messages
+                   if message["role"] == "user" and isinstance(message["content"], list)]
+        first = results[0]["content"][0]
+        self.assertEqual(first["tool_use_id"], "t1")
+        self.assertIn("не распарсились как JSON", first["content"])
+        self.assertIn("НЕ выполнен", first["content"])
+        self.assertNotIn("__malformed_json__", first["content"],
+                         "внутренний ключ пометки ей в ленту не едет")
+        self.assertIn("аргументы не распарсились как JSON", "\n".join(trace))
+
+    def test_the_pair_of_call_and_result_is_never_broken(self):
+        """Блок вызова остаётся в ленте: tool_use без tool_result провайдер не примет."""
+        steps = []
+
+        def fake_chat(*_args, **_kwargs):
+            steps.append(1)
+            if len(steps) == 1:
+                return types.SimpleNamespace(stop_reason="tool_use", text="",
+                                             blocks=self._torn_call_blocks())
+            return types.SimpleNamespace(stop_reason="end_turn", text="ладно", blocks=[])
+
+        messages = [{"role": "user", "content": "го"}]
+        with mock.patch.object(agent.llm, "chat", side_effect=fake_chat), \
+                mock.patch.dict(agent.TOOL_IMPL, {"check_email": lambda **_: "писем нет"}):
+            agent._terminal_tool_loop(system="test", messages=messages,
+                                      tools=[{"name": "check_email"}], max_iters=None)
+        assistant = next(m for m in messages if m["role"] == "assistant")
+        ids = [b["id"] for b in assistant["content"] if b.get("type") == "tool_use"]
+        answered = [b["tool_use_id"] for m in messages
+                    if m["role"] == "user" and isinstance(m["content"], list)
+                    for b in m["content"] if b.get("type") == "tool_result"]
+        self.assertEqual(ids, answered)
+
+    def test_the_execution_funnel_never_expands_the_mark_into_kwargs(self):
+        """Возобновлённый вызов идёт той же воронкой: `**пометка` уронил бы руку TypeError."""
+        impl = mock.Mock(side_effect=AssertionError("рука не должна зваться"))
+        out = agent._call_tool_with_ceiling(
+            "check_email", impl, self._torn_call_blocks()[0]["input"])
+        self.assertEqual(impl.call_count, 0)
+        self.assertIn("check_email", out)
+        self.assertIn("не распарсились как JSON", out)
+        self.assertIn("Снаружи ничего не изменилось", out)
+
+    def test_read_arguments_still_reach_the_hand_untouched(self):
+        seen = {}
+        agent._call_tool_with_ceiling(
+            "recall", lambda **kw: seen.update(kw), {"q": "х", "n": 3})
+        self.assertEqual(seen, {"q": "х", "n": 3})
+
+
 if __name__ == "__main__":
     unittest.main()

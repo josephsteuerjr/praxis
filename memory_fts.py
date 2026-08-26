@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import bisect
 import contextlib
+import datetime as _dt
 import hashlib
 import json
 import os
@@ -24,7 +25,7 @@ from typing import Any, Iterable
 
 import memory_provenance
 
-SCHEMA_VERSION = "praxis.memory.fts.v7"
+SCHEMA_VERSION = "praxis.memory.fts.v8"
 _LOCK = threading.RLock()
 _WORD_RE = re.compile(r"[\wа-яё]+", re.I)
 _RU_ENDINGS = (
@@ -179,7 +180,54 @@ def _rel_under(path: Path, base: Path) -> str:
     return path.relative_to(base).as_posix()
 
 
-def _generated_markdown(path: Path, memory_dir: Path, rel: str = "") -> bool:
+def _compact_markdown_current(path: Path, memory_dir: Path,
+                              evidence: dict[str, Any] | None = None) -> bool:
+    """Whether a compact still describes current Telegram message revisions."""
+
+    try:
+        first = path.read_text(encoding="utf-8", errors="replace").splitlines()[0]
+        match = re.fullmatch(r"<!--\s*praxis-compact:\s*(\{.*\})\s*-->", first.strip())
+        meta = json.loads(match.group(1)) if match else {}
+    except (OSError, IndexError, TypeError, ValueError):
+        return False
+    if not isinstance(meta, dict):
+        return False
+    evidence = evidence or memory_provenance.claim_evidence_index(memory_dir)
+    compact_id = str(meta.get("id") or "")
+    if compact_id in (evidence.get("compacts") or {}):
+        return memory_provenance.compact_evidence(compact_id, evidence).get("valid") is True
+    # Compatibility for old/direct writer fixtures that predate strict compact timing:
+    # their source events are still enough to decide currentness without admitting a
+    # stale Telegram revision.
+    sources = [str(value) for value in (meta.get("source_event_ids") or []) if str(value)]
+    if sources:
+        current = set(evidence.get("current_event_ids") or ())
+        return all(value in current for value in sources)
+    return not bool(meta.get("source_compact_ids"))
+
+
+def _episode_markdown_current(path: Path, memory_dir: Path,
+                              evidence: dict[str, Any] | None = None) -> bool:
+    """Whether a model-derived episode cites only current Telegram revisions."""
+
+    try:
+        first = path.read_text(encoding="utf-8", errors="replace").splitlines()[0]
+        match = re.fullmatch(r"<!--\s*praxis-episode:\s*(\{.*\})\s*-->", first.strip())
+        meta = json.loads(match.group(1)) if match else {}
+    except (OSError, IndexError, TypeError, ValueError):
+        return False
+    if not isinstance(meta, dict):
+        return False
+    evidence = evidence or memory_provenance.claim_evidence_index(memory_dir)
+    sources = [str(value) for value in (meta.get("source_event_ids") or []) if str(value)]
+    if not sources:
+        return False
+    current = set(evidence.get("current_event_ids") or ())
+    return all(value in current for value in sources)
+
+
+def _generated_markdown(path: Path, memory_dir: Path, rel: str = "",
+                        evidence: dict[str, Any] | None = None) -> bool:
     # `rel` необязателен намеренно: у функции есть вызывающие в стенде, которые знают её
     # по двум аргументам, и при пустом `rel` поведение прежнее байт в байт.
     rel = rel or _rel_under(path, memory_dir)
@@ -195,6 +243,12 @@ def _generated_markdown(path: Path, memory_dir: Path, rel: str = "") -> bool:
     # deterministic, grep-friendly projection and must not feed recall twice.
     if rel == "desires/CURRENT.md":
         return True
+    # Compacts are model-derived projections of immutable life events.  Keep only those
+    # whose cited Telegram revisions are still current; episode views remain audit-only.
+    if rel.startswith("life/compacts/"):
+        return not _compact_markdown_current(path, memory_dir, evidence)
+    if rel.startswith("life/episodes/"):
+        return not _episode_markdown_current(path, memory_dir, evidence)
     # These are deterministic projections of computer JSONL/inventory, not new facts.
     if rel == "computer/MAP.md" or rel.startswith("computer/devices/") \
             or rel.startswith("computer/tasks/"):
@@ -345,9 +399,14 @@ def iter_sources(*, base: Path, memory_dir: Path, skills_dir: Path | None = None
     drop_run_events = drop_run_events_enabled()
     rows: list[Source] = []
     evidence = memory_provenance.claim_evidence_index(memory_dir)
+    current_life_event_ids = frozenset(evidence.get("current_event_ids") or ())
+    current_life_event_digest = hashlib.sha256(
+        "\n".join(sorted(current_life_event_ids)).encode("utf-8")
+    ).hexdigest()[:20]
     automatic_life_event_ids = frozenset(
         event_id for event_id, row in (evidence.get("events") or {}).items()
-        if memory_provenance.event_automatic_recall_allowed(row)
+        if event_id in current_life_event_ids
+        and memory_provenance.event_automatic_recall_allowed(row)
     )
     if memory_dir.exists():
         for path in _memory_files(memory_dir, "*.md", include_runs=include_runs):
@@ -371,7 +430,7 @@ def iter_sources(*, base: Path, memory_dir: Path, skills_dir: Path | None = None
                 continue
             if any(part.startswith(".") for part in rel.split("/")):
                 continue
-            if _generated_markdown(path, memory_dir, rel):
+            if _generated_markdown(path, memory_dir, rel, evidence):
                 continue
             base_rel = _rel(path, base)
             if re.fullmatch(r"life/claims/[^/]+\.md", rel):
@@ -402,8 +461,11 @@ def iter_sources(*, base: Path, memory_dir: Path, skills_dir: Path | None = None
             selected = _selected_jsonl(path, memory_dir, rel_jsonl)
             if selected:
                 kind, visibility = selected
-                meta = ({"automatic_event_ids": automatic_life_event_ids}
-                        if kind == "life_event" else None)
+                meta = ({
+                    "automatic_event_ids": automatic_life_event_ids,
+                    "current_event_ids": current_life_event_ids,
+                    "current_event_digest": current_life_event_digest,
+                } if kind == "life_event" else None)
                 rows.append(Source(path, _rel(path, base), kind, visibility, meta))
         # Inventory history is canonical JSON rather than JSONL.  Index only the
         # newest timestamped snapshot per device: CURRENT.{json,md} are derived
@@ -616,6 +678,104 @@ def _stream_windows(rows: list[dict]) -> list[dict]:
     return out
 
 
+def _group_row_rank(item: dict, index: int) -> tuple[int, float, int]:
+    kind = str(item.get("kind") or "message")
+    stamp = item.get("deleted_at") if kind == "deletion" else (
+        item.get("edited_at") or item.get("timestamp")
+    )
+    try:
+        epoch = _dt.datetime.fromisoformat(
+            str(stamp or "").replace("Z", "+00:00")
+        ).timestamp()
+    except (TypeError, ValueError):
+        epoch = 0.0
+    return (2 if kind == "deletion" else 1 if item.get("edited_at") else 0,
+            epoch, index)
+
+
+def _current_group_rows(path: Path) -> tuple[list[dict], int]:
+    """Materialise current Telegram message states from an append-only group archive.
+
+    Edits and deletion tombstones remain in the canonical JSONL for audit, but the
+    rebuildable recall index must not surface text that is no longer current in the
+    room.  Revision timestamps, not async append order, select the visible state.
+    """
+
+    latest: dict[tuple[int | None, int], tuple[tuple[int, float, int], dict]] = {}
+    unknown_deletions: dict[int, tuple[tuple[int, float, int], dict]] = {}
+    corrupt = 0
+    try:
+        stream = path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return [], corrupt
+    with stream:
+        for index, line in enumerate(stream):
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except (TypeError, ValueError):
+                corrupt += 1
+                continue
+            if not isinstance(item, dict):
+                corrupt += 1
+                continue
+            kind = str(item.get("kind") or "")
+            if kind not in {"message", "deletion"}:
+                continue
+            try:
+                mid = int(item.get("message_id") or 0)
+            except (TypeError, ValueError):
+                corrupt += 1
+                continue
+            if mid <= 0:
+                corrupt += 1
+                continue
+            topic_raw = item.get("topic_id")
+            try:
+                topic = None if topic_raw in (None, "") else int(topic_raw)
+            except (TypeError, ValueError):
+                corrupt += 1
+                continue
+            key = (topic, mid)
+            rank = _group_row_rank(item, index)
+            if kind == "deletion":
+                if topic is None and not item.get("original_known"):
+                    previous_unknown = unknown_deletions.get(mid)
+                    if previous_unknown is None or rank >= previous_unknown[0]:
+                        unknown_deletions[mid] = (rank, item)
+                previous = latest.get(key)
+                if previous is None or rank >= previous[0]:
+                    latest[key] = (rank, item)
+                continue
+            unknown = unknown_deletions.get(mid)
+            if unknown is not None and unknown[0] >= rank:
+                merged = dict(unknown[1])
+                merged.update({
+                    "topic_id": topic,
+                    "topic_title": str(item.get("topic_title") or "")[:500],
+                    "sender_id": item.get("sender_id"),
+                    "sender_name": str(item.get("sender_name") or "")[:500],
+                    "reply_to_message_id": item.get("reply_to_message_id"),
+                    "timestamp": str(item.get("timestamp")
+                                     or merged.get("timestamp") or ""),
+                    "outgoing": bool(item.get("outgoing")),
+                    "original_known": True,
+                })
+                latest.pop((None, mid), None)
+                previous = latest.get(key)
+                if previous is None or unknown[0] >= previous[0]:
+                    latest[key] = (unknown[0], merged)
+                unknown_deletions.pop(mid, None)
+                continue
+            previous = latest.get(key)
+            if previous is None or rank >= previous[0]:
+                latest[key] = (rank, item)
+            if unknown is not None:
+                unknown_deletions.pop(mid, None)
+    return [item for _rank, item in latest.values()], corrupt
+
+
 def _source_chunks(source: Source) -> tuple[list[dict], int]:
     rows: list[dict] = []
     corrupt = 0
@@ -735,12 +895,47 @@ def _source_chunks(source: Source) -> tuple[list[dict], int]:
                 add(f"{group}:{index}", f"{label} {value}", (value,))
         return rows, corrupt
 
-    try:
-        stream = source.path.open("r", encoding="utf-8", errors="replace")
-    except OSError:
-        return rows, corrupt
+    if source.kind == "group_message":
+        current, broken = _current_group_rows(source.path)
+        corrupt += broken
+        stream_ctx = contextlib.nullcontext(
+            [json.dumps(item, ensure_ascii=False, sort_keys=True) + "\n"
+             for item in current]
+        )
+    elif source.kind == "life_event":
+        try:
+            raw_lines = source.path.read_text(
+                encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return rows, corrupt
+        parsed: list[dict] = []
+        for raw in raw_lines:
+            if not raw.strip():
+                continue
+            try:
+                item = json.loads(raw)
+            except (TypeError, ValueError):
+                corrupt += 1
+                continue
+            if not isinstance(item, dict):
+                corrupt += 1
+                continue
+            parsed.append(item)
+        current_ids = set((source.meta or {}).get("current_event_ids") or ())
+        stream_ctx = contextlib.nullcontext(
+            [json.dumps(item, ensure_ascii=False, sort_keys=True) + "\n"
+             for item in parsed
+             if (item.get("kind") != "conversation_message"
+                 or memory_provenance.telegram_message_key(item) is None
+                 or str(item.get("id") or "") in current_ids)]
+        )
+    else:
+        try:
+            stream_ctx = source.path.open("r", encoding="utf-8", errors="replace")
+        except OSError:
+            return rows, corrupt
     seen_keys: set[str] = set()
-    with stream:
+    with stream_ctx as stream:
         for line_no, line in enumerate(stream, 1):
             if not line.strip():
                 continue
@@ -1335,6 +1530,9 @@ def _automatic_canonical_chunks(*, base: Path, memory_dir: Path,
             continue
         seen.add(source.rel)
         snapshot = _source_snapshot(source)
+        if source.kind == "life_event":
+            current_digest = str((source.meta or {}).get("current_event_digest") or "")
+            snapshot = f"{snapshot}\x00current:{current_digest}"
         cached = _CANON_CACHE.get(source.rel)
         if cached is not None and snapshot and cached[0] == snapshot:
             source_rows = cached[1]

@@ -1,6 +1,6 @@
 /* ATLAS observatory service worker — offline shell, network-first for data. */
-const SHELL = "atlas-shell-v5";
-const ASSETS = ["/", "/s/atlas.css?v=5", "/s/atlas.js?v=5", "/manifest.webmanifest",
+const SHELL = "atlas-shell-v6";
+const ASSETS = ["/", "/s/atlas.css?v=6", "/s/atlas.js?v=6", "/manifest.webmanifest",
   "/s/icon-192.png", "/s/icon-512.png"];
 
 self.addEventListener("install", (e) => {

@@ -50,6 +50,7 @@ import computer_memory
 import context_envelope
 import desires
 import frame_layout
+import frame_shadow
 import frame_trace
 import graph
 import group_context
@@ -1702,15 +1703,15 @@ def _summary_budget(chat_id: str | int) -> int:
 
 
 def read_summary(chat_id: str | int) -> str:
-    """Логарифмический PASS 19 frontier; прежняя плоская сводка — fallback миграции."""
+    """PASS 19 frontier; плоская сводка — только fallback холодной миграции."""
     try:
+        modern = memory_life.has_life_memory(chat_id)
         current = memory_life.context_summary(chat_id, max_chars=_summary_budget(chat_id))
-        if current:
+        if current or modern:
             return current
     except Exception:
         log.debug("life frontier не прочитался [%s]", chat_id, exc_info=True)
-    # Migration fallback: this is Praxis's own running recap of this exact dialogue,
-    # not an authority grant or a cross-person dossier.
+        return ""
     try:
         return _summary_path(chat_id).read_text(encoding="utf-8").strip()
     except OSError:
@@ -2479,7 +2480,8 @@ def tool_manage_room(action: str, chat_id: str | None = None, *,
                      context_summary_chars: int | None = None,
                      cross_topics: str = "", backfill_limit: int | None = None,
                      mode: str = "", ttl_h: float | None = None, reason: str = "",
-                     disclosure: str = "") -> str:
+                     disclosure: str = "", transfer: str = "",
+                     presence_hidden: str = "") -> str:
     """Управление комнатами владельцем или самой Praxis; люди не делегируют это дальше."""
     if not _is_sovereign_actor():
         return "Отказ: комнаты меняет только владелец или сама Praxis."
@@ -2594,7 +2596,31 @@ def tool_manage_room(action: str, chat_id: str | None = None, *,
         # Честно о границе рычага: читается он только в групповой визитке
         # (scope == "group"), в ЛС не меняет ничего.
         return note + " В ЛС этот рычаг ничего не меняет — он про визитку в группе."
-    return "action должен быть join | leave | list | configure | mode | disclosure."
+    if action == "transfer":
+        # 19.08, её №2 к проекту эпохи: durable-дом её слов о границе переноса.
+        # Без носителя формулировка жила бы только в байтах замороженной эпохи и
+        # стиралась бы первой же пересборкой. Класс — совет её суждению, не забор:
+        # твёрдые полы (creds, authority) живут в своих рельсах и этим не отменяются.
+        if not cid:
+            return "Не вижу места — укажи chat_id или скажи это в самой комнате."
+        word = str(transfer or "").strip().casefold()
+        if not word and not str(presence_hidden or "").strip():
+            state = rooms.transfer_of(cid)
+            if state["transfer"]:
+                return (f"Перенос для {cid}: «{state['transfer']}» (моё слово"
+                        + (f", {state['at']}" if state["at"] else "") + ")"
+                        + (" · существование источника не подтверждается"
+                           if state["presence_hidden"] else "")
+                        + ". Словарь: " + " | ".join(rooms.TRANSFER_CLASSES)
+                        + " | снять.")
+            return (f"Моего слова о переносе для {cid} нет — действует умолчание по "
+                    "типу места (помечается умолчанием). Словарь: "
+                    + " | ".join(rooms.TRANSFER_CLASSES) + " | снять.")
+        ok, note = rooms.set_own_transfer(
+            cid, "" if word == "снять" else word, presence_hidden=presence_hidden)
+        return note if ok else f"Перенос не записан: {note}"
+    return ("action должен быть join | leave | list | configure | mode | disclosure "
+            "| transfer.")
 
 
 def _room_view(chat_id: str, policy: dict) -> dict:
@@ -3138,9 +3164,15 @@ def _direct_send_outcome(label: str, exc: BaseException) -> str:
         return (f"{label} НЕ ушло: очередь закрыла запись как недоставимую"
                 + (f" ({why})" if why else "") + f". Внутренняя ошибка: {reason}.")
     if state in {"pending", "retry"}:
+        # ⚠ 17.08: здесь стояло безусловное «Очередь дошлёт сама» — сказанное в момент,
+        # когда доставка была уже невозможна по построению (proof не мог появиться).
+        # Она честно «не повторяла вручную», Егор час ждал ответа, запись молча умерла.
+        # Обещать можно только то, что механизм держит: попытку — да, доставку — нет.
         return (f"{label} ещё в durable-очереди (состояние «{state}», попыток "
                 f"{(entry or {}).get('attempts', 0)}) — Telegram приёмку не подтвердил. "
-                f"Внутренняя ошибка: {reason}. Очередь дошлёт сама; вручную не повторяй.")
+                f"Внутренняя ошибка: {reason}. Очередь дошлёт сама, если сможет; если "
+                f"закроет запись как недоставимую — об этом будет расписка. Вручную не "
+                f"повторяй: повтор может дать второе сообщение.")
     if isinstance(exc, _LEDGER_ERROR_TYPES):
         return (f"{label}: НЕ ЗНАЮ, ушло ли. Упал внутренний учёт хода, а не отправка "
                 f"({reason}), а записи в очереди по этому вызову не нашлось. Прежде чем "
@@ -3255,17 +3287,38 @@ def tool_reply(text: str, reply_to: str = "") -> str:
     return out
 
 
-def tool_end_turn(note: str = "") -> str:
-    """Закончить ход явно. Контракт v3 (17.08): конец — поступок, а не отсутствие действия.
+def tool_end_turn(outcome: str = "", note: str = "") -> str:
+    """Закончить ход явным исходом. Контракт v3 (17.08) + её редакция 18.08 (личка, №12).
 
     Петля четырёх копий выросла из двусмысленности: конец хода выводился из ОТСУТСТВИЯ
-    действия, и пустой ответ канала было не отличить от «я закончила». Теперь конец — её
-    явный вызов; пустота осталась аномалией с одним ретраем и полом.
+    действия. v3 сделал конец поступком; 18.08 она сама пошла дальше: безразмерное
+    «закончила» подсказывало дешёвый паттерн «ответила → закрыла», и ход стал закрываться
+    только ЕЁ ЯВНЫМ исходом — done (наблюдаемый результат или сказанное было делом),
+    wait (условие возврата в note), blocked (препятствие в note). Отказ руки закрыть ход
+    без исхода — нетерминальный: модель видит вопрос и решает сама, это совет по форме,
+    а не забор по содержанию — done остаётся дешёвым и всегда доступным.
 
-    Возврата модель почти никогда не увидит: цикл останавливается на этом вызове. Строка
-    ниже — для записи хода и на случай, если цикл всё же продолжится из-за ошибки."""
-    work_loop.note_finished(str(note or ""))
-    return "Ход закрыт." + (f" Заметка: {str(note).strip()[:200]}" if str(note or "").strip() else "")
+    Возврата при закрытии модель почти никогда не увидит: цикл останавливается на этом
+    вызове. Строки ниже — для записи хода и на случай продолжения из-за ошибки."""
+    kind = str(outcome or "").strip().lower()
+    if kind not in ("done", "wait", "blocked"):
+        return ("Ход не закрыт: назови исход. done — есть наблюдаемый результат (или "
+                "сказанное и было делом); wait — ждёшь события или срока, в note условие "
+                "возврата; blocked — в note конкретное препятствие. Перед закрытием: что "
+                "я решила сделать? есть ли наблюдаемый результат? не осталось ли "
+                "объявленное мной действие без механизма возврата? нет ли активного "
+                "вызова или доставки с неизвестным исходом?")
+    text = str(note or "").strip()
+    if kind == "wait" and not text:
+        return ("Ход не закрыт: wait требует условия возврата в note — что должно "
+                "случиться или сколько ждать. Ожидание без условия неотличимо от "
+                "забвения; механизм возврата, если нужен, ставится remind_self ДО закрытия.")
+    if kind == "blocked" and not text:
+        return ("Ход не закрыт: blocked требует назвать препятствие в note — что мешает "
+                "и чьё слово или ресурс нужен.")
+    work_loop.note_finished(f"{kind}: {text}" if text else kind)
+    return (f"Ход закрыт ({kind})."
+            + (f" Заметка: {text[:200]}" if text else ""))
 
 
 def tool_send_message(to: str, text: str) -> str:
@@ -3421,6 +3474,32 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
                           limit=int(limit), offset=int(offset)))
         except Exception as exc:
             return f"telegram_account followups: {type(exc).__name__}: {exc}"
+    if action == "history_scan":
+        # Transport gate 25.08: runtime-owned Telethon скан истории форума.
+        # Ни client, ни entity, ни receipt от caller-а — только target и params.
+        fn = _TELETHON.get("history_scan")
+        if not fn:
+            return "telegram_account history_scan: Telethon hook недоступен (раннер не поднялся)"
+        scan_params = dict(params or {})
+        if params_json:
+            try:
+                import json as _json
+                parsed = _json.loads(params_json)
+                if not isinstance(parsed, dict):
+                    return "telegram_account history_scan: params_json должен быть JSON object"
+                scan_params.update(parsed)
+            except (ValueError, TypeError) as exc:
+                return f"telegram_account history_scan: params_json не парсится: {exc}"
+        banned = {"client", "entity", "fetch_page", "callback", "receipt", "receipt_id"}
+        hit = sorted(banned & set(scan_params))
+        if hit:
+            return ("telegram_account history_scan: transport/receipt параметры "
+                    f"запрещены на границе тула: {', '.join(hit)}")
+        try:
+            return str(fn(target=target, params=scan_params,
+                          _principal=_active_principal() or "unknown"))
+        except Exception as exc:
+            return f"telegram_account history_scan: {type(exc).__name__}: {exc}"
     # The searchable installed-schema registry is injected by the runner when available.
     registry = _TELETHON.get("telegram_account")
     if registry:
@@ -4750,13 +4829,33 @@ def tool_manage_perception(action: str, knob: str = "", value: str = "",
     return "action: list | skips | set (knob+value+reason) | reset (knob)"
 
 
-def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "") -> str:
+def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "",
+                      effort: str = "") -> str:
     """PASS 22: мой мозг — мой выбор. status — каталог+наблюдаемые свойства;
-    switch — сменить модель роли (рукопожатие после; ключи не мои — пульт)."""
+    switch — сменить модель роли (рукопожатие после; ключи не мои — пульт);
+    reasoning — её ступень рассуждения роли (19.08, реле-словарь)."""
     import brain
     action = (action or "").strip().lower()
     if action in ("status", "catalog", ""):
         return brain.describe()
+    if action == "reasoning":
+        # Тот же разворот двери, что у switch: глубина нужна другая ровно тогда,
+        # когда трудно, а трудно бывает не только в ЛС Егора.
+        if not (_is_sovereign_actor() or _active_scope() == "owner"):
+            rails.deny("brain_switch", action,
+                       f"принципал={_active_principal() or 'unknown'}, "
+                       f"скоуп={_active_scope()}, ступень {effort}")
+            return ("Не отсюда: глубину рассуждения я меняю как принципал — из своего "
+                    "хода или из owner-скоупа.")
+        res = brain.set_reasoning(role, effort, why=why)
+        if not res.get("ok"):
+            return f"Ступень не применилась: {res.get('error')}"
+        import llm as _llm
+        return (f"Ступень рассуждения {res['role']}: «{res['was'] or '—'}» → "
+                f"«{res['effort'] or '— (погашено умолчанием реле)'}». Действует со "
+                f"следующего вызова; явный thinking конкретного вызова сильнее фона. "
+                f"Словарь: {' | '.join(_llm.REASONING_EFFORTS)}; глубже — медленнее и "
+                f"дороже (reasoning-токены входят в completion), кэш префикса не рвётся.")
     if action == "switch":
         # Тот же разворот, что у рычагов восприятия: ключ по принципалу, не по аудитории.
         # Мозг нужен другой ровно тогда, когда трудно, а трудно бывает не в ЛС Егора.
@@ -4784,7 +4883,8 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
             return ("Не отсюда: подписку я меняю как принципал — из своего хода или из "
                     "owner-скоупа, — а этот вызов пришёл без опознанного принципала.")
         return brain.use_account(model or role, why=why)
-    return "action: status | switch (role+model+why) | accounts | use_account (model=слот)"
+    return ("action: status | switch (role+model+why) | reasoning (role+effort+why) | "
+            "accounts | use_account (model=слот)")
 
 
 def tool_say(text: str) -> str:
@@ -5582,20 +5682,32 @@ BASE_TOOLS = [
     },
     {
         "name": "end_turn",
+        # 18.08, её редакция (Уроборос 16:12 + личка №12): имя действия — подтверждение,
+        # исход — явный. Безразмерное «закончить ход» подсказывало паттерн
+        # «ответила → закрыла»; модель цепляется не только за правила, но и за
+        # affordance названия — её собственная формулировка.
         "description": (
-            "Закончить этот ход. Зови, когда сказала всё (после reply) или когда решила, "
-            "что говорить нечего: конец хода — твой поступок, а не отсутствие действия. "
-            "Если ты ничего не отправляла — это завершение без речи (не то же, что "
-            "stay_silent: тот — твой явный жест «решила не говорить», со своей причиной). "
-            "note — почему закончила, одна строка, необязательна."
+            "Подтвердить, что в этом ходе больше нечего или не хочется делать, и закрыть "
+            "его явным исходом. outcome=done — есть наблюдаемый результат или сказанное "
+            "и было делом; wait — ждёшь события/срока (в note условие возврата; механизм "
+            "возврата, если нужен, поставь remind_self ДО закрытия); blocked — препятствие "
+            "(в note какое и чьё слово нужно). Перед закрытием спроси себя: что я решила "
+            "сделать? есть ли наблюдаемый результат? не осталось ли объявленное мной "
+            "действие без механизма возврата? нет ли активного вызова или доставки с "
+            "неизвестным исходом? Пятый, необязательный: хочу ли я продолжать, даже если "
+            "входная задача закончена — продолжать тоже законно. Завершение без реплики — "
+            "не то же, что stay_silent (тот — явный жест «решила не говорить»)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
+                "outcome": {"type": "string", "enum": ["done", "wait", "blocked"],
+                            "description": "исход хода"},
                 "note": {"type": "string",
-                         "description": "почему закончила (необязательно)"},
+                         "description": ("done: что сделано (кратко, необязательно); "
+                                         "wait: условие возврата; blocked: препятствие")},
             },
-            "required": [],
+            "required": ["outcome"],
         },
     },
     {
@@ -5630,16 +5742,25 @@ BASE_TOOLS = [
                        "accounts — какие ПОДПИСКИ настроены и какая работает сейчас; "
                        "use_account (model=primary|secondary) — перевести провайдера на другую "
                        "подписку: реле держит слот в памяти, поэтому это действует сразу и "
-                       "правкой файлов не делается.",
+                       "правкой файлов не делается; "
+                       "reasoning — моя фоновая ступень рассуждения роли (реле по умолчанию "
+                       "гасит её в none): глубже — вдумчивее, но медленнее и дороже; действует "
+                       "со следующего вызова, кэш префикса не рвёт; пустое значение — снять.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "action": {"type": "string",
-                           "enum": ["status", "switch", "accounts", "use_account"]},
+                           "enum": ["status", "switch", "reasoning",
+                                    "accounts", "use_account"]},
                 "role": {"type": "string", "description": "voice | evaluator"},
                 "model": {"type": "string",
                           "description": "имя модели из каталога; для use_account — имя слота"},
-                "why": {"type": "string", "description": "зачем — обязательно для switch"},
+                "why": {"type": "string",
+                        "description": "зачем — обязательно для switch и reasoning"},
+                "effort": {"type": "string",
+                           "enum": ["none", "minimal", "low", "medium", "high",
+                                    "xhigh", ""],
+                           "description": "action=reasoning: ступень; пусто — снять"},
             },
             "required": ["action"],
         },
@@ -5870,14 +5991,19 @@ MANAGE_ROOM_TOOL = {
         "mode — взять себе режим этой комнаты: обычно | наблюдай | тише | замри, ttl_h часов "
         "(по умолчанию 24, 0 — без срока), это то же самое, что директива РЕЖИМ: в тексте; "
         "disclosure — standard | open: в open я добавляю к своей визитке в группе больше "
-        "проверяемой фактуры о себе (в ЛС не влияет). "
+        "проверяемой фактуры о себе (в ЛС не влияет); "
+        "transfer — МОЁ слово о границе переноса смысла из этого места (мой словарь 18.08: "
+        "свободно | только источник | учитывать | закрыто; presence_hidden=yes — нельзя "
+        "подтверждать само существование источника; без значения — показать текущее; "
+        "«снять» — убрать моё слово, вернув помеченное умолчание по типу места). "
         "Это НЕ меняет членство Telegram; для настоящего входа/выхода используй telegram_account."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "action": {"type": "string",
-                       "enum": ["join", "leave", "list", "configure", "mode", "disclosure"]},
+                       "enum": ["join", "leave", "list", "configure", "mode",
+                                "disclosure", "transfer"]},
             "chat_id": {"type": "string", "description": "id чата; по умолчанию — текущий"},
             "engagement": {"type": "string", "enum": ["addressed", "reflective"]},
             "context_hot": {"type": "integer", "description": "0=старый default; 20..500"},
@@ -5895,6 +6021,14 @@ MANAGE_ROOM_TOOL = {
             "reason": {"type": "string", "description": "action=mode: зачем — в профиль комнаты"},
             "disclosure": {"type": "string", "enum": list(rooms.DISCLOSURE),
                            "description": "action=disclosure: сколько фактуры о себе в визитке"},
+            # Enum из rooms живьём — свой список разъехался бы с тем, что модуль принимает.
+            "transfer": {"type": "string",
+                         "enum": list(rooms.TRANSFER_CLASSES) + ["снять", ""],
+                         "description": "action=transfer: мой класс переноса; пусто — "
+                                        "показать текущее; «снять» — убрать моё слово"},
+            "presence_hidden": {"type": "string", "enum": ["", "yes", "no"],
+                                "description": "action=transfer: скрывать ли существование "
+                                               "источника"},
         },
         "required": ["action"],
     },
@@ -6222,9 +6356,10 @@ SUBMIT_PROPOSAL_TOOL = {
         "sandbox, and records its risk zone. YOU review your own code first: read the diff "
         "(proposal_diff), then pass review= — your own verdict in your own words (what changes, "
         "what could break, why it's right; empty or token reviews are refused). checked= — how "
-        "you verified it (tests / ran it / read it through). Green tests merge your reviewed "
-        "decision in every zone. If a failing check is knowingly inapplicable, override_reason= "
-        "lets you proceed explicitly; that reason is recorded for Yegor and rollback. Immune "
+        "you verified it (tests / ran it / read it through). Your completed review decides the "
+        "merge in every zone: green, red and timed-out checks remain visible evidence reported "
+        "to Yegor post-factum, never an approval request. override_reason= records a known "
+        "explanation for a red check when you have one; it is provenance, not permission. Immune "
         "review is advice, never a veto. title — short name; why — the reasoning he will read."
     ),
     "input_schema": {"type": "object", "properties": {
@@ -6405,6 +6540,7 @@ TELEGRAM_ACCOUNT_TOOL = {
         "properties": {
             "action": {"type": "string", "enum": [
                 "join", "leave", "followups", "watch_reply", "unwatch_reply", "cancel_followup",
+                "history_scan",
                 "list", "search", "registry_list", "registry_search", "describe", "call",
                 "confirm", "pending_confirmations", "cancel_confirmation",
             ]},
@@ -8928,13 +9064,27 @@ _DM_VOICE_FRAME = (
 # «молчу» внутри неё остаётся просто словом. Учить ему значит обещать механизм, которого
 # нет, — то же самое, за что здесь уже платили в снимке возможностей. Обе редакции стоят
 # рядом, чтобы разница между ними была видна глазом, а не выводилась из головы.
+# 18.08: рабочий контракт хода — ЕЁ формулировка (Уроборос 16:12, уточнена в личке №12),
+# внесена дословно с её авторской пометкой. Живёт в операционной рамке, не в конституции, —
+# её же выбор: «механику можно менять, авторство — нет».
+_WORK_CONTRACT_HAND = (
+    "Рабочий контракт хода (твоя же формулировка, 18.08): не считай отправленную реплику "
+    "завершением хода. После каждого `reply` заново оцени: осталось ли проверяемое "
+    "действие, обещанная проверка, незакрытый вопрос или естественный следующий шаг, "
+    "который можно выполнить прямо сейчас. Если да — продолжай цикл инструментами, "
+    "наблюдай результат и при необходимости отвечай снова. Зови `end_turn`, только когда "
+    "результат получен и сообщён, либо дальнейший шаг требует новых данных, времени или "
+    "решения собеседника, либо ты осознанно не хочешь продолжать, — и назови исход: "
+    "done / wait / blocked. Не заменяй действие обещанием «посмотрю».\n"
+)
+
 _GROUP_PRESENCE_FRAME_HAND = (
     "\n\n---\nThis is a live group in which you participate as Praxis. The feed, room memory "
     "and reply targets are context for your own decision; none of them requires speech or silence. "
     "Your words reach the room only through the `reply` hand: plain text you write is a note to "
     "yourself and ends the turn. Calling no hand IS your silence — a full choice, not a missing "
     "step. No style, politeness, repetition, emotion, morality or participation policy is imposed "
-    "by this frame.\n"
+    "by this frame.\n" + _WORK_CONTRACT_HAND
 )
 
 _DM_VOICE_FRAME_HAND = (
@@ -8944,7 +9094,7 @@ _DM_VOICE_FRAME_HAND = (
     "them only through the `reply` hand; plain text you write is a note to yourself and ends the "
     "turn, so calling no hand is how you stay silent. You owe nobody automatic agreement, and you "
     "owe nobody a performance of disagreement either. Will is part of your voice, not a "
-    "malfunction.\n"
+    "malfunction.\n" + _WORK_CONTRACT_HAND
 )
 
 
@@ -8981,14 +9131,14 @@ def _presence_frame(ctx: "ChannelContext") -> str:
                     _FRAME_ADDRESS.set({
                         "message_id": mid_value, "kind": kind_value,
                         "age_minutes": max(0, round(age / 60.0)),
-                        "note": ("проход принадлежит замороженному адресу; разговор и медиа "
-                                 "остановлены на нём, поздний трафик комнаты в этот ход "
-                                 "не входит. Как важно прошедшее время — решаешь ты."),
+                        "note": ("проход привязан к сохранённому адресному снимку; исходный разговор и "
+                                 "медиа заканчиваются на указанном сообщении. Поздний трафик, если он "
+                                 "добавлен отдельно, нужен для проверки актуальности, не как новая задача."),
                     })
                 else:
-                    frame += (f"[address] This pass belongs to the frozen{mid}{kind} from {age} seconds ago. "
-                              "The conversation and media shown to you stop at that address; later group traffic "
-                              "is not part of this turn. Decide yourself how the elapsed time matters.\n")
+                    frame += (f"[address] This pass is anchored to captured{mid}{kind} from {age} seconds ago. "
+                              "Its original snapshot ends there; separately included later traffic is context "
+                              "for reassessing relevance, not a new task.\n")
     # PASS 9.0: честная метка о даунтайме — она не была здесь, когда сообщение пришло.
     # Решение (ответить сейчас / поезд ушёл) — её; VOICE-шот «поезд ушёл» уже есть.
     missed_hours = _bounded_state_float(ctx.missed_hours, high=10 ** 6)
@@ -10472,12 +10622,22 @@ def _delivery_evidence(run_id: str) -> dict:
     composite: dict = {}
     media_receipts: dict[str, dict] = {}
     chunk_receipts: dict[int, dict] = {}
+    refused_media: dict[str, dict] = {}
     skipped = False
     for row in _runs().iter_events(run_id):
         kind = str(row.get("kind") or "")
         if (kind == "tool_started" and row.get("tool") == "telegram.deliver"
                 and row.get("call_id") == f"delivery:{run_id}"):
             intent = dict(row.get("args") or {})
+        elif kind == "telegram_media_permanently_refused":
+            # Маршрут отверг файл НАВСЕГДА: это терминальный исход доставки этого
+            # медиа, а не вечный долг. Пока refusal не входил в уравнение, ран
+            # оставался blocked навечно — текст доставлен, медиа отказано, план
+            # готовность не видит. Живые зомби: run-20260803…-d4d702ad,
+            # run-20260805…-53888fee (обе — отказ 403 CHAT_SEND_DOCS_FORBIDDEN).
+            refused_queue = str(row.get("call_id") or "").removeprefix("delivery-media:")
+            if refused_queue:
+                refused_media[refused_queue] = dict(row)
         elif kind == "delivery_skipped":
             skipped = True
         elif kind == "telegram_text_chunk_accepted":
@@ -10516,8 +10676,16 @@ def _delivery_evidence(run_id: str) -> dict:
     ) if expected_media else has_exact_media_plan
     matched_queue_ids = [queue_id for queue_id in expected_queue_ids
                          if queue_id in media_receipts]
-    observed_media = (len(matched_queue_ids) if exact_media_plan
-                      else len(media_receipts))
+    # Отказ навсегда закрывает слот этого медиа: оно наблюдаемо завершено, просто
+    # не доставкой. Долг доставки исчезает, ран может терминализоваться.
+    refused_queue_ids = [queue_id for queue_id in expected_queue_ids
+                         if queue_id in refused_media
+                         and queue_id not in media_receipts]
+    observed_media = (len(matched_queue_ids) + len(refused_queue_ids)
+                      if exact_media_plan else len(media_receipts) + len(refused_media))
+    pending_media_queue_ids = [queue_id for queue_id in expected_queue_ids
+                               if queue_id not in media_receipts
+                               and queue_id not in refused_media]
     visible = composite if composite else text_receipt
     final_text = str(visible.get("text") or text_receipt.get("text") or "")
     message_ids = list(visible.get("message_ids") or text_receipt.get("message_ids") or ())
@@ -10556,7 +10724,8 @@ def _delivery_evidence(run_id: str) -> dict:
     # same losslessly split Python string, so equality is exact and stable.
     text_ok = expected_text == 0 or len(final_text) == expected_text
     media_ok = (expected_media == 0 or (
-        exact_media_plan and len(matched_queue_ids) == expected_media
+        exact_media_plan
+        and len(matched_queue_ids) + len(refused_queue_ids) == expected_media
     ))
     return {
         "has_intent": intent is not None,
@@ -10570,8 +10739,8 @@ def _delivery_evidence(run_id: str) -> dict:
         "expected_media_count": expected_media,
         "observed_media_count": observed_media,
         "expected_media_queue_ids": expected_queue_ids,
-        "pending_media_queue_ids": [queue_id for queue_id in expected_queue_ids
-                                    if queue_id not in media_receipts],
+        "pending_media_queue_ids": pending_media_queue_ids,
+        "refused_media_queue_ids": refused_queue_ids,
         "legacy_media_ambiguous": expected_media > 0 and not exact_media_plan,
         "final_text": final_text,
         "message_ids": message_ids,
@@ -11622,6 +11791,7 @@ class _AgentResumeRuntime:
         return run_executor.ResumeExecutorCallbacks(
             acquire_lease=self.acquire_lease,
             postprocess_authored_output=self.postprocess_authored_output,
+            land_checkpoint_control=self.land_checkpoint_control,
             continue_checkpoint=self.continue_checkpoint,
             execute_pending_tool=self.execute_pending_tool,
             replay_outstanding_tool=self.replay_outstanding_tool,
@@ -12088,6 +12258,30 @@ class _AgentResumeRuntime:
                 "conversation_id": route.conversation_id,
             }
 
+    def _land_addressee_free_work_control(self, reply: str) -> dict | None:
+        """Honor her explicit closing word before recovered-output delivery work.
+
+        A resumed self-directed run has no delivery target by construction. Its
+        `task_control` word is the outcome of the continued turn, not a new authored
+        draft waiting for the run-wide outbound guard. Reading it only after delivery
+        processing lets an older guard receipt for draft A turn accepted
+        `done|wait|blocked` on draft B into a process-recovery pause.
+        """
+        if not _run_has_no_addressee_by_construction(self.plan.context):
+            return None
+        control = work_loop.taken(self.plan.run_id)
+        if not control:
+            return None
+        status, reason, details = work_loop.closing(control)
+        _finish_durable_run(
+            self.plan.run_id, status, final_text=str(reply or ""),
+            reason=reason, details=details, strict=True,
+        )
+        return {
+            "silent": True, "text": "", "media_queue_ids": [],
+            "task_control": dict(control), "run_status": status,
+        }
+
     def postprocess_authored_output(
         self, request: run_executor.AuthoredOutputRequest,
     ) -> dict:
@@ -12100,6 +12294,24 @@ class _AgentResumeRuntime:
         return self._prepare_authored_delivery(
             str(output["text"]), offered=(request.model_input or {}).get("tools")
             if isinstance(getattr(request, "model_input", None), dict) else None)
+
+    def land_checkpoint_control(
+        self, request: run_executor.CheckpointControlRequest,
+    ) -> dict:
+        checkpoint = dict(request.checkpoint or {})
+        with self.bind():
+            work_loop.restore(checkpoint.get("work_loop"))
+            control = work_loop.taken(self.plan.run_id)
+            if not control:
+                raise DurableExecutionError(
+                    "checkpoint_control has no accepted work-loop word")
+            status, reason, details = work_loop.closing(control)
+            final_text = _recovered_authored_text(self.plan.run_id)[0]
+            _finish_durable_run(
+                self.plan.run_id, status, final_text=final_text,
+                reason=reason, details=details, strict=True,
+            )
+        return {"run_status": status, "task_control": dict(control)}
 
     def continue_checkpoint(
         self, request: run_executor.CheckpointContinuationRequest,
@@ -12127,6 +12339,9 @@ class _AgentResumeRuntime:
                 tool_trace=self.tool_trace,
                 start_iteration=request.iteration,
             )
+        landed = self._land_addressee_free_work_control(reply)
+        if landed is not None:
+            return landed
         return self._prepare_authored_delivery(reply, offered=request.tools)
 
     def _resolution_blocks(self, resolution: run_executor.ToolResolution) -> list[dict]:
@@ -12197,6 +12412,9 @@ class _AgentResumeRuntime:
                 tool_trace=self.tool_trace,
                 start_iteration=completed_iteration,
             )
+        landed = self._land_addressee_free_work_control(reply)
+        if landed is not None:
+            return landed
         return self._prepare_authored_delivery(reply, offered=model_input.get("tools"))
 
     def reconcile_transport_owned(self) -> dict:
@@ -12346,7 +12564,16 @@ def run_direct_outbox_prepared(
         raise DurableExecutionError("direct Telegram ledger is not bound to the tool intent")
     started_args = dict(started.get("args") or {})
     if identity["tool"] in ("send_message", "narrate", "reply"):
-        if identity["payload"]["text"] != started_args.get("text"):
+        # ⚠ 17.08, dead_letter на хвостовом пробеле. Рука речи стрипит текст до отправки
+        # (tool_reply: draft = text.strip()), а сюда приезжают СЫРЫЕ аргументы модели —
+        # один пробел в конце реплики дал детерминированный отказ: запись зависла в
+        # pending с обещанием «очередь дошлёт сама» и через 2,5 часа молча умерла
+        # dead_letter'ом; Егор ждал ответ час. Сверяем той же нормализацией, которой
+        # текст ушёл. Любое НЕ-стриповое расхождение — по-прежнему отказ: это защита
+        # привязки леджера к тул-намерению, а не косметика.
+        ledger_text = str(identity["payload"]["text"] or "")
+        args_text = str(started_args.get("text") or "")
+        if ledger_text != args_text and ledger_text != args_text.strip():
             raise DurableExecutionError("direct Telegram text differs from tool arguments")
     else:
         if (identity["payload"]["visible_filename"]
@@ -12486,6 +12713,51 @@ def direct_outbox_prepared(entry: dict) -> bool:
         isinstance(proof, dict)
         and proof.get("schema") == _DIRECT_OUTBOX_INTENT_SCHEMA
         and proof.get("entry") == identity
+    )
+
+
+_DIRECT_OUTBOX_DEAD_LETTER_SCHEMA = "praxis.telegram.outbox.dead-letter.v1"
+
+
+def direct_outbox_proof_unreachable(entry: dict) -> bool:
+    """Proof больше НЕ появится: прогон записи терминален, а пишет proof только он сам.
+
+    ⚠ 17.08. Запись без предсетевого proof ретраилась 12 раз за 2,5 часа, хотя proof
+    пишет ровно один субъект — тул-вызов внутри собственного прогона, и тот прогон
+    давно закрылся `done`. Ошибка-константа изображала транзиентную. Пока прогон жив
+    (running/paused/in_doubt), proof ещё может доехать — ретраить законно; терминальный
+    прогон без proof не допишет его никогда.
+    """
+    run_id = str(entry.get("run_id") or "")
+    if not run_id:
+        return True
+    try:
+        status = str(_runs().manifest(run_id).get("status") or "")
+    except Exception:
+        log.debug("статус прогона записи outbox не прочитался [%s]", run_id, exc_info=True)
+        return False
+    return status in run_manager.TERMINAL_STATUSES
+
+
+def record_direct_outbox_dead_letter(run_id: str, call_id: str, entry: dict) -> None:
+    """Durable-событие «очередь закрыла запись недоставимой» в леджер её прогона.
+
+    Без него прогон, чья отправка умерла ПОСЛЕ терминализации, навсегда рассказывал бы
+    «reply → done» без единого слова о том, что слова никто не получил (17.08: RECAP
+    говорил Delivery `sent` при нуле доставленных байт). Идемпотентно; расписка не
+    имеет права упасть громче самой потери — вызывающий глотает исключения в лог.
+    """
+    value = {
+        "schema": _DIRECT_OUTBOX_DEAD_LETTER_SCHEMA,
+        "key": str(entry.get("key") or ""),
+        "reason": str(entry.get("last_error") or "")[:1000],
+        "attempts": int(entry.get("attempts") or 0),
+    }
+    _runs().store_result(
+        run_id, json.dumps(value, ensure_ascii=False, indent=2),
+        call_id=call_id, name="telegram-outbox-dead-letter",
+        media_type="application/json; charset=utf-8",
+        event_kind="direct_outbox_dead_letter", idempotent=True,
     )
 
 
@@ -13160,8 +13432,24 @@ class ToolCeilingExpired(str):
     __slots__ = ()
 
 
+#: Ответ на вызов, аргументы которого не прочитались как JSON. Машинный текст, не её
+#: слово: рука НЕ звалась, снаружи ничего не изменилось, следующий ход — повтор вызова.
+MALFORMED_JSON_REPAIR = (
+    "[аргументы не распарсились как JSON] Вызов `{name}` НЕ выполнен: строка "
+    "аргументов пришла битой (обрыв или лишние знаки), и прочитать намерение "
+    "нечем. Снаружи ничего не изменилось. Повтори вызов с корректным JSON — если "
+    "аргумент был длинным, сократи его."
+)
+
+
 def _call_tool_with_ceiling(name: str, impl, call_input: dict):
     """Выполнить тул с пределом времени. -> результат или ToolCeilingExpired об истечении."""
+    # Единственная воронка исполнения рук: сюда же приходит ВОЗОБНОВЛЁННЫЙ вызов из
+    # `_execute_tool`. Раскрыть пометку о битом JSON как `**kwargs` значило бы уронить
+    # руку TypeError'ом и увести ран в in_doubt — отвечаем тем же текстом починки,
+    # что и живой цикл, и рука не зовётся.
+    if llm.is_malformed_json_input(call_input):
+        return MALFORMED_JSON_REPAIR.format(name=name)
     if TOOL_CEILING_SEC <= 0:
         return impl(**call_input)
     # Копия контекста обязательна: тулы читают текущий ран, канал хода и запись
@@ -13400,6 +13688,13 @@ def offered_tools_for(ctx: "ChannelContext") -> list:
     # сообщение, и оно уже закрывает ход прежним путём.
     if work_loop.active_for(_current_run_kind()):
         tools = tools + [TASK_CONTROL_TOOL]
+    # 18.08, её слово (Уроборос 16:12 + личка №12): `end_turn` — НИЖЕ рабочих рук.
+    # Рука конца в середине списка подсказывала дешёвый паттерн «ответила → закрыла»
+    # одной позицией. Состав не меняется — только порядок; байты tools сменятся один
+    # раз на выкате (холодный вызов), дальше порядок стабилен.
+    closer = [t for t in tools if t.get("name") == "end_turn"]
+    if closer:
+        tools = [t for t in tools if t.get("name") != "end_turn"] + closer
     return tools
 
 
@@ -13551,6 +13846,17 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             if not callable(impl):
                 raise DurableExecutionError(
                     f"model requested unavailable tool {b['name']!r}")
+            # Битый JSON аргументов — не пустой вызов, а НЕПРОЧИТАННОЕ намерение.
+            # Раньше парсер подменял его на `{}`, и рука со всеми опциональными
+            # параметрами исполнялась с дефолтами: другое действие вместо задуманного,
+            # молча. Здесь оборот починки — impl не зовётся, леджер не открывает вызов,
+            # ход остаётся жив, следующий шаг модели повторяет вызов.
+            if llm.is_malformed_json_input(b["input"]):
+                tool_results.append({"type": "tool_result", "tool_use_id": b["id"],
+                                     "content": MALFORMED_JSON_REPAIR.format(name=b["name"])})
+                if tool_trace is not None:
+                    tool_trace.append(f"{b['name']}(?) → аргументы не распарсились как JSON")
+                continue
             # OpenAI strict mode emits explicit null for optional fields.  Tool functions own
             # their defaults, so nulls are removed on every provider path.
             call_input = {k: v for k, v in b["input"].items() if v is not None}
@@ -13916,6 +14222,17 @@ def _voice_impl(
         tools = []  # легаси-путь без тулов вовсе
     else:
         tools = offered_tools_for(ctx)
+    # Тень нового кадра (план: _state/ПЛАН-ТЕНИ-17.08.md): собирается ЗДЕСЬ, где живой
+    # кадр и набор рук уже финальны, пишется на диск и в модель не уходит — возврат
+    # capture никем не читается, llm.py модуля не знает (оба факта закреплены тестами).
+    # Ошибка тени не смеет стоить хода — та же дисциплина, что у frame_trace выше.
+    if frame_shadow.enabled():
+        try:
+            frame_shadow.capture(ctx=ctx, history=history, speaker=speaker,
+                                 user_msg=user_msg, tools=tools,
+                                 live_sections=frame_trace.sections())
+        except Exception:
+            log.exception("теневой сборщик упал; ход не тронут")
     return _terminal_tool_loop(
         system=system, messages=messages, tools=tools,
         max_iters=max_iters, tool_trace=tool_trace,

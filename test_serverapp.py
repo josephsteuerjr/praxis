@@ -538,6 +538,24 @@ class TestWebLayer(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.status, 200)
         self.assertEqual((await r.json())["ok"], True)
 
+    async def test_session_renews_by_bearer_not_only_initdata(self):
+        """Иконка на экране продлевает себя сама: /api/session принимает и уже
+        выданный Bearer. Иначе через SESSION_TTL standalone-апп снова просит ссылку."""
+        r = await self.client.get("/api/session",
+                                  params={"_auth": make_init_data(user_id=777)})
+        self.assertEqual(r.status, 200)
+        tok = (await r.json())["token"]
+        self.assertEqual(serverapp.verify_session(tok), 777)
+        r2 = await self.client.get("/api/session",
+                                   headers={"Authorization": "Bearer " + tok})
+        self.assertEqual(r2.status, 200)
+        self.assertEqual(serverapp.verify_session((await r2.json())["token"]), 777)
+
+    async def test_session_forbidden_for_stranger(self):
+        r = await self.client.get("/api/session",
+                                  params={"_auth": make_init_data(user_id=666)})
+        self.assertEqual(r.status, 403)
+
     async def test_handler_error_becomes_502(self):
         def boom():
             raise RuntimeError("нет докера")
@@ -551,8 +569,12 @@ class TestWebLayer(unittest.IsolatedAsyncioTestCase):
         self.assertIn(r.status, (200, 500))  # 500 если html ещё не рядом
 
     async def test_favicon_no_auth(self):
+        # ⚠ 25.08.2026: тест ждал ровно 204, то есть «иконки рядом нет» — а в рабочем
+        # дереве serverapp_static/icon.svg есть, и гейт краснел от СРЕДЫ, а не от кода.
+        # Проверяем то, ради чего тест написан: favicon отдаётся без авторизации.
         r = await self.client.get("/favicon.ico")
-        self.assertEqual(r.status, 204)
+        want = 200 if (serverapp.BASE / "serverapp_static" / "icon.svg").is_file() else 204
+        self.assertEqual(r.status, want)
 
     async def test_vendor_serves_lib_no_auth(self):
         # 3d-force-graph переиспользуется из panel_static/ (публично, как favicon)
@@ -748,6 +770,190 @@ class TestCollectContainers(unittest.IsolatedAsyncioTestCase):
         others = [c for c in out["items"]
                   if c["state"] == "running" and c["id"] != "000000000003"]
         self.assertTrue(all(c["stats"] is not None for c in others))
+
+
+class TestPublicUrl(unittest.TestCase):
+    """25.08.2026. Обсерватория не открывалась: кнопка мини-аппа в Telegram вела на
+    srv.<старый-IP>.nip.io. Адрес обязан вычисляться из SERVER_HOST, а не храниться."""
+
+    def test_asset_version_takes_max(self):
+        html = '<link href="/s/atlas.css?v=3"><script src="/s/atlas.js?v=5">'
+        self.assertEqual(serverapp.asset_version(html), "5")
+
+    def test_asset_version_defaults_to_one(self):
+        self.assertEqual(serverapp.asset_version("<html></html>"), "1")
+
+    def test_url_from_host_and_version(self):
+        with mock.patch.dict(os.environ, {"PRAXIS_SERVERAPP_URL": ""}, clear=False):
+            self.assertEqual(serverapp.public_url("203.0.113.10", "7"),
+                             "https://srv.203.0.113.10.nip.io/?v=7")
+
+    def test_empty_host_gives_empty_url(self):
+        # Пусто лучше, чем кнопка в никуда: см. sync_menu_button -> "skip".
+        with mock.patch.object(serverapp, "SERVER_HOST", ""), \
+                mock.patch.dict(os.environ, {"PRAXIS_SERVERAPP_URL": ""}, clear=False):
+            self.assertEqual(serverapp.public_url(), "")
+
+    def test_explicit_env_wins(self):
+        with mock.patch.dict(os.environ,
+                             {"PRAXIS_SERVERAPP_URL": "https://atlas.example/"},
+                             clear=False):
+            self.assertEqual(serverapp.public_url("1.2.3.4"), "https://atlas.example/")
+
+    def test_menu_button_url_extraction(self):
+        cur = {"type": "web_app", "text": "О", "web_app": {"url": "https://a/"}}
+        self.assertEqual(serverapp.menu_button_url(cur), "https://a/")
+        self.assertEqual(serverapp.menu_button_url({"type": "commands"}), "")
+        self.assertEqual(serverapp.menu_button_url(None), "")
+
+
+class TestSyncMenuButton(unittest.IsolatedAsyncioTestCase):
+    """Кнопка живёт НА СТОРОНЕ Telegram и деплой её не трогает — значит сверять
+    на каждом старте. Идемпотентно: совпало — не писать."""
+
+    def _fake_tg(self, current):
+        calls = []
+
+        async def fake(session, method, payload=None):
+            calls.append((method, payload))
+            if method == "getChatMenuButton":
+                return current
+            return True
+        return fake, calls
+
+    async def test_sets_button_when_url_drifted(self):
+        old = {"type": "web_app", "text": "Обсерватория",
+               "web_app": {"url": "https://srv.166.88.185.90.nip.io/?v=4"}}
+        fake, calls = self._fake_tg(old)
+        with mock.patch.object(serverapp, "_tg", fake), \
+                mock.patch.object(serverapp, "TOKEN", TOKEN), \
+                mock.patch.object(serverapp, "MENU_SYNC", True):
+            got = await serverapp.sync_menu_button(None, "https://srv.198.51.100.7.nip.io/?v=5")
+        self.assertEqual(got, "set")
+        self.assertEqual([c[0] for c in calls],
+                         ["getChatMenuButton", "setChatMenuButton"])
+        btn = calls[1][1]["menu_button"]
+        self.assertEqual(btn["type"], "web_app")
+        self.assertEqual(btn["web_app"]["url"], "https://srv.198.51.100.7.nip.io/?v=5")
+
+    async def test_does_not_write_when_already_right(self):
+        url = "https://srv.198.51.100.7.nip.io/?v=5"
+        fake, calls = self._fake_tg({"type": "web_app", "text": "О",
+                                     "web_app": {"url": url}})
+        with mock.patch.object(serverapp, "_tg", fake), \
+                mock.patch.object(serverapp, "TOKEN", TOKEN), \
+                mock.patch.object(serverapp, "MENU_SYNC", True):
+            got = await serverapp.sync_menu_button(None, url)
+        self.assertEqual(got, "ok")
+        self.assertEqual([c[0] for c in calls], ["getChatMenuButton"])
+
+    async def test_unknown_host_touches_nothing(self):
+        fake, calls = self._fake_tg({"type": "commands"})
+        with mock.patch.object(serverapp, "_tg", fake), \
+                mock.patch.object(serverapp, "TOKEN", TOKEN), \
+                mock.patch.object(serverapp, "MENU_SYNC", True), \
+                mock.patch.object(serverapp, "SERVER_HOST", ""), \
+                mock.patch.dict(os.environ, {"PRAXIS_SERVERAPP_URL": ""}, clear=False):
+            got = await serverapp.sync_menu_button(None)
+        self.assertEqual(got, "skip")
+        self.assertEqual(calls, [])
+
+    async def test_switch_off_is_honoured(self):
+        fake, calls = self._fake_tg({"type": "commands"})
+        with mock.patch.object(serverapp, "_tg", fake), \
+                mock.patch.object(serverapp, "MENU_SYNC", False):
+            self.assertEqual(await serverapp.sync_menu_button(None, "https://a/"), "off")
+        self.assertEqual(calls, [])
+
+
+class TestDockerDf(unittest.IsolatedAsyncioTestCase):
+    """Регресс раздела STORAGE: /system/df на живом хосте считается ~28 с, а бюджет
+    коллектора — 6 с. Пока df звался внутри коллектора, /api/disks не мог ответить
+    в принципе: таймаут → breaker → 502 с пустым текстом."""
+
+    def setUp(self):
+        serverapp._df_reset()
+
+    def tearDown(self):
+        serverapp._df_reset()
+
+    def _slow_dget(self, delay=5.0, boom=None):
+        async def fake(session, path, *, raw=False, timeout=20.0):
+            if path != "/system/df":
+                raise RuntimeError("unexpected " + path)
+            if boom:
+                raise boom
+            await asyncio.sleep(delay)
+            return {"Images": [{"Size": 10}, {"Size": 20}],
+                    "Containers": [{"SizeRw": 3}, {"SizeRw": None}],
+                    "Volumes": [{"UsageData": {"Size": 7}}, {}],
+                    "BuildCache": [{"Size": 5}]}
+        return fake
+
+    def test_shape_sums_all_four(self):
+        out = serverapp.shape_docker_df(
+            {"Images": [{"Size": 10}, {"Size": 20}],
+             "Containers": [{"SizeRw": 3}, {"SizeRw": None}],
+             "Volumes": [{"UsageData": {"Size": 7}}, {}],
+             "BuildCache": [{"Size": 5}]})
+        self.assertEqual(out, {"images_count": 2, "images_size": 30,
+                               "containers_size": 3, "volumes_size": 7,
+                               "build_cache": 5})
+
+    async def test_slow_df_does_not_kill_the_section(self):
+        with mock.patch.object(serverapp, "_dget", self._slow_dget(delay=5.0)):
+            t0 = time.monotonic()
+            out = await asyncio.wait_for(
+                serverapp._cached("dk_t", 15, lambda: serverapp.collect_disks(None)),
+                timeout=serverapp._COLLECT_TIMEOUT)
+            elapsed = time.monotonic() - t0
+            self.assertIn("disks", out)                    # локальные ФС всегда есть
+            self.assertTrue(out["docker"].get("pending"))  # docker — «считаю»
+            self.assertLess(elapsed, serverapp._COLLECT_TIMEOUT)
+            await asyncio.wait_for(serverapp._df["task"], timeout=10)
+            again = await serverapp.collect_disks(None)
+        self.assertEqual(again["docker"]["images_size"], 30)   # фон досчитал
+        self.assertNotIn("pending", again["docker"])
+        serverapp._cache.pop("dk_t", None)
+
+    async def test_df_failure_is_reported_not_raised(self):
+        with mock.patch.object(serverapp, "_dget",
+                               self._slow_dget(boom=asyncio.TimeoutError())):
+            out = await serverapp.collect_disks(None)
+        self.assertIn("disks", out)
+        # ⚠ у TimeoutError пустой str: раньше наружу уходило {"error": ""}
+        self.assertEqual(out["docker"]["error"], "TimeoutError")
+
+    async def test_failure_keeps_last_good_numbers(self):
+        """docker system df гоняется с живыми контейнерами и падает 500 на ровном
+        месте. Один такой сбой не имеет права стирать уже посчитанное."""
+        with mock.patch.object(serverapp, "_dget", self._slow_dget(delay=0)):
+            good = await serverapp.collect_disks(None)
+        self.assertEqual(good["docker"]["images_size"], 30)
+
+        serverapp._df["next_try"] = 0.0                  # разрешаем пересчёт
+        boom = RuntimeError("docker /system/df -> 500")
+        with mock.patch.object(serverapp, "_dget", self._slow_dget(boom=boom)):
+            first = await serverapp.collect_disks(None)  # спавнит фон, отдаёт last-good
+            task = serverapp._df["task"]
+            if task is not None:
+                await asyncio.wait_for(task, timeout=5)
+            second = await serverapp.collect_disks(None)
+        self.assertEqual(first["docker"]["images_size"], 30)
+        self.assertEqual(second["docker"]["images_size"], 30)   # цифры целы
+        self.assertIn("500", second["docker"]["error"])         # но сбой не замолчан
+
+    async def test_failure_schedules_short_retry(self):
+        with mock.patch.object(serverapp, "_dget",
+                               self._slow_dget(boom=RuntimeError("500"))):
+            await serverapp.collect_disks(None)
+        gap = serverapp._df["next_try"] - time.monotonic()
+        self.assertGreater(gap, 0)
+        self.assertLess(gap, serverapp._DF_TTL)   # после сбоя ждать полный TTL нельзя
+
+    def test_errmsg_never_empty(self):
+        self.assertEqual(serverapp._errmsg(asyncio.TimeoutError()), "TimeoutError")
+        self.assertEqual(serverapp._errmsg(RuntimeError("вот текст")), "вот текст")
 
 
 if __name__ == "__main__":

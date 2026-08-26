@@ -9,6 +9,10 @@
 почты/панели (mailroom_bot), но токеном своего бота (PRAXIS_SERVERAPP_BOT_TOKEN
 из .deploy.env). Публичный HTTPS даёт host-Caddy: srv.<SERVER_HOST>.nip.io → 8093.
 
+Единственная запись наружу — кнопка мини-аппа собственного бота. Она хранится НА
+СТОРОНЕ Telegram, переживает деплой и смену IP, и потому сверяется на каждом старте
+(sync_menu_button): сервера это не касается, он по-прежнему только читается.
+
 Коллекторы — чистый stdlib, пути инжектируются (PRAXIS_HOST_PROC / PRAXIS_HOSTFS),
 поэтому тестируются фикстурами без докера и без Linux (test_serverapp.py).
 """
@@ -65,6 +69,48 @@ AUTH_MAX_AGE = int(os.getenv("PRAXIS_SERVERAPP_AUTH_MAX_AGE", "86400") or 86400)
 DOCKER = os.getenv("PRAXIS_DOCKER_PROXY", "http://dockerproxy:2375").rstrip("/")
 PROC = os.getenv("PRAXIS_HOST_PROC", "/proc")     # pid:host ⇒ /proc = хостовый
 HOSTFS = os.getenv("PRAXIS_HOSTFS", "/rootfs")    # корень хоста, ro
+
+# Публичный адрес обсерватории.
+#
+# ⚠ 25.08.2026. Обсерватория «сломалась» не в коде: кнопка мини-аппа в Telegram вела
+# на srv.<СТАРЫЙ-IP>.nip.io. Хранимая копия адреса живёт у Telegram, деплой её не
+# трогает, а SERVER_HOST в .deploy.env на сервере остался от прежнего IP — поэтому
+# DNS резолвился, хост молчал, и ошибки не было НИГДЕ: и бот, и сервер отвечали 200.
+# Тот же класс, что и заглушки 03.08 в mailroom_bot: хранимая копия разошлась с
+# правдой. Лечение — считать адрес из SERVER_HOST и сверять кнопку на каждом старте.
+SERVER_HOST = (os.getenv("SERVER_HOST") or "").strip()
+MENU_TEXT = os.getenv("PRAXIS_SERVERAPP_MENU_TEXT", "Обсерватория")
+MENU_SYNC = (os.getenv("PRAXIS_SERVERAPP_MENU_SYNC", "1") or "").strip().lower() \
+    not in ("0", "false", "no", "off")
+
+
+def _errmsg(e: BaseException) -> str:
+    """Текст ошибки для наружу. У TimeoutError он ПУСТ — и 502 приходил как
+    {"error": ""}, то есть раздел падал молча. Пустой текст → имя класса."""
+    return str(e) or e.__class__.__name__
+
+
+def asset_version(html: str) -> str:
+    """Кэш-бастер кнопки = максимальный ?v= из serverapp.html: одна правда на оба."""
+    vs = [int(v) for v in re.findall(r"\?v=(\d+)", html)]
+    return str(max(vs)) if vs else "1"
+
+
+def public_url(host: str = "", version: str = "") -> str:
+    """Адрес, по которому обсерваторию открывает владелец. Пусто = хост неизвестен;
+    тогда лучше НЕ трогать кнопку, чем поставить её в никуда."""
+    explicit = (os.getenv("PRAXIS_SERVERAPP_URL") or "").strip()
+    if explicit:
+        return explicit
+    host = host or SERVER_HOST
+    if not host:
+        return ""
+    if not version:
+        try:
+            version = asset_version((BASE / "serverapp.html").read_text(encoding="utf-8"))
+        except Exception:
+            version = "1"
+    return f"https://srv.{host}.nip.io/?v={version}"
 
 CLK_TCK = 100          # USER_HZ: тики /proc/*/stat (стандарт на x86)
 PAGE = 4096            # страница для /proc/*/statm
@@ -1146,14 +1192,32 @@ async def collect_stack(session) -> dict:
             "uptime": uptime_seconds()}
 
 
-async def collect_disks(session) -> dict:
-    out = {"disks": await _to_thread(disks)}
-    try:
-        df = await _dget(session, "/system/df", timeout=40)
-        imgs = df.get("Images") or []
-        vols = df.get("Volumes") or []
-        out["docker"] = {
-            "images_count": len(imgs),
+# /system/df докер считает ДОЛГО: он обходит все образы, слои и тома. На живом хосте
+# (76 образов) это 28 с — а общий бюджет коллектора `_cached` шесть секунд. Поэтому
+# раньше /api/disks не мог ответить В ПРИНЦИПЕ: таймаут → breaker на 30 с → 502 с
+# пустым текстом, раздел STORAGE мёртв. Теперь df живёт отдельно: считается в фоне,
+# держится долгим TTL, а запрос ждёт его пару секунд и отдаёт последнее известное.
+# Мало того, что медленный: docker system df ещё и ГОНЯЕТСЯ с живыми контейнерами —
+# обходя снапшоты, он спотыкается о файл, который контейнер успел удалить, и весь
+# запрос падает 500 («failed to calculate image disk usage: lstat …: no such file»).
+# Поэтому неудача НЕ имеет права затирать последние хорошие цифры: она только
+# назначает скорый повтор и уезжает в поле error рядом с ними.
+_DF_TTL = float(os.getenv("PRAXIS_SERVERAPP_DF_TTL", "600") or 600)
+_DF_TIMEOUT = float(os.getenv("PRAXIS_SERVERAPP_DF_TIMEOUT", "120") or 120)
+_DF_GRACE = float(os.getenv("PRAXIS_SERVERAPP_DF_GRACE", "3") or 3)
+_DF_RETRY = float(os.getenv("PRAXIS_SERVERAPP_DF_RETRY", "60") or 60)
+_df: dict = {"at": 0.0, "value": None, "err": "", "next_try": 0.0, "task": None}
+
+
+def _df_reset() -> None:               # для тестов: состояние df — модульное
+    _df.update({"at": 0.0, "value": None, "err": "", "next_try": 0.0, "task": None})
+
+
+def shape_docker_df(df: dict) -> dict:
+    """Ответ /system/df → четыре числа, которые показывает раздел STORAGE."""
+    imgs = df.get("Images") or []
+    vols = df.get("Volumes") or []
+    return {"images_count": len(imgs),
             "images_size": sum(i.get("Size", 0) for i in imgs),
             "containers_size": sum((c.get("SizeRw") or 0)
                                    for c in df.get("Containers") or []),
@@ -1161,9 +1225,46 @@ async def collect_disks(session) -> dict:
                                 for v in vols),
             "build_cache": sum((b.get("Size") or 0)
                                for b in df.get("BuildCache") or [])}
+
+
+async def _df_refresh(session) -> None:
+    try:
+        val = shape_docker_df(await _dget(session, "/system/df", timeout=_DF_TIMEOUT))
     except Exception as e:
-        out["docker"] = {"error": str(e)}
+        _df["err"] = _errmsg(e)
+        _df["next_try"] = time.monotonic() + _DF_RETRY      # last-good остаётся жить
+    else:
+        _df["value"], _df["at"], _df["err"] = val, time.monotonic(), ""
+        _df["next_try"] = _df["at"] + _DF_TTL
+    finally:
+        _df["task"] = None
+
+
+async def docker_df(session, *, grace: float = _DF_GRACE) -> dict:
+    """Размеры докера: свежее — сразу, иначе фоновый пересчёт и последнее известное."""
+    loop = asyncio.get_running_loop()
+    task = _df.get("task")
+    if task is not None and (task.done() or task.get_loop() is not loop):
+        _df["task"] = task = None      # хвост прошлой жизни процесса (или теста)
+    if task is None and time.monotonic() >= _df["next_try"]:
+        _df["task"] = task = loop.create_task(_df_refresh(session))
+    if task is not None and _df["value"] is None and grace > 0:
+        await asyncio.wait({task}, timeout=grace)   # первый заход: дать шанс успеть
+    if _df["value"] is None:
+        out = {"pending": True,
+               "note": "докер считает размеры образов — покажу, когда досчитает"}
+    else:
+        out = dict(_df["value"])
+        if time.monotonic() - _df["at"] >= _DF_TTL:
+            out["stale"] = True
+    if _df["err"]:
+        out["error"] = _df["err"]      # молчать о неудаче нельзя даже с хорошим кэшем
     return out
+
+
+async def collect_disks(session) -> dict:
+    """Локальные ФС видны ВСЕГДА: медленный докер не имеет права гасить раздел."""
+    return {"disks": await _to_thread(disks), "docker": await docker_df(session)}
 
 
 def collect_access() -> dict:
@@ -1371,6 +1472,46 @@ async def _cached(key: str, ttl: float, coro_factory, *,
         return val
 
 
+async def _tg(session, method: str, payload: dict | None = None) -> dict:
+    """Вызов Bot API. Токен не попадает ни в лог, ни в текст исключения."""
+    url = f"https://api.telegram.org/bot{TOKEN}/{method}"
+    async with session.post(url, json=payload or {},
+                            timeout=aiohttp.ClientTimeout(total=15)) as r:
+        status = r.status
+        data = await r.json(content_type=None)
+    if not isinstance(data, dict) or not data.get("ok"):
+        desc = data.get("description") if isinstance(data, dict) else None
+        raise RuntimeError(f"telegram {method} -> {desc or status}")
+    return data.get("result")
+
+
+def menu_button_url(cur) -> str:
+    """Адрес из ответа getChatMenuButton (пусто — кнопки мини-аппа нет)."""
+    if isinstance(cur, dict) and cur.get("type") == "web_app":
+        return (cur.get("web_app") or {}).get("url") or ""
+    return ""
+
+
+async def sync_menu_button(session, url: str = "") -> str:
+    """Привести кнопку мини-аппа к текущему публичному адресу. Идемпотентно:
+    сначала читаем, ставим только при расхождении. Ошибка — предупреждение, не срыв."""
+    if not MENU_SYNC:
+        return "off"
+    url = url or public_url()
+    if not TOKEN or not url:
+        log.warning("кнопку мини-аппа не сверяю: %s",
+                    "нет токена бота" if not TOKEN else "неизвестен SERVER_HOST")
+        return "skip"
+    was = menu_button_url(await _tg(session, "getChatMenuButton"))
+    if was == url:
+        log.info("кнопка мини-аппа верна: %s", url)
+        return "ok"
+    await _tg(session, "setChatMenuButton", {"menu_button": {
+        "type": "web_app", "text": MENU_TEXT, "web_app": {"url": url}}})
+    log.warning("кнопка мини-аппа переставлена: %s -> %s", was or "(не было)", url)
+    return "set"
+
+
 def build_app():
     routes = web.RouteTableDef()
 
@@ -1381,8 +1522,8 @@ def build_app():
             try:
                 data = await handler(request)
             except Exception as e:
-                log.warning("handler %s failed: %s", request.path, e)
-                return web.json_response({"error": str(e)}, status=502)
+                log.warning("handler %s failed: %s", request.path, _errmsg(e))
+                return web.json_response({"error": _errmsg(e)}, status=502)
             return web.json_response(data, dumps=lambda d: json.dumps(d, ensure_ascii=False))
         return wrapped
 
@@ -1549,6 +1690,12 @@ def build_app():
                     ("/api/disks", api_disks)):
         routes.get(path)(guard(h))
 
+    async def _sync_menu_safely(app):
+        try:
+            await sync_menu_button(app["session"])
+        except Exception as e:
+            log.warning("сверка кнопки мини-аппа не удалась: %s", _errmsg(e))
+
     app = web.Application()
     app.add_routes(routes)
 
@@ -1557,9 +1704,10 @@ def build_app():
         app["sampler"] = Sampler(session_getter=lambda: app["session"])
         app["sampler_task"] = asyncio.create_task(app["sampler"].run())
         app["restart_task"] = asyncio.create_task(_watch_restart_signal())
+        app["menu_task"] = asyncio.create_task(_sync_menu_safely(app))
 
     async def _on_stop(app):
-        for key in ("sampler_task", "restart_task"):
+        for key in ("sampler_task", "restart_task", "menu_task"):
             t = app.get(key)
             if t:
                 t.cancel()
@@ -1612,8 +1760,8 @@ def main():
         raise SystemExit("aiohttp не установлен")
     if not TOKEN:
         log.warning("PRAXIS_SERVERAPP_BOT_TOKEN пуст — все API-запросы будут 403")
-    log.info("serverapp on :%s (docker=%s, proc=%s, hostfs=%s)",
-             PORT, DOCKER, PROC, HOSTFS)
+    log.info("serverapp on :%s (docker=%s, proc=%s, hostfs=%s, public=%s)",
+             PORT, DOCKER, PROC, HOSTFS, public_url() or "неизвестен (нет SERVER_HOST)")
     web.run_app(build_app(), port=PORT)
 
 

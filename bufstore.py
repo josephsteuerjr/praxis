@@ -32,12 +32,28 @@ def path_for(chat_id) -> Path:
 
 
 def save(chat_id, lines) -> None:
-    """Атомарно записать буфер чата (список строк) на диск."""
+    """Атомарно записать буфер чата (список строк) на диск.
+
+    Шаг 6 (25.08): содержимое не изменилось байт-в-байт — не трогаем файл. Буфер —
+    зеркало горячего кольца, а бут-синк помечает dirty все ключи места разом; без
+    этой границы каждый рестарт переписывал все 693 файла (в т.ч. 427 байт-в-байт
+    идентичных зеркал AbstractDL), и mtime лгал о свежести ключа. Идентичная запись
+    не является изменением: честный mtime показывает, когда ключ последний раз
+    РЕАЛЬНО менялся, — это и есть наблюдаемая граница живости для будущего отвода
+    поглощённых дублей (решение по числам, не rm по маске).
+    """
     BUF_DIR.mkdir(parents=True, exist_ok=True)
     data = [str(l) for l in lines]
+    payload = json.dumps(data, ensure_ascii=False)
     p = path_for(chat_id)
+    if p.exists():
+        try:
+            if p.read_text(encoding="utf-8") == payload:
+                return
+        except OSError:
+            pass
     tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.write_text(payload, encoding="utf-8")
     tmp.replace(p)
 
 

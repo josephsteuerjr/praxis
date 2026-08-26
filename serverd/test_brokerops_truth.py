@@ -268,6 +268,18 @@ class OperationListHonestyCase(unittest.TestCase):
         self.assertIn("из 5", rows["note"])
         self.assertIn("НЕ полный", rows["note"])
 
+    def test_live_only_filters_terminal_history_before_the_cap(self):
+        """Точный live-запрос не должен быть усечён старой terminal-историей."""
+        for index in range(5):
+            self._unit(f"op-done-{index}", json.dumps({"root": "/srv/app"}), status="done")
+        self._unit("op-running", json.dumps({"root": "/srv/app"}), status="running")
+        rows = brokerops.op_list("/srv/app", limit=2, live_only=True)
+        self.assertTrue(rows["ok"], rows)
+        self.assertEqual([row["id"] for row in rows["operations"]], ["op-running"])
+        self.assertEqual(rows["matched"], 1)
+        self.assertEqual(rows["shown"], 1)
+        self.assertNotIn("note", rows)
+
     def test_a_root_that_did_not_resolve_is_not_answered_with_an_empty_list(self):
         self._unit("op-good", json.dumps({"root": "/srv/app"}))
         with mock.patch.object(brokerops.Path, "resolve", side_effect=OSError("ELOOP")):

@@ -223,6 +223,127 @@ def same_conversation(a: Any, b: Any, places: dict[str, str] | None = None) -> b
             or (places.get(sa) is not None and places.get(sa) == places.get(sb)))
 
 
+_TELEGRAM_MESSAGE_SOURCE_RE = re.compile(
+    r"^(?P<message_id>\d+)(?::(?P<revision>edit|delete)(?::.*)?)?$"
+)
+
+
+def telegram_message_key(row: dict[str, Any]) -> tuple[str, int] | None:
+    """Stable Telegram peer/message identity for one life ``conversation_message``.
+
+    Topic conversation keys are projections of one Telegram peer.  Message identifiers
+    are peer-wide there, so an original observed under the root and a later revision
+    routed through a topic must still form one lineage.  Non-Telegram events deliberately
+    have no such identity.
+    """
+
+    if (str(row.get("kind") or "") != "conversation_message"
+            or str(row.get("source") or "").casefold() != "telegram"):
+        return None
+    match = _TELEGRAM_MESSAGE_SOURCE_RE.fullmatch(str(row.get("source_id") or ""))
+    if not match:
+        return None
+    meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+    # A bare numeric source_id also occurs in old synthetic/provenance fixtures.  Treat it
+    # as a Telegram message identity only when the runtime envelope/dedupe marker proves
+    # it was captured by the live message path.  Explicit edit/delete source forms are
+    # self-identifying and remain usable when recovering older deployments.
+    if (match.group("revision") is None
+            and not str(row.get("dedupe_key") or "")
+            and "is_dm" not in meta and "time_quality" not in meta):
+        return None
+    chat_id = str(row.get("chat_id") or "")
+    if not chat_id:
+        return None
+    peer_id = chat_id.split("__topic__", 1)[0]
+    return peer_id, int(match.group("message_id"))
+
+
+def telegram_revision_kind(row: dict[str, Any]) -> str:
+    """Return ``original``, ``edit`` or ``delete`` for a Telegram life event."""
+
+    match = _TELEGRAM_MESSAGE_SOURCE_RE.fullmatch(str(row.get("source_id") or ""))
+    if not match or telegram_message_key(row) is None:
+        return ""
+    return str(match.group("revision") or "original")
+
+
+def _event_epoch(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return _dt.datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def current_conversation_events(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Materialise current Telegram revisions while preserving immutable raw events.
+
+    Telegram edits and deletions are append-only evidence, but ordinary continuity and
+    recall need one current statement per peer/message.  Revision time wins over delivery
+    order, so a delayed older edit cannot replace a newer one.  Equal-second edits use the
+    separately captured observation time and finally stable input order; deletions are
+    terminal when Telegram gives the same timestamp to competing update kinds.
+    """
+
+    items = [row for row in rows if isinstance(row, dict)]
+    selected: dict[
+        tuple[str, int], tuple[tuple[int, float, int, int, float, int], dict[str, Any]]
+    ] = {}
+    passthrough: list[tuple[int, dict[str, Any]]] = []
+    priority = {"original": 0, "edit": 1, "delete": 2}
+    for index, row in enumerate(items):
+        key = telegram_message_key(row)
+        if key is None:
+            passthrough.append((index, row))
+            continue
+        kind = telegram_revision_kind(row)
+        meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+        revision_order = meta.get("revision_order")
+        try:
+            revision_order = int(revision_order)
+        except (TypeError, ValueError):
+            revision_order = 0
+        rank = (
+            1 if kind == "delete" else 0,
+            _event_epoch(row.get("ts")),
+            priority.get(kind, 0),
+            revision_order,
+            _event_epoch(meta.get("observed_at")),
+            index,
+        )
+        previous = selected.get(key)
+        if previous is None or rank >= previous[0]:
+            selected[key] = (rank, row)
+    current_ids = {id(row) for _rank, row in selected.values()}
+    return [
+        row for row in items
+        if telegram_message_key(row) is None or id(row) in current_ids
+    ]
+
+
+def current_conversation_event_ids(rows: Iterable[dict[str, Any]]) -> frozenset[str]:
+    """IDs allowed in current-state continuity.
+
+    Every non-Telegram event remains eligible; only Telegram message lineages collapse to
+    one current revision.  This matters for generic runtime observations whose schema is
+    valid but whose source is intentionally not Telegram.
+    """
+
+    items = [row for row in rows if isinstance(row, dict)]
+    current_telegram_ids = {
+        str(row.get("id")) for row in current_conversation_events(items)
+        if telegram_message_key(row) is not None and str(row.get("id") or "")
+    }
+    return frozenset(
+        str(row.get("id")) for row in items
+        if str(row.get("id") or "")
+        and (telegram_message_key(row) is None
+             or str(row.get("id")) in current_telegram_ids)
+    )
+
+
 def _nonempty_string(value: Any, *, limit: int = 20_000) -> bool:
     return type(value) is str and value == value.strip() and 0 < len(value) <= limit
 
@@ -501,10 +622,12 @@ def claim_evidence_index(memory_dir: str | Path) -> dict[str, Any]:
         if cached and cached[0] == frozen:
             return cached[1]
         events, duplicate_events = _event_index(root)
+        current_event_ids = current_conversation_event_ids(events.values())
         compacts, duplicate_compacts = _compact_index(root)
         result = {
             "memory_dir": root,
             "events": events,
+            "current_event_ids": current_event_ids,
             "compacts": compacts,
             "duplicate_events": duplicate_events,
             "duplicate_compacts": duplicate_compacts,
@@ -621,11 +744,33 @@ def event_automatic_recall_allowed(row: dict[str, Any]) -> bool:
 def _invalid_resolution() -> dict[str, Any]:
     return {
         "valid": False, "automatic": False, "leaves": [], "direct": False,
-        "first_ts": "", "last_ts": "",
+        "first_ts": "", "last_ts": "", "superseded": [],
     }
 
 
-def _resolve_compact(compact_id: str, evidence: dict[str, Any], stack: set[str]) -> dict[str, Any]:
+def _resolve_compact(compact_id: str, evidence: dict[str, Any], stack: set[str],
+                     *, require_current: bool = True) -> dict[str, Any]:
+    """Разрешение свёртки. Два режима, и различие между ними — её слово 21.08.
+
+    `require_current=True` — ПОКАЗ И ЦИТАТА. Строгий путь: каждое исходное событие
+    обязано быть текущей ревизией своего сообщения. Сослаться на текст, который потом
+    переписали, нельзя, и показать его в живом кадре тоже.
+
+    `require_current=False` — ПОКРЫТИЕ. Отвечает на другой вопрос: было ли это событие
+    уже свёрнуто. Позднейшая правка сообщения не отменяет того, что событие свёрнуто:
+    отредактированное сообщение не переставало быть сказанным. Раньше обоими вопросами
+    заведовала одна проверка, и одна правка одного сообщения делала недействительной
+    ВСЮ свёртку — вместе с сотней чужих событий. Замер 21.08 по AbstractDL: 245 из 310
+    компактов мертвы, их события возвращались в горячее кольцо на каждой правке, кольцо
+    выросло до 3802 при потолке 125.
+
+    Всё остальное — существование события, принадлежность месту, целость графа,
+    event_count, границы времени, циклы — проверяется В ОБОИХ режимах одинаково.
+    Ослабляется ровно одна проверка и ровно для одного вопроса.
+
+    `superseded` — исходные события, переставшие быть текущими. Это причина, по которой
+    свёртка годна для покрытия и не годна для показа, и список затронутых событий.
+    """
     if compact_id in stack:
         return _invalid_resolution()
     meta = (evidence.get("compacts") or {}).get(compact_id)
@@ -634,25 +779,70 @@ def _resolve_compact(compact_id: str, evidence: dict[str, Any], stack: set[str])
     stack = {*stack, compact_id}
     leaves: list[str] = []
     timestamps: list[str] = []
+    superseded: list[str] = []
+    current_ids = set(evidence.get("current_event_ids") or ())
+    lineages: set[tuple[str, int]] = set()
     automatic = not bool(meta.get("legacy") or meta.get("degraded"))
     direct = True
     for event_id in meta.get("source_event_ids") or []:
         event_id = str(event_id)
         row = (evidence.get("events") or {}).get(event_id)
+        # КАЖДОЕ событие доказывается ЯВНО и в обоих режимах. Раньше эти четыре
+        # проверки никто не писал: их неявно сторожило членство в current_event_ids —
+        # туда попадают только conversation_message с телеграмной идентичностью.
+        # Сняв членство ради покрытия, я снял и сторожа: публичный `compact_coverage`
+        # начал принимать `run_episode`, чужую схему и строку, чей `id` не равен
+        # ключу (воспроизведено пробником 21.08, её P0). Ослаблять разрешено ровно
+        # одно — членство; всё остальное обязано быть доказано здесь.
         if (not isinstance(row, dict)
+                or row.get("schema") != "praxis.life.event.v1"
+                or str(row.get("id") or "") != event_id
                 or row.get("chat_id") is None
                 or not same_conversation(row.get("chat_id"), meta.get("chat_id"),
                                          evidence.get("places"))):
             return _invalid_resolution()
+        if event_id not in current_ids:
+            if require_current:
+                return _invalid_resolution()
+            # ОСЛАБЛЕНИЕ ЗДЕСЬ УЗКОЕ И ОБУСЛОВЛЕННОЕ. Не быть текущим событие может
+            # ровно по одной законной причине: это телеграмное сообщение, вытесненное
+            # своей же поздней ревизией (`current_conversation_event_ids`: «every
+            # non-Telegram event remains eligible; only Telegram message lineages
+            # collapse»). Любая другая причина — чужой вид, подделка, событие вне
+            # ленты — остаётся отказом в ОБОИХ режимах.
+            if (str(row.get("kind") or "") != "conversation_message"
+                    or telegram_message_key(row) is None):
+                return _invalid_resolution()
+            # Ещё одно, что молча гарантировало членство: внутри ОДНОЙ свёртки не
+            # могло оказаться двух ревизий одного сообщения — текущая ревизия ровно
+            # одна. В режиме покрытия такая свёртка прошла бы, и текущая ревизия
+            # оказалась бы «уже свёрнутой», то есть невидимой и негорячей. Сверяем
+            # только внутри своей свёртки: ветвь родителей ЗАКОННО может нести
+            # старую ревизию в одном компакте и новую в другом — это история, а не
+            # подделка.
+            lineage = telegram_message_key(row)
+            if lineage is not None:
+                if lineage in lineages:
+                    return _invalid_resolution()
+                lineages.add(lineage)
+            superseded.append(event_id)
+        else:
+            lineage = telegram_message_key(row)
+            if lineage is not None:
+                if lineage in lineages:
+                    return _invalid_resolution()
+                lineages.add(lineage)
         leaves.append(event_id)
         timestamps.append(str(row.get("ts") or ""))
         event_automatic, event_direct = _event_evidence_class(row)
         automatic = automatic and event_automatic
         direct = direct and event_direct
     for parent in meta.get("source_compact_ids") or []:
-        resolved = _resolve_compact(str(parent), evidence, stack)
+        resolved = _resolve_compact(str(parent), evidence, stack,
+                                    require_current=require_current)
         if not resolved["valid"]:
             return resolved
+        superseded.extend(resolved.get("superseded") or ())
         parent_meta = (evidence.get("compacts") or {}).get(str(parent)) or {}
         if not same_conversation(parent_meta.get("chat_id"), meta.get("chat_id"),
                                  evidence.get("places")):
@@ -675,6 +865,7 @@ def _resolve_compact(compact_id: str, evidence: dict[str, Any], stack: set[str])
         "valid": True, "automatic": automatic,
         "leaves": unique_leaves, "direct": direct,
         "first_ts": first_ts, "last_ts": last_ts,
+        "superseded": list(dict.fromkeys(superseded)),
     }
 
 
@@ -685,7 +876,8 @@ def _resolve_claim_evidence(meta: dict[str, Any], evidence: dict[str, Any]) -> d
         ref = str(ref)
         if _EVENT_ID_RE.fullmatch(ref):
             row = (evidence.get("events") or {}).get(ref)
-            if not isinstance(row, dict):
+            if (not isinstance(row, dict)
+                    or ref not in set(evidence.get("current_event_ids") or ())):
                 return _invalid_resolution()
             leaves.append(ref)
             event_automatic, event_direct = _event_evidence_class(row)
@@ -710,8 +902,21 @@ def _resolve_claim_evidence(meta: dict[str, Any], evidence: dict[str, Any]) -> d
 
 
 def compact_evidence(compact_id: str, evidence_index: dict[str, Any]) -> dict[str, Any]:
-    """Public, read-only resolution used by formation before it cites a compact."""
+    """Public, read-only resolution used by formation before it cites a compact.
+
+    СТРОГИЙ путь: показ, цитирование, обычный поиск. Не ослаблен ни на знак."""
     return _resolve_compact(str(compact_id), evidence_index, set())
+
+
+def compact_coverage(compact_id: str, evidence_index: dict[str, Any]) -> dict[str, Any]:
+    """Покрытие: было ли это событие уже свёрнуто. Её решение 21.08.
+
+    Отвечает ТОЛЬКО на вопрос пересборки состояния — что не должно вернуться в
+    горячее кольцо. Для показа и цитаты этого мало: `superseded` называет исходные
+    события, чья ревизия устарела, и такая свёртка обязана считаться `needs_refresh`,
+    а её recap — не ехать в живой кадр."""
+    return _resolve_compact(str(compact_id), evidence_index, set(),
+                            require_current=False)
 
 
 def claim_source(path: str | Path, *, evidence_index: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:

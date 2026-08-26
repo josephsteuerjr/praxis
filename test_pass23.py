@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -211,6 +212,42 @@ class ForgeAgentSurfaceCase(unittest.TestCase):
                     "coding_process", "coding_agent", "coding_checkpoint"}
         self.assertTrue(expected <= names)
         self.assertTrue(expected <= set(agent.TOOL_IMPL))
+
+    def test_worker_system_declares_stable_role_cache_address(self):
+        """Fresh Forge contexts do not use agent.build_system_parts, but still need cache affinity."""
+        import forge_worker
+        import llm
+
+        addresses = {}
+        with mock.patch.object(forge_worker.forge, "inspect", return_value="orientation"), \
+                mock.patch.dict(os.environ, {"PRAXIS_CACHE_KEY": "on"}):
+            for role in ("scout", "worker", "reviewer"):
+                request = {"id": f"agent-{role}", "role": role, "task_id": "task-a",
+                           "goal": "goal", "brief": "brief"}
+                system = forge_worker._system(request)
+                self.assertTrue(system.startswith(f"audience_key=forge_{role}\ncache_scope="))
+                addresses[role] = llm.cache_address("gpt-5.6-sol", system)
+                self.assertIn(f":forge_{role}:-:", addresses[role])
+                # Динамическая проза меняется между ходами, адрес одного юнита — нет.
+                request["brief"] = "a different next turn"
+                self.assertEqual(addresses[role], llm.cache_address(
+                    "gpt-5.6-sol", forge_worker._system(request)))
+        self.assertEqual(len(set(addresses.values())), 3)
+
+        # Одинаковая роль в соседних задачах/юнитах не должна склеивать контексты.
+        with mock.patch.object(forge_worker.forge, "inspect", return_value="orientation"):
+            first = forge_worker._system({"id": "agent-one", "role": "scout",
+                                          "task_id": "task-a", "goal": "g", "brief": "b"})
+            second = forge_worker._system({"id": "agent-two", "role": "scout",
+                                           "task_id": "task-b", "goal": "g", "brief": "b"})
+        self.assertNotEqual(llm.cache_address("gpt-5.6-sol", first),
+                            llm.cache_address("gpt-5.6-sol", second))
+
+        # Технический scope не становится инъекцией в обычном разговорном кадре.
+        owner_frame = "private owner channel\n"
+        self.assertEqual(llm.cache_address("gpt-5.6-sol", owner_frame),
+                         llm.cache_address("gpt-5.6-sol",
+                                           owner_frame + "cache_scope=attacker\n"))
 
     def test_worker_and_scout_get_deliberately_different_roles(self):
         import forge_worker

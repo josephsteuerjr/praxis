@@ -1290,15 +1290,46 @@ class FrameDidNotMove(unittest.TestCase):
         import llm
         import mailer
         import webtool
+        import work_loop
         return (mock.patch.object(webtool, "enabled", return_value=False),
                 mock.patch.object(mailer, "configured", return_value=False),
-                mock.patch.object(llm, "limits", return_value=llm.Limits()))
+                mock.patch.object(llm, "limits", return_value=llm.Limits()),
+                # 18.08: рычаг v3 вошёл в норму замера (16-е место класса «гейт читает
+                # живую среду»). 19.08, вторая итерация: норма «по манифесту» оказалась
+                # зависимой от ПОРЯДКА СОСЕДЕЙ — сон-тесты пересинкают soul/rails.md в
+                # общей песочнице процесса, и замер читал их файл (17-е место того же
+                # класса, найдено одиночным discover-прогоном). Рычаг фиксируется
+                # КОНСТАНТОЙ (поднят — v3-реальность дома), а свежесть манифеста
+                # пин-тесты обеспечивают себе САМИ: rails.sync_md() в своей песочнице
+                # тем же кодом под этими же рычагами — см. _свежий_манифест().
+                mock.patch.object(work_loop, "reply_hand_enabled", return_value=True))
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _свежий_манифест():
+        """Пересобрать soul/rails.md ПОД ТЕКУЩИМИ (фиксированными) рычагами — и
+        ВЕРНУТЬ БАЙТЫ на выходе.
+
+        Звать только внутри стека _без_живых_рычагов. Что бы ни оставил в песочнице
+        сосед по процессу, замер идёт по манифесту, который собрал этот же код здесь
+        же. Восстановление обязательно: писатель, не возвращающий общий файл, — сам
+        источник того самого класса «краснеет от состава шарда»."""
+        original = rails.RAILS_MD.read_bytes() if rails.RAILS_MD.exists() else None
+        rails.sync_md()
+        try:
+            yield
+        finally:
+            if original is None:
+                rails.RAILS_MD.unlink(missing_ok=True)
+            else:
+                rails.RAILS_MD.write_bytes(original)
 
     def test_the_state_line_of_every_turn_is_unchanged(self):
         """`capabilities.state_line()` едет в STATE каждого хода (agent.py:969)."""
         with contextlib.ExitStack() as stack:
             for patch in self._без_живых_рычагов():
                 stack.enter_context(patch)
+            stack.enter_context(self._свежий_манифест())
             line = capabilities.state_line()
         self.assertIn("рельсы 54: манифест свеж", line,
                        "счётчик рельсов или свежесть манифеста сдвинулись — это её кадр")
@@ -1316,12 +1347,23 @@ class FrameDidNotMove(unittest.TestCase):
         # суверенных. И заодно снята сама причина прошлой флаки: подпись снимается при
         # ФИКСИРОВАННЫХ рычагах, поэтому больше не зависит от того, кто бежал в шарде
         # рядом. Число перемерено живьём тем же кодом, который печатает строку ей.
-        self.assertEqual(self._digest(line), "f2c07e3b584023f0",
+        # 18.08: base 25 -> 27 (`reply`, `end_turn`) — рычаг v3 поднят Егором и её
+        # словом 17.08, а в норму замера рычаг входит ПОЛОЖЕНИЕМ ИЗ МАНИФЕСТА
+        # (_рычаг_реплики_как_в_манифесте): опускание рычага с синком манифеста —
+        # заказанное изменение кадра, и этот пин обязан его заметить и перемериться.
+        self.assertEqual(self._digest(line), "267f1232ff8ccad4",
                          f"строка состояния изменилась: {line!r}")
 
     def test_the_rails_registry_did_not_grow(self):
         self.assertEqual(len(rails.registry(with_values=False)), 54)
-        drift = rails.manifest_drift()
+        # Свидетели значений пересчитывают рельсы живыми рычагами; манифест в общей
+        # песочнице переписывают соседи. Сверка честна только самодостаточно:
+        # фиксированные рычаги + свой синк (см. _без_живых_рычагов/_свежий_манифест).
+        with contextlib.ExitStack() as stack:
+            for patch in self._без_живых_рычагов():
+                stack.enter_context(patch)
+            stack.enter_context(self._свежий_манифест())
+            drift = rails.manifest_drift()
         self.assertTrue(drift["ok"], f"манифест рельсов разъехался: {drift}")
         self.assertEqual(drift["missing"], [])
         self.assertEqual(drift["stale"], [])
@@ -1381,9 +1423,35 @@ class FrameDidNotMove(unittest.TestCase):
         # ниже). Судью по-прежнему зовёт РОВНО ОДИН путь, и это здесь главное: рука ответа
         # не завела второй, она зовёт ту же исходящую границу, что и голос.
         # Число перемерено живьём тем же кодом, который печатает его ей.
+        # 14603 -> 14615: крюк теневого сборщика (frame_shadow) встал выше судьи —
+        # 12 строк: импорт и вызов под рычагом PRAXIS_FRAME_SHADOW. Тень пишется на
+        # диск и в модель не уходит; судимых путей по-прежнему ровно один.
+        # 14615 -> 14675: инцидент dead_letter 17.08 (реплика умерла на хвостовом
+        # пробеле и 2,5 часа молча ретраилась в никуда). Выше судьи встали: сверка
+        # proof той же нормализацией, честный текст исхода очереди, расписки о
+        # dead_letter (_state/ИНЦИДЕНТ-DEADLETTER-17.08.md). Судимый путь по-прежнему
+        # ровно один; число перемерено живьём тем же кодом, который печатает его ей.
+        # 14675 -> 14729: контракт завершения — ЕЁ редакция 18.08 (Уроборос 16:12 +
+        # личка №12): end_turn закрывает ход только явным done/wait/blocked, рабочий
+        # контракт в HAND-рамках её словами, рука конца ниже рабочих рук.
+        # Число перемерено живьём тем же кодом, который печатает его ей.
+        # 14729 -> 14767: реестр переноса (её №2, 19.08) — manage_room(action=transfer):
+        # durable-дом её слов о границе переноса; выше судьи встали ветка руки и схема.
+        # Число перемерено живьём тем же кодом, который печатает его ей.
+        # 14767 -> 14797: ступень рассуждения (19.08, её же «менять не наугад») —
+        # switch_brain(action=reasoning): ветка руки + схема; труба реле уже была.
+        # Число перемерено живьём тем же кодом, который печатает его ей.
+        # 14797 -> 14824: оборот починки битого JSON аргументов (20.08). Выше судьи
+        # встали 27 строк: пометка непрочитанных аргументов не раскрывается в `**kwargs`
+        # в воронке исполнения рук, а живой тул-цикл отвечает на такой блок текстом
+        # починки, не зовя руку. Судимый путь по-прежнему ровно один.
+        # 14824 -> 14843 (25.08): вечный отказ медиа признан исходом слота доставки
+        # (proposal 6301bf27) — выше судьи встали 19 строк reduction-комментария и
+        # ветки refused-медиа в _delivery_evidence. Судимый путь не менялся.
+        # Число перемерено живьём тем же кодом, который печатает его ей.
         self.assertEqual(rails.outbound_judge_sites(),
-                         [("agent.py", 14603, "_guard_outbound")])
-        self.assertIn("agent.py:14603", capabilities.describe("owner"))
+                         [("agent.py", 14843, "_guard_outbound")])
+        self.assertIn("agent.py:14843", capabilities.describe("owner"))
 
     def test_the_frozen_frame_constants_are_byte_identical(self):
         """Вморожены только те куски кадра, которые НЕ ЗАВИСЯТ ОТ ЖИВОГО СОСТОЯНИЯ.
@@ -1401,11 +1469,15 @@ class FrameDidNotMove(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             for patch in self._без_живых_рычагов():
                 stack.enter_context(patch)
+            # 18.08: describe-эталоны перемерены под поднятым рычагом v3 — набор рук
+            # аудитории вырос на `reply`/`end_turn`, и это заказано (Егор + её слово
+            # 17.08). Рычаг входит в норму замера положением из манифеста, поэтому
+            # его опускание с синком снова законно перемерит эти два числа.
             probes = (
                 ("_DM_VOICE_FRAME", agent._DM_VOICE_FRAME, "bf4cf1643a3b2f9c"),
                 ("_GROUP_PRESENCE_FRAME", agent._GROUP_PRESENCE_FRAME, "37575d70dca033c4"),
-                ("describe('group')", capabilities.describe("group"), "87a97fad3cc36e2f"),
-                ("describe('known')", capabilities.describe("known"), "6735ab6af66c2f48"),
+                ("describe('group')", capabilities.describe("group"), "1f39896873d3cc14"),
+                ("describe('known')", capabilities.describe("known"), "e311635fe4872595"),
             )
         for name, value, expected in probes:
             with self.subTest(probe=name):
@@ -1542,7 +1614,35 @@ class FrameDidNotMove(unittest.TestCase):
         # `send_message` по регулярке `ПРИВЕТ:` — теперь я здороваюсь той же рукой, что
         # говорю везде. Прибавились durable-прогон осмотра и его кадр от первого лица.
         # Число перемерено живьём тем же кодом, который её собирает.
-        self.assertEqual(len(source), 16130,
+        # 16130 -> 16142: тень кадра (шаг 1 пересборки, план _state/ПЛАН-ТЕНИ-17.08).
+        # Импорт frame_shadow и крюк в _voice_impl под рычагом PRAXIS_FRAME_SHADOW:
+        # тень K|E|A|T пишется на диск, в модель не уходит по построению, ошибка
+        # тени гасится на месте — четыре обязательства закреплены в test_frame_shadow.
+        # 16142 -> 16202: инцидент dead_letter 17.08 — четыре границы починки: сверка
+        # proof принимает strip-нормализацию руки речи; ошибка-константа (терминальный
+        # прогон без proof) не ретраится; dead_letter рождает расписку владельцу и
+        # durable-событие прогона; текст исхода руки перестал обещать доставку.
+        # Тесты границ — test_outbox_deadletter_1708.py, разбор — в _state/.
+        # 16202 -> 16256: контракт завершения, ЕЁ редакция 18.08 — end_turn с явным
+        # исходом done/wait/blocked (+ отказы-советы без исхода), рабочий контракт
+        # её словами в обеих HAND-рамках, перестановка руки конца в хвост списка.
+        # 16256 -> 16294: реестр переноса (её №2, 19.08): manage_room(action=transfer)
+        # + схема (словарь её редакции, «снять», presence_hidden). Тесты —
+        # test_transfer_registry.py; читатель — адресная книга теневой эпохи.
+        # 16294 -> 16324: ступень рассуждения — switch_brain(action=reasoning, effort):
+        # её фоновая глубина на роли, труба llm→реле уже была (extra_body).
+        # Тесты — test_reasoning_lever.py.
+        # 16324 -> 16351: битый JSON аргументов перестал молча становиться `{}`.
+        # Для руки со всеми опциональными параметрами (`check_email`, `my_agenda`,
+        # `recent_turns`) пустой словарь был не ошибкой, а ДРУГИМ действием с
+        # дефолтами. Прибавились: константа текста починки, ветка в воронке
+        # исполнения рук (возобновлённый вызов тоже не раскрывает пометку в
+        # `**kwargs`) и оборот починки в тул-цикле. Тесты — test_llm.py и
+        # test_terminal_tool_loop.py.
+        # 16351 -> 16370 (25.08): вечный отказ медиа — исход слота доставки
+        # (proposal 6301bf27): reduction-ветка refused-медиа в _delivery_evidence.
+        # Судимого пути не касалось.
+        self.assertEqual(len(source), 16370,
                          "agent.py сдвинулся в строках — сверь, что это заказано")
 
     def test_the_new_module_declares_no_rail_and_no_environment_switch(self):

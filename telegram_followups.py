@@ -25,6 +25,7 @@ JSON остаётся источником правды через рестар�
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import re
@@ -146,7 +147,7 @@ def request_from_owner_buffer(lines, *, limit: int = 12,
 
 
 def _empty() -> dict:
-    return {"version": _VERSION, "items": []}
+    return {"version": _VERSION, "items": [], "pending_revisions": []}
 
 
 def _load(path: Path = STATE_PATH) -> dict:
@@ -156,7 +157,13 @@ def _load(path: Path = STATE_PATH) -> dict:
         return _empty()
     if not isinstance(data, dict) or not isinstance(data.get("items"), list):
         return _empty()
-    return {"version": _VERSION, "items": [x for x in data["items"] if isinstance(x, dict)]}
+    pending = data.get("pending_revisions")
+    return {
+        "version": _VERSION,
+        "items": [x for x in data["items"] if isinstance(x, dict)],
+        "pending_revisions": ([x for x in pending if isinstance(x, dict)]
+                              if isinstance(pending, list) else []),
+    }
 
 
 def _save(data: dict, path: Path = STATE_PATH) -> None:
@@ -185,11 +192,49 @@ def _owes_owner_notice(item: dict) -> bool:
     )
 
 
+def _response_revision_rank(source_id: str) -> tuple[int, float]:
+    """Rank a response revision exactly like Telegram's live projection.
+
+    The runner identity is ``<mid>:edit:<UTC second>:<payload hash>``.  The hash
+    distinguishes exact replay from a second real edit in the same Telegram second;
+    ordering remains timestamp then arrival, and deletion is terminal.
+    """
+    value = str(source_id or "")
+    if ":delete" in value:
+        return 2, float("inf")
+    if ":edit:" in value:
+        revision = value.split(":edit:", 1)[1].rsplit(":", 1)[0]
+        try:
+            stamp = dt.datetime.fromisoformat(revision.replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=dt.timezone.utc)
+            return 1, stamp.timestamp()
+        except (TypeError, ValueError):
+            return 1, 0.0
+    return 0, 0.0
+
+
+def _response_revision_is_stale(
+    existing_source_id: str, incoming_source_id: str, *,
+    existing_order: int = 0, incoming_order: int = 0,
+) -> bool:
+    existing = _response_revision_rank(existing_source_id)
+    incoming = _response_revision_rank(incoming_source_id)
+    if existing[0] == 2 and incoming[0] < 2:
+        return True
+    if existing[0] == 1 and incoming[0] == 0:
+        return True
+    return (existing[0] == incoming[0] == 1
+            and (incoming[1], int(incoming_order))
+            < (existing[1], int(existing_order)))
+
+
 def _compact(items: list[dict], *, settled_keep: int = _SETTLED_KEEP) -> list[dict]:
     """Bound settled history without ever dropping an unresolved obligation."""
     protected = {
         index for index, item in enumerate(items)
-        if item.get("status") == "pending" or _owes_owner_notice(item)
+        if (item.get("status") == "pending" or _owes_owner_notice(item)
+            or isinstance(item.get("pending_response_revision"), dict))
     }
     settled = [index for index in range(len(items)) if index not in protected]
     keep_settled = max(0, int(settled_keep) - len(protected))
@@ -354,7 +399,12 @@ class FollowUpLedger:
                     return None
             candidates = []
             for index, item in enumerate(state["items"]):
-                if item.get("status") != "pending" or str(item.get("target_peer_id")) != peer:
+                if str(item.get("target_peer_id")) != peer:
+                    continue
+                pending_revision = item.get("pending_response_revision") or {}
+                pending_match = self._pending_revision_matches(item, peer, mid)
+                if (item.get("status") != "pending"
+                        and not (item.get("status") == "response_deleted" and pending_match)):
                     continue
                 sent_mid = int(item.get("sent_message_id") or 0)
                 target_user = item.get("target_user_id")
@@ -375,8 +425,19 @@ class FollowUpLedger:
                 return None
             _, _, index = max(candidates)
             item = state["items"][index]
-            item["status"] = "answered"
-            item["response"] = {
+            pending_revision = item.pop("pending_response_revision", None)
+            if not isinstance(pending_revision, dict):
+                pending_revision = next((
+                    row for row in state.get("pending_revisions", [])
+                    if str(row.get("peer_id")) == peer
+                    and int(row.get("message_id") or 0) == mid
+                ), None)
+            state["pending_revisions"] = [
+                row for row in state.get("pending_revisions", [])
+                if not (str(row.get("peer_id")) == peer
+                        and int(row.get("message_id") or 0) == mid)
+            ]
+            response = {
                 "peer_id": peer,
                 "sender_id": sender,
                 # Отвечает ЧЕЛОВЕК, а не чат: заголовок письма брал `target_label`
@@ -387,7 +448,46 @@ class FollowUpLedger:
                 "reply_to_message_id": reply_mid,
                 "text": str(text or "")[:4000],
                 "received_at": now,
+                "revision_source_id": str(mid),
+                # Revision evidence is append-only while the thread is retained; the
+                # bounded follow-up ledger itself is not an archival store.
+                "revisions": [{
+                    "kind": "message", "source_id": str(mid),
+                    "text": str(text or "")[:4000], "observed_at": now,
+                }],
             }
+            if isinstance(pending_revision, dict):
+                source_id = str(pending_revision.get("source_id") or "")
+                kind = str(pending_revision.get("kind") or "")
+                if kind == "deletion" or ":delete" in source_id:
+                    response["revisions"].append({
+                        "kind": "deletion", "source_id": source_id or f"{mid}:delete",
+                        "observed_at": pending_revision.get("observed_at"),
+                    })
+                    response["text"] = ""
+                    response["deleted"] = True
+                    response["deleted_at"] = pending_revision.get("observed_at")
+                    response["revision_source_id"] = source_id or f"{mid}:delete"
+                    item["status"] = "response_deleted"
+                    item["notice_skipped"] = "ответ удалён до отправки отчёта"
+                    item["notice_skipped_at"] = pending_revision.get("observed_at") or now
+                elif kind == "edit" and ":edit:" in source_id:
+                    value = str(pending_revision.get("text") or "")[:4000]
+                    response["revisions"].append({
+                        "kind": "edit", "source_id": source_id, "text": value,
+                        "observed_at": pending_revision.get("observed_at"),
+                    })
+                    response["text"] = value
+                    response["edited_at"] = pending_revision.get("observed_at")
+                    response["revision_source_id"] = source_id
+                    response["revision_order"] = int(
+                        pending_revision.get("revision_order") or 0)
+                    item["status"] = "answered"
+                else:
+                    item["status"] = "answered"
+            else:
+                item["status"] = "answered"
+            item["response"] = response
             if sender_is_owner:
                 # 27.07 02:32: Егор ответил ей реплаем в AbstractDL — и его же слова
                 # уехали ему в ЛС под заголовком «AbstractDL Chat ответил(а)». Нить
@@ -399,6 +499,215 @@ class FollowUpLedger:
                 item["notice_skipped_at"] = now
             _save(state, self.path)
             return dict(item)
+
+    def get(self, followup_id: str) -> dict | None:
+        """Return one durable thread without mutating expiry/current state."""
+        with _LOCK:
+            for item in _load(self.path)["items"]:
+                if str(item.get("id") or "") == str(followup_id or ""):
+                    return dict(item)
+        return None
+
+    @staticmethod
+    def _response_matches(item: dict, peer: str, mid: int) -> bool:
+        response = item.get("response") or {}
+        try:
+            return (str(response.get("peer_id")) == peer
+                    and int(response.get("message_id")) == mid)
+        except (TypeError, ValueError):
+            return False
+
+    def _pending_revision_matches(self, item: dict, peer: str, mid: int) -> bool:
+        pending = item.get("pending_response_revision") or {}
+        try:
+            return (str(pending.get("peer_id")) == peer
+                    and int(pending.get("message_id")) == mid)
+        except (TypeError, ValueError):
+            return False
+
+    def _store_pending_revision(
+        self, state: dict, *, peer: str, mid: int, kind: str, source_id: str,
+        observed_at: float, text: str = "", revision_order: int = 0,
+    ) -> dict | None:
+        """Remember an edit/delete that arrived before its delayed original response.
+
+        Group revisions do not identify which pending thread they answer, so they stay in
+        a peer/message quarantine until ``observe_incoming`` supplies reply lineage.  DMs
+        have one addressed user per thread and can bind the revision immediately.
+        """
+        candidates: list[tuple[float, int]] = []
+        for index, item in enumerate(state["items"]):
+            if str(item.get("target_peer_id")) != peer or item.get("status") != "pending":
+                continue
+            target_user = item.get("target_user_id")
+            if not target_user or mid <= int(item.get("sent_message_id") or 0):
+                continue
+            candidates.append((float(item.get("sent_at") or 0), index))
+        if candidates:
+            _, index = max(candidates)
+            item = state["items"][index]
+            existing = item.get("pending_response_revision") or {}
+            existing_source = str(existing.get("source_id") or "")
+            existing_order = int(existing.get("revision_order") or 0)
+            if (source_id == existing_source
+                    or _response_revision_is_stale(
+                        existing_source, source_id,
+                        existing_order=existing_order,
+                        incoming_order=int(revision_order),
+                    )):
+                return None
+            item["pending_response_revision"] = {
+                "peer_id": peer, "message_id": mid, "kind": kind,
+                "source_id": source_id, "observed_at": observed_at,
+                "revision_order": int(revision_order),
+                **({"text": str(text or "")[:4000]} if kind == "edit" else {}),
+            }
+            if kind == "deletion":
+                item["status"] = "response_deleted"
+                item["notice_skipped"] = "ответ удалён до получения исходного апдейта"
+                item["notice_skipped_at"] = observed_at
+            _save(state, self.path)
+            return dict(item)
+
+        pending = state.setdefault("pending_revisions", [])
+        existing = next((row for row in pending
+                         if str(row.get("peer_id")) == peer
+                         and int(row.get("message_id") or 0) == mid), None)
+        existing_source = str((existing or {}).get("source_id") or "")
+        existing_order = int((existing or {}).get("revision_order") or 0)
+        if (source_id == existing_source
+                or _response_revision_is_stale(
+                    existing_source, source_id,
+                    existing_order=existing_order,
+                    incoming_order=int(revision_order),
+                )):
+            return None
+        row = {
+            "peer_id": peer, "message_id": mid, "kind": kind,
+            "source_id": source_id, "observed_at": observed_at,
+            "revision_order": int(revision_order),
+            **({"text": str(text or "")[:4000]} if kind == "edit" else {}),
+        }
+        state["pending_revisions"] = [
+            item for item in pending
+            if not (str(item.get("peer_id")) == peer
+                    and int(item.get("message_id") or 0) == mid)
+        ][-999:] + [row]
+        _save(state, self.path)
+        return None
+
+    def revise_response(
+        self, *, peer_id: str | int, message_id: str | int, text: str,
+        revision_source_id: str, observed_at: float | None = None,
+        revision_order: int = 0,
+    ) -> dict | None:
+        """Project an admitted Telegram edit onto a stored response.
+
+        Returns the changed thread only when the lineage exists and the revision is
+        newer/current under the same timestamp ordering as the live Telegram buffer.
+        Every accepted revision is appended to ``response.revisions``; current consumers
+        read only ``response.text``.
+        """
+        peer, mid = str(peer_id), int(message_id)
+        source_id = str(revision_source_id or "").strip()
+        if not source_id or ":edit:" not in source_id:
+            raise ValueError("an edit revision source id is required")
+        now = float(observed_at if observed_at is not None else time.time())
+        with _LOCK:
+            state = _load(self.path)
+            for item in state["items"]:
+                if not self._response_matches(item, peer, mid):
+                    continue
+                response = item["response"]
+                existing = str(response.get("revision_source_id") or mid)
+                revisions = response.get("revisions")
+                if not isinstance(revisions, list):
+                    revisions = [{
+                        "kind": "message", "source_id": existing,
+                        "text": str(response.get("text") or "")[:4000],
+                        "observed_at": response.get("received_at"),
+                    }]
+                    response["revisions"] = revisions
+                if (source_id == existing
+                        or any(str(row.get("source_id") or "") == source_id
+                               for row in revisions if isinstance(row, dict))
+                        or _response_revision_is_stale(
+                            existing, source_id,
+                            existing_order=int(response.get("revision_order") or 0),
+                            incoming_order=int(revision_order),
+                        )):
+                    return None
+                value = str(text or "")[:4000]
+                revisions.append({
+                    "kind": "edit", "source_id": source_id,
+                    "text": value, "observed_at": now,
+                })
+                response["text"] = value
+                response["revision_source_id"] = source_id
+                response["revision_order"] = int(revision_order)
+                response["edited_at"] = now
+                if not item.get("notified_at"):
+                    item["status"] = "answered"
+                    if str(item.get("notice_skipped") or "").startswith("ответ удалён"):
+                        item["notice_skipped"] = ""
+                        item["notice_skipped_at"] = None
+                _save(state, self.path)
+                return dict(item)
+            return self._store_pending_revision(
+                state, peer=peer, mid=mid, kind="edit", source_id=source_id,
+                observed_at=now, text=text, revision_order=int(revision_order),
+            )
+
+    def delete_response(
+        self, *, peer_id: str | int, message_id: str | int,
+        observed_at: float | None = None,
+    ) -> dict | None:
+        """Tombstone a stored response and suppress any still-unsent owner notice.
+
+        A notification already marked ``notified`` remains historical truth and is not
+        described as recalled.  The original/edited text survives only in the append-only
+        revision evidence, never in the current response fields or live context.
+        """
+        peer, mid = str(peer_id), int(message_id)
+        source_id = f"{mid}:delete"
+        now = float(observed_at if observed_at is not None else time.time())
+        with _LOCK:
+            state = _load(self.path)
+            for item in state["items"]:
+                if not self._response_matches(item, peer, mid):
+                    continue
+                response = item["response"]
+                existing = str(response.get("revision_source_id") or mid)
+                revisions = response.get("revisions")
+                if not isinstance(revisions, list):
+                    revisions = [{
+                        "kind": "message", "source_id": existing,
+                        "text": str(response.get("text") or "")[:4000],
+                        "observed_at": response.get("received_at"),
+                    }]
+                    response["revisions"] = revisions
+                if (existing == source_id
+                        or any(str(row.get("source_id") or "") == source_id
+                               for row in revisions if isinstance(row, dict))):
+                    return None
+                revisions.append({
+                    "kind": "deletion", "source_id": source_id,
+                    "observed_at": now,
+                })
+                response["text"] = ""
+                response["deleted"] = True
+                response["deleted_at"] = now
+                response["revision_source_id"] = source_id
+                if not item.get("notified_at"):
+                    item["status"] = "response_deleted"
+                    item["notice_skipped"] = "ответ удалён до отправки отчёта"
+                    item["notice_skipped_at"] = now
+                _save(state, self.path)
+                return dict(item)
+            return self._store_pending_revision(
+                state, peer=peer, mid=mid, kind="deletion", source_id=source_id,
+                observed_at=now,
+            )
 
     def pending_notifications(self) -> list[dict]:
         """Только ЗАКАЗАННЫЕ отчёты: след нити — её память, а не почта Егору.

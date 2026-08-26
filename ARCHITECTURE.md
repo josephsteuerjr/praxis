@@ -22,6 +22,18 @@ Telegram-контур, durable runs, задачи Forge, workers и обучен
 Praxis. LocalSystem service владеет единственным исходящим WSS; пользовательский session host
 получает desktop-envelope через локальный ACL/token-bound pipe.
 
+### Изолированный TTS
+
+`media_audio.py` сохраняет прежние `edge`/`piper` backends и добавляет только opt-in
+`PRAXIS_TTS_BACKEND=silero`. В этом режиме основной `mtproto_runner` не импортирует PyTorch и не
+держит Silero-модель: `silero_tts_client.py` лениво запускает отдельный interpreter с
+`silero_tts_worker.py`, передаёт ему serial JSONL-запросы и перед первым load требует точный
+SHA-256 локального `v5_ru.pt`. Worker не обращается к registry/сети, пишет только зарезервированный
+private WAV и умирает по idle timeout, request recycle, parent-death signal, ошибке, timeout или
+RSS guard. Перед Piper fallback клиент синхронно снимает и reap-ит worker; boot warmup этот backend
+пропускает. `scripts/silero_soak.py` — отдельный 30–60-минутный gate по трудному корпусу,
+worker/cgroup RSS, swap, PSI и возврату памяти после idle; сам по себе он live backend не переключает.
+
 ### Локальный shared STT
 
 `mtproto_runner.py` владеет единственным process-global `media_audio` backend и резидентной

@@ -765,6 +765,55 @@ class TestFinishTellsTheTruthAndDoesNotHoldTheLock(unittest.TestCase):
         task = json.loads((forge.TASKS_DIR / "hcode-t" / "task.json").read_text(encoding="utf-8"))
         self.assertTrue(task["finish_unknowns"], "незнание осталось в записи задачи")
 
+    def test_finish_asks_the_host_for_a_live_only_operation_survey(self):
+        """Terminal history must not make a completed Forge task permanently uncloseable."""
+        calls = []
+        fake = self._fake_serverd(calls, ok=True)
+        with mock.patch.object(forge, "serverd_client", fake):
+            forge.finish("hcode-t", checked="глазами", submit=False)
+        op_calls = [call for call in fake.call.call_args_list if call.args[0] == "op.list"]
+        self.assertEqual(len(op_calls), 1)
+        self.assertTrue(op_calls[0].args[1]["live_only"])
+
+    def test_truncated_new_terminal_rows_cannot_hide_an_old_running_operation(self):
+        """>100 новых terminal-записей вытесняют старую running из среза op.list."""
+        calls = []
+        fake = self._fake_serverd(calls, ok=True)
+        terminal = [{"id": f"done-{i}", "status": "finished"} for i in range(100)]
+        # Полный набор имитирует реальность: running есть, но op.list(limit=100)
+        # вернул только первые сто новых terminal-строк.
+        all_rows = terminal + [{"id": "old-running", "status": "running"}]
+        fake.call.side_effect = lambda verb, args=None, **kw: (
+            calls.append(f"rpc:{verb}") or {
+                "ok": True, "operations": all_rows[:100], "shown": 100, "matched": 101,
+                "note": "показаны 100 операций из 101 подходящих — список НЕ полный",
+            })
+        with mock.patch.object(forge, "serverd_client", fake):
+            out = forge.finish("hcode-t", checked="глазами", submit=False)
+        self.assertIn("finish заблокирован", out)
+        self.assertIn("НЕИЗВЕСТНЫ", out)
+        task = json.loads((forge.TASKS_DIR / "hcode-t" / "task.json").read_text(encoding="utf-8"))
+        self.assertEqual(task["status"], "active", "усечённый survey не должен закрыть задачу")
+
+    def test_malformed_operation_rows_block_finish_without_crashing(self):
+        """Успешный RPC с повреждённой строкой — не доказательство отсутствия live-op."""
+        calls = []
+        fake = self._fake_serverd(calls, ok=True)
+        fake.call.side_effect = lambda verb, args=None, **kw: (
+            calls.append(f"rpc:{verb}") or {
+                "ok": True,
+                "operations": [{"id": "done", "status": "finished"}, None, "broken"],
+            })
+        with mock.patch.object(forge, "serverd_client", fake):
+            out = forge.finish("hcode-t", checked="глазами", submit=False)
+        self.assertIn("finish заблокирован", out)
+        self.assertIn("НЕИЗВЕСТНЫ", out)
+        self.assertIn("malformed строк не-object: 2", out)
+        task = json.loads((forge.TASKS_DIR / "hcode-t" / "task.json").read_text(encoding="utf-8"))
+        self.assertEqual(task["status"], "active")
+        self.assertTrue(any("повреждённый список" in note
+                            for note in task.get("finish_unknowns", [])))
+
     def test_impact_is_not_asked_when_the_root_has_no_git(self):
         """Именно этот вызов сжёг 26.07 12 минут: у корня нет git — ответ пуст по
         построению, платить за него минутами ядра незачем."""

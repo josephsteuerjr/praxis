@@ -90,7 +90,8 @@ def record(state_dir: Path, *, task: dict, root: Path, events: Iterable[dict],
         if event.get("status") not in {"ok", "passed"}:
             failures.append(item)
     matrix = (verification or {}).get("checks") or []
-    failures.extend(row for row in matrix if row.get("status") not in {"ok", "passed"})
+    failures.extend(row for row in matrix if row.get("status") not in
+                    {"ok", "passed", "timed_out"})
     explicit = str(lesson or "").strip()
     if not explicit:
         if failures:

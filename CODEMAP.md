@@ -21,7 +21,10 @@
 | `tool_offerings.py` | Детерминированное формирование полного набора tools для owner, Praxis self и scoped trusted humans. |
 | `brain.py`, `appetite.py` | Наблюдаемый выбор model role и учёт/интерпретация вычислительного аппетита без скрытого veto. |
 | `media.py` | Typed inbound/outbound media, guarded spool, durable media receipts и cleanup. |
-| `media_audio.py` | Local STT и TTS backends с атомарными аудио-артефактами. |
+| `media_audio.py` | Local STT и TTS facade/backends с атомарными аудио-артефактами; Silero подключается только opt-in. |
+| `silero_tts_client.py`, `silero_tts_worker.py` | Lazy process-isolated Silero v5_ru: verified local model SHA, JSONL supervisor, timeout/RSS/recycle/parent-death и Piper fallback без импорта PyTorch в runner. |
+| `requirements-silero.txt`, `scripts/provision_silero.py` | Отдельная worker-only Python-среда и verified model provisioning; основной `requirements.txt` остаётся без PyTorch. |
+| `scripts/silero_soak.py` | Bounded 30–60-минутный gate трудного корпуса: latency/RTF, worker+cgroup memory/swap/PSI и idle-unload; не меняет live backend. |
 | `stt_rpc.py` | Authenticated HTTP-over-UDS адаптер для bounded hardbot STT; переиспользует resident Whisper из `mtproto_runner.py`, удаляет private temp audio и не персистит transcript. |
 
 ## Durable runs и Telegram side effects

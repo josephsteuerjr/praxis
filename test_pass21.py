@@ -240,6 +240,58 @@ class WiringTests(Pass21Base):
         mr._note_room_mode_skip("-100", "-100", "frozen", stage="frozen")
         self.assertEqual(captured[0][0], ("frozen", "запретил_егор"))
 
+    def test_effective_mode_wins_over_a_stale_raw_profile_in_skip_receipt(self):
+        mr = _import_runner()
+        captured = []
+        self.patch(mr.rooms, profile_read=lambda peer_id: {
+            "mode": "normal", "mode_set_by": "", "mode_reason": "", "mode_until": "",
+        })
+        self.patch(mr.perception, note_skip=lambda *args, **kwargs: captured.append((args, kwargs)))
+        mr._note_room_mode_skip("-100", "-100", "frozen", stage="room_mode")
+        self.assertEqual(captured[0][1]["detail"], "режим frozen")
+        self.assertEqual(captured[0][1]["meta"]["mode"], "frozen")
+        self.assertEqual(captured[0][0], ("room_mode", "не_увидела"))
+
+    def test_broken_mode_sensor_fails_closed_and_names_sensor_failure(self):
+        mr = _import_runner()
+        captured = []
+        self.patch(mr.rooms, effective_mode=lambda peer_id, **_kwargs: (_ for _ in ()).throw(OSError("boom")))
+        mode, failed = mr._resolve_room_mode("-100", "-100", where="test")
+        self.assertEqual((mode, failed), ("frozen", True))
+
+        self.patch(mr.rooms, profile_read=lambda peer_id: {})
+        self.patch(mr.perception, note_skip=lambda *args, **kwargs: captured.append((args, kwargs)))
+        mr._note_room_mode_skip(
+            "-100", "-100", mode, stage="room_mode", resolution_failed=failed,
+        )
+        self.assertEqual(captured[0][0], ("room_mode", "не_увидела"))
+        self.assertIn("не прочитан", captured[0][1]["detail"])
+        self.assertEqual(captured[0][1]["meta"]["mode"], "unavailable")
+
+    def test_real_profile_read_failure_fails_closed_before_aggregate_mode(self):
+        mr = _import_runner()
+
+        class UnreadableProfile:
+            def read_text(self, **_kwargs):
+                raise PermissionError("denied")
+
+        self.patch(mr.rooms, profile_path=lambda peer_id: UnreadableProfile())
+        mode, failed = mr._resolve_room_mode("-100", "-100", where="test")
+        self.assertEqual((mode, failed), ("frozen", True))
+
+    def test_protocol_and_unknown_modes_are_not_attributed_to_yegor(self):
+        mr = _import_runner()
+        for author in ("protocol", "unknown"):
+            captured = []
+            self.patch(mr.rooms, profile_read=lambda peer_id, author=author: {
+                "mode": "frozen", "mode_set_by": author,
+                "mode_reason": "автоматический тракт", "mode_until": "",
+            })
+            self.patch(mr.perception, note_skip=lambda *args, **kwargs: captured.append((args, kwargs)))
+            mr._note_room_mode_skip("-100", "-100", "frozen", stage="room_mode")
+            self.assertEqual(captured[0][0], ("room_mode", "не_увидела"), author)
+            self.assertEqual(captured[0][1]["meta"]["mode_set_by"], author)
+
     def test_runner_cooldown_uses_perception(self):
         mr = _import_runner()
         perception.set_knob("cooldown_dm", "42")

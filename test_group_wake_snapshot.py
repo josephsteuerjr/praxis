@@ -5,13 +5,16 @@ Run with: python praxis_test.py test_group_wake_snapshot -v
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import sys
+import tempfile
 import time
 import os
 import types
 import unittest
 from collections import defaultdict, deque
+from pathlib import Path
 from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import agent
@@ -214,6 +217,209 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.address_age_sec, 180.0)
         self.assertEqual(client.sent, [(-700, "увидела", {"reply_to": 10})])
         self.assertNotIn(chat_id, wakes)
+
+    async def test_delayed_pass_rechecks_live_mode_instead_of_using_stale_meta(self):
+        chat_id = "-702"
+        wake = _wake(mid=12, ts=990.0, context="Алиса: после срока")
+        wakes = {chat_id: wake}
+        meta = {chat_id: {
+            "entity": -702, "is_dm": False, "is_owner": False,
+            "known": True, "family": False, "name": "Алиса",
+            "title": "room", "size": 4, "addressed": True,
+            "addressed_mid": 12, "room_mode": "frozen",
+        }}
+        captured = {}
+        client = _Client()
+
+        def voice(*args, **kwargs):
+            captured.update(args=args, kwargs=kwargs)
+            return media.TurnEnvelope(text="дошло")
+
+        with (
+            patch.object(runner, "client", client),
+            patch.object(runner, "_meta", meta),
+            patch.object(runner, "_group_wakes", wakes),
+            patch.object(runner, "_last_pass", defaultdict(float)),
+            patch.object(runner, "_passing", set()),
+            patch.object(runner, "_pending_media", defaultdict(lambda: deque(maxlen=16))),
+            patch.object(runner, "_recent_msgs", defaultdict(lambda: deque(maxlen=12))),
+            patch.object(runner, "_missed", {}),
+            patch.object(runner, "_cooldown", return_value=0.0),
+            patch.object(runner, "_resolve_room_mode", return_value=("normal", False)),
+            patch.object(runner, "_group_context_frozen", return_value=(wake.context_snapshot, ())),
+            patch.object(runner, "_buf_push", return_value=None),
+            patch.object(runner, "_maybe_compact", side_effect=_no_compact),
+            patch.object(agent, "voice_turn_envelope", side_effect=voice),
+        ):
+            await runner._run_pass(chat_id)
+            await asyncio.sleep(0)
+
+        self.assertEqual(meta[chat_id]["room_mode"], "normal")
+        self.assertEqual(captured["args"][0], chat_id)
+        self.assertEqual(client.sent, [(-702, "дошло", {"reply_to": 12})])
+        self.assertNotIn(chat_id, wakes)
+
+    async def test_delayed_pass_stops_if_room_became_frozen(self):
+        chat_id = "-703"
+        wake = _wake(mid=13, ts=990.0, context="Алиса: ещё вопрос")
+        wakes = {chat_id: wake}
+        note = Mock()
+        consume = Mock()
+        with (
+            patch.object(runner, "_meta", {chat_id: {
+                "is_dm": False, "peer_id": chat_id, "room_mode": "normal",
+            }}),
+            patch.object(runner, "_group_wakes", wakes),
+            patch.object(runner, "_resolve_room_mode", return_value=("frozen", False)),
+            patch.object(runner, "_note_room_mode_skip", note),
+            patch.object(runner, "_consume_pending_media", consume),
+            patch.object(agent, "voice_turn_envelope",
+                         side_effect=AssertionError("frozen delayed wake reached voice")),
+        ):
+            await runner._run_pass(chat_id)
+
+        note.assert_called_once_with(
+            chat_id, chat_id, "frozen", stage="room_mode", resolution_failed=False,
+        )
+        consume.assert_called_once_with(chat_id, wake.media_snapshot)
+        self.assertNotIn(chat_id, wakes)
+
+    async def test_delayed_pass_rechecks_again_after_waiting_for_one_mind(self):
+        chat_id = "-7031"
+        media_ref = object()
+        wake = _wake(mid=131, ts=990.0, context="Алиса: дождалась",
+                     media_refs=(media_ref,))
+        wakes = {chat_id: wake}
+        lock = runner._OneMind()
+        await lock.acquire()
+        entered = asyncio.Event()
+        real_acquire = lock.acquire
+
+        async def acquire_after_notice():
+            entered.set()
+            return await real_acquire()
+
+        lock.acquire = acquire_after_notice
+        note = Mock()
+        consume = Mock()
+        arm = Mock()
+        resolver = Mock(side_effect=(("normal", False), ("frozen", False)))
+        with (
+            patch.object(runner, "_ONE_MIND", lock),
+            patch.object(runner, "_meta", {chat_id: {
+                "is_dm": False, "peer_id": chat_id, "room_mode": "normal",
+            }}),
+            patch.object(runner, "_group_wakes", wakes),
+            patch.object(runner, "_last_pass", defaultdict(float)),
+            patch.object(runner, "_passing", set()),
+            patch.object(runner, "_cooldown", return_value=0.0),
+            patch.object(runner, "_resolve_room_mode", resolver),
+            patch.object(runner, "_note_room_mode_skip", note),
+            patch.object(runner, "_consume_pending_media", consume),
+            patch.object(runner, "_arm", arm),
+            patch.object(runner, "_maybe_compact", side_effect=_no_compact),
+            patch.object(agent, "voice_turn_envelope",
+                         side_effect=AssertionError("post-lock frozen wake reached voice")),
+        ):
+            task = asyncio.create_task(runner._run_pass(chat_id))
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            self.assertIs(wakes[chat_id], wake)
+            lock.release()
+            await asyncio.wait_for(task, timeout=1.0)
+            await asyncio.sleep(0)
+
+        self.assertEqual(resolver.call_count, 2)
+        note.assert_called_once_with(
+            chat_id, chat_id, "frozen", stage="room_mode", resolution_failed=False,
+        )
+        consume.assert_called_once_with(chat_id, wake.media_snapshot)
+        arm.assert_not_called()
+        self.assertNotIn(chat_id, wakes)
+        self.assertFalse(lock.locked())
+
+    async def test_post_lock_sensor_failure_keeps_wake_and_uses_only_deferred_retry(self):
+        chat_id = "-7032"
+        media_ref = object()
+        wake = _wake(mid=132, ts=990.0, context="Алиса: сенсор",
+                     media_refs=(media_ref,))
+        wakes = {chat_id: wake}
+        defer = Mock()
+        consume = Mock()
+        arm = Mock()
+        resolver = Mock(side_effect=(("normal", False), ("frozen", True)))
+        with (
+            patch.object(runner, "_ONE_MIND", runner._OneMind()),
+            patch.object(runner, "_meta", {chat_id: {
+                "is_dm": False, "peer_id": chat_id, "room_mode": "normal",
+            }}),
+            patch.object(runner, "_group_wakes", wakes),
+            patch.object(runner, "_last_pass", defaultdict(float)),
+            patch.object(runner, "_passing", set()),
+            patch.object(runner, "_cooldown", return_value=0.0),
+            patch.object(runner, "_resolve_room_mode", resolver),
+            patch.object(runner, "_note_room_mode_skip"),
+            patch.object(runner, "_defer_pass", defer),
+            patch.object(runner, "_consume_pending_media", consume),
+            patch.object(runner, "_arm", arm),
+            patch.object(runner, "_maybe_compact", side_effect=_no_compact),
+            patch.object(agent, "voice_turn_envelope",
+                         side_effect=AssertionError("post-lock sensor failure reached voice")),
+        ):
+            await runner._run_pass(chat_id)
+            await asyncio.sleep(0)
+
+        self.assertEqual(resolver.call_count, 2)
+        defer.assert_called_once_with(chat_id, 60.0)
+        consume.assert_not_called()
+        arm.assert_not_called()
+        self.assertIs(wakes[chat_id], wake)
+
+    async def test_delayed_pass_retries_when_mode_sensor_is_temporarily_unavailable(self):
+        chat_id = "-704"
+        wake = _wake(mid=14, ts=990.0, context="Алиса: сохранённый вопрос")
+        wakes = {chat_id: wake}
+        defer = Mock()
+        consume = Mock()
+        with (
+            patch.object(runner, "_meta", {chat_id: {
+                "is_dm": False, "peer_id": chat_id, "room_mode": "normal",
+            }}),
+            patch.object(runner, "_group_wakes", wakes),
+            patch.object(runner, "_resolve_room_mode", return_value=("frozen", True)),
+            patch.object(runner, "_note_room_mode_skip"),
+            patch.object(runner, "_defer_pass", defer),
+            patch.object(runner, "_consume_pending_media", consume),
+            patch.object(agent, "voice_turn_envelope",
+                         side_effect=AssertionError("sensor failure reached voice")),
+        ):
+            await runner._run_pass(chat_id)
+
+        defer.assert_called_once_with(chat_id, 60.0)
+        consume.assert_not_called()
+        self.assertIs(wakes[chat_id], wake)
+
+    async def test_deferred_retry_can_schedule_its_own_successor(self):
+        chat_id = "-705"
+        calls = []
+        done = asyncio.Event()
+
+        async def again(cid):
+            calls.append(cid)
+            if len(calls) == 1:
+                runner._defer_pass(cid, 0.0)
+            else:
+                done.set()
+
+        with (
+            patch.object(runner, "_deferred", {}),
+            patch.object(runner, "_run_pass", side_effect=again),
+        ):
+            runner._defer_pass(chat_id, 0.0)
+            await asyncio.wait_for(done.wait(), timeout=1.0)
+
+        self.assertEqual(calls, [chat_id, chat_id])
+        self.assertNotIn(chat_id, runner._deferred,
+                         "completed successor cleans its own slot")
 
     async def test_cooldown_defers_as_transport_retry_without_model_or_task_side_effects(self):
         chat_id = "-709"
@@ -600,6 +806,55 @@ class _Event:
 
 
 class TestWakeCapture(unittest.IsolatedAsyncioTestCase):
+    async def test_expired_frozen_mode_reaches_wake_instead_of_stale_skip(self):
+        chat_id = "-800"
+        buf = defaultdict(lambda: deque(maxlen=runner.BUF_MAXLEN))
+        wakes = {}
+        arm = Mock()
+        with tempfile.TemporaryDirectory(prefix="praxis-expired-room-") as td:
+            mem = Path(td) / "memory"
+            patches = (
+                patch.object(runner.rooms, "BASE", Path(td)),
+                patch.object(runner.rooms, "MEM_DIR", mem),
+                patch.object(runner.rooms, "ROOMS_DIR", mem / "rooms"),
+                patch.object(runner.rooms, "FROZEN", mem / "frozen_chats.json"),
+                patch.object(runner.rooms, "CARDS_PATH", mem / ".state" / "room_cards.json"),
+                patch.object(runner, "OWNER_ID", 101),
+                patch.object(runner, "_buf", buf),
+                patch.object(runner, "_buf_dirty", set()),
+                patch.object(runner, "_meta", {}),
+                patch.object(runner, "_group_wakes", wakes),
+                patch.object(runner, "_pending_media", defaultdict(lambda: deque(maxlen=16))),
+                patch.object(runner, "_recent_msgs", defaultdict(lambda: deque(maxlen=12))),
+                patch.object(runner, "_recent_senders", defaultdict(lambda: deque(maxlen=40))),
+                patch.object(runner, "_seen_ids", defaultdict(lambda: deque(maxlen=100))),
+                patch.object(runner, "_capture_typed_media", AsyncMock(return_value=(None, None))),
+                patch.object(runner, "_chat_descriptor",
+                             AsyncMock(return_value={"title": "room", "size": 4})),
+                patch.object(runner, "_arm", arm),
+                patch.object(runner.bufstore, "meta_update", return_value=None),
+                patch.object(runner.rooms, "is_allowed", return_value=True),
+                patch.object(runner.social, "category", return_value="known"),
+                patch.object(runner.reflex, "triage", return_value="reply"),
+            )
+            with contextlib.ExitStack() as stack:
+                for item in patches:
+                    stack.enter_context(item)
+                runner.rooms.set_mode(
+                    chat_id, "frozen", set_by="praxis", ttl_h=1,
+                    now=time.time() - 2 * 3600,
+                )
+                self.assertTrue(runner.rooms.is_frozen(chat_id))
+                await runner.on_new(_Event(
+                    mid=9, text="@praxis после срока", name="Алиса",
+                    sender_id=101, mentioned=True,
+                ))
+
+                self.assertEqual(arm.call_count, 1)
+                self.assertIn(chat_id, wakes)
+                self.assertFalse(runner.rooms.is_frozen(chat_id))
+                self.assertEqual(runner.rooms.effective_mode(chat_id), "normal")
+
     async def test_background_cannot_mutate_wake_and_new_address_reanchors(self):
         chat_id = "-800"
         buf = defaultdict(lambda: deque(maxlen=runner.BUF_MAXLEN))
@@ -713,16 +968,38 @@ class TestWakeCapture(unittest.IsolatedAsyncioTestCase):
 
 
 class TestAddressFrame(unittest.TestCase):
-    def test_age_and_frozen_boundary_are_visible_to_voice(self):
+    def test_age_and_captured_boundary_are_visible_to_voice(self):
         ctx = agent.ChannelContext(
             chat_id="-900", is_dm=False, addressed=True,
             address_message_id=77, address_kind="mention", address_age_sec=180.2)
-        with patch.object(agent.notes, "read", return_value=""):
+        with (
+            patch.dict(os.environ, {"PRAXIS_FRAME_TAIL_SPLIT": "0"}),
+            patch.object(agent.notes, "read", return_value=""),
+        ):
             frame = agent._presence_frame(ctx)
-        self.assertIn("message #77", frame)
+        self.assertIn("captured Telegram message #77", frame)
         self.assertIn("mention", frame)
         self.assertIn("180 seconds ago", frame)
-        self.assertIn("stop at that address", frame)
+        self.assertIn("original snapshot ends there", frame)
+        self.assertNotIn("frozen", frame)
+
+    def test_tail_observation_does_not_masquerade_as_a_frozen_room(self):
+        ctx = agent.ChannelContext(
+            chat_id="-900", is_dm=False, addressed=True,
+            address_message_id=77, address_kind="mention", address_age_sec=180.2)
+        token = agent._FRAME_ADDRESS.set(None)
+        try:
+            with (
+                patch.dict(os.environ, {"PRAXIS_FRAME_TAIL_SPLIT": "1"}),
+                patch.object(agent.notes, "read", return_value=""),
+            ):
+                agent._presence_frame(ctx)
+                address = agent.build_frame_tail(split_tail=True)["observations"]["address"]
+        finally:
+            agent._FRAME_ADDRESS.reset(token)
+        self.assertIn("сохранённому адресному снимку", address["note"])
+        self.assertIn("заканчиваются на указанном сообщении", address["note"])
+        self.assertNotIn("заморож", address["note"])
 
 
 class _ChannelEvent(_Event):

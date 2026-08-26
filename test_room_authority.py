@@ -80,6 +80,27 @@ class RoomsHarness(unittest.TestCase):
         return rooms.profile_path(cid).read_text(encoding="utf-8")
 
 
+    def test_strict_frozen_read_distinguishes_missing_from_broken(self):
+        self.assertEqual(rooms._load_frozen(strict=True), set(),
+                         "missing sidecar is valid empty state")
+        rooms.FROZEN.parent.mkdir(parents=True, exist_ok=True)
+        rooms.FROZEN.write_text("not-json", encoding="utf-8")
+        self.assertEqual(rooms._load_frozen(), set(),
+                         "legacy readers remain tolerant")
+        with self.assertRaises(ValueError):
+            rooms._load_frozen(strict=True)
+
+
+    def test_strict_expiry_validates_sidecar_before_rewriting_profile(self):
+        cid = "-777"
+        rooms.set_mode(cid, "frozen", set_by="praxis", ttl_h=1, now=T0)
+        rooms.FROZEN.write_text("{broken", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            rooms.effective_mode(cid, now=T0 + HOUR, strict=True)
+        self.assertEqual(rooms.profile_read(cid)["mode"], "frozen",
+                         "sensor failure must not rewrite the room open")
+
+
 class TestHonestAuthorship(RoomsHarness):
     def test_an_unnamed_author_is_never_yegor(self):
         """Корень лжи: неопознанный автор коэрсился в «owner»."""

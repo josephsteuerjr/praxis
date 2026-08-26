@@ -187,17 +187,20 @@ def run(request_path: Path) -> int:
                                    scope, str(request.get("id") or directory.name), request)
                        for i, row in enumerate(checks)]
             results = [future.result() for future in futures]
-        failed = [row for row in results if row.get("status") != "passed"]
-        final = {"status": "passed" if not failed else "failed", "finished": _now(),
+        failed = [row for row in results if row.get("status") in {"failed", "error"}]
+        skipped = [row for row in results if row.get("status") == "timed_out"]
+        passed = [row for row in results if row.get("status") == "passed"]
+        final_status = "failed" if failed else ("passed_with_skips" if skipped else "passed")
+        final = {"status": final_status, "finished": _now(),
                  "duration_s": round(time.monotonic() - started, 3), "checks": results,
-                 "passed": len(results) - len(failed), "failed": len(failed),
+                 "passed": len(passed), "skipped": len(skipped), "failed": len(failed),
                  # Срок виден в самом отчёте, а не только в логах отдельных проверок:
                  # `timed_out` без названного предела читается как «упало само».
                  "matrix_deadline_s": timeout,
                  "supervisor_pid": os.getpid(),
                  "supervisor_started_at": state.get("supervisor_started_at", "")}
         _write(directory / "result.json", final)
-        return 0 if not failed else 1
+        return 1 if failed else 0
     except BaseException as exc:  # noqa: BLE001
         final = {"status": "error", "finished": _now(),
                  "duration_s": round(time.monotonic() - started, 3),

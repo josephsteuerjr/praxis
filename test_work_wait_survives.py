@@ -94,6 +94,72 @@ class WorkWaitBase(unittest.TestCase):
             event_kind="run_checkpoint", idempotent=True,
         )
 
+    def _old_guard_receipt(self, context, draft: str = "прежний черновик") -> None:
+        value = {
+            "schema": agent._OUTBOUND_GUARD_RECEIPT_SCHEMA,
+            "draft_sha256": agent.hashlib.sha256(draft.encode("utf-8")).hexdigest(),
+            "text": draft,
+            "media_queue_ids": [],
+            "advisor": "not_run",
+            "advisor_verdict": "",
+            "advisor_reason": "",
+            "praxis_decision": "send_authored",
+        }
+        self.manager.store_result(
+            context.run_id, json.dumps(value, ensure_ascii=False, indent=2),
+            call_id=f"{agent._OUTBOUND_GUARD_RECEIPT_CALL_PREFIX}:{context.run_id}",
+            name="outbound-guard", inline_chars=128,
+            media_type="application/json; charset=utf-8",
+            event_kind="outbound_guard_result", idempotent=True,
+        )
+
+    def _old_guard_input_before(self, context, *, draft: str = "старый текст") -> None:
+        value = {
+            "schema": run_resume.OUTBOUND_GUARD_INPUT_SCHEMA,
+            "draft_sha256": agent.hashlib.sha256(draft.encode("utf-8")).hexdigest(),
+            "media_queue_ids": [],
+        }
+        self.manager.store_result(
+            context.run_id, json.dumps(value, ensure_ascii=False, indent=2),
+            call_id=f"outbound-guard-input:{context.run_id}",
+            name="outbound-guard-input", inline_chars=128,
+            media_type="application/json; charset=utf-8",
+            event_kind="outbound_guard_input", idempotent=True,
+        )
+
+    def _terminal_model_after_checkpoint(self, context, *, text: str = "итог") -> None:
+        call_id = "model-after-checkpoint"
+        model_input = {
+            "system": "exact system",
+            "messages": [{"role": "user", "content": "работа"}],
+            "tools": [{"name": "fs_read"}],
+        }
+        self.manager.store_result(
+            context.run_id, json.dumps(model_input, ensure_ascii=False, indent=2),
+            call_id=call_id, name="model-input", inline_chars=128,
+            media_type="application/json; charset=utf-8",
+            event_kind="model_input", idempotent=True,
+        )
+        self.manager.append_event(
+            context.run_id, "model_started", call_id=call_id,
+            role="voice", message_count=1, tool_count=1,
+        )
+        model_output = {
+            "text": text, "blocks": [{"type": "text", "text": text}],
+            "stop_reason": "end_turn", "framework": "test", "model": "test",
+            "usage": {},
+        }
+        self.manager.store_result(
+            context.run_id, json.dumps(model_output, ensure_ascii=False, indent=2),
+            call_id=call_id, name="model-output", inline_chars=128,
+            media_type="application/json; charset=utf-8",
+            event_kind="model_output", idempotent=True,
+        )
+        self.manager.append_event(
+            context.run_id, "model_completed", call_id=call_id,
+            role="voice", stop_reason="end_turn",
+        )
+
     def _say(self, context, action: str, **fields) -> dict:
         """Её слово ЖИВОЙ рукой: через потолок времени, в отдельном потоке.
 
@@ -252,6 +318,7 @@ class TheRevivedTurnIsTheSameWork(WorkWaitBase):
             messages=[{"role": "user", "content": "первая половина работы"}],
             work_state=work_loop.snapshot(),
         )
+        self._old_guard_receipt(context)
         self._park(context, self._say(context, "wait", wake_on="жду сборку"),
                    now=time.time() - 7200)
 
@@ -284,6 +351,7 @@ class TheRevivedTurnIsTheSameWork(WorkWaitBase):
     def test_a_revived_turn_that_says_done_still_lands_done(self):
         context = self._work_run("done-after-wait")
         self._checkpoint(context, work_state=work_loop.snapshot())
+        self._old_guard_receipt(context)
         self._park(context, self._say(context, "wait", wake_on="жду"),
                    now=time.time() - 7200)
 
@@ -295,11 +363,127 @@ class TheRevivedTurnIsTheSameWork(WorkWaitBase):
             return "готово"
 
         with mock.patch.object(agent, "_terminal_tool_loop", side_effect=loop):
-            agent.resume_durable_run(context.run_id)
+            report = agent.resume_durable_run(context.run_id)
 
+        self.assertEqual(report["status"], "completed")
         manifest = self.manager.manifest(context.run_id)
         self.assertEqual(manifest["status"], "done")
         self.assertIn("сборка зелёная", manifest["terminal"]["reason"])
+        row = [r for r in self.manager.events(context.run_id)
+               if r.get("kind") == "status_changed" and r.get("to_status") == "done"][-1]
+        self.assertEqual(row["details"]["task_control"]["action"], "done")
+
+    def test_tool_response_resume_lands_her_word_before_the_old_guard_too(self):
+        context = self._work_run("tool-response-done")
+        self._checkpoint(context, work_state=work_loop.snapshot())
+        self._old_guard_receipt(context)
+        self._park(context, self._say(context, "wait", wake_on="жду инструмент"),
+                   now=time.time() - 7200)
+
+        def loop(**_kwargs):
+            agent._call_tool_with_ceiling(
+                "task_control", agent.tool_task_control,
+                {"action": "done", "evidence": "результат инструмента проверен"},
+            )
+            return "инструмент проверен"
+
+        plan = self._plan(context)
+        runtime = agent._AgentResumeRuntime(plan)
+        request = agent.run_executor.ToolResponseContinuationRequest(
+            lease=agent.run_executor.ResumeLease.from_plan(plan),
+            owner_token="test-owner",
+            context=plan.context,
+            model_input={
+                "system": "exact system",
+                "messages": [{"role": "user", "content": "работа"}],
+                "tools": [{"name": "fs_read"}],
+            },
+            model_output={"stop_reason": "tool_use", "blocks": []},
+            resolutions=(), checkpoint={"iteration": 2}, outbound=(),
+        )
+        self.manager.resume(
+            context.run_id, actor="test:resume-runtime",
+            reason="test acquired exact resume lease",
+        )
+        with mock.patch.object(agent, "_terminal_tool_loop", side_effect=loop):
+            result = runtime.continue_tool_response(request)
+
+        self.assertEqual(result["run_status"], "done")
+        manifest = self.manager.manifest(context.run_id)
+        self.assertEqual(manifest["status"], "done")
+        self.assertIn("результат инструмента проверен", manifest["terminal"]["reason"])
+    def test_legacy_done_checkpoint_lands_before_stale_guard_ordering(self):
+        """Prod regression: accepted done was checkpointed, then an older guard poisoned plan."""
+        context = self._work_run("legacy-done-poisoned")
+        self._old_guard_input_before(context)
+        control = self._say(
+            context, "done", evidence="точный артефакт и зелёный тест",
+            summary="работа завершена",
+        )
+        work_state = {
+            "schema": "praxis.work-loop-state.v1", "used": 0,
+            "control": dict(control), "sent": 0, "finished": False,
+            "finish_note": "",
+        }
+        self._checkpoint(context, iteration=9, work_state=work_state)
+        self._terminal_model_after_checkpoint(context, text="работа завершена")
+        self.manager.transition(
+            context.run_id, "paused", expected="running",
+            reason="recovery executor stopped before transport intent",
+        )
+
+        plan = self._plan(context)
+        self.assertEqual(plan.kind, "checkpoint_control")
+        self.assertEqual(plan.diagnostics, ("done",))
+        with mock.patch.object(
+            agent, "_terminal_tool_loop",
+            side_effect=AssertionError("legacy control must not re-author"),
+        ):
+            report = agent.resume_durable_run(context.run_id)
+
+        self.assertEqual(report["status"], "completed")
+        manifest = self.manager.manifest(context.run_id)
+        self.assertEqual(manifest["status"], "done")
+        self.assertIn("точный артефакт", manifest["terminal"]["reason"])
+        self.assertEqual(control["action"], "done")
+
+    def test_legacy_checkpoint_control_never_bypasses_an_addressed_run(self):
+        channel = agent.ChannelContext(
+            chat_id="777", room_id="777", principal_id="777",
+            is_dm=True, owner=True, known=True, addressed=True,
+            address_message_id=9, address_kind="direct",
+            reply_targets=((9, "Yegor", "continue"),),
+        )
+        context = run_context.RunContext.create(
+            run_id="run-work-wait-addressed-boundary", kind="chat_turn",
+            goal="addressed boundary", principal_id="777", scope=channel.scope,
+            origin_chat_id="777", origin_message_ids=[9],
+            delivery_chat_id="777", model_profile="voice",
+        )
+        persisted = self.manager.create(
+            context, agent._run_context_markdown(
+                ctx=channel, kind=context.kind, goal=context.goal,
+                conversation="immutable conversation", history=None,
+                extra="immutable runtime frame",
+            ),
+        )
+        self.manager.transition(persisted.run_id, "running", expected="pending")
+        context = self.manager.context(persisted.run_id)
+        self._old_guard_input_before(context)
+        work_state = {
+            "schema": "praxis.work-loop-state.v1", "used": 0,
+            "control": {"action": "done", "evidence": "evidence"},
+            "sent": 0, "finished": False, "finish_note": "",
+        }
+        self._checkpoint(context, work_state=work_state)
+        self._terminal_model_after_checkpoint(context, text="addressed result")
+        self.manager.transition(
+            context.run_id, "paused", expected="running",
+            reason="recovery executor stopped before transport intent",
+        )
+        plan = self._plan(context)
+        self.assertEqual(plan.kind, "blocked")
+        self.assertIn("outbound guard input", plan.reason)
 
 
 class TheProtocolIsMachineReadable(WorkWaitBase):

@@ -73,6 +73,23 @@ class OwnerDeliveryLedgerCase(unittest.TestCase):
         self.assertTrue(read["delivered_at"])
         self.assertEqual(read["last_detail"], {"surface": "pwa"})
 
+    def test_current_for_transport_rejects_superseded_or_stale_snapshots(self):
+        first = self.emit(dedupe="old", coalesce="thread:transport")
+        current = self.ledger.current_for_transport(
+            first["id"], transport="telegram",
+            expected_revision=first["revision"],
+        )
+        self.assertEqual(current["id"], first["id"])
+        newer = self.emit(dedupe="new", coalesce="thread:transport")
+        self.assertIsNone(self.ledger.current_for_transport(
+            first["id"], transport="telegram",
+            expected_revision=first["revision"],
+        ))
+        self.assertIsNone(self.ledger.current_for_transport(
+            newer["id"], transport="telegram",
+            expected_revision=newer["revision"] + 1,
+        ))
+
     def test_dedupe_is_exact_and_newer_coalesced_item_supersedes_old(self):
         first = self.emit(dedupe="same", coalesce="thread:42")
         replay = self.emit(dedupe="same", coalesce="thread:42")

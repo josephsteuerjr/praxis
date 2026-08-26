@@ -62,7 +62,8 @@ NON_EXECUTABLE_KINDS = frozenset({
     "transport_owned", "blocked", "in_doubt", "not_resumable",
 })
 EXECUTABLE_KINDS = frozenset({
-    "authored_output", "continue_checkpoint", "replay_model_tool_response",
+    "authored_output", "checkpoint_control", "continue_checkpoint",
+    "replay_model_tool_response",
 })
 REPLAY_BASES = frozenset({"read_only", "idempotency_key"})
 
@@ -159,6 +160,16 @@ class AuthoredOutputRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class CheckpointControlRequest:
+    """Exact checkpoint whose accepted work-loop closing word must be landed."""
+
+    lease: ResumeLease
+    owner_token: Any
+    context: RunContext
+    checkpoint: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
 class CheckpointContinuationRequest:
     """Exact checkpoint state from which model/tool authoring may continue."""
 
@@ -230,6 +241,7 @@ class ResumeExecutorCallbacks:
 
     acquire_lease: Callable[[ResumeLease], LeaseGrant]
     postprocess_authored_output: Callable[[AuthoredOutputRequest], Any] | None = None
+    land_checkpoint_control: Callable[[CheckpointControlRequest], Any] | None = None
     continue_checkpoint: Callable[[CheckpointContinuationRequest], Any] | None = None
     execute_pending_tool: Callable[[PendingToolRequest], Any] | None = None
     replay_outstanding_tool: Callable[[ReplayToolRequest], Any] | None = None
@@ -384,6 +396,10 @@ def _preflight(plan: ResumePlan, callbacks: ResumeExecutorCallbacks) -> ResumeLe
             raise ResumeExecutionError("authored output lacks its exact model pair")
         if plan.model_output.get("stop_reason") == "tool_use":
             raise ResumeExecutionError("authored output is not terminal")
+    elif plan.kind == "checkpoint_control":
+        if callbacks.land_checkpoint_control is None:
+            raise ResumeExecutionError("land_checkpoint_control callback is required")
+        _checkpoint(plan)
     elif plan.kind == "continue_checkpoint":
         if callbacks.continue_checkpoint is None:
             raise ResumeExecutionError("continue_checkpoint callback is required")
@@ -500,6 +516,26 @@ def execute_resume(
             reason="persisted authored output postprocessed without re-authoring",
             lease=lease, lease_acquired=True, effects_started=True,
             phase="postprocess_authored_output", callback_value=value,
+        )
+
+    if plan.kind == "checkpoint_control":
+        checkpoint = _checkpoint(plan)
+        request = CheckpointControlRequest(
+            lease=lease, owner_token=grant.owner_token, context=context,
+            checkpoint=checkpoint,
+        )
+        try:
+            value = callbacks.land_checkpoint_control(request)  # type: ignore[misc]
+        except Exception as exc:
+            return _failed(
+                plan, lease=lease, acquired=True, effects_started=True,
+                phase="land_checkpoint_control", exc=exc,
+            )
+        return ResumeExecutionOutcome(
+            run_id=plan.run_id, plan_kind=plan.kind, status="completed",
+            reason="exact checkpointed work control landed without re-authoring",
+            lease=lease, lease_acquired=True, effects_started=True,
+            phase="land_checkpoint_control", callback_value=value,
         )
 
     if plan.kind == "continue_checkpoint":

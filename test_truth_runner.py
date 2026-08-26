@@ -1124,6 +1124,109 @@ class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
         self.assertEqual(projection.get("followup_request"), "")
 
 
+class FollowUpPendingDeliveryRevisionTests(unittest.IsolatedAsyncioTestCase):
+    """A queued owner copy must track current response text until transport send."""
+
+    async def test_edit_supersedes_unsent_stale_copy_and_emits_current_revision(self):
+        with tempfile.TemporaryDirectory(prefix="praxis-followup-delivery-") as raw:
+            base = Path(raw)
+            ledger = telegram_followups.FollowUpLedger(base / "followups.json")
+            delivery = runner.owner_delivery.OwnerDeliveryLedger(
+                base / "owner_delivery" / "events.jsonl")
+            item = ledger.create(
+                target_ref="-1001", target_label="Room", target_peer_id=-1001,
+                target_user_id=None, sent_message_id=50,
+                request_text="сообщи, когда ответит", notify_owner=True,
+                notice_source="owner", sent_at=1)
+            ledger.observe_incoming(
+                peer_id=-1001, sender_id=7, sender_name="Alice", message_id=51,
+                reply_to_message_id=50, text="A", received_at=2)
+            stale = delivery.emit(
+                "followup_answer", title="Alice ответила", body="A",
+                correlation={"followup_id": item["id"]},
+                dedupe_key=f"stale:{item['id']}")
+            with (patch.object(runner.telegram_followups, "LEDGER", ledger),
+                  patch.object(runner.owner_delivery, "LEDGER", delivery),
+                  patch.object(runner, "OWNER_ID", 555000100),
+                  patch.object(runner, "_deliver_owner_item", AsyncMock(
+                      side_effect=lambda row: row))):
+                ledger.revise_response(
+                    peer_id=-1001, message_id=51, text="B",
+                    revision_source_id="51:edit:2026-08-20T08:00:02Z:new",
+                    observed_at=3)
+                self.assertEqual(await runner._supersede_pending_followup_deliveries(
+                    item["id"], reason="response_edited"), 1)
+                await runner._followups_once()
+
+            old = delivery.get(stale["id"])
+            self.assertEqual(old["status"], "superseded")
+            current = [row for row in delivery.pending()
+                       if row["correlation"].get("followup_id") == item["id"]]
+            self.assertEqual([row["body"] for row in current], ["B"])
+
+    async def test_transport_boundary_refuses_a_stale_followup_snapshot(self):
+        with tempfile.TemporaryDirectory(prefix="praxis-followup-boundary-") as raw:
+            base = Path(raw)
+            ledger = telegram_followups.FollowUpLedger(base / "followups.json")
+            delivery = runner.owner_delivery.OwnerDeliveryLedger(
+                base / "owner_delivery" / "events.jsonl")
+            item = ledger.create(
+                target_ref="-1001", target_label="Room", target_peer_id=-1001,
+                target_user_id=None, sent_message_id=50,
+                request_text="сообщи, когда ответит", notify_owner=True,
+                notice_source="owner", sent_at=1)
+            answered = ledger.observe_incoming(
+                peer_id=-1001, sender_id=7, sender_name="Alice", message_id=51,
+                reply_to_message_id=50, text="A", received_at=2)
+            stale = delivery.emit(
+                "followup_answer", title="Alice ответил(а) в Room", body="A",
+                correlation={"followup_id": item["id"]},
+                provenance={
+                    "source": "telegram_followups", "source_id": item["id"],
+                    "revision_source_id": answered["response"]["revision_source_id"],
+                },
+                dedupe_key=f"stale:{item['id']}")
+            ledger.revise_response(
+                peer_id=-1001, message_id=51, text="B",
+                revision_source_id="51:edit:2026-08-20T08:00:02Z:new",
+                observed_at=3, revision_order=2)
+            send = AsyncMock()
+            with (
+                patch.object(runner.telegram_followups, "LEDGER", ledger),
+                patch.object(runner.owner_delivery, "LEDGER", delivery),
+                patch.object(runner, "OWNER_ID", 555000100),
+                patch.object(runner, "_send_message_idempotent", send),
+            ):
+                result = await runner._deliver_owner_item(stale)
+            send.assert_not_awaited()
+            self.assertEqual(result["status"], "superseded")
+
+    async def test_delete_supersedes_unsent_stale_copy(self):
+        with tempfile.TemporaryDirectory(prefix="praxis-followup-delete-") as raw:
+            base = Path(raw)
+            ledger = telegram_followups.FollowUpLedger(base / "followups.json")
+            delivery = runner.owner_delivery.OwnerDeliveryLedger(
+                base / "owner_delivery" / "events.jsonl")
+            item = ledger.create(
+                target_ref="-1001", target_label="Room", target_peer_id=-1001,
+                target_user_id=None, sent_message_id=50,
+                request_text="сообщи, когда ответит", notify_owner=True,
+                notice_source="owner", sent_at=1)
+            ledger.observe_incoming(
+                peer_id=-1001, sender_id=7, message_id=51,
+                reply_to_message_id=50, text="A", received_at=2)
+            stale = delivery.emit(
+                "followup_answer", title="Alice ответила", body="A",
+                correlation={"followup_id": item["id"]},
+                dedupe_key=f"stale:{item['id']}")
+            with patch.object(runner.owner_delivery, "LEDGER", delivery):
+                ledger.delete_response(peer_id=-1001, message_id=51, observed_at=3)
+                self.assertEqual(await runner._supersede_pending_followup_deliveries(
+                    item["id"], reason="response_deleted"), 1)
+            self.assertEqual(delivery.get(stale["id"])["status"], "superseded")
+            self.assertEqual(delivery.pending(), [])
+
+
 class FollowUpLetterNamesThePersonTests(unittest.IsolatedAsyncioTestCase):
     """27.07: письмо в ЛС Егора называлось «AbstractDL Chat ответил(а)». Чат не отвечает —
     отвечает человек, и имя было под рукой: строкой выше раннер печатает «получен ответ

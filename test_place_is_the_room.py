@@ -61,15 +61,26 @@ class TheRoomVerdictReachesTheKey(unittest.TestCase):
         self.assertIsNone(route.topic_id)
 
     def test_a_real_forum_keeps_its_topics_apart(self):
-        """Настоящий форум не трогаем: его темы разделил Telegram, а не мы."""
+        """Настоящий форум не трогаем: его темы разделил Telegram, а не мы.
+
+        С 22.08 «разделил Telegram» доказывается каталогом: тема остаётся отдельным
+        местом по подтверждённому id, а без каталога ключ честно падает в комнату
+        (её решение: отсутствие полного знания означает комнату; первую реплику
+        настоящей темы спасает preflight-добыча до фиксации маршрута).
+        """
         with mock.patch.object(runner.telegram_routes, "status_at",
                                lambda *a, **k: (telegram_routes.TRUE, 1)):
             forum = runner._known_forum("-100777", _msg(500, reply_to_top=400))
         self.assertIs(forum, True)
         route = telegram_topics.route_for_message(
-            "-100777", _msg(500, reply_to_top=400), is_private=False, is_forum=forum)
+            "-100777", _msg(500, reply_to_top=400), is_private=False, is_forum=forum,
+            confirmed_topics=frozenset({400}))
         self.assertEqual(route.conversation_id, "-100777__topic__400",
                          "настоящая тема форума перестала быть отдельным местом")
+        blind = telegram_topics.route_for_message(
+            "-100777", _msg(500, reply_to_top=400), is_private=False, is_forum=forum)
+        self.assertEqual(blind.conversation_id, "-100777",
+                         "без каталога fail-safe — комната, не заголовок")
 
     def test_an_unproven_room_behaves_exactly_as_before(self):
         """«Не знаем» обязано быть прежним поведением байт-в-байт.

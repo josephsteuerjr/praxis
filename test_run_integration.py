@@ -633,6 +633,33 @@ class RunIntegrationTests(unittest.TestCase):
         self.assertEqual(self.manager.manifest(current.run_id)["status"], "done")
         self.assertTrue((self.manager.path(current.run_id) / "RECAP.md").is_file())
 
+    def test_permanent_media_refusal_closes_the_delivery_slot_and_finalizes(self):
+        # Живой баг двух зомби 03.08/05.08: текст доставлен, медиа навечно отказано
+        # маршрутом (403). Пока refusal не считался исходом слота, evidence не
+        # становился ready и ран оставался blocked навсегда.
+        current = self._context("refused delivery")
+        agent.run_delivery_started(
+            current.run_id, chat_id="1", text_chars=5, media_count=1,
+            media_queue_ids=["queue-one"],
+        )
+        agent.run_delivery_text_accepted(current.run_id, text="hello", message_ids=["77"])
+        agent.run_delivery_media_started(current.run_id, "queue-one")
+        agent.run_delivery_media_result(
+            current.run_id, "queue-one", ok=False, permanent=True,
+            error="ChatAdminRequiredError: CHAT_SEND_DOCS_FORBIDDEN",
+        )
+        self.assertTrue(agent.run_delivery_blocked(current.run_id, reason="upload refused"))
+
+        evidence = agent._delivery_evidence(current.run_id)
+        self.assertEqual(evidence["observed_media_count"], 1)
+        self.assertEqual(evidence["refused_media_queue_ids"], ["queue-one"])
+        self.assertEqual(evidence["pending_media_queue_ids"], [])
+        self.assertTrue(evidence["ready"])
+
+        self.assertTrue(agent.run_delivery_finalize_recovered(current.run_id, media_count=0))
+        self.assertEqual(self.manager.manifest(current.run_id)["status"], "done")
+        self.assertTrue((self.manager.path(current.run_id) / "RECAP.md").is_file())
+
     def test_versioned_text_plan_replays_only_missing_chunks_and_then_reconciles(self):
         current = self._context("durable topic text")
         chunks = ["first ", "second"]

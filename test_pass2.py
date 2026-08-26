@@ -71,6 +71,16 @@ class Base(unittest.TestCase):
                         JOURNAL_DIR=mem / "journal", REFLECTIONS=mem / "reflections.md",
                         INDEX_MD=mem / "INDEX.md", SUMMARIES_DIR=mem / ".summaries", _TELETHON={},
                         _CURRENT_CHAT=None),
+            agent.memory_life: dict(BASE=self.tmp, MEM_DIR=mem, LIFE_DIR=mem / "life",
+                                    EVENTS_DIR=mem / "life" / "events",
+                                    COMPACTS_DIR=mem / "life" / "compacts",
+                                    EPISODES_DIR=mem / "life" / "episodes",
+                                    CLAIMS_DIR=mem / "life" / "claims",
+                                    PATCHES_DIR=mem / "life" / "patches",
+                                    REFLECTIONS_DIR=mem / "life" / "reflections",
+                                    STATE_DIR=mem / ".state" / "life",
+                                    LEGACY_SUMMARIES_DIR=mem / ".summaries",
+                                    DIALOGUES_DIR=mem / "dialogues"),
             bufstore: dict(BASE=self.tmp, BUF_DIR=mem / ".buffers"),
             pe: dict(BASE=self.tmp, PEOPLE_DIR=mem / "people"),
             mi: dict(BASE=self.tmp, MEM_DIR=mem, SOUL_DIR=soul, SKILLS_DIR=soul / "skills",
@@ -197,6 +207,30 @@ class TestCompact(Base):
         self.assertIn("ранее: познакомились", sent)
         # новая сводка записана на диск
         self.assertIn("деплой", agent.read_summary("777"))
+
+    def test_modern_empty_frontier_does_not_revive_legacy_summary(self):
+        life = agent.memory_life
+        agent.write_summary("777", "LEGACY STALE SECRET")
+        original = life.record_message(
+            "777", "Егор: исходный текст", actor="Егор", direction="in",
+            source_id="41", ts=41.0, dedupe_key="telegram:777:41:in",
+        )
+        life._write_compact(
+            "777", {"summary": "STALE MODERN RECAP", "open_threads": [],
+                    "claims": [], "episodes": []},
+            tier=1, depth=1, source_events=[original["id"]], source_compacts=[],
+            event_count=1, continued=False,
+        )
+        life.record_message(
+            "777", "Егор: исправленный текст", actor="Егор", direction="in",
+            source_id="41:edit:1", ts=42.0,
+            dedupe_key="telegram:777:41:edit:in",
+        )
+        life.note_message_revision("777", 41, "Егор: исправленный текст")
+        life.rebuild_state("777")
+
+        self.assertEqual(life.context_summary("777"), "")
+        self.assertEqual(agent.read_summary("777"), "")
 
     def test_summary_injected_on_top(self):
         agent.write_summary("777", "СВОДКА-МАРКЕР раньше тут было важное")

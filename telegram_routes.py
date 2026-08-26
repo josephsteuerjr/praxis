@@ -34,6 +34,7 @@ TopicCreate и TopicEdit, но нет ToggleForum; факт виден толь�
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import json
 import logging
@@ -42,6 +43,15 @@ import re
 import threading
 from pathlib import Path
 from typing import NamedTuple
+
+try:
+    import fcntl as _fcntl              # идиома notes.py: flock проверен живьём 27.07
+except ImportError:                     # pragma: no cover — на Windows fcntl нет
+    _fcntl = None
+try:
+    import msvcrt as _msvcrt
+except ImportError:                     # pragma: no cover — вне Windows msvcrt нет
+    _msvcrt = None
 
 log = logging.getLogger("praxis-routes")
 
@@ -78,6 +88,40 @@ EVIDENCE = {
 _LOCK = threading.Lock()
 
 
+@contextlib.contextmanager
+def _process_lock(peer_id):
+    """Межпроцессный замок на route-файл одной комнаты.
+
+    ⚠ `threading.Lock` защищает только один процесс, а в route-файл пишут и раннер,
+    и бэкфил, и CLI: два процесса делали read-modify-write и теряли одно из двух
+    append-only добавлений (воспроизведено Praxis 22.08). Идиома — как в notes.py:
+    fcntl там проверен живьём, msvcrt — паритет для Windows-разработки; гейт
+    линуксовый. Замок берётся ВОКРУГ read → modify → _save, поэтому union стабилен.
+    """
+    DIR.mkdir(parents=True, exist_ok=True)
+    path = DIR / f"{_slug(peer_id)}.route.lock"
+    handle = open(path, "a+b")
+    locked = False
+    try:
+        if _fcntl is not None:
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
+            locked = True
+        elif _msvcrt is not None:
+            handle.seek(0)
+            _msvcrt.locking(handle.fileno(), _msvcrt.LK_LOCK, 1)
+            locked = True
+        yield
+    finally:
+        if locked:
+            with contextlib.suppress(OSError):
+                if _fcntl is not None:
+                    _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+                elif _msvcrt is not None:
+                    handle.seek(0)
+                    _msvcrt.locking(handle.fileno(), _msvcrt.LK_UNLCK, 1)
+        handle.close()
+
+
 def _slug(peer_id) -> str:
     """Тот же вид имени, что у соседних per-peer receipts группы."""
     raw = str(peer_id or "unknown")
@@ -104,15 +148,65 @@ def read(peer_id) -> dict:
     return data
 
 
-def _save(peer_id, data: dict) -> None:
+def _rev_path(peer_id) -> Path:
+    return DIR / f"{_slug(peer_id)}.route.rev"
+
+
+def topic_revision(peer_id) -> int:
+    """Durable-ревизия route-состояния комнаты (seqlock-токен). 0 — записей не было.
+
+    Её гейт REPAIR5: метаданные ФС (mtime/size) не доказательство — на живой
+    файловой системе быстрые equal-size atomic replace дают настоящий ABA. Токен —
+    МОНОТОННОЕ целое в sidecar-файле, которое каждый писатель двигает под
+    межпроцессным замком: нечётное значение = коммит идёт (все хиты и доказательства
+    отключены), чётное = коммит завершён. Монотонность исключает ABA по построению.
+    """
+    try:
+        return int(_rev_path(peer_id).read_text(encoding="utf-8").strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def _write_revision(peer_id, value: int) -> None:
+    tmp = DIR / f"{_slug(peer_id)}.route.rev.tmp"
+    tmp.write_text(str(int(value)), encoding="utf-8")
+    tmp.replace(_rev_path(peer_id))
+
+
+def _save(peer_id, data: dict) -> bool:
+    """Атомарная запись route-файла под seqlock-ревизией. -> записалось ли.
+
+    Порядок — её свойство 7 (crash-семантика, названная явно):
+      1) токен := нечётный (max(sidecar, main.rev, чётность восстановлена) + 1) —
+         с этого мгновения кэш-хиты и snapshot-доказательства читателей отключены;
+      2) atomic replace основного файла, ревизия записана В ТОМ ЖЕ снимке
+         (`data["rev"]` = финальный чётный токен);
+      3) токен := чётный — коммит завершён.
+    Падение между шагами оставляет нечётный токен: никакого окна, где main уже
+    сменился, а токен разрешает hit, — только консервативная деградация в холодное
+    чтение до следующего успешного писателя, который восстанавливает чётность.
+    Монотонность переживает падения: база — max обоих носителей.
+
+    ⚠ OSError не глотается в успех: warning здесь, строгие пути поднимают до
+    исключения.
+    """
     try:
         DIR.mkdir(parents=True, exist_ok=True)
+        base = max(topic_revision(peer_id), int(data.get("rev") or 0))
+        if base % 2:
+            base += 1                      # чётность после чужого падения
+        final_revision = base + 2
+        _write_revision(peer_id, base + 1)          # нечётный: коммит идёт
+        data["rev"] = final_revision
         path = _path(peer_id)
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(path)
+        _write_revision(peer_id, final_revision)    # чётный: коммит завершён
+        return True
     except OSError:
-        log.debug("реестр маршрутов не записался [%s]", peer_id, exc_info=True)
+        log.warning("реестр маршрутов не записался [%s]", peer_id, exc_info=True)
+        return False
 
 
 def _mid(value):
@@ -153,7 +247,7 @@ def observe(peer_id, *, kind: str, forum: bool | None = None,
         if hi is not None:
             epoch["until_message_id"] = hi if cur_hi is None else max(int(cur_hi), hi)
 
-    with _LOCK:
+    with _LOCK, _process_lock(peer_id):
         data = read(peer_id)
         epochs = data["epochs"]
         current = epochs[-1] if epochs else None
@@ -210,7 +304,7 @@ def note_writing(peer_id, *, broadcast=None, linked_chat_id=None,
     Пустое значение НЕ затирает известное: свидетельство приходит откуда придётся, и
     «я не посмотрел» не должно выглядеть как «я посмотрел и там пусто».
     """
-    with _LOCK:
+    with _LOCK, _process_lock(peer_id):
         data = read(peer_id)
         rec = data.get("writing")
         if not isinstance(rec, dict):
@@ -312,7 +406,7 @@ def observe_branches(peer_id, mapping: dict) -> int:
     """
     if not isinstance(mapping, dict) or not mapping:
         return 0
-    with _LOCK:
+    with _LOCK, _process_lock(peer_id):
         data = read(peer_id)
         branches = data.get("branches")
         if not isinstance(branches, dict):
@@ -333,6 +427,172 @@ def observe_branches(peer_id, mapping: dict) -> int:
         data.setdefault("epochs", [])
         _save(peer_id, data)
     return len(mapping)
+
+
+# Выдуманный заголовок «topic #N» — артефакт нашего же кода (35–59% групповых
+# сообщений лежали в местах с такими именами, замер 21.08.2026). Он не имеет права
+# пересекать границу durable-знания: нет настоящего имени — нет имени.
+_INVENTED_TITLE_RE = re.compile(r"^topic #\d+$")
+
+
+def _clean_topic_row(topic_id: int, item, now: str) -> dict:
+    """Одна валидная запись каталога из чего угодно. Мусор чинится, не подтверждается."""
+    row = item if isinstance(item, dict) else {}
+    title = str(row.get("title") or "").strip()[:200]
+    if _INVENTED_TITLE_RE.fullmatch(title):
+        title = ""
+    top_message = _mid(row.get("top_message"))
+    return {
+        "title": title,
+        # id темы равен id её корневого сообщения — нумерация в комнате сквозная.
+        "top_message": top_message if top_message and top_message > 0 else int(topic_id),
+        "first_seen": str(row.get("first_seen") or now),
+        "last_seen": str(row.get("last_seen") or now),
+        "source": str(row.get("source") or "")[:40],
+    }
+
+
+def observe_topics(peer_id, topics: dict, *, source: str = "get_forum_topics",
+                   complete: bool = False) -> int:
+    """Записать настоящие темы комнаты: {topic_id: {"title": …, "top_message": …}}.
+
+    Каталог — прямой ответ Telegram (GetForumTopics) либо служебное «создана тема».
+    Знание append-only: тема, однажды подтверждённая, остаётся известной — даже
+    закрытая, её старые ключи легитимны (количество тем в минус не меняется, слово
+    владельца 21.08.2026). Название обновляется свежим наблюдением (TopicEdit).
+
+    ``complete=True`` — это был ДОКАЗАННО ПОЛНЫЙ свип каталога: с этого момента
+    ``confirmed_topics`` перестаёт отвечать «не знаю». Усечённый или инкрементальный
+    результат полноты не заявляет — неполное знание не имеет права рождать
+    отрицательное («этой темы нет») и схлопывать настоящие темы в комнату.
+
+    Строгий durable-путь: под межпроцессным замком, а неудача записи — исключение,
+    не тихий успех. Существующие malformed-записи чинятся по одной, не подтверждаясь
+    и не ломая следующий append.
+    """
+    rows = topics if isinstance(topics, dict) else {}
+    with _LOCK, _process_lock(peer_id):
+        data = read(peer_id)
+        raw_catalogue = data.get("topics")
+        catalogue: dict = {}
+        now = _now_iso()
+        if isinstance(raw_catalogue, dict):
+            for key, item in raw_catalogue.items():
+                known_id = _mid(key)
+                if known_id is None or known_id <= 0:
+                    continue                      # мусорный ключ не подтверждаем
+                catalogue[str(known_id)] = _clean_topic_row(known_id, item, now)
+        written = 0
+        for raw_id, meta in rows.items():
+            topic_id = _mid(raw_id)
+            if topic_id is None or topic_id <= 0:
+                continue
+            meta = meta if isinstance(meta, dict) else {}
+            fresh = _clean_topic_row(topic_id, meta, now)
+            row = catalogue.get(str(topic_id))
+            if not isinstance(row, dict):
+                row = {"first_seen": now, "title": ""}
+            if fresh["title"]:
+                row["title"] = fresh["title"]
+            row.setdefault("title", "")
+            row["top_message"] = (fresh["top_message"]
+                                  if _mid(meta.get("top_message"))
+                                  else int(row.get("top_message") or topic_id))
+            row["last_seen"] = now
+            row["source"] = str(source or "")[:40]
+            row.setdefault("first_seen", now)
+            catalogue[str(topic_id)] = row
+            written += 1
+        data["topics"] = catalogue
+        if complete:
+            data["topics_seen_at"] = now
+        data.setdefault("schema", SCHEMA)
+        data.setdefault("peer_id", str(peer_id))
+        data.setdefault("epochs", [])
+        if not _save(peer_id, data):
+            raise OSError(f"реестр маршрутов [{peer_id}]: durable-каталог тем не записался")
+    return written
+
+
+def confirmed_topics(peer_id):
+    """Подтверждённые Telegram'ом темы комнаты. -> frozenset[int] | None.
+
+    ``None`` — полный каталог ещё ни разу не наблюдался (это «не знаю», а не «тем
+    нет»). ``frozenset`` — ответ по знанию; для ключа хранения тема существует,
+    только если она здесь. Malformed-записи пропускаются, а не подтверждаются.
+    """
+    data = read(peer_id)
+    if not str(data.get("topics_seen_at") or ""):
+        return None
+    catalogue = data.get("topics")
+    if not isinstance(catalogue, dict):
+        return frozenset()
+    out = set()
+    for key, item in catalogue.items():
+        mid = _mid(key)
+        if mid is not None and mid > 0 and isinstance(item, dict):
+            out.add(mid)
+    return frozenset(out)
+
+
+def topic_knowledge(peer_id):
+    """(известные темы, доказана ли полнота каталога). -> (frozenset[int], bool).
+
+    Её гейт REPAIR2 22.08 развёл два вида знания, которые `confirmed_topics`
+    смешивал: ПОЛОЖИТЕЛЬНОЕ durable-знание о конкретных id (живой опенер с
+    ``complete=False`` подтверждает СВОЙ id немедленно и после рестарта) и ПОЛНОТУ
+    (право утверждать, что неизвестного id не существует, — его даёт только
+    доказанно полный свип). Ключ хранения минтится по membership в первом;
+    неизвестный id без полноты — «не знаю», то есть комната, не заголовок.
+    Malformed-записи пропускаются, как и в `confirmed_topics`.
+    """
+    data = read(peer_id)
+    complete = bool(str(data.get("topics_seen_at") or ""))
+    catalogue = data.get("topics")
+    ids = set()
+    if isinstance(catalogue, dict):
+        for key, item in catalogue.items():
+            mid = _mid(key)
+            if mid is not None and mid > 0 and isinstance(item, dict):
+                ids.add(mid)
+    return frozenset(ids), complete
+
+
+def topics_seen_at(peer_id) -> str:
+    """Когда каталог наблюдался ДОКАЗАННО целиком в последний раз. Пусто — никогда."""
+    return str(read(peer_id).get("topics_seen_at") or "")
+
+
+def topic_title(peer_id, topic_id) -> str:
+    """Настоящее имя темы из durable-каталога. Пусто — имени у Telegram нет.
+
+    Выдуманное «topic #N» отфильтровано и на чтении: старый файл мог быть записан
+    кодом до запрета, а имя-артефакт не имеет права выглядеть настоящим.
+    """
+    mid = _mid(topic_id)
+    if mid is None:
+        return ""
+    row = read(peer_id).get("topics")
+    if not isinstance(row, dict):
+        return ""
+    item = row.get(str(mid))
+    if not isinstance(item, dict):
+        return ""
+    title = str(item.get("title") or "").strip()
+    return "" if _INVENTED_TITLE_RE.fullmatch(title) else title
+
+
+def topics_of(peer_id) -> dict:
+    """Каталог целиком: {topic_id: {"title", "top_message", …}}. Пусто — не наблюдался."""
+    catalogue = read(peer_id).get("topics")
+    if not isinstance(catalogue, dict):
+        return {}
+    out = {}
+    for key, item in catalogue.items():
+        mid = _mid(key)
+        if mid is not None and mid > 0 and isinstance(item, dict):
+            out[mid] = _clean_topic_row(mid, item, str(item.get("last_seen") or ""))
+    return out
 
 
 def room_of(conversation_id) -> str:

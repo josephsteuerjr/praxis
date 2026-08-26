@@ -80,6 +80,7 @@ REPLY_HAND = "reply"
 PlanKind = Literal[
     "transport_owned",
     "authored_output",
+    "checkpoint_control",
     "continue_checkpoint",
     "replay_model_tool_response",
     "blocked",
@@ -769,6 +770,43 @@ def _validate_model_output(value: dict) -> dict:
     return copy.deepcopy(value)
 
 
+def _run_has_no_addressee_context(context: RunContext | None) -> bool:
+    """True only for self-authored work classes born without any delivery address."""
+    return bool(
+        context is not None
+        and context.kind in work_loop.WORK_KINDS
+        and context.principal_id == "praxis:self"
+        and context.origin_chat_id is None
+        and context.delivery_chat_id is None
+        and not context.origin_message_ids
+    )
+
+
+def _checkpoint_control(checkpoint: dict | None) -> dict | None:
+    """Return one validated work-loop closing word from an exact checkpoint.
+
+    This deliberately accepts only the existing checkpoint schema and only the three
+    actions the live loop can persist.  The caller still owns the run-kind, lease,
+    outstanding-tool and outbound boundaries.
+    """
+    state = checkpoint.get("work_loop") if isinstance(checkpoint, dict) else None
+    if not isinstance(state, dict) or state.get("schema") != "praxis.work-loop-state.v1":
+        return None
+    control = state.get("control")
+    if not isinstance(control, dict) or control.get("action") not in work_loop.CLOSING_ACTIONS:
+        return None
+    clean = {"action": str(control["action"])}
+    for key in ("summary", "evidence", "blocker", "wake_on"):
+        value = control.get(key)
+        if value is not None:
+            if not isinstance(value, str):
+                raise ResumeEvidenceError("checkpoint work control has a non-text field")
+            text = value.strip()
+            if text:
+                clean[key] = text
+    return clean
+
+
 def _checkpoint_value(manager: RunManagerReader, run_id: str, row: dict, *,
                       max_result_bytes: int,
                       budget: _EvidenceBudget | None = None) -> dict:
@@ -965,6 +1003,30 @@ def _checkpoint_for_media_ids(checkpoint: dict, queue_ids: Sequence[str]) -> dic
     if [str(item.get("queue_id") or "") for item in filtered] != wanted:
         raise ResumeEvidenceError("durable media ids differ from checkpoint order/content")
     return {**checkpoint, "outbound": filtered}
+
+
+def _permanently_refused_media(events: list[dict]) -> frozenset[str]:
+    """Queue ids whose upload the route refused FOREVER (terminal outcome).
+
+    ``telegram_media_permanently_refused`` closes the ``delivery-media:*`` tool
+    call without a ``telegram-media`` receipt: the refusal IS the outcome.  Until
+    this reduction existed, a refused upload stayed "pending" in planning even
+    though its staged file was legitimately deleted — the run could then never
+    plan past ``checkpoint outbound file is missing`` and stayed blocked forever
+    (live zombies run-20260803…-d4d702ad / run-20260805…-53888fee).
+    """
+    refused: set[str] = set()
+    for row in events:
+        if row.get("kind") != "telegram_media_permanently_refused":
+            continue
+        call_id = str(row.get("call_id") or "")
+        queue_id = call_id.removeprefix("delivery-media:")
+        if not _QUEUE_ID.fullmatch(queue_id) or call_id != f"delivery-media:{queue_id}":
+            raise ResumeEvidenceError("permanent media refusal has an invalid call_id")
+        if queue_id in refused:
+            raise ResumeEvidenceError("permanent media refusal is duplicated")
+        refused.add(queue_id)
+    return frozenset(refused)
 
 
 def _completed_transport_media(
@@ -1404,7 +1466,14 @@ def plan_resume(manager: RunManagerReader, run_id: str, *,
             if completed_ids.difference(expected_ids):
                 raise ResumeEvidenceError(
                     "Telegram media receipt does not belong to the parent intent")
-            pending_ids = [item for item in expected_ids if item not in completed_ids]
+            # Отказ навсегда — терминальный исход этого слота медиа, а не долг:
+            # staged-файл уже честно удалён, и восстанавливать нечего.
+            refused_ids = _permanently_refused_media(events)
+            if refused_ids.difference(expected_ids):
+                raise ResumeEvidenceError(
+                    "permanent media refusal does not belong to the parent intent")
+            pending_ids = [item for item in expected_ids
+                           if item not in completed_ids and item not in refused_ids]
             checkpoint_rows = [row for row in events if row.get("kind") == "run_checkpoint"]
             if checkpoint_rows:
                 transport_checkpoint = _checkpoint_value(
@@ -1633,6 +1702,25 @@ def plan_resume(manager: RunManagerReader, run_id: str, *,
                     "с последней точки, а не доставляем последнюю реплику",
                     manifest=manifest, context=context, auto_resume=True,
                     checkpoint=checkpoint, outbound=outbound,
+                )
+            checkpoint_control = _checkpoint_control(checkpoint)
+            if (_run_has_no_addressee_context(context) and checkpoint_control
+                    and not outstanding):
+                # Legacy self-directed windows may already contain her accepted closing
+                # word in the latest exact checkpoint.  Their old run-wide outbound guard
+                # belongs to an earlier draft and is irrelevant to that word; validating
+                # it first turns durable done/wait/blocked into an endless recovery pause.
+                # This plan does not execute a model or delivery.  The integration must
+                # atomically claim the exact cursors before landing the checkpoint word.
+                if checkpoint.get("outbound"):
+                    raise ResumeEvidenceError(
+                        "checkpointed work control coexists with outbound media")
+                return _base_plan(
+                    run_id, "checkpoint_control", status,
+                    "land exact checkpointed work control before legacy outbound guard",
+                    manifest=manifest, context=context, auto_resume=True,
+                    checkpoint=checkpoint,
+                    diagnostics=(str(checkpoint_control["action"]),),
                 )
             guarded_ids = _guarded_media_ids(
                 manager, run_id, events, output_row=latest_output,
