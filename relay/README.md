@@ -10,10 +10,14 @@ Everything under this directory is licensed under the **MIT License**; see
 [`LICENSE`](LICENSE). The MIT notice must remain with copies or substantial
 portions of Relay.
 
-The repository outside `relay/` is Praxis and is licensed separately under
-**GNU AGPL version 3**; see the repository-root [`LICENSE`](../LICENSE) and
-[`LICENSE-AGPL-3.0.txt`](../LICENSE-AGPL-3.0.txt). The root AGPL license does
-not replace or relicense the files in this directory.
+Relay also carries files derived from the OpenAI Codex CLI, which is
+Apache-2.0; [`NOTICE`](NOTICE) names them and states that they were modified,
+as Apache-2.0 asks of anyone who redistributes them.
+
+The repository outside `relay/` is Praxis and is licensed separately under the
+**Apache License, Version 2.0**; see the repository-root [`LICENSE`](../LICENSE)
+and [`NOTICE`](../NOTICE). The root license does not replace or relicense the
+files in this directory.
 
 ## Snapshot provenance
 

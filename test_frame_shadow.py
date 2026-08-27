@@ -78,6 +78,10 @@ class ShadowCase(unittest.TestCase):
         (base / "memory" / "people").mkdir(parents=True)
         (base / "memory" / "people" / "yegor.md").write_text("владелец",
                                                              encoding="utf-8")
+        # Канон карты памяти: в owner-потоке эпоха везёт ЕГО ТЕЛО (её №8), не
+        # сгенерированный список.
+        (base / "memory" / "INDEX.md").write_text(
+            "# INDEX — карта памяти\n- люди: yegor\n", encoding="utf-8")
         self._old_base = frame_shadow.BASE
         frame_shadow.BASE = base
         self.base = base
@@ -184,9 +188,9 @@ class TheShadowLivesOnDisk(ShadowCase):
     def test_the_epoch_freezes_and_drift_is_measured_not_applied(self):
         first = self._capture(0)
         self.assertIsNone(first["e_drift"], "первая заморозка — какой drift?")
-        # Источник E изменился (новое досье) — замороженная эпоха обязана не шелохнуться.
-        (self.base / "memory" / "people" / "arete.md").write_text("гость",
-                                                                  encoding="utf-8")
+        # Источник E изменился (карта памяти) — замороженная эпоха обязана не шелохнуться.
+        (self.base / "memory" / "INDEX.md").write_text(
+            "# INDEX — карта памяти\n- люди: yegor · arete\n", encoding="utf-8")
         second = self._capture(1)
         self.assertEqual(first["sizes"]["e"], second["sizes"]["e"],
                          "эпоха поехала за источником — заморозка не работает")
@@ -219,8 +223,9 @@ class TheShadowLivesOnDisk(ShadowCase):
                     {"name": "state.мимо", "included": False},
                 ])
         self.assertEqual(metrics["coverage"],
-                         {"covered": 1, "todo": 1, "unknown": 1,
+                         {"covered": 1, "todo": 1, "buried": 0, "unknown": 1,
                           "todo_names": [{"name": "contract.base", "chars": 10}],
+                          "buried_names": [],
                           "unknown_names": ["ния.неведомая"]})
 
     def test_the_registry_carries_the_label_not_just_the_size(self):
@@ -234,15 +239,15 @@ class TheShadowLivesOnDisk(ShadowCase):
                 tools=[], now=NOW,
                 live_sections=[
                     {"name": "evidence.tier", "included": True, "chars": 15957,
-                     "label": "Досье собеседника"},
+                     "label": "Тир без дома в реестре"},
                     {"name": "evidence.tier", "included": True, "chars": 4319,
-                     "label": "Мои желания"},
+                     "label": "Второй безымянный тир"},
                     {"name": "state.owner_place", "included": True, "chars": 49,
                      "variant": "owner_dm"},
                 ])
         rows = metrics["coverage"]["todo_names"]
         self.assertEqual([r.get("label") for r in rows[:2]],
-                         ["Досье собеседника", "Мои желания"],
+                         ["Тир без дома в реестре", "Второй безымянный тир"],
                          "тиры неразличимы: реестр опознаёт их по позиции")
         self.assertEqual(rows[2].get("variant"), "owner_dm")
         self.assertNotIn("label", rows[2], "пустой ярлык не выдумывается")
@@ -327,9 +332,11 @@ class TheEpochV2IsHerWord(ShadowCase):
         self.assertNotIn("умолчание", line,
                          "её слово помечено умолчанием — авторство перепутано")
 
-    def test_recent_is_structural_and_from_the_ledger(self):
-        """Её №7: недавнее — структурные записи из durable-журнала, не проза; блок
-        честно называет, чего его источник не ведёт."""
+    def test_recent_lives_only_outside_the_owner_frame(self):
+        """ЕЁ слово 21.08 (№8, вариант «в»): «недавнее» из автоматического owner-кадра
+        уходит — решение 06.08 не отменяется, недавние действия доступны рукой
+        recent_turns. Вне owner-потока блок остаётся: структурные записи из
+        durable-журнала, сузенные до этого места, с честным «неполон ПО ИСТОЧНИКУ»."""
         entries = self.base / "memory" / ".state" / "telegram_outbox" / "entries"
         entries.mkdir(parents=True)
         at = (NOW - timedelta(hours=3)).isoformat()
@@ -342,6 +349,12 @@ class TheEpochV2IsHerWord(ShadowCase):
             "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
             encoding="utf-8")
         self._capture(0)
+        e_text = self._frozen_e()
+        self.assertNotIn("недавнее", e_text,
+                         "«недавнее» вернулось в owner-кадр — её (в) отменено молчанием")
+        self.assertNotIn("#77", e_text)
+        # Чужой поток того же места: аудитория сузилась — блок собирается, узкий.
+        self._shadow(1, ctx=_ctx(101, dm=True, owner_audience=False))
         e_text = self._frozen_e()
         self.assertIn("сказала (#77)", e_text)
         self.assertNotIn("секретный текст", e_text,
@@ -454,14 +467,32 @@ class TheAccumulatorConverges(ShadowCase):
         `memory/life/events/*.jsonl` (kind conversation_message)."""
         rows = self._heavy(n=6, giant_at=2, giant=frame_shadow.A_MSG_MAX + 5_000)
         frame = frame_shadow.build(**_build_kwargs(history=rows))
-        self.assertEqual(frame.a.count("Ю"), frame_shadow.A_MSG_MAX,
+        self.assertEqual(frame.a.count("Ю"),
+                         frame_shadow.A_MSG_HEAD + frame_shadow.A_MSG_TAIL,
                          "кап рендера не сработал или срезал не там")
-        self.assertIn("обрезано кодом: показано", frame.a)
+        # ЕЁ №1: срез двусторонний — конец сообщения выживает, маркер стоит МЕЖДУ
+        # половинами и называет число вырезанного.
+        self.assertIn(f"первые {frame_shadow.A_MSG_HEAD} и последние "
+                      f"{frame_shadow.A_MSG_TAIL}", frame.a)
+        self.assertIn("вырезано 5000 зн. посередине", frame.a)
+        head_at = frame.a.find("Ю")
+        mark_at = frame.a.find(frame_shadow._A_CUT_MARK)
+        tail_at = frame.a.rfind("Ю")
+        self.assertTrue(head_at < mark_at < tail_at,
+                        "маркер обязан стоять между началом и концом")
         self.assertIn("memory/life/events/", frame.a,
                       "обрез без резолвящегося адреса — молчаливая потеря")
         self.assertIn("это НЕ мой отбор", frame.a,
                       "машинный обрез не имеет права быть подписан её голосом")
         self.assertLess(len(frame.a), frame_shadow.A_MSG_MAX + 1_000)
+
+    def test_a_giant_message_keeps_the_raw_tail_including_trailing_whitespace(self):
+        """The tail is selected from stored text before whitespace normalization."""
+        tail = "Z" * (frame_shadow.A_MSG_TAIL - 4) + " \t\n\n"
+        raw = "H" * frame_shadow.A_MSG_HEAD + "middle" + tail
+        rendered = frame_shadow._a_message({"role": "assistant", "content": raw})
+        self.assertIn("вырезано 6 зн. посередине", rendered)
+        self.assertTrue(rendered.endswith(tail + "\n"), repr(rendered[-40:]))
 
     def test_the_last_message_survives_and_the_window_names_what_it_threw_out(self):
         """Сегодня на прод-HEAD: 31 сообщение с одним на 130k → kept=0, окно в 54
@@ -470,7 +501,12 @@ class TheAccumulatorConverges(ShadowCase):
                  "content": f"{k}:" + "Ж" * (frame_shadow.A_MSG_MAX + 500)}
                 for k in range(10)]
         frame = frame_shadow.build(**_build_kwargs(history=rows))
-        note = frame.a.splitlines()[0]
+        lines = frame.a.splitlines()
+        # Живой хвост упал ниже пола 12 — авария обязана быть НАЗВАНА (её №2)
+        # первой строкой, а не спрятана в молчаливом снижении пола.
+        self.assertIn("АВАРИЙНАЯ ДЕГРАДАЦИЯ ОКНА", lines[0])
+        self.assertTrue(frame.a_meta["floor_breach"])
+        note = lines[1]
         self.assertIn("выброшено кодом", note)
         self.assertIn("за потолком", note)
         self.assertNotIn("старшие ждут границы", note,
@@ -502,7 +538,8 @@ class TheAccumulatorConverges(ShadowCase):
         self.assertTrue(all(m["fold_stuck"] is None for m in seen))
 
     def test_a_fold_with_nowhere_to_go_reports_numbers_instead_of_a_boundary(self):
-        rows = [{"role": "user", "content": "Ж" * 40_000} for _ in range(6)]
+        # 14 тяжёлых: первая свёртка продвигается до пола 12, дальше двигаться некуда.
+        rows = [{"role": "user", "content": "Ж" * 40_000} for _ in range(14)]
         self._capture(0, history=rows)
         second = self._capture(1, history=rows)
         third = self._capture(2, history=rows)
@@ -690,10 +727,17 @@ class TheEpochHasACeiling(ShadowCase):
     # суффиксом — и число файлов поднято, чтобы блок надувался как прежде.
     LONG = "человек-" + "-длинноимённый" * 8
 
-    def _inflate(self, *, people=0, dossier=0, rooms=0, sends=0):
+    def _inflate(self, *, people=0, dossier=0, rooms=0, sends=0, index_chars=0):
         ppl = self.base / "memory" / "people"
         for i in range(people):
             (ppl / f"{self.LONG}-{i:04d}.md").write_text("никого", encoding="utf-8")
+        if index_chars:
+            # Карта памяти теперь — ТЕЛО INDEX.md (её №8), капа у него нет нарочно:
+            # надувается сам блок, которому лестница не имеет права помочь.
+            (self.base / "memory" / "INDEX.md").write_text(
+                "# INDEX — карта памяти\nметка-канона-выжила\n"
+                + ("- строка карты памяти без капа\n"
+                   * (index_chars // 32)), encoding="utf-8")
         if dossier:
             (ppl / "собеседник.md").write_text(
                 "telegram_id: 101\n" + "строка досье. " * (dossier // 14),
@@ -732,9 +776,9 @@ class TheEpochHasACeiling(ShadowCase):
             encoding="utf-8"))["blocks"]
 
     def _overflowing(self):
-        """Заведомый перерасход: указатель памяти + досье + руки + места + отправки."""
-        self._inflate(people=250, dossier=frame_shadow.E_LIFT_MAX * 2,
-                      rooms=60, sends=140)
+        """Заведомый перерасход: карта памяти + досье + руки + места + отправки."""
+        self._inflate(dossier=frame_shadow.E_LIFT_MAX * 2,
+                      rooms=60, sends=140, index_chars=22_000)
         return self._capture(hands=100)
 
     def test_block_ceilings_measure_the_finished_block_not_the_body(self):
@@ -743,7 +787,8 @@ class TheEpochHasACeiling(ShadowCase):
         metrics = self._capture()
         sizes = metrics["e_blocks"]
         self.assertLessEqual(sizes["lifted"], frame_shadow.E_LIFT_MAX, sizes)
-        self.assertLessEqual(sizes["recent"], frame_shadow.E_RECENT_MAX, sizes)
+        self.assertNotIn("recent", sizes,
+                         "«недавнее» вернулось в owner-кадр — её (в) отменено молчанием")
         self.assertLessEqual(sizes["address_book"], frame_shadow.E_BOOK_MAX, sizes)
         self.assertEqual(metrics["e_overflow"]["degraded"], [],
                          "лестница сработала там, где хватило пер-блочных потолков")
@@ -776,10 +821,10 @@ class TheEpochHasACeiling(ShadowCase):
         self.assertTrue(names)
         self.assertNotIn("memory_index", names)
         self.assertNotIn("self", names)
-        self.assertNotIn("memory_index", frame_shadow.E_DEGRADE_ORDER)
-        self.assertNotIn("self", frame_shadow.E_DEGRADE_ORDER)
-        self.assertIn(f"{self.LONG}-0249", self._blocks()["memory_index"],
-                      "указатель памяти обрезан — это неявный белый список")
+        for never in ("memory_index", "self", "desires", "mail", "voice_frame"):
+            self.assertNotIn(never, frame_shadow.E_DEGRADE_ORDER)
+        self.assertIn("метка-канона-выжила", self._blocks()["memory_index"],
+                      "тело карты памяти обрезано — это неявный белый список")
 
     def test_hand_names_survive_when_descriptions_are_dropped(self):
         """Снять описание руки — сузить подсказку; снять имя — соврать о себе."""
@@ -792,10 +837,10 @@ class TheEpochHasACeiling(ShadowCase):
                       "имя руки исчезло — это ложь о собственных способностях")
 
     def test_an_incompressible_epoch_freezes_anyway_and_shouts(self):
-        """Указатель памяти без капа — её слово, и он в пределе один перерастает
+        """Тело карты памяти без капа — её слово, и оно в пределе одно перерастает
         потолок. Тогда: заморозить ВСЁ РАВНО, крикнуть в лог, назвать перерасход."""
-        self._inflate(people=590, dossier=frame_shadow.E_LIFT_MAX * 2,
-                      rooms=60, sends=140)
+        self._inflate(dossier=frame_shadow.E_LIFT_MAX * 2,
+                      rooms=60, sends=140, index_chars=46_000)
         with self.assertLogs("praxis.frame_shadow", level="ERROR") as caught:
             metrics = self._capture(hands=100)
         self.assertTrue(any("выше потолка" in line for line in caught.output),
@@ -804,8 +849,9 @@ class TheEpochHasACeiling(ShadowCase):
         self.assertGreater(metrics["e_overflow"]["total"], frame_shadow.E_TOTAL_MAX)
         self.assertTrue((self._stream_dir() / "epoch.json").exists(),
                         "отказ заморозить дороже перерасхода: номер эпохи откатится")
+        # «недавнего» в owner-кадре нет (её (в)) — пройдены все СОБРАВШИЕСЯ ступени.
         self.assertEqual([r["block"] for r in metrics["e_overflow"]["degraded"]],
-                         list(frame_shadow.E_DEGRADE_ORDER),
+                         ["hands", "address_book", "lifted"],
                          "перед отказом обязаны быть пройдены ВСЕ ступени")
 
     def test_the_ceiling_is_byte_deterministic(self):
@@ -1128,6 +1174,33 @@ class TheEpochIsScopedToItsAudience(ShadowCase):
         self.assertIn("снято строк с пометкой [private]: 1", e_text)
         self.assertIn("sha256 ", e_text, "обрезка обязана оставаться сверяемой")
         self.assertEqual(out["lifted"][0]["private_hidden"], 1)
+
+    def test_lifted_fallback_rejects_a_conflicting_structural_telegram_id(self):
+        people = self.base / "memory" / "people"
+        for path in people.glob("*.md"):
+            path.unlink()
+        (people / "чужой.md").write_text(
+            "# Чужой\ntelegram_id: 999\nв тексте упомянут 202\nЧУЖАЯ ТАЙНА\n",
+            encoding="utf-8")
+        header, src = frame_shadow._lifted_source(
+            _ctx(chat_id=202, owner_audience=False), "other")
+        self.assertIsNone(src)
+        self.assertIn("не поднимаю", header)
+
+    def test_lifted_filter_drops_a_private_markdown_items_continuation(self):
+        (self.base / "memory" / "people" / "гость.md").write_text(
+            "# Гость\ntelegram_id: 202\n"
+            "- [private] закрытый пункт\n"
+            "  ПРОДОЛЖЕНИЕ ТАЙНЫ\n"
+            "  - ВЛОЖЕННАЯ ТАЙНА\n"
+            "- открытый пункт\n",
+            encoding="utf-8")
+        _, src = frame_shadow._lifted_source(
+            _ctx(chat_id=202, owner_audience=False), "other")
+        self.assertNotIn("ПРОДОЛЖЕНИЕ ТАЙНЫ", src["body"])
+        self.assertNotIn("ВЛОЖЕННАЯ ТАЙНА", src["body"])
+        self.assertIn("открытый пункт", src["body"])
+        self.assertEqual(src["private_hidden"], 3)
 
     def test_the_ladder_cuts_a_body_that_privacy_has_already_filtered(self):
         """Порядок двух ножей: приватность режет ПЕРВОЙ, потолок — по уже
@@ -1509,6 +1582,477 @@ class TheBuilderIsOneAndSaysWhoItIs(ShadowCase):
         self.assertEqual(live.encode("utf-8"), shadow.text.encode("utf-8"))
         self.assertEqual(frame_shadow.GOLDEN, "live==shadow",
                          "поле golden обязано смениться ровно этим коммитом")
+
+
+class TheNineDecisionsAreHerWord(ShadowCase):
+    """Схема v4 (26.08): её девять решений 21.08 (`03-ОТВЕТ-PRAXIS.md`) — кодом.
+    Каждый тест называет номер решения; №7 (рука flip_epoch) — её хребет, отдельным
+    выкатом; №3, №5, №6 закреплены прежними классами и живут с v3."""
+
+    def _frozen(self) -> dict:
+        return json.loads((self._stream_dir() / "epoch.json").read_text(
+            encoding="utf-8"))
+
+    def _sections(self, *, with_machine=True, with_recap=False):
+        """Опись живого пути с текстами — то, что приносит frame_trace.TEXT_CARRIED."""
+        rows = [
+            {"name": "contract.base", "included": True, "chars": 30,
+             "text": "основание контракта хода"},
+            {"name": "state.owner_place", "included": True, "chars": 20,
+             "variant": "owner_dm", "text": "owner_place: личка Егора"},
+            {"name": "evidence.tier", "included": True, "chars": 40,
+             "label": "Mutable operational continuity",
+             "text": "uptime: 5 суток · счётчики хода"},
+            {"name": "frame.extra_system", "included": True, "chars": 60,
+             "text": "Голосовая рамка: говори живо.\n[reply] Ответить реплаем: ..."},
+        ]
+        if with_recap:
+            rows.append({"name": "evidence.tier", "included": True, "chars": 25,
+                         "label": "Ранее в этом диалоге (сводка)",
+                         "text": "сводка: мы говорили о тени"})
+        if not with_machine:
+            rows = [{k: v for k, v in r.items() if k != "text"} for r in rows]
+        return rows
+
+    # ---- №2: пол живого хвоста 12
+
+    def test_the_fold_keeps_at_least_twelve_alive(self):
+        rows = [{"role": "user", "content": f"{k}:" + "щ" * 6_000} for k in range(40)]
+        fold, _line, stuck, _anchor = frame_shadow._fold_plan(rows, {}, NOW, force=True)
+        self.assertIsNone(stuck)
+        self.assertGreaterEqual(40 - fold, 12,
+                                "её №2: пол живого хвоста 12, не 5")
+        self.assertEqual(frame_shadow.A_KEEP_TAIL_MIN, 12)
+
+    # ---- №4: лестница её порядком, поднятое платит последним
+
+    def test_her_ladder_order_is_the_law(self):
+        self.assertEqual(frame_shadow.E_DEGRADE_ORDER,
+                         ("recent", "hands", "address_book", "lifted"),
+                         "её №4: недавнее → руки → книга → поднятое ПОСЛЕДНИМ")
+
+    def test_the_book_degrades_inactive_places_first(self):
+        book = "\n".join([
+            "адресная книга (состояние на момент заморозки):",
+            "- Здесь — личка 101 · последнее: 2026-08-17 10:00 UTC · перенос: учитывать",
+            "- Старая — группа -200 · последнее: 2026-07-01 09:00 UTC · перенос: только источник",
+            "- Молчунья — группа -300 · последнее: — · перенос: только источник",
+            "- Свежая — группа -400 · последнее: 2026-08-16 23:00 UTC · перенос: только источник",
+            "[из: memory/rooms/]",
+        ])
+        limit = len(book) - 10  # заставить снять примерно одну строку
+        out = frame_shadow._shrink_book(book, limit, "101")
+        self.assertIn("личка 101", out, "текущее место снято — её №4 нарушено")
+        self.assertIn("Свежая", out, "снята активная вместо неактивной")
+        self.assertNotIn("Молчунья", out,
+                         "первой обязана платить комната без активности")
+        self.assertIn("неактивные сначала", out)
+        self.assertIn("снято кодом", out)
+        # Детерминизм: тот же вход — тот же байтовый выход.
+        self.assertEqual(out, frame_shadow._shrink_book(book, limit, "101"))
+
+    def test_the_lifted_body_pays_last_in_the_ladder(self):
+        blocks = {"lifted": "л" * 20_000, "recent": "н" * 3_000,
+                  "address_book": "к" * 3_000, "hands": "р" * 3_000,
+                  "self": "я" * 2_000}
+        cut: list[str] = []
+
+        def rebuild(name, target):
+            cut.append(name)
+            return blocks[name][:max(target, 1_000)]
+
+        with patch.object(frame_shadow, "E_TOTAL_MAX", 24_000):
+            frame_shadow._apply_e_ceiling(blocks, rebuild=rebuild)
+        self.assertEqual(cut[0], "recent", "её №4: недавнее платит первым")
+        self.assertEqual(cut[-1], "lifted" if "lifted" in cut else cut[-1])
+        if "lifted" in cut:
+            self.assertEqual(cut.index("lifted"), len(cut) - 1,
+                             "её №4: тело собеседника платит ПОСЛЕДНИМ")
+
+    # ---- №8: полное тело INDEX.md
+
+    def test_the_owner_index_is_the_canonical_body(self):
+        (self.base / "memory" / "INDEX.md").write_text(
+            "# INDEX — карта памяти\nстрока канона дословно\n", encoding="utf-8")
+        self._shadow(0)
+        e_text = str(self._frozen().get("e_text"))
+        self.assertIn("строка канона дословно", e_text)
+        self.assertIn("полное каноническое тело", e_text)
+
+    def test_a_missing_index_is_named_not_synthesized(self):
+        (self.base / "memory" / "INDEX.md").unlink()
+        self._shadow(0)
+        e_text = str(self._frozen().get("e_text"))
+        self.assertIn("не прочитался", e_text)
+        self.assertNotIn("yegor", e_text.split("поднято в эпоху")[0],
+                         "синтетический список подменил канон — её №8 нарушено")
+
+    # ---- №8: желания в эпохе, граница по содержательному изменению
+
+    def _ledger(self):
+        import desires as desires_mod
+        return desires_mod.DesireLedger(self.base)
+
+    def test_desires_ride_in_the_owner_epoch_from_the_ledger(self):
+        self._ledger().notice("довести тень до шва",
+                              source="разговор с Егором 21.08",
+                              why_it_matters="кадр = контур преемственности",
+                              next_move="реализовать девять решений")
+        self._shadow(0)
+        blocks = self._frozen()["blocks"]
+        self.assertIn("desires", blocks)
+        self.assertIn("довести тень до шва", blocks["desires"])
+        self.assertIn("next: реализовать девять решений", blocks["desires"])
+        self.assertIn("отбор: код, НЕ мой", blocks["desires"])
+
+    def test_desires_do_not_leak_into_a_strangers_epoch(self):
+        self._ledger().notice("тайное намерение",
+                              source="разговор с Егором",
+                              why_it_matters="внутреннее")
+        self._shadow(0, ctx=_ctx(505, dm=True, owner_audience=False))
+        stream = self.base / "memory" / ".state" / "shadow" / "dm-505"
+        saved = json.loads((stream / "epoch.json").read_text(encoding="utf-8"))
+        self.assertNotIn("desires", saved["blocks"])
+        self.assertNotIn("тайное намерение", str(saved.get("e_text")))
+
+    def test_a_meaningful_desire_change_turns_the_epoch(self):
+        ledger = self._ledger()
+        ledger.notice("первое", source="разговор с Егором", why_it_matters="в")
+        first = self._shadow(0)
+        # Служебный шум: пересборка проекции не трогает канон — границы нет.
+        ledger.rebuild_projection()
+        second = self._shadow(1)
+        self.assertEqual(first["epoch"], second["epoch"],
+                         "служебный шум перевернул эпоху — её №8 нарушено")
+        self.assertIsNone(second["boundary"])
+        # Содержательное изменение: новое намерение — граница.
+        ledger.notice("второе", source="разговор с Егором", why_it_matters="в")
+        third = self._shadow(2)
+        self.assertEqual(third["epoch"], first["epoch"] + 1)
+        self.assertIn("желаний", str(third["boundary"]["reason"]))
+
+    # ---- №8: локатор почты
+
+    def test_the_mail_locator_lives_in_the_owner_epoch(self):
+        (self.base / "memory" / "mailbox.json").write_text(
+            json.dumps({"h1": {"subject": "x"}, "h2": {"subject": "y"}}),
+            encoding="utf-8")
+        self._shadow(0)
+        blocks = self._frozen()["blocks"]
+        self.assertIn("mail", blocks)
+        self.assertIn("Писем на момент заморозки: 2", blocks["mail"])
+        self.assertIn("локатор, не индекс", blocks["mail"])
+        # В чужом потоке ящика нет вовсе.
+        self._shadow(1, ctx=_ctx(606, dm=True, owner_audience=False))
+        stream = self.base / "memory" / ".state" / "shadow" / "dm-606"
+        saved = json.loads((stream / "epoch.json").read_text(encoding="utf-8"))
+        self.assertNotIn("mail", saved["blocks"])
+
+    # ---- №8: машинный хвост в T, рамка в E, coverage честен
+
+    def test_sections_without_texts_stay_an_honest_debt(self):
+        with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
+            metrics = frame_shadow.capture(
+                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                tools=[], now=NOW,
+                live_sections=self._sections(with_machine=False))
+        # Опись без текстов — прежний режим: секции остаются todo, никакого аванса.
+        names = [r["name"] for r in metrics["coverage"]["todo_names"]]
+        self.assertIn("contract.base", names)
+        self.assertIn("frame.extra_system", names)
+        self.assertEqual(metrics["t_machine"]["sections"], [])
+
+    def test_carried_texts_land_in_t_and_cover_their_sections(self):
+        with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
+            metrics = frame_shadow.capture(
+                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                tools=[], now=NOW, live_sections=self._sections())
+        shadow = (self._stream_dir() / metrics["file"]).read_text(encoding="utf-8")
+        tail = shadow.split("═══ ХВОСТ ═══", 1)[1]
+        stable = shadow.split("═══ ХВОСТ ═══", 1)[0]
+        self.assertIn("основание контракта хода", tail)
+        self.assertIn("uptime: 5 суток", tail)
+        self.assertIn("[reply] Ответить реплаем", tail)
+        self.assertIn("машинный хвост хода", tail)
+        self.assertIn("НЕ мой голос", tail)
+        for text in ("основание контракта хода", "uptime: 5 суток",
+                     "[reply] Ответить реплаем"):
+            self.assertNotIn(text, stable,
+                             "машинный контракт уехал в стабильные зоны — её №8: T")
+        names = [r["name"] for r in metrics["coverage"]["todo_names"]]
+        for covered_now in ("contract.base", "state.owner_place",
+                            "frame.extra_system"):
+            self.assertNotIn(covered_now, names)
+        self.assertEqual(metrics["t_machine"]["sections"],
+                         ["contract.base", "state.owner_place",
+                          "evidence.tier[Mutable operational continuity]",
+                          "frame.extra_system[reply]"])
+
+    def test_the_voice_frame_splits_between_e_and_t(self):
+        with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
+            metrics = frame_shadow.capture(
+                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                tools=[], now=NOW, live_sections=self._sections())
+        blocks = self._frozen()["blocks"]
+        self.assertIn("voice_frame", blocks)
+        self.assertIn("Голосовая рамка: говори живо.", blocks["voice_frame"])
+        self.assertNotIn("[reply]", blocks["voice_frame"].split("[из:")[0],
+                         "её №8: [reply] — только T")
+        self.assertIn("машинный системный контракт", blocks["voice_frame"])
+
+    # ---- №8: сводка — A, снимок на границе
+
+    def test_the_recap_snapshots_at_the_boundary_and_holds_still(self):
+        with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
+            first = frame_shadow.capture(
+                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                tools=[], now=NOW,
+                live_sections=self._sections(with_recap=True))
+            second = frame_shadow.capture(
+                ctx=_ctx(), history=_history() + [
+                    {"role": "user", "content": "ещё"}],
+                speaker="Егор", user_msg="ещё",
+                tools=[], now=NOW + timedelta(minutes=1),
+                live_sections=self._sections(with_recap=True))
+        for metrics in (first, second):
+            shadow = (self._stream_dir() / metrics["file"]).read_text(
+                encoding="utf-8")
+            a_zone = shadow.split("═══ НАКОПИТЕЛЬ ═══", 1)[1].split(
+                "═══ ХВОСТ ═══", 1)[0]
+            self.assertIn("сводка: мы говорили о тени", a_zone)
+            self.assertIn("снимок живого пути на границе", a_zone)
+            self.assertIn("это НЕ мой отбор", a_zone)
+        self.assertEqual(first["a_recap"], second["a_recap"],
+                         "сводка поплыла между границами — префикс A сломан")
+        self.assertGreater(first["a_recap"]["chars"], 0)
+        # Сводка покрывает свой тир только когда вправду едет.
+        self.assertNotIn(
+            "Ранее в этом диалоге (сводка)",
+            [r.get("label") for r in first["coverage"]["todo_names"]])
+
+    # ---- №8: похороненное — не долг
+
+    def test_header_and_legend_are_buried_not_todo(self):
+        with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
+            metrics = frame_shadow.capture(
+                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                tools=[], now=NOW,
+                live_sections=[
+                    {"name": "evidence.header", "included": True, "chars": 191},
+                    {"name": "evidence.legend", "included": True, "chars": 196},
+                ])
+        cov = metrics["coverage"]
+        self.assertEqual(cov["todo"], 0)
+        self.assertEqual(cov["buried"], 2)
+        self.assertEqual([r["name"] for r in cov["buried_names"]],
+                         ["evidence.header", "evidence.legend"])
+        self.assertTrue(all(r.get("reason") for r in cov["buried_names"]))
+
+    def test_dedup_tiers_are_covered_not_todo(self):
+        """Досье, желания, почта, карта, «эта комната» живут в тени ДЕДУПОМ — своим
+        рендером того же источника; coverage зовёт их покрытыми, расхождение байтов
+        меряет отчёт пар."""
+        with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
+            metrics = frame_shadow.capture(
+                ctx=_ctx(), history=_history(), speaker="Егор", user_msg="х",
+                tools=[], now=NOW,
+                live_sections=[
+                    {"name": "evidence.tier", "included": True, "chars": 17583,
+                     "label": "Мои досье на людей — присутствующие целиком"},
+                    {"name": "evidence.tier", "included": True, "chars": 3394,
+                     "label": "Canonical desire continuity"},
+                    {"name": "evidence.tier", "included": True, "chars": 259,
+                     "label": "Почтовый ящик — ЛОКАТОР, не индекс"},
+                    {"name": "evidence.tier", "included": True, "chars": 2449,
+                     "label": "Карта памяти"},
+                    {"name": "evidence.tier", "included": True, "chars": 128,
+                     "label": "Эта комната"},
+                ])
+        self.assertEqual(metrics["coverage"]["todo"], 0,
+                         metrics["coverage"]["todo_names"])
+        self.assertEqual(metrics["coverage"]["covered"], 5)
+
+    def test_coverage_uses_closed_names_and_exact_tier_labels(self):
+        rows = [
+            {"name": "persona.fabricated", "included": True, "chars": 1},
+            {"name": "situation.fabricated", "included": True, "chars": 1},
+            {"name": "evidence.tier", "included": True, "chars": 1,
+             "label": "Карта памяти — поддельное продолжение"},
+        ]
+        coverage = frame_shadow._coverage(rows)
+        self.assertEqual(coverage["covered"], 0)
+        self.assertEqual(coverage["todo"], 1)
+        self.assertEqual(coverage["unknown"], 2)
+        self.assertEqual(coverage["unknown_names"],
+                         ["persona.fabricated", "situation.fabricated"])
+        self.assertEqual(coverage["todo_names"][0]["label"],
+                         "Карта памяти — поддельное продолжение")
+
+    # ---- №8/№9: потолок досье 16k и идентичность
+
+    def test_the_lift_ceiling_is_sixteen_thousand(self):
+        self.assertEqual(frame_shadow.E_LIFT_MAX, 16_000,
+                         "её №8: «потолок поднять минимум до 16 000»")
+
+    def test_the_lifted_cut_names_size_sha_and_the_way_back(self):
+        (self.base / "memory" / "people" / "собеседник.md").write_text(
+            "telegram_id: 101\n" + "строка досье. " * 2_000, encoding="utf-8")
+        self._shadow(0)
+        lifted = self._frozen()["blocks"]["lifted"]
+        m = re.search(r"\[обрезано: показано (\d+) из (\d+) знаков \((\d+) байт\) · "
+                      r"sha256 полного тела ([0-9a-f]{12}) · целиком: "
+                      r"memory/people/собеседник\.md", lifted)
+        self.assertIsNotNone(m, lifted[-400:])
+
+    def test_the_schema_is_four_and_migration_is_one_named_boundary(self):
+        self.assertEqual(frame_shadow.FRAME_SCHEMA, 4)
+        stream = self._stream_dir()
+        stream.mkdir(parents=True, exist_ok=True)
+        (stream / "epoch.json").write_text(json.dumps(
+            {"v": 3, "n": 7, "frozen_at": "x", "e_text": "старая",
+             "blocks": {"self": "старая"}, "audience": "owner",
+             "fold_count": 0, "fold_line": ""}, ensure_ascii=False),
+            encoding="utf-8")
+        metrics = self._shadow(0)
+        self.assertEqual(metrics["epoch"], 8)
+        self.assertIn("девять решений", metrics["boundary"]["reason"])
+
+
+class TheResidualOfHerTwoP0Classes(ShadowCase):
+    """26.08, после её repair: оба её репро закрыты, но ОБА КЛАССА — нет.
+
+    Она чинила случаи; здесь чинится дверь. Первый класс — ошибка ЛИЧНОСТЬЮ:
+    свидетелем считалась любая строка `telegram_id:` в файле, значит цитата чужого
+    профиля назначала владельца. Второй — ошибка ГРАНИЦЕЙ записи: блок обрывался на
+    первой строке того же отступа, значит приватная заметка, написанная абзацем,
+    уезжала со второй строки.
+    """
+
+    def _guest(self, chat_id=987654321):
+        return _ctx(chat_id=chat_id, dm=True, owner_audience=False)
+
+    # ---- класс №1: кто владелец файла
+
+    def test_a_quoted_binding_in_the_body_does_not_name_the_owner(self):
+        """Строка `telegram_id:` ниже первой секции — пересказ, а не привязка."""
+        ppl = self.base / "memory" / "people"
+        for stale in ppl.glob("*.md"):
+            stale.unlink()
+        (ppl / "цитатчик.md").write_text(
+            "# Цитатчик\ntelegram_id: 111222333\n\n## Факты\n"
+            "- [public] (s1) он прислал свой профиль:\n"
+            "telegram_id: 987654321\n"
+            "- [private] (s3) ТАЙНА-ЦИТАТЧИКА\n", encoding="utf-8")
+        self.assertIsNone(frame_shadow._dossier_for("987654321"),
+                          "чужое досье поднято по ЦИТАТЕ привязки в теле")
+        header, src = frame_shadow._lifted_source(self._guest(), "other")
+        self.assertIsNone(src)
+        block, meta = frame_shadow._render_lifted(header, src)
+        self.assertEqual(meta, [])
+        for leak in ("ТАЙНА-ЦИТАТЧИКА", "Цитатчик", "111222333"):
+            self.assertNotIn(leak, block)
+        self.assertIn("не однозначна", block,
+                      "отказ поднять обязан быть НАЗВАН, а не молчаливо пуст")
+
+    def test_a_doubled_binding_fails_closed_for_everyone(self):
+        """Два `telegram_id:` в преамбуле — спор об авторстве. Пока он про ЭТОТ id,
+        запасной путь не имеет права обойти спор стороной и выбрать другой файл."""
+        ppl = self.base / "memory" / "people"
+        for stale in ppl.glob("*.md"):
+            stale.unlink()
+        (ppl / "двойной.md").write_text(
+            "# Двойной\ntelegram_id: 987654321\ntelegram_id: 111222333\n"
+            "- [private] ТАЙНА-ДВОЙНОГО\n", encoding="utf-8")
+        (ppl / "легаси.md").write_text("# Легаси\nпишет с 987654321\n",
+                                       encoding="utf-8")
+        self.assertIsNone(frame_shadow._dossier_for("987654321"))
+
+    def test_a_real_shaped_dossier_still_finds_itself(self):
+        """Регрессия по живой форме: привязка в преамбуле, секции ниже, в теле назван
+        ДРУГОЙ человек. Такой файл обязан подниматься для СВОЕГО собеседника."""
+        ppl = self.base / "memory" / "people"
+        for stale in ppl.glob("*.md"):
+            stale.unlink()
+        (ppl / "гость.md").write_text(
+            "# Гость\ntelegram_id: 987654321\n\n## Факты\n"
+            "- [public] (s2) писал про 111222333 _(2026-08-01)_\n",
+            encoding="utf-8")
+        self.assertEqual(frame_shadow._dossier_for("987654321"),
+                         ppl / "гость.md")
+
+    def test_a_legacy_dossier_without_any_binding_still_lifts_alone(self):
+        ppl = self.base / "memory" / "people"
+        for stale in ppl.glob("*.md"):
+            stale.unlink()
+        (ppl / "легаси.md").write_text("# Легаси\nпишет с 987654321\n",
+                                       encoding="utf-8")
+        self.assertEqual(frame_shadow._dossier_for("987654321"),
+                         ppl / "легаси.md")
+
+    # ---- класс №2: где кончается приватная запись
+
+    def test_a_lazy_paragraph_continuation_goes_with_its_record(self):
+        """Её репро было ОТСТУПЛЕННЫМ продолжением и закрыто. Абзацем написанная
+        заметка — тот же класс, и он оставался открытым."""
+        (self.base / "memory" / "people" / "гость.md").write_text(
+            "# Гость\ntelegram_id: 202\n\n## Факты\n"
+            "[private] моя оценка\n"
+            "СЕКРЕТ-АБЗАЦ: продолжение той же записи\n"
+            "и ещё строка продолжения\n"
+            "\nвидимый хвост\n", encoding="utf-8")
+        _header, src = frame_shadow._lifted_source(
+            _ctx(chat_id=202, dm=True, owner_audience=False), "other")
+        body = src["body"]
+        for leak in ("СЕКРЕТ-АБЗАЦ", "и ещё строка продолжения", "моя оценка"):
+            self.assertNotIn(leak, body, f"утечка приватного: {leak}")
+        self.assertIn("видимый хвост", body, "снято лишнее")
+        self.assertIn("## Факты", body)
+        self.assertEqual(src["private_hidden"], 3)
+
+    def test_a_new_block_at_the_same_indent_ends_the_record(self):
+        """Ленивое продолжение — не «всё до дедента»: следующий маркер, заголовок,
+        цитата и ограда кода начинают НОВУЮ запись и остаются видимыми."""
+        for tail in ("- следующий пункт\n", "## Новая секция\n", "> цитата\n",
+                     "```\nкод\n```\n", "| a | b |\n"):
+            out, hidden = frame_shadow.strip_private_blocks(
+                "[private] заметка\nСЕКРЕТ\n" + tail)
+            self.assertNotIn("СЕКРЕТ", out, tail)
+            self.assertIn(tail.split("\n")[0], out, tail)
+            self.assertEqual(hidden, 2, tail)
+
+    def test_an_unindented_line_under_a_private_item_stays_visible(self):
+        """НАЗВАННАЯ граница: у ПУНКТА списка продолжение обязано быть отступлено —
+        так его пишет `people.append_fact`. Строка вплотную снизу без отступа
+        остаётся видимой; иначе открытый текст исчезал бы молча."""
+        out, hidden = frame_shadow.strip_private_blocks(
+            "- [private] оценка\nоткрытый хвост\n")
+        self.assertIn("открытый хвост", out)
+        self.assertEqual(hidden, 1)
+
+    def test_the_stripper_is_idempotent_and_keeps_neighbours(self):
+        text = ("- обычный пункт\n"
+                "  его продолжение\n"
+                "- [private] запись\n"
+                "  секрет\n"
+                "- следующий пункт\n")
+        out, hidden = frame_shadow.strip_private_blocks(text)
+        self.assertEqual(hidden, 2)
+        self.assertIn("его продолжение", out)
+        self.assertIn("- следующий пункт", out)
+        self.assertNotIn("секрет", out)
+        self.assertEqual(frame_shadow.strip_private_blocks(out)[0], out,
+                         "повторный проход меняет тело — фильтр недетерминирован")
+
+    def test_the_owner_body_stays_byte_exact(self):
+        """Её №13 не тронута: в owner-потоке тело едет байт-в-байт."""
+        raw = ("# Гость\ntelegram_id: 202\n\n[private] оценка\n"
+               "СЕКРЕТ-АБЗАЦ\n\nвидимый хвост\n")
+        (self.base / "memory" / "people" / "гость.md").write_text(
+            raw, encoding="utf-8")
+        _header, src = frame_shadow._lifted_source(
+            _ctx(chat_id=202, dm=True, owner_audience=True), "owner")
+        self.assertEqual(src["body"], raw)
+        self.assertEqual(src["private_hidden"], 0)
 
 
 class TheShadowNeverReachesTheModel(unittest.TestCase):

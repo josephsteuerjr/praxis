@@ -354,8 +354,44 @@ class RunManager:
         self._thread_lock = threading.RLock()
         self._paths: dict[str, Path] = {}
         # Прогоны, признанные терминальными (см. settled_run_ids). Терминальность
-        # поглощающая, поэтому запись сюда окончательна и кэш не может протухнуть.
+        # обычно поглощающая. Guard-owned cancelled — узкое исключение: другой
+        # процесс может явно reopen-нуть его, поэтому рядом держим подпись файла.
         self._settled: set[str] = set()
+        self._settled_signatures: dict[
+            str, tuple[tuple[int, int, int], tuple[int, int, int]]
+        ] = {}
+
+    @staticmethod
+    def _file_signature(path: Path) -> tuple[int, int, int]:
+        stat = path.stat()
+        return (int(stat.st_mtime_ns), int(stat.st_size), int(stat.st_ino))
+
+    def _settled_signature(
+            self, manifest_path: Path) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+        # Manifest publication is atomic, but a crashed reversible reopen can exist
+        # only in the append-only event stream. Both files are therefore part of
+        # the cache-coherence boundary.
+        return (self._file_signature(manifest_path),
+                self._file_signature(manifest_path.parent / "events.jsonl"))
+
+    def _cache_settled(
+            self, run_id: str, manifest_path: Path, *,
+            signature: tuple[tuple[int, int, int], tuple[int, int, int]] | None = None,
+    ) -> None:
+        self._settled.add(run_id)
+        try:
+            self._settled_signatures[run_id] = (
+                signature if signature is not None
+                else self._settled_signature(manifest_path)
+            )
+        except OSError:
+            # Если подпись не снялась, следующий scan обязан перечитать manifest.
+            self._settled.discard(run_id)
+            self._settled_signatures.pop(run_id, None)
+
+    def _uncache_settled(self, run_id: str) -> None:
+        self._settled.discard(run_id)
+        self._settled_signatures.pop(run_id, None)
 
     def _validate_id(self, run_id: str) -> str:
         value = str(run_id or "").strip()
@@ -602,14 +638,53 @@ class RunManager:
                 continue
             self._paths[run_id] = manifest_path.parent
             if run_id in settled:
+                try:
+                    unchanged = (self._settled_signatures.get(run_id)
+                                 == self._settled_signature(manifest_path))
+                except OSError:
+                    unchanged = False
+                if unchanged:
+                    continue
+                # Something durable changed after the terminal verdict. It may be a
+                # WAL-only reversible reopen whose manifest publication crashed.
+                # Do not recache from the stale raw manifest: return the run once so
+                # the ordinary locked path can replay/reduce exact evidence. A benign
+                # terminal-side append costs one extra inspection, never hidden work.
+                self._uncache_settled(run_id)
+                result.append(run_id)
                 continue
             try:
-                status = str(_read_json(manifest_path).get("status") or "")
+                # A terminal manifest is only a cacheable verdict when it covers
+                # the complete WAL. In particular, a reversible reopen appends
+                # its reducer input before publishing manifest.json; after a crash
+                # in that window a fresh manager has no old signature with which
+                # to notice that the raw terminal manifest is stale.
+                before_signature = self._settled_signature(manifest_path)
+                raw_manifest = _read_json(manifest_path)
+                status = str(raw_manifest.get("status") or "")
             except Exception:
                 result.append(run_id)  # не знаю — пусть решает обычный путь под замком
                 continue
             if status in TERMINAL_STATUSES:
-                settled.add(run_id)
+                try:
+                    wal_seq = self._last_event_seq(manifest_path.parent, strict=True)
+                    after_signature = self._settled_signature(manifest_path)
+                    manifest_seq = int(raw_manifest.get("event_seq") or 0)
+                except (OSError, RunError, TypeError, ValueError):
+                    # This is an unlocked cache optimization. Missing/unreadable or
+                    # structurally corrupt WAL evidence must fail open: expose the
+                    # run to the ordinary locked replay path, never hide it.
+                    result.append(run_id)
+                    continue
+                if before_signature != after_signature or manifest_seq != wal_seq:
+                    # The unlocked snapshot raced a writer, or durable reducer
+                    # input is ahead of publication. Never bind the later file
+                    # signature to the earlier terminal observation: expose the
+                    # run so the normal locked reader can replay exact evidence.
+                    result.append(run_id)
+                    continue
+                self._cache_settled(run_id, manifest_path,
+                                    signature=after_signature)
                 continue
             result.append(run_id)
         return result
@@ -838,6 +913,7 @@ class RunManager:
                     stream.seek(-1, os.SEEK_END)
                     drop_unterminated_tail = stream.read(1) != b"\n"
                 remainder = b""
+                skip_eof_separator = not drop_unterminated_tail
                 while cursor > 0:
                     take = min(cursor, 65536)
                     cursor -= take
@@ -851,24 +927,40 @@ class RunManager:
                         drop_unterminated_tail = False
                     for raw in reversed(complete):
                         if not raw:
+                            if skip_eof_separator:
+                                skip_eof_separator = False
+                                continue
+                            if strict:
+                                raise RunError(f"empty event row in {path}")
                             continue
+                        skip_eof_separator = False
                         try:
                             row = json.loads(raw)
                         except (UnicodeDecodeError, ValueError):
                             if strict:
                                 raise RunError(f"invalid event JSON in {path}")
                             continue
-                        if isinstance(row, dict):
-                            yield row
-                if remainder and not drop_unterminated_tail:
-                    try:
-                        row = json.loads(remainder)
-                    except (UnicodeDecodeError, ValueError):
-                        if strict:
-                            raise RunError(f"invalid event JSON in {path}")
+                        if not isinstance(row, dict):
+                            if strict:
+                                raise RunError(f"event JSON is not an object in {path}")
+                            continue
+                        yield row
+                if not drop_unterminated_tail:
+                    if not remainder:
+                        if cursor == 0 and strict and path.stat().st_size:
+                            raise RunError(f"empty event row in {path}")
                     else:
-                        if isinstance(row, dict):
-                            yield row
+                        try:
+                            row = json.loads(remainder)
+                        except (UnicodeDecodeError, ValueError):
+                            if strict:
+                                raise RunError(f"invalid event JSON in {path}")
+                        else:
+                            if not isinstance(row, dict):
+                                if strict:
+                                    raise RunError(f"event JSON is not an object in {path}")
+                            else:
+                                yield row
         except OSError as exc:
             raise RunError(f"cannot read event stream for {run_dir.name}: {exc}") from exc
 
@@ -898,7 +990,42 @@ class RunManager:
         for row in reversed(pending_rows):
             seq = int(row.get("seq") or 0)
             kind = str(row.get("kind") or "")
-            if kind == "status_changed":
+            if kind == "resume_stale_reopened":
+                # Reopening a guard-owned terminal is one WAL transaction.  Do
+                # not replay it as status_changed plus authorization: a crash
+                # between those records exposed paused + cancelled metadata.
+                manifest["status"] = "paused"
+                manifest["terminal_at"] = ""
+                manifest["terminal"] = {}
+                manifest["recap"] = {"status": "not_due"}
+                manifest["control"] = {}
+                manifest["resume_stale_guard"] = {}
+            elif kind in {"resume_stale_closed", "resume_stale_attention"}:
+                before = str(row.get("previous_status") or manifest.get("status") or "paused")
+                attention = kind == "resume_stale_attention"
+                status = before if attention else "cancelled"
+                manifest["status"] = status
+                guard = dict(manifest.get("resume_stale_guard") or {})
+                guard.update({
+                    "phase": "attention" if attention else "closed",
+                    "previous_status": before,
+                    "progress": list(row.get("progress") or guard.get("progress") or ()),
+                    ("attention_at" if attention else "closed_at"): row.get("at") or _utc_now(),
+                })
+                if attention:
+                    guard["blockers"] = dict(row.get("blockers") or {})
+                else:
+                    manifest["terminal_at"] = row.get("at") or _utc_now()
+                    manifest["terminal"] = {
+                        "status": "cancelled", "reason": str(row.get("reason") or ""),
+                    }
+                    manifest["control"] = {}
+                    recap = dict(manifest.get("recap") or {})
+                    if recap.get("status") in (None, "not_due"):
+                        recap["status"] = "pending"
+                    manifest["recap"] = recap
+                manifest["resume_stale_guard"] = guard
+            elif kind == "status_changed":
                 status = str(row.get("to_status") or manifest.get("status") or "pending")
                 manifest["status"] = status
                 if status == "running" and not manifest.get("started_at"):
@@ -993,15 +1120,41 @@ class RunManager:
             manifest["revision"] = int(manifest.get("revision") or 0) + 1
             manifest["updated_at"] = _utc_now()
             _atomic_json(path, manifest)
+        if str(manifest.get("status") or "") not in TERMINAL_STATUSES:
+            # Guard-owned terminals are exceptionally reversible. WAL replay can
+            # reopen a raw cancelled manifest after live_run_ids() cached it as
+            # settled, so invalidate only when the effective manifest is live.
+            self._uncache_settled(run_dir.name)
         return manifest
 
-    def _last_event_seq(self, run_dir: Path) -> int:
-        for row in self._iter_events_reverse(run_dir):
-            try:
-                return int(row.get("seq") or 0)
-            except (TypeError, ValueError):
-                continue
-        return 0
+    def _last_event_seq(self, run_dir: Path, *, strict: bool = False) -> int:
+        last_seq: int | None = None
+        expected_seq: int | None = None
+        for row in self._iter_events_reverse(run_dir, strict=strict):
+            raw_seq = row.get("seq")
+            if strict:
+                # Replay relies on a contiguous, one-based integer cursor. Do
+                # not let bool-as-int, coercible strings, missing cursors,
+                # duplicates, or gaps bless an unreplayable terminal verdict.
+                if (not isinstance(raw_seq, int) or isinstance(raw_seq, bool)
+                        or raw_seq < 1):
+                    raise RunError(
+                        f"invalid event sequence in {run_dir / 'events.jsonl'}")
+                if expected_seq is not None and raw_seq != expected_seq:
+                    raise RunError(
+                        f"non-contiguous event sequence in {run_dir / 'events.jsonl'}")
+                expected_seq = raw_seq - 1
+            if last_seq is None:
+                try:
+                    last_seq = int(raw_seq or 0)
+                except (TypeError, ValueError):
+                    pass
+            if last_seq is not None and not strict:
+                return last_seq
+        if strict and last_seq is not None and expected_seq != 0:
+            raise RunError(
+                f"non-contiguous event sequence in {run_dir / 'events.jsonl'}")
+        return last_seq or 0
 
     def _event_locked(self, run_dir: Path, manifest: dict, kind: str, data: dict) -> dict:
         seq = max(int(manifest.get("event_seq") or 0), self._last_event_seq(run_dir)) + 1
@@ -1423,6 +1576,85 @@ class RunManager:
                 },
             )
 
+    def mark_resume_stale(self, run_id: str, *, expected_revision: int,
+                          progress: list[Any], previous_status: str) -> dict:
+        """Durably arm the first phase of the automatic resume stale guard."""
+        run_dir = self._find(run_id)
+        with self._locked(run_dir):
+            manifest = self._manifest_locked(run_dir)
+            self._expected_revision(manifest, expected_revision)
+            before = str(manifest.get("status") or "")
+            if before not in {"paused", "blocked"} or before != str(previous_status):
+                raise RunConflict(f"{run_id}: stale guard observed {previous_status}, found {before}")
+            old = dict(manifest.get("resume_stale_guard") or {})
+            if (old.get("phase") == "warned"
+                    and list(old.get("progress") or ()) == list(progress)
+                    and old.get("previous_status") == before):
+                return manifest
+            row = self._event_locked(run_dir, manifest, "resume_stale_warned", {
+                "previous_status": before, "progress": list(progress),
+            })
+            manifest["resume_stale_guard"] = {
+                "phase": "warned", "warned_at": row["at"],
+                "previous_status": before, "progress": list(progress),
+            }
+            manifest["revision"] = int(manifest.get("revision") or 0) + 1
+            manifest["updated_at"] = row["at"]
+            _atomic_json(run_dir / "manifest.json", manifest)
+            return manifest
+
+    def close_resume_stale(self, run_id: str, *, expected_revision: int,
+                           progress: list[Any]) -> dict:
+        """Atomically close, or quarantine when unknown tool effects remain."""
+        run_dir = self._find(run_id)
+        with self._locked(run_dir):
+            manifest = self._manifest_locked(run_dir)
+            self._expected_revision(manifest, expected_revision)
+            guard = dict(manifest.get("resume_stale_guard") or {})
+            before = str(manifest.get("status") or "")
+            if (guard.get("phase") != "warned"
+                    or list(guard.get("progress") or ()) != list(progress)
+                    or guard.get("previous_status") != before):
+                raise RunConflict(f"{run_id}: stale guard evidence changed")
+            blockers = self._terminal_blockers(self._tool_ledger_locked(run_dir))
+            unresolved = {key: value for key, value in blockers.items() if value}
+            phase = "attention" if unresolved else "closed"
+            target = before if unresolved else "cancelled"
+            reason = ("automatic resume quarantined; durable tool outcomes need attention"
+                      if unresolved else
+                      "automatic resume stale guard confirmed no progress")
+            event_kind = ("resume_stale_attention" if unresolved
+                          else "resume_stale_closed")
+            row = self._event_locked(run_dir, manifest, event_kind, {
+                "from_status": before, "to_status": target, "reason": reason,
+                "details": {"reversible": True, "previous_status": before, **unresolved},
+                "previous_status": before,
+                "progress": list(progress),
+                **({"blockers": unresolved} if unresolved else {}),
+                "requested_by": "system:durable-resume",
+            })
+            now = row["at"]
+            manifest["resume_stale_guard"] = {
+                **guard, "phase": phase,
+                ("attention_at" if unresolved else "closed_at"): now,
+                **({"blockers": unresolved} if unresolved else {}),
+            }
+            if not unresolved:
+                manifest["status"] = "cancelled"
+                manifest["terminal_at"] = now
+                manifest["terminal"] = {"status": "cancelled", "reason": reason}
+                manifest["control"] = {}
+                recap = dict(manifest.get("recap") or {})
+                if recap.get("status") in (None, "not_due"):
+                    recap["status"] = "pending"
+                manifest["recap"] = recap
+            manifest["revision"] = int(manifest.get("revision") or 0) + 1
+            manifest["updated_at"] = now
+            _atomic_json(run_dir / "manifest.json", manifest)
+            if not unresolved:
+                self._cache_settled(run_id, run_dir / "manifest.json")
+            return manifest
+
     def authorize_resume(self, run_id: str, *, actor: str, reason: str = "",
                          expected_revision: int | None = None) -> dict:
         """Release an explicit pause for the exact recovery executor.
@@ -1441,10 +1673,90 @@ class RunManager:
             manifest = self._manifest_locked(run_dir)
             self._expected_revision(manifest, expected_revision)
             before = str(manifest.get("status") or "pending")
+            guard = dict(manifest.get("resume_stale_guard") or {})
+            guard_phase = str(guard.get("phase") or "")
+            guard_owned = guard_phase in {"warned", "attention", "closed"}
+            if guard_phase == "attention":
+                blockers = self._terminal_blockers(self._tool_ledger_locked(run_dir))
+                unresolved = {key: value for key, value in blockers.items() if value}
+                if unresolved:
+                    # Authorization is not evidence that an uncertain effect did or did
+                    # not happen. Move the patient onto the existing explicit
+                    # reconciliation rail, but retain attention: only durable receipts
+                    # can make a later authorization executable.
+                    if before not in {"paused", "blocked"}:
+                        raise InvalidTransition(
+                            f"{run_id}: stale attention reconciliation requires "
+                            f"paused or blocked, found {before}"
+                        )
+                    row = self._event_locked(run_dir, manifest, "status_changed", {
+                        "from_status": before, "to_status": "in_doubt",
+                        "reason": "explicit resume requires durable tool reconciliation",
+                        "details": {
+                            "previous_status": before,
+                            "resume_requested_reason": why,
+                            **unresolved,
+                        },
+                        "control_action": "resume_stale_reconcile_required",
+                        "requested_by": requested_by,
+                    })
+                    manifest["status"] = "in_doubt"
+                    manifest["resume_stale_guard"] = {
+                        **guard,
+                        "phase": "attention",
+                        "reconciliation_requested_at": row["at"],
+                        "reconciliation_requested_by": requested_by,
+                        "blockers": unresolved,
+                    }
+                    manifest["revision"] = int(manifest.get("revision") or 0) + 1
+                    manifest["updated_at"] = row["at"]
+                    _atomic_json(run_dir / "manifest.json", manifest)
+                    return manifest
+            if before == "cancelled" and guard_phase == "closed":
+                previous = str(guard.get("previous_status") or "paused")
+                if previous not in {"paused", "blocked"}:
+                    raise RunConflict(f"{run_id}: invalid stale guard previous status")
+                # The ordinary executor can only CAS-claim a paused run.  Reopening to
+                # ``blocked`` would audit success but plan a permanent noop, so both
+                # guard-owned terminal shapes return through the same executable gate.
+                row = self._event_locked(run_dir, manifest, "resume_stale_reopened", {
+                    "from_status": "cancelled", "to_status": "paused",
+                    "reason": why,
+                    "requested_by": requested_by,
+                    "reopened_stale_guard": True,
+                    "previous_status": previous,
+                })
+                manifest["status"] = "paused"
+                manifest["terminal_at"] = ""
+                manifest["terminal"] = {}
+                manifest["recap"] = {"status": "not_due"}
+                manifest["control"] = {}
+                manifest["resume_stale_guard"] = {}
+                manifest["revision"] = int(manifest.get("revision") or 0) + 1
+                manifest["updated_at"] = row["at"]
+                _atomic_json(run_dir / "manifest.json", manifest)
+                self._uncache_settled(run_id)
+                return manifest
+            if before == "blocked" and guard_phase == "attention":
+                # Attention is a reversible quarantine, not an ordinary task blocker.
+                # Preserve unresolved ledger evidence but expose the paused CAS gate so
+                # the audited authorization can actually reach the recovery executor.
+                self._event_locked(run_dir, manifest, "status_changed", {
+                    "from_status": "blocked", "to_status": "paused",
+                    "reason": "explicitly released automatic stale-guard quarantine",
+                    "control_action": "resume_stale_reopen",
+                    "requested_by": requested_by,
+                    "details": {"previous_status": "blocked"},
+                })
+                manifest["status"] = "paused"
+                before = "paused"
             if before != "paused":
                 raise InvalidTransition(
                     f"{run_id}: authorize_resume requires paused, found {before}"
                 )
+            if guard_owned:
+                # Cleared in the same revision as the authorization boundary below.
+                manifest["resume_stale_guard"] = {}
             pending = dict(manifest.get("control") or {})
             if pending.get("action") == "cancel":
                 raise RunConflict(

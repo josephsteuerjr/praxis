@@ -617,6 +617,48 @@ class MyReplyGoesOutByHand(_TurnHarness):
         self.assertNotIn("reply", names, "рука ответа объявлена там, где отвечать некому")
         self.assertIn("reply", live, "рука ответа пропала там, где собеседник есть")
 
+    def test_a_turn_without_anybody_to_answer_can_still_be_closed(self):
+        """⚑ ЖИВАЯ ПОЛОМКА 27.08, И ОНА СТОИЛА ЕЙ СЛУХА.
+
+        `end_turn` отбирался вместе с `reply` у ходов без собеседника. Но конец хода —
+        не про собеседника: по контракту v3 ход закрывается ПОСТУПКОМ, а пробуждение и
+        рабочее окно — такие же ходы.
+
+        Что было: она просыпалась, работала (shell, my_agenda, fs_edit), звала
+        `stay_silent` — и не могла сказать «я закончила». Модель возвращала пустоту,
+        та поднималась как EmptyResponseError. 50 сбойных пробуждений из 50 кончались
+        ровно этим, 70% за сутки. А поскольку разбор shadow-модерации доставляется КАК
+        пробуждение, он падал так же — и его недоставленные события держали флаг
+        приоритета, который откладывал каждый живой ход в каждом чате, включая личку
+        Егора. Два часа молчания без единой ошибки в логе.
+        """
+        windowish = agent.ChannelContext(chat_id=None, principal_id=agent.PRAXIS_SELF_PRINCIPAL,
+                                         is_dm=True, owner=False, known=True)
+        with _lever("on"):
+            names = {str(t.get("name")) for t in agent.offered_tools_for(windowish)}
+        self.assertIn("end_turn", names,
+                      "ход без собеседника нечем закрыть — он умрёт пустым ответом")
+        self.assertNotIn("reply", names,
+                         "рука ответа объявлена там, где отвечать некому")
+
+    def test_the_lowered_lever_still_takes_both_hands(self):
+        """Обратная сторона: при опущенном рычаге реплика уходит возвратом хода, и обе
+        руки были бы неправдой об устройстве. Разводя условия, это свойство не теряем."""
+        windowish = agent.ChannelContext(chat_id=None, principal_id=agent.PRAXIS_SELF_PRINCIPAL,
+                                         is_dm=True, owner=False, known=True)
+        with _lever("off"):
+            windowless = {str(t.get("name")) for t in agent.offered_tools_for(windowish)}
+            live = {str(t.get("name")) for t in agent.offered_tools_for(_owner_dm())}
+        for names, where in ((windowless, "ход без собеседника"), (live, "живая личка")):
+            self.assertNotIn("reply", names, f"{where}: рычаг опущен, а рука ответа есть")
+            self.assertNotIn("end_turn", names, f"{where}: рычаг опущен, а end_turn есть")
+
+    def test_a_live_chat_keeps_both_hands(self):
+        with _lever("on"):
+            live = {str(t.get("name")) for t in agent.offered_tools_for(_owner_dm())}
+        self.assertIn("reply", live)
+        self.assertIn("end_turn", live)
+
     def test_a_delivered_reply_survives_the_loss_of_the_in_memory_counter(self):
         """⚑ СКАЗАННОЕ DURABLE, А ЗНАНИЕ О СКАЗАННОМ ЖИЛО ТОЛЬКО В ПАМЯТИ ПРОЦЕССА.
 

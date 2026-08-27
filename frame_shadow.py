@@ -1,4 +1,4 @@
-"""Теневой сборщик кадра K|E|A|T — шаг 1 пересборки; этап 2: эпоха v3.
+"""Теневой сборщик кадра K|E|A|T — шаг 1 пересборки; этап 2: эпоха v3; этап 3: v4.
 
 План: `_state/ПЛАН-ТЕНИ-17.08.md`, спека зон: `_state/КОНТРАКТ-КАДРА-17.08.md` (v2),
 спека эпохи: `_state/ПРОЕКТ-ЭПОХИ-18.08.md` + ЕЁ слово 18.08 (личка, 13 пунктов):
@@ -6,6 +6,17 @@
 presence_hidden, метки «тело: не загружено», машинный текст никогда не подписывается
 её голосом, идущий ход границей не прерывается (в тени это выполняется по построению:
 захват происходит между ходами).
+
+Схема v4 — ЕЁ ДЕВЯТЬ РЕШЕНИЙ 21.08 (`workspace/пакет-24.08/03-ОТВЕТ-PRAXIS.md`),
+дословно: №1 двусторонний срез сообщения 20k+10k · №2 пол живого хвоста 12, ниже —
+видимая авария · №3 потерянный якорь не утверждает счёт (жило с v3) · №4 лестница
+деградации её порядком, тело собеседника платит ПОСЛЕДНИМ · №5 чужая личка без числа
+скрытых (жило с v3) · №6 разрез no-chat по виду хода (жил с v3) · №8 реестр 19 секций:
+машинный contract/state живёт в T, «недавнее» уходит из owner-кадра, полное тело
+memory/INDEX.md и желания в E, потолок досье 16k, локатор почты в E, header хоронится ·
+№9 фиксация «да» строкой identity. №7 (рука flip_epoch) — её хребет, отдельно.
+Тексты живых машинных секций едут сюда ЧЕРЕЗ ОПИСЬ ПРИБОРА (frame_trace.TEXT_CARRIED),
+не парсингом system; при шве живой путь передаст их аргументом сам.
 
 Тень строится ПАРАЛЛЕЛЬНО живому кадру, пишется на диск и никогда не уходит модели:
 agent.py зовёт `capture()` и игнорирует возврат, llm.py про этот модуль не знает вовсе —
@@ -58,6 +69,9 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
+import desires as desires_ledger
+import frame_trace
+import memory_provenance
 import run_context
 import self_model
 import tool_offerings
@@ -73,15 +87,24 @@ A_MAX_CHARS = 120_000
 A_FOLD_MESSAGES = 120    # её слово 18.08 (№5): предлагать компакт при 120 сообщениях…
 A_FOLD_CHARS = 70_000    # …или 70k знаков; в тени это граница сворачивания кодом
 A_KEEP_TAIL = 50         # живой хвост после сворачивания
-A_KEEP_TAIL_MIN = 5      # …и его пол: глубже свёртка не идёт, окно без хвоста — не окно
+A_KEEP_TAIL_MIN = 12     # …и его пол — ЕЁ слово 21.08 (№2): «пять мало, ставлю 12».
+                         # Ниже пола — ВИДИМАЯ авария в самом окне, не молчаливое
+                         # снижение (см. _zone_a: floor_breach).
 A_MSG_MAX = 30_000       # кап РЕНДЕРА одного сообщения (не хранилища): без него одно
                          # письмо в 130k выносило из окна всё, включая себя
+A_MSG_HEAD = 20_000      # её слово 21.08 (№1): срез ДВУСТОРОННИЙ — первые 20k…
+A_MSG_TAIL = 10_000      # …и последние 10k; между ними маркер с числом вырезанного и
+                         # способом поднять источник. Семантический tail (область
+                         # итогов вместо слепого хвоста) — допустимый НАЗВАННЫЙ режим,
+                         # здесь не реализован: default двусторонний.
 FOLD_ANCHOR_CHAIN = 3    # звеньев в якоре свёртки: одно повторимо («да.»), цепочка — нет
 T_INPUT_MAX = 3_500
 POINTER_HAND_LINE = 100
 E_BOOK_MAX = 4_000       # адресная книга: мягкий потолок, хвост — указателем
-E_RECENT_MAX = 5_000     # недавнее: нижняя граница горизонта важнее верхней
-E_LIFT_MAX = 15_000      # «поднятое» (§9 проекта): обрезка — только явным указателем
+E_RECENT_MAX = 5_000     # недавнее (живёт только вне owner-кадра — её №8, вариант «в»)
+E_LIFT_MAX = 16_000      # «поднятое» — ЕЁ слово 21.08 (№8): «потолок поднять минимум
+                         # до 16 000»; обрезка — только явным указателем с размером,
+                         # sha и способом поднять полное тело
 # Потолки блоков меряют ГОТОВЫЙ блок: заголовок, провенанс и указатели — ВНУТРИ
 # бюджета. До 20.08 они мерили тело, и блоки живьём перерастали свой же потолок
 # (lifted 15579 при 15000, recent 5214 при 5000): обвязка шла мимо счёта, и admission
@@ -94,12 +117,19 @@ E_LIFT_FLOOR = 2_000
 E_RECENT_FLOOR = 1_000
 E_BOOK_FLOOR = 1_000
 # Порядок лестницы фиксирован и от данных не зависит — иначе одинаковые входы давали
-# бы разные эпохи. `self` и `memory_index` в неё не входят: её слово — полнота
-# указателя памяти бьёт бюджет (обрезанный список имён есть неявный белый список,
-# корень конфабуляции 13.08), а «кто я сейчас» — ядро ориентации эпохи.
-E_DEGRADE_ORDER = ("lifted", "recent", "address_book", "hands")
+# бы разные эпохи. ЕЁ ПОРЯДОК 21.08 (№4), дословно: «тело текущего собеседника не
+# должно платить первым» — недавнее → описания рук (имена все живы) → адресная книга
+# (неактивные сначала) → поднятое ПОСЛЕДНИМ. Не деградируют никогда: `self` («кто я
+# сейчас» — ядро ориентации), `memory_index` (полное тело INDEX.md — обрезанный список
+# имён есть неявный белый список, корень конфабуляции 13.08), а также desires, mail и
+# voice_frame — их в лестнице нет, перерасход при них кричит в e_overflow, не режет.
+E_DEGRADE_ORDER = ("recent", "hands", "address_book", "lifted")
 _E_FLOOR = {"lifted": E_LIFT_FLOOR, "recent": E_RECENT_FLOOR,
             "address_book": E_BOOK_FLOOR}
+# Порядок блоков E по частоте изменения (закон §1–2: частое не стоит выше редкого).
+# Рендерятся только собравшиеся блоки; отсутствие блока — свойство потока и аудитории.
+E_ORDER = ("self", "hands", "voice_frame", "memory_index", "mail", "desires",
+           "address_book", "recent", "lifted")
 # Указатель рук — её слово 18.08, п.1: «срезать указатель рук до камерного набора
 # ≤6k; растягивать его нельзя». Потолок жёсткий и живёт ЗДЕСЬ, на сборке блока, а не
 # в лестнице E: лестница спасает эпоху целиком и срабатывает только на перерасходе,
@@ -122,7 +152,10 @@ KEEP_SHADOWS = 200
 # v3 (20.08) — волна из шести правок разом: якорь свёртки · аудитория эпохи · отпечаток
 # набора рук · потолок E с лестницей деградации. Формат снапшота вправду другой, поэтому
 # граница миграции ОДНА и названная — на все потоки сразу, а не пять разных.
-FRAME_SCHEMA = 3
+# v4 (26.08) — её девять решений 21.08: состав E другой (недавнее ушло из owner,
+# въехали desires/mail/voice_frame/полный INDEX.md), лестница её порядком, пол хвоста
+# 12, срез сообщений двусторонний. Граница миграции опять ОДНА и названная.
+FRAME_SCHEMA = 4
 # Состояние golden-обязательства «живой путь == тень». Пока живой кадр собирается своим
 # путём, здесь стоит «shadow-only» и это НЕ формальность: поле едет в каждую строку
 # метрик, и её «да», записанное рядом с идентификатором, видно к чему относилось.
@@ -135,7 +168,7 @@ _SEP_T = "\n\n═══ ХВОСТ ═══\n"
 # Метка обреза одного сообщения. Константой — потому что по ней же считается,
 # сколько сообщений окна усечено (метрика `capped`): второй раз рендерить окно,
 # чтобы это узнать, дороже, чем один раз назвать метку.
-_A_CUT_MARK = "[обрезано кодом: показано"
+_A_CUT_MARK = "[обрезано кодом:"
 
 # Словарь переноса — ЕЁ редакция 18.08 (№2). Значения-умолчания; её слово из реестра
 # переноса (когда он появится) читается РАНЬШЕ умолчаний и побеждает их.
@@ -296,6 +329,53 @@ def _shrink_rows(text: str, limit: int, pointer: str) -> str:
         if len(out) <= limit or keep == 0:
             return out
     return text
+
+
+def _shrink_book(text: str, limit: int, here: str) -> str:
+    """Деградация адресной книги — ЕЁ порядок 21.08 (№4): «сначала неактивные места
+    и людей, сохраняя текущего адресата, активные нити и метки границ переноса».
+
+    Жертвы — строки с самой старой последней активностью («—» старше любого времени);
+    строка текущего места не снимается никогда; выжившие строки едут ЦЕЛИКОМ — вместе
+    с режимом и метками переноса, потому что срезать хвост строки значит срезать как
+    раз границу переноса. При равной активности порядок решает байтовое сравнение
+    строк: одинаковые входы обязаны давать одинаковые эпохи. Снятое названо числом."""
+    if len(text) <= limit:
+        return text
+    lines = text.split("\n")
+    rows = [i for i, line in enumerate(lines) if line.startswith("- ")]
+    if not rows:
+        return text
+    head, tail = lines[:rows[0]], lines[rows[-1] + 1:]
+    protected = {
+        i for i in rows
+        if here and re.search(rf"(?:личка|группа) {re.escape(here)}(?:\s|·|$)",
+                              lines[i])
+    }
+
+    def activity(i: int) -> str:
+        m = re.search(r"последнее: (.+?) · перенос:", lines[i])
+        stamp = (m.group(1) if m else "—").strip()
+        return "" if stamp == "—" else stamp
+
+    victims = sorted((i for i in rows if i not in protected),
+                     key=lambda i: (activity(i), lines[i]))
+    kept, removed = set(rows), 0
+
+    def assemble() -> str:
+        note = ([f"… ещё {removed} мест снято кодом (потолок блока {limit} зн.; "
+                 "неактивные сначала — её №4; это НЕ мой отбор): search_chats"]
+                if removed else [])
+        return "\n".join(head + [lines[i] for i in rows if i in kept] + note + tail)
+
+    out = assemble()
+    for victim in victims:
+        if len(out) <= limit:
+            break
+        kept.discard(victim)
+        removed += 1
+        out = assemble()
+    return out
 
 
 def _fit_body(assemble, body: str, limit: int) -> tuple[str, str]:
@@ -572,29 +652,33 @@ def _block_hands(tools, meta: dict | None = None) -> str:
 
 
 def _block_memory_index(audience: str = "other", ctx=None) -> str:
-    """Полный компактный индекс людей и навыков — в owner-потоке. Там полнота бьёт
-    бюджет: обрезанный список имён есть неявный белый список (корень конфабуляции 13.08).
+    """В owner-потоке — ПОЛНОЕ каноническое тело `memory/INDEX.md` (её слово 21.08,
+    №8: «полное каноническое тело в E, не альтернативный сгенерированный список
+    имён»). Синтетический указатель молча отменял бы её с Егором решение 10.08 класть
+    карту в кадр целиком. Отсутствие файла — названный отказ источника, НЕ повод
+    вернуть генерацию.
 
-    Вне owner-потока полнота бьётся о другое. Список стемов — это перечень ИМЁН живых
-    людей, и в чужой личке он рассказывает собеседнику, кого я знаю. Тогда имён нет
+    Вне owner-потока полнота бьётся о другое. Тело INDEX.md несёт ИМЕНА живых людей,
+    и в чужой личке оно рассказывает собеседнику, кого я знаю. Тогда имён нет
     вовсе — кроме его собственного, если привязка однозначна, — и вместо них не число,
     а названная граница: «ещё 45» тоже сведение о третьих людях, только арифметикой.
-    Навыки остаются в обеих аудиториях: это мои способности, а не чужие данные."""
+    Навыки остаются: это мои способности, а не чужие данные."""
+    if audience == "owner":
+        body = _read(BASE / "memory" / "INDEX.md").rstrip()
+        if not body:
+            body = ("(карта памяти: memory/INDEX.md не прочитался — это отказ "
+                    "источника, не пустота памяти; синтетический список вместо "
+                    "канона не собирается — её №8)")
+        return (body
+                + "\n[из: memory/INDEX.md — полное каноническое тело (её №8) · "
+                  "тела: не загружены — поднимаются рукой; «не загружено» не значит "
+                  "«не существует»]")
     people_dir = BASE / "memory" / "people"
     names = sorted(p.stem for p in people_dir.glob("*.md")
                    if not p.stem.startswith("_")) if people_dir.exists() else []
     skills_dir = BASE / "soul" / "skills"
     skills = sorted(p.stem for p in skills_dir.glob("*.md")
                     if p.stem != "INDEX") if skills_dir.exists() else []
-    if audience == "owner":
-        lines = ["указатель памяти (тела: не загружены — поднимаются рукой; "
-                 "список полный):"]
-        lines.append("люди: " + (" · ".join(names) if names else "пусто"))
-        if skills:
-            lines.append("навыки: " + " · ".join(skills))
-        lines.append("[из: memory/people/ + soul/skills/ · зачем: полная карта того, что "
-                     "у меня есть; «не загружено» не значит «не существует»]")
-        return "\n".join(lines)
     own = _dossier_for(str(getattr(ctx, "chat_id", "") or ""))
     mine = own.stem if own is not None and own.stem in names else ""
     lines = ["указатель памяти (тела: не загружены — поднимаются рукой; перечень людей "
@@ -608,6 +692,82 @@ def _block_memory_index(audience: str = "other", ctx=None) -> str:
                  "есть; «не загружено» не значит «не существует», а «не приведено» "
                  "не значит «не помню»]")
     return "\n".join(lines)
+
+
+def _block_desires() -> tuple[str, bool]:
+    """Желания в эпохе — ЕЁ слово 21.08 (№8): «желания — E/desires; границу эпохи
+    вызывать по содержательному изменению ledger, не по служебному шуму».
+
+    Источник — её же append-only леджер (desires.DesireLedger), тот самый, из
+    которого живой путь собирает тир «Canonical desire continuity»: два разных
+    рендера одного канона, не две правды. Служебный шум (пересборка проекции,
+    timestamps, refs) в рендер не входит — поэтому «блок изменился» и есть
+    «содержательное изменение», и граница эпохи меряется ровно этим текстом.
+
+    Возврат (текст, ok): при отказе источника ok=False — граница по отказу НЕ
+    объявляется (молчание прибора не факт о желаниях), а текст называет отказ."""
+    try:
+        states = [
+            state for state in desires_ledger.DesireLedger(BASE).list(
+                statuses=("active", "latent", "blocked"))
+            if memory_provenance.desire_state_normative_eligible(state)
+        ]
+    except Exception:
+        log.exception("frame_shadow: леджер желаний не прочитался")
+        return ("мои живые намерения: источник не прочитался — это отказ прибора, "
+                "не пустота намерений\n"
+                "[из: memory/desires/events.jsonl · её №8: желания живут в эпохе]",
+                False)
+    shown = states[:10]
+    rows = []
+    for state in shown:
+        row = (f"- {state.get('id')} [{state.get('stage')}/{state.get('status')}]: "
+               f"{str(state.get('statement') or '').strip()}")
+        if state.get("next_move"):
+            row += f"; next: {str(state.get('next_move'))[:500]}"
+        rows.append(row)
+    lines = ["мои живые намерения (снимок на момент заморозки; внутреннее, "
+             "не обещание аудитории):"]
+    lines.extend(rows if rows else ["- живых намерений в леджере сейчас нет"])
+    if len(states) > len(shown):
+        lines.append(f"Показано {len(shown)} из {len(states)} — остальные целиком "
+                     "через manage_desire(action=get, desire_id=…).")
+    lines.append("[из: memory/desires/events.jsonl (append-only канон) · отбор: код, "
+                 "НЕ мой · её №8: желания живут в эпохе, граница — содержательное "
+                 "изменение леджера]")
+    return "\n".join(lines), True
+
+
+def _block_mail() -> str | None:
+    """Локатор почты — ЕЁ слово 21.08 (№8): «почтовый локатор — E». Локатор, не
+    индекс: тела писем и список — руками, здесь только «ящик существует и чем его
+    открыть» плюс счёт на момент заморозки (снимок, не живое число)."""
+    box = BASE / "memory" / "mailbox.json"
+    if not box.exists():
+        return None
+    try:
+        data = json.loads(_read(box) or "{}")
+        letters = str(len(data)) if isinstance(data, dict) else "0"
+    except Exception:
+        log.debug("frame_shadow: mailbox.json не разобрался", exc_info=True)
+        letters = "не прочитался (отказ прибора, не пустота ящика)"
+    return ("почтовый ящик — локатор, не индекс. Писем на момент заморозки: "
+            f"{letters}. Индекс не в кадре; письмо — mail_read, список — "
+            "manage_mail; индекс приедет сам, если речь зайдёт о почте.\n"
+            "[из: memory/mailbox.json · её №8: локатор живёт в эпохе]")
+
+
+def _block_voice_frame(payload: dict | None) -> str | None:
+    """Стабильная голосовая рамка — ЕЁ слово 21.08 (№8): «можно оставить в E как
+    явно машинный системный контракт». Текст приезжает аргументом от живого пути
+    (frame.extra_system без [reply]-части — та едет в T); тень его не сочиняет.
+    Нет текста — нет блока: у wake/task-потоков рамки и не бывает."""
+    text = str((payload or {}).get("voice_frame") or "").strip()
+    if not text:
+        return None
+    return (text
+            + "\n[из: живой путь, frame.extra_system без [reply] · явно машинный "
+              "системный контракт, НЕ мой голос (её №8); [reply]-часть хода — в T]")
 
 
 def _room_last_activity(chat_id: str) -> str:
@@ -795,18 +955,109 @@ def _dossier_for(chat_id: str) -> Path | None:
     if not people.exists() or not chat_id:
         return None
     header_hits, content_hits = [], []
-    pattern = re.compile(rf"^telegram_id:\s*{re.escape(chat_id)}\s*$", re.M)
+    target = re.compile(rf"^telegram_id:\s*{re.escape(chat_id)}\s*$", re.M)
+    declaration = re.compile(r"^telegram_id\s*:", re.M)
     for path in sorted(people.glob("*.md")):
         raw = _read(path)
-        if pattern.search(raw):
+        # Свидетель живёт в ПРЕАМБУЛЕ — до первой секции: ровно та дисциплина, по
+        # которой привязку пишет `people.telegram_id`. Ниже начинается пересказ, где
+        # `telegram_id:` бывает ЦИТАТОЙ чужого профиля, а цитата владельца не
+        # назначает: досье называют третьих людей, и свидетель, срабатывающий на
+        # пересказ, есть свидетель ЧУЖОГО (26.08, остаток после первого repair).
+        preamble = re.split(r"^##\s", raw, maxsplit=1, flags=re.M)[0]
+        bound = declaration.findall(preamble)
+        if len(bound) > 1:
+            # Задвоенная привязка — спор об авторстве, а не свидетель. Если спорят
+            # ИМЕННО об этом id, не поднимаем НИЧЕГО: иначе запасной путь обошёл бы
+            # спор стороной и молча выбрал другой файл.
+            if target.search(preamble):
+                return None
+            continue
+        if bound and target.search(preamble):
             header_hits.append(path)
-        elif chat_id in raw:
+        elif chat_id in raw and not declaration.search(raw):
+            # An incidental mention is a fallback only for an unbound file.  A file
+            # structurally bound to somebody else must never become this peer's dossier.
             content_hits.append(path)
     if len(header_hits) == 1:
         return header_hits[0]
     if not header_hits and len(content_hits) == 1:
         return content_hits[0]
     return None
+
+
+# Начало СЛЕДУЮЩЕЙ записи на том же отступе: маркер списка, заголовок, цитата,
+# ограда кода, строка таблицы, тематический разрыв. Всё прочее на том же отступе —
+# ленивое продолжение предыдущего абзаца, то есть ЧАСТЬ той же записи.
+_NEW_BLOCK = re.compile(
+    r"(?:[-*+]\s|\d+[.)]\s|#{1,6}\s|>|```|~~~|\||-{3,}\s*$|\*{3,}\s*$|_{3,}\s*$)")
+_LIST_MARK = re.compile(r"(?:[-*+]|\d+[.)])\s")
+
+
+def strip_private_blocks(text: str) -> tuple[str, int]:
+    """Снять записи с пометкой `[private]` ЦЕЛИКОМ — вместе с продолжениями.
+
+    26.08, остаток после первого repair: блок снимался, но обрывался на первой же
+    строке ТОГО ЖЕ отступа. В markdown соседняя непустая строка без своего маркера —
+    ленивое продолжение того же абзаца; приватная заметка, написанная обычным
+    абзацем (а не пунктом списка), уезжала собеседнику со второй строки.
+
+    Запись кончается там, где начинается СЛЕДУЮЩАЯ: дедент, новый маркер, заголовок,
+    цитата, ограда — а для абзаца ещё и пустая строка.
+
+    ⚠ Ленивое продолжение снимается только у АБЗАЦА. У пункта списка продолжение
+    обязано быть отступлено — так его и пишет `people.append_fact`, и так стоят её
+    пины. Строка вплотную под `- [private] …` БЕЗ отступа остаётся видимой: это
+    названная граница, а не оплошность — иначе открытый текст, приклеенный к пункту,
+    исчезал бы молча.
+
+    Возвращает тело и число снятых СТРОК (оно же `private_hidden`).
+    """
+    kept: list[str] = []
+    hidden = 0
+    heading_level: int | None = None
+    indent: int | None = None
+    listish = False
+    blank_seen = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip(" \t")
+        col = len(line) - len(stripped)
+        head = re.match(r"^(#{1,6})\s", stripped)
+        level = len(head.group(1)) if head else None
+        if heading_level is not None:
+            if level is not None and level <= heading_level:
+                heading_level = None
+            else:
+                hidden += 1
+                continue
+        if indent is not None:
+            if not stripped.strip():
+                if listish:
+                    hidden += 1
+                    blank_seen = True
+                    continue
+                indent = None            # абзац кончился пустой строкой
+            elif col > indent:
+                hidden += 1
+                blank_seen = False
+                continue
+            elif (col == indent and not listish and not blank_seen
+                  and not _NEW_BLOCK.match(stripped)):
+                hidden += 1              # ленивое продолжение той же записи
+                continue
+            else:
+                indent = None
+        if "[private]" in line:
+            hidden += 1
+            if level is not None:
+                heading_level = level
+            else:
+                indent = col
+                listish = bool(_LIST_MARK.match(stripped))
+                blank_seen = False
+            continue
+        kept.append(line)
+    return "".join(kept), hidden
 
 
 def _lifted_source(ctx, audience: str = "other") -> tuple[str, dict | None]:
@@ -822,11 +1073,11 @@ def _lifted_source(ctx, audience: str = "other") -> tuple[str, dict | None]:
     чужого человека сюда не поднять по построению — привязка идёт от chat_id правилом
     свидетелей.
 
-    Аудитория здесь режет не файл, а строки: вне owner-потока снимаются строки с
-    пометкой `[private]` — тот же механический пол, что стоит у живого кадра в
-    `agent._people_index`. Байтовость её №13 остаётся там, где она её и ставила, — в
-    owner-потоке; вне его тело подписано как отфильтрованное, а sha256 по-прежнему
-    считан ПО ФАЙЛУ ЦЕЛИКОМ, чтобы обрезка не выдавала себя за оригинал.
+    Аудитория здесь режет не файл, а приватные markdown-записи целиком через
+    `strip_private_blocks`: вместе с принадлежащими записи продолжениями. Байтовость
+    её №13 остаётся там, где она её и ставила, — в owner-потоке; вне его тело
+    подписано как отфильтрованное, а sha256 по-прежнему считан ПО ФАЙЛУ ЦЕЛИКОМ,
+    чтобы обрезка не выдавала себя за оригинал.
 
     Здесь только ЧТЕНИЕ — ровно одно на заморозку. Вёрстка отдана `_render_lifted`,
     чтобы лестница деградации пересобирала блок под меньший потолок из уже
@@ -851,13 +1102,7 @@ def _lifted_source(ctx, audience: str = "other") -> tuple[str, dict | None]:
     body = raw.decode("utf-8", errors="replace")
     private_hidden = 0
     if audience != "owner":
-        kept = []
-        for line in body.split("\n"):
-            if "[private]" in line:
-                private_hidden += 1
-                continue
-            kept.append(line)
-        body = "\n".join(kept)
+        body, private_hidden = strip_private_blocks(body)
     try:
         import rooms as rooms_mod
         her = rooms_mod.transfer_of(chat_id)
@@ -883,8 +1128,12 @@ def _render_lifted(header: str, src: dict | None,
     private_hidden = int(src.get("private_hidden") or 0)
 
     def assemble(shown: str, cut: bool) -> str:
+        # ЕЁ слово 21.08 (№8): «вся будущая обрезка только явно, с исходным размером,
+        # sha и способом поднять полное тело».
         cut_note = ((f"\n[обрезано: показано {len(shown)} из {len(body)} знаков "
-                     f"({len(raw)} байт) · целиком: memory/people/{path.name}]")
+                     f"({len(raw)} байт) · sha256 полного тела {sha[:12]} · "
+                     f"целиком: memory/people/{path.name} — поднять рукой чтения "
+                     f"файла]")
                     if cut else "")
         if private_hidden:
             cut_note += (f"\n[вне owner-потока снято строк с пометкой [private]: "
@@ -953,10 +1202,18 @@ def _apply_e_ceiling(blocks: dict[str, str], *, rebuild) -> list[dict]:
 
 
 def _epoch_blocks(ctx, tools, now: datetime,
-                  audience: str = "other") -> tuple[dict[str, str], list[dict],
-                                                    list[dict]]:
-    """Семь блоков E v3 в порядке частоты изменения, опись поднятых тел и опись
+                  audience: str = "other",
+                  payload: dict | None = None) -> tuple[dict[str, str], list[dict],
+                                                        list[dict]]:
+    """Блоки E v4 в порядке частоты изменения (E_ORDER), опись поднятых тел и опись
     деградаций потолка. Шапка добавляется при заморозке — она знает номер и причину.
+
+    Состав — ЕЁ реестр 21.08 (№8): в owner-потоке «недавнее» НЕ собирается (вариант
+    «в»: недавние действия доступны рукой recent_turns, а не постоянным блоком),
+    зато живут желания, локатор почты и полное тело INDEX.md. Вне owner-потока
+    состав прежний узкий (её слово: групповую половину реестра принимать только
+    после реальных замеров тени в группах). Голосовая рамка едет из payload живого
+    пути — тень машинный контракт не сочиняет.
 
     Аудитория едет ОДНИМ аргументом через все блоки: разные её толкования в разных
     блоках — это и есть та дыра, которой книга уезжала в чужой поток. Умолчание
@@ -967,11 +1224,6 @@ def _epoch_blocks(ctx, tools, now: datetime,
     сработавшая лестница показывала бы вечный drift в блоках, которые не менялись."""
     here = str(getattr(ctx, "chat_id", "") or "")
     book = _block_address_book(ctx, audience)
-    titles: dict[str, str] = {}
-    for line in book.splitlines():
-        m = re.match(r"- (.+?) — (?:личка|группа) (-?\d+)", line)
-        if m:
-            titles[m.group(2)] = m.group(1)
     lift_header, lift_src = _lifted_source(ctx, audience)
     lifted_block, lifted_meta = _render_lifted(lift_header, lift_src)
     hands_meta: dict = {}
@@ -980,9 +1232,23 @@ def _epoch_blocks(ctx, tools, now: datetime,
         "hands": _block_hands(tools, hands_meta),
         "memory_index": _block_memory_index(audience, ctx),
         "address_book": book,
-        "recent": _block_recent(now, titles, audience, here),
         "lifted": lifted_block,
     }
+    voice = _block_voice_frame(payload)
+    if voice is not None:
+        blocks["voice_frame"] = voice
+    if audience == "owner":
+        mail = _block_mail()
+        if mail is not None:
+            blocks["mail"] = mail
+        blocks["desires"] = _block_desires()[0]
+    else:
+        titles: dict[str, str] = {}
+        for line in book.splitlines():
+            m = re.match(r"- (.+?) — (?:личка|группа) (-?\d+)", line)
+            if m:
+                titles[m.group(2)] = m.group(1)
+        blocks["recent"] = _block_recent(now, titles, audience, here)
 
     def rebuild(name: str, target: int) -> str | None:
         """Пересборка одного блока под меньший потолок БЕЗ повторного чтения диска:
@@ -994,7 +1260,7 @@ def _epoch_blocks(ctx, tools, now: datetime,
         if name == "recent":
             return _shrink_rows(blocks["recent"], target, "журнал доставки")
         if name == "address_book":
-            return _shrink_rows(blocks["address_book"], target, "search_chats")
+            return _shrink_book(blocks["address_book"], target, here)
         if name == "hands":
             return _strip_hand_lines(blocks["hands"])
         return None
@@ -1011,19 +1277,17 @@ def _epoch_blocks(ctx, tools, now: datetime,
 
 
 def _epoch_text(blocks: dict[str, str], header_line: str) -> str:
-    order = ["self", "hands", "memory_index", "address_book", "recent", "lifted"]
-    return "\n\n".join([blocks[k] for k in order if k in blocks] + [header_line])
+    return "\n\n".join([blocks[k] for k in E_ORDER if k in blocks] + [header_line])
 
 
 def _zone_e_current(tools, ctx=None, now: datetime | None = None,
-                    audience: str = "other") -> str:
+                    audience: str = "other", payload: dict | None = None) -> str:
     """Э, какой она собралась бы СЕЙЧАС (без шапки — та рождается на границе).
     В кадр едет замороженный снапшот; расхождение — метрика drift по блокам."""
     now = now or datetime.now(timezone.utc)
-    blocks, _meta, _degraded, _hands = _epoch_blocks(ctx, tools, now, audience)
-    return "\n\n".join(blocks[k] for k in
-                       ["self", "hands", "memory_index", "address_book",
-                        "recent", "lifted"])
+    blocks, _meta, _degraded, _hands = _epoch_blocks(ctx, tools, now, audience,
+                                                     payload)
+    return "\n\n".join(blocks[k] for k in E_ORDER if k in blocks)
 
 
 # --------------------------------------------------------------- эпоха: заморозка
@@ -1055,9 +1319,16 @@ def _max_epoch_in_metrics(stream_dir: Path) -> int:
 def _freeze_epoch(stream_dir: Path, ctx, tools, now: datetime, n: int,
                   reason: str, fold_count: int, fold_line: str,
                   fold_anchor: dict | None = None,
-                  audience: str = "other") -> dict:
+                  audience: str = "other",
+                  payload: dict | None = None) -> dict:
     blocks, lifted_meta, degraded, hands_meta = _epoch_blocks(
-        ctx, tools, now, audience)
+        ctx, tools, now, audience, payload)
+    # Сводка прошлых ходов — ЕЁ реестр №8: «сводка — A». Снимается на ГРАНИЦЕ из
+    # живого пути (тень своих компактов не варит — этап 2) и стоит в голове A
+    # байт-в-байт до следующей границы: вставка, меняющаяся между границами,
+    # ломала бы префикс без права границы.
+    recap_text = str((payload or {}).get("recap") or "")
+    recap = ({"text": recap_text, "at": _minutes_utc(now)} if recap_text else None)
     header = (f"[эпоха {n} · заморожена {_minutes_utc(now)} · "
               f"поток: {stream_dir.name} · граница: {reason}]")
     saved = {
@@ -1083,6 +1354,7 @@ def _freeze_epoch(stream_dir: Path, ctx, tools, now: datetime, n: int,
         # чтения старыми глазами; позиционно его больше никто не применяет.
         "fold_count": int(fold_count), "fold_line": str(fold_line or ""),
         "fold_anchor": fold_anchor,
+        "recap": recap,
     }
     stream_dir.mkdir(parents=True, exist_ok=True)
     _write_atomic(_epoch_path(stream_dir),
@@ -1104,7 +1376,7 @@ def _load_epoch(stream_dir: Path) -> dict | None:
 
 
 def _epoch_drift(saved: dict, ctx, tools, now: datetime,
-                 audience: str = "other") -> dict | None:
+                 audience: str = "other", payload: dict | None = None) -> dict | None:
     """Drift по блокам: какой именно блок устарел и на сколько знаков.
 
     Аудитория берётся ТА ЖЕ, под которой эпоха заморожена: иначе drift мерил бы не
@@ -1112,17 +1384,22 @@ def _epoch_drift(saved: dict, ctx, tools, now: datetime,
     frozen_blocks = saved.get("blocks")
     if not isinstance(frozen_blocks, dict):
         frozen = str(saved.get("e_text") or "")
-        current = _zone_e_current(tools, ctx, now, audience)
+        current = _zone_e_current(tools, ctx, now, audience, payload)
         if frozen == current:
             return None
         return {"at": _first_diff(frozen, current),
                 "frozen_chars": len(frozen), "current_chars": len(current)}
-    current_blocks, _m, _d, _h = _epoch_blocks(ctx, tools, now, audience)
+    current_blocks, _m, _d, _h = _epoch_blocks(ctx, tools, now, audience, payload)
     changed = {}
     for name, cur in current_blocks.items():
         old = str(frozen_blocks.get(name) or "")
         if old != cur:
             changed[name] = {"frozen_chars": len(old), "current_chars": len(cur)}
+    for name, old in frozen_blocks.items():
+        # Замороженный блок, который сегодня не собрался бы вовсе, — тоже drift:
+        # молчание о нём выдавало бы исчезновение источника за здоровье.
+        if name not in current_blocks and str(old or ""):
+            changed[name] = {"frozen_chars": len(str(old)), "current_chars": 0}
     if not changed:
         return None
     total_old = sum(len(str(v)) for v in frozen_blocks.values())
@@ -1162,13 +1439,21 @@ def _a_message(message) -> str:
     if not isinstance(message, dict):
         return ""
     role = str(message.get("role") or "?")
-    text = _text_of(message.get("content")).rstrip()
+    text = _text_of(message.get("content"))
     if len(text) > A_MSG_MAX:
-        text = (text[:A_MSG_MAX]
-                + f"\n{_A_CUT_MARK} {A_MSG_MAX} из {len(text)} знаков этого "
-                  "сообщения · это НЕ мой отбор · целиком: события memory_life "
-                  "этого потока — memory/life/events/*.jsonl, kind "
-                  "conversation_message]")
+        # ЕЁ слово 21.08 (№1): срез ДВУСТОРОННИЙ — «сохранять начало и конец, между
+        # ними явный маркер с числом вырезанных знаков и точным способом поднять
+        # полный источник». Обрезка только хвоста прятала бы именно ту область, где
+        # у результатов рук живут итоги и ошибки.
+        total = len(text)
+        cut = total - (A_MSG_HEAD + A_MSG_TAIL)
+        text = (text[:A_MSG_HEAD]
+                + f"\n{_A_CUT_MARK} первые {A_MSG_HEAD} и последние {A_MSG_TAIL} из "
+                  f"{total} знаков этого сообщения · вырезано {cut} зн. посередине · "
+                  "срез двусторонний · это НЕ мой отбор · целиком: события "
+                  "memory_life этого потока — memory/life/events/*.jsonl, kind "
+                  "conversation_message]\n"
+                + text[-A_MSG_TAIL:])
     return f"\n[{role}]\n{text}\n"
 
 
@@ -1242,9 +1527,18 @@ def _zone_a(history, fold_count: int, fold_line: str) -> tuple[str, dict]:
     total = len(list(history or ()))
     kept = len(rows)
     live = total - fold_count
+    # ЕЁ слово 21.08 (№2): пол живого хвоста 12 — «если даже 12 не помещаются в
+    # аварийный потолок, это отдельная ВИДИМАЯ аварийная деградация, а не молчаливое
+    # снижение пола». Пол меряется против живого хвоста: короткая история не авария.
+    floor_breach = kept < min(A_KEEP_TAIL_MIN, live)
     head = ""
     if fold_line:
         head += fold_line + "\n"
+    if floor_breach:
+        head += (f"⚠ [АВАРИЙНАЯ ДЕГРАДАЦИЯ ОКНА: живой хвост {kept} сообщ. — ниже "
+                 f"пола {A_KEEP_TAIL_MIN}; даже пол не влез в аварийный потолок "
+                 f"{A_MAX_CHARS} зн. Это названная авария, не молчаливое снижение "
+                 f"пола (её №2)]\n")
     if kept < live:
         head += (f"[окно: {kept} из {live} живых сообщений · выброшено кодом "
                  f"{dropped_by_count + dropped_by_chars}: {dropped_by_count} за "
@@ -1256,6 +1550,7 @@ def _zone_a(history, fold_count: int, fold_line: str) -> tuple[str, dict]:
         "dropped_by_chars": dropped_by_chars,
         "dropped_by_count": dropped_by_count,
         "dropped_chars": dropped_chars, "capped": capped,
+        "floor_breach": floor_breach,
     }
 
 
@@ -1270,7 +1565,26 @@ def _needs_fold(history, fold_count: int) -> bool:
 # ------------------------------------------------------------------------ зона T
 
 
-def _zone_t(ctx, speaker, user_msg, now: datetime) -> str:
+def _zone_t(ctx, speaker, user_msg, now: datetime,
+            payload: dict | None = None) -> str:
+    """Хвост: машинный контракт хода → ситуация → вход (вход последним — ближе всех
+    к ответу).
+
+    Машинный хвост — ЕЁ слово 21.08 (№8, арифметика «б»): «contract.* и
+    state.owner_place — в T, а не в E: это машинный действующий контракт/адрес хода,
+    он не должен вытеснять живого человека и не должен читаться как мой авторский
+    документ». Сюда же state_block, channel_facts, mutable operational continuity и
+    [reply]-часть рамки. Цену она назвала сама: эти знаки пересобираются каждый ход
+    и не держат кэш — и это принятая цена, не дефект. Тексты приезжают аргументом от
+    живого пути; нет текстов — нет хвоста (и coverage честно считает их todo)."""
+    machine = ""
+    rows = list((payload or {}).get("machine") or ())
+    if rows:
+        parts = [f"--- {name} ---\n{text}" for name, text in rows]
+        machine = ("[машинный хвост хода — действующий контракт и состояние; собрано "
+                   "кодом живого пути · это НЕ мой голос и НЕ эпоха (её №8: "
+                   "contract/state живут в T)]\n"
+                   + "\n\n".join(parts) + "\n\n")
     chat_id = getattr(ctx, "chat_id", None)
     place = ("личка" if getattr(ctx, "is_dm", False) else "группа")
     if chat_id is not None:
@@ -1279,7 +1593,8 @@ def _zone_t(ctx, speaker, user_msg, now: datetime) -> str:
     entry = _text_of(user_msg).strip()
     if len(entry) > T_INPUT_MAX:
         entry = entry[:T_INPUT_MAX] + f"\n[обрезано: вход {len(_text_of(user_msg))} зн.]"
-    return ("<ТЕКУЩЕЕ>\n"
+    return (machine
+            + "<ТЕКУЩЕЕ>\n"
             f"место: {place}\n"
             f"говорит: {who}\n"
             f"адрес ответа: {who if who != '—' else place}\n"
@@ -1288,6 +1603,52 @@ def _zone_t(ctx, speaker, user_msg, now: datetime) -> str:
             "</ТЕКУЩЕЕ>\n"
             "вход:\n"
             f"{entry}\n")
+
+
+# --------------------------------------------------- тексты живого пути (её №8)
+
+
+def _live_payload(live_sections) -> dict:
+    """Разложить опись прибора на грузы для тени: machine-хвост T, стабильная
+    голосовая рамка (E), сводка прошлых ходов (A на границе) и множество carried —
+    имена секций, которые тень в этом захвате ВПРАВДУ несёт (по нему честен
+    coverage). Тексты в описи есть только у секций frame_trace.TEXT_CARRIED; их
+    отсутствие — не ошибка, а прежний режим: тогда machine пуст и секции остаются
+    в todo. Тень не парсит system и не сочиняет машинный контракт — только берёт
+    его аргументом; при шве живой путь передаст те же тексты сам."""
+    machine: list[tuple[str, str]] = []
+    carried: set[str] = set()
+    voice_frame = recap = ""
+    for row in list(live_sections or ()):
+        if not isinstance(row, dict) or not row.get("included"):
+            continue
+        name = str(row.get("name") or "")
+        text = row.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        label = str(row.get("label") or "")
+        if name == "frame.extra_system":
+            # ЕЁ №8: «стабильную голосовую рамку можно оставить в E как явно
+            # машинный системный контракт; [reply] — только T». Режем по маркеру.
+            idx = text.find("[reply]")
+            head = (text[:idx] if idx >= 0 else text).strip("\n")
+            tail = (text[idx:] if idx >= 0 else "").strip("\n")
+            if head:
+                voice_frame = head
+            if tail:
+                machine.append(("frame.extra_system[reply]", tail))
+            carried.add(name)
+        elif name.startswith(("contract.", "state.")):
+            machine.append((name, text.strip("\n")))
+            carried.add(name)
+        elif name == "evidence.tier" and label == "Mutable operational continuity":
+            machine.append((f"evidence.tier[{label}]", text.strip("\n")))
+            carried.add(f"{name}:{label}")
+        elif name == "evidence.tier" and label.startswith("Ранее в этом диалоге"):
+            recap = text.strip("\n")
+            carried.add(f"{name}:{label}")
+    return {"machine": machine, "voice_frame": voice_frame, "recap": recap,
+            "carried": carried}
 
 
 # ------------------------------------------------------------------------- сборка
@@ -1325,23 +1686,30 @@ class Plan:
     audience: str = "other"
     fold: dict = field(default_factory=dict)
     fold_stuck: dict | None = None
+    # Сводка прошлых ходов, снятая живым путём на границе (её №8: «сводка — A»);
+    # {"text","at"} | None. Едет из снапшота эпохи — байт-в-байт между границами.
+    recap: dict | None = None
 
 
-def prepare(*, ctx, history, tools, now: datetime | None = None) -> Plan:
+def prepare(*, ctx, history, tools, now: datetime | None = None,
+            payload: dict | None = None) -> Plan:
     """Внешняя половина сборщика — та, что имеет право трогать диск: чтение эпохи,
     заморозка на границе, план свёртки. Всё, что она решила, уезжает в Plan; байты
     кадра из него собирает `build`, и другого пути к байтам нет ни у кого.
 
     Живой путь при switch зовёт ровно эту пару — prepare + build — и получает те же
-    байты, что тень: не «похожие», а те же, потому что функция одна."""
+    байты, что тень: не «похожие», а те же, потому что функция одна. `payload` —
+    тексты живого пути (машинный контракт, рамка, сводка): в тени их даёт опись
+    прибора, при шве живой путь передаст их сам."""
     now = now or datetime.now(timezone.utc)
     stream_dir = _shadow_root() / _stream_key(ctx)
     stream_dir.mkdir(parents=True, exist_ok=True)
     saved, drift, boundary, fold, stuck = _epoch_for_capture(
-        stream_dir, ctx, tools, history, now)
+        stream_dir, ctx, tools, history, now, payload)
     blocks = saved.get("blocks") if isinstance(saved.get("blocks"), dict) else {}
     anchor = saved.get("fold_anchor")
     anchor = anchor if isinstance(anchor, dict) else {}
+    recap = saved.get("recap")
     return Plan(epoch_n=int(saved.get("n") or 1),
                 e_text=str(saved.get("e_text") or ""),
                 fold_count=int(fold["count"]),
@@ -1359,11 +1727,12 @@ def prepare(*, ctx, history, tools, now: datetime | None = None) -> Plan:
                 # заморожена).
                 fold={"count": int(fold["count"]), "by": str(fold["by"]),
                       "at": str(anchor.get("at") or "")},
-                fold_stuck=stuck)
+                fold_stuck=stuck,
+                recap=recap if isinstance(recap, dict) else None)
 
 
 def build(*, ctx, history, speaker, user_msg, tools, now: datetime,
-          plan: Plan) -> Frame:
+          plan: Plan, payload: dict | None = None) -> Frame:
     """Чистая сборка: никакого IO, кроме чтения source-файлов K. Всё подвижное
     (эпоха, свёртка, время) приходит аргументами — на этом стоят тесты детерминизма.
 
@@ -1373,8 +1742,17 @@ def build(*, ctx, history, speaker, user_msg, tools, now: datetime,
     stream = _stream_key(ctx)
     epoch_n, e_text = plan.epoch_n, plan.e_text
     k = _zone_k()
-    a, a_meta = _zone_a(history, plan.fold_count, plan.fold_line)
-    t = _zone_t(ctx, speaker, user_msg, now)
+    fold_head = plan.fold_line
+    recap = plan.recap if isinstance(plan.recap, dict) else None
+    if recap and str(recap.get("text") or ""):
+        # Сводка старше всего в A — стоит первой; снята на границе и не меняется
+        # между границами (её №8: «сводка — A»; подпись — машинная, её №6).
+        fold_head = (f"[сводка прошлых ходов · снимок живого пути на границе "
+                     f"{recap.get('at')} · это НЕ мой отбор]\n"
+                     f"{recap.get('text')}\n"
+                     + (f"{plan.fold_line}" if plan.fold_line else "")).rstrip("\n")
+    a, a_meta = _zone_a(history, plan.fold_count, fold_head)
+    t = _zone_t(ctx, speaker, user_msg, now, payload)
     # Номер эпохи из заголовка НАД конституцией убран (18.08): он инвалидировал бы
     # 13k неизменной K на каждой границе. Номер живёт в шапке E и в метриках.
     header = f"# Теневой кадр · {stream}\n"
@@ -1385,51 +1763,93 @@ def build(*, ctx, history, speaker, user_msg, tools, now: datetime,
 
 # ------------------------------------------------------------- полнота против живого
 
-_COVERAGE_MAP = (
-    ("persona.", "K"),
-    ("situation.", "T"),
-    ("contract.", "todo"),
-    ("state.", "todo"),
-    ("evidence.", "todo"),
-    ("frame.extra_system", "todo"),
-)
+# Тиры, которые тень несёт ДЕДУПОМ — своим рендером того же источника (её реестр
+# №8): совпадение байтов не обещается, расхождение меряет отчёт пар, а coverage
+# отвечает на «есть ли у секции дом в тени». Ключ — префикс ярлыка тира.
+_EXACT_TIER_LABELS = {label: home for label, home in (
+    ("Мои досье на людей — присутствующие целиком", "lifted"),
+    ("Досье собеседника", "lifted"),
+    ("Canonical desire continuity", "desires"),
+    ("Мои желания", "desires"),
+    ("Почтовый ящик — ЛОКАТОР, не индекс", "mail"),
+    ("Карта памяти", "memory_index"),
+    ("Эта комната", "address_book"),
+)}
+# Похороненное — ЕЁ слово №8: header удалить; легенда живёт только пока существует
+# gutter, а в тени gutter-а нет — «при снятии gutter легенда удаляется тем же
+# изменением».
+_BURIED = {
+    "evidence.header": "её №8: удалить",
+    "evidence.legend": "её №8: легенда живёт только при gutter — в тени gutter-а нет",
+}
 
 
-def _coverage(live_sections) -> dict:
-    covered = todo = 0
+def _coverage(live_sections, carried=frozenset(), recap_in_a: bool = False) -> dict:
+    """Полнота тени против живой описи. Четыре исхода на секцию: covered (у секции
+    есть дом в тени — зоной, дедупом или carried-текстом этого захвата) · buried
+    (её слово: секция умирает) · todo (дома нет — честный долг) · unknown (прибор
+    не узнал имени). `carried` — множество имён, которые тень В ЭТОМ захвате вправду
+    везёт: секция, чей текст не приехал, остаётся todo, а не объявляется покрытой
+    авансом."""
+    covered = todo = buried = 0
     todo_rows: list[dict] = []
+    buried_rows: list[dict] = []
     unknown: list[str] = []
+
+    def note(row, name, sink):
+        item = {"name": name, "chars": int(row.get("chars") or 0)}
+        # ЯРЛЫК ЕДЕТ ВМЕСТЕ С РАЗМЕРОМ (семь тиров звались одинаково, опознание
+        # шло по позиции в agent.py); `variant` рядом по той же причине.
+        for extra in ("label", "variant"):
+            if row.get(extra):
+                item[extra] = str(row[extra])[:120]
+        sink.append(item)
+
     for row in list(live_sections or ()):
         if not isinstance(row, dict) or not row.get("included"):
             continue
         name = str(row.get("name") or "")
-        for prefix, zone in _COVERAGE_MAP:
-            if name.startswith(prefix):
-                if zone == "todo":
-                    todo += 1
-                    # Имена и размеры — для «потеряно» её трёхчастного отчёта:
-                    # счётчик без имён не отвечает, ЧТО именно тень не несёт.
-                    #
-                    # ЯРЛЫК ЕДЕТ ВМЕСТЕ С РАЗМЕРОМ. Живая строка его несёт
-                    # (frame_trace: row["label"]), а прибор выбрасывал — и семь
-                    # разных тиров превращались в семь одинаковых `evidence.tier`
-                    # на 33,7k знаков. Опознавать их приходилось ПО ПОЗИЦИИ в
-                    # жёстком порядке agent.py: реестр переноса, который она
-                    # принимает, стоял на догадке о том, что именно перевозится.
-                    # `variant` рядом по той же причине — одна и та же секция в
-                    # разных ветках весит разное (owner_place: 115 · 49 · 86).
-                    todo_rows.append({"name": name,
-                                      "chars": int(row.get("chars") or 0)})
-                    for extra in ("label", "variant"):
-                        if row.get(extra):
-                            todo_rows[-1][extra] = str(row[extra])[:120]
+        label = str(row.get("label") or "")
+        if name in {"persona.soul", "persona.voice", "persona.self_current",
+                    "situation.channel"}:
+            covered += 1
+        elif name in _BURIED:
+            buried += 1
+            note(row, name, buried_rows)
+            buried_rows[-1]["reason"] = _BURIED[name]
+        elif name.startswith(("contract.", "state.")) or name == "frame.extra_system":
+            if name in carried:
+                covered += 1
+            else:
+                todo += 1
+                note(row, name, todo_rows)
+        elif name == "evidence.tier":
+            if label in _EXACT_TIER_LABELS:
+                covered += 1
+            else:
+                if label == "Mutable operational continuity":
+                    if f"{name}:{label}" in carried:
+                        covered += 1
+                    else:
+                        todo += 1
+                        note(row, name, todo_rows)
+                elif label.startswith("Ранее в этом диалоге"):
+                    if recap_in_a:
+                        covered += 1
+                    else:
+                        todo += 1
+                        note(row, name, todo_rows)
                 else:
-                    covered += 1
-                break
+                    todo += 1
+                    note(row, name, todo_rows)
+        elif name.startswith("evidence."):
+            todo += 1
+            note(row, name, todo_rows)
         else:
             unknown.append(name)
-    return {"covered": covered, "todo": todo, "unknown": len(unknown),
-            "todo_names": todo_rows[:40], "unknown_names": unknown[:20]}
+    return {"covered": covered, "todo": todo, "buried": buried,
+            "unknown": len(unknown), "todo_names": todo_rows[:40],
+            "buried_names": buried_rows[:10], "unknown_names": unknown[:20]}
 
 
 # ------------------------------------------------------------------------- захват
@@ -1503,14 +1923,15 @@ def _fold_plan(history, saved: dict, now: datetime, *,
 
 def _cross(stream_dir: Path, ctx, tools, history, now: datetime, *, saved: dict,
            n: int, reason: str, audience: str, force: bool,
-           extra: dict | None = None):
+           extra: dict | None = None, payload: dict | None = None):
     """Пересечь границу: спланировать свёртку, заморозить E, назвать границу.
 
-    Одно место на все пять причин — иначе каждая ветка обрастала бы своим порядком
+    Одно место на все причины — иначе каждая ветка обрастала бы своим порядком
     аргументов, и однажды одна из них заморозила бы эпоху не под ту аудиторию."""
     fold_count, fold_line, stuck, anchor = _fold_plan(history, saved, now, force=force)
     fresh = _freeze_epoch(stream_dir, ctx, tools, now, n, reason, fold_count,
-                          fold_line, fold_anchor=anchor, audience=audience)
+                          fold_line, fold_anchor=anchor, audience=audience,
+                          payload=payload)
     boundary = {"reason": reason, "n": n, "folded": fold_count}
     if extra:
         boundary.update(extra)
@@ -1519,14 +1940,16 @@ def _cross(stream_dir: Path, ctx, tools, history, now: datetime, *, saved: dict,
 
 
 def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
-                       now: datetime) -> tuple[dict, dict | None, dict | None,
-                                               dict, dict | None]:
+                       now: datetime,
+                       payload: dict | None = None
+                       ) -> tuple[dict, dict | None, dict | None,
+                                  dict, dict | None]:
     """(эпоха, drift, boundary, свёртка, тупик свёртки).
 
     Границы здесь, В ПОРЯДКЕ ПРОВЕРКИ СВЕРХУ ВНИЗ: первая заморозка · рваный файл
-    (аварийная, с восстановлением номера) · её flip · переход на схему v3 · СУЖЕНИЕ
-    АУДИТОРИИ · смена набора рук · порог накопителя (ЕЁ числа 120/70k; свёртка кодом,
-    подписанная «не мой отбор»).
+    (аварийная, с восстановлением номера) · её flip · переход на схему v4 · СУЖЕНИЕ
+    АУДИТОРИИ · смена набора рук · СОДЕРЖАТЕЛЬНОЕ ИЗМЕНЕНИЕ ЖЕЛАНИЙ (её №8) ·
+    порог накопителя (ЕЁ числа 120/70k; свёртка кодом, подписанная «не мой отбор»).
 
     Порядок не случаен. Схема раньше всего: снапшот чужого формата нельзя ни сверять,
     ни сужать. Аудитория раньше набора и порога: безопасность раньше экономии — снимок,
@@ -1546,24 +1969,25 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
         else:
             n, reason = 1, "первая заморозка потока"
         fresh = _freeze_epoch(stream_dir, ctx, tools, now, n, reason, 0, "",
-                             fold_anchor=None, audience=audience)
+                             fold_anchor=None, audience=audience, payload=payload)
         return (fresh, None, {"reason": reason, "n": n, "folded": 0},
                 {"count": 0, "by": "граница", "line": ""}, None)
     if saved.get("e_text") is None:  # её flip ждёт заморозки
         n = int(saved.get("n") or 1)
         reason = str(saved.get("pending_reason") or "её слово (flip_epoch)")
         return _cross(stream_dir, ctx, tools, history, now, saved=saved, n=n,
-                      reason=reason, audience=audience, force=True)
+                      reason=reason, audience=audience, force=True, payload=payload)
     if (int(saved.get("v") or 1) != FRAME_SCHEMA
             or not isinstance(saved.get("blocks"), dict)):
-        # ОДНА честная граница миграции на все потоки: формат эпохи вправду другой
-        # (якорь свёртки, аудитория, отпечаток рук, потолок E). Пять отдельных границ
-        # на один выкат стоили бы пять холодных префиксов вместо одного.
+        # ОДНА честная граница миграции на все потоки: формат эпохи вправду другой.
+        # Отдельные границы на каждое из девяти решений стоили бы девять холодных
+        # префиксов вместо одного.
         n = int(saved.get("n") or 1) + 1
         reason = (f"переход на схему кадра v{FRAME_SCHEMA} "
-                  "(якорь свёртки · аудитория · отпечаток рук · потолок E)")
+                  "(девять решений 21.08: реестр секций · лестница её порядком · "
+                  "пол хвоста 12 · двусторонний срез)")
         return _cross(stream_dir, ctx, tools, history, now, saved=saved, n=n,
-                      reason=reason, audience=audience, force=False)
+                      reason=reason, audience=audience, force=False, payload=payload)
     # Храповик аудитории. Снимок, собранный ШИРЕ потока, дожить до чужого хода не имеет
     # права: заморозка — не разрешение. Отсутствие ключа читается как `owner` (такой
     # снимок и собирался полной книгой). Расширение обратно НЕ происходит: узкая эпоха
@@ -1574,7 +1998,8 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
         n = int(saved.get("n") or 1) + 1
         reason = f"сужение аудитории потока ({frozen_audience} → {effective})"
         return _cross(stream_dir, ctx, tools, history, now, saved=saved, n=n,
-                      reason=reason, audience=effective, force=False)
+                      reason=reason, audience=effective, force=False,
+                      payload=payload)
     tools_sha = tool_offerings.fingerprint(tools)
     frozen_sha = str(saved.get("tools_sha") or "")
     if not frozen_sha:
@@ -1594,7 +2019,18 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
         return _cross(stream_dir, ctx, tools, history, now, saved=saved, n=n,
                       reason="смена набора рук", audience=effective, force=False,
                       extra={"tools_sha": tools_sha[:12],
-                             "tools_sha_was": frozen_sha[:12]})
+                             "tools_sha_was": frozen_sha[:12]}, payload=payload)
+    # ЕЁ слово 21.08 (№8): «границу эпохи вызывать по содержательному изменению
+    # ledger, не по служебному шуму». Мера содержательности — сам рендер блока:
+    # timestamps, refs и пересборки проекции в него не входят. Отказ источника
+    # (ok=False) границей не считается: молчание прибора — не факт о желаниях.
+    if effective == "owner" and "desires" in (saved.get("blocks") or {}):
+        current_desires, desires_ok = _block_desires()
+        if desires_ok and current_desires != saved["blocks"].get("desires"):
+            n = int(saved.get("n") or 1) + 1
+            return _cross(stream_dir, ctx, tools, history, now, saved=saved, n=n,
+                          reason="содержательное изменение желаний (ledger)",
+                          audience=effective, force=False, payload=payload)
     fold_count, by = _resolve_fold(history, saved)
     stuck = None
     if _needs_fold(history, fold_count):
@@ -1603,7 +2039,8 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
             n = int(saved.get("n") or 1) + 1
             reason = f"порог накопителя ({A_FOLD_MESSAGES} сообщ. / {A_FOLD_CHARS} зн.)"
             fresh = _freeze_epoch(stream_dir, ctx, tools, now, n, reason, new_fold,
-                                  fold_line, fold_anchor=anchor, audience=effective)
+                                  fold_line, fold_anchor=anchor, audience=effective,
+                                  payload=payload)
             return (fresh, None, {"reason": reason, "n": n, "folded": new_fold},
                     {"count": new_fold, "by": "граница", "line": fold_line}, None)
         # Свёртке некуда двигаться. Граница здесь была бы границей на КАЖДОМ захвате —
@@ -1624,7 +2061,7 @@ def _epoch_for_capture(stream_dir: Path, ctx, tools, history,
         # Счёт не утверждается: граница ушла из окна вместе со срезанным фронтом.
         line += ("\n[граница свёртки из окна ушла: всё ниже — новее её; "
                  "сколько свёрнуто, здесь не утверждается]")
-    drift = _epoch_drift(saved, ctx, tools, now, effective)
+    drift = _epoch_drift(saved, ctx, tools, now, effective, payload)
     return saved, drift, None, {"count": fold_count, "by": by, "line": line}, stuck
 
 
@@ -1640,10 +2077,11 @@ def capture(*, ctx, history, speaker, user_msg, tools,
     now = now or datetime.now(timezone.utc)
     stream_dir = _shadow_root() / _stream_key(ctx)
     stream_dir.mkdir(parents=True, exist_ok=True)
-    plan = prepare(ctx=ctx, history=history, tools=tools, now=now)
+    payload = _live_payload(live_sections)
+    plan = prepare(ctx=ctx, history=history, tools=tools, now=now, payload=payload)
     boundary = plan.boundary
     frame = build(ctx=ctx, history=history, speaker=speaker, user_msg=user_msg,
-                  tools=tools, now=now, plan=plan)
+                  tools=tools, now=now, plan=plan, payload=payload)
     new_bytes = frame.text.encode("utf-8")
     lcp = None
     try:
@@ -1704,13 +2142,22 @@ def capture(*, ctx, history, speaker, user_msg, tools,
         "lifted": plan.lifted,
         "a_window": frame.a_meta,
         "fold": plan.fold,
+        # Сводка в голове A: когда снята и сколько весит. null — сводки на границе
+        # не было (живой путь её не дал или граница старее механизма).
+        "a_recap": ({"at": plan.recap.get("at"),
+                     "chars": len(str(plan.recap.get("text") or ""))}
+                    if isinstance(plan.recap, dict) else None),
+        # Машинный хвост T: что тень везёт аргументом живого пути (её №8).
+        "t_machine": {"sections": [name for name, _t in payload["machine"]],
+                      "chars": sum(len(t) for _n, t in payload["machine"])},
         "lcp": lcp,
         "e_drift": plan.drift,
         "boundary": boundary,
         # Свёртка упёрлась в пол хвоста: границы нет, но окно уже не сходится —
         # молчать об этом значит выдавать тупик за здоровье.
         "fold_stuck": plan.fold_stuck,
-        "coverage": _coverage(live_sections),
+        "coverage": _coverage(live_sections, carried=payload["carried"],
+                              recap_in_a=isinstance(plan.recap, dict)),
     }
     with (stream_dir / "metrics.jsonl").open("a", encoding="utf-8",
                                              newline="\n") as sink:

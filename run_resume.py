@@ -1169,7 +1169,7 @@ def _is_recovery_pause(events: list[dict], status: str, control: dict) -> bool:
         return False
     authorization = next(
         (item for item in reversed(events)
-         if item.get("kind") == "resume_authorized"),
+         if item.get("kind") in {"resume_authorized", "resume_stale_reopened"}),
         None,
     )
     return bool(

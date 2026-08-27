@@ -143,6 +143,33 @@ class TheDossierContract(unittest.TestCase):
         self.assertEqual(len(list(self.people.glob("*.md"))), 4,
                          "файлы досье тронуты — контракт менял КАДР, а не канон")
 
+    def test_non_owner_strips_a_whole_private_markdown_record(self) -> None:
+        """A lazy paragraph continuation belongs to the private record, not its tail."""
+        self._write("дмитрий", "Дмитрий", "700000202",
+                    "[private] PRIVATE-HEAD\n"
+                    "PRIVATE-LAZY-CONTINUATION\n"
+                    "ещё одна секретная строка\n"
+                    "\n"
+                    "PUBLIC-TAIL\n")
+        block = self._block(self._ctx(principal_id="700000202", chat_id="700000202",
+                                      is_dm=True, owner=False))
+        for secret in ("PRIVATE-HEAD", "PRIVATE-LAZY-CONTINUATION",
+                       "ещё одна секретная строка"):
+            self.assertNotIn(secret, block, f"private continuation leaked: {secret}")
+        self.assertIn("PUBLIC-TAIL", block, "the next public paragraph was removed")
+        self.assertIn("приватных записей снято 3", block,
+                      "the frame must disclose the actual removed-line count")
+
+    def test_owner_keeps_private_markdown_record_byte_for_byte(self) -> None:
+        body = ("[private] OWNER-PRIVATE-HEAD\n"
+                "OWNER-PRIVATE-CONTINUATION\n\n"
+                "OWNER-PUBLIC-TAIL\n")
+        self._write("дмитрий", "Дмитрий", "700000202", body)
+        block = self._block(self._ctx(principal_id="700000202", chat_id="700000202",
+                                      is_dm=True, owner=True))
+        self.assertIn(body.rstrip(), block)
+        self.assertNotIn("приватных записей снято", block)
+
     def test_the_label_stops_saying_all_and_whole(self) -> None:
         """Ярлык обязан называть наблюдаемое. «ВСЕ И ЦЕЛИКОМ» стало неправдой."""
         import inspect

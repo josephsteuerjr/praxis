@@ -60,6 +60,7 @@ memory/*.md
 !memory/README.md
 !memory/people/_пример.md
 workspace/
+private/
 .proposals/
 soul/self.md
 soul/self/

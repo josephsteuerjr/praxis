@@ -5,11 +5,14 @@ Red→green контракт: workspace/TRANSPORT-GATE-FORUM-HISTORY-25.08.md.
 """
 
 import asyncio
+import hashlib
 import json
 import os
+import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,6 +21,7 @@ os.environ.setdefault("PRAXIS_TEST", "1")
 
 import history_scan  # noqa: E402
 import telegram_routes  # noqa: E402
+import mtproto_runner  # noqa: E402
 
 
 def _routes_dir():
@@ -222,6 +226,184 @@ class TestPositiveOnlySemantics(unittest.TestCase):
             history_scan.observe_history_floor({"peer_id": "-100"}, apply=False)
 
 
+class TestPrivateFreeze(unittest.TestCase):
+    def _result(self):
+        result = history_scan.HistoryScanResult(
+            peer_id="-100secret", range=history_scan.ScanRange(1, 2),
+            complete=True, reason="history_exhausted")
+        result.corpus = [
+            {"message_id": 2, "date": "2025-01-02T03:04:05Z",
+             "text": "TOP SECRET TEXT", "reply_to_message_id": 1, "topic_id": 1},
+            {"message_id": 1, "date": None, "text": "first",
+             "reply_to_message_id": None, "topic_id": None},
+        ]
+        return result
+
+    def test_freeze_is_canonical_private_and_route_read_only(self):
+        result = self._result()
+        original = telegram_routes.observe
+        telegram_routes.observe = lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("freeze mutated route state"))
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                receipt = history_scan.freeze_corpus(result, root=Path(tmp))
+                artifact = Path(receipt["path"])
+                exact = artifact.read_bytes()
+                expected = (
+                    b'{"message_id":1,"date":null,"text":"first",'
+                    b'"reply_to_message_id":null,"topic_id":null}\n'
+                    b'{"message_id":2,"date":"2025-01-02T03:04:05Z",'
+                    b'"text":"TOP SECRET TEXT","reply_to_message_id":1,"topic_id":1}\n')
+                self.assertEqual(exact, expected)
+                self.assertNotIn(b'"sender_id"', exact)
+                import hashlib
+                self.assertEqual(receipt["sha256"], hashlib.sha256(expected).hexdigest())
+                self.assertEqual(artifact.name, receipt["sha256"] + ".jsonl")
+                self.assertNotIn("TOP SECRET TEXT", json.dumps(receipt))
+                self.assertNotIn("first", json.dumps(receipt))
+        finally:
+            telegram_routes.observe = original
+
+    def test_content_address_is_immutable_and_incomplete_refused(self):
+        result = self._result()
+        with tempfile.TemporaryDirectory() as tmp:
+            first = history_scan.freeze_corpus(result, root=Path(tmp))
+            Path(first["path"]).write_bytes(b"tampered")
+            with self.assertRaises(history_scan.HistoryScanError):
+                history_scan.freeze_corpus(result, root=Path(tmp))
+        result.complete = False
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(history_scan.HistoryScanError):
+                history_scan.freeze_corpus(result, root=Path(tmp))
+
+    def test_ordinary_scan_does_not_retain_message_corpus(self):
+        async def fetch(offset, limit):
+            first = Msg(2)
+            first.message = "SECRET"
+            second = Msg(1)
+            second.message = "other"
+            return [first, second] if offset > 2 else []
+
+        ordinary = asyncio.run(history_scan.run_history_scan(
+            "-100secret", history_scan.ScanRange(1, 2), fetch,
+            page_size=10, max_pages=5))
+        captured = asyncio.run(history_scan.run_history_scan(
+            "-100secret", history_scan.ScanRange(1, 2), fetch,
+            page_size=10, max_pages=5, capture_corpus=True))
+        self.assertIsNone(ordinary.corpus)
+        self.assertEqual([row["text"] for row in captured.corpus], ["SECRET", "other"])
+
+    def test_bounded_acquisition_excludes_blank_and_action_rows(self):
+        async def fetch(offset, limit):
+            if offset > 5:
+                first, service, blank, second = Msg(5), Msg(4, opener=True), Msg(3), Msg(2)
+                first.message = "first"
+                service.message = "service text must not enter corpus"
+                blank.message = "   "
+                second.message = "second"
+                return [first, service, blank, second]
+            return []
+
+        result = asyncio.run(history_scan.acquire_eligible_corpus(
+            "-100secret", 5, fetch, eligible_limit=2, page_size=10, max_pages=5))
+        self.assertTrue(result.complete)
+        self.assertEqual(result.reason, "eligible_limit_reached")
+        self.assertEqual(result.range, history_scan.ScanRange(2, 5))
+        self.assertEqual([row["message_id"] for row in result.corpus], [5, 2])
+        self.assertEqual(set(result.corpus[0]), set(history_scan.FREEZE_FIELDS))
+
+    def test_bounded_acquisition_fails_closed_on_page_budget(self):
+        async def fetch(offset, limit):
+            row = Msg(offset - 1)
+            row.message = "text"
+            return [row]
+
+        result = asyncio.run(history_scan.acquire_eligible_corpus(
+            "-100secret", 10, fetch, eligible_limit=5, page_size=1, max_pages=1))
+        self.assertFalse(result.complete)
+        self.assertEqual(result.reason, "page_budget_exhausted")
+        self.assertIsNone(result.corpus)
+
+    def test_attested_freeze_requires_matching_complete_range(self):
+        discovery = self._result()
+        attestation = history_scan.HistoryScanResult(
+            peer_id=discovery.peer_id, range=discovery.range,
+            complete=True, reason="history_exhausted",
+            observed_ids={1, 2})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "history_scan"
+            receipt = history_scan.freeze_attested_corpus(
+                discovery, attestation, root=root, acquired_at="2026-08-26T21:00:00Z")
+            manifest_path = Path(receipt["manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            second = self._result()
+            second.corpus[0]["text"] = "different corpus"
+            second_receipt = history_scan.freeze_attested_corpus(
+                second, attestation, root=root, acquired_at="2026-08-26T21:01:00Z")
+            self.assertNotEqual(manifest_path, Path(second_receipt["manifest_path"]))
+            self.assertEqual(manifest, json.loads(manifest_path.read_text(encoding="utf-8")))
+        self.assertEqual(receipt["manifest"]["row_count"], 2)
+        self.assertEqual(receipt["manifest"]["history_scan_sha256"], attestation.scan_sha256())
+        self.assertEqual(manifest["corpus_sha256"], receipt["sha256"])
+        self.assertNotIn("TOP SECRET TEXT", json.dumps(manifest))
+        attestation.range = history_scan.ScanRange(2, 2)
+        with self.assertRaises(history_scan.HistoryScanError):
+            history_scan.freeze_attested_corpus(discovery, attestation)
+
+    def test_freeze_rejects_symlink_escape_and_secures_modes(self):
+        result = self._result()
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            outside = parent / "outside"
+            outside.mkdir()
+            root_link = parent / "root-link"
+            root_link.symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(history_scan.HistoryScanError):
+                history_scan.freeze_corpus(result, root=root_link)
+            self.assertEqual(list(outside.iterdir()), [])
+
+            ancestor_link = parent / "private"
+            ancestor_link.symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(history_scan.HistoryScanError):
+                history_scan.freeze_corpus(result, root=ancestor_link / "history_scan")
+            self.assertFalse((outside / "history_scan").exists())
+
+            root = parent / "root"
+            root.mkdir(mode=0o777)
+            payload = history_scan._canonical_jsonl(result.corpus)
+            digest = hashlib.sha256(payload).hexdigest()
+            victim = parent / "victim"
+            victim.write_bytes(b"victim")
+            (root / f"{digest}.jsonl").symlink_to(victim)
+            with self.assertRaises(history_scan.HistoryScanError):
+                history_scan.freeze_corpus(result, root=root)
+            self.assertEqual(victim.read_bytes(), b"victim")
+            self.assertEqual(stat.S_IMODE(victim.stat().st_mode), 0o644)
+            self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = parent / "root"
+            root.mkdir()
+            payload = history_scan._canonical_jsonl(result.corpus)
+            digest = hashlib.sha256(payload).hexdigest()
+            victim = parent / "victim"
+            victim.write_bytes(payload)
+            destination = root / f"{digest}.jsonl"
+            os.link(victim, destination)
+            with self.assertRaises(history_scan.HistoryScanError):
+                history_scan.freeze_corpus(result, root=root)
+            self.assertEqual(stat.S_IMODE(victim.stat().st_mode), 0o644)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "root"
+            receipt = history_scan.freeze_corpus(result, root=root)
+            self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+            artifact = Path(receipt["path"])
+            self.assertEqual(stat.S_IMODE(artifact.stat().st_mode), 0o600)
+            self.assertEqual(artifact.stat().st_nlink, 1)
+
+
 class TestBackfillSilenceIsNotFalse(unittest.TestCase):
     """П.1 гейта: production backfill больше не пишет no_topic_openers_in_range."""
 
@@ -319,6 +501,73 @@ class TestToolBoundary(unittest.TestCase):
         handled = {"join", "leave", "followups", "cancel_followup",
                    "watch_reply", "unwatch_reply", "history_scan"}
         self.assertLessEqual(handled, enum)
+
+
+class TestRuntimeFreezeCeiling(unittest.TestCase):
+    """The runtime, not a caller-supplied sentinel, finds the newest id."""
+
+    def _invoke(self, params, client):
+        entity = type("Entity", (), {"id": 1240718803})()
+
+        class ImmediateResult:
+            def __init__(self, coro):
+                self.coro = coro
+
+            def result(self, timeout=None):
+                return asyncio.run(self.coro)
+
+        with mock.patch.object(mtproto_runner, "OWNER_ID", 1), \
+             mock.patch.object(mtproto_runner, "client", client), \
+             mock.patch.object(mtproto_runner, "_LOOP", object()), \
+             mock.patch.object(mtproto_runner, "_resolve_entity",
+                               new=mock.AsyncMock(return_value=entity)), \
+             mock.patch.object(asyncio, "run_coroutine_threadsafe",
+                               side_effect=lambda coro, loop: ImmediateResult(coro)):
+            return mtproto_runner._sync_history_scan(
+                "-1001240718803", params, _principal="praxis:self")
+
+    def test_latest_freeze_uses_runtime_newest_id_without_offset_overflow(self):
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            def iter_messages(self, entity, *, limit, offset_id=None):
+                self.calls.append((limit, offset_id))
+
+                async def rows():
+                    if offset_id is None:
+                        yield type("Message", (), {"id": 77})()
+                    elif offset_id == 78:
+                        yield type("Message", (), {
+                            "id": 77, "message": "text", "action": None,
+                            "reply_to": None, "date": None,
+                        })()
+                return rows()
+
+        client = Client()
+        with mock.patch.object(history_scan, "freeze_attested_corpus",
+                               return_value={"sha256": "digest", "count": 1}) as freeze:
+            result = self._invoke(
+                {"freeze": True, "ceiling_id": "latest", "eligible_limit": 1}, client)
+        self.assertIn('"sha256": "digest"', result)
+        self.assertEqual(client.calls[0], (1, None))
+        self.assertNotIn((100, 2147483648), client.calls)
+        discovery = freeze.call_args.args[0]
+        self.assertEqual(discovery.range.ceiling_id, 77)
+
+    def test_latest_freeze_refuses_empty_history_without_freeze(self):
+        class EmptyClient:
+            def iter_messages(self, entity, *, limit, offset_id=None):
+                async def rows():
+                    if False:
+                        yield None
+                return rows()
+
+        with mock.patch.object(history_scan, "freeze_attested_corpus") as freeze:
+            result = self._invoke(
+                {"freeze": True, "ceiling_id": "latest", "eligible_limit": 1}, EmptyClient())
+        self.assertEqual(result, "history_scan: newest ceiling lookup found no messages")
+        freeze.assert_not_called()
 
 
 if __name__ == "__main__":

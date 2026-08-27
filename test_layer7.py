@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 from pathlib import Path
 
 _fa = types.ModuleType("anthropic")
@@ -22,6 +24,7 @@ _fd.load_dotenv = lambda *a, **k: None
 sys.modules.setdefault("dotenv", _fd)
 
 import memory_index as mi  # noqa: E402
+import memory_fts  # noqa: E402
 import people as pe  # noqa: E402
 import agent  # noqa: E402
 import llm  # noqa: E402
@@ -340,6 +343,23 @@ class TestDataAdvisorSeesToolTrace(Base):
         out = agent.tool_send_message("Вася", "привет")
         self.assertIn("Не отправилось", out)
         self.assertIn("Не отправилось", agent.recent_journal(500), "провал — тоже факт для журнала")
+
+    def test_send_message_journal_reindex_avoids_corpus_discovery(self):
+        agent._TELETHON["send_message"] = lambda to, text: f"Отправила → {to} (id 1): ..."
+        memory_fts.rebuild(base=self.tmp, memory_dir=agent.MEM_DIR, skills_dir=agent.SKILLS_DIR)
+        with mock.patch.object(
+            memory_fts, "iter_sources",
+            side_effect=AssertionError("post-send journal upsert must not discover the corpus"),
+        ):
+            out = agent.tool_send_message("Вася", "быстрый маркер")
+            database = memory_fts._db_path(agent.MEM_DIR)
+            with sqlite3.connect(database) as db:
+                indexed = db.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE text LIKE ?", ("%[отправка] Отправила → Вася%",)
+                ).fetchone()[0]
+        self.assertIn("Отправила", out)
+        self.assertEqual(indexed, 1, "post-send journal entry must be indexed before discovery resumes")
+        self.assertIn("[отправка]", agent.recent_journal(500))
 
 
 class TestOwnerDmNoStonewall(Base):

@@ -1,0 +1,261 @@
+{
+  "schema": "praxis.moderation.frozen-corpus.v1",
+  "peer_id": -1001240718803,
+  "frozen_at": "2026-08-26T10:24:28Z",
+  "provenance": {
+    "source": "canonical AbstractDL append-only archive",
+    "archive_prefix_lines": 10272,
+    "archive_prefix_bytes": 8353800,
+    "archive_prefix_sha256": "8b890082dc37461a0fe8c9818a916cb49526c3c73d7c2640ca3502184a464178",
+    "known_deletions": 9,
+    "unknown_body_deletions_excluded": 4,
+    "note": "Synthetic text preserves detector features; source hashes bind cases to private canonical text without publishing it. Names, usernames and sender ids are excluded. The live archive later gained two more known-body tombstones; they are outside the requested nine-case evidence freeze and must be assessed in a future corpus revision."
+  },
+  "cases": [
+    {
+      "case_id": "spam-99752",
+      "label": "spam",
+      "source_message_id": 99752,
+      "source_text_sha256": "9e49e535a54a3f1d78af6f95296d450713d312b7b75e1ff723b696d3f86c1648",
+      "synthetic_text": "Мне помог сервисный бот, найдите promohelperbot в поиске мессенджера.",
+      "first_message": true,
+      "repeated_within_hour": false,
+      "expected_features": [
+        "promoted_bot",
+        "call_to_action"
+      ]
+    },
+    {
+      "case_id": "spam-99846",
+      "label": "spam",
+      "source_message_id": 99846,
+      "source_text_sha256": "eac68b6a4720b9513567483ba681f1bd1324b26f749dd1cc910b6038d89d0995",
+      "synthetic_text": "Нужны срочно деньги? Ставь +!",
+      "first_message": true,
+      "repeated_within_hour": false,
+      "expected_features": [
+        "money",
+        "call_to_action"
+      ]
+    },
+    {
+      "case_id": "spam-99841",
+      "label": "spam",
+      "source_message_id": 99841,
+      "source_text_sha256": "025ad4ae7aa7ff21ccc106279f43d616078a68040c1ae53184ae32934d04d72b",
+      "synthetic_text": "Ищем исполнителей: высокий доход и оплата, пиши в личку.",
+      "first_message": true,
+      "repeated_within_hour": true,
+      "expected_features": [
+        "money",
+        "call_to_action",
+        "repeat"
+      ]
+    },
+    {
+      "case_id": "spam-99847",
+      "label": "spam",
+      "source_message_id": 99847,
+      "source_text_sha256": "3d5bdd32db9c5cf3ba7157c437a6aac99b55780f7e1459844c0243ac03cd9112",
+      "synthetic_text": "Кто поможет в простом деле? По завершении 5500, напиши мне.",
+      "first_message": true,
+      "repeated_within_hour": true,
+      "expected_features": [
+        "money",
+        "call_to_action",
+        "repeat"
+      ]
+    },
+    {
+      "case_id": "spam-99858",
+      "label": "spam",
+      "source_message_id": 99858,
+      "source_text_sha256": "076bbb7cdfc41dee062a7d7112014361f84d2b0b6c10a185156b74e4385013b2",
+      "synthetic_text": "Куплю USDT.",
+      "first_message": true,
+      "repeated_within_hour": false,
+      "expected_features": [
+        "money"
+      ]
+    },
+    {
+      "case_id": "spam-100293",
+      "label": "spam",
+      "source_message_id": 100293,
+      "source_text_sha256": "98182f5b8a6229c7bfde47a5689f4409b875c7b38421db56e057055e2d12b820",
+      "synthetic_text": "Нужно убрать участок и собрать мусор. По факту 5200 ₽, откликнись.",
+      "first_message": true,
+      "repeated_within_hour": false,
+      "expected_features": [
+        "money",
+        "call_to_action"
+      ]
+    },
+    {
+      "case_id": "spam-100301",
+      "label": "spam",
+      "source_message_id": 100301,
+      "source_text_sha256": "4231fffcae34180fce658d8bd840512bfb515379254690ae5daf6e477a40d1d6",
+      "synthetic_text": "Хотите дополнительную прибыль 15-20 тыс.? Напишите мне, расскажу подробнее.",
+      "first_message": true,
+      "repeated_within_hour": false,
+      "expected_features": [
+        "money",
+        "call_to_action"
+      ]
+    },
+    {
+      "case_id": "spam-100304",
+      "label": "spam",
+      "source_message_id": 100304,
+      "source_text_sha256": "4231fffcae34180fce658d8bd840512bfb515379254690ae5daf6e477a40d1d6",
+      "synthetic_text": "Хотите дополнительную прибыль 15-20 тыс.? Напишите мне, расскажу подробнее.",
+      "first_message": false,
+      "repeated_within_hour": true,
+      "expected_features": [
+        "money",
+        "call_to_action",
+        "repeat"
+      ]
+    },
+    {
+      "case_id": "spam-100318",
+      "label": "spam",
+      "source_message_id": 100318,
+      "source_text_sha256": "47e0bc39647f308f63c612dc09c9d26e00bc8336f67ef0faa05a6c1077e4627e",
+      "synthetic_text": "Разложить одежду по размерам и категориям, высокая оплата, пишите в лс.",
+      "first_message": true,
+      "repeated_within_hour": false,
+      "expected_features": [
+        "money",
+        "call_to_action"
+      ]
+    },
+    {
+      "case_id": "ham-99749",
+      "label": "ham",
+      "source_message_id": 99749,
+      "source_text_sha256": "9039f53d6cf19b7c05188d96c3104b71c10066ba9c49de6b85219e0c50530fd6",
+      "synthetic_text": "Как же сложно дописывать собственный проект.",
+      "first_message": false,
+      "repeated_within_hour": false,
+      "expected_features": []
+    },
+    {
+      "case_id": "ham-99753",
+      "label": "ham",
+      "source_message_id": 99753,
+      "source_text_sha256": "a088995f881497f64d50018b7debb8453301c154ddce58f1a23d4c1033378007",
+      "synthetic_text": "Это утилитарные модули: сделал один раз и используешь.",
+      "first_message": false,
+      "repeated_within_hour": false,
+      "expected_features": []
+    },
+    {
+      "case_id": "ham-99818",
+      "label": "ham",
+      "source_message_id": 99818,
+      "source_text_sha256": "dbbe027736ff5157c0b514a4659c7e5a0aae25bc53f14fab1c765ac2324175f9",
+      "synthetic_text": "В проекте уже внедрили контроль удаления сообщений, а у вас?",
+      "first_message": false,
+      "repeated_within_hour": false,
+      "expected_features": []
+    },
+    {
+      "case_id": "ham-99851",
+      "label": "ham",
+      "source_message_id": 99851,
+      "source_text_sha256": "153dcc151dda96c487c25dbcb34e7dd5fda58322f79c1d8f777bd19767407562",
+      "synthetic_text": "Бот поставил реакцию спамеру, но сообщения всё равно стоит удалить.",
+      "first_message": false,
+      "repeated_within_hour": false,
+      "expected_features": []
+    },
+    {
+      "case_id": "ham-99859",
+      "label": "ham",
+      "source_message_id": 99859,
+      "source_text_sha256": "54cda9e56dfd0071a9b6060732bea58a02f439c272b98df585f03b473bae25d8",
+      "synthetic_text": "Каждый раз вижу тут подозрительные объявления про USDT и подработку.",
+      "first_message": false,
+      "repeated_within_hour": false,
+      "expected_features": [
+        "money"
+      ]
+    },
+    {
+      "case_id": "ham-100288",
+      "label": "ham",
+      "source_message_id": 100288,
+      "source_text_sha256": "97cf6f277d04329271fd3eeb098843c32ead7bfba31beb0bb29858034c1949fd",
+      "synthetic_text": "Остались подписи модулей, bootstrap, проверка прав и observability.",
+      "first_message": false,
+      "repeated_within_hour": false,
+      "expected_features": []
+    },
+    {
+      "case_id": "ham-100296",
+      "label": "ham",
+      "source_message_id": 100296,
+      "source_text_sha256": "e53b2f3f9dd67ced69388e73d40d657801267abef67b67709b773906a2f097f8",
+      "synthetic_text": "Как дела с текущим проектом?",
+      "first_message": false,
+      "repeated_within_hour": false,
+      "expected_features": []
+    },
+    {
+      "case_id": "ham-100297",
+      "label": "ham",
+      "source_message_id": 100297,
+      "source_text_sha256": "4d590c1263b0973310045f2ad78c4beb74e88754d26024807dbff14c7b8689e3",
+      "synthetic_text": "Проект жив, спам пока чистится вручную, автоматического гейткипера нет.",
+      "first_message": false,
+      "repeated_within_hour": false,
+      "expected_features": []
+    },
+    {
+      "case_id": "ham-100299",
+      "label": "ham",
+      "source_message_id": 100299,
+      "source_text_sha256": "2c0461e0d22da362d253a25cdf47918606306392f9e3cb97e523e6527e6bda9e",
+      "synthetic_text": "Это значит, что проблем меньше не стало.",
+      "first_message": false,
+      "repeated_within_hour": false,
+      "expected_features": []
+    },
+    {
+      "case_id": "ham-100302",
+      "label": "ham",
+      "source_message_id": 100302,
+      "source_text_sha256": "f350a66249519e95b3ae68d4f035d05447ea9c8708461fa0fc53248bc8e24de4",
+      "synthetic_text": "Почему изображение профиля не совпадает с выбранным именем?",
+      "first_message": false,
+      "repeated_within_hour": false,
+      "expected_features": []
+    },
+    {
+      "case_id": "ham-confound-money",
+      "label": "ham",
+      "source_message_id": 99860,
+      "source_text_sha256": "ea9223a0868f7c26244db3a5086b2c695fb282175f272220c540e6966a7810f1",
+      "synthetic_text": "В документации пример комиссии: оплата 5000 ₽ или USDT.",
+      "first_message": false,
+      "repeated_within_hour": false,
+      "expected_features": [
+        "money"
+      ]
+    },
+    {
+      "case_id": "ham-confound-call",
+      "label": "ham",
+      "source_message_id": 99861,
+      "source_text_sha256": "8ff041a4e483edf4382a6681969cfa0e051cf018cfcf62886067532fc9e4912b",
+      "synthetic_text": "Если найдёшь ошибку, напиши мне в личку.",
+      "first_message": false,
+      "repeated_within_hour": false,
+      "expected_features": [
+        "call_to_action"
+      ]
+    }
+  ]
+}

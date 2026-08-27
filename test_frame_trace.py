@@ -254,6 +254,37 @@ class TheJoinOfMarksIsTheZoneItself(FrameBase):
         self.assertEqual(zones["evidence"]["container"], "messages[-1]")
 
 
+# ------------------------------------------------- 3½. тексты для тени (её №8)
+
+
+class TheCarriedTextsFeedTheShadowNotTheReceipt(FrameBase):
+    """TEXT_CARRIED: тексты машинных секций переживают seal ВНУТРИ процесса — их
+    читает теневой сборщик (её №8: contract/state едут в тень аргументом, не
+    парсингом system). В расписку на диске по-прежнему не едет ни байта кадра —
+    канарейки NoTokensAndNoContent сторожат это отдельно."""
+
+    def test_carried_sections_keep_text_after_seal_and_others_drop_it(self):
+        seen = self.run_turn()
+        rows = seen["sections"]
+        carried = [r for r in rows if r.get("included")
+                   and str(r["name"]).startswith(frame_trace.TEXT_CARRIED)]
+        self.assertTrue(carried, "в owner-кадре не нашлось ни одной carried-секции")
+        for row in carried:
+            self.assertIsInstance(row.get("text"), str, row["name"])
+            self.assertEqual(len(row["text"]), row["chars"],
+                             f"{row['name']}: текст не равен своей же мере")
+        for row in rows:
+            if row.get("included") and str(row["name"]).startswith("persona."):
+                self.assertNotIn("text", row,
+                                 "persona пережила seal — прибор стал складом кадра")
+
+    def test_the_emitted_receipt_carries_no_text_keys(self):
+        seen = self.run_turn()
+        for row in seen["meta"]["sections"]:
+            self.assertNotIn("text", row,
+                             f"{row.get('name')}: байты кадра уехали в расписку")
+
+
 # --------------------------------------------------------------- 4. полнота реестра
 
 

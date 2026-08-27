@@ -85,6 +85,12 @@ ZONES = ("persona", "dynamic", "evidence", "situation", "messages", "tools")
 KINDS = ("md", "text", "json", "jsonl", "frame", "marker")
 REASONS = ("context_budget", "empty", "branch", "cap")
 
+# Тексты этих секций ПЕРЕЖИВАЮТ seal и едут в `sections()` полем `text`: их читает
+# теневой сборщик (её решение №8 от 21.08 — contract.*/state.* и машинные тиры едут
+# в тень АРГУМЕНТОМ через опись прибора, а не парсингом system). Остальные тексты
+# сбрасываются как раньше: прибор не склад, лишние ссылки — лишняя память.
+TEXT_CARRIED = ("contract.", "state.", "frame.extra_system", "evidence.tier")
+
 # Закрытый реестр системных зон. Каждое имя в КАЖДОМ кадре обязано быть либо помечено
 # (mark), либо объявлено отсутствующим (absent). Реестр зоны evidence ОТКРЫТ: тир
 # опознаётся своим ярлыком (label), а не именем, и тиры, которые не собрались вовсе,
@@ -288,6 +294,8 @@ class Trace:
     def _drop_texts(self) -> None:
         for bucket in self._by_zone.values():
             for rec in bucket:
+                if isinstance(rec.name, str) and rec.name.startswith(TEXT_CARRIED):
+                    continue  # эти тексты читает тень ПОСЛЕ seal — см. TEXT_CARRIED
                 rec.text = None
 
     # --- выдача ---
@@ -308,6 +316,12 @@ class Trace:
                     row["chars"] = int(rec.chars)
                     if rec.nbytes >= 0:
                         row["bytes"] = int(rec.nbytes)
+                    # Текст — только у секций из TEXT_CARRIED (см. константу): это
+                    # транспорт для тени, не общий канал. У остальных текст сброшен
+                    # на seal, и None сюда честно не пишется.
+                    if (isinstance(rec.text, str)
+                            and str(rec.name).startswith(TEXT_CARRIED)):
+                        row["text"] = rec.text
                 else:
                     row["reason"] = rec.reason
                     if rec.chars:
@@ -679,7 +693,11 @@ def _full(trace: Trace, *, receipt_scrubbed: bool) -> dict | None:
     # действительно разъехалась»: без него оба случая выглядят одинаково — honesty.ok=false.
     caps = {"sections_dropped": 0, "labels_dropped": 0,
             "records_dropped": bool(trace.overflow)}
-    rows = trace.section_rows()
+    # Тексты TEXT_CARRIED — транспорт для тени ВНУТРИ процесса (`sections()`);
+    # в расписку на диске не едет НИ БАЙТА кадра — это железный контракт прибора,
+    # закреплённый канарейками test_not_a_single_byte_of_frame_content.
+    rows = [{k: v for k, v in row.items() if k != "text"}
+            for row in trace.section_rows()]
     if len(rows) > MAX_SECTIONS:
         caps["sections_dropped"] = len(rows) - MAX_SECTIONS
         rows = rows[:MAX_SECTIONS]

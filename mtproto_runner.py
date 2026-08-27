@@ -33,6 +33,7 @@ import group_context
 import llm
 import memory_life
 import media as media_core
+import moderation_shadow
 import owner_delivery
 import perception
 import selfdev
@@ -44,6 +45,7 @@ import telegram_contacts
 import telegram_confirmation
 import telegram_followups
 import telegram_membership
+import telegram_moderation
 import telegram_outbox
 import telegram_registry
 import telegram_routes
@@ -280,6 +282,10 @@ _DIRECT_OUTBOX: telegram_outbox.TelegramOutbox | None = None
 _DIRECT_OUTBOX_RECONCILED: set[str] = set()
 _SOCIAL_PULSE_TASK: asyncio.Task | None = None
 _FORGE_EVENTS_TASK: asyncio.Task | None = None   # PASS 30 Этап 1: single-flight насоса событий
+_MODERATION_EVENTS_TASK: asyncio.Task | None = None  # shadow moderation -> её live wake
+# A durable review event gets first claim on the next free voice turn. It is a scheduling
+# hint only: the moderation wake still supplies facts and Praxis still decides any action.
+_MODERATION_PRIORITY_PENDING = False
 _SLEEP_TASK: asyncio.Task | None = None          # 26.07: ночь ждёт замок, но не в часах
 
 
@@ -2722,6 +2728,20 @@ async def on_new(event) -> None:
                      peer_id)
             return
     sender_id = getattr(event, "sender_id", None) or getattr(sender, "id", None)
+    # Shadow-only moderation seam: exact Telegram ids in, no route/room mutation and no
+    # actuator.  The detector persists only ids/timestamps/a text digest locally; durable
+    # review events contain no text, name, username or digest.
+    if not is_private and sender_id is not None and text:
+        try:
+            await asyncio.to_thread(
+                moderation_shadow.observe_message,
+                peer_id=int(event.chat_id), message_id=mid_of(msg),
+                sender_id=int(sender_id), text=text,
+                observed_at=(msg.date.timestamp() if getattr(msg, "date", None) else None),
+            )
+        except Exception:
+            log.warning("moderation shadow failed closed for peer=%s message=%s",
+                        peer_id, mid_of(msg), exc_info=True)
     is_owner = OWNER_ID != 0 and sender_id == OWNER_ID
     if sender is not None:
         try:
@@ -3935,6 +3955,13 @@ async def _run_pass(chat_id: str) -> None:
         perception.note_skip("cooldown", "отложила", chat_id=chat_id,
                              detail=(f"transport retry через {cd - elapsed:.0f}с; "
                                      "после него актуальность решается заново"))
+        return
+    # A queued moderation review is the next live turn once a current pass has finished.
+    # Do not let a newly due ordinary chat debounce claim the only mind first.
+    if _MODERATION_PRIORITY_PENDING:
+        _defer_pass(chat_id, 0.05)
+        perception.note_skip("moderation_priority", "отложила", chat_id=chat_id,
+                             detail="очередь shadow-модерации берёт следующий свободный ход")
         return
     _passing.add(chat_id)
     armed_gen = _supersede_gen.get(chat_id, 0)  # PASS 29: снимок ДО первого await
@@ -5560,19 +5587,40 @@ def _sync_history_scan(target: str = "", params: dict | None = None,
     if client is None:
         return "history_scan: Telethon-клиент не подключён"
     cfg = dict(params or {})
-    try:
-        floor_id = int(cfg.get("floor_id"))
-        ceiling_id = int(cfg.get("ceiling_id"))
-    except (TypeError, ValueError):
-        return "history_scan: floor_id и ceiling_id обязательны и целые"
+    freeze_flag = bool(cfg.get("freeze", False))
+    raw_ceiling = cfg.get("ceiling_id")
+    # A freeze must begin at the newest message that the runtime itself
+    # observes. Accepting the explicit marker avoids callers fabricating a
+    # sentinel ceiling (and then overflowing offset_id = ceiling + 1).
+    auto_ceiling = freeze_flag and raw_ceiling == "latest"
+    if auto_ceiling:
+        ceiling_id = None
+    else:
+        try:
+            ceiling_id = int(raw_ceiling)
+        except (TypeError, ValueError):
+            suffix = " или 'latest' при freeze=true" if freeze_flag else ""
+            return f"history_scan: ceiling_id обязателен и целый{suffix}"
+    if freeze_flag:
+        floor_id = None
+    else:
+        try:
+            floor_id = int(cfg.get("floor_id"))
+        except (TypeError, ValueError):
+            return "history_scan: floor_id обязателен и целый"
     apply_flag = bool(cfg.get("apply", False))
+    if apply_flag and freeze_flag:
+        return "history_scan: freeze=true несовместим с apply=true"
     page_size = int(cfg.get("page_size", 100))
     max_pages = int(cfg.get("max_pages", 200))
-    try:
-        scan_range = history_scan.ScanRange(floor_id=floor_id, ceiling_id=ceiling_id)
-    except ValueError as exc:
-        return f"history_scan: {exc}"
-
+    eligible_limit = int(cfg.get("eligible_limit", 500))
+    if freeze_flag and "floor_id" in cfg:
+        return "history_scan: freeze=true discovers its own floor; floor_id не передаётся"
+    if not freeze_flag:
+        try:
+            scan_range = history_scan.ScanRange(floor_id=floor_id, ceiling_id=ceiling_id)
+        except ValueError as exc:
+            return f"history_scan: {exc}"
     async def _run() -> dict:
         entity = await _resolve_entity(target)
         if entity is None:
@@ -5587,9 +5635,7 @@ def _sync_history_scan(target: str = "", params: dict | None = None,
             return {"error": f"entity mismatch: target={target} resolved={resolved}"}
 
         def _page(offset_id: int, size: int):
-            return client.iter_messages(
-                entity, limit=size, offset_id=offset_id
-            )
+            return client.iter_messages(entity, limit=size, offset_id=offset_id)
 
         async def fetch_page(offset_id: int, size: int):
             bucket: list = []
@@ -5597,12 +5643,39 @@ def _sync_history_scan(target: str = "", params: dict | None = None,
                 bucket.append(message)
             return bucket
 
+        peer_id = f"-100{resolved}"
+        if freeze_flag:
+            effective_ceiling = ceiling_id
+            if auto_ceiling:
+                try:
+                    async for newest in client.iter_messages(entity, limit=1):
+                        newest_id = getattr(newest, "id", None)
+                        if (isinstance(newest_id, bool)
+                                or not isinstance(newest_id, int) or newest_id < 1):
+                            return {"error": "newest ceiling lookup returned invalid message id"}
+                        effective_ceiling = newest_id
+                        break
+                except Exception as exc:
+                    return {"error": f"newest ceiling lookup failed:{type(exc).__name__}"}
+                if effective_ceiling is None:
+                    return {"error": "newest ceiling lookup found no messages"}
+            discovery = await history_scan.acquire_eligible_corpus(
+                peer_id, effective_ceiling, fetch_page, eligible_limit=eligible_limit,
+                page_size=page_size, max_pages=max_pages)
+            if not discovery.complete or discovery.corpus is None:
+                return {"error": f"acquisition incomplete:{discovery.reason}"}
+            if not discovery.corpus:
+                return {"error": "acquisition found no eligible text rows"}
+            attestation = await history_scan.run_history_scan(
+                peer_id, discovery.range, fetch_page,
+                page_size=page_size, max_pages=max_pages)
+            return history_scan.freeze_attested_corpus(
+                discovery, attestation,
+                acquired_at=datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"))
+
         result = await history_scan.run_history_scan(
-            f"-100{resolved}", scan_range, fetch_page,
-            page_size=page_size, max_pages=max_pages,
-        )
-        outcome = history_scan.observe_history_floor(result, apply=apply_flag)
-        return outcome
+            peer_id, scan_range, fetch_page, page_size=page_size, max_pages=max_pages)
+        return history_scan.observe_history_floor(result, apply=apply_flag)
 
     try:
         outcome = asyncio.run_coroutine_threadsafe(_run(), _LOOP).result(timeout=900)
@@ -5611,6 +5684,136 @@ def _sync_history_scan(target: str = "", params: dict | None = None,
     if isinstance(outcome, dict) and outcome.get("error"):
         return f"history_scan: {outcome['error']}"
     return json.dumps(outcome, ensure_ascii=False, default=str)
+
+
+_MODERATION_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+async def _moderate_abstractdl(peer_id: int, message_id: int, sender_id: int,
+                               action: str, principal: str) -> dict:
+    """One exact moderation action over the runtime-owned Telethon client."""
+    key = telegram_moderation.validate(peer_id, message_id, sender_id, action)
+    lock = _MODERATION_LOCKS.setdefault(key, asyncio.Lock())
+    async with lock:
+        completed = telegram_moderation.prior(key)
+        if completed:
+            return {"replayed": True, **completed}
+        latest = telegram_moderation.latest(key) or {}
+        deleted = bool(latest.get("deleted"))
+        banned = bool(latest.get("banned"))
+        sender_verified = bool(latest.get("sender_verified"))
+        entity = await client.get_entity(int(peer_id))
+        if _marked_peer_id(entity) != int(peer_id):
+            receipt = telegram_moderation.append_receipt({
+                "idempotency_key": key, "actor": principal, "peer_id": int(peer_id),
+                "message_id": int(message_id), "sender_id": int(sender_id), "action": action,
+                "status": "failed", "deleted": deleted, "banned": banned,
+                "sender_verified": sender_verified,
+                "error": "resolved_peer_identity_mismatch",
+            })
+            return receipt
+        if not latest:
+            telegram_moderation.append_receipt({
+                "idempotency_key": key, "actor": principal, "peer_id": int(peer_id),
+                "message_id": int(message_id), "sender_id": int(sender_id), "action": action,
+                "status": "intent", "deleted": False, "banned": False,
+                "sender_verified": False, "error": "",
+            })
+        if not deleted:
+            message = await client.get_messages(entity, ids=int(message_id))
+            if message is None:
+                # An intent exists before the delete RPC.  After restart, absence of the exact
+                # message is the only observable post-state: continue as deleted rather than
+                # permanently stranding delete_and_ban between the two effects.
+                deleted = bool(sender_verified and latest.get("status") in {"verified", "partial"})
+                if not deleted:
+                    return telegram_moderation.append_receipt({
+                        "idempotency_key": key, "actor": principal, "peer_id": int(peer_id),
+                        "message_id": int(message_id), "sender_id": int(sender_id), "action": action,
+                        "status": "failed", "deleted": False, "banned": banned,
+                        "sender_verified": sender_verified,
+                        "error": "exact_message_unavailable",
+                    })
+            else:
+                actual_sender = int(getattr(message, "sender_id", 0) or 0)
+                if actual_sender != int(sender_id):
+                    return telegram_moderation.append_receipt({
+                        "idempotency_key": key, "actor": principal, "peer_id": int(peer_id),
+                        "message_id": int(message_id), "sender_id": int(sender_id), "action": action,
+                        "status": "failed", "deleted": False, "banned": banned,
+                        "sender_verified": False,
+                        "error": f"sender_mismatch:{actual_sender}",
+                    })
+                sender_verified = True
+                telegram_moderation.append_receipt({
+                    "idempotency_key": key, "actor": principal, "peer_id": int(peer_id),
+                    "message_id": int(message_id), "sender_id": int(sender_id),
+                    "action": action, "status": "verified", "deleted": False,
+                    "banned": banned, "sender_verified": True, "error": "",
+                })
+                try:
+                    await client.delete_messages(entity, [int(message_id)], revoke=True)
+                    deleted = True
+                except Exception as exc:
+                    return telegram_moderation.append_receipt({
+                        "idempotency_key": key, "actor": principal, "peer_id": int(peer_id),
+                        "message_id": int(message_id), "sender_id": int(sender_id), "action": action,
+                        "status": "failed", "deleted": False, "banned": banned,
+                        "sender_verified": sender_verified,
+                        "error": f"delete:{type(exc).__name__}:{exc}"[:500],
+                    })
+        if action == "delete_and_ban" and not banned:
+            try:
+                await client.edit_permissions(entity, int(sender_id), view_messages=False)
+                banned = True
+            except Exception as exc:
+                return telegram_moderation.append_receipt({
+                    "idempotency_key": key, "actor": principal, "peer_id": int(peer_id),
+                    "message_id": int(message_id), "sender_id": int(sender_id), "action": action,
+                    "status": "partial", "deleted": deleted, "banned": False,
+                    "sender_verified": sender_verified,
+                    "error": f"ban:{type(exc).__name__}:{exc}"[:500],
+                })
+        return telegram_moderation.append_receipt({
+            "idempotency_key": key, "actor": principal, "peer_id": int(peer_id),
+            "message_id": int(message_id), "sender_id": int(sender_id), "action": action,
+            "status": "completed", "deleted": deleted,
+            "banned": banned if action == "delete_and_ban" else False,
+            "sender_verified": sender_verified, "error": "",
+        })
+
+
+def _sync_moderate_abstractdl(params: dict | None = None,
+                               _principal: object = None, **_ignored) -> str:
+    denied = _telegram_account_gate()
+    if denied:
+        return denied
+    if _LOOP is None or not client.is_connected():
+        return "moderation: Telethon-клиент не подключён"
+    data = dict(params or {})
+    allowed = {"peer_id", "message_id", "sender_id", "decision"}
+    extras = sorted(set(data) - allowed)
+    if extras:
+        return f"moderation: only exact fields are accepted; unexpected: {', '.join(extras)}"
+    if set(data) != allowed:
+        missing = sorted(allowed - set(data))
+        return f"moderation: missing exact fields: {', '.join(missing)}"
+    values = (data["peer_id"], data["message_id"], data["sender_id"])
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
+        return "moderation: peer_id/message_id/sender_id must be exact JSON integers"
+    if not isinstance(data["decision"], str):
+        return "moderation: decision must be an exact string"
+    principal = _telegram_account_principal(_principal)
+    if principal is None:
+        return "moderation: sovereign principal unavailable"
+    try:
+        result = asyncio.run_coroutine_threadsafe(
+            _moderate_abstractdl(data["peer_id"], data["message_id"],
+                                 data["sender_id"], data["decision"],
+                                 principal), _LOOP).result(timeout=90)
+        return json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as exc:
+        return f"moderation: {type(exc).__name__}: {exc}"
 
 
 def _canonical_peer_id(entity) -> str | None:
@@ -8253,6 +8456,90 @@ async def _forge_events_once() -> None:
     _FORGE_EVENTS_TASK = asyncio.create_task(_run_forge_event_pass())
 
 
+async def _run_moderation_event_pass() -> None:
+    """Deliver privacy-minimal moderation review facts as one live wake."""
+    global _MODERATION_PRIORITY_PENDING
+    from core import events as core_events
+    if _ONE_MIND.locked():
+        return
+    async with _ONE_MIND:
+        # The priority is consumed only when this review owns the shared voice turn.
+        # Until then ordinary debounced chats yield, so a review cannot starve behind them.
+        _MODERATION_PRIORITY_PENDING = False
+        if not await asyncio.to_thread(agent.llm.configured):
+            return
+        raw_events = await asyncio.to_thread(core_events.undelivered, {"moderation_review"})
+        if not raw_events:
+            return
+
+        def _key(item: dict) -> str:
+            return str(item.get("dedup_key") or item.get("id") or "")
+
+        malformed = [item for item in raw_events
+                     if not isinstance(item, dict) or not isinstance(item.get("payload"), dict)]
+        events = [item for item in raw_events if item not in malformed]
+        if malformed:
+            log.warning("malformed moderation-review события погашены отдельно: %s",
+                        ", ".join(_key(item) for item in malformed))
+            await asyncio.to_thread(core_events.mark_delivered,
+                                    [_key(item) for item in malformed])
+        if not events:
+            await asyncio.to_thread(core_events.compact)
+            return
+        counts = await asyncio.to_thread(core_events.bump_attempts, [_key(e) for e in events])
+        poisoned = [e for e in events
+                    if counts.get(_key(e), 1) > core_events.MAX_DELIVERY_ATTEMPTS]
+        loud = [e for e in events if e not in poisoned]
+        turn_ok = True
+        if loud:
+            facts = []
+            for item in loud:
+                payload = item.get("payload") or {}
+                facts.append({key: payload.get(key) for key in (
+                    "peer_id", "message_id", "sender_id", "verdict", "matched_features")})
+            goal = ("Shadow-модерация AbstractDL просит моего решения. Ничего ещё не удалено "
+                    "и никто не забанен. Проверь живой контекст точных сообщений и сама реши, "
+                    "нужна ли мера. Privacy-minimal receipts: "
+                    + json.dumps(facts, ensure_ascii=False, separators=(",", ":")))
+            try:
+                await asyncio.to_thread(agent.wake_turn, goal)
+                log.info("moderation-review события доставлены ходом: %d", len(loud))
+            except Exception:
+                turn_ok = False
+                log.warning("moderation-review ход упал; события ждут повторной доставки",
+                            exc_info=True)
+        delivered = (loud if turn_ok else []) + poisoned
+        if poisoned:
+            log.warning("moderation-review события погашены после %d попыток: %s",
+                        core_events.MAX_DELIVERY_ATTEMPTS,
+                        ", ".join(_key(e) for e in poisoned))
+        await asyncio.to_thread(core_events.mark_delivered, [_key(e) for e in delivered])
+        await asyncio.to_thread(core_events.compact)
+
+
+async def _moderation_events_once() -> None:
+    """Cheap clock pump: durable moderation facts wake Praxis, never an actuator."""
+    global _MODERATION_EVENTS_TASK, _MODERATION_PRIORITY_PENDING
+    try:
+        from core import events as core_events
+        if not core_events.enabled():
+            return
+        pending = await asyncio.to_thread(core_events.undelivered, {"moderation_review"}, 1)
+        if not pending:
+            return
+    except Exception:
+        log.debug("moderation-events tick failed", exc_info=True)
+        return
+    # Make a persisted review the next claimant of the shared voice turn.  This does not
+    # decide a moderation outcome and is cleared only by _run_moderation_event_pass.
+    _MODERATION_PRIORITY_PENDING = True
+    if _passing or any(not task.done() for task in _debounce.values()):
+        return
+    if _MODERATION_EVENTS_TASK is not None and not _MODERATION_EVENTS_TASK.done():
+        return
+    _MODERATION_EVENTS_TASK = asyncio.create_task(_run_moderation_event_pass())
+
+
 async def _work_engine_once() -> None:
     """Оборот 3: работу поднимает РАБОТА, а не расписание.
 
@@ -8325,6 +8612,7 @@ def _clock_jobs() -> dict:
         "forge_wake": (max(CLOCK_TICK, 30.0), _forge_wake_once),  # urgent Forge-завершения -> немедленное окно
         # PASS 30 Этап 1: завершения субагентов будят её ходом (события, не поллинг)
         "forge_events": (max(CLOCK_TICK, 5.0), _forge_events_once),
+        "moderation_events": (max(CLOCK_TICK, 5.0), _moderation_events_once),
         # Оборот 3: движок работ. Часы только спрашивают «созрело ли»; что именно —
         # решает её леджер желаний. Рычаг опущен по умолчанию (PRAXIS_WORK_ENGINE).
         "work_engine": (300.0, _work_engine_once),
@@ -8607,6 +8895,7 @@ async def main() -> None:
     # entity от caller-а: transport closure строится здесь над module-global
     # Telethon client. apply=true пишет evidence только внутри этого же вызова.
     agent._TELETHON["history_scan"] = _sync_history_scan
+    agent._TELETHON["moderate_abstractdl"] = _sync_moderate_abstractdl
     # Её лицо, слова о себе и жесты — тот же sovereign-гейт, что и остальной аккаунт.
     agent._TELETHON["set_profile_photo"] = _sync_set_avatar
     agent._TELETHON["update_profile"] = _sync_update_profile

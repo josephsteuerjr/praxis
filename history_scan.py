@@ -28,8 +28,14 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
+import secrets
+import stat
+import tempfile
 import threading
+from datetime import date, datetime, timezone
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 
 log = logging.getLogger("praxis.history_scan")
@@ -41,6 +47,12 @@ MIN_MAX_PAGES = 1
 ORIGIN_HISTORY_OPENER = "history_opener"
 ORIGIN_HISTORY_HEADER = "history_header"
 SOURCE_RUNTIME_TELETHON = "runtime_telethon_history_scan"
+PRIVATE_FREEZE_ROOT = Path(__file__).resolve().parent / "private" / "history_scan"
+PRIVATE_MANIFEST_ROOT = PRIVATE_FREEZE_ROOT.parent
+# Corpus rows deliberately use the experiment vocabulary, not Telethon's raw
+# field name. Keeping this allow-list narrow prevents new message attributes
+# from silently entering a private corpus.
+FREEZE_FIELDS = ("message_id", "date", "text", "reply_to_message_id", "topic_id")
 
 
 class HistoryScanError(RuntimeError):
@@ -171,6 +183,8 @@ class HistoryScanResult:
     messages_seen: int = 0
     signals: list[ScanSignal] = field(default_factory=list)
     observed_ids: set[int] = field(default_factory=set)
+    # Allocated only for the explicit private-freeze acquisition path.
+    corpus: list[dict[str, Any]] | None = field(default=None, repr=False)
 
     @property
     def general_count(self) -> int:
@@ -220,6 +234,7 @@ async def run_history_scan(
     *,
     page_size: int = 100,
     max_pages: int = 200,
+    capture_corpus: bool = False,
 ) -> HistoryScanResult:
     """Прогнать полный скан через приватный степпер fetch_page.
 
@@ -235,7 +250,8 @@ async def run_history_scan(
     _validate_positive_int("page_size", page_size)
     _validate_positive_int("max_pages", max_pages)
 
-    result = HistoryScanResult(peer_id=peer_id, range=scan_range)
+    result = HistoryScanResult(peer_id=peer_id, range=scan_range,
+                               corpus=[] if capture_corpus else None)
     offset_id = scan_range.ceiling_id + 1
     seen: set[int] = set()
 
@@ -266,6 +282,8 @@ async def run_history_scan(
                 seen.add(mid)
                 if scan_range.floor_id <= mid <= scan_range.ceiling_id:
                     page_ids.append(mid)
+                    if result.corpus is not None:
+                        result.corpus.append(_canonical_message(message))
             result.signals.extend(extract_signals(page))
 
             new_offset = min(
@@ -278,12 +296,14 @@ async def run_history_scan(
             offset_id = new_offset
         else:
             result.reason = "page_budget_exhausted"
+            result.corpus = None
             return result
     except asyncio.CancelledError:
         result.complete = False
         result.reason = "cancelled"
         result.signals = []
         result.observed_ids = set()
+        result.corpus = None
         raise
     except HistoryScanError as exc:
         log.warning("history scan [%s] failed honest pagination: %s", peer_id, exc)
@@ -291,6 +311,7 @@ async def run_history_scan(
         result.reason = "pagination_violation"
         result.signals = []
         result.observed_ids = set()
+        result.corpus = None
         return result
     except Exception as exc:  # RPC/сеть/транспорт
         log.warning("history scan [%s] transport failure: %s", peer_id, type(exc).__name__)
@@ -298,11 +319,322 @@ async def run_history_scan(
         result.reason = f"rpc_error:{type(exc).__name__}"
         result.signals = []
         result.observed_ids = set()
+        result.corpus = None
         return result
 
     result.messages_seen = len(seen)
     result.observed_ids = seen
     return result
+
+
+def _eligible_corpus_row(message: Any) -> dict[str, Any] | None:
+    """Privacy-minimal row for a non-empty human-visible text message.
+
+    Service/action messages are pagination evidence, never corpus material.
+    """
+    if getattr(message, "action", None) is not None:
+        return None
+    row = _canonical_message(message)
+    if not row["text"].strip():
+        return None
+    return row
+
+
+async def acquire_eligible_corpus(
+    peer_id: str,
+    ceiling_id: int,
+    fetch_page: Callable[[int, int], Awaitable[list[Any]]],
+    *,
+    eligible_limit: int = 500,
+    page_size: int = 100,
+    max_pages: int = 200,
+) -> HistoryScanResult:
+    """Boundedly discover eligible rows without attesting, freezing or mutating.
+
+    Actions and blank/deleted bodies advance the pagination cursor but never
+    enter the corpus. The returned candidate range is for a separate exact
+    range attestation before an explicit freeze.
+    """
+    _validate_positive_int("eligible_limit", eligible_limit)
+    _validate_positive_int("page_size", page_size)
+    _validate_positive_int("max_pages", max_pages)
+    if isinstance(ceiling_id, bool) or not isinstance(ceiling_id, int) or ceiling_id < 1:
+        raise ParameterError("ceiling_id должен быть целым числом >= 1")
+
+    result = HistoryScanResult(peer_id=peer_id, range=ScanRange(1, ceiling_id), corpus=[])
+    offset_id = ceiling_id + 1
+    seen: set[int] = set()
+    try:
+        while result.pages < max_pages:
+            page = await fetch_page(offset_id, page_size)
+            if not isinstance(page, list):
+                raise HistoryScanError("страница не является списком сообщений")
+            result.pages += 1
+            if not page:
+                result.complete = True
+                result.reason = "history_exhausted"
+                break
+            for message in page:
+                mid = getattr(message, "id", None)
+                if mid is None:
+                    raise HistoryScanError("сообщение без id в странице")
+                mid = int(mid)
+                if mid >= offset_id:
+                    raise HistoryScanError(
+                        f"страница не продвинулась: id {mid} >= offset {offset_id}")
+                if mid in seen:
+                    raise HistoryScanError(f"дублированный id {mid}")
+                seen.add(mid)
+                row = _eligible_corpus_row(message)
+                if row is not None:
+                    result.corpus.append(row)
+                    if len(result.corpus) == eligible_limit:
+                        result.complete = True
+                        result.reason = "eligible_limit_reached"
+                        break
+            if result.complete:
+                break
+            offset_id = min(int(getattr(m, "id")) for m in page)
+        else:
+            result.reason = "page_budget_exhausted"
+            result.corpus = None
+            return result
+    except asyncio.CancelledError:
+        result.corpus = None
+        raise
+    except HistoryScanError as exc:
+        log.warning("history acquisition [%s] failed honest pagination: %s", peer_id, exc)
+        result.reason = "pagination_violation"
+        result.corpus = None
+        return result
+    except Exception as exc:
+        log.warning("history acquisition [%s] transport failure: %s", peer_id, type(exc).__name__)
+        result.reason = f"rpc_error:{type(exc).__name__}"
+        result.corpus = None
+        return result
+
+    result.messages_seen = len(seen)
+    result.observed_ids = seen
+    if result.corpus:
+        result.range = ScanRange(min(int(row["message_id"]) for row in result.corpus), ceiling_id)
+    return result
+
+
+def _canonical_date(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
+
+
+def _canonical_message(message: Any) -> dict[str, Any]:
+    reply = getattr(message, "reply_to", None)
+    reply_id = getattr(reply, "reply_to_msg_id", None) if reply is not None else None
+    text = getattr(message, "message", None)
+    if text is None:
+        text = getattr(message, "raw_text", None)
+    return {
+        "message_id": int(getattr(message, "id")),
+        "date": _canonical_date(getattr(message, "date", None)),
+        "text": text if isinstance(text, str) else ("" if text is None else str(text)),
+        "reply_to_message_id": int(reply_id) if reply_id is not None else None,
+        "topic_id": message_topic_id(message),
+    }
+
+
+def _canonical_jsonl(records: Iterable[dict[str, Any]]) -> bytes:
+    lines = []
+    for row in sorted(records, key=lambda item: int(item["message_id"])):
+        exact = {field: row.get(field) for field in FREEZE_FIELDS}
+        lines.append(json.dumps(exact, ensure_ascii=False, separators=(",", ":")))
+    return (("\n".join(lines) + "\n") if lines else "").encode("utf-8")
+
+
+def _open_private_directory(path: Path) -> tuple[Path, int]:
+    """Create/open path without following symlinks in any component."""
+    base = path.absolute()
+    parts = base.parts
+    if not parts or not base.is_absolute():
+        raise HistoryScanError("private freeze root must be absolute")
+    try:
+        current_fd = os.open(parts[0], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        for component in parts[1:]:
+            try:
+                os.mkdir(component, mode=0o700, dir_fd=current_fd)
+            except FileExistsError:
+                pass
+            next_fd = os.open(
+                component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=current_fd,
+            )
+            os.close(current_fd)
+            current_fd = next_fd
+        os.fchmod(current_fd, 0o700)
+        return base, current_fd
+    except OSError as exc:
+        try:
+            os.close(current_fd)
+        except (NameError, OSError):
+            pass
+        raise HistoryScanError(f"cannot secure private freeze root: {exc}") from exc
+
+
+def freeze_corpus(
+    result: HistoryScanResult,
+    *,
+    root: Path | None = None,
+    manifest: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Atomically persist exact corpus; return a privacy-minimal receipt."""
+    if type(result) is not HistoryScanResult:
+        raise HistoryScanError("freeze_corpus принимает только HistoryScanResult")
+    if not result.complete:
+        raise HistoryScanError(f"freeze requires complete scan: {result.reason}")
+    if result.corpus is None:
+        raise HistoryScanError("freeze requires an explicitly captured corpus")
+    requested_base = Path(root) if root is not None else PRIVATE_FREEZE_ROOT
+    payload = _canonical_jsonl(result.corpus)
+    digest = hashlib.sha256(payload).hexdigest()
+    base, dir_fd = _open_private_directory(requested_base)
+
+    destination_name = f"{digest}.jsonl"
+    destination = base / destination_name
+    temporary_name = f".freeze-{secrets.token_hex(16)}"
+    temporary_created = False
+    try:
+        fd = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=dir_fd,
+        )
+        temporary_created = True
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(
+                temporary_name, destination_name,
+                src_dir_fd=dir_fd, dst_dir_fd=dir_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            try:
+                existing_fd = os.open(
+                    destination_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+            except OSError as exc:
+                raise HistoryScanError(
+                    "existing freeze destination is not a safe regular file") from exc
+            with os.fdopen(existing_fd, "rb") as existing:
+                existing_stat = os.fstat(existing.fileno())
+                if (not stat.S_ISREG(existing_stat.st_mode)
+                        or existing_stat.st_nlink != 1):
+                    raise HistoryScanError(
+                        "existing freeze destination is not a private regular file")
+                if existing.read() != payload:
+                    raise HistoryScanError("content-addressed freeze artifact mismatch")
+                os.fchmod(existing.fileno(), 0o600)
+        else:
+            os.unlink(temporary_name, dir_fd=dir_fd)
+            temporary_created = False
+            published_fd = os.open(
+                destination_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+            try:
+                published_stat = os.fstat(published_fd)
+                if (not stat.S_ISREG(published_stat.st_mode)
+                        or published_stat.st_nlink != 1):
+                    raise HistoryScanError(
+                        "published freeze artifact is not a private regular file")
+                os.fchmod(published_fd, 0o600)
+            finally:
+                os.close(published_fd)
+        os.fsync(dir_fd)
+    except OSError as exc:
+        raise HistoryScanError(f"cannot publish private freeze artifact: {exc}") from exc
+    finally:
+        if temporary_created:
+            try:
+                os.unlink(temporary_name, dir_fd=dir_fd)
+            except FileNotFoundError:
+                pass
+        os.close(dir_fd)
+    return {"frozen": True, "sha256": digest, "path": str(destination),
+            "messages": len(result.corpus), "bytes": len(payload),
+            "format": "canonical-jsonl-v1", "manifest": dict(manifest or {})}
+
+
+def freeze_attested_corpus(
+    discovery: HistoryScanResult,
+    attestation: HistoryScanResult,
+    *,
+    root: Path | None = None,
+    acquired_at: str | None = None,
+) -> dict[str, Any]:
+    """Freeze only a discovered corpus whose exact closed range was attested."""
+    if type(discovery) is not HistoryScanResult or type(attestation) is not HistoryScanResult:
+        raise HistoryScanError("attested freeze принимает только HistoryScanResult")
+    if not discovery.complete or discovery.corpus is None:
+        raise HistoryScanError(f"attested freeze requires complete discovery: {discovery.reason}")
+    if not attestation.complete:
+        raise HistoryScanError(f"attested freeze requires complete attestation: {attestation.reason}")
+    if discovery.peer_id != attestation.peer_id or discovery.range != attestation.range:
+        raise HistoryScanError("attestation does not match discovered corpus range")
+    discovered_ids = {int(row["message_id"]) for row in discovery.corpus}
+    if not discovered_ids <= attestation.observed_ids:
+        raise HistoryScanError("attestation did not observe every discovered corpus row")
+    manifest = {
+        "peer": discovery.peer_id,
+        **discovery.range.as_dict(),
+        "row_count": len(discovery.corpus),
+        "acquired_at": acquired_at,
+        "history_scan_sha256": attestation.scan_sha256(),
+    }
+    receipt = freeze_corpus(discovery, root=root, manifest=manifest)
+    manifest_root = Path(root).parent if root is not None else PRIVATE_MANIFEST_ROOT
+    base, dir_fd = _open_private_directory(manifest_root)
+    try:
+        encoded = (json.dumps({**manifest, "corpus_sha256": receipt["sha256"]},
+                              ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        # A mutable fixed name would let a later freeze erase the attestation
+        # binding for an earlier corpus. Publish the manifest by its own bytes.
+        filename = f"{hashlib.sha256(encoded).hexdigest()}.manifest.json"
+        temporary = f".manifest-{secrets.token_hex(16)}"
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=dir_fd)
+        try:
+            with os.fdopen(fd, "wb") as out:
+                out.write(encoded)
+                out.flush()
+                os.fsync(out.fileno())
+            try:
+                os.link(temporary, filename, src_dir_fd=dir_fd, dst_dir_fd=dir_fd,
+                        follow_symlinks=False)
+            except FileExistsError:
+                existing_fd = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+                with os.fdopen(existing_fd, "rb") as existing:
+                    existing_stat = os.fstat(existing.fileno())
+                    if (not stat.S_ISREG(existing_stat.st_mode)
+                            or existing_stat.st_nlink != 1 or existing.read() != encoded):
+                        raise HistoryScanError("existing manifest is not the expected private artifact")
+                    os.fchmod(existing.fileno(), 0o600)
+            else:
+                os.unlink(temporary, dir_fd=dir_fd)
+            os.fsync(dir_fd)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=dir_fd)
+            except FileNotFoundError:
+                pass
+    finally:
+        os.close(dir_fd)
+    receipt["manifest_path"] = str(base / filename)
+    return receipt
 
 
 def _validate_positive_int(name: str, value: Any) -> None:

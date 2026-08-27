@@ -399,6 +399,71 @@ class MemoryFtsTests(unittest.TestCase):
         self.assertIn((history / "0001.md").resolve(), vector_sources)
         self.assertNotIn(latest.resolve(), vector_sources)  # canonical JSON is covered by FTS
 
+    def test_upsert_canonical_journal_skips_discovery_but_later_ensure_discovers_roster(self):
+        seed = self.memory / "people" / "seed.md"
+        seed.write_text("- existing corpus fact\n", encoding="utf-8")
+        initial = memory_fts.rebuild(
+            base=self.base, memory_dir=self.memory, skills_dir=self.skills
+        )
+
+        journal = self.memory / "journal" / "2026-07-15.md"
+        journal.parent.mkdir()
+        journal.write_text("# July 15\n\nfast journal narwhal marker\n", encoding="utf-8")
+        with mock.patch.object(
+            memory_fts, "iter_sources",
+            side_effect=AssertionError("journal upsert must not walk the corpus"),
+        ):
+            result = memory_fts.upsert(
+                journal, base=self.base, memory_dir=self.memory, skills_dir=self.skills
+            )
+        self.assertTrue(result["indexed"])
+        # The immediate FTS row exists, but upsert has not pretended it knows the
+        # complete corpus fingerprint.
+        database = memory_fts._db_path(self.memory)
+        self.assertEqual(memory_fts._meta(database)["fingerprint"], initial["fingerprint"])
+        journal_hits = self.search("fast journal narwhal")
+        self.assertTrue(journal_hits)
+        self.assertEqual(journal_hits[0]["source_type"], "journal_episode")
+
+        outsider = self.memory / "people" / "later.md"
+        outsider.write_text("- later discovered capybara\n", encoding="utf-8")
+        original = memory_fts.iter_sources
+        with mock.patch.object(memory_fts, "iter_sources", wraps=original) as walked:
+            discovered = memory_fts.ensure(
+                base=self.base, memory_dir=self.memory, skills_dir=self.skills
+            )
+        walked.assert_called_once()
+        self.assertGreaterEqual(discovered.get("refreshed", 0), 1)
+        # Discovery reconciled the independent source and preserved the journal row,
+        # both of which are available through the public search API.
+        self.assertTrue(self.search("fast journal narwhal"))
+        self.assertTrue(self.search("later discovered capybara"))
+
+        journal.unlink()
+        with mock.patch.object(
+            memory_fts, "iter_sources",
+            side_effect=AssertionError("journal deletion must not walk the corpus"),
+        ):
+            removed = memory_fts.upsert(
+                journal, base=self.base, memory_dir=self.memory, skills_dir=self.skills
+            )
+        self.assertFalse(removed["indexed"])
+        self.assertFalse(self.search("fast journal narwhal"))
+
+    def test_upsert_noncanonical_journal_like_path_still_walks_sources(self):
+        memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
+        journal_like = self.memory / "journal" / "2026-07-15-draft.md"
+        journal_like.parent.mkdir()
+        journal_like.write_text("draft journal-like ibex marker\n", encoding="utf-8")
+        original = memory_fts.iter_sources
+        with mock.patch.object(memory_fts, "iter_sources", wraps=original) as walked:
+            result = memory_fts.upsert(
+                journal_like, base=self.base, memory_dir=self.memory, skills_dir=self.skills
+            )
+        self.assertTrue(result["indexed"])
+        walked.assert_called_once()
+        self.assertTrue(self.search("journal-like ibex"))
+
     def test_upsert_tracks_edits_and_deletion_without_touching_source(self):
         person = self.memory / "people" / "egor.md"
         person.write_text("# Egor\n\n- [public] copper albatross\n", encoding="utf-8")

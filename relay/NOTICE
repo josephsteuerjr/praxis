@@ -1,0 +1,24 @@
+Praxis Relay
+Copyright (c) 2026 Yegor Kosyrev <y.kosyrev@mailfence.com>
+Telegram: @tatarskiy_e4pochmak
+
+This product includes software developed by unluckyjori
+(https://github.com/unluckyjori/Codex-Proxy-Server), Copyright (c) 2025
+unluckyjori, licensed under the MIT License.  See LICENSE.
+
+Portions of this software are derived from the OpenAI Codex CLI
+(https://github.com/openai/codex), Copyright 2025 OpenAI, licensed under the
+Apache License, Version 2.0.  A copy of that license is available at
+http://www.apache.org/licenses/LICENSE-2.0
+
+The following files are derived from that project and have been modified:
+
+  src/core/prompt.md              verbatim Codex CLI system prompt
+  src/login/lib.rs                ChatGPT sign-in and token refresh
+  src/login/token_data.rs         auth.json token model
+  src/login/login_with_chatgpt.py local callback server for the sign-in flow
+  src/core/client.rs              Responses-API client (not built; retained
+  src/core/model_provider_info.rs  for reference -- these three files are not
+  src/core/openai_tools.rs         declared in any module tree)
+
+This project is not affiliated with, endorsed by, or sponsored by OpenAI.

@@ -72,6 +72,10 @@ class TestClock(unittest.TestCase):
                           "durable_resume", "computer_inventory",
                           "group_context_backfill", "reap_orphans",
                           "selfdev_reconcile", "forge_wake", "forge_events",
+                          # Shadow-модерация поднимает только durable review-факты: никакого
+                          # актюатора нет, а приоритет очереди — лишь право на следующий
+                          # свободный голосовой ход.
+                          "moderation_events",
                           # Оборот 3, 12.08: часы спрашивают «есть ли созревшая работа»,
                           # а что именно созрело — решает её леджер желаний. Рычаг
                           # `PRAXIS_WORK_ENGINE` опущен: без него забота выходит сразу.

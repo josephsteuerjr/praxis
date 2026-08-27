@@ -1448,10 +1448,21 @@ class FrameDidNotMove(unittest.TestCase):
         # 14824 -> 14843 (25.08): вечный отказ медиа признан исходом слота доставки
         # (proposal 6301bf27) — выше судьи встали 19 строк reduction-комментария и
         # ветки refused-медиа в _delivery_evidence. Судимый путь не менялся.
-        # Число перемерено живьём тем же кодом, который печатает его ей.
+        # 15136 -> 15162 (27.08): `end_turn` возвращён ходам без собеседника.
+        # Он отбирался вместе с `reply`, и пробуждение нечем было закрыть: она
+        # работала, звала `stay_silent` и умирала пустым ответом — 50 сбоев из 50,
+        # 70% пробуждений за сутки. Тем же путём падал разбор shadow-модерации, а
+        # его недоставленные события держали флаг приоритета, который откладывал
+        # КАЖДЫЙ живой ход в каждом чате: 27.08 она два часа не слышала личку.
+        # Сдвиг заказан; число перемерено живьём тем же кодом, который печатает
+        # его ей.
+        # 14843 -> 15136 (26.08): durable stale-guard resume-петель добавил структурный
+        # учёт recovery-прогресса выше исходящей границы; затем P1 repair private markdown
+        # добавил structural filter в live participant prompt-path ещё выше. Сам судимый
+        # путь не менялся. Число перемерено живьём тем же кодом, который печатает его ей.
         self.assertEqual(rails.outbound_judge_sites(),
-                         [("agent.py", 14843, "_guard_outbound")])
-        self.assertIn("agent.py:14843", capabilities.describe("owner"))
+                         [("agent.py", 15162, "_guard_outbound")])
+        self.assertIn("agent.py:15162", capabilities.describe("owner"))
 
     def test_the_frozen_frame_constants_are_byte_identical(self):
         """Вморожены только те куски кадра, которые НЕ ЗАВИСЯТ ОТ ЖИВОГО СОСТОЯНИЯ.
@@ -1642,7 +1653,12 @@ class FrameDidNotMove(unittest.TestCase):
         # 16351 -> 16370 (25.08): вечный отказ медиа — исход слота доставки
         # (proposal 6301bf27): reduction-ветка refused-медиа в _delivery_evidence.
         # Судимого пути не касалось.
-        self.assertEqual(len(source), 16370,
+        # 16663 -> 16689 (27.08): та же правка `end_turn` — четыре строки кода и
+        # объяснение, почему конец хода не про собеседника. Число перемерено живьём.
+        # 16370 -> 16663 (26.08): durable stale-guard resume-петель добавил
+        # structural recovery-маркеры и двухфазную проверку; затем P1 repair private
+        # markdown добавил live participant filter и регрессии. Нового snapshot-шва нет.
+        self.assertEqual(len(source), 16689,
                          "agent.py сдвинулся в строках — сверь, что это заказано")
 
     def test_the_new_module_declares_no_rail_and_no_environment_switch(self):

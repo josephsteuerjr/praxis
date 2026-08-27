@@ -28,6 +28,7 @@ import memory_provenance
 SCHEMA_VERSION = "praxis.memory.fts.v8"
 _LOCK = threading.RLock()
 _WORD_RE = re.compile(r"[\wа-яё]+", re.I)
+_JOURNAL_DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}\.md\Z")
 _RU_ENDINGS = (
     "иями", "ями", "ами", "ого", "ему", "ому", "ыми", "ими", "ая", "яя",
     "ое", "ее", "ые", "ие", "ый", "ий", "ой", "ам", "ям", "ах", "ях",
@@ -1875,15 +1876,84 @@ def search(query: str, *, base: Path, memory_dir: Path, skills_dir: Path | None 
     return out
 
 
+def _canonical_journal_upsert_source(path: str | Path, *, base: Path,
+                                     memory_dir: Path) -> tuple[str, Source | None] | None:
+    """Return the one known journal source which may skip corpus discovery.
+
+    A journal append is on the post-send path.  Do not generalize this shortcut to
+    arbitrary ``journal``-looking inputs: the normal source registry is still the
+    authority for every other file.  In particular, a symlink or generated view
+    must go through that registry, where its eligibility is checked in the same
+    way as during a rebuild.
+
+    ``None`` as the source is an intentional fast deletion for a vanished exact
+    daily journal path.  Deleting an already indexed row is safe without knowing
+    the rest of the corpus; the deliberately old fingerprint makes the next
+    ``ensure`` discover and reconcile the complete roster.
+    """
+    raw = Path(path)
+    try:
+        raw_absolute = raw.absolute()
+        target = raw.resolve()
+        resolved_memory = memory_dir.resolve()
+    except OSError:
+        return None
+    journal_dir = resolved_memory / "journal"
+    if (raw.is_symlink() or raw_absolute != target or target.parent != journal_dir
+            or not _inside(target, resolved_memory)
+            or not _JOURNAL_DAY_RE.fullmatch(target.name)):
+        return None
+    try:
+        _dt.date.fromisoformat(target.stem)
+    except ValueError:
+        return None
+
+    rel = _rel(target, base)
+    if not target.exists():
+        return rel, None
+    if not target.is_file():
+        return None
+    rel_under = _rel_under(target, resolved_memory)
+    if _generated_markdown(target, resolved_memory, rel_under):
+        return None
+    return rel, Source(
+        target, rel, memory_provenance.episodic_kind(rel) or "markdown", "owner"
+    )
+
+
 def upsert(path: str | Path, *, base: Path, memory_dir: Path,
            skills_dir: Path | None = None, db_path: Path | None = None) -> dict:
     """Refresh one eligible source; rebuild if the database is absent or incompatible."""
     base, memory_dir = Path(base), Path(memory_dir)
-    target = Path(path).resolve()
     database = Path(db_path) if db_path is not None else _db_path(memory_dir)
     current = _meta(database)
     if current.get("schema") != SCHEMA_VERSION:
         return rebuild(base=base, memory_dir=memory_dir, skills_dir=skills_dir, db_path=database)
+    journal = _canonical_journal_upsert_source(path, base=base, memory_dir=memory_dir)
+    if journal is not None:
+        rel, source = journal
+        with _LOCK, contextlib.closing(sqlite3.connect(database, timeout=15)) as db:
+            db.execute("PRAGMA busy_timeout=15000")
+            db.execute("DELETE FROM chunks WHERE path = ?", (rel,))
+            db.execute("DELETE FROM source_state WHERE path = ?", (rel,))
+            count = corrupt = 0
+            if source is not None:
+                count, corrupt = _insert_source(db, source, memory_dir)
+            totals = db.execute("SELECT COUNT(*) FROM chunks").fetchone()
+            corrupt_total = db.execute(
+                "SELECT COALESCE(SUM(corrupt_lines), 0) FROM source_state"
+            ).fetchone()[0]
+            # Do not manufacture a corpus fingerprint from the known file.  It
+            # must remain stale so a later ensure performs full source discovery
+            # and notices independent additions, removals, or registry changes.
+            for key, value in (("chunks", str(int(totals[0] or 0))),
+                               ("corrupt_lines", str(int(corrupt_total or 0)))):
+                db.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+                           (key, value))
+            db.commit()
+        return {"ok": True, "path": rel, "chunks": count, "indexed": source is not None}
+
+    target = Path(path).resolve()
     sources = iter_sources(base=base, memory_dir=memory_dir, skills_dir=skills_dir)
     source = next((item for item in sources if item.path.resolve() == target), None)
     rel = _rel(target, base)

@@ -85,7 +85,8 @@ def _corpus() -> dict[str, str]:
         for path in CODE.rglob("*"):
             if path.suffix not in {".py", ".rs", ".service", ".sh", ".toml", ".json"}:
                 continue
-            if _SKIP_DIRS & set(path.parts) or path.name == "rails.py":
+            relative = path.relative_to(CODE)
+            if _SKIP_DIRS & set(relative.parts) or path.name == "rails.py":
                 continue
             if path.name.startswith("test_") or path.name.endswith("_test.py"):
                 continue
@@ -95,6 +96,23 @@ def _corpus() -> dict[str, str]:
             except OSError:
                 continue
     return _CORPUS
+
+
+class TestCorpusBoundary(unittest.TestCase):
+    def test_skip_directories_are_relative_to_the_live_code_root(self):
+        """A checkout under .proposals is live; only nested proposal copies are skipped."""
+        with tempfile.TemporaryDirectory() as outer:
+            code = Path(outer) / ".proposals" / "current"
+            code.mkdir(parents=True)
+            (code / "keep.py").write_text("LIVE = True\n", encoding="utf-8")
+            nested = code / ".proposals" / "old"
+            nested.mkdir(parents=True)
+            (nested / "drop.py").write_text("FROZEN = True\n", encoding="utf-8")
+
+            with mock.patch.dict(globals(), {"CODE": code, "_CORPUS": {}}):
+                corpus = _corpus()
+
+        self.assertEqual(corpus, {"keep.py": "LIVE = True\n"})
 
 
 # Опись чисел: (рельс, файл-источник, регулярка с числом в группе 1, как оно выглядит у неё).

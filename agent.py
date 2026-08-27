@@ -3456,6 +3456,20 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
             return str(fn(target))
         except Exception as exc:
             return f"telegram_account {action}: {type(exc).__name__}: {exc}"
+    if action == "moderate_abstractdl":
+        fn = _TELETHON.get("moderate_abstractdl")
+        if not fn:
+            return "telegram_account moderate_abstractdl: Telethon hook недоступен"
+        try:
+            parsed = dict(params or {})
+            if params_json:
+                decoded = json.loads(params_json)
+                if not isinstance(decoded, dict):
+                    return "telegram_account moderate_abstractdl: params_json должен быть JSON object"
+                parsed.update(decoded)
+            return str(fn(params=parsed, _principal=_active_principal() or "unknown"))
+        except Exception as exc:
+            return f"telegram_account moderate_abstractdl: {type(exc).__name__}: {exc}"
     if action in {"followups", "cancel_followup", "watch_reply", "unwatch_reply"}:
         fn = _TELETHON.get("followups")
         if not fn:
@@ -6540,7 +6554,7 @@ TELEGRAM_ACCOUNT_TOOL = {
         "properties": {
             "action": {"type": "string", "enum": [
                 "join", "leave", "followups", "watch_reply", "unwatch_reply", "cancel_followup",
-                "history_scan",
+                "history_scan", "moderate_abstractdl",
                 "list", "search", "registry_list", "registry_search", "describe", "call",
                 "confirm", "pending_confirmations", "cancel_confirmation",
             ]},
@@ -6549,7 +6563,7 @@ TELEGRAM_ACCOUNT_TOOL = {
             "query": {"type": "string"},
             "request": {"type": "string", "description": "exact functions.*Request name"},
             "challenge_id": {"type": "string", "description": "critical challenge selector"},
-            "params_json": {"type": "string", "description": "call parameters as one JSON object"},
+            "params_json": {"type": "string", "description": "call parameters as one JSON object; moderate_abstractdl expects peer_id/message_id/sender_id/decision"},
             "scope": {"type": "string", "description": "optional telegram.* registry filter"},
             "namespace": {"type": "string", "description": "optional registry namespace filter"},
             "risk": {"type": "string", "description": "optional registry risk filter"},
@@ -8008,6 +8022,70 @@ def _mentioned_slugs(ctx: "ChannelContext", exclude: set[str]) -> list[str]:
     return sorted(s[0] for s in by_key.values() if len(s) == 1)
 
 
+_PARTICIPANT_NEW_BLOCK = re.compile(
+    r"(?:[-*+]\s|\d+[.)]\s|#{1,6}\s|>|```|~~~|\||-{3,}\s*$|\*{3,}\s*$|_{3,}\s*$)")
+_PARTICIPANT_LIST_MARK = re.compile(r"(?:[-*+]|\d+[.)])\s")
+
+
+def _strip_participant_private_blocks(text: str) -> tuple[str, int]:
+    """Remove `[private]` markdown records and their record continuations.
+
+    This is the live prompt-path boundary.  It deliberately lives beside its consumer
+    rather than making the live frame depend on Shadow's implementation: Shadow has
+    an analogous, separately tested read-only filter, while this function protects
+    material that actually reaches the voice prompt.
+
+    A non-list paragraph may continue lazily at the same indentation; a list item's
+    continuation must be indented.  A following markdown block starts a fresh public
+    record.  The return count is lines removed, matching the disclosure in the frame.
+    """
+    kept: list[str] = []
+    hidden = 0
+    heading_level: int | None = None
+    indent: int | None = None
+    listish = False
+    blank_seen = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip(" \t")
+        col = len(line) - len(stripped)
+        head = re.match(r"^(#{1,6})\s", stripped)
+        level = len(head.group(1)) if head else None
+        if heading_level is not None:
+            if level is not None and level <= heading_level:
+                heading_level = None
+            else:
+                hidden += 1
+                continue
+        if indent is not None:
+            if not stripped.strip():
+                if listish:
+                    hidden += 1
+                    blank_seen = True
+                    continue
+                indent = None
+            elif col > indent:
+                hidden += 1
+                blank_seen = False
+                continue
+            elif (col == indent and not listish and not blank_seen
+                  and not _PARTICIPANT_NEW_BLOCK.match(stripped)):
+                hidden += 1
+                continue
+            else:
+                indent = None
+        if "[private]" in line:
+            hidden += 1
+            if level is not None:
+                heading_level = level
+            else:
+                indent = col
+                listish = bool(_PARTICIPANT_LIST_MARK.match(stripped))
+                blank_seen = False
+            continue
+        kept.append(line)
+    return "".join(kept), hidden
+
+
 def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str:
     """ВСЕ её досье на людей, целиком. Отбора нет — и это решение, а не упрощение.
 
@@ -8040,7 +8118,8 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     if directory is None or not directory.exists():
         return ""
     # ⚠ ОТБОР МАТЕРИАЛА СНЯТ, ГРАНИЦА ПРИВАТНОСТИ — НЕТ. В owner-контуре едет всё; в
-    # чужой комнате строки, помеченные источником как `[private]`, вырезаются. Это не
+    # чужой комнате приватные markdown-записи, помеченные источником как `[private]`,
+    # вырезаются вместе с их продолжениями. Это не
     # экономия и не осторожность ради осторожности: личный факт о ТРЕТЬЕМ человеке,
     # лежащий в кадре при разговоре с четвёртым, — ровно то, от чего в проекте заведён
     # адресный контур данных. Снять эту границу можно только её словом, а не попутно.
@@ -8051,13 +8130,9 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
         nonlocal hidden
         if owner_audience:
             return body
-        kept = []
-        for line in body.split("\n"):
-            if "[private]" in line:
-                hidden += 1
-                continue
-            kept.append(line)
-        return "\n".join(kept)
+        body, removed = _strip_participant_private_blocks(body)
+        hidden += removed
+        return body
 
     # ── КОНТРАКТ ДОСЬЕ (решение Praxis и Егора 09.08) ─────────────────────────────────
     #
@@ -8144,7 +8219,7 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     else:
         who = "кто передо мной — кадру не назван: подтверждённого принципала в этом ходе нет"
     veil = ("" if owner_audience else
-            f" Здесь не owner-контур, поэтому строк с пометкой [private] снято {hidden} —"
+            f" Здесь не owner-контур, поэтому строк приватных записей снято {hidden} —"
             f" они есть в первоисточнике и открываются рукой.")
     if not contract:
         head = (f"досье: {len(rows)}, знаков {total}. Это моя память о людях целиком, без "
@@ -13147,6 +13222,10 @@ def resume_durable_run(run_id: str) -> dict:
 # 3 быстрые попытки, потом 1, 2, 4… минуты и потолок в час — 24 удара в сутки вместо 3 288.
 RESUME_FREE_ATTEMPTS = 3
 RESUME_BACKOFF_CAP_SECONDS = 3600.0
+# Closing is deliberately much slower than the rejected 12 × 45s ceiling.  Twelve is only
+# enough to WARN; phase two needs another ten minutes with the exact same progress mark.
+RESUME_STALE_WARN_ATTEMPTS = 12
+RESUME_STALE_QUIET_SECONDS = 600.0
 _RESUME_IDLE_EVENT = "resume_attempt_idle"
 _RESUME_IDLE_SCAN_LIMIT = 400
 # Всё, после чего счёт начинается заново: ран сдвинулся, или его позвали руками.
@@ -13155,6 +13234,7 @@ _RESUME_IDLE_SCAN_LIMIT = 400
 _RESUME_RESET_EVENTS = frozenset({
     "tool_result", "model_completed", "run_checkpoint", "artifact_created",
     "telegram_text_chunk_accepted", "run_promoted", "tool_started", "resume_authorized",
+    "resume_stale_reopened",
 })
 # ⚑ Загрузка процесса — тоже сброс, и это не удобство, а честность: после рестарта КОД
 # ДРУГОЙ. Отсрочка, накопленная прошлой жизнью процесса, судила бы новый код по старым
@@ -13233,6 +13313,134 @@ def _run_progress_mark(manager, run_id: str) -> tuple:
             int(manifest.get("artifact_seq") or 0))
 
 
+def _resume_guard_state(manager, run_id: str) -> tuple[list, int]:
+    """Return a structural fingerprint and idle evidence after its durable boundary.
+
+    Resume lease status chatter is deliberately not progress. Every other event is a
+    durable boundary, so old idle observations cannot arm the guard after model/output,
+    control, artifact, or other structural activity. Legacy idle rows without an explicit
+    boundary remain usable only within their current structural segment.
+    """
+    try:
+        rows = list(manager.iter_events(run_id))
+        manifest = manager.manifest(run_id)
+    except Exception:
+        return [], 0
+    latest_pause: dict = {}
+    recovery_anchor = 0
+    boundary = 0
+    idle = 0
+    blocked_after_anchor = False
+    running_after_anchor = False
+    latest_pause_is_recovery = False
+    last_status_seq = 0
+    prefix: list[dict] = []
+    for row in rows:
+        prefix.append(row)
+        kind = str(row.get("kind") or "")
+        seq = int(row.get("seq") or 0)
+        details = row.get("details") if isinstance(row.get("details"), dict) else {}
+        # Keep the guard's legacy vocabulary exactly aligned with the resume planner.
+        # The audit-field check excludes an owner pause which merely became resumable
+        # after authorization: that is not a machine recovery anchor.
+        recovery_pause = bool(
+            kind == "status_changed" and row.get("to_status") == "paused"
+            and not row.get("control_action") and not row.get("requested_by")
+            and run_resume._is_recovery_pause(prefix, "paused", {})
+        )
+        resume_claim = bool(
+            kind == "status_changed" and row.get("to_status") == "running"
+            and row.get("control_action") == "resume_claim"
+        )
+        if kind == "status_changed":
+            last_status_seq = seq
+            if row.get("to_status") == "running" and recovery_anchor and not resume_claim:
+                running_after_anchor = True
+        if kind == "status_changed" and row.get("to_status") == "paused":
+            latest_pause = row
+            latest_pause_is_recovery = recovery_pause
+            if recovery_pause:
+                # Only the first machine recovery pause begins the evidentiary lifetime.
+                # Subsequent claim -> recovery-pause pairs are the idle cycles measured.
+                if not recovery_anchor:
+                    recovery_anchor = seq
+                    boundary = seq
+                    idle = 0
+                blocked_after_anchor = False
+                running_after_anchor = False
+        if (kind == "status_changed" and row.get("to_status") == "blocked"
+                and recovery_anchor and seq > recovery_anchor):
+            blocked_after_anchor = True
+        automated_lease = kind == "resume_stale_warned" or resume_claim
+        if kind == _RESUME_IDLE_EVENT:
+            observed = row.get("boundary_seq")
+            if observed is None or int(observed or 0) == boundary:
+                idle += 1
+            else:
+                idle = 0
+        elif recovery_pause:
+            # The new anchor reset above is itself the boundary.
+            pass
+        elif not automated_lease:
+            boundary = seq
+            idle = 0
+
+    status = str(manifest.get("status") or "")
+    control = dict(manifest.get("control") or {})
+    latest_is_recovery = bool(latest_pause and latest_pause_is_recovery)
+    status_matches_anchor = (
+        status == "paused" and latest_is_recovery and last_status_seq == int(latest_pause.get("seq") or 0)
+        or status == "blocked" and blocked_after_anchor and not running_after_anchor
+        and last_status_seq > recovery_anchor
+    )
+    eligible = not control and recovery_anchor and latest_is_recovery and status_matches_anchor
+    if not eligible:
+        return [], 0
+    mark = [status, int(manifest.get("result_seq") or 0),
+            int(manifest.get("artifact_seq") or 0), boundary, recovery_anchor]
+    return mark, idle
+
+
+def _resume_stale_guard(manager, run_id: str) -> str:
+    """Advance at most one durable guard phase; never inspect human prose."""
+    try:
+        manifest = manager.manifest(run_id)
+        status = str(manifest.get("status") or "")
+        if status not in {"paused", "blocked"}:
+            return ""
+        guard = dict(manifest.get("resume_stale_guard") or {})
+        if guard.get("phase") == "attention":
+            return "attention"
+        mark, idle = _resume_guard_state(manager, run_id)
+        if not mark:
+            return ""
+        if guard.get("phase") == "warned":
+            if list(guard.get("progress") or ()) == mark:
+                warned_at = str(guard.get("warned_at") or "")
+                age = _seconds_since(warned_at) if warned_at else -1.0
+                # Malformed durable evidence fails closed, never closes work.
+                if age == float("inf") or age < RESUME_STALE_QUIET_SECONDS:
+                    return "warned"
+                closed = manager.close_resume_stale(
+                    run_id, expected_revision=int(manifest.get("revision") or 0), progress=mark)
+                return str((closed.get("resume_stale_guard") or {}).get("phase") or "")
+            # Real progress invalidates the old warning. It may be replaced only after a
+            # complete new streak beyond the durable boundary.
+        if idle < RESUME_STALE_WARN_ATTEMPTS:
+            return ""
+        manager.mark_resume_stale(
+            run_id, expected_revision=int(manifest.get("revision") or 0),
+            progress=mark, previous_status=status,
+        )
+        return "warned"
+    except (run_manager.RunConflict, run_manager.InvalidTransition):
+        # Concurrent progress/control wins over an observation made by the clock.
+        return ""
+    except Exception:
+        log.warning("resume stale guard failed [%s]", run_id, exc_info=True)
+        return ""
+
+
 def resume_durable_runs(*, limit: int = 20) -> list[dict]:
     """Scan interrupted runs and attempt exact resumes; never infer evidence."""
 
@@ -13246,10 +13454,16 @@ def resume_durable_runs(*, limit: int = 20) -> list[dict]:
         except Exception:
             continue
         if status in {"paused", "blocked", "in_doubt"}:
+            # Lifetime evidence is checked independently of the process-local backoff epoch,
+            # otherwise precisely the old 495–982-attempt patients would restart at zero and
+            # never enter phase one after a deployment.
+            guard_result = (_resume_stale_guard(manager, run_id)
+                            if status in {"paused", "blocked"} else "")
+            if guard_result in {"closed", "attention"}:
+                continue
             idle, last = _resume_idle_streak(manager, run_id)
             wait = resume_backoff_seconds(idle)
             if wait and last and _seconds_since(last) < wait:
-                # Молча и без единой записи: отсрочка не должна сама себя раздувать.
                 continue
             candidates.append((run_id, idle))
     bounded = max(0, int(limit))
@@ -13283,8 +13497,10 @@ def resume_durable_runs(*, limit: int = 20) -> list[dict]:
             # исполнитель. Отметка нужна затем, чтобы отсрочка считалась по факту
             # «не сдвинулся», а не по тексту, который завтра перепишут.
             try:
+                state, _ = _resume_guard_state(manager, run_id)
                 manager.append_event(
                     run_id, _RESUME_IDLE_EVENT, attempt=int(idle) + 1,
+                    boundary_seq=(state[3] if state else None),
                     phase=str(report.get("phase") or ""),
                     error_type=str(report.get("error_type") or ""),
                     next_try_in_seconds=int(resume_backoff_seconds(int(idle) + 1)),
@@ -13667,8 +13883,34 @@ def offered_tools_for(ctx: "ChannelContext") -> list:
     #
     # Образец рядом, в этой же функции: `task_control` добавляется ПО ВИДУ ХОДА, а не по
     # рычагу. Здесь спрашиваем сам канал — он и решает, есть ли кому отвечать.
-    if not work_loop.reply_hand_enabled() or ctx.chat_id is None:
+    #
+    # ⚠⚠ 27.08: `end_turn` УЕХАЛ ИЗ ВЕТКИ «НЕТ СОБЕСЕДНИКА», И ЭТО БЫЛА ЖИВАЯ ПОЛОМКА.
+    # Всё рассуждение выше — про `reply`: обещать отправку там, где отправлять некому.
+    # `end_turn` попал в тот же кортеж заодно, а он НЕ ПРО СОБЕСЕДНИКА ВОВСЕ — он про то,
+    # как ход закрывается по контракту v3, где конец хода стал поступком, а не отсутствием
+    # действия. Пробуждение и рабочее окно — такие же ходы, и закрывать их надо так же.
+    #
+    # Цена ошибки, замеренная на живом 26-27.08: у пробуждений НЕЧЕМ было сказать
+    # «я закончила». Она просыпалась, работала по-настоящему (shell, my_agenda, fs_edit),
+    # звала `stay_silent` — и цикл спрашивал модель снова. Сказать нечего, закрыть ход
+    # нечем; модель возвращала пустоту, и та поднималась как `EmptyResponseError`.
+    # 50 сбойных пробуждений из 50 кончались ровно этим; 70% всех пробуждений за сутки.
+    #
+    # ⚑ И ЭТО ЖЕ ОТНИМАЛО У НЕЁ СЛУХ. Разбор shadow-модерации доставляется КАК
+    # ПРОБУЖДЕНИЕ, поэтому падал так же; недоставленные события держали
+    # `_MODERATION_PRIORITY_PENDING` поднятым, а поднятый флаг откладывал КАЖДЫЙ живой
+    # ход в каждом чате — включая личку Егора. Круг замыкался сам: чаты уступали
+    # модерации, модерация не запускалась, потому что чаты стояли в дебаунсе, а дебаунс
+    # существовал потому, что чаты уступили. 27.08 она молчала два часа, и в логе не было
+    # ни одной ошибки — только «отложила».
+    #
+    # Поэтому условия разведены: рычаг опущен — нет обеих рук (реплики уходят возвратом
+    # хода, и обе руки были бы неправдой об устройстве); собеседника нет — нет только
+    # `reply`.
+    if not work_loop.reply_hand_enabled():
         tools = [t for t in tools if t.get("name") not in ("reply", "end_turn")]
+    elif ctx.chat_id is None:
+        tools = [t for t in tools if t.get("name") != "reply"]
     hosted_search = _hosted_web_search_tool()
     if hosted_search is not None:
         tools = tools + [hosted_search]
