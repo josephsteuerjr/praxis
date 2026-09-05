@@ -43,8 +43,8 @@ button {
 }
 
 .top-name {
-  font: 400 26px/1.1 var(--serif);
-  font-variation-settings: "opsz" 24;
+  /* имя агента — его почерком, как над его комнатой в окне (06.09) */
+  font: 300 28px/1.1 var(--hand);
 }
 
 .top-state {
@@ -147,6 +147,14 @@ button {
   margin: 0 6px 3px;
   font-size: 11px;
   color: var(--muted);
+}
+
+/* Имя говорящего в общей комнате: на телефоне подписи не было вовсе, и все
+   реплики выглядели одинаково. Ставится только там, где говорящих больше
+   двух (комнаты Telegram); в окне сторона пузыря говорит сама за себя. */
+.msg-time b {
+  font-weight: 600;
+  color: var(--ink-3);
 }
 
 .msg-body {

@@ -1,7 +1,7 @@
 // Планы: что агент себе наметил (будильники, окна, доставки), форж-субагенты
 // и его доска. Это ответ на «что она будет делать, пока меня нет».
 import { api } from "../api";
-import { esc, md } from "../lib";
+import { bindFail, esc, failHTML, md } from "../lib";
 
 const AGENDA_KIND: Record<string, string> = {
   wake: "будильник",
@@ -53,18 +53,33 @@ function forgeCard(t: ForgeTask): string {
 }
 
 export async function render(container: HTMLElement): Promise<void> {
-  const [b, agenda, forge] = await Promise.all([
+  // Раньше здесь стоял Promise.all: падение любого из трёх чтений стирало и
+  // доску, и агенду, и субагентов разом. Теперь деградация по карточкам —
+  // одна не прочиталась, две остальные владелец всё равно видит.
+  const [bR, agendaR, forgeR] = await Promise.allSettled([
     api<{ board?: string }>("/api/board"),
     api<Agenda>("/api/agenda"),
     api<ForgeTask[]>("/api/forge"),
   ]);
-  const activeForge = forge.filter((t) => t.status === "active" || (t.agents || []).some((a) => a.status === "running"));
+  if (bR.status === "rejected" && agendaR.status === "rejected" && forgeR.status === "rejected") {
+    throw agendaR.reason; // всё разом — это отказ связи, экран отказа общий
+  }
+  const card = <T>(r: PromiseSettledResult<T>, draw: (v: T) => string): string =>
+    r.status === "fulfilled" ? draw(r.value) : failHTML(r.reason, { retry: false });
+  const agendaHTML = card(agendaR, (agenda) =>
+    `<h3 class="section-title">Намеченное себе <span class="muted">активных ${agenda.active.length} из ${agenda.total}</span></h3>
+    <div class="card">${agenda.active.slice(0, 40).map(agendaRow).join("") || '<div class="muted">Пока ничего не намечено.</div>'}</div>`);
+  const forgeHTML = card(forgeR, (forge) => {
+    const activeForge = forge.filter((t) => t.status === "active" || (t.agents || []).some((a) => a.status === "running"));
+    return `<h3 class="section-title">Субагенты <span class="muted">задач ${forge.length}${activeForge.length ? " · живых " + activeForge.length : ""}</span></h3>
+    ${forge.map(forgeCard).join("") || '<div class="card muted">Субагентов сейчас нет.</div>'}`;
+  });
+  const boardHTML = card(bR, (b) => `<div class="card md">${md(b.board || "Доска пуста.")}</div>`);
   container.innerHTML = `<div class="center">
-    <h3 class="section-title">Намеченное себе <span class="muted">активных ${agenda.active.length} из ${agenda.total}</span></h3>
-    <div class="card">${agenda.active.slice(0, 40).map(agendaRow).join("") || '<div class="muted">Пока ничего не намечено.</div>'}</div>
-    <h3 class="section-title">Субагенты <span class="muted">задач ${forge.length}${activeForge.length ? " · живых " + activeForge.length : ""}</span></h3>
-    ${forge.map(forgeCard).join("") || '<div class="card muted">Субагентов сейчас нет.</div>'}
+    ${agendaHTML}
+    ${forgeHTML}
     <h3 class="section-title">Доска</h3>
-    <div class="card md">${md(b.board || "Доска пуста.")}</div>
+    ${boardHTML}
   </div>`;
+  bindFail(container, () => void render(container));
 }

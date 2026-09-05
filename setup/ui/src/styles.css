@@ -500,7 +500,10 @@ button:focus-visible {
 .explain-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 0 56px;
+  /* Отступ между рядами нужен с тех пор, как объяснений на сцене «Служба»
+     стало четыре: четвёртое переносится на второй ряд, и без зазора его
+     верхняя линейка ложилась вплотную к тексту над ней. */
+  gap: 34px 56px;
   max-width: 1240px;
 }
 
@@ -694,13 +697,188 @@ button:focus-visible {
   border-color: var(--accent);
 }
 
-/* служба */
+/* Ограда и служба — ДВА измерения, и на экране они не в одном ряду.
+   Ряд `.modes` — выбор одного из двух (песочница | интерактивный);
+   `.service-card` под ним — отдельная опция поверх любого из них, внутри неё
+   галочка нулевой сессии. Пока служба была третьей карточкой ряда, выбор
+   службы молча снимал ограду — см. шапку scenes/mode.ts. */
 
-.service-control {
+.modes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  max-width: 1240px;
+  align-items: start;
+}
+
+.mode-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding-top: 8px;
+  gap: 10px;
+  padding: 22px 24px 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: transparent;
+  transition: border-color 0.15s ease, background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.mode-card:hover {
+  border-color: var(--ink-3);
+}
+
+.mode-card[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.mode-card:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mode-title {
+  font: 400 28px/1.2 var(--serif);
+  font-variation-settings: "opsz" 28;
+  color: var(--ink);
+}
+
+.mode-text {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.mode-note {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+
+.mode-why {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--err);
+}
+
+.mode-why[hidden] {
+  display: none;
+}
+
+/* Опция службы. Не карточка выбора: у неё свой выключатель, и стоит она под
+   рядом оград, во всю его ширину. Галочка нулевой сессии — вторым столбцом
+   справа, а не под текстом: так она видимо ВНУТРИ опции и сцена умещается в
+   кадр 1080 без прокрутки (её тут нет). */
+.service-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 440px);
+  gap: 12px 40px;
+  align-items: start;
+  padding: 22px 24px 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  max-width: 1240px;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.service-card:has(.switch[aria-checked="true"]) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Опция недоступна не «просто серостью»: причину печатаем тут же (.mode-why),
+   и она остаётся в полную силу — гаснет только то, чего нельзя выбрать.
+   ⚠ Гасим ВНУТРЕННОСТИ, а не саму карточку: карточка — блок сцены, и ветер
+   держит на ней собственную inline-прозрачность (wind.settle). Правило
+   `opacity` на самой карточке не действует вовсе — проверено в превью. */
+.service-card:has(.switch:disabled) .switch,
+.service-card:has(.switch:disabled) .mode-text,
+.service-card:has(.switch:disabled) .mode-note {
+  opacity: 0.55;
+}
+
+.service-main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.switch:disabled {
+  cursor: default;
+}
+
+.mode-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 32px;
+  border-left: 1px solid var(--line);
+  min-width: 0;
+}
+
+.mode-extra[hidden] {
+  display: none;
+}
+
+.mode-extra .switch {
+  font-size: 16px;
+  text-align: left;
+}
+
+.mode-warn {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+
+/* Включённая нулевая сессия говорит словами самого харнесса и цветом тревоги. */
+.mode-warn.on {
+  color: var(--warn);
+}
+
+/* прежние поколения продукта: службы Vera/Frame, оставшиеся от прошлых версий */
+
+.legacy-list {
+  /* Служб бывает больше одной (Vera и Frame сразу): в два столбца они
+     умещаются в кадр, в столбик — нет, а кадр у сцены не прокручивается. */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 28px 56px;
+  max-width: 1240px;
+}
+
+.legacy-item {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.legacy-item h3 {
+  margin: 0 0 8px;
+  font: 400 26px/1.3 var(--serif);
+  font-variation-settings: "opsz" 24;
+  color: var(--ink);
+}
+
+.legacy-item p {
+  margin: 0 0 10px;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.legacy-path {
+  font-family: var(--mono);
+  font-size: 14.5px;
+  color: var(--ink-3);
+  word-break: break-all;
+}
+
+.legacy-item .install-actions {
+  margin-top: 4px;
 }
 
 /* установка */
@@ -815,6 +993,12 @@ button:focus-visible {
   margin-top: 12px;
 }
 
+/* display:flex перебивает [hidden]: без этого box.hidden = true не скрывал
+   список, и пустой контейнер оставался в потоке со своим margin-top. */
+.models[hidden] {
+  display: none;
+}
+
 .models-label {
   width: 100%;
   font: 500 12.5px/1.3 var(--sans);
@@ -842,4 +1026,20 @@ button:focus-visible {
   background: var(--accent);
   border-color: transparent;
   color: var(--accent-ink);
+}
+
+/* Подпись на сцене имени: имя агента его почерком — так оно встанет над его
+   комнатой в окне. Пока поле пустое — многоточие цветом подсказки. */
+.signature {
+  margin: 4px 0 0;
+  min-height: 52px;
+  font: 300 40px/1.25 var(--hand);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signature.empty {
+  color: var(--muted);
 }

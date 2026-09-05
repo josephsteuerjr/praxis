@@ -25,6 +25,24 @@ function url(path: string): string {
   return full + (path.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(cfg.key);
 }
 
+/**
+ * Отказ трубы вместе с КОДОМ, а не только словами.
+ *
+ * Без него окно не могло отличить «файл изменился под тобой» (409, code
+ * `conflict`) от любой другой неудачи записи и молча затирало правку агента —
+ * серверная защита стояла, а читателя у неё не было.
+ */
+export class ApiError extends Error {
+  status?: number;
+  code?: string;
+  constructor(message: string, status?: number, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 export type LiveEvent = { t: string; [k: string]: unknown };
 type Waiter = { res: (v: unknown) => void; rej: (e: Error) => void };
 
@@ -63,7 +81,7 @@ export function connect() {
     ready = true;
   };
   s.onmessage = (m) => {
-    let d: { hello?: string; event?: LiveEvent; id?: number; status?: number; body?: unknown; error?: string };
+    let d: { hello?: string; event?: LiveEvent; id?: number; status?: number; body?: unknown; error?: string; code?: string };
     try {
       d = JSON.parse(m.data);
     } catch {
@@ -81,7 +99,10 @@ export function connect() {
     if (w) {
       waiting.delete(d.id ?? -1);
       if (d.status && d.status < 400) w.res(d.body);
-      else w.rej(new Error((d.error || "") + " (" + d.status + ")"));
+      // Ответ без поля status давал владельцу литеральное « (undefined)».
+      // Код отказа несём отдельным полем: по нему окно отличает конфликт
+      // правок от любой другой неудачи.
+      else w.rej(new ApiError((d.error || "труба ответила отказом") + (d.status ? " (" + d.status + ")" : ""), d.status, d.code));
     }
   };
   s.onclose = s.onerror = () => {
@@ -132,7 +153,9 @@ export async function post<T = any>(path: string, body: unknown): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(await r.text());
+  // HTTP-половина кода не несёт — его заменяет статус: 409 у трубы означает
+  // ровно конфликт правок (deskapp.api_md_write → HTTPConflict).
+  if (!r.ok) throw new ApiError(await r.text(), r.status, r.status === 409 ? "conflict" : undefined);
   return r.json();
 }
 

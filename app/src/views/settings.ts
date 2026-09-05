@@ -1,9 +1,23 @@
 // Настройки экраном, а не файлом: имена, модель с живой проверкой, подписка
-// ChatGPT с состоянием входа, Telegram, служба с квитанцией, автозапуск, тема,
-// папка данных. Пишет helene.json через оболочку; применяется перезапуском.
+// ChatGPT с состоянием входа, Telegram, ограда рук со службой, монтирование,
+// автозапуск, тема, папка данных. Пишет helene.json через оболочку; применяется
+// перезапуском.
+//
+// ⚠⚠ ПРАВИЛО ЭТОГО ЭКРАНА: БЛОКИ КОНФИГА СЛИВАЮТСЯ, А НЕ ПЕРЕСОБИРАЮТСЯ.
+// Владелец правит helene.json ещё и руками, а харнесс кладёт туда своё — всё,
+// чего этот экран не знает, обязано пережить «Сохранить». Дважды пересборка
+// уже стоила живых данных: сперва `relay.instructions` (23 КБ чужого промпта
+// возвращались агенту), потом `sandbox.mounts` — вся работа по монтированию
+// обнулялась одним кликом. Поэтому объектные блоки пишутся только через
+// `keepBlock` (см. ниже), и на этом стоит тест app/test/config-blocks.test.mjs.
 import { api, cfg, inTauri, post, shell } from "../api";
+import { ANTHROPIC_PRESETS, BILLING_LABEL, clampEffort, effortPlan } from "../../../ui-kit/providers";
+import { keepBlock } from "../config";
 import QRCode from "qrcode";
-import { el, esc, q, toast } from "../lib";
+import { bindFail, el, esc, failHTML, humanError, q, toast } from "../lib";
+import { MODE_KEY, loadMode, modeCard, type ModeState } from "../mode";
+import { mountsCard, type LiveSandbox } from "../mounts";
+import { RELAY_PORT, relayBaseUrl, relayProbeUrl, newRelayKey } from "../relay";
 import { S } from "../state";
 
 interface Config {
@@ -11,10 +25,31 @@ interface Config {
   phone?: { enabled?: boolean };
   update?: { url?: string };
   owner?: { name?: string; room?: string };
-  model?: { framework?: string; base_url?: string; model?: string; key?: string; max_tokens?: number; reasoning_effort?: string };
-  relay?: { enabled?: boolean; port?: number };
+  model?: { framework?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string };
+  // `instructions` экран не показывает, но обязан сохранить: этой ручкой
+  // оболочка гасит 23 КБ чужого системного промпта Codex CLI перед конституцией
+  // (shell/src/main.rs, RELAY_INSTRUCTIONS). Раньше блок relay пересобирался
+  // заново, и ручка исчезала при первом же «Сохранить».
+  relay?: { enabled?: boolean; port?: number; instructions?: string; [k: string]: unknown };
   telegram?: { bot_token?: string; owner_id?: number | string; mode?: string; api_id?: string | number; api_hash?: string; phone?: string };
-  sandbox?: { enabled?: boolean; network?: boolean };
+  // ⚠ `mounts` и `mounts_denied` этот экран ТОЖЕ пишет (карточка «Монтирование»),
+  // а `[k: string]` держит и то, чего он не знает: блок обязан СЛИВАТЬСЯ при
+  // сохранении, иначе список смонтированных папок исчезает при первом же клике.
+  sandbox?: { enabled?: boolean; network?: boolean; mounts?: unknown; mounts_denied?: unknown; [k: string]: unknown };
+  // Режим агента — ОГРАДА РУК и только она: sandbox | interactive. Значение
+  // "service" здесь больше не пишется никем: служба — не режим, а опция поверх
+  // любой ограды (см. ../mode). Ключ именно `agent_mode` — `mode` в этом файле
+  // занят под местожительство харнесса (local | remote), и режим, записанный
+  // туда, выключает и окно, и службу.
+  // Форму `{name: …}` конфиг тоже допускает; окно пишет строкой.
+  agent_mode?: string | { name?: string; [k: string]: unknown };
+  // Блок службы. `session0` — доступ агента к правам системы (умолчание false),
+  // `firewall` — ставит ли служба правило брандмауэра для телефона (умолчание
+  // true). Это два РАЗНЫХ вопроса: на одном ключе кнопка «Телефон» под службой
+  // была мертва, пока владелец не отдаст агенту права системы. Оба лежат ровно
+  // там, где их читает служба (svc/src/main.rs::load_plan).
+  service?: { session0?: boolean; firewall?: boolean; [k: string]: unknown };
+  installed?: { service?: boolean; [k: string]: unknown };
   [k: string]: unknown;
 }
 
@@ -26,6 +61,17 @@ interface Loaded {
 }
 
 type Provider = "api" | "anthropic" | "chatgpt" | "local";
+
+/**
+ * Годный ли Telegram-id владельца. То же правило, что в визарде
+ * (setup/ui/src/scenes/keys.ts): только цифры. Плюс ноль — не id, а ровно то
+ * значение, которое окно молча клало вместо пустого поля: гейт харнесса при
+ * нём не пускает НИКОГО, и бот молчит на всё при зелёной шапке.
+ */
+function ownerIdOk(v: unknown): boolean {
+  const s = String(v ?? "").trim();
+  return /^\d+$/.test(s) && Number(s) > 0;
+}
 
 function providerOf(c: Config): Provider {
   if (c.relay?.enabled) return "chatgpt";
@@ -111,7 +157,10 @@ function card(title: string, ...children: Array<HTMLElement | string>): HTMLElem
 export async function render(container: HTMLElement): Promise<void> {
   if (!inTauri) {
     const center = el("div", "center");
-    center.append(themeCard(), phoneCard({}), el("div", "card muted", "Остальные настройки доступны в приложении: здесь окно смотрит на удалённый харнесс."));
+    // Тумблер телефона в вебе был пустышкой: черновик выбрасывался в мусор,
+    // кнопки «Сохранить» в этой ветке нет вовсе — человек щёлкал, и ничего не
+    // происходило, и никто не говорил, что не происходит.
+    center.append(themeCard(), el("div", "card muted", "Остальные настройки доступны в приложении Hélène на том компьютере, где живёт агент: здесь окно смотрит на удалённый харнесс."));
     container.replaceChildren(center);
     bindTheme(container);
     return;
@@ -120,8 +169,33 @@ export async function render(container: HTMLElement): Promise<void> {
   try {
     loaded = await shell<Loaded>("config_load");
   } catch (e) {
-    container.innerHTML = `<div class="empty"><b>Настройки не прочитались</b>${esc((e as Error).message)}</div>`;
+    container.innerHTML = failHTML(e);
+    bindFail(container, () => void render(container));
     return;
+  }
+  // Режим спрашиваем у трубы, а не разбираем конфиг сами: правила режима живут
+  // в одном месте (localharness/modes.py), и второй разбор здесь разошёлся бы с
+  // первым. Отказ трубы — не повод не открыть настройки: карточка скажет о нём
+  // словами, остальные настройки работают.
+  let modeLive: ModeState | null = null;
+  let modeFail: unknown = null;
+  try {
+    modeLive = await loadMode();
+  } catch (e) {
+    modeFail = e;
+  }
+  // Снимок устройства нужен карточке монтирования: просьбы агента лежат в его
+  // дереве (`memory/.state/mounts.json`), а приговор харнесса по каждой папке —
+  // только у него. Отказ снимка настройки не закрывает: карточка скажет, чего
+  // не знает. ⚠ Снимок пишется на СТАРТЕ харнесса (runner._write_anatomy), то
+  // есть он не свежее последнего запуска — обещать по нему «сейчас» нельзя.
+  let liveSandbox: LiveSandbox | null = null;
+  let anatomyFail: unknown = null;
+  try {
+    const snap = await api<{ sandbox?: LiveSandbox }>("/api/anatomy");
+    liveSandbox = snap && typeof snap.sandbox === "object" ? snap.sandbox || null : null;
+  } catch (e) {
+    anatomyFail = e;
   }
   const c = loaded.config;
   const draft: Config = JSON.parse(JSON.stringify(c));
@@ -130,6 +204,15 @@ export async function render(container: HTMLElement): Promise<void> {
   draft.model = draft.model || {};
   draft.telegram = draft.telegram || {};
   let provider = providerOf(draft);
+  const savedProvider = provider;
+  // Ключи провайдеров храним раздельно. Раньше в конфиге был один model.key, а
+  // черновик неактивной вкладки заполнялся пустотой: щелчок по чужой вкладке и
+  // «Сохранить» стирали боевой ключ прежнего провайдера — единственную копию на
+  // диске, без предупреждения и без отмены. Блок model.keys ядру не мешает:
+  // boot._brain_config читает только известные поля.
+  const keyStore: Record<string, string> = { ...(draft.model.keys || {}) };
+  if (draft.model.key) keyStore[savedProvider] = String(draft.model.key);
+  const keyOf = (p: Provider) => String(keyStore[p] || "");
   const center = el("div", "center");
 
   // --- имена
@@ -138,7 +221,13 @@ export async function render(container: HTMLElement): Promise<void> {
     field("Имя агента", String(draft.agent.name || ""), (v) => (draft.agent!.name = v)),
     field("Твоё имя", String(draft.owner.name || ""), (v) => (draft.owner!.name = v)),
   );
-  center.append(card("Имена", names, "Имя агента войдёт в подписи и в кадр; имя владельца нужно агенту, чтобы знать, чьё слово решает."));
+  // Настройки пишут только helene.json. Конституцию (data/soul/SOUL.md) не
+  // переписывает никто, кроме установщика, — а в ней старые имена остаются
+  // навсегда, и агент в своём K-слое читает именно их. Обещать обратное нельзя.
+  center.append(card("Имена", names,
+    "Имя агента войдёт в подписи и в снимок состояния; имя владельца нужно агенту, чтобы знать, чьё слово решает. " +
+    "Конституция агента этим не меняется: имена в ней он написал при рождении, и правит их только он сам или ты руками — " +
+    "раздел «Файлы», soul/SOUL.md."));
 
   // --- модель
   const model = el("div");
@@ -147,7 +236,7 @@ export async function render(container: HTMLElement): Promise<void> {
   const panes: Record<Provider, HTMLElement> = { api: el("div"), anthropic: el("div"), chatgpt: el("div"), local: el("div") };
   const items: Array<[Provider, string, string]> = [
     ["api", "Ключ API", "OpenAI и любой совместимый адрес"],
-    ["anthropic", "Anthropic API", "Anthropic, Z.ai и совместимые"],
+    ["anthropic", "Anthropic API", "Anthropic, Z.ai, MiniMax, Kimi и совместимые"],
     ["chatgpt", "Подписка ChatGPT", "вход в аккаунт через встроенное реле"],
     ["local", "Локальная модель", "Ollama или LM Studio на этом ПК"],
   ];
@@ -164,12 +253,17 @@ export async function render(container: HTMLElement): Promise<void> {
     b.addEventListener("click", () => {
       provider = value;
       syncPick();
+      // Ярлык «усилия» зависит от провайдера — на подписке пустое поле значит
+      // «рассуждение выключено», а не «решает модель».
+      syncEffort();
     });
     pick.append(b);
   }
   const apiGrid = el("div", "form-grid three");
   apiGrid.style.marginTop = "14px";
-  const apiDraft = { base_url: provider === "api" ? String(draft.model.base_url || "") : "https://api.openai.com/v1", model: provider === "api" ? String(draft.model.model || "") : "gpt-5.2", key: provider === "api" ? String(draft.model.key || "") : "" };
+  // gpt-5.2 реле не знает (SUPPORTED_MODELS её не содержит) и PLAN просил её
+  // убрать: подставленная вслепую, она уезжала в конфиг как имя несуществующей.
+  const apiDraft = { base_url: provider === "api" ? String(draft.model.base_url || "") : "https://api.openai.com/v1", model: provider === "api" ? String(draft.model.model || "") : "gpt-5.4", key: keyOf("api") };
   const apiModelField = field("Модель", apiDraft.model, (v) => (apiDraft.model = v), { mono: true });
   apiGrid.append(
     field("Адрес", apiDraft.base_url, (v) => (apiDraft.base_url = v), { mono: true }),
@@ -195,7 +289,7 @@ export async function render(container: HTMLElement): Promise<void> {
         });
       } catch (e) {
         probeOut.className = "receipt err";
-        probeOut.textContent = String(e);
+        probeOut.textContent = humanError(e).text;
       }
     }),
     probeOut,
@@ -203,16 +297,33 @@ export async function render(container: HTMLElement): Promise<void> {
   panes.api.append(apiGrid, probeRow, apiModels);
 
   // --- Anthropic-совместимые (Anthropic, Z.ai)
-  const anthDraft = { base_url: provider === "anthropic" ? String(draft.model.base_url || "") : "https://api.z.ai/api/anthropic", model: provider === "anthropic" ? String(draft.model.model || "") : "glm-5.3", key: provider === "anthropic" ? String(draft.model.key || "") : "" };
+  const anthDraft = { base_url: provider === "anthropic" ? String(draft.model.base_url || "") : "https://api.z.ai/api/anthropic", model: provider === "anthropic" ? String(draft.model.model || "") : "glm-5.3", key: keyOf("anthropic") };
   const anthGrid = el("div", "form-grid three");
   anthGrid.style.marginTop = "14px";
   const anthBase = field("Адрес", anthDraft.base_url, (v) => (anthDraft.base_url = v), { mono: true });
-  const anthModelField = field("Модель", anthDraft.model, (v) => (anthDraft.model = v), { mono: true });
+  const anthModelField = field("Модель", anthDraft.model, (v) => {
+    anthDraft.model = v;
+    // Шкала рассуждения зависит от модели (glm-* против остальных).
+    syncEffort();
+  }, { mono: true });
   anthGrid.append(anthBase, anthModelField, field("Ключ", anthDraft.key, (v) => (anthDraft.key = v), { type: "password", mono: true, placeholder: "sk-ant-…" }));
   const anthPresets = el("div", "actions");
   anthPresets.style.marginTop = "12px";
-  for (const [label, url] of [["Anthropic", "https://api.anthropic.com"], ["Z.ai (GLM)", "https://api.z.ai/api/anthropic"]] as Array<[string, string]>) {
-    anthPresets.append(button(label, "quiet", () => { anthDraft.base_url = url; setInput(anthBase, url); }));
+  // Кнопки провайдеров — из общей таблицы (ui-kit/providers.ts): адрес, модель
+  // по умолчанию и честная строка про план и рассуждение.
+  const presetNote = el("p", "field-hint", "");
+  presetNote.style.marginTop = "8px";
+  for (const preset of ANTHROPIC_PRESETS) {
+    anthPresets.append(button(preset.label, "quiet", () => {
+      anthDraft.base_url = preset.url;
+      setInput(anthBase, preset.url);
+      if (preset.model) {
+        anthDraft.model = preset.model;
+        setInput(anthModelField, preset.model);
+      }
+      presetNote.textContent = `${preset.label} — ${BILLING_LABEL[preset.billing]}. ${preset.note}`;
+      syncEffort();
+    }));
   }
   const anthModels = el("div", "models");
   anthModels.hidden = true;
@@ -225,30 +336,41 @@ export async function render(container: HTMLElement): Promise<void> {
         const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: anthDraft.base_url, key: anthDraft.key, framework: "anthropic" });
         anthOut.className = "receipt " + (r.ok ? "ok" : "err");
         anthOut.textContent = r.note;
-        renderModels(anthModels, r.models || [], anthDraft.model, (id) => { anthDraft.model = id; setInput(anthModelField, id); });
+        renderModels(anthModels, r.models || [], anthDraft.model, (id) => { anthDraft.model = id; setInput(anthModelField, id); syncEffort(); });
       } catch (e) {
         anthOut.className = "receipt err";
-        anthOut.textContent = String(e);
+        anthOut.textContent = humanError(e).text;
       }
     }),
     anthOut,
   );
-  panes.anthropic.append(anthGrid, anthPresets, anthModels, el("p", "field-hint", "Anthropic и Z.ai говорят на протоколе Anthropic Messages. Проверка спросит список моделей, если сервер его отдаёт."));
+  panes.anthropic.append(anthGrid, anthPresets, presetNote, anthModels, el("p", "field-hint", "Все эти провайдеры говорят на протоколе Anthropic Messages: кнопка подставляет адрес и модель, ключ — из кабинета провайдера. Проверка спросит список моделей, если сервер его отдаёт."));
 
   const relayRow = el("div", "actions");
   relayRow.style.marginTop = "14px";
   const relayOut = el("span", "receipt");
+  let relayAuthorized = false;
   const relayRefresh = async () => {
     try {
       const st = await shell<string>("relay_status");
-      relayOut.className = "receipt " + (st === "authorized" ? "ok" : "");
+      relayAuthorized = st === "authorized";
+      relayOut.className = "receipt " + (relayAuthorized ? "ok" : "");
+      // Реле читает учётные данные ОДИН раз, на старте: пока его не
+      // перезапустят, оно на каждый вызов отдаёт 503 login_required. Раньше
+      // здесь стояло зелёное «Вход выполнен», и агент всё равно молчал.
       relayOut.textContent =
-        st === "authorized" ? "Вход выполнен" : st === "pending" ? "Ждём вход в браузере. Повторное нажатие отменит прежнюю попытку." : "Вход ещё не выполнен";
+        relayAuthorized
+          ? "Вход выполнен — применится перезапуском"
+          : st === "pending" ? "Ждём вход в браузере. Повторное нажатие отменит прежнюю попытку." : "Вход ещё не выполнен";
       loginBtn.textContent = st === "pending" ? "Начать вход заново" : "Войти в ChatGPT";
+      relayRestart.hidden = !relayAuthorized;
     } catch (e) {
-      relayOut.textContent = String(e);
+      relayOut.className = "receipt err";
+      relayOut.textContent = humanError(e).text;
     }
   };
+  const relayRestart = button("Перезапустить сейчас", "quiet", () => dispatchEvent(new Event("frame-restart")));
+  relayRestart.hidden = true;
   let relayPoll = 0;
   const loginBtn = button("Войти в ChatGPT", "quiet", async () => {
     try {
@@ -260,10 +382,10 @@ export async function render(container: HTMLElement): Promise<void> {
         if (++tries > 100) window.clearInterval(relayPoll);
       }, 3000);
     } catch (e) {
-      toast(String(e));
+      toast("Вход не запустился: " + humanError(e).text);
     }
   });
-  relayRow.append(loginBtn, relayOut);
+  relayRow.append(loginBtn, relayRestart, relayOut);
   const chatgptDraft = { model: provider === "chatgpt" ? String(draft.model.model || "gpt-5.6-sol") : "gpt-5.6-sol" };
   const chatgptGrid = el("div", "form-grid two");
   chatgptGrid.style.marginTop = "14px";
@@ -278,16 +400,30 @@ export async function render(container: HTMLElement): Promise<void> {
       chatgptProbeOut.className = "receipt";
       chatgptProbeOut.textContent = "спрашиваю реле…";
       try {
-        const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: "http://127.0.0.1:5011/v1", key: String(draft.model?.key || ""), framework: "openai" });
-        chatgptProbeOut.className = "receipt " + (r.ok ? "ok" : "err");
-        chatgptProbeOut.textContent = r.ok ? r.note : `${r.note}. Реле поднимается вместе с программой после сохранения и перезапуска.`;
+        // Ключ сюда не отдаём: /v1/models у реле авторизацию не проверяет вовсе,
+        // а порт 5011 в этот момент может держать не наше реле — и боевой ключ
+        // OpenAI уехал бы чужому процессу заголовком Authorization.
+        // RELAY_PROBE_URL — единственное место, где «/v1» уместно: у реле есть
+        // GET /v1/models, но НЕТ POST /v1/chat/completions. Адрес мозга берётся
+        // из RELAY_BASE_URL того же модуля, чтобы эти двое не разошлись снова.
+        const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: relayProbeUrl(Number(draft.relay?.port) || RELAY_PORT), key: "", framework: "openai" });
+        // Ответ /v1/models доказывает только то, что процесс реле жив: ни вход в
+        // аккаунт, ни остаток лимита он не проверяет. Зелёное «моделей 6» при
+        // невыполненном входе и было механизмом «всё зелёное, агент молчит».
+        await relayRefresh();
+        chatgptProbeOut.className = "receipt " + (r.ok && relayAuthorized ? "ok" : r.ok ? "" : "err");
+        chatgptProbeOut.textContent = r.ok
+          ? relayAuthorized
+            ? `Реле живо, вход в ChatGPT выполнен. ${r.note}`
+            : `Реле живо, но вход в ChatGPT НЕ выполнен — агент будет молчать. Нажми «Войти в ChatGPT» выше. (${r.note})`
+          : `${r.note}. Реле поднимается вместе с программой после сохранения и перезапуска.`;
         renderModels(chatgptModels, r.models || [], chatgptDraft.model, (id) => {
           chatgptDraft.model = id;
           setInput(chatgptModelField, id);
         });
       } catch (e) {
         chatgptProbeOut.className = "receipt err";
-        chatgptProbeOut.textContent = String(e);
+        chatgptProbeOut.textContent = humanError(e).text;
       }
     }),
     chatgptProbeOut,
@@ -319,29 +455,43 @@ export async function render(container: HTMLElement): Promise<void> {
         });
       } catch (e) {
         localProbeOut.className = "receipt err";
-        localProbeOut.textContent = String(e);
+        localProbeOut.textContent = humanError(e).text;
       }
     }),
     localProbeOut,
   );
   panes.local.append(localGrid, localProbeRow, localModels);
-  // усилие рассуждения — отдельный селектор
+  // Усилие рассуждения — шкала ЗАВИСИТ ОТ ПРОВАЙДЕРА И МОДЕЛИ (ui-kit/providers.ts):
+  // окно показывает только те ступени, которые ядро действительно передаст, и
+  // говорит, что значит пустое поле именно здесь (на подписке — «выключено»,
+  // у Z.ai — серверный max, у остальных по протоколу Anthropic — ничего).
   let effort = String(draft.model.reasoning_effort || "");
   const effortRow = el("div", "models");
   effortRow.style.marginTop = "14px";
-  effortRow.append(el("span", "models-label", "Усилие рассуждения"));
-  for (const [value, label] of [["", "по умолчанию модели"], ["low", "low"], ["medium", "medium"], ["high", "high"], ["xhigh", "xhigh"]] as Array<[string, string]>) {
-    const chip = el("button", "model-chip", label);
-    chip.type = "button";
-    chip.setAttribute("aria-pressed", String(effort === value));
-    chip.addEventListener("click", () => {
-      effort = value;
-      for (const other of effortRow.querySelectorAll(".model-chip")) other.setAttribute("aria-pressed", String(other === chip));
-    });
-    effortRow.append(chip);
-  }
-  model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow);
+  const effortHint = el("p", "field-hint", "");
+  effortHint.style.marginTop = "8px";
+  const modelForEffort = () =>
+    provider === "anthropic" ? anthDraft.model : provider === "api" ? apiDraft.model : provider === "local" ? localDraft.model : chatgptDraft.model;
+  const syncEffort = () => {
+    const plan = effortPlan(provider, modelForEffort());
+    effort = clampEffort(provider, modelForEffort(), effort);
+    effortRow.replaceChildren(el("span", "models-label", "Усилие рассуждения"));
+    for (const { value, label } of plan.chips) {
+      const chip = el("button", "model-chip", label);
+      chip.type = "button";
+      chip.setAttribute("aria-pressed", String(effort === value));
+      chip.addEventListener("click", () => {
+        effort = value;
+        for (const other of effortRow.querySelectorAll(".model-chip")) other.setAttribute("aria-pressed", String(other === chip));
+      });
+      effortRow.append(chip);
+    }
+    if (!plan.chips.length) effortRow.append(el("span", "receipt", "ступень сюда не передаётся"));
+    effortHint.textContent = plan.hint;
+  };
+  model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint);
   syncPick();
+  syncEffort();
   center.append(card("Модель", model));
 
   // --- Telegram: бот или свой аккаунт агента
@@ -371,11 +521,27 @@ export async function render(container: HTMLElement): Promise<void> {
     });
     tgPick.append(b);
   }
-  const ownerField = field("Твой Telegram id", String(draft.telegram.owner_id || "") === "0" ? "" : String(draft.telegram.owner_id || ""), (v) => (draft.telegram!.owner_id = v), { mono: true, placeholder: "число, узнать у @userinfobot" });
+  // Предупреждение харнесса «telegram.owner_id не задан — ход не пойдёт ни от
+  // кого» (localharness/botapi.py) уходило только в helene.log, которого
+  // владелец не читает. Поднимаем его сюда, на глаза, ещё до «Сохранить».
+  const tgWarn = el("p", "receipt err");
+  const syncTgWarn = () => {
+    const hasToken = !!String(draft.telegram!.bot_token || "").trim();
+    tgWarn.hidden = !hasToken || ownerIdOk(draft.telegram!.owner_id);
+    tgWarn.textContent = "Токен есть, а твоего id нет: ход разрешён только владельцу, и без id бот будет молчать на всё. Узнать id: напиши @userinfobot — он ответит числом.";
+  };
+  const ownerField = field("Твой Telegram id", String(draft.telegram.owner_id || "") === "0" ? "" : String(draft.telegram.owner_id || ""), (v) => {
+    draft.telegram!.owner_id = v;
+    syncTgWarn();
+  }, { mono: true, placeholder: "число, узнать у @userinfobot" });
   const tg = el("div", "form-grid two");
   tg.style.marginTop = "14px";
-  tg.append(field("Токен бота", String(draft.telegram.bot_token || ""), (v) => (draft.telegram!.bot_token = v), { type: "password", mono: true, placeholder: "от @BotFather" }));
-  tgPanes.bot.append(tg, el("p", "field-hint", "Бот — вторая дверь к агенту. Без токена агент живёт только в окне."));
+  tg.append(field("Токен бота", String(draft.telegram.bot_token || ""), (v) => {
+    draft.telegram!.bot_token = v;
+    syncTgWarn();
+  }, { type: "password", mono: true, placeholder: "от @BotFather" }));
+  tgPanes.bot.append(tg, tgWarn, el("p", "field-hint", "Бот — вторая дверь к агенту. Без токена агент живёт только в окне."));
+  syncTgWarn();
   const acc = el("div", "form-grid three");
   acc.style.marginTop = "14px";
   acc.append(
@@ -422,7 +588,7 @@ export async function render(container: HTMLElement): Promise<void> {
       }
     } catch (e) {
       accOut.className = "receipt err";
-      accOut.textContent = String(e);
+      accOut.textContent = humanError(e).text;
     }
   };
   accRow.append(
@@ -442,56 +608,77 @@ export async function render(container: HTMLElement): Promise<void> {
   if (tgMode === "account" && draft.telegram.api_id) void accCall("status");
   center.append(card("Telegram", tgBox));
 
-  // --- песочница
+  // --- ограда рук (песочница | интерактивный) и ОТДЕЛЬНО от неё служба
+  //
+  // Карточка живёт отдельным файлом (../mode). Она же держит кнопки «Поставить
+  // службу» / «Снять службу» и две галочки службы: служба — не режим, а опция
+  // поверх любой ограды, и второй точки управления ею на экране нет. Ограду
+  // служба не снимает: ровно эта склейка стоила владельцу молча снятой
+  // песочницы.
   draft.sandbox = draft.sandbox || {};
+  // Галочки службы берём ИЗ ФАЙЛА, а не из ответа трубы: труба отдаёт
+  // действующие, а без установленной службы `session0` всегда false — писать по
+  // ней значило бы молча стирать выбор владельца при первом же «Сохранить».
+  const svcBlock = draft.service && typeof draft.service === "object" ? draft.service : {};
+  const storedService = {
+    session0: !!svcBlock.session0,
+    // Умолчание брандмауэра — ДА: ключа нет = служба ставит правило сама
+    // (modes.FIREWALL_DEFAULT). Прочитать его как false значило бы выключить
+    // владельцу кнопку «Телефон», которой он не касался.
+    firewall: svcBlock.firewall !== false,
+  };
+  const sandboxState = el("p", "field-hint");
+  const mode = modeCard(modeLive, modeFail, storedService, (_name, sandbox, title) => {
+    syncSandboxState(sandbox, title);
+    mounts.setFence(sandbox, title);
+  });
+  center.append(mode.el);
+
+  // --- песочница: сеть контейнера остаётся выбором владельца, ограду ставит режим
   const sb = el("div");
-  const sbToggle = toggle("Песочница для рук", draft.sandbox.enabled !== false, (v) => (draft.sandbox!.enabled = v));
   const sbNet = toggle("Сеть из shell", draft.sandbox.network !== false, (v) => (draft.sandbox!.network = v));
-  sb.append(sbToggle, sbNet);
-  center.append(card("Песочница", sb, "Shell агента работает в контейнере Windows без доступа к файлам вне папки Hélène; файловые руки — только внутри неё. Остальные руки (компьютер, проекты) ограда не трогает. Состояние видно на экране «Устройство». Применяется перезапуском."));
+  /**
+   * Строка состояния ограды — БЕЗ единого утверждения о том, что ограда накрывает.
+   *
+   * ⚠ Здесь стояла своя строка, и в ней была неправда: «Окна ограда не трогает:
+   * агент их видит и водит». Ограда до руки окон действительно не достаёт, но
+   * самой руки в поставке нет ни в одном режиме — это проверено по коду (задача
+   * C3) и снято из `modes.TEXTS` и `fence.WINDOWS_TRUTH`. На экране владельца
+   * выдумка пережила исправление ровно потому, что была копией.
+   *
+   * Поэтому второй копии тут нет и не будет: что именно накрывает ограда,
+   * написано ОДИН раз — в карточке «Режим» выше, словами `modes.TEXTS` прямо из
+   * трубы. Здесь только название выбранной ограды (тоже из трубы) и то, что
+   * делает соседний тумблер.
+   */
+  function syncSandboxState(on: boolean, title: string) {
+    const named = title ? `«${title}»` : "выбранный режим";
+    sandboxState.textContent = on
+      ? `Ограду ставит ${named} — что она накрывает, написано в карточке «Режим» выше. ` +
+        "Тумблер ниже решает, пустят ли команды агента в интернет из контейнера."
+      : `${title ? named : "Выбранный режим"} ограду не ставит: файлы и команды идут с твоими правами. ` +
+        "Тумблер ниже подействует только в песочнице.";
+  }
+  syncSandboxState(mode.name() ? mode.sandbox() : draft.sandbox.enabled !== false, mode.title());
+  sb.append(sandboxState, sbNet);
+  center.append(card("Песочница", sb, "Что вышло на самом деле — видно на экране «Система». Применяется перезапуском."));
 
-  // --- служба
-  const svc = el("div", "actions");
-  const svcOut = el("span", "receipt");
-  const svcRefresh = async () => {
-    try {
-      const st = await shell<string>("service_state");
-      svcOut.className = "receipt " + (st === "running" ? "ok" : "");
-      svcOut.textContent = st === "running" ? "Служба работает" : st === "stopped" ? "Служба поставлена, но не запущена" : "Службы нет";
-      installBtn.hidden = st !== "absent";
-      removeBtn.hidden = st === "absent";
-    } catch (e) {
-      svcOut.textContent = String(e);
-    }
-  };
-  const afterService = () => {
-    let tries = 0;
-    const poll = window.setInterval(() => {
-      void svcRefresh();
-      if (++tries > 10) clearInterval(poll);
-    }, 2500);
-  };
-  const installBtn = button("Поставить службу", "quiet", async () => {
-    try {
-      toast(await shell<string>("install_service"));
-      afterService();
-    } catch (e) {
-      toast(String(e));
-    }
-  });
-  const removeBtn = button("Снять службу", "quiet", async () => {
-    try {
-      toast(await shell<string>("remove_service"));
-      afterService();
-    } catch (e) {
-      toast(String(e));
-    }
-  });
-  svc.append(installBtn, removeBtn, svcOut);
-  void svcRefresh();
-  center.append(card("Служба Windows", "Служба запускает агента до входа в систему и держит его, пока компьютер включён. Windows один раз попросит права администратора.", svc));
+  // --- монтирование: папки владельца, открытые агенту сверх его дома
+  //
+  // Списка в окне не было вовсе: владелец правил `sandbox.mounts` руками, а
+  // просьбы агента копились в `data/memory/.state/mounts.json` и были видны
+  // только в анатомии. Карточка правит ЧЕРНОВИК; в файл всё уезжает общей
+  // кнопкой «Сохранить», как и остальные настройки.
+  const mounts = mountsCard(
+    draft.sandbox,
+    liveSandbox,
+    anatomyFail,
+    mode.name() ? mode.sandbox() : draft.sandbox.enabled !== false,
+    mode.title() || modeLive?.title || "",
+  );
+  center.append(mounts.el);
 
-  center.append(phoneCard(draft));
+  center.append(phoneCard(draft, !!c.phone?.enabled));
 
   // --- автозапуск
   const auto = el("div");
@@ -500,7 +687,7 @@ export async function render(container: HTMLElement): Promise<void> {
       await shell("autostart_set", { on: v });
       toast(v ? "Автозапуск включён" : "Автозапуск выключен");
     } catch (e) {
-      toast(String(e));
+      toast(humanError(e).text);
     }
   });
   shell<boolean>("autostart_get").then((v) => autoToggle.setAttribute("aria-checked", String(v))).catch(() => {});
@@ -514,7 +701,7 @@ export async function render(container: HTMLElement): Promise<void> {
   const data = el("div", "actions");
   data.append(
     el("span", "mono", loaded.tree),
-    button("Открыть папку", "quiet", () => void shell("open_path", { path: loaded.tree }).catch((e) => toast(String(e)))),
+    button("Открыть папку", "quiet", () => void shell("open_path", { path: loaded.tree }).catch((e) => toast(humanError(e).text))),
   );
   center.append(card("Данные агента", data, "Память, дневник, конституция и настройки лежат здесь. Перенос агента на другую машину — перенос этой папки вместе с программой."));
 
@@ -531,6 +718,14 @@ export async function render(container: HTMLElement): Promise<void> {
     })
     .catch(() => (ver.textContent = "версия видна в окне программы"));
   const updOut = el("span", "receipt");
+  // Кнопка создаётся один раз и переключается. Раньше её добавляли внутрь
+  // обработчика: три нажатия «Проверить обновления» — три кнопки «Скачать» в
+  // ряд, и она оставалась висеть даже рядом с «Это последняя версия».
+  let updUrl = "";
+  const dlBtn = button("Скачать", "primary", () => {
+    if (updUrl) void shell("open_path", { path: updUrl }).catch((e) => toast(humanError(e).text));
+  });
+  dlBtn.hidden = true;
   aboutRow.append(
     ver,
     button("Проверить обновления", "quiet", async () => {
@@ -543,15 +738,21 @@ export async function render(container: HTMLElement): Promise<void> {
         if (r.newer) {
           updOut.className = "receipt ok";
           updOut.textContent = `Есть версия ${r.latest}. ${r.notes || ""}`.trim();
-          if (r.url) aboutRow.append(button("Скачать", "primary", () => void shell("open_path", { path: r.url }).catch((e) => toast(String(e)))));
+          updUrl = r.url || "";
+          dlBtn.hidden = !updUrl;
         } else {
           updOut.textContent = `Это последняя версия (${r.current}).`;
+          updUrl = "";
+          dlBtn.hidden = true;
         }
       } catch (e) {
         updOut.className = "receipt err";
-        updOut.textContent = String(e);
+        updOut.textContent = humanError(e).text;
+        updUrl = "";
+        dlBtn.hidden = true;
       }
     }),
+    dlBtn,
     updOut,
   );
   const logsRow = el("div", "actions");
@@ -562,18 +763,18 @@ export async function render(container: HTMLElement): Promise<void> {
         toast("Логи собраны: " + p);
         await shell("reveal_path", { path: p });
       } catch (e) {
-        toast(String(e));
+        toast(humanError(e).text);
       }
     }),
     button("Открыть helene.log", "quiet", () => {
-      if (aboutInfo) void shell("open_path", { path: aboutInfo.log }).catch((e) => toast(String(e)));
+      if (aboutInfo) void shell("open_path", { path: aboutInfo.log }).catch((e) => toast(humanError(e).text));
     }),
   );
   about.append(
     aboutRow,
     field("Адрес обновлений", String(draft.update?.url || ""), (v) => (draft.update!.url = v), {
       mono: true,
-      placeholder: "https://api.github.com/repos/<владелец>/vera/releases/latest",
+      placeholder: "https://api.github.com/repos/<владелец>/helene/releases/latest",
       hint: "Адрес выпусков на GitHub (…/releases/latest) или свой JSON с полями version, url и notes. Программа только сообщает о новой версии и даёт ссылку, сама ничего не подменяет.",
     }),
     logsRow,
@@ -586,47 +787,156 @@ export async function render(container: HTMLElement): Promise<void> {
   save.append(
     button("Сохранить", "primary", async () => {
       const out: Config = JSON.parse(JSON.stringify(draft));
-      out.model = { ...(out.model || {}), framework: "openai" };
-      delete out.relay;
+      out.model = keepBlock(out.model, { framework: "openai" });
+      // Блок relay СЛИВАЕТСЯ, а не пересобирается: кроме enabled/port в нём
+      // живут ручки, которых этот экран не знает (relay.instructions), и
+      // `delete out.relay` стирал их при первом же «Сохранить».
+      const relayBlock = { ...(draft.relay || {}) };
+      const keys = { ...keyStore };
       if (provider === "api") {
         out.model.base_url = apiDraft.base_url.trim();
         out.model.model = apiDraft.model.trim();
         out.model.key = apiDraft.key.trim();
+        keys.api = out.model.key;
       } else if (provider === "local") {
         out.model.base_url = localDraft.base_url.trim();
         out.model.model = localDraft.model.trim();
-        out.model.key = "";
+        // Заглушка, а не пустая строка: ядро без ключа не создаёт клиента
+        // вообще (live/llm.py: `if not key: return None`) и агент молчит на
+        // каждый ход. Ollama и LM Studio Authorization игнорируют. Ровно это
+        // кладёт установщик (setup/src/install.rs, ветка "local"); пустая
+        // строка здесь была третьим расхождением двух писателей одного файла.
+        out.model.key = "local";
       } else if (provider === "anthropic") {
         out.model.framework = "anthropic";
         out.model.base_url = anthDraft.base_url.trim();
         out.model.model = anthDraft.model.trim();
         out.model.key = anthDraft.key.trim();
+        keys.anthropic = out.model.key;
       } else {
-        out.model.base_url = "http://127.0.0.1:5011/v1";
+        // БЕЗ «/v1»: клиент ядра приклеивает к base_url «/chat/completions», а
+        // у реле есть именно этот маршрут — /v1/chat/completions у него нет
+        // вовсе. Установщик пишет ровно этот адрес (setup/src/install.rs, тест
+        // relay_base_url_has_no_v1); окно возвращало «/v1» обратно, и первое же
+        // «Сохранить» уводило каждый ход в 404 при зелёной кнопке «Проверить».
+        // Порт — ИЗ КОНФИГА, не из константы: установщик мог выбрать не 5011
+        // (см. relayBaseUrl в ../relay). Константа здесь возвращала 5011 и
+        // уводила мозг в чужое реле при первом же «Сохранить».
+        const relayPort = Number(relayBlock.port) || RELAY_PORT;
+        out.model.base_url = relayBaseUrl(relayPort);
         out.model.model = chatgptDraft.model.trim() || "gpt-5.6-sol";
-        if (!String(out.model.key || "").startsWith("sk-frame-")) out.model.key = "sk-frame-" + Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2);
-        out.relay = { enabled: true, port: 5011 };
+        // Ключ петли к реле держим постоянным: при уходе с подписки и возврате
+        // здесь генерировался НОВЫЙ sk-frame-…, и живое реле, читавшее прежний
+        // при старте, начинало отвечать 401.
+        const relayKey = String(out.model.key || "").startsWith("sk-frame-")
+          ? String(out.model.key)
+          : keys.chatgpt && keys.chatgpt.startsWith("sk-frame-")
+            ? keys.chatgpt
+            : newRelayKey();
+        out.model.key = relayKey;
+        keys.chatgpt = relayKey;
+        out.relay = { ...relayBlock, enabled: true, port: relayPort };
       }
-      if (effort) out.model.reasoning_effort = effort;
+      // Не подписка: реле не поднимаем, но блок не сносим — иначе вместе с ним
+      // исчезнут ручки, которых этот экран не знает.
+      if (provider !== "chatgpt") {
+        if (Object.keys(relayBlock).length) out.relay = { ...relayBlock, enabled: false };
+        else delete out.relay;
+      }
+      // Ключи неактивных провайдеров переживают смену вкладки.
+      out.model.keys = keys;
+      // Чужая ступень не уезжает: у провайдера без селектора поле снимается.
+      const effortOut = clampEffort(provider, modelForEffort(), effort);
+      if (effortOut) out.model.reasoning_effort = effortOut;
       else delete out.model.reasoning_effort;
-      out.telegram = { ...(out.telegram || {}), owner_id: Number(String(out.telegram?.owner_id || "0").trim()) || 0, mode: tgMode };
-      out.sandbox = { enabled: draft.sandbox?.enabled !== false, network: draft.sandbox?.network !== false };
-      out.phone = { enabled: !!draft.phone?.enabled };
+      // Telegram: токен без числового id — молчащий бот, а не «почти готово».
+      // Гейт харнесса пускает ход только от владельца (telegram.allow_from),
+      // и при owner_id = 0 не проходит НИКТО: бот в окне числится включённым,
+      // шапка говорит «На связи», а на любое сообщение он молчит. Визард сюда
+      // не пускает (setup/ui/src/scenes/keys.ts) — окно молча клало ноль.
+      const ownerIdRaw = String(out.telegram?.owner_id ?? "").trim();
+      const botToken = String(out.telegram?.bot_token || "").trim();
+      if (botToken && !ownerIdOk(ownerIdRaw)) {
+        saveOut.className = "receipt err";
+        saveOut.textContent =
+          "Для Telegram нужен и твой id: число. Без него бот включится и будет молчать на всё — ход разрешён только владельцу. Узнать id: напиши @userinfobot в Telegram, он ответит числом.";
+        return;
+      }
+      out.telegram = keepBlock(out.telegram, { owner_id: ownerIdRaw ? Number(ownerIdRaw) || 0 : 0, mode: tgMode });
+      // Ограда — в `agent_mode`, галочки службы — в `service`. Ключ `mode`
+      // (местожительство харнесса: local | remote) не трогаем ни при каких
+      // обстоятельствах: режим, записанный туда, оставляет окно без харнесса, а
+      // службу — без старта.
+      //
+      // ⚠ `mode.name()` отдаёт ТОЛЬКО ограду: "sandbox" или "interactive".
+      // Слово "service" в этот ключ не пишется больше никогда — служба не режим,
+      // и запись её сюда как раз и снимала ограду молча.
+      const picked = mode.name();
+      if (picked) {
+        out[MODE_KEY] = picked;
+        // Две РАЗНЫЕ галочки, а не одна: `session0` — доступ агента к правам
+        // системы (умолчание нет), `firewall` — ставит ли служба правило для
+        // кнопки «Телефон» (умолчание да). На общем ключе кнопка «Телефон» под
+        // службой была мертва, пока владелец не отдаст агенту права системы.
+        out.service = keepBlock(out.service, { session0: mode.session0(), firewall: mode.firewall() });
+      }
+      // Ограду выставляет режим — той же раскладкой, что `modes.apply` делает
+      // перед `fence.install`. Пишем её здесь, а не оставляем руннеру, чтобы
+      // файл не противоречил сам себе между «Сохранить» и следующим стартом:
+      // владелец открывает helene.json и видит выбранную ограду и согласную с
+      // ней раскладку, а не расхождение, о котором харнесс потом напишет в
+      // журнал.
+      //
+      // ⚠⚠ БЛОК СЛИВАЕТСЯ. Здесь стояла пересборка `{ enabled, network }`, и она
+      // стирала `sandbox.mounts` и `sandbox.mounts_denied`: вся работа по
+      // монтированию — и список папок, и записанные отказы владельца — умирала
+      // при первом же «Сохранить», молча. Тот же класс, что был с `relay`.
+      out.sandbox = keepBlock(out.sandbox, {
+        enabled: picked ? mode.sandbox() : draft.sandbox?.enabled !== false,
+        network: draft.sandbox?.network !== false,
+        // Списки пишет карточка монтирования — она их и читала из этого же
+        // блока, так что здесь они не появляются из ниоткуда, а возвращаются.
+        mounts: mounts.mounts(),
+        mounts_denied: mounts.denied(),
+      });
+      out.phone = keepBlock(out.phone, { enabled: !!draft.phone?.enabled });
       out.setup_complete = true;
       try {
         await shell("config_save", { config: JSON.stringify(out) });
         saveOut.className = "receipt ok";
-        saveOut.textContent = "Сохранено. Чтобы применить, перезапусти программу.";
-        restartBtn.hidden = false;
+        // Под службой перезапуск ОКНА настройки не применит: службу конфиг
+        // читает один раз при своём старте. Раньше расписка обещала обратное.
+        let svc = "";
+        try {
+          svc = await shell<string>("service_state");
+        } catch {
+          // не смогли спросить — говорим общее
+        }
+        // Пустой ключ — самая частая причина «всё зелёное, агент молчит»:
+        // фраза состояния про него сказать не может, ключ в снимок не попадает.
+        const needKey = provider === "api" || provider === "anthropic";
+        const noKey = needKey && !String(out.model.key || "").trim()
+          ? " Ключ модели не задан — агент будет молчать."
+          : "";
+        // Хвост про режим — от карточки: она знает, что осталось сделать
+        // (поставить или снять службу), а расписка не имеет права молчать об этом.
+        const modeNote = mode.note();
+        if (svc === "running") {
+          saveOut.textContent = "Сохранено. Агента держит служба Windows: чтобы настройки применились, сними и поставь её заново (карточка «Режим» выше)." + noKey + modeNote;
+          restartBtn.hidden = true;
+        } else {
+          saveOut.textContent = "Сохранено. Чтобы применить, перезапусти программу." + noKey + modeNote;
+          restartBtn.hidden = false;
+        }
         S.agent = String(out.agent?.name || S.agent);
       } catch (e) {
         saveOut.className = "receipt err";
-        saveOut.textContent = String(e);
+        saveOut.textContent = humanError(e).text;
       }
     }),
     saveOut,
   );
-  const restartBtn = button("Перезапустить сейчас", "quiet", () => void shell("restart_self").catch((e) => toast(String(e))));
+  const restartBtn = button("Перезапустить сейчас", "quiet", () => dispatchEvent(new Event("frame-restart")));
   restartBtn.hidden = true;
   save.append(restartBtn);
   const saveCard = el("section", "card");
@@ -637,13 +947,21 @@ export async function render(container: HTMLElement): Promise<void> {
   bindTheme(container);
 }
 
-function phoneCard(draft: Config): HTMLElement {
+function phoneCard(draft: Config, savedEnabled = false): HTMLElement {
   draft.phone = draft.phone || {};
   const phone = el("div");
-  const phoneToggle = toggle("Разрешить подключение телефона по сети", !!draft.phone.enabled, (v) => (draft.phone!.enabled = v));
-  const phoneHint = el("p", "field-hint", "Труба начнёт слушать сеть, а не только эту машину; доступ с других устройств — только по ключу из QR. В той же Wi-Fi телефон достучится сразу. Из любой другой сети — через Tailscale: поставь его на компьютер и телефон, войди в один аккаунт, и QR возьмёт его адрес. Включение применяется перезапуском.");
+  const phoneToggle = toggle("Разрешить подключение телефона по сети", !!draft.phone.enabled, (v) => {
+    draft.phone!.enabled = v;
+    syncPhone();
+  });
+  // Честно про шифрование: соединение идёт открытым текстом по http://, и в
+  // общей Wi-Fi (кафе, отель, коворкинг) ключ устройства и вся переписка с
+  // агентом видны соседям. Прежняя подсказка обещала «доступ только по ключу»
+  // и про отсутствие шифрования молчала.
+  const phoneHint = el("p", "field-hint", "Труба начнёт слушать сеть, а не только эту машину. Внимание: соединение НЕ шифруется (обычный http). В чужой или общей Wi-Fi — кафе, отель, коворкинг — ключ телефона и переписка с агентом идут открытым текстом, их видно соседям по сети. Дома в своей сети это приемлемо; в любой другой пользуйся Tailscale: поставь его на компьютер и телефон, войди в один аккаунт, и QR даст его адрес. Включение применяется перезапуском.");
   const qrRow = el("div", "actions");
   qrRow.style.marginTop = "12px";
+  const qrWhy = el("span", "receipt");
   const qrOut = el("div", "qr-out");
   qrOut.hidden = true;
   const devicesBox = el("div", "devices");
@@ -661,46 +979,69 @@ function phoneCard(draft: Config): HTMLElement {
       const row = el("div", "device-row");
       row.append(el("span", "", `${d.name} · ${new Date(d.created).toLocaleDateString("ru-RU")}`));
       row.append(button("Отвязать", "quiet", async () => {
-        await post("/pair/revoke", { id: d.id }).catch((e) => toast(String(e)));
+        await post("/pair/revoke", { id: d.id }).catch((e) => toast(humanError(e).text));
         void drawDevices();
       }));
       devicesBox.append(row);
     }
   };
-  qrRow.append(
-    button("Показать QR", "quiet", async () => {
-      try {
-        const pair = await post<{ path: string; expires_in: number; uses: number }>("/pair/new", {});
-        let host = location.host;
-        let via = "";
-        if (inTauri) {
-          const port = new URL(cfg.base || "http://127.0.0.1:8094").port || "8094";
-          const ts = await shell<string | null>("tailscale_ip").catch(() => null);
-          const ip = ts || (await shell<string | null>("lan_ip").catch(() => null));
-          if (ip) host = `${ip}:${port}`;
-          via = ts
-            ? "Адрес из Tailscale: телефон с Tailscale в том же аккаунте достучится из любой сети."
-            : "Адрес в этой Wi-Fi: телефон должен быть в той же сети. Чтобы доставать отовсюду, поставь Tailscale на оба устройства.";
-        }
-        const url = `http://${host}${pair.path}`;
-        const svg = await QRCode.toString(url, { type: "svg", margin: 1, width: 240, color: { dark: "#262320", light: "#00000000" } });
-        qrOut.hidden = false;
-        qrOut.innerHTML = `<div class="qr">${svg}</div>
-          <div class="qr-text">
-            <p>Открой камеру телефона и наведи на код. Ссылка живёт десять минут и годится дважды.</p>
-            <p><b>iPhone:</b> страница откроется в Safari; нажми «Поделиться» → «На экран „Домой“». Второе открытие из значка допишет ключ, поэтому код и двухразовый.</p>
-            ${via ? `<p>${esc(via)}</p>` : ""}
-            <p class="mono qr-url">${esc(url)}</p>
-          </div>`;
-        if (inTauri) {
-          const fw = await shell<string>("firewall_allow", { port: Number(new URL(cfg.base || "http://127.0.0.1:8094").port || 8094) }).catch((e) => String(e));
-          toast(fw);
-        }
-      } catch (e) {
-        toast("QR не собрался: " + String(e));
+  const qrBtn = button("Показать QR", "quiet", async () => {
+    try {
+      const pair = await post<{ path: string; expires_in: number; uses: number }>("/pair/new", {});
+      const port = new URL(cfg.base || "http://127.0.0.1:8094").port || "8094";
+      // Оба адреса, а не выбор за владельца: Tailscale мог быть запущен для
+      // других дел, а телефон в тайлнет не добавлен — тогда QR со 100.x.y.z
+      // ведёт туда, куда телефон не дойдёт, и локальный адрес не предлагался
+      // никогда.
+      const addrs: Array<{ host: string; note: string }> = [];
+      if (inTauri) {
+        const ts = await shell<string | null>("tailscale_ip").catch(() => null);
+        const lan = await shell<string | null>("lan_ip").catch(() => null);
+        if (lan) addrs.push({ host: lan + ":" + port, note: "В этой Wi-Fi: телефон должен быть в той же сети." });
+        if (ts) addrs.push({ host: ts + ":" + port, note: "Через Tailscale: телефон с Tailscale в том же аккаунте достучится из любой сети." });
       }
-    }),
-  );
+      if (!addrs.length) addrs.push({ host: location.host, note: "" });
+      const blocks: string[] = [];
+      for (const a of addrs) {
+        const link = "http://" + a.host + pair.path;
+        // Белый фон модулей задан явно: карточка .qr и так белая, но так код
+        // остаётся читаемым камерой, даже если карточку когда-нибудь затемнят.
+        const svg = await QRCode.toString(link, { type: "svg", margin: 1, width: 240, color: { dark: "#262320", light: "#ffffff" } });
+        blocks.push(`<div class="qr-pair"><div class="qr">${svg}</div>
+          <div class="qr-text">${a.note ? `<p><b>${esc(a.note)}</b></p>` : ""}
+            <p class="mono qr-url">${esc(link)}</p></div></div>`);
+      }
+      qrOut.hidden = false;
+      qrOut.innerHTML = blocks.join("") +
+        `<div class="qr-text">
+          <p>Открой камеру телефона и наведи на код. Ссылка живёт десять минут и годится дважды.</p>
+          <p><b>iPhone:</b> страница откроется в Safari; нажми «Поделиться» → «На экран „Домой“». Второе открытие из значка допишет ключ, поэтому код и двухразовый.</p>
+        </div>`;
+      if (inTauri) {
+        const fw = await shell<string>("firewall_allow", { port: Number(port) }).catch((e) => humanError(e).text);
+        toast(fw);
+      }
+    } catch (e) {
+      qrOut.hidden = false;
+      qrOut.innerHTML = failHTML(e, { retry: false });
+      bindFail(qrOut);
+    }
+  });
+  // Кнопка не смотрела ни на тумблер, ни на то, был ли перезапуск: труба всё
+  // ещё слушала 127.0.0.1, владелец получал красивый QR на адрес, где никто не
+  // отвечает, а телефон обвинял в этом Wi-Fi.
+  const syncPhone = () => {
+    const on = !!draft.phone?.enabled;
+    qrBtn.disabled = !on || !savedEnabled;
+    qrWhy.className = "receipt";
+    qrWhy.textContent = !on
+      ? "Включи тумблер, сохрани и перезапусти — тогда труба начнёт слушать сеть."
+      : !savedEnabled
+        ? "Сохрани и перезапусти программу: пока труба слушает только эту машину, и QR вёл бы туда, где никто не отвечает."
+        : "";
+  };
+  qrRow.append(qrBtn, qrWhy);
+  syncPhone();
   phone.append(phoneToggle, phoneHint, qrRow, qrOut, devicesBox);
   void drawDevices();
   return card("Телефон", phone);

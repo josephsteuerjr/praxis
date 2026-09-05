@@ -24,6 +24,7 @@ import datetime as dt
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -36,12 +37,107 @@ def _append_jsonl(path: Path, row: dict) -> None:
         sink.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _path_lock(path: Path) -> threading.Lock:
+    """Замок на файл в пределах процесса: два потока не публикуют один файл разом."""
+    key = str(path)
+    with _LOCKS_GUARD:
+        lock = _LOCKS.get(key)
+        if lock is None:
+            lock = _LOCKS[key] = threading.Lock()
+        return lock
+
+
 def _write_json(path: Path, data: dict) -> None:
+    """Атомарная запись квитанции. Временное имя — СВОЁ у каждого писателя.
+
+    ⚠ Здесь стояло `".tmp-" + path.name` — одно имя на всех. Писателей у одного
+    файла двое и больше (поток приёма botapi и главный поток руннера пишут
+    group_context/<комната>.json на каждом сообщении; heartbeat и _set_busy пишут
+    .reader.json), и они затирали чужой недописанный файл: замер 4404 провала
+    os.replace и 535 опубликованных БИТЫХ json за 4 секунды. Битая квитанция
+    читателя = окно объявляет живой руннер мёртвым и предлагает перезапуск.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(".tmp-" + path.name)
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1),
-                   encoding="utf-8", newline="\n")
-    os.replace(tmp, path)
+    tmp = path.with_name(f".tmp-{os.getpid()}-{threading.get_ident()}-{path.name}")
+    with _path_lock(path):
+        _publish(tmp, path, data)
+
+
+def _publish(tmp: Path, path: Path, data: dict) -> None:
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1),
+                       encoding="utf-8", newline="\n")
+        # На Windows os.replace отказывает (WinError 5/32), пока файл открыт
+        # читателем — а читателей у квитанций двое (окно и телефон) и они
+        # опрашивают их постоянно. Короткие повторы, потом честная ошибка наверх.
+        for attempt in range(4):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 3:
+                    raise
+                time.sleep(0.03)
+    except BaseException:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _registry(tree: Path, stream: str, archive: Path, *,
+              participants: int = 2, topics: int = 0) -> None:
+    """Реестр комнаты для окна: сколько сообщений, когда последнее.
+
+    ⚠ Две правки против прежней версии.
+      1. Ошибка чтения архива писала В РЕЕСТР НОЛЬ поверх верных чисел: окно
+         показывало комнату с нулём сообщений и роняло её в конец списка. Теперь
+         при ошибке реестр не трогается вовсе — прежние числа честнее нуля.
+      2. Счёт шёл полным перечитыванием файла на КАЖДОМ сообщении. Считаем
+         приращением от прошлой расписки, а перечитываем только когда сверить
+         не с чем (первая запись, файл усох, реестра нет).
+    """
+    try:
+        stat = archive.stat()
+    except OSError as exc:
+        log.warning("реестр комнаты %s не обновлён (архив не читается): %s", stream, exc)
+        return
+    path = tree / "memory" / ".state" / "group_context" / (str(stream) + ".json")
+    prev: dict = {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            prev = loaded
+    except (OSError, ValueError):
+        prev = {}
+    count = -1
+    try:
+        if prev.get("archive") and int(prev.get("archive_size") or 0) < stat.st_size:
+            count = int(prev.get("message_count") or 0) + 1
+    except (TypeError, ValueError):
+        count = -1
+    if count < 0:
+        try:
+            with archive.open(encoding="utf-8", errors="replace") as src:
+                count = sum(1 for _ in src)
+        except OSError as exc:
+            log.warning("реестр комнаты %s не обновлён: %s", stream, exc)
+            return
+    try:
+        _write_json(path, {"peer_id": str(stream),
+                           "archive": "memory/groups/" + str(stream) + ".jsonl",
+                           "message_count": count,
+                           "participant_count": int(participants),
+                           "topic_count": int(topics),
+                           "archive_mtime_ns": stat.st_mtime_ns,
+                           "archive_size": stat.st_size})
+    except OSError as exc:
+        log.warning("реестр комнаты %s не записался: %s", stream, exc)
 
 
 class Desk:
@@ -59,31 +155,31 @@ class Desk:
 
     # ------------------------------------------------------------- запись
     def archive(self, text: str, *, outgoing: bool, now: dt.datetime | None = None,
-                sender: str = "") -> None:
+                sender: str = "", system: bool = False) -> None:
         """Лента комнаты в её формате: memory/groups/<поток>.jsonl + реестр состояния.
 
-        Пульт читает комнаты именно отсюда (deskd.readers.chats/chat_tail), а её
-        `group_context` — из того же архива. Один файл на обоих читателей.
+        Пульт читает комнаты именно отсюда (deskd.readers.chats/chat_tail).
+
+        ⚠ Здесь стояло обещание «а её `group_context` — из того же архива, один файл
+        на обоих читателей». Оно неверно: её `group_context` читает
+        `memory/groups/<слаг>/archive.jsonl` (live/group_context.py:104), то есть
+        ДРУГОЙ путь. Обещание снято; сама рука честно отвечает про эту комнату через
+        подмену в `install` ниже.
+
+        `sender_name` пишется и у ИСХОДЯЩИХ строк: имя агента правится в настройках,
+        а без подписи в строке вся прошлая переписка задним числом становилась
+        сказанной новым именем — и в окне, и в ленте, которую читает модель.
         """
         stamp = (now or dt.datetime.now(dt.timezone.utc)).isoformat(timespec="seconds")
-        row = {"timestamp": stamp, "outgoing": bool(outgoing), "text": str(text)}
-        if not outgoing:
-            row["sender_name"] = sender or self.speaker
+        row = {"timestamp": stamp, "outgoing": bool(outgoing), "text": str(text),
+               "sender_name": (self.agent_name if outgoing else (sender or self.speaker))}
+        if system:
+            # Служебная плашка продукта, а не слово агента: окно её показывает,
+            # память жизни (и значит кадр модели) её не получает.
+            row["system"] = True
         archive = self.tree / "memory" / "groups" / (self.stream + ".jsonl")
         _append_jsonl(archive, row)
-        try:
-            stat = archive.stat()
-            with archive.open(encoding="utf-8") as src:
-                count = sum(1 for _ in src)
-        except OSError:
-            stat, count = None, 0
-        _write_json(self.tree / "memory" / ".state" / "group_context"
-                    / (self.stream + ".json"),
-                    {"peer_id": self.stream,
-                     "archive": "memory/groups/" + self.stream + ".jsonl",
-                     "message_count": count, "participant_count": 2, "topic_count": 0,
-                     "archive_mtime_ns": stat.st_mtime_ns if stat else 0,
-                     "archive_size": stat.st_size if stat else 0})
+        _registry(self.tree, self.stream, archive)
 
     def life(self, text: str, *, direction: str, actor: str, source_id: str,
              now: dt.datetime | None = None) -> None:
@@ -107,8 +203,13 @@ class Desk:
     # ------------------------------------------------------------- чтение
     def rows(self, limit: int = 200) -> list[dict]:
         archive = self.tree / "memory" / "groups" / (self.stream + ".jsonl")
+        # ⚠ errors="replace" — не косметика. Строгий декодер бросал
+        # UnicodeDecodeError (подкласс ValueError, а не OSError) мимо этого
+        # except, и ОДИН битый байт в архиве глушил агента навсегда: каждое
+        # следующее сообщение владельца съедалось падением хода, а окно
+        # показывало чат целым — оно читает тот же файл с заменой.
         try:
-            with archive.open(encoding="utf-8") as src:
+            with archive.open(encoding="utf-8", errors="replace") as src:
                 lines = src.readlines()[-max(1, int(limit)):]
         except OSError:
             return []
@@ -123,27 +224,46 @@ class Desk:
         return out
 
     def lines(self, limit: int = 200) -> list[str]:
-        """Лента строками «Имя: текст» — тот же вид, в каком её видит живой раннер."""
+        """Лента строками «Имя: текст» — тот же вид, в каком её видит живой раннер.
+
+        Имя берётся ИЗ СТРОКИ архива, текущее — только для старых строк без него.
+        Иначе переименование агента в настройках переписывало авторство всей
+        прошлой переписки, включая ход, где он представился прежним именем.
+
+        Служебные плашки продукта (`system`) в ленту модели не идут: их пишет
+        харнесс, а не агент, и подписаны они не им.
+        """
         out = []
         for row in self.rows(limit):
-            who = self.agent_name if row.get("outgoing") else (row.get("sender_name")
-                                                               or self.speaker)
+            if row.get("system"):
+                continue
+            who = str(row.get("sender_name") or "").strip() or (
+                self.agent_name if row.get("outgoing") else self.speaker)
             text = str(row.get("text") or "").strip()
             if text:
                 out.append(f"{who}: {text}")
         return out
 
     # ------------------------------------------------------------ доставка
-    def deliver(self, text: str, *, source_id: str = "", label: str = "") -> str:
+    def deliver(self, text: str, *, source_id: str = "", label: str = "",
+                system: bool = False) -> str:
         """Её слово доехало до окна. Возвращаем расписку в том же виде, что транспорт.
 
         Расписка — не косметика: рука `reply` дописывает к ней подсказку про `end_turn`,
         а `send_message` отличает по типу отказ от квитанции. Пустая или невнятная
         расписка сделала бы её ход слепым к тому, состоялась ли отправка.
+
+        `system=True` — плашка харнесса («⚠ ход не состоялся», «⏸ ход приостановлен»).
+        ⚠ Раньше они шли этим же путём как ЕЁ СЛОВО: в память жизни ложилось, что
+        агент сказал «⚠ ход не состоялся», и на следующем ходу модель читала это
+        своей репликой (а recall — своей мыслью). Плашка теперь живёт только в
+        окне: владелец её видит, память агента — нет.
         """
         now = dt.datetime.now(dt.timezone.utc)
         body = str(text or "")
-        self.archive(body, outgoing=True, now=now)
+        self.archive(body, outgoing=True, now=now, system=system)
+        if system:
+            return f"Показано в окне → {label or self.title} (плашка продукта)"
         self.life(body, direction="out", actor=self.agent_name,
                   source_id=source_id or f"deliver-{int(time.time() * 1000)}", now=now)
         self.sent.append(body)
@@ -151,6 +271,52 @@ class Desk:
         # адресат один и тот же человек, безадресное «Отправила → владелец» позволило
         # ей честно поверить, что слово ушло в Telegram, когда оно легло в окно.
         return f"Отправлено → {label or self.title} (окно Frame, id {len(self.sent)})"
+
+
+def _honest_group_context(agent_mod, desk: Desk) -> None:
+    """Рука ориентирования в комнате не должна врать про этот продукт.
+
+    Её `group_context` читает каноническую раскладку дерева —
+    `memory/groups/<слаг>/archive.jsonl` (live/group_context.py:104), — а продукт
+    пишет переписку одним файлом `memory/groups/<id>.jsonl`. В личке (в том числе
+    в окне) рука честно отказывает сама («доступен только внутри текущей группы»),
+    а вот в ГРУППЕ Telegram она отвечала «0 сообщений, 0 тем» о живой комнате и
+    заводила рядом пустую карту MAP.md.
+
+    Подменяем реализацию (тот же приём, что у песочницы с TOOL_IMPL): вместо
+    выдуманного нуля — правда о раскладке и настоящее число сообщений.
+    """
+    impl = getattr(agent_mod, "TOOL_IMPL", None)
+    if not isinstance(impl, dict) or "group_context" not in impl:
+        return
+    original = impl["group_context"]
+
+    def _group_context(action: str = "context", query: str = "",
+                       topic_id: int = 0, limit: int = 20) -> str:
+        ctx = None
+        try:
+            ctx = agent_mod._TURN_CHANNEL.get()
+        except Exception:
+            ctx = None
+        if ctx is None or getattr(ctx, "is_dm", True):
+            return original(action=action, query=query, topic_id=topic_id, limit=limit)
+        chat_id = str(getattr(ctx, "chat_id", "") or "")
+        count = 0
+        try:
+            path = (desk.tree / "memory" / ".state" / "group_context"
+                    / (chat_id + ".json"))
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            count = int(loaded.get("message_count") or 0) if isinstance(loaded, dict) else 0
+        except (OSError, ValueError, TypeError):
+            count = 0
+        return ("Карты комнаты в этом продукте нет: переписка лежит одним архивом "
+                f"memory/groups/{chat_id}.jsonl, а не в раскладке group_context. "
+                f"Сообщений в комнате: {count}. Читай ленту рукой fetch_context "
+                "или read_chat — они читают тот самый архив.")
+
+    _group_context.__name__ = getattr(original, "__name__", "tool_group_context")
+    _group_context.__doc__ = getattr(original, "__doc__", "")
+    impl["group_context"] = _group_context
 
 
 def install(agent_mod, desk: Desk) -> None:
@@ -220,6 +386,8 @@ def install(agent_mod, desk: Desk) -> None:
         if ref in (desk.stream, desk.title, desk.speaker):
             return desk.stream
         return None
+
+    _honest_group_context(agent_mod, desk)
 
     hooks["reply"] = _reply
     hooks["send_message"] = _send_message

@@ -1,7 +1,8 @@
 // Устройство: как этот агент работает, простыми словами, с разбором живого
 // хода и живым списком рук — снимок кода, не пересказ.
 import { api } from "../api";
-import { esc, fmtN, fmtTime, md, q } from "../lib";
+import { esc, fmtN, fmtTime, md, q, safeRender } from "../lib";
+import { loadMode, type ModeState } from "../mode";
 import { S } from "../state";
 
 const INTRO: Array<[string, string]> = [
@@ -57,14 +58,75 @@ interface Anatomy {
   agent_name?: string;
   model?: { model?: string; framework?: string };
   transports?: string[];
-  sandbox?: { enabled?: boolean; container?: boolean; reason?: string };
+  // `windows` — строка самой ограды (`fence.WINDOWS_TRUTH`): что на самом деле
+  // с управлением окнами. Раньше про окна на экранах владельца стояла
+  // выдумка окна, и она пережила исправление в харнессе именно потому, что
+  // была копией. Здесь копии нет — только то, что прислал снимок.
+  sandbox?: { enabled?: boolean; container?: boolean; reason?: string; windows?: string };
   tools?: Array<{ name: string; desc?: string; params?: string[]; required?: string[] }>;
   skills_index?: string;
   knobs?: Record<string, unknown>;
 }
 
+/**
+ * Расход за сутки. Труба считает calls_day/cache_day на каждый запрос пульса, а
+ * окно их не показывало нигде — владелец-непрограммист не мог внутри программы
+ * ответить «сколько я сегодня потратил». Это ещё не полный счёт (токены по
+ * ролям и моделям лежат в memory/.state/usage.json, ручки на них у трубы нет),
+ * но это честные числа вместо молчания.
+ */
+function spendHTML(p: { calls_day?: number | null; cache_day?: number | null; cache_day_hours?: number; cache_now?: number | null } | null): string {
+  if (!p || p.calls_day == null) return "";
+  const parts = [`вызовов модели: <b>${fmtN(p.calls_day)}</b>`];
+  if (p.cache_day != null) parts.push(`доля кэша: <b>${p.cache_day}%</b>`);
+  if (p.cache_now != null) parts.push(`сейчас: <b>${p.cache_now}%</b>`);
+  const win = p.cache_day_hours ? ` за последние ${fmtN(p.cache_day_hours)} ч` : " за сутки";
+  return `<h3 class="section-title">Расход${esc(win)}</h3>
+    <div class="card">${parts.join(" · ")}
+      <div class="muted" style="margin-top:6px">Чем больше доля кэша, тем дешевле ход: K, E и A стабильны байт в байт, провайдер считает их как префикс.</div>
+    </div>`;
+}
+
+/**
+ * Режим агента — рядом с песочницей, потому что это про одно и то же: в каких
+ * правах живёт агент. Тексты приходят готовыми из `/api/mode`; свой пересказ
+ * здесь означал бы, что в Настройках владелец выбирает одно, а тут читает другое.
+ * Снимок анатомии говорит, что ВЫШЛО (ограда встала или нет), режим — что было
+ * ВЫБРАНО; расхождение этих двоих и есть то, что стоит увидеть.
+ */
+function modeHTML(m: ModeState | null): string {
+  if (!m || !m.name) return "";
+  const svc = m.service_installed === null ? "спросить не удалось" : m.service_installed ? "установлена" : "не установлена";
+  const facts = [
+    `ограда песочницы: ${m.sandbox ? "включена" : "выключена"}`,
+    `служба Windows: ${svc}`,
+    // Две галочки службы — разные вопросы, и на экране они стоят порознь.
+    // `session0` — права системы агенту; `firewall` — правило брандмауэра для
+    // кнопки «Телефон». Про брандмауэр говорим только когда он ВЫКЛЮЧЕН: это
+    // выбор владельца против умолчания, и по нему кнопка «Телефон» под службой
+    // ведёт себя иначе.
+    m.session0 ? "нулевая сессия разрешена" : "",
+    m.firewall_set === false ? "правило брандмауэра служба не ставит" : "",
+    m.legacy_service ? "в файле режимом записана служба — старая запись, ограда выведена отдельно" : "",
+    m.source ? `источник: ${m.source}` : "",
+  ].filter(Boolean);
+  const warn = (m.session0 && m.session0_warning ? [m.session0_warning] : []).concat(m.notes);
+  return `<h3 class="section-title">Режим</h3>
+    <div class="card">
+      <p><b>${esc(m.title)}</b> — ${esc(m.text)}</p>
+      <p class="muted">${esc(facts.join(" · "))}</p>
+      ${warn.map((n) => `<p class="receipt err">${esc(n)}</p>`).join("")}
+      <p class="muted">Сменить режим — «Настройки», карточка «Режим».</p>
+    </div>`;
+}
+
 export async function render(container: HTMLElement): Promise<void> {
-  const a = await api<Anatomy>("/api/anatomy");
+  const [aR, pR, mR] = await Promise.allSettled([api<Anatomy>("/api/anatomy"), api("/api/pulse"), loadMode()]);
+  if (aR.status === "rejected") throw aR.reason;
+  const a = aR.value;
+  const spend = spendHTML(pR.status === "fulfilled" ? pR.value : null);
+  const modeBox = modeHTML(mR.status === "fulfilled" ? mR.value : null);
+  const modeName = mR.status === "fulfilled" && mR.value.name ? `режим: <b>${esc(mR.value.title)}</b> · ` : "";
   const tools = a.tools || [];
   const intro = INTRO.map(
     ([h, t]) => `<details class="fold" open><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`,
@@ -73,11 +135,11 @@ export async function render(container: HTMLElement): Promise<void> {
     ([h, t]) => `<details class="fold"><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`,
   ).join("");
   const meta = tools.length
-    ? `<p class="muted">Транспорты: ${esc((a.transports || []).join(" + "))} · песочница: ${esc(a.sandbox ? (a.sandbox.container ? "shell в контейнере" : a.sandbox.enabled ? "без контейнера" : "выключена") : "?")}${a.sandbox?.reason ? " · " + esc(a.sandbox.reason) : ""} · мозг: <b>${esc(a.model?.model || "?")}</b> (${esc(a.model?.framework || "?")})
+    ? `<p class="muted">Транспорты: ${esc((a.transports || []).join(" + "))} · ${modeName}песочница: ${esc(a.sandbox ? (a.sandbox.container ? "shell в контейнере" : a.sandbox.enabled ? "без контейнера" : "выключена") : "?")}${a.sandbox?.reason ? " · " + esc(a.sandbox.reason) : ""}${a.sandbox?.windows ? " · " + esc(a.sandbox.windows) : ""} · мозг: <b>${esc(a.model?.model || "?")}</b> (${esc(a.model?.framework || "?")})
        · рук предложено: <b>${tools.length}</b> · снято ${esc(fmtTime(a.written_at))}. Живой список сборщика, не пересказ.</p>`
     : '<p class="muted">Снимка ещё нет: руннер пишет его при старте.</p>';
   container.innerHTML = `<div class="center">
-    ${meta}${intro}
+    ${meta}${modeBox}${spend}${intro}
     <h3 class="section-title">Разбор живого хода</h3>
     <p class="muted">Не пример из документации, а последний настоящий ход этого агента, шаг за шагом, с пояснением каждого шага.</p>
     <details class="fold" id="lesson-box"><summary><b>Разобрать последний ход</b></summary><div class="fold-body ev-steps" id="lesson-steps"></div></details>
@@ -90,7 +152,11 @@ export async function render(container: HTMLElement): Promise<void> {
   </div>`;
   const lessonBox = q<HTMLDetailsElement>("#lesson-box", container);
   lessonBox.addEventListener("toggle", () => {
-    if (lessonBox.open) void renderLesson(q<HTMLElement>("#lesson-steps", container));
+    // Голый `void` оставлял складку в «ищу последний завершённый ход…» навсегда.
+    if (lessonBox.open) {
+      const box = q<HTMLElement>("#lesson-steps", container);
+      safeRender(box, () => renderLesson(box));
+    }
   });
   const filter = container.querySelector<HTMLInputElement>("#tool-filter");
   if (filter) {

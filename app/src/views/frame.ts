@@ -1,7 +1,7 @@
 // Кадр: живые слепки того, что видит модель, по потокам; чтение целиком,
 // дифф соседних захватов (где порвался префикс кэша) и метрики.
 import { api } from "../api";
-import { esc, fmtN, md, q } from "../lib";
+import { esc, fmtN, md, q, safeRender } from "../lib";
 import { S } from "../state";
 
 interface Stream {
@@ -33,7 +33,7 @@ export async function render(container: HTMLElement): Promise<void> {
   for (const el of container.querySelectorAll<HTMLElement>(".item[data-stream]")) {
     el.addEventListener("click", () => {
       S.stream = el.dataset.stream!;
-      void render(container);
+      safeRender(container, () => render(container));
     });
   }
   await renderStream(container);
@@ -58,10 +58,13 @@ async function renderStream(container: HTMLElement) {
     </div>
     <div id="frame-out"></div>`;
   if (captures.length > 1) q<HTMLSelectElement>("#cap-old", main).selectedIndex = 1;
-  q("#do-diff", main).addEventListener("click", () => void doDiff(main));
-  q("#do-view", main).addEventListener("click", () => void doView(main));
-  q("#do-metrics", main).addEventListener("click", () => void doMetrics(main));
-  q("#cap-new", main).addEventListener("change", () => void doView(main));
+  // Раньше все четыре были голым `void`: при отказе кнопки навсегда оставляли
+  // «читаю кадр…», «считаю дифф…», «читаю метрики…» — без ошибки и без выхода.
+  const out = () => q<HTMLElement>("#frame-out", main);
+  q("#do-diff", main).addEventListener("click", () => safeRender(out(), () => doDiff(main)));
+  q("#do-view", main).addEventListener("click", () => safeRender(out(), () => doView(main)));
+  q("#do-metrics", main).addEventListener("click", () => safeRender(out(), () => doMetrics(main)));
+  q("#cap-new", main).addEventListener("change", () => safeRender(out(), () => doView(main)));
   await doView(main);
 }
 

@@ -40,9 +40,19 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import boot
 import botapi
+import broker
+import modes
 import transport
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+# Уровень лога — ручкой, а не константой: две главные глухоты продукта (квитанция
+# читателя не пишется; сторож живых файлов сдох) диагностировались строками
+# log.debug при жёстко прибитом INFO, то есть в собранном владельцем архиве логов
+# от них не оставалось ни строки.
+_LOG_LEVEL = (os.environ.get("HELENE_LOG") or "INFO").strip().upper()
+if _LOG_LEVEL not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+    _LOG_LEVEL = "INFO"
+logging.basicConfig(level=_LOG_LEVEL,
+                    format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("frame.runner")
 
 STREAM = "window"          # комната окна: ключ архива memory/groups/window.jsonl
@@ -58,6 +68,7 @@ _title = "Hélène"
 _agent_name = "Агент"
 _tree: Path | None = None
 _busy: dict = {"busy": False, "run": "", "since": 0.0}   # для единой модели состояния
+_mode: dict = {}       # картина режима (modes.resolve) — едет в анатомию
 _deliver_unspoken = True   # agent.deliver_unspoken в helene.json; см. _turn_in_window
 
 
@@ -153,12 +164,26 @@ def _last_n() -> int:
 # Идёт в блок runtime continuity кадра через параметр orient, дерево не правится.
 _WINDOW_ORIENT = ("Это окно Hélène на компьютере владельца. Слово владельцу уходит "
                   "ТОЛЬКО рукой reply; текст без руки — заметка себе, до окна он не дойдёт.")
+# Кадр дерева обещает агенту автокоммит и автооткат правок в git. В поставке git
+# нет вовсе, и обещание — ложь ровно там, где на неё опираются, решаясь править
+# свои файлы. Правку кадра дерева делать нельзя, а сказать правду можно здесь:
+# ориентир едет в тот же блок runtime continuity.
+_NO_GIT_ORIENT = ("В этой сборке нет git: автокоммита правок и автоотката при падении "
+                  "НЕТ. Правка файла необратима — снимай копию сама, если жалко.")
+_ORIENT_EXTRA = ""      # заполняется на старте по факту (см. main)
+
+
+def _orient(chat_id: str) -> str:
+    bits = [_WINDOW_ORIENT] if chat_id == STREAM else []
+    if _ORIENT_EXTRA:
+        bits.append(_ORIENT_EXTRA)
+    return " ".join(bits)
 
 
 def _run_turn(chat_id: str, convo: str, speaker: str, ctx) -> "object | None":
     """Один её ход с уже собранным контекстом. -> envelope или None (упал)."""
     history, current = _dialogue(chat_id)
-    orient = _WINDOW_ORIENT if chat_id == STREAM else ""
+    orient = _orient(chat_id)
     try:
         return _agent.voice_turn_envelope(
             chat_id, convo, speaker, ctx=ctx, history=history, current_text=current,
@@ -166,6 +191,37 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx) -> "object | None":
     except Exception:
         log.exception("ход упал в дереве [%s]", chat_id)
         return None
+
+
+def _compact(chat_id: str) -> None:
+    """Свернуть горячий слой, если пора. ПОСЛЕ хода, чтобы не удлинять ответ.
+
+    ⚠ Продукт написал свой раннер и не перенёс из ядра этот вызов — единственный,
+    который применяет потолок горячего слоя В ТОКЕНАХ (HOT_TOKEN_CAP=24000).
+    Чтение слоя режет только по ЧИСЛУ записей (125), поэтому лента, уезжающая в
+    модель, росла без предела: владелец, вставляющий в окно логи и куски файлов,
+    набирал десятки тысяч токенов за вечер, и они платились заново на каждой
+    итерации каждого следующего хода.
+
+    ЧЕМ ЭТО ПЛАТИТСЯ, ЧЕСТНО. Свёртка зовёт модель сама — роль `evaluator`
+    (`live/memory_life.py:847`), промпт до 48 000 знаков и мимо кэша, плюс
+    рекурсивные тиры на верхних слоях. Зовётся она не на каждый ход, а по
+    давлению слоя (число записей или 24 000 токенов), и «дешёвой» эта модель
+    становится не сама: пока владелец не назвал модель свёрток
+    (`evaluator.model` или `model.compact_model` в helene.json — см.
+    `boot._brain_config`), она ТА ЖЕ ФЛАГМАНСКАЯ, что и голос. Прежняя строчка
+    здесь обещала «один дешёвый вызов»; дешёвого в нём не было ничего.
+    """
+    if _life is None:
+        return
+    try:
+        result = _life.compact_if_due(chat_id)
+    except Exception:
+        log.warning("свёртка горячего слоя не прошла [%s]", chat_id, exc_info=True)
+        return
+    folded = int((result or {}).get("folded") or 0)
+    if folded:
+        log.info("свёртка [%s]: свёрнуто %d записей", chat_id, folded)
 
 
 def _close_run(envelope, chat_id: str, *, delivered_text: str = "",
@@ -239,8 +295,15 @@ def handle_desk(message: str) -> None:
     _turn_in_window(source_id, speaker=_speaker)
 
 
-def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False) -> None:
-    """Ход в комнате окна по уже записанному в память входящему."""
+def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False) -> str:
+    """Ход в комнате окна по уже записанному в память входящему.
+
+    -> исход хода: "spoken" (слово доехало), "silent" (её решение молчать),
+    "deferred" (чекпойнт), "failed" (ход не состоялся). Исход НУЖЕН наверху:
+    отметка рождения пишется только по факту состоявшегося хода, а раньше она
+    писалась безусловно — и провалившийся первый ход навсегда лишал агента
+    возможности представиться (born.json уже есть, рождение не повторится).
+    """
     convo = "\n".join(_desk.lines(_last_n()))
     ctx = _agent.ChannelContext(chat_id=STREAM, is_dm=True, owner=True, known=True,
                                 addressed=True, title=_title)
@@ -254,8 +317,8 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False) -> Non
         _set_busy(False, str(getattr(envelope, "run_id", "") or ""))
     if envelope is None:
         _desk.deliver("⚠ ход не дошёл до конца — подробности в логе руннера.",
-                      source_id=source_id)
-        return
+                      source_id=source_id, system=True)
+        return "failed"
     spoken = list(_desk.sent)
     text = str(getattr(envelope, "text", "") or "").strip()
     run_id = str(getattr(envelope, "run_id", "") or "")
@@ -273,10 +336,10 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False) -> Non
         # Durable-чекпойнт придержал ход до подтверждения побочного эффекта. Молчать
         # об этом нельзя: окно выглядело бы зависшим, а ход на самом деле жив.
         _desk.deliver("⏸ ход приостановлен на чекпойнте и ждёт подтверждения "
-                      f"(прогон {run_id}).", source_id=source_id)
+                      f"(прогон {run_id}).", source_id=source_id, system=True)
     elif getattr(envelope, "failed", False):
         _desk.deliver(f"⚠ ход не состоялся (прогон {run_id or 'без id'}) — "
-                      "подробности в карточке хода.", source_id=source_id)
+                      "подробности в карточке хода.", source_id=source_id, system=True)
     elif not spoken and text:
         # Рычаг речи опущен (или ход закрылся текстом): реплика — возврат хода,
         # доставляем её мы. Под поднятым рычагом сюда не попадаем: слово ушло рукой.
@@ -289,6 +352,12 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False) -> Non
     log.info("ход %s [окно]: %.1f с, реплик рукой %d%s", run_id or "—",
              time.time() - started, len(spoken),
              "" if not media_count else f", медиа {media_count}")
+    _compact(STREAM)
+    if getattr(envelope, "deferred", False):
+        return "deferred"
+    if getattr(envelope, "failed", False):
+        return "failed"
+    return "spoken" if (spoken or text or media_count) else "silent"
 
 
 def handle_owner_note(chat_id: str, message: str) -> None:
@@ -336,8 +405,15 @@ def handle_bot(chat_id: str) -> None:
     convo = "\n".join(_bot.rooms.lines(chat_id, _last_n()))
     if not convo.strip():
         return
+    # ⚠ `principal_id` раньше не передавался вовсе, и кадр на КАЖДОМ ходе из
+    # Telegram писал «личность транспортом НЕ подтверждена» — при том, что id
+    # отправителя пришёл транспортом и досье вяжется именно по нему.
+    # `known` тоже перестал быть константой: человек, которого владелец не
+    # заводил, не «известный» (гейт входящих — в botapi._ingest).
     ctx = _agent.ChannelContext(chat_id=chat_id, is_dm=is_dm, owner=owner,
-                                known=True, addressed=True,
+                                principal_id=str(sender_id or "") or None,
+                                known=bool(owner or _bot.is_allowed(sender_id)),
+                                addressed=True,
                                 title=_room_title(chat_id) or str(chat_id))
     if is_dm:
         _bot.typing(chat_id)
@@ -385,6 +461,7 @@ def handle_bot(chat_id: str) -> None:
     log.info("ход %s [бот %s]: %.1f с, реплик рукой %d%s", run_id or "—", chat_id,
              time.time() - started, len(spoken),
              "" if not media_count else f", медиа {media_count}")
+    _compact(chat_id)
 
 
 def _write_anatomy(tree: Path, cfg: dict) -> None:
@@ -416,24 +493,108 @@ def _write_anatomy(tree: Path, cfg: dict) -> None:
         except OSError:
             pass
         telegram = dict(cfg.get("telegram") or {})
-        _write_json(tree / "memory" / ".state" / "anatomy.json", {
+        anatomy = tree / "memory" / ".state" / "anatomy.json"
+        _write_json(anatomy, {
             "written_at": _now().isoformat(timespec="seconds"),
             "agent_name": boot.agent_name(cfg),
             "owner_name": boot.owner_name(cfg),
-            "model": {k: v for k, v in (cfg.get("model") or {}).items()
-                      if k not in ("key", "api_key")},
-            "knobs": boot.env_knobs(cfg),
+            # ⚠ Здесь стоял список ИМЁН: `if k not in ("key", "api_key")`. Окно
+            # завело рядом новое поле `model.keys` = {api, anthropic, chatgpt} —
+            # фильтр его не знал, и все боевые ключи владельца поехали в этот
+            # файл, то есть в GET /api/anatomy и на экран «Система». Перечисление
+            # имён всегда проигрывает соседу, который заводит поле; `public_model`
+            # чистит по имени И по форме значения, рекурсивно.
+            "model": boot.public_model(cfg),
+            # Запрос инженера установщика (доска, repair/setup.md): окно считало
+            # мозг настроенным по одному лишь ИМЕНИ модели и рисовало «На связи»
+            # над ходом, который упадёт без ключа. Ключ показывать нельзя, а факт
+            # «ключ есть» и приговор самого дерева — можно и нужно.
+            "has_key": bool(str((cfg.get("model") or {}).get("key")
+                                or (cfg.get("model") or {}).get("api_key") or "").strip()),
+            "brain_ready": _brain_ready(),
+            # ⚠ Здесь стояло `boot.env_knobs(cfg)` — ручки среды ДОСЛОВНО, вместе
+            # с тем, что владелец в них кладёт: OPENAI_API_KEY, токен бота, пароль
+            # SMTP. Этот файл отдаётся по GET /api/anatomy, уезжает на телефон и
+            # РИСУЕТСЯ ТАБЛИЦЕЙ на экране «Система» — то есть виден на скриншоте и
+            # при демонстрации экрана. Строкой выше ключ из блока model вырезался,
+            # а тут печатался: закрыта была ровно половина.
+            "knobs": boot.safe_knobs(cfg),
+            "git": _git_state(tree),
             "transports": (["окно Hélène"]
                            + (["Telegram-аккаунт"] if str(telegram.get("mode") or "bot") == "account"
                               and telegram.get("api_id") else
                               ["Telegram-бот"] if telegram.get("bot_token") else [])),
+            # Режим виден и владельцу (экран «Система»), и АГЕНТУ: анатомия —
+            # его же снимок устройства. Знать, заперт ли он в своей папке и
+            # доступны ли ему окна, он обязан из прибора, а не из догадки.
+            "mode": modes.describe(_mode) if _mode else None,
             "sandbox": _sandbox_state(),
+            # Брокер: есть ли у агента рука, слушает ли просьбы окно, сколько
+            # их ждёт ответа. Снимок пишется на старте — «ждущих 0» здесь
+            # значит «столько было при запуске», а не «сейчас».
+            "broker": broker.state(),
             "tools": rows,
             "skills_index": skills_index,
         })
+        # Вторая дверь к тому же файлу: он лежит в `memory`, которая выдана
+        # контейнеру рекурсивно на изменение. Права ставим ПОСЛЕ записи — запись
+        # идёт через os.replace, и новый файл наследует права папки, то есть
+        # прежнее сужение теряется на каждом старте.
+        _shut_anatomy(anatomy)
         log.info("устройство: %d рук записано для окна", len(rows))
     except Exception:
         log.exception("анатомия не записалась (продукт работает дальше)")
+
+
+def _shut_anatomy(path: Path) -> None:
+    """Закрыть снимок устройства от песочницы (если она поднята)."""
+    try:
+        import fence
+        if fence.state().get("container"):
+            # Секретов в этом файле больше нет, поэтому чтение остаётся всем
+            # вошедшим в систему: под службой руннер работает от LocalSystem, и
+            # сужение «на себя» отняло бы анатомию у окна владельца.
+            fence.shut_out_container(path, share_read=True)
+    except Exception:
+        log.warning("анатомия не закрыта от песочницы", exc_info=True)
+
+
+def _say_tree_is_busy(tree: Path, cfg: dict, holder: dict) -> None:
+    """Сказать владельцу, что дерево занято другой копией. И замолчать до смены копии.
+
+    ⚠ Молчание здесь и есть худшая половина дефекта. Адверсарий поднял двух
+    руннеров на одном дереве: рождение случилось дважды, ходы перемешались в
+    ленте, записка владельца досталась одной копии и осталась без ответа у
+    другой — и НИ ОДИН лог не сказал о второй копии ни слова. Владелец видит не
+    «два агента», а «агент сломался», и назвать причину ему нечем.
+
+    Оболочка поднимает упавшего ребёнка снова (с растущей паузой), поэтому
+    плашка пишется ОДИН РАЗ на владельца замка: иначе лента владельца забилась
+    бы повторами быстрее, чем он успел бы прочесть первую.
+    """
+    pid = holder.get("pid")
+    log.error("дерево %s занято другой копией харнесса (pid %s, %s) — не поднимаюсь",
+              tree, pid, holder.get("host") or "этот компьютер")
+    said = tree / "memory" / ".state" / "harness_busy.json"
+    try:
+        seen = json.loads(said.read_text(encoding="utf-8"))
+        if isinstance(seen, dict) and seen.get("pid") == pid:
+            return                       # об этой копии уже сказано
+    except (OSError, ValueError):
+        pass
+    try:
+        desk = transport.Desk(tree, STREAM, boot.owner_name(cfg),
+                             str((cfg.get("owner") or {}).get("room") or "Hélène"),
+                             agent_name=boot.agent_name(cfg))
+        desk.deliver(
+            f"⚠ Вторая копия {boot.agent_name(cfg)} не запустилась: этой памятью уже "
+            f"занят другой запущенный экземпляр (процесс {pid}). Так бывает, когда "
+            "программа открыта дважды или агента держит служба Windows. Работай в том "
+            "окне, которое уже открыто; если оно закрыто — сними службу на экране "
+            "«Система» или заверши процесс и запусти снова.", system=True)
+        _write_json(said, {"pid": pid, "at": time.time()})
+    except Exception:
+        log.exception("не сказал владельцу, что дерево занято")
 
 
 def _heartbeat_forever(inbox: Path) -> None:
@@ -445,12 +606,19 @@ def _heartbeat_forever(inbox: Path) -> None:
     """
     while True:
         try:
+            # Тем же ударом подтверждаем замок на дереве: живой владелец замка
+            # обязан отмечаться, иначе брошенный замок держал бы дерево вечно.
+            boot.refresh_tree_lock()
             _write_json(inbox / ".reader.json", {
                 "pid": os.getpid(), "at": time.time(),
                 "busy": bool(_busy["busy"]), "run": str(_busy["run"] or ""),
                 "since": float(_busy["since"] or 0.0)})
         except Exception:
-            log.debug("квитанция читателя не записалась", exc_info=True)
+            # ⚠ Было log.debug при жёстко прибитом уровне INFO: окно рисовало
+            # красное «Не запущен» над живым руннером, а в собранном владельцем
+            # логе не было НИ ОДНОЙ строки о причине. Частота ограничена
+            # интервалом сердцебиения — залива не будет.
+            log.warning("квитанция читателя не записалась", exc_info=True)
         time.sleep(_HEARTBEAT_SEC)
 
 
@@ -465,59 +633,130 @@ def _set_busy(on: bool, run: str = "") -> None:
             "pid": os.getpid(), "at": time.time(),
             "busy": bool(_busy["busy"]), "run": _busy["run"], "since": _busy["since"]})
     except Exception:
-        pass
+        # Голое `pass` здесь означало, что «окно считает руннер мёртвым» —
+        # диагноз без единой строки в логе. Молчать об этом нельзя.
+        log.warning("квитанция занятости не записалась", exc_info=True)
 
 
 _BIRTH_NOTE = (
-    "Это твой первый запуск на устройстве {device}. Тебе предлагается осмотреться "
+    "Это твой первый запуск {where}. Тебе предлагается осмотреться "
     "и познакомиться.")
+# Исходы `end_turn` (done | wait | blocked) — машинная строка конца хода, а не речь.
+_OUTCOME_PREFIXES = ("done", "wait", "blocked")
+
+
+def _tail_lines(path: Path, count: int) -> list[str]:
+    """Последние `count` строк файла, не читая его целиком.
+
+    ⚠ `read_text().splitlines()` на turns.jsonl — это чтение всего файла ради
+    пяти строк (замер: 38 МБ за 131 мс против 12 мс у хвоста), и оно же роняло
+    доставку слова UnicodeDecodeError на одном битом байте В НАЧАЛЕ файла.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return []
+    chunk = min(size, max(65536, count * 16384))
+    try:
+        with path.open("rb") as src:
+            src.seek(max(0, size - chunk))
+            raw = src.read()
+    except OSError:
+        return []
+    return raw.decode("utf-8", "replace").splitlines()[-max(1, int(count)):]
 
 
 def _unspoken_note() -> str:
     """Заметка последнего хода окна, если ход кончился без реплики.
 
-    Под поднятым рычагом reply её текст без руки — заметка себе, не слово. При
-    рождении это ровно тот текст, которым она представилась: отдать его на
-    границе честнее, чем оставить первый запуск немым. Читаем её же запись хода.
+    Под поднятым рычагом reply её текст без руки — заметка себе, не слово. Отдать
+    его на границе честнее, чем оставить владельца без ответа. Читаем её же
+    запись хода.
+
+    ⚠ НО заметкой хода бывает и МАШИННАЯ строка исхода: `end_turn(done)` кладёт в
+    то же поле «done», «done: представилась», «wait: <условие>». Доставленное
+    владельцу «done» он прочитает как слово агента — и на первом запуске читал
+    именно его. Различаем по следу рук того же хода: есть вызов end_turn и note
+    начинается с исхода — это не речь, доставлять нельзя.
     """
-    try:
-        path = Path(_tree) / "memory" / ".state" / "turns.jsonl"
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, TypeError):
+    if _tree is None:
         return ""
-    for line in reversed(lines[-5:]):
+    lines = _tail_lines(Path(_tree) / "memory" / ".state" / "turns.jsonl", 5)
+    for line in reversed(lines):
         try:
             row = json.loads(line)
         except ValueError:
             continue
-        if str(row.get("chat_id") or "") != STREAM:
+        if not isinstance(row, dict) or str(row.get("chat_id") or "") != STREAM:
             continue
-        if str(row.get("held") or "") == "unspoken":
-            return str(row.get("note") or "").strip()
-        return ""
+        if str(row.get("held") or "") != "unspoken":
+            return ""
+        note = str(row.get("note") or "").strip()
+        if not note:
+            return ""
+        head = note.split(":", 1)[0].strip().lower()
+        if head in _OUTCOME_PREFIXES and "end_turn(" in str(row.get("tools") or ""):
+            log.info("заметка хода — машинный исход «%s», в окно не доставляю", note[:40])
+            return ""
+        return note
     return ""
 
 
-def handle_birth() -> None:
-    """Первый ход при рождении: агент представляется сам, не дожидаясь вопроса.
+_BIRTH_TRIES = 5           # столько попыток первого хода, дальше — словами владельцу
+
+
+def _birth_note(*, note_written: bool = False) -> str:
+    """Записка первого запуска в память комнаты. -> source_id для хода.
 
     Это обычный ход в комнате окна, только записка приходит не от владельца, а от
     Hélène: так она честно лежит в памяти как событие первого запуска, а ответ
     идёт тем же путём, что и любой другой (рука reply в окно; возврат хода —
-    доставляем мы). Отметка born.json защищает от повторного рождения.
+    доставляем мы).
+
+    `note_written=True` — записка уже в памяти с прошлой, недоведённой попытки:
+    класть её второй раз нельзя, иначе новорождённый читает в своей ленте, что он
+    рождается второй раз (живой прогон: три записки на три попытки).
     """
-    note = _BIRTH_NOTE.format(device=platform.node() or "этот компьютер")
     now = _now()
     source_id = f"birth-{int(now.timestamp() * 1000)}"
-    _desk.archive(note, outgoing=False, now=now, sender="Hélène")
-    _desk.life(note, direction="in", actor="Hélène", source_id=source_id, now=now)
-    _turn_in_window(source_id, speaker="Hélène", birth=True)
+    if not note_written:
+        # Предлог — внутри подстановки: при пустом platform.node() шаблон
+        # «на устройстве {device}» давал «на устройстве этот компьютер».
+        device = platform.node()
+        note = _BIRTH_NOTE.format(where=f"на устройстве {device}" if device
+                                  else "на этом компьютере")
+        _desk.archive(note, outgoing=False, now=now, sender="Hélène")
+        _desk.life(note, direction="in", actor="Hélène", source_id=source_id, now=now)
+    return source_id
 
 
 def _maybe_birth(tree: Path) -> None:
+    """Рождение — ровно один РАЗ и ровно по факту состоявшегося хода.
+
+    ⚠ Здесь было два зеркальных дефекта одного шва.
+      * Отметка писалась БЕЗУСЛОВНО после `handle_birth()`, а провал хода наверх
+        не уходит никогда (`_run_turn` ловит всё сам). Реле на холодной машине не
+        успевало подняться -> APIConnectionError -> в окне «⚠ ход не состоялся» и
+        в логе «рождение: первый ход состоялся». Перезапуск не помогал: born.json
+        уже написан, представиться агент не мог никогда, и лечилось это только
+        удалением файла руками, о чём нигде не сказано.
+      * Записка рождения ложилась в память ДО хода, а отметка после: убитый
+        посреди первого хода руннер рождал агента заново, со второй запиской.
+    Теперь отметка — это состояние: `in_progress` до хода (защищает от второй
+    записки), `done` — только когда ход СОСТОЯЛСЯ, `gave_up` после пяти попыток,
+    и тогда владельцу говорится словами, что делать.
+    """
     marker = tree / "memory" / ".state" / "born.json"
+    state: dict = {}
     if marker.exists():
-        return
+        try:
+            loaded = json.loads(marker.read_text(encoding="utf-8"))
+            state = loaded if isinstance(loaded, dict) else {}
+        except (OSError, ValueError):
+            state = {}
+        # Старая отметка (без поля state) — рождение состоялось по прежним правилам.
+        if str(state.get("state") or "done") in ("done", "gave_up"):
+            return
     try:
         import llm
         if not llm.configured():
@@ -525,14 +764,241 @@ def _maybe_birth(tree: Path) -> None:
                      "запуске с ключом")
             return
     except Exception:
+        log.warning("рождение отложено: модуль llm не опросился", exc_info=True)
+        return
+    tries = int(state.get("tries") or 0) + 1
+    outcome = "failed"
+    try:
+        # Порядок важен: записка ложится в память, и ТОЛЬКО ПОСЛЕ этого отметка
+        # говорит «записка есть». Убитый между этими шагами руннер положит записку
+        # заново — это дешевле, чем ход по пустому разговору.
+        source_id = _birth_note(note_written=bool(state.get("note_written")))
+        _write_json(marker, {"state": "in_progress", "tries": tries,
+                             "note_written": True,
+                             "at": _now().isoformat(timespec="seconds"),
+                             "agent": _agent_name, "owner": _speaker})
+        outcome = _turn_in_window(source_id, speaker="Hélène", birth=True)
+    except Exception:
+        log.exception("первый ход при рождении упал")
+    if outcome in ("spoken", "silent", "deferred"):
+        try:
+            _write_json(marker, {"state": "done", "tries": tries,
+                                 "at": _now().isoformat(timespec="seconds"),
+                                 "agent": _agent_name, "owner": _speaker})
+        except Exception:
+            # Ход СОСТОЯЛСЯ (деньги потрачены, слово сказано) — отметка не легла.
+            # Повтор рождения на следующем старте дешевле, чем падение руннера.
+            log.exception("отметка рождения не записалась")
+        log.info("рождение: первый ход состоялся (%s)", outcome)
+        if outcome == "silent":
+            # Ход был, слова не было (агент закрыл его `end_turn` без реплики —
+            # его право). Но окно первого запуска, где вообще ничего нет, читается
+            # как поломка, а машинную строку исхода выдавать за его слово нельзя.
+            _desk.deliver(f"{_agent_name} закрыл первый ход, ничего не сказав — это "
+                          "его решение, а не сбой. Напиши ему первым.", system=True)
+        return
+    if tries >= _BIRTH_TRIES:
+        try:
+            _write_json(marker, {"state": "gave_up", "tries": tries,
+                                 "at": _now().isoformat(timespec="seconds"),
+                                 "agent": _agent_name, "owner": _speaker})
+        except Exception:
+            log.exception("отметка «рождение не состоялось» не записалась")
+        log.error("рождение не состоялось за %d попыток — больше не пробую", tries)
+        try:
+            _desk.deliver(
+                f"⚠ Первый ход агента не состоялся {tries} раз подряд — обычно это "
+                "значит, что мозг недоступен: проверь ключ и адрес модели в "
+                "Настройках. Подробности — в data/runner.log. Чтобы попробовать "
+                "знакомство заново, удали файл data/memory/.state/born.json.",
+                system=True)
+        except Exception:
+            log.exception("не сказала владельцу о несостоявшемся рождении")
+        return
+    log.warning("рождение: ход не состоялся (попытка %d из %d) — повторю на "
+                "следующем запуске", tries, _BIRTH_TRIES)
+
+
+_ALARM_EVERY_SEC = 30.0
+_ALARM_PER_TICK = 3          # больше трёх ходов подряд без спроса — это уже не будильник
+# Предохранитель на деньги владельца. Будильник — первый способ агента ходить БЕЗ
+# спроса, и ход по нему стоит столько же, сколько ответ владельцу. Агент, который
+# в ходе по будильнику заводит себе новый будильник «на сейчас», получил бы петлю
+# на всю ночь; такая петля у этого дерева в истории уже была (руминация 06.07).
+# Шесть ходов в час — потолок, за которым это уже не будильник, а петля.
+_ALARM_HOUR_CAP = 6
+_ALARM_FIRED: list[float] = []
+
+
+def _alarm_note(task: dict) -> str:
+    """Чем продукт будит агента. Его же словами о его же намерении, без машинных скобок."""
+    kind = str(task.get("kind") or "")
+    goal = str(task.get("goal") or "").strip()
+    target = str(task.get("target") or "").strip()
+    if kind == "message" and target:
+        return (f"Сработал твой будильник: намечено сказать «{target}» — {goal}\n"
+                "Отправить за тебя продукт не может: если это ещё нужно, скажи это "
+                "рукой send_message.")
+    if kind == "email" and target:
+        return (f"Сработал твой будильник: намечено письмо на {target} — {goal}\n"
+                "Продукт писем сам не шлёт: если это ещё нужно, отправь рукой.")
+    if goal:
+        return f"Сработал твой будильник. Намечено было вот что: {goal}"
+    return "Сработал твой будильник на это время (чем именно — не записано)."
+
+
+def _fire_due_tasks() -> None:
+    """Будильники агента: созревшее намерение поднимает ЕГО ход в окне.
+
+    ⚠ Рука `remind_self` агенту предложена, `my_agenda` показывает намеченное — а
+    ЗВОНИТЬ было некому. `tasks.due()` во всём дереве зовёт ровно один файл,
+    `live/mtproto_runner.py`, а этот продукт его не запускает: главный цикл
+    руннера разбирал записки окна, очередь бота и раз в шесть часов подметал
+    архив. Значит собственного хода у агента не было вовсе — только ответ на
+    сообщение и однократное рождение, — тогда как конституция обещает будильники,
+    а доктрина инициативы на них стоит. Обещание без механизма хуже отсутствия
+    обещания: агент планирует вернуться к делу и молча не возвращается никогда.
+
+    Ход идёт в комнате окна: в этом продукте другой у него нет, и владелец
+    видит, ПОЧЕМУ агент заговорил сам, — строкой будильника перед его словом.
+    """
+    if _desk is None or _life is None or not _brain_ready():
         return
     try:
-        handle_birth()
-        _write_json(marker, {"at": _now().isoformat(timespec="seconds"),
-                             "agent": _agent_name, "owner": _speaker})
-        log.info("рождение: первый ход состоялся")
+        import tasks
     except Exception:
-        log.exception("первый ход при рождении упал (повторю на следующем запуске)")
+        log.warning("будильники: модуль намерений не загрузился", exc_info=True)
+        return
+    try:
+        # Микро-намерение «после рана» ждёт конца прогона; пока удержание не снято,
+        # оно не созреет никогда — снимаем его тем же тиком, что и в живом раннере.
+        for held in tasks.after_run_holds():
+            run_id = str(held.get("after_run") or "")
+            if run_id and _agent.run_is_terminal(run_id):
+                tasks.clear_after_run(str(held.get("id") or ""))
+                log.info("будильник #%s дождался прогона %s", held.get("id"), run_id[:12])
+        ready = list(tasks.due())
+    except Exception:
+        log.warning("будильники: список намерений не прочитался", exc_info=True)
+        return
+    if len(ready) > _ALARM_PER_TICK:
+        log.info("будильники: созрело %d, беру %d — остальные на следующем тике",
+                 len(ready), _ALARM_PER_TICK)
+    for task in ready[:_ALARM_PER_TICK]:
+        task_id = str(task.get("id") or "")
+        now_ts = time.time()
+        _ALARM_FIRED[:] = [t for t in _ALARM_FIRED if now_ts - t < 3600]
+        if len(_ALARM_FIRED) >= _ALARM_HOUR_CAP:
+            # Намерение НЕ гасим: предохранитель откладывает, а не съедает.
+            log.warning("будильники: за час уже %d ходов без спроса — остальные "
+                        "жду следующего часа (предохранитель на расход)",
+                        len(_ALARM_FIRED))
+            return
+        _ALARM_FIRED.append(now_ts)
+        # Гасим ДО хода, а не после. Цикл здесь один, ход идёт следующей строкой,
+        # а намерение, пережившее свой ход, зазвонит на следующем тике снова — и
+        # так без конца, на деньги владельца. Будильник, потерянный при падении
+        # руннера посреди хода, дешевле бесконечной петли вызовов модели.
+        try:
+            tasks.mark_fired(task_id)
+        except Exception:
+            log.exception("будильник #%s не погашен — ход не поднимаю", task_id)
+            continue
+        log.info("будильник #%s [%s]: %s", task_id, task.get("kind"),
+                 (str(task.get("goal") or "") or str(task.get("target") or ""))[:60])
+        now = _now()
+        source_id = f"alarm-{task_id}-{int(now.timestamp() * 1000)}"
+        note = _alarm_note(task)
+        try:
+            _desk.archive(note, outgoing=False, now=now, sender="Hélène")
+            _desk.life(note, direction="in", actor="Hélène", source_id=source_id, now=now)
+            _turn_in_window(source_id, speaker="Hélène")
+        except Exception:
+            log.exception("ход по будильнику #%s упал", task_id)
+
+
+def _name_the_owner(owner: str) -> None:
+    """Назвать собеседника кадра ИМЕНЕМ ВЛАДЕЛЬЦА, а не «Егор».
+
+    ⚠ В самой свежей части кадра — зоне «СЕЙЧАС» user-сообщения, той единственной
+    строке, что отвечает на вопрос «кто передо мной», — стоял литерал
+    `frame_layout.py:960: bits.append(own("это Егор"))`. У владельца по имени Иван
+    агент на каждом ходе читал «говорит «Иван» … это Егор»: одна строка называла
+    собеседника двумя разными людьми, и ни один из них не был владельцем.
+
+    Дерево править нельзя, поэтому подменяем сборщик слота — тем же приёмом, каким
+    песочница подменяет `agent.TOOL_IMPL`. Замена точечная: литерал стоит последним
+    в слоте, а чужие значения приезжают в кавычках «…», поэтому хвост строки
+    ни с чем не спутать.
+    """
+    if not owner or owner == "Егор":
+        return
+    try:
+        import frame_layout
+        import gutter
+    except Exception:
+        log.warning("кадр: имя владельца не подставлено — модуль слоя не загрузился",
+                    exc_info=True)
+        return
+    original = getattr(frame_layout, "_speaker", None)
+    if original is None or getattr(original, "_helene_owner", ""):
+        return
+    tail = "это Егор"
+
+    def _speaker(ctx, speaker, snap):
+        text, kind = original(ctx, speaker, snap)
+        body = str(text)
+        if body.endswith(tail):
+            text = gutter.Own(body[:-len(tail)] + "это " + owner,
+                              getattr(text, "guest", False))
+        return text, kind
+
+    _speaker._helene_owner = owner
+    frame_layout._speaker = _speaker
+    log.info("кадр: собеседник назван «%s» (в дереве стоял литерал «Егор»)", owner)
+
+
+def _announce_git(tree: Path) -> None:
+    """Сказать вслух, есть ли обратимость правок, которую обещает кадр дерева."""
+    global _ORIENT_EXTRA
+    import shutil
+    state = _git_state(tree)
+    if state["repo"] and state["exe"]:
+        log.info("откат правок: git есть (%s), репозиторий в дереве данных есть — "
+                 "автокоммит правок и страховочные снимки живы", shutil.which("git"))
+        return
+    _ORIENT_EXTRA = _NO_GIT_ORIENT
+    log.warning("откат правок: git %s, репозитория в дереве %s — автокоммита и "
+                "автоотката НЕТ (агенту сказано в ориентире кадра)",
+                "есть" if state["exe"] else "нет",
+                "нет" if not state["repo"] else "есть")
+
+
+def _sweep_processed(processed: Path, days: int = 14) -> None:
+    """Разобранные записки окна старше `days` — удалить.
+
+    ⚠ Каждое сообщение владельца после обработки оставалось отдельным .md
+    НАВСЕГДА: ни читателя, ни уборки. За год переписки это десятки тысяч файлов и
+    ещё одна полная копия разговора открытым текстом — из-за неё удалить одну
+    неудачную реплику (пароль, ключ) было невозможно без сноса всей data/.
+    Возраст, а не немедленное удаление: сутки-две это ещё и следствие, по которому
+    можно понять, что именно съел упавший ход.
+    """
+    cutoff = time.time() - max(1, int(days)) * 86400
+    removed = 0
+    try:
+        entries = list(processed.glob("*.md"))
+    except OSError:
+        return
+    for stale in entries:
+        try:
+            if stale.stat().st_mtime < cutoff:
+                stale.unlink()
+                removed += 1
+        except OSError:
+            continue
+    if removed:
+        log.info("уборка: удалено разобранных записок окна: %d", removed)
 
 
 def _read_message(path: Path) -> str:
@@ -544,35 +1010,137 @@ def _read_message(path: Path) -> str:
 
 
 def _sandbox_state() -> dict:
+    """Ограда как она есть — плюс режим, который её и включил.
+
+    ⚠ Половина правды здесь читается как обман, и до 04.09 здесь стояла ровно
+    половина: «окна доступны: ограда накрывает команды и файловые руки, рука окон
+    в неё не попадает». Проверка по коду (задача C3) показала, что первая часть
+    верна, а вывод — нет: руки окон в поставке НЕТ ВОВСЕ. `computer` из дерева
+    ходит в тело Праксис по HTTP (body_client → praxis-bridge), а у Hélène ни
+    моста, ни тела не едет — только исходники. Строку теперь пишет сама ограда
+    (`fence.WINDOWS_TRUTH`), одну на анатомию, настройки и агента.
+    """
     try:
         import fence
-        return fence.state()
+        state = dict(fence.state())
     except Exception:
-        return {"enabled": False, "container": False, "reason": "модуль недоступен"}
+        state = {"enabled": False, "container": False, "reason": "модуль недоступен",
+                 "windows": "окна: спросить не у кого — модуль ограды не загрузился"}
+    if _mode:
+        state["mode"] = _mode.get("name")
+        state["mode_title"] = _mode.get("title")
+    return state
 
 
-def _write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(".tmp-" + path.name)
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1),
-                   encoding="utf-8", newline="\n")
-    os.replace(tmp, path)
+def _brain_ready() -> bool:
+    """Приговор самого дерева: есть ли чем думать. Не «имя модели непусто»."""
+    try:
+        import llm
+        return bool(llm.configured())
+    except Exception:
+        return False
+
+
+def _git_state(tree: Path) -> dict:
+    """Есть ли на самом деле обратимость правок, которую обещает кадр.
+
+    Дерево говорит агенту (contract.living_documents) «правка автокоммитится в
+    git», а привратник правок кода прямо ослаблен словами «у неё есть
+    git-автокоммит и автооткат при падении — НЕ будь параноиком». До 06.09 в
+    поставке не было ни git.exe, ни репозитория в дереве данных:
+    `selfgit.repo_ready()` всегда False, и все снимки — тихий no-op. Теперь
+    поставка везёт MinGit (runtime/git, `boot.arm_git`), а `boot.seed_git`
+    заводит личный репозиторий агента при рождении дома — и обещание стало
+    правдой. Проверка осталась: сборка без git (чужой запуск, снесённая
+    папка) обязана сказать это в анатомию и в ориентир кадра (`_orient`).
+    """
+    import shutil as _shutil
+    return {"repo": (Path(tree) / ".git").exists(),
+            "exe": bool(_shutil.which("git"))}
+
+
+# Ровно одна копия атомарной записи на весь харнесс: три разошедшиеся копии одной
+# функции — тот самый класс, из которого выросла гонка временного имени.
+_write_json = transport._write_json
+
+
+def _settle_mode(cfg: dict, config_path: Path) -> dict:
+    """Разложить режим по ручкам ДО того, как их прочтут, и записать его явно.
+
+    Порядок важен: `sandbox.enabled` читает `fence.install`, а `service.session0`
+    и `service.firewall` — служба. Режим обязан выставить их раньше, иначе он был
+    бы словом на экране над ручками, живущими своей жизнью.
+
+    ⚠ Служба здесь НЕ режим и ручкой режима не управляется (04.09): ставится она
+    поверх любой ограды и ограду не снимает. Раскладка трогает ровно ограду и две
+    галочки службы — сам факт установки спрашивается у SCM.
+
+    Первый запуск на старом конфиге (режима в файле нет) — это и есть «первое
+    сохранение»: миграция выводит режим из того, что в файле уже есть, и
+    записывает его словом. Своей неудачей запись продукт не роняет: в памяти
+    режим всё равно разложен, а причина названа в логе.
+    """
+    picture = modes.apply(cfg)
+    modes.journal(picture, where=config_path.name)
+    if picture.get("needs_write"):
+        try:
+            written = modes.ensure_written(config_path)
+            picture["written"] = written.get("written")
+        except Exception:
+            log.exception("режим не записался в конфиг (работаю по выведенному)")
+    return picture
 
 
 def main() -> None:
-    global _desk, _bot, _speaker, _title, _agent_name, _tree, _deliver_unspoken
+    global _desk, _bot, _speaker, _title, _agent_name, _tree, _deliver_unspoken, _mode
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
     config_path = Path(args.config).resolve()
-    cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    # ⚠ ПЕРВЫЙ-ЗАПУСК.md зовёт владельца править helene.json руками, и любая
+    # опечатка роняла руннер голым трейсом: оболочка перезапускала его с растущей
+    # паузой и говорила «падает раз за разом», не имея чем назвать причину.
+    # Код выхода 3 = «конфиг/раскладка», его можно отличить от случайной смерти.
+    try:
+        cfg = json.loads(boot.read_config_text(config_path))
+        if not isinstance(cfg, dict):
+            raise ValueError("верхний уровень должен быть объектом {…}")
+    except (OSError, ValueError) as exc:
+        log.error("helene.json не читается (%s): %s — поправь файл и запусти снова",
+                  config_path, exc)
+        raise SystemExit(3)
+
+    try:
+        _mode = _settle_mode(cfg, config_path)
+    except Exception:
+        log.exception("режим не разобрался — иду по ручкам как есть")
+        _mode = {}
 
     tree = Path(os.environ.get("HELENE_TREE") or os.environ.get("PRAXIS_DESK_TREE")
                 or cfg.get("tree") or "data")
     if not tree.is_absolute():
         tree = (config_path.parent / tree).resolve()
     _tree = tree
-    boot.ensure_layout(tree, cfg)
+    try:
+        # git поставки — в PATH ДО раскладки: seed_git заводит репозиторий агента,
+        # а selfgit и _git_state ниже зовут голое `git`.
+        git_from = boot.arm_git()
+        log.info("git: %s", git_from or "не найден — снимков правок не будет")
+        boot.ensure_layout(tree, cfg)
+    except boot.LayoutError as exc:
+        log.error("папка данных не готова: %s", exc)
+        raise SystemExit(3)
+
+    # Замок на ДЕРЕВО — до всего тяжёлого: вторая копия не должна ни рождать
+    # агента заново, ни разбирать записки владельца, ни писать в ту же память.
+    # `role` — подпись в замке для диагностики. Стояло `cfg["mode"]`, то есть
+    # местожительство харнесса ("local"): в замке всегда было одно и то же
+    # слово. Режим агента здесь говорит больше — видно, чей замок нашли.
+    busy = boot.claim_tree(tree, agent=boot.agent_name(cfg),
+                           role=str(_mode.get("name") or cfg.get("mode") or "окно"))
+    if busy:
+        _say_tree_is_busy(tree, cfg, busy)
+        raise SystemExit(3)
 
     code_raw = str(cfg.get("code") or "../../live")
     code_dir = Path(code_raw)
@@ -592,16 +1160,27 @@ def main() -> None:
 
     log.info("%s", boot.project_brain(tree, cfg))
     agent, memory_life = _load_tree(code_dir, tree, cfg)
+    _name_the_owner(_speaker)
+    _announce_git(tree)
     _desk = transport.Desk(tree, STREAM, _speaker, _title, memory_life=memory_life,
                            agent_name=_agent_name)
     transport.install(agent, _desk)
-    # Песочница: shell в AppContainer, файловые руки — в папке Hélène. Не вышло —
-    # причина в анатомии, продукт работает дальше.
+    # Песочница: shell в AppContainer, файловые руки — в папке Hélène, плюс
+    # смонтированные владельцем папки (их список ограда перечитывает из
+    # `config_path` на ходу — потому он сюда и передаётся). Не вышло — причина в
+    # анатомии, продукт работает дальше.
     try:
         import fence
-        fence.install(agent, tree, cfg)
+        fence.install(agent, tree, cfg, config_path=config_path)
     except Exception:
         log.exception("песочница не поднялась — руки без ограды")
+    # Рука брокера — ПОСЛЕ ограды: она закрывает свои файлы обмена от контейнера,
+    # а поднят он или нет, решает предыдущий шаг. Без этой руки тексты продукта
+    # обещали агенту брокера, которого у него не было.
+    try:
+        broker.install(agent, tree, cfg)
+    except Exception:
+        log.exception("рука брокера не выдана — просить права агенту нечем")
     tg = dict(cfg.get("telegram") or {})
     if str(tg.get("mode") or "bot") == "account" and tg.get("api_id") and tg.get("api_hash"):
         # Свой аккаунт агента по MTProto: сессия после входа в настройках.
@@ -641,6 +1220,8 @@ def main() -> None:
     inbox = tree / "memory" / ".control" / "desk_inbox"
     processed = inbox / "processed"
     processed.mkdir(parents=True, exist_ok=True)
+    _sweep_processed(processed)
+    swept_at = time.time()
     log.info("локальный харнесс: дерево данных %s · код %s · транспорты: окно%s",
              tree, code_dir, "" if _bot is None else " + бот @" + _bot.username)
     import threading
@@ -649,6 +1230,7 @@ def main() -> None:
     # Рождение — после того, как всё поднято и квитанция читателя уже пишется:
     # окно видит «думает», а не мёртвый руннер, пока идёт первый ход.
     _maybe_birth(tree)
+    alarms_at = 0.0
     while True:
         for path in sorted(inbox.glob("*.md")):
             if path.name.startswith(".tmp-"):
@@ -680,6 +1262,18 @@ def main() -> None:
                 handle_bot(chat_id)
             except Exception:
                 log.exception("ход бота упал [%s]", chat_id)
+        # Часы агента: записка владельца и очередь бота разобраны — теперь его
+        # собственные будильники. Порядок не случаен: живое слово владельца
+        # вперёд, будильник подождёт полминуты.
+        if time.time() - alarms_at > _ALARM_EVERY_SEC:
+            alarms_at = time.time()
+            try:
+                _fire_due_tasks()
+            except Exception:
+                log.exception("тик будильников упал (продукт работает дальше)")
+        if time.time() - swept_at > 6 * 3600:
+            swept_at = time.time()
+            _sweep_processed(processed)
         time.sleep(_POLL_SEC)
 
 

@@ -10,38 +10,287 @@
 from __future__ import annotations
 
 import difflib
+import ipaddress
 import json
+import logging
+import math
 import os
 import re
+import shutil
+import sys
+import threading
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+
+log = logging.getLogger("helene.readers")
 
 _RUN_ID_RE = re.compile(r"^run-(\d{4})(\d{2})\d{2}T\d{6,}Z?-[0-9a-f]{8}$")
-_MD_ROOTS = ("memory/", "workspace/", "soul/")
 _MD_CAP = 400_000
+
+_TREE_SAID = {"path": None}
 
 
 def tree() -> Path:
+    """Дерево агента. Источник — только HELENE_TREE; остальное фолбэки.
+
+    Было: `Path("/data")` без оговорок. На Windows это НЕ линуксовый /data, а
+    `C:\\data` — корень ТЕКУЩЕГО диска. При ручном запуске без HELENE_TREE труба
+    молча брала за дерево агента чужую папку и safe_write_md писал бы туда.
+    Ветка оставлена только там, где она и задумана (сервер), и выбор пишется
+    в лог одной строкой: раньше не логировался ни один из трёх вариантов.
+    """
     override = os.environ.get("HELENE_TREE") or os.environ.get("PRAXIS_DESK_TREE")
     if override:
-        return Path(override)
-    data = Path("/data")
-    if data.is_dir():
-        return data
+        return _said(Path(override), "HELENE_TREE")
+    if os.name != "nt":
+        data = Path("/data")
+        if data.is_dir():
+            return _said(data, "/data (сервер)")
     # локальная разработка: клон прода лежит рядом с desk/
-    return Path(__file__).resolve().parent.parent.parent / "live"
+    return _said(Path(__file__).resolve().parent.parent.parent / "live",
+                 "фолбэк рядом с desk/ (HELENE_TREE не задан!)")
+
+
+def _said(path: Path, why: str) -> Path:
+    if _TREE_SAID["path"] != str(path):
+        _TREE_SAID["path"] = str(path)
+        log.info("дерево агента: %s — %s", path, why)
+    return path
+
+
+# ------------------------------------------------------- конфиг продукта
+# helene.json лежит рядом с exe (Helene/helene.json), труба — в Helene/app/.
+# Читаем ровно два-три скаляра: настроена ли модель и включено ли реле. Ключи
+# и токены отсюда не уходят в ответы НИКОГДА — берём поимённо, не блоком.
+
+_CFG_CACHE: dict[str, Any] = {"stamp": None, "value": {}}
+
+
+def config_path() -> Path | None:
+    raw = os.environ.get("HELENE_CONFIG")
+    if raw:
+        path = Path(raw)
+        return path if path.is_file() else None
+    here = Path(__file__).resolve()
+    for cand in (here.parents[2] / "helene.json", here.parents[1] / "helene.json"):
+        try:
+            if cand.is_file():
+                return cand
+        except OSError:
+            continue
+    return None
+
+
+def product_config() -> dict:
+    path = config_path()
+    if path is None:
+        return {}
+    try:
+        stat = path.stat()
+        stamp = (str(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return {}
+    if _CFG_CACHE["stamp"] == stamp:
+        return _CFG_CACHE["value"]
+    raw = _load_json(path)
+    relay = raw.get("relay") or {}
+    model = raw.get("model") or {}
+    try:
+        port = int(relay.get("port") or 5011)
+    except (TypeError, ValueError):
+        port = 5011
+    value = {
+        "relay_enabled": bool(relay.get("enabled")),
+        "relay_port": port,
+        "model": str(model.get("model") or "").strip(),
+        "base_url": str(model.get("base_url") or "").strip(),
+        # Только ФАКТ «ключ задан», сам ключ отсюда не берётся никогда и наружу
+        # не уходит. Это самый свежий из трёх источников: файл переписывают
+        # «Настройки» окна, и пустой ключ виден сразу после «Сохранить», а не
+        # после перезапуска раннера.
+        "key_present": bool(str(model.get("key") or model.get("api_key")
+                                or "").strip()),
+    }
+    _CFG_CACHE["stamp"] = stamp
+    _CFG_CACHE["value"] = value
+    return value
+
+
+# ---------------------------------------------------------------- режим
+# Режим-ограда (песочница | интерактивный) и ОТДЕЛЬНО от него служба — всё это
+# разбирает ОДИН модуль, `localharness/modes.py`. Читатели трубы его
+# импортируют, а не повторяют: вторая реализация правил миграции разошлась бы с
+# руннером в первый же месяц, и окно показывало бы не тот режим, в котором агент
+# живёт.
+#
+# ⚠ Служба здесь НЕ режим (04.09). Она опция поверх любой из двух оград и ограду
+# не снимает; поэтому `name` — всегда `sandbox` или `interactive`, а про службу
+# отвечают `service_installed`, `session0` и `firewall`.
+
+#: Ответ, когда режим прочитать не вышло. Форма та же, что при удаче: окно
+#: читает поля без проверок, и рубеж не должен ронять экран вместо трубы. Имя
+#: режима пустое намеренно — назвать наугад «интерактивный» значило бы соврать
+#: про то, в каких правах живёт агент. Одна копия на обе аварийные ветки
+#: (`mode_state` и `_mode_state_safe`): третья разошлась бы с `modes.describe`.
+_MODE_UNKNOWN: dict = {
+    "name": "", "title": "Режим не прочитан", "text": "",
+    "sandbox": False, "explicit": False, "source": "",
+    "service_installed": None, "service_title": "", "service_text": "",
+    "session0": False, "session0_set": False, "session0_warning": "",
+    "firewall": False, "firewall_set": False, "legacy_service": False,
+    "notes": [], "choices": [], "service": None, "config": "",
+}
+
+
+def mode_unknown(why: str) -> dict:
+    """Копия `_MODE_UNKNOWN` с причиной на месте описания и в тревогах."""
+    out = dict(_MODE_UNKNOWN)
+    out["text"] = why
+    out["notes"] = [why] if why else []
+    return out
+
+
+_MODES: dict = {"mod": None, "tried": False}
+
+
+def _modes():
+    """Модуль режима. None — не нашёлся (тогда окно скажет об этом честно).
+
+    Раскладка одна и в дереве разработки (desk/deskd + desk/localharness), и в
+    поставке (Helene/app/deskd + Helene/app/localharness): сосед по папке.
+    """
+    if not _MODES["tried"]:
+        _MODES["tried"] = True
+        try:
+            here = Path(__file__).resolve().parent.parent / "localharness"
+            if str(here) not in sys.path:
+                sys.path.append(str(here))
+            import modes as mod
+            _MODES["mod"] = mod
+        except Exception:
+            log.warning("модуль режима не импортировался (%s)", "localharness/modes.py",
+                        exc_info=True)
+    return _MODES["mod"]
+
+
+def mode_state() -> dict:
+    """Какая ограда выбрана, что со службой и что это значит — окну и агенту.
+
+    Читает helene.json (единственный источник) плюс SCM: стоит ли служба на
+    самом деле. Ничего не пишет: запись явного режима — дело руннера
+    (`runner._settle_mode`), у читателей трубы права на правку конфига нет.
+
+    `choices` (две ограды) и `service` (опция службы с её галочками) едут вместе
+    с ответом намеренно: экраны установщика и настроек берут названия и
+    описания ОТСЮДА, а не пишут свои. Разошедшиеся описания означали бы, что
+    владелец выбирает одно, а получает другое.
+    """
+    mod = _modes()
+    if mod is None:
+        return mode_unknown("модуль режима не нашёлся рядом с трубой — "
+                            "смотри helene.log")
+    path = config_path()
+    if path is None:
+        return mode_unknown("helene.json рядом не найден — режим неизвестен")
+    try:
+        picture = mod.describe(mod.resolve(_load_json(path)))
+    except Exception:
+        log.exception("режим не разобрался")
+        return mode_unknown("режим не разобрался — смотри helene.log")
+    picture["choices"] = mod.catalogue()
+    picture["service"] = mod.service_option()
+    picture["config"] = str(path)
+    return picture
+
+
+def _url_host_port(url: str) -> tuple[str, int | None]:
+    try:
+        parts = urlsplit(str(url or "").strip())
+        return (parts.hostname or "").lower(), parts.port
+    except ValueError:
+        return "", None
+
+
+def _url_is_local(url: str) -> bool:
+    host, _ = _url_host_port(url)
+    if host in ("localhost", ""):
+        return host == "localhost"
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _load_json(path: Path) -> dict:
+    """Любой json продукта. Кодировка — как её сохранил редактор ВЛАДЕЛЬЦА.
+
+    ⚠ Через эту функцию читается и `helene.json`, который ПЕРВЫЙ-ЗАПУСК.md прямо
+    зовёт править руками. Блокнот, VS Code и `Set-Content` из PowerShell 5.1
+    пишут UTF-8 с меткой BOM или UTF-16 — строгий `encoding="utf-8"` возвращал на
+    таком файле пустоту МОЛЧА, и окно писало «Модель не настроена» над верным
+    конфигом. Оболочка тот же файл читает и BOM снимает; расходиться им нельзя.
+    """
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+    except OSError:
+        return {}
+    text = ""
+    try:
+        if raw[:3] == b"\xef\xbb\xbf":
+            text = raw[3:].decode("utf-8")
+        elif raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            text = raw.decode("utf-16")
+        elif b"\x00" in raw[:4096]:          # UTF-16 без метки: в json нулей нет
+            text = raw.decode("utf-16-le" if raw[1:2] == b"\x00" else "utf-16-be")
+        else:
+            text = raw.decode("utf-8")
+        data = json.loads(text)
         return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+    except (UnicodeDecodeError, ValueError):
         return {}
 
 
+def _num(value, default: float = 0.0) -> float:
+    """Число из строки jsonl, которая может быть чем угодно.
+
+    Здесь стоял голый `float(row.get("ts") or 0)` — в девяти местах. Строки в
+    `llm_calls.jsonl` и `perception_skips.jsonl` пишет дерево агента, файл
+    дописывается годами и НЕ РОТИРУЕТСЯ: достаточно одной строки с нечисловым
+    `ts` (оборванная запись, ручная правка, чужой хвост после сбоя питания) —
+    и `state()` с `health()` падают `ValueError` НАВСЕГДА. Наружу это выходило
+    500-м: шапка окна пустела на каждом опросе, телефон получал голый отказ, и
+    для владельца весь продукт выглядел мёртвым, хотя агент работал.
+
+    Кривое значение — не число: возвращаем умолчание и идём дальше, как будто
+    строки не было. NaN и бесконечность тоже отсекаем: они молча ломают max(),
+    сравнения возрастов и округление в шапке.
+    """
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    return out if math.isfinite(out) else default
+
+
+def _whole(value, default: int = 0) -> int:
+    """То же для счётчиков токенов: `int("12.5")` — тоже ValueError."""
+    return int(_num(value, default))
+
+
 def tail_lines(path: Path, n: int, *, max_bytes: int = 4_000_000) -> list[str]:
-    """Последние n строк файла без чтения его целиком."""
+    """Последние n строк файла без чтения его целиком.
+
+    n нормализуется здесь: `lines[-n:]` при n<=0 отдаёт ВЕСЬ буфер (при n=-1 —
+    `lines[1:]`), и объявленный вызывающими потолок (600 реплик) обходился
+    одним `?n=-1`, вывозя до max_bytes переписки владельца.
+    """
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return []
     try:
         size = path.stat().st_size
     except OSError:
@@ -83,13 +332,20 @@ def run_dir(run_id: str) -> Path | None:
     return path if path.is_dir() else None
 
 
-def list_runs(limit: int = 80, kind: str = "", before: str = "") -> list[dict]:
-    """Свежие прогоны, новые первыми. Имя каталога сортирует по времени само."""
+def list_runs(limit: int = 80, kind: str = "", before: str = "",
+              *, with_titles: bool = True) -> list[dict]:
+    """Свежие прогоны, новые первыми. Имя каталога сортирует по времени само.
+
+    with_titles=False — для сторожа: ему нужно только имя свежего прогона, а
+    chat_titles() вычитывает 4 МБ хвоста turns.jsonl. Сторож тикал раз в 1.5 с
+    круглосуточно и в простое читал десятки гигабайт в сутки ради заголовков,
+    которые никто не смотрел.
+    """
     root = tree() / "memory" / "runs"
     if not root.is_dir():
         return []
     months = sorted((p for p in root.iterdir() if p.is_dir()), reverse=True)
-    titles = chat_titles()
+    titles = chat_titles() if with_titles else {}
     out: list[dict] = []
     for month in months:
         try:
@@ -127,12 +383,27 @@ def list_runs(limit: int = 80, kind: str = "", before: str = "") -> list[dict]:
     return out
 
 
+_TITLES_CACHE: dict[str, Any] = {"stamp": None, "value": {}}
+
+
 def chat_titles(n: int = 4000) -> dict[str, str]:
     """chat_id -> живое имя, из хвоста turns.jsonl.
 
-    У комнат имя лежит в `title`, у личек `title` пуст — имя собеседника в `who`."""
+    У комнат имя лежит в `title`, у личек `title` пуст — имя собеседника в `who`.
+
+    Результат кэшируется по mtime/размеру turns.jsonl: на одно событие хода этот
+    хвост (до 4 МБ) читался дважды — из list_runs и из chats().
+    """
+    path = tree() / "memory" / ".state" / "turns.jsonl"
+    try:
+        stat = path.stat()
+        stamp = (str(path), stat.st_mtime_ns, stat.st_size, n)
+    except OSError:
+        stamp = (str(path), None, None, n)
+    if _TITLES_CACHE["stamp"] == stamp:
+        return _TITLES_CACHE["value"]
     titles: dict[str, str] = {}
-    for row in tail_jsonl(tree() / "memory" / ".state" / "turns.jsonl", n):
+    for row in tail_jsonl(path, n):
         chat_id = row.get("chat_id")
         if chat_id is None:
             continue
@@ -142,6 +413,8 @@ def chat_titles(n: int = 4000) -> dict[str, str]:
             title = str(row.get("who") or "").strip()
         if title:
             titles[key] = title
+    _TITLES_CACHE["value"] = titles
+    _TITLES_CACHE["stamp"] = stamp
     return titles
 
 
@@ -199,19 +472,17 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
     current: dict | None = None
     tools_by_call: dict[str, dict] = {}
     events_path = path / "events.jsonl"
+    # Хвостом, а не через весь файл: правило записано в шапке этого же модуля,
+    # а здесь оно нарушалось. Окно перечитывает идущий прогон каждые ~1.5 с;
+    # на events.jsonl в 59 МБ это было 2.4 с и 148 МБ пика памяти на запрос.
     rows: list[dict] = []
-    try:
-        with events_path.open(encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(row, dict):
-                    rows.append(row)
-    except OSError:
-        rows = []
-    rows = rows[-max_events:]
+    for line in tail_lines(events_path, max_events, max_bytes=16_000_000):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
     status_flow: list[dict] = []
     for row in rows:
         kind = row.get("kind")
@@ -301,24 +572,24 @@ def pulse(n: int = 300) -> dict:
         agg = by_run.setdefault(run_id, {"calls": 0, "in": 0, "cached": 0, "out": 0,
                                          "err": 0, "last_ts": 0.0})
         agg["calls"] += 1
-        agg["in"] += int(row.get("in") or 0)
-        agg["cached"] += int(row.get("cached") or 0)
-        agg["out"] += int(row.get("out") or 0)
+        agg["in"] += _whole(row.get("in"))
+        agg["cached"] += _whole(row.get("cached"))
+        agg["out"] += _whole(row.get("out"))
         agg["err"] += 1 if row.get("err") else 0
-        agg["last_ts"] = max(agg["last_ts"], float(row.get("ts") or 0))
+        agg["last_ts"] = max(agg["last_ts"], _num(row.get("ts")))
     # Кэш двумя честными числами (просьба владельца): среднесуточный — скользящие
     # сутки назад от СЕЙЧАС; текущий — последние 15 минут (или последний вызов).
     now = _time.time()
     day_rows = [r for r in tail_jsonl(
         tree() / "memory" / ".state" / "llm_calls.jsonl", 20_000)
-        if float(r.get("ts") or 0) >= now - 86_400]
+        if _num(r.get("ts")) >= now - 86_400]
     def _share(rows_):
-        fresh = sum(int(r.get("in") or 0) for r in rows_)
-        cached = sum(int(r.get("cached") or 0) for r in rows_)
+        fresh = sum(_whole(r.get("in")) for r in rows_)
+        cached = sum(_whole(r.get("cached")) for r in rows_)
         total = fresh + cached
         return round(100 * cached / total) if total else None
-    recent = [r for r in day_rows if float(r.get("ts") or 0) >= now - 900]
-    hours = round((now - float(day_rows[0].get("ts") or now)) / 3600) if day_rows else 0
+    recent = [r for r in day_rows if _num(r.get("ts")) >= now - 900]
+    hours = round((now - _num(day_rows[0].get("ts"), now)) / 3600) if day_rows else 0
     return {"last": last, "by_run": by_run, "rows": rows[-40:],
             "cache_day": _share(day_rows), "cache_day_hours": hours,
             "cache_now": _share(recent) if recent else _share(rows[-1:] if rows else []),
@@ -556,8 +827,33 @@ def shadow_diff(stream: str, old: str, new: str) -> dict:
             "zones": zones, "gone": gone, "diff": diff_lines}
 
 
-def shadow_metrics(n: int = 120) -> list[dict]:
-    return tail_jsonl(shadow_root() / "metrics.jsonl", n)
+def shadow_metrics(n: int = 120, stream: str = "") -> list[dict]:
+    """Метрики тени. Лежат ПО ПОТОКАМ: frame_shadow пишет в
+    `<корень>/<поток>/metrics.jsonl`, а читалось из `<корень>/metrics.jsonl`,
+    куда не пишет никто, — кнопка «Метрики» на экране «Контекст» была мертва
+    всегда, на любой машине. Без имени потока берём поток со свежими метриками,
+    чтобы кнопка ожила и у старого окна, которое имя не передаёт.
+    """
+    root = shadow_root()
+    name = os.path.basename(str(stream or "").strip())
+    if not name:
+        best, best_mtime = "", -1.0
+        try:
+            for entry in root.iterdir():
+                if not entry.is_dir() or entry.name == "report":
+                    continue
+                try:
+                    mtime = (entry / "metrics.jsonl").stat().st_mtime
+                except OSError:
+                    continue
+                if mtime > best_mtime:
+                    best, best_mtime = entry.name, mtime
+        except OSError:
+            pass
+        name = best
+    if not name:
+        return tail_jsonl(root / "metrics.jsonl", n)
+    return tail_jsonl(root / name / "metrics.jsonl", n)
 
 
 # ------------------------------------------------------------------ переписки
@@ -584,7 +880,9 @@ def chats() -> list[dict]:
             "participants": data.get("participant_count"),
             "topics": data.get("topic_count"),
             "archive": str(data.get("archive")),
-            "mtime_ns": int(data.get("archive_mtime_ns") or 0),
+            # Тот же класс, что девять голых float() ниже: строка пишется
+            # деревом, кривое значение уронило бы весь экран «Чаты» 500-м.
+            "mtime_ns": _whole(data.get("archive_mtime_ns")),
             "size": data.get("archive_size"),
         }
         if peer not in best or row["mtime_ns"] > best[peer]["mtime_ns"]:
@@ -634,6 +932,28 @@ def anatomy() -> dict:
 # ------------------------------------------------------------------ сторож тишины
 
 def health() -> dict:
+    """Сторож тишины — с рубежом: его отказ не должен гасить шапку окна.
+
+    Обе эти ручки окно и телефон опрашивают каждые несколько секунд, и обе
+    читают файлы, которые пишет НЕ продукт. Любая неожиданность внутри выходила
+    наружу 500-м (`api_health` обёртки не имела вовсе) — и на телефоне это голый
+    отказ, а в окне «Не прочиталось» на каждом экране. Отказ прибора — не повод
+    объявлять мёртвым весь продукт: отдаём пустой, но ЧЕСТНЫЙ ответ и говорим о
+    поломке вслух — тревогой в шапке и трассировкой в `helene.log`.
+    """
+    import time as _time
+    try:
+        return _health_impl()
+    except Exception:
+        log.exception("сторож тишины не собрался")
+        return {"alarms": [{"kind": "reader_failed",
+                            "text": "сторож тишины не прочитался — "
+                                    "подробности в helene.log"}],
+                "checked_at": _time.time(), "last_call_min_ago": None,
+                "restarts_20m": 0, "undelivered": 0, "skips_5m": 0}
+
+
+def _health_impl() -> dict:
     """Тревоги «она молчит/зациклена, хотя не должна» — мета-класс всех глухот.
 
     Каждый из четырёх инцидентов глухоты (27.08 end_turn, 28.08 пустая очередь,
@@ -645,28 +965,47 @@ def health() -> dict:
     alarms: list[dict] = []
     state = tree() / "memory" / ".state"
 
-    # 1. Петля рестартов: строки [restart] в сегодняшнем дневнике за 20 минут.
+    # 1. Петля рестартов: строки [restart] в дневнике за последние 20 минут.
+    #
+    # Было структурно неработоспособно, и это единственный прибор против
+    # инцидента 29.08: (а) имя файла бралось по дате UTC, а дерево пишет дневник
+    # по СВОЕЙ дате (Europe/Samara по умолчанию) — с 20:00 UTC читался вчерашний
+    # файл; (б) «HH:MM» из строки трактовалось как UTC, а agent._now() пишет
+    # ЛОКАЛЬНЫЕ часы машины — на UTC+4 отметка всегда оказывалась на 4 часа в
+    # будущем и условие `0 <= now - stamp` не выполнялось НИКОГДА.
+    # Теперь: три соседних дня по именам файлов (день дерева может отличаться от
+    # локального на ±1), и HH:MM каждой строки привязывается к дате ЕЁ файла —
+    # поэтому одна строка не может попасть в счёт дважды.
     import datetime as _dt
-    day = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+    today = _dt.datetime.now()
     recent_restarts = 0
-    for line in tail_lines(tree() / "memory" / "journal" / f"{day}.md", 300):
-        if "[restart]" not in line and "перезапускаюсь" not in line:
+    journal = tree() / "memory" / "journal"
+    for shift in (-1, 0, 1):
+        day = today + _dt.timedelta(days=shift)
+        path = journal / f"{day:%Y-%m-%d}.md"
+        try:    # файл, который никто не трогал час, не может нести свежий рестарт
+            if now - path.stat().st_mtime > 3600:
+                continue
+        except OSError:
             continue
-        try:  # «- 02:36 (s3) [restart] …» — часы:минуты UTC её дневника
-            hh, mm = line.split("- ", 1)[1].split(" ", 1)[0].split(":")
-            stamp = _dt.datetime.now(_dt.timezone.utc).replace(
-                hour=int(hh), minute=int(mm), second=0)
+        for line in tail_lines(path, 300):
+            if "[restart]" not in line and "перезапускаюсь" not in line:
+                continue
+            try:  # «- 02:36 (s3) [restart] …» — часы:минуты её локальных часов
+                hh, mm = line.split("- ", 1)[1].split(" ", 1)[0].split(":")
+                stamp = day.replace(hour=int(hh), minute=int(mm), second=0,
+                                    microsecond=0)
+            except (ValueError, IndexError):
+                continue
             if 0 <= (now - stamp.timestamp()) < 1200:
                 recent_restarts += 1
-        except (ValueError, IndexError):
-            continue
     if recent_restarts >= 3:
         alarms.append({"kind": "restart_loop",
                        "text": f"петля рестартов: {recent_restarts} за 20 минут"})
 
     # 2. Молчание при долге: вызовов модели давно нет, а недоставленные события есть.
     llm_rows = tail_jsonl(state / "llm_calls.jsonl", 5)
-    last_call = max((float(r.get("ts") or 0) for r in llm_rows), default=0.0)
+    last_call = max((_num(r.get("ts")) for r in llm_rows), default=0.0)
     quiet_min = (now - last_call) / 60 if last_call else None
     undelivered = 0
     try:
@@ -689,7 +1028,7 @@ def health() -> dict:
 
     # 3. Шторм откладываний: perception_skips растёт лавиной (defer-петля 20 Гц).
     skips = tail_jsonl(state / "perception_skips.jsonl", 400)
-    recent_skips = sum(1 for r in skips if now - float(r.get("ts") or 0) < 300)
+    recent_skips = sum(1 for r in skips if now - _num(r.get("ts")) < 300)
     if recent_skips >= 150:
         alarms.append({"kind": "defer_storm",
                        "text": f"{recent_skips} откладываний за 5 минут — похоже на defer-петлю"})
@@ -713,17 +1052,29 @@ _MD_GROUPS = (
 )
 
 
+_MD_SCAN_CAP = 20_000
+
+
 def md_tree() -> list[dict]:
-    """Её маркдауны по корням: имя, размер, свежесть. Без рекурсии в runs."""
+    """Её маркдауны по корням: имя, размер, свежесть. Без рекурсии в runs.
+
+    Обход идёт ДО КОНЦА, и только потом сортировка по свежести. Было наоборот:
+    обрыв на 400-м файле, а rglob идёт в порядке файловой системы (алфавит) —
+    из 1001 заметки окно показывало произвольную СТАРУЮ полосу из середины
+    алфавита, свежей заметки в списке не было вовсе, а счётчик печатал «200».
+    Теперь в группе есть `total` — настоящее число файлов, чтобы окно не выдавало
+    длину среза за размер памяти агента.
+    """
     out: list[dict] = []
+    base = tree()
     for label, rel in _MD_GROUPS:
-        root = tree() / rel
+        root = base / rel
         if not root.is_dir():
             continue
         files: list[dict] = []
         try:
             for path in root.rglob("*.md"):
-                relative = _posix_rel(path, tree())
+                relative = _posix_rel(path, base)
                 if relative is None or "/runs/" in relative or "/.state/" in relative:
                     continue
                 try:
@@ -731,14 +1082,16 @@ def md_tree() -> list[dict]:
                 except OSError:
                     continue
                 files.append({"path": relative, "name": relative[len(rel) + 1:],
-                              "size": stat.st_size, "mtime": stat.st_mtime})
-                if len(files) >= 400:
-                    break
+                              "size": stat.st_size, "mtime": stat.st_mtime,
+                              "readonly": md_readonly(relative)})
+                if len(files) >= _MD_SCAN_CAP:
+                    break     # предохранитель от патологического дерева
         except OSError:
             continue
         files.sort(key=lambda f: -f["mtime"])
         if files:
-            out.append({"group": label, "root": rel, "files": files[:200]})
+            out.append({"group": label, "root": rel, "total": len(files),
+                        "files": files[:200]})
     return out
 
 
@@ -749,17 +1102,118 @@ def _posix_rel(path: Path, base: Path) -> str | None:
         return None
 
 
-def safe_read_md(rel: str) -> dict:
-    rel = (rel or "").replace("\\", "/").lstrip("/")
-    if ".." in rel.split("/") or not rel.startswith(_MD_ROOTS):
-        return {"error": "путь вне разрешённых корней"}
-    path = tree() / rel
+def md_readonly(clean: str) -> bool:
+    """Файлы, которые окно ПОКАЗЫВАЕТ, но править не должно.
+
+    soul/self/** — провенансная самомодель: live/self_model.py сверяет sha256
+    файла истории с распиской, и любая правка снаружи уводит источник в
+    fail-closed (source=missing) НАВСЕГДА — отката по построению нет, блок
+    «кто я сейчас» исчезает из кадра, а тень пишет ложный диагноз.
+    memory/work/**/TASK.md — YAML-фронтматтер, который разбирают и дерево, и
+    окно; правка руками ломает разбор молча.
+    """
+    key = _md_key(clean)
+    if key == "soul/self" or key.startswith("soul/self/"):
+        return True
+    if key.startswith("memory/work/") and key.endswith("/task.md"):
+        return True
+    return False
+
+
+def _md_key(clean: str) -> str:
+    """Путь в том виде, в каком его видит файловая система Windows.
+
+    NTFS не различает регистр и молча отбрасывает точки и пробелы в конце
+    сегмента: `soul/Self/CURRENT.md`, `soul/self./CURRENT.md` и
+    `soul/self /CURRENT.md` — ТОТ ЖЕ файл, что `soul/self/CURRENT.md`. Голый
+    `startswith` этого не знает, и запрет обходился бы так же тривиально, как
+    через двойной слэш (его схлопывает `_md_path`). Сверку групп это не
+    касается: там несовпадение регистра даёт отказ, а отказ безопасен.
+    """
+    return "/".join(seg.rstrip(". ").lower() for seg in clean.split("/"))
+
+
+def _md_in_groups(clean: str) -> bool:
+    return any(clean == root or clean.startswith(root + "/")
+               for _, root in _MD_GROUPS)
+
+
+def _md_path(rel: str) -> tuple[str, Path] | dict:
+    """Общая проверка пути для чтения и записи. Ошибка -> dict с code.
+
+    ⚠ Путь приводится к каноническому виду ДО всех проверок, иначе запрет
+    `md_readonly` обходится одним лишним слэшем. Было: `replace("\\\\","/")` и
+    `strip("/")` — повторные слэши и сегменты «.» оставались как есть. Тогда
+    `soul//self/CURRENT.md` не начинается с `soul/self/` (readonly не видит
+    самомодель -> False), `_md_in_groups` пускает (корень группы — сам `soul`),
+    а файловая система схлопывает `//` и отдаёт ТУ ЖЕ защищённую цель. Правка
+    самомодели снаружи уводит `live/self_model.py` в fail-closed навсегда —
+    отката по построению нет. Проверено живой трубой (адверсарий №3):
+    `soul//self/CURRENT.md` и `soul/./self/history/0003.md` -> 200, файл
+    перезаписан. Порядок важен: «..» ищется по ИСХОДНЫМ сегментам, до
+    схлопывания, — иначе `a/..//b` мог бы схлопнуться во что-то безобидное.
+    """
+    parts = str(rel or "").replace("\\", "/").split("/")
+    if ".." in parts:
+        return {"error": "путь не похож на маркдаун агента", "code": "outside"}
+    clean = "/".join(p for p in parts if p and p != ".")
+    if not clean:
+        return {"error": "путь не похож на маркдаун агента", "code": "outside"}
+    if not clean.endswith(".md"):
+        # Расширение проверялось только на записи. На чтении не проверялось
+        # ВОВСЕ, а корни сверялись голыми префиксами ("memory/"), поэтому через
+        # /api/md уходил любой файл под memory/ — в том числе memory/llm.json с
+        # ключом модели и memory/rooms/*/messages.jsonl со всей перепиской.
+        return {"error": "окно показывает только маркдауны агента",
+                "code": "not_markdown"}
+    if not _md_in_groups(clean):
+        return {"error": "этот файл окно не показывает", "code": "outside"}
+    base = tree()
+    path = base / clean
     try:
-        if path.stat().st_size > _MD_CAP:
-            return {"error": f"файл больше {_MD_CAP} байт"}
-        return {"path": rel, "text": path.read_text(encoding="utf-8", errors="replace")}
+        path.resolve().relative_to(base.resolve())
+    except (OSError, ValueError):
+        return {"error": "путь выходит из дерева", "code": "outside"}
+    return clean, path
+
+
+def safe_read_md(rel: str) -> dict:
+    checked = _md_path(rel)
+    if isinstance(checked, dict):
+        return checked
+    clean, path = checked
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        # Было: сырой OSError с английским именем класса, кодом WinError и
+        # полным абсолютным путём — окно печатало его как есть.
+        return {"error": "Этого файла больше нет — агент его убрал.",
+                "code": "not_found"}
+    except PermissionError:
+        return {"error": "Нет доступа к файлу.", "code": "denied"}
     except OSError as exc:
-        return {"error": f"{type(exc).__name__}: {exc}"}
+        return {"error": "Файл не открылся.", "code": "io",
+                "detail": f"{type(exc).__name__}: {exc}"}
+    if stat.st_size > _MD_CAP:
+        return {"error": f"Файл слишком большой, чтобы показать целиком "
+                         f"({stat.st_size} байт).", "code": "too_big"}
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return {"error": "Файл не прочитался.", "code": "io",
+                "detail": f"{type(exc).__name__}: {exc}"}
+    # mtime_ns отдаётся наружу, чтобы окно могло вернуть его в POST и получить
+    # 409 вместо тихой перезаписи чужой правки.
+    #
+    # СТРОКОЙ, а не числом, и это не косметика. st_mtime_ns сейчас ~1.79e18 —
+    # больше Number.MAX_SAFE_INTEGER (9.0e15) в двести раз, и JSON.parse в окне
+    # округляет его до ближайшего представимого double (шаг 256 нс):
+    # 1788476136444380500 возвращается как 1788476136444380400. Отпечаток,
+    # прошедший через число в JS, НЕ СОВПАДАЕТ сам с собой, то есть сверка ниже
+    # давала бы конфликт на каждое сохранение. `safe_write_md` принимает и
+    # строку, и число (int(...)), так что старые клиенты не ломаются.
+    return {"path": clean, "text": text, "mtime_ns": str(stat.st_mtime_ns),
+            "size": stat.st_size, "readonly": md_readonly(clean)}
 
 
 # ---------------------------------------------------------------------------
@@ -767,6 +1221,27 @@ def safe_read_md(rel: str) -> dict:
 # ---------------------------------------------------------------------------
 
 _SLEEP_KINDS = {"wake", "window"}
+
+# Единственный порог живости раннера на весь продукт. Раньше их было два:
+# state() считала живой квитанцию свежее 45 с (поле `at`), а deskapp._say —
+# свежее 48 ЧАСОВ (mtime файла). Из-за расхождения окно писало «Не запущен» и
+# тут же принимало сообщение как доставленное mid-turn.
+READER_FRESH_S = 45
+
+
+def reader_status(base: Path | None = None, now: float | None = None) -> dict:
+    """Квитанция читателя desk_inbox: жив ли раннер и занят ли он ходом."""
+    import time as _time
+    base = base or tree()
+    now = now if now is not None else _time.time()
+    receipt = _load_json(base / "memory" / ".control" / "desk_inbox" / ".reader.json")
+    age = (now - _num(receipt.get("at"))) if receipt else None
+    alive = age is not None and 0 <= age < READER_FRESH_S
+    return {"alive": alive,
+            "age_s": None if age is None else round(age, 1),
+            "busy": bool(receipt.get("busy")) and alive,
+            "run": str(receipt.get("run") or ""),
+            "since": _num(receipt.get("since"))}
 
 
 def _short_error(err) -> str:
@@ -783,12 +1258,110 @@ def _short_error(err) -> str:
     if "connect" in low or "getaddrinfo" in low or "name or service" in low \
             or "network" in low:
         return "нет связи с моделью"
-    if "404" in low or "not found" in low:
+    if "404" in low or "not found" in low or "model_not_found" in low:
         return "такой модели нет по этому адресу"
-    return text[:90] or "ошибка модели"
+    if "unsupported_parameter" in low or "unsupported parameter" in low \
+            or "unsupported value" in low or "unrecognized request argument" in low:
+        return "модель не принимает одну из настроек — проверь усилие рассуждения"
+    if "context_length" in low or "context length" in low \
+            or "maximum context" in low or "too many tokens" in low:
+        return "разговор длиннее, чем модель принимает"
+    if "content_filter" in low or "content policy" in low or "safety" in low:
+        return "модель отказалась отвечать по своим правилам"
+    if "invalid_request_error" in low or "400" in low:
+        return "модель не приняла запрос"
+    if "500" in low or "502" in low or "503" in low or "overloaded" in low \
+            or "internal server error" in low:
+        return "сбой на стороне модели"
+    # Было: `text[:90]` — сырой английский Python-эксепшн, обрезанный по счётчику
+    # посреди слова, прямо в шапку окна (и ещё дважды на других экранах).
+    # Сырой текст остаётся в last_error_raw и в Журнале, человеку — фраза.
+    return "подробности в Журнале"
+
+
+def _key_present(anatomy: dict, llm: dict, voice: dict, product: dict) -> bool:
+    """Есть ли у мозга ключ. Наружу уходит только булево, сам ключ — никогда.
+
+    Настроенность считалась по одному ИМЕНИ модели. Владелец сохранял Настройки
+    с пустым ключом — `llm.configured()` в дереве становилась False, агент
+    замолкал НАВСЕГДА, а шапка окна писала зелёное «На связи» над мозгом,
+    который сам про себя записал `brain_ready: false`. Руннер оба факта пишет
+    (`has_key`, `brain_ready` в `anatomy.json`, `runner.py:_write_anatomy`) —
+    читать их было некому, и «Модель не настроена» на пустом ключе не
+    показывалась НИ РАЗУ.
+
+    Голосов три, от свежего к старому:
+      * `helene.json` — то, что владелец только что сохранил в Настройках;
+      * `memory/llm.json` — то, по чему модель зовут на самом деле (тот же файл
+        читает `llm._client_for`: пустой `api_key` -> клиента нет вообще);
+      * снимок раннера — `has_key` и приговор дерева `brain_ready`.
+
+    Правило «хоть один говорит „есть“ — значит есть» выбрано намеренно. Ложное
+    «Модель не настроена» над работающим агентом здесь уже было один раз (F-10,
+    снимок anatomy не собрался) и оно хуже запоздалого «На связи»: снимок
+    пишется один раз на старте и стареет, а llm.json переписывается только при
+    следующем запуске. Никто не высказался (старая анатомия, сервер без
+    helene.json) — считаем, что ключ есть.
+    """
+    votes: list[bool] = []
+    if "key_present" in product:
+        votes.append(bool(product["key_present"]))
+    block = (llm.get("frameworks") or {}).get(str(voice.get("framework") or "openai"))
+    if isinstance(block, dict):
+        votes.append(bool(str(block.get("api_key") or "").strip()))
+    for field in ("has_key", "brain_ready"):
+        if field in anatomy:
+            votes.append(bool(anatomy.get(field)))
+    return any(votes) if votes else True
+
+
+def _mode_state_safe() -> dict:
+    """Режим для аварийной ветки `state()`: не имеет права упасть второй раз."""
+    try:
+        return mode_state()
+    except Exception:
+        log.exception("режим не прочитался и в аварийной ветке")
+        return mode_unknown("")
 
 
 def state() -> dict:
+    """Шапка окна — с рубежом: отказ читателя не гасит окно и телефон.
+
+    Форма ответа та же, что у удачного разбора (окно читает `level`, `phrase`,
+    `runner`, `brain` без проверок) — иначе рубеж уронил бы окно вместо трубы.
+    Фраза при этом честная: продукт не делает вид, что всё в порядке.
+    """
+    try:
+        return _state_impl()
+    except Exception:
+        log.exception("состояние не собралось")
+        return {
+            "agent": "Агент", "owner": "",
+            "level": "error", "phrase": "Состояние не прочиталось",
+            # Кнопки нет намеренно: окно умеет ровно два действия («settings» и
+            # «restart»), и любое третье слово дало бы мёртвую кнопку. Куда
+            # смотреть — сказано тревогой ниже.
+            "action": None,
+            "runner": {"alive": False, "age_s": None, "busy": False,
+                       "run": "", "since": 0.0},
+            "anatomy": False,
+            "brain": {"configured": False, "model": "", "base_url": "",
+                      "last_call_at": None, "last_error": None,
+                      "last_error_raw": None},
+            "relay": {"used": False, "authorized": False},
+            "telegram": {"enabled": False},
+            # Форма ответа обязана совпадать с удачной: окно читает state.mode
+            # без проверок. Режим здесь пробуем отдельно — он читается из
+            # helene.json и обычно жив, даже когда упало всё остальное.
+            "mode": _mode_state_safe(),
+            "next_wake": None,
+            "alarms": [{"kind": "reader_failed",
+                        "text": "состояние агента не прочиталось — "
+                                "подробности в helene.log"}],
+        }
+
+
+def _state_impl() -> dict:
     """Что с агентом прямо сейчас — одна фраза и одно действие.
 
     Только чтение артефактов: квитанция читателя руннера (жив ли, думает ли),
@@ -803,19 +1376,50 @@ def state() -> dict:
     st = base / "memory" / ".state"
     anatomy = _load_json(st / "anatomy.json")
     agent = str(anatomy.get("agent_name") or "Агент")
-    reader = _load_json(base / "memory" / ".control" / "desk_inbox" / ".reader.json")
-    reader_age = (now - float(reader.get("at") or 0.0)) if reader else None
-    runner_alive = reader_age is not None and reader_age < 45
-    busy = bool(reader.get("busy")) and runner_alive
-    model_cfg = anatomy.get("model") or {}
-    configured = bool(str(model_cfg.get("model") or "").strip())
+    runner = reader_status(base, now)
+    runner_alive = runner["alive"]
+    busy = runner["busy"]
+    # Настроенность НЕ определяется одним снимком anatomy.json: руннер пишет его
+    # один раз на старте, вся сборка под глушителем `except Exception`, и при
+    # пропавшем снимке окно говорило «Модель не настроена» при живом руннере и
+    # настроенной модели — а экран Настроек показывал заполненные поля. Тупик.
+    # Спрашиваем ещё и то, по чему модель РЕАЛЬНО зовут: memory/llm.json (его
+    # пишет boot.project_brain из helene.json) и сам helene.json.
+    model_cfg = dict(anatomy.get("model") or {})
+    llm = _load_json(base / "memory" / "llm.json")
+    voice = ((llm.get("roles") or {}).get("voice") or {})
+    if not str(model_cfg.get("model") or "").strip():
+        model_cfg["model"] = str(voice.get("model") or "").strip()
+    if not str(model_cfg.get("base_url") or "").strip():
+        frameworks = llm.get("frameworks") or {}
+        block = frameworks.get(str(voice.get("framework") or "openai")) or {}
+        model_cfg["base_url"] = str(block.get("base_url") or "").strip()
+    product = product_config()
+    named = bool(str(model_cfg.get("model") or "").strip() or product.get("model"))
+    key_present = _key_present(anatomy, llm, voice, product)
+    configured = named and key_present
+    if not str(model_cfg.get("base_url") or "").strip():
+        model_cfg["base_url"] = str(product.get("base_url") or "")
     llm_rows = tail_jsonl(st / "llm_calls.jsonl", 12)
     last = llm_rows[-1] if llm_rows else {}
-    last_ts = float(last.get("ts") or 0.0)
+    last_ts = _num(last.get("ts"))
     last_err = str(last.get("err") or "") if last else ""
     recent_error = bool(last_err) and (now - last_ts) < 900
-    relay_auth = (base / "relay" / "local_auth" / "auth.json").exists()
-    relay_used = "127.0.0.1:50" in str(model_cfg.get("base_url") or "")
+    # Реле определяется фактом, а не подстрокой. Было
+    # `"127.0.0.1:50" in base_url`: любой локальный сервер модели на порту 5000
+    # (text-generation-webui по умолчанию) навсегда получал жёлтое «Подписка
+    # ChatGPT не подключена», а настоящее реле на localhost:5011 или на другом
+    # порту не опознавалось никогда — предупреждение о невыполненном входе не
+    # появлялось, и агент молча получал 401.
+    relay_home = base / "relay"
+    relay_auth = (relay_home / "local_auth" / "auth.json").exists()
+    base_url = str(model_cfg.get("base_url") or "")
+    _, port = _url_host_port(base_url)
+    if product:
+        relay_used = bool(product.get("relay_enabled")) and _url_is_local(base_url) \
+            and port == product.get("relay_port")
+    else:   # конфига рядом нет (сервер) — по дому реле, который создаёт оболочка
+        relay_used = _url_is_local(base_url) and relay_home.is_dir()
     next_wake = None
     for row in agenda().get("active", []):
         if str(row.get("kind") or "") not in _SLEEP_KINDS:
@@ -836,14 +1440,24 @@ def state() -> dict:
         level, phrase = "error", "Не запущен"
         action = {"label": "Перезапустить", "target": "restart"}
     elif not configured:
-        level, phrase = "warn", "Модель не настроена"
-        action = {"label": "Настроить", "target": "settings"}
+        if named:
+            # Отдельная фраза: имя модели заполнено, а ключа нет. Прежнее
+            # «Модель не настроена» отправляло владельца искать пустое поле
+            # модели, которое на самом деле заполнено, — и он уходил ни с чем.
+            # Коротко намеренно: шапка окна режет длинную фразу многоточием.
+            level, phrase = "warn", "Ключ модели не введён"
+            action = {"label": "Ввести ключ", "target": "settings"}
+        else:
+            level, phrase = "warn", "Модель не настроена"
+            action = {"label": "Настроить", "target": "settings"}
+    elif recent_error:
+        # Свежая ошибка модели важнее предупреждения про вход в реле: раньше
+        # ветка реле стояла выше и перекрывала настоящую причину молчания.
+        level, phrase = "error", f"Модель отвечает ошибкой: {_short_error(last_err)}"
+        action = {"label": "Настройки", "target": "settings"}
     elif relay_used and not relay_auth:
         level, phrase = "warn", "Подписка ChatGPT не подключена"
         action = {"label": "Войти", "target": "settings"}
-    elif recent_error:
-        level, phrase = "error", f"Модель отвечает ошибкой: {_short_error(last_err)}"
-        action = {"label": "Настройки", "target": "settings"}
     elif busy:
         level, phrase = "live", "Думает"
     elif next_wake is not None:
@@ -857,10 +1471,10 @@ def state() -> dict:
         "level": level,
         "phrase": phrase,
         "action": action,
-        "runner": {"alive": runner_alive,
-                   "age_s": None if reader_age is None else round(reader_age, 1),
-                   "busy": busy, "run": str(reader.get("run") or ""),
-                   "since": float(reader.get("since") or 0.0)},
+        "runner": runner,
+        # anatomy=False при configured=True значит «снимок устройства не собрался»,
+        # а не «модель не настроена»: это разные беды с разными действиями.
+        "anatomy": bool(anatomy),
         "brain": {"configured": configured, "model": str(model_cfg.get("model") or ""),
                   "base_url": str(model_cfg.get("base_url") or ""),
                   "last_call_at": last_ts or None,
@@ -868,36 +1482,68 @@ def state() -> dict:
                   "last_error_raw": (last_err[:300] if recent_error else None)},
         "relay": {"used": relay_used, "authorized": relay_auth},
         "telegram": {"enabled": any("Telegram" in x for x in transports)},
+        # Режим — в шапке состояния, а не только в анатомии: владелец должен
+        # видеть, в каких правах живёт агент, не открывая отдельный экран.
+        # Ходит по обоим каналам сразу, потому что /api/state есть и в HTTP, и
+        # в диспетчере трубы (окно ходит именно трубой).
+        "mode": mode_state(),
         "next_wake": next_wake.isoformat() if next_wake else None,
         "alarms": health().get("alarms", []),
     }
 
 
-def safe_write_md(rel: str, text: str) -> dict:
+def safe_write_md(rel: str, text: str, mtime_ns=None) -> dict:
     """Записать маркдаун по тем же правилам, по каким safe_read_md читает.
 
     Только файлы внутри групп _MD_GROUPS, только .md, без выхода из дерева;
     запись атомарная (tmp + replace), перевод строк "\n". Возвращает размер.
+
+    Две защиты от молчаливой потери чужой работы (владелец правит файл в окне,
+    агент правит тот же файл своей рукой — раньше выигрывал тот, кто записал
+    последним, и чужая работа исчезала целиком, без предупреждения и копии):
+      * `mtime_ns` — то, что окно видело при чтении. Не совпало -> code=conflict,
+        писать не начинаем;
+      * `<имя>.md.bak` рядом перед подменой — последний рубеж, когда окно
+        отпечаток не прислало (старая сборка UI).
     """
-    base = tree()
-    clean = str(rel or "").replace("\\", "/").strip("/")
-    if not clean or ".." in clean.split("/") or not clean.endswith(".md"):
-        return {"error": "путь не похож на маркдаун агента"}
-    if not any(clean == root or clean.startswith(root + "/") for _, root in _MD_GROUPS):
-        return {"error": "этот файл окно не правит"}
-    path = base / clean
+    checked = _md_path(rel)
+    if isinstance(checked, dict):
+        checked["error"] = checked["error"].replace("показывает", "правит")
+        return checked
+    clean, path = checked
+    if md_readonly(clean):
+        return {"error": "Этот файл окно не правит: он подписан агентом, "
+                         "ручная правка его обнуляет.", "code": "readonly"}
     try:
-        path.resolve().relative_to(base.resolve())
-    except ValueError:
-        return {"error": "путь выходит из дерева"}
+        stat = path.stat()
+    except OSError:
+        stat = None
+    if stat is not None and mtime_ns not in (None, ""):
+        try:
+            seen = int(mtime_ns)
+        except (TypeError, ValueError):
+            seen = None
+        if seen is not None and seen != stat.st_mtime_ns:
+            return {"error": "Файл изменился с тех пор, как окно его открыло — "
+                             "перечитай и перенеси правку заново.",
+                    "code": "conflict", "mtime_ns": str(stat.st_mtime_ns)}
     body = str(text or "").replace("\r\n", "\n")
     if not body.endswith("\n"):
         body += "\n"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        if stat is not None:
+            try:
+                shutil.copy2(path, path.with_name(path.name + ".bak"))
+            except OSError:
+                pass          # дерево только на чтение — не повод не пытаться писать
         tmp = path.with_name(".tmp-" + path.name)
         tmp.write_text(body, encoding="utf-8", newline="\n")
         os.replace(tmp, path)
     except OSError as exc:
-        return {"error": f"не записалось: {exc}"}
-    return {"path": clean, "size": len(body.encode("utf-8"))}
+        return {"error": f"не записалось: {exc}", "code": "io"}
+    try:
+        written = str(path.stat().st_mtime_ns)   # строкой — см. safe_read_md
+    except OSError:
+        written = None
+    return {"path": clean, "size": len(body.encode("utf-8")), "mtime_ns": written}

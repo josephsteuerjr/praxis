@@ -11,12 +11,24 @@ export class NameScene extends FormScene {
     const head = el("h2", "form-head");
     head.append(el("span", "line", "Как назвать агента?"));
     const grid = el("div", "form-grid two");
+    // Подпись: имя агента его же почерком — так оно встанет над его комнатой в
+    // окне. Живой предпросмотр, пока печатаешь: имя видно раньше, чем принято.
+    const signature = el("p", "signature");
+    const syncSignature = () => {
+      const name = setup.agent.trim();
+      signature.textContent = name || "…";
+      signature.classList.toggle("empty", !name);
+    };
     const agentField = field({
       label: "Имя агента",
       value: setup.agent,
       placeholder: "например, Вера или Марк",
-      onInput: (v) => (setup.agent = v),
+      onInput: (v) => {
+        setup.agent = v;
+        syncSignature();
+      },
     });
+    syncSignature();
     const ownerField = field({
       label: "Твоё имя",
       value: setup.owner,
@@ -36,7 +48,7 @@ export class NameScene extends FormScene {
         "Чтобы знать, чьё слово решает при любом конфликте указаний, и обращаться к тебе по-человечески.",
       ),
     );
-    this.mount(head, grid, notes);
+    this.mount(head, grid, signature, notes);
   }
 
   protected onEntered() {

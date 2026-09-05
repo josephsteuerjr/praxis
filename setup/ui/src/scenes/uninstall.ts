@@ -21,7 +21,7 @@ export class UninstallScene extends FormScene {
     const pick = choice<"keep" | "purge">({
       value: "keep",
       items: [
-        { value: "keep", title: "Оставить данные", text: "память, конституция, вход в Telegram и ChatGPT остаются в папке data" },
+        { value: "keep", title: "Оставить данные", text: "память, конституция, ключ модели, вход в Telegram и ChatGPT остаются в папке data" },
         { value: "purge", title: "Удалить всё", text: "папка данных исчезает вместе с программой, восстановить будет нечего" },
       ],
       onChange: (v) => (this.purge = v === "purge"),
@@ -31,7 +31,9 @@ export class UninstallScene extends FormScene {
     this.result = el("div", "install-result");
     this.result.hidden = true;
     this.mount(head, lead, pick, explain("Что останется",
-      "Если данные оставить, следующая установка в ту же папку подхватит агента с его памятью. Удалить их можно и позже, просто убрав папку."), this.actions, this.result);
+      "Если данные оставить, следующая установка в ту же папку подхватит агента с его памятью. В той же папке останутся секреты: " +
+      "ключ модели, вход в аккаунт ChatGPT и сессия твоего Telegram. Удалить их можно и позже, убрав папку целиком; " +
+      "рядом с ней будет записка КАК-ВЕРНУТЬСЯ.md."), this.actions, this.result);
   }
 
   get locked(): boolean {
@@ -45,12 +47,17 @@ export class UninstallScene extends FormScene {
     this.result.hidden = false;
     this.result.replaceChildren(el("p", "muted", "Снимаю…"));
     let text: string;
+    let failed = false;
     try {
       text = await runUninstall(this.purge);
     } catch (e) {
       text = "Снятие не удалось: " + String(e);
+      failed = true;
     }
-    const title = el("h3", "", text.startsWith("Снятие не удалось") ? "Не вышло" : "Снято");
+    // Заголовок раньше сверялся со строкой, которой снятие не возвращает никогда,
+    // — «Снято» стояло и над «служба осталась», и над «не удалось удалить».
+    const partial = /ВНИМАНИЕ|Не всё получилось/.test(text);
+    const title = el("h3", "", failed ? "Не вышло" : partial ? "Снято не до конца" : "Снято");
     const note = el("p", "muted", text);
     const close = button("Закрыть", "primary", () => void getCurrentWindow().close());
     this.result.replaceChildren(title, note, close);

@@ -3,8 +3,8 @@
 // экраном, а не файлом.
 import "./styles/app.css";
 import { api, cfg, connect, inTauri, onConnection, onEvent, post, shell } from "./api";
-import { esc, fmtN, fmtTs, q, toast } from "./lib";
-import { S, WINDOW_ROOM, type AgentState, type Room, type Run, type View } from "./state";
+import { bindFail, esc, failHTML, fmtN, fmtTs, humanError, q, toast } from "./lib";
+import { PRODUCT_NAME, S, WINDOW_ROOM, runIsLive, type AgentState, type Pending, type Room, type Run, type View } from "./state";
 import * as talk from "./views/talk";
 import * as plans from "./views/plans";
 import * as frame from "./views/frame";
@@ -151,22 +151,53 @@ const views: Record<View, { render: (root: HTMLElement) => Promise<void> }> = {
   settings,
 };
 
-export async function show(id: View) {
+// Диктору говорим отдельной строкой: раньше aria-live висел на #view, и весь
+// чат зачитывался заново каждые полторы секунды.
+const liveRegion = q<HTMLElement>("#live");
+function announce(text: string) {
+  liveRegion.textContent = text;
+}
+
+// Два конкурирующих show() (клик по полке во время незавершённого чтения)
+// писали в один #view; поколение отсекает опоздавшего.
+let showSeq = 0;
+
+/**
+ * @param quiet — «обнови содержимое», а не «покажи другой раздел»: без
+ *   промежуточного «читаю…» и с сохранением прокрутки. Нужен живым обновлениям
+ *   (журнал под штормом откладываний иначе мигает и уезжает в начало).
+ */
+export async function show(id: View, opts: { quiet?: boolean } = {}) {
+  const gen = ++showSeq;
   S.view = id;
   syncRail();
   const section = SECTIONS.find((s) => s.id === id);
   headKicker.textContent = section ? section.kicker : "Программа";
-  if (id !== "talk") headTitle.textContent = section?.label ?? "Настройки";
+  if (id !== "talk") {
+    headTitle.textContent = section?.label ?? "Настройки";
+    // Почерк — только над комнатой агента; «Настройки» и остальные экраны —
+    // обычной шапкой (иначе класс с комнаты переезжал на них, найдено живьём).
+    headTitle.classList.remove("hand");
+  }
   const talking = id === "talk";
   composer.hidden = !talking;
   panel.hidden = !talking;
   app.classList.toggle("with-panel", talking);
   panelBtn.hidden = !talking;
-  view.innerHTML = '<div class="empty">читаю…</div>';
+  const keepScroll = opts.quiet ? view.scrollTop : 0;
+  if (!opts.quiet) view.innerHTML = '<div class="empty">читаю…</div>';
   try {
     await views[id].render(view);
+    if (gen !== showSeq) return;
+    if (opts.quiet) view.scrollTop = keepScroll;
+    announce(section?.label ?? "Настройки");
   } catch (e) {
-    view.innerHTML = `<div class="empty"><b>Не прочиталось</b>${esc((e as Error).message)}</div>`;
+    if (gen !== showSeq) return;
+    // Раньше сюда прилетало «Failed to fetch» английской строкой браузера как
+    // единственное объяснение, без кнопки и без подсказки, что делать.
+    view.innerHTML = failHTML(e);
+    bindFail(view, () => void show(id));
+    announce(humanError(e).text);
   }
 }
 
@@ -174,7 +205,9 @@ export async function show(id: View) {
 
 function roomsFromRuns(runs: Run[], chats: Array<{ peer_id: string; title?: string; messages?: number }>): Room[] {
   const byKey = new Map<string, Room>();
-  byKey.set(WINDOW_ROOM, { key: WINDOW_ROOM, name: "Окно", live: false, count: 0 });
+  // Комната окна носит имя агента, а не слово «Окно» (слово владельца 06.09):
+  // это её голос здесь, а не место.
+  byKey.set(WINDOW_ROOM, { key: WINDOW_ROOM, name: S.agent, live: false, count: 0 });
   for (const c of chats) {
     const key = String(c.peer_id);
     if (key === "pult") continue;
@@ -185,7 +218,7 @@ function roomsFromRuns(runs: Run[], chats: Array<{ peer_id: string; title?: stri
     let key = String(r.chat_id);
     if (key === "pult") key = WINDOW_ROOM;
     const room = byKey.get(key) ?? { key, name: r.chat_title || "чат " + key, live: false, count: 0 };
-    if (r.status === "running") room.live = true;
+    if (runIsLive(r.status)) room.live = true;
     room.count += 1;
     if (!byKey.has(key)) byKey.set(key, room);
   }
@@ -199,7 +232,9 @@ function renderRooms() {
       b.type = "button";
       b.className = "room";
       b.setAttribute("aria-current", String(room.key === S.room));
-      b.innerHTML = `<span class="room-name">${esc(room.name)}</span>` +
+      // Имя агента над его комнатой — его почерком (.hand); чужие комнаты
+      // (чаты Telegram) остаются гротеском интерфейса.
+      b.innerHTML = `<span class="room-name${room.key === WINDOW_ROOM ? " hand" : ""}">${esc(room.name)}</span>` +
         (room.count ? `<span class="room-count">${room.count}</span>` : "") +
         `<span class="dot ${room.live ? "live" : ""}"></span>`;
       b.addEventListener("click", () => {
@@ -211,7 +246,9 @@ function renderRooms() {
       return b;
     }),
   );
-  q<HTMLElement>("#rail-agent").textContent = S.agent;
+  // Шапка полки — имя ПРОДУКТА, не агента: слово владельца 06.09 («оставил бы
+  // Hélène в рабочем окне как ПО»). Имя агента живёт в подписи его слов.
+  q<HTMLElement>("#rail-agent").textContent = PRODUCT_NAME;
 }
 
 export async function loadRooms() {
@@ -228,7 +265,35 @@ export async function loadRooms() {
 
 // ---------------------------------------------------------------- состояние
 
+/**
+ * Перезапуск честно: если агента держит служба Windows, оболочка своих детей не
+ * поднимала, и перезапуск окна — нулевое действие. Раньше владелец жал кнопку
+ * и не получал ничего, без единого слова почему.
+ */
+export async function restartHarness() {
+  let svc = "";
+  try {
+    svc = await shell<string>("service_state");
+  } catch {
+    // вне приложения (веб) — служба не при делах
+  }
+  if (svc === "running") {
+    // Указатель на карточку: отдельной «Служба Windows» нет, службой управляет
+    // секция внутри карточки «Режим». Служба при этом не режим и ограду не
+    // снимает — она опция поверх выбранной ограды (см. ./mode).
+    toast("Агента держит служба Windows: перезапуск окна её не тронет. Настройки → Режим: сними и поставь службу заново.");
+    void show("settings");
+    return;
+  }
+  try {
+    await shell("restart_self");
+  } catch (e) {
+    toast("Не перезапустилось: " + humanError(e).text);
+  }
+}
+
 function renderState(s: AgentState | null, connected: boolean) {
+  paintPulse(connected);
   if (!connected) {
     statePill.dataset.level = "off";
     stateText.textContent = "Нет связи с харнессом";
@@ -238,12 +303,13 @@ function renderState(s: AgentState | null, connected: boolean) {
   if (!s) return;
   statePill.dataset.level = s.level;
   stateText.textContent = s.phrase;
+  statePill.title = s.phrase;
   if (s.action) {
     stateAction.hidden = false;
     stateAction.textContent = s.action.label;
     stateAction.onclick = () => {
       if (s.action?.target === "settings") void show("settings");
-      else if (s.action?.target === "restart") void shell("restart_self").catch((e) => toast(String(e)));
+      else if (s.action?.target === "restart") void restartHarness();
     };
   } else {
     stateAction.hidden = true;
@@ -261,12 +327,42 @@ export async function refreshState() {
     S.agentState = s;
     if (s.agent) {
       S.agent = s.agent;
-      q<HTMLElement>("#rail-agent").textContent = s.agent;
+      // Шапка полки остаётся именем продукта: имя агента из состояния сюда не
+      // пишем (три места писали по-разному — вот это и возвращало «Мира»).
+      q<HTMLElement>("#rail-agent").textContent = PRODUCT_NAME;
+      // Комната окна — по имени агента: переименовали в настройках — сменилась
+      // и она, в списке и в шапке, если открыта именно она.
+      const win = S.rooms.find((r) => r.key === WINDOW_ROOM);
+      if (win && win.name !== s.agent) {
+        win.name = s.agent;
+        if (S.room === WINDOW_ROOM) {
+          S.roomName = s.agent;
+          const title = document.querySelector<HTMLElement>("#head-title");
+          if (title && S.view === "talk") title.textContent = s.agent;
+        }
+        renderRooms();
+      }
     }
-    renderState(s, true);
+    // Связь берём настоящую: api() умеет уйти на HTTP-фолбэк при мёртвом
+    // сокете, и жёсткое `true` затирало честное «Нет связи с харнессом».
+    renderState(s, S.connected);
   } catch {
     // связь решает пилюля через onConnection
   }
+}
+
+// Последняя строка расхода и время, когда её подтвердили. При обрыве связи
+// цифры не выдаём за текущие: раньше рядом с «Нет связи» бодро стояли
+// вчерашние токены, и владелец верил им.
+let pulseHTML = "";
+let pulseStamp = "";
+function paintPulse(connected: boolean) {
+  if (!pulseHTML) {
+    pulseBox.textContent = "";
+    return;
+  }
+  pulseBox.classList.toggle("stale", !connected);
+  pulseBox.innerHTML = connected ? pulseHTML : `<span class="muted">данные от ${esc(pulseStamp)}</span> · ${pulseHTML}`;
 }
 
 async function refreshPulse() {
@@ -274,52 +370,154 @@ async function refreshPulse() {
     const p = await api("/api/pulse");
     const l = p.last || {};
     if (!l.ts) {
+      pulseHTML = "";
       pulseBox.textContent = "";
       return;
     }
     const total = (l.in || 0) + (l.cached || 0);
     const share = total ? Math.round((100 * (l.cached || 0)) / total) : 0;
-    pulseBox.innerHTML =
+    pulseHTML =
       `${fmtTs(l.ts)} · <b>${esc(l.model || "")}</b> · кэш <span class="cachebar"><i style="width:${share}%"></i></span>${share}% · ` +
       `${fmtN(total)}→${fmtN(l.out || 0)}${l.err ? ' · <span class="err-msg">ошибка</span>' : ""}`;
+    pulseStamp = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    if (p.calls_day != null) {
+      pulseBox.title = `За сутки: вызовов ${fmtN(p.calls_day)}` +
+        (p.cache_day != null ? `, доля кэша ${p.cache_day}%` : "") +
+        (p.cache_now != null ? `; сейчас ${p.cache_now}%` : "");
+    }
+    paintPulse(S.connected);
   } catch {
-    // тихо
+    // Цифра не подтверждена живым ответом — значит она не текущая.
+    paintPulse(false);
   }
 }
 
 // ---------------------------------------------------------------- композер
 
+// Черновик переживает падение трубы и закрытие окна: набранное не должно
+// пропадать никогда.
+const draftKey = (room: string) => "frame.draft." + room;
+function saveDraft(room: string, text: string) {
+  try {
+    if (text) localStorage.setItem(draftKey(room), text);
+    else localStorage.removeItem(draftKey(room));
+  } catch {
+    // без хранилища черновик живёт до перезапуска
+  }
+}
+function readDraft(room: string): string {
+  try {
+    return localStorage.getItem(draftKey(room)) || "";
+  } catch {
+    return "";
+  }
+}
+function autoGrow() {
+  say.style.height = "auto";
+  say.style.height = Math.min(say.scrollHeight, 180) + "px";
+}
+
+let composerRoom = "";
 function syncComposer() {
   composerTarget.textContent = S.room === WINDOW_ROOM ? "" : `в «${S.roomName}»`;
+  // Черновик подставляем только при настоящей смене комнаты: событие
+  // frame-room летит на каждой перерисовке чата (раз в 1.5 с во время хода),
+  // и иначе оно затирало бы то, что владелец печатает прямо сейчас.
+  if (composerRoom !== S.room) {
+    saveDraft(composerRoom, composerRoom ? say.value : "");
+    composerRoom = S.room;
+    say.value = readDraft(S.room);
+    autoGrow();
+  }
 }
 
 say.addEventListener("input", () => {
-  say.style.height = "auto";
-  say.style.height = Math.min(say.scrollHeight, 180) + "px";
+  autoGrow();
+  saveDraft(S.room, say.value);
 });
 say.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
+  // sending и isComposing: без них два быстрых Enter давали два хода агента по
+  // одному тексту (и два счёта), а Enter подтверждения IME-композиции при
+  // кириллическом вводе отправлял недописанное.
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !sending) {
     e.preventDefault();
     void doSend();
   }
 });
 send.addEventListener("click", () => void doSend());
 
+let sending = false;
+let pendSeq = 0;
+
+/** Куда делась реплика владельца — словами, по настоящему состоянию агента. */
+function sendNote(chat: string, midturn: boolean): string {
+  if (chat) return midturn ? `ушло в «${S.roomName}»` : `ждёт хода в «${S.roomName}»`;
+  if (midturn) return "агент читает сейчас";
+  const st = S.agentState;
+  if (st && st.runner && !st.runner.alive) return "ждёт запуска агента";
+  return "ждёт следующего хода";
+}
+
 async function doSend() {
+  if (sending) return;
   const text = say.value.trim();
   if (!text) return;
-  const chat = S.room === WINDOW_ROOM ? "" : S.room;
+  const room = S.room;
+  const chat = room === WINDOW_ROOM ? "" : room;
+  // Труба принимает записку в telegram-комнату и без бота (midturn:true), а
+  // руннер потом молча выбрасывает её в log.warning «бота нет — некуда везти».
+  // Состояние это знает заранее — спрашиваем его, вместо того чтобы терять текст.
+  if (chat && S.agentState?.telegram && !S.agentState.telegram.enabled) {
+    toast(`Telegram не подключён: везти сообщение в «${S.roomName}» некуда. Настройки → Telegram.`);
+    return;
+  }
+  // Оптимистичное эхо: реплика ложится в ленту сразу. Раньше поле очищалось, в
+  // ленте не появлялось ничего (туда пишет только руннер, между ходами), и
+  // экран говорил «Здесь пока тихо» сразу после того, как владелец написал.
+  const pending: Pending = {
+    id: ++pendSeq,
+    room,
+    text,
+    at: new Date().toISOString(),
+    state: "sending",
+    note: "отправляется…",
+  };
+  S.pending.push(pending);
+  sending = true;
   send.disabled = true;
+  const typed = say.value;
+  say.value = "";
+  autoGrow();
+  saveDraft(room, "");
+  talk.paintPending();
+  const slow = window.setTimeout(() => {
+    if (pending.state === "sending") {
+      pending.note = "агент не отвечает уже пять секунд…";
+      talk.paintPending();
+    }
+  }, 5000);
   try {
     const data = await post("/api/say", chat ? { text, chat } : { text });
-    say.value = "";
-    say.style.height = "auto";
-    if (chat) toast(`Ушло в «${S.roomName}»: ход пойдёт там`);
-    else if (!data.midturn) toast("Ушло запиской: агент прочитает на следующем ходу");
+    pending.state = "queued";
+    pending.note = sendNote(chat, !!data?.midturn);
+    talk.paintPending();
     talk.afterSend();
   } catch (e) {
-    toast("Не ушло: " + (e as Error).message);
+    // Текст не теряем: пузырь убираем, набранное возвращаем в поле.
+    S.pending = S.pending.filter((p) => p.id !== pending.id);
+    talk.paintPending();
+    if (S.room === room) {
+      say.value = typed;
+      autoGrow();
+      saveDraft(room, typed);
+      say.focus();
+    } else {
+      saveDraft(room, typed);
+    }
+    toast("Не ушло: " + humanError(e).text);
   }
+  clearTimeout(slow);
+  sending = false;
   send.disabled = false;
 }
 
@@ -338,6 +536,12 @@ onConnection((ok) => {
   }
 });
 
+let skipsTimer = 0;
+let skipsPaintedAt = 0;
+function paintJournal() {
+  skipsPaintedAt = Date.now();
+  if (S.view === "journal") void show("journal", { quiet: true });
+}
 onEvent((ev) => {
   if (ev.t === "health") void refreshState();
   if (ev.t === "llm") void refreshPulse();
@@ -346,16 +550,27 @@ onEvent((ev) => {
     talk.onRunEvent(String(ev.run_id ?? ""));
     void refreshState();
   }
-  if (ev.t === "skips" && S.view === "journal") void show("journal");
+  // Дебаунс, как у чата: под штормом откладываний (продукт сам заводит тревогу
+  // defer_storm) события шли раз в 1.33 с, и журнал — экран, написанный ровно
+  // для этого случая, — мигал «читаю…» и уезжал в начало таблицы.
+  // Потолок ожидания: сплошной поток событий не должен бесконечно отодвигать
+  // перерисовку («хвостовой» дебаунс без потолка перестаёт обновлять экран
+  // ровно под штормом, ради которого журнал и открыли).
+  if (ev.t === "skips" && S.view === "journal") {
+    clearTimeout(skipsTimer);
+    if (Date.now() - skipsPaintedAt > 3000) paintJournal();
+    else skipsTimer = window.setTimeout(paintJournal, 1500);
+  }
 });
 
 // ---------------------------------------------------------------- старт
 
 S.agent = (cfg.agent || "").trim() || "Агент";
-q<HTMLElement>("#rail-agent").textContent = S.agent;
+q<HTMLElement>("#rail-agent").textContent = PRODUCT_NAME;
 syncComposer();
 addEventListener("frame-room", syncComposer);
 addEventListener("frame-go", (e) => void show((e as CustomEvent<View>).detail));
+addEventListener("frame-restart", () => void restartHarness());
 connect();
 void refreshState();
 loadRooms()

@@ -60,7 +60,10 @@
           </div>
         </header>
         <div id="alarm" class="alarm" hidden></div>
-        <section id="view" class="view scroll" aria-live="polite"></section>
+        <!-- aria-live снят: сюда кладут ленту целиком на каждой перерисовке
+             (раз в ~1.5 с во время хода), и диктор зачитывал весь чат заново.
+             Смена раздела объявляется отдельной строкой #live. -->
+        <section id="view" class="view scroll"></section>
         <footer id="composer" class="composer">
           <div class="composer-box">
             <div id="composer-target" class="composer-target"></div>
@@ -75,6 +78,7 @@
 
       <aside id="panel" class="panel scroll" hidden></aside>
     </div>
+    <div id="live" class="sr-only" aria-live="polite"></div>
     <div id="toast" class="toast" hidden></div>
   </body>
 </html>

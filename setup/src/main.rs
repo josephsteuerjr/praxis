@@ -14,6 +14,16 @@
 // ярлыки, запись в «Приложениях», служба; данные остаются, если не --purge.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// Без фичи custom-protocol Tauri считает сборку «dev» и грузит devUrl
+// (http://localhost:5173) вместо вшитой страницы: у покупателя окно установщика
+// осталось бы пустым навсегда, и ни одна проверка дальше по конвейеру этого не
+// ловит. Пусть такая сборка просто не соберётся.
+#[cfg(all(not(debug_assertions), not(feature = "custom-protocol")))]
+compile_error!(
+    "релизная сборка установщика без --features custom-protocol грузит http://localhost:5173; \
+     собирай `cargo build --release --features custom-protocol` или `tauri build`"
+);
+
 mod install;
 
 use std::process::Command;
@@ -59,16 +69,60 @@ fn relay_status() -> String {
     install::relay_status()
 }
 
-/// Установка целиком; ход — событиями `install-progress`, итог — распиской.
+/// Службы прежних поколений продукта (Vera, Frame, Praxis) и своя, если она
+/// живёт не в той папке, куда сейчас ставят. Опрос SCM — WMI, без прав.
+/// `home` — папка установки или снятия: своя служба из списка выпадает.
 #[tauri::command]
-async fn install(app: tauri::AppHandle, setup: install::Setup) -> Result<install::Receipt, String> {
+async fn legacy_services(home: Option<String>) -> Vec<install::LegacyService> {
     tauri::async_runtime::spawn_blocking(move || {
-        install::install(&setup, |p| {
-            let _ = app.emit("install-progress", p);
-        })
+        let path = home.map(std::path::PathBuf::from);
+        install::legacy_services(path.as_deref())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .unwrap_or_default()
+}
+
+/// Есть ли у этой учётной записи права администратора: экран режима по этому
+/// ответу либо оставляет карточку «Служба» живой, либо делает недоступной и
+/// пишет ПОЧЕМУ. Ничего не меняет и прав не просит.
+#[tauri::command]
+async fn admin_rights() -> install::AdminRights {
+    tauri::async_runtime::spawn_blocking(install::admin_rights)
+        .await
+        .unwrap_or(install::AdminRights { can: true, certain: false, elevated: false })
+}
+
+/// Снять названную службу. Зовётся ТОЛЬКО кнопкой в сцене согласия: молча
+/// трогать службу прежнего поколения нельзя, даже свою.
+#[tauri::command]
+async fn remove_service(name: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || install::remove_service(&name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Установка целиком; ход — событиями `install-progress`, итог — распиской.
+///
+/// Журнал пишем ВСЕГДА, а не только в безоконном `--install`: раньше при отказе
+/// владелец видел одну красную строку в окне, и она исчезала навсегда вместе с окном.
+#[tauri::command]
+async fn install(app: tauri::AppHandle, setup: install::Setup) -> Result<install::Receipt, String> {
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let mut log = String::new();
+        let r = install::install(&setup, |p| {
+            log.push_str(&format!("[{}/{}] {}\n", p.step, p.total, p.label));
+            let _ = app.emit("install-progress", p);
+        });
+        match &r {
+            Ok(rec) => log.push_str(&format!("OK {}\n", serde_json::to_string(rec).unwrap_or_default())),
+            Err(e) => log.push_str(&format!("FAIL {e}\n")),
+        }
+        let _ = std::fs::write(install::exe_dir().join("install.log"), &log);
+        r
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    result
 }
 
 /// Открыть установленный Hélène и закрыть установщик.
@@ -110,14 +164,13 @@ async fn uninstall_run(purge: bool) -> Result<String, String> {
     Ok(text)
 }
 
-#[allow(dead_code)]
 fn message_box(text: &str) {
     let script = format!(
         "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('{}', '{}') | Out-Null",
         text.replace('\'', "''"),
         install::PRODUCT
     );
-    let _ = Command::new("powershell.exe")
+    let _ = Command::new(install::powershell_exe())
         .args(["-NoProfile", "-Command", &script])
         .status();
 }
@@ -165,22 +218,49 @@ fn main() {
     if uninstall_mode && args.iter().any(|a| a == "--quiet") {
         // Тихое снятие из командной строки; с окном — та же сцена, что у установки.
         let purge = args.iter().any(|a| a == "--purge");
-        let text = match install::uninstall(purge) {
+        let result = install::uninstall(purge);
+        let ok = result.is_ok();
+        let text = match result {
             Ok(text) => text,
             Err(err) => format!("Удаление не удалось: {err}"),
         };
         let _ = std::fs::write(std::env::temp_dir().join("helene-uninstall.log"), &text);
-        install::uninstall_finish();
+        // Хвост самоудаления — ТОЛЬКО когда снятие состоялось. Раньше он бежал
+        // всегда и уносил helene-setup.exe даже из папки, которую снимать отказались.
+        if ok {
+            install::uninstall_finish();
+        }
+        if !ok {
+            std::process::exit(1);
+        }
         return;
     }
     UNINSTALL_MODE.store(uninstall_mode, std::sync::atomic::Ordering::Relaxed);
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             focus_main(app);
+            // «Удалить» в «Приложениях» при открытом установщике запускает
+            // helene-setup.exe --uninstall. Молча сфокусировать окно установки —
+            // значит показать человеку не то, о чём он просил.
+            if argv.iter().any(|a| a == "--uninstall")
+                && !UNINSTALL_MODE.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                std::thread::spawn(|| {
+                    message_box(
+                        "Сейчас открыт установщик. Закрой его окно и запусти удаление ещё раз.",
+                    )
+                });
+            }
         }))
-        .invoke_handler(tauri::generate_handler![defaults, install, open_frame, probe_model, relay_login, relay_status, relay_models, uninstall_run])
+        .invoke_handler(tauri::generate_handler![defaults, install, open_frame, probe_model, relay_login, relay_status, relay_models, uninstall_run, legacy_services, remove_service, admin_rights])
         .setup(|app| {
+            // Учётные данные ChatGPT прошлого запуска установщика: пока они
+            // лежали в %TEMP%, протухшая учётка от другого аккаунта показывалась
+            // как зелёное «Вход выполнен» и переезжала в новую установку.
+            // Только здесь: второй экземпляр до setup не доходит (его снимает
+            // плагин single-instance), иначе он стёр бы вход первого.
+            install::relay_cleanup();
             tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -200,6 +280,20 @@ fn main() {
             .shadow(true)
             .visible(false)
             .build()?;
+            // Страховка: окно рождается невидимым, а показывает его UI. Любое
+            // исключение в модуле UI до win.show() оставляло живой процесс вообще
+            // без окна — владелец видел пустоту, а single-instance был занят.
+            // Показать уже показанное окно безвредно (так же сделано в оболочке).
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(4));
+                if let Some(window) = handle.get_webview_window("main") {
+                    if !window.is_visible().unwrap_or(false) {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+            });
             Ok(())
         })
         // Закрыли установщик посреди входа в ChatGPT — помощник входа не
@@ -216,6 +310,9 @@ fn main() {
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
                 install::relay_abort();
+                // Временный дом реле с живым refresh_token к аккаунту ChatGPT не
+                // должен пережить установщик: раньше он оставался в %TEMP% навсегда.
+                install::relay_cleanup();
                 if UNINSTALL_DONE.load(std::sync::atomic::Ordering::Relaxed) {
                     install::uninstall_finish();
                 }

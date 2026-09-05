@@ -20,11 +20,24 @@
 //   * имя агента — из конфига; продукт зовётся Hélène.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// Тот же гард, что у установщика (setup/src/main.rs), и по той же причине —
+// асимметрия сборки. У оболочки нет devUrl, поэтому без фичи она собирается и
+// даже работает; но tauri-codegen считает такую сборку dev'ом и дописывает в
+// exe абсолютный путь папки сборки (with_config_parent) — в публичный релиз
+// уезжает домашний путь владельца, а бинарь молча получает статус dev-сборки.
+// Отличить его грепом нельзя, build_dist.py копирует exe вслепую, CI нет.
+// Пусть такая сборка просто не соберётся.
+#[cfg(all(not(debug_assertions), not(feature = "custom-protocol")))]
+compile_error!(
+    "релизная сборка оболочки без --features custom-protocol вшивает в exe путь папки сборки \
+     и метит бинарь как dev; собирай `cargo build --release --features custom-protocol` или `tauri build`"
+);
+
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::Manager;
 
@@ -42,6 +55,16 @@ const CONFIG_NAME: &str = "helene.json";
 const WINDOW_ROOM: &str = "window";
 /// AppUserModelID уведомлений = identifier из tauri.conf.json (см. register_toast_identity).
 const TOAST_ID: &str = "app.helene.desk";
+
+/// Владелец уже убирал окно в трей: отложенный показ окна не должен вытаскивать
+/// его обратно поверх всего, чем человек занят.
+static HIDDEN_BY_OWNER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Окно открылось с экраном «порт держит чужая установка»: адрес харнесса в
+/// вебвью не подставлен вовсе. Если чужая копия закроется и надзор поднимет
+/// СВОЙ харнесс, окно об этом ещё не знает — и должно сказать владельцу, что
+/// теперь его стоит перезапустить.
+static BLOCKED_BY_FOREIGN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Журнал оболочки рядом с exe: то, что иначе терялось бы без консоли.
 fn log_line(text: &str) {
@@ -76,6 +99,124 @@ fn toast(title: &str, body: &str) {
 #[cfg(not(windows))]
 fn toast(_title: &str, _body: &str) {}
 
+/// Окно с ошибкой — последний канал, когда журнала мало и окна ещё/уже нет.
+/// Оболочка собрана как windows_subsystem="windows": консоли у неё нет, и без
+/// этого владелец не получал вообще ничего — ни строки, ни звука.
+#[cfg(windows)]
+fn message_box_with(title: &str, text: &str, icon: u32) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, MB_OK, MB_SETFOREGROUND, MB_TOPMOST,
+    };
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (caption, body) = (wide(title), wide(text));
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            body.as_ptr(),
+            caption.as_ptr(),
+            MB_OK | icon | MB_SETFOREGROUND | MB_TOPMOST,
+        );
+    }
+}
+
+#[cfg(windows)]
+fn message_box(title: &str, text: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONERROR;
+    message_box_with(title, text, MB_ICONERROR);
+}
+
+/// То же окно, но со значком «просто сообщаю»: крест ошибки там, где ничего
+/// не сломалось, — это неправда об экране.
+#[cfg(windows)]
+fn message_box_info(title: &str, text: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONINFORMATION;
+    message_box_with(title, text, MB_ICONINFORMATION);
+}
+
+#[cfg(not(windows))]
+fn message_box(_title: &str, _text: &str) {}
+
+#[cfg(not(windows))]
+fn message_box_info(_title: &str, _text: &str) {}
+
+/// То же окно, но не задерживая запуск: окно программы должно открыться, даже
+/// если человек не подошёл нажать «ОК».
+fn message_box_async(title: String, text: String) {
+    std::thread::spawn(move || message_box(&title, &text));
+}
+
+/// Паника в оконном exe гасила процесс АБСОЛЮТНО молча: окно исчезало или не
+/// появлялось, в helene.log оставалась одна строка «старт». Теперь любая
+/// паника — в любом потоке — оставляет причину в журнале и показывает окно.
+/// Второй раз окно не показываем: петля паник не должна засыпать экран.
+fn install_panic_hook() {
+    static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let place = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "неизвестно где".into());
+        let what = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "без описания".into());
+        let text = format!("ПАНИКА {place}: {what}");
+        log_line(&text);
+        if !SHOWN.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            message_box(
+                &format!("{PRODUCT_UI}: сбой"),
+                &format!("{text}\n\nПодробности — в helene.log рядом с программой."),
+            );
+        }
+        previous(info);
+    }));
+}
+
+/// Системные программы — только полным путём из %SystemRoot%.
+/// Command::new("powershell") ищет exe СНАЧАЛА в папке своего процесса: файл
+/// powershell.exe, положенный рядом с helene.exe (а туда пишет и сам агент —
+/// fence.py разрешает ему папку установки), исполнялся бы вместо системного,
+/// в том числе под UAC в install_service.
+fn system_root() -> PathBuf {
+    std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("C:\\Windows"))
+}
+
+fn sys_exe(name: &str) -> PathBuf {
+    let full = system_root().join("System32").join(name);
+    if full.exists() {
+        full
+    } else {
+        PathBuf::from(name)
+    }
+}
+
+fn powershell_exe() -> PathBuf {
+    let full = system_root()
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    if full.exists() {
+        full
+    } else {
+        PathBuf::from("powershell.exe")
+    }
+}
+
+fn explorer_exe() -> PathBuf {
+    let full = system_root().join("explorer.exe");
+    if full.exists() {
+        full
+    } else {
+        PathBuf::from("explorer.exe")
+    }
+}
+
 /// Как поднять ребёнка заново, если он упал: оболочка — надзиратель, а не
 /// просто запускатель. Всё нужное для повторного spawn лежит здесь.
 #[derive(Clone)]
@@ -95,6 +236,33 @@ impl ChildSpec {
         }
     }
 
+    /// Как назвать это владельцу. Имён питоновских файлов он нигде в программе
+    /// не видит, а уведомление о падении получал именно ими («deskapp.py
+    /// падает раз за разом»).
+    fn human(&self) -> &'static str {
+        match self {
+            ChildSpec::Script { script, .. } => {
+                match script.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default().as_str() {
+                    "deskapp.py" => "Связь с агентом",
+                    "runner.py" => "Агент",
+                    _ => "Часть программы",
+                }
+            }
+            ChildSpec::Relay { .. } => "Подписка ChatGPT",
+        }
+    }
+
+    /// Куда пишется вывод этого ребёнка (реле ведёт свои логи само).
+    fn log_path(&self) -> Option<PathBuf> {
+        match self {
+            ChildSpec::Script { script, tree, .. } => {
+                let stem = script.file_stem()?.to_string_lossy().into_owned();
+                Some(tree.join(format!("{stem}.log")))
+            }
+            ChildSpec::Relay { .. } => None,
+        }
+    }
+
     fn spawn(&self) -> Option<Child> {
         match self {
             ChildSpec::Script { python, script, args, tree, host } => spawn_child(python, script, args, tree, host),
@@ -103,16 +271,35 @@ impl ChildSpec {
     }
 }
 
+/// Ребёнок под надзором. `child` — Option, потому что «не поднялся» не значит
+/// «забыть навсегда»: раньше провал ПЕРВОГО спавна выбрасывал спеку из
+/// надзора (filter_map), и агент не поднимался уже никогда, молча.
 struct Managed {
     spec: ChildSpec,
-    child: Child,
-    falls: Vec<std::time::Instant>,
-    retry_at: Option<std::time::Instant>,
+    child: Option<Child>,
+    falls: Vec<Instant>,
+    retry_at: Option<Instant>,
+    /// Ребёнок сказал кодом выхода, что виноват не случай, а настройки или
+    /// раскладка (руннер: 3 — конфиг, 2 — нет папки с кодом агента). Такое
+    /// перезапуском не лечится: крутить 1→2→4→…→32 с и дальше по десять минут
+    /// значит жечь машину и врать владельцу «поднимаю снова».
+    halted: bool,
+}
+
+/// Что оболочка должна поднять и где. Живёт после первой попытки: занятый
+/// порт или придержавший запуск антивирус — не приговор на весь сеанс.
+#[derive(Clone)]
+struct SpawnPlan {
+    specs: Vec<ChildSpec>,
+    port: u16,
+    tree: PathBuf,
 }
 
 struct LocalHarness {
     children: Mutex<Vec<Managed>>,
     stopping: std::sync::atomic::AtomicBool,
+    /// Локальный режим: план подъёма для повторных попыток. None — удалённый.
+    plan: Mutex<Option<SpawnPlan>>,
 }
 
 /// Кто здесь живёт: имя агента и дерево данных (None — удалённый режим).
@@ -128,6 +315,117 @@ fn exe_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+// --- статика окна: с диска, из exe только как запасной выход ------------------
+
+/// Папка статики окна — `app/static` рядом с exe. Поставка кладёт туда сборку
+/// Vite (`installer/build_dist.py::copy_static`), и окно читает её на каждый
+/// запрос: правка файла видна по F5, оболочку пересобирать не нужно (слово
+/// владельца 06.09: «статику сделать редактируемой»). До этого статика была
+/// вшита в exe (`frontendDist`), и копия в `app/static` лежала мёртвым грузом:
+/// пересобранный интерфейс не менял окно, пока не пересоберёшь оболочку.
+/// Вшитая копия остаётся запасным выходом на случай снесённой папки.
+fn static_root() -> PathBuf {
+    exe_dir().join("app").join("static")
+}
+
+/// `%XX` в байты, байты в UTF-8; ломаные последовательности остаются как есть.
+fn pct_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("zz");
+            if let Ok(v) = u8::from_str_radix(hex, 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Относительный путь файла из пути URL; None — путь ведёт наружу папки.
+/// Пусто и `/` — это index.html.
+fn static_rel(uri_path: &str) -> Option<String> {
+    let decoded = pct_decode(uri_path);
+    let trimmed = decoded.trim_start_matches('/');
+    let rel = if trimmed.is_empty() { "index.html" } else { trimmed };
+    let bad = rel.split('/').any(|seg| seg.is_empty() || seg == "." || seg == "..")
+        || rel.contains('\\')
+        || rel.contains(':')
+        || rel.contains('\0');
+    if bad {
+        None
+    } else {
+        Some(rel.to_string())
+    }
+}
+
+fn static_mime(rel: &str) -> &'static str {
+    let ext = rel
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" | "webmanifest" | "map" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "ico" => "image/x-icon",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        "ttf" => "font/ttf",
+        "txt" | "md" => "text/plain; charset=utf-8",
+        "wasm" => "application/wasm",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Обработчик протокола окна (`http://helene.localhost/…` в WebView2): файл с
+/// диска, иначе — вшитая копия, иначе 404. Ни одного залипшего бандла:
+/// `no-cache` заставляет WebView2 переспрашивать файл на каждом F5, а поставка
+/// кладёт свежий index.html поверх старого без пересборки оболочки.
+fn serve_static<R: tauri::Runtime>(
+    ctx: tauri::UriSchemeContext<'_, R>,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<std::borrow::Cow<'static, [u8]>> {
+    use std::borrow::Cow;
+    let (status, mime, body): (u16, String, Cow<'static, [u8]>) =
+        match static_rel(request.uri().path()) {
+            None => (403, "text/plain; charset=utf-8".to_string(), Cow::Borrowed(b"forbidden".as_slice())),
+            Some(rel) => match std::fs::read(static_root().join(&rel)) {
+                Ok(bytes) => (200, static_mime(&rel).to_string(), Cow::Owned(bytes)),
+                Err(_) => match ctx.app_handle().asset_resolver().get(format!("/{rel}")) {
+                    Some(asset) => (200, asset.mime_type().to_string(), Cow::Owned(asset.bytes().to_vec())),
+                    None => (404, "text/plain; charset=utf-8".to_string(), Cow::Borrowed(b"not found".as_slice())),
+                },
+            },
+        };
+    let is_html = mime.starts_with("text/html");
+    let mut resp = tauri::http::Response::builder()
+        .status(status)
+        .header("content-type", mime)
+        .header("cache-control", "no-cache");
+    // CSP из tauri.conf.json раньше клеил сам Tauri к вшитым файлам; файл с
+    // диска идёт мимо него, поэтому заголовок ставим здесь и тот же самый.
+    if is_html {
+        if let Some(csp) = ctx.app_handle().config().app.security.csp.as_ref() {
+            resp = resp.header("content-security-policy", csp.to_string());
+        }
+    }
+    resp.body(body)
+        .unwrap_or_else(|_| tauri::http::Response::new(Cow::Borrowed(b"".as_slice())))
+}
+
 fn resolve(base: &Path, raw: &str) -> PathBuf {
     let p = PathBuf::from(raw);
     if p.is_absolute() {
@@ -135,6 +433,75 @@ fn resolve(base: &Path, raw: &str) -> PathBuf {
     } else {
         base.join(p)
     }
+}
+
+/// Что вышло из чтения helene.json. Три случая, а не два: «файла нет» ведёт к
+/// установщику, «файл есть, но не разобрался» — НИКОГДА не должно, иначе
+/// установщик проходит по кругу и перезаписывает конституцию и настройки.
+enum ConfigRead {
+    Missing,
+    Ok(serde_json::Value),
+    Broken(String),
+}
+
+/// Текст конфига в UTF-8, чем бы его ни сохранили.
+/// ПЕРВЫЙ-ЗАПУСК.md зовёт владельца править helene.json руками, а штатные
+/// средства Windows пишут ровно то, чего serde_json не понимает: Блокнот и
+/// VS Code — UTF-8 с BOM, `Set-Content` в PowerShell 5.1 — UTF-16LE.
+/// Раньше и то и другое читалось как «конфига нет».
+fn decode_config(bytes: &[u8]) -> Result<String, String> {
+    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+        let big = bytes[0] == 0xFE;
+        let body = &bytes[2..];
+        if !body.len().is_multiple_of(2) {
+            return Err("оборванный UTF-16".into());
+        }
+        let units: Vec<u16> = body
+            .chunks_exact(2)
+            .map(|p| if big { u16::from_be_bytes([p[0], p[1]]) } else { u16::from_le_bytes([p[0], p[1]]) })
+            .collect();
+        return String::from_utf16(&units).map_err(|_| "не читается как UTF-16".to_string());
+    }
+    let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    String::from_utf8(body.to_vec()).map_err(|_| "не читается как UTF-8".to_string())
+}
+
+fn read_config(path: &Path) -> ConfigRead {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return ConfigRead::Missing,
+        Err(err) => return ConfigRead::Broken(format!("файл не читается: {err}")),
+    };
+    let text = match decode_config(&bytes) {
+        Ok(t) => t,
+        Err(why) => return ConfigRead::Broken(why),
+    };
+    if text.trim().is_empty() {
+        return ConfigRead::Missing;
+    }
+    match serde_json::from_str(&text) {
+        Ok(v) => ConfigRead::Ok(v),
+        Err(err) => ConfigRead::Broken(format!("JSON не разобрался: {err}")),
+    }
+}
+
+/// Конфиг для команд оболочки; None — нет или не разобрался.
+fn config_value() -> Option<serde_json::Value> {
+    match read_config(&exe_dir().join(CONFIG_NAME)) {
+        ConfigRead::Ok(v) => Some(v),
+        _ => None,
+    }
+}
+
+/// Дерево данных: из конфига, но ОТ ПАПКИ ПРОГРАММЫ, а не от текущей папки
+/// процесса. Относительный "data" при запуске helene.exe из другой папки
+/// уводил сессию Telegram и сбор логов в чужое место.
+fn tree_dir() -> PathBuf {
+    let base = exe_dir();
+    let raw = config_value()
+        .and_then(|c| c.get("tree").and_then(|v| v.as_str()).map(str::to_string))
+        .unwrap_or_else(|| "data".into());
+    resolve(&base, &raw)
 }
 
 /// Имя агента даёт владелец при установке (`agent.name`); старые конфиги
@@ -153,8 +520,41 @@ fn agent_name(cfg: Option<&serde_json::Value>) -> String {
     .unwrap_or_else(|| "Агент".to_string())
 }
 
+/// Найти программу в PATH, НЕ заглядывая в папку самой программы: голое имя
+/// в CreateProcess берётся сначала оттуда, и подложенный туда python.exe
+/// исполнился бы вместо настоящего.
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let here = exe_dir().canonicalize().ok();
+    let raw_ext = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".into());
+    let exts: Vec<&str> = raw_ext.split(';').filter(|e| !e.is_empty()).collect();
+    for dir in std::env::split_paths(&std::env::var_os("PATH")?) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        if let (Some(here), Ok(d)) = (here.as_ref(), dir.canonicalize()) {
+            if &d == here {
+                continue;
+            }
+        }
+        let direct = dir.join(name);
+        if direct.is_file() {
+            return Some(direct);
+        }
+        for ext in &exts {
+            let cand = dir.join(format!("{name}{ext}"));
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    None
+}
+
 /// Питон для харнесса: явный из конфига → runtime/python.exe рядом с exe
-/// (embedded CPython поставки) → системный из PATH.
+/// (embedded CPython поставки) → найденный в PATH.
+/// Голого имени "python" здесь больше нет: не нашли — возвращаем путь к
+/// встроенному, и запуск честно падает с «нет такого файла» в helene.log,
+/// а не запускает первое, что лежит рядом.
 fn python_path(base: &Path, cfg: &serde_json::Value) -> PathBuf {
     if let Some(raw) = cfg.get("python").and_then(|v| v.as_str()) {
         if raw != "python" {
@@ -165,7 +565,7 @@ fn python_path(base: &Path, cfg: &serde_json::Value) -> PathBuf {
     if embedded.exists() {
         return embedded;
     }
-    PathBuf::from("python")
+    find_in_path("python").unwrap_or(embedded)
 }
 
 /// Телефон подключается по Wi-Fi: труба слушает все адреса, а не только петлю.
@@ -181,7 +581,7 @@ fn phone_enabled(cfg: &serde_json::Value) -> bool {
 /// Убили окно из диспетчера — дети не остаются сиротами держать порт и файлы.
 #[cfg(windows)]
 mod job {
-    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
         SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -196,6 +596,7 @@ mod job {
             unsafe {
                 let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
                 if handle.is_null() {
+                    super::log_line("job-объект не создан — дети могут пережить окно");
                     return None;
                 }
                 let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
@@ -207,6 +608,11 @@ mod job {
                     std::mem::size_of_val(&info) as u32,
                 );
                 if ok == 0 {
+                    // Хэндл ядра уже выдан: без CloseHandle он тёк до конца
+                    // жизни процесса, и при этом защита от сирот молча
+                    // выключалась на весь сеанс — ни строки об этом не было.
+                    CloseHandle(handle);
+                    super::log_line("job-объект не настроился — дети могут пережить окно");
                     return None;
                 }
                 Some(Job(handle))
@@ -216,7 +622,9 @@ mod job {
         pub fn adopt(&self, child: &std::process::Child) {
             use std::os::windows::io::AsRawHandle;
             unsafe {
-                AssignProcessToJobObject(self.0, child.as_raw_handle() as HANDLE);
+                if AssignProcessToJobObject(self.0, child.as_raw_handle() as HANDLE) == 0 {
+                    super::log_line("ребёнок не приписан к job-объекту — может остаться сиротой");
+                }
             }
         }
     }
@@ -235,13 +643,102 @@ fn adopt(child: &Child) {
     let _ = child;
 }
 
+/// Секрет трубы. Без него труба (deskapp.py) отдаёт роль ВЛАДЕЛЬЦА каждому
+/// запросу по петле: любому процессу этой машины, коду другой учётной записи
+/// Windows и рукам самого агента — то есть всю переписку, /api/anatomy с
+/// ключами моделей и запись в soul/SOUL.md. Приём секрета в трубе был написан
+/// давно (`HELENE_TOKEN`), но не ставил его никто.
+///
+/// Секрет один НА ДЕРЕВО, а не на процесс, и лежит в самом дереве: харнесс
+/// поднимает либо окно, либо служба, а предъявлять трубе один и тот же ключ
+/// должны оба плюс второе окно, которое подключается к уже живому харнессу.
+/// Свой собственный ключ у каждого = 403 от собственного харнесса и пустое окно.
+static DESK_TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+fn desk_token() -> &'static str {
+    DESK_TOKEN.get().map(String::as_str).unwrap_or("")
+}
+
+fn desk_token_path(tree: &Path) -> PathBuf {
+    tree.join("memory").join(".state").join("desk-token")
+}
+
+/// Случайные байты из CSPRNG Windows. None — генератор не ответил: лучше
+/// остаться без замка (как было до этой правки), чем закрыться предсказуемым.
+#[cfg(windows)]
+fn random_hex(bytes: usize) -> Option<String> {
+    use windows_sys::Win32::Security::Cryptography::{
+        BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+    };
+    let mut buf = vec![0u8; bytes];
+    let status = unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    Some(buf.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+#[cfg(not(windows))]
+fn random_hex(_bytes: usize) -> Option<String> {
+    None
+}
+
+/// Секрет из дерева, если он там уже есть и выглядит секретом.
+fn read_desk_token(tree: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(desk_token_path(tree)).ok()?;
+    let t = raw.trim();
+    (t.len() >= 16 && t.len() <= 128 && t.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .then(|| t.to_string())
+}
+
+/// Прочитать секрет дерева, а если его нет — завести и положить туда же.
+/// Не записался (дерево только для чтения) — возвращаем None и говорим об этом
+/// в журнал: труба останется открытой, как была, но молчать об этом нельзя.
+fn ensure_desk_token(tree: &Path) -> Option<String> {
+    if let Some(t) = read_desk_token(tree) {
+        return Some(t);
+    }
+    let token = random_hex(24)?;
+    let path = desk_token_path(tree);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match std::fs::write(&path, &token) {
+        Ok(()) => Some(token),
+        Err(err) => {
+            log_line(&format!(
+                "секрет трубы не записался ({}): {err} — труба остаётся открытой любому процессу этой машины",
+                path.display()
+            ));
+            None
+        }
+    }
+}
+
 fn spawn_child(python: &Path, script: &Path, args: &[String], tree: &Path, host: &str) -> Option<Child> {
     let mut cmd = Command::new(python);
-    cmd.arg(script)
+    // -u: без него вывод питона в файл буферизован блоками, и аварийное
+    // завершение теряло ровно те килобайты, где причина. Служба (svc) делает
+    // так же — это был единственный разошедшийся с ней ключ.
+    cmd.arg("-u")
+        .arg(script)
         .args(args)
         .env("HELENE_TREE", tree)
         .env("HELENE_HOST", host)
-        .env("PYTHONUTF8", "1");
+        .env("PYTHONUTF8", "1")
+        // Замок трубы. Пустая строка тоже ставится осознанно: секрет решает
+        // тот, кто поднял харнесс, а не переменная окружения владельца, —
+        // иначе системная PRAXIS_DESK_TOKEN закрывала бы трубу ключом,
+        // которого окно не знает (deskapp.py принимает обе переменные).
+        .env("HELENE_TOKEN", desk_token())
+        .env_remove("PRAXIS_DESK_TOKEN");
     if let Some(dir) = script.parent() {
         cmd.current_dir(dir);
     }
@@ -260,22 +757,49 @@ fn spawn_child(python: &Path, script: &Path, args: &[String], tree: &Path, host:
             Some(child)
         }
         Err(err) => {
-            eprintln!("дочерний процесс {script:?} не поднялся: {err}");
+            // Было eprintln! — в exe без консоли (windows_subsystem="windows")
+            // это запись в никуда: провал не оставлял следа нигде.
+            log_line(&format!(
+                "дочерний процесс {} не поднялся: {err}",
+                script.display()
+            ));
             None
         }
     }
 }
 
-/// Файл вывода ребёнка; больше 5 МБ — уходит в .1, чтобы диск не пух.
+/// Предел файла вывода ребёнка.
+const CHILD_LOG_MAX: u64 = 5 * 1024 * 1024;
+
+/// Файл вывода ребёнка; больше предела — прежний уходит в .1.
+/// Проверка здесь ловит только момент запуска; у живого агента файл режет
+/// надзор (см. rotate_child_log), иначе deskapp.log рос без границы.
 fn child_log(tree: &Path, script: &Path) -> Option<std::fs::File> {
     let stem = script.file_stem()?.to_string_lossy().into_owned();
     let path = tree.join(format!("{stem}.log"));
     if let Ok(meta) = std::fs::metadata(&path) {
-        if meta.len() > 5 * 1024 * 1024 {
+        if meta.len() > CHILD_LOG_MAX {
             let _ = std::fs::rename(&path, tree.join(format!("{stem}.log.1")));
         }
     }
     std::fs::OpenOptions::new().create(true).append(true).open(path).ok()
+}
+
+/// Ротация лога живого ребёнка: переименовать нельзя (файл открыт им самим),
+/// поэтому копия в .1 и обрезка на месте — дальше он допишет с начала.
+fn rotate_child_log(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else { return false };
+    if meta.len() <= CHILD_LOG_MAX {
+        return false;
+    }
+    let backup = path.with_extension("log.1");
+    if std::fs::copy(path, &backup).is_err() {
+        return false;
+    }
+    match std::fs::OpenOptions::new().write(true).open(path) {
+        Ok(f) => f.set_len(0).is_ok(),
+        Err(_) => false,
+    }
 }
 
 /// Харнесс уже жив на этом порту? (служба или другое окно.)
@@ -287,58 +811,157 @@ fn harness_alive(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok()
 }
 
-/// Чьё дерево у харнесса на этом порту. None — не ответил.
-fn harness_tree(port: u16) -> Option<PathBuf> {
-    let agent = ureq::AgentBuilder::new().timeout(Duration::from_millis(1500)).build();
-    let body = agent
-        .get(&format!("http://127.0.0.1:{port}/api/home"))
-        .call()
-        .ok()?
-        .into_string()
-        .ok()?;
-    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
-    Some(PathBuf::from(v.get("tree")?.as_str()?))
+/// Кто держит порт. Отдельный случай Guarded: харнесс под токеном отвечает
+/// 403 без ключа, и это НЕ «чужая установка» — раньше владелец с системной
+/// переменной PRAXIS_DESK_TOKEN получал ложное обвинение и мёртвое окно.
+enum Holder {
+    Tree(PathBuf),
+    Guarded,
+    Silent,
 }
 
-/// Тот ли это харнесс. Осиротевший процесс прежней установки держал порт, и
-/// окно молча показывало чужого агента — теперь это видно и сказано.
-fn harness_is_ours(port: u16, tree: &Path) -> bool {
-    let ours = tree.canonicalize().unwrap_or_else(|_| tree.to_path_buf());
-    match harness_tree(port) {
-        Some(theirs) => {
-            let theirs = theirs.canonicalize().unwrap_or(theirs);
-            theirs == ours
+/// Один запрос `/api/home`. `key` пустой — спрашиваем анонимно.
+fn home_probe(port: u16, key: &str) -> Holder {
+    // 1500 мс не хватало холодному aiohttp: медленный ответ читался как «чужой».
+    // redirects(0): держатель порта — не обязательно наш; переадресация увела
+    // бы наш запрос (а с ним и ключ) на любой адрес, который назовёт он сам.
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_millis(2500))
+        .redirects(0)
+        .build();
+    let query = if key.is_empty() { String::new() } else { format!("?key={key}") };
+    match agent.get(&format!("http://127.0.0.1:{port}/api/home{query}")).call() {
+        Ok(resp) => {
+            if (300..400).contains(&resp.status()) {
+                return Holder::Silent;
+            }
+            let body = resp.into_string().unwrap_or_default();
+            match serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("tree").and_then(|t| t.as_str()).map(PathBuf::from))
+            {
+                Some(tree) => Holder::Tree(tree),
+                None => Holder::Silent,
+            }
         }
-        None => false,
+        Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => Holder::Guarded,
+        Err(_) => Holder::Silent,
+    }
+}
+
+/// Кто держит порт. Два шага, и порядок здесь важен.
+///
+/// Сначала спрашиваем БЕЗ ключа: держатель порта — не обязательно наш, и
+/// отдавать секрет дерева первому, кто занял порт, нельзя. Ключ предъявляем
+/// только тому, кто ответил «нужен ключ» (401/403): под замком собственная
+/// труба иначе выглядела бы «чужой программой», а это ложное обвинение и
+/// мёртвое окно.
+fn harness_holder(port: u16) -> Holder {
+    match home_probe(port, "") {
+        Holder::Guarded => {
+            let key = desk_token();
+            if key.is_empty() {
+                Holder::Guarded
+            } else {
+                match home_probe(port, key) {
+                    Holder::Tree(tree) => Holder::Tree(tree),
+                    // Наш ключ ему не подошёл — чей это харнесс, мы не знаем.
+                    _ => Holder::Guarded,
+                }
+            }
+        }
+        other => other,
+    }
+}
+
+/// Что делать с портом, который уже занят.
+#[derive(Clone)]
+enum Verdict {
+    /// Наш харнесс (то же дерево) — окно становится клиентом.
+    Ours,
+    /// Харнесс под ключом, которого мы не знаем: чей — не знаем, но это не
+    /// «чужая установка».
+    Guarded,
+    /// Порт держит кто-то другой: молча показывать чужого агента нельзя.
+    /// Внутри — дерево чужой установки, если она его назвала: владельцу нужно
+    /// сказать, ЧТО именно здесь работает, а не просто «занято».
+    Foreign(Option<PathBuf>),
+}
+
+fn harness_verdict(port: u16, tree: &Path) -> Verdict {
+    let ours = tree.canonicalize().unwrap_or_else(|_| tree.to_path_buf());
+    match harness_holder(port) {
+        Holder::Tree(theirs) => {
+            let canon = theirs.canonicalize().unwrap_or_else(|_| theirs.clone());
+            if canon == ours {
+                Verdict::Ours
+            } else {
+                Verdict::Foreign(Some(theirs))
+            }
+        }
+        Holder::Guarded => Verdict::Guarded,
+        Holder::Silent => Verdict::Foreign(None),
     }
 }
 
 /// Встроенное реле подписки ChatGPT (отдельный exe в поставке). Поднимается
 /// ребёнком, когда helene.json просит: relay.enabled. Дом реле — data/relay:
 /// учётные данные живут в папке продукта и переезжают вместе с ней.
-fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> Option<Child> {
-    let relay = cfg.get("relay")?;
-    if !relay
-        .get("enabled")
+fn relay_enabled(cfg: &serde_json::Value) -> bool {
+    cfg.get("relay")
+        .and_then(|r| r.get("enabled"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
-    {
-        return None;
-    }
+}
+
+fn relay_port(cfg: &serde_json::Value) -> u16 {
+    cfg.get("relay")
+        .and_then(|r| r.get("port"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5011)
+        .min(u16::MAX as u64) as u16
+}
+
+/// Спека реле попадает в план только при relay.enabled — «сознательно не
+/// поднимаю» и «не смог» больше не сходятся в одном молчаливом None.
+fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> Option<Child> {
     let exe = base.join("helene-relay.exe");
     if !exe.exists() {
-        eprintln!("relay.enabled, но helene-relay.exe рядом нет — реле не поднимаю");
+        log_line("relay.enabled, но helene-relay.exe рядом нет — реле не поднимаю");
         return None;
     }
-    let port = relay.get("port").and_then(|v| v.as_u64()).unwrap_or(5011);
+    let port = relay_port(cfg);
+    // Порт реле занимает кто-то ещё (осиротевшее реле прежней установки или
+    // чужая программа): раньше своё реле уходило в петлю перезапусков, а весь
+    // мозг молча шёл в ЧУЖОЕ реле — то есть в чужую подписку и чужую сессию.
+    if harness_alive(port) {
+        log_line(&format!(
+            "порт реле {port} уже занят — своё реле не поднимаю; закрой прежнюю копию или смени relay.port в {CONFIG_NAME}"
+        ));
+        return None;
+    }
     let home = tree.join("relay");
     let _ = std::fs::create_dir_all(&home);
     let python = base.join("runtime").join("python.exe");
     let mut cmd = Command::new(&exe);
+    // Инструкции реле: без этой переменной реле кладёт ПЕРЕД конституцией
+    // агента 23 КБ чужого системного промпта («ты кодинг-агент Codex CLI») —
+    // ~5-6 тыс. токенов подписки на каждый ход и прямой конфликт ролей.
+    // minimal — ~60 слов; если апстрим их отвергнет, реле само повторит на
+    // полном промпте. Вернуть прежнее: "relay": {"instructions": "full"}.
+    let instructions = cfg
+        .get("relay")
+        .and_then(|r| r.get("instructions"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("minimal")
+        .to_string();
     cmd.arg("serve")
         .current_dir(&home)
         .env("RELAY_PORT", port.to_string())
         .env("RELAY_LOCAL", "1")
+        .env("RELAY_INSTRUCTIONS", instructions)
         .env("RELAY_LOG_DIR", home.join("logs"));
     // Ключ мозга = ключ реле: сгенерированный при установке ключ обязателен
     // Bearer-ом на /chat/completions — открытый локальный порт позволял бы
@@ -362,55 +985,45 @@ fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> Option<Chil
             Some(child)
         }
         Err(err) => {
-            eprintln!("реле не поднялось: {err}");
+            log_line(&format!("реле не поднялось: {err}"));
             None
         }
     }
 }
 
-/// Локальный режим: труба (deskapp) + руннер (localharness) — оба дети окна.
-/// Если харнесс уже держит порт (служба или второе окно) — детей не плодим:
-/// окно становится чистым клиентом.
-fn spawn_local(base: &Path, cfg: &serde_json::Value) -> (Vec<Managed>, u16, PathBuf) {
-    let port = cfg.get("port").and_then(|v| v.as_u64()).unwrap_or(8094) as u16;
+/// Локальный режим: что и где поднимать. Чистый расчёт, ничего не запускает —
+/// план живёт весь сеанс, чтобы повторная попытка была возможна.
+fn build_plan(base: &Path, cfg: &serde_json::Value) -> SpawnPlan {
+    let port = cfg
+        .get("port")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(8094)
+        .min(u16::MAX as u64) as u16;
     let tree = resolve(
         base,
         cfg.get("tree").and_then(|v| v.as_str()).unwrap_or("data"),
     );
-    if harness_alive(port) {
-        if harness_is_ours(port, &tree) {
-            log_line(&format!("харнесс уже жив на 127.0.0.1:{port} — подключаюсь без своих детей"));
-            return (Vec::new(), port, tree);
-        }
-        // Порт держит чужой харнесс (обычно осиротевший процесс прежней
-        // установки). Молча подключаться к чужому агенту нельзя.
-        log_line(&format!(
-            "порт {port} занят ДРУГОЙ установкой — свой харнесс не поднимаю; закрой её или смени порт в {CONFIG_NAME}"
-        ));
-        toast(PRODUCT_UI, &format!(
-            "Порт {port} занят другой установкой. Окно покажет её агента, а не этого. Закрой прежнюю копию или смени порт в {CONFIG_NAME}."
-        ));
-        return (Vec::new(), port, tree);
-    }
     let python = python_path(base, cfg);
     let app = resolve(
         base,
-        cfg.get("app")
-            .and_then(|v| v.as_str())
-            .unwrap_or("deskapp.py"),
+        cfg.get("app").and_then(|v| v.as_str()).unwrap_or("deskapp.py"),
     );
-    let _ = std::fs::create_dir_all(&tree);
     let host = if phone_enabled(cfg) { "0.0.0.0" } else { "127.0.0.1" };
-    let mut specs = vec![
-        ChildSpec::Relay { base: base.to_path_buf(), cfg: cfg.clone(), tree: tree.clone() },
-        ChildSpec::Script {
-            python: python.clone(),
-            script: app,
-            args: vec![port.to_string()],
+    let mut specs = Vec::new();
+    if relay_enabled(cfg) {
+        specs.push(ChildSpec::Relay {
+            base: base.to_path_buf(),
+            cfg: cfg.clone(),
             tree: tree.clone(),
-            host: host.into(),
-        },
-    ];
+        });
+    }
+    specs.push(ChildSpec::Script {
+        python: python.clone(),
+        script: app,
+        args: vec![port.to_string()],
+        tree: tree.clone(),
+        host: host.into(),
+    });
     if let Some(runner_raw) = cfg.get("runner").and_then(|v| v.as_str()) {
         let config = base.join(CONFIG_NAME).to_string_lossy().into_owned();
         specs.push(ChildSpec::Script {
@@ -421,14 +1034,81 @@ fn spawn_local(base: &Path, cfg: &serde_json::Value) -> (Vec<Managed>, u16, Path
             host: "127.0.0.1".into(),
         });
     }
-    let children = specs
-        .into_iter()
-        .filter_map(|spec| {
-            spec.spawn()
-                .map(|child| Managed { spec, child, falls: Vec::new(), retry_at: None })
-        })
-        .collect();
-    (children, port, tree)
+    SpawnPlan { specs, port, tree }
+}
+
+/// Поднять своих детей, если порт свободен. Пустой список — «не сейчас», а не
+/// «никогда»: надзор попробует снова (порт освободился, антивирус отпустил).
+/// `announce` — говорить ли владельцу; при повторных попытках молчим, чтобы
+/// не превращать журнал и трей в дребезг.
+///
+/// Второе значение — вердикт по занятому порту, если порт занят. Он нужен
+/// НАВЕРХУ: пока его знала только эта функция, окно всё равно строило адрес
+/// вебвью тем же портом и становилось клиентом чужой установки.
+fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Verdict>) {
+    // Дерево создаём ДО проверки: иначе canonicalize своего пути падает и
+    // сравнение с чужим давало ложное «чужая установка».
+    let _ = std::fs::create_dir_all(&plan.tree);
+    let port = plan.port;
+    if harness_alive(port) {
+        let verdict = harness_verdict(port, &plan.tree);
+        match &verdict {
+            Verdict::Ours => {
+                if announce {
+                    log_line(&format!(
+                        "харнесс уже жив на 127.0.0.1:{port} — подключаюсь без своих детей"
+                    ));
+                }
+            }
+            Verdict::Guarded => {
+                if announce {
+                    log_line(&format!(
+                        "порт {port} держит харнесс под ключом, которого у меня нет — подключаюсь без своих детей"
+                    ));
+                }
+            }
+            Verdict::Foreign(theirs) => {
+                if announce {
+                    let whose = match theirs {
+                        Some(t) => format!(" (её дерево: {})", t.display()),
+                        None => String::new(),
+                    };
+                    log_line(&format!(
+                        "порт {port} занят ДРУГОЙ программой{whose} — свой харнесс не поднимаю и в её дерево не хожу; закрой её или смени порт в {CONFIG_NAME}"
+                    ));
+                    toast(PRODUCT_UI, &format!(
+                        "Порт {port} занят другой программой. Пока она его держит, агент этого окна не поднимется. Закрой прежнюю копию или смени порт в {CONFIG_NAME}."
+                    ));
+                }
+            }
+        }
+        return (Vec::new(), Some(verdict));
+    }
+    let mut children = Vec::new();
+    let mut failed: Vec<&'static str> = Vec::new();
+    for spec in &plan.specs {
+        let child = spec.spawn();
+        if child.is_none() {
+            failed.push(spec.human());
+        }
+        children.push(Managed {
+            spec: spec.clone(),
+            // Не поднялся — спеку НЕ выбрасываем: надзор попробует через 30 с.
+            retry_at: child.is_none().then(|| Instant::now() + Duration::from_secs(30)),
+            child,
+            falls: Vec::new(),
+            halted: false,
+        });
+    }
+    if announce && !failed.is_empty() {
+        let names = failed.join(", ");
+        log_line(&format!("не поднялось с первого раза: {names} — пробую снова через 30 с"));
+        toast(
+            PRODUCT_UI,
+            &format!("Не удалось запустить: {names}. Пробую снова; причина — в helene.log рядом с программой."),
+        );
+    }
+    (children, None)
 }
 
 /// Не настроено: явного receipt ещё нет и ключ модели тоже пуст.
@@ -467,12 +1147,46 @@ fn config_save(config: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Перезапуск начисто: новый процесс прочтёт конфиг и поднимет харнесс обычным путём.
+/// Перезапуск начисто — единственный способ применить настройки, поэтому он
+/// не имеет права быть гонкой. Себя из себя больше не спавним: новый процесс
+/// заставал живого (single-instance) и выходил сам, либо успевал увидеть ещё
+/// не убитых детей старого и оставался окном без харнесса. Теперь: гасим
+/// детей, отдаём запуск отложенному хвосту cmd и только потом выходим.
 #[tauri::command]
 fn restart_self(app: tauri::AppHandle) {
-    let exe = std::env::current_exe().ok();
-    if let Some(exe) = exe {
-        let _ = Command::new(exe).spawn();
+    let Ok(exe) = std::env::current_exe() else {
+        log_line("перезапуск: не узнал собственный путь");
+        return;
+    };
+    let dir = exe.parent().map(Path::to_path_buf).unwrap_or_else(exe_dir);
+    let state = app.state::<LocalHarness>();
+    kill_children(&state);
+    relay_abort();
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new(sys_exe("cmd.exe"));
+        cmd.current_dir(std::env::temp_dir());
+        cmd.arg("/C");
+        // Командную строку отдаём сырой: std экранирует кавычки как \", чего
+        // cmd не понимает. Пауза — чтобы старый процесс успел умереть и
+        // отпустить порт до того, как новый решит судьбу детей.
+        cmd.raw_arg(format!(
+            "ping 127.0.0.1 -n 3 >nul & start \"\" /D \"{}\" \"{}\"",
+            dir.display(),
+            exe.display()
+        ));
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        if let Err(err) = cmd.spawn() {
+            // Не выходим: лучше живое окно без применённых настроек, чем
+            // тишина после нажатия «Перезапустить сейчас».
+            log_line(&format!("перезапуск не запустился: {err}"));
+            toast(PRODUCT_UI, "Перезапуск не запустился — закрой и открой программу сам.");
+            return;
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new(&exe).current_dir(&dir).spawn();
     }
     app.exit(0);
 }
@@ -482,29 +1196,57 @@ fn restart_self(app: tauri::AppHandle) {
 /// падают с 400 в браузере.
 static LOGIN: Mutex<Option<Child>> = Mutex::new(None);
 
-fn relay_abort() {
-    let Ok(mut guard) = LOGIN.lock() else { return };
-    if let Some(mut child) = guard.take() {
+/// Отравленный замок здесь не означает испорченных данных: внутри только
+/// хэндл процесса. Раньше при отравлении Child терялся, и помощник входа
+/// становился неубиваемым — держал порт 1455 до перезагрузки.
+fn login_lock() -> std::sync::MutexGuard<'static, Option<Child>> {
+    LOGIN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn abort_login_child(slot: &mut Option<Child>) {
+    if let Some(mut child) = slot.take() {
         if child.try_wait().ok().flatten().is_none() {
-            let mut kill = Command::new("taskkill");
+            let mut kill = Command::new(sys_exe("taskkill.exe"));
             kill.args(["/PID", &child.id().to_string(), "/T", "/F"]);
-            let _ = run_hidden(&mut kill);
+            let _ = run_hidden_for(&mut kill, Duration::from_secs(15));
             let _ = child.wait();
         }
     }
 }
 
+fn relay_abort() {
+    let mut guard = login_lock();
+    abort_login_child(&mut guard);
+}
+
+/// Дом реле — из конфига (tree/relay), как и у поднятого реле. Раньше вход и
+/// статус смотрели в захардкоженный data/relay: у владельца, перенёсшего
+/// дерево, вход «выполнялся» туда, где реле его никогда не искало.
+fn relay_home() -> PathBuf {
+    tree_dir().join("relay")
+}
+
 #[tauri::command]
-fn relay_login() -> Result<String, String> {
+async fn relay_login() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(relay_login_blocking)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn relay_login_blocking() -> Result<String, String> {
     // Логин реле в подписку ChatGPT: колбэк-сервер поднимает встроенный питон,
     // браузер открывается сам. Консоль не нужна — и не появляется.
-    relay_abort();
+    // Замок держим на всём протяжении: между «погасить прежнего» и «записать
+    // нового» проскакивало второе нажатие, и первый помощник оставался
+    // сиротой на порту 1455.
+    let mut guard = login_lock();
+    abort_login_child(&mut guard);
     let base = exe_dir();
     let exe = base.join("helene-relay.exe");
     if !exe.exists() {
         return Err("в этой поставке нет helene-relay.exe".into());
     }
-    let home = base.join("data").join("relay");
+    let home = relay_home();
     let _ = std::fs::create_dir_all(&home);
     let mut cmd = Command::new(&exe);
     cmd.arg("login")
@@ -518,23 +1260,21 @@ fn relay_login() -> Result<String, String> {
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     let child = cmd.spawn().map_err(|e| format!("логин не запустился: {e}"))?;
-    if let Ok(mut guard) = LOGIN.lock() {
-        *guard = Some(child);
-    }
+    // В job-объект окна: выход из трея с незавершённым входом оставлял
+    // helene-relay.exe login жить и держать порт колбэка.
+    adopt(&child);
+    *guard = Some(child);
     Ok("сейчас откроется браузер — войди в свой аккаунт ChatGPT".into())
 }
 
 #[tauri::command]
 fn relay_status() -> String {
-    let auth = exe_dir()
-        .join("data")
-        .join("relay")
-        .join("local_auth")
-        .join("auth.json");
+    let auth = relay_home().join("local_auth").join("auth.json");
     if auth.exists() {
         return "authorized".into();
     }
-    if let Ok(mut guard) = LOGIN.lock() {
+    {
+        let mut guard = login_lock();
         if let Some(child) = guard.as_mut() {
             if child.try_wait().ok().flatten().is_none() {
                 return "pending".into();
@@ -552,7 +1292,7 @@ fn install_service() -> Result<String, String> {
     if !script.exists() {
         return Err("в этой поставке нет install-service.ps1".into());
     }
-    Command::new("powershell")
+    Command::new(powershell_exe())
         .args([
             "-NoProfile",
             "-Command",
@@ -577,9 +1317,10 @@ fn notify(title: String, body: String) {
 fn config_load() -> Result<serde_json::Value, String> {
     let base = exe_dir();
     let path = base.join(CONFIG_NAME);
-    let cfg: serde_json::Value = match std::fs::read_to_string(&path) {
-        Ok(raw) => serde_json::from_str(&raw).map_err(|e| format!("{CONFIG_NAME} не разобрался: {e}"))?,
-        Err(_) => serde_json::json!({}),
+    let cfg = match read_config(&path) {
+        ConfigRead::Ok(v) => v,
+        ConfigRead::Missing => serde_json::json!({}),
+        ConfigRead::Broken(why) => return Err(format!("{CONFIG_NAME} не разобрался: {why}")),
     };
     let tree = resolve(&base, cfg.get("tree").and_then(|v| v.as_str()).unwrap_or("data"));
     Ok(serde_json::json!({
@@ -590,28 +1331,74 @@ fn config_load() -> Result<serde_json::Value, String> {
     }))
 }
 
-fn run_hidden(cmd: &mut Command) -> Result<std::process::Output, String> {
+/// Внешняя программа без окна и С ДЕДЛАЙНОМ. Раньше это был голый
+/// `cmd.output()`: повисший netsh, sc или tailscaled вешал вызвавшую команду
+/// навсегда, а вместе с ней (у синхронных команд) и всё окно.
+fn run_hidden_for(cmd: &mut Command, limit: Duration) -> Result<Output, String> {
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd.output().map_err(|e| e.to_string())
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let out_pipe = child.stdout.take();
+    let err_pipe = child.stderr.take();
+    // Трубы читаем в отдельных потоках: иначе полный буфер вывода
+    // заблокировал бы ребёнка, и дедлайн ловил бы собственный тупик.
+    let out_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut p) = out_pipe {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let err_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut p) = err_pipe {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let deadline = Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = out_thread.join().unwrap_or_default();
+                let stderr = err_thread.join().unwrap_or_default();
+                return Ok(Output { status, stdout, stderr });
+            }
+            Ok(None) => {}
+            Err(err) => return Err(err.to_string()),
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("не ответил за {} с", limit.as_secs()));
+        }
+        std::thread::sleep(Duration::from_millis(80));
+    }
 }
 
 /// Состояние службы по SCM: running / stopped / absent. Прав не требует.
+/// async: синхронная команда Tauri исполняется на главном потоке, и висящий
+/// sc.exe вешал бы окно целиком (а опрашивают его каждые 2,5 с).
 #[tauri::command]
-fn service_state() -> String {
-    let mut cmd = Command::new("sc.exe");
-    cmd.args(["query", PRODUCT]);
-    match run_hidden(&mut cmd) {
-        Ok(out) if out.status.success() => {
-            let text = String::from_utf8_lossy(&out.stdout).to_uppercase();
-            if text.contains("RUNNING") || text.contains("START_PENDING") {
-                "running".into()
-            } else {
-                "stopped".into()
+async fn service_state() -> String {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut cmd = Command::new(sys_exe("sc.exe"));
+        cmd.args(["query", PRODUCT]);
+        match run_hidden_for(&mut cmd, Duration::from_secs(15)) {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout).to_uppercase();
+                if text.contains("RUNNING") || text.contains("START_PENDING") {
+                    "running".to_string()
+                } else {
+                    "stopped".to_string()
+                }
             }
+            _ => "absent".to_string(),
         }
-        _ => "absent".into(),
-    }
+    })
+    .await
+    .unwrap_or_else(|_| "absent".to_string())
 }
 
 #[tauri::command]
@@ -620,7 +1407,7 @@ fn remove_service() -> Result<String, String> {
     if !script.exists() {
         return Err("в этой поставке нет uninstall-service.ps1".into());
     }
-    Command::new("powershell")
+    Command::new(powershell_exe())
         .args([
             "-NoProfile",
             "-Command",
@@ -634,11 +1421,55 @@ fn remove_service() -> Result<String, String> {
     Ok("запрошено снятие службы (появится окно прав администратора)".into())
 }
 
-/// Открыть папку в Проводнике.
+/// Что вообще можно отдать Проводнику. Проводник не «показывает», а ЗАПУСКАЕТ
+/// то, что ему дали (.exe, .lnk, .bat), а строка сюда приходит из веб-части и
+/// из ответа сервера обновлений (кнопка «Скачать» подставляет его url).
+/// Поэтому — белый список: http(s)-ссылка либо путь внутри папки программы,
+/// дерева данных или %TEMP%.
+fn open_target(path: &str) -> Result<std::ffi::OsString, String> {
+    let raw = path.trim();
+    if raw.is_empty() {
+        return Err("пустой путь".into());
+    }
+    let lower = raw.to_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        if raw.contains(['"', '\n', '\r', '\0']) {
+            return Err("в ссылке недопустимые знаки".into());
+        }
+        return Ok(raw.into());
+    }
+    let target = PathBuf::from(raw)
+        .canonicalize()
+        .map_err(|_| format!("нет такого пути: {raw}"))?;
+    for root in [exe_dir(), tree_dir(), std::env::temp_dir()] {
+        if let Ok(root) = root.canonicalize() {
+            if target.starts_with(&root) {
+                return Ok(plain_path(&target).into_os_string());
+            }
+        }
+    }
+    Err("этот путь вне папок программы — не открываю".into())
+}
+
+/// Убрать префикс `\\?\`, который добавляет canonicalize: Проводник такой
+/// путь не понимает и вместо папки открыл бы «Документы».
+fn plain_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy().into_owned();
+    if let Some(rest) = text.strip_prefix("\\\\?\\UNC\\") {
+        return PathBuf::from(format!("\\\\{rest}"));
+    }
+    match text.strip_prefix("\\\\?\\") {
+        Some(rest) => PathBuf::from(rest),
+        None => path.to_path_buf(),
+    }
+}
+
+/// Открыть папку в Проводнике (или ссылку в браузере).
 #[tauri::command]
 fn open_path(path: String) -> Result<(), String> {
-    Command::new("explorer.exe")
-        .arg(&path)
+    let target = open_target(&path)?;
+    Command::new(explorer_exe())
+        .arg(target)
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())
@@ -647,19 +1478,86 @@ fn open_path(path: String) -> Result<(), String> {
 /// Показать файл в Проводнике с выделением — для собранных логов.
 #[tauri::command]
 fn reveal_path(path: String) -> Result<(), String> {
-    Command::new("explorer.exe")
-        .arg(format!("/select,{path}"))
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    let target = open_target(&path)?;
+    let mut cmd = Command::new(explorer_exe());
+    // Проводнику нужна форма /select,"<путь>" — кавычки ВОКРУГ ПУТИ.
+    // Обычный .arg закавычивал бы весь аргумент целиком, и путь с пробелом
+    // (профиль «Иван Петров») открывал папку по умолчанию вместо выделения.
+    #[cfg(windows)]
+    cmd.raw_arg(format!("/select,\"{}\"", target.to_string_lossy()));
+    #[cfg(not(windows))]
+    cmd.arg(format!("/select,{}", target.to_string_lossy()));
+    cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Известная папка пользователя из реестра, а не склейка из %APPDATA%.
+/// Групповая политика «Перенаправление папок» уводит меню «Пуск» и
+/// автозагрузку на сетевой диск: склейка молча промахивалась, ярлык ложился
+/// не туда, и уведомления не приходили никогда — при бодрой строке в журнале
+/// «ярлык создан».
+#[cfg(windows)]
+fn shell_folder(name: &str, fallback: &str) -> Option<PathBuf> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let read = |key: &str| -> Option<String> {
+        hkcu.open_subkey(key)
+            .ok()
+            .and_then(|k| k.get_value::<String, _>(name).ok())
+            .map(|s| expand_env(&s))
+            .filter(|s| !s.trim().is_empty())
+    };
+    let found = read("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders")
+        .or_else(|| read("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders"));
+    match found {
+        Some(p) => Some(PathBuf::from(p)),
+        None => std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join(fallback)),
+    }
+}
+
+#[cfg(not(windows))]
+fn shell_folder(_name: &str, fallback: &str) -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join(fallback))
+}
+
+/// %VAR% в значении реестра (REG_EXPAND_SZ приходит как есть).
+fn expand_env(raw: &str) -> String {
+    let mut out = String::new();
+    let mut rest = raw;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start + 1..];
+        match tail.find('%') {
+            Some(end) => {
+                let name = &tail[..end];
+                match std::env::var(name) {
+                    Ok(v) => out.push_str(&v),
+                    Err(_) => {
+                        out.push('%');
+                        out.push_str(name);
+                        out.push('%');
+                    }
+                }
+                rest = &tail[end + 1..];
+            }
+            None => {
+                out.push('%');
+                out.push_str(tail);
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn programs_dir() -> Option<PathBuf> {
+    shell_folder("Programs", "Microsoft\\Windows\\Start Menu\\Programs")
 }
 
 fn startup_lnk() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|a| {
-        PathBuf::from(a)
-            .join("Microsoft\\Windows\\Start Menu\\Programs\\Startup")
-            .join(format!("{PRODUCT}.lnk"))
-    })
+    shell_folder("Startup", "Microsoft\\Windows\\Start Menu\\Programs\\Startup")
+        .map(|d| d.join(format!("{PRODUCT}.lnk")))
 }
 
 /// Автозапуск — ярлык в папке автозагрузки пользователя, без реестра и прав.
@@ -669,27 +1567,43 @@ fn autostart_get() -> bool {
 }
 
 #[tauri::command]
-fn autostart_set(on: bool) -> Result<(), String> {
-    let lnk = startup_lnk().ok_or("нет APPDATA")?;
+async fn autostart_set(on: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || autostart_set_blocking(on))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn autostart_set_blocking(on: bool) -> Result<(), String> {
+    let lnk = startup_lnk().ok_or("не нашёл папку автозагрузки")?;
     if !on {
-        let _ = std::fs::remove_file(&lnk);
-        return Ok(());
+        // Ошибку удаления больше не глотаем: тумблер рапортовал «Автозапуск
+        // выключен», а программа поднималась снова после перезагрузки.
+        return match std::fs::remove_file(&lnk) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(format!("ярлык автозапуска не удалился: {err}")),
+        };
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    if let Some(dir) = lnk.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     let script = format!(
         "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}'); $s.TargetPath='{}'; $s.WorkingDirectory='{}'; $s.Save()",
         lnk.display(),
         exe.display(),
         exe.parent().map(|p| p.display().to_string()).unwrap_or_default()
     );
-    let mut cmd = Command::new("powershell.exe");
-    cmd.args(["-NoProfile", "-Command", &script]);
-    let out = run_hidden(&mut cmd)?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    let mut cmd = Command::new(powershell_exe());
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    let out = run_hidden_for(&mut cmd, Duration::from_secs(30))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
+    if !lnk.exists() {
+        return Err("ярлык автозапуска не появился".into());
+    }
+    Ok(())
 }
 
 /// Адрес этой машины в локальной сети — для QR телефону. Сокет не отправляет
@@ -705,45 +1619,1387 @@ fn lan_ip() -> Option<String> {
 /// включён: телефон с Tailscale в том же аккаунте достучится из любой сети,
 /// не только из этой Wi-Fi. Спрашиваем у их же CLI, ничего не угадываем.
 #[tauri::command]
-fn tailscale_ip() -> Option<String> {
-    let mut candidates = vec![PathBuf::from("tailscale.exe")];
-    if let Ok(pf) = std::env::var("ProgramFiles") {
-        candidates.insert(0, PathBuf::from(pf).join("Tailscale").join("tailscale.exe"));
-    }
-    for exe in candidates {
-        let mut cmd = Command::new(&exe);
-        cmd.args(["ip", "-4"]);
-        let Ok(out) = run_hidden(&mut cmd) else { continue };
-        if !out.status.success() {
-            continue;
+async fn tailscale_ip() -> Option<String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        // Голого "tailscale.exe" в списке больше нет: по голому имени Windows
+        // взяла бы файл из папки программы, а туда пишет и сам агент.
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Ok(pf) = std::env::var(var) {
+                candidates.push(PathBuf::from(pf).join("Tailscale").join("tailscale.exe"));
+            }
         }
-        let text = String::from_utf8_lossy(&out.stdout);
-        if let Some(ip) = text.lines().map(str::trim).find(|l| l.starts_with("100.")) {
-            return Some(ip.to_string());
+        if let Some(found) = find_in_path("tailscale") {
+            candidates.push(found);
+        }
+        for exe in candidates {
+            if !exe.is_file() {
+                continue;
+            }
+            let mut cmd = Command::new(&exe);
+            cmd.args(["ip", "-4"]);
+            let Ok(out) = run_hidden_for(&mut cmd, Duration::from_secs(10)) else { continue };
+            if !out.status.success() {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Some(ip) = text.lines().map(str::trim).find(|l| l.starts_with("100.")) {
+                return Some(ip.to_string());
+            }
+        }
+        None
+    })
+    .await
+    .unwrap_or(None)
+}
+
+// Само правило (имя, сужение, слова расписки) — общее со службой, см.
+// common/firewall_rule.rs: имена у нас совпадают до буквы, и кто ставит
+// вторым, тот переписывает правило первого.
+include!("../../common/firewall_rule.rs");
+
+// Клиентская сторона брокера прав — тоже ОДИН текст на обе стороны трубы, см.
+// common/broker.rs. Отсюда нужны имя трубы (`broker_pipe_name`), секрет
+// (`broker_token_read`), сборка просьбы (`BrokerAsk`), разбор квитанции
+// (`broker_call`) и пути файлов обмена с харнессом (`broker_asks_path`,
+// `broker_answers_path`) — там же лежит и контракт руки агента. Внутри файла
+// только std и serde_json: набор фич windows-sys у оболочки другой, и первая же
+// строка Win32 в общем файле сломала бы ей сборку.
+include!("../../common/broker.rs");
+
+fn firewall_rule_name(port: u16) -> String {
+    format!("name={}", firewall_rule_title(PRODUCT, port))
+}
+
+/// Текст, который сказала родная утилита Windows.
+///
+/// netsh отвечает в OEM-кодировке (на русской Windows это cp866), а
+/// `from_utf8_lossy` превращал его в сплошные «□»: владелец получал в
+/// уведомлении мусор вместо причины отказа.
+///
+/// ⚠ Близнец этой функции живёт в svc/src/main.rs (`console_text`,
+/// `decode_cp866`). Общим файлом в common/ они пока не стали намеренно: общий
+/// файл имеет смысл, когда на него переходят ОБЕ стороны сразу, а служба
+/// сейчас в чужой правке. Сведение потом — одна строка `include!`.
+fn console_text(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => bytes.iter().map(|b| decode_cp866(*b)).collect::<String>().trim().to_string(),
+    }
+}
+
+fn decode_cp866(b: u8) -> char {
+    if b < 0x80 {
+        return b as char;
+    }
+    const HIGH: &str = concat!(
+        "АБВГДЕЖЗИЙКЛМНОП",
+        "РСТУФХЦЧШЩЪЫЬЭЮЯ",
+        "абвгдежзийклмноп",
+        "░▒▓│┤╡╢╖╕╣║╗╝╜╛┐",
+        "└┴┬├─┼╞╟╚╔╩╦╠═╬╧",
+        "╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀",
+        "рстуфхцчшщъыьэюя",
+        "ЁёЄєЇїЎў°∙·√№¤■\u{00A0}",
+    );
+    HIGH.chars().nth((b - 0x80) as usize).unwrap_or('\u{fffd}')
+}
+
+// ─────────────────────────────────────────────── что именно просим у netsh
+//
+// Правило ставится ПАЧКОЙ: сначала снос старого, потом добавление своего.
+// Кодом пачки считается код ПОСЛЕДНЕЙ команды — в обеих наших пачках последняя
+// и есть дело, а предыдущая подготавливает. Снос несуществующего правила netsh
+// считает ошибкой, и это норма, а не отказ.
+//
+// ⚠ ПОЧЕМУ ПАЧКОЙ, А НЕ ДВУМЯ ПОДЪЁМАМИ. Через дверь элевации обе команды
+// обязаны пройти под ОДНИМ подтверждением. Два окна UAC подряд — это не только
+// два вопроса человеку: на втором можно нажать «Нет», и правило останется
+// снятым, то есть телефон перестанет работать вовсе. А раньше снос шёл вообще
+// без прав администратора: у обычного пользователя он молча не срабатывал, и
+// каждое нажатие «Показать QR» добавляло ЕЩЁ ОДНО правило с тем же именем
+// (netsh уникальности имени при добавлении не требует).
+
+fn firewall_delete_args(port: u16) -> Vec<String> {
+    vec![
+        "advfirewall".into(),
+        "firewall".into(),
+        "delete".into(),
+        "rule".into(),
+        firewall_rule_name(port),
+    ]
+}
+
+/// Поставить правило заново. Добавление — последним: его код и есть итог.
+fn firewall_set_runs(port: u16, program: Option<&str>) -> Vec<Vec<String>> {
+    vec![
+        firewall_delete_args(port),
+        // Сужение (profile=, remoteip=) — в common/firewall_rule.rs, общем со
+        // службой: раньше эти две строки жили только здесь, и служба при каждой
+        // загрузке машины меняла правило на открытое.
+        firewall_add_args(&firewall_rule_title(PRODUCT, port), port, program),
+    ]
+}
+
+/// Снять правило. Одна команда, она же последняя.
+fn firewall_clear_runs(port: u16) -> Vec<Vec<String>> {
+    vec![firewall_delete_args(port)]
+}
+
+/// «Зачем» для журнала владельца. Идёт в `broker.log` и читается человеком,
+/// поэтому одной строкой и словами: пустое или многострочное объяснение брокер
+/// отвергает на границе (common/broker.rs).
+fn firewall_why(port: u16, adding: bool) -> String {
+    if adding {
+        format!("правило брандмауэра для телефона, порт {port}")
+    } else {
+        format!("снять правило брандмауэра, порт {port}")
+    }
+}
+
+// ───────────────────────────────────────────────────── какой дверью повышаться
+
+/// Каким путём выполняется netsh.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FirewallPath {
+    /// Своими правами: процесс уже повышен, просить некого.
+    Direct,
+    /// Окном Windows (UAC) — штатный механизм интерактивного режима.
+    Uac,
+    /// Брокером службы — штатный механизм режима службы. `RunAs` здесь не
+    /// используется вовсе.
+    Broker,
+}
+
+/// Режим агента из helene.json: `sandbox` | `interactive` | `service`.
+/// Пустая строка — режим не записан (старый конфиг).
+///
+/// ⚠ Ключ — `agent_mode`, а НЕ `mode`. `mode` в helene.json занят под
+/// местожительство харнесса ("local" | "remote"), и режим, записанный туда,
+/// выключает продукт: окно не поднимает ни трубу, ни руннер (см. `match
+/// cfg.get("mode")` в `main`), а служба отказывается стартовать. Правила чтения
+/// здесь те же, что в localharness/modes.py::stated, до буквы: строка, объект с
+/// `name` и — как поломка, которую всё равно надо понять, — режим, записанный
+/// в `mode`.
+fn agent_mode(cfg: Option<&serde_json::Value>) -> String {
+    fn known(raw: Option<&serde_json::Value>) -> Option<String> {
+        let name = raw?.as_str()?.trim().to_lowercase();
+        matches!(name.as_str(), "sandbox" | "interactive" | "service").then_some(name)
+    }
+    let Some(cfg) = cfg else { return String::new() };
+    let raw = cfg.get("agent_mode");
+    if let Some(obj) = raw.and_then(|v| v.as_object()) {
+        if let Some(name) = known(obj.get("name")).or_else(|| known(obj.get("mode"))) {
+            return name;
+        }
+    } else if let Some(name) = known(raw) {
+        return name;
+    }
+    known(cfg.get("mode")).unwrap_or_default()
+}
+
+/// Дверь для повышения. Развилка вся здесь и целиком чистая: ошибка в ней —
+/// это не «не сработало», а «пошло не тем путём», а два пути к одному действию
+/// в этом продукте уже расходились однажды.
+///
+/// ⚠⚠ ЧТО ЗДЕСЬ ИСПРАВЛЕНО И ПОЧЕМУ ЭТО НЕ КОСМЕТИКА. Раньше дверь выбиралась
+/// ОДНИМ вопросом — `mode == "service"`. Но служба — не режим и не третий пункт
+/// списка, а ОПЦИЯ ПОВЕРХ любого режима (см. localharness/modes.py): режим
+/// бывает только `sandbox` или `interactive`. То есть после развода этих двух
+/// измерений условие `mode == "service"` не выполняется НИКОГДА, и дверь
+/// брокера умерла бы молча: у владельца со службой окно продолжало бы дёргать
+/// UAC на каждый чих, ради чего служба и ставилась.
+///
+/// Поэтому спрашиваем не конфиг, а сам брокер: `broker` — «труба ответила».
+/// Живой брокер бывает ровно тогда, когда служба стоит, запущена и брокер в ней
+/// не выключен в Настройках, — то есть ровно тогда, когда идти туда можно.
+/// `mode` остаётся вторым, ХВОСТОВЫМ вопросом: старый конфиг со словом
+/// `service` мы всё ещё понимаем, и отказ брокера в этом случае объясняется
+/// владельцу словами про службу, а не молчанием.
+fn firewall_path(elevated: bool, mode: &str, broker: bool) -> FirewallPath {
+    if elevated {
+        // Повышаться некуда: netsh отработает прямо здесь. Так живёт машина
+        // владельца — администратор с выключенным UAC.
+        return FirewallPath::Direct;
+    }
+    if broker || mode == "service" {
+        FirewallPath::Broker
+    } else {
+        // Сюда же попадает конфиг без режима (старая установка): окно просит
+        // права у Windows. Правило от этого не разъедется — его собирает общий
+        // common/firewall_rule.rs, — а починка режима в файле дело настроек.
+        FirewallPath::Uac
+    }
+}
+
+/// Слово о том, ЧЬИМИ правами сделано дело. Одно на все двери: расписка
+/// владельцу обязана совпадать до буквы. Разойдись эти строки — и два пути к
+/// одному действию начали бы обещать разное; в этом продукте так уже было,
+/// когда правило брандмауэра ставили и служба, и окно, по-разному.
+fn firewall_door_words(path: FirewallPath) -> &'static str {
+    match path {
+        FirewallPath::Direct => "",
+        FirewallPath::Uac => " с правами администратора",
+        FirewallPath::Broker => " через брокера службы",
+    }
+}
+
+fn firewall_added(port: u16, path: FirewallPath) -> String {
+    format!(
+        "правило брандмауэра для порта {port} добавлено{} ({FIREWALL_SCOPE_HUMAN})",
+        firewall_door_words(path)
+    )
+}
+
+fn firewall_removed(port: u16, path: FirewallPath) -> String {
+    format!("правило брандмауэра для порта {port} снято{}", firewall_door_words(path))
+}
+
+/// Повышен ли НАШ процесс.
+///
+/// Не «администратор ли учётка»: у администратора с включённым UAC обычное окно
+/// живёт с урезанным токеном, и netsh из него отвечает «требуется повышение».
+/// Спрашиваем ровно то, что решает исход: можем ли мы выполнить netsh сами.
+#[cfg(windows)]
+fn process_is_elevated() -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    unsafe {
+        let mut token: HANDLE = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return false;
+        }
+        let mut info = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut len: u32 = 0;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            &mut info as *mut _ as *mut core::ffi::c_void,
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut len,
+        );
+        CloseHandle(token);
+        ok != 0 && info.TokenIsElevated != 0
+    }
+}
+
+#[cfg(not(windows))]
+fn process_is_elevated() -> bool {
+    false
+}
+
+/// Тип токена: 1 — обычный (UAC не при чём), 2 — полный, 3 — урезанный
+/// (учётка администраторская, но права сняты фильтром UAC). 0 — не спросили.
+#[cfg(windows)]
+fn token_elevation_type() -> i32 {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenElevationType, TOKEN_ELEVATION_TYPE, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    unsafe {
+        let mut token: HANDLE = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return 0;
+        }
+        let mut kind: TOKEN_ELEVATION_TYPE = 0;
+        let mut len: u32 = 0;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevationType,
+            &mut kind as *mut _ as *mut core::ffi::c_void,
+            std::mem::size_of::<TOKEN_ELEVATION_TYPE>() as u32,
+            &mut len,
+        );
+        CloseHandle(token);
+        if ok == 0 {
+            0
+        } else {
+            kind
         }
     }
-    None
+}
+
+#[cfg(not(windows))]
+fn token_elevation_type() -> i32 {
+    0
+}
+
+/// Что эта учётная запись может по части прав администратора.
+///
+/// `admin` — окно уже повышено. `can_elevate` — повышение пройдёт БЕЗ чужого
+/// пароля: либо мы уже повышены, либо UAC урезал администраторский токен и
+/// вернёт права по подтверждению. У обычного пользователя здесь `false`, и это
+/// не совсем «нельзя»: он может позвать администратора, который введёт свой
+/// пароль в окне UAC. Врать про это нельзя — экран режимов рядом с выбором
+/// «Служба» пишет про окно Windows отдельной строкой.
+///
+/// Ручку просит app/src/mode.ts::adminProbe: без неё экран режимов отвечает
+/// честным «не знаю».
+#[tauri::command]
+fn admin_state() -> serde_json::Value {
+    admin_verdict(process_is_elevated(), token_elevation_type())
+}
+
+/// Тот же ответ, но ЧИСТОЙ функцией: два вызова Win32 выше живьём не подделать,
+/// а вывод из них — можно и нужно проверить. Ошибка здесь звучит для владельца
+/// как «вариант со службой тебе недоступен» там, где он доступен, — и наоборот,
+/// что хуже: обещание, которое на его машине не сбудется.
+fn admin_verdict(admin: bool, kind: i32) -> serde_json::Value {
+    serde_json::json!({
+        "admin": admin,
+        // Урезанный токен (3) — это администратор, у которого UAC снял права до
+        // подтверждения. Он повысится САМ, чужого пароля не нужно. Обычный
+        // токен (1) — обычный пользователь: ему нужен администратор рядом, и
+        // называть это «можешь» было бы враньём.
+        "can_elevate": admin || kind == 3,
+        // Сырой тип токена — чтобы «не знаю» отличалось от «точно нет».
+        "elevation": match kind {
+            1 => "default",
+            2 => "full",
+            3 => "limited",
+            _ => "unknown",
+        },
+    })
+}
+
+// ─────────────────────────────────────────────────────────────── исполнение
+
+/// Чем кончилась пачка: код ПОСЛЕДНЕЙ команды и то, что netsh о ней сказал.
+/// Пустой `said` — текста нет: под UAC netsh отвечает в своё скрытое окно, и до
+/// нас доезжает только код.
+struct NetshDone {
+    code: i32,
+    said: String,
+}
+
+/// Пачка netsh СВОИМИ правами. Зовётся только когда процесс уже повышен: без
+/// прав netsh отвечает «требуется повышение», и гонять его впустую значит
+/// показать владельцу пустой отказ вместо дела.
+fn netsh_direct(runs: &[Vec<String>]) -> Result<NetshDone, String> {
+    let netsh = sys_exe("netsh.exe");
+    let mut done = NetshDone { code: -1, said: String::new() };
+    for args in runs {
+        let mut cmd = Command::new(&netsh);
+        cmd.args(args);
+        let out = run_hidden_for(&mut cmd, Duration::from_secs(30))?;
+        let mut said = console_text(&out.stdout);
+        if said.is_empty() {
+            said = console_text(&out.stderr);
+        }
+        done = NetshDone { code: out.status.code().unwrap_or(-1), said };
+    }
+    Ok(done)
+}
+
+/// Метка в выводе повышающего скрипта. Только ASCII: вывод powershell приезжает
+/// в кодировке консоли, и по-русски метка читалась бы через раз.
+const RUNAS_MARK: &str = "HELENE-RUNAS";
+
+/// Что сказал скрипт повышения.
+#[derive(PartialEq, Eq, Debug)]
+enum RunAs {
+    /// Повышение состоялось, вот код пачки.
+    Code(i32),
+    /// Повышения не было, вот код Windows (1223 — «Нет» в окне UAC).
+    Refused(u32),
+    /// Повышение прошло, но Windows не вернула код. Врать «получилось» здесь
+    /// нельзя, и врать «не получилось» — тоже.
+    Unknown,
+}
+
+fn parse_runas(text: &str) -> Option<RunAs> {
+    let line = text.lines().rev().map(str::trim).find(|l| l.starts_with(RUNAS_MARK))?;
+    let mut parts = line.split_whitespace().skip(1);
+    match (parts.next(), parts.next()) {
+        (Some("ok"), Some(n)) => n.parse().ok().map(RunAs::Code),
+        (Some("fail"), Some(n)) => n.parse().ok().map(RunAs::Refused),
+        (Some("unknown"), _) => Some(RunAs::Unknown),
+        _ => None,
+    }
+}
+
+/// Отказ Windows — человеческими словами. Числа владельцу ничего не говорят, а
+/// «не удалось» без причины не говорит вообще ничего.
+fn runas_refusal(code: u32) -> String {
+    match code {
+        // ERROR_CANCELLED. Сюда же Windows кладёт политику, которая отклоняет
+        // запросы повышения молча, — поэтому названы обе причины.
+        1223 => "нужны права администратора: в окне Windows выбрано «Нет» либо повышение \
+                 запрещено политикой этого компьютера"
+            .into(),
+        // ERROR_ACCESS_DISABLED_BY_POLICY.
+        1260 => "повышение прав запрещено политикой этого компьютера".into(),
+        // ERROR_ACCESS_DENIED.
+        5 => "Windows отказала в повышении прав (доступ запрещён)".into(),
+        // ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND.
+        2 | 3 => "не нашёл powershell.exe, которым запрашиваются права администратора".into(),
+        0 => "Windows отказала в повышении прав и не назвала причины".into(),
+        other => format!("Windows не подняла права (код {other})"),
+    }
+}
+
+/// Скрипт для ПОВЫШЕННОГО powershell: вся пачка netsh одним подъёмом.
+///
+/// `$LASTEXITCODE` выставлен заранее не случайно: если netsh не запустится
+/// вовсе, переменная осталась бы пустой, и `exit [int]$null` отрапортовал бы
+/// НУЛЁМ, то есть успехом. 9009 — то, чем Windows отвечает на «команду не
+/// нашли».
+fn netsh_batch_script(netsh: &str, runs: &[Vec<String>]) -> String {
+    let mut script = String::from("$ErrorActionPreference='Continue'; $LASTEXITCODE = 9009; ");
+    for args in runs {
+        script.push_str("& ");
+        script.push_str(&ps_quote(netsh));
+        for a in args {
+            script.push(' ');
+            script.push_str(&ps_quote(a));
+        }
+        script.push_str(" | Out-Null; ");
+    }
+    script.push_str("exit [int]$LASTEXITCODE");
+    script
+}
+
+/// base64 от UTF-16LE — так powershell ждёт `-EncodedCommand`.
+///
+/// ⚠ ЗАЧЕМ ЭТО ВООБЩЕ. `Start-Process -ArgumentList @(…)` склеивает элементы
+/// через пробел и НЕ берёт их в кавычки. Аргумент с пробелом — а у нас это и
+/// путь к питону, и имя правила «Helene (8094)» — приехал бы в дочерний
+/// powershell разрезанным на куски. Base64 — один токен без пробелов и кавычек,
+/// склейке его не испортить; заодно снимается вопрос о вложенных кавычках.
+fn utf16le_base64(text: &str) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut bytes: Vec<u8> = Vec::with_capacity(text.len() * 2);
+    for unit in text.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { ALPHABET[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { ALPHABET[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+/// Аргумент в одинарных кавычках PowerShell (свои кавычки удваиваются).
+/// Путь питона содержит пробелы, а имя правила — скобки: без кавычек PowerShell
+/// разрежет их на части, и netsh получит мусор.
+fn ps_quote(arg: &str) -> String {
+    format!("'{}'", arg.replace('\'', "''"))
+}
+
+/// Скрипт, который просит у Windows права: поднимает powershell с пачкой netsh
+/// и печатает ОДНУ строку о том, чем это кончилось.
+///
+/// ⚠ ПОЧЕМУ ЗДЕСЬ .NET, А НЕ `Start-Process -Verb RunAs`. Причину отказа надо
+/// назвать словами, а `Start-Process` её ТЕРЯЕТ: он заворачивает ошибку в
+/// `InvalidOperationException` БЕЗ вложенного исключения, и код Windows
+/// (1223 — «Нет» в окне UAC) из него уже не достать — остаётся только
+/// локализованная фраза, по которой сравнивать нельзя. `Process.Start` с
+/// `Verb='runas'` бросает настоящий `Win32Exception`, и код читается честно.
+/// Проверено на этой машине: отказ «файл не найден» приезжает кодом 2 через
+/// .NET и нулём через Start-Process.
+///
+/// Строка аргументов здесь одна и без пробелов внутри частей — это второе, за
+/// что взят -EncodedCommand: `ProcessStartInfo.Arguments` пришлось бы иначе
+/// кавычить руками.
+fn runas_script(target: &str, encoded: &str, workdir: &str) -> String {
+    format!(
+        "$ErrorActionPreference='Stop'; \
+         try {{ \
+         $i = New-Object System.Diagnostics.ProcessStartInfo; \
+         $i.FileName = {target}; \
+         $i.Arguments = '-NoProfile -NonInteractive -EncodedCommand {encoded}'; \
+         $i.WorkingDirectory = {workdir}; \
+         $i.Verb = 'runas'; \
+         $i.UseShellExecute = $true; \
+         $i.WindowStyle = 'Hidden'; \
+         $p = [System.Diagnostics.Process]::Start($i); \
+         if ($null -eq $p) {{ Write-Output '{RUNAS_MARK} unknown' }} \
+         else {{ $p.WaitForExit(); Write-Output ('{RUNAS_MARK} ok ' + [int]$p.ExitCode) }} \
+         }} catch {{ \
+         $c = 0; $e = $_.Exception; \
+         while ($null -ne $e) {{ \
+         if ($e -is [System.ComponentModel.Win32Exception]) {{ $c = $e.NativeErrorCode; break }}; \
+         $e = $e.InnerException }}; \
+         Write-Output ('{RUNAS_MARK} fail ' + [int]$c) }}",
+        target = ps_quote(target),
+        workdir = ps_quote(workdir)
+    )
+}
+
+/// Пачка netsh под правами администратора: окно Windows, глагол `runas`.
+///
+/// ⚠ Это НЕ костыль. Правило брандмауэра требует прав администратора, а окно их
+/// не имеет и не просит; в первой редакции проекта механизм был записан на
+/// снос, и это была ошибка — для интерактивного режима он штатный. Снимается он
+/// только в режиме службы, где ту же работу делает брокер.
+///
+/// ⚠ Полные пути, а не голые имена. Прежний вариант поднимал `netsh.exe` по
+/// имени, а голое имя Windows ищет и в папке процесса — то есть в папке
+/// установки, куда пишет и сам агент. Подложенный туда файл исполнился бы
+/// ПОВЫШЕННЫМ.
+fn netsh_via_uac(runs: &[Vec<String>]) -> Result<NetshDone, String> {
+    let netsh = sys_exe("netsh.exe");
+    if !netsh.is_absolute() {
+        return Err("не нашёл netsh.exe в System32 — повышать нечего".into());
+    }
+    let shell = powershell_exe();
+    if !shell.is_absolute() {
+        return Err("не нашёл powershell.exe в System32 — им и запрашиваются права".into());
+    }
+    let script = netsh_batch_script(&netsh.display().to_string(), runs);
+    // Рабочая папка повышенного процесса — System32, а НЕ папка установки:
+    // туда пишет и сам агент, а текущая папка участвует в поиске программ.
+    let outer = runas_script(
+        &shell.display().to_string(),
+        &utf16le_base64(&script),
+        &system_root().join("System32").display().to_string(),
+    );
+    let mut cmd = Command::new(&shell);
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &outer]);
+    // 120 с, а не 30: между запросом и ответом стоит человек с окном UAC.
+    let out = run_hidden_for(&mut cmd, Duration::from_secs(120))?;
+    match parse_runas(&console_text(&out.stdout)) {
+        Some(RunAs::Code(code)) => Ok(NetshDone { code, said: String::new() }),
+        Some(RunAs::Refused(code)) => Err(runas_refusal(code)),
+        Some(RunAs::Unknown) => Err("Windows не сказала, чем кончилось повышение прав — \
+                                     проверь правило в брандмауэре сам"
+            .into()),
+        // Метки нет вовсе: скрипт не доработал. Раньше на этом месте стоял
+        // `catch { exit 5 }`, и любая причина — от отказа в окне UAC до
+        // сломанного powershell — выглядела одинаково.
+        None => {
+            let said = console_text(&out.stderr);
+            Err(if said.is_empty() {
+                format!("запрос прав администратора не отработал (код {})", out.status.code().unwrap_or(-1))
+            } else {
+                format!("запрос прав администратора не отработал: {said}")
+            })
+        }
+    }
+}
+
+/// Позвать брокера со сроком.
+///
+/// ⚠ У чтения ответа в `broker_call` таймаута нет: у файла на трубе его не
+/// бывает без перекрытого ввода-вывода. Служба, убитая посреди работы, повесила
+/// бы вызов навсегда — а «служба не отвечает» должно быть состоянием, а не
+/// зависшим окном. Поэтому ждём в отдельном потоке и со сроком; поток, если он
+/// всё-таки повис, умрёт сам, когда труба оборвётся.
+fn broker_call_deadline(
+    pipe: &str,
+    ask: &BrokerAsk,
+    limit: Duration,
+) -> Result<BrokerReceipt, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (pipe, ask) = (pipe.to_string(), ask.clone());
+    std::thread::spawn(move || {
+        let _ = tx.send(broker_call(&pipe, &ask));
+    });
+    match rx.recv_timeout(limit) {
+        Ok(answer) => answer,
+        Err(_) => Err(format!(
+            "служба не ответила за {} с — проверь её на экране «Система»",
+            limit.as_secs()
+        )),
+    }
+}
+
+/// Та же пачка netsh — брокером службы. В режиме службы `RunAs` не используется
+/// вовсе: права поднимает служба, а владелец видит просьбу в `broker.log`.
+/// Правило брандмауэра через УЗКУЮ дверь брокера: порт и `why`, больше ничего.
+///
+/// Аргументы netsh здесь не передаются вовсе — их собирает служба тем же
+/// `common/firewall_rule.rs`, которым пользуемся мы, поэтому правило не может
+/// разъехаться между двумя дверями. Права нулевой сессии для этого не нужны:
+/// у службы они и так есть, а `service.firewall` решает, можно ли ей их тратить
+/// на брандмауэр.
+fn firewall_via_broker(port: u16, why: &str) -> Result<NetshDone, String> {
+    let tree = tree_dir();
+    let Some(token) = broker_token_read(&tree) else {
+        return Err(format!(
+            "секрета брокера нет ({}) — служба его ещё не заводила. Поставь службу в              Настройках или выбери путь без службы",
+            broker_token_path(&tree).display()
+        ));
+    };
+    let pipe = broker_pipe_name(&exe_dir());
+    let mut ask = BrokerAsk::new(
+        &token,
+        BrokerOp::Firewall,
+        "",
+        &[port.to_string()],
+        why,
+    );
+    ask.timeout_sec = 60;
+    let receipt = broker_call_deadline(&pipe, &ask, Duration::from_secs(90))?;
+    if !receipt.ok {
+        // Слова отказа написаны службой и объясняют владельцу, где галочка.
+        // Пересказ своими словами разъехался бы с оригиналом.
+        let note = receipt.note.trim();
+        return Err(if note.is_empty() {
+            "служба отказала и не сказала почему".into()
+        } else {
+            note.to_string()
+        });
+    }
+    Ok(NetshDone { code: 0, said: receipt.note.clone() })
+}
+
+fn netsh_via_broker(runs: &[Vec<String>], why: &str) -> Result<NetshDone, String> {
+    let netsh = sys_exe("netsh.exe");
+    if !netsh.is_absolute() {
+        // Брокер голое имя не примет намеренно: Windows искала бы его сначала в
+        // папке процесса службы, то есть в папке установки.
+        return Err("не нашёл netsh.exe в System32 — брокер берёт только полный путь".into());
+    }
+    let cmd = netsh.display().to_string();
+    let tree = tree_dir();
+    let Some(token) = broker_token_read(&tree) else {
+        return Err(format!(
+            "секрета брокера нет ({}) — служба его ещё не заводила. Поставь службу на экране \
+             «Система» или выбери другой режим в Настройках",
+            broker_token_path(&tree).display()
+        ));
+    };
+    // Имя трубы считается ТОЛЬКО этой функцией: руками собранное имя разъедется
+    // со службой на первом же регистре или хвостовом слэше.
+    let pipe = broker_pipe_name(&exe_dir());
+    let mut done = NetshDone { code: -1, said: String::new() };
+    for args in runs {
+        let mut ask = BrokerAsk::new(&token, BrokerOp::Exec, &cmd, args, why);
+        ask.timeout_sec = 60;
+        let receipt = broker_call_deadline(&pipe, &ask, Duration::from_secs(90))?;
+        if !receipt.ok {
+            // Отказ приходит уже человеческими словами — они написаны службой и
+            // объясняют владельцу, где галочка. Своими словами не пересказываем:
+            // пересказ разъедется с оригиналом.
+            let note = receipt.note.trim();
+            return Err(if note.is_empty() {
+                "служба отказала и не сказала почему".into()
+            } else {
+                note.to_string()
+            });
+        }
+        let Some(code) = receipt.code else {
+            return Err(format!(
+                "служба не дождалась netsh{}",
+                if receipt.note.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", receipt.note.trim())
+                }
+            ));
+        };
+        let mut said = receipt.err.trim().to_string();
+        if said.is_empty() {
+            said = receipt.out.trim().to_string();
+        }
+        done = NetshDone { code, said };
+    }
+    Ok(done)
+}
+
+/// Итог пачки словами. Число само по себе владельцу ничего не говорит, а 9009
+/// — это вообще не ответ netsh: так наш скрипт сообщает, что netsh не запустился
+/// вовсе (ноль на этом месте означал бы «получилось»).
+fn netsh_code_words(done: &NetshDone) -> String {
+    let mut said = format!("netsh вернул код {}", done.code);
+    if done.code == 9009 {
+        said.push_str(" — Windows не нашла netsh.exe");
+    }
+    if !done.said.is_empty() {
+        said.push_str(" — ");
+        said.push_str(&done.said);
+    }
+    said
+}
+
+/// Выполнить пачку той дверью, которую выбрал режим, и ЗАПИСАТЬ всё, что вышло.
+/// Молчаливого проглатывания здесь нет ни в одной ветке: журнал получает и
+/// команду, и дверь, и итог.
+fn netsh_batch(
+    runs: &[Vec<String>],
+    why: &str,
+    path: FirewallPath,
+    port: u16,
+) -> Result<NetshDone, String> {
+    let netsh = sys_exe("netsh.exe").display().to_string();
+    let door = match path {
+        FirewallPath::Direct => "своими правами",
+        FirewallPath::Uac => "через окно Windows",
+        FirewallPath::Broker => "через брокера службы",
+    };
+    for args in runs {
+        log_line(&format!(
+            "брандмауэр ({door}): {}",
+            broker_shown_command(&netsh, args)
+        ));
+    }
+    let done = match path {
+        FirewallPath::Direct => netsh_direct(runs),
+        FirewallPath::Uac => netsh_via_uac(runs),
+        // ⚠ У брокера дверь УЗКАЯ: служба собирает правило сама из общего
+        // common/firewall_rule.rs, от нас идёт только порт. Через `exec` это
+        // ходило раньше — и упиралось в галочку нулевой сессии, то есть ради
+        // одного правила владельцу предлагалось выдать агенту права системы.
+        FirewallPath::Broker => firewall_via_broker(port, why),
+    };
+    match &done {
+        Ok(d) if d.code == 0 => log_line(&format!("брандмауэр ({door}): готово")),
+        Ok(d) => log_line(&format!("брандмауэр ({door}): {}", netsh_code_words(d))),
+        Err(err) => log_line(&format!("брандмауэр ({door}): не вышло — {err}")),
+    }
+    done
 }
 
 /// Разрешить входящие к трубе в брандмауэре Windows. Нужны права
 /// администратора; без них — честная ошибка, а не тишина.
 #[tauri::command]
-fn firewall_allow(port: u16) -> Result<String, String> {
+async fn firewall_allow(port: u16) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || firewall_allow_blocking(port))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn firewall_allow_blocking(port: u16) -> Result<String, String> {
     let base = exe_dir();
-    let python = base.join("runtime").join("python.exe");
-    let program = if python.exists() { python.display().to_string() } else { "python.exe".to_string() };
-    let mut cmd = Command::new("netsh");
-    cmd.args([
-        "advfirewall", "firewall", "add", "rule",
-        &format!("name={PRODUCT} ({port})"), "dir=in", "action=allow", "protocol=TCP",
-        &format!("localport={port}"), &format!("program={program}"),
-    ]);
-    let out = run_hidden(&mut cmd)?;
-    if out.status.success() {
-        Ok(format!("правило брандмауэра для порта {port} добавлено"))
-    } else {
-        Err(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    let cfg = config_value();
+    // Правило вешается на ТОТ питон, которым запущена труба, а не на
+    // встроенный «по умолчанию»: с явным python в конфиге правило уезжало на
+    // несуществующий файл, и функция всё равно рапортовала об успехе.
+    let python = match cfg.as_ref() {
+        Some(cfg) => python_path(&base, cfg),
+        None => base.join("runtime").join("python.exe"),
+    };
+    if !python.is_file() {
+        return Err(format!(
+            "не нашёл питон трубы ({}) — правило не добавлено",
+            python.display()
+        ));
     }
+    // Живого брокера спрашиваем только тогда, когда он мог бы понадобиться:
+    // повышенному процессу повышаться некуда, и лишний стук в трубу ему ни к чему.
+    let elevated = process_is_elevated();
+    let path = firewall_path(
+        elevated,
+        &agent_mode(cfg.as_ref()),
+        !elevated && broker_alive(&tree_dir()),
+    );
+    let runs = firewall_set_runs(port, Some(&python.display().to_string()));
+    match netsh_batch(&runs, &firewall_why(port, true), path, port) {
+        Ok(done) if done.code == 0 => Ok(firewall_added(port, path)),
+        Ok(done) => Err(format!("правило не добавлено: {}", netsh_code_words(&done))),
+        // В режиме службы отказ брокера — это ещё не «телефон не работает»:
+        // правило в этом режиме ставит сама служба при запуске. Сказать об этом
+        // надо здесь, иначе владелец останется с отказом и без выхода.
+        // Текст уходит в тост окна одной строкой (textContent), поэтому и
+        // собран одной строкой: перевод строки там просто схлопнется.
+        Err(err) if path == FirewallPath::Broker => Err(format!(
+            "{err}. В режиме службы правило брандмауэра ставит сама служба при запуске: \
+             включи телефон в настройках и перезапусти её на экране «Система»"
+        )),
+        Err(err) => Err(err),
+    }
+}
+
+/// Убрать разрешение брандмауэра (телефон выключили, программу снимают).
+/// Во всём продукте до этого был только `add rule` и ни одного `delete`:
+/// дыра переживала и выключение телефона, и удаление программы.
+#[tauri::command]
+async fn firewall_clear(port: u16) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || firewall_clear_blocking(port))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn firewall_clear_blocking(port: u16) -> Result<String, String> {
+    let elevated = process_is_elevated();
+    let path = firewall_path(
+        elevated,
+        &agent_mode(config_value().as_ref()),
+        !elevated && broker_alive(&tree_dir()),
+    );
+    match netsh_batch(&firewall_clear_runs(port), &firewall_why(port, false), path, port) {
+        Ok(done) if done.code == 0 => Ok(firewall_removed(port, path)),
+        // Снос несуществующего правила netsh считает ошибкой. Для владельца это
+        // тот же итог, которого он и хотел: правила нет. Раньше эта команда
+        // отвечала «снято» вообще всегда — в том числе когда netsh отказывал за
+        // отсутствием прав, и правило оставалось на месте.
+        Ok(_) => Ok(format!(
+            "правила брандмауэра для порта {port} не нашлось — снимать было нечего"
+        )),
+        Err(err) if path == FirewallPath::Broker => Err(format!(
+            "{err}. Правило осталось; снять его из окна администратора: \
+             netsh advfirewall firewall delete rule {}",
+            firewall_rule_name(port)
+        )),
+        Err(err) => Err(err),
+    }
+}
+
+// ───────────────────────────── рука брокера для агента: просьба и подпись (R6)
+//
+// ЗАЧЕМ ЭТО ЕСТЬ. Брокер задуман как «агент просит повысить ОДНУ задачу», но
+// клиентом брокера до сих пор была ровно одна кнопка — правило брандмауэра в
+// этом же файле. У самого агента руки к брокеру не было вовсе: в
+// `localharness/` слова broker нет ни разу. Конституция при этом обещала
+// брокера как существующий механизм, то есть обещала то, чего нет.
+//
+// КАК УСТРОЕНО. Агент пишет просьбу в `broker-asks.json` (рука харнесса —
+// контракт ниже), оболочка её читает, ПОКАЗЫВАЕТ ВЛАДЕЛЬЦУ и только по «да»
+// зовёт брокера своим токеном. Ответ уходит в `broker-answers.json`, а что
+// произошло на самом деле — в `broker.log` и в журнал оболочки.
+//
+// МОЛЧА НЕ ВЫПОЛНЯЕТСЯ НИЧЕГО. Брокер — это права системы; «спрошу потом»
+// здесь означало бы «не спрошу». Отказ записывается наравне с согласием: без
+// записи отказа журнал отвечает на вопрос «что сделали», но не на вопрос «о чём
+// просили».
+//
+// ⚠ ПОЧЕМУ ПОДТВЕРЖДЕНИЕ — РОДНОЕ ОКНО WINDOWS, а не экран программы. Окно
+// продукта живёт в трее и бывает закрыто, а просьба приходит ровно тогда, когда
+// агент работает без владельца перед экраном. MessageBox приходит поверх всего
+// и не требует поднятого вебвью. Кнопка по умолчанию — «Нет»: случайный Enter
+// обязан ОТКАЗАТЬ, а не согласиться.
+
+/// Сколько просьба ждёт владельца, прежде чем протухнуть.
+///
+/// Не «навсегда». Агент, попросивший права, ждёт ответа минуты, а не сутки, и
+/// окно подтверждения над просьбой трёхдневной давности — это подпись вслепую
+/// под тем, чего агент уже не хочет. Заодно это снимает очередь модальных окон
+/// при первом запуске после долгого перерыва.
+const BROKER_WISH_STALE_SEC: u64 = 10 * 60;
+
+/// Сколько окон подтверждения показываем за один проход. Остальные ждут
+/// следующего: пять модальных окон подряд — это не согласие, а «жми да».
+const BROKER_WISH_PER_PASS: usize = 3;
+
+/// Сколько ответов держим в файле: хвост для харнесса и для экрана «Система».
+const BROKER_ANSWERS_KEPT: usize = 50;
+
+/// Сколько знаков команды помещается в окно подтверждения.
+///
+/// ⚠ Это не косметика, а замок. Аргументов бывает до 256, длина каждого ничем
+/// не ограничена: агент, набив первый аргумент пробелами, увёл бы настоящее
+/// дело за нижний край окна — владелец подписал бы то, чего не видел. Обрезаем
+/// ЯВНО и говорим, что обрезали.
+const BROKER_SHOWN_MAX: usize = 1200;
+
+/// Когда оболочка начала слушать просьбы. Уезжает в файл ответов, чтобы
+/// харнесс отличал «владелец ещё не ответил» от «слушать некому — окна нет».
+static BROKER_WATCH_SINCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Местное время в том же виде, что в `service.log` и `broker.log`: журнал у
+/// владельца один, и две половины одной строки не должны быть в разных
+/// часовых поясах.
+#[cfg(windows)]
+fn local_stamp() -> String {
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+    let mut t: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    unsafe { GetLocalTime(&mut t) };
+    format!(
+        "[{:02}.{:02}.{} {:02}:{:02}:{:02}]",
+        t.wDay, t.wMonth, t.wYear, t.wHour, t.wMinute, t.wSecond
+    )
+}
+
+#[cfg(not(windows))]
+fn local_stamp() -> String {
+    format!("[{}]", now_unix())
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Просьба агента — то, что оболочка приняла из `broker-asks.json`.
+///
+/// Токена здесь НЕТ и быть не может: агент секрета брокера не знает (в песочнице
+/// он его физически не прочитает — файл закрыт на СИСТЕМУ, администраторов и
+/// владельца), и передавать его агенту, чтобы он «сам сходил», значило бы отдать
+/// брокера целиком. Токен подставляет оболочка, и только после «да».
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BrokerWish {
+    id: String,
+    op: BrokerOp,
+    cmd: String,
+    args: Vec<String>,
+    why: String,
+    timeout_sec: u64,
+    /// Когда просьба записана (unix-секунды). 0 — харнесс не сказал, тогда
+    /// возраст считается по времени файла.
+    at_unix: u64,
+}
+
+/// Просьба, которую нельзя выполнить, но МОЖНО ответить: id разобрался, всё
+/// остальное — нет. Без ответа агент ждал бы молчания и не узнал причины.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BrokerBad {
+    id: String,
+    why: String,
+}
+
+/// Идентификатор просьбы. Чужие знаки не «чистим», а отвергаем: подчищенный id
+/// перестал бы совпадать с тем, что ждёт харнесс, и ответ ушёл бы в никуда. А
+/// перевод строки в нём подделал бы соседние записи журнала.
+fn broker_wish_id(raw: &str) -> Option<String> {
+    let id = raw.trim();
+    (!id.is_empty()
+        && id.len() <= 64
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+    .then(|| id.to_string())
+}
+
+/// Разбор файла просьб. Чистая функция: цена ошибки здесь — не «не сработало»,
+/// а «владельцу показали не то, что выполнят».
+fn broker_wishes(raw: &str) -> Vec<Result<BrokerWish, BrokerBad>> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Vec::new();
+    };
+    let rows = match value.get("requests").and_then(|v| v.as_array()) {
+        Some(rows) => rows.clone(),
+        None => match value.as_array() {
+            Some(rows) => rows.clone(),
+            None => return Vec::new(),
+        },
+    };
+    let mut out = Vec::new();
+    for row in rows.iter().take(64) {
+        let Some(id) = row.get("id").and_then(|v| v.as_str()).and_then(broker_wish_id) else {
+            // Без годного id ответить некуда: пропускаем молча для агента и
+            // громко для журнала (см. вызывающего).
+            continue;
+        };
+        let bad = |why: &str| {
+            Err(BrokerBad { id: id.clone(), why: why.to_string() })
+        };
+        let op_raw = row.get("op").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let Some(op) = BrokerOp::parse(op_raw) else {
+            out.push(bad(
+                "не сказано, какой дверью: op бывает exec (правами СИСТЕМЫ), \
+                 spawn_interactive (твоими правами, в твоей сессии) или ping",
+            ));
+            continue;
+        };
+        let mut args = Vec::new();
+        let mut args_ok = true;
+        match row.get("args") {
+            None | Some(serde_json::Value::Null) => {}
+            Some(serde_json::Value::Array(items)) => {
+                for item in items {
+                    match item.as_str() {
+                        Some(text) => args.push(text.to_string()),
+                        None => args_ok = false,
+                    }
+                }
+            }
+            Some(_) => args_ok = false,
+        }
+        if !args_ok {
+            out.push(bad(
+                "args — массив строк, и никогда одна строка: склейка командной \
+                 строки это класс инъекций, а не удобство",
+            ));
+            continue;
+        }
+        out.push(Ok(BrokerWish {
+            id,
+            op,
+            cmd: row.get("cmd").and_then(|v| v.as_str()).unwrap_or("").trim().to_string(),
+            args,
+            why: row.get("why").and_then(|v| v.as_str()).unwrap_or("").trim().to_string(),
+            timeout_sec: row
+                .get("timeout_sec")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(BROKER_TIMEOUT_DEFAULT),
+            at_unix: row.get("at_unix").and_then(|v| v.as_u64()).unwrap_or(0),
+        }));
+    }
+    out
+}
+
+/// Собрать просьбу так, как её ПРИМЕТ служба, и проверить ровно её же
+/// проверками (`common/broker.rs`). Смысл — не «удобно», а «владельцу не
+/// покажут команду, которую служба всё равно отвергнет»: иначе он подписывал бы
+/// отказы.
+fn broker_wish_ask(wish: &BrokerWish, token: &str) -> Result<BrokerAsk, String> {
+    let mut ask = BrokerAsk::new(token, wish.op, &wish.cmd, &wish.args, &wish.why);
+    ask.id = wish.id.clone();
+    ask.timeout_sec = wish.timeout_sec;
+    BrokerAsk::parse(&ask.to_json())
+}
+
+/// Слова, которыми просьба показывается владельцу. Чистая функция и под тестом:
+/// это единственный экран, по которому человек решает отдать права системы, и
+/// «зачем» в нём — слова САМОГО АГЕНТА, а не факт.
+fn broker_confirm_text(wish: &BrokerWish) -> String {
+    let door = match wish.op {
+        BrokerOp::Exec => {
+            "ПРАВАМИ СИСТЕМЫ — это выше твоих собственных прав администратора"
+        }
+        BrokerOp::SpawnInteractive => "твоими правами, в твоей сессии",
+        BrokerOp::Ping => "ничего не выполняя (проверка связи)",
+        // Узкая дверь: агент выбирает только порт, само правило собирает служба.
+        // Показывать её теми же словами, что и «права системы», было бы враньём
+        // в сторону страха — а пугать там, где риска нет, тоже обман.
+        BrokerOp::Firewall => "правами службы, и только чтобы поставить правило брандмауэра",
+    };
+    let shown = broker_shown_command(&wish.cmd, &wish.args);
+    let total = shown.chars().count();
+    let shown = if total > BROKER_SHOWN_MAX {
+        let head: String = shown.chars().take(BROKER_SHOWN_MAX).collect();
+        format!(
+            "{head}\n\n⚠ КОМАНДА ОБРЕЗАНА: в ней {total} знаков, целиком она в окно не влезает. \
+             Конец команды тебе НЕ показан — сама эта длина повод отказать."
+        )
+    } else {
+        shown
+    };
+    format!(
+        "Агент просит выполнить команду {door}.\n\n\
+         Зачем — его слова, не проверенный факт:\n{}\n\n\
+         Что запустится ровно в этом виде:\n{shown}\n\n\
+         Выполнить? «Нет» — отказ, он тоже будет записан в журнал.",
+        wish.why
+    )
+}
+
+/// Спросить владельца родным окном Windows. По умолчанию — «Нет».
+#[cfg(windows)]
+fn ask_owner_yes(title: &str, text: &str) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO,
+    };
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (caption, body) = (wide(title), wide(text));
+    let answer = unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            body.as_ptr(),
+            caption.as_ptr(),
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND | MB_TOPMOST,
+        )
+    };
+    answer == IDYES
+}
+
+/// Не-Windows: спросить некого, а «некого спросить» — это отказ, не согласие.
+#[cfg(not(windows))]
+fn ask_owner_yes(_title: &str, _text: &str) -> bool {
+    false
+}
+
+/// Живой ли брокер прямо сейчас. Не «стоит ли служба» по конфигу, а вопрос
+/// самой трубе: служба может быть снята, остановлена или брокер в ней выключен
+/// в Настройках — во всех трёх случаях идти туда нельзя.
+///
+/// `ping` ничего не выполняет и в журнал действий не пишется, поэтому спросить
+/// им дёшево. Срок короткий: если трубы нет вовсе, открытие падает сразу.
+fn broker_alive(tree: &Path) -> bool {
+    let Some(token) = broker_token_read(tree) else {
+        return false;
+    };
+    let mut ask = BrokerAsk::new(&token, BrokerOp::Ping, "", &[], "проверка связи с брокером");
+    ask.timeout_sec = 5;
+    broker_call_deadline(&broker_pipe_name(&exe_dir()), &ask, Duration::from_secs(6))
+        .map(|receipt| receipt.ok)
+        .unwrap_or(false)
+}
+
+/// Строка в журнал владельца (`broker.log`) И в журнал оболочки рядом с exe.
+///
+/// Два места намеренно: `broker.log` лежит в дереве, а дерево — дом агента, он
+/// туда пишет сам и подчистить его может. Вторая копия ложится вне дерева, и
+/// одновременно подделать обе агенту заметно труднее.
+///
+/// ⚠ Не «невозможно», и врать про это нельзя: обе записи делает процесс
+/// владельца, а `helene.log` вдобавок перестанет писаться вовсе, если служба
+/// однажды закроет папку установки на запись (задача A4). Настоящий журнал
+/// брокера пишет служба — от её строки эта отличается словом «окно».
+fn broker_note_owner(tree: &Path, line: &str) {
+    use std::io::Write as _;
+    let path = broker_log_path(tree);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // Усечение — как у службы: журнал не должен съесть диск.
+    if std::fs::metadata(&path).map(|m| m.len() > 5 * 1024 * 1024).unwrap_or(false) {
+        let _ = std::fs::rename(&path, path.with_extension("log.1"));
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{} окно · {}", local_stamp(), line);
+    }
+    log_line(&format!("брокер: {line}"));
+}
+
+fn broker_answers_load(tree: &Path) -> Vec<serde_json::Value> {
+    let Ok(raw) = std::fs::read_to_string(broker_answers_path(tree)) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("answers").and_then(|a| a.as_array()).cloned())
+        .unwrap_or_default()
+}
+
+fn broker_answers_save(tree: &Path, rows: &[serde_json::Value]) {
+    let path = broker_answers_path(tree);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let keep = rows.len().saturating_sub(BROKER_ANSWERS_KEPT);
+    let body = serde_json::json!({
+        "v": 1,
+        "updated_at": local_stamp(),
+        // Чтобы харнесс отличал «владелец ещё не ответил» от «спрашивать
+        // некому»: без окна просьбу не увидит никто, и ждать её незачем.
+        "desk": {
+            "watching_since": BROKER_WATCH_SINCE.get().cloned().unwrap_or_default(),
+            "pid": std::process::id(),
+        },
+        "answers": &rows[keep..],
+    });
+    let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
+        return;
+    };
+    let tmp = path.with_file_name(format!(".tmp-{name}"));
+    let text = serde_json::to_string_pretty(&body).unwrap_or_default();
+    if std::fs::write(&tmp, text.as_bytes()).is_ok() {
+        // rename на Windows заменяет существующий файл: харнесс никогда не
+        // видит файла, дописанного наполовину.
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// Ответ на одну просьбу. Не «успех», а всё, что видела оболочка: решение
+/// владельца, слова причины и квитанция брокера целиком.
+fn broker_answer_row(
+    wish: &BrokerWish,
+    decision: &str,
+    note: &str,
+    receipt: Option<&BrokerReceipt>,
+) -> serde_json::Value {
+    let mut row = serde_json::json!({
+        "id": wish.id,
+        "decision": decision,
+        "at": local_stamp(),
+        "op": wish.op.as_str(),
+        "why": wish.why,
+        "shown": broker_shown_command(&wish.cmd, &wish.args),
+        "note": note,
+    });
+    if let Some(r) = receipt {
+        let map = row.as_object_mut().expect("собран объектом выше");
+        map.insert("ok".into(), serde_json::Value::Bool(r.ok));
+        map.insert("code".into(), match r.code {
+            Some(code) => serde_json::Value::from(code),
+            None => serde_json::Value::Null,
+        });
+        map.insert("pid".into(), match r.pid {
+            Some(pid) => serde_json::Value::from(pid),
+            None => serde_json::Value::Null,
+        });
+        map.insert("out".into(), serde_json::Value::String(r.out.clone()));
+        map.insert("err".into(), serde_json::Value::String(r.err.clone()));
+        map.insert("ms".into(), serde_json::Value::from(r.ms));
+    }
+    row
+}
+
+/// Один проход по файлу просьб. Возвращает `true`, если ответить удалось на
+/// всё: непройденное (упёрлись в потолок окон за проход) обязано вернуться в
+/// следующем проходе, а не потеряться.
+///
+/// ⚠ ГОНКА, КОТОРОЙ ЗДЕСЬ НЕТ. Просьба читается ОДИН раз, и владельцу
+/// показывается ровно то, что потом уедет брокеру: и `why`, и команда живут в
+/// `wish` в памяти. Перечитай мы файл после «да», агент успел бы подменить
+/// команду между вопросом и выполнением — классический TOCTOU, и подпись
+/// владельца стояла бы под чужим текстом.
+fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
+    let wishes = broker_wishes(raw);
+    if wishes.is_empty() {
+        return true;
+    }
+    let mut answers = broker_answers_load(tree);
+    let mut known: std::collections::HashSet<String> = answers
+        .iter()
+        .filter_map(|r| r.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect();
+    let mut added = 0usize;
+    let mut shown = 0usize;
+    let mut all = true;
+    let now = now_unix();
+    for wish in wishes {
+        let wish = match wish {
+            Ok(wish) => wish,
+            Err(bad) => {
+                if !known.insert(bad.id.clone()) {
+                    continue;
+                }
+                broker_note_owner(tree, &format!("ОТКАЗ на разборе просьбы {}: {}", bad.id, bad.why));
+                answers.push(serde_json::json!({
+                    "id": bad.id, "decision": "refused", "at": local_stamp(),
+                    "note": bad.why,
+                }));
+                added += 1;
+                continue;
+            }
+        };
+        if !known.insert(wish.id.clone()) {
+            continue;
+        }
+        // Отказ до вопроса владельцу: протухла, брокера нет, просьба такая, что
+        // служба её всё равно не примет. Собирается ОДНОЙ величиной, а не
+        // разбегается по веткам: развилка «спросили или нет» тут одна.
+        let at = if wish.at_unix > 0 { wish.at_unix } else { file_at };
+        let mut refusal: Option<String> = None;
+        let mut ready: Option<BrokerAsk> = None;
+        if now.saturating_sub(at) > BROKER_WISH_STALE_SEC {
+            refusal = Some(format!(
+                "просьба ждала дольше {} минут — за это время агент ушёл дальше, и \
+                 подписывать её вслепую опаснее, чем отказать. Пусть попросит заново",
+                BROKER_WISH_STALE_SEC / 60
+            ));
+        } else {
+            match broker_token_read(tree) {
+                None => {
+                    refusal = Some(
+                        "брокера нет: служба не установлена, и повышать права некому. \
+                         Служба ставится один раз под администратором на экране «Система»"
+                            .to_string(),
+                    )
+                }
+                // Слова отказа — службины, слово в слово: пересказ разъехался бы
+                // с оригиналом, а владельцу и агенту нужен один текст.
+                Some(token) => match broker_wish_ask(&wish, &token) {
+                    Ok(ask) => ready = Some(ask),
+                    Err(why) => refusal = Some(why),
+                },
+            }
+        }
+        // `ping` ничего не выполняет — спрашивать владельца не о чем. Это
+        // единственное исключение, и оно ровно такое же, как у службы.
+        if refusal.is_none() && wish.op != BrokerOp::Ping {
+            if shown >= BROKER_WISH_PER_PASS {
+                all = false;
+                known.remove(&wish.id);
+                continue;
+            }
+            shown += 1;
+            if !ask_owner_yes(
+                &format!("{PRODUCT_UI}: агент просит права"),
+                &broker_confirm_text(&wish),
+            ) {
+                refusal = Some("владелец отказал в окне подтверждения".to_string());
+            }
+        }
+        if let Some(note) = refusal {
+            broker_note_owner(
+                tree,
+                &format!(
+                    "ОТКАЗ · зачем: {} · команда: {} · {note}",
+                    wish.why,
+                    broker_shown_command(&wish.cmd, &wish.args)
+                ),
+            );
+            answers.push(broker_answer_row(&wish, "refused", &note, None));
+            added += 1;
+            continue;
+        }
+        let ask = ready.expect("без отказа просьба собрана выше");
+        let limit = Duration::from_secs(wish.timeout_sec.saturating_add(30));
+        match broker_call_deadline(&broker_pipe_name(&exe_dir()), &ask, limit) {
+            Ok(receipt) => {
+                let outcome = if !receipt.ok {
+                    "ОТКАЗ службы".to_string()
+                } else {
+                    match receipt.code {
+                        Some(code) => format!("код {code}"),
+                        None => "не дождался".to_string(),
+                    }
+                };
+                broker_note_owner(
+                    tree,
+                    &format!(
+                        "{} · владелец разрешил · {outcome} за {} мс · зачем: {} · команда: {}",
+                        wish.op.as_str(),
+                        receipt.ms,
+                        wish.why,
+                        broker_shown_command(&wish.cmd, &wish.args)
+                    ),
+                );
+                answers.push(broker_answer_row(
+                    &wish,
+                    if receipt.ok { "allowed" } else { "failed" },
+                    receipt.note.trim(),
+                    Some(&receipt),
+                ));
+                added += 1;
+            }
+            Err(err) => {
+                broker_note_owner(
+                    tree,
+                    &format!("владелец разрешил, но брокер не ответил: {err} · зачем: {}", wish.why),
+                );
+                answers.push(broker_answer_row(&wish, "failed", &err, None));
+                added += 1;
+            }
+        }
+    }
+    if added > 0 {
+        broker_answers_save(tree, &answers);
+    }
+    all
+}
+
+/// Сторож просьб. Отдельный поток: окно подтверждения блокирует того, кто его
+/// показал, и на главном потоке это заморозило бы всю программу.
+fn watch_broker_wishes(tree: PathBuf) {
+    std::thread::spawn(move || {
+        let _ = BROKER_WATCH_SINCE.set(local_stamp());
+        let asks = broker_asks_path(&tree);
+        // Файл ответов переписывается сразу: харнесс должен видеть, что
+        // слушатель есть, ещё до первой просьбы.
+        broker_answers_save(&tree, &broker_answers_load(&tree));
+        let mut seen: Option<(u64, std::time::SystemTime)> = None;
+        loop {
+            std::thread::sleep(Duration::from_secs(2));
+            let Ok(meta) = std::fs::metadata(&asks) else {
+                continue;
+            };
+            let stamp = (meta.len(), meta.modified().unwrap_or(std::time::UNIX_EPOCH));
+            if seen == Some(stamp) {
+                continue;
+            }
+            let Ok(raw) = std::fs::read_to_string(&asks) else {
+                continue;
+            };
+            let at = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or_else(now_unix);
+            // Стоп-кадр запоминаем ТОЛЬКО когда ответили на всё: иначе просьба,
+            // не попавшая в потолок окон за проход, не вернулась бы никогда.
+            if broker_pass(&tree, &raw, at) {
+                seen = Some(stamp);
+            }
+        }
+    });
 }
 
 /// Идентификаторы моделей из ответа /models: по ним человек выбирает модель
@@ -762,6 +3018,57 @@ fn model_ids(body: &str) -> Vec<String> {
     ids
 }
 
+/// Куда оболочке позволено ходить с ключом владельца.
+/// probe_model отправляет ключ заголовком на адрес, пришедший из веб-части, а
+/// update_check делает GET по адресу из конфига: без разбора схемы это
+/// однострочный вывоз ключа наружу. https — куда угодно (туда и ходят
+/// облачные модели), http — только к себе и в локальную сеть.
+fn outbound_url_ok(url: &str) -> Result<(), String> {
+    let u = url.trim();
+    let lower = u.to_lowercase();
+    if lower.starts_with("https://") {
+        return Ok(());
+    }
+    let Some(rest) = lower.strip_prefix("http://") else {
+        return Err("адрес должен начинаться с https:// или http://".into());
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => authority.split(':').next().unwrap_or(""),
+    };
+    if host_is_local(host) {
+        Ok(())
+    } else {
+        Err(format!(
+            "по http ключ уходит только на свою машину или в локальную сеть, а тут {host}; снаружи нужен https://"
+        ))
+    }
+}
+
+/// Свой ли это адрес: петля, частные сети RFC1918, сеть Tailscale, .local.
+fn host_is_local(host: &str) -> bool {
+    if host == "localhost" || host == "::1" || host.ends_with(".local") || host.ends_with(".localhost") {
+        return true;
+    }
+    let octets: Vec<u8> = host
+        .split('.')
+        .filter_map(|p| p.parse::<u8>().ok())
+        .collect();
+    if octets.len() != 4 || host.split('.').count() != 4 {
+        return false;
+    }
+    match (octets[0], octets[1]) {
+        (127, _) => true,
+        (10, _) => true,
+        (192, 168) => true,
+        (172, b) if (16..=31).contains(&b) => true,
+        (100, b) if (64..=127).contains(&b) => true,
+        _ => false,
+    }
+}
+
 /// Живая проверка адреса и ключа: GET {base}/models с Bearer. Фраза и список.
 #[tauri::command]
 async fn probe_model(base_url: String, key: String, framework: Option<String>) -> serde_json::Value {
@@ -772,9 +3079,19 @@ async fn probe_model(base_url: String, key: String, framework: Option<String>) -
     } else {
         format!("{base}/models")
     };
+    if let Err(why) = outbound_url_ok(&url) {
+        return serde_json::json!({ "ok": false, "note": why, "models": [] });
+    }
     let result = tauri::async_runtime::spawn_blocking(move || {
+        // redirects(0) — половина гарда outbound_url_ok, без которой вторая
+        // не работает: ureq по умолчанию идёт по переадресациям до пяти хопов
+        // и снимает на чужом хосте только Authorization, а НЕ кастомный
+        // x-api-key, которым ходит ветка anthropic/z.ai. Разрешённый гардом
+        // http://127.0.0.1:PORT отвечал 302 куда угодно — и ключ уезжал туда,
+        // куда гард только что запретил.
         let agent = ureq::AgentBuilder::new()
             .timeout(std::time::Duration::from_secs(12))
+            .redirects(0)
             .build();
         let mut req = agent.get(&url);
         if !key.trim().is_empty() {
@@ -786,6 +3103,17 @@ async fn probe_model(base_url: String, key: String, framework: Option<String>) -
         }
         match req.call() {
             Ok(resp) => {
+                // С redirects(0) переадресация возвращается как ответ, а не
+                // проходится молча. Говорим прямо: ключ туда не пошёл.
+                if (300..400).contains(&resp.status()) {
+                    let to: String = resp.header("location").unwrap_or("").chars().take(120).collect();
+                    let code = resp.status();
+                    return (
+                        false,
+                        format!("Адрес отвечает переадресацией ({code}) на {to} — ключ туда не отправляю; укажи конечный адрес"),
+                        Vec::new(),
+                    );
+                }
                 let body = resp.into_string().unwrap_or_default();
                 let models = model_ids(&body);
                 if models.is_empty() {
@@ -834,23 +3162,25 @@ fn register_toast_identity(_identifier: &str, _name: &str, _icon: Option<&Path>)
 /// он чинится, если его нет: скрипт вшит в exe и выполняется без окна.
 #[cfg(windows)]
 fn ensure_start_menu_shortcut(identifier: &str, name: &str, icon: Option<&Path>) {
-    let Some(appdata) = std::env::var_os("APPDATA") else { return };
-    let programs = PathBuf::from(appdata)
-        .join("Microsoft")
-        .join("Windows")
-        .join("Start Menu")
-        .join("Programs");
+    // Папку меню «Пуск» спрашиваем у Windows, а не склеиваем из %APPDATA%:
+    // при перенаправлении папок политикой склейка промахивалась молча.
+    let Some(programs) = programs_dir() else { return };
     if programs.join(format!("{name}.lnk")).exists() || programs.join(format!("{PRODUCT}.lnk")).exists() {
         return;
     }
     let Ok(exe) = std::env::current_exe() else { return };
-    let script = std::env::temp_dir().join("helene-start-menu-shortcut.ps1");
+    // Имя с pid: установщик пишет скрипт по тому же пути в %TEMP%, и общий
+    // файл, исполняемый с -ExecutionPolicy Bypass, — TOCTOU по построению.
+    let script = std::env::temp_dir().join(format!(
+        "helene-start-menu-shortcut-{}.ps1",
+        std::process::id()
+    ));
     if std::fs::write(&script, include_str!("../resources/start-menu-shortcut.ps1")).is_err() {
         log_line("ярлык меню «Пуск»: не записался скрипт");
         return;
     }
-    let mut cmd = Command::new("powershell.exe");
-    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+    let mut cmd = Command::new(powershell_exe());
+    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&script)
         .arg("-Exe")
         .arg(&exe)
@@ -861,14 +3191,26 @@ fn ensure_start_menu_shortcut(identifier: &str, name: &str, icon: Option<&Path>)
     if let Some(icon) = icon {
         cmd.arg("-Icon").arg(icon);
     }
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    match cmd.output() {
-        Ok(out) if out.status.success() => log_line("ярлык меню «Пуск» создан (уведомления)"),
+    let result = run_hidden_for(&mut cmd, Duration::from_secs(60));
+    let _ = std::fs::remove_file(&script);
+    match result {
+        // Успех скрипта — ещё не ярлык: раньше в журнал уходила расписка
+        // «ярлык создан», даже если файла по этому пути не появлялось.
+        Ok(out) if out.status.success() => {
+            if programs.join(format!("{name}.lnk")).exists() {
+                log_line("ярлык меню «Пуск» создан (уведомления)");
+            } else {
+                log_line(&format!(
+                    "ярлык меню «Пуск»: скрипт отчитался, а файла в {} нет — уведомлений может не быть",
+                    programs.display()
+                ));
+            }
+        }
         Ok(out) => log_line(&format!(
             "ярлык меню «Пуск» не создался: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         )),
-        Err(err) => log_line(&format!("ярлык меню «Пуск»: powershell не запустился: {err}")),
+        Err(err) => log_line(&format!("ярлык меню «Пуск»: powershell не отработал: {err}")),
     }
 }
 
@@ -880,7 +3222,12 @@ fn ensure_start_menu_shortcut(_identifier: &str, _name: &str, _icon: Option<&Pat
 /// Читаем хвост архива комнаты окна (его пишет транспорт руннера) и показываем
 /// только исходящие строки, только пока окно скрыто или не в фокусе. Старт — с
 /// текущего конца файла: прошлые реплики уведомлениями не становятся.
-fn watch_outbound(app: tauri::AppHandle, tree: PathBuf, agent: String) {
+///
+/// `show_text` — показывать ли саму реплику (helene.json: notifications.text).
+/// Windows держит уведомления в Центре уведомлений и по умолчанию показывает
+/// их на экране блокировки: с выключенным тумблером приходит только «новое
+/// сообщение», без текста разговора.
+fn watch_outbound(app: tauri::AppHandle, tree: PathBuf, agent: String, show_text: bool) {
     std::thread::spawn(move || {
         let archive = tree
             .join("memory")
@@ -888,7 +3235,11 @@ fn watch_outbound(app: tauri::AppHandle, tree: PathBuf, agent: String) {
             .join(format!("{WINDOW_ROOM}.jsonl"));
         let mut offset: u64 = std::fs::metadata(&archive).map(|m| m.len()).unwrap_or(0);
         let mut last_body = String::new();
-        let mut last_toast = std::time::Instant::now() - Duration::from_secs(60);
+        // Было `Instant::now() - Duration::from_secs(60)`: на Windows ноль
+        // Instant — момент загрузки машины, и при старте по автозапуску (аптайм
+        // меньше минуты) вычитание паниковало. Поток тихо умирал, и уведомлений
+        // не было весь сеанс.
+        let mut last_toast: Option<Instant> = None;
         loop {
             std::thread::sleep(Duration::from_secs(2));
             let len = match std::fs::metadata(&archive) {
@@ -942,53 +3293,199 @@ fn watch_outbound(app: tauri::AppHandle, tree: PathBuf, agent: String) {
                 fresh = Some(text.chars().take(240).collect());
             }
             let Some(body) = fresh else { continue };
-            if body == last_body || last_toast.elapsed() < Duration::from_secs(15) {
+            let too_soon = last_toast.is_some_and(|t| t.elapsed() < Duration::from_secs(15));
+            if body == last_body || too_soon {
                 continue;
             }
             last_body = body.clone();
-            last_toast = std::time::Instant::now();
-            toast(&agent, &body);
+            last_toast = Some(Instant::now());
+            if show_text {
+                toast(&agent, &body);
+            } else {
+                toast(&agent, "Новое сообщение — открой окно, чтобы прочитать.");
+            }
         }
     });
 }
 
+/// Ненастроенный продукт встречает установщик — но только если он ЖИВ.
+/// Раньше запуск считался удачным по факту CreateProcess: умерший через
+/// двести миллисекунд установщик (нет WebView2, паника) выглядел как успех, и
+/// владелец, кликнув по значку, не видел ничего вообще.
+fn hand_over_to_setup(base: &Path) -> bool {
+    let setup = base.join("helene-setup.exe");
+    if !setup.exists() {
+        log_line("продукт не настроен, а helene-setup.exe рядом нет — открываю окно как есть");
+        return false;
+    }
+    let mut child = match Command::new(&setup).current_dir(base).spawn() {
+        Ok(c) => c,
+        Err(err) => {
+            log_line(&format!("helene-setup.exe не запустился: {err} — открываю окно"));
+            return false;
+        }
+    };
+    // Две секунды — достаточно, чтобы отличить «поднялся» от «умер сразу».
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                log_line(&format!("helene-setup.exe вышел сразу ({status}) — открываю окно"));
+                message_box_async(
+                    format!("{PRODUCT_UI}: установка не открылась"),
+                    "Помощник установки закрылся сразу после запуска.\n\nЧастая причина — нет Microsoft Edge WebView2 Runtime.\nПодробности — в helene.log рядом с программой.".to_string(),
+                );
+                return false;
+            }
+            Ok(None) => {}
+            Err(_) => break,
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    true
+}
+
+/// Окно открылось, но агента этого окна нет: порт держит ЧУЖАЯ установка.
+///
+/// Здесь важны две вещи сразу. Первая — `base` пустой: ни один запрос окна не
+/// уходит на чужой порт, чужие переписка, память и конституция остаются
+/// чужими. Вторая — владелец должен увидеть, ЧТО произошло, а не пустой экран
+/// «нет связи»: поверх страницы рисуется объяснение с адресом чужого дерева.
+///
+/// Рисуем из init-скрипта, а не из `app/`: страница окна — общая с браузером и
+/// телефоном, а это состояние знает только оболочка.
+fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
+    let whose = match theirs {
+        Some(p) => format!("Её данные лежат здесь: {}", p.display()),
+        None => "Что это за программа — выяснить не удалось: на /api/home она отвечает не по-нашему.".to_string(),
+    };
+    let title = format!("Порт {port} держит другая установка Hélène");
+    let body = format!(
+        "{whose}\n\nАгент этого окна не поднялся, и к чужому дереву окно не подключается: чужая переписка, чужая память и чужая конституция остаются чужими.\n\nЗакрой ту копию и перезапусти Hélène — или смени port в {CONFIG_NAME} рядом с программой."
+    );
+    let cfg = serde_json::json!({"base": "", "key": "", "agent": agent});
+    let t = serde_json::Value::String(title);
+    let b = serde_json::Value::String(body);
+    format!(
+        r#"window.PULT_CONFIG_OVERRIDE = {cfg};
+(function () {{
+  var title = {t}, body = {b};
+  function draw() {{
+    if (document.getElementById("helene-blocked")) return;
+    var host = document.body || document.documentElement;
+    if (!host) return;
+    var back = document.createElement("div");
+    back.id = "helene-blocked";
+    back.setAttribute("style", "position:fixed;inset:0;z-index:2147483647;background:#15171b;color:#e9e9ec;display:flex;align-items:center;justify-content:center;padding:48px;font:16px/1.6 'Segoe UI',system-ui,sans-serif");
+    var box = document.createElement("div");
+    box.setAttribute("style", "max-width:640px");
+    var h = document.createElement("div");
+    h.textContent = title;
+    h.setAttribute("style", "font-size:22px;font-weight:600;margin:0 0 16px");
+    var p = document.createElement("div");
+    p.textContent = body;
+    p.setAttribute("style", "white-space:pre-wrap;opacity:.85;margin:0 0 22px");
+    box.appendChild(h);
+    box.appendChild(p);
+    var api = window.__TAURI_INTERNALS__;
+    if (api && typeof api.invoke === "function") {{
+      var btn = document.createElement("button");
+      btn.textContent = "Перезапустить Hélène";
+      btn.setAttribute("style", "font:inherit;padding:10px 18px;border-radius:8px;border:1px solid #3b4049;background:#242830;color:inherit;cursor:pointer");
+      btn.onclick = function () {{ try {{ api.invoke("restart_self"); }} catch (e) {{}} }};
+      box.appendChild(btn);
+    }}
+    back.appendChild(box);
+    host.appendChild(back);
+  }}
+  if (document.readyState === "loading") {{
+    document.addEventListener("DOMContentLoaded", draw);
+  }} else {{
+    draw();
+  }}
+  setTimeout(draw, 1500);
+}})();"#
+    )
+}
+
 fn main() {
     let base = exe_dir();
+    install_panic_hook();
     log_line(&format!("старт {PRODUCT} {}", env!("CARGO_PKG_VERSION")));
-    let cfg: Option<serde_json::Value> = std::fs::read_to_string(base.join(CONFIG_NAME))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok());
+    let read = read_config(&base.join(CONFIG_NAME));
+    let broken = matches!(read, ConfigRead::Broken(_));
+    // Битый конфиг НЕ ведёт к установщику: тот проходил по кругу и переписывал
+    // helene.json и конституцию с нуля из-за лишней запятой или BOM.
+    if let ConfigRead::Broken(why) = &read {
+        let path = base.join(CONFIG_NAME);
+        log_line(&format!("{CONFIG_NAME} не разобрался ({why}) — установщик НЕ зову, открываю окно"));
+        message_box_async(
+            format!("{PRODUCT_UI}: файл настроек повреждён"),
+            format!(
+                "{}\n\n{why}\n\nПочини файл или переустанови программу. Пока он не читается, агент не поднимется, а настройки и конституция остаются на месте.",
+                path.display()
+            ),
+        );
+    }
+    let cfg: Option<serde_json::Value> = match read {
+        ConfigRead::Ok(v) => Some(v),
+        _ => None,
+    };
     let agent = agent_name(cfg.as_ref());
-    if unconfigured(&cfg) {
-        // Ненастроенный продукт встречает установщик, если он лежит рядом.
-        // Без него окно открывается как есть: состояние в шапке скажет
-        // «Модель не настроена» и куда идти.
-        let setup = base.join("helene-setup.exe");
-        if setup.exists() {
-            if Command::new(&setup).current_dir(&base).spawn().is_ok() {
-                return;
-            }
-            log_line("helene-setup.exe рядом есть, но не запустился — открываю окно");
-        }
+    // К установщику — когда продукт не настроен, но файл при этом ЦЕЛ
+    // (его нет вовсе или он читается): поставка приезжает с шаблоном
+    // helene.json, и первый запуск обязан открывать визард.
+    if !broken && unconfigured(&cfg) && hand_over_to_setup(&base) {
+        return;
     }
     let configured = !unconfigured(&cfg);
 
     let mut children: Vec<Managed> = Vec::new();
     let mut init_script = String::new();
     let mut tree: Option<PathBuf> = None;
+    let mut plan: Option<SpawnPlan> = None;
+    let notify_text = cfg
+        .as_ref()
+        .and_then(|c| c.get("notifications"))
+        .and_then(|n| n.get("text"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     // Без настройки харнесс не поднимаем: без ключа модели дети бесполезны.
     if let Some(cfg) = cfg.as_ref().filter(|_| configured) {
         match cfg.get("mode").and_then(|v| v.as_str()).unwrap_or("") {
             "local" => {
-                let (spawned, port, data) = spawn_local(&base, cfg);
-                // Пустой список детей — не провал: харнесс уже живёт (служба или
-                // другое окно), и это окно — просто ещё один клиент того же порта.
-                children = spawned;
-                tree = Some(data);
-                init_script = format!(
-                    "window.PULT_CONFIG_OVERRIDE = {{base: \"http://127.0.0.1:{port}\", key: \"\", agent: {}}};",
-                    serde_json::Value::String(agent.clone())
-                );
+                let made = build_plan(&base, cfg);
+                let port = made.port;
+                // Секрет трубы заводится ДО подъёма детей: он уходит им в
+                // окружение и он же предъявляется трубе из окна.
+                let _ = std::fs::create_dir_all(&made.tree);
+                if let Some(t) = ensure_desk_token(&made.tree) {
+                    let _ = DESK_TOKEN.set(t);
+                }
+                // Пустой список детей — не провал и не приговор: харнесс уже
+                // живёт (служба или другое окно) либо порт занят; надзор
+                // попробует снова, когда порт освободится.
+                let (kids, verdict) = start_children(&made, true);
+                children = kids;
+                tree = Some(made.tree.clone());
+                plan = Some(made);
+                match verdict {
+                    // ЧУЖАЯ установка на нашем порту. Адрес вебвью на неё не
+                    // строим вовсе: иначе окно показывало бы чужую переписку,
+                    // писало в чужой desk_inbox и правило чужой soul/SOUL.md
+                    // через /api/md — ровно туда, куда только что запретили.
+                    Some(Verdict::Foreign(theirs)) => {
+                        BLOCKED_BY_FOREIGN.store(true, std::sync::atomic::Ordering::Relaxed);
+                        init_script = blocked_script(port, theirs.as_deref(), &agent);
+                    }
+                    _ => {
+                        init_script = format!(
+                            "window.PULT_CONFIG_OVERRIDE = {{base: \"http://127.0.0.1:{port}\", key: {}, agent: {}}};",
+                            serde_json::Value::String(desk_token().to_string()),
+                            serde_json::Value::String(agent.clone())
+                        );
+                    }
+                }
             }
             "remote" => {
                 let base_url = cfg.get("base").and_then(|v| v.as_str()).unwrap_or("");
@@ -1004,7 +3501,7 @@ fn main() {
         }
     }
 
-    tauri::Builder::default()
+    let run = tauri::Builder::default()
         // Один экземпляр — ПЕРВЫМ плагином: повторный запуск не доходит до
         // окна, а поднимает и фокусирует уже живое.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -1015,11 +3512,14 @@ fn main() {
         .manage(LocalHarness {
             children: Mutex::new(children),
             stopping: std::sync::atomic::AtomicBool::new(false),
+            plan: Mutex::new(plan),
         })
         .manage(Identity {
             agent: agent.clone(),
             tree: tree.clone(),
         })
+        // Статика окна — с диска (app/static), см. serve_static.
+        .register_uri_scheme_protocol("helene", |ctx, request| serve_static(ctx, request))
         .invoke_handler(tauri::generate_handler![
             config_save,
             restart_self,
@@ -1034,6 +3534,8 @@ fn main() {
             lan_ip,
             tailscale_ip,
             firewall_allow,
+            firewall_clear,
+            admin_state,
             relay_login,
             relay_status,
             notify,
@@ -1052,7 +3554,16 @@ fn main() {
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
             debug_assert_eq!(app.config().identifier, TOAST_ID);
             let mut builder =
-                tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+                tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    // Свой протокол вместо вшитого `tauri://`: файлы берутся из
+                    // app/static на диске (serve_static). На Windows WebView2
+                    // видит зарегистрированную схему как http://<схема>.localhost.
+                    tauri::WebviewUrl::CustomProtocol(
+                        tauri::Url::parse("http://helene.localhost/index.html").expect("адрес окна"),
+                    ),
+                )
                     .title(PRODUCT_UI)
                     .icon(window_icon)?
                     .inner_size(1360.0, 860.0)
@@ -1071,7 +3582,11 @@ fn main() {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(500));
-                show_main(&handle);
+                // Если владелец за эти полсекунды успел убрать окно в трей —
+                // не вытаскивать его обратно поверх всего, чем он занят.
+                if !HIDDEN_BY_OWNER.load(std::sync::atomic::Ordering::Relaxed) {
+                    show_main(&handle);
+                }
             });
             let handle = app.handle().clone();
             std::thread::spawn(move || watch_children(handle));
@@ -1117,7 +3632,11 @@ fn main() {
 
             // Слово агента, когда окно не перед глазами, — уведомлением.
             if let Some(data) = tree.clone() {
-                watch_outbound(app.handle().clone(), data, agent.clone());
+                watch_outbound(app.handle().clone(), data.clone(), agent.clone(), notify_text);
+                // …и его просьба к брокеру — окном подтверждения. Тоже не через
+                // вебвью: просьба приходит, когда владелец занят другим, а окно
+                // продукта в этот момент чаще всего в трее.
+                watch_broker_wishes(data);
             }
             Ok(())
         })
@@ -1126,6 +3645,7 @@ fn main() {
                 // Закрыть окно ≠ убить организм: окно в трей, дети живут.
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
+                    HIDDEN_BY_OWNER.store(true, std::sync::atomic::Ordering::Relaxed);
                     let _ = window.hide();
                     close_hint(window.app_handle());
                 }
@@ -1137,8 +3657,53 @@ fn main() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("окно Hélène не поднялось");
+        .run(tauri::generate_context!());
+    // Было .expect(): паника в exe без консоли гасила процесс молча — окно
+    // просто не появлялось, и причины не было нигде.
+    if let Err(err) = run {
+        log_line(&format!("окно {PRODUCT_UI} не поднялось: {err}"));
+        let hint = if webview2_present() {
+            String::new()
+        } else {
+            "\n\nНа этой машине не найден Microsoft Edge WebView2 Runtime — без него окно не откроется. Поставь его с сайта Microsoft (Evergreen Runtime) и запусти снова.".to_string()
+        };
+        message_box(
+            &format!("{PRODUCT_UI} не открылась"),
+            &format!("{err}{hint}\n\nПодробности — в helene.log рядом с программой."),
+        );
+    }
+}
+
+/// Есть ли на машине WebView2 Runtime — без него окно Tauri не откроется, а
+/// продукт нигде о нём не говорил: на Windows 10 LTSC и корпоративных образах
+/// это самая частая причина «кликнул и ничего не произошло».
+#[cfg(windows)]
+fn webview2_present() -> bool {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    use winreg::RegKey;
+    const CLIENT: &str = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+    let paths = [
+        format!("SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{CLIENT}"),
+        format!("SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{CLIENT}"),
+    ];
+    for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+        let hive = RegKey::predef(root);
+        for path in &paths {
+            if let Ok(key) = hive.open_subkey(path) {
+                if let Ok(pv) = key.get_value::<String, _>("pv") {
+                    if !pv.trim().is_empty() && pv != "0.0.0.0" {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+#[cfg(not(windows))]
+fn webview2_present() -> bool {
+    true
 }
 
 /// Первое закрытие окна: сказать, что агент жив и где его найти. Один раз —
@@ -1171,59 +3736,213 @@ fn kill_children(state: &tauri::State<LocalHarness>) {
     state.stopping.store(true, std::sync::atomic::Ordering::Relaxed);
     if let Ok(mut guard) = state.children.lock() {
         for m in guard.iter_mut() {
-            let _ = m.child.kill();
-            let _ = m.child.wait();
+            if let Some(child) = m.child.as_mut() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
         guard.clear();
     };
+    // Незавершённый вход в ChatGPT — тоже наш ребёнок: без этого
+    // helene-relay.exe login переживал выход из трея и держал порт 1455.
+    relay_abort();
 }
 
 /// Надзор: упавший ребёнок поднимается снова с растущей паузой; шестое падение
 /// за десять минут — пауза на десять минут и честное уведомление, чтобы не
-/// жечь машину петлёй. Под замком не спим: выход из трея не должен ждать.
+/// жечь машину петлёй.
+///
+/// Замок children берётся только на быстрые действия: раньше под ним шли
+/// CreateProcess питона и показ уведомления, а тот же замок берёт выход из
+/// трея — и меню не отвечало ровно тогда, когда владелец хотел выйти.
+///
+/// Здесь же — вторая попытка поднять СВОЙ харнесс, когда своих детей нет
+/// вовсе: порт был занят (служба, чужая программа, зомби прежней установки).
+/// Раньше это состояние было необратимым до перезапуска exe.
 fn watch_children(app: tauri::AppHandle) {
     use std::sync::atomic::Ordering;
-    use std::time::Instant;
+    /// Что делать с ребёнком после осмотра — решение принимается под замком,
+    /// а исполняется без него.
+    enum Act {
+        Spawn(ChildSpec),
+        Report(String, &'static str),
+        /// Ребёнок назвал причину кодом выхода: перезапускать нечего, надо
+        /// говорить владельцу, что именно чинить.
+        Halt(String, String),
+    }
+    let mut last_lift = Instant::now();
     loop {
         std::thread::sleep(Duration::from_secs(5));
         let state = app.state::<LocalHarness>();
         if state.stopping.load(Ordering::Relaxed) {
             return;
         }
-        let Ok(mut guard) = state.children.lock() else { continue };
-        let now = Instant::now();
-        for m in guard.iter_mut() {
-            let label = m.spec.label();
-            if let Some(at) = m.retry_at {
-                if now < at {
+        // 1) Осмотр под замком: только try_wait и учёт падений.
+        let mut acts: Vec<(usize, Act)> = Vec::new();
+        let logs: Vec<PathBuf>;
+        let empty;
+        {
+            let Ok(mut guard) = state.children.lock() else { continue };
+            empty = guard.is_empty();
+            let now = Instant::now();
+            for (i, m) in guard.iter_mut().enumerate() {
+                let label = m.spec.label();
+                // Остановлен по причине, которую перезапуск не лечит.
+                if m.halted {
                     continue;
                 }
-                m.retry_at = None;
-                match m.spec.spawn() {
-                    Some(child) => {
-                        m.child = child;
-                        log_line(&format!("{label} поднят снова"));
+                if let Some(at) = m.retry_at {
+                    if now >= at {
+                        m.retry_at = None;
+                        acts.push((i, Act::Spawn(m.spec.clone())));
                     }
-                    None => {
-                        log_line(&format!("{label} не поднялся, ещё попытка через 30 с"));
-                        m.retry_at = Some(now + Duration::from_secs(30));
+                    continue;
+                }
+                if m.child.is_none() {
+                    // Ребёнок, которого не удалось поднять, ждёт своей минуты.
+                    m.retry_at = Some(now + Duration::from_secs(30));
+                    continue;
+                }
+                let Ok(Some(status)) = m.child.as_mut().unwrap().try_wait() else { continue };
+                m.child = None;
+                // Код выхода — это слово ребёнка о причине, и его надо слышать.
+                // Руннер выходит 3, когда виноват helene.json или раскладка
+                // папки данных, и 2, когда рядом нет папки с кодом агента.
+                // Раньше оба крутились в вечном 1→2→4→8→16→32 с и по десять
+                // минут дальше — с текстом «поднимаю снова», который был ложью.
+                if let Some(code @ (2 | 3)) = status.code() {
+                    m.halted = true;
+                    m.retry_at = None;
+                    let human = m.spec.human();
+                    let (why, what) = if code == 3 {
+                        (
+                            "не может прочитать свои настройки",
+                            format!("Проверь {CONFIG_NAME} рядом с программой (или открой Настройки), потом запусти Hélène снова."),
+                        )
+                    } else {
+                        (
+                            "не находит свою папку с кодом агента",
+                            "Похоже, поставка неполная: переустанови Hélène в эту же папку.".to_string(),
+                        )
+                    };
+                    acts.push((
+                        i,
+                        Act::Halt(
+                            format!("{label} завершился с кодом {code}: {why} — перезапуск здесь не поможет, жду решения владельца"),
+                            format!("{human} {why}. {what}"),
+                        ),
+                    ));
+                    continue;
+                }
+                m.falls.retain(|t| now.duration_since(*t) < Duration::from_secs(600));
+                m.falls.push(now);
+                if m.falls.len() > 5 {
+                    m.falls.clear();
+                    m.retry_at = Some(now + Duration::from_secs(600));
+                    acts.push((
+                        i,
+                        Act::Report(
+                            format!("{label} завершился ({status}) шестой раз за десять минут — пауза десять минут"),
+                            m.spec.human(),
+                        ),
+                    ));
+                    continue;
+                }
+                let pause = Duration::from_secs(1u64 << (m.falls.len() - 1).min(5));
+                m.retry_at = Some(now + pause);
+                acts.push((
+                    i,
+                    Act::Report(
+                        format!("{label} завершился ({status}), поднимаю снова через {} с", pause.as_secs()),
+                        "",
+                    ),
+                ));
+            }
+            logs = guard.iter().filter_map(|m| m.spec.log_path()).collect();
+        }
+        // Ротация логов живых детей — вне замка: у долго живущего агента
+        // deskapp.log рос без границы (проверка была только в момент запуска),
+        // а копирование мегабайтов под общим замком держало бы выход из трея.
+        for path in logs {
+            if rotate_child_log(&path) {
+                log_line(&format!("{} обрезан по размеру", path.display()));
+            }
+        }
+        // 2) Действия — без замка.
+        for (i, act) in acts {
+            match act {
+                Act::Report(line, human) => {
+                    log_line(&line);
+                    if !human.is_empty() {
+                        toast(
+                            PRODUCT_UI,
+                            &format!("{human}: не удаётся запустить раз за разом. Открой Настройки → «Собрать логи для поддержки»."),
+                        );
                     }
                 }
-                continue;
+                Act::Halt(line, said) => {
+                    log_line(&line);
+                    toast(PRODUCT_UI, &said);
+                }
+                Act::Spawn(spec) => {
+                    let label = spec.label();
+                    let child = spec.spawn();
+                    let ok = child.is_some();
+                    if let Ok(mut guard) = state.children.lock() {
+                        if let Some(m) = guard.get_mut(i) {
+                            if ok {
+                                m.child = child;
+                            } else {
+                                m.retry_at = Some(Instant::now() + Duration::from_secs(30));
+                            }
+                        }
+                    }
+                    log_line(&if ok {
+                        format!("{label} поднят снова")
+                    } else {
+                        format!("{label} не поднялся, ещё попытка через 30 с")
+                    });
+                }
             }
-            let Ok(Some(status)) = m.child.try_wait() else { continue };
-            m.falls.retain(|t| now.duration_since(*t) < Duration::from_secs(600));
-            m.falls.push(now);
-            if m.falls.len() > 5 {
-                log_line(&format!("{label} завершился ({status}) шестой раз за десять минут — пауза десять минут"));
-                toast(PRODUCT_UI, &format!("{label} падает раз за разом. Подробности в helene.log и в логах рядом с данными."));
-                m.falls.clear();
-                m.retry_at = Some(now + Duration::from_secs(600));
-                continue;
+        }
+        // 3) Своих детей нет совсем — попробовать поднять харнесс заново.
+        if empty && last_lift.elapsed() >= Duration::from_secs(15) {
+            last_lift = Instant::now();
+            let plan = state.plan.lock().ok().and_then(|p| p.clone());
+            if let Some(plan) = plan {
+                let (mut lifted, _) = start_children(&plan, false);
+                if !lifted.is_empty() {
+                    let mut installed = false;
+                    if let Ok(mut guard) = state.children.lock() {
+                        if guard.is_empty() && !state.stopping.load(Ordering::Relaxed) {
+                            *guard = std::mem::take(&mut lifted);
+                            installed = true;
+                        }
+                    }
+                    if installed {
+                        log_line("порт освободился — свой харнесс поднят окном");
+                        // Окно открывалось с экраном «здесь чужая установка»:
+                        // адреса харнесса в нём нет, и само оно к своему уже
+                        // поднятому агенту не подключится.
+                        if BLOCKED_BY_FOREIGN.swap(false, Ordering::Relaxed) {
+                            log_line("окно открывалось без адреса (чужая установка на порту) — прошу владельца перезапустить его");
+                            toast(
+                                PRODUCT_UI,
+                                "Порт освободился, агент этого окна поднялся. Перезапусти Hélène, чтобы окно к нему подключилось.",
+                            );
+                        }
+                    } else {
+                        // Пока мы поднимали, окно уже гасят или кто-то успел
+                        // раньше: сирот не оставляем.
+                        for m in lifted.iter_mut() {
+                            if let Some(child) = m.child.as_mut() {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                            }
+                        }
+                    }
+                }
             }
-            let pause = Duration::from_secs(1u64 << (m.falls.len() - 1).min(5));
-            log_line(&format!("{label} завершился ({status}), поднимаю снова через {} с", pause.as_secs()));
-            m.retry_at = Some(now + pause);
         }
     }
 }
@@ -1239,17 +3958,43 @@ fn app_info() -> serde_json::Value {
     })
 }
 
-/// Новее ли версия-кандидат: сравнение по числам через точку.
+/// Версия из тега: `v0.2.1`, `V1.0.0`, `1.0`, `1.0.0-rc1` → числа.
+/// Строго: непонятный тег даёт None, а не нули. Раньше `V1.0.0` (заглавная
+/// буква) и `helene-1.0.0` читались как 0.0.0, и мажорный выпуск был
+/// неотличим от «обновлений нет».
+fn parse_version(raw: &str) -> Option<Vec<u64>> {
+    let text = raw.trim();
+    let text = text.strip_prefix('v').or_else(|| text.strip_prefix('V')).unwrap_or(text);
+    let text = text.split(['-', '+', ' ']).next().unwrap_or("");
+    if text.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for chunk in text.split('.') {
+        let digits: String = chunk.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() || digits.len() != chunk.len() {
+            return None;
+        }
+        parts.push(digits.parse().ok()?);
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    // 1.0 и 1.0.0 — одна и та же версия.
+    while parts.len() < 3 {
+        parts.push(0);
+    }
+    parts.truncate(4);
+    Some(parts)
+}
+
+/// Новее ли версия-кандидат. Непонятный тег — не «новее» (и вызывающий об
+/// этом скажет владельцу отдельно, а не молчаливым «последняя версия»).
 fn version_newer(candidate: &str, current: &str) -> bool {
-    let parse = |s: &str| -> Vec<u64> {
-        s.trim()
-            .trim_start_matches('v')
-            .split('.')
-            .map(|p| p.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0))
-            .collect()
-    };
-    let a = parse(candidate);
-    !a.is_empty() && a > parse(current)
+    match (parse_version(candidate), parse_version(current)) {
+        (Some(a), Some(b)) => a > b,
+        _ => false,
+    }
 }
 
 /// Проверка обновлений: JSON по адресу владельца — {"version","url","notes"}.
@@ -1261,51 +4006,85 @@ async fn update_check(url: String) -> Result<serde_json::Value, String> {
     if url.is_empty() {
         return Err("адрес обновлений не задан".into());
     }
+    outbound_url_ok(&url)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(12)).build();
-        let body = agent
-            .get(&url)
-            .call()
-            .map_err(|e| format!("не ответил: {e}"))?
-            .into_string()
-            .map_err(|e| e.to_string())?;
+        // redirects(0) — та же причина, что и в probe_model: переадресация
+        // уносит заголовки мимо разбора адреса, который сделан выше.
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(12))
+            .redirects(0)
+            .build();
+        let resp = agent.get(&url).call().map_err(|e| format!("не ответил: {e}"))?;
+        if (300..400).contains(&resp.status()) {
+            return Err(format!(
+                "сервер обновлений отвечает переадресацией ({}) — укажи конечный адрес",
+                resp.status()
+            ));
+        }
+        let body = resp.into_string().map_err(|e| e.to_string())?;
         let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("это не JSON: {e}"))?;
         // Два формата: свой {"version","url","notes"} и GitHub Releases
         // (.../releases/latest → tag_name, html_url, body, assets[]).
         let text = |key: &str| v.get(key).and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let latest = if !text("version").is_empty() { text("version") } else { text("tag_name") };
-        let asset_zip = v
-            .get("assets")
-            .and_then(|a| a.as_array())
-            .and_then(|a| {
-                a.iter()
-                    .filter_map(|x| x.get("browser_download_url").and_then(|u| u.as_str()))
-                    .find(|u| u.to_lowercase().ends_with(".zip"))
-                    .map(str::to_string)
-            });
+        let raw_latest = if !text("version").is_empty() { text("version") } else { text("tag_name") };
+        if raw_latest.trim().is_empty() {
+            return Err("сервер обновлений не назвал версию — проверь адрес".to_string());
+        }
+        // Непонятный тег больше не выдаётся за «это последняя версия».
+        if parse_version(&raw_latest).is_none() {
+            return Err(format!("не понял ответ сервера обновлений: версия «{raw_latest}»"));
+        }
+        let asset = v.get("assets").and_then(|a| a.as_array()).and_then(|a| {
+            a.iter()
+                .find(|x| {
+                    x.get("browser_download_url")
+                        .and_then(|u| u.as_str())
+                        .map(|u| u.to_lowercase().ends_with(".zip"))
+                        .unwrap_or(false)
+                })
+                .cloned()
+        });
+        let asset_zip = asset
+            .as_ref()
+            .and_then(|a| a.get("browser_download_url").and_then(|u| u.as_str()).map(str::to_string));
+        // Подпись кода у поставки нет; sha256 от GitHub — единственная
+        // бесплатная страховка на 80 МБ архива, и она просто не бралась.
+        let digest = asset
+            .as_ref()
+            .and_then(|a| a.get("digest").and_then(|d| d.as_str()).map(str::to_string))
+            .unwrap_or_default();
         let url = if !text("url").is_empty() { text("url") } else { asset_zip.unwrap_or_else(|| text("html_url")) };
         let notes = if !text("notes").is_empty() { text("notes") } else { text("body") };
-        let notes: String = notes.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(200).collect();
+        // Первая строка описания релиза — обычно заголовок «# Изменения»:
+        // окно печатало его как «что нового».
+        let notes: String = notes
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty() && !l.starts_with('#'))
+            .unwrap_or("")
+            .chars()
+            .take(200)
+            .collect();
         let current = env!("CARGO_PKG_VERSION");
+        let latest = raw_latest.trim().trim_start_matches(['v', 'V']).to_string();
         Ok(serde_json::json!({
             "current": current,
             "latest": latest,
-            "newer": version_newer(&latest, current),
+            "newer": version_newer(&raw_latest, current),
             "url": url,
             "notes": notes,
+            "sha256": digest,
         }))
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-/// Собрать логи для поддержки в один zip во временной папке: helene.log,
-/// вывод харнесса, службы и реле. Файлы сперва копируются: дети держат свои
-/// логи открытыми, и архиватор напрямую их не читает.
 /// Вход агента в Telegram своим аккаунтом: шаги status / send / code / logout
 /// выполняет помощник на встроенном Python; ответ — его JSON как есть.
 #[tauri::command]
 async fn telegram_account(
+    app: tauri::AppHandle,
     step: String,
     api_id: String,
     api_hash: String,
@@ -1314,8 +4093,10 @@ async fn telegram_account(
     password: String,
 ) -> Result<serde_json::Value, String> {
     let base = exe_dir();
-    let info = config_load()?;
-    let tree = PathBuf::from(info.get("tree").and_then(|v| v.as_str()).unwrap_or("data"));
+    // Дерево — то же, с которым живёт окно, а не «data» от текущей папки
+    // процесса: запущенный не ярлыком helene.exe клал сессию Telethon в чужое
+    // место, и руннер не находил её никогда.
+    let tree = app.state::<Identity>().tree.clone().unwrap_or_else(tree_dir);
     tauri::async_runtime::spawn_blocking(move || {
         let python = base.join("runtime").join("python.exe");
         let script = base.join("app").join("localharness").join("mtproto_login.py");
@@ -1324,16 +4105,25 @@ async fn telegram_account(
         }
         let session = tree.join("telegram").join("account");
         let mut cmd = Command::new(python);
-        cmd.arg(script)
+        cmd.arg("-u")
+            .arg(script)
             .arg("--session").arg(&session)
-            .arg("--api-id").arg(api_id.trim())
-            .arg("--api-hash").arg(api_hash.trim())
-            .arg("--phone").arg(phone.trim())
-            .arg("--code").arg(code.trim())
-            .arg("--password").arg(password)
+            // ⚠ Секреты — ОКРУЖЕНИЕМ, не аргументами. Командную строку чужого
+            // процесса на Windows читает любой процесс того же пользователя
+            // (Win32_Process.CommandLine), и она же пишется в аудит запусков
+            // (Sysmon 1 / 4688). Пароль двухфакторки Telegram и api_hash —
+            // секреты долгоживущие. Помощник читает их из этих переменных
+            // (localharness/mtproto_login.py, `_from_env`).
+            .env("HELENE_TG_API_ID", api_id.trim())
+            .env("HELENE_TG_API_HASH", api_hash.trim())
+            .env("HELENE_TG_PHONE", phone.trim())
+            .env("HELENE_TG_CODE", code.trim())
+            .env("HELENE_TG_PASSWORD", password)
             .arg(step.trim())
+            .current_dir(&base)
             .env("PYTHONUTF8", "1");
-        let out = run_hidden(&mut cmd)?;
+        // Вход в Telegram ждёт сеть и код: минута, но не бесконечность.
+        let out = run_hidden_for(&mut cmd, Duration::from_secs(90))?;
         let text = String::from_utf8_lossy(&out.stdout);
         let line = text.lines().rev().find(|l| l.trim_start().starts_with('{')).unwrap_or("");
         serde_json::from_str::<serde_json::Value>(line)
@@ -1343,18 +4133,137 @@ async fn telegram_account(
     .map_err(|e| e.to_string())?
 }
 
+/// Собрать логи для поддержки в один zip во временной папке: helene.log,
+/// вывод харнесса, службы и реле. Файлы сперва копируются: дети держат свои
+/// логи открытыми, и архиватор напрямую их не читает.
 #[tauri::command]
-fn logs_bundle() -> Result<String, String> {
+async fn logs_bundle(app: tauri::AppHandle) -> Result<String, String> {
+    // Дерево берём то, с которым это окно живёт (Identity), а не считаем
+    // заново от текущей папки процесса.
+    let tree = app.state::<Identity>().tree.clone().unwrap_or_else(tree_dir);
+    tauri::async_runtime::spawn_blocking(move || logs_bundle_blocking(tree))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Секрет в тексте лога закрывается ЗДЕСЬ, при копировании в архив.
+///
+/// Источники сегодня чистые (труба пишет путь без query, реле само пишет
+/// «value redacted») — но архив владелец отправляет постороннему человеку, а
+/// удержать это свойство нечем: любой новый `log.info` в любой из четырёх
+/// подсистем попадёт в тот же zip. Маска — механизм, а не надежда.
+///
+/// Формы: `key=…`, `token=…`, `Bearer …`, `sk-…`, `dk-…` (регистр не важен).
+fn mask_secrets(text: &str) -> String {
+    const MARKS: [&str; 3] = ["key=", "token=", "bearer "];
+    const PREFIXES: [&str; 2] = ["sk-", "dk-"];
+    const HIDDEN: &[u8] = "<скрыто>".as_bytes();
+    // Символы, из которых состоит сам секрет: на первом чужом байте (пробел,
+    // кавычка, запятая, любой не-ASCII) значение кончилось.
+    fn body_byte(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b'+' | b'/' | b':' | b'%' | b'*' | b'=')
+    }
+    let src = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(src.len());
+    let mut i = 0usize;
+    while i < src.len() {
+        let rest = &src[i..];
+        // key= / token= / Bearer — прячем значение, сам маркер оставляем.
+        if let Some(len) = MARKS
+            .iter()
+            .find(|m| rest.len() >= m.len() && rest[..m.len()].eq_ignore_ascii_case(m.as_bytes()))
+            .map(|m| m.len())
+        {
+            out.extend_from_slice(&rest[..len]);
+            i += len;
+            let mut j = i;
+            while j < src.len() && body_byte(src[j]) {
+                j += 1;
+            }
+            if j > i {
+                out.extend_from_slice(HIDDEN);
+                i = j;
+            }
+            continue;
+        }
+        // sk-… / dk-… — только на границе слова, иначе съело бы «task-1».
+        let word_start = i == 0 || !body_byte(src[i - 1]);
+        if word_start {
+            if let Some(len) = PREFIXES
+                .iter()
+                .find(|p| rest.len() >= p.len() && rest[..p.len()].eq_ignore_ascii_case(p.as_bytes()))
+                .map(|p| p.len())
+            {
+                let mut j = i + len;
+                while j < src.len() && body_byte(src[j]) {
+                    j += 1;
+                }
+                // Меньше восьми знаков — это не ключ, а слово через дефис.
+                if j - i >= 8 {
+                    out.extend_from_slice(&rest[..len]);
+                    out.extend_from_slice(HIDDEN);
+                    i = j;
+                    continue;
+                }
+            }
+        }
+        out.push(src[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Хвост файла в текст: логи режутся ротацией по 5 МБ, но у реле свои правила,
+/// а маска работает по тексту — читаем не больше разумного.
+const BUNDLE_TAIL: u64 = 8 * 1024 * 1024;
+
+fn read_tail(path: &Path) -> Option<String> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    if len > BUNDLE_TAIL {
+        f.seek(SeekFrom::Start(len - BUNDLE_TAIL)).ok()?;
+    }
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+fn logs_bundle_blocking(tree: PathBuf) -> Result<String, String> {
     let base = exe_dir();
-    let info = config_load()?;
-    let tree = PathBuf::from(info.get("tree").and_then(|v| v.as_str()).unwrap_or("data"));
+    // Конфиг здесь не обязателен: логи нужнее всего именно тогда, когда
+    // helene.json испорчен, а config_load()? отказывал ровно в этом случае.
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    // Прошлые архивы и папки сборки — вон из %TEMP%. Они там копились с самого
+    // первого нажатия: %TEMP% читает любой процесс этой учётной записи, а
+    // внутри — журналы, которые владелец собирал именно потому, что что-то
+    // пошло не так. Чистим ДО создания своей папки, чтобы не снести её же.
+    let mut dropped = 0usize;
+    if let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("helene-logs-") {
+                continue;
+            }
+            let path = e.path();
+            let gone = if path.is_dir() {
+                std::fs::remove_dir_all(&path).is_ok()
+            } else {
+                std::fs::remove_file(&path).is_ok()
+            };
+            if gone {
+                dropped += 1;
+            }
+        }
+    }
+    if dropped > 0 {
+        log_line(&format!("прошлых архивов логов удалено из %TEMP%: {dropped}"));
+    }
     let stage = std::env::temp_dir().join(format!("helene-logs-{stamp}"));
     std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
-    let mut copied = 0usize;
+    let mut copied: Vec<String> = Vec::new();
     let mut sources = vec![base.join("helene.log")];
     for name in ["deskapp.log", "runner.log", "service.log", "desk.log"] {
         sources.push(tree.join(name));
@@ -1367,11 +4276,13 @@ fn logs_bundle() -> Result<String, String> {
             continue;
         }
         let Some(name) = src.file_name() else { continue };
-        if std::fs::copy(&src, stage.join(name)).is_ok() {
-            copied += 1;
+        // Не copy, а «прочитать → закрыть секреты → записать».
+        let Some(text) = read_tail(&src) else { continue };
+        if std::fs::write(stage.join(name), mask_secrets(&text)).is_ok() {
+            copied.push(name.to_string_lossy().into_owned());
         }
     }
-    if copied == 0 {
+    if copied.is_empty() {
         let _ = std::fs::remove_dir_all(&stage);
         return Err("логов пока нет".into());
     }
@@ -1381,21 +4292,661 @@ fn logs_bundle() -> Result<String, String> {
         stage.display(),
         out.display()
     );
-    let mut cmd = Command::new("powershell.exe");
-    cmd.args(["-NoProfile", "-Command", &script]);
-    let o = run_hidden(&mut cmd)?;
+    let mut cmd = Command::new(powershell_exe());
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    let o = run_hidden_for(&mut cmd, Duration::from_secs(120))?;
     let _ = std::fs::remove_dir_all(&stage);
     if !o.status.success() || !out.is_file() {
         let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
         return Err(if err.is_empty() { "архив не собрался".into() } else { err });
     }
+    // Что именно уедет постороннему — владелец видит ДО отправки, поимённо.
+    // Возвращаемое значение остаётся путём: его получает reveal_path.
+    log_line(&format!("архив логов собран: {} ({})", out.display(), copied.join(", ")));
+    message_box_info(
+        &format!("{PRODUCT_UI}: логи для поддержки"),
+        &format!(
+            "Архив: {}\n\nВ него попали:\n · {}\n\nКлючи, токены и строки Bearer в тексте закрыты словом «скрыто». Всё остальное — как есть: пути на этой машине, имена файлов и куски сообщений об ошибках. Отправляй только тому, кому доверяешь.",
+            out.display(),
+            copied.join("\n · ")
+        ),
+    );
     Ok(out.display().to_string())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_name, unconfigured};
+    #[test]
+    fn static_rel_stays_inside_the_folder() {
+        use super::static_rel;
+        assert_eq!(static_rel("/").as_deref(), Some("index.html"));
+        assert_eq!(static_rel("").as_deref(), Some("index.html"));
+        assert_eq!(static_rel("/assets/index-abc.js").as_deref(), Some("assets/index-abc.js"));
+        assert_eq!(
+            static_rel("/assets/%D1%88%D1%80%D0%B8%D1%84%D1%82.woff2").as_deref(),
+            Some("assets/шрифт.woff2")
+        );
+        assert!(static_rel("/../helene.json").is_none());
+        assert!(static_rel("/assets/..%2F..%2Fhelene.json").is_none());
+        assert!(static_rel("/C:/Windows/win.ini").is_none());
+        assert!(static_rel("/a\\b").is_none());
+        // Лишние слэши в начале — не выход наружу, а тот же относительный путь.
+        assert_eq!(static_rel("//etc").as_deref(), Some("etc"));
+    }
+
+    #[test]
+    fn static_mime_by_extension() {
+        use super::static_mime;
+        assert_eq!(static_mime("index.html"), "text/html; charset=utf-8");
+        assert_eq!(static_mime("assets/x.js"), "text/javascript; charset=utf-8");
+        assert_eq!(static_mime("assets/f.woff2"), "font/woff2");
+        assert_eq!(static_mime("noext"), "application/octet-stream");
+    }
+
+    use super::{
+        admin_verdict, agent_mode, agent_name, blocked_script, broker_answer_row, broker_confirm_text,
+        broker_wish_ask, broker_wish_id, broker_wishes, console_text, decode_config,
+        ensure_desk_token, expand_env, firewall_add_args, firewall_added, firewall_clear_runs,
+        firewall_path, firewall_removed, firewall_rule_name, firewall_rule_title,
+        firewall_set_runs, firewall_why, host_is_local, mask_secrets, netsh_batch_script,
+        netsh_code_words, outbound_url_ok, parse_runas, parse_version, ps_quote, read_desk_token,
+        runas_refusal, runas_script, unconfigured, utf16le_base64, version_newer, BrokerAsk,
+        BrokerOp, BrokerReceipt, BrokerWish, FirewallPath, NetshDone, RunAs, FIREWALL_SCOPE_HUMAN,
+        PRODUCT, RUNAS_MARK,
+    };
     use serde_json::json;
+
+    // ───────────────────────────────────────────── D1/D2: элевация и её дверь
+    //
+    // Проверяется здесь не «работает netsh», а РАЗВИЛКА и СЛОВА: живьём эти
+    // ветки требуют то окна UAC, то установленной службы, и потому проверить их
+    // прогоном на столе можно ровно по одной за раз. Цена ошибки в развилке —
+    // не «не сработало», а «пошло не тем путём».
+
+    /// Режим агента живёт в СВОЁМ ключе. `mode` в helene.json занят под
+    /// местожительство харнесса (local|remote), и режим оттуда читается только
+    /// как поломка, которую всё равно надо понять, — ровно как в
+    /// localharness/modes.py::stated.
+    #[test]
+    fn agent_mode_is_read_from_its_own_key() {
+        assert_eq!(agent_mode(Some(&json!({ "agent_mode": "service" }))), "service");
+        assert_eq!(agent_mode(Some(&json!({ "agent_mode": " Service " }))), "service");
+        assert_eq!(
+            agent_mode(Some(&json!({ "agent_mode": { "name": "sandbox" } }))),
+            "sandbox"
+        );
+        // `mode` со значением режима — чужой ключ, но понять его надо.
+        assert_eq!(agent_mode(Some(&json!({ "mode": "service" }))), "service");
+        // А `mode` в своём значении режимом не является ни на минуту.
+        assert_eq!(agent_mode(Some(&json!({ "mode": "local" }))), "");
+        assert_eq!(agent_mode(Some(&json!({ "mode": "remote" }))), "");
+        assert_eq!(agent_mode(Some(&json!({}))), "");
+        assert_eq!(agent_mode(None), "");
+        // Мусор — это «не записан», а не режим.
+        assert_eq!(agent_mode(Some(&json!({ "agent_mode": 7 }))), "");
+        assert_eq!(agent_mode(Some(&json!({ "agent_mode": "служба" }))), "");
+    }
+
+    /// Дверь выбирается ЖИВЫМ брокером, а не словом в конфиге. Повышенный
+    /// процесс не идёт ни в UAC, ни к брокеру: ему некуда повышаться.
+    ///
+    /// ⚠ Ради чего тест переписан: служба стала опцией ПОВЕРХ режима, режим
+    /// бывает только sandbox|interactive, и старое условие `mode == "service"`
+    /// не выполнялось бы никогда — дверь брокера умерла бы молча.
+    #[test]
+    fn the_door_is_chosen_by_the_mode() {
+        // Брокер жив — идём брокером в ЛЮБОМ режиме: служба ставится ровно ради
+        // того, чтобы не дёргать UAC на каждый чих.
+        assert_eq!(firewall_path(false, "sandbox", true), FirewallPath::Broker);
+        assert_eq!(firewall_path(false, "interactive", true), FirewallPath::Broker);
+        assert_eq!(firewall_path(false, "", true), FirewallPath::Broker);
+        // Брокера нет — окно Windows, тоже в любом режиме.
+        assert_eq!(firewall_path(false, "sandbox", false), FirewallPath::Uac);
+        assert_eq!(firewall_path(false, "interactive", false), FirewallPath::Uac);
+        assert_eq!(firewall_path(false, "", false), FirewallPath::Uac);
+        // Старый конфиг со словом «service» понимаем и без живой трубы: отказ
+        // брокера объяснит владельцу, что со службой, а молчание — не объяснит.
+        assert_eq!(firewall_path(false, "service", false), FirewallPath::Broker);
+        // Повышенному процессу повышаться некуда — ни одной из дверей.
+        for mode in ["sandbox", "interactive", "service", ""] {
+            for broker in [true, false] {
+                assert_eq!(firewall_path(true, mode, broker), FirewallPath::Direct);
+            }
+        }
+    }
+
+    /// Два пути к одному действию обязаны обещать владельцу ОДНО И ТО ЖЕ. Так
+    /// уже расходилось: правило ставили и служба, и окно, по-разному.
+    #[test]
+    fn both_doors_promise_the_same_thing() {
+        let uac = firewall_added(8094, FirewallPath::Uac);
+        let broker = firewall_added(8094, FirewallPath::Broker);
+        let direct = firewall_added(8094, FirewallPath::Direct);
+        for said in [&uac, &broker, &direct] {
+            assert!(said.contains(FIREWALL_SCOPE_HUMAN), "{said}");
+            assert!(said.contains("для порта 8094 добавлено"), "{said}");
+        }
+        // Разница между дверями — ровно одно слово о правах, и ничего больше.
+        assert_eq!(uac.replace(" с правами администратора", ""), direct);
+        assert_eq!(broker.replace(" через брокера службы", ""), direct);
+        assert_ne!(uac, broker);
+        let cleared = firewall_removed(8094, FirewallPath::Broker);
+        assert_eq!(cleared.replace(" через брокера службы", ""), firewall_removed(8094, FirewallPath::Direct));
+    }
+
+    /// Пачка: снос старого, потом добавление своего. Порядок важен — кодом
+    /// пачки считается код ПОСЛЕДНЕЙ команды, а снос несуществующего правила
+    /// netsh честно считает ошибкой.
+    #[test]
+    fn a_rule_is_replaced_not_piled_up() {
+        let runs = firewall_set_runs(8094, Some(r"C:\Helene\runtime\python.exe"));
+        assert_eq!(runs.len(), 2);
+        assert!(runs[0].contains(&"delete".to_string()), "{:?}", runs[0]);
+        assert!(runs[1].contains(&"add".to_string()), "{:?}", runs[1]);
+        // Снос и добавление — про ОДНО имя, иначе снос ничего не находит.
+        let name = firewall_rule_name(8094);
+        assert!(runs[0].contains(&name), "{:?}", runs[0]);
+        assert!(runs[1].contains(&format!("name={}", firewall_rule_title(PRODUCT, 8094))));
+        assert_eq!(firewall_clear_runs(8094), vec![runs[0].clone()]);
+    }
+
+    /// Скрипт для повышенного powershell: аргументы целы, а пустой
+    /// `$LASTEXITCODE` не превращается в «успех».
+    #[test]
+    fn the_elevated_script_keeps_arguments_whole() {
+        let runs = firewall_set_runs(8094, Some(r"C:\Program Files\Hélène\python.exe"));
+        let script = netsh_batch_script(r"C:\Windows\System32\netsh.exe", &runs);
+        assert!(!script.contains('\n'), "скрипт должен быть одной строкой: {script}");
+        assert!(!script.contains('"'), "двойных кавычек в скрипте быть не должно: {script}");
+        assert!(script.contains("$LASTEXITCODE = 9009"), "{script}");
+        assert!(script.ends_with("exit [int]$LASTEXITCODE"), "{script}");
+        // Имя правила со скобками и пробелом — одним аргументом.
+        assert!(script.contains("'name=Helene (8094)'"), "{script}");
+        assert!(script.contains(r"'program=C:\Program Files\Hélène\python.exe'"), "{script}");
+        // Обе команды на месте, в своём порядке.
+        let delete = script.find("'delete'").expect("нет сноса");
+        let add = script.find("'add'").expect("нет добавления");
+        assert!(delete < add, "{script}");
+        // Своя кавычка внутри аргумента удваивается, а не рвёт строку.
+        assert_eq!(ps_quote("это 'моё'"), "'это ''моё'''");
+    }
+
+    /// -EncodedCommand — единственный способ передать пачку целиком:
+    /// `Start-Process -ArgumentList` склеивает элементы пробелом и не берёт их в
+    /// кавычки, так что аргумент с пробелом приехал бы разрезанным.
+    #[test]
+    fn encoded_command_is_utf16le_base64() {
+        // Известный вектор: "hi" в UTF-16LE — 68 00 69 00.
+        assert_eq!(utf16le_base64("hi"), "aABpAA==");
+        assert_eq!(utf16le_base64(""), "");
+        let encoded = utf16le_base64("& 'C:\\путь с пробелом\\netsh.exe' 'name=Helene (8094)'");
+        assert!(encoded.len() % 4 == 0, "{encoded}");
+        assert!(
+            encoded.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='),
+            "в base64 попал чужой знак: {encoded}"
+        );
+        // Ни пробела, ни кавычки — иначе склейка в -ArgumentList его разрежет.
+        assert!(!encoded.contains(' ') && !encoded.contains('\''), "{encoded}");
+    }
+
+    /// Внешний скрипт печатает ОДНУ строку об исходе — и она разбирается.
+    #[test]
+    fn the_outcome_of_the_uac_window_is_read_not_guessed() {
+        let script = runas_script(
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "aABpAA==",
+            r"C:\Windows\System32",
+        );
+        assert!(script.contains(RUNAS_MARK), "{script}");
+        assert!(script.contains("$i.Verb = 'runas'"), "{script}");
+        assert!(script.contains("-EncodedCommand aABpAA=="), "{script}");
+        assert!(script.contains(r"$i.WorkingDirectory = 'C:\Windows\System32'"), "{script}");
+        assert!(!script.contains('\n'), "{script}");
+        // ⚠ Именно .NET, а не Start-Process: тот теряет код Windows, и «Нет» в
+        // окне UAC становится неотличимо от любой другой поломки.
+        assert!(!script.contains("Start-Process"), "{script}");
+
+        assert_eq!(parse_runas("HELENE-RUNAS ok 0"), Some(RunAs::Code(0)));
+        assert_eq!(parse_runas("шум\r\nHELENE-RUNAS ok 1\r\n"), Some(RunAs::Code(1)));
+        assert_eq!(parse_runas("HELENE-RUNAS fail 1223"), Some(RunAs::Refused(1223)));
+        assert_eq!(parse_runas("HELENE-RUNAS unknown"), Some(RunAs::Unknown));
+        // Метки нет — это «не знаю», а не «получилось». Прежний код на этом
+        // месте молча выходил нулём, то есть рапортовал об успехе.
+        assert_eq!(parse_runas("Start-Process : всё плохо"), None);
+        assert_eq!(parse_runas(""), None);
+    }
+
+    /// Отказ называется словами. «Нет» в окне UAC — не поломка, и говорить о
+    /// нём надо так, чтобы человек понял, что произошло.
+    #[test]
+    fn a_refusal_is_said_in_words() {
+        let cancelled = runas_refusal(1223);
+        assert!(cancelled.contains("«Нет»"), "{cancelled}");
+        assert!(cancelled.contains("политик"), "{cancelled}");
+        assert!(runas_refusal(1260).contains("политик"));
+        assert!(runas_refusal(0).contains("не назвала причины"));
+        // Незнакомый код не проглатывается: владелец увидит хотя бы число.
+        assert!(runas_refusal(4242).contains("4242"));
+    }
+
+    /// 9009 — не ответ netsh, а наш признак «программа не запустилась вовсе».
+    /// Ноль на этом месте означал бы «получилось».
+    #[test]
+    fn a_code_is_explained_not_just_printed() {
+        let missing = NetshDone { code: 9009, said: String::new() };
+        assert!(netsh_code_words(&missing).contains("не нашла netsh.exe"));
+        let refused = NetshDone { code: 1, said: "Требуется повышение прав".into() };
+        let words = netsh_code_words(&refused);
+        assert!(words.contains("код 1") && words.contains("Требуется повышение"), "{words}");
+    }
+
+    /// Просьба к брокеру собирается такой, какой служба её ПРИМЕТ. Проверка
+    /// идёт разбором той же стороны, что стоит в службе (common/broker.rs):
+    /// разъедься эти половины, и отказ вылез бы только живьём, у владельца.
+    #[test]
+    fn the_broker_is_asked_the_way_the_service_expects() {
+        for (adding, runs) in [
+            (true, firewall_set_runs(8094, Some(r"C:\Helene\runtime\python.exe"))),
+            (false, firewall_clear_runs(8094)),
+        ] {
+            let why = firewall_why(8094, adding);
+            for args in &runs {
+                let ask = BrokerAsk::new(
+                    "0123456789abcdef",
+                    BrokerOp::Exec,
+                    // Полный путь — голое имя брокер отвергает: Windows искала
+                    // бы его сначала в папке процесса службы.
+                    r"C:\Windows\System32\netsh.exe",
+                    args,
+                    &why,
+                );
+                let back = BrokerAsk::parse(&ask.to_json()).expect("служба не приняла бы просьбу");
+                assert_eq!(&back.args, args);
+                assert_eq!(back.why, why);
+                assert!(back.why.len() >= 3 && !back.why.contains('\n'), "{why}");
+            }
+        }
+    }
+
+    /// R8: что окно узнаёт о правах. Без этой ручки экран режимов не мог честно
+    /// сказать, почему вариант со службой недоступен, — а «недоступно без
+    /// причины» человек читает как поломку продукта.
+    #[test]
+    fn what_the_window_learns_about_admin_rights() {
+        // Уже повышены: и «админ», и «повысится» — да, независимо от типа токена.
+        for kind in [0, 1, 2, 3] {
+            let v = admin_verdict(true, kind);
+            assert_eq!(v["admin"], true, "{v}");
+            assert_eq!(v["can_elevate"], true, "{v}");
+        }
+        // Урезанный токен — администратор под UAC: повысится сам, по кнопке.
+        let limited = admin_verdict(false, 3);
+        assert_eq!(limited["admin"], false);
+        assert_eq!(limited["can_elevate"], true);
+        assert_eq!(limited["elevation"], "limited");
+        // Обычный пользователь: не «нельзя», а «нужен администратор рядом».
+        // Обещать ему службу по кнопке было бы враньём.
+        let plain = admin_verdict(false, 1);
+        assert_eq!(plain["can_elevate"], false);
+        assert_eq!(plain["elevation"], "default");
+        // Не спросили — это «не знаю», и оно обязано отличаться от «точно нет».
+        assert_eq!(admin_verdict(false, 0)["elevation"], "unknown");
+        assert_eq!(admin_verdict(false, 0)["can_elevate"], false);
+        // Полный токен без повышения бывает при выключенном UAC у админа: тогда
+        // process_is_elevated() уже сказал «да», и сюда мы не попадаем.
+        assert_eq!(admin_verdict(false, 2)["elevation"], "full");
+    }
+
+    // ───────────────────────────────── R6: просьба агента к брокеру и подпись
+    //
+    // Проверяется здесь не «выполнилось», а ГРАНИЦА: что владельцу показали, что
+    // уехало брокеру и что записалось. Живьём эта ветка требует установленной
+    // службы и живого человека у окна подтверждения, то есть прогоном ловится
+    // по одному случаю за раз.
+
+    /// Просьба разбирается, а негодная — ОСТАЁТСЯ ОТВЕЧАЕМОЙ. Молчание в ответ
+    /// агент читает как «ещё думают» и ждёт до таймаута; отказ он читает как
+    /// отказ и идёт дальше.
+    #[test]
+    fn a_wish_is_parsed_and_a_bad_one_can_still_be_answered() {
+        let raw = r#"{"v":1,"requests":[
+            {"id":"a1","op":"spawn_interactive","cmd":"C:\\Windows\\System32\\notepad.exe",
+             "args":["C:\\файл.txt"],"why":"владелец попросил открыть файл","at_unix":100},
+            {"id":"a2","op":"rm -rf","why":"шутка"},
+            {"id":"a3","op":"exec","cmd":"C:\\a.exe","args":"раз && два","why":"склейка"},
+            {"op":"exec","cmd":"C:\\a.exe","why":"без id"},
+            {"id":"жирный+id","op":"exec","cmd":"C:\\a.exe","why":"негодный id"}
+        ]}"#;
+        let wishes = broker_wishes(raw);
+        // Две строки выпали целиком: без годного id ответ отправить некуда.
+        assert_eq!(wishes.len(), 3, "{wishes:?}");
+        let first = wishes[0].as_ref().expect("первая просьба должна разобраться");
+        assert_eq!(first.id, "a1");
+        assert_eq!(first.op, BrokerOp::SpawnInteractive);
+        assert_eq!(first.args, vec![r"C:\файл.txt".to_string()]);
+        assert_eq!(first.at_unix, 100);
+        let bad = wishes[1].as_ref().unwrap_err();
+        assert_eq!(bad.id, "a2");
+        assert!(bad.why.contains("какой дверью"), "{}", bad.why);
+        let bad = wishes[2].as_ref().unwrap_err();
+        assert_eq!(bad.id, "a3");
+        assert!(bad.why.contains("массив строк"), "{}", bad.why);
+        // Мусор вместо файла — это «просьб нет», а не паника.
+        assert!(broker_wishes("не json").is_empty());
+        assert!(broker_wishes("{}").is_empty());
+    }
+
+    /// Идентификатор не «чистится», а проверяется: подчищенный id перестал бы
+    /// совпадать с тем, что ждёт харнесс, а перевод строки в нём подделал бы
+    /// соседние записи журнала.
+    #[test]
+    fn a_wish_id_is_checked_not_cleaned() {
+        assert_eq!(broker_wish_id(" a-1_B "), Some("a-1_B".to_string()));
+        for bad in ["", "   ", "a b", "a\nб", "ид", "a)(", &"x".repeat(65)] {
+            assert!(broker_wish_id(bad).is_none(), "пропустил «{bad}»");
+        }
+    }
+
+    /// Секрет брокера подставляет ОБОЛОЧКА. Свой токен агент не знает и знать
+    /// не должен: в песочнице файл секрета ему вообще не читается, а если бы он
+    /// умел присылать токен сам, подтверждение владельца стало бы формальностью.
+    #[test]
+    fn the_secret_is_the_shells_and_never_the_agents() {
+        let raw = r#"{"requests":[{"id":"a1","op":"exec","token":"чужой-токен",
+            "cmd":"C:\\Windows\\System32\\netsh.exe","args":["advfirewall"],
+            "why":"правило для телефона"}]}"#;
+        let wish = broker_wishes(raw).remove(0).expect("просьба не разобралась");
+        let ask = broker_wish_ask(&wish, "0123456789abcdef").expect("служба не приняла бы");
+        assert_eq!(ask.token, "0123456789abcdef");
+        assert_eq!(ask.id, "a1");
+        // И сам json просьбы, уехавший брокеру, чужого токена не несёт.
+        assert!(!ask.to_json().contains("чужой-токен"));
+    }
+
+    /// Что служба отвергнет, владельцу не показывают. Иначе он подписывал бы
+    /// отказы: нажал «да» — и получил ошибку разбора вместо дела.
+    #[test]
+    fn the_owner_is_never_asked_about_a_request_the_service_would_refuse() {
+        let base = BrokerWish {
+            id: "a1".into(),
+            op: BrokerOp::Exec,
+            cmd: r"C:\Windows\System32\netsh.exe".into(),
+            args: vec!["advfirewall".into()],
+            why: "правило для телефона".into(),
+            timeout_sec: 60,
+            at_unix: 0,
+        };
+        assert!(broker_wish_ask(&base, "0123456789abcdef").is_ok());
+        // Пустое «зачем» — единственная человеческая строка журнала.
+        let mute = BrokerWish { why: "  ".into(), ..base.clone() };
+        assert!(broker_wish_ask(&mute, "0123456789abcdef").unwrap_err().contains("зачем"));
+        // Перевод строки в «зачем» подделал бы соседние записи журнала.
+        let forged = BrokerWish { why: "раз\nвсё хорошо".into(), ..base.clone() };
+        assert!(broker_wish_ask(&forged, "0123456789abcdef")
+            .unwrap_err()
+            .contains("одной строкой"));
+        // Голое имя программы = подмена файла в папке установки правами СИСТЕМЫ.
+        let bare = BrokerWish { cmd: "netsh.exe".into(), ..base.clone() };
+        assert!(broker_wish_ask(&bare, "0123456789abcdef")
+            .unwrap_err()
+            .contains("полным путём"));
+        // Срок сверх потолка службы.
+        let forever = BrokerWish { timeout_sec: 100_000, ..base };
+        assert!(broker_wish_ask(&forever, "0123456789abcdef").unwrap_err().contains("600"));
+    }
+
+    /// Экран подтверждения — единственное место, по которому человек решает
+    /// отдать права системы. В нём обязаны быть три вещи: чьими правами,
+    /// ЧТО именно запустится и что «зачем» — слова агента, а не факт.
+    #[test]
+    fn the_owner_sees_the_door_the_command_and_whose_words_these_are() {
+        let wish = BrokerWish {
+            id: "a1".into(),
+            op: BrokerOp::Exec,
+            cmd: r"C:\Windows\System32\netsh.exe".into(),
+            args: vec!["advfirewall".into(), "name=Helene (8094)".into()],
+            why: "правило брандмауэра для телефона".into(),
+            timeout_sec: 60,
+            at_unix: 0,
+        };
+        let text = broker_confirm_text(&wish);
+        assert!(text.contains("ПРАВАМИ СИСТЕМЫ"), "{text}");
+        assert!(text.contains("его слова"), "{text}");
+        assert!(text.contains("правило брандмауэра для телефона"), "{text}");
+        assert!(
+            text.contains(r#"C:\Windows\System32\netsh.exe advfirewall "name=Helene (8094)""#),
+            "{text}"
+        );
+        assert!(text.contains("отказ"), "{text}");
+        // Вторая дверь называется своими правами, а не системными: путать их
+        // нельзя, разница между ними и есть весь вопрос.
+        let side = BrokerWish { op: BrokerOp::SpawnInteractive, ..wish.clone() };
+        let text = broker_confirm_text(&side);
+        assert!(text.contains("твоими правами"), "{text}");
+        assert!(!text.contains("ПРАВАМИ СИСТЕМЫ"), "{text}");
+
+        // Длинная команда не уводит дело за нижний край окна МОЛЧА: обрезку
+        // владелец видит, и она сама названа поводом отказать.
+        let padded = BrokerWish {
+            args: vec![" ".repeat(4000), "del /q C:\\*".into()],
+            ..side
+        };
+        let text = broker_confirm_text(&padded);
+        assert!(text.contains("КОМАНДА ОБРЕЗАНА"), "{text}");
+        assert!(text.contains("повод отказать"), "{text}");
+        // Хвост, ради которого набивали пробелы, до окна и не доехал — но и
+        // окно не делает вид, что показало команду целиком.
+        assert!(!text.contains("del /q"), "хвост показан, значит обрезки не было");
+        assert!(text.len() < 4000, "окно всё-таки распухло: {}", text.len());
+    }
+
+    /// Ответ агенту — не «успех», а всё, что видела оболочка. И в нём нет
+    /// секрета: файл ответов лежит в дереве, то есть в доме агента.
+    #[test]
+    fn the_answer_carries_the_whole_receipt_and_no_secret() {
+        let wish = BrokerWish {
+            id: "a1".into(),
+            op: BrokerOp::Exec,
+            cmd: r"C:\Windows\System32\netsh.exe".into(),
+            args: vec!["advfirewall".into()],
+            why: "правило для телефона".into(),
+            timeout_sec: 60,
+            at_unix: 0,
+        };
+        let receipt = BrokerReceipt {
+            id: "a1".into(),
+            ok: true,
+            op: "exec".into(),
+            code: Some(1),
+            pid: Some(4242),
+            out: "вывод".into(),
+            err: "ошибки".into(),
+            ms: 120,
+            at: "[04.09.2026 13:00:00]".into(),
+            why: "правило для телефона".into(),
+            note: String::new(),
+        };
+        let row = broker_answer_row(&wish, "allowed", "", Some(&receipt));
+        assert_eq!(row["id"], "a1");
+        assert_eq!(row["decision"], "allowed");
+        assert_eq!(row["code"], 1);
+        assert_eq!(row["pid"], 4242);
+        assert_eq!(row["out"], "вывод");
+        assert_eq!(row["ms"], 120);
+        // Незавершённый процесс — код ОТСУТСТВУЕТ, а не «0».
+        let waiting = BrokerReceipt { code: None, ..receipt };
+        assert!(broker_answer_row(&wish, "failed", "не дождался", Some(&waiting))["code"].is_null());
+        // Отказ до брокера: квитанции нет вовсе, но причина есть всегда.
+        let refused = broker_answer_row(&wish, "refused", "владелец отказал", None);
+        assert_eq!(refused["note"], "владелец отказал");
+        assert!(refused.get("code").is_none());
+        assert!(!refused.to_string().contains("token"));
+    }
+
+    /// netsh отвечает в кодировке консоли. Без разбора OEM причина отказа
+    /// приезжала владельцу сплошными «□».
+    #[test]
+    fn what_netsh_said_is_readable() {
+        // «Ок» в cp866.
+        assert_eq!(console_text(&[0x8E, 0xAA]), "Ок");
+        assert_eq!(console_text("Ok\r\n".as_bytes()), "Ok");
+        assert_eq!(console_text("уже UTF-8".as_bytes()), "уже UTF-8");
+    }
+
+    /// Сужение правила не зависит от двери: аргументы одни и те же, из
+    /// common/firewall_rule.rs.
+    #[test]
+    fn the_rule_itself_does_not_depend_on_the_door() {
+        let runs = firewall_set_runs(8094, Some(r"C:\Helene\runtime\python.exe"));
+        assert_eq!(
+            runs[1],
+            firewall_add_args(
+                &firewall_rule_title(PRODUCT, 8094),
+                8094,
+                Some(r"C:\Helene\runtime\python.exe")
+            )
+        );
+    }
+
+    #[test]
+    fn secrets_are_closed_on_the_way_into_the_support_archive() {
+        // Ровно те формы, которые названы в требовании: key=, token=,
+        // Bearer, sk-, dk-. Регистр не важен, значение не должно уцелеть.
+        let masked = mask_secrets(
+            "GET /api/state?key=abc123def456 token=Tk_9911 Authorization: Bearer sk-ant-api03-XYZ\n\
+             ключ dk-live-9988776655 и sk-proj-AAAA1111\n",
+        );
+        assert!(!masked.contains("abc123def456"), "{masked}");
+        assert!(!masked.contains("Tk_9911"), "{masked}");
+        assert!(!masked.contains("ant-api03-XYZ"), "{masked}");
+        assert!(!masked.contains("live-9988776655"), "{masked}");
+        assert!(!masked.contains("proj-AAAA1111"), "{masked}");
+        assert!(masked.contains("key=<скрыто>"), "{masked}");
+        assert!(masked.contains("Bearer <скрыто>"), "{masked}");
+        // Кириллица вокруг не должна пострадать: журнал продукта по-русски.
+        assert!(masked.contains("ключ "), "{masked}");
+        // А обычный текст с дефисом — не секрет: sk-/dk- ловятся только с
+        // начала слова, и всё, что короче восьми знаков, остаётся как есть.
+        let plain = mask_secrets("задача task-17, приставка sk-1 и слово monkey= пустое");
+        assert!(plain.contains("task-17"), "{plain}");
+        assert!(plain.contains("sk-1"), "{plain}");
+    }
+
+    #[test]
+    fn desk_token_is_one_per_tree_and_survives_rereading() {
+        // Секрет трубы должен быть ОДИН на дерево: окно и служба предъявляют
+        // его оба, свой у каждого = 403 от собственного харнесса.
+        let tree = std::env::temp_dir().join(format!(
+            "helene-test-token-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tree);
+        std::fs::create_dir_all(&tree).unwrap();
+        let first = ensure_desk_token(&tree).expect("секрет не завёлся");
+        assert!(first.len() >= 32 && first.bytes().all(|b| b.is_ascii_alphanumeric()));
+        assert_eq!(ensure_desk_token(&tree).as_deref(), Some(first.as_str()));
+        assert_eq!(read_desk_token(&tree).as_deref(), Some(first.as_str()));
+        // Мусор вместо секрета читается как «секрета нет», а не как секрет.
+        std::fs::write(tree.join("memory").join(".state").join("desk-token"), "коротко").unwrap();
+        assert_eq!(read_desk_token(&tree), None);
+        let _ = std::fs::remove_dir_all(&tree);
+    }
+
+    #[test]
+    fn foreign_holder_never_becomes_the_address_of_this_window() {
+        // Главное свойство экрана «здесь чужая установка»: адреса чужого
+        // харнесса в нём нет вовсе — ни порта, ни ключа.
+        let s = blocked_script(8094, Some(std::path::Path::new("C:\\Чужая\\data")), "Hélène");
+        assert!(!s.contains("127.0.0.1:8094"), "{s}");
+        assert!(s.contains("\"base\":\"\"") || s.contains("\"base\": \"\""), "{s}");
+        assert!(s.contains("Чужая"), "{s}");
+    }
+
+    #[test]
+    fn config_reads_through_bom_and_utf16() {
+        // Так пишут Блокнот, VS Code и Set-Content в PowerShell 5.1 — раньше
+        // всё это читалось как «конфига нет» и запускало установщик заново.
+        let plain = b"{\"a\": 1}".to_vec();
+        assert_eq!(decode_config(&plain).unwrap(), "{\"a\": 1}");
+        let mut with_bom = vec![0xEF, 0xBB, 0xBF];
+        with_bom.extend_from_slice(&plain);
+        assert_eq!(decode_config(&with_bom).unwrap(), "{\"a\": 1}");
+        let mut utf16 = vec![0xFF, 0xFE];
+        for unit in "{\"a\": 1}".encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+        assert_eq!(decode_config(&utf16).unwrap(), "{\"a\": 1}");
+    }
+
+    #[test]
+    fn version_parsing_is_strict_about_the_tag() {
+        assert_eq!(parse_version("v0.2.1"), Some(vec![0, 2, 1]));
+        assert_eq!(parse_version("V1.0.0"), Some(vec![1, 0, 0]));
+        assert_eq!(parse_version("1.0"), Some(vec![1, 0, 0]));
+        assert_eq!(parse_version("v1.0.0-rc1"), Some(vec![1, 0, 0]));
+        // Непонятное — именно непонятное, а не «нули» (иначе мажорный выпуск
+        // печатался бы как «это последняя версия»).
+        assert_eq!(parse_version("helene-1.0.0"), None);
+        assert_eq!(parse_version(""), None);
+        assert_eq!(parse_version("release"), None);
+    }
+
+    #[test]
+    fn newer_version_is_compared_by_numbers() {
+        assert!(version_newer("v0.10.0", "0.2.1"));
+        assert!(version_newer("V1.0.0", "0.2.1"));
+        assert!(!version_newer("v0.2.1", "0.2.1"));
+        assert!(!version_newer("1.0", "1.0.0"));
+        assert!(!version_newer("release-1.0", "0.2.1"));
+        assert!(!version_newer("", "0.2.1"));
+    }
+
+    #[test]
+    fn key_goes_out_only_over_https_or_to_our_own_network() {
+        assert!(outbound_url_ok("https://api.openai.com/v1/models").is_ok());
+        assert!(outbound_url_ok("http://127.0.0.1:11434/v1/models").is_ok());
+        assert!(outbound_url_ok("http://localhost:1234/v1/models").is_ok());
+        assert!(outbound_url_ok("http://192.168.1.5:1234/v1/models").is_ok());
+        assert!(outbound_url_ok("http://100.101.102.103:8094/api").is_ok());
+        assert!(outbound_url_ok("http://evil.example.com/v1/models").is_err());
+        assert!(outbound_url_ok("file:///C:/windows/system32").is_err());
+        assert!(outbound_url_ok("javascript:alert(1)").is_err());
+    }
+
+    #[test]
+    fn local_hosts_are_recognised_without_dns() {
+        assert!(host_is_local("127.0.0.1"));
+        assert!(host_is_local("10.0.0.7"));
+        assert!(host_is_local("172.16.0.1"));
+        assert!(!host_is_local("172.32.0.1"));
+        assert!(!host_is_local("8.8.8.8"));
+        assert!(!host_is_local("example.com"));
+    }
+
+    #[test]
+    fn verbatim_prefix_is_stripped_for_explorer() {
+        use std::path::{Path, PathBuf};
+        assert_eq!(
+            super::plain_path(Path::new("\\\\?\\C:\\Users\\Иван Петров\\логи.zip")),
+            PathBuf::from("C:\\Users\\Иван Петров\\логи.zip")
+        );
+        assert_eq!(
+            super::plain_path(Path::new("\\\\?\\UNC\\server\\share\\x")),
+            PathBuf::from("\\\\server\\share\\x")
+        );
+        assert_eq!(
+            super::plain_path(Path::new("C:\\обычный\\путь")),
+            PathBuf::from("C:\\обычный\\путь")
+        );
+    }
+
+    #[test]
+    fn env_vars_in_registry_paths_expand() {
+        std::env::set_var("HELENE_TEST_DIR", "C:\\Users\\test");
+        assert_eq!(expand_env("%HELENE_TEST_DIR%\\Menu"), "C:\\Users\\test\\Menu");
+        assert_eq!(expand_env("C:\\plain\\path"), "C:\\plain\\path");
+        assert_eq!(expand_env("%NO_SUCH_VAR_HERE%\\x"), "%NO_SUCH_VAR_HERE%\\x");
+    }
 
     #[test]
     fn first_run_is_unconfigured() {

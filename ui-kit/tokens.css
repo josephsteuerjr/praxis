@@ -29,6 +29,8 @@
   --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
   --sans: "Golos Text", "Segoe UI", system-ui, sans-serif;
   --mono: "PT Mono", Consolas, "Courier New", monospace;
+  /* почерк агента: только его имя над его комнатой и подпись (06.09) */
+  --hand: "Shantell Sans", "Segoe Print", "Comic Sans MS", cursive;
 }
 
 @media (prefers-color-scheme: dark) {

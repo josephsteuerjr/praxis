@@ -95,7 +95,14 @@ namespace FrameShortcut {
 "@
 Add-Type -TypeDefinition $code -Language CSharp
 
-$dir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
+# Папку меню «Пуск» спрашиваем у Windows: групповая политика «Перенаправление
+# папок» уводит её с %APPDATA% (в домене — на сетевой диск), и склейка руками
+# молча создавала ярлык не там, где Windows ищет AUMID, — уведомления при
+# этом пропадали без единой ошибки.
+$dir = [Environment]::GetFolderPath('Programs')
+if ([string]::IsNullOrWhiteSpace($dir)) {
+    $dir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
+}
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $lnk = Join-Path $dir ($Name + ".lnk")
 [FrameShortcut.Maker]::Create($lnk, $Exe, $Aumid, $Name, $Icon)

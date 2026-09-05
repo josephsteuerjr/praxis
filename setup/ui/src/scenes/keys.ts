@@ -3,9 +3,15 @@
 import { FormScene } from "./base";
 import { button, choice, el, explain, field } from "./form";
 import { probeModel, relayLogin, relayModels, relayStatus, setup, type Effort, type Provider } from "../setup";
+import { ANTHROPIC_PRESETS, BILLING_LABEL, clampEffort, effortPlan } from "../../../../ui-kit/providers";
 
 export class KeysScene extends FormScene {
   private panes: Record<Provider, HTMLElement>;
+  /** Последнее известное состояние входа в ChatGPT — его спрашивает validate(). */
+  private relay: "authorized" | "pending" | "no-auth" = "no-auth";
+  private relayWarned = false;
+  /** Перестроить шкалу рассуждения под провайдера и модель; задаётся в constructor. */
+  private syncEffort: () => void = () => {};
 
   constructor(root: HTMLElement) {
     super(root);
@@ -13,18 +19,24 @@ export class KeysScene extends FormScene {
     head.append(el("span", "line", "Откуда приходит модель"));
     const lead = el("p", "form-lead",
       "Модель — единственное, что агент берёт извне. Всё остальное остаётся на этом компьютере.");
+    // Про деньги установщик не говорил ни слова, а первая вкладка — платная по счётчику.
+    const money = el("p", "form-lead muted",
+      "О деньгах прямо: по ключу API платишь за каждый ответ по счётчику, потолка нет. " +
+      "По подписке ChatGPT — фиксированная плата, но есть недельное окно запросов. " +
+      "Локальная модель бесплатна, но считает на твоём железе.");
 
     const picker = choice<Provider>({
       value: setup.provider,
       items: [
         { value: "api", title: "Ключ API", text: "OpenAI и любой совместимый адрес" },
-        { value: "anthropic", title: "Anthropic API", text: "Anthropic, Z.ai и совместимые" },
+        { value: "anthropic", title: "Anthropic API", text: "Anthropic, Z.ai, MiniMax, Kimi и совместимые" },
         { value: "chatgpt", title: "Подписка ChatGPT", text: "вход в аккаунт, без ключа" },
         { value: "local", title: "Локальная модель", text: "Ollama или LM Studio на этом ПК" },
       ],
       onChange: (v) => {
         setup.provider = v;
         this.showPane(v);
+        this.syncEffort();
       },
     });
 
@@ -61,17 +73,28 @@ export class KeysScene extends FormScene {
     const anthropic = el("div", "pane");
     const anthGrid = el("div", "form-grid three");
     const anthBase = field({ label: "Адрес", value: setup.anthropic.base_url, mono: true, onInput: (v) => (setup.anthropic.base_url = v) });
-    const anthModel = field({ label: "Модель", value: setup.anthropic.model, mono: true, onInput: (v) => (setup.anthropic.model = v) });
+    const anthModel = field({ label: "Модель", value: setup.anthropic.model, mono: true, onInput: (v) => { setup.anthropic.model = v; this.syncEffort(); } });
     anthGrid.append(
       anthBase,
       anthModel,
       field({ label: "Ключ", value: setup.anthropic.key, type: "password", mono: true, placeholder: "sk-ant-…", onInput: (v) => (setup.anthropic.key = v) }),
     );
+    // Кнопки провайдеров — из общей с окном таблицы (ui-kit/providers.ts):
+    // адрес, модель по умолчанию и честная строка про план и рассуждение.
     const anthPresets = el("div", "actions");
-    for (const [label, url] of [["Z.ai (GLM)", "https://api.z.ai/api/anthropic"], ["Anthropic", "https://api.anthropic.com"]] as Array<[string, string]>) {
-      anthPresets.append(button(label, "quiet", () => {
-        setup.anthropic.base_url = url;
-        setInput(anthBase, url);
+    const presetNote = el("p", "form-lead muted");
+    presetNote.hidden = true;
+    for (const preset of ANTHROPIC_PRESETS) {
+      anthPresets.append(button(preset.label, "quiet", () => {
+        setup.anthropic.base_url = preset.url;
+        setInput(anthBase, preset.url);
+        if (preset.model) {
+          setup.anthropic.model = preset.model;
+          setInput(anthModel, preset.model);
+        }
+        presetNote.textContent = `${preset.label} — ${BILLING_LABEL[preset.billing]}. ${preset.note}`;
+        presetNote.hidden = false;
+        this.syncEffort();
       }));
     }
     const anthModels = el("div", "models");
@@ -88,18 +111,20 @@ export class KeysScene extends FormScene {
         renderModels(anthModels, r.models || [], setup.anthropic.model, (id) => {
           setup.anthropic.model = id;
           setInput(anthModel, id);
+          this.syncEffort();
         });
       }),
       anthOut,
     );
-    anthropic.append(anthGrid, anthPresets, anthProbeRow, anthModels, explain("Тот же ключ, другой протокол",
-      "Anthropic и Z.ai говорят на протоколе Anthropic Messages. Адрес и модель — из их документации; проверка спросит список моделей, если сервер его отдаёт."));
+    anthropic.append(anthGrid, anthPresets, presetNote, anthProbeRow, anthModels, explain("Один протокол, шесть дверей",
+      "Anthropic, Z.ai, MiniMax, Kimi, DeepSeek и Qwen говорят на протоколе Anthropic Messages: кнопка подставляет адрес и модель, ключ — из кабинета провайдера. Подписки (coding plan) — у Z.ai, MiniMax, Kimi и Qwen; DeepSeek и Anthropic — только по счётчику. Проверка спросит список моделей, если сервер его отдаёт."));
 
     const chatgpt = el("div", "pane");
     const relayRow = el("div", "actions");
     const relayOut = el("span", "receipt");
     const relayRefresh = async () => {
       const st = await relayStatus().catch(() => "no-auth" as const);
+      this.relay = st;
       relayOut.className = "receipt " + (st === "authorized" ? "ok" : "");
       relayOut.textContent =
         st === "authorized"
@@ -183,23 +208,40 @@ export class KeysScene extends FormScene {
     const paneBox = el("div", "panes");
     paneBox.append(api, anthropic, chatgpt, local);
 
-    // Усилие рассуждения — отдельный селектор, начальное значение (слово владельца).
+    // Усилие рассуждения — начальное значение (слово владельца). Шкала ЗАВИСИТ ОТ
+    // ПРОВАЙДЕРА И МОДЕЛИ (ui-kit/providers.ts): показываем только ступени,
+    // которые ядро действительно передаст, и говорим, что значит пустое поле
+    // именно здесь. Прежний единый ряд low…xhigh обещал Anthropic-совместимым
+    // серверам то, что до них не доезжало.
     const effortBox = el("div", "effort");
     effortBox.append(el("h3", "form-sub", "Усилие рассуждения"));
     const effortRow = el("div", "models");
-    const efforts: Array<[Effort, string]> = [["", "по умолчанию модели"], ["low", "low"], ["medium", "medium"], ["high", "high"], ["xhigh", "xhigh"]];
-    for (const [value, label] of efforts) {
-      const chip = el("button", "model-chip", label) as HTMLButtonElement;
-      chip.type = "button";
-      chip.setAttribute("aria-pressed", String(setup.reasoning_effort === value));
-      chip.addEventListener("click", () => {
-        setup.reasoning_effort = value;
-        for (const other of effortRow.querySelectorAll(".model-chip")) other.setAttribute("aria-pressed", String(other === chip));
-      });
-      effortRow.append(chip);
-    }
-    effortBox.append(effortRow, explain("",
-      "Сколько модель думает перед ответом. Не у всех моделей есть эта ручка; где нет — значение просто не уйдёт. Менять можно в настройках."));
+    const effortHint = el("p", "form-lead muted");
+    const modelForEffort = () =>
+      setup.provider === "anthropic" ? setup.anthropic.model
+        : setup.provider === "api" ? setup.api.model
+          : setup.provider === "local" ? setup.local.model
+            : setup.chatgpt_model;
+    this.syncEffort = () => {
+      const plan = effortPlan(setup.provider, modelForEffort());
+      setup.reasoning_effort = clampEffort(setup.provider, modelForEffort(), setup.reasoning_effort) as Effort;
+      effortRow.replaceChildren();
+      for (const { value, label } of plan.chips) {
+        const chip = el("button", "model-chip", label) as HTMLButtonElement;
+        chip.type = "button";
+        chip.setAttribute("aria-pressed", String(setup.reasoning_effort === value));
+        chip.addEventListener("click", () => {
+          setup.reasoning_effort = value as Effort;
+          for (const other of effortRow.querySelectorAll(".model-chip")) other.setAttribute("aria-pressed", String(other === chip));
+        });
+        effortRow.append(chip);
+      }
+      if (!plan.chips.length) effortRow.append(el("span", "receipt", "ступень сюда не передаётся"));
+      effortHint.textContent = plan.hint;
+    };
+    this.syncEffort();
+    effortBox.append(effortRow, effortHint, explain("",
+      "Сколько модель думает перед ответом: выше усилие — дольше и дороже ответ (рассуждение оплачивается как выходные токены). Менять можно в настройках."));
 
     const tg = el("div", "tg");
     tg.append(el("h3", "form-sub", "Telegram, если нужен"));
@@ -211,7 +253,7 @@ export class KeysScene extends FormScene {
     tg.append(tgGrid, explain("",
       "Бот — вторая дверь к агенту, кроме окна. Токен выдаёт @BotFather, свой id подскажет @userinfobot: без него агент не поймёт, кто из пишущих его владелец. Можно оставить пустым. Свой аккаунт Telegram для агента (не бот) подключается после установки, в настройках."));
 
-    this.mount(head, lead, picker, paneBox, effortBox, tg);
+    this.mount(head, lead, money, picker, paneBox, effortBox, tg);
     this.showPane(setup.provider);
   }
 
@@ -225,9 +267,26 @@ export class KeysScene extends FormScene {
       if (!setup.api.model.trim()) return "Назови модель";
       if (!setup.api.key.trim()) return "Нужен ключ API";
     }
+    // Ветки anthropic не было вовсе: можно было пройти дальше с пустым адресом,
+    // моделью и ключом — установка проходила, а агент молчал навсегда.
+    if (setup.provider === "anthropic") {
+      if (!setup.anthropic.base_url.trim()) return "Нужен адрес модели";
+      if (!setup.anthropic.model.trim()) return "Назови модель";
+      if (!setup.anthropic.key.trim()) return "Нужен ключ API";
+    }
     if (setup.provider === "local") {
       if (!setup.local.base_url.trim()) return "Нужен адрес локальной модели";
       if (!setup.local.model.trim()) return "Назови локальную модель";
+    }
+    // Для chatgpt раньше не проверялось ничего: можно было поставить без входа,
+    // и в расписке про подписку не появлялось ни строки — молчание вместо
+    // предупреждения. Спрашиваем один раз и пускаем: войти можно и позже.
+    if (setup.provider === "chatgpt") {
+      if (!setup.chatgpt_model.trim()) return "Назови модель подписки";
+      if (this.relay !== "authorized" && !this.relayWarned) {
+        this.relayWarned = true;
+        return "Вход в ChatGPT не выполнен — без него агент не ответит. Нажми «Далее» ещё раз, если войдёшь позже в настройках.";
+      }
     }
     const tg = setup.telegram;
     if (tg.bot_token.trim() && !/^\d+$/.test(tg.owner_id.trim())) {
@@ -250,10 +309,13 @@ function renderModels(box: HTMLElement, models: string[], current: string, pick:
     return;
   }
   box.hidden = false;
+  // Известность считаем по ПОЛНОМУ списку, а показываем часть: раньше список
+  // резался по алфавиту, и продукт заявлял «модели нет», хотя её просто обрезали.
   const known = models.includes(current.trim());
+  const shown = models.filter((id) => id === current.trim()).concat(models.filter((id) => id !== current.trim())).slice(0, 40);
   const label = el("span", "models-label", known ? "Доступные модели" : `Модели «${current.trim() || "…"}» в списке нет. Доступные:`);
   box.append(label);
-  for (const id of models.slice(0, 40)) {
+  for (const id of shown) {
     const chip = el("button", "model-chip", id) as HTMLButtonElement;
     chip.type = "button";
     chip.setAttribute("aria-pressed", String(id === current.trim()));
@@ -263,5 +325,8 @@ function renderModels(box: HTMLElement, models: string[], current: string, pick:
       label.textContent = "Доступные модели";
     });
     box.append(chip);
+  }
+  if (models.length > shown.length) {
+    box.append(el("span", "models-label", `и ещё ${models.length - shown.length} — впиши имя руками`));
   }
 }

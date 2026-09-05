@@ -84,7 +84,11 @@ export interface SwitchOptions {
   onChange: (value: boolean) => void;
 }
 
-export function toggle(o: SwitchOptions): HTMLElement {
+/** Переключатель. Возвращаем именно HTMLButtonElement, а не HTMLElement:
+ *  сцене режима нужно и погасить его (`disabled`, когда прав администратора
+ *  нет), и переставить значение снаружи (`aria-checked`) — вслед за тем, что
+ *  сцена уже поправила в состоянии установки. */
+export function toggle(o: SwitchOptions): HTMLButtonElement {
   const b = el("button", "switch");
   b.type = "button";
   b.setAttribute("role", "switch");

@@ -18,6 +18,13 @@
 ⚠ Восприятие пишет память ДО подтверждения курсора: сообщение сначала ложится
 в архив и события жизни, потом offset уезжает в getUpdates. Упали между — при
 рестарте Telegram отдаст сообщение снова, и dedupe_key его отсеет.
+
+⚠ КТО ЗАПУСКАЕТ ХОД. Имя бота публично по построению, поэтому написать ему может
+кто угодно, а ход агента — это деньги владельца и руки на его машине. Поэтому
+входящее от постороннего ЗАПИСЫВАЕТСЯ в память (агент видит, что ему писали) и
+НЕ запускает ход. Кому можно — `telegram.allow_from`: "owner" (по умолчанию),
+"listed" (+ `telegram.allowed_ids`), "any" (прежнее поведение, теперь — явное
+решение владельца).
 """
 from __future__ import annotations
 
@@ -36,7 +43,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-from transport import _append_jsonl, _write_json
+from transport import _append_jsonl, _registry, _write_json
 
 log = logging.getLogger("frame.botapi")
 
@@ -44,6 +51,7 @@ _MSG_LIMIT = 4096          # потолок sendMessage; длиннее — ре
 _CAPTION_LIMIT = 1024
 _POLL_TIMEOUT = 25         # long-poll: столько держит сервер, +10 наш сокет
 _STALE_SEC = 90            # связь считается живой, пока последний poll моложе
+_INGEST_TRIES = 5          # столько раз пробуем переварить один апдейт
 
 
 # --------------------------------------------------------------------------- #
@@ -226,22 +234,12 @@ class Rooms:
         return {"is_dm": not str(chat_id).startswith("-"), "title": ""}
 
     def _registry(self, chat_id: str, archive: Path) -> None:
-        try:
-            stat = archive.stat()
-            with archive.open(encoding="utf-8") as src:
-                count = sum(1 for _ in src)
-        except OSError:
-            stat, count = None, 0
+        # Одна реализация реестра на оба транспорта (transport._registry): при
+        # ошибке чтения архива прежние числа НЕ затираются нулём, а счёт идёт
+        # приращением, а не полным перечитыванием файла на каждом сообщении.
         meta = self.meta(chat_id)
-        _write_json(self.tree / "memory" / ".state" / "group_context"
-                    / (str(chat_id) + ".json"),
-                    {"peer_id": str(chat_id),
-                     "archive": "memory/groups/" + str(chat_id) + ".jsonl",
-                     "message_count": count,
-                     "participant_count": meta.get("size") or 2,
-                     "topic_count": 0,
-                     "archive_mtime_ns": stat.st_mtime_ns if stat else 0,
-                     "archive_size": stat.st_size if stat else 0})
+        _registry(self.tree, str(chat_id), archive,
+                  participants=int(meta.get("size") or 2))
 
     def record(self, chat_id: str, text: str, *, outgoing: bool, sender: str = "",
                source_id: str = "", ts: float | None = None,
@@ -249,10 +247,12 @@ class Rooms:
         import datetime as dt
         moment = dt.datetime.fromtimestamp(ts, dt.timezone.utc) if ts else \
             dt.datetime.now(dt.timezone.utc)
+        # Автор пишется и у ИСХОДЯЩИХ: имя агента правится в настройках, а без
+        # подписи в строке вся прошлая переписка задним числом становилась
+        # сказанной новым именем — и в окне, и в ленте, которую читает модель.
         row = {"timestamp": moment.isoformat(timespec="seconds"),
-               "outgoing": bool(outgoing), "text": str(text)}
-        if not outgoing and sender:
-            row["sender_name"] = sender
+               "outgoing": bool(outgoing), "text": str(text),
+               "sender_name": (self.agent_name if outgoing else (sender or "?"))}
         archive = self.tree / "memory" / "groups" / (str(chat_id) + ".jsonl")
         _append_jsonl(archive, row)
         self._registry(chat_id, archive)
@@ -282,8 +282,12 @@ class Rooms:
 
     def lines(self, chat_id: str, limit: int = 200) -> list[str]:
         archive = self.tree / "memory" / "groups" / (str(chat_id) + ".jsonl")
+        # errors="replace": один битый байт архива (жёсткое убийство руннера
+        # посреди записи, кончившийся диск) роняет ход UnicodeDecodeError —
+        # подклассом ValueError, мимо `except OSError`, — и агент глохнет на
+        # КАЖДОМ следующем сообщении, пока окно показывает чат целым.
         try:
-            with archive.open(encoding="utf-8") as src:
+            with archive.open(encoding="utf-8", errors="replace") as src:
                 raw = src.readlines()[-max(1, int(limit)):]
         except OSError:
             return []
@@ -293,11 +297,13 @@ class Rooms:
                 row = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(row, dict) or row.get("system"):
+                continue
             text = str(row.get("text") or "").strip()
             if not text:
                 continue
-            who = self.agent_name if row.get("outgoing") else \
-                (row.get("sender_name") or "?")
+            who = str(row.get("sender_name") or "").strip() or (
+                self.agent_name if row.get("outgoing") else "?")
             out.append(f"{who}: {text}")
         return out
 
@@ -388,7 +394,23 @@ class BotTransport:
         self.agent = agent_mod
         self.tree = Path(tree)
         self.client = BotClient(str(tg.get("bot_token") or ""))
-        self.owner_id = str(tg.get("owner_id") or "")
+        # .strip(): id сверяется СТРОКОЙ (`ident == str(self.owner_id)`), и
+        # " 111 " из руками правленного helene.json не совпал бы с "111"
+        # никогда — владелец получил бы бота, молчащего лично на него.
+        self.owner_id = str(tg.get("owner_id") or "").strip()
+        # Кому позволено ЗАПУСКАТЬ ход на деньги и на машине владельца.
+        # По умолчанию — только владельцу: имя бота публично по построению, и до
+        # этой правки любой посторонний, написавший боту, получал полный ход
+        # агента (93 руки из 95, включая shell, fs_write, git, restart_self).
+        self.allow_from = str(tg.get("allow_from") or "owner").strip().lower()
+        if self.allow_from not in ("owner", "listed", "any"):
+            log.warning("telegram.allow_from = %r — не знаю такого; беру owner",
+                        self.allow_from)
+            self.allow_from = "owner"
+        self.allowed_ids = {str(x).strip() for x in (tg.get("allowed_ids") or [])
+                            if str(x).strip()}
+        self._stuck: dict = {}      # апдейт, который не переваривается: {id, n}
+        self._muted: set[str] = set()   # о ком уже сказано «не отвечаю» — в лог один раз
         owner_name = str((cfg.get("owner") or {}).get("name") or "владелец")
         self.owner_name = owner_name
         agent_name = boot.agent_name(cfg)
@@ -404,9 +426,11 @@ class BotTransport:
         self._last_poll_ok = 0.0
         self._stop = threading.Event()
         self.sent_now: list[tuple[str, str]] = []   # (chat_id, text) этого хода
-        if not self.owner_id:
-            log.warning("telegram.owner_id не задан: никто не будет владельцем "
-                        "в бот-чатах (owner-руки не выдаются)")
+        if not self.owner_id and self.allow_from != "any":
+            log.warning("telegram.owner_id не задан: владельца в Telegram нет, и ход "
+                        "по входящему не пойдёт ни от кого. Впиши свой id в "
+                        "настройках (или telegram.allow_from=\"any\", если бот "
+                        "заведомо открыт всем).")
 
     # ------------------------------------------------------------- жизнь
     def start(self) -> None:
@@ -479,16 +503,45 @@ class BotTransport:
                 time.sleep(5)
                 continue
             self._last_poll_ok = time.time()
+            stalled = False
             for update in updates or []:
+                update_id = int(update.get("update_id") or 0)
                 try:
                     self._ingest(update)
                 except Exception:
-                    log.exception("апдейт не переварился: %s",
-                                  str(update)[:200])
-                offset = max(offset, int(update.get("update_id") or 0) + 1)
+                    # ⚠ Курсор двигался ЗДЕСЬ ЖЕ, на упавшем апдейте, и
+                    # подтверждённый offset — необратимое удаление сообщения на
+                    # стороне Telegram: слово владельца исчезало навсегда, вопреки
+                    # обещанию шапки этого файла («упали между — Telegram отдаст
+                    # сообщение снова»). Теперь курсор стоит на непереваренном
+                    # апдейте и Telegram отдаёт его снова (dedupe_key отсеет
+                    # повтор) — но не вечно: неперевариваемый апдейт после
+                    # _INGEST_TRIES попыток пропускается ГРОМКО, иначе одна
+                    # битая запись заглушила бы весь транспорт навсегда.
+                    if self._stuck.get("id") == update_id:
+                        self._stuck["n"] = int(self._stuck.get("n") or 0) + 1
+                    else:
+                        self._stuck = {"id": update_id, "n": 1}
+                    if self._stuck["n"] >= _INGEST_TRIES:
+                        log.exception("апдейт %s не переваривается %d раз — ПРОПУСКАЮ "
+                                      "его (сообщение потеряно): %s", update_id,
+                                      self._stuck["n"], str(update)[:200])
+                        self._stuck = {}
+                    else:
+                        log.exception("апдейт %s не переварился (попытка %d) — курсор "
+                                      "оставляю на нём: %s", update_id,
+                                      self._stuck["n"], str(update)[:200])
+                        stalled = True
+                        break
+                else:
+                    if self._stuck.get("id") == update_id:
+                        self._stuck = {}
+                offset = max(offset, update_id + 1)
             if updates:
                 # Восприятие уже в памяти — теперь можно подтвердить курсор.
                 self._save_offset(offset)
+            if stalled:
+                time.sleep(2)      # не крутить холостой цикл на застрявшем апдейте
 
     def _ingest(self, update: dict) -> None:
         message = update.get("message")
@@ -535,8 +588,49 @@ class BotTransport:
         self.rooms.record(conversation, text, outgoing=False, sender=sender_name,
                           source_id=str(message.get("message_id") or ""),
                           ts=float(message.get("date") or 0) or None)
-        if is_dm or self._addressed(message):
-            self._enqueue(conversation)
+        if not (is_dm or self._addressed(message)):
+            return
+        sender_id = str(sender.get("id") or "")
+        if not self.is_allowed(sender_id):
+            # ⚠ ГЛАВНЫЙ ГЕЙТ ПРОДУКТА, которого здесь не было вовсе.
+            # Имя бота от BotFather публично и ищется поиском в Telegram. Любой
+            # посторонний, написавший боту «привет», запускал на компьютере
+            # владельца полноценный ход агента: вызов модели с префиксом ~19к
+            # токенов, неограниченный тул-цикл и руки shell, fs_write, git,
+            # restart_self, manage_service, computer. owner_id при этом был не
+            # гейтом, а ярлыком — он читался ПОСЛЕ запуска хода, только чтобы
+            # выбрать аудиторию. Ни белого списка, ни лимита частоты не было.
+            # Сообщение по-прежнему ложится в память (агент видит, что ему
+            # писали), но ход от него не идёт.
+            if sender_id not in self._muted:
+                self._muted.add(sender_id)
+                log.warning("сообщение от %s (%s) записано, но хода не будет: "
+                            "запускать ход может только владелец "
+                            "(telegram.allow_from=%s)", sender_name, sender_id,
+                            self.allow_from)
+            return
+        self._enqueue(conversation)
+
+    def is_allowed(self, sender_id) -> bool:
+        """Может ли этот человек ЗАПУСТИТЬ ход. Владелец — всегда.
+
+        `telegram.allow_from`: "owner" (по умолчанию) — только владелец;
+        "listed" — владелец и `telegram.allowed_ids`; "any" — кто угодно (так
+        было до 03.09; оставлено как явное, названное владельцем решение).
+        """
+        ident = str(sender_id or "")
+        if self.allow_from == "any":
+            return True
+        if self.owner_id and ident == str(self.owner_id):
+            return True
+        if self.allow_from == "listed" and ident in self.allowed_ids:
+            return True
+        if not self.owner_id and self.allow_from == "owner":
+            # owner_id не задан: владельца в Telegram нет вовсе, и «только
+            # владелец» означает «никто». Это честнее, чем «кто угодно», и уже
+            # названо предупреждением при старте транспорта.
+            return False
+        return False
 
     def _addressed(self, message: dict) -> bool:
         """В группе ход начинается только с обращения: @username или reply боту.
