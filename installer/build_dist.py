@@ -370,7 +370,13 @@ def stage_git(out: Path, cache: Path) -> int:
     if not exe.is_file():
         raise SystemExit(f"в {zip_path.name} нет cmd/git.exe — раскладка MinGit "
                          "изменилась, сборка остановлена")
-    probe = _run_timed([str(exe), "--version"], check=False, timeout=120)
+    # Вывод ловим сами: _run_timed печатает в консоль, а не возвращает, и первый
+    # прогон 06.09 упал на пустой строке при живом git (версия ушла в лог).
+    try:
+        probe = subprocess.run([str(exe), "--version"], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=120)
+    except subprocess.TimeoutExpired:
+        raise SystemExit("runtime/git не ответил на --version за две минуты") from None
     said = (probe.stdout or "").strip()
     if probe.returncode != 0 or "git version" not in said:
         raise SystemExit(f"runtime/git не отвечает на --version: {said!r} "
