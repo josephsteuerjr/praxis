@@ -1,4 +1,5 @@
 // Состояние окна. Один объект, без магии; экраны читают его и дёргают bus.
+import contract from "../../ui-kit/contract.json";
 
 export interface AgentState {
   agent: string;
@@ -19,6 +20,26 @@ export interface AgentState {
   telegram: { enabled: boolean };
   next_wake: string | null;
   alarms: Array<{ kind: string; text: string }>;
+  /** Есть ли снимок харнесса (`memory/.state/anatomy.json`). false — дерево ведёт чужой харнесс. */
+  anatomy?: boolean;
+}
+
+/**
+ * Чужой харнесс: снимка анатомии нет и живого руннера нет. Так выглядит
+ * Пульт Праксис — тем же окном владелец ходит в её дерево на VPS, где ходы
+ * ведёт её собственный харнесс без сердцебиения Hélène. Судить о жизни там
+ * можно только по вызовам модели и манифестам прогонов; «Не запущен» с
+ * кнопкой «Перезапустить» было бы враньём.
+ */
+export function foreignHarness(): boolean {
+  const s = S.agentState;
+  return !!s && s.anatomy === false && !s.runner?.alive;
+}
+
+/** Прогон свежий: создан не позже получаса назад (для чужого харнесса). */
+export function runIsRecent(r: Run, minutes = 30): boolean {
+  const at = new Date(r.created_at ?? "").getTime();
+  return !isNaN(at) && Date.now() - at < minutes * 60_000;
 }
 
 export interface Run {
@@ -33,11 +54,17 @@ export interface Run {
   forge_task_id?: string;
 }
 
+/** Комната: чат окна (`window`, `window-<hex>`) или чат Telegram. */
 export interface Room {
   key: string;
   name: string;
+  kind: "window" | "telegram";
   live: boolean;
   count: number;
+  /** Свежесть архива (нс), для сортировки; 0 — неизвестно. */
+  mtime: number;
+  /** Комната-заглушка: канал ещё не умеет несколько чатов, живёт только в этом окне. */
+  stub?: boolean;
 }
 
 export type View = "talk" | "plans" | "frame" | "files" | "journal" | "anatomy" | "settings";
@@ -68,15 +95,22 @@ export const S = {
   captures: [] as string[],
   connected: false,
   pending: [] as Pending[],
+  /** Канал ответил 404 на ручки комнат: несколько чатов этот харнесс не умеет. */
+  roomsUnsupported: false,
 };
 
-export const WINDOW_ROOM = "window";
+/** Ключ комнаты окна по умолчанию и префикс новых — из ui-kit/contract.json. */
+export const WINDOW_ROOM: string = contract.rooms.window;
+export const WINDOW_PREFIX: string = contract.rooms.window_prefix;
+
+export function isWindowRoom(key: string): boolean {
+  return key === WINDOW_ROOM || key === "pult" || key.startsWith(WINDOW_PREFIX);
+}
 
 /**
  * Имя ПРОДУКТА — не имя агента (`S.agent`): агента владелец переименовывает в
  * настройках, продукт остаётся Hélène. Служебные плашки подписаны им, и слот
- * этого имени не должен пересекаться с `sender_name` из Telegram, который
- * выбирает сам отправитель.
+ * этого имени не должен пересекаться с `sender_name` из Telegram.
  */
 export const PRODUCT_NAME = "Hélène";
 
@@ -87,9 +121,11 @@ export const PRODUCT_NAME = "Hélène";
  * пульсирующая точка спорила с красной шапкой «Не запущен» до конца жизни
  * установки. Руннер однопоточный: если он не занят, ни один ход не идёт.
  */
-export function runIsLive(status?: string): boolean {
+export function runIsLive(status?: string, run?: Run): boolean {
   if (status !== "running") return false;
   const r = S.agentState?.runner;
   if (!r) return true; // состояния ещё нет — верим манифесту
+  // Чужой харнесс: сердцебиения нет, верим манифесту, но не старше получаса.
+  if (foreignHarness()) return run ? runIsRecent(run) : true;
   return !!r.alive && !!r.busy;
 }

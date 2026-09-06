@@ -15,6 +15,7 @@ import { ANTHROPIC_PRESETS, BILLING_LABEL, clampEffort, effortPlan } from "../..
 import { keepBlock } from "../config";
 import QRCode from "qrcode";
 import { bindFail, el, esc, failHTML, humanError, q, toast } from "../lib";
+import { button, card, chips, field, saveTheme, setField, toggle, type Theme } from "../../../ui-kit/dom";
 import { computerCard, storedComputer } from "../computer";
 import { MODE_KEY, loadMode, modeCard, type ModeState } from "../mode";
 import { mountsCard, type LiveSandbox } from "../mounts";
@@ -69,6 +70,8 @@ interface Loaded {
   path: string;
   tree: string;
   exe_dir: string;
+  /** Отпечаток файла на момент чтения (КОНТРАКТ-B→A §2); старая оболочка его не шлёт. */
+  mtime_ns?: string | number;
 }
 
 type Provider = "api" | "anthropic" | "chatgpt" | "local";
@@ -92,77 +95,10 @@ function providerOf(c: Config): Provider {
   return "api";
 }
 
-function field(label: string, value: string, onInput: (v: string) => void, opts: { type?: string; mono?: boolean; placeholder?: string; hint?: string } = {}): HTMLElement {
-  const wrap = el("label", "field");
-  wrap.append(el("span", "field-label", label));
-  const input = el("input", "field-input" + (opts.mono ? " mono" : ""));
-  input.type = opts.type || "text";
-  input.value = value;
-  input.placeholder = opts.placeholder || "";
-  input.autocomplete = "off";
-  input.spellcheck = false;
-  input.addEventListener("input", () => onInput(input.value));
-  wrap.append(input);
-  if (opts.hint) wrap.append(el("span", "field-hint", opts.hint));
-  return wrap;
-}
-
-function toggle(label: string, value: boolean, onChange: (v: boolean) => void): HTMLButtonElement {
-  const b = el("button", "switch");
-  b.type = "button";
-  b.setAttribute("role", "switch");
-  b.setAttribute("aria-checked", String(value));
-  b.append(el("span", "switch-knob"), el("span", "switch-label", label));
-  b.addEventListener("click", () => {
-    const next = b.getAttribute("aria-checked") !== "true";
-    b.setAttribute("aria-checked", String(next));
-    onChange(next);
-  });
-  return b;
-}
-
-function button(text: string, kind: "primary" | "quiet", onClick: () => void): HTMLButtonElement {
-  const b = el("button", `btn btn-${kind}`, text);
-  b.type = "button";
-  b.addEventListener("click", onClick);
-  return b;
-}
-
-
-// Список моделей после проверки адреса: выбор одним нажатием вместо имени вслепую.
-function setInput(wrap: HTMLElement, value: string) {
-  const input = wrap.querySelector("input");
-  if (input) input.value = value;
-}
-
 function renderModels(box: HTMLElement, models: string[], current: string, pick: (id: string) => void) {
-  box.replaceChildren();
-  if (!models.length) {
-    box.hidden = true;
-    return;
-  }
-  box.hidden = false;
   const known = models.includes(current.trim());
-  const label = el("span", "models-label", known ? "Доступные модели" : `Модели «${current.trim() || "…"}» в списке нет. Доступные:`);
-  box.append(label);
-  for (const id of models.slice(0, 40)) {
-    const chip = el("button", "model-chip", id) ;
-    chip.type = "button";
-    chip.setAttribute("aria-pressed", String(id === current.trim()));
-    chip.addEventListener("click", () => {
-      pick(id);
-      for (const other of box.querySelectorAll(".model-chip")) other.setAttribute("aria-pressed", String(other === chip));
-      label.textContent = "Доступные модели";
-    });
-    box.append(chip);
-  }
-}
-
-function card(title: string, ...children: Array<HTMLElement | string>): HTMLElement {
-  const c = el("section", "card");
-  c.append(el("h3", "", title));
-  for (const ch of children) c.append(typeof ch === "string" ? el("p", "field-hint", ch) : ch);
-  return c;
+  const label = known || !models.length ? "Доступные модели" : `Модели «${current.trim() || "…"}» в списке нет. Доступные:`;
+  chips(box, models.slice(0, 40).map((value) => ({ value })), current.trim(), pick, label);
 }
 
 export async function render(container: HTMLElement): Promise<void> {
@@ -172,7 +108,7 @@ export async function render(container: HTMLElement): Promise<void> {
     // кнопки «Сохранить» в этой ветке нет вовсе — человек щёлкал, и ничего не
     // происходило, и никто не говорил, что не происходит.
     center.append(themeCard(), el("div", "card muted", "Остальные настройки доступны в приложении Hélène на том компьютере, где живёт агент: здесь окно смотрит на удалённый харнесс."));
-    container.replaceChildren(center);
+    mountSettings(container, center);
     bindTheme(container);
     return;
   }
@@ -296,7 +232,7 @@ export async function render(container: HTMLElement): Promise<void> {
         probeOut.textContent = r.note;
         renderModels(apiModels, r.models || [], apiDraft.model, (id) => {
           apiDraft.model = id;
-          setInput(apiModelField, id);
+          setField(apiModelField, id);
         });
       } catch (e) {
         probeOut.className = "receipt err";
@@ -327,10 +263,10 @@ export async function render(container: HTMLElement): Promise<void> {
   for (const preset of ANTHROPIC_PRESETS) {
     anthPresets.append(button(preset.label, "quiet", () => {
       anthDraft.base_url = preset.url;
-      setInput(anthBase, preset.url);
+      setField(anthBase, preset.url);
       if (preset.model) {
         anthDraft.model = preset.model;
-        setInput(anthModelField, preset.model);
+        setField(anthModelField, preset.model);
       }
       presetNote.textContent = `${preset.label} — ${BILLING_LABEL[preset.billing]}. ${preset.note}`;
       syncEffort();
@@ -347,7 +283,7 @@ export async function render(container: HTMLElement): Promise<void> {
         const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: anthDraft.base_url, key: anthDraft.key, framework: "anthropic" });
         anthOut.className = "receipt " + (r.ok ? "ok" : "err");
         anthOut.textContent = r.note;
-        renderModels(anthModels, r.models || [], anthDraft.model, (id) => { anthDraft.model = id; setInput(anthModelField, id); syncEffort(); });
+        renderModels(anthModels, r.models || [], anthDraft.model, (id) => { anthDraft.model = id; setField(anthModelField, id); syncEffort(); });
       } catch (e) {
         anthOut.className = "receipt err";
         anthOut.textContent = humanError(e).text;
@@ -430,7 +366,7 @@ export async function render(container: HTMLElement): Promise<void> {
           : `${r.note}. Реле поднимается вместе с программой после сохранения и перезапуска.`;
         renderModels(chatgptModels, r.models || [], chatgptDraft.model, (id) => {
           chatgptDraft.model = id;
-          setInput(chatgptModelField, id);
+          setField(chatgptModelField, id);
         });
       } catch (e) {
         chatgptProbeOut.className = "receipt err";
@@ -462,7 +398,7 @@ export async function render(container: HTMLElement): Promise<void> {
         localProbeOut.textContent = r.note;
         renderModels(localModels, r.models || [], localDraft.model, (id) => {
           localDraft.model = id;
-          setInput(localModelField, id);
+          setField(localModelField, id);
         });
       } catch (e) {
         localProbeOut.className = "receipt err";
@@ -750,8 +686,35 @@ export async function render(container: HTMLElement): Promise<void> {
   // обработчика: три нажатия «Проверить обновления» — три кнопки «Скачать» в
   // ряд, и она оставалась висеть даже рядом с «Это последняя версия».
   let updUrl = "";
-  const dlBtn = button("Скачать", "primary", () => {
-    if (updUrl) void shell("open_path", { path: updUrl }).catch((e) => toast(humanError(e).text));
+  // Скачать и поставить — оболочка (КОНТРАКТ-B→A §3: update_download →
+  // update_install). Пока этих команд у оболочки нет, кнопка честно открывает
+  // ссылку на выпуск, как раньше, и говорит об этом.
+  const dlBtn = button("Скачать и установить", "primary", async () => {
+    if (!updUrl) return;
+    dlBtn.disabled = true;
+    updOut.className = "receipt";
+    updOut.textContent = "Скачиваю…";
+    try {
+      const got = await shell<{ path: string; sha_ok: boolean; sha_expected?: string; sha_actual?: string }>("update_download", { url: updUrl });
+      if (!got.sha_ok) {
+        updOut.className = "receipt err";
+        updOut.textContent = `Архив скачан, но его отпечаток не сошёлся с заметками выпуска — ставить не буду. Файл: ${got.path}`;
+        return;
+      }
+      updOut.textContent = "Скачано, отпечаток сошёлся. Запускаю установщик — программа закроется сама.";
+      await shell("update_install", { path: got.path });
+    } catch (e) {
+      const text = e instanceof Error ? e.message : String(e ?? "");
+      if (/not found|неизвестн|unknown|command/i.test(text)) {
+        updOut.textContent = "Эта версия оболочки ещё не умеет ставить обновление сама — открыл страницу выпуска, скачай и запусти helene-setup.exe.";
+        void shell("open_path", { path: updUrl }).catch((e2) => toast(humanError(e2).text));
+      } else {
+        updOut.className = "receipt err";
+        updOut.textContent = humanError(e).text;
+      }
+    } finally {
+      dlBtn.disabled = false;
+    }
   });
   dlBtn.hidden = true;
   aboutRow.append(
@@ -943,7 +906,7 @@ export async function render(container: HTMLElement): Promise<void> {
       else delete out.key;
       out.setup_complete = true;
       try {
-        await shell("config_save", { config: JSON.stringify(out) });
+        await writeConfig(out);
         saveOut.className = "receipt ok";
         // Под службой перезапуск ОКНА настройки не применит: службу конфиг
         // читает один раз при своём старте. Раньше расписка обещала обратное.
@@ -971,21 +934,111 @@ export async function render(container: HTMLElement): Promise<void> {
         }
         S.agent = String(out.agent?.name || S.agent);
       } catch (e) {
+        if (e instanceof StaleConfig) {
+          // Файл менял кто-то ещё (установщик, харнесс, Блокнот). Развилка
+          // вместо молчаливой перезаписи — как у /api/md.
+          saveOut.className = "receipt err";
+          saveOut.textContent = "Файл настроек изменился, пока экран был открыт.";
+          conflictBox.hidden = false;
+          return;
+        }
         saveOut.className = "receipt err";
         saveOut.textContent = humanError(e).text;
       }
     }),
     saveOut,
   );
+  // Свежесть: отпечаток файла из config_load едет обратно в config_save; при
+  // расхождении оболочка отвечает `stale:<mtime>` (КОНТРАКТ-B→A §2). Старая
+  // оболочка отпечатка не шлёт — тогда пишем как раньше.
+  let seenMtime: string | undefined = loaded.mtime_ns != null ? String(loaded.mtime_ns) : undefined;
+  class StaleConfig extends Error {}
+  const writeConfig = async (out: Config, force = false) => {
+    const args: Record<string, unknown> = { config: JSON.stringify(out) };
+    if (seenMtime && !force) args.mtimeNs = seenMtime;
+    try {
+      const r = await shell<{ ok?: boolean; mtime_ns?: string | number } | null>("config_save", args);
+      if (r && typeof r === "object" && r.mtime_ns != null) seenMtime = String(r.mtime_ns);
+    } catch (e) {
+      const text = e instanceof Error ? e.message : String(e ?? "");
+      if (/^stale:/.test(text)) throw new StaleConfig(text);
+      throw e;
+    }
+  };
+  const conflictBox = el("div");
+  conflictBox.hidden = true;
+  conflictBox.innerHTML = `<div class="notice err" style="margin-top:12px"><span class="dot failed"></span>
+    <span>Пока настройки были открыты, helene.json изменил кто-то ещё — установщик, харнесс или ты в Блокноте. Если сохранить как есть, его правка пропадёт.</span></div>`;
+  const conflictRow = el("div", "actions");
+  conflictRow.style.marginTop = "10px";
+  conflictRow.append(
+    button("Перечитать (мои правки потеряются)", "primary", () => void render(container)),
+    button("Перезаписать своим", "quiet", async () => {
+      conflictBox.hidden = true;
+      try {
+        await writeConfig(JSON.parse(JSON.stringify(draft)), true);
+        saveOut.className = "receipt ok";
+        saveOut.textContent = "Перезаписано. Чтобы применить, перезапусти программу.";
+        restartBtn.hidden = false;
+      } catch (e) {
+        saveOut.className = "receipt err";
+        saveOut.textContent = humanError(e).text;
+      }
+    }),
+  );
+  conflictBox.append(conflictRow);
   const restartBtn = button("Перезапустить сейчас", "quiet", () => dispatchEvent(new Event("frame-restart")));
   restartBtn.hidden = true;
   save.append(restartBtn);
-  const saveCard = el("section", "card");
-  saveCard.append(save, el("p", "field-hint", `Файл настроек: ${loaded.path}`));
+  const saveCard = el("section", "card save-bar");
+  saveCard.append(save, conflictBox, el("p", "field-hint", `Файл настроек: ${loaded.path}`));
   center.append(saveCard);
 
-  container.replaceChildren(center);
+  mountSettings(container, center);
   bindTheme(container);
+}
+
+/**
+ * Экран настроек — карточки и оглавление слева. Оглавление собирается из
+ * заголовков карточек: ни одной второй копии списка.
+ */
+function mountSettings(container: HTMLElement, center: HTMLElement) {
+  const wrap = el("div", "settings");
+  const nav = el("nav", "settings-nav");
+  nav.setAttribute("aria-label", "Разделы настроек");
+  const body = el("div", "settings-body");
+  center.className = "";
+  body.append(center);
+  const cards = [...center.querySelectorAll<HTMLElement>("section.card")].filter((c) => c.querySelector(":scope > h3"));
+  const links: HTMLAnchorElement[] = [];
+  cards.forEach((c, i) => {
+    const title = c.querySelector(":scope > h3")!.textContent || "";
+    c.id = "s-" + i;
+    const a = el("a", "", title);
+    a.href = "#" + c.id;
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      c.scrollIntoView({ block: "start", behavior: "smooth" });
+      for (const l of links) l.setAttribute("aria-current", String(l === a));
+    });
+    links.push(a);
+    nav.append(a);
+  });
+  wrap.append(nav, body);
+  container.replaceChildren(wrap);
+  if ("IntersectionObserver" in window && cards.length) {
+    const seen = new Map<Element, boolean>();
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) seen.set(e.target, e.isIntersecting);
+        const first = cards.find((c) => seen.get(c));
+        if (!first) return;
+        for (const l of links) l.setAttribute("aria-current", String(l.getAttribute("href") === "#" + first.id));
+      },
+      { root: container, rootMargin: "-10% 0px -70% 0px" },
+    );
+    for (const c of cards) io.observe(c);
+  }
 }
 
 /**
@@ -1201,11 +1254,7 @@ function bindTheme(container: HTMLElement) {
   sync(current);
   for (const b of row.querySelectorAll<HTMLButtonElement>(".choice-item")) {
     b.addEventListener("click", () => {
-      try {
-        localStorage.setItem("frame.theme", b.dataset.value!);
-      } catch {
-        // без хранилища тема живёт до перезапуска
-      }
+      saveTheme(b.dataset.value as Theme);
       sync(b.dataset.value!);
       dispatchEvent(new Event("frame-theme"));
     });

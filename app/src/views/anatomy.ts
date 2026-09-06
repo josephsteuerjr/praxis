@@ -2,6 +2,7 @@
 // хода и живым списком рук — снимок кода, не пересказ.
 import { api } from "../api";
 import { esc, fmtN, fmtTime, md, q, safeRender } from "../lib";
+import { stepsHTML, type RunDetail } from "../panel";
 import { loadMode, type ModeState } from "../mode";
 import { S } from "../state";
 
@@ -195,28 +196,10 @@ async function renderLesson(box: HTMLElement) {
     box.innerHTML = '<div class="muted">завершённых ходов ещё нет — напиши агенту и вернись сюда</div>';
     return;
   }
-  const d = await api("/api/run/" + encodeURIComponent(pick.id));
+  const d = await api<RunDetail>("/api/run/" + encodeURIComponent(pick.id));
   const m = d.manifest || {};
-  const rows: string[] = [];
-  const lesson = (key: string, html: string) =>
-    rows.push(`<div class="ev-step">${html}<div class="lesson">${esc(LESSON[key])}</div></div>`);
-  rows.push(`<div class="row"><b>${esc((m.goal || "").split("\n")[0].slice(0, 110))}</b> <span class="muted mono">${esc(pick.id)} · ${fmtTime(m.created_at)}</span></div>`);
-  let thought = 0;
-  for (const it of d.iterations || []) {
-    const u = it.usage || {};
-    thought += 1;
-    lesson(
-      thought === 1 ? "think_first" : "think",
-      `думает · ${esc(it.model || "")}${it.ms != null ? ` · ${(it.ms / 1000).toFixed(1)} с` : ""}${u.in != null ? ` · вход ${fmtN(u.in)}${u.cache_read ? ` (из кэша ${fmtN(u.cache_read)})` : ""} → ${fmtN(u.out || 0)}` : ""}`,
-    );
-    for (const t of it.tools || []) {
-      const args = t.args ? JSON.stringify(t.args) : "";
-      const head = (t.result && (t.result.head || t.result.tail)) || "";
-      const key = t.tool === "reply" ? "reply" : t.tool === "end_turn" ? "end_turn" : "hand";
-      lesson(key, `<b class="hand mono">${esc(t.tool || "?")}</b> ${args ? `<span class="muted">${esc(args.slice(0, 90))}${args.length > 90 ? "…" : ""}</span>` : ""}${head ? `<div class="muted">→ ${esc(String(head).slice(0, 130))}</div>` : ""}`);
-    }
-  }
-  const term = m.terminal || {};
-  lesson("terminal", `<b>${esc(m.status || "")}</b>${term.reason ? ` <span class="muted">· ${esc(String(term.reason).slice(0, 100))}</span>` : ""}`);
-  box.innerHTML = rows.join("");
+  // Та же разметка шагов, что в панели хода, плюс пояснение под каждым шагом.
+  box.innerHTML =
+    `<div class="row"><b>${esc((m.goal || "").split("\n")[0].slice(0, 110))}</b> <span class="muted mono">${esc(pick.id)} · ${fmtTime(m.created_at)}</span></div>` +
+    stepsHTML(d, { lesson: LESSON });
 }

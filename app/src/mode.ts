@@ -35,6 +35,7 @@
 // правды, и побеждала бы то одна, то другая.
 import { api, shell } from "./api";
 import { el, humanError, toast } from "./lib";
+import { button as btn, toggle as switchRow } from "../../ui-kit/dom";
 
 /** Ключ режима в helene.json. Не трогать `mode` — см. шапку файла. */
 export const MODE_KEY = "agent_mode";
@@ -217,30 +218,7 @@ async function adminProbe(): Promise<{ known: boolean; canElevate: boolean }> {
   }
 }
 
-// Мелкие обёртки продублированы из settings.ts намеренно: карточка живёт
-// отдельным файлом, чтобы соседние задачи (монтирование, установщик) не
-// толкались со мной в одном месте. Обёртки — двенадцать строк DOM, не правило.
-
-function switchRow(label: string, value: boolean, onChange: (v: boolean) => void): HTMLButtonElement {
-  const b = el("button", "switch");
-  b.type = "button";
-  b.setAttribute("role", "switch");
-  b.setAttribute("aria-checked", String(value));
-  b.append(el("span", "switch-knob"), el("span", "switch-label", label));
-  b.addEventListener("click", () => {
-    const next = b.getAttribute("aria-checked") !== "true";
-    b.setAttribute("aria-checked", String(next));
-    onChange(next);
-  });
-  return b;
-}
-
-function btn(text: string, kind: "primary" | "quiet", onClick: () => void): HTMLButtonElement {
-  const b = el("button", `btn btn-${kind}`, text);
-  b.type = "button";
-  b.addEventListener("click", onClick);
-  return b;
-}
+// Обёртки DOM — общие, из ui-kit/dom.ts (одна копия на все интерфейсы).
 
 /** Галочки службы, как они ЛЕЖАТ В ФАЙЛЕ. Труба отдаёт действующие — они врут вне службы. */
 export interface StoredService {

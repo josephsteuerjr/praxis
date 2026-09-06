@@ -26,6 +26,10 @@
   --ctrl-hover: rgba(38, 35, 32, 0.06);
   --close-hover: #c8412f;
   --shadow: 0 1px 2px rgba(38, 35, 32, 0.04), 0 10px 30px rgba(38, 35, 32, 0.05);
+  /* полка слева и панель хода справа — на полтона темнее бумаги (окно, 07.09) */
+  --rail: #f6f3ee;
+  --panel: #faf8f4;
+  --radius: 12px;
   --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
   --sans: "Golos Text", "Segoe UI", system-ui, sans-serif;
   --mono: "PT Mono", Consolas, "Courier New", monospace;
@@ -57,6 +61,8 @@
     --light-b: rgba(255, 196, 132, 0);
     --ctrl-hover: rgba(239, 233, 223, 0.08);
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 10px 30px rgba(0, 0, 0, 0.25);
+    --rail: #161412;
+    --panel: #1c1a17;
   }
 }
 
@@ -83,4 +89,6 @@
   --light-b: rgba(255, 196, 132, 0);
   --ctrl-hover: rgba(239, 233, 223, 0.08);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 10px 30px rgba(0, 0, 0, 0.25);
+  --rail: #161412;
+  --panel: #1c1a17;
 }

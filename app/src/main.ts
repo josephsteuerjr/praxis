@@ -1,10 +1,14 @@
-// Hélène — основная программа. Полка слева (разделы и разговоры), разговор в
-// центре, ходы справа; состояние агента одной фразой в шапке; настройки
-// экраном, а не файлом.
+// Hélène — окно. Полка слева (разделы и чаты), переписка в центре, ход агента
+// справа; состояние агента одной фразой в шапке; настройки экраном, а не
+// файлом. Большой надписи с именем продукта нет — только подпись внизу полки
+// (слово владельца 07.09).
 import "./styles/app.css";
 import { api, cfg, connect, inTauri, onConnection, onEvent, post, shell } from "./api";
-import { bindFail, esc, failHTML, fmtN, fmtTs, humanError, q, toast } from "./lib";
-import { PRODUCT_NAME, S, WINDOW_ROOM, runIsLive, type AgentState, type Pending, type Room, type Run, type View } from "./state";
+import { applyTheme, readTheme } from "../../ui-kit/dom";
+import { bindFail, esc, failHTML, fmtAge, fmtK, fmtTs, humanError, q, toast } from "./lib";
+import { PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "./state";
+import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "./rooms";
+import * as panel from "./panel";
 import * as talk from "./views/talk";
 import * as plans from "./views/plans";
 import * as frame from "./views/frame";
@@ -17,7 +21,9 @@ const view = q<HTMLElement>("#view");
 const app = q<HTMLElement>("#app");
 const railNav = q<HTMLElement>("#rail-nav");
 const railBottom = q<HTMLElement>("#rail-bottom");
+const railSign = q<HTMLElement>("#rail-sign");
 const roomsBox = q<HTMLElement>("#rooms");
+const roomAdd = q<HTMLButtonElement>("#room-add");
 const headKicker = q<HTMLElement>("#head-kicker");
 const headTitle = q<HTMLElement>("#head-title");
 const statePill = q<HTMLElement>("#state");
@@ -27,28 +33,17 @@ const pulseBox = q<HTMLElement>("#pulse");
 const alarmBox = q<HTMLElement>("#alarm");
 const composer = q<HTMLElement>("#composer");
 const composerTarget = q<HTMLElement>("#composer-target");
+const composerNote = q<HTMLElement>("#composer-note");
 const say = q<HTMLTextAreaElement>("#say");
 const send = q<HTMLButtonElement>("#send");
-const panel = q<HTMLElement>("#panel");
+const panelBox = q<HTMLElement>("#panel");
+const menu = q<HTMLElement>("#menu");
 
 // ---------------------------------------------------------------- тема
 
-type Theme = "system" | "light" | "dark";
-function applyTheme() {
-  // По умолчанию как в Windows: светлая днём не слепит ночью. Светлый вариант —
-  // самый светлый из набора (слово владельца 02.09).
-  let mode: Theme = "system";
-  try {
-    const raw = localStorage.getItem("frame.theme");
-    if (raw === "system" || raw === "dark" || raw === "light") mode = raw;
-  } catch {
-    // без хранилища — светлая
-  }
-  if (mode === "system") delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = mode;
-}
-applyTheme();
-addEventListener("frame-theme", applyTheme);
+// По умолчанию как в Windows: светлая днём не слепит ночью.
+applyTheme(readTheme());
+addEventListener("frame-theme", () => applyTheme(readTheme()));
 
 // ---------------------------------------------------------------- окно
 
@@ -79,27 +74,27 @@ const ICONS: Record<View, string> = {
   settings: '<circle cx="10" cy="10" r="2.6"/><path d="M10 2.8v2M10 15.2v2M2.8 10h2M15.2 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M4.9 15.1l1.4-1.4M13.7 6.3l1.4-1.4"/>',
 };
 
-const SECTIONS: Array<{ id: View; label: string; kicker: string }> = [
-  { id: "talk", label: "Чат", kicker: "Чат" },
-  { id: "plans", label: "Задачи", kicker: "План агента" },
-  { id: "frame", label: "Контекст", kicker: "Что видит модель" },
-  { id: "files", label: "Файлы", kicker: "Память агента в файлах" },
-  { id: "journal", label: "Журнал", kicker: "Ошибки и пропуски" },
-  { id: "anatomy", label: "Система", kicker: "Как это устроено" },
+const SECTIONS: Array<{ id: View; label: string; kicker: string; key: string }> = [
+  { id: "talk", label: "Чат", kicker: "", key: "1" },
+  { id: "plans", label: "Задачи", kicker: "План агента", key: "2" },
+  { id: "frame", label: "Контекст", kicker: "Что видит модель", key: "3" },
+  { id: "files", label: "Файлы", kicker: "Память агента в файлах", key: "4" },
+  { id: "journal", label: "Журнал", kicker: "Ошибки и пропуски", key: "5" },
+  { id: "anatomy", label: "Система", kicker: "Как это устроено", key: "6" },
 ];
 
-function railButton(id: View, label: string): HTMLButtonElement {
+function railButton(id: View, label: string, key: string): HTMLButtonElement {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "rail-item";
   b.dataset.view = id;
-  b.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true">${ICONS[id]}</svg><span>${esc(label)}</span>`;
+  b.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true">${ICONS[id]}</svg><span>${esc(label)}</span><kbd>Ctrl+${esc(key)}</kbd>`;
   b.addEventListener("click", () => void show(id));
   return b;
 }
 
-for (const s of SECTIONS) railNav.append(railButton(s.id, s.label));
-railBottom.append(railButton("settings", "Настройки"));
+for (const s of SECTIONS) railNav.append(railButton(s.id, s.label, s.key));
+railBottom.append(railButton("settings", "Настройки", ","));
 
 // Панели сворачиваются как в IDE и помнят состояние.
 const railBtn = q<HTMLButtonElement>("#toggle-rail");
@@ -124,14 +119,28 @@ setCollapsed("rail", readFlag("frame.rail"));
 setCollapsed("panel", readFlag("frame.panel"));
 railBtn.addEventListener("click", () => setCollapsed("rail", !app.classList.contains("rail-collapsed")));
 panelBtn.addEventListener("click", () => setCollapsed("panel", !app.classList.contains("panel-collapsed")));
+
 document.addEventListener("keydown", (e) => {
-  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  if (e.shiftKey) return;
   if (e.code === "KeyB") {
     e.preventDefault();
     railBtn.click();
   } else if (e.code === "KeyJ") {
     e.preventDefault();
     panelBtn.click();
+  } else if (e.code === "KeyN") {
+    e.preventDefault();
+    void newRoom();
+  } else if (e.code === "Comma") {
+    e.preventDefault();
+    void show("settings");
+  } else if (/^Digit[1-6]$/.test(e.code)) {
+    const s = SECTIONS[Number(e.code.slice(5)) - 1];
+    if (s) {
+      e.preventDefault();
+      void show(s.id);
+    }
   }
 });
 
@@ -151,8 +160,8 @@ const views: Record<View, { render: (root: HTMLElement) => Promise<void> }> = {
   settings,
 };
 
-// Диктору говорим отдельной строкой: раньше aria-live висел на #view, и весь
-// чат зачитывался заново каждые полторы секунды.
+// Диктору говорим отдельной строкой: aria-live на #view зачитывал бы весь чат
+// заново каждые полторы секунды.
 const liveRegion = q<HTMLElement>("#live");
 function announce(text: string) {
   liveRegion.textContent = text;
@@ -164,24 +173,21 @@ let showSeq = 0;
 
 /**
  * @param quiet — «обнови содержимое», а не «покажи другой раздел»: без
- *   промежуточного «читаю…» и с сохранением прокрутки. Нужен живым обновлениям
- *   (журнал под штормом откладываний иначе мигает и уезжает в начало).
+ *   промежуточного «читаю…» и с сохранением прокрутки.
  */
 export async function show(id: View, opts: { quiet?: boolean } = {}) {
   const gen = ++showSeq;
   S.view = id;
   syncRail();
   const section = SECTIONS.find((s) => s.id === id);
-  headKicker.textContent = section ? section.kicker : "Программа";
+  headKicker.textContent = section ? section.kicker : "";
   if (id !== "talk") {
     headTitle.textContent = section?.label ?? "Настройки";
-    // Почерк — только над комнатой агента; «Настройки» и остальные экраны —
-    // обычной шапкой (иначе класс с комнаты переезжал на них, найдено живьём).
     headTitle.classList.remove("hand");
   }
   const talking = id === "talk";
   composer.hidden = !talking;
-  panel.hidden = !talking;
+  panelBox.hidden = !talking;
   app.classList.toggle("with-panel", talking);
   panelBtn.hidden = !talking;
   const keepScroll = opts.quiet ? view.scrollTop : 0;
@@ -193,8 +199,6 @@ export async function show(id: View, opts: { quiet?: boolean } = {}) {
     announce(section?.label ?? "Настройки");
   } catch (e) {
     if (gen !== showSeq) return;
-    // Раньше сюда прилетало «Failed to fetch» английской строкой браузера как
-    // единственное объяснение, без кнопки и без подсказки, что делать.
     view.innerHTML = failHTML(e);
     bindFail(view, () => void show(id));
     announce(humanError(e).text);
@@ -203,72 +207,195 @@ export async function show(id: View, opts: { quiet?: boolean } = {}) {
 
 // ---------------------------------------------------------------- комнаты
 
-function roomsFromRuns(runs: Run[], chats: Array<{ peer_id: string; title?: string; messages?: number }>): Room[] {
-  const byKey = new Map<string, Room>();
-  // Комната окна носит имя агента, а не слово «Окно» (слово владельца 06.09):
-  // это её голос здесь, а не место.
-  byKey.set(WINDOW_ROOM, { key: WINDOW_ROOM, name: S.agent, live: false, count: 0 });
-  for (const c of chats) {
-    const key = String(c.peer_id);
-    if (key === "pult") continue;
-    if (!byKey.has(key)) byKey.set(key, { key, name: c.title || "чат " + key, live: false, count: c.messages || 0 });
+function selectRoom(room: Room) {
+  S.room = room.key;
+  S.roomName = room.name;
+  renderRooms();
+  void show("talk");
+}
+
+function roomButton(room: Room): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "room" + (room.stub ? " stub" : "");
+  b.dataset.key = room.key;
+  b.setAttribute("aria-current", String(room.key === S.room));
+  // Имя агента над его комнатой — его почерком; остальные — гротеском.
+  const hand = room.key === WINDOW_ROOM;
+  b.innerHTML =
+    `<span class="dot ${room.live ? "live" : ""}"></span>` +
+    `<span class="room-name${hand ? " hand" : ""}" title="${esc(room.name)}">${esc(room.name)}</span>` +
+    (room.count && !hand ? `<span class="room-count">${room.count}</span>` : "");
+  if (room.kind === "window" && room.key !== WINDOW_ROOM) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "icon-btn room-more";
+    more.setAttribute("aria-label", "Действия с чатом");
+    more.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="1.3"/><circle cx="10" cy="10" r="1.3"/><circle cx="15" cy="10" r="1.3"/></svg>';
+    more.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openMenu(room, more.getBoundingClientRect());
+    });
+    b.append(more);
+    b.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openMenu(room, new DOMRect(e.clientX, e.clientY, 0, 0));
+    });
   }
-  for (const r of runs) {
-    if (r.kind !== "chat_turn" || r.chat_id == null) continue;
-    let key = String(r.chat_id);
-    if (key === "pult") key = WINDOW_ROOM;
-    const room = byKey.get(key) ?? { key, name: r.chat_title || "чат " + key, live: false, count: 0 };
-    if (runIsLive(r.status)) room.live = true;
-    room.count += 1;
-    if (!byKey.has(key)) byKey.set(key, room);
-  }
-  return [...byKey.values()];
+  b.addEventListener("click", () => selectRoom(room));
+  return b;
 }
 
 function renderRooms() {
-  roomsBox.replaceChildren(
-    ...S.rooms.map((room) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "room";
-      b.setAttribute("aria-current", String(room.key === S.room));
-      // Имя агента над его комнатой — его почерком (.hand); чужие комнаты
-      // (чаты Telegram) остаются гротеском интерфейса.
-      b.innerHTML = `<span class="room-name${room.key === WINDOW_ROOM ? " hand" : ""}">${esc(room.name)}</span>` +
-        (room.count ? `<span class="room-count">${room.count}</span>` : "") +
-        `<span class="dot ${room.live ? "live" : ""}"></span>`;
-      b.addEventListener("click", () => {
-        S.room = room.key;
-        S.roomName = room.name;
-        renderRooms();
-        void show("talk");
-      });
-      return b;
-    }),
-  );
-  // Шапка полки — имя ПРОДУКТА, не агента: слово владельца 06.09 («оставил бы
-  // Hélène в рабочем окне как ПО»). Имя агента живёт в подписи его слов.
-  q<HTMLElement>("#rail-agent").textContent = PRODUCT_NAME;
+  const nodes: HTMLElement[] = [];
+  let group = "";
+  for (const room of S.rooms) {
+    if (room.kind === "telegram" && group !== "telegram") {
+      group = "telegram";
+      const label = document.createElement("div");
+      label.className = "rooms-group";
+      label.textContent = "Telegram";
+      nodes.push(label);
+    }
+    nodes.push(roomButton(room));
+  }
+  roomsBox.replaceChildren(...nodes);
+  roomAdd.hidden = false;
 }
 
 export async function loadRooms() {
-  const [runs, chats] = await Promise.all([
-    api<Run[]>("/api/runs?limit=200"),
-    api<Array<{ peer_id: string; title?: string; messages?: number }>>("/api/chats").catch(() => []),
-  ]);
+  const { runs, chats } = await fetchRooms();
   S.runs = runs;
-  S.rooms = roomsFromRuns(runs, chats);
+  S.rooms = buildRooms(runs, chats);
   const current = S.rooms.find((r) => r.key === S.room);
   if (current) S.roomName = current.name;
+  else if (S.room !== WINDOW_ROOM) {
+    // Комнату убрали (другое окно, харнесс) — возвращаемся в основную.
+    S.room = WINDOW_ROOM;
+    S.roomName = S.agent;
+  }
   renderRooms();
+}
+
+async function newRoom() {
+  try {
+    const room = await createRoom("Новый чат");
+    S.rooms.splice(S.rooms.findIndex((r) => r.kind === "telegram") < 0 ? S.rooms.length : S.rooms.findIndex((r) => r.kind === "telegram"), 0, room);
+    // Новая комната сразу первой среди чатов окна, после основной.
+    const i = S.rooms.indexOf(room);
+    S.rooms.splice(i, 1);
+    S.rooms.splice(1, 0, room);
+    selectRoom(room);
+    if (room.stub) {
+      toast("Этот харнесс ещё не умеет несколько чатов: чат создан как заглушка, писать в него нельзя. Появится в 0.3.3.");
+    }
+    startRename(room);
+  } catch (e) {
+    toast("Чат не создался: " + humanError(e).text);
+  }
+}
+roomAdd.addEventListener("click", () => void newRoom());
+
+/** Переименование на месте: поле вместо имени, Enter — сохранить, Esc — отмена. */
+function startRename(room: Room) {
+  const b = roomsBox.querySelector<HTMLElement>(`.room[data-key="${CSS.escape(room.key)}"]`);
+  const name = b?.querySelector<HTMLElement>(".room-name");
+  if (!b || !name) return;
+  const input = document.createElement("input");
+  input.className = "field-input";
+  input.value = room.name;
+  input.style.height = "26px";
+  input.style.flex = "1";
+  input.style.minWidth = "0";
+  input.style.padding = "0 8px";
+  input.style.fontSize = "13px";
+  name.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = async (save: boolean) => {
+    if (done) return;
+    done = true;
+    const value = input.value.trim();
+    if (save && value && value !== room.name) {
+      try {
+        await renameRoom(room, value);
+        if (S.room === room.key) S.roomName = room.name;
+        // Заголовок и панель хода носят имя комнаты — перерисовать тихо.
+        if (S.view === "talk" && S.room === room.key) void show("talk", { quiet: true });
+      } catch (e) {
+        toast(humanError(e).text);
+      }
+    }
+    renderRooms();
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void finish(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      void finish(false);
+    }
+    e.stopPropagation();
+  });
+  input.addEventListener("blur", () => void finish(true));
+  input.addEventListener("click", (e) => e.stopPropagation());
+}
+
+function openMenu(room: Room, at: DOMRect) {
+  menu.replaceChildren();
+  const item = (text: string, cls: string, fn: () => void) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = cls;
+    b.textContent = text;
+    b.addEventListener("click", () => {
+      closeMenu();
+      fn();
+    });
+    menu.append(b);
+  };
+  item("Переименовать", "", () => startRename(room));
+  item("Убрать чат", "danger", () => void removeRoom(room));
+  menu.hidden = false;
+  const x = Math.min(at.left, innerWidth - menu.offsetWidth - 8);
+  const y = Math.min(at.bottom + 4, innerHeight - menu.offsetHeight - 8);
+  menu.style.left = x + "px";
+  menu.style.top = y + "px";
+  setTimeout(() => document.addEventListener("pointerdown", closeMenu, { once: true }), 0);
+  document.addEventListener("keydown", closeMenuOnEsc);
+}
+
+function closeMenu() {
+  menu.hidden = true;
+  document.removeEventListener("keydown", closeMenuOnEsc);
+}
+function closeMenuOnEsc(e: KeyboardEvent) {
+  if (e.key === "Escape") closeMenu();
+}
+
+async function removeRoom(room: Room) {
+  try {
+    await deleteRoom(room);
+    S.rooms = S.rooms.filter((r) => r.key !== room.key);
+    if (S.room === room.key) {
+      S.room = WINDOW_ROOM;
+      S.roomName = S.agent;
+      void show("talk");
+    }
+    renderRooms();
+    toast(room.stub ? "Чат убран." : "Чат убран: переписка отложена в архив агента, не удалена.");
+  } catch (e) {
+    toast(humanError(e).text);
+  }
 }
 
 // ---------------------------------------------------------------- состояние
 
 /**
  * Перезапуск честно: если агента держит служба Windows, оболочка своих детей не
- * поднимала, и перезапуск окна — нулевое действие. Раньше владелец жал кнопку
- * и не получал ничего, без единого слова почему.
+ * поднимала, и перезапуск окна — нулевое действие.
  */
 export async function restartHarness() {
   let svc = "";
@@ -278,9 +405,6 @@ export async function restartHarness() {
     // вне приложения (веб) — служба не при делах
   }
   if (svc === "running") {
-    // Указатель на карточку: отдельной «Служба Windows» нет, службой управляет
-    // секция внутри карточки «Режим». Служба при этом не режим и ограду не
-    // снимает — она опция поверх выбранной ограды (см. ./mode).
     toast("Агента держит служба Windows: перезапуск окна её не тронет. Настройки → Режим: сними и поставь службу заново.");
     void show("settings");
     return;
@@ -292,6 +416,23 @@ export async function restartHarness() {
   }
 }
 
+/**
+ * Чужой харнесс (Пульт Праксис): сердцебиения Hélène нет, и канал честно
+ * отвечает «Не запущен». Для окна это не тревога, а другой способ судить о
+ * жизни: свежий вызов модели и идущие прогоны.
+ */
+function foreignState(s: AgentState): { level: string; phrase: string } {
+  const running = S.runs.find((r) => r.status === "running" && runIsRecent(r));
+  if (running) return { level: "live", phrase: "Ведёт ход" + (running.chat_title ? ` · ${running.chat_title}` : "") };
+  const at = s.brain?.last_call_at;
+  if (!at) return { level: "warn", phrase: "Вызовов модели ещё не было" };
+  const ageMin = (Date.now() / 1000 - at) / 60;
+  const age = fmtAge(at);
+  const when = age === "только что" ? age : `${age} назад`;
+  if (ageMin < 15) return { level: "ok", phrase: `На связи · модель отвечала ${when}` };
+  return { level: "warn", phrase: `Модель молчит ${age}` };
+}
+
 function renderState(s: AgentState | null, connected: boolean) {
   paintPulse(connected);
   if (!connected) {
@@ -301,6 +442,15 @@ function renderState(s: AgentState | null, connected: boolean) {
     return;
   }
   if (!s) return;
+  if (foreignHarness()) {
+    const f = foreignState(s);
+    statePill.dataset.level = f.level;
+    stateText.textContent = f.phrase;
+    statePill.title = "Дерево ведёт чужой харнесс: снимка Hélène нет, состояние — по вызовам модели и прогонам.";
+    stateAction.hidden = true;
+    alarmBox.hidden = true;
+    return;
+  }
   statePill.dataset.level = s.level;
   stateText.textContent = s.phrase;
   statePill.title = s.phrase;
@@ -314,8 +464,7 @@ function renderState(s: AgentState | null, connected: boolean) {
   } else {
     stateAction.hidden = true;
   }
-  // «Долгое молчание» без долга — сигнал разработчику про автономию, не тревога
-  // для человека: агент просто ничем не занят. Остальные тревоги показываем.
+  // «Долгое молчание» без долга — сигнал разработчику, не тревога для человека.
   const alarms = (s.alarms || []).filter((a) => a.kind !== "long_silence");
   alarmBox.hidden = !alarms.length;
   alarmBox.innerHTML = alarms.map((a) => `<span>⚠ ${esc(a.text)}</span>`).join(" · ");
@@ -324,12 +473,14 @@ function renderState(s: AgentState | null, connected: boolean) {
 export async function refreshState() {
   try {
     const s = await api<AgentState>("/api/state");
+    const wasBusy = !!S.agentState?.runner?.busy;
     S.agentState = s;
-    if (s.agent) {
-      S.agent = s.agent;
-      // Шапка полки остаётся именем продукта: имя агента из состояния сюда не
-      // пишем (три места писали по-разному — вот это и возвращало «Мира»).
-      q<HTMLElement>("#rail-agent").textContent = PRODUCT_NAME;
+    // Имя: снимок харнесса знает его лучше всех; без снимка (чужой харнесс)
+    // имя даёт config.js страницы — иначе Праксис звалась бы «Агент».
+    const named = s.anatomy === false && (cfg.agent || "").trim() ? (cfg.agent || "").trim() : s.agent;
+    if (named) {
+      s.agent = named;
+      S.agent = named;
       // Комната окна — по имени агента: переименовали в настройках — сменилась
       // и она, в списке и в шапке, если открыта именно она.
       const win = S.rooms.find((r) => r.key === WINDOW_ROOM);
@@ -337,23 +488,24 @@ export async function refreshState() {
         win.name = s.agent;
         if (S.room === WINDOW_ROOM) {
           S.roomName = s.agent;
-          const title = document.querySelector<HTMLElement>("#head-title");
-          if (title && S.view === "talk") title.textContent = s.agent;
+          if (S.view === "talk") headTitle.textContent = s.agent;
         }
         renderRooms();
       }
     }
-    // Связь берём настоящую: api() умеет уйти на HTTP-фолбэк при мёртвом
-    // сокете, и жёсткое `true` затирало честное «Нет связи с харнессом».
+    // Связь берём настоящую: api() умеет уйти на HTTP-фолбэк при мёртвом сокете.
     renderState(s, S.connected);
+    const busy = foreignHarness()
+      ? S.runs.some((r) => r.status === "running" && runIsRecent(r))
+      : !!s.runner?.busy && !!s.runner?.alive;
+    if (busy || wasBusy) panel.tick(busy);
   } catch {
     // связь решает пилюля через onConnection
   }
 }
 
 // Последняя строка расхода и время, когда её подтвердили. При обрыве связи
-// цифры не выдаём за текущие: раньше рядом с «Нет связи» бодро стояли
-// вчерашние токены, и владелец верил им.
+// цифры не выдаём за текущие.
 let pulseHTML = "";
 let pulseStamp = "";
 function paintPulse(connected: boolean) {
@@ -378,24 +530,22 @@ async function refreshPulse() {
     const share = total ? Math.round((100 * (l.cached || 0)) / total) : 0;
     pulseHTML =
       `${fmtTs(l.ts)} · <b>${esc(l.model || "")}</b> · кэш <span class="cachebar"><i style="width:${share}%"></i></span>${share}% · ` +
-      `${fmtN(total)}→${fmtN(l.out || 0)}${l.err ? ' · <span class="err-msg">ошибка</span>' : ""}`;
+      `${fmtK(total)} → ${fmtK(l.out || 0)}${l.err ? ' · <span class="err-msg">ошибка</span>' : ""}`;
     pulseStamp = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
     if (p.calls_day != null) {
-      pulseBox.title = `За сутки: вызовов ${fmtN(p.calls_day)}` +
+      pulseBox.title = `За сутки: вызовов ${p.calls_day}` +
         (p.cache_day != null ? `, доля кэша ${p.cache_day}%` : "") +
         (p.cache_now != null ? `; сейчас ${p.cache_now}%` : "");
     }
     paintPulse(S.connected);
   } catch {
-    // Цифра не подтверждена живым ответом — значит она не текущая.
     paintPulse(false);
   }
 }
 
 // ---------------------------------------------------------------- композер
 
-// Черновик переживает падение трубы и закрытие окна: набранное не должно
-// пропадать никогда.
+// Черновик переживает падение канала и закрытие окна.
 const draftKey = (room: string) => "frame.draft." + room;
 function saveDraft(room: string, text: string) {
   try {
@@ -419,14 +569,18 @@ function autoGrow() {
 
 let composerRoom = "";
 function syncComposer() {
-  composerTarget.textContent = S.room === WINDOW_ROOM ? "" : `в «${S.roomName}»`;
+  const room = S.rooms.find((r) => r.key === S.room);
+  composerTarget.textContent = isWindowRoom(S.room) ? "" : `в «${S.roomName}»`;
+  say.placeholder = room?.stub ? "Чат-заглушка: писать сюда пока нельзя" : isWindowRoom(S.room) ? "Написать агенту…" : `Написать в «${S.roomName}»…`;
+  say.disabled = !!room?.stub;
+  send.disabled = !!room?.stub || sending;
   // Черновик подставляем только при настоящей смене комнаты: событие
-  // frame-room летит на каждой перерисовке чата (раз в 1.5 с во время хода),
-  // и иначе оно затирало бы то, что владелец печатает прямо сейчас.
+  // frame-room летит на каждой перерисовке чата.
   if (composerRoom !== S.room) {
     saveDraft(composerRoom, composerRoom ? say.value : "");
     composerRoom = S.room;
     say.value = readDraft(S.room);
+    composerNote.textContent = "";
     autoGrow();
   }
 }
@@ -435,10 +589,12 @@ say.addEventListener("input", () => {
   autoGrow();
   saveDraft(S.room, say.value);
 });
+// Первый замер мог пройти до стилей (dev-сервер подключает CSS асинхронно) —
+// поле раздувалось до потолка. Перемеряем, когда страница собралась.
+addEventListener("load", autoGrow);
 say.addEventListener("keydown", (e) => {
   // sending и isComposing: без них два быстрых Enter давали два хода агента по
-  // одному тексту (и два счёта), а Enter подтверждения IME-композиции при
-  // кириллическом вводе отправлял недописанное.
+  // одному тексту, а Enter подтверждения IME при кириллице отправлял недописанное.
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !sending) {
     e.preventDefault();
     void doSend();
@@ -451,7 +607,7 @@ let pendSeq = 0;
 
 /** Куда делась реплика владельца — словами, по настоящему состоянию агента. */
 function sendNote(chat: string, midturn: boolean): string {
-  if (chat) return midturn ? `ушло в «${S.roomName}»` : `ждёт хода в «${S.roomName}»`;
+  if (chat && !isWindowRoom(chat)) return midturn ? `ушло в «${S.roomName}»` : `ждёт хода в «${S.roomName}»`;
   if (midturn) return "агент читает сейчас";
   const st = S.agentState;
   if (st && st.runner && !st.runner.alive) return "ждёт запуска агента";
@@ -463,17 +619,19 @@ async function doSend() {
   const text = say.value.trim();
   if (!text) return;
   const room = S.room;
+  const current = S.rooms.find((r) => r.key === room);
+  if (current?.stub) {
+    toast("Этот чат — заглушка: харнесс ещё не умеет несколько чатов. Пиши в основной.");
+    return;
+  }
   const chat = room === WINDOW_ROOM ? "" : room;
-  // Труба принимает записку в telegram-комнату и без бота (midturn:true), а
-  // руннер потом молча выбрасывает её в log.warning «бота нет — некуда везти».
-  // Состояние это знает заранее — спрашиваем его, вместо того чтобы терять текст.
-  if (chat && S.agentState?.telegram && !S.agentState.telegram.enabled) {
+  // Канал принимает записку в telegram-комнату и без бота, а руннер потом молча
+  // выбрасывает её. Состояние это знает заранее — спрашиваем его.
+  if (chat && !isWindowRoom(chat) && S.agentState?.telegram && !S.agentState.telegram.enabled) {
     toast(`Telegram не подключён: везти сообщение в «${S.roomName}» некуда. Настройки → Telegram.`);
     return;
   }
-  // Оптимистичное эхо: реплика ложится в ленту сразу. Раньше поле очищалось, в
-  // ленте не появлялось ничего (туда пишет только руннер, между ходами), и
-  // экран говорил «Здесь пока тихо» сразу после того, как владелец написал.
+  // Оптимистичное эхо: реплика ложится в ленту сразу.
   const pending: Pending = {
     id: ++pendSeq,
     room,
@@ -500,6 +658,7 @@ async function doSend() {
     const data = await post("/api/say", chat ? { text, chat } : { text });
     pending.state = "queued";
     pending.note = sendNote(chat, !!data?.midturn);
+    composerNote.textContent = pending.note;
     talk.paintPending();
     talk.afterSend();
   } catch (e) {
@@ -544,18 +703,16 @@ function paintJournal() {
 }
 onEvent((ev) => {
   if (ev.t === "health") void refreshState();
-  if (ev.t === "llm") void refreshPulse();
+  if (ev.t === "llm") {
+    void refreshPulse();
+    panel.onLlm();
+  }
   if (ev.t === "run") {
     void loadRooms();
     talk.onRunEvent(String(ev.run_id ?? ""));
     void refreshState();
   }
-  // Дебаунс, как у чата: под штормом откладываний (продукт сам заводит тревогу
-  // defer_storm) события шли раз в 1.33 с, и журнал — экран, написанный ровно
-  // для этого случая, — мигал «читаю…» и уезжал в начало таблицы.
-  // Потолок ожидания: сплошной поток событий не должен бесконечно отодвигать
-  // перерисовку («хвостовой» дебаунс без потолка перестаёт обновлять экран
-  // ровно под штормом, ради которого журнал и открыли).
+  // Дебаунс под штормом откладываний: журнал — экран ровно для этого случая.
   if (ev.t === "skips" && S.view === "journal") {
     clearTimeout(skipsTimer);
     if (Date.now() - skipsPaintedAt > 3000) paintJournal();
@@ -566,7 +723,10 @@ onEvent((ev) => {
 // ---------------------------------------------------------------- старт
 
 S.agent = (cfg.agent || "").trim() || "Агент";
-q<HTMLElement>("#rail-agent").textContent = PRODUCT_NAME;
+railSign.textContent = PRODUCT_NAME;
+shell<{ version: string }>("app_info")
+  .then((i) => (railSign.textContent = `${PRODUCT_NAME} ${i.version}`))
+  .catch(() => {});
 syncComposer();
 addEventListener("frame-room", syncComposer);
 addEventListener("frame-go", (e) => void show((e as CustomEvent<View>).detail));

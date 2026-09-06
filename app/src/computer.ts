@@ -20,6 +20,7 @@
 // трубы. Окно его только показывает и никогда не пишет.
 import { api } from "./api";
 import { el, fmtTimeSec, humanError } from "./lib";
+import { button, toggle as switchRow } from "../../ui-kit/dom";
 import type { ComputerLive, ComputerOption, ModeState } from "./mode";
 
 /** Что ЛЕЖИТ в файле — по нему и пишем обратно. */
@@ -53,27 +54,6 @@ export function storedComputer(block: unknown): StoredComputer {
       ? COMPUTER_SCOPES.filter((s) => raw.map(String).includes(s))
       : [];
   return { enabled: b.enabled === true, scopes };
-}
-
-function switchRow(label: string, value: boolean, onChange: (v: boolean) => void): HTMLButtonElement {
-  const b = el("button", "switch");
-  b.type = "button";
-  b.setAttribute("role", "switch");
-  b.setAttribute("aria-checked", String(value));
-  b.append(el("span", "switch-knob"), el("span", "switch-label", label));
-  b.addEventListener("click", () => {
-    const next = b.getAttribute("aria-checked") !== "true";
-    b.setAttribute("aria-checked", String(next));
-    onChange(next);
-  });
-  return b;
-}
-
-function btn(text: string, onClick: () => void): HTMLButtonElement {
-  const b = el("button", "btn btn-quiet", text);
-  b.type = "button";
-  b.addEventListener("click", onClick);
-  return b;
 }
 
 /** Строка о теле по снимку харнесса. Только то, что он прислал. */
@@ -184,7 +164,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer): Co
     status.className = "receipt " + (line.ok === true ? "ok" : line.ok === false ? "err" : "");
     status.textContent = line.text;
   };
-  const check = btn("Проверить", async () => {
+  const check = button("Проверить", "quiet", async () => {
     try {
       const fresh = await api<ModeState>("/api/mode");
       syncStatus(fresh.computer_live);

@@ -16,6 +16,7 @@
 // системная папка, не заведённый стык в `mnt/`), знает только харнесс, и она
 // приезжает снимком в анатомии.
 import { el } from "./lib";
+import { button as smallBtn } from "../../ui-kit/dom";
 import {
   ACCESS_WORDS,
   mountAccess,
@@ -55,13 +56,6 @@ function accessSelect(value: "read" | "write", onChange: (v: "read" | "write") =
   sel.value = value;
   sel.addEventListener("change", () => onChange(sel.value === "write" ? "write" : "read"));
   return sel;
-}
-
-function smallBtn(text: string, kind: "primary" | "quiet", onClick: () => void): HTMLButtonElement {
-  const b = el("button", `btn btn-${kind}`, text);
-  b.type = "button";
-  b.addEventListener("click", onClick);
-  return b;
 }
 
 /**

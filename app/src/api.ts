@@ -1,4 +1,4 @@
-// Связь с харнессом: труба frame.desk.v1 (WebSocket: запросы + живые события)
+// Связь с харнессом: канал frame.desk.v1 (WebSocket: запросы + живые события)
 // с HTTP-фолбэком, и мост к нативной оболочке (Tauri) там, где она есть.
 
 export interface Cfg {
@@ -147,13 +147,22 @@ export async function api<T = any>(path: string): Promise<T> {
 }
 
 export async function post<T = any>(path: string, body: unknown): Promise<T> {
-  if (ready && sock) return tunnelCall<T>(path, "POST", body);
+  return request<T>("POST", path, body);
+}
+
+/** DELETE — комнаты (КОНТРАКТ-B→A §1). По каналу тем же конвертом, что POST. */
+export async function del<T = any>(path: string): Promise<T> {
+  return request<T>("DELETE", path, null);
+}
+
+async function request<T>(method: string, path: string, body: unknown): Promise<T> {
+  if (ready && sock) return tunnelCall<T>(path, method, body);
   const r = await fetch(url(path), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    method,
+    headers: body == null ? {} : { "Content-Type": "application/json" },
+    body: body == null ? undefined : JSON.stringify(body),
   });
-  // HTTP-половина кода не несёт — его заменяет статус: 409 у трубы означает
+  // HTTP-половина кода не несёт — его заменяет статус: 409 у канала означает
   // ровно конфликт правок (deskapp.api_md_write → HTTPConflict).
   if (!r.ok) throw new ApiError(await r.text(), r.status, r.status === 409 ? "conflict" : undefined);
   return r.json();
