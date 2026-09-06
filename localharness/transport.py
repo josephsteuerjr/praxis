@@ -30,15 +30,43 @@ from pathlib import Path
 
 log = logging.getLogger("frame.transport")
 
+# Реестр комнат окна — чистый модуль канала (deskd/rooms.py, без зависимостей):
+# один и тот же для канала и харнесса, чтобы имена и ключи не разъезжались.
+import sys as _sys
+_APP_DIR = str(Path(__file__).resolve().parent.parent)
+if _APP_DIR not in _sys.path:
+    _sys.path.append(_APP_DIR)
+from deskd import rooms  # noqa: E402
 
-def _append_jsonl(path: Path, row: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8", newline="\n") as sink:
-        sink.write(json.dumps(row, ensure_ascii=False) + "\n")
+# Комнаты окна (задача A §3; те же значения в ui-kit/contract.json, сверка —
+# tests/t_contract.py). Ключ комнаты = имя потока = имя файла архива
+# `memory/groups/<ключ>.jsonl`: без двоеточий и пробелов. Комната по умолчанию
+# `window` зовётся именем агента и не удаляется; новые — `window-<8 hex>`.
+ROOM_DEFAULT = rooms.ROOM_DEFAULT
+ROOM_PATTERN = rooms.ROOM_PATTERN
+ROOM_ARCHIVE_DIR = rooms.ROOM_ARCHIVE_DIR
+is_room = rooms.is_room
 
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
+
+
+def _append_jsonl(path: Path, row: dict) -> None:
+    """Одна строка в архив комнаты — под тем же замком, что и квитанции.
+
+    ⚠ Здесь замка не было (ревью 06.09, §5): поток приёма бота (`Rooms.record`)
+    и главный поток руннера (`Desk.archive`, ответ на границе) дописывают один
+    `groups/<комната>.jsonl`, и две строки могли склеиться в одну битую — окно
+    её пропускает молча, а лента модели теряет реплику. Строка собирается ДО
+    захвата замка, под замком — только запись и flush.
+    """
+    line = json.dumps(row, ensure_ascii=False) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _path_lock(path):
+        with path.open("a", encoding="utf-8", newline="\n") as sink:
+            sink.write(line)
+            sink.flush()
 
 
 def _path_lock(path: Path) -> threading.Lock:
@@ -155,7 +183,7 @@ class Desk:
 
     # ------------------------------------------------------------- запись
     def archive(self, text: str, *, outgoing: bool, now: dt.datetime | None = None,
-                sender: str = "", system: bool = False) -> None:
+                sender: str = "", system: bool = False, kind: str = "") -> None:
         """Лента комнаты в её формате: memory/groups/<поток>.jsonl + реестр состояния.
 
         Пульт читает комнаты именно отсюда (deskd.readers.chats/chat_tail).
@@ -175,8 +203,12 @@ class Desk:
                "sender_name": (self.agent_name if outgoing else (sender or self.speaker))}
         if system:
             # Служебная плашка продукта, а не слово агента: окно её показывает,
-            # память жизни (и значит кадр модели) её не получает.
+            # память жизни (и значит кадр модели) её не получает. `kind` — вид
+            # плашки для окна: "silence" (молчание/ход без слова, серым),
+            # пусто — тревога (⚠/⏸), как раньше.
             row["system"] = True
+            if kind:
+                row["kind"] = str(kind)
         archive = self.tree / "memory" / "groups" / (self.stream + ".jsonl")
         _append_jsonl(archive, row)
         _registry(self.tree, self.stream, archive)
@@ -246,7 +278,7 @@ class Desk:
 
     # ------------------------------------------------------------ доставка
     def deliver(self, text: str, *, source_id: str = "", label: str = "",
-                system: bool = False) -> str:
+                system: bool = False, kind: str = "") -> str:
         """Её слово доехало до окна. Возвращаем расписку в том же виде, что транспорт.
 
         Расписка — не косметика: рука `reply` дописывает к ней подсказку про `end_turn`,
@@ -261,7 +293,7 @@ class Desk:
         """
         now = dt.datetime.now(dt.timezone.utc)
         body = str(text or "")
-        self.archive(body, outgoing=True, now=now, system=system)
+        self.archive(body, outgoing=True, now=now, system=system, kind=kind)
         if system:
             return f"Показано в окне → {label or self.title} (плашка продукта)"
         self.life(body, direction="out", actor=self.agent_name,
@@ -273,7 +305,73 @@ class Desk:
         return f"Отправлено → {label or self.title} (окно Frame, id {len(self.sent)})"
 
 
-def _honest_group_context(agent_mod, desk: Desk) -> None:
+class Desks:
+    """Комнаты окна: один `Desk` на ключ, память жизни — одна на всех.
+
+    Задача A §3: без Telegram окно — основной канал, и одной комнаты мало.
+    Реестр комнат (имена, создание, архив) ведёт канал (`deskd/rooms.py`);
+    здесь — только чтение имён и ленивое рождение `Desk` под ключ. Имя комнаты
+    перечитывается на каждом `get`: владелец переименовал в окне — следующий
+    ход уже идёт с новым именем в кадре.
+    """
+
+    def __init__(self, tree: Path, speaker: str, title: str, memory_life=None,
+                 agent_name: str = "Агент"):
+        self.tree = Path(tree)
+        self.speaker = str(speaker)
+        self.title = str(title)            # имя продукта — подпись расписок
+        self.agent_name = str(agent_name)
+        self._life = memory_life
+        self._by_key: dict[str, Desk] = {}
+        self.default = self.get(ROOM_DEFAULT)
+
+    def room_title(self, key: str) -> str:
+        return rooms.title(self.tree, key, self.agent_name)
+
+    def get(self, key: str) -> Desk:
+        key = str(key or ROOM_DEFAULT)
+        if not is_room(key):
+            raise ValueError(f"не комната окна: {key!r}")
+        desk = self._by_key.get(key)
+        if desk is None:
+            desk = Desk(self.tree, key, self.speaker, self.room_title(key),
+                        memory_life=self._life, agent_name=self.agent_name)
+            self._by_key[key] = desk
+        else:
+            desk.title = self.room_title(key)
+        return desk
+
+    def keys(self) -> list[str]:
+        return [ROOM_DEFAULT] + sorted(k for k in rooms.load(self.tree) if k != ROOM_DEFAULT)
+
+    def find(self, ref) -> "Desk | None":
+        """Комната по ключу или по имени (без учёта регистра). None — не наша."""
+        ref = str(ref or "").strip()
+        if not ref:
+            return None
+        if is_room(ref) and (ref == ROOM_DEFAULT or ref in rooms.load(self.tree)
+                             or rooms.archive_path(self.tree, ref).exists()):
+            return self.get(ref)
+        low = ref.lower()
+        for key in self.keys():
+            if self.room_title(key).lower() == low:
+                return self.get(key)
+        return None
+
+    def current(self, agent_mod) -> Desk:
+        """Комната текущего хода (по `_TURN_CHANNEL` дерева), иначе — по умолчанию."""
+        try:
+            ctx = agent_mod._TURN_CHANNEL.get()
+        except Exception:
+            ctx = None
+        chat_id = str(getattr(ctx, "chat_id", "") or "") if ctx is not None else ""
+        return self.get(chat_id) if is_room(chat_id) else self.default
+
+    def listing(self) -> str:
+        return ", ".join(f"«{self.room_title(k)}» ({k})" for k in self.keys())
+
+
+def _honest_group_context(agent_mod, tree: Path) -> None:
     """Рука ориентирования в комнате не должна врать про этот продукт.
 
     Её `group_context` читает каноническую раскладку дерева —
@@ -303,7 +401,7 @@ def _honest_group_context(agent_mod, desk: Desk) -> None:
         chat_id = str(getattr(ctx, "chat_id", "") or "")
         count = 0
         try:
-            path = (desk.tree / "memory" / ".state" / "group_context"
+            path = (Path(tree) / "memory" / ".state" / "group_context"
                     / (chat_id + ".json"))
             loaded = json.loads(path.read_text(encoding="utf-8"))
             count = int(loaded.get("message_count") or 0) if isinstance(loaded, dict) else 0
@@ -319,29 +417,41 @@ def _honest_group_context(agent_mod, desk: Desk) -> None:
     impl["group_context"] = _group_context
 
 
-def install(agent_mod, desk: Desk) -> None:
-    """Положить Пульт в `agent._TELETHON`. Вызывается один раз на старте раннера."""
+def install(agent_mod, desks: Desks) -> None:
+    """Положить окно в `agent._TELETHON`. Вызывается один раз на старте раннера.
+
+    Комнат окна много (задача A §3): адрес — ключ (`window`, `window-<hex>`)
+    или имя комнаты; без адреса — комната текущего хода. Telegram-адреса здесь
+    не наши: на них честный отказ особого типа.
+    """
 
     hooks = agent_mod._TELETHON
 
-    def _reply(chat_id, text, reply_to="") -> str:
-        if str(chat_id) != desk.stream:
-            return agent_mod.DirectSendRefusal(
-                f"не отправила: в этом продукте одна комната — «{desk.title}», "
-                f"а адрес «{chat_id}» ей не принадлежит.")
-        return desk.deliver(text, label=desk.speaker)
-
-    def _send_message(to, text) -> str:
-        target = str(to or "").strip()
-        if target in ("", desk.stream, desk.speaker, desk.title):
-            return desk.deliver(text, label=desk.speaker)
+    def _refusal(target: str):
         # ⚠ Отказ СТРОКОЙ особого типа, а не исключением и не обычной квитанцией:
         # `DirectSendRefusal` — её способ отличить «не ушло» от «ушло», не нюхая текст.
         # Обычная строка здесь засчиталась бы как доставка, и её запись хода соврала бы.
         return agent_mod.DirectSendRefusal(
             f"не отправила: наружу писать нечем — в этом продукте нет транспорта до "
-            f"«{target}». Есть только окно Пульта; чтобы сказать это владельцу, отвечай "
-            f"обычной рукой ответа.")
+            f"«{target}». Есть только комнаты окна: {desks.listing()}; чтобы сказать "
+            f"это владельцу, отвечай обычной рукой ответа.")
+
+    def _reply(chat_id, text, reply_to="") -> str:
+        desk = desks.find(chat_id)
+        if desk is None:
+            return agent_mod.DirectSendRefusal(
+                f"не отправила: адрес «{chat_id}» — не комната окна. "
+                f"Комнаты окна: {desks.listing()}.")
+        return desk.deliver(text, label=desks.speaker)
+
+    def _send_message(to, text) -> str:
+        target = str(to or "").strip()
+        if target in ("", desks.speaker):
+            return desks.current(agent_mod).deliver(text, label=desks.speaker)
+        desk = desks.find(target)
+        if desk is not None:
+            return desk.deliver(text, label=desks.speaker)
+        return _refusal(target)
 
     def _send_file(path, caption="", to="", media_kind="document",
                    voice_note=False) -> str:
@@ -351,43 +461,54 @@ def install(agent_mod, desk: Desk) -> None:
         note = f"[файл] {src.name} — {src}"
         if str(caption or "").strip():
             note += "\n" + str(caption).strip()
+        target = str(to or "").strip()
+        desk = desks.current(agent_mod) if target in ("", desks.speaker) else desks.find(target)
+        if desk is None:
+            return _refusal(target)
         # v1: файл остаётся на месте, в окно уезжает названный путь. Показ вложений
-        # внутри чата Пульта — отдельная работа; обещать её распиской нельзя.
-        return desk.deliver(note, label=desk.speaker)
+        # внутри чата — отдельная работа; обещать её распиской нельзя.
+        return desk.deliver(note, label=desks.speaker)
 
     def _fetch_context(chat_id, limit: int = 50) -> str:
-        if str(chat_id) != desk.stream:
+        desk = desks.find(chat_id)
+        if desk is None:
             return "(нет такого чата)"
         return "\n".join(desk.lines(int(limit)))
 
     def _read_chat(chat_ref, limit: int = 30) -> str:
-        if str(chat_ref) not in (desk.stream, desk.title, desk.speaker):
-            return ("(не нашла такой чат — в этом продукте одна комната: "
-                    f"«{desk.title}»)")
+        desk = desks.find(chat_ref)
+        if desk is None:
+            return f"(не нашла такой чат — комнаты окна: {desks.listing()})"
         return "\n".join(desk.lines(int(limit)))
 
     def _search_chats(query: str) -> str:
         needle = str(query or "").strip().lower()
-        if not needle or needle in desk.title.lower() or needle in desk.stream.lower():
-            return f"{desk.title}: {desk.stream}"
-        return "(ничего не нашла — здесь одна комната: " + desk.title + ")"
+        hits = [f"{desks.room_title(k)}: {k}" for k in desks.keys()
+                if not needle or needle in desks.room_title(k).lower() or needle in k.lower()]
+        if not hits:
+            return f"(ничего не нашла — комнаты окна: {desks.listing()})"
+        return "\n".join(hits)
 
     def _search_private_messages(query: str, limit: int = 20) -> str:
         needle = str(query or "").strip().lower()
         if not needle:
             return "Нужна непустая строка поиска."
-        hits = [line for line in desk.lines(2000) if needle in line.lower()]
+        keys = desks.keys()
+        hits = []
+        for key in keys:
+            title = desks.room_title(key)
+            for line in desks.get(key).lines(2000):
+                if needle in line.lower():
+                    hits.append(f"[{title}] {line}" if len(keys) > 1 else line)
         if not hits:
             return "(ничего не нашла)"
         return "\n".join(hits[-max(1, int(limit)):])
 
     def _get_id(name_or_username: str):
-        ref = str(name_or_username or "").strip()
-        if ref in (desk.stream, desk.title, desk.speaker):
-            return desk.stream
-        return None
+        desk = desks.find(name_or_username)
+        return desk.stream if desk is not None else None
 
-    _honest_group_context(agent_mod, desk)
+    _honest_group_context(agent_mod, desks.tree)
 
     hooks["reply"] = _reply
     hooks["send_message"] = _send_message
@@ -401,4 +522,4 @@ def install(agent_mod, desk: Desk) -> None:
     # Сенсор транспорта для сторожа тишины: локальное окно всегда «на связи», и
     # окна намеренного разрыва (как у Telegram при перелогине) здесь не бывает.
     hooks["transport_state"] = lambda: {"connected": True, "intentional_window": False}
-    log.info("транспорт: Пульт вложен в её шов _TELETHON (%d крючка)", len(hooks))
+    log.info("транспорт: окно вложено в её шов _TELETHON (%d крючка)", len(hooks))

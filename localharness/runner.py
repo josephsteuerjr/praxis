@@ -62,7 +62,8 @@ _HEARTBEAT_SEC = 10.0
 
 _agent = None          # её дерево, загруженное в этот процесс
 _life = None           # memory_life — память дерева
-_desk: transport.Desk | None = None
+_desk: transport.Desk | None = None      # комната окна по умолчанию (`window`)
+_desks: transport.Desks | None = None    # все комнаты окна (задача A §3)
 _bot = None            # botapi.BotTransport | None
 _speaker = "владелец"
 _title = "Hélène"
@@ -164,7 +165,8 @@ def _last_n() -> int:
 # а под поднятым рычагом reply текст без руки — заметка себе, и слово теряется.
 # Идёт в блок runtime continuity кадра через параметр orient, дерево не правится.
 _WINDOW_ORIENT = ("Это окно Hélène на компьютере владельца. Слово владельцу уходит "
-                  "ТОЛЬКО рукой reply; текст без руки — заметка себе, до окна он не дойдёт.")
+                  "ТОЛЬКО рукой reply; текст без руки и заметка end_turn — не ответ, "
+                  "а запись себе.")
 # Кадр дерева обещает агенту автокоммит и автооткат правок в git. В поставке git
 # нет вовсе, и обещание — ложь ровно там, где на неё опираются, решаясь править
 # свои файлы. Правку кадра дерева делать нельзя, а сказать правду можно здесь:
@@ -174,8 +176,26 @@ _NO_GIT_ORIENT = ("В этой сборке нет git: автокоммита �
 _ORIENT_EXTRA = ""      # заполняется на старте по факту (см. main)
 
 
+def _room(key: str) -> "transport.Desk":
+    """Комната окна по ключу; без реестра комнат — комната по умолчанию."""
+    if _desks is not None and transport.is_room(key):
+        return _desks.get(key)
+    return _desk
+
+
+def _inbox_target(stem: str) -> str:
+    """Адрес записки композера по имени файла: `<stamp>__to__<ключ>.md`.
+
+    Без суффикса, `window` и `pult` — комната окна по умолчанию; `window-<hex>`
+    — другая комната окна; всё прочее — Telegram-комната."""
+    if "__to__" not in stem:
+        return STREAM
+    target = stem.split("__to__", 1)[1].strip()
+    return STREAM if target in ("", STREAM, "pult") else target
+
+
 def _orient(chat_id: str) -> str:
-    bits = [_WINDOW_ORIENT] if chat_id == STREAM else []
+    bits = [_WINDOW_ORIENT] if transport.is_room(chat_id) else []
     if _ORIENT_EXTRA:
         bits.append(_ORIENT_EXTRA)
     return " ".join(bits)
@@ -277,7 +297,7 @@ def _deliver_outbound(envelope, chat_id: str) -> int:
             else:
                 note = f"[файл] {Path(item.path).name} — {item.path}"
                 caption = str(getattr(item, "caption", "") or "").strip()
-                receipt = _desk.deliver(note + ("\n" + caption if caption else ""))
+                receipt = _room(target).deliver(note + ("\n" + caption if caption else ""))
             delivered += 1
             log.info("медиа хода доставлено: %s", str(receipt)[:120])
         except Exception:
@@ -285,18 +305,20 @@ def _deliver_outbound(envelope, chat_id: str) -> int:
     return delivered
 
 
-def handle_desk(message: str) -> None:
-    """Одна записка из окна — один ход агента."""
+def handle_desk(message: str, room: str = STREAM) -> None:
+    """Одна записка из окна — один ход агента в комнате `room`."""
     now = _now()
-    source_id = f"window-{int(now.timestamp() * 1000)}"
+    source_id = f"{room}-{int(now.timestamp() * 1000)}"
+    desk = _room(room)
     # Восприятие пишет память ДО кадра — как в живом раннере: кадр читает горячий
     # слой, и текущая реплика обязана быть в нём, иначе она отвечала бы на пустоту.
-    _desk.archive(message, outgoing=False, now=now)
-    _desk.life(message, direction="in", actor=_speaker, source_id=source_id, now=now)
-    _turn_in_window(source_id, speaker=_speaker)
+    desk.archive(message, outgoing=False, now=now)
+    desk.life(message, direction="in", actor=_speaker, source_id=source_id, now=now)
+    _turn_in_window(source_id, speaker=_speaker, room=room)
 
 
-def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False) -> str:
+def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
+                    room: str = STREAM) -> str:
     """Ход в комнате окна по уже записанному в память входящему.
 
     -> исход хода: "spoken" (слово доехало), "silent" (её решение молчать),
@@ -304,56 +326,84 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False) -> str
     отметка рождения пишется только по факту состоявшегося хода, а раньше она
     писалась безусловно — и провалившийся первый ход навсегда лишал агента
     возможности представиться (born.json уже есть, рождение не повторится).
+
+    `room` — комната окна (задача A §3): свой архив, свой горячий слой памяти
+    (`_dialogue(room)`), своё имя в кадре; память жизни — общая.
     """
-    convo = "\n".join(_desk.lines(_last_n()))
-    ctx = _agent.ChannelContext(chat_id=STREAM, is_dm=True, owner=True, known=True,
-                                addressed=True, title=_title)
-    _desk.sent.clear()
+    desk = _room(room)
+    convo = "\n".join(desk.lines(_last_n()))
+    ctx = _agent.ChannelContext(chat_id=room, is_dm=True, owner=True, known=True,
+                                addressed=True, title=desk.title)
+    desk.sent.clear()
     started = time.time()
     _set_busy(True)
     envelope = None
     try:
-        envelope = _run_turn(STREAM, convo, speaker, ctx)
+        envelope = _run_turn(room, convo, speaker, ctx)
     finally:
         _set_busy(False, str(getattr(envelope, "run_id", "") or ""))
     if envelope is None:
-        _desk.deliver("⚠ ход не дошёл до конца — подробности в логе руннера.",
-                      source_id=source_id, system=True)
+        desk.deliver("⚠ ход не дошёл до конца — подробности в логе руннера.",
+                     source_id=source_id, system=True)
         return "failed"
-    spoken = list(_desk.sent)
+    spoken = list(desk.sent)
     text = str(getattr(envelope, "text", "") or "").strip()
     run_id = str(getattr(envelope, "run_id", "") or "")
-    media_count = _deliver_outbound(envelope, STREAM)
-    if not spoken and not text and not media_count and (birth or _deliver_unspoken):
-        # Слово написано текстом, а не рукой reply: под поднятым рычагом это
-        # заметка себе, и до окна она не дошла бы. Продукт по умолчанию
-        # доставляет её на границе (agent.deliver_unspoken в helene.json), потому
-        # что слабые модели теряют так каждое третье слово; при рождении — всегда.
-        text = _unspoken_note()
-        if text:
+    media_count = _deliver_outbound(envelope, room)
+    ending, word = ("", "")
+    if not spoken and not text:
+        # Рука reply молчала и конверт пуст. Медиа этого НЕ отменяет: 06.09 ход
+        # со снимком экрана отдал в окно один «[файл]», а весь отчёт остался в
+        # заметке хода — прежнее условие `and not media_count` считало файл
+        # словом. Читаем запись хода: там либо её слово (заметка), либо её
+        # решение молчать, либо ничего.
+        ending, word = boundary_word(_turn_record(room))
+        if ending == WORD and (birth or _deliver_unspoken):
+            # Слово написано текстом, а не рукой reply: под поднятым рычагом это
+            # заметка себе, и до окна она не дошла бы. Продукт по умолчанию
+            # доставляет её на границе (agent.deliver_unspoken в helene.json),
+            # потому что слабые модели теряют так каждое третье слово; при
+            # рождении — всегда.
+            text = word
             log.info("%s: слово пришло заметкой хода — доставляю на границе",
                      "рождение" if birth else "ход")
     if getattr(envelope, "deferred", False):
         # Durable-чекпойнт придержал ход до подтверждения побочного эффекта. Молчать
         # об этом нельзя: окно выглядело бы зависшим, а ход на самом деле жив.
-        _desk.deliver("⏸ ход приостановлен на чекпойнте и ждёт подтверждения "
-                      f"(прогон {run_id}).", source_id=source_id, system=True)
+        desk.deliver("⏸ ход приостановлен на чекпойнте и ждёт подтверждения "
+                     f"(прогон {run_id}).", source_id=source_id, system=True)
     elif getattr(envelope, "failed", False):
-        _desk.deliver(f"⚠ ход не состоялся (прогон {run_id or 'без id'}) — "
-                      "подробности в карточке хода.", source_id=source_id, system=True)
+        desk.deliver(f"⚠ ход не состоялся (прогон {run_id or 'без id'}) — "
+                     "подробности в карточке хода.", source_id=source_id, system=True)
     elif not spoken and text:
         # Рычаг речи опущен (или ход закрылся текстом): реплика — возврат хода,
         # доставляем её мы. Под поднятым рычагом сюда не попадаем: слово ушло рукой.
-        _desk.deliver(text, source_id=source_id)
-    elif not spoken and not text and not media_count:
-        log.info("ход %s: она промолчала (это её решение, не сбой)", run_id)
-    _close_run(envelope, STREAM,
+        desk.deliver(text, source_id=source_id)
+    elif not spoken and not text:
+        # Владелец обязан видеть либо слово, либо явную пометку — пустое окно
+        # после долгого хода читается как поломка. Пометка — плашка продукта
+        # (`system`, вид `silence`): окно её показывает серым, память агента её
+        # не получает, авторство ей не приписывается.
+        if ending == SILENCE:
+            log.info("ход %s: молчание по её решению%s", run_id,
+                     f" ({word})" if word else "")
+            desk.deliver(f"⋯ молчание по решению {_agent_name}"
+                         + (f": {word}" if word else " (это выбор, не сбой)"),
+                         source_id=source_id, system=True, kind="silence")
+        elif not birth:
+            # При рождении плашку кладёт _maybe_birth — со своими словами.
+            log.info("ход %s: закрыт без слова для окна%s", run_id,
+                     " (только файл)" if media_count else "")
+            desk.deliver("⋯ ход закрыт без реплики: слова для окна в нём не было"
+                         + (", только файл" if media_count else ""),
+                         source_id=source_id, system=True, kind="silence")
+    _close_run(envelope, room,
                delivered_text=(text if not spoken else ""),
                spoken_by_hand=len(spoken), media_count=media_count)
-    log.info("ход %s [окно]: %.1f с, реплик рукой %d%s", run_id or "—",
-             time.time() - started, len(spoken),
+    log.info("ход %s [окно%s]: %.1f с, реплик рукой %d%s", run_id or "—",
+             "" if room == STREAM else f" {room}", time.time() - started, len(spoken),
              "" if not media_count else f", медиа {media_count}")
-    _compact(STREAM)
+    _compact(room)
     if getattr(envelope, "deferred", False):
         return "deferred"
     if getattr(envelope, "failed", False):
@@ -671,40 +721,72 @@ def _tail_lines(path: Path, count: int) -> list[str]:
     return raw.decode("utf-8", "replace").splitlines()[-max(1, int(count)):]
 
 
-def _unspoken_note() -> str:
-    """Заметка последнего хода окна, если ход кончился без реплики.
+def _turn_record(chat_id: str) -> dict:
+    """Запись только что состоявшегося хода этой комнаты из её же turns.jsonl.
 
-    Под поднятым рычагом reply её текст без руки — заметка себе, не слово. Отдать
-    его на границе честнее, чем оставить владельца без ответа. Читаем её же
-    запись хода.
-
-    ⚠ НО заметкой хода бывает и МАШИННАЯ строка исхода: `end_turn(done)` кладёт в
-    то же поле «done», «done: представилась», «wait: <условие>». Доставленное
-    владельцу «done» он прочитает как слово агента — и на первом запуске читал
-    именно его. Различаем по следу рук того же хода: есть вызов end_turn и note
-    начинается с исхода — это не речь, доставлять нельзя.
+    Дерево пишет запись (`turns.record`) ДО того, как вернуть конверт, поэтому на
+    границе она уже лежит последней строкой этой комнаты. Хвост в 12 строк — с
+    запасом на ходы других комнат, которые могли лечь между стартом и концом.
     """
     if _tree is None:
-        return ""
-    lines = _tail_lines(Path(_tree) / "memory" / ".state" / "turns.jsonl", 5)
+        return {}
+    lines = _tail_lines(Path(_tree) / "memory" / ".state" / "turns.jsonl", 12)
     for line in reversed(lines):
         try:
             row = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(row, dict) or str(row.get("chat_id") or "") != STREAM:
-            continue
-        if str(row.get("held") or "") != "unspoken":
-            return ""
-        note = str(row.get("note") or "").strip()
-        if not note:
-            return ""
-        head = note.split(":", 1)[0].strip().lower()
-        if head in _OUTCOME_PREFIXES and "end_turn(" in str(row.get("tools") or ""):
-            log.info("заметка хода — машинный исход «%s», в окно не доставляю", note[:40])
-            return ""
-        return note
-    return ""
+        if isinstance(row, dict) and str(row.get("chat_id") or "") == str(chat_id):
+            return row
+    return {}
+
+
+# Как ход кончился, если рука reply не говорила и конверт пуст (см. boundary_word).
+WORD = "word"          # у неё было слово — доставляем его как её реплику
+SILENCE = "silence"    # позвала stay_silent: молчание — её решение
+BLANK = "blank"        # ход закрылся без слова для окна — факт, не решение
+
+
+def boundary_word(row: dict) -> tuple[str, str]:
+    """Что показать владельцу, когда ход кончился без реплики рукой. -> (исход, текст).
+
+    Правило дерева (agent.py, «три исхода, а не два»): `held=voice` — она позвала
+    stay_silent, это её слово; `held=unspoken` — ход кончился без руки reply, и это
+    факт, а не решение. Во втором случае её текст обычно лежит в `note`: под
+    поднятым рычагом reply финальный текст модели — заметка себе, и слабые модели
+    кладут туда ВЕСЬ ответ («done: проверила руку computer по шагам… всё удалось»).
+    Оставить владельца без этого текста — значит показать пустое окно после
+    двухминутного хода; так и было 06.09 (два хода из четырёх).
+
+    ⚠ НО заметкой бывает и МАШИННАЯ строка исхода: `end_turn(done)` кладёт в то
+    же поле «done», «done: представилась», «wait: <условие>». Прежнее правило
+    глотало ВСЮ заметку, если она начиналась с исхода и в следе был end_turn, —
+    и вместе с «done» глотало отчёт после двоеточия (а след рук режется
+    потолком записи, и end_turn в нём не всегда виден). Теперь исход снимается
+    как префикс (и повторно: дерево пишет «done: done: …»), а решает остаток:
+    есть в нём хотя бы два слова — это речь, доставляем; одно слово или пусто —
+    машинная строка, владельцу показывается плашка, а не «done».
+    """
+    held = str(row.get("held") or "").strip().lower()
+    if held == "voice":
+        return SILENCE, " ".join(str(row.get("why") or "").split())
+    if held != "unspoken":
+        return BLANK, ""
+    note = " ".join(str(row.get("note") or "").split())
+    label = ""
+    for _ in range(3):
+        head, sep, rest = note.partition(":")
+        if not sep or head.strip().lower() not in _OUTCOME_PREFIXES:
+            break
+        label = label or head.strip().lower()
+        note = rest.strip()
+    if len(note.split()) < 2:
+        return BLANK, ""
+    if label == "wait":
+        note = "Жду: " + note
+    elif label == "blocked":
+        note = "Препятствие: " + note
+    return WORD, note
 
 
 _BIRTH_TRIES = 5           # столько попыток первого хода, дальше — словами владельцу
@@ -799,8 +881,12 @@ def _maybe_birth(tree: Path) -> None:
             # Ход был, слова не было (агент закрыл его `end_turn` без реплики —
             # его право). Но окно первого запуска, где вообще ничего нет, читается
             # как поломка, а машинную строку исхода выдавать за его слово нельзя.
-            _desk.deliver(f"{_agent_name} закрыл первый ход, ничего не сказав — это "
-                          "его решение, а не сбой. Напиши ему первым.", system=True)
+            # Молчание по решению (`stay_silent`) плашку уже получило в
+            # _turn_in_window; здесь — только ход без слова.
+            if not _desk.rows(1) or not _desk.rows(1)[-1].get("system"):
+                _desk.deliver(f"⋯ {_agent_name}: первый ход закрыт без слова — это "
+                              "решение, а не сбой. Напиши первым.", system=True,
+                              kind="silence")
         return
     if tries >= _BIRTH_TRIES:
         try:
@@ -1103,7 +1189,7 @@ def _settle_mode(cfg: dict, config_path: Path) -> dict:
 
 
 def main() -> None:
-    global _desk, _bot, _speaker, _title, _agent_name, _tree, _deliver_unspoken, _mode
+    global _desk, _desks, _bot, _speaker, _title, _agent_name, _tree, _deliver_unspoken, _mode
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
@@ -1181,9 +1267,10 @@ def main() -> None:
     agent, memory_life = _load_tree(code_dir, tree, cfg)
     _name_the_owner(_speaker)
     _announce_git(tree)
-    _desk = transport.Desk(tree, STREAM, _speaker, _title, memory_life=memory_life,
-                           agent_name=_agent_name)
-    transport.install(agent, _desk)
+    _desks = transport.Desks(tree, _speaker, _title, memory_life=memory_life,
+                             agent_name=_agent_name)
+    _desk = _desks.default
+    transport.install(agent, _desks)
     # Песочница: shell в AppContainer, файловые руки — в папке Hélène, плюс
     # смонтированные владельцем папки (их список ограда перечитывает из
     # `config_path` на ходу — потому он сюда и передаётся). Не вышло — причина в
@@ -1213,7 +1300,7 @@ def main() -> None:
             import mtproto
             _bot = mtproto.MtprotoTransport(agent, tree, memory_life, cfg)
             _bot.start()
-            botapi.install(agent, _desk, _bot)
+            botapi.install(agent, _desks, _bot)
         except Exception:
             _bot = None
             log.exception("аккаунт Telegram не поднялся — работаю только окном")
@@ -1223,7 +1310,7 @@ def main() -> None:
         try:
             _bot = botapi.BotTransport(agent, tree, memory_life, cfg)
             _bot.start()
-            botapi.install(agent, _desk, _bot)
+            botapi.install(agent, _desks, _bot)
         except Exception:
             _bot = None
             log.exception("Telegram-бот не поднялся — работаю только окном")
@@ -1268,17 +1355,16 @@ def main() -> None:
             if not message:
                 continue
             # `<stamp>__to__<комната>.md` — адресная записка композера: реплика
-            # владельца в telegram-комнату. Без суффикса — комната окна.
-            target = ""
-            if "__to__" in path.stem:
-                target = path.stem.split("__to__", 1)[1]
+            # владельца в telegram-комнату или в другую комнату окна
+            # (`window-<hex>`). Без суффикса — комната окна по умолчанию.
+            target = _inbox_target(path.stem)
             try:
-                if target and target != STREAM:
-                    handle_owner_note(target, message)
+                if transport.is_room(target):
+                    handle_desk(message, room=target)
                 else:
-                    handle_desk(message)
+                    handle_owner_note(target, message)
             except Exception:
-                log.exception("ход окна упал")
+                log.exception("ход окна упал [%s]", target)
         while _bot is not None:
             chat_id = _bot.pop_pending()
             if chat_id is None:

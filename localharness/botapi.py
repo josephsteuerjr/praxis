@@ -43,7 +43,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-from transport import _append_jsonl, _registry, _write_json
+from transport import _append_jsonl, _registry, _write_json, is_room
 
 log = logging.getLogger("frame.botapi")
 
@@ -716,17 +716,21 @@ class BotTransport:
 #  Крючки: маршрутизатор поверх desk-транспорта
 # --------------------------------------------------------------------------- #
 
-def install(agent_mod, desk, bot: BotTransport) -> None:
+def install(agent_mod, desks, bot: BotTransport) -> None:
     """Встроить бота в `agent._TELETHON` ПОВЕРХ крючков окна.
 
-    Правило одно: адрес «pult» (и имена его владельца/комнаты) — окно, любой
-    числовой Telegram-адрес — бот, неизвестное имя — резолв по контактам бота.
+    Правило одно: адрес комнаты окна (`window`, `window-<hex>`, имя комнаты,
+    имя владельца) — окно, любой числовой Telegram-адрес — бот, неизвестное
+    имя — резолв по контактам бота. `desks` — все комнаты окна
+    (`transport.Desks`); `desks.default` — комната по умолчанию.
     """
     hooks = agent_mod._TELETHON
     desk_hooks = dict(hooks)            # то, что положил transport.install
+    desk = desks.default
 
     def _is_desk(ref) -> bool:
-        return str(ref or "").strip() in ("", desk.stream, desk.speaker, desk.title)
+        ref = str(ref or "").strip()
+        return ref in ("", desk.speaker) or desks.find(ref) is not None
 
     def _reply(chat_id, text, reply_to="") -> str:
         if _is_desk(chat_id):
@@ -742,7 +746,7 @@ def install(agent_mod, desk, bot: BotTransport) -> None:
         # предпочитается окну; окно достаётся адресам самого окна и владельцу,
         # которого бот (ещё) не видел. Канал в любом случае назван распиской.
         ref = str(to or "").strip()
-        if ref in ("", desk.stream):
+        if ref == "" or desks.find(ref) is not None and is_room(ref):
             return desk_hooks["send_message"](to, text)
         target = ref if is_telegram_key(ref) else bot.contacts.resolve(ref)
         if target:
@@ -760,7 +764,7 @@ def install(agent_mod, desk, bot: BotTransport) -> None:
         if not ref:
             active = agent_mod._active_chat()
             ref = str(active) if active is not None else desk.stream
-        if ref == desk.stream:
+        if is_room(ref):
             return desk_hooks["send_file"](path, caption, to, media_kind, voice_note)
         # Тот же порядок, что у send_message: Telegram-контакт раньше имени окна.
         target = ref if is_telegram_key(ref) else bot.contacts.resolve(ref)
@@ -799,8 +803,8 @@ def install(agent_mod, desk, bot: BotTransport) -> None:
     def _search_chats(query: str) -> str:
         rows = bot.contacts.search(query, limit=10)
         head = desk_hooks["search_chats"](query)
-        if head and not head.startswith("(") and f": {desk.stream}" in head:
-            rows = [head] + rows
+        if head and not head.startswith("("):
+            rows = [head] + rows          # комнаты окна — первыми
         return "\n".join(rows) if rows else "(ничего не нашла)"
 
     def _search_private(query: str, limit: int = 20) -> str:
@@ -823,7 +827,7 @@ def install(agent_mod, desk, bot: BotTransport) -> None:
     def _get_id(name_or_username):
         ref = str(name_or_username or "").strip()
         if _is_desk(ref):
-            return desk.stream
+            return desk_hooks["get_id"](ref) or desk.stream
         return bot.contacts.resolve(ref)
 
     def _react(chat="", message_id=0, emoji="", remove=False) -> str:

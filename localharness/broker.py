@@ -107,7 +107,10 @@ def _load(path: Path) -> dict:
 
 
 def _stamp() -> str:
-    return time.strftime("%d.%m.%Y %H:%M")
+    # Тот же формат, что у helene.log, service.log и broker.log службы
+    # (`common/stamp.rs`): местное время С СЕКУНДАМИ. Раньше здесь их не было,
+    # и просьбы агента нельзя было сопоставить с журналом службы по времени.
+    return time.strftime("%d.%m.%Y %H:%M:%S")
 
 
 def _rows(data: dict, key: str) -> list[dict]:

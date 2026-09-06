@@ -35,7 +35,7 @@ compile_error!(
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -50,6 +50,10 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Имя в файловой системе (ярлык, папка) — латиницей; на экране — по-французски.
 const PRODUCT: &str = "Helene";
 const PRODUCT_UI: &str = "Hélène";
+/// Порты по умолчанию — те же, что в `ui-kit/contract.json` (тест
+/// `contract_json_matches_constants` сверяет): канал окна и встроенное реле.
+const DESK_PORT: u16 = 8094;
+const RELAY_PORT: u16 = 5011;
 const CONFIG_NAME: &str = "helene.json";
 /// Комната окна в памяти агента: memory/groups/<WINDOW_ROOM>.jsonl.
 const WINDOW_ROOM: &str = "window";
@@ -67,18 +71,17 @@ static HIDDEN_BY_OWNER: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 static BLOCKED_BY_FOREIGN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Журнал оболочки рядом с exe: то, что иначе терялось бы без консоли.
+/// Строка в helene.log. Штамп — местное время с секундами, тот же формат, что
+/// у service.log и broker.log (`common/stamp.rs`); раньше здесь были секунды
+/// эпохи, и три журнала продукта шли в трёх системах счисления.
 fn log_line(text: &str) {
     use std::io::Write;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(exe_dir().join("helene.log"))
     {
-        let _ = writeln!(f, "[{stamp}] {text}");
+        let _ = writeln!(f, "{} {text}", now_stamp());
     }
 }
 
@@ -663,33 +666,6 @@ fn desk_token_path(tree: &Path) -> PathBuf {
     tree.join("memory").join(".state").join("desk-token")
 }
 
-/// Случайные байты из CSPRNG Windows. None — генератор не ответил: лучше
-/// остаться без замка (как было до этой правки), чем закрыться предсказуемым.
-#[cfg(windows)]
-fn random_hex(bytes: usize) -> Option<String> {
-    use windows_sys::Win32::Security::Cryptography::{
-        BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
-    };
-    let mut buf = vec![0u8; bytes];
-    let status = unsafe {
-        BCryptGenRandom(
-            std::ptr::null_mut(),
-            buf.as_mut_ptr(),
-            buf.len() as u32,
-            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
-        )
-    };
-    if status != 0 {
-        return None;
-    }
-    Some(buf.iter().map(|b| format!("{b:02x}")).collect())
-}
-
-#[cfg(not(windows))]
-fn random_hex(_bytes: usize) -> Option<String> {
-    None
-}
-
 /// Секрет из дерева, если он там уже есть и выглядит секретом.
 fn read_desk_token(tree: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(desk_token_path(tree)).ok()?;
@@ -918,7 +894,7 @@ fn relay_port(cfg: &serde_json::Value) -> u16 {
     cfg.get("relay")
         .and_then(|r| r.get("port"))
         .and_then(|v| v.as_u64())
-        .unwrap_or(5011)
+        .unwrap_or(RELAY_PORT as u64)
         .min(u16::MAX as u64) as u16
 }
 
@@ -997,7 +973,7 @@ fn build_plan(base: &Path, cfg: &serde_json::Value) -> SpawnPlan {
     let port = cfg
         .get("port")
         .and_then(|v| v.as_u64())
-        .unwrap_or(8094)
+        .unwrap_or(DESK_PORT as u64)
         .min(u16::MAX as u64) as u16;
     let tree = resolve(
         base,
@@ -1134,17 +1110,48 @@ fn unconfigured(cfg: &Option<serde_json::Value>) -> bool {
     }
 }
 
+/// mtime файла в наносекундах — отпечаток свежести для окна. Строкой: в JS
+/// число теряет точность за 2^53, а Python-сторона (`readers.safe_read_md`)
+/// уже отдаёт `mtime_ns` строкой — одна форма на оба канала.
+fn file_mtime_ns(path: &Path) -> Option<String> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let nanos = modified.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    Some(nanos.to_string())
+}
+
 /// Записать конфиг целиком (экран настроек). Атомарно: tmp + rename.
+///
+/// `mtime_ns` — отпечаток, который окно получило от `config_load`. Не совпал с
+/// файлом на диске — файл менял кто-то ещё (руннер чинил `agent_mode`,
+/// установщик обновлял поверх, владелец правил в Блокноте), и черновик окна
+/// устарел: отвечаем `{ok:false, code:"stale"}` с текущим отпечатком и не
+/// пишем, как `safe_write_md` у маркдаунов (ревью 06.09, §3, решение 3).
+/// Старое окно без отпечатка пишет как раньше.
 #[tauri::command]
-fn config_save(config: String) -> Result<(), String> {
+fn config_save(config: String, mtime_ns: Option<String>) -> Result<serde_json::Value, String> {
+    config_save_at(&exe_dir().join(CONFIG_NAME), &config, mtime_ns.as_deref())
+}
+
+fn config_save_at(target: &Path, config: &str, mtime_ns: Option<&str>) -> Result<serde_json::Value, String> {
     let parsed: serde_json::Value =
-        serde_json::from_str(&config).map_err(|e| format!("это не JSON: {e}"))?;
+        serde_json::from_str(config).map_err(|e| format!("это не JSON: {e}"))?;
     let pretty = serde_json::to_string_pretty(&parsed).map_err(|e| e.to_string())?;
-    let target = exe_dir().join(CONFIG_NAME);
-    let tmp = exe_dir().join(format!(".tmp-{CONFIG_NAME}"));
+    let seen = mtime_ns.map(str::trim).filter(|s| !s.is_empty());
+    if let (Some(seen), Some(now)) = (seen, file_mtime_ns(target)) {
+        if seen != now {
+            return Ok(serde_json::json!({
+                "ok": false,
+                "code": "stale",
+                "mtime_ns": now,
+                "error": "Настройки на диске изменились с тех пор, как окно их открыло — перечитай и перенеси правку заново.",
+            }));
+        }
+    }
+    let dir = target.parent().map(Path::to_path_buf).unwrap_or_else(exe_dir);
+    let tmp = dir.join(format!(".tmp-{}", target.file_name().and_then(|n| n.to_str()).unwrap_or(CONFIG_NAME)));
     std::fs::write(&tmp, pretty).map_err(|e| format!("не записалось: {e}"))?;
-    std::fs::rename(&tmp, &target).map_err(|e| format!("не подменилось: {e}"))?;
-    Ok(())
+    std::fs::rename(&tmp, target).map_err(|e| format!("не подменилось: {e}"))?;
+    Ok(serde_json::json!({ "ok": true, "mtime_ns": file_mtime_ns(target) }))
 }
 
 /// Перезапуск начисто — единственный способ применить настройки, поэтому он
@@ -1285,25 +1292,42 @@ fn relay_status() -> String {
 }
 
 #[tauri::command]
-fn install_service() -> Result<String, String> {
-    // Опциональная служба: один UAC. Запускаем скрипт установки с подъёмом
-    // прав; само окно прав не требует и не получает.
-    let script = exe_dir().join("install-service.ps1");
+async fn install_service() -> Result<String, String> {
+    // Опциональная служба: один UAC. Само окно прав не требует и не получает;
+    // рецепт — установщика (`common/service_op.rs`): ждём поднятый процесс,
+    // читаем его код и спрашиваем SCM. Раньше результат не читался, и
+    // «запрошено» значило «сделано» — отказ в UAC выглядел успехом.
+    tauri::async_runtime::spawn_blocking(|| service_op_from_window("install"))
+        .await
+        .unwrap_or_else(|_| Err("вызов службы прерван".into()))
+}
+
+/// Поднятая операция со службой из окна: расписка — по SCM, не по «запустил».
+fn service_op_from_window(op: &str) -> Result<String, String> {
+    let script_name = if op == "install" { "install-service.ps1" } else { "uninstall-service.ps1" };
+    let script = exe_dir().join(script_name);
     if !script.exists() {
-        return Err("в этой поставке нет install-service.ps1".into());
+        return Err(format!("в этой поставке нет {script_name}"));
     }
-    Command::new(powershell_exe())
-        .args([
-            "-NoProfile",
-            "-Command",
-            &format!(
-                "Start-Process powershell -Verb RunAs -WindowStyle Hidden -ArgumentList '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\"'",
-                script.display()
-            ),
-        ])
-        .spawn()
-        .map_err(|e| format!("установка не запустилась: {e}"))?;
-    Ok("запрошен запуск установки (появится окно UAC)".into())
+    let wrapper = std::env::temp_dir().join("helene-service-op.ps1");
+    std::fs::write(&wrapper, SERVICE_OP_PS1).map_err(|e| format!("обёртка службы не записалась: {e}"))?;
+    let mut cmd = Command::new(powershell_exe());
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &service_op_command(&wrapper, op, PRODUCT, Some(&script))]);
+    // Дедлайн — на окно UAC и сам скрипт (установка ждёт старта службы);
+    // повисший вызов не должен держать окно вечно.
+    let out = run_hidden_for(&mut cmd, Duration::from_secs(300))?;
+    let verdict = service_op_verdict(out.status.code());
+    let state = service_state_blocking();
+    match (op, verdict, state.as_str()) {
+        ("install", Ok(()), "running") => Ok("Служба поставлена и запущена.".into()),
+        ("install", Ok(()), "stopped") => Ok("Служба поставлена, но ещё не запущена — SCM поднимет её сам или запусти из оснастки.".into()),
+        ("install", Err(e), "absent") => Err(format!("Служба не поставлена: {e}.")),
+        ("install", Err(e), st) => Ok(format!("Скрипт вернул ошибку ({e}), но по SCM служба есть: {st}.")),
+        (_, Ok(()), "absent") => Ok("Служба снята.".into()),
+        (_, Ok(()), st) => Err(format!("Скрипт отработал, а служба по SCM осталась: {st}.")),
+        (_, Err(e), "absent") => Ok(format!("Службы нет ({e}).")),
+        (_, Err(e), st) => Err(format!("Служба не снята: {e}; по SCM — {st}.")),
+    }
 }
 
 /// Уведомление Windows из веб-части (заголовок, текст).
@@ -1328,53 +1352,9 @@ fn config_load() -> Result<serde_json::Value, String> {
         "path": path.display().to_string(),
         "tree": tree.display().to_string(),
         "exe_dir": base.display().to_string(),
+        // Отпечаток свежести: окно возвращает его в `config_save`.
+        "mtime_ns": file_mtime_ns(&path),
     }))
-}
-
-/// Внешняя программа без окна и С ДЕДЛАЙНОМ. Раньше это был голый
-/// `cmd.output()`: повисший netsh, sc или tailscaled вешал вызвавшую команду
-/// навсегда, а вместе с ней (у синхронных команд) и всё окно.
-fn run_hidden_for(cmd: &mut Command, limit: Duration) -> Result<Output, String> {
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    let out_pipe = child.stdout.take();
-    let err_pipe = child.stderr.take();
-    // Трубы читаем в отдельных потоках: иначе полный буфер вывода
-    // заблокировал бы ребёнка, и дедлайн ловил бы собственный тупик.
-    let out_thread = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut p) = out_pipe {
-            let _ = p.read_to_end(&mut buf);
-        }
-        buf
-    });
-    let err_thread = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut p) = err_pipe {
-            let _ = p.read_to_end(&mut buf);
-        }
-        buf
-    });
-    let deadline = Instant::now() + limit;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let stdout = out_thread.join().unwrap_or_default();
-                let stderr = err_thread.join().unwrap_or_default();
-                return Ok(Output { status, stdout, stderr });
-            }
-            Ok(None) => {}
-            Err(err) => return Err(err.to_string()),
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!("не ответил за {} с", limit.as_secs()));
-        }
-        std::thread::sleep(Duration::from_millis(80));
-    }
 }
 
 /// Состояние службы по SCM: running / stopped / absent. Прав не требует.
@@ -1382,43 +1362,34 @@ fn run_hidden_for(cmd: &mut Command, limit: Duration) -> Result<Output, String> 
 /// sc.exe вешал бы окно целиком (а опрашивают его каждые 2,5 с).
 #[tauri::command]
 async fn service_state() -> String {
-    tauri::async_runtime::spawn_blocking(|| {
-        let mut cmd = Command::new(sys_exe("sc.exe"));
-        cmd.args(["query", PRODUCT]);
-        match run_hidden_for(&mut cmd, Duration::from_secs(15)) {
-            Ok(out) if out.status.success() => {
-                let text = String::from_utf8_lossy(&out.stdout).to_uppercase();
-                if text.contains("RUNNING") || text.contains("START_PENDING") {
-                    "running".to_string()
-                } else {
-                    "stopped".to_string()
-                }
+    tauri::async_runtime::spawn_blocking(service_state_blocking)
+        .await
+        .unwrap_or_else(|_| "absent".to_string())
+}
+
+/// Ответ SCM о службе продукта: running | stopped | absent. С дедлайном —
+/// повисший sc.exe не должен вешать окно.
+fn service_state_blocking() -> String {
+    let mut cmd = Command::new(sys_exe("sc.exe"));
+    cmd.args(["query", PRODUCT]);
+    match run_hidden_for(&mut cmd, Duration::from_secs(15)) {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout).to_uppercase();
+            if text.contains("RUNNING") || text.contains("START_PENDING") {
+                "running".to_string()
+            } else {
+                "stopped".to_string()
             }
-            _ => "absent".to_string(),
         }
-    })
-    .await
-    .unwrap_or_else(|_| "absent".to_string())
+        _ => "absent".to_string(),
+    }
 }
 
 #[tauri::command]
-fn remove_service() -> Result<String, String> {
-    let script = exe_dir().join("uninstall-service.ps1");
-    if !script.exists() {
-        return Err("в этой поставке нет uninstall-service.ps1".into());
-    }
-    Command::new(powershell_exe())
-        .args([
-            "-NoProfile",
-            "-Command",
-            &format!(
-                "Start-Process powershell -Verb RunAs -WindowStyle Hidden -ArgumentList '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\"'",
-                script.display()
-            ),
-        ])
-        .spawn()
-        .map_err(|e| format!("снятие не запустилось: {e}"))?;
-    Ok("запрошено снятие службы (появится окно прав администратора)".into())
+async fn remove_service() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| service_op_from_window("uninstall"))
+        .await
+        .unwrap_or_else(|_| Err("вызов службы прерван".into()))
 }
 
 /// Что вообще можно отдать Проводнику. Проводник не «показывает», а ЗАПУСКАЕТ
@@ -1657,6 +1628,15 @@ async fn tailscale_ip() -> Option<String> {
 // common/firewall_rule.rs: имена у нас совпадают до буквы, и кто ставит
 // вторым, тот переписывает правило первого.
 include!("../../common/firewall_rule.rs");
+// Общее с установщиком и службой (ревью 06.09, §4): проба модели и гард
+// исходящего адреса, экранирование PowerShell, поднятая операция со службой,
+// штамп времени журналов, случайные байты из CSPRNG.
+include!("../../common/model_probe.rs");
+include!("../../common/ps.rs");
+include!("../../common/service_op.rs");
+include!("../../common/stamp.rs");
+include!("../../common/random_hex.rs");
+include!("../../common/run_hidden.rs");
 
 // Клиентская сторона брокера прав — тоже ОДИН текст на обе стороны трубы, см.
 // common/broker.rs. Отсюда нужны имя трубы (`broker_pipe_name`), секрет
@@ -2088,13 +2068,6 @@ fn utf16le_base64(text: &str) -> String {
         out.push(if chunk.len() > 2 { ALPHABET[n as usize & 63] as char } else { '=' });
     }
     out
-}
-
-/// Аргумент в одинарных кавычках PowerShell (свои кавычки удваиваются).
-/// Путь питона содержит пробелы, а имя правила — скобки: без кавычек PowerShell
-/// разрежет их на части, и netsh получит мусор.
-fn ps_quote(arg: &str) -> String {
-    format!("'{}'", arg.replace('\'', "''"))
 }
 
 /// Скрипт, который просит у Windows права: поднимает powershell с пачкой netsh
@@ -3002,133 +2975,13 @@ fn watch_broker_wishes(tree: PathBuf) {
     });
 }
 
-/// Идентификаторы моделей из ответа /models: по ним человек выбирает модель
-/// одним нажатием, а не переписывает имя вслепую.
-fn model_ids(body: &str) -> Vec<String> {
-    let mut ids: Vec<String> = serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(|s| s.to_string()))
-        .collect();
-    ids.sort();
-    ids.dedup();
-    ids.truncate(80);
-    ids
-}
-
-/// Куда оболочке позволено ходить с ключом владельца.
-/// probe_model отправляет ключ заголовком на адрес, пришедший из веб-части, а
-/// update_check делает GET по адресу из конфига: без разбора схемы это
-/// однострочный вывоз ключа наружу. https — куда угодно (туда и ходят
-/// облачные модели), http — только к себе и в локальную сеть.
-fn outbound_url_ok(url: &str) -> Result<(), String> {
-    let u = url.trim();
-    let lower = u.to_lowercase();
-    if lower.starts_with("https://") {
-        return Ok(());
-    }
-    let Some(rest) = lower.strip_prefix("http://") else {
-        return Err("адрес должен начинаться с https:// или http://".into());
-    };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let authority = authority.rsplit('@').next().unwrap_or(authority);
-    let host = match authority.strip_prefix('[') {
-        Some(v6) => v6.split(']').next().unwrap_or(""),
-        None => authority.split(':').next().unwrap_or(""),
-    };
-    if host_is_local(host) {
-        Ok(())
-    } else {
-        Err(format!(
-            "по http ключ уходит только на свою машину или в локальную сеть, а тут {host}; снаружи нужен https://"
-        ))
-    }
-}
-
-/// Свой ли это адрес: петля, частные сети RFC1918, сеть Tailscale, .local.
-fn host_is_local(host: &str) -> bool {
-    if host == "localhost" || host == "::1" || host.ends_with(".local") || host.ends_with(".localhost") {
-        return true;
-    }
-    let octets: Vec<u8> = host
-        .split('.')
-        .filter_map(|p| p.parse::<u8>().ok())
-        .collect();
-    if octets.len() != 4 || host.split('.').count() != 4 {
-        return false;
-    }
-    match (octets[0], octets[1]) {
-        (127, _) => true,
-        (10, _) => true,
-        (192, 168) => true,
-        (172, b) if (16..=31).contains(&b) => true,
-        (100, b) if (64..=127).contains(&b) => true,
-        _ => false,
-    }
-}
-
-/// Живая проверка адреса и ключа: GET {base}/models с Bearer. Фраза и список.
+/// Живая проверка адреса и ключа — тем же кодом, что установщик
+/// (`common/model_probe.rs`): 200 без списка моделей — не «ok», как отвечал
+/// прежний вариант окна на неверный ключ z.ai.
 #[tauri::command]
 async fn probe_model(base_url: String, key: String, framework: Option<String>) -> serde_json::Value {
-    let anthropic = framework.as_deref().unwrap_or("").trim().eq_ignore_ascii_case("anthropic");
-    let base = base_url.trim().trim_end_matches('/').to_string();
-    let url = if anthropic {
-        if base.ends_with("/v1") { format!("{base}/models") } else { format!("{base}/v1/models") }
-    } else {
-        format!("{base}/models")
-    };
-    if let Err(why) = outbound_url_ok(&url) {
-        return serde_json::json!({ "ok": false, "note": why, "models": [] });
-    }
     let result = tauri::async_runtime::spawn_blocking(move || {
-        // redirects(0) — половина гарда outbound_url_ok, без которой вторая
-        // не работает: ureq по умолчанию идёт по переадресациям до пяти хопов
-        // и снимает на чужом хосте только Authorization, а НЕ кастомный
-        // x-api-key, которым ходит ветка anthropic/z.ai. Разрешённый гардом
-        // http://127.0.0.1:PORT отвечал 302 куда угодно — и ключ уезжал туда,
-        // куда гард только что запретил.
-        let agent = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_secs(12))
-            .redirects(0)
-            .build();
-        let mut req = agent.get(&url);
-        if !key.trim().is_empty() {
-            if anthropic {
-                req = req.set("x-api-key", key.trim()).set("anthropic-version", "2023-06-01");
-            } else {
-                req = req.set("Authorization", &format!("Bearer {}", key.trim()));
-            }
-        }
-        match req.call() {
-            Ok(resp) => {
-                // С redirects(0) переадресация возвращается как ответ, а не
-                // проходится молча. Говорим прямо: ключ туда не пошёл.
-                if (300..400).contains(&resp.status()) {
-                    let to: String = resp.header("location").unwrap_or("").chars().take(120).collect();
-                    let code = resp.status();
-                    return (
-                        false,
-                        format!("Адрес отвечает переадресацией ({code}) на {to} — ключ туда не отправляю; укажи конечный адрес"),
-                        Vec::new(),
-                    );
-                }
-                let body = resp.into_string().unwrap_or_default();
-                let models = model_ids(&body);
-                if models.is_empty() {
-                    (true, "Отвечает, список моделей не в привычном виде".to_string(), models)
-                } else {
-                    (true, format!("Отвечает: моделей доступно {}", models.len()), models)
-                }
-            }
-            Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => {
-                (false, "Ключ не подошёл".to_string(), Vec::new())
-            }
-            Err(ureq::Error::Status(404, _)) => (false, "По этому адресу нет /models".to_string(), Vec::new()),
-            Err(ureq::Error::Status(code, _)) => (false, format!("Ответ {code}"), Vec::new()),
-            Err(err) => (false, format!("Нет связи: {}", err.to_string().chars().take(120).collect::<String>()), Vec::new()),
-        }
+        probe_model_blocking(&base_url, &key, framework.as_deref().unwrap_or(""))
     })
     .await
     .unwrap_or((false, "проверка не выполнилась".to_string(), Vec::new()));
@@ -3541,6 +3394,8 @@ fn main() {
             notify,
             app_info,
             update_check,
+            update_download,
+            update_install,
             logs_bundle,
             reveal_path,
             telegram_account,
@@ -4056,6 +3911,13 @@ async fn update_check(url: String) -> Result<serde_json::Value, String> {
             .unwrap_or_default();
         let url = if !text("url").is_empty() { text("url") } else { asset_zip.unwrap_or_else(|| text("html_url")) };
         let notes = if !text("notes").is_empty() { text("notes") } else { text("body") };
+        // Вторая строка заметок релиза — sha256 архива (installer/RELEASE.md,
+        // шаг 4): когда GitHub не отдал digest ассета, сумма берётся отсюда.
+        let sha_from_notes = notes
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c: char| !c.is_ascii_hexdigit()).to_lowercase())
+            .find(|w| w.len() == 64 && w.bytes().all(|b| b.is_ascii_hexdigit()))
+            .unwrap_or_default();
         // Первая строка описания релиза — обычно заголовок «# Изменения»:
         // окно печатало его как «что нового».
         let notes: String = notes
@@ -4068,14 +3930,185 @@ async fn update_check(url: String) -> Result<serde_json::Value, String> {
             .collect();
         let current = env!("CARGO_PKG_VERSION");
         let latest = raw_latest.trim().trim_start_matches(['v', 'V']).to_string();
+        let digest = digest.trim().trim_start_matches("sha256:").to_lowercase();
         Ok(serde_json::json!({
             "current": current,
             "latest": latest,
             "newer": version_newer(&raw_latest, current),
             "url": url,
             "notes": notes,
-            "sha256": digest,
+            "sha256": if digest.is_empty() { sha_from_notes } else { digest },
         }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Папка «Загрузки» владельца: известная папка из реестра, а не склейка.
+/// Реестр не ответил или папки нет — %USERPROFILE%\Downloads, затем %TEMP%.
+fn downloads_dir() -> PathBuf {
+    let known = shell_folder("{374DE290-123F-4565-9164-39C4925E467B}", "Downloads")
+        .filter(|p| p.is_dir() && !p.ends_with("Roaming\\Downloads"));
+    if let Some(p) = known {
+        return p;
+    }
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        let p = PathBuf::from(profile).join("Downloads");
+        if p.is_dir() {
+            return p;
+        }
+    }
+    std::env::temp_dir()
+}
+
+/// Имя файла архива из ссылки — только буквы, цифры, точка, дефис, подчёркивание;
+/// обязательно .zip. Всё остальное — не наш файл.
+fn update_file_name(url: &str) -> Result<String, String> {
+    let raw = url.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    let raw = raw.split(['?', '#']).next().unwrap_or("");
+    let name: String = raw.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')).collect();
+    if !name.to_lowercase().ends_with(".zip") || name.starts_with('.') || name.len() < 5 {
+        return Err(format!("ссылка ведёт не на архив .zip: {raw}"));
+    }
+    Ok(name)
+}
+
+/// Скачать архив обновления в «Загрузки» и сверить sha256 (задача A §2).
+/// Сумма — из `update_check` (digest ассета GitHub или вторая строка заметок
+/// релиза). Не совпала — файл удаляется, ответ отказ: подписи кода у поставки
+/// нет, и сумма — единственная проверка, что скачано то, что выложено.
+/// `sha_ok`: true — совпала; null — сверять было не с чем (сумма не пришла).
+#[tauri::command]
+async fn update_download(url: String, sha256: Option<String>) -> Result<serde_json::Value, String> {
+    let url = url.trim().to_string();
+    if !url.to_lowercase().starts_with("https://") {
+        return Err("архив обновления скачивается только по https".into());
+    }
+    outbound_url_ok(&url)?;
+    let name = update_file_name(&url)?;
+    let expected = sha256.unwrap_or_default().trim().trim_start_matches("sha256:").to_lowercase();
+    if !expected.is_empty() && (expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit())) {
+        return Err("контрольная сумма релиза не похожа на sha256".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        use sha2::{Digest, Sha256};
+        use std::io::{Read, Write};
+        let dir = downloads_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| format!("нет папки «Загрузки»: {e}"))?;
+        let target = dir.join(&name);
+        let tmp = dir.join(format!(".{name}.part"));
+        // Переадресации здесь нужны: browser_download_url GitHub ведёт на
+        // objects.githubusercontent.com. Секретов в запросе нет — уносить нечего.
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(20))
+            .timeout_read(Duration::from_secs(120))
+            .build();
+        let resp = agent.get(&url).call().map_err(|e| format!("не скачалось: {e}"))?;
+        let mut reader = resp.into_reader();
+        let mut file = std::fs::File::create(&tmp).map_err(|e| format!("не записалось: {e}"))?;
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 256 * 1024];
+        let mut total: u64 = 0;
+        loop {
+            let n = reader.read(&mut buf).map_err(|e| format!("обрыв скачивания: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            total += n as u64;
+            if total > 2_000_000_000 {
+                drop(file);
+                let _ = std::fs::remove_file(&tmp);
+                return Err("архив больше 2 ГБ — это не поставка Hélène".into());
+            }
+            hasher.update(&buf[..n]);
+            file.write_all(&buf[..n]).map_err(|e| format!("не записалось: {e}"))?;
+        }
+        file.flush().map_err(|e| e.to_string())?;
+        drop(file);
+        let digest = format!("{:x}", hasher.finalize());
+        if !expected.is_empty() && digest != expected {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!(
+                "контрольная сумма не совпала (скачано {digest}, в релизе {expected}) — файл удалён, попробуй позже"
+            ));
+        }
+        if target.exists() {
+            std::fs::remove_file(&target).map_err(|e| format!("не заменился прежний архив: {e}"))?;
+        }
+        std::fs::rename(&tmp, &target).map_err(|e| format!("не подменилось: {e}"))?;
+        log_line(&format!("обновление скачано: {} ({total} байт, sha256 {digest})", target.display()));
+        Ok(serde_json::json!({
+            "path": target.display().to_string(),
+            "bytes": total,
+            "sha256": digest,
+            "sha_ok": if expected.is_empty() { serde_json::Value::Null } else { serde_json::Value::Bool(true) },
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Распаковать скачанный архив рядом (в «Загрузках») и запустить его
+/// `helene-setup.exe`. Установщик сам гасит работающую программу — включая
+/// это окно — и ставит поверх по правилам resources/ОБНОВЛЕНИЕ.md.
+/// Путь принимается только из «Загрузок» или %TEMP% и только .zip.
+#[tauri::command]
+async fn update_install(path: String) -> Result<serde_json::Value, String> {
+    let archive = PathBuf::from(path.trim())
+        .canonicalize()
+        .map_err(|_| "архива нет по этому пути".to_string())?;
+    if !archive.extension().map(|e| e.eq_ignore_ascii_case("zip")).unwrap_or(false) {
+        return Err("это не .zip".into());
+    }
+    let allowed = [downloads_dir(), std::env::temp_dir()]
+        .iter()
+        .filter_map(|r| r.canonicalize().ok())
+        .any(|r| archive.starts_with(&r));
+    if !allowed {
+        return Err("устанавливаю только архивы из «Загрузок» или временной папки".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let stem = archive.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Helene".into());
+        let dest = archive.parent().map(Path::to_path_buf).unwrap_or_else(downloads_dir).join(&stem);
+        if dest.exists() {
+            std::fs::remove_dir_all(&dest).map_err(|e| format!("не очистилась папка распаковки: {e}"))?;
+        }
+        let script = format!(
+            "$ProgressPreference='SilentlyContinue'; Expand-Archive -LiteralPath {} -DestinationPath {} -Force; exit $LASTEXITCODE",
+            ps_quote(&plain_path(&archive).to_string_lossy()),
+            ps_quote(&plain_path(&dest).to_string_lossy()),
+        );
+        let mut cmd = Command::new(powershell_exe());
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+        let out = run_hidden_for(&mut cmd, Duration::from_secs(600))?;
+        if !out.status.success() {
+            return Err(format!(
+                "архив не распаковался: {}",
+                String::from_utf8_lossy(&out.stderr).trim().chars().take(200).collect::<String>()
+            ));
+        }
+        // helene-setup.exe — в корне архива или в его единственной подпапке.
+        let mut setup = dest.join("helene-setup.exe");
+        if !setup.exists() {
+            let subdirs: Vec<PathBuf> = std::fs::read_dir(&dest)
+                .map_err(|e| e.to_string())?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.is_dir())
+                .collect();
+            if let [one] = subdirs.as_slice() {
+                setup = one.join("helene-setup.exe");
+            }
+        }
+        if !setup.exists() {
+            return Err(format!("в архиве нет helene-setup.exe (распаковано в {})", dest.display()));
+        }
+        let workdir = setup.parent().map(Path::to_path_buf).unwrap_or_else(|| dest.clone());
+        Command::new(&setup)
+            .current_dir(&workdir)
+            .spawn()
+            .map_err(|e| format!("установщик не запустился: {e}"))?;
+        log_line(&format!("обновление: запущен установщик {}", setup.display()));
+        Ok(serde_json::json!({ "setup": setup.display().to_string(), "dir": workdir.display().to_string() }))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -4360,6 +4393,46 @@ fn logs_bundle_blocking(tree: PathBuf) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    /// Константы окна — те же, что в `ui-kit/contract.json` (одно место для
+    /// трёх языков; задача A п. 1.12).
+    #[test]
+    fn contract_json_matches_constants() {
+        let c: serde_json::Value = serde_json::from_str(include_str!("../../ui-kit/contract.json")).unwrap();
+        assert_eq!(c["ports"]["desk"], super::DESK_PORT);
+        assert_eq!(c["ports"]["relay"], super::RELAY_PORT);
+        assert_eq!(c["config_name"], super::CONFIG_NAME);
+    }
+
+    /// `config_save` с отпечатком свежести: чужая правка на диске — отказ
+    /// `stale` с текущим отпечатком, черновик окна не записывается; со свежим
+    /// отпечатком — записывается. Без отпечатка (старое окно) — как раньше.
+    #[test]
+    fn config_save_refuses_stale_draft() {
+        use super::config_save_at;
+        let dir = std::env::temp_dir().join(format!("helene-cfg-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let target = dir.join("helene.json");
+        let first = config_save_at(&target, r#"{"a":1}"#, None).unwrap();
+        assert_eq!(first["ok"], true);
+        let seen = first["mtime_ns"].as_str().expect("отпечаток строкой").to_string();
+        // Кто-то записал поверх (руннер, установщик, Блокнот) — отпечаток сменился.
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(&target, "{\"a\":2}").unwrap();
+        let stale = config_save_at(&target, r#"{"a":3}"#, Some(&seen)).unwrap();
+        assert_eq!(stale["ok"], false);
+        assert_eq!(stale["code"], "stale");
+        assert!(stale["mtime_ns"].as_str().is_some());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "{\"a\":2}", "устаревший черновик не записан");
+        let fresh = stale["mtime_ns"].as_str().unwrap().to_string();
+        let ok = config_save_at(&target, r#"{"a":3}"#, Some(&fresh)).unwrap();
+        assert_eq!(ok["ok"], true);
+        assert!(std::fs::read_to_string(&target).unwrap().contains('3'));
+        // Пустой отпечаток — старое окно, пишем без проверки.
+        assert_eq!(config_save_at(&target, r#"{"a":4}"#, Some(""))
+            .unwrap()["ok"], true);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn static_rel_stays_inside_the_folder() {
         use super::static_rel;
@@ -4392,8 +4465,8 @@ mod tests {
         broker_wish_ask, broker_wish_id, broker_wishes, console_text, decode_config,
         ensure_desk_token, expand_env, firewall_add_args, firewall_added, firewall_clear_runs,
         firewall_path, firewall_removed, firewall_rule_name, firewall_rule_title,
-        firewall_set_runs, firewall_why, host_is_local, mask_secrets, netsh_batch_script,
-        netsh_code_words, outbound_url_ok, parse_runas, parse_version, ps_quote, read_desk_token,
+        firewall_set_runs, firewall_why, mask_secrets, netsh_batch_script,
+        netsh_code_words, parse_runas, parse_version, ps_quote, read_desk_token,
         runas_refusal, runas_script, unconfigured, utf16le_base64, version_newer, BrokerAsk,
         BrokerOp, BrokerReceipt, BrokerWish, FirewallPath, NetshDone, RunAs, FIREWALL_SCOPE_HUMAN,
         PRODUCT, RUNAS_MARK,
@@ -4922,6 +4995,21 @@ mod tests {
         assert_eq!(decode_config(&utf16).unwrap(), "{\"a\": 1}");
     }
 
+    /// Имя архива обновления — из ссылки, только безопасные знаки и .zip.
+    #[test]
+    fn update_file_name_is_a_plain_zip() {
+        use super::update_file_name;
+        assert_eq!(
+            update_file_name("https://github.com/josephsteuerjr/helene/releases/download/v0.3.3/Helene-0.3.3.zip").unwrap(),
+            "Helene-0.3.3.zip"
+        );
+        assert_eq!(update_file_name("https://x/y/Helene.zip?token=1").unwrap(), "Helene.zip");
+        assert_eq!(update_file_name("https://x/y/He..%2F..%2Flene.zip").unwrap(), "He..2F..2Flene.zip");
+        assert!(update_file_name("https://x/y/setup.exe").is_err());
+        assert!(update_file_name("https://x/y/.zip").is_err());
+        assert!(update_file_name("https://x/y/").is_err());
+    }
+
     #[test]
     fn version_parsing_is_strict_about_the_tag() {
         assert_eq!(parse_version("v0.2.1"), Some(vec![0, 2, 1]));
@@ -4943,28 +5031,6 @@ mod tests {
         assert!(!version_newer("1.0", "1.0.0"));
         assert!(!version_newer("release-1.0", "0.2.1"));
         assert!(!version_newer("", "0.2.1"));
-    }
-
-    #[test]
-    fn key_goes_out_only_over_https_or_to_our_own_network() {
-        assert!(outbound_url_ok("https://api.openai.com/v1/models").is_ok());
-        assert!(outbound_url_ok("http://127.0.0.1:11434/v1/models").is_ok());
-        assert!(outbound_url_ok("http://localhost:1234/v1/models").is_ok());
-        assert!(outbound_url_ok("http://192.168.1.5:1234/v1/models").is_ok());
-        assert!(outbound_url_ok("http://100.101.102.103:8094/api").is_ok());
-        assert!(outbound_url_ok("http://evil.example.com/v1/models").is_err());
-        assert!(outbound_url_ok("file:///C:/windows/system32").is_err());
-        assert!(outbound_url_ok("javascript:alert(1)").is_err());
-    }
-
-    #[test]
-    fn local_hosts_are_recognised_without_dns() {
-        assert!(host_is_local("127.0.0.1"));
-        assert!(host_is_local("10.0.0.7"));
-        assert!(host_is_local("172.16.0.1"));
-        assert!(!host_is_local("172.32.0.1"));
-        assert!(!host_is_local("8.8.8.8"));
-        assert!(!host_is_local("example.com"));
     }
 
     #[test]

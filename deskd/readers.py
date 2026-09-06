@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from deskd import rooms  # noqa: E402  — комнаты окна (реестр и архивы)
+
 log = logging.getLogger("helene.readers")
 
 _RUN_ID_RE = re.compile(r"^run-(\d{4})(\d{2})\d{2}T\d{6,}Z?-[0-9a-f]{8}$")
@@ -66,6 +68,10 @@ def _said(path: Path, why: str) -> Path:
 
 _CFG_CACHE: dict[str, Any] = {"stamp": None, "value": {}}
 
+# Как в ui-kit/contract.json (сверка — tests/t_contract.py).
+CONFIG_NAME = "helene.json"
+RELAY_PORT_DEFAULT = 5011
+
 
 def config_path() -> Path | None:
     raw = os.environ.get("HELENE_CONFIG")
@@ -73,7 +79,7 @@ def config_path() -> Path | None:
         path = Path(raw)
         return path if path.is_file() else None
     here = Path(__file__).resolve()
-    for cand in (here.parents[2] / "helene.json", here.parents[1] / "helene.json"):
+    for cand in (here.parents[2] / CONFIG_NAME, here.parents[1] / CONFIG_NAME):
         try:
             if cand.is_file():
                 return cand
@@ -97,9 +103,9 @@ def product_config() -> dict:
     relay = raw.get("relay") or {}
     model = raw.get("model") or {}
     try:
-        port = int(relay.get("port") or 5011)
+        port = int(relay.get("port") or RELAY_PORT_DEFAULT)
     except (TypeError, ValueError):
-        port = 5011
+        port = RELAY_PORT_DEFAULT
     value = {
         "relay_enabled": bool(relay.get("enabled")),
         "relay_port": port,
@@ -111,6 +117,10 @@ def product_config() -> dict:
         # после перезапуска раннера.
         "key_present": bool(str(model.get("key") or model.get("api_key")
                                 or "").strip()),
+        # Имя агента — для комнаты окна по умолчанию (rooms.title): она
+        # зовётся именем агента, а не «Окно».
+        "agent_name": str((raw.get("agent") or {}).get("name")
+                          or (raw.get("telegram") or {}).get("agent_name") or "").strip(),
     }
     _CFG_CACHE["stamp"] = stamp
     _CFG_CACHE["value"] = value
@@ -212,6 +222,19 @@ def mode_state() -> dict:
         picture["computer"] = None
         picture["computer_option"] = None
     picture["computer_live"] = _load_json(tree() / "memory" / ".state" / "body.json")
+    # Просьбы агента о папках — живьём, а не через анатомию (ревью 06.09, §5:
+    # анатомия пишется один раз на старте, и просьба `mount_request` доходила до
+    # карточки только после перезапуска). Файл пишет ограда (`fence.Mounts.
+    # save_requests`): {"v": 1, "updated_at": …, "requests": [{path, real,
+    # access, why, at, asked}]}; отвеченные просьбы она же из него убирает.
+    # Нет файла — пустой список, а не отсутствие поля: окно различает «просьб
+    # нет» и «харнесс старый, поля не знает».
+    live_mounts = _load_json(tree() / "memory" / ".state" / "mounts.json")
+    picture["mounts_live"] = {
+        "updated_at": live_mounts.get("updated_at"),
+        "requests": [r for r in (live_mounts.get("requests") or [])
+                     if isinstance(r, dict)],
+    }
     picture["config"] = str(path)
     return picture
 
@@ -434,8 +457,11 @@ def _title_for(chat_id, titles: dict[str, str]) -> str:
     key = str(chat_id or "")
     if not key:
         return ""
-    if key in ("window", "pult"):
-        return "Окно"          # комната окна Hélène — не Telegram, у неё нет чужого имени
+    if key == "pult" or rooms.is_room(key):
+        # Комната окна — не Telegram, чужого имени у неё нет: имя из реестра
+        # комнат, у комнаты по умолчанию — имя агента.
+        return rooms.title(tree(), "window" if key == "pult" else key,
+                           product_config().get("agent_name") or "")
     if key in titles:
         return titles[key]
     base = key.split("__topic__")[0]
@@ -871,7 +897,13 @@ def shadow_metrics(n: int = 120, stream: str = "") -> list[dict]:
 # ------------------------------------------------------------------ переписки
 
 def chats() -> list[dict]:
-    """Комнаты из реестра group_context: по свежему состоянию на пир."""
+    """Комнаты из реестра group_context: по свежему состоянию на пир.
+
+    `kind` — "window" (комната окна: `window` или `window-<hex>`, см.
+    deskd/rooms.py) или "telegram"; `title` у комнат окна — из реестра комнат
+    (по умолчанию — имя агента). Комната окна, заведённая, но ещё без единого
+    сообщения, тоже здесь: `rooms.create` кладёт ей запись в group_context.
+    """
     root = tree() / "memory" / ".state" / "group_context"
     if not root.is_dir():
         return []
@@ -888,6 +920,7 @@ def chats() -> list[dict]:
         row = {
             "peer_id": peer,
             "title": _title_for(peer, titles),
+            "kind": "window" if rooms.is_room(peer) else "telegram",
             "messages": data.get("message_count"),
             "participants": data.get("participant_count"),
             "topics": data.get("topic_count"),

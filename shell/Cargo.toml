@@ -1,6 +1,6 @@
 [package]
 name = "helene"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
 description = "Frame — нативная оболочка основной программы: окно + WebView2, трей, уведомления, один экземпляр. Говорит с харнессом агента по frame.desk.v1: локально (дети окна) или удалённо."
 
@@ -17,6 +17,9 @@ serde_json = "1"
 # «Проверить обновления» врали «Нет связи» там, где браузер работает.
 # proxy-from-env/socks-proxy: за корпоративным прокси то же самое.
 ureq = { version = "2", features = ["tls", "native-certs", "proxy-from-env", "socks-proxy"] }
+# sha256 скачанного архива обновления (update_download): подписи кода у
+# поставки нет, сумма из релиза — единственная проверка, что файл тот.
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

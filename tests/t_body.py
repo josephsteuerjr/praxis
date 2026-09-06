@@ -293,6 +293,49 @@ def _built_pair() -> Path | None:
 
 @unittest.skipUnless(os.name == "nt" and _built_pair() is not None,
                      "мост и тело не собраны (HELENE_BODY_DIR или ../_body_target/release)")
+class Spool(unittest.TestCase):
+    """п. 1.14: спул моста подчищается — старые кадры контроллера и отвеченные
+    ответы уходят, свежее и чужое (`to_device`) остаётся."""
+
+    def test_prune_keeps_fresh_and_drops_dead(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "spool.db"
+            con = sqlite3.connect(str(db))
+            con.executescript("""
+                CREATE TABLE frames (message_id TEXT PRIMARY KEY, device_id TEXT NOT NULL,
+                    direction TEXT NOT NULL, seq INTEGER NOT NULL, payload TEXT NOT NULL,
+                    acknowledged INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+                CREATE TABLE responses (device_id TEXT NOT NULL, request_id TEXT NOT NULL,
+                    operation_id TEXT, frame_type TEXT NOT NULL, terminal INTEGER NOT NULL,
+                    payload TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY(device_id, request_id));
+            """)
+            old = "2026-09-06T17:10:06.049717200+00:00"
+            import datetime as dt
+            fresh = dt.datetime.now(dt.timezone.utc).isoformat()
+            rows = [("m1", "pc", "to_controller", 1, "x", old),
+                    ("m2", "pc", "to_controller", 2, "x", fresh),
+                    ("m3", "pc", "to_device", 1, "x", old)]
+            con.executemany("INSERT INTO frames VALUES (?,?,?,?,?,0,?)", rows)
+            con.executemany("INSERT INTO responses VALUES (?,?,?,?,?,?,?)", [
+                ("pc", "r1", None, "result", 1, "x", old),
+                ("pc", "r2", None, "result", 1, "x", fresh),
+                ("pc", "r3", None, "accepted", 0, "x", old)])
+            con.commit()
+            con.close()
+            pruned = body.prune_spool(db)
+            self.assertEqual(pruned, {"frames": 1, "responses": 1})
+            con = sqlite3.connect(str(db))
+            left = sorted(r[0] for r in con.execute("SELECT message_id FROM frames"))
+            self.assertEqual(left, ["m2", "m3"], "свежий кадр и кадр телу остались")
+            left = sorted(r[0] for r in con.execute("SELECT request_id FROM responses"))
+            self.assertEqual(left, ["r2", "r3"], "свежий и незавершённый ответы остались")
+            con.close()
+            self.assertEqual(body.prune_spool(db), {"frames": 0, "responses": 0})
+        self.assertEqual(body.prune_spool(Path(tmp) / "нет.db"), {"frames": 0, "responses": 0})
+
+
 class Live(unittest.TestCase):
     """Живьём: поднять, дождаться, спросить рабочий стол, погасить."""
 

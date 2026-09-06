@@ -37,7 +37,7 @@ controller для руки), мост и тело получают их чере
 и без числового принципала, и дерево отвечало бы «нет выданного права для
 этого Telegram id». Здесь право решает ВЛАДЕЛЕЦ галочками в helene.json:
 
-    "computer": {"enabled": true, "port": 9480,
+    "computer": {"enabled": true, "port": <DEFAULT_PORT>,
                  "scopes": ["computer.read", "computer.files",
                             "computer.process", "computer.apps"]}
 
@@ -422,8 +422,15 @@ class Body:
 
     def _watch(self) -> None:
         last_probe = 0.0
+        last_prune = time.monotonic()
         while not self.stopping.wait(3.0):
             now = time.monotonic()
+            if now - last_prune >= SPOOL_PRUNE_EVERY_SEC:
+                last_prune = now
+                pruned = prune_spool(self.home / "bridge" / "spool.db")
+                if pruned.get("frames") or pruned.get("responses"):
+                    log.info("тело: спул моста подчищен — кадров %s, ответов %s",
+                             pruned.get("frames"), pruned.get("responses"))
             for child in self.children:
                 if child.alive():
                     continue
@@ -450,6 +457,12 @@ class Body:
                 self.probe(timeout=4.0)
             self._write_state()
 
+    def spool_bytes(self) -> int:
+        try:
+            return (self.home / "bridge" / "spool.db").stat().st_size
+        except OSError:
+            return 0
+
     def probe(self, *, timeout: float = 4.0) -> bool:
         """Спросить тело через мост. Пишет `connected`/`identity`/`reason`."""
         result = call("body.status", {}, timeout=timeout)
@@ -475,6 +488,7 @@ class Body:
 
     def _write_state(self) -> None:
         path = self.tree.joinpath(*STATE_FILE)
+        STATE["spool_bytes"] = self.spool_bytes()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_name(".tmp-" + path.name)
@@ -503,6 +517,59 @@ class Body:
             self._write_state()
         except Exception:
             pass
+
+
+# --------------------------------------------------------------------------- #
+#  Спул моста: подчистка (мост копит ответы для контроллера, который их не ack'ает)
+# --------------------------------------------------------------------------- #
+
+#: Раз в столько секунд сторож подчищает `data/body/bridge/spool.db`.
+SPOOL_PRUNE_EVERY_SEC = 600
+
+
+def prune_spool(path: Path, *, frames_older_min: int = 10,
+                responses_older_min: int = 60) -> dict:
+    """Убрать из спула моста то, что никто никогда не прочитает.
+
+    Замер 06.09 на установке владельца: за вечер с рукой `computer` спул вырос
+    до 5 МБ — 615 кадров `to_controller` и 611 ответов, по 2 МБ каждые. Мост
+    (`tree/body/crates/praxis-bridge`) хранит кадры для контроллера до его
+    подтверждения по WebSocket, а наш контроллер — HTTP-опрос (`body_client`):
+    он читает ответ из таблицы `responses` и ничего не подтверждает, поэтому
+    кадры `to_controller` в этом продукте не читает никто и никогда, а сам
+    мост чистит их только через 30 дней. Ответы (`responses`, terminal=1)
+    нужны, пока `body_client.call` их опрашивает — секунды, не часы.
+
+    Это наш процесс и наша база (мост — ребёнок раннера, файл — в дереве
+    агента), поэтому чистим сами, а не просим мост менять протокол. Журнал
+    БД — DELETE (`PRAGMA journal_mode` в spool.rs), одновременная запись моста
+    ждёт нашего замка не дольше `timeout`. Файл не усыхает (VACUUM здесь не
+    зовём — мост держит соединение), но освобождённые страницы переиспользуются:
+    рост ограничен окном в `frames_older_min`/`responses_older_min`.
+
+    -> {"frames": удалено кадров, "responses": удалено ответов} либо {"error"}.
+    """
+    import sqlite3
+    if not path.is_file():
+        return {"frames": 0, "responses": 0}
+    try:
+        con = sqlite3.connect(str(path), timeout=2.0)
+        try:
+            with con:
+                frames = con.execute(
+                    "DELETE FROM frames WHERE direction='to_controller' "
+                    "AND datetime(created_at) < datetime('now', ?)",
+                    (f"-{int(frames_older_min)} minutes",)).rowcount
+                responses = con.execute(
+                    "DELETE FROM responses WHERE terminal=1 "
+                    "AND datetime(updated_at) < datetime('now', ?)",
+                    (f"-{int(responses_older_min)} minutes",)).rowcount
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        log.debug("тело: спул не подчищен (%s): %s", path, exc)
+        return {"frames": 0, "responses": 0, "error": str(exc)}
+    return {"frames": int(frames), "responses": int(responses)}
 
 
 # --------------------------------------------------------------------------- #

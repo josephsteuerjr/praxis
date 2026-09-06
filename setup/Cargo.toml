@@ -1,6 +1,6 @@
 [package]
 name = "helene-setup"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
 description = "Установщик Hélène: motion-сцена первого запуска, имя агента, конституция, ключи, служба и установка в папку пользователя. Отдельный процесс от основной программы: одно окно, один экземпляр, закрыл окно = вышел."
 
@@ -16,6 +16,8 @@ ureq = { version = "2", features = ["tls"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# BCryptGenRandom для ключа реле (common/random_hex.rs) — как в shell и svc.
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 [profile.release]
 opt-level = "z"

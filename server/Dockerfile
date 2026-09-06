@@ -7,8 +7,10 @@ FROM python:3.12-slim
 # git — личный репозиторий агента (data/.git, как MinGit на Windows);
 # ffmpeg — голосовые для faster-whisper (PyAV его не требует, но телеграм-ogg
 # и конвертация в media_audio идут через него).
+# procps — `free`, `ps`, `top`: агент зовёт их рукой `shell`, осматривая дом,
+# и в slim-образе спотыкался на первом же `free` (живой ход 06.09 на VPS).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ffmpeg ca-certificates \
+    && apt-get install -y --no-install-recommends git ffmpeg ca-certificates procps \
     && rm -rf /var/lib/apt/lists/* \
     && git config --global --add safe.directory '*'
 

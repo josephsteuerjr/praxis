@@ -211,13 +211,40 @@ def copy_tree(src: Path, dst: Path) -> tuple[int, list[str]]:
     return count, secrets
 
 
-def copy_static(dst: Path) -> None:
-    """UI окна — только сборка Vite; без неё сборка честно падает."""
+STATIC_MANIFEST = ".helene-static.json"
+
+
+def static_manifest(root: Path) -> dict:
+    """Манифест статики окна: sha256 каждого файла и один общий отпечаток.
+
+    По нему установщик решает, менял ли ВЫПУСК интерфейс (задача A §2, слово
+    владельца 07.09: «если я не трогал статику — оставлять пользовательскую»).
+    Сравниваются манифесты двух поставок — новой и той, что ставилась раньше, —
+    а не файлы пользователя: правил ли он их, нас не касается.
+    """
+    files: dict[str, str] = {}
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        rel = path.relative_to(root).as_posix()
+        if rel == STATIC_MANIFEST:
+            continue
+        files[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256(
+        "\n".join(f"{rel} {sha}" for rel, sha in files.items()).encode("utf-8")).hexdigest()
+    return {"v": 1, "digest": digest, "files": files}
+
+
+def copy_static(dst: Path) -> str:
+    """UI окна — только сборка Vite; без неё сборка честно падает. -> отпечаток."""
     if not (APP_DIST / "index.html").is_file():
         raise SystemExit("нет app/dist — собери UI: npm --prefix app run build")
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(APP_DIST, dst)
+    manifest = static_manifest(dst)
+    (dst / STATIC_MANIFEST).write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=1) + "\n",
+        encoding="utf-8", newline="\n")
+    return manifest["digest"]
 
 
 def copy_mobile(dst: Path, allow_partial: bool) -> bool:
@@ -274,7 +301,7 @@ def stage_payload(dest: Path, live: Path, allow_partial: bool) -> dict:
     shutil.copy2(DESK / "deskapp.py", dest / "app" / "deskapp.py")
     for name in ("__init__.py", "readers.py"):
         shutil.copy2(DESK / "deskd" / name, dest / "app" / "deskd" / name)
-    copy_static(dest / "app" / "static")
+    static_digest = copy_static(dest / "app" / "static")
     copy_resources(dest / "app" / "resources")
     phone = copy_mobile(dest / "app" / "mobile", allow_partial)
     # rglob, а не glob: подпакет в localharness раньше молча не уехал бы.
@@ -296,7 +323,8 @@ def stage_payload(dest: Path, live: Path, allow_partial: bool) -> dict:
             "поставка без tree/ нерабочая — проверь путь (--tree PATH или HELENE_TREE_SRC)")
     (dest / "requirements.txt").write_text("\n".join(DEPS) + "\n",
                                            encoding="utf-8", newline="\n")
-    return {"tree_files": copied, "phone": phone, "secrets_skipped": secrets}
+    return {"tree_files": copied, "phone": phone, "secrets_skipped": secrets,
+            "static_digest": static_digest}
 
 
 # --- сеть ---------------------------------------------------------------------
@@ -1228,6 +1256,9 @@ def main() -> None:
         "declared_versions": declared,
         "python": PY_VERSION,
         "tree_files": staged["tree_files"],
+        # Отпечаток статики окна (тот же, что в app/static/.helene-static.json):
+        # по нему установщик решает, менял ли выпуск интерфейс.
+        "static": staged["static_digest"],
         # Точный состав скачанного и установленного. Пинов по хэшам у pip нет
         # (открытый остаток, см. RELEASE.md), но по этим двум спискам сборку
         # можно опознать и повторить: раньше выложенный архив нельзя было

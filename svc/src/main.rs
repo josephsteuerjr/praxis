@@ -54,6 +54,8 @@ use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_service::{define_windows_service, service_dispatcher};
 
 const SERVICE_NAME: &str = "Helene";  // идентификатор в SCM — латиницей
+/// Порт встроенного реле по умолчанию — как в `ui-kit/contract.json`.
+const RELAY_PORT: u16 = 5011;
 const SERVICE_DISPLAY: &str = "Hélène · агент";
 // Прежний текст обещал «живым до входа пользователя». Это перестало быть
 // правдой в тот день, когда харнесс переехал в сессию владельца: до входа
@@ -66,29 +68,6 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Журнал службы и журналы детей режутся на этом размере — служба может
 /// прожить месяцы, а перезапуск упавшего ребёнка пишет строку каждую минуту.
 const LOG_MAX: u64 = 5 * 1024 * 1024;
-
-/// Человекочитаемое время: `service.log` — единственный след службы, и читать
-/// его будет человек. Раньше здесь были миллисекунды эпохи.
-#[cfg(windows)]
-fn now_stamp() -> String {
-    use windows_sys::Win32::Foundation::SYSTEMTIME;
-    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
-    let mut t: SYSTEMTIME = unsafe { std::mem::zeroed() };
-    unsafe { GetLocalTime(&mut t) };
-    format!(
-        "[{:02}.{:02}.{} {:02}:{:02}:{:02}]",
-        t.wDay, t.wMonth, t.wYear, t.wHour, t.wMinute, t.wSecond
-    )
-}
-
-#[cfg(not(windows))]
-fn now_stamp() -> String {
-    let ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    format!("[{ms}]")
-}
 
 /// Консоль отпущена (режим session-host) — на экран больше не пишем.
 ///
@@ -302,31 +281,6 @@ fn desk_token_path(tree: &Path) -> PathBuf {
     tree.join("memory").join(".state").join("desk-token")
 }
 
-#[cfg(windows)]
-fn random_hex(bytes: usize) -> Option<String> {
-    use windows_sys::Win32::Security::Cryptography::{
-        BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
-    };
-    let mut buf = vec![0u8; bytes];
-    let status = unsafe {
-        BCryptGenRandom(
-            std::ptr::null_mut(),
-            buf.as_mut_ptr(),
-            buf.len() as u32,
-            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
-        )
-    };
-    if status != 0 {
-        return None;
-    }
-    Some(buf.iter().map(|b| format!("{b:02x}")).collect())
-}
-
-#[cfg(not(windows))]
-fn random_hex(_bytes: usize) -> Option<String> {
-    None
-}
-
 /// Прочитать секрет из файла. Проверка формы — не педантизм: обрезанный файл
 /// («» или один байт) в роли токена означал бы «замок, который открывается
 /// пустотой».
@@ -528,7 +482,7 @@ fn load_plan(config_path: &Path) -> Result<Plan, String> {
             .get("relay")
             .and_then(|r| r.get("port"))
             .and_then(|v| v.as_u64())
-            .unwrap_or(5011) as u16,
+            .unwrap_or(RELAY_PORT as u64) as u16,
         relay_key: cfg
             .get("model")
             .and_then(|m| m.get("key"))
@@ -680,6 +634,9 @@ fn same_tree(a: &Path, b: &Path) -> bool {
 // Само правило (имя, сужение, слова расписки) — общее с оболочкой, см.
 // common/firewall_rule.rs.
 include!("../../common/firewall_rule.rs");
+// Штамп журналов и случайные байты — общие с оболочкой и установщиком.
+include!("../../common/stamp.rs");
+include!("../../common/random_hex.rs");
 
 /// Правило брандмауэра для трубы, когда разрешён телефон.
 ///
@@ -3685,5 +3642,17 @@ mod tests {
             be.extend_from_slice(&unit.to_be_bytes());
         }
         assert_eq!(decode_config(&be).unwrap(), "{\"a\": 1}");
+    }
+}
+
+#[cfg(test)]
+mod contract_tests {
+    /// Константы службы — те же, что в `ui-kit/contract.json` (одно место
+    /// для трёх языков; задача A п. 1.12).
+    #[test]
+    fn contract_json_matches_constants() {
+        let c: serde_json::Value = serde_json::from_str(include_str!("../../ui-kit/contract.json")).unwrap();
+        assert_eq!(c["ports"]["relay"], super::RELAY_PORT);
+        assert_eq!(c["config_name"], super::CONFIG_NAME);
     }
 }

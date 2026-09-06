@@ -22,6 +22,7 @@ memory/.state/devices.json (спаренные телефоны) и маркда
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime as dt
 import json
 import logging
@@ -31,6 +32,7 @@ import secrets
 import threading
 import time
 from pathlib import Path
+from typing import Any, Awaitable, Callable
 
 from aiohttp import web
 from aiohttp.abc import AbstractAccessLogger
@@ -38,6 +40,7 @@ from aiohttp.abc import AbstractAccessLogger
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from deskd import readers
+from deskd import rooms
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("frame.desk")
@@ -116,8 +119,8 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
 # /tunnel и /events пускаем: внутри трубы область проверяется ещё раз, по
 # каждому маршруту (_tunnel_dispatch), иначе телефон обошёл бы разбор прав.
 _DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health",
-                 "/tunnel", "/events"}
-_DEVICE_PREFIXES = ("/api/chat/",)
+                 "/api/rooms", "/tunnel", "/events"}
+_DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/")
 
 
 def _hostname(raw: str) -> str:
@@ -400,13 +403,6 @@ def _device_rows() -> list[dict]:
             for d in _devices()]
 
 
-async def api_pair_new(request):
-    """Новая пара — только со своей машины (окно программы)."""
-    if not _is_loopback(request):
-        raise web.HTTPForbidden(text="пару выдаёт только окно на этой машине")
-    return _json(_new_pair())
-
-
 def _redeem(token: str, ua: str, addr: str) -> dict:
     """Обмен токена пары на ключ устройства.
 
@@ -458,19 +454,6 @@ async def api_pair_redeem(request):
     response.set_cookie(COOKIE, got["key"], max_age=365 * 24 * 3600,
                         httponly=True, samesite="Lax")
     return response
-
-
-async def api_devices(request):
-    if not _is_loopback(request):
-        raise web.HTTPForbidden(text="список устройств — только с этой машины")
-    return _json(_device_rows())
-
-
-async def api_device_revoke(request):
-    if not _is_loopback(request):
-        raise web.HTTPForbidden(text="отвязать — только с этой машины")
-    payload = await _json_body(request)
-    return _json(_revoke_device(str((payload or {}).get("id") or "")))
 
 
 # ------------------------------------------------------------- PWA /m/
@@ -534,164 +517,251 @@ def _json(data) -> web.Response:
 
 
 # ------------------------------------------------------------------ API
+#
+# ОДНА таблица маршрутов на оба канала (ревью 06.09, §5; задача A п. 1.11).
+# Окно ходит по каналу (WebSocket /tunnel), браузер и телефон — по HTTP. До
+# 07.09 у каждой двери был свой список ручек, и ручка, заведённая в одном
+# списке, в другом отвечала 404: так было с /api/home (единственной из
+# двадцати), потом с /api/mode. Теперь ручка — это строка в ROUTES: aiohttp-
+# роутер и диспетчер канала строятся из неё, и «есть в одном канале из двух»
+# стало невозможно по построению (стенд: tests/t_routes.py).
+#
+# Обработчик получает обезличенный запрос (Call) и возвращает ТЕЛО ответа —
+# то, что уедет json-ом, — либо бросает web.HTTPError (404/400/409 словами),
+# либо возвращает Fail, когда ответу нужен ещё и `code` (конфликт mtime).
+# Оба канала переводят это в свою форму одинаково.
 
-async def api_runs(request):
-    kind = request.query.get("kind") or ""
-    before = request.query.get("before") or ""
-    limit = _int_arg(request.query, "limit", 80, 1, 200)
-    return _json(await asyncio.to_thread(readers.list_runs, limit, kind, before))
+@dataclasses.dataclass
+class Call:
+    match: dict            # параметры пути: {peer}, {stream}, {run_id}
+    query: dict            # query-строка, последнее значение на ключ
+    body: Any              # разобранный JSON тела POST/DELETE или None
+    local: bool            # запрос с этой машины (петля)
+    role: str              # owner | device
 
 
-async def api_run(request):
-    run_id = request.match_info["run_id"]
-    detail = await asyncio.to_thread(readers.run_detail, run_id)
+@dataclasses.dataclass
+class Fail:
+    status: int
+    error: str
+    code: str = ""
+
+
+@dataclasses.dataclass(frozen=True)
+class Route:
+    method: str
+    path: str              # aiohttp-шаблон: "/api/chat/{peer}"
+    handler: Callable[[Call], Awaitable[Any]]
+    local_only: bool = False   # только с этой машины (окно): пары телефона
+
+
+def _reader(fn: Callable[[], Any]):
+    """Ручка-читатель без параметров: `readers.<имя>` в потоке."""
+    async def handler(call: Call):
+        return await asyncio.to_thread(fn)
+    return handler
+
+
+async def _r_runs(c: Call):
+    return await asyncio.to_thread(readers.list_runs, _int_arg(c.query, "limit", 80, 1, 200),
+                                   c.query.get("kind") or "", c.query.get("before") or "")
+
+
+async def _r_run(c: Call):
+    detail = await asyncio.to_thread(readers.run_detail, c.match["run_id"])
     if not detail:
         raise web.HTTPNotFound(text="нет такого прогона")
-    return _json(detail)
+    return detail
 
 
-async def api_pulse(request):
-    return _json(await asyncio.to_thread(readers.pulse))
+async def _r_shadow_captures(c: Call):
+    return await asyncio.to_thread(readers.shadow_captures, c.match["stream"])
 
 
-async def api_errors(request):
-    return _json(await asyncio.to_thread(readers.errors))
+async def _r_shadow_capture(c: Call):
+    name = c.query.get("name") or ""
+    text = await asyncio.to_thread(readers.shadow_capture, c.match["stream"], name)
+    return {"stream": c.match["stream"], "name": name, "text": text}
 
 
-async def api_board(request):
-    return _json(await asyncio.to_thread(readers.board))
+async def _r_shadow_diff(c: Call):
+    return await asyncio.to_thread(readers.shadow_diff, c.match["stream"],
+                                   c.query.get("old") or "", c.query.get("new") or "")
 
 
-async def api_agenda(request):
-    return _json(await asyncio.to_thread(readers.agenda))
+async def _r_shadow_metrics(c: Call):
+    stream = c.query.get("stream") or c.match.get("stream") or ""
+    return await asyncio.to_thread(readers.shadow_metrics, 120, stream)
 
 
-async def api_forge(request):
-    return _json(await asyncio.to_thread(readers.forge_tasks))
+async def _r_chats(c: Call):
+    return await asyncio.to_thread(readers.chats)
 
 
-async def api_shadow(request):
-    return _json(await asyncio.to_thread(readers.shadow_streams))
+async def _r_chat(c: Call):
+    return await asyncio.to_thread(readers.chat_tail, c.match["peer"],
+                                   _int_arg(c.query, "n", 200, 1, 600))
 
 
-async def api_shadow_captures(request):
-    stream = request.match_info["stream"]
-    return _json(await asyncio.to_thread(readers.shadow_captures, stream))
+async def _r_chat_turns(c: Call):
+    return await asyncio.to_thread(readers.chat_turns, c.match["peer"],
+                                   _int_arg(c.query, "n", 120, 1, 300))
 
 
-async def api_shadow_capture(request):
-    stream = request.match_info["stream"]
-    name = request.query.get("name") or ""
-    text = await asyncio.to_thread(readers.shadow_capture, stream, name)
-    return _json({"stream": stream, "name": name, "text": text})
+async def _r_md(c: Call):
+    return await asyncio.to_thread(readers.safe_read_md, c.query.get("path") or "")
 
 
-async def api_shadow_diff(request):
-    stream = request.match_info["stream"]
-    old = request.query.get("old") or ""
-    new = request.query.get("new") or ""
-    return _json(await asyncio.to_thread(readers.shadow_diff, stream, old, new))
+async def _r_md_write(c: Call):
+    """Правка маркдауна агента из окна: конституция, навыки, заметки.
+
+    Путь только внутри разрешённых групп (readers.safe_write_md), только .md,
+    запись атомарная. Окно возвращает mtime_ns, который получило при чтении,
+    и при расхождении ручка отвечает 409 (code=conflict), а не переписывает
+    молча чужую правку — владелец правит SOUL.md в окне, агент правит его же
+    своей рукой, и раньше выигрывал тот, кто записал последним.
+    """
+    body = c.body or {}
+    result = await asyncio.to_thread(readers.safe_write_md, str(body.get("path") or ""),
+                                     str(body.get("text") or ""), body.get("mtime_ns"))
+    if result.get("error"):
+        return Fail(409 if result.get("code") == "conflict" else 400,
+                    result["error"], str(result.get("code") or ""))
+    return result
 
 
-async def api_shadow_metrics(request):
-    stream = request.query.get("stream") or request.match_info.get("stream") or ""
-    return _json(await asyncio.to_thread(readers.shadow_metrics, 120, stream))
-
-
-async def api_chats(request):
-    return _json(await asyncio.to_thread(readers.chats))
-
-
-async def api_chat(request):
-    peer = request.match_info["peer"]
-    n = _int_arg(request.query, "n", 200, 1, 600)
-    return _json(await asyncio.to_thread(readers.chat_tail, peer, n))
-
-
-async def api_md(request):
-    return _json(await asyncio.to_thread(readers.safe_read_md,
-                                         request.query.get("path") or ""))
-
-
-async def api_md_tree(request):
-    return _json(await asyncio.to_thread(readers.md_tree))
-
-
-async def api_home(request):
+async def _r_home(c: Call):
     """Чьё это дерево. Оболочка спрашивает перед тем, как признать живой на
     порту харнесс своим: осиротевший процесс прежней установки держал порт, и
     новое окно молча показывало чужого агента."""
-    return _json({"tree": str(readers.tree().resolve())})
+    return {"tree": str(readers.tree().resolve())}
 
 
-# Обе ручки окно и телефон опрашивают непрерывно, и раньше ни у одной не было
-# рубежа: одна кривая строка в llm_calls.jsonl (голый `float(ts)` в девяти
-# местах readers) — и обе отвечали 500 навсегда, пока файл не ротируется.
-# Рубеж стоит ВНУТРИ readers.state/readers.health, а не здесь, потому что вторая
-# дверь к тем же читателям — труба (_tunnel_dispatch), и телефон ходит именно в
-# неё: обёртка на HTTP-обработчике телефон бы не прикрыла. Ответ при отказе той
-# же формы, что при удаче, с честной фразой «не прочиталось».
-async def api_health(request):
-    return _json(await asyncio.to_thread(readers.health))
-
-
-async def api_state(request):
-    return _json(await asyncio.to_thread(readers.state))
-
-
-async def api_mode(request):
+async def _r_mode(c: Call):
     """Ограда (песочница | интерактивный) и ОТДЕЛЬНО от неё служба.
 
     Два независимых ответа в одном теле: `name`/`choices` — какая ограда,
     `service_installed`/`session0`/`firewall`/`service` — что со службой. Служба
     режимом не является: она ставится поверх любой ограды и ограду не снимает
-    (склейка этих двух измерений и была P0 первой редакции).
-
-    Отдельной ручкой, а не только полем в /api/state: экраны установщика и
-    настроек спрашивают режим и список выборов сами по себе, без всей шапки.
-
-    ⚠ ЛОВУШКА ПРОДУКТА: окно ходит по ТРУБЕ, а не по HTTP. Ручка, заведённая
-    только здесь, в окне не работает — так уже было с /api/home, единственным
-    маршрутом из двадцати, жившим в одном канале из двух. Поэтому она заведена
-    И в `_tunnel_dispatch` (маршрут "/api/mode").
+    (склейка этих двух измерений и была P0 первой редакции). Плюс опция
+    `computer` с живым снимком тела и живые просьбы о папках (`mounts_live`).
     """
-    return _json(await asyncio.to_thread(readers.mode_state))
+    return await asyncio.to_thread(readers.mode_state)
 
 
-async def api_md_write(request):
-    """Правка маркдауна агента из окна: конституция, навыки, заметки.
-
-    Первый шаг конструктора: то, что окно показывает, оно же и правит. Путь
-    только внутри разрешённых групп (readers.safe_write_md), только .md,
-    запись атомарная.
-
-    Прежний докстринг обещал безопасность («файл переписывается целиком тем,
-    что человек видел») — но именно это и означало «текстом ДО правки агента».
-    Владелец правит soul/SOUL.md в окне, агент правит его же своей рукой:
-    выигрывал тот, кто записал последним, чужая работа исчезала без следа.
-    Теперь окно возвращает mtime_ns, который получило при чтении, и при
-    расхождении ручка отвечает 409, а не переписывает молча.
-    """
-    payload = await _json_body(request) or {}
-    result = await asyncio.to_thread(readers.safe_write_md,
-                                     str(payload.get("path") or ""),
-                                     str(payload.get("text") or ""),
-                                     payload.get("mtime_ns"))
-    if result.get("error"):
-        if result.get("code") == "conflict":
-            raise web.HTTPConflict(text=result["error"])
-        raise web.HTTPBadRequest(text=result["error"])
-    return _json(result)
+async def _r_say(c: Call):
+    body = c.body or {}
+    return await _say(body.get("text"), body.get("chat") or "")
 
 
-async def api_anatomy(request):
-    return _json(await asyncio.to_thread(readers.anatomy))
+async def _r_rooms_create(c: Call):
+    return await asyncio.to_thread(_room_op, rooms.create, (c.body or {}).get("title"))
 
 
-async def api_chat_turns(request):
-    peer = request.match_info["peer"]
-    n = _int_arg(request.query, "n", 120, 1, 300)
-    return _json(await asyncio.to_thread(readers.chat_turns, peer, n))
+async def _r_rooms_rename(c: Call):
+    return await asyncio.to_thread(_room_op, rooms.rename, c.match["peer"],
+                                   (c.body or {}).get("title"))
+
+
+async def _r_rooms_delete(c: Call):
+    return await asyncio.to_thread(_room_op, rooms.delete, c.match["peer"])
+
+
+def _room_op(fn, *args):
+    """Комнаты окна (задача A §3): отказ реестра — словами и кодом, не 500."""
+    try:
+        return fn(readers.tree(), *args)
+    except rooms.RoomError as exc:
+        return Fail(exc.status, str(exc), "room")
+
+
+async def _r_pair_new(c: Call):
+    return _new_pair()
+
+
+async def _r_devices(c: Call):
+    return _device_rows()
+
+
+async def _r_revoke(c: Call):
+    return _revoke_device(str((c.body or {}).get("id") or ""))
+
+
+ROUTES: tuple[Route, ...] = (
+    Route("GET", "/api/runs", _r_runs),
+    Route("GET", "/api/run/{run_id}", _r_run),
+    Route("GET", "/api/pulse", _reader(lambda: readers.pulse())),
+    Route("GET", "/api/errors", _reader(lambda: readers.errors())),
+    Route("GET", "/api/board", _reader(lambda: readers.board())),
+    Route("GET", "/api/agenda", _reader(lambda: readers.agenda())),
+    Route("GET", "/api/forge", _reader(lambda: readers.forge_tasks())),
+    Route("GET", "/api/shadow", _reader(lambda: readers.shadow_streams())),
+    Route("GET", "/api/shadow/{stream}/captures", _r_shadow_captures),
+    Route("GET", "/api/shadow/{stream}/capture", _r_shadow_capture),
+    Route("GET", "/api/shadow/{stream}/diff", _r_shadow_diff),
+    Route("GET", "/api/shadow/{stream}/metrics", _r_shadow_metrics),
+    Route("GET", "/api/shadow-metrics", _r_shadow_metrics),
+    Route("GET", "/api/chats", _r_chats),
+    Route("GET", "/api/chat/{peer}", _r_chat),
+    Route("GET", "/api/chat-turns/{peer}", _r_chat_turns),
+    Route("GET", "/api/md", _r_md),
+    Route("POST", "/api/md", _r_md_write),
+    Route("GET", "/api/md-tree", _reader(lambda: readers.md_tree())),
+    # Обе ручки окно и телефон опрашивают каждые несколько секунд; рубеж от
+    # 500-х стоит ВНУТРИ readers.state/readers.health — он общий на оба канала.
+    Route("GET", "/api/health", _reader(lambda: readers.health())),
+    Route("GET", "/api/state", _reader(lambda: readers.state())),
+    Route("GET", "/api/mode", _r_mode),
+    Route("GET", "/api/home", _r_home),
+    Route("GET", "/api/anatomy", _reader(lambda: readers.anatomy())),
+    Route("POST", "/api/say", _r_say),
+    # Комнаты окна (задача A §3): создать, переименовать, убрать в архив.
+    Route("POST", "/api/rooms", _r_rooms_create),
+    Route("POST", "/api/rooms/{peer}", _r_rooms_rename),
+    Route("DELETE", "/api/rooms/{peer}", _r_rooms_delete),
+    # Телефон: пары выдаёт и отзывает только окно на этой машине.
+    Route("POST", "/pair/new", _r_pair_new, local_only=True),
+    Route("GET", "/pair/devices", _r_devices, local_only=True),
+    Route("POST", "/pair/revoke", _r_revoke, local_only=True),
+)
+
+
+def _route_regex(path: str) -> "re.Pattern[str]":
+    return re.compile("^" + re.sub(r"\{(\w+)\}", r"(?P<\1>[^/]+)", path) + "$")
+
+
+_ROUTE_INDEX: tuple[tuple[Route, "re.Pattern[str]"], ...] = tuple(
+    (route, _route_regex(route.path)) for route in ROUTES)
+
+
+def match_route(method: str, path: str) -> tuple[Route | None, dict]:
+    """Строка таблицы для метода и пути канала. (None, {}) — нет такого пути."""
+    method = str(method or "GET").upper()
+    for route, pattern in _ROUTE_INDEX:
+        found = pattern.match(path)
+        if found and route.method == method:
+            return route, dict(found.groupdict())
+    return None, {}
+
+
+def _http_handler(route: Route):
+    """HTTP-дверь к строке таблицы: aiohttp-запрос -> Call -> json-ответ."""
+    async def handler(request: web.Request):
+        if route.local_only and not _is_loopback(request):
+            raise web.HTTPForbidden(text="только с этой машины")
+        body = None
+        if route.method in ("POST", "DELETE") and request.can_read_body:
+            body = await _json_body(request)
+        call = Call(match=dict(request.match_info),
+                    query={k: request.query.get(k) for k in request.query},
+                    body=body, local=_is_loopback(request), role=_role(request))
+        result = await route.handler(call)
+        if isinstance(result, Fail):
+            # Текстом, как прежние HTTPConflict/HTTPBadRequest: клиенты читают
+            # причину из тела ответа словами.
+            return web.Response(status=result.status, text=result.error)
+        return _json(result)
+    return handler
 
 
 _SAY_RE = re.compile(r"[^\w\-]+")
@@ -732,10 +802,13 @@ async def _say(text: str, chat: str = "") -> dict:
         raise web.HTTPBadRequest(text="пустое сообщение")
     if len(text) > 20_000:
         raise web.HTTPBadRequest(text="слишком длинно (20k)")
-    if chat and chat not in ("window", "pult") and not _CHAT_KEY_RE.match(chat):
+    if chat and chat not in ("window", "pult") and not _CHAT_KEY_RE.match(chat) \
+            and not rooms.is_room(chat):
         raise web.HTTPBadRequest(text=f"не похоже на адрес комнаты: {chat!r}")
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     body = (f"# Сообщение с окна владельца · {stamp}\n\n{text}\n")
+    # Адресная записка — и в Telegram-комнату, и в другую комнату окна
+    # (`window-<hex>`, задача A §3): раннер ведёт ход в ней (`__to__<ключ>`).
     targeted = bool(chat and chat not in ("window", "pult"))
 
     def _write() -> dict:
@@ -774,143 +847,57 @@ async def _say(text: str, chat: str = "") -> dict:
     return result
 
 
-async def api_say(request):
-    payload = await _json_body(request) or {}
-    return _json(await _say(payload.get("text"), payload.get("chat") or ""))
-
-
 # ------------------------------------------------------------------ труба
 
-PROTOCOL = "frame.desk.v1"
+PROTOCOL = "frame.desk.v1"          # как в ui-kit/contract.json (tests/t_contract.py)
+DEFAULT_PORT = 8094                 # порт канала по умолчанию — там же
 _STARTED_AT = time.time()
 
 
 async def _tunnel_dispatch(method: str, path: str, body, local: bool = False,
                            role: str = "owner") -> dict:
-    """Один запрос трубы -> тот же ответ, что у HTTP-ручки того же пути.
+    """Один запрос канала -> тот же ответ, что у HTTP-ручки того же пути.
 
-    Это ШОВ БУДУЩЕГО ПРОДУКТА: сегодня по трубе отвечает удалённый харнесс
-    (этот демон на сервере), завтра — нативный харнесс на винде. Оболочка
-    разницы не видит: протокол один, praxis.desk.v1 (по образцу praxis.body.v1
-    её тела — исходящее соединение, ни одного открытого порта у клиента)."""
+    Это ШОВ ПРОДУКТА: по каналу отвечает и удалённый харнесс (на сервере), и
+    локальный на винде; оболочка разницы не видит — протокол один,
+    frame.desk.v1 (по образцу praxis.body.v1 её тела — исходящее соединение,
+    ни одного открытого порта у клиента). Маршруты — из той же таблицы
+    ROUTES, что и HTTP-роутер: второго списка нет."""
     from urllib.parse import urlsplit, parse_qs
     parts = urlsplit(path)
-    route = parts.path
+    route_path = parts.path
     query = {k: values[-1] for k, values in parse_qs(parts.query).items()}
-    # Труба — ВТОРАЯ дверь к тем же ручкам, и область ключа устройства должна
-    # быть в ней той же самой: иначе телефон, открыв /tunnel, обходил бы весь
+    # Канал — ВТОРАЯ дверь к тем же ручкам, и область ключа устройства должна
+    # быть в нём той же самой: иначе телефон, открыв /tunnel, обходил бы весь
     # разбор прав HTTP-слоя.
-    if not _scope_ok(role, route):
+    if not _scope_ok(role, route_path):
         return {"status": 403, "error": "телефону сюда нельзя — это делают из окна"}
-    try:
-        if method == "POST" and route == "/api/md":
-            result = await asyncio.to_thread(
-                readers.safe_write_md, str((body or {}).get("path") or ""),
-                str((body or {}).get("text") or ""), (body or {}).get("mtime_ns"))
-            if result.get("error"):
-                status = 409 if result.get("code") == "conflict" else 400
-                return {"status": status, "error": result["error"],
-                        "code": result.get("code")}
-            return {"status": 200, "body": result}
-        if method == "POST" and route == "/api/say":
-            return {"status": 200,
-                    "body": await _say((body or {}).get("text"),
-                                       (body or {}).get("chat") or "")}
-        if route == "/api/runs":
-            return {"status": 200, "body": await asyncio.to_thread(
-                readers.list_runs, _int_arg(query, "limit", 80, 1, 200),
-                query.get("kind") or "", query.get("before") or "")}
-        if route.startswith("/api/run/"):
-            detail = await asyncio.to_thread(readers.run_detail,
-                                             route.removeprefix("/api/run/"))
-            return ({"status": 200, "body": detail} if detail
-                    else {"status": 404, "error": "нет такого прогона"})
-        if route == "/api/pulse":
-            return {"status": 200, "body": await asyncio.to_thread(readers.pulse)}
-        if route == "/api/errors":
-            return {"status": 200, "body": await asyncio.to_thread(readers.errors)}
-        if route == "/api/board":
-            return {"status": 200, "body": await asyncio.to_thread(readers.board)}
-        if route == "/api/agenda":
-            return {"status": 200, "body": await asyncio.to_thread(readers.agenda)}
-        if route == "/api/forge":
-            return {"status": 200, "body": await asyncio.to_thread(readers.forge_tasks)}
-        if route == "/api/chats":
-            return {"status": 200, "body": await asyncio.to_thread(readers.chats)}
-        if route.startswith("/api/chat/"):
-            return {"status": 200, "body": await asyncio.to_thread(
-                readers.chat_tail, route.removeprefix("/api/chat/"),
-                _int_arg(query, "n", 200, 1, 600))}
-        if route == "/api/shadow":
-            return {"status": 200, "body": await asyncio.to_thread(readers.shadow_streams)}
-        if route == "/api/shadow-metrics":
-            return {"status": 200, "body": await asyncio.to_thread(
-                readers.shadow_metrics, 120, query.get("stream") or "")}
-        # Была заведена ТОЛЬКО в HTTP-роутере: единственная ручка из двадцати,
-        # существовавшая в одном канале из двух. По трубе отвечала 404.
-        if route == "/api/home":
-            return {"status": 200, "body": {"tree": str(readers.tree().resolve())}}
-        # Каждый маршрут — в ОБОИХ каналах. Ровно здесь была историческая
-        # ловушка: /api/home существовала только в HTTP-роутере.
-        match = re.match(r"^/api/shadow/([^/]+)/(captures|capture|diff|metrics)$", route)
-        if match:
-            stream, action = match.group(1), match.group(2)
-            if action == "metrics":
-                return {"status": 200, "body": await asyncio.to_thread(
-                    readers.shadow_metrics, 120, stream)}
-            if action == "captures":
-                return {"status": 200, "body": await asyncio.to_thread(
-                    readers.shadow_captures, stream)}
-            if action == "capture":
-                text = await asyncio.to_thread(readers.shadow_capture, stream,
-                                               query.get("name") or "")
-                return {"status": 200, "body": {"stream": stream,
-                                                "name": query.get("name"),
-                                                "text": text}}
-            return {"status": 200, "body": await asyncio.to_thread(
-                readers.shadow_diff, stream, query.get("old") or "",
-                query.get("new") or "")}
-        if route == "/api/md":
-            return {"status": 200, "body": await asyncio.to_thread(
-                readers.safe_read_md, query.get("path") or "")}
-        if route == "/api/md-tree":
-            return {"status": 200, "body": await asyncio.to_thread(readers.md_tree)}
-        if route.startswith("/api/chat-turns/"):
-            return {"status": 200, "body": await asyncio.to_thread(
-                readers.chat_turns, route.removeprefix("/api/chat-turns/"),
-                _int_arg(query, "n", 120, 1, 300))}
-        if route == "/api/anatomy":
-            return {"status": 200, "body": await asyncio.to_thread(readers.anatomy)}
-        if route == "/api/health":
-            return {"status": 200, "body": await asyncio.to_thread(readers.health)}
-        if route == "/api/state":
-            return {"status": 200, "body": await asyncio.to_thread(readers.state)}
-        # Вторая дверь к режиму — та самая, которой ходит окно. HTTP-маршрут без
-        # этой строки существовал бы только на бумаге (см. api_mode).
-        if route == "/api/mode":
-            return {"status": 200, "body": await asyncio.to_thread(readers.mode_state)}
-        # телефон: пары выдаёт и отзывает только окно на этой машине
-        if route.startswith("/pair/") and not local:
-            return {"status": 403, "error": "только с этой машины"}
-        if route == "/pair/devices":
-            return {"status": 200, "body": _device_rows()}
-        if method == "POST" and route == "/pair/new":
-            return {"status": 200, "body": _new_pair()}
-        if method == "POST" and route == "/pair/revoke":
-            return {"status": 200, "body": _revoke_device(str((body or {}).get("id") or ""))}
+    route, params = match_route(method, route_path)
+    if route is None:
         return {"status": 404, "error": "нет такого пути"}
+    if route.local_only and not local:
+        return {"status": 403, "error": "только с этой машины"}
+    try:
+        result = await route.handler(Call(match=params, query=query, body=body,
+                                          local=local, role=role))
     except web.HTTPError as exc:
         return {"status": exc.status, "error": exc.text or str(exc)}
     except Exception as exc:
-        log.warning("канал: %s %s упал", method, route, exc_info=True)
+        log.warning("канал: %s %s упал", method, route_path, exc_info=True)
         return {"status": 500, "error": f"{type(exc).__name__}: {exc}"[:300]}
+    if isinstance(result, Fail):
+        reply = {"status": result.status, "error": result.error}
+        if result.code:
+            reply["code"] = result.code
+        return reply
+    return {"status": 200, "body": result}
 
 
 async def tunnel(request):
     """Одна труба на оболочку: запросы с id + события живьём, praxis.desk.v1.
 
     На рукопожатие WebSocket политика CORS не действует вообще, поэтому страница
-    из браузера владельца открывала ws://127.0.0.1:8094/tunnel, получала
+    из браузера владельца открывала ws://127.0.0.1:<порт>/tunnel, получала
     `local = True` по факту петли — и вместе с ним права окна: выпустить пару,
     посмотреть и ОТВЯЗАТЬ устройства владельца, переписать конституцию.
     Починка одного только CORS эту дверь не закрывала. Origin браузер обязан
@@ -1185,31 +1172,10 @@ def _mobile_file(name: str):
 def build_app() -> web.Application:
     app = web.Application(middlewares=[auth_middleware])
     app.router.add_get("/", index)
-    app.router.add_get("/api/runs", api_runs)
-    app.router.add_get("/api/run/{run_id}", api_run)
-    app.router.add_get("/api/pulse", api_pulse)
-    app.router.add_get("/api/errors", api_errors)
-    app.router.add_get("/api/board", api_board)
-    app.router.add_get("/api/agenda", api_agenda)
-    app.router.add_get("/api/forge", api_forge)
-    app.router.add_get("/api/shadow", api_shadow)
-    app.router.add_get("/api/shadow/{stream}/captures", api_shadow_captures)
-    app.router.add_get("/api/shadow/{stream}/capture", api_shadow_capture)
-    app.router.add_get("/api/shadow/{stream}/diff", api_shadow_diff)
-    app.router.add_get("/api/shadow-metrics", api_shadow_metrics)
-    app.router.add_get("/api/shadow/{stream}/metrics", api_shadow_metrics)
-    app.router.add_get("/api/chats", api_chats)
-    app.router.add_get("/api/chat/{peer}", api_chat)
-    app.router.add_get("/api/md", api_md)
-    app.router.add_get("/api/md-tree", api_md_tree)
-    app.router.add_get("/api/health", api_health)
-    app.router.add_get("/api/state", api_state)
-    app.router.add_get("/api/mode", api_mode)
-    app.router.add_get("/api/home", api_home)
-    app.router.add_post("/pair/new", api_pair_new)
+    # Все ручки API — из одной таблицы (та же, что у канала).
+    for route in ROUTES:
+        app.router.add_route(route.method, route.path, _http_handler(route))
     app.router.add_get("/pair/redeem", api_pair_redeem)
-    app.router.add_get("/pair/devices", api_devices)
-    app.router.add_post("/pair/revoke", api_device_revoke)
     app.router.add_get("/m/", mobile_index)
     app.router.add_get("/m", mobile_index)
     app.router.add_get("/m/manifest.webmanifest", mobile_manifest)
@@ -1218,10 +1184,6 @@ def build_app() -> web.Application:
     for name in ("icon-192.png", "icon-512.png", "apple-touch-icon.png"):
         if (MOBILE / name).is_file():
             app.router.add_get("/m/" + name, _mobile_file(name))
-    app.router.add_post("/api/md", api_md_write)
-    app.router.add_get("/api/anatomy", api_anatomy)
-    app.router.add_get("/api/chat-turns/{peer}", api_chat_turns)
-    app.router.add_post("/api/say", api_say)
     app.router.add_get("/events", sse)
     app.router.add_get("/tunnel", tunnel)
     if STATIC.is_dir():
@@ -1251,7 +1213,7 @@ def _ensure_local_tree() -> None:
 
 def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(
-        os.environ.get("HELENE_PORT") or os.environ.get("PRAXIS_DESK_PORT") or 8094)
+        os.environ.get("HELENE_PORT") or os.environ.get("PRAXIS_DESK_PORT") or DEFAULT_PORT)
     # Локальный харнесс обязан слушать ТОЛЬКО петлю: дерево без токена не должно
     # быть видно даже соседям по локальной сети. Сервер (за Caddy) — как раньше.
     host = (os.environ.get("HELENE_HOST") or os.environ.get("PRAXIS_DESK_HOST") or "0.0.0.0").strip()

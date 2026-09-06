@@ -38,6 +38,28 @@ pub const RELAY_PORT: u16 = 5011;
 /// писал свой конфиг без этого ключа — «Проверить обновления» отказывало всегда.
 pub const UPDATE_URL: &str = "https://api.github.com/repos/josephsteuerjr/helene/releases/latest";
 
+// Общее с оболочкой и службой (ревью 06.09, §4): проба модели и гард
+// исходящего адреса, экранирование PowerShell, поднятая операция со службой,
+// случайные байты из CSPRNG, внешняя программа с дедлайном.
+include!("../../common/model_probe.rs");
+include!("../../common/ps.rs");
+include!("../../common/service_op.rs");
+include!("../../common/random_hex.rs");
+include!("../../common/run_hidden.rs");
+
+/// Имя правила брандмауэра — из того же файла, что у оболочки и службы
+/// (`common/firewall_rule.rs`): установщик снимает правило при удалении, и
+/// до 07.09 собирал имя руками мимо `firewall_rule_title` (ревью 06.09, §4
+/// п. 15). Остальное из файла установщику не нужно — отсюда модуль.
+mod firewall_rule {
+    #![allow(dead_code)]
+    include!("../../common/firewall_rule.rs");
+
+    pub(super) fn title(product: &str, port: u16) -> String {
+        firewall_rule_title(product, port)
+    }
+}
+
 /// Файлы поставки, по которым мы узнаём её папку.
 const PAYLOAD_MARKERS: [&str; 3] = ["helene.exe", "app", "runtime"];
 
@@ -111,6 +133,8 @@ const COMPUTER_SCOPES: [&str; 4] = ["computer.read", "computer.files", "computer
 
 /// Порт моста тела по умолчанию (body.DEFAULT_PORT). Не 9473: там тело Праксис.
 const COMPUTER_PORT: u16 = 9480;
+/// Порт канала окна по умолчанию — как в `ui-kit/contract.json`.
+const DESK_PORT: u16 = 8094;
 
 fn computer_block(enabled: bool) -> serde_json::Value {
     serde_json::json!({ "enabled": enabled, "port": COMPUTER_PORT, "scopes": COMPUTER_SCOPES })
@@ -333,13 +357,6 @@ fn inside_or_same(a: &str, b: &str) -> bool {
 
 // ---------------------------------------------------------------- PowerShell
 
-/// Строка внутри одинарных кавычек PowerShell: апостроф удваивается.
-/// Без этого путь вида `C:\Users\O'Brien\…` рвёт скрипт ЦЕЛИКОМ (ParserError),
-/// а отказ у нас проглатывался — гашение процессов и ярлыки молча не работали.
-fn ps_quote(s: &str) -> String {
-    s.replace('\'', "''")
-}
-
 /// Текст, который печатают консольные программы. Windows PowerShell 5.1 на
 /// системе с OEMCP=866 отдаёт кириллицу в CP866; читать её как UTF-8 значит
 /// показать владельцу вместо причины строку из «?????». Сначала пробуем UTF-8
@@ -397,6 +414,12 @@ fn io_note(path: &Path, e: &std::io::Error) -> String {
 }
 
 fn copy_dir(src: &Path, dst: &Path, skip_root: &[&str]) -> Result<usize, String> {
+    copy_dir_skip(src, dst, skip_root, &[])
+}
+
+/// `skip_rel` — пути от корня поставки (`app/static`, `runtime`), которые
+/// не копируются: обновление оставляет их такими, какие стоят (см. `install`).
+fn copy_dir_skip(src: &Path, dst: &Path, skip_root: &[&str], skip_rel: &[&str]) -> Result<usize, String> {
     // Приёмник внутри источника — рекурсия видела бы собственную копию и уходила
     // вглубь до переполнения стека (2,4 ГБ мусора за 25 секунд на прогоне).
     let (ns, nd) = (norm_path(src), norm_path(dst));
@@ -407,10 +430,10 @@ fn copy_dir(src: &Path, dst: &Path, skip_root: &[&str]) -> Result<usize, String>
             dst.display()
         ));
     }
-    copy_tree(src, dst, skip_root)
+    copy_tree(src, dst, skip_root, skip_rel, "")
 }
 
-fn copy_tree(src: &Path, dst: &Path, skip_root: &[&str]) -> Result<usize, String> {
+fn copy_tree(src: &Path, dst: &Path, skip_root: &[&str], skip_rel: &[&str], rel: &str) -> Result<usize, String> {
     std::fs::create_dir_all(dst).map_err(|e| io_note(dst, &e))?;
     let mut count = 0;
     for entry in std::fs::read_dir(src).map_err(|e| io_note(src, &e))? {
@@ -419,16 +442,71 @@ fn copy_tree(src: &Path, dst: &Path, skip_root: &[&str]) -> Result<usize, String
         if skip_root.iter().any(|s| name == *s) {
             continue;
         }
+        let name_text = name.to_string_lossy();
+        let here = if rel.is_empty() { name_text.to_string() } else { format!("{rel}/{name_text}") };
+        if skip_rel.iter().any(|s| *s == here) {
+            continue;
+        }
         let from = entry.path();
         let to = dst.join(&name);
         if from.is_dir() {
-            count += copy_tree(&from, &to, &[])?;
+            count += copy_tree(&from, &to, &[], skip_rel, &here)?;
         } else {
             std::fs::copy(&from, &to).map_err(|e| io_note(&to, &e))?;
             count += 1;
         }
     }
     Ok(count)
+}
+
+// ------------------------------------------------- обновление поверх: что менять
+
+/// Манифест статики окна, который кладёт сборка (`installer/build_dist.py`):
+/// sha256 каждого файла и общий отпечаток `digest`.
+const STATIC_MANIFEST: &str = ".helene-static.json";
+
+fn static_digest(root: &Path) -> Option<String> {
+    let v = read_json(&root.join("app").join("static").join(STATIC_MANIFEST))?;
+    v.get("digest").and_then(|d| d.as_str()).filter(|d| !d.is_empty()).map(str::to_string)
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum StaticPlan {
+    /// Первая установка (или установка без статики): положить с манифестом.
+    Fresh,
+    /// Выпуск статику не менял — папку пользователя не трогать вовсе.
+    Keep,
+    /// Выпуск статику менял — заменить, прежнюю отложить в `app/static.prev`.
+    Replace,
+}
+
+/// Решение о статике окна — по манифестам ДВУХ ПОСТАВОК (новой и той, что
+/// ставилась раньше), а не по файлам пользователя. Слово владельца 07.09:
+/// «если я не трогал статику — оставлять пользовательскую». Правил ли он
+/// `app/static` руками — его дело, установщик по этому не решает никогда.
+/// Поставка без манифеста (старее 0.3.3) сравнить себя не может — заменяет,
+/// как раньше.
+fn static_plan(payload: &Path, dir: &Path) -> StaticPlan {
+    if !dir.join("app").join("static").join("index.html").exists() {
+        return StaticPlan::Fresh;
+    }
+    match (static_digest(payload), static_digest(dir)) {
+        (Some(new), Some(old)) if new == old => StaticPlan::Keep,
+        _ => StaticPlan::Replace,
+    }
+}
+
+/// Рантайм одинаков по паспорту сборки (`helene-build.json`): версия Python,
+/// суммы скачанного, список пакетов. Одинаковый — не копировать 200 МБ впустую.
+/// Установка без живого `runtime/python.exe` — не одинаковый ни при чём.
+fn runtime_same(payload: &Path, dir: &Path) -> bool {
+    if !dir.join("runtime").join("python.exe").exists() {
+        return false;
+    }
+    let (Some(new), Some(old)) = (read_json(&payload.join("helene-build.json")), read_json(&dir.join("helene-build.json"))) else {
+        return false;
+    };
+    ["python", "downloads", "packages"].iter().all(|k| new.get(k).is_some() && new.get(k) == old.get(k))
 }
 
 // ---------------------------------------------------------------- конфиг
@@ -447,7 +525,12 @@ fn config_json(s: &Setup, prev_relay_key: Option<String>, relay_port: u16) -> se
     match s.provider.as_str() {
         "chatgpt" => {
             // Ключ реле = ключ мозга: случайный, обязателен Bearer-ом на локальном порту.
-            let key = prev_relay_key.unwrap_or_else(|| format!("sk-frame-{}", random_hex(24)));
+            // CSPRNG (BCryptGenRandom, `common/random_hex.rs`); до 07.09 здесь был
+            // RandomState + время. Отказ системного генератора — не повод
+            // подставлять генератор похуже: это ключ, а не косметика.
+            let key = prev_relay_key.unwrap_or_else(|| {
+                format!("sk-frame-{}", random_hex(24).expect("системный генератор случайных чисел (BCryptGenRandom) отказал"))
+            });
             // БЕЗ /v1: реле объявляет /chat/completions и /v1/models, маршрута
             // /v1/chat/completions у него нет — с /v1 каждый вызов модели давал 404.
             model["base_url"] = format!("http://127.0.0.1:{relay_port}").into();
@@ -499,7 +582,7 @@ fn config_json(s: &Setup, prev_relay_key: Option<String>, relay_port: u16) -> se
         "runner": "app/localharness/runner.py",
         "tree": "data",
         "code": "tree",
-        "port": 8094,
+        "port": DESK_PORT,
         "agent": { "name": s.agent.trim() },
         "owner": { "name": s.owner.trim(), "room": PRODUCT_UI },
         "model": model,
@@ -543,8 +626,27 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
     let mut out = old;
     for k in WIZARD_KEYS {
         if let Some(v) = new.get(k) {
+            if k == "model" {
+                continue; // ниже, по полям
+            }
             out.insert(k.to_string(), v.clone());
         }
+    }
+    // `model` — по полям, а не целиком (ревью 06.09, §3, решение 4). Визард
+    // знает адрес, имя модели, ключ, framework, потолок и усилие; окно после
+    // установки заводит рядом `model.keys` (ключи всех провайдеров, чтобы
+    // переключение не стирало их) и `model.compact_model` (модель свёрток).
+    // Переписать блок целиком значило бы молча стереть их при обновлении
+    // поверх — boot.py об этом предупреждал, но не мог помешать.
+    if let Some(serde_json::Value::Object(fresh_model)) = new.get("model") {
+        let mut model = match out.get("model") {
+            Some(serde_json::Value::Object(m)) => m.clone(),
+            _ => serde_json::Map::new(),
+        };
+        for (k, v) in fresh_model {
+            model.insert(k.clone(), v.clone());
+        }
+        out.insert("model".into(), serde_json::Value::Object(model));
     }
     // Реле: появилось — ставим, провайдер сменился — убираем.
     match new.get("relay") {
@@ -654,26 +756,6 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_str(&decode_config(&raw)?).ok()
 }
 
-fn random_hex(bytes: usize) -> String {
-    // Без внешних крейтов: время + адреса стека через хэш — достаточно для
-    // локального ключа, который ходит только по 127.0.0.1.
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    let mut out = String::new();
-    while out.len() < bytes * 2 {
-        let mut h = RandomState::new().build_hasher();
-        h.write_u128(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0),
-        );
-        out.push_str(&format!("{:016x}", h.finish()));
-    }
-    out.truncate(bytes * 2);
-    out
-}
-
 fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| io_note(parent, &e))?;
@@ -699,7 +781,7 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
 fn procs_under(dir: &Path) -> Option<usize> {
     let script = format!(
         "$d='{}'; @(Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -and $_.ExecutablePath.StartsWith($d,'OrdinalIgnoreCase') -and $_.ProcessId -ne {} }}).Count",
-        ps_quote(&format!("{}\\", dir.display())),
+        ps_escape(&format!("{}\\", dir.display())),
         std::process::id()
     );
     let out = powershell(&script).ok()?;
@@ -715,7 +797,7 @@ fn procs_under(dir: &Path) -> Option<usize> {
 pub fn stop_running(dir: &Path) -> bool {
     let script = format!(
         "$d='{}'; Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -and $_.ExecutablePath.StartsWith($d,'OrdinalIgnoreCase') -and $_.ProcessId -ne {} }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
-        ps_quote(&format!("{}\\", dir.display())),
+        ps_escape(&format!("{}\\", dir.display())),
         std::process::id()
     );
     let _ = powershell(&script);
@@ -877,10 +959,10 @@ fn shortcuts(exe: &Path, name: &str, icon: Option<&Path>) -> Result<String, Stri
     // выбрасывался, и расписка «Ярлыки: ok» относилась только к меню «Пуск».
     let desktop = powershell(&format!(
         "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\\{}.lnk'); $s.TargetPath='{}'; $s.WorkingDirectory='{}'; {} $s.Save()",
-        ps_quote(name),
-        ps_quote(&exe.display().to_string()),
-        ps_quote(&exe.parent().map(|p| p.display().to_string()).unwrap_or_default()),
-        icon.map(|i| format!("$s.IconLocation='{},0';", ps_quote(&i.display().to_string()))).unwrap_or_default()
+        ps_escape(name),
+        ps_escape(&exe.display().to_string()),
+        ps_escape(&exe.parent().map(|p| p.display().to_string()).unwrap_or_default()),
+        icon.map(|i| format!("$s.IconLocation='{},0';", ps_escape(&i.display().to_string()))).unwrap_or_default()
     ));
     match desktop {
         Ok(out) if out.status.success() => note.push_str("; ярлык рабочего стола ok"),
@@ -1142,211 +1224,24 @@ fn move_relay_auth(dir: &Path) -> Option<Result<String, String>> {
     })
 }
 
-/// Живая проверка адреса и ключа: GET {base}/models с Bearer.
-/// Идентификаторы моделей из ответа /models: по ним человек выбирает модель
-/// одним нажатием, а не переписывает имя вслепую.
-pub fn model_ids(body: &str) -> Vec<String> {
-    let mut ids: Vec<String> = serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("data").and_then(|d| d.as_array()).cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(|s| s.to_string()))
-        .collect();
-    ids.sort();
-    ids.dedup();
-    ids
-}
-
-/// Куда установщику позволено ходить с ключом владельца. Тот же гард, что в
-/// оболочке (shell/src/main.rs::outbound_url_ok), и по той же причине: адрес
-/// приходит из веб-части визарда, а ключ уходит заголовком. Один и тот же код
-/// жил в двух подсистемах, а разбор адреса стоял только в одной.
-/// https — куда угодно (туда и ходят облачные модели), http — только к себе и
-/// в локальную сеть (Ollama, LM Studio, соседняя машина в Tailscale).
-pub fn outbound_url_ok(url: &str) -> Result<(), String> {
-    let u = url.trim();
-    let lower = u.to_lowercase();
-    if lower.starts_with("https://") {
-        return Ok(());
-    }
-    let Some(rest) = lower.strip_prefix("http://") else {
-        return Err("адрес должен начинаться с https:// или http://".into());
-    };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let authority = authority.rsplit('@').next().unwrap_or(authority);
-    let host = match authority.strip_prefix('[') {
-        Some(v6) => v6.split(']').next().unwrap_or(""),
-        None => authority.split(':').next().unwrap_or(""),
-    };
-    if host_is_local(host) {
-        Ok(())
-    } else {
-        Err(format!(
-            "по http ключ уходит только на свою машину или в локальную сеть, а тут {host}; снаружи нужен https://"
-        ))
-    }
-}
-
-/// Свой ли это адрес: петля, частные сети RFC1918, сеть Tailscale, .local.
-pub fn host_is_local(host: &str) -> bool {
-    if host == "localhost" || host == "::1" || host.ends_with(".local") || host.ends_with(".localhost") {
-        return true;
-    }
-    let octets: Vec<u8> = host.split('.').filter_map(|p| p.parse::<u8>().ok()).collect();
-    if octets.len() != 4 || host.split('.').count() != 4 {
-        return false;
-    }
-    match (octets[0], octets[1]) {
-        (127, _) => true,
-        (10, _) => true,
-        (192, 168) => true,
-        (172, b) if (16..=31).contains(&b) => true,
-        (100, b) if (64..=127).contains(&b) => true,
-        _ => false,
-    }
-}
-
+/// Живая проверка адреса и ключа — `common/model_probe.rs`, тем же кодом, что
+/// в окне. Успех — только настоящий список моделей.
 pub fn probe_model(base_url: &str, key: &str, framework: &str) -> (bool, String, Vec<String>) {
-    // Anthropic-совместимые (Anthropic, Z.ai) — /v1/models с x-api-key; остальные — /models с Bearer.
-    let anthropic = framework.trim().eq_ignore_ascii_case("anthropic");
-    let base = base_url.trim().trim_end_matches('/');
-    let url = if anthropic {
-        if base.ends_with("/v1") { format!("{base}/models") } else { format!("{base}/v1/models") }
-    } else {
-        format!("{base}/models")
-    };
-    if let Err(why) = outbound_url_ok(&url) {
-        return (false, why, Vec::new());
-    }
-    // redirects(0): ureq по умолчанию идёт по переадресациям до пяти хопов и
-    // снимает на чужом хосте только Authorization, а НЕ кастомный x-api-key,
-    // которым ходит ветка anthropic/z.ai. Без этой строки разрешённый гардом
-    // адрес отвечал 302 куда угодно — и ключ уезжал туда одним хопом.
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(12))
-        .redirects(0)
-        .build();
-    let mut req = agent.get(&url);
-    if !key.trim().is_empty() {
-        if anthropic {
-            req = req.set("x-api-key", key.trim()).set("anthropic-version", "2023-06-01");
-        } else {
-            req = req.set("Authorization", &format!("Bearer {}", key.trim()));
-        }
-    }
-    match req.call() {
-        Ok(resp) => {
-            // С redirects(0) переадресация возвращается ответом: говорим о ней
-            // прямо, а не выдаём пустой список за «странный ответ».
-            if (300..400).contains(&resp.status()) {
-                let code = resp.status();
-                let to: String = resp.header("location").unwrap_or("").chars().take(120).collect();
-                return (
-                    false,
-                    format!("Адрес отвечает переадресацией ({code}) на {to} — ключ туда не отправляю; укажи конечный адрес"),
-                    Vec::new(),
-                );
-            }
-            let body = resp.into_string().unwrap_or_default();
-            let models = model_ids(&body);
-            if models.is_empty() {
-                // 200 — ещё не «ключ подошёл»: z.ai на неверный ключ отвечает
-                // HTTP 200 с телом {"success":false,"msg":"Authentication Failed"}.
-                // Успех — только настоящий список моделей.
-                (
-                    false,
-                    format!(
-                        "Ответ пришёл, но это не список моделей: {}",
-                        body.trim().chars().take(160).collect::<String>()
-                    ),
-                    models,
-                )
-            } else {
-                (true, format!("Отвечает: моделей доступно {}", models.len()), models)
-            }
-        }
-        Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => (false, "Ключ не подошёл".to_string(), Vec::new()),
-        Err(ureq::Error::Status(404, _)) => (false, "По этому адресу нет /models".to_string(), Vec::new()),
-        Err(ureq::Error::Status(code, _)) => (false, format!("Ответ {code}"), Vec::new()),
-        Err(err) => (false, format!("Нет связи: {}", err.to_string().chars().take(120).collect::<String>()), Vec::new()),
-    }
+    probe_model_blocking(base_url, key, framework)
 }
 
 // ---------------------------------------------------------------- служба
 
-/// Поднятая часть работы со службой. Отдельным скриптом, а не строкой в
-/// -ArgumentList: путь с апострофом рвал строку целиком, а результат прежде
-/// выбрасывался — снятие рапортовало «Снято» при живой службе LocalSystem.
-const SERVICE_OP_PS1: &str = r#"# Служебные операции Hélène под правами администратора.
-# Коды выхода: 0 — сделано, 1 — служба осталась, 2 — нет скрипта поставки.
-param([string]$Op, [string]$Name, [string]$Script)
-$ErrorActionPreference = 'Continue'
-
-function Gone { & sc.exe query $Name *> $null; return ($LASTEXITCODE -ne 0) }
-
-if ($Op -eq 'install') {
-  if (-not (Test-Path $Script)) { exit 2 }
-  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script
-  exit $LASTEXITCODE
-}
-
-# Автоперезапуск снимаем ДО остановки: иначе SCM поднимет службу через 5 секунд
-# (install-service.ps1 прописывает restart/5000) прямо посреди снятия.
-& sc.exe failure $Name reset= 0 actions= "" *> $null
-& sc.exe config $Name start= disabled *> $null
-
-if ($Op -eq 'stop') {
-  & sc.exe stop $Name *> $null
-  for ($i = 0; $i -lt 30; $i++) {
-    if (Gone) { exit 0 }
-    $q = & sc.exe query $Name 2>$null
-    if ($q -match 'STOPPED') { exit 0 }
-    Start-Sleep -Milliseconds 400
-  }
-  exit 1
-}
-
-# uninstall
-if ($Script -and (Test-Path $Script)) {
-  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script *> $null
-}
-for ($i = 0; $i -lt 30; $i++) {
-  if (Gone) { exit 0 }
-  & sc.exe stop $Name *> $null
-  & sc.exe delete $Name *> $null
-  Start-Sleep -Milliseconds 400
-}
-exit 1
-"#;
-
-/// Один поднятый вызов: пишем скрипт во временную папку и запускаем его через
-/// UAC, ЧИТАЯ код возврата (-PassThru): отказ от прав больше не выглядит успехом.
-/// `name` — имя службы в SCM: не только своё, но и прежних поколений продукта
-/// (Vera, Frame), которые прошлое снятие оставило живыми под LocalSystem.
+/// Один поднятый вызов (`common/service_op.rs`): пишем обёртку во временную
+/// папку и запускаем её через UAC, ЧИТАЯ код возврата (-PassThru): отказ от
+/// прав больше не выглядит успехом. `name` — имя службы в SCM: не только своё,
+/// но и прежних поколений продукта (Vera, Frame), которые прошлое снятие
+/// оставило живыми под LocalSystem.
 fn service_op(op: &str, name: &str, script: Option<&Path>) -> Result<(), String> {
     let wrapper = std::env::temp_dir().join("helene-service-op.ps1");
     std::fs::write(&wrapper, SERVICE_OP_PS1).map_err(|e| io_note(&wrapper, &e))?;
-    let script_arg = script.map(|p| p.display().to_string()).unwrap_or_default();
-    // Аргументы одной строкой и каждый в двойных кавычках: Start-Process с
-    // массивом склеивает элементы пробелом и сам ничего не экранирует, поэтому
-    // путь с пробелом (C:\Users\John Smith\…) разъехался бы на два аргумента.
-    // Вся строка — в одинарных кавычках PowerShell, значит апостроф удваиваем.
-    let cmd = format!(
-        "try {{ $p = Start-Process powershell -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\" -Op \"{}\" -Name \"{}\" -Script \"{}\"'; exit $p.ExitCode }} catch {{ exit 5 }}",
-        ps_quote(&wrapper.display().to_string()),
-        ps_quote(op),
-        ps_quote(name),
-        ps_quote(&script_arg),
-    );
-    let out = powershell(&cmd)?;
-    match out.status.code() {
-        Some(0) => Ok(()),
-        Some(2) => Err("в этой поставке нет скрипта службы".into()),
-        Some(5) => Err("права администратора не были даны".into()),
-        Some(code) => Err(format!("служба не поддалась (код {code})")),
-        None => Err("вызов службы прерван".into()),
-    }
+    let out = powershell(&service_op_command(&wrapper, op, name, script))?;
+    service_op_verdict(out.status.code())
 }
 
 /// Служба: один UAC на машинную часть. Ждём завершения скрипта, потом
@@ -1443,10 +1338,12 @@ pub fn service_state() -> String {
     service_state_of(PRODUCT)
 }
 
+/// С дедлайном, как в окне: повисший sc.exe не должен вешать визард
+/// (ревью 06.09, §4 п. 13).
 pub fn service_state_of(name: &str) -> String {
     let mut cmd = Command::new(sys_exe("sc.exe"));
     cmd.args(["query", name]);
-    match run_hidden(&mut cmd) {
+    match run_hidden_for(&mut cmd, std::time::Duration::from_secs(15)) {
         Ok(out) if out.status.success() => {
             let text = console_text(&out.stdout).to_uppercase();
             if text.contains("RUNNING") || text.contains("START_PENDING") {
@@ -1505,7 +1402,7 @@ fn image_exe(cmdline: &str) -> String {
 pub fn legacy_services(home: Option<&Path>) -> Vec<LegacyService> {
     let filter = KNOWN_SERVICE_NAMES
         .iter()
-        .map(|n| format!("Name='{}'", ps_quote(n)))
+        .map(|n| format!("Name='{}'", ps_escape(n)))
         .collect::<Vec<_>>()
         .join(" or ");
     let script = format!(
@@ -1739,9 +1636,43 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
     };
 
     tick("Копирую файлы программы", &mut progress);
+    // Что заменяется, а что нет (resources/ОБНОВЛЕНИЕ.md): exe, app/, tree/,
+    // server/, документы — всегда; data/ и helene.json — никогда (конфиг
+    // сливается ниже); app/static — по тому, менял ли её ВЫПУСК; runtime/ —
+    // только если сменился состав. Решения принимаются ДО копирования: паспорт
+    // и манифест старой установки копия перепишет.
+    let plan = static_plan(&payload, &dir);
+    let runtime_kept = runtime_same(&payload, &dir);
+    let mut skip_rel: Vec<&str> = Vec::new();
+    if plan == StaticPlan::Keep {
+        skip_rel.push("app/static");
+    }
+    if runtime_kept {
+        skip_rel.push("runtime");
+    }
+    if plan == StaticPlan::Replace {
+        let prev = dir.join("app").join("static.prev");
+        if prev.exists() {
+            std::fs::remove_dir_all(&prev).map_err(|e| io_note(&prev, &e))?;
+        }
+        let current = dir.join("app").join("static");
+        std::fs::rename(&current, &prev).map_err(|e| io_note(&current, &e))?;
+    }
     // helene.json и data/ поставки не копируем: конфиг пишем свой, данные рождаются здесь.
-    let copied = copy_dir(&payload, &dir, &SKIP_FROM_PAYLOAD)?;
+    let copied = copy_dir_skip(&payload, &dir, &SKIP_FROM_PAYLOAD, &skip_rel)?;
     steps.push(Step { label: "Файлы программы".into(), ok: true, note: Some(format!("{copied} файлов")) });
+    steps.push(Step {
+        label: "Интерфейс окна".into(),
+        ok: true,
+        note: Some(match plan {
+            StaticPlan::Fresh => "положен из поставки".to_string(),
+            StaticPlan::Keep => "выпуск его не менял — оставлен твой (app\\static не тронута)".to_string(),
+            StaticPlan::Replace => "обновлён; прежняя версия лежит рядом — app\\static.prev".to_string(),
+        }),
+    });
+    if runtime_kept {
+        steps.push(Step { label: "Рантайм".into(), ok: true, note: Some("состав не менялся — не копировался".into()) });
+    }
 
     tick("Записываю настройки и конституцию", &mut progress);
     let cfg_path = dir.join("helene.json");
@@ -1756,7 +1687,16 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
         .and_then(|k| k.as_str())
         .filter(|k| k.starts_with("sk-frame-"))
         .map(|k| k.to_string());
-    let merged = merge_config(existing.clone(), config_json(s, prev_relay_key, relay_port), s);
+    let mut merged = merge_config(existing.clone(), config_json(s, prev_relay_key, relay_port), s);
+    // Окну — знать, что интерфейс обновлён, а прежний отложен рядом: ключ
+    // `installed.static_prev` живёт, пока лежит папка `app/static.prev`.
+    if let Some(installed) = merged.get_mut("installed").and_then(|v| v.as_object_mut()) {
+        if plan == StaticPlan::Replace || dir.join("app").join("static.prev").exists() {
+            installed.insert("static_prev".into(), "app/static.prev".into());
+        } else {
+            installed.remove("static_prev");
+        }
+    }
     let cfg = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
     write_atomic(&cfg_path, &(cfg + "\n"))?;
     // Конституция — только если её ещё нет: принятый при установке текст и всё,
@@ -2138,7 +2078,7 @@ pub fn uninstall(purge: bool) -> Result<String, String> {
     let mut fw = Command::new(sys_exe("netsh.exe"));
     fw.args([
         "advfirewall", "firewall", "delete", "rule",
-        &format!("name={PRODUCT} ({port})"),
+        &format!("name={}", firewall_rule::title(PRODUCT, port)),
     ]);
     let _ = run_hidden(&mut fw);
 
@@ -2228,22 +2168,6 @@ pub fn uninstall(purge: bool) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Ключ владельца уходит из визарда заголовком. По http он не должен
-    /// уезжать никуда, кроме своей машины и локальной сети; всё остальное —
-    /// только по https. Тот же список, что у оболочки.
-    #[test]
-    fn key_goes_out_only_over_https_or_to_our_own_network() {
-        assert!(outbound_url_ok("https://api.openai.com/v1/models").is_ok());
-        assert!(outbound_url_ok("http://127.0.0.1:11434/v1/models").is_ok());
-        assert!(outbound_url_ok("http://localhost:1234/v1/models").is_ok());
-        assert!(outbound_url_ok("http://192.168.1.5:1234/v1/models").is_ok());
-        assert!(outbound_url_ok("http://100.101.102.103:8094/api").is_ok());
-        assert!(outbound_url_ok("http://evil.example.com/v1/models").is_err());
-        assert!(outbound_url_ok("file:///C:/windows/system32").is_err());
-        assert!(outbound_url_ok("javascript:alert(1)").is_err());
-        assert!(host_is_local("172.16.0.1") && !host_is_local("172.32.0.1"));
-    }
 
     /// Предупреждение службы едет к владельцу файлом: её `println!` уходит в
     /// скрытое поднятое окно. Читаем то, что она положила, — и молчим, когда
@@ -2374,6 +2298,135 @@ mod tests {
         // А своё визард переписывает.
         assert_eq!(out["agent"]["name"], "Вера");
         assert_eq!(out["setup_complete"], true);
+    }
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("helene-{tag}-{}-{}", std::process::id(), random_hex(4).unwrap_or_default()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn put(root: &Path, rel: &str, text: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn payload_with(root: &Path, digest: &str, build: &str) {
+        put(root, "helene.exe", "exe");
+        put(root, "app/static/index.html", "<html>new</html>");
+        put(root, "app/static/assets/a.js", "new js");
+        put(root, &format!("app/static/{STATIC_MANIFEST}"), &format!("{{\"v\":1,\"digest\":\"{digest}\",\"files\":{{}}}}"));
+        put(root, "app/deskapp.py", "py");
+        put(root, "runtime/python.exe", "py-exe");
+        put(root, "helene-build.json", build);
+    }
+
+    const BUILD_A: &str = r#"{"python":"3.14.5","downloads":{"x":"1"},"packages":["aiohttp==3.14.3"]}"#;
+    const BUILD_B: &str = r#"{"python":"3.14.5","downloads":{"x":"1"},"packages":["aiohttp==3.14.4"]}"#;
+
+    /// Статика окна при обновлении поверх — три случая (задача A §2): выпуск её
+    /// не менял, а пользователь правил — его файлы целы; выпуск менял —
+    /// заменена, прежняя в `static.prev`; первая установка — положена с
+    /// манифестом. Решает манифест поставки, а не содержимое папки пользователя.
+    #[test]
+    fn static_follows_the_release_not_the_user() {
+        let payload = temp_dir("payload");
+        let dir = temp_dir("install");
+        payload_with(&payload, "d1", BUILD_A);
+        // 1. Первая установка.
+        assert_eq!(static_plan(&payload, &dir), StaticPlan::Fresh);
+        copy_dir_skip(&payload, &dir, &SKIP_FROM_PAYLOAD, &[]).unwrap();
+        assert!(dir.join("app/static").join(STATIC_MANIFEST).exists(), "манифест уехал в установку");
+        // 2. Пользователь правил статику; выпуск её не менял (тот же отпечаток).
+        put(&dir, "app/static/index.html", "<html>мой</html>");
+        put(&dir, "app/static/custom.css", "body{}");
+        let plan = static_plan(&payload, &dir);
+        assert_eq!(plan, StaticPlan::Keep);
+        copy_dir_skip(&payload, &dir, &SKIP_FROM_PAYLOAD, &["app/static"]).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("app/static/index.html")).unwrap(), "<html>мой</html>");
+        assert!(dir.join("app/static/custom.css").exists());
+        assert!(!dir.join("app/static.prev").exists());
+        // 3. Выпуск статику менял (другой отпечаток) — заменена, прежняя рядом.
+        payload_with(&payload, "d2", BUILD_A);
+        put(&payload, "app/static/index.html", "<html>v2</html>");
+        assert_eq!(static_plan(&payload, &dir), StaticPlan::Replace);
+        std::fs::rename(dir.join("app/static"), dir.join("app/static.prev")).unwrap();
+        copy_dir_skip(&payload, &dir, &SKIP_FROM_PAYLOAD, &[]).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("app/static/index.html")).unwrap(), "<html>v2</html>");
+        assert_eq!(std::fs::read_to_string(dir.join("app/static.prev/index.html")).unwrap(), "<html>мой</html>");
+        assert!(dir.join("app/static.prev/custom.css").exists(), "правки пользователя не пропали");
+        assert!(!dir.join("app/static/custom.css").exists(), "новая статика — чистая");
+        // Поставка без манифеста сравнить себя не может — заменяет.
+        std::fs::remove_file(payload.join("app/static").join(STATIC_MANIFEST)).unwrap();
+        assert_eq!(static_plan(&payload, &dir), StaticPlan::Replace);
+        let _ = std::fs::remove_dir_all(&payload);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Рантайм не копируется при равном паспорте — и копируется, когда состав
+    /// пакетов другой или установленного рантайма нет.
+    #[test]
+    fn runtime_is_skipped_only_when_the_passport_matches() {
+        let payload = temp_dir("payload-rt");
+        let dir = temp_dir("install-rt");
+        payload_with(&payload, "d1", BUILD_A);
+        assert!(!runtime_same(&payload, &dir), "рантайма ещё нет — копировать");
+        copy_dir_skip(&payload, &dir, &SKIP_FROM_PAYLOAD, &[]).unwrap();
+        assert!(runtime_same(&payload, &dir));
+        // Тот же паспорт: runtime пропускается, остальное едет.
+        put(&payload, "runtime/python.exe", "py-exe-2");
+        put(&payload, "app/deskapp.py", "py-2");
+        copy_dir_skip(&payload, &dir, &SKIP_FROM_PAYLOAD, &["runtime"]).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("runtime/python.exe")).unwrap(), "py-exe");
+        assert_eq!(std::fs::read_to_string(dir.join("app/deskapp.py")).unwrap(), "py-2");
+        // Другой состав пакетов — копировать.
+        put(&payload, "helene-build.json", BUILD_B);
+        assert!(!runtime_same(&payload, &dir));
+        let _ = std::fs::remove_dir_all(&payload);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Константы установщика — те же, что в `ui-kit/contract.json` (одно
+    /// место для трёх языков; задача A п. 1.12).
+    #[test]
+    fn contract_json_matches_constants() {
+        let c: serde_json::Value = serde_json::from_str(include_str!("../../ui-kit/contract.json")).unwrap();
+        assert_eq!(c["ports"]["desk"], DESK_PORT);
+        assert_eq!(c["ports"]["relay"], RELAY_PORT);
+        assert_eq!(c["ports"]["body"], COMPUTER_PORT);
+        assert_eq!(c["computer_scopes"], serde_json::json!(COMPUTER_SCOPES));
+        assert_eq!(config_json(&setup_for("api"), None, RELAY_PORT)["port"], c["ports"]["desk"]);
+    }
+
+    /// `model` сливается по полям: ключи всех провайдеров и модель свёрток,
+    /// заведённые окном, переживают переустановку; своё визард переписывает.
+    #[test]
+    fn merge_keeps_model_extras() {
+        let old = serde_json::json!({
+            "model": {
+                "framework": "anthropic", "base_url": "https://api.z.ai/api/anthropic",
+                "model": "glm-5.3", "key": "zai-1",
+                "keys": { "api": "sk-1", "anthropic": "zai-1", "chatgpt": "sk-frame-x" },
+                "compact_model": "glm-4.5-flash", "max_tokens": 4096,
+            },
+            "evaluator": { "model": "glm-4.5-flash" },
+        });
+        let s = setup_for("api");
+        let out = merge_config(Some(old), config_json(&s, None, RELAY_PORT), &s);
+        assert_eq!(out["model"]["framework"], "openai", "провайдер — слово визарда");
+        assert_eq!(out["model"]["base_url"], "https://api.openai.com/v1");
+        assert_eq!(out["model"]["model"], "gpt-5.4");
+        assert_eq!(out["model"]["key"], "sk-1");
+        assert_eq!(out["model"]["max_tokens"], 8192, "потолок — визарда");
+        assert_eq!(out["model"]["keys"]["anthropic"], "zai-1", "ключи окна уцелели");
+        assert_eq!(out["model"]["keys"]["chatgpt"], "sk-frame-x");
+        assert_eq!(out["model"]["compact_model"], "glm-4.5-flash", "модель свёрток уцелела");
+        assert_eq!(out["evaluator"]["model"], "glm-4.5-flash");
+        // Конфиг без блока model вовсе — блок доставляется целиком.
+        let out = merge_config(Some(serde_json::json!({ "port": 8094 })), config_json(&s, None, RELAY_PORT), &s);
+        assert_eq!(out["model"]["model"], "gpt-5.4");
     }
 
     #[test]
@@ -2617,11 +2670,6 @@ mod tests {
         assert!(KNOWN_SERVICE_NAMES.contains(&PRODUCT));
     }
 
-    #[test]
-    fn ps_quote_doubles_apostrophe() {
-        assert_eq!(ps_quote(r"C:\Users\O'Brien"), r"C:\Users\O''Brien");
-    }
-
     /// Текст ошибок PowerShell на русской системе приходит в CP866.
     #[test]
     fn console_text_decodes_cp866() {
@@ -2651,12 +2699,4 @@ mod tests {
         assert!(validate_setup(&s).is_err());
     }
 
-    #[test]
-    fn model_ids_are_not_truncated() {
-        let body: String = format!(
-            "{{\"data\":[{}]}}",
-            (0..120).map(|i| format!("{{\"id\":\"m{i:03}\"}}")).collect::<Vec<_>>().join(",")
-        );
-        assert_eq!(model_ids(&body).len(), 120);
-    }
 }
