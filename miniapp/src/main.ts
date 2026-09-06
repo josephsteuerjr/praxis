@@ -5,6 +5,7 @@
 import "./styles.css";
 import { mountPhone, remember, type Redeem } from "../../ui-kit/phone";
 import { applyTheme, type Theme } from "../../ui-kit/dom";
+import { watchShellVersion } from "../../ui-kit/version";
 
 interface TelegramWebApp {
   initData: string;
@@ -34,6 +35,10 @@ const STORAGE = "frame.tg.device";
 // Ключ прямо в адресе — только для проверки из браузера (?key=…).
 const directKey = params.get("key") || override?.key || "";
 if (directKey) remember(STORAGE, directKey);
+
+// WKWebView Telegram держит старую сборку по адресу кнопки — страница сама
+// сверяет сборку с сервером и перезагружается на новую.
+watchShellVersion();
 
 tg?.ready();
 tg?.expand();
@@ -100,4 +105,4 @@ const app = mountPhone(document.getElementById("app")!, {
   },
 });
 
-tg?.BackButton.onClick(() => app.closeSheet());
+tg?.BackButton.onClick(() => app.back());

@@ -5,6 +5,7 @@
 import "./styles.css";
 import { mountPhone, remember, type Redeem } from "../../ui-kit/phone";
 import { toast } from "../../ui-kit/dom";
+import { watchShellVersion } from "../../ui-kit/version";
 
 declare global {
   interface Window {
@@ -76,6 +77,10 @@ function pairScreen(pair: Redeem | null): { title: string; text: string; retry: 
       return { title: "Нужен ключ", text: "Открой на компьютере Настройки → Телефон → «Показать QR» и наведи камеру. Ссылка подключит этот телефон.", retry: true };
   }
 }
+
+// Оболочка сверяет свою сборку с серверной и сама перезагружается на новую:
+// PWA на «Домой» иначе живёт старой версией неделями.
+watchShellVersion();
 
 mountPhone(document.getElementById("app")!, {
   platform: "web",

@@ -5,6 +5,7 @@
 import "./styles/app.css";
 import { api, cfg, connect, inTauri, onConnection, onEvent, post, shell } from "./api";
 import { applyTheme } from "../../ui-kit/dom";
+import { watchShellVersion } from "../../ui-kit/version";
 import { bindFail, esc, failHTML, fmtAge, fmtK, fmtTs, humanError, q, toast } from "./lib";
 import { PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "./state";
 import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "./rooms";
@@ -46,6 +47,10 @@ const menu = q<HTMLElement>("#menu");
 // Тема — как в системе (слово владельца 07.09): светлая днём, тёмная ночью,
 // без переключателя в окне.
 applyTheme("system");
+
+// Веб-версия окна (Пульт за каналом) обновляется сама, когда на сервере новая
+// сборка; в оболочке helene:// сверка тихо не срабатывает — там статика с диска.
+if (!inTauri) watchShellVersion();
 
 // ---------------------------------------------------------------- окно
 

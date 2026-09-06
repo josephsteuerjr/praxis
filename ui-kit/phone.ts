@@ -589,6 +589,8 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     composer.hidden = false;
     render();
     bumpFeed();
+    // Открытый чат — «внутренний» экран: платформе (Telegram) нужна кнопка «назад».
+    opts.onSheet?.(true);
   }
 
   let lastFeed = "";
@@ -608,6 +610,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
         room = "";
         composer.hidden = true;
         render();
+        opts.onSheet?.(false);
       });
     }
     await renderFeed(guard);
@@ -1074,6 +1077,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
         room = "";
         composer.hidden = true;
         render();
+        opts.onSheet?.(false);
         return true;
       }
       return false;

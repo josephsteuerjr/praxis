@@ -1,7 +1,7 @@
 // Service worker телефона: оболочка приложения живёт в кэше, данные — только
 // с канала. Ассеты Vite носят хэш в имени — их можно хранить долго; страница
 // /m/ берётся из сети, а из кэша — только когда сети нет.
-const CACHE = "helene-m-v1";
+const CACHE = "helene-m-__BUILD__";
 const SHELL = ["/m/", "/m/icon-192.png", "/m/icon-512.png", "/m/apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {
