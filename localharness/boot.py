@@ -492,6 +492,20 @@ def _lock_is_live(holder: dict) -> bool:
         at = float(holder.get("at") or 0.0)
     except (TypeError, ValueError):
         return False
+    # Замок с другого хоста: номер процесса чужого пространства ничего не значит.
+    # Найдено на сервере 06.09: контейнер пересоздан, новый раннер получил тот же
+    # pid 8, что и прежний в замке, и харнесс отказывался подниматься кодом 3.
+    # Свой собственный номер в чужом замке — тот же случай (тот же контейнер,
+    # `docker restart`): держать замок сами на себя мы не можем.
+    host = str(holder.get("host") or "")
+    if host and host != platform.node():
+        log.warning("замок дерева: pid %d на хосте %s, а мы на %s — считаю замок брошенным",
+                    pid, host, platform.node())
+        return False
+    if pid == os.getpid():
+        log.warning("замок дерева: в нём наш собственный pid %d — замок брошен прежней копией",
+                    pid)
+        return False
     if not _pid_alive(pid):
         return False
     if time.time() - at > _LOCK_FRESH_SEC:

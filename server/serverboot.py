@@ -114,6 +114,20 @@ def main() -> int:
     if not app.is_file() or not runner.is_file():
         raise SystemExit(f"нет трубы или раннера: {app} / {runner}")
     token = _desk_token(tree)
+    # Замок дерева прошлого контейнера. В свежем контейнере живого раннера нет по
+    # построению (его поднимает только этот надзор, и он ещё ничего не поднял),
+    # а pid в замке — из ДРУГОГО пространства процессов: новый раннер получает
+    # тот же pid 8, `boot.claim_tree` видит «живого» владельца и выходит с кодом
+    # 3. Найдено на VPS автора 06.09 при пересоздании контейнера. Снимаем
+    # замок здесь, до подъёма детей; сам харнесс с 0.3.1 тоже считает замок с
+    # чужим именем хоста брошенным.
+    stale = tree / "memory" / ".state" / "harness.lock"
+    if stale.exists():
+        try:
+            stale.unlink()
+            print(f"[serverboot] снят замок дерева прошлого контейнера: {stale}", flush=True)
+        except OSError as exc:
+            print(f"[serverboot] замок дерева не снят ({exc}) — раннер может отказаться", flush=True)
     env = dict(os.environ, HELENE_TREE=str(tree), HELENE_TOKEN=token, PYTHONUTF8="1",
                PYTHONUNBUFFERED="1", HELENE_HOST=os.environ.get("HELENE_HOST", "0.0.0.0"))
     env.pop("PRAXIS_DESK_TOKEN", None)
