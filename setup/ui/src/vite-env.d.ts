@@ -38,7 +38,18 @@ declare module "virtual:helene-modes" {
     text: string;
     toggles: ServiceToggle[];
   }
+  /** Управление компьютером — опция ПОВЕРХ любого режима (modes.computer_option):
+   *  тело руки `computer` живёт снаружи ограды. Установщик спрашивает только
+   *  выключатель; четыре права — в Настройках. */
+  export interface ComputerOption {
+    title: string;
+    text: string;
+    /** Оговорка, которую владелец читает ДО включения. */
+    warning: string;
+    default: boolean;
+  }
   export const MODE_CARDS: ModeCard[];
   export const SERVICE_OPTION: ServiceOption;
   export const SESSION0_WARNING: string;
+  export const COMPUTER_OPTION: ComputerOption;
 }

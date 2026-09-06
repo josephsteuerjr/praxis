@@ -15,6 +15,7 @@ import { ANTHROPIC_PRESETS, BILLING_LABEL, clampEffort, effortPlan } from "../..
 import { keepBlock } from "../config";
 import QRCode from "qrcode";
 import { bindFail, el, esc, failHTML, humanError, q, toast } from "../lib";
+import { computerCard, storedComputer } from "../computer";
 import { MODE_KEY, loadMode, modeCard, type ModeState } from "../mode";
 import { mountsCard, type LiveSandbox } from "../mounts";
 import { RELAY_PORT, relayBaseUrl, relayProbeUrl, newRelayKey } from "../relay";
@@ -49,7 +50,17 @@ interface Config {
   // была мертва, пока владелец не отдаст агенту права системы. Оба лежат ровно
   // там, где их читает служба (svc/src/main.rs::load_plan).
   service?: { session0?: boolean; firewall?: boolean; [k: string]: unknown };
+  // Управление компьютером: `enabled` (перезапуском) и четыре права `scopes`
+  // (харнесс перечитывает на ходу). `port` и всё прочее — не наше, блок
+  // СЛИВАЕТСЯ через keepBlock, как и остальные.
+  computer?: { enabled?: boolean; scopes?: unknown; port?: number; [k: string]: unknown };
   installed?: { service?: boolean; [k: string]: unknown };
+  // Местожительство харнесса: `local` — дети окна; `remote` — окно ходит в
+  // трубу на сервере по `base` и `key` (server/README-СЕРВЕР.md). Это НЕ
+  // режим агента — тот в `agent_mode`.
+  mode?: string;
+  base?: string;
+  key?: string;
   [k: string]: unknown;
 }
 
@@ -683,7 +694,19 @@ export async function render(container: HTMLElement): Promise<void> {
   mounts.el.hidden = !(mode.name() ? mode.sandbox() : draft.sandbox.enabled !== false);
   center.append(mounts.el);
 
+  // --- управление компьютером: опция ПОВЕРХ любого режима (06.09)
+  //
+  // Тело руки `computer` живёт снаружи ограды, поэтому карточка не прячется
+  // ни в одном режиме. Тексты и четыре права — из трубы (`computer_option`),
+  // живое состояние тела — из снимка харнесса (`computer_live`); окно
+  // пишет ровно два ключа блока и сливает остальное.
+  const computer = computerCard(modeLive, storedComputer(draft.computer));
+  center.append(computer.el);
+
   center.append(phoneCard(draft, !!c.phone?.enabled));
+
+  // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
+  center.append(transferCard(draft));
 
   // --- автозапуск
   const auto = el("div");
@@ -905,6 +928,19 @@ export async function render(container: HTMLElement): Promise<void> {
         mounts_denied: mounts.denied(),
       });
       out.phone = keepBlock(out.phone, { enabled: !!draft.phone?.enabled });
+      // Управление компьютером: два ключа от карточки, `port` и прочее — как
+      // лежали. Права харнесс перечитывает на ходу, включение — перезапуском.
+      out.computer = keepBlock(out.computer, { enabled: computer.enabled(), scopes: computer.scopes() });
+      // Местожительство харнесса (карточка «Перенос»): три скаляра. `remote`
+      // без адреса — это окно без харнесса, поэтому пустой адрес = `local`.
+      const remoteBase = String(draft.base || "").trim();
+      const remoteOn = draft.mode === "remote" && !!remoteBase;
+      out.mode = remoteOn ? "remote" : "local";
+      if (remoteBase) out.base = remoteBase;
+      else delete out.base;
+      const remoteKey = String(draft.key || "").trim();
+      if (remoteKey) out.key = remoteKey;
+      else delete out.key;
       out.setup_complete = true;
       try {
         await shell("config_save", { config: JSON.stringify(out) });
@@ -950,6 +986,82 @@ export async function render(container: HTMLElement): Promise<void> {
 
   container.replaceChildren(center);
   bindTheme(container);
+}
+
+/**
+ * Карточка «Перенос»: экспорт агента одним архивом и подключение окна к
+ * харнессу на сервере (server/README-СЕРВЕР.md).
+ *
+ * Экспорт — команда оболочки `carry_export` (app/localharness/carry.py):
+ * data/ с личным git, helene.json с ключами, паспорт. Импорта из окна нет
+ * намеренно: подменять data/ под живым харнессом нельзя — это делают из
+ * консоли при закрытой программе, и карточка говорит как.
+ *
+ * Удалённый харнесс — три скаляра конфига: `mode` (local|remote), `base`,
+ * `key`. Пишутся общей кнопкой «Сохранить», применяются перезапуском: с
+ * `remote` оболочка своих детей не поднимает и ходит в чужую трубу.
+ */
+function transferCard(draft: Config): HTMLElement {
+  const box = el("div");
+  const exportOut = el("span", "receipt");
+  const exportBtn = button("Экспорт агента", "quiet", async () => {
+    exportOut.className = "receipt";
+    exportOut.textContent = "Собираю архив…";
+    try {
+      const path = await shell<string>("carry_export");
+      exportOut.className = "receipt ok";
+      exportOut.textContent = `Готово: ${path}`;
+      toast("Архив переноса собран");
+      await shell("reveal_path", { path }).catch(() => {});
+    } catch (e) {
+      exportOut.className = "receipt err";
+      exportOut.textContent = humanError(e).text;
+    }
+  });
+  const exportRow = el("div", "actions");
+  exportRow.append(exportBtn, exportOut);
+  box.append(
+    exportRow,
+    el(
+      "p",
+      "field-hint",
+      "Архив — вся папка данных агента (память, конституция, навыки, личный git, вход ChatGPT, сессия Telegram) и helene.json. " +
+        "Внутри ключ модели и токены — не для пересылки посторонним; паспорт helene-carry.json в архиве перечисляет их поимённо. " +
+        "Не едут: тело руки computer, журналы, ключ окна, стыки смонтированных папок. " +
+        "Обратный импорт на этом ПК — из консоли при закрытой программе: runtime\\python.exe app\\localharness\\carry.py import --config helene.json --archive <архив>; прежняя data/ останется рядом как data.before-<штамп>.",
+    ),
+  );
+
+  // --- окно к харнессу на сервере
+  const remote = el("div");
+  remote.style.marginTop = "12px";
+  const remoteToggle = toggle("Окно ходит к харнессу на сервере", draft.mode === "remote", (v) => {
+    draft.mode = v ? "remote" : "local";
+    syncRemote();
+  });
+  const baseField = field("Адрес трубы на сервере", String(draft.base || ""), (v) => (draft.base = v), {
+    mono: true,
+    placeholder: "https://helene.example.com",
+    hint: "Тот адрес, по которому Caddy или Tailscale отдаёт трубу контейнера (server/docker-compose.yml слушает 127.0.0.1:8094 хоста).",
+  });
+  const keyField = field("Ключ окна", String(draft.key || ""), (v) => (draft.key = v), {
+    type: "password",
+    mono: true,
+    hint: "Строка ключа печатается при старте контейнера: docker logs helene | head. Тот же ключ — у телефона.",
+  });
+  const remoteNote = el("p", "field-hint");
+  const syncRemote = () => {
+    const on = draft.mode === "remote";
+    baseField.hidden = !on;
+    keyField.hidden = !on;
+    remoteNote.textContent = on
+      ? "После сохранения и перезапуска оболочка своих детей не поднимает: агент живёт на сервере, окно и телефон ходят туда. Пустой адрес — это снова local."
+      : "Сейчас агент живёт на этой машине: трубу и харнесс поднимает окно. Перенос на сервер — экспорт выше, затем server/README-СЕРВЕР.md в поставке.";
+  };
+  remote.append(remoteToggle, baseField, keyField, remoteNote);
+  syncRemote();
+  box.append(remote);
+  return card("Перенос", box, "Применяется перезапуском.");
 }
 
 function phoneCard(draft: Config, savedEnabled = false): HTMLElement {

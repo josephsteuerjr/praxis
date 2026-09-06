@@ -3543,7 +3543,8 @@ fn main() {
             update_check,
             logs_bundle,
             reveal_path,
-            telegram_account
+            telegram_account,
+            carry_export
         ])
         .setup(move |app| {
             // Продукт зовётся своим именем: заголовок, ярлык, значок, уведомления —
@@ -4128,6 +4129,49 @@ async fn telegram_account(
         let line = text.lines().rev().find(|l| l.trim_start().starts_with('{')).unwrap_or("");
         serde_json::from_str::<serde_json::Value>(line)
             .map_err(|_| format!("помощник входа ответил не JSON: {}", text.trim().chars().take(200).collect::<String>()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Экспорт агента одним архивом — `app/localharness/carry.py export`: данные
+/// с личным git, helene.json с ключами и паспорт `helene-carry.json`. Возвращает
+/// путь к архиву; окно показывает его в Проводнике. Импорт на ПК — только из
+/// консоли при закрытой программе: подменять data/ под живым харнессом нельзя,
+/// и команды на это у окна намеренно нет.
+#[tauri::command]
+async fn carry_export() -> Result<String, String> {
+    let base = exe_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        let python = base.join("runtime").join("python.exe");
+        let script = base.join("app").join("localharness").join("carry.py");
+        if !python.exists() || !script.exists() {
+            return Err("в этой поставке нет помощника переноса (app/localharness/carry.py)".to_string());
+        }
+        let mut cmd = Command::new(python);
+        cmd.arg("-u")
+            .arg(script)
+            .arg("export")
+            .arg("--config")
+            .arg(base.join(CONFIG_NAME))
+            .current_dir(&base)
+            .env("PYTHONUTF8", "1");
+        // Память агента бывает на сотни мегабайт; десять минут — не бесконечность.
+        let out = run_hidden_for(&mut cmd, Duration::from_secs(600))?;
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let archive = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("архив: "))
+            .map(|s| s.rsplit_once(" (").map(|(p, _)| p).unwrap_or(s).trim().to_string())
+            .filter(|p| !p.is_empty());
+        match archive {
+            Some(path) if out.status.success() => Ok(path),
+            _ => {
+                let err = String::from_utf8_lossy(&out.stderr);
+                let tail: String = err.trim().chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect();
+                Err(format!("экспорт не удался: {}", if tail.is_empty() { text.trim().to_string() } else { tail }))
+            }
+        }
     })
     .await
     .map_err(|e| e.to_string())?

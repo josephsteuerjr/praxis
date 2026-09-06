@@ -1,0 +1,42 @@
+# Hélène на сервере: один контейнер с трубой и раннером, данные агента и
+# конфиг — на хосте рядом. Запуск из корня поставки:
+#   docker compose -f server/docker-compose.yml up -d --build
+#
+# Наружу труба выходит ТОЛЬКО на 127.0.0.1:8094 хоста; в мир её выпускает
+# Caddy (или Tailscale) владельца — см. server/README-СЕРВЕР.md.
+services:
+  helene:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    container_name: helene
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONUTF8=1
+      # Публичный адрес трубы для строки ключа окна (печатается при старте).
+      - HELENE_PUBLIC_URL=${HELENE_PUBLIC_URL:-}
+      # Host-заголовки, которые труба пускает сверх localhost/IP/*.ts.net —
+      # имя, по которому окно и телефон приходят через Caddy.
+      - HELENE_HOSTS=${HELENE_HOSTS:-}
+      # STT — та же коробка, что у Праксис (тома и модель ниже). Пусто в
+      # HELENE_MODELS — модели нет, голосовые не расшифровываются, дерево
+      # говорит об этом само.
+      - PRAXIS_AUDIO_MODEL_DIR=/models/audio
+      - PRAXIS_STT_MODEL=/models/audio/whisper/faster-whisper-large-v3-turbo
+      - PRAXIS_STT_REVISION=
+      - PRAXIS_STT_COMPUTE_TYPE=int8
+      - PRAXIS_STT_CPU_THREADS=${HELENE_STT_THREADS:-3}
+      - PRAXIS_STT_BEAM_SIZE=5
+      - PRAXIS_STT_LOCAL_FILES_ONLY=1
+      - PRAXIS_STT_KEEP_LOADED=${HELENE_STT_KEEP_LOADED:-0}
+    ports:
+      - "127.0.0.1:${HELENE_PORT:-8094}:8094"
+    volumes:
+      - ../data:/opt/helene/data
+      - ../helene.json:/opt/helene/helene.json
+      # Модели тяжёлые и живут вне поставки; в контейнере только читаются.
+      # На сервере автора это /opt/praxis-models (та же модель, что у Праксис).
+      - ${HELENE_MODELS:-./models}:/models:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

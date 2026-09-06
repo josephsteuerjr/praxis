@@ -91,7 +91,7 @@ for (const [, block, tail] of assignments) {
 }
 
 // Именно те блоки, на которых класс уже срывался, — поимённо.
-for (const block of ["sandbox", "phone", "telegram", "model", "service"]) {
+for (const block of ["sandbox", "phone", "telegram", "model", "service", "computer"]) {
   assert.ok(
     new RegExp(`out\\.${block} = keepBlock\\(out\\.${block},`).test(settingsTs),
     `out.${block} обязан писаться через keepBlock(out.${block}, …)`,

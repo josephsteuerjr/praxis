@@ -1,0 +1,48 @@
+{
+  "mode": "local",
+  "agent_mode": "interactive",
+  "python": "python",
+  "app": "app/deskapp.py",
+  "runner": "app/localharness/runner.py",
+  "tree": "data",
+  "code": "tree",
+  "port": 8094,
+  "agent": {
+    "name": ""
+  },
+  "owner": {
+    "name": "",
+    "room": "Hélène"
+  },
+  "model": {
+    "framework": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "key": "",
+    "model": "",
+    "max_tokens": 8192
+  },
+  "telegram": {
+    "bot_token": "",
+    "owner_id": 0
+  },
+  "phone": {
+    "enabled": true
+  },
+  "sandbox": {
+    "enabled": false,
+    "network": true
+  },
+  "service": {
+    "session0": false
+  },
+  "computer": {
+    "enabled": false,
+    "port": 9480,
+    "scopes": ["computer.read", "computer.files", "computer.process", "computer.apps"]
+  },
+  "update": {
+    "url": "https://api.github.com/repos/josephsteuerjr/helene/releases/latest"
+  },
+  "read_dotenv": false,
+  "setup_complete": true
+}

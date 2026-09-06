@@ -158,11 +158,20 @@ function modesFromPython(): Plugin {
           },
         ],
       };
+      // Управление компьютером: опция ПОВЕРХ любого режима (modes.computer_option).
+      // Установщик спрашивает только выключатель; четыре права живут в Настройках.
+      const computer = {
+        title: constantText(py, "COMPUTER_TITLE"),
+        text: constantText(py, "COMPUTER_TEXT"),
+        warning: constantText(py, "COMPUTER_WARNING"),
+        default: constantBool(py, "COMPUTER_DEFAULT"),
+      };
       return (
         "// собрано из localharness/modes.py плагином helene-modes-from-python\n" +
         `export const MODE_CARDS = ${JSON.stringify(cards, null, 2)};\n` +
         `export const SERVICE_OPTION = ${JSON.stringify(option, null, 2)};\n` +
-        `export const SESSION0_WARNING = ${JSON.stringify(session0Warning)};\n`
+        `export const SESSION0_WARNING = ${JSON.stringify(session0Warning)};\n` +
+        `export const COMPUTER_OPTION = ${JSON.stringify(computer, null, 2)};\n`
       );
     },
   };

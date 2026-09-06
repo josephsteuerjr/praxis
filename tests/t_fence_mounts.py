@@ -450,46 +450,23 @@ class Fenced(unittest.TestCase):
 
 
 class Windows(unittest.TestCase):
-    """C3: рука окон. Ограда её не трогает — а тела под ней нет."""
+    """Рука окон — не дело ограды: строку про окна ограда берёт у тела.
 
-    def setUp(self):
-        self.saved = sys.modules.get("body_client")
-        self.body = types.ModuleType("body_client")
-        self.body.available = lambda: False
-        sys.modules["body_client"] = self.body
+    Сама рука и её отказы проверяются в `tests/t_body.py`; здесь только шов:
+    ограда не заводит второй правды, а спрашивает `body.windows_truth()`.
+    """
 
-    def tearDown(self):
-        if self.saved is None:
-            sys.modules.pop("body_client", None)
-        else:
-            sys.modules["body_client"] = self.saved
-
-    def test_without_a_body_the_hand_says_so_in_russian(self):
-        called = []
-        agent = types.SimpleNamespace(
-            TOOL_IMPL={"computer": lambda **kw: called.append(kw) or "тело ответило"})
-        fence._windows_truth_in_hand(agent)
-        fence._windows_truth_in_hand(agent)          # обёртка одна, не матрёшка
-        said = agent.TOOL_IMPL["computer"](action="windows")
-        self.assertIn("тела под ней нет", said)
-        self.assertIn("Ограда здесь ни при чём", said)
-        self.assertEqual(called, [])
-
-    def test_with_a_body_the_hand_works_as_before(self):
-        called = []
-        agent = types.SimpleNamespace(
-            TOOL_IMPL={"computer": lambda **kw: called.append(kw) or "тело ответило"})
-        fence._windows_truth_in_hand(agent)
-        self.body.available = lambda: True
-        self.assertEqual(agent.TOOL_IMPL["computer"](action="windows"),
-                         "тело ответило")
-        self.assertEqual(called, [{"action": "windows"}])
-
-    def test_state_says_the_same(self):
-        # Одна строка на анатомию, настройки и агента — вторая правда здесь
-        # означала бы, что владелец и агент читают разное.
-        self.assertIn("ограда до них не достаёт", fence.WINDOWS_TRUTH)
-        self.assertIn("тела для руки", fence.WINDOWS_TRUTH)
+    def test_state_line_comes_from_the_body_module(self):
+        import body
+        body.STATE.update({"enabled": False, "available": False})
+        self.assertEqual(fence.windows_truth(), body.windows_truth())
+        self.assertIn("окна:", fence.windows_truth())
+        body.STATE.update({"enabled": True, "available": True, "port": 9480,
+                           "scopes": ["computer.apps"], "reason": "проба"})
+        self.assertIn("9480", fence.windows_truth())
+        self.assertIn("computer.apps", fence.windows_truth())
+        body.STATE.update({"enabled": False, "available": False, "port": 0,
+                           "scopes": [], "reason": "не поднималось"})
 
 
 class Hand(unittest.TestCase):

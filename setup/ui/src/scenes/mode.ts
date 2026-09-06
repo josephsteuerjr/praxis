@@ -24,9 +24,9 @@
 // Куда уезжает выбор: ограда — ключом `agent_mode` (НЕ `mode`: тот занят под
 // местожительство харнесса, local|remote), служба — полем `service` установки,
 // галочка — в `service.session0`, туда, где её читает служба.
-import { MODE_CARDS, SERVICE_OPTION, SESSION0_WARNING, type ModeCard } from "virtual:helene-modes";
+import { COMPUTER_OPTION, MODE_CARDS, SERVICE_OPTION, SESSION0_WARNING, type ModeCard } from "virtual:helene-modes";
 import { FormScene } from "./base";
-import { el, explain, toggle } from "./form";
+import { el, toggle } from "./form";
 import { adminRights, setup, type AdminRights, type AgentMode } from "../setup";
 
 /** Что произойдёт при установке с этой оградой — про сам установщик, а не про
@@ -67,6 +67,14 @@ const SESSION0 = (() => {
   return found;
 })();
 
+/** Что произойдёт при установке с телом. Только про установку: про саму
+ *  опцию уже сказано словами харнесса (COMPUTER_OPTION.text). */
+const COMPUTER_NOTE =
+  "Прав администратора не нужно. Все четыре права выдаются сразу, сузить можно в настройках.";
+
+/** Слово к выключенной опции: чтобы выключенная не выглядела запретом. */
+const COMPUTER_OFF = "Пока выключено: рука `computer` есть, а тела под ней нет — она отказывает словами.";
+
 export class ModeScene extends FormScene {
   private cards = new Map<AgentMode, HTMLElement>();
   private serviceSwitch!: HTMLButtonElement;
@@ -74,6 +82,8 @@ export class ModeScene extends FormScene {
   private extra!: HTMLElement;
   private session0Switch!: HTMLButtonElement;
   private extraText!: HTMLElement;
+  private computerSwitch!: HTMLButtonElement;
+  private computerText!: HTMLElement;
   private rights: AdminRights = { can: true, certain: false, elevated: false };
 
   constructor(root: HTMLElement) {
@@ -83,8 +93,8 @@ export class ModeScene extends FormScene {
     const lead = el(
       "p",
       "form-lead",
-      "Два вопроса, и они не связаны: насколько далеко агент дотягивается — и ставить ли службу Windows. " +
-        "Поменять можно потом, в настройках программы.",
+      "Три вопроса, и они не связаны: насколько далеко агент дотягивается, ставить ли службу Windows " +
+        "и давать ли ему окна и мышь. Поменять можно потом, в настройках.",
     );
 
     const row = el("div", "modes");
@@ -92,25 +102,22 @@ export class ModeScene extends FormScene {
     row.setAttribute("aria-label", "Ограда рук");
     for (const card of MODE_CARDS) row.append(this.card(card));
 
-    // Врезки. Той, что обещала окна («Окна он водит в любом режиме»), здесь
-    // больше нет: рука окон в поставку не едет ни в одном режиме, и modes.py
-    // говорит об этом прямо в описании песочницы — карточка выше повторяет его
-    // слово в слово.
-    const notes = el("div", "explain-row");
-    notes.append(
-      explain(
-        "Внутри своей папки он свободен",
-        "При любой ограде агент правит собственный код и собственную память. В песочнице это " +
-          "и есть весь его мир: сломать он может только себя.",
-      ),
-      explain(
-        "Это не навсегда",
-        "Ограда переключается после установки, на экране настроек. Службу там же можно поставить " +
-          "или снять — Windows опять спросит права.",
-      ),
+    // Одна строка вместо двух врезок: с третьей опцией врезки не умещались в
+    // кадр 1080 (он не прокручивается), а «это не навсегда» уже сказано в
+    // лиде. Про окна здесь ничего не обещается: они — третий вопрос, опция
+    // «Управление компьютером», словами modes.py.
+    const notes = el(
+      "p",
+      "mode-note scene-foot",
+      "Внутри своей папки он свободен при любой ограде: правит собственный код и память. " +
+        "В песочнице это и есть весь его мир — сломать он может только себя.",
     );
 
-    this.mount(head, lead, row, this.serviceBox(), notes);
+    // Две опции — в один ряд: столбиком они не умещаются в кадр 1080. Внутри
+    // каждой карточки колонки складываются.
+    const options = el("div", "options-row");
+    options.append(this.serviceBox(), this.computerBox());
+    this.mount(head, lead, row, options, notes);
     // Вторая галочка опции (`service.firewall`) на экран не выведена, но её
     // умолчание берём отсюда же, а не заводим второй правдой в setup.ts.
     const firewall = SERVICE_OPTION.toggles.find((t) => t.key === "service.firewall");
@@ -118,6 +125,7 @@ export class ModeScene extends FormScene {
     setup.firewall = firewall.default;
     this.select(setup.agent_mode);
     this.syncService();
+    this.syncComputer();
     // Спрашиваем Windows один раз и в фоне: до ответа опция службы доступна —
     // заставой всё равно остаётся UAC при установке.
     void adminRights()
@@ -204,6 +212,38 @@ export class ModeScene extends FormScene {
     return box;
   }
 
+  /** Опция управления компьютером: третий блок под службой, той же формы.
+   *  Не карточка выбора и не часть службы: тело живёт снаружи ограды и без
+   *  службы, поднимает его харнесс. Оговорка — справа, всегда на виду. */
+  private computerBox(): HTMLElement {
+    const box = el("div", "service-card computer-card");
+    const main = el("div", "service-main");
+    this.computerSwitch = toggle({
+      label: COMPUTER_OPTION.title,
+      value: setup.computer,
+      onChange: (v) => {
+        setup.computer = v;
+        this.syncComputer();
+      },
+    });
+    main.append(
+      this.computerSwitch,
+      el("p", "mode-text", COMPUTER_OPTION.text),
+      el("p", "mode-note", COMPUTER_NOTE),
+    );
+    const extra = el("div", "mode-extra");
+    this.computerText = el("p", "mode-warn", COMPUTER_OFF);
+    extra.append(this.computerText);
+    box.append(main, extra);
+    return box;
+  }
+
+  private syncComputer() {
+    this.computerSwitch.setAttribute("aria-checked", String(setup.computer));
+    this.computerText.textContent = setup.computer ? COMPUTER_OPTION.warning : COMPUTER_OFF;
+    this.computerText.classList.toggle("on", setup.computer);
+  }
+
   private select(name: AgentMode) {
     setup.agent_mode = name;
     for (const [key, box] of this.cards) {
@@ -247,6 +287,7 @@ export class ModeScene extends FormScene {
   protected beforeEnter() {
     this.select(setup.agent_mode);
     this.syncService();
+    this.syncComputer();
     this.syncAdmin();
   }
 }

@@ -164,6 +164,48 @@ async fn uninstall_run(purge: bool) -> Result<String, String> {
     Ok(text)
 }
 
+/// Где стоит Hélène для экспорта: рядом с установщиком (портативный запуск) или
+/// по записи установки. -> путь к архиву переноса.
+fn export_agent() -> Result<String, String> {
+    let here = install::exe_dir();
+    let dir = if here.join("helene.json").is_file() && here.join("runtime").join("python.exe").is_file() {
+        here
+    } else {
+        std::path::PathBuf::from(
+            install::installed_info().ok_or("Hélène не установлена — экспортировать нечего")?.dir,
+        )
+    };
+    let python = dir.join("runtime").join("python.exe");
+    let script = dir.join("app").join("localharness").join("carry.py");
+    if !python.is_file() || !script.is_file() {
+        return Err(format!("в {} нет помощника переноса (runtime/python.exe, app/localharness/carry.py)", dir.display()));
+    }
+    let mut cmd = std::process::Command::new(python);
+    cmd.arg("-u")
+        .arg(script)
+        .arg("export")
+        .arg("--config")
+        .arg(dir.join("helene.json"))
+        .current_dir(&dir)
+        .env("PYTHONUTF8", "1");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    let out = cmd.output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let archive = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("архив: "))
+        .map(|s| s.rsplit_once(" (").map(|(p, _)| p).unwrap_or(s).trim().to_string())
+        .filter(|p| !p.is_empty());
+    match archive {
+        Some(path) if out.status.success() => Ok(path),
+        _ => Err(String::from_utf8_lossy(&out.stderr).trim().chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect()),
+    }
+}
+
 fn message_box(text: &str) {
     let script = format!(
         "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('{}', '{}') | Out-Null",
@@ -210,6 +252,26 @@ fn main() {
             });
         }
         if failed {
+            std::process::exit(1);
+        }
+        return;
+    }
+    // Экспорт агента без окна: `helene-setup.exe --export [--quiet]` — тот же
+    // помощник, что и за кнопкой «Экспорт агента» в Настройках
+    // (app/localharness/carry.py). Берётся установка из реестра, либо папка
+    // самого установщика, если helene.json лежит рядом (портативный запуск).
+    if args.iter().any(|a| a == "--export") {
+        let quiet = args.iter().any(|a| a == "--quiet");
+        let result = export_agent();
+        let text = match &result {
+            Ok(path) => format!("Архив переноса: {path}"),
+            Err(err) => format!("Экспорт не удался: {err}"),
+        };
+        let _ = std::fs::write(install::exe_dir().join("export.log"), &text);
+        if !quiet {
+            message_box(&text);
+        }
+        if result.is_err() {
             std::process::exit(1);
         }
         return;

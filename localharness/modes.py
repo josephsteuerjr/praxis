@@ -122,9 +122,9 @@ TITLES = {
 #: и про окна, потому что половина правды здесь читается как обман.
 TEXTS = {
     "sandbox": ("Агент заперт в своей папке: файлы и команды дальше дома не "
-                "идут, наружу — только те папки, что ты смонтировал. Окна "
-                "ограда не трогает — но и водить их пока нечем: руки окон в "
-                "этой сборке нет ни в одном режиме."),
+                "идут, наружу — только те папки, что ты смонтировал. Окна и "
+                "рабочий стол — отдельная опция «Управление компьютером»: "
+                "тело для них живёт снаружи ограды."),
     "interactive": ("Агент работает с твоими правами: файлы и процессы — те же, "
                     "что доступны тебе самому, не больше. Файловые руки видят "
                     "то же, что и shell, монтировать ничего не нужно. Если "
@@ -174,6 +174,104 @@ FIREWALL_TEXT = ("Кнопка «Телефон» открывает порт ч
                  "Windows про права. Это одно узкое действие продукта по твоей "
                  "кнопке — прав системы агенту оно не даёт и с нулевой сессией "
                  "не связано. Выключишь — окно будет спрашивать права само.")
+
+# --------------------------------------------------------------------------- #
+#  Управление компьютером: опция поверх любого режима, не режим
+# --------------------------------------------------------------------------- #
+
+#: Ключ блока в helene.json: `computer.enabled`, `computer.scopes`, `computer.port`.
+#: Читает его `localharness/body.py`; окно пишет через `keepBlock`.
+COMPUTER_KEY = "computer"
+
+COMPUTER_TITLE = "Управление компьютером"
+
+#: ⚠ Имя константы разбирает сборка установщика (setup/ui/vite.config.ts).
+COMPUTER_TEXT = ("Рука `computer`: окна, экран, клавиатура и мышь, файлы и "
+                 "процессы на этой машине. Работает через отдельное тело "
+                 "(helene-body.exe), которое харнесс поднимает рядом с собой в "
+                 "твоей сессии — снаружи ограды, поэтому в песочнице оно тоже "
+                 "работает. Что именно разрешено, решают четыре права ниже; "
+                 "от режима опция не зависит.")
+
+#: Оговорка — та же, что у нулевой сессии: владелец читает её ДО включения.
+COMPUTER_WARNING = ("Опция для энтузиастов, не для слабых моделей: агент водит "
+                    "твоей мышью и клавиатурой по-настоящему и видит экран. "
+                    "Слабая модель может не понять, что делает.")
+
+#: Умолчание опции — выключено: включают осознанно, прочитав оговорку.
+COMPUTER_DEFAULT = False
+
+#: Порт моста по умолчанию (body.DEFAULT_PORT). Не 9473: там тело Праксис.
+COMPUTER_PORT_DEFAULT = 9480
+
+#: Четыре права дерева (`computer_access.SCOPES`) — в порядке показа. Ключи —
+#: те же строки, что проверяет рука: `_COMPUTER_ACTION_SCOPES` в tree/agent.py.
+COMPUTER_SCOPES: tuple[str, ...] = ("computer.read", "computer.files",
+                                    "computer.process", "computer.apps")
+
+COMPUTER_SCOPE_TITLES = {
+    "computer.read": "Смотреть",
+    "computer.files": "Файлы",
+    "computer.process": "Процессы",
+    "computer.apps": "Окна и ввод",
+}
+
+COMPUTER_SCOPE_TEXTS = {
+    "computer.read": ("Состояние тела, инвентарь машины, список папок и "
+                      "свойства файлов. Ничего не меняет."),
+    "computer.files": ("Читать, писать и пересылать файлы по абсолютному пути — "
+                       "любые, что доступны твоей учётке, мимо ограды."),
+    "computer.process": ("Запускать команды PowerShell в твоей сессии и следить "
+                         "за ними. Тоже мимо ограды."),
+    "computer.apps": ("Список окон, активация, клавиатура и мышь, снимки "
+                      "экрана, чтение окна как текста, буфер обмена."),
+}
+
+
+def computer_state(cfg: dict) -> dict:
+    """Что записано владельцем: включено ли, какие права, какой порт.
+
+    Нет ключа `scopes` — все четыре: включил опцию — получил руку целиком,
+    сузить можно галочками. Живое «тело подключено» здесь НЕ решается: это
+    знает только раннер (`body.py`, снимок `memory/.state/body.json`).
+    """
+    raw = cfg.get(COMPUTER_KEY)
+    block = dict(raw) if isinstance(raw, dict) else {}
+    scopes_raw = block.get("scopes")
+    if scopes_raw is None:
+        scopes = list(COMPUTER_SCOPES)
+    elif isinstance(scopes_raw, (list, tuple)):
+        chosen = {str(x) for x in scopes_raw}
+        scopes = [s for s in COMPUTER_SCOPES if s in chosen]
+    else:
+        scopes = []
+    try:
+        port = int(block.get("port") or COMPUTER_PORT_DEFAULT)
+    except (TypeError, ValueError):
+        port = COMPUTER_PORT_DEFAULT
+    return {
+        "enabled": bool(block.get("enabled", COMPUTER_DEFAULT)),
+        "scopes": scopes,
+        "port": port if 1024 <= port <= 65535 else COMPUTER_PORT_DEFAULT,
+        "explicit": isinstance(raw, dict) and "enabled" in raw,
+    }
+
+
+def computer_option() -> dict:
+    """Опция управления компьютером с четырьмя правами — для экранов."""
+    return {
+        "name": "computer",
+        "title": COMPUTER_TITLE,
+        "text": COMPUTER_TEXT,
+        "warning": COMPUTER_WARNING,
+        "default": COMPUTER_DEFAULT,
+        "needs_admin": False,
+        "scopes": [
+            {"key": key, "title": COMPUTER_SCOPE_TITLES[key],
+             "text": COMPUTER_SCOPE_TEXTS[key]}
+            for key in COMPUTER_SCOPES
+        ],
+    }
 
 
 # --------------------------------------------------------------------------- #

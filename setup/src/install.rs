@@ -94,7 +94,26 @@ pub struct Setup {
     /// и тогда действует то же умолчание (см. `default_firewall`).
     #[serde(default = "default_firewall")]
     pub firewall: bool,
+    /// Управление компьютером — опция ПОВЕРХ любой ограды и без службы: тело
+    /// руки `computer` (окна, экран, клавиатура и мышь) поднимает харнесс в
+    /// сессии владельца, снаружи ограды (`localharness/body.py`). В конфиг
+    /// уходит блоком `computer` — `enabled` отсюда, четыре права все, порт
+    /// умолчанием; сузить права можно в Настройках. Старый визард поля не
+    /// шлёт — тогда выключено (modes.COMPUTER_DEFAULT).
+    #[serde(default)]
+    pub computer: bool,
     pub dir: String,
+}
+
+/// Четыре права руки `computer` — те же строки, что проверяет дерево
+/// (`_COMPUTER_ACTION_SCOPES` в tree/agent.py) и рисует окно. Порядок — показа.
+const COMPUTER_SCOPES: [&str; 4] = ["computer.read", "computer.files", "computer.process", "computer.apps"];
+
+/// Порт моста тела по умолчанию (body.DEFAULT_PORT). Не 9473: там тело Праксис.
+const COMPUTER_PORT: u16 = 9480;
+
+fn computer_block(enabled: bool) -> serde_json::Value {
+    serde_json::json!({ "enabled": enabled, "port": COMPUTER_PORT, "scopes": COMPUTER_SCOPES })
 }
 
 impl Setup {
@@ -472,6 +491,9 @@ fn config_json(s: &Setup, prev_relay_key: Option<String>, relay_port: u16) -> se
         "agent_mode": agent_mode,
         "sandbox": { "enabled": agent_mode == "sandbox", "network": true },
         "service": { "session0": s.wants_session0(), "firewall": s.firewall },
+        // Третий ответ, тоже независимый: тело руки `computer`. Все четыре
+        // права сразу — сузить владелец может в Настройках.
+        "computer": computer_block(s.computer),
         "python": "runtime/python.exe",
         "app": "app/deskapp.py",
         "runner": "app/localharness/runner.py",
@@ -563,6 +585,10 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
     for (block, key, value) in [
         ("sandbox", "enabled", serde_json::Value::Bool(mode == "sandbox")),
         ("service", "session0", serde_json::Value::Bool(s.wants_session0())),
+        // Тело руки `computer`: выключатель — визарда, права и порт — владельца
+        // (права он сужает в Настройках, порт правит руками). Блок прошлой
+        // установки мог родиться без них — тогда доставляем умолчания.
+        ("computer", "enabled", serde_json::Value::Bool(s.computer)),
     ] {
         let mut b = match out.get(block) {
             Some(serde_json::Value::Object(m)) => m.clone(),
@@ -574,6 +600,14 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
         }
         if block == "service" && !b.contains_key("firewall") {
             b.insert("firewall".into(), s.firewall.into());
+        }
+        if block == "computer" {
+            if !b.contains_key("port") {
+                b.insert("port".into(), COMPUTER_PORT.into());
+            }
+            if !b.contains_key("scopes") {
+                b.insert("scopes".into(), serde_json::json!(COMPUTER_SCOPES));
+            }
         }
         out.insert(block.to_string(), serde_json::Value::Object(b));
     }
@@ -591,9 +625,33 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
     serde_json::Value::Object(out)
 }
 
+/// helene.json так, как его сохранил редактор ВЛАДЕЛЬЦА: UTF-8, UTF-8 с меткой
+/// BOM, UTF-16 с меткой — та же функция, что `decode_config` в оболочке и
+/// службе. ⚠ До 06.09 здесь стояло голое `read_to_string` + `from_str`: файл,
+/// правленный Блокнотом (BOM), не разбирался, `existing` становился `None`, и
+/// `merge_config` молча возвращал свежий конфиг — решения владельца
+/// (монтирование, телефон, ручки среды, вход MTProto) и ключ реле терялись при
+/// обновлении поверх. Найдено ревью 06.09.
+fn decode_config(bytes: &[u8]) -> Option<String> {
+    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+        let big = bytes[0] == 0xFE;
+        let body = &bytes[2..];
+        if body.len() % 2 != 0 {
+            return None;
+        }
+        let units: Vec<u16> = body
+            .chunks_exact(2)
+            .map(|p| if big { u16::from_be_bytes([p[0], p[1]]) } else { u16::from_le_bytes([p[0], p[1]]) })
+            .collect();
+        return String::from_utf16(&units).ok();
+    }
+    let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    String::from_utf8(body.to_vec()).ok()
+}
+
 fn read_json(path: &Path) -> Option<serde_json::Value> {
-    let raw = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&raw).ok()
+    let raw = std::fs::read(path).ok()?;
+    serde_json::from_str(&decode_config(&raw)?).ok()
 }
 
 fn random_hex(bytes: usize) -> String {
@@ -679,7 +737,8 @@ pub fn stop_running(dir: &Path) -> bool {
 /// установка остаётся смесью двух версий, и отката у неё нет.
 fn locked_files(dir: &Path) -> Vec<String> {
     let mut busy = Vec::new();
-    for name in ["helene.exe", "helene-svc.exe", "helene-relay.exe", "helene-setup.exe"] {
+    for name in ["helene.exe", "helene-svc.exe", "helene-relay.exe", "helene-setup.exe",
+                 "helene-bridge.exe", "helene-body.exe"] {
         let path = dir.join(name);
         if !path.exists() {
             continue;
@@ -2224,8 +2283,46 @@ mod tests {
             service: false,
             session0: false,
             firewall: default_firewall(),
+            computer: false,
             dir: String::new(),
         }
+    }
+
+    /// Тело руки `computer`: выключено по умолчанию, блок в конфиге есть
+    /// всегда (с портом и всеми четырьмя правами), включение — только словом
+    /// визарда; переустановка не стирает ни сужённые права, ни порт владельца.
+    #[test]
+    fn computer_block_is_written_and_merged() {
+        let mut s = setup_for("api");
+        let cfg = config_json(&s, None, RELAY_PORT);
+        assert_eq!(cfg["computer"]["enabled"], false);
+        assert_eq!(cfg["computer"]["port"], COMPUTER_PORT);
+        assert_eq!(cfg["computer"]["scopes"].as_array().map(|a| a.len()), Some(4));
+        s.computer = true;
+        assert_eq!(config_json(&s, None, RELAY_PORT)["computer"]["enabled"], true);
+
+        let old = serde_json::json!({
+            "computer": { "enabled": true, "port": 9499, "scopes": ["computer.read"] },
+        });
+        let s = setup_for("api");
+        let out = merge_config(Some(old), config_json(&s, None, RELAY_PORT), &s);
+        assert_eq!(out["computer"]["enabled"], false, "выключатель — слово визарда");
+        assert_eq!(out["computer"]["port"], 9499, "порт владельца не переписан");
+        assert_eq!(out["computer"]["scopes"], serde_json::json!(["computer.read"]), "сужённые права уцелели");
+
+        // Конфиг прошлой установки без блока вовсе — блок доставляется целиком.
+        let out = merge_config(Some(serde_json::json!({ "port": 8094 })), config_json(&s, None, RELAY_PORT), &s);
+        assert_eq!(out["computer"]["port"], COMPUTER_PORT);
+        assert_eq!(out["computer"]["scopes"].as_array().map(|a| a.len()), Some(4));
+        // Старый визард поля `computer` не шлёт — serde подставляет false.
+        let raw: Setup = serde_json::from_value(serde_json::json!({
+            "agent": "А", "owner": "Б", "constitution": "В", "accepted": true, "provider": "api",
+            "api": { "base_url": "u", "model": "m", "key": "k" },
+            "local": { "base_url": "", "model": "" },
+            "telegram": { "bot_token": "", "owner_id": "" },
+            "service": false, "dir": "",
+        })).unwrap();
+        assert!(!raw.computer);
     }
 
     /// Реле объявляет /chat/completions, а не /v1/chat/completions: адрес с /v1

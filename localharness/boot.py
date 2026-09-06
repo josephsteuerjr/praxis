@@ -284,6 +284,7 @@ _GIT_IGNORE = """\
 memory/
 relay/
 telegram/
+body/
 *.log
 *.sqlite3
 *.sqlite3-*

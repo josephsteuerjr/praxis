@@ -78,6 +78,53 @@ export interface ServiceOption {
   toggles: ServiceToggle[];
 }
 
+/** Одно из четырёх прав руки `computer`: `modes.computer_option().scopes[]`. */
+export interface ComputerScope {
+  /** `computer.read` | `computer.files` | `computer.process` | `computer.apps`. */
+  key: string;
+  title: string;
+  text: string;
+}
+
+/** Опция «Управление компьютером» целиком: `modes.computer_option()`. Поверх
+ *  любого режима, ни одну ограду не снимает — тело живёт снаружи неё. */
+export interface ComputerOption {
+  name: string;
+  title: string;
+  text: string;
+  /** Оговорка, которую владелец читает ДО включения. */
+  warning: string;
+  default: boolean;
+  needs_admin: boolean;
+  scopes: ComputerScope[];
+}
+
+/** Что записано владельцем в `computer` (modes.computer_state). */
+export interface ComputerState {
+  enabled: boolean;
+  scopes: string[];
+  port: number;
+  explicit: boolean;
+}
+
+/** Снимок харнесса о теле — `memory/.state/body.json` (localharness/body.py).
+ *  Только то, что он прислал; пустой объект — снимка ещё нет. */
+export interface ComputerLive {
+  enabled?: boolean;
+  available?: boolean;
+  reason?: string;
+  port?: number;
+  device?: string;
+  scopes?: string[];
+  bridge_pid?: number;
+  body_pid?: number;
+  /** true — тело ответило через мост; false — спросили, не ответило; null — не спрашивали. */
+  connected?: boolean | null;
+  identity?: { kind?: string; session_id?: number | null; integrity?: string; elevated?: boolean };
+  checked_at?: string;
+  logs?: string[];
+}
+
 /**
  * Ответ `/api/mode` (он же блок `mode` в `/api/state` и в анатомии).
  *
@@ -108,6 +155,11 @@ export interface ModeState {
   notes: string[];
   choices: ModeChoice[];
   service: ServiceOption | null;
+  /** Управление компьютером — опция поверх режима (06.09). Старый харнесс
+   *  не присылает ни одного из трёх полей; окно говорит об этом словами. */
+  computer?: ComputerState | null;
+  computer_option?: ComputerOption | null;
+  computer_live?: ComputerLive;
   config: string;
 }
 

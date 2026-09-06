@@ -38,6 +38,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import body
 import boot
 import botapi
 import broker
@@ -529,6 +530,10 @@ def _write_anatomy(tree: Path, cfg: dict) -> None:
             # доступны ли ему окна, он обязан из прибора, а не из догадки.
             "mode": modes.describe(_mode) if _mode else None,
             "sandbox": _sandbox_state(),
+            # Тело руки `computer`: включено ли владельцем, какие права, порт
+            # моста и — если сторож уже спросил — подключено ли. Снимок на
+            # старте; живое состояние окно берёт из memory/.state/body.json.
+            "computer": _computer_state(),
             # Брокер: есть ли у агента рука, слушает ли просьбы окно, сколько
             # их ждёт ответа. Снимок пишется на старте — «ждущих 0» здесь
             # значит «столько было при запуске», а не «сейчас».
@@ -1009,16 +1014,22 @@ def _read_message(path: Path) -> str:
     return "\n".join(lines).strip()
 
 
+def _computer_state() -> dict:
+    """Тело руки `computer` как оно есть (body.STATE), без второй правды."""
+    try:
+        return body.state()
+    except Exception:
+        return {"enabled": False, "available": False,
+                "reason": "модуль тела не ответил — смотри runner.log"}
+
+
 def _sandbox_state() -> dict:
     """Ограда как она есть — плюс режим, который её и включил.
 
-    ⚠ Половина правды здесь читается как обман, и до 04.09 здесь стояла ровно
-    половина: «окна доступны: ограда накрывает команды и файловые руки, рука окон
-    в неё не попадает». Проверка по коду (задача C3) показала, что первая часть
-    верна, а вывод — нет: руки окон в поставке НЕТ ВОВСЕ. `computer` из дерева
-    ходит в тело Праксис по HTTP (body_client → praxis-bridge), а у Hélène ни
-    моста, ни тела не едет — только исходники. Строку теперь пишет сама ограда
-    (`fence.WINDOWS_TRUTH`), одну на анатомию, настройки и агента.
+    Строку про окна (`windows`) пишет сама ограда, а слова для неё берёт у
+    тела (`body.windows_truth()`): одна строка на анатомию, настройки и агента.
+    До 06.09 тела в поставке не было, и строка честно говорила «водить нечем»;
+    теперь она говорит, включил ли тело владелец и подключилось ли оно.
     """
     try:
         import fence
@@ -1159,6 +1170,14 @@ def main() -> None:
     _deliver_unspoken = bool((cfg.get("agent") or {}).get("deliver_unspoken", True))
 
     log.info("%s", boot.project_brain(tree, cfg))
+    # Тело для руки `computer` — ДО импорта дерева: импорт занимает секунды, а
+    # тело за них успевает подключиться к мосту. Опция владельца
+    # (`computer.enabled`); выключена — только строка в журнал. Токены живут
+    # в памяти этого процесса, в среду не кладутся (шапка body.py).
+    try:
+        body.launch(config_path.parent, tree, cfg)
+    except Exception:
+        log.exception("тело не поднялось — рука окон откажет словами")
     agent, memory_life = _load_tree(code_dir, tree, cfg)
     _name_the_owner(_speaker)
     _announce_git(tree)
@@ -1174,6 +1193,12 @@ def main() -> None:
         fence.install(agent, tree, cfg, config_path=config_path)
     except Exception:
         log.exception("песочница не поднялась — руки без ограды")
+    # Рука окон — ПОСЛЕ ограды: тело живёт снаружи контейнера, а разрешение
+    # владельца (четыре права) перечитывается из того же helene.json на ходу.
+    try:
+        body.install(agent, tree, cfg, config_path=config_path)
+    except Exception:
+        log.exception("рука computer не подключена к телу")
     # Рука брокера — ПОСЛЕ ограды: она закрывает свои файлы обмена от контейнера,
     # а поднят он или нет, решает предыдущий шаг. Без этой руки тексты продукта
     # обещали агенту брокера, которого у него не было.

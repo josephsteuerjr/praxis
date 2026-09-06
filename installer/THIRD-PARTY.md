@@ -5,9 +5,11 @@ Hélène собрана из открытых компонентов. Ниже �
 
 Полные тексты лежат внутри самой поставки:
 
-- Rust-крейты, статически влинкованные в `helene.exe`, `helene-setup.exe` и
-  `helene-svc.exe` — в `licenses/rust/` (список крейтов и ссылки на тексты — в
-  `licenses/rust/README.md`; собирается автоматически при сборке из `Cargo.lock`).
+- Rust-крейты, статически влинкованные в `helene.exe`, `helene-setup.exe`,
+  `helene-svc.exe`, `helene-bridge.exe` и `helene-body.exe` — в
+  `licenses/rust/` (список крейтов и ссылки на тексты — в
+  `licenses/rust/README.md`; собирается автоматически при сборке из `Cargo.lock`
+  всех пяти).
 - Пакеты Python — в `runtime/Lib/site-packages/<пакет>.dist-info/`.
 - CPython — `runtime/LICENSE.txt`.
 
@@ -77,6 +79,21 @@ https://github.com/git-for-windows/git (тег `v2.55.0.windows.5`).
 ## Реле подписки ChatGPT
 
 - `helene-relay.exe` — MIT (исходники в репозитории автора)
+
+## Тело руки `computer` (`helene-body.exe`, `helene-bridge.exe`)
+
+Оба собраны из крейтов дерева агента — `tree/body/crates/praxis-body`,
+`praxis-bridge` и `praxis-protocol`; исходники едут в этой же поставке. Их
+зависимости (axum, tokio, rusqlite с bundled SQLite — Public Domain, крейт
+`windows` — MIT или Apache-2.0, и остальные) перечислены в
+`licenses/rust/README.md`.
+
+Условия самого кода тела — те же, что у дерева: Apache-2.0 (см. «Код агента»
+ниже). ⚠ В `tree/body/Cargo.toml` поле `license` этого workspace всё ещё
+объявляет `PolyForm-Noncommercial-1.0.0` — это старая запись, оставшаяся с
+тех пор, когда дерево ещё не было открыто под Apache-2.0; решение автора о
+лицензии дерева (27.08.2026) её перекрывает, но поле в манифесте стоит
+поправить в самом дереве (это правка хребта Праксис, здесь её не делают).
 
 ## Стороннее внутри дерева агента
 

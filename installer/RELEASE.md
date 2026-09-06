@@ -14,6 +14,11 @@
    `npm --prefix mobile run build`, `npm --prefix setup/ui run build`.
    Затем `cargo build --release --features custom-protocol` в `shell` и `setup`,
    `cargo build --release` в `svc` и в `_relay_prod_src`.
+   Тело руки `computer` — из дерева, но в чужой target-каталог, чтобы `live/`
+   оставалось чистым: в `live/body` —
+   `cargo build --release -p praxis-body -p praxis-bridge --target-dir ../../_body_target`
+   (сборка ищет `_body_target/release/praxis-body.exe` и `praxis-bridge.exe`
+   рядом с репозиториями и кладёт их как `helene-body.exe` и `helene-bridge.exe`).
    Затем `python installer/build_dist.py` — **без `--skip-runtime`**.
 
    `--skip-runtime` и `--allow-partial` — только для отладки. Выпуск собирается
@@ -27,7 +32,8 @@
    `Cargo.toml` совпадают; дерево агента на месте и непустое; скачанное
    (embeddable CPython, get-pip, busybox, MinGit) совпадает с записанными в
    `build_dist.py` контрольными суммами — включая то, что лежит в кэше; все
-   четыре exe собраны; телефон собран; рантайм импортирует свои зависимости;
+   шесть exe собраны (оболочка, установщик, служба, реле, мост и тело);
+   телефон собран; рантайм импортирует свои зависимости;
    версия ВНУТРИ `helene.exe` и `helene-setup.exe` совпадает с объявленной в
    их `Cargo.toml` (подняли версию, но не пересобрали — сборка падает);
    ни в одном едущем файле нет ничего похожего на кред (сканируется

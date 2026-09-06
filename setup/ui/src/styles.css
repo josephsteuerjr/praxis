@@ -828,6 +828,42 @@ button:focus-visible {
   text-align: left;
 }
 
+/* Две опции поверх ограды — служба и управление компьютером — в один ряд:
+   столбиком они выталкивают врезки за кадр 1080, а кадр не прокручивается.
+   Внутри ряда карточка складывает свои колонки: галочка нулевой сессии и
+   оговорка тела уходят под текст, отчёркнутые сверху, а не справа. */
+.options-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  max-width: 1240px;
+  align-items: start;
+}
+
+.options-row .service-card {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 18px 22px 20px;
+}
+
+/* В два столбца длинные описания опций (слова харнесса, здесь не режем)
+   набраны на кегль меньше — иначе ряд не умещается в кадр. */
+.options-row .mode-text {
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.scene-foot {
+  max-width: 1240px;
+}
+
+.options-row .mode-extra {
+  padding-left: 0;
+  padding-top: 12px;
+  border-left: 0;
+  border-top: 1px solid var(--line);
+}
+
 .mode-warn {
   margin: 0;
   font-size: 15px;

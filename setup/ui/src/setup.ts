@@ -54,6 +54,11 @@ export interface Setup {
    *  Настройках; сюда значение приезжает умолчанием из modes.FIREWALL_DEFAULT,
    *  чтобы в установщике не завелась вторая правда о нём. */
   firewall: boolean;
+  /** Управление компьютером — опция ПОВЕРХ любого режима: тело руки `computer`
+   *  (окна, экран, клавиатура и мышь) харнесс поднимает снаружи ограды. В
+   *  helene.json уезжает в `computer.enabled`; четыре права (`computer.scopes`)
+   *  установщик не спрашивает — все четыре, сузить можно в Настройках. */
+  computer: boolean;
   dir: string;
 }
 
@@ -112,6 +117,9 @@ export const setup: Setup = {
   // То же умолчание, что в modes.FIREWALL_DEFAULT. Значение приезжает сюда из
   // SERVICE_OPTION на сцене режима — здесь только первое, до её показа.
   firewall: true,
+  // Умолчание — выключено (modes.COMPUTER_DEFAULT): включают осознанно,
+  // прочитав оговорку. Значение приезжает из COMPUTER_OPTION на сцене режима.
+  computer: false,
   dir: "",
 };
 

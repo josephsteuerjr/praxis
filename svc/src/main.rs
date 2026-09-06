@@ -423,6 +423,12 @@ struct Plan {
     relay_enabled: bool,
     relay_port: u16,
     relay_key: String,
+    /// `relay.instructions` — какой системный промпт реле кладёт перед
+    /// конституцией: `minimal` (~60 слов) или `full` (23 КБ чужого промпта
+    /// Codex CLI). Умолчание то же, что у оболочки (shell::spawn_relay).
+    /// ⚠ До 06.09 служба переменную не передавала вовсе, и под session-host
+    /// агент получал полный чужой промпт на каждом ходу. Найдено ревью 06.09.
+    relay_instructions: String,
     phone: bool,
     /// Отдельная галочка «разрешить агенту нулевую сессию» (`service.session0`
     /// в helene.json), по умолчанию выключена. Включённая возвращает прежний
@@ -528,6 +534,14 @@ fn load_plan(config_path: &Path) -> Result<Plan, String> {
             .and_then(|m| m.get("key"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
+            .to_string(),
+        relay_instructions: cfg
+            .get("relay")
+            .and_then(|r| r.get("instructions"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("minimal")
             .to_string(),
         phone: cfg
             .get("phone")
@@ -1025,6 +1039,7 @@ fn spawn_relay(plan: &Plan) -> Result<Child, String> {
         .current_dir(&home)
         .env("RELAY_PORT", plan.relay_port.to_string())
         .env("RELAY_LOCAL", "1")
+        .env("RELAY_INSTRUCTIONS", &plan.relay_instructions)
         .env("RELAY_LOG_DIR", home.join("logs"));
     if !plan.relay_key.trim().is_empty() {
         // Тот же контракт, что у оболочки: ключ мозга обязателен Bearer-ом.

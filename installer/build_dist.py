@@ -7,6 +7,9 @@
     helene-setup.exe     — установщик: сцены первого запуска, копия в LocalAppData
     helene-svc.exe       — служба Windows (необязательная)
     helene-relay.exe     — реле подписки ChatGPT
+    helene-bridge.exe    — мост тела руки `computer` (praxis-bridge из tree/body)
+    helene-body.exe      — тело: окна, экран, клавиатура и мышь, файлы, процессы
+                          (praxis-body из tree/body); поднимает их харнесс
     helene.json          — конфиг поставки (ключ пуст, настраивает установщик)
     helene-build.json    — паспорт сборки: версия, время, git, состав рантайма
     ПЕРВЫЙ-ЗАПУСК.md    — что делать сразу после распаковки
@@ -116,6 +119,9 @@ MOBILE_DIST = DESK / "mobile" / "dist"   # PWA телефона (npm --prefix mo
 # константой: нет папки — rglob по несуществующему каталогу молча отдаёт
 # пустой список, и сборка выпускала архив без tree/ и без единого слова.
 LIVE_DEFAULT = ROOT / "live"
+# Куда собираются мост и тело (крейты tree/body): рядом с репозиториями, не в
+# `live/` — дерево Праксис при сборке остаётся чистым.
+BODY_TARGET = ROOT / "_body_target" / "release"
 
 
 def live_root(cli: str | None) -> Path:
@@ -689,13 +695,16 @@ def _lock_crates(lock: Path) -> list[tuple[str, str]]:
     return out
 
 
-def collect_rust_licenses(out: Path, allow_partial: bool) -> int:
-    """Тексты лицензий крейтов, статически влинкованных в наши три exe.
+def collect_rust_licenses(out: Path, allow_partial: bool, live: Path | None = None) -> int:
+    """Тексты лицензий крейтов, статически влинкованных в наши exe.
 
     MIT требует включать уведомление об авторстве «in all copies or substantial
     portions». Раньше ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md обещал, что тексты «лежат в
     исходниках каждого проекта» — в поставке их не было ни одного. Собираем из
     локального реестра cargo, одинаковые тексты кладём один раз.
+
+    С 0.3.1 сюда входит и `Cargo.lock` тела (tree/body): мост и тело едут в
+    поставке как helene-bridge.exe и helene-body.exe.
     """
     dest = out / "licenses" / "rust"
     crates: set[tuple[str, str]] = set()
@@ -704,6 +713,14 @@ def collect_rust_licenses(out: Path, allow_partial: bool) -> int:
     if not crates:
         raise SystemExit("не прочитались Cargo.lock (shell/setup/svc) — "
                          "лицензии влинкованного собрать не из чего")
+    body_lock = (live or LIVE_DEFAULT) / "body" / "Cargo.lock"
+    body_crates = _lock_crates(body_lock) if body_lock.is_file() else []
+    if not body_crates:
+        msg = f"не прочитался Cargo.lock тела ({body_lock}) — лицензии моста и тела не собраны"
+        if not allow_partial:
+            raise SystemExit(msg)
+        print("  ⚠ " + msg)
+    crates.update(body_crates)
     registry = _cargo_registry_src()
     if registry is None:
         msg = ("нет локального реестра cargo (~/.cargo/registry/src) — "
@@ -737,7 +754,8 @@ def collect_rust_licenses(out: Path, allow_partial: bool) -> int:
             refs.append(f"[{f.name}](texts/{digest}.txt)")
         index.append(f"- **{name} {ver}** — " + ", ".join(refs))
     head = [
-        "# Лицензии Rust-крейтов, влинкованных в helene.exe, helene-setup.exe и helene-svc.exe",
+        "# Лицензии Rust-крейтов, влинкованных в helene.exe, helene-setup.exe, "
+        "helene-svc.exe, helene-bridge.exe и helene-body.exe",
         "",
         f"Собрано автоматически при сборке поставки из Cargo.lock ({len(crates)} крейтов).",
         "Одинаковые тексты лежат в `texts/` по одному разу; ссылки ниже ведут на них.",
@@ -831,6 +849,11 @@ HELENE_JSON = """{
   },
   "service": {
     "session0": false
+  },
+  "computer": {
+    "enabled": false,
+    "port": 9480,
+    "scopes": ["computer.read", "computer.files", "computer.process", "computer.apps"]
   },
   "update": {
     "url": "https://api.github.com/repos/josephsteuerjr/helene/releases/latest"
@@ -936,7 +959,7 @@ _TRACK_SUFFIXES = (".rs", ".py", ".ts", ".tsx", ".js", ".mjs", ".css", ".html",
                    ".json", ".toml", ".ps1", ".md", ".ico", ".png")
 _TRACK_ROOTS = ("app/", "setup/", "shell/", "svc/", "mobile/", "common/",
                 "localharness/", "deskd/", "resources/", "installer/", "tests/",
-                "ui-kit/", "docs/")
+                "ui-kit/", "docs/", "server/")
 
 
 def _untracked_sources(path: Path) -> list[str]:
@@ -1098,6 +1121,17 @@ def main() -> None:
         (ROOT / "_relay_prod_src" / "target" / "release" / "codex-proxy-server.exe", "helene-relay.exe",
          "собери реле: cargo build --release в _relay_prod_src",
          None),
+        # Тело руки `computer` — крейты дерева (tree/body), версия у них своя
+        # (workspace 0.1.0), поэтому декларация — None, как у реле. Собираются
+        # ВНЕ дерева (`--target-dir`), чтобы `live/` оставалось чистым.
+        (BODY_TARGET / "praxis-bridge.exe", "helene-bridge.exe",
+         "собери тело: в live/body — cargo build --release -p praxis-body -p praxis-bridge "
+         f"--target-dir {BODY_TARGET.parent}",
+         None),
+        (BODY_TARGET / "praxis-body.exe", "helene-body.exe",
+         "собери тело: в live/body — cargo build --release -p praxis-body -p praxis-bridge "
+         f"--target-dir {BODY_TARGET.parent}",
+         None),
     ]
     missing = []
     stale = []
@@ -1148,6 +1182,21 @@ def main() -> None:
     # installer/RELEASE.md, который сюда не едет. Кнопка «Скачать» в окне
     # открывала архив на 80 МБ и дальше человек оставался один.
     copy_text_lf(DESK / "resources" / "ОБНОВЛЕНИЕ.md", out / "ОБНОВЛЕНИЕ.md")
+    # Сервер: та же поставка разворачивается в Docker на Linux (server/README-СЕРВЕР.md):
+    # Dockerfile, compose, надзор serverboot.py, шаблон конфига. Windows-части
+    # (exe, runtime/) туда не копируются самим Dockerfile.
+    server_out = out / "server"
+    if server_out.exists():
+        shutil.rmtree(server_out)
+    server_out.mkdir()
+    for item in sorted((DESK / "server").iterdir()):
+        if item.name.startswith(".") or item.name == "__pycache__":
+            continue
+        if item.suffix in (".md", ".py", ".yml", ".yaml", ".txt", ".json") or item.name == "Dockerfile":
+            copy_text_lf(item, server_out / item.name)
+        else:
+            shutil.copy2(item, server_out / item.name)
+    print(f"  server/: {len(list(server_out.iterdir()))} файлов")
     # Apache-2.0 §4(a): получатель кода обязан получить копию лицензии, §4(d) —
     # NOTICE. Дерево агента объявлено под Apache-2.0 в обоих документах, а
     # рядом с ним не было ни LICENSE, ни NOTICE.
@@ -1156,7 +1205,7 @@ def main() -> None:
     (out / "tree" / "LICENSE").write_text(body + "\n", encoding="utf-8", newline="\n")
     copy_text_lf(DESK / "installer" / "NOTICE", out / "tree" / "NOTICE")
     copy_text_lf(DESK / "installer" / "NOTICE", out / "NOTICE")
-    n_lic = collect_rust_licenses(out, args.allow_partial)
+    n_lic = collect_rust_licenses(out, args.allow_partial, live)
     print(f"  лицензии крейтов: {n_lic}")
 
     (out / "helene.json").write_text(HELENE_JSON, encoding="utf-8", newline="\n")

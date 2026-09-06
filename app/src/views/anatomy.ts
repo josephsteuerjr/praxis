@@ -40,6 +40,7 @@ const LAYERS: Array<[string, string]> = [
   ["helene.exe — оболочка (Rust, Tauri)", "Окно, значок у часов, уведомления. Сама не думает и не переписывается: собрана один раз и поднимает всё остальное тихими дочерними процессами по helene.json."],
   ["труба frame.desk.v1 → deskapp.py", "Всё, что окно показывает, приезжает по одной трубе (запросы и живые события). deskapp — читатель дерева: только файлы, никаких замков раннера. Тот же протокол работает с удалённым харнессом."],
   ["runner.py — локальный харнесс", "Слушает записки окна и Telegram и запускает ход агента (voice_turn_envelope из дерева). Своей логики хода у руннера нет: только транспорт и конфиг."],
+  ["helene-body.exe и helene-bridge.exe — тело", "Окна, экран, клавиатура и мышь, файлы и процессы для руки computer. Харнесс поднимает обоих рядом с собой в сессии владельца, снаружи ограды; включает и выдаёт права владелец в Настройках («Управление компьютером»). Мозга внутри нет: тело исполняет то, что прислала рука, и возвращает расписку."],
   ["transport.py и botapi.py — двери", "Оба наполняют один словарь крючков, тот же, которым агент держит Telegram. Окно — одна дверь, бот — вторая. Организм один: общая память, общий кадр."],
   ["дерево агента", "agent.py — ход и руки; frame_shadow.py — кадр; memory_life.py — события жизни; desires.py — желания; llm.py — мозг, любой OpenAI- или Anthropic-совместимый адрес."],
 ];
@@ -58,11 +59,15 @@ interface Anatomy {
   agent_name?: string;
   model?: { model?: string; framework?: string };
   transports?: string[];
-  // `windows` — строка самой ограды (`fence.WINDOWS_TRUTH`): что на самом деле
-  // с управлением окнами. Раньше про окна на экранах владельца стояла
-  // выдумка окна, и она пережила исправление в харнессе именно потому, что
-  // была копией. Здесь копии нет — только то, что прислал снимок.
+  // `windows` — строка самой ограды (слова ей даёт `body.windows_truth()`):
+  // что на самом деле с управлением окнами. Раньше про окна на экранах
+  // владельца стояла выдумка окна, и она пережила исправление в харнессе
+  // именно потому, что была копией. Здесь копии нет — только то, что прислал
+  // снимок.
   sandbox?: { enabled?: boolean; container?: boolean; reason?: string; windows?: string };
+  // Тело руки `computer` (localharness/body.py): включено ли владельцем, есть
+  // ли exe в поставке, подключилось ли на момент снимка, какие права выданы.
+  computer?: { enabled?: boolean; available?: boolean; reason?: string; port?: number; scopes?: string[]; connected?: boolean | null };
   tools?: Array<{ name: string; desc?: string; params?: string[]; required?: string[] }>;
   skills_index?: string;
   knobs?: Record<string, unknown>;
@@ -134,8 +139,11 @@ export async function render(container: HTMLElement): Promise<void> {
   const layers = LAYERS.map(
     ([h, t]) => `<details class="fold"><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`,
   ).join("");
+  const body = a.computer
+    ? ` · тело: ${esc(!a.computer.enabled ? "выключено владельцем" : !a.computer.available ? "нет в поставке" : a.computer.connected === true ? `подключено, мост 127.0.0.1:${a.computer.port}` : a.computer.connected === false ? "не отвечает" : "поднималось на старте")}${a.computer.enabled && a.computer.scopes ? ` (права: ${esc(a.computer.scopes.join(", ") || "нет")})` : ""}`
+    : "";
   const meta = tools.length
-    ? `<p class="muted">Транспорты: ${esc((a.transports || []).join(" + "))} · ${modeName}песочница: ${esc(a.sandbox ? (a.sandbox.container ? "shell в контейнере" : a.sandbox.enabled ? "без контейнера" : "выключена") : "?")}${a.sandbox?.reason ? " · " + esc(a.sandbox.reason) : ""}${a.sandbox?.windows ? " · " + esc(a.sandbox.windows) : ""} · мозг: <b>${esc(a.model?.model || "?")}</b> (${esc(a.model?.framework || "?")})
+    ? `<p class="muted">Транспорты: ${esc((a.transports || []).join(" + "))} · ${modeName}песочница: ${esc(a.sandbox ? (a.sandbox.container ? "shell в контейнере" : a.sandbox.enabled ? "без контейнера" : "выключена") : "?")}${a.sandbox?.reason ? " · " + esc(a.sandbox.reason) : ""}${a.sandbox?.windows ? " · " + esc(a.sandbox.windows) : ""}${body} · мозг: <b>${esc(a.model?.model || "?")}</b> (${esc(a.model?.framework || "?")})
        · рук предложено: <b>${tools.length}</b> · снято ${esc(fmtTime(a.written_at))}. Живой список сборщика, не пересказ.</p>`
     : '<p class="muted">Снимка ещё нет: руннер пишет его при старте.</p>';
   container.innerHTML = `<div class="center">

@@ -22,21 +22,15 @@
 это записано в анатомии, чтобы владелец не думал иначе. Это ограда, не тюрьма
 для самого агента: его память и код внутри папки Hélène ему доступны.
 
-⚠ ОКНА (проверено по коду 04.09, задача C3). Утверждение «ограда накрывает shell
-и файловые руки, а окна идут другой рукой, поэтому UIA в песочнице работает»
-верно ровно наполовину, и вторая половина важнее:
-  * ограда действительно НЕ накрывает руку окон — в контейнер уходит только
-    `bash -lc` (шим `_SubprocessShim.run`), а обёртка пути стоит на пяти
-    файловых руках. `computer` в этих списках нет и не должно быть;
-  * но и работать ей нечем: `computer` из дерева ходит в тело Праксис по HTTP
-    (`body_client` → `praxis-bridge`, 127.0.0.1:9473), а в поставке Hélène ни
-    моста, ни тела нет — едут только исходники `tree/body`. Без
-    `PRAXIS_BODY_CONTROLLER_TOKEN` рука отвечает «unavailable» В ЛЮБОМ режиме,
-    не только в песочнице.
-Итог для текстов: в песочнице окна не заперты — их просто ещё нет. Когда UIA
-портируют (`live/body/crates/praxis-body/src/uia.rs`), она обязана остаться
-СНАРУЖИ контейнера: рука окон в AppContainer бесполезна — у него нет доступа ни
-к чужим окнам, ни к рабочему столу владельца.
+⚠ ОКНА. Ограда НЕ накрывает руку окон — в контейнер уходит только `bash -lc`
+(шим `_SubprocessShim.run`), а обёртка пути стоит на пяти файловых руках.
+`computer` в этих списках нет и не должно быть: тело, которое водит окнами
+(`helene-body.exe` + мост `helene-bridge.exe`, порт UIA сделан 06.09), живёт
+СНАРУЖИ контейнера, в сессии владельца — у AppContainer нет доступа ни к чужим
+окнам, ни к рабочему столу. Поднимает тело раннер (`body.py`), а включает или
+выключает — владелец, опцией «Управление компьютером» с четырьмя правами; от
+режима опция не зависит. Строку про окна в анатомию даёт `body.windows_truth()`,
+здесь копии нет.
 
 Включается `sandbox.enabled` в helene.json (по умолчанию включена). Если контейнер
 поднять не удалось (старая Windows, ошибка прав), shell работает без ограды,
@@ -56,7 +50,6 @@ import hashlib
 import json
 import locale
 import logging
-import msvcrt
 import os
 import stat as _stat
 import subprocess
@@ -66,15 +59,23 @@ from pathlib import Path
 
 log = logging.getLogger("helene.fence")
 
-#: Одна честная строка про окна — и в анатомию, и в подсказку настроек. Разбор в
-#: шапке модуля: ограда руку окон не трогает, но самой руки в поставке нет.
-WINDOWS_TRUTH = ("окна: ограда до них не достаёт (в контейнере живёт только "
-                 "shell), но и водить их нечем — тела для руки `computer` в "
-                 "поставке нет ни в одном режиме")
+#: Строка про окна до того, как спросили тело. Живую даёт `body.windows_truth()`
+#: (см. шапку модуля): ограда руку окон не трогает, тело живёт снаружи неё.
+WINDOWS_UNKNOWN = ("окна: ограда до них не достаёт (в контейнере живёт только "
+                   "shell); что с телом — спросить не у кого, модуль body не загрузился")
+
+
+def windows_truth() -> str:
+    try:
+        import body as _body
+        return _body.windows_truth()
+    except Exception:
+        return WINDOWS_UNKNOWN
+
 
 STATE: dict = {"enabled": False, "container": False, "reason": "выключена", "roots": [],
                "writable_roots": [], "mounts": [], "denied_mounts": [],
-               "mount_requests": [], "windows": WINDOWS_TRUTH}
+               "mount_requests": [], "windows": WINDOWS_UNKNOWN}
 
 
 # --------------------------------------------------------------------------- #
@@ -1148,6 +1149,7 @@ class Container:
         tmp.mkdir(parents=True, exist_ok=True)
         out_path = tmp / f"shell-{os.getpid()}-{int(time.time() * 1000)}.out"
         fd = os.open(str(out_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_BINARY)
+        import msvcrt   # только здесь: модуль импортируется и на Linux (сервер), где msvcrt нет
         handle = msvcrt.get_osfhandle(fd)
         os.set_handle_inheritable(handle, True)
 
@@ -1496,42 +1498,6 @@ def _offer_mount_hand(agent_mod, mounts: "Mounts") -> None:
     log.info("монтирование: рука mount_request выдана агенту")
 
 
-def _windows_truth_in_hand(agent_mod) -> None:
-    """Сказать про окна честно ТАМ, ГДЕ АГЕНТ СПРАШИВАЕТ, — в самой руке.
-
-    ⚠ Разбор C3 (шапка модуля): рука `computer` в поставке есть, а тела под ней
-    нет. Без обёртки агент получает английское «PRAXIS_BODY_CONTROLLER_TOKEN is
-    not configured» — это читается как «поправь настройку», и следующий ход
-    уходит на попытку поправить несуществующую настройку. Хуже того, в песочнице
-    такой отказ читается как «меня заперли», хотя ограда тут ни при чём.
-
-    Проход остаётся: если тело когда-нибудь появится (токен в среде), рука
-    сработает как была — обёртка спрашивает `body_client.available()` на каждом
-    вызове, а не решает раз и навсегда на старте.
-    """
-    impl = getattr(agent_mod, "TOOL_IMPL", None)
-    original = impl.get("computer") if isinstance(impl, dict) else None
-    if not callable(original) or getattr(original, "_helene_windows", False):
-        return
-
-    def computer(*args, **kwargs):
-        try:
-            import body_client
-            if body_client.available():
-                return original(*args, **kwargs)
-        except Exception:
-            log.debug("рука окон: body_client не спросился", exc_info=True)
-        return ("Рука окон в этой сборке не работает: тела под ней нет — ни в "
-                "песочнице, ни в интерактивном режиме, ни под службой. Ограда "
-                "здесь ни при чём, порт UIA ещё не сделан. Что видно и что "
-                "можно — смотри в анатомии.")
-
-    computer._helene_windows = True
-    computer.__name__ = getattr(original, "__name__", "computer")
-    computer.__doc__ = getattr(original, "__doc__", "")
-    impl["computer"] = computer
-
-
 def _open_home(agent_mod, mounts: "Mounts") -> None:
     """Пустить файловые руки в смонтированное: гард ДЕРЕВА запирает их в доме.
 
@@ -1675,8 +1641,9 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
         _open_everything(agent_mod, tree, install_root)
         STATE["reason"] = (STATE["reason"] + "; файловые руки и shell видят всё, "
                            "что доступно учётке владельца, монтирование не нужно")
-    STATE["windows"] = WINDOWS_TRUTH
-    _windows_truth_in_hand(agent_mod)
+    # Рука окон (`computer`) — не наша: её подключает `body.install` ПОСЛЕ ограды,
+    # тело живёт снаружи контейнера. Здесь только строка правды в анатомию.
+    STATE["windows"] = windows_truth()
 
     if not enabled:
         return

@@ -193,13 +193,25 @@ def mode_state() -> dict:
     path = config_path()
     if path is None:
         return mode_unknown("helene.json рядом не найден — режим неизвестен")
+    cfg = _load_json(path)
     try:
-        picture = mod.describe(mod.resolve(_load_json(path)))
+        picture = mod.describe(mod.resolve(cfg))
     except Exception:
         log.exception("режим не разобрался")
         return mode_unknown("режим не разобрался — смотри helene.log")
     picture["choices"] = mod.catalogue()
     picture["service"] = mod.service_option()
+    # Управление компьютером — опция поверх любого режима, не режим (06.09).
+    # Что записал владелец — из конфига; что с телом на самом деле — снимок
+    # раннера (`body.py` пишет его сторожем раз в несколько секунд). Старый
+    # harness без опции отдаёт пустоту, и окно говорит об этом словами.
+    try:
+        picture["computer"] = mod.computer_state(cfg)
+        picture["computer_option"] = mod.computer_option()
+    except AttributeError:
+        picture["computer"] = None
+        picture["computer_option"] = None
+    picture["computer_live"] = _load_json(tree() / "memory" / ".state" / "body.json")
     picture["config"] = str(path)
     return picture
 
