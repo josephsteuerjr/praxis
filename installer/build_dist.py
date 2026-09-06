@@ -299,8 +299,10 @@ def stage_payload(dest: Path, live: Path, allow_partial: bool) -> dict:
     """
     (dest / "app" / "deskd").mkdir(parents=True, exist_ok=True)
     shutil.copy2(DESK / "deskapp.py", dest / "app" / "deskapp.py")
-    for name in ("__init__.py", "readers.py"):
-        shutil.copy2(DESK / "deskd" / name, dest / "app" / "deskd" / name)
+    # Все модули пакета, а не перечисление имён: `rooms.py` (07.09) не уехал бы
+    # в поставку, и канал падал бы на импорте — поставка без комнат нерабочая.
+    for f in sorted((DESK / "deskd").glob("*.py")):
+        shutil.copy2(f, dest / "app" / "deskd" / f.name)
     static_digest = copy_static(dest / "app" / "static")
     copy_resources(dest / "app" / "resources")
     phone = copy_mobile(dest / "app" / "mobile", allow_partial)
