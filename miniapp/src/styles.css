@@ -1,0 +1,7 @@
+@import "../../ui-kit/phone.css";
+
+/* Мини-апп Telegram: всё общее — в ui-kit/phone.css. Telegram даёт свою
+   шапку и кнопку «назад», поэтому сверху меньше воздуха. */
+#top {
+  padding-top: 6px;
+}

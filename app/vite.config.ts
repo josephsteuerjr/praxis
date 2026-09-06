@@ -1,27 +1,9 @@
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig } from "vite";
+import { devOverride } from "../ui-kit/vite-dev";
 
 // UI основной программы. base './' — те же файлы живут и в exe (Tauri), и
 // за deskapp по HTTP; ui-kit лежит выше корня, поэтому fs.allow.
-//
-// Превью против чужого канала (Пульт Праксис на VPS, задача B 07.09): в dev
-// адрес и ключ приходят из среды — HELENE_DEV_BASE и HELENE_DEV_KEY — и
-// подставляются в страницу как window.PULT_CONFIG_OVERRIDE. В сборку это не
-// попадает: плагин работает только у dev-сервера, ключ в файлы не пишется.
-function devOverride(): Plugin {
-  return {
-    name: "helene-dev-override",
-    apply: "serve",
-    transformIndexHtml(html) {
-      const base = (process.env.HELENE_DEV_BASE || "").trim().replace(/\/+$/, "");
-      const key = (process.env.HELENE_DEV_KEY || "").trim();
-      const agent = (process.env.HELENE_DEV_AGENT || "").trim();
-      if (!base) return html;
-      const cfg = JSON.stringify({ base, key, agent });
-      return html.replace("<head>", `<head><script>window.PULT_CONFIG_OVERRIDE = ${cfg};</script>`);
-    },
-  };
-}
-
+// Превью против чужого канала — ui-kit/vite-dev.ts (только dev-сервер).
 export default defineConfig({
   base: "./",
   clearScreen: false,

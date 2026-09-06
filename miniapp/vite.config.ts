@@ -1,14 +1,15 @@
 import { defineConfig } from "vite";
 import { devOverride } from "../ui-kit/vite-dev";
 
-// PWA для телефона. Отдаётся deskapp по пути /m/ с того же origin, что и API:
-// один канал, один ключ устройства. ui-kit лежит выше корня — fs.allow.
+// Мини-апп Telegram. Хостится своим сайтом (Caddy: статика + прокси /api,
+// /pair, /events, /tunnel на канал) — относительные пути, чтобы сборка жила
+// в любом корне. ui-kit лежит выше корня — fs.allow.
 export default defineConfig({
-  base: "/m/",
+  base: "./",
   clearScreen: false,
   plugins: [devOverride()],
   server: {
-    port: 5175,
+    port: 5176,
     strictPort: true,
     fs: { allow: [".."] },
     proxy: {
