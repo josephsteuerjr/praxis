@@ -9,7 +9,9 @@ import { bindFail, esc, failHTML, fmtAge, fmtK, fmtTs, humanError, q, toast } fr
 import { PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "./state";
 import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "./rooms";
 import * as panel from "./panel";
+import * as now from "./views/now";
 import * as talk from "./views/talk";
+import * as wakes from "./views/wakes";
 import * as plans from "./views/plans";
 import * as frame from "./views/frame";
 import * as files from "./views/files";
@@ -65,6 +67,8 @@ if (inTauri) {
 // ---------------------------------------------------------------- разделы
 
 const ICONS: Record<View, string> = {
+  now: '<path d="M3.5 10h3l2-5 3 10 2-5h3"/>',
+  wakes: '<circle cx="10" cy="10.5" r="5.5"/><path d="M10 7.5v3l2 1.5M6 3.5 3.5 5.5M14 3.5l2.5 2"/>',
   talk: '<path d="M4 5.5h12v8H8l-4 3z"/>',
   plans: '<rect x="3.5" y="4" width="13" height="12" rx="2"/><path d="M6.5 2.8v2.5M13.5 2.8v2.5M6.5 8h7M6.5 11h4"/>',
   frame: '<path d="M3.5 6.5V4.8c0-.7.6-1.3 1.3-1.3h1.7M13.5 3.5h1.7c.7 0 1.3.6 1.3 1.3v1.7M16.5 13.5v1.7c0 .7-.6 1.3-1.3 1.3h-1.7M6.5 16.5H4.8c-.7 0-1.3-.6-1.3-1.3v-1.7"/><circle cx="10" cy="10" r="2.6"/>',
@@ -75,12 +79,14 @@ const ICONS: Record<View, string> = {
 };
 
 const SECTIONS: Array<{ id: View; label: string; kicker: string; key: string }> = [
-  { id: "talk", label: "Чат", kicker: "", key: "1" },
-  { id: "plans", label: "Задачи", kicker: "План агента", key: "2" },
-  { id: "frame", label: "Контекст", kicker: "Что видит модель", key: "3" },
-  { id: "files", label: "Файлы", kicker: "Память агента в файлах", key: "4" },
-  { id: "journal", label: "Журнал", kicker: "Ошибки и пропуски", key: "5" },
-  { id: "anatomy", label: "Система", kicker: "Как это устроено", key: "6" },
+  { id: "now", label: "Сейчас", kicker: "Что агент делает", key: "1" },
+  { id: "talk", label: "Чат", kicker: "", key: "2" },
+  { id: "plans", label: "Задачи", kicker: "Агенда, доска, субагенты", key: "3" },
+  { id: "wakes", label: "Вейки", kicker: "Пробуждения по расписанию", key: "4" },
+  { id: "frame", label: "Контекст", kicker: "Что видит модель", key: "5" },
+  { id: "files", label: "Файлы", kicker: "Память агента в файлах", key: "6" },
+  { id: "journal", label: "Журнал", kicker: "Ошибки и пропуски", key: "7" },
+  { id: "anatomy", label: "Система", kicker: "Как это устроено", key: "8" },
 ];
 
 function railButton(id: View, label: string, key: string): HTMLButtonElement {
@@ -135,7 +141,7 @@ document.addEventListener("keydown", (e) => {
   } else if (e.code === "Comma") {
     e.preventDefault();
     void show("settings");
-  } else if (/^Digit[1-6]$/.test(e.code)) {
+  } else if (/^Digit[1-8]$/.test(e.code)) {
     const s = SECTIONS[Number(e.code.slice(5)) - 1];
     if (s) {
       e.preventDefault();
@@ -151,8 +157,10 @@ function syncRail() {
 }
 
 const views: Record<View, { render: (root: HTMLElement) => Promise<void> }> = {
+  now,
   talk,
   plans,
+  wakes,
   frame,
   files,
   journal,
@@ -207,7 +215,9 @@ export async function show(id: View, opts: { quiet?: boolean } = {}) {
 
 // ---------------------------------------------------------------- комнаты
 
+let roomPicked = false;
 function selectRoom(room: Room) {
+  roomPicked = true;
   S.room = room.key;
   S.roomName = room.name;
   renderRooms();
@@ -267,6 +277,15 @@ export async function loadRooms() {
   const { runs, chats } = await fetchRooms();
   S.runs = runs;
   S.rooms = buildRooms(runs, chats);
+  // Чужой харнесс (Пульт Праксис): комната окна у неё пуста — чат открывается
+  // на самой свежей комнате, пока владелец не выбрал сам.
+  if (foreignHarness() && !roomPicked && S.room === WINDOW_ROOM) {
+    const fresh = S.rooms.find((r) => r.kind === "telegram" && r.count > 0) ?? S.rooms.find((r) => r.kind === "telegram");
+    if (fresh) {
+      S.room = fresh.key;
+      S.roomName = fresh.name;
+    }
+  }
   const current = S.rooms.find((r) => r.key === S.room);
   if (current) S.roomName = current.name;
   else if (S.room !== WINDOW_ROOM) {
@@ -498,7 +517,10 @@ export async function refreshState() {
     const busy = foreignHarness()
       ? S.runs.some((r) => r.status === "running" && runIsRecent(r))
       : !!s.runner?.busy && !!s.runner?.alive;
-    if (busy || wasBusy) panel.tick(busy);
+    if (busy || wasBusy) {
+      panel.tick(busy);
+      now.tick();
+    }
   } catch {
     // связь решает пилюля через onConnection
   }
@@ -706,9 +728,10 @@ onEvent((ev) => {
   if (ev.t === "llm") {
     void refreshPulse();
     panel.onLlm();
+    now.onEvent("llm");
   }
   if (ev.t === "run") {
-    void loadRooms();
+    void loadRooms().then(() => now.onEvent("run"));
     talk.onRunEvent(String(ev.run_id ?? ""));
     void refreshState();
   }
@@ -737,8 +760,13 @@ addEventListener("frame-go", (e) => void show((e as CustomEvent<View>).detail));
 addEventListener("frame-restart", () => void restartHarness());
 connect();
 void refreshState();
+addEventListener("frame-open-room", (e) => {
+  const d = (e as CustomEvent<{ key: string; name: string }>).detail;
+  const room = S.rooms.find((r) => r.key === d.key) ?? { key: d.key, name: d.name, kind: isWindowRoom(d.key) ? "window" : "telegram", live: false, count: 0, mtime: 0 } as Room;
+  selectRoom(room);
+});
 loadRooms()
-  .then(() => show("talk"))
+  .then(() => show("now"))
   .catch(() => {
     view.innerHTML = `<div class="empty"><b>${esc(S.agent)} сейчас не на связи</b>Окно продолжит попытки само. Можно оставить его открытым.</div>`;
     renderState(null, false);

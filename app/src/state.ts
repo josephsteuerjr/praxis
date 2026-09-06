@@ -67,7 +67,7 @@ export interface Room {
   stub?: boolean;
 }
 
-export type View = "talk" | "plans" | "frame" | "files" | "journal" | "anatomy" | "settings";
+export type View = "now" | "talk" | "plans" | "wakes" | "frame" | "files" | "journal" | "anatomy" | "settings";
 
 /** Реплика владельца, которую он уже отправил, а лента ещё не подтвердила. */
 export interface Pending {
@@ -82,7 +82,7 @@ export interface Pending {
 export const S = {
   agent: "Агент",
   agentState: null as AgentState | null,
-  view: "talk" as View,
+  view: "now" as View,
   room: "window",
   // Комната окна зовётся именем агента; до первого /api/state — как и он сам.
   roomName: "Агент",

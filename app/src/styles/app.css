@@ -2259,3 +2259,43 @@ select.field-input {
     transition: none !important;
   }
 }
+
+/* ---------- «Сейчас»: монитор хода ---------- */
+
+.now .turn-live {
+  margin: 4px 0 14px;
+  padding: 14px 18px 10px;
+}
+
+.now .turn-live-head {
+  font-size: 17px;
+}
+
+.now .ev-steps {
+  font-size: 13px;
+}
+
+.now-idle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 14px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font: 400 15px/1.4 var(--serif);
+  color: var(--ink-2);
+}
+
+.now .frame-strip {
+  margin-bottom: 8px;
+}
+
+.now .ev {
+  margin: 3px 0;
+}
+
+.now .ev-sub a {
+  color: var(--accent);
+}
