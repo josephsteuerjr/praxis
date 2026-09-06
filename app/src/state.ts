@@ -99,9 +99,10 @@ export const S = {
   roomsUnsupported: false,
 };
 
-/** Ключ комнаты окна по умолчанию и префикс новых — из ui-kit/contract.json. */
-export const WINDOW_ROOM: string = contract.rooms.window;
-export const WINDOW_PREFIX: string = contract.rooms.window_prefix;
+/** Ключ комнаты окна по умолчанию и префикс новых — из ui-kit/contract.json
+ *  (`rooms.default`, `rooms.pattern` = `^window-[0-9a-f]{8}$`). */
+export const WINDOW_ROOM: string = contract.rooms.default;
+export const WINDOW_PREFIX: string = contract.rooms.pattern.replace(/^\^/, "").split("[")[0];
 
 export function isWindowRoom(key: string): boolean {
   return key === WINDOW_ROOM || key === "pult" || key.startsWith(WINDOW_PREFIX);

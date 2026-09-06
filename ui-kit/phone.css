@@ -252,6 +252,13 @@ a {
   padding: 7px 12px;
 }
 
+.msg.silence .msg-body {
+  border-style: dotted;
+  border-color: var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .msg-body p {
   margin: 0 0 0.5em;
 }

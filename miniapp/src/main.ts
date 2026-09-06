@@ -20,12 +20,14 @@ declare global {
   interface Window {
     Telegram?: { WebApp?: TelegramWebApp };
     PULT_CONFIG_OVERRIDE?: { base: string; key: string; agent?: string };
+    PULT_CONFIG?: { base: string; key: string; agent?: string } | null;
   }
 }
 
 const tg = window.Telegram?.WebApp;
 const params = new URLSearchParams(location.search);
-const override = window.PULT_CONFIG_OVERRIDE;
+// Приоритет: подстановка dev-сервера, потом config.js хостинга.
+const override = window.PULT_CONFIG_OVERRIDE || window.PULT_CONFIG || undefined;
 const base = override?.base || "";
 const STORAGE = "frame.tg.device";
 

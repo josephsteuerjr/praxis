@@ -15,6 +15,8 @@ interface Msg {
   // (localharness/transport.py, `row["system"] = True`). Из Telegram он прийти
   // не может: входящие строки собирает botapi из полей апдейта.
   system?: boolean;
+  /** У служебной плашки: "silence" — молчание по решению / ход без реплики. */
+  kind?: string;
   sender_id?: string | number;
   topic_title?: string;
   reply_to_message_id?: number;
@@ -195,7 +197,10 @@ export async function render(container: HTMLElement): Promise<void> {
     // Справа — только владелец: чужая реплика из общей комнаты — слева, с именем.
     const foreign = showName && !!S.agentState?.owner;
     const own = !m.outgoing && !system && !foreign;
-    const cls = own ? "own" : system ? "system" : m.outgoing ? "agent" : "";
+    // `kind: "silence"` — серая плашка (КОНТРАКТ A→B §3): молчание по
+    // решению или ход без реплики; не слово агента и не тревога.
+    const silence = system && m.kind === "silence";
+    const cls = own ? "own" : system ? "system" + (silence ? " silence" : "") : m.outgoing ? "agent" : "";
     const head = m.outgoing
       ? `<span class="who-hand">${esc(S.agent)}</span><span>${fmtTime(m.timestamp)}${edited}</span>`
       : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}${edited}</span>`;

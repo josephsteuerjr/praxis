@@ -20,6 +20,7 @@
 // трубы. Окно его только показывает и никогда не пишет.
 import { api } from "./api";
 import { el, fmtTimeSec, humanError } from "./lib";
+import contract from "../../ui-kit/contract.json";
 import { button, toggle as switchRow } from "../../ui-kit/dom";
 import type { ComputerLive, ComputerOption, ModeState } from "./mode";
 
@@ -38,9 +39,10 @@ export interface ComputerCard {
   scopes(): string[];
 }
 
-/** Четыре права дерева — порядок показа тот же, что у харнесса. Список нужен
- *  только чтобы прочитать блок из файла ДО ответа трубы: рисуем по её списку. */
-export const COMPUTER_SCOPES = ["computer.read", "computer.files", "computer.process", "computer.apps"] as const;
+/** Четыре права дерева — порядок показа тот же, что у харнесса; список — из
+ *  ui-kit/contract.json (его же сверяют Python и Rust). Нужен только чтобы
+ *  прочитать блок из файла ДО ответа канала: рисуем по его списку. */
+export const COMPUTER_SCOPES: readonly string[] = contract.computer_scopes;
 
 /** Блок `computer` из черновика конфига → что записано. Нет ключа `scopes` —
  *  все четыре (то же правило, что у харнесса: включил опцию — получил руку

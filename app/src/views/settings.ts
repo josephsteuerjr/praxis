@@ -144,6 +144,12 @@ export async function render(container: HTMLElement): Promise<void> {
   } catch (e) {
     anatomyFail = e;
   }
+  // Просьбы агента — живьём из `/api/mode` (КОНТРАКТ A→B §2), когда канал их
+  // отдаёт: снимок анатомии пишется один раз на старте и устаревает.
+  if (modeLive?.mounts_live && Array.isArray(modeLive.mounts_live.requests)) {
+    liveSandbox = { ...(liveSandbox || {}), mount_requests: modeLive.mounts_live.requests };
+    anatomyFail = null;
+  }
   const c = loaded.config;
   const draft: Config = JSON.parse(JSON.stringify(c));
   draft.agent = draft.agent || {};
@@ -686,22 +692,21 @@ export async function render(container: HTMLElement): Promise<void> {
   // обработчика: три нажатия «Проверить обновления» — три кнопки «Скачать» в
   // ряд, и она оставалась висеть даже рядом с «Это последняя версия».
   let updUrl = "";
-  // Скачать и поставить — оболочка (КОНТРАКТ-B→A §3: update_download →
-  // update_install). Пока этих команд у оболочки нет, кнопка честно открывает
-  // ссылку на выпуск, как раньше, и говорит об этом.
+  let updSha = "";
+  // Скачать и поставить — оболочка (КОНТРАКТ A→B §5: update_download →
+  // update_install). Несовпадение суммы оболочка отвергает сама (throw, файл
+  // удалён); `sha_ok: null` — сверять было не с чем. Установщик гасит
+  // программу — «установщик запущен» говорим ДО вызова. Старая оболочка без
+  // этих команд — кнопка честно открывает ссылку на выпуск.
   const dlBtn = button("Скачать и установить", "primary", async () => {
     if (!updUrl) return;
     dlBtn.disabled = true;
     updOut.className = "receipt";
-    updOut.textContent = "Скачиваю…";
+    updOut.textContent = "Скачиваю в «Загрузки»…";
     try {
-      const got = await shell<{ path: string; sha_ok: boolean; sha_expected?: string; sha_actual?: string }>("update_download", { url: updUrl });
-      if (!got.sha_ok) {
-        updOut.className = "receipt err";
-        updOut.textContent = `Архив скачан, но его отпечаток не сошёлся с заметками выпуска — ставить не буду. Файл: ${got.path}`;
-        return;
-      }
-      updOut.textContent = "Скачано, отпечаток сошёлся. Запускаю установщик — программа закроется сама.";
+      const got = await shell<{ path: string; bytes?: number; sha256?: string; sha_ok: boolean | null }>("update_download", { url: updUrl, sha256: updSha });
+      const checked = got.sha_ok === true ? "отпечаток сошёлся" : got.sha_ok === null ? "отпечатка в выпуске нет, сверить было не с чем" : "отпечаток проверен";
+      updOut.textContent = `Скачано (${checked}). Установщик запущен — программа закроется сама и откроется новой.`;
       await shell("update_install", { path: got.path });
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e ?? "");
@@ -723,17 +728,19 @@ export async function render(container: HTMLElement): Promise<void> {
       updOut.className = "receipt";
       updOut.textContent = "спрашиваю…";
       try {
-        const r = await shell<{ current: string; latest: string; newer: boolean; url: string; notes: string }>("update_check", {
+        const r = await shell<{ current: string; latest: string; newer: boolean; url: string; notes: string; sha256?: string }>("update_check", {
           url: String(draft.update?.url || ""),
         });
         if (r.newer) {
           updOut.className = "receipt ok";
           updOut.textContent = `Есть версия ${r.latest}. ${r.notes || ""}`.trim();
           updUrl = r.url || "";
+          updSha = r.sha256 || "";
           dlBtn.hidden = !updUrl;
         } else {
           updOut.textContent = `Это последняя версия (${r.current}).`;
           updUrl = "";
+          updSha = "";
           dlBtn.hidden = true;
         }
       } catch (e) {
@@ -761,6 +768,11 @@ export async function render(container: HTMLElement): Promise<void> {
       if (aboutInfo) void shell("open_path", { path: aboutInfo.log }).catch((e) => toast(humanError(e).text));
     }),
   );
+  // Выпуск менял интерфейс, прежняя папка отложена рядом (КОНТРАКТ A→B §5).
+  const prev = String((c.installed && (c.installed as Record<string, unknown>).static_prev) || "").trim();
+  if (prev) {
+    about.append(el("p", "field-hint", `Интерфейс обновлён этим выпуском; твоя прежняя версия статики лежит рядом: ${prev}. Ключ исчезнет при следующей установке, если папки нет.`));
+  }
   about.append(
     aboutRow,
     field("Адрес обновлений", String(draft.update?.url || ""), (v) => (draft.update!.url = v), {
@@ -957,9 +969,13 @@ export async function render(container: HTMLElement): Promise<void> {
     const args: Record<string, unknown> = { config: JSON.stringify(out) };
     if (seenMtime && !force) args.mtimeNs = seenMtime;
     try {
-      const r = await shell<{ ok?: boolean; mtime_ns?: string | number } | null>("config_save", args);
+      const r = await shell<{ ok?: boolean; code?: string; error?: string; mtime_ns?: string | number } | null>("config_save", args);
+      // КОНТРАКТ A→B §1: `{ok: false, code: "stale", mtime_ns, error}` — файл
+      // менял кто-то ещё, черновик не записан.
+      if (r && typeof r === "object" && r.ok === false && r.code === "stale") throw new StaleConfig(r.error || "stale");
       if (r && typeof r === "object" && r.mtime_ns != null) seenMtime = String(r.mtime_ns);
     } catch (e) {
+      if (e instanceof StaleConfig) throw e;
       const text = e instanceof Error ? e.message : String(e ?? "");
       if (/^stale:/.test(text)) throw new StaleConfig(text);
       throw e;

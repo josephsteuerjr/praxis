@@ -30,6 +30,7 @@ export interface Msg {
   text?: string;
   sender_name?: string;
   system?: boolean;
+  kind?: string;
   topic_id?: number | string;
   topic_title?: string;
   media?: string;
@@ -97,8 +98,8 @@ export interface PhoneApp {
   sheetOpen(): boolean;
 }
 
-const WINDOW_ROOM: string = contract.rooms.window;
-const WINDOW_PREFIX: string = contract.rooms.window_prefix;
+const WINDOW_ROOM: string = contract.rooms.default;
+const WINDOW_PREFIX: string = contract.rooms.pattern.replace(/^\^/, "").split("[")[0];
 const isWindowRoom = (key: string) => key === WINDOW_ROOM || key === "pult" || key.startsWith(WINDOW_PREFIX);
 
 /** 403: ни ключа, ни cookie не хватило. */
@@ -413,7 +414,8 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       const showName = !m.outgoing && !system && !windowish && name !== state?.owner;
       const foreignRow = showName && !!state?.owner;
       const own = !m.outgoing && !system && !foreignRow && (windowish || !!state?.owner);
-      const cls = own ? "own" : system ? "system" : m.outgoing ? "agent" : "";
+      const silence = system && m.kind === "silence";
+      const cls = own ? "own" : system ? "system" + (silence ? " silence" : "") : m.outgoing ? "agent" : "";
       const topic = m.topic_title && !/__topic__/.test(room) ? ` <span class="badge">${esc(m.topic_title)}</span>` : "";
       const head = m.outgoing
         ? `<span class="who-hand">${esc(agent)}</span><span>${fmtTime(m.timestamp)}</span>`

@@ -161,6 +161,9 @@ export interface ModeState {
   computer?: ComputerState | null;
   computer_option?: ComputerOption | null;
   computer_live?: ComputerLive;
+  /** Живые просьбы агента о папках (КОНТРАКТ A→B §2): `memory/.state/mounts.json`
+   *  как он лежит сейчас, а не снимок анатомии со старта. Старый харнесс поля не шлёт. */
+  mounts_live?: { updated_at: string | null; requests: Array<{ path?: string; real?: string; access?: string; why?: string; at?: string; asked?: number }> };
   config: string;
 }
 

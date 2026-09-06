@@ -27,8 +27,11 @@ const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/
 const relayTs = code(readFileSync(join(src, "relay.ts"), "utf8"));
 const settingsTs = code(readFileSync(join(src, "views", "settings.ts"), "utf8"));
 
-// --- 1. значения самих констант (модуль без зависимостей — читаем литералы)
-const port = Number(/RELAY_PORT = (\d+)/.exec(relayTs)[1]);
+// --- 1. значения самих констант: порт — из ui-kit/contract.json (его же
+// сверяют Python и Rust), окно обязано читать его оттуда, а не литералом
+const contract = JSON.parse(readFileSync(join(here, "..", "..", "ui-kit", "contract.json"), "utf8"));
+assert.ok(/RELAY_PORT: number = contract\.ports\.relay;/.test(relayTs), "RELAY_PORT обязан читаться из ui-kit/contract.json");
+const port = Number(contract.ports.relay);
 assert.equal(port, 5011, "порт реле разошёлся с install.rs");
 
 const base = `http://127.0.0.1:${port}`;

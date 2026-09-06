@@ -833,6 +833,15 @@ html:not(.native) #chrome .controls {
   padding: 7px 12px;
 }
 
+/* Молчание по решению / ход без реплики (КОНТРАКТ A→B §3): серая плашка,
+   без авторства — это не слово агента и не тревога. */
+.msg.silence .msg-body {
+  border-style: dotted;
+  border-color: var(--line);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
 .msg-body p {
   margin: 0 0 0.65em;
 }
