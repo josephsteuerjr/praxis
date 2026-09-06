@@ -7,7 +7,7 @@
 // `desk_key` (deskapp.auth_middleware), дальше — cookie; на 403 ключ
 // возвращается в адрес. Область ключа устройства — КОНТРАКТ-B→A §4: ходы и
 // прогоны телефон получает, когда канал их отдаст; до этого честно говорит.
-import { applyTheme, el, q, readTheme, saveTheme, toast, type Theme } from "./dom";
+import { applyTheme, el, q, toast, type Theme } from "./dom";
 import { esc, fmtDay, fmtDur, fmtTime, md } from "./text";
 import { frameStripHTML, stepsHTML, type RunDetail } from "./steps";
 import contract from "./contract.json";
@@ -134,7 +134,7 @@ const ICON = {
 };
 
 export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
-  applyTheme(opts.theme ? opts.theme() : readTheme());
+  applyTheme(opts.theme ? opts.theme() : "system");
   const base = (opts.base || "").replace(/\/+$/, "");
 
   // ---------------------------------------------------------------- DOM
@@ -606,31 +606,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   function drawMore() {
     sheetHead.innerHTML = `<span>Ещё</span>`;
     sheetBody.replaceChildren();
-    if (!opts.theme) {
-      const row = el("div", "more-row");
-      row.append(el("h4", "", "Тема"));
-      const choice = el("div", "choice");
-      choice.setAttribute("role", "radiogroup");
-      const current = readTheme();
-      for (const [value, title, text] of [
-        ["system", "Как на телефоне", "днём светлая, ночью тёмная"],
-        ["light", "Светлая", "всегда"],
-        ["dark", "Тёмная", "всегда"],
-      ] as Array<[Theme, string, string]>) {
-        const b = el("button", "choice-item");
-        b.type = "button";
-        b.setAttribute("role", "radio");
-        b.setAttribute("aria-checked", String(value === current));
-        b.append(el("span", "choice-title", title), el("span", "choice-text", text));
-        b.addEventListener("click", () => {
-          saveTheme(value);
-          for (const o of choice.querySelectorAll(".choice-item")) o.setAttribute("aria-checked", String(o === b));
-        });
-        choice.append(b);
-      }
-      row.append(choice);
-      sheetBody.append(row);
-    }
+    // Тема — как в системе или от Telegram (слово владельца 07.09): переключателя нет.
     const about = el("div", "more-row");
     about.append(el("h4", "", "Об этом телефоне"));
     const kind = opts.platform === "telegram" ? "мини-апп Telegram" : "приложение на экране «Домой»";

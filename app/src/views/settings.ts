@@ -14,8 +14,8 @@ import { api, cfg, inTauri, post, shell } from "../api";
 import { ANTHROPIC_PRESETS, BILLING_LABEL, clampEffort, effortPlan } from "../../../ui-kit/providers";
 import { keepBlock } from "../config";
 import QRCode from "qrcode";
-import { bindFail, el, esc, failHTML, humanError, q, toast } from "../lib";
-import { button, card, chips, field, saveTheme, setField, toggle, type Theme } from "../../../ui-kit/dom";
+import { bindFail, el, esc, failHTML, humanError, toast } from "../lib";
+import { button, card, chips, field, setField, toggle } from "../../../ui-kit/dom";
 import { computerCard, storedComputer } from "../computer";
 import { MODE_KEY, loadMode, modeCard, type ModeState } from "../mode";
 import { mountsCard, type LiveSandbox } from "../mounts";
@@ -107,9 +107,8 @@ export async function render(container: HTMLElement): Promise<void> {
     // Тумблер телефона в вебе был пустышкой: черновик выбрасывался в мусор,
     // кнопки «Сохранить» в этой ветке нет вовсе — человек щёлкал, и ничего не
     // происходило, и никто не говорил, что не происходит.
-    center.append(themeCard(), el("div", "card muted", "Остальные настройки доступны в приложении Hélène на том компьютере, где живёт агент: здесь окно смотрит на удалённый харнесс."));
+    center.append(el("div", "card muted", "Настройки доступны в приложении Hélène на том компьютере, где живёт агент: здесь окно смотрит на удалённый харнесс. Тема — как в системе."));
     mountSettings(container, center);
-    bindTheme(container);
     return;
   }
   let loaded: Loaded;
@@ -664,8 +663,7 @@ export async function render(container: HTMLElement): Promise<void> {
   auto.append(autoToggle);
   center.append(card("Автозапуск", auto));
 
-  // --- тема
-  center.append(themeCard());
+  // Тема — только как в системе (слово владельца 07.09): переключателя нет.
 
   // --- данные
   const data = el("div", "actions");
@@ -1011,7 +1009,6 @@ export async function render(container: HTMLElement): Promise<void> {
   center.append(saveCard);
 
   mountSettings(container, center);
-  bindTheme(container);
 }
 
 /**
@@ -1232,48 +1229,4 @@ function phoneCard(draft: Config, savedEnabled = false): HTMLElement {
   void drawDevices();
   return card("Телефон", phone);
 
-}
-
-function themeCard(): HTMLElement {
-  const c = el("section", "card");
-  c.append(el("h3", "", "Тема"));
-  const row = el("div", "choice");
-  row.id = "theme-choice";
-  for (const [value, title, text] of [
-    ["system", "Как в Windows", "днём светлая, ночью тёмная"],
-    ["light", "Светлая", "всегда, самая светлая"],
-    ["dark", "Тёмная", "всегда, тёплый уголь"],
-  ]) {
-    const b = el("button", "choice-item");
-    b.type = "button";
-    b.dataset.value = value;
-    b.append(el("span", "choice-title", title), el("span", "choice-text", text));
-    row.append(b);
-  }
-  c.append(row);
-  return c;
-}
-
-function bindTheme(container: HTMLElement) {
-  const row = container.querySelector<HTMLElement>("#theme-choice");
-  if (!row) return;
-  const current = (() => {
-    try {
-      return localStorage.getItem("frame.theme") || "system";
-    } catch {
-      return "system";
-    }
-  })();
-  const sync = (v: string) => {
-    for (const b of row.querySelectorAll<HTMLButtonElement>(".choice-item")) b.setAttribute("aria-checked", String(b.dataset.value === v));
-  };
-  sync(current);
-  for (const b of row.querySelectorAll<HTMLButtonElement>(".choice-item")) {
-    b.addEventListener("click", () => {
-      saveTheme(b.dataset.value as Theme);
-      sync(b.dataset.value!);
-      dispatchEvent(new Event("frame-theme"));
-    });
-  }
-  q("#theme-choice", container);
 }

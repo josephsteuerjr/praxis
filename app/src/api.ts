@@ -5,6 +5,8 @@ export interface Cfg {
   base: string;
   key: string;
   agent?: string;
+  /** Имя продукта для подписи и заголовка (хостинг Пульта Праксис — «Praxis»). */
+  product?: string;
 }
 
 declare global {

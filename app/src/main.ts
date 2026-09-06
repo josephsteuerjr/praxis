@@ -4,7 +4,7 @@
 // (слово владельца 07.09).
 import "./styles/app.css";
 import { api, cfg, connect, inTauri, onConnection, onEvent, post, shell } from "./api";
-import { applyTheme, readTheme } from "../../ui-kit/dom";
+import { applyTheme } from "../../ui-kit/dom";
 import { bindFail, esc, failHTML, fmtAge, fmtK, fmtTs, humanError, q, toast } from "./lib";
 import { PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "./state";
 import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "./rooms";
@@ -41,9 +41,9 @@ const menu = q<HTMLElement>("#menu");
 
 // ---------------------------------------------------------------- тема
 
-// По умолчанию как в Windows: светлая днём не слепит ночью.
-applyTheme(readTheme());
-addEventListener("frame-theme", () => applyTheme(readTheme()));
+// Тема — как в системе (слово владельца 07.09): светлая днём, тёмная ночью,
+// без переключателя в окне.
+applyTheme("system");
 
 // ---------------------------------------------------------------- окно
 
@@ -723,9 +723,13 @@ onEvent((ev) => {
 // ---------------------------------------------------------------- старт
 
 S.agent = (cfg.agent || "").trim() || "Агент";
-railSign.textContent = PRODUCT_NAME;
+// Подпись внизу полки и заголовок вкладки — имя продукта хостинга: у Пульта
+// Праксис это «Praxis» (config.js), у Hélène — Hélène (слово владельца 07.09).
+const product = (cfg.product || "").trim() || PRODUCT_NAME;
+railSign.textContent = product;
+document.title = product;
 shell<{ version: string }>("app_info")
-  .then((i) => (railSign.textContent = `${PRODUCT_NAME} ${i.version}`))
+  .then((i) => (railSign.textContent = `${product} ${i.version}`))
   .catch(() => {});
 syncComposer();
 addEventListener("frame-room", syncComposer);
