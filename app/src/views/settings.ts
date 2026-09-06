@@ -631,6 +631,10 @@ export async function render(container: HTMLElement): Promise<void> {
   const mode = modeCard(modeLive, modeFail, storedService, (_name, sandbox, title) => {
     syncSandboxState(sandbox, title);
     mounts.setFence(sandbox, title);
+    // Монтирование — дверь песочницы. Без ограды файловые руки и shell видят
+    // всё, что доступно учётке (слово владельца 06.09), и карточке здесь нечего
+    // показывать; список в конфиге живёт и оживает вместе с песочницей.
+    mounts.el.hidden = !sandbox;
   });
   center.append(mode.el);
 
@@ -676,6 +680,7 @@ export async function render(container: HTMLElement): Promise<void> {
     mode.name() ? mode.sandbox() : draft.sandbox.enabled !== false,
     mode.title() || modeLive?.title || "",
   );
+  mounts.el.hidden = !(mode.name() ? mode.sandbox() : draft.sandbox.enabled !== false);
   center.append(mounts.el);
 
   center.append(phoneCard(draft, !!c.phone?.enabled));

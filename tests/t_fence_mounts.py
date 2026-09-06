@@ -507,5 +507,82 @@ class Hand(unittest.TestCase):
         self.assertTrue(callable(agent.TOOL_IMPL["mount_request"]))
 
 
+class Interactive(unittest.TestCase):
+    """Без ограды файловые руки видят всё, что доступно учётке (слово владельца 06.09)."""
+
+    def setUp(self):
+        self.g = Ground()
+        self.addCleanup(self.g.close)
+        self.saved_state = dict(fence.STATE)
+        self.addCleanup(lambda: fence.STATE.update(self.saved_state))
+        self.saved_shop = sys.modules.get("workshop")
+        home = self.g.tree
+        shop = types.ModuleType("workshop")
+
+        def _resolve_read(path):           # гард дерева: только дом
+            p = Path(path)
+            p = p if p.is_absolute() else home / p
+            try:
+                p.resolve().relative_to(home)
+            except ValueError:
+                return None
+            if p.name == "llm.json":       # секрет внутри дома — отказ дерева
+                return None
+            return p.resolve()
+
+        shop._resolve_read = _resolve_read
+        shop._resolve_write = lambda path, proposal_id="": (
+            (_resolve_read(path), "") if _resolve_read(path) is not None else (None, "путь вне дома"))
+        sys.modules["workshop"] = shop
+        self.addCleanup(self._restore_shop)
+        self.saved_container = fence.Container
+        fence.Container = Fenced._fake_container()
+        self.addCleanup(lambda: setattr(fence, "Container", self.saved_container))
+        self.shop = shop
+
+    def _restore_shop(self):
+        if self.saved_shop is None:
+            sys.modules.pop("workshop", None)
+        else:
+            sys.modules["workshop"] = self.saved_shop
+
+    def install(self, cfg):
+        self.g.write(cfg)
+        agent = types.SimpleNamespace(TOOL_IMPL={}, BASE_TOOLS=[], BASE=str(self.g.tree),
+                                      subprocess=__import__("subprocess"))
+        fence.install(agent, self.g.tree, cfg, config_path=self.g.config)
+        return agent
+
+    def test_outside_opens_for_reading_and_writing(self):
+        self.install({"agent_mode": "interactive", "sandbox": {"enabled": False}})
+        target = str(self.g.outside / "а.txt")
+        self.assertIsNotNone(self.shop._resolve_read(target))
+        got, err = self.shop._resolve_write(target)
+        self.assertIsNotNone(got)
+        self.assertEqual(err, "")
+
+    def test_tree_rules_inside_home_survive(self):
+        self.install({"agent_mode": "interactive", "sandbox": {"enabled": False}})
+        secret = str(self.g.tree / "memory" / "llm.json")
+        self.assertIsNone(self.shop._resolve_read(secret), "секрет внутри дома остаётся отказом дерева")
+        # Относительный путь решает дерево: внутри дома — пускает, побег через
+        # `..` — нет, и обёртка его не спасает.
+        self.assertIsNotNone(self.shop._resolve_read("заметка.md"))
+        self.assertIsNone(self.shop._resolve_read("../../Документы/а.txt"), "относительный побег — отказ дерева")
+
+    def test_no_mount_hand_and_state_says_why(self):
+        agent = self.install({"agent_mode": "interactive",
+                              "sandbox": {"enabled": False, "mounts": [str(self.g.other)]}})
+        self.assertNotIn("mount_request", agent.TOOL_IMPL)
+        self.assertFalse(any(t.get("name") == "mount_request" for t in agent.BASE_TOOLS))
+        self.assertIn("монтирование не нужно", fence.STATE["reason"])
+        self.assertFalse((self.g.workspace / "mnt").exists(), "стыков без ограды не делаем")
+
+    def test_sandbox_still_mounts(self):
+        agent = self.install(_cfg([str(self.g.other)]))
+        self.assertIn("mount_request", agent.TOOL_IMPL)
+        self.assertIsNone(self.shop._resolve_read(str(self.g.outside / "а.txt")))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

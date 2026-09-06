@@ -1402,6 +1402,78 @@ def _mount_hand(mounts: "Mounts"):
     return mount_request
 
 
+def _open_everything(agent_mod, tree: Path, install_root: Path) -> None:
+    """Интерактивный режим: файловые руки видят всё, что доступно учётке владельца.
+
+    Гард ДЕРЕВА (`workshop._resolve_read`/`_resolve_write`) запирает файловые
+    руки в доме при любой ограде (см. `_open_home`). В песочнице это правильно,
+    и дверь наружу там одна — монтирование. Без ограды это было раздвоение:
+    `shell` читал любой файл владельца его правами, а `fs_read` на тот же путь
+    отвечал «вне дома», карточка настроек при этом уверяла, что «файлы и так
+    открыты его руками». Слово владельца 06.09: «давай открытый доступ в
+    интерактивном режиме» — как у Claude Code, не как у Cowork.
+
+    Расширяем решение дерева, не заменяем: внутри дома и кода его отказы
+    (секреты, ядро через предложение) остаются как были; снаружи — любой
+    абсолютный путь, а дальше решают права учётки, ровно как у `shell`.
+    """
+    try:
+        import workshop
+    except Exception:
+        log.warning("интерактивный режим: модуль workshop не загрузился — "
+                    "файловые руки остаются в доме", exc_info=True)
+        return
+    read_original = getattr(workshop, "_resolve_read", None)
+    write_original = getattr(workshop, "_resolve_write", None)
+    if read_original is None or write_original is None:
+        log.warning("интерактивный режим: в дереве нет _resolve_read/_resolve_write — "
+                    "файловые руки остаются в доме")
+        return
+    if getattr(read_original, "_helene_open", False):
+        return
+    homes = [os.path.normcase(str(Path(p).resolve()))
+             for p in (tree, install_root / "tree")]
+
+    def _inside_home(path: Path) -> bool:
+        text = os.path.normcase(str(path))
+        return any(text == h or text.startswith(h + os.sep) for h in homes)
+
+    def _outside(path: str) -> Path | None:
+        raw = str(path or "").strip()
+        if not raw:
+            return None
+        p = Path(raw)
+        if not p.is_absolute():
+            return None          # относительное — это про дом, там решает дерево
+        try:
+            p = p.resolve()
+        except OSError:
+            return None
+        return None if _inside_home(p) else p
+
+    def _resolve_read(path: str):
+        got = read_original(path)
+        if got is not None:
+            return got
+        return _outside(path)
+
+    def _resolve_write(path: str, proposal_id: str = ""):
+        got, err = write_original(path, proposal_id)
+        if got is not None or proposal_id:
+            return got, err
+        opened = _outside(path)
+        if opened is not None:
+            return opened, ""
+        return None, err
+
+    _resolve_read._helene_open = True
+    _resolve_write._helene_open = True
+    workshop._resolve_read = _resolve_read
+    workshop._resolve_write = _resolve_write
+    log.info("интерактивный режим: файловые руки открыты на всё, что доступно учётке "
+             "владельца; дом и код — по правилам дерева")
+
+
 def _offer_mount_hand(agent_mod, mounts: "Mounts") -> None:
     """Дать агенту руку просьбы — и в список рук модели, и в TOOL_IMPL.
 
@@ -1569,29 +1641,40 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
         agent_mod.subprocess = _SubprocessShim(agent_mod.subprocess, container,
                                                workspace, install_root)
 
-    # 2. монтирование — В ЛЮБОМ РЕЖИМЕ, даже с выключенной оградой. Оно не
-    # сужает, а расширяет дом: гард ДЕРЕВА (`workshop._resolve_read`) запирает
-    # файловые руки в доме независимо от нашей ограды, так что без этого шага
-    # смонтированная папка не открылась бы и в интерактивном режиме.
+    # 2. Гард ДЕРЕВА (`workshop._resolve_read`) запирает файловые руки в доме
+    # независимо от нашей ограды, поэтому дом расширяем здесь сами — по-разному
+    # для двух оград:
+    #   * песочница — монтирование: наружу только то, что владелец назвал, и
+    #     рука `mount_request`, чтобы попросить;
+    #   * интерактивный — всё, что доступно учётке владельца (слово владельца
+    #     06.09). Монтировать тут нечего, и руки просьбы нет: список
+    #     `sandbox.mounts` в конфиге остаётся и оживает с песочницей.
+    # Раньше монтирование поднималось в любом режиме, и без ограды `fs_read`
+    # отвечал «вне дома» там, где `shell` тот же файл спокойно читал.
     mounts = None
-    try:
-        mounts = Mounts(Path(config_path) if config_path
-                        else install_root / "helene.json",
-                        install_root, tree, workspace)
-        mounts.container = container
-        mounts.refresh(force=True)
-        mounts.forget_answered()
-        log.info("монтирование: %s", mounts.describe())
-        for row in mounts.rows():
-            if row["error"]:
-                log.warning("монтирование: %s — %s", row["path"] or "(пустой путь)",
-                            row["error"])
-    except Exception:
-        log.exception("монтирование не поднялось — агент остаётся в доме")
-        mounts = None
-    if mounts is not None:
-        _open_home(agent_mod, mounts)
-        _offer_mount_hand(agent_mod, mounts)
+    if enabled:
+        try:
+            mounts = Mounts(Path(config_path) if config_path
+                            else install_root / "helene.json",
+                            install_root, tree, workspace)
+            mounts.container = container
+            mounts.refresh(force=True)
+            mounts.forget_answered()
+            log.info("монтирование: %s", mounts.describe())
+            for row in mounts.rows():
+                if row["error"]:
+                    log.warning("монтирование: %s — %s", row["path"] or "(пустой путь)",
+                                row["error"])
+        except Exception:
+            log.exception("монтирование не поднялось — агент остаётся в доме")
+            mounts = None
+        if mounts is not None:
+            _open_home(agent_mod, mounts)
+            _offer_mount_hand(agent_mod, mounts)
+    else:
+        _open_everything(agent_mod, tree, install_root)
+        STATE["reason"] = (STATE["reason"] + "; файловые руки и shell видят всё, "
+                           "что доступно учётке владельца, монтирование не нужно")
     STATE["windows"] = WINDOWS_TRUTH
     _windows_truth_in_hand(agent_mod)
 
