@@ -10,6 +10,7 @@
 // области окна (ходы, прогоны, задачи) телефон получает, когда канал их
 // отдаёт (КОНТРАКТ-B→A §4); на 403 честно говорит «телефону не отдаётся».
 import { applyTheme, el, q, toast, type Theme } from "./dom";
+import "./version";
 import { esc, fmtDay, fmtDur, fmtTime, md } from "./text";
 import { frameStripHTML, stepsHTML, type RunDetail } from "./steps";
 import contract from "./contract.json";
@@ -816,6 +817,24 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     const kind = opts.platform === "telegram" ? "мини-апп Telegram" : "приложение на экране «Домой»";
     about.append(el("p", "field-hint", `${agent} · ${kind} · ключ устройства ${key ? "есть" : "нет"} · канал ${base || location.host}. Тема — как в системе. Переписка, ходы и задачи читаются живьём с компьютера, где живёт агент; на телефоне ничего не хранится, кроме ключа.`));
     sheetBody.append(about);
+    // Принудительное обновление руками — для iPhone, где WebView держит старую
+    // сборку: та же сверка, что идёт сама при возврате на экран.
+    const upd = el("div", "more-row");
+    upd.append(el("h4", "", "Оболочка"));
+    const updBtn = el("button", "btn btn-quiet", "Обновить оболочку");
+    updBtn.type = "button";
+    const updNote = el("p", "field-hint", `Сборка ${(document.querySelector<HTMLScriptElement>('script[type="module"][src*="assets/index-"]')?.getAttribute("src") || "").split("/").pop()?.replace(/^index-|\.js$/g, "") || "?"}. Обновляется сама при открытии и возврате на экран; кнопка — если не дождался сам.`);
+    updBtn.addEventListener("click", async () => {
+      updBtn.disabled = true;
+      updNote.textContent = "Сверяю с сервером…";
+      const went = window.heleneCheckShell ? await window.heleneCheckShell() : false;
+      if (!went) {
+        updNote.textContent = "Это уже свежая сборка.";
+        updBtn.disabled = false;
+      }
+    });
+    upd.append(updBtn, updNote);
+    sheetBody.append(upd);
     const unpair = el("div", "more-row");
     unpair.append(el("h4", "", "Отвязать"));
     const b = el("button", "btn btn-danger", "Забыть ключ на этом телефоне");

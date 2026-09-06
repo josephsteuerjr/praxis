@@ -64,8 +64,16 @@ export async function checkShellVersion(): Promise<boolean> {
   return true;
 }
 
+declare global {
+  interface Window {
+    /** Ручная сверка из консоли или кнопки «Обновить оболочку». */
+    heleneCheckShell?: () => Promise<boolean>;
+  }
+}
+
 /** Сверять при старте, при возврате на экран и раз в несколько минут. */
 export function watchShellVersion(everyMs = 5 * 60 * 1000): void {
+  window.heleneCheckShell = checkShellVersion;
   void checkShellVersion();
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) void checkShellVersion();
