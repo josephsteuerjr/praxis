@@ -102,7 +102,7 @@ export function connect() {
       // Ответ без поля status давал владельцу литеральное « (undefined)».
       // Код отказа несём отдельным полем: по нему окно отличает конфликт
       // правок от любой другой неудачи.
-      else w.rej(new ApiError((d.error || "труба ответила отказом") + (d.status ? " (" + d.status + ")" : ""), d.status, d.code));
+      else w.rej(new ApiError((d.error || "канал ответил отказом") + (d.status ? " (" + d.status + ")" : ""), d.status, d.code));
     }
   };
   s.onclose = s.onerror = () => {

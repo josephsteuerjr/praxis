@@ -634,7 +634,7 @@ fn broker_read_frame(source: &mut dyn std::io::Read, cap: usize) -> Result<Vec<u
     let mut head = [0u8; 4];
     source
         .read_exact(&mut head)
-        .map_err(|e| format!("труба оборвалась на заголовке: {e}"))?;
+        .map_err(|e| format!("канал оборвался на заголовке: {e}"))?;
     let len = u32::from_le_bytes(head) as usize;
     if len == 0 {
         return Err("пустое сообщение".into());
@@ -645,7 +645,7 @@ fn broker_read_frame(source: &mut dyn std::io::Read, cap: usize) -> Result<Vec<u
     let mut body = vec![0u8; len];
     source
         .read_exact(&mut body)
-        .map_err(|e| format!("труба оборвалась на теле: {e}"))?;
+        .map_err(|e| format!("канал оборвался на теле: {e}"))?;
     Ok(body)
 }
 

@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """Надзор за харнессом Hélène на сервере (Linux, Docker) — то, что на Windows
-делает оболочка `helene.exe`: поднять трубу и раннер, перезапускать упавших,
+делает оболочка `helene.exe`: поднять канал и раннер, перезапускать упавших,
 дать окну ключ.
 
 Запуск: python server/serverboot.py --config /opt/helene/helene.json
 
 Что делает:
-  * ключ трубы — `data/memory/.state/desk-token` (заводится, если нет) — уходит
-    трубе в HELENE_TOKEN и печатается один раз строкой для окна:
+  * ключ канала — `data/memory/.state/desk-token` (заводится, если нет) — уходит
+    каналу в HELENE_TOKEN и печатается один раз строкой для окна:
     в helene.json на ПК владельца — {"mode": "remote", "base": "https://…", "key": "…"};
-  * труба `app/deskapp.py <port>` слушает 0.0.0.0 внутри контейнера, наружу её
+  * канал `app/deskapp.py <port>` слушает 0.0.0.0 внутри контейнера, наружу её
     выпускает compose на 127.0.0.1:<port>, а в мир — Caddy/Tailscale владельца;
   * раннер `app/localharness/runner.py --config helene.json` — тот же, что на
     Windows: ограды AppContainer здесь нет, границей служит сам контейнер
@@ -112,7 +112,7 @@ def main() -> int:
     app = base / str(cfg.get("app") or "app/deskapp.py")
     runner = base / str(cfg.get("runner") or "app/localharness/runner.py")
     if not app.is_file() or not runner.is_file():
-        raise SystemExit(f"нет трубы или раннера: {app} / {runner}")
+        raise SystemExit(f"нет канала или раннера: {app} / {runner}")
     token = _desk_token(tree)
     # Замок дерева прошлого контейнера. В свежем контейнере живого раннера нет по
     # построению (его поднимает только этот надзор, и он ещё ничего не поднял),
@@ -132,7 +132,7 @@ def main() -> int:
                PYTHONUNBUFFERED="1", HELENE_HOST=os.environ.get("HELENE_HOST", "0.0.0.0"))
     env.pop("PRAXIS_DESK_TOKEN", None)
     children = [
-        Child("труба", [sys.executable, "-u", str(app), str(port)], env, app.parent, tree / "deskapp.log"),
+        Child("канал", [sys.executable, "-u", str(app), str(port)], env, app.parent, tree / "deskapp.log"),
         Child("раннер", [sys.executable, "-u", str(runner), "--config", str(config)], env,
               runner.parent, tree / "runner.log"),
     ]

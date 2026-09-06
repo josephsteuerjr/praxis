@@ -43,10 +43,20 @@ assert.ok(
   "ключ режима обязан быть agent_mode: `mode` занят под местожительство харнесса",
 );
 assert.ok(/MODE_KEY/.test(settingsTs), "settings.ts обязан писать режим через MODE_KEY, а не строкой");
-for (const bad of [/out\.mode\s*=/, /out\["mode"\]\s*=/, /out\['mode'\]\s*=/]) {
+for (const bad of [/out\["mode"\]\s*=/, /out\['mode'\]\s*=/]) {
   assert.ok(
     !bad.test(settingsTs),
     "settings.ts пишет в ключ `mode` — окно останется без харнесса, а служба не стартует",
+  );
+}
+// В `mode` окно пишет ТОЛЬКО местожительство харнесса — карточка «Перенос»
+// (0.3.1): `local` или `remote`, и ничего из оград. Любая другая правая часть —
+// тот самый P0, ради которого тест написан.
+const modeWrites = [...settingsTs.matchAll(/out\.mode\s*=\s*([^;]+);/g)].map((m) => m[1]);
+for (const rhs of modeWrites) {
+  assert.ok(
+    /"remote"/.test(rhs) && /"local"/.test(rhs) && !/picked|sandbox|interactive|MODE_KEY|agent_mode/.test(rhs),
+    `settings.ts пишет в \`mode\` не местожительство харнесса, а «${rhs.trim()}» — окно останется без харнесса, а служба не стартует`,
   );
 }
 assert.ok(

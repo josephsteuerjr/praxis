@@ -285,7 +285,7 @@ export function humanError(e: unknown): HumanError {
   if (low.includes("permissionerror") || low.includes("winerror 5")) {
     return { text: "Windows не дал сюда заглянуть.", detail: raw };
   }
-  if (/\b40[13]\b/.test(raw)) return { text: "Труба не пустила: ключ доступа не подошёл.", detail: raw };
+  if (/\b40[13]\b/.test(raw)) return { text: "Канал не пустил: ключ доступа не подошёл.", detail: raw };
   if (/\b404\b/.test(raw)) return { text: "Программа попросила у агента то, чего он не знает.", detail: raw };
   if (/\b5\d\d\b/.test(raw)) return { text: "Не удалось прочитать память агента.", detail: raw };
   // Сырой Python-эксепшн из трубы: `TypeError: …`, `OSError: …`.

@@ -11,7 +11,7 @@
 | `data/` | я: память, душа, рабочая папка; мой репозиторий git (`.git`, снимки правок души и навыков) | все файловые; это дом. `shell` → `git -C <дом> log` |
 | `tree/` | мой код на Python: `agent.py` (ход, кадр, руки), `memory_*.py`, `frame_*.py`, `desires.py`, `self_model.py`, `tasks.py`, `llm.py`, `forge.py` | читать — `fs_read`; править — только coding-рука, `direct` |
 | `app/localharness/` | харнесс: `runner.py` (ход, будильники, рождение), `boot.py` (раскладка), `transport.py` (окно как канал), `botapi.py` (Telegram), `fence.py` (ограда), `modes.py` (режимы) | читать; при службе папка закрыта на запись |
-| `app/deskapp.py`, `app/deskd/` | труба: что читают окно и телефон | читать |
+| `app/deskapp.py`, `app/deskd/` | канал: что читают окно и телефон | читать |
 | `helene.exe`, `helene-svc.exe`, `helene-setup.exe`, `helene-relay.exe` | оболочка, служба, установщик, реле — Rust | не мои; только пересборка из исходников |
 | `app/static/`, `app/mobile/` | окно и телефон — собранный TypeScript; окно читает `app/static` с диска, правка видна по F5 | в «Песочнице» только читать; править — просить смонтировать |
 | `runtime/` | Python, на котором я бегу; `runtime/git/` — мой git (MinGit) | не трогать |

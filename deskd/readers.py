@@ -188,7 +188,7 @@ def mode_state() -> dict:
     """
     mod = _modes()
     if mod is None:
-        return mode_unknown("модуль режима не нашёлся рядом с трубой — "
+        return mode_unknown("модуль режима не нашёлся рядом с каналом — "
                             "смотри helene.log")
     path = config_path()
     if path is None:

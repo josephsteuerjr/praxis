@@ -714,7 +714,7 @@ fn ensure_desk_token(tree: &Path) -> Option<String> {
         Ok(()) => Some(token),
         Err(err) => {
             log_line(&format!(
-                "секрет трубы не записался ({}): {err} — труба остаётся открытой любому процессу этой машины",
+                "секрет канала не записался ({}): {err} — канал остаётся открытым любому процессу этой машины",
                 path.display()
             ));
             None
@@ -2383,7 +2383,7 @@ fn firewall_allow_blocking(port: u16) -> Result<String, String> {
     };
     if !python.is_file() {
         return Err(format!(
-            "не нашёл питон трубы ({}) — правило не добавлено",
+            "не нашёл питон канала ({}) — правило не добавлено",
             python.display()
         ));
     }

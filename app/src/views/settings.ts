@@ -1039,10 +1039,10 @@ function transferCard(draft: Config): HTMLElement {
     draft.mode = v ? "remote" : "local";
     syncRemote();
   });
-  const baseField = field("Адрес трубы на сервере", String(draft.base || ""), (v) => (draft.base = v), {
+  const baseField = field("Адрес канала на сервере", String(draft.base || ""), (v) => (draft.base = v), {
     mono: true,
     placeholder: "https://helene.example.com",
-    hint: "Тот адрес, по которому Caddy или Tailscale отдаёт трубу контейнера (server/docker-compose.yml слушает 127.0.0.1:8094 хоста).",
+    hint: "Тот адрес, по которому Caddy или Tailscale отдаёт канал контейнера (server/docker-compose.yml слушает 127.0.0.1:8094 хоста).",
   });
   const keyField = field("Ключ окна", String(draft.key || ""), (v) => (draft.key = v), {
     type: "password",
@@ -1056,7 +1056,7 @@ function transferCard(draft: Config): HTMLElement {
     keyField.hidden = !on;
     remoteNote.textContent = on
       ? "После сохранения и перезапуска оболочка своих детей не поднимает: агент живёт на сервере, окно и телефон ходят туда. Пустой адрес — это снова local."
-      : "Сейчас агент живёт на этой машине: трубу и харнесс поднимает окно. Перенос на сервер — экспорт выше, затем server/README-СЕРВЕР.md в поставке.";
+      : "Сейчас агент живёт на этой машине: канал и харнесс поднимает окно. Перенос на сервер — экспорт выше, затем server/README-СЕРВЕР.md в поставке.";
   };
   remote.append(remoteToggle, baseField, keyField, remoteNote);
   syncRemote();
@@ -1075,7 +1075,7 @@ function phoneCard(draft: Config, savedEnabled = false): HTMLElement {
   // общей Wi-Fi (кафе, отель, коворкинг) ключ устройства и вся переписка с
   // агентом видны соседям. Прежняя подсказка обещала «доступ только по ключу»
   // и про отсутствие шифрования молчала.
-  const phoneHint = el("p", "field-hint", "Труба начнёт слушать сеть, а не только эту машину. Внимание: соединение НЕ шифруется (обычный http). В чужой или общей Wi-Fi — кафе, отель, коворкинг — ключ телефона и переписка с агентом идут открытым текстом, их видно соседям по сети. Дома в своей сети это приемлемо; в любой другой пользуйся Tailscale: поставь его на компьютер и телефон, войди в один аккаунт, и QR даст его адрес. Включение применяется перезапуском.");
+  const phoneHint = el("p", "field-hint", "Канал начнёт слушать сеть, а не только эту машину. Внимание: соединение НЕ шифруется (обычный http). В чужой или общей Wi-Fi — кафе, отель, коворкинг — ключ телефона и переписка с агентом идут открытым текстом, их видно соседям по сети. Дома в своей сети это приемлемо; в любой другой пользуйся Tailscale: поставь его на компьютер и телефон, войди в один аккаунт, и QR даст его адрес. Включение применяется перезапуском.");
   const qrRow = el("div", "actions");
   qrRow.style.marginTop = "12px";
   const qrWhy = el("span", "receipt");
@@ -1152,9 +1152,9 @@ function phoneCard(draft: Config, savedEnabled = false): HTMLElement {
     qrBtn.disabled = !on || !savedEnabled;
     qrWhy.className = "receipt";
     qrWhy.textContent = !on
-      ? "Включи тумблер, сохрани и перезапусти — тогда труба начнёт слушать сеть."
+      ? "Включи тумблер, сохрани и перезапусти — тогда канал начнёт слушать сеть."
       : !savedEnabled
-        ? "Сохрани и перезапусти программу: пока труба слушает только эту машину, и QR вёл бы туда, где никто не отвечает."
+        ? "Сохрани и перезапусти программу: пока канал слушает только эту машину, и QR вёл бы туда, где никто не отвечает."
         : "";
   };
   qrRow.append(qrBtn, qrWhy);

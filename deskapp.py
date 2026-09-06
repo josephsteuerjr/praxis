@@ -902,7 +902,7 @@ async def _tunnel_dispatch(method: str, path: str, body, local: bool = False,
     except web.HTTPError as exc:
         return {"status": exc.status, "error": exc.text or str(exc)}
     except Exception as exc:
-        log.warning("труба: %s %s упал", method, route, exc_info=True)
+        log.warning("канал: %s %s упал", method, route, exc_info=True)
         return {"status": 500, "error": f"{type(exc).__name__}: {exc}"[:300]}
 
 
@@ -946,7 +946,7 @@ async def tunnel(request):
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.warning("труба: насос событий умер — закрываю сокет", exc_info=True)
+            log.warning("канал: насос событий умер — закрываю сокет", exc_info=True)
             await ws.close()
 
     pump_task = asyncio.create_task(pump())
@@ -965,7 +965,7 @@ async def tunnel(request):
                 str(req.get("path") or ""), req.get("body"), local=local,
                 role=role)
         except Exception as exc:               # ответ обязан уйти всегда
-            log.warning("труба: обработчик упал", exc_info=True)
+            log.warning("канал: обработчик упал", exc_info=True)
             reply = {"status": 500, "error": f"{type(exc).__name__}: {exc}"[:300]}
         reply["id"] = req.get("id")
         try:

@@ -587,7 +587,7 @@ fn plan_usable(plan: &Plan) -> Result<(), String> {
         return Err(format!("нет питона: {}", plan.python.display()));
     }
     if !plan.app.exists() {
-        return Err(format!("нет трубы: {} (ключ \"app\" в helene.json)", plan.app.display()));
+        return Err(format!("нет канала: {} (ключ \"app\" в helene.json)", plan.app.display()));
     }
     if let Some(runner) = &plan.runner {
         if !runner.exists() {
@@ -797,7 +797,7 @@ fn supervise(
     let now = Instant::now();
     let mut kids: Vec<Kid> = vec![Kid {
         role: Role::Trube,
-        label: "труба",
+        label: "канал",
         script: plan.app.clone(),
         args: vec![plan.port.to_string()],
         child: None,
@@ -833,7 +833,7 @@ fn supervise(
     let token = ensure_desk_token(&plan.tree);
     if token.is_empty() {
         log.line(
-            "секрет трубы не завёлся — труба останется открытой любому процессу этой машины",
+            "секрет канала не завёлся — канал останется открытым любому процессу этой машины",
         );
     }
     if plan.phone && firewall {
@@ -1611,7 +1611,7 @@ fn relax_acl(config: &Path, log: &mut Log) {
 include!("../../common/broker.rs");
 
 /// Первый экземпляр трубы заводится с `FILE_FLAG_FIRST_PIPE_INSTANCE`: если имя
-/// уже занято, значит его занял НЕ мы, и служить на чужой трубе нельзя ни
+/// уже занято, значит его занял НЕ мы, и служить на чужом канале нельзя ни
 /// секунды. Флаг гасится ТОЛЬКО после удачного создания — иначе неудача первой
 /// попытки молча разрешила бы подсесть вторым экземпляром к чужой трубе.
 static BROKER_FIRST: AtomicBool = AtomicBool::new(true);
@@ -1667,7 +1667,7 @@ fn broker_ensure_token(tree: &Path, owner_sid: Option<&str>, log: &mut Log) -> S
     let token = ensure_token_file(&path);
     if token.is_empty() {
         log.line(&format!(
-            "брокер: не смог завести секрет {} — трубы не будет: без замка она открыта",
+            "брокер: не смог завести секрет {} — канала не будет: без замка он открыт",
             path.display()
         ));
         return token;
@@ -2225,7 +2225,7 @@ fn broker_pipe_instance(name: &str, sddl: &str, first: bool) -> Result<Pipe, Str
     };
     if built == 0 {
         return Err(format!(
-            "дескриптор трубы не собрался (SDDL «{sddl}»), код {}",
+            "дескриптор канала не собрался (SDDL «{sddl}»), код {}",
             unsafe { GetLastError() }
         ));
     }
@@ -2253,11 +2253,11 @@ fn broker_pipe_instance(name: &str, sddl: &str, first: bool) -> Result<Pipe, Str
     unsafe { LocalFree(sd as HLOCAL) };
     if handle == INVALID_HANDLE_VALUE {
         let squatted = if first && code == ERROR_ACCESS_DENIED {
-            " — имя уже занято другой программой; служить на чужой трубе нельзя"
+            " — имя уже занято другой программой; служить на чужом канале нельзя"
         } else {
             ""
         };
-        return Err(format!("труба {name} не завелась: код {code}{squatted}"));
+        return Err(format!("канал {name} не завёлся: код {code}{squatted}"));
     }
     Ok(Pipe(handle))
 }
@@ -2273,7 +2273,7 @@ fn broker_pipe_connect(pipe: &Pipe) -> Result<(), String> {
         // Клиент успел подключиться между созданием и ConnectNamedPipe. Не
         // ошибка, а штатная гонка: Windows сообщает о ней вот так.
         ERROR_PIPE_CONNECTED => Ok(()),
-        code => Err(format!("труба не приняла клиента: код {code}")),
+        code => Err(format!("канал не принял клиента: код {code}")),
     }
 }
 
@@ -2285,7 +2285,7 @@ fn broker_client_who(pipe: &Pipe) -> Result<(u32, u32), String> {
     use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
     let mut pid: u32 = 0;
     if unsafe { GetNamedPipeClientProcessId(pipe.0, &mut pid) } == 0 {
-        return Err(format!("не узнал, кто на том конце трубы: код {}", unsafe {
+        return Err(format!("не узнал, кто на том конце канала: код {}", unsafe {
             GetLastError()
         }));
     }
@@ -2584,7 +2584,7 @@ fn broker_serve(config: PathBuf, stop: Arc<AtomicBool>) {
         };
         if !plan.broker {
             if !said_off {
-                log.line("брокер выключен (service.broker=false) — трубы нет");
+                log.line("брокер выключен (service.broker=false) — канала нет");
                 said_off = true;
             }
             std::thread::sleep(Duration::from_secs(3));
@@ -2592,7 +2592,7 @@ fn broker_serve(config: PathBuf, stop: Arc<AtomicBool>) {
         }
         said_off = false;
         let Some(root) = install_root(&config) else {
-            log.line("брокер: рядом с конфигом нет helene-svc.exe — это не папка установки, трубу не открываю");
+            log.line("брокер: рядом с конфигом нет helene-svc.exe — это не папка установки, канал не открываю");
             return;
         };
         // Владельца спрашиваем на КАЖДОМ круге: вошёл другой человек — труба
@@ -2600,7 +2600,7 @@ fn broker_serve(config: PathBuf, stop: Arc<AtomicBool>) {
         let Some(owner) = broker_owner_sid() else {
             if !said_nobody {
                 log.line(
-                    "брокер: в систему никто не вошёл — трубу открывать некому. Это состояние, \
+                    "брокер: в систему никто не вошёл — канал открывать некому. Это состояние, \
                      а не ошибка; открою при входе",
                 );
                 said_nobody = true;
@@ -2610,7 +2610,7 @@ fn broker_serve(config: PathBuf, stop: Arc<AtomicBool>) {
         };
         said_nobody = false;
         let Some(sddl) = broker_sddl(&owner) else {
-            log.line(&format!("брокер: «{owner}» не похоже на SID — трубу не открываю"));
+            log.line(&format!("брокер: «{owner}» не похоже на SID — канал не открываю"));
             std::thread::sleep(Duration::from_secs(30));
             continue;
         };
