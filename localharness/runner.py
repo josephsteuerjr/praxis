@@ -798,7 +798,10 @@ def boundary_word(row: dict) -> tuple[str, str]:
             break
         label = label or head.strip().lower()
         note = rest.strip()
-    if len(note.split()) < 2:
+    # A short answer without an outcome prefix is still speech ("Спасибо",
+    # a code, a number). Only actual outcome markers and their one-word
+    # machine recap keep the pre-existing plaque behavior.
+    if not note or note.lower() in _OUTCOME_PREFIXES or (label and len(note.split()) < 2):
         return BLANK, ""
     if label == "wait":
         note = "Жду: " + note

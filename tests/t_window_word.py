@@ -87,6 +87,11 @@ class Boundary(unittest.TestCase):
         self.assertEqual(runner.boundary_word(row),
                          (runner.WORD, "Проверила руку computer по шагам: всё удалось."))
 
+    def test_single_word_answer_is_not_a_machine_outcome(self):
+        for note in ("Спасибо.", "42", "Готово"):
+            self.assertEqual(runner.boundary_word({"held": "unspoken", "note": note}),
+                             (runner.WORD, note))
+
     def test_bare_outcome_is_not_a_word(self):
         for note in ("done", "done: представилась", "", "wait:"):
             self.assertEqual(runner.boundary_word({"held": "unspoken", "note": note}),
@@ -148,6 +153,13 @@ class WindowTurn(unittest.TestCase):
         self.assertTrue(last["outgoing"])
         self.assertNotIn("system", last, "слово агента — не плашка")
         self.assertIn(("text", "Всё проверила: окно нашла, текст набран."), agent.receipts)
+
+    def test_short_authored_answer_reaches_archive_and_delivery_receipt(self):
+        outcome, rows, agent = self._turn({"held": "unspoken", "note": "Спасибо."}, _Envelope("run-short"))
+        self.assertEqual(outcome, "spoken")
+        self.assertEqual(rows[-1]["text"], "Спасибо.")
+        self.assertNotIn("system", rows[-1])
+        self.assertIn(("text", "Спасибо."), agent.receipts)
 
     def test_media_does_not_swallow_the_word(self):
         # 06.09: снимок ушёл, отчёт остался в заметке — окно показало один «[файл]».
