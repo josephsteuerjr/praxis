@@ -1178,6 +1178,11 @@ html:not(.native) #chrome .controls {
 }
 
 .ev-head {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -1217,7 +1222,7 @@ html:not(.native) #chrome .controls {
 .ev-sub {
   margin: -4px 9px 6px;
   font-size: 11.5px;
-  color: var(--muted);
+  color: var(--ink-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1227,6 +1232,14 @@ html:not(.native) #chrome .controls {
   padding: 2px 9px 9px;
   font-size: 12.5px;
 }
+
+.ev-chevron { color: var(--ink-3); font: 20px/1 var(--sans); transition: transform .15s; }
+.ev.open .ev-chevron { transform: rotate(90deg); }
+.now .ev { margin: 0; border-bottom-color: var(--line); border-radius: 0; padding: 6px 0; }
+.now .ev-title { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 14px; line-height: 1.5; color: var(--ink); }
+.now .ev-head { align-items: start; }
+.now .ev-time { padding-top: 5px; white-space: nowrap; color: var(--ink-3); }
+.now .ev-head .dot { margin-top: 7px; }
 
 .ev-step {
   display: flex;

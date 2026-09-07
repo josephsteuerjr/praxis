@@ -27,12 +27,29 @@
 .usage-quota-label { font-size: 13px; margin-bottom: 8px; }
 .usage-quota-label strong { font-weight: 500; font-variant-numeric: tabular-nums; }
 .usage-meter { height: 6px; border-radius: 8px; background: var(--surface-2); overflow: hidden; }
-.usage-meter i { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.usage-meter i { display: block; height: 100%; border-radius: inherit; background: var(--ok); }
 .usage-meter .usage-low { background: var(--err); }
 .usage-quota-foot { margin-top: 7px; font-size: 10px; color: var(--ink-3); flex-wrap: wrap; gap: 3px 10px; }
 .usage-source { margin-top: 14px; font-size: 10px; }
 .usage-quota-empty { margin-top: 14px; }
 .usage-muted { line-height: 1.6; }
+.usage-compact { padding: 0; margin: 18px 0; background: transparent; border-radius: 12px; }
+.usage-summary { display: grid; grid-template-columns: 1fr auto; gap: 12px 24px; padding: 16px 20px; cursor: pointer; list-style: none; }
+.usage-summary::-webkit-details-marker { display: none; }
+.usage-summary:focus-visible, .usage-details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 8px; }
+.usage-summary-title { font: 500 14px/1.4 var(--sans); }
+.usage-summary-toggle { align-self: center; font: 12px/1.4 var(--sans); color: var(--accent); }
+.usage-summary-toggle > span { display: inline-block; margin-left: 5px; }
+.usage-compact[open] .usage-summary-toggle > span { transform: rotate(180deg); }
+.usage-brief { display: flex; gap: 28px; grid-column: 1 / -1; color: var(--ink-3); font: 12px/1.5 var(--sans); }
+.usage-brief > span { display: flex; flex-direction: column; gap: 2px; }
+.usage-brief b { font: 500 21px/1.4 var(--sans); color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -.025em; }
+.usage-brief small { font: 12px/1.4 var(--sans); color: var(--ink-3); letter-spacing: 0; }
+.usage-limits-brief { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 5px 20px; font: 11px/1.6 var(--sans); color: var(--ink-3); }
+.usage-limit-brief b { color: var(--ink-2); font-weight: 500; margin-right: 5px; }
+.usage-limit-brief.usage-low { color: var(--err); }
+.usage-expanded { padding: 22px; border-top: 1px solid var(--line); background: var(--surface); border-radius: 0 0 12px 12px; }
+.usage-compact .usage-heading h2 { font-size: 22px; }
 @media(max-width:600px) {
   .usage-panel { margin: 20px 0; padding: 18px; border-radius: 14px; }
   .usage-overview { grid-template-columns: 1fr 1fr; gap: 18px; }
@@ -50,4 +67,10 @@
   .usage-details tbody td:nth-child(3)::before { content: "Вход"; }
   .usage-details tbody td:nth-child(4)::before { content: "Выход"; }
   .usage-details tbody td:nth-child(5)::before { content: "Кэш"; }
+  .usage-panel.usage-compact { padding: 0; margin: 14px 0; }
+  .usage-summary { padding: 14px 16px; gap: 10px 14px; }
+  .usage-brief { gap: 20px; flex-wrap: wrap; }
+  .usage-brief b { font-size: 19px; }
+  .usage-brief small { font-size: 11px; }
+  .usage-expanded { padding: 18px 16px; }
 }

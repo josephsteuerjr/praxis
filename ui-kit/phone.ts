@@ -353,7 +353,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   function runLabel(r: Run): string {
     const w = words.get(r.id);
     const text = clean(w?.out || "") || noteLabel(w?.note || "") || goalLabel(r.goal_head || "");
-    return text.slice(0, 80) || `${RUN_KIND[r.kind] || r.kind} · ${fmtTime(r.created_at)}`;
+    return text || `${RUN_KIND[r.kind] || r.kind} · ${fmtTime(r.created_at)}`;
   }
 
   function runRow(r: Run, opts2: { showRoom?: boolean } = {}): string {
@@ -364,28 +364,33 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     // В личке собеседник и комната — одно имя: не повторять.
     const sub = [RUN_KIND[r.kind] || r.kind, roomTitle, who && who !== roomTitle ? who : ""].filter(Boolean).join(" · ");
     return `<div class="ev ${evOpen.has(r.id) ? "open" : ""}" data-ev="${esc(r.id)}">
-      <div class="ev-head"><span class="ev-title">${esc(runLabel(r))}</span><span class="ev-time">${fmtDay(r.created_at) === "Сегодня" ? "" : fmtDay(r.created_at) + " "}${fmtTime(r.created_at)}</span><span class="dot ${dot}"></span></div>
+      <button type="button" class="ev-head" aria-expanded="${evOpen.has(r.id)}" aria-controls="run-${esc(r.id)}"><span class="ev-title">${esc(runLabel(r))}</span><span class="ev-time">${fmtDay(r.created_at) === "Сегодня" ? "" : fmtDay(r.created_at) + " "}${fmtTime(r.created_at)}</span><span class="dot ${dot}"></span><span class="ev-chevron" aria-hidden="true">›</span></button>
       ${sub ? `<div class="ev-sub">${esc(sub)}</div>` : ""}
-      <div class="ev-steps" ${evOpen.has(r.id) ? "" : "hidden"}></div></div>`;
+      <div class="ev-steps" id="run-${esc(r.id)}" ${evOpen.has(r.id) ? "" : "hidden"}></div></div>`;
   }
 
   /** Оживить раскрывающиеся ходы внутри узла. */
-  function bindRuns(box: HTMLElement, redraw: () => void) {
+  function bindRuns(box: HTMLElement, _redraw: () => void) {
     for (const node of box.querySelectorAll<HTMLElement>(".ev[data-ev]")) {
       const id = node.dataset.ev!;
-      node.querySelector(".ev-head")!.addEventListener("click", () => {
-        if (evOpen.has(id)) evOpen.delete(id);
-        else evOpen.add(id);
-        redraw();
-      });
-      if (evOpen.has(id)) {
-        const steps = node.querySelector<HTMLElement>(".ev-steps")!;
+      const head = node.querySelector<HTMLButtonElement>(".ev-head")!;
+      const steps = node.querySelector<HTMLElement>(".ev-steps")!;
+      const load = () => {
         steps.innerHTML = '<div class="muted">читаю шаги…</div>';
         void runDetail(id).then((d) => {
           if (!steps.isConnected) return;
           steps.innerHTML = d ? stepsHTML(d) : closed.has("run") ? '<div class="muted">шаги телефону пока не отдаются</div>' : '<div class="muted">шаги не прочитались</div>';
         });
-      }
+      };
+      head.addEventListener("click", () => {
+        const open = !evOpen.has(id);
+        if (open) evOpen.add(id); else evOpen.delete(id);
+        node.classList.toggle("open", open);
+        head.setAttribute("aria-expanded", String(open));
+        steps.hidden = !open;
+        if (open) load();
+      });
+      if (evOpen.has(id)) load();
     }
     for (const a of box.querySelectorAll<HTMLElement>("[data-room]")) {
       a.addEventListener("click", () => openRoom(a.dataset.room!, a.dataset.roomName || a.dataset.room!));
@@ -487,14 +492,14 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
           ${live.chat_title ? `<div class="turn-live-sub"><a href="#" data-room="${esc(roomKey(live))}" data-room-name="${esc(live.chat_title)}">${esc(live.chat_title)}</a>${live.goal_head ? " · " + esc(clean(live.goal_head).slice(0, 70)) : ""}</div>` : ""}
           <div class="ev-steps" id="turn-live-steps">${liveDetail ? stepsHTML(liveDetail, { limit: 12 }) : closed.has("run") ? '<div class="muted">шаги телефону пока не отдаются</div>' : '<div class="muted">читаю шаги…</div>'}</div>
         </div>`
-      : `<div class="now-idle"><span class="dot ${state && !foreign() && state.level === "error" ? "failed" : ""}"></span><span>${esc(state ? (foreign() ? "Хода сейчас нет · " + foreignPhrase().phrase.replace(/^На связи · /, "") : state.phrase) : "Подключение…")}${state?.next_wake ? ` · пробуждение ${esc(fmtTime(state.next_wake) || state.next_wake)}` : ""}</span></div>`;
+      : `<div class="now-idle"><span class="dot ${state && !foreign() && state.level === "error" ? "failed" : ""}"></span><span>${esc(state ? (foreign() ? "Нет текущих действий · " + foreignPhrase().phrase.replace(/^На связи · /, "") : state.phrase) : "Подключение…")}${state?.next_wake ? ` · пробуждение ${esc(fmtTime(state.next_wake) || state.next_wake)}` : ""}</span></div>`;
     const rest = list.filter((r) => r.id !== live?.id);
     screen.innerHTML =
       liveHTML +
-      usageShell() +
-      frameStripHTML(strip, live ? "Кадр сейчас" : "Кадр последнего хода") +
-      `<div class="screen-title">Недавние ходы</div>` +
-      (closed.has("runs") ? notGiven("Ходы") : rest.map((r) => runRow(r, { showRoom: true })).join("") || '<div class="empty">Ходов ещё нет</div>');
+      usageShell(true) +
+      frameStripHTML(strip, live ? "Контекст сейчас" : "Контекст последнего ответа") +
+      `<div class="screen-title">Последние действия</div>` +
+      (closed.has("runs") ? notGiven("Действия") : rest.map((r) => runRow(r, { showRoom: true })).join("") || '<div class="empty">Здесь появятся действия и результаты</div>');
     bindRuns(screen, () => void renderNow());
     mountUsage(screen, api);
     scheduleLive(!!live);
@@ -550,6 +555,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       if (r.kind !== "chat_turn" || r.chat_id == null) continue;
       const k = roomKey(r);
       let found = next.find((x) => x.key === k);
+      if (!found && isWindowRoom(k)) continue;
       if (!found) {
         found = { key: k, name: r.chat_title || (isWindowRoom(k) ? "Новый чат" : "чат " + k), kind: isWindowRoom(k) ? "window" : "telegram", live: false, count: 0, at: 0 };
         next.push(found);

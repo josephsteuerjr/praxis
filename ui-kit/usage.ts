@@ -23,8 +23,31 @@ const exact = (n: number | null) => n == null ? "неизвестно" : new Int
 const clamp = (n: number) => Math.max(0, Math.min(100, n));
 const date = (n: number) => new Date(n * 1000).toLocaleString("ru", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
-export function usageShell(): string {
-  return `<section class="usage-panel" aria-label="Расход и лимиты"><div class="usage-heading"><h2>Расход</h2><span>Загружаю счётчик…</span></div><div data-usage></div><div data-allowances></div></section>`;
+let overviewOpen = false;
+let modelsOpen = false;
+
+export function usageShell(compact = false): string {
+  const body = `<div class="usage-heading"><h2>Расход</h2><span>Загружаю счётчик…</span></div><div data-usage></div><div data-allowances></div>`;
+  if (!compact) return `<section class="usage-panel" aria-label="Расход и лимиты">${body}</section>`;
+  return `<details class="usage-panel usage-compact" ${overviewOpen ? "open" : ""}>
+    <summary class="usage-summary"><span class="usage-summary-title">Расход и лимиты</span><span class="usage-summary-toggle">Подробнее <span aria-hidden="true">⌄</span></span>
+    <span class="usage-brief" data-usage-brief>Загружаю счётчик…</span><span class="usage-limits-brief" data-limits-brief>Проверяю лимиты…</span></summary>
+    <div class="usage-expanded">${body}</div></details>`;
+}
+
+function briefHTML(data: Usage): string {
+  if (data.status !== "ok" || !data.today_total || !data.week_total) return `<span>${esc(data.reason || "Счётчик недоступен")}</span>`;
+  return `<span><span>Сегодня</span><b>${num(data.today_total.total_tokens)} <small>токенов</small></b></span><span><span>7 дней</span><b>${num(data.week_total.total_tokens)} <small>токенов</small></b></span>`;
+}
+
+function limitsBriefHTML(providers: Allowance[]): string {
+  if (!providers.length) return "Квоты подписки не подключены";
+  return providers.map(p => {
+    const windows = p.windows.filter(w => w.remaining_percent != null);
+    const lowest = windows.reduce<Allowance["windows"][number] | undefined>((a, w) => !a || w.remaining_percent! < a.remaining_percent! ? w : a, undefined);
+    const label = lowest ? `${num(lowest.remaining_percent)}% осталось · ${lowest.label}` : "лимит неизвестен";
+    return `<span class="usage-limit-brief ${lowest && lowest.remaining_percent! <= 10 ? "usage-low" : ""}"><b>${esc(p.name)}</b> ${esc(label)}${p.status === "stale" ? " · прежние данные" : ""}</span>`;
+  }).join("");
 }
 
 function countsHTML(data: Usage): string {
@@ -43,29 +66,50 @@ function countsHTML(data: Usage): string {
 
 function allowancesHTML(providers: Allowance[]): string {
   if (!providers.length) return `<div class="usage-quota-empty">Квоты подписки не подключены</div>`;
-  return `<div class="usage-allowances">${providers.map(p => `<div class="usage-provider"><div class="usage-provider-head"><b>${esc(p.name)}</b><span>${p.status === "stale" ? "Последние известные данные" : "Весь аккаунт"}</span></div>${p.windows.length ? p.windows.map(w => `<div class="usage-quota"><div class="usage-quota-label"><span>${esc(w.label)}</span><strong>${w.remaining_percent == null ? "Нет процента" : num(w.remaining_percent) + "% осталось"}</strong></div><div class="usage-meter" role="meter" aria-label="${esc(p.name + ' · ' + w.label)}: использовано" ${w.used_percent == null ? '' : `aria-valuenow="${clamp(w.used_percent)}" aria-valuemin="0" aria-valuemax="100"`}><i class="${(w.used_percent ?? 0) >= 90 ? "usage-low" : ""}" style="width:${clamp(w.used_percent ?? 0)}%"></i></div><div class="usage-quota-foot"><span>${w.remaining != null && w.limit != null ? `${num(w.remaining)} / ${num(w.limit)} ${w.unit === "credits" ? "кредитов" : "ед."}` : w.used_percent == null ? "Сервис не сообщил расход" : num(w.used_percent) + "% использовано"}</span><span>${w.resets_at ? "Сброс " + date(w.resets_at) : "Время сброса не сообщено"}</span></div></div>`).join("") : `<p class="usage-muted">${esc(p.reason || "Сервис не вернул квоты")}</p>`}<div class="usage-source">Данные сервиса · ${date(p.observed_at)}</div></div>`).join("")}</div>`;
+  return `<div class="usage-allowances">${providers.map(p => `<div class="usage-provider"><div class="usage-provider-head"><b>${esc(p.name)}</b><span>${p.status === "stale" ? "Последние известные данные" : "Весь аккаунт"}</span></div>${p.windows.length ? p.windows.map(w => {
+    const remaining = w.remaining_percent == null ? null : clamp(w.remaining_percent);
+    const meter = remaining == null ? "" : `<div class="usage-meter" role="meter" aria-label="${esc(p.name + ' · ' + w.label)}: осталось" aria-valuenow="${remaining}" aria-valuemin="0" aria-valuemax="100"><i class="${remaining <= 10 ? "usage-low" : ""}" style="width:${remaining}%"></i></div>`;
+    return `<div class="usage-quota"><div class="usage-quota-label"><span>${esc(w.label)}</span><strong>${remaining == null ? "Нет процента" : num(remaining) + "% осталось"}</strong></div>${meter}<div class="usage-quota-foot"><span>${w.remaining != null && w.limit != null ? `${num(w.remaining)} / ${num(w.limit)} ${w.unit === "credits" ? "кредитов" : "ед."}` : w.used_percent == null ? "Сервис не сообщил расход" : num(w.used_percent) + "% использовано"}</span><span>${w.resets_at ? "Сброс " + date(w.resets_at) : "Время сброса не сообщено"}</span></div></div>`;
+  }).join("") : `<p class="usage-muted">${esc(p.reason || "Сервис не вернул квоты")}</p>`}<div class="usage-source">Данные сервиса · ${date(p.observed_at)}</div></div>`).join("")}</div>`;
 }
 
 export function mountUsage(container: HTMLElement, api: Fetcher): void {
   const panel = container.querySelector<HTMLElement>(".usage-panel");
   if (!panel) return;
+  if (panel instanceof HTMLDetailsElement) panel.addEventListener("toggle", () => { overviewOpen = panel.open; });
+  const brief = panel.querySelector<HTMLElement>("[data-usage-brief]");
+  const limits = panel.querySelector<HTMLElement>("[data-limits-brief]");
   const refresh = async () => {
     if (!panel.isConnected) return;
     await Promise.allSettled([
       api<Usage>("/api/usage").then(data => {
         if (!panel.isConnected) return;
-        const open = !!panel.querySelector<HTMLDetailsElement>("details")?.open;
+        const focused = panel.querySelector(".usage-details > summary") === document.activeElement;
         panel.querySelector<HTMLElement>("[data-usage]")!.innerHTML = countsHTML(data);
-        const details = panel.querySelector<HTMLDetailsElement>("details");
-        if (details) details.open = open;
+        const details = panel.querySelector<HTMLDetailsElement>(".usage-details");
+        if (details) {
+          details.open = modelsOpen;
+          details.addEventListener("toggle", () => { modelsOpen = details.open; });
+          if (focused) details.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+        }
+        if (brief) brief.innerHTML = briefHTML(data);
         panel.querySelector<HTMLElement>(".usage-heading > span")!.textContent = "Учёт агента";
       }).catch(() => {
-        if (panel.isConnected) panel.querySelector<HTMLElement>(".usage-heading > span")!.textContent = "Счётчик недоступен";
+        if (panel.isConnected) {
+          panel.querySelector<HTMLElement>(".usage-heading > span")!.textContent = "Счётчик недоступен";
+          if (brief) brief.textContent = "Не удалось обновить расход";
+        }
       }),
       api<{providers: Allowance[]}>("/api/allowances").then(data => {
-        if (panel.isConnected) panel.querySelector<HTMLElement>("[data-allowances]")!.innerHTML = allowancesHTML(data.providers);
+        if (panel.isConnected) {
+          panel.querySelector<HTMLElement>("[data-allowances]")!.innerHTML = allowancesHTML(data.providers);
+          if (limits) limits.innerHTML = limitsBriefHTML(data.providers);
+        }
       }).catch(() => {
-        if (panel.isConnected) panel.querySelector<HTMLElement>("[data-allowances]")!.innerHTML = '<p class="usage-muted">Не удалось обновить квоты подписки</p>';
+        if (panel.isConnected) {
+          panel.querySelector<HTMLElement>("[data-allowances]")!.innerHTML = '<p class="usage-muted">Не удалось обновить квоты подписки</p>';
+          if (limits) limits.textContent = "Не удалось обновить лимиты";
+        }
       }),
     ]);
     if (panel.isConnected) window.setTimeout(refresh, 15000);

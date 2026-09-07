@@ -74,7 +74,7 @@ export function wordOf(runId: string): { out: string; note: string; who: string 
 export function runLabel(r: Run): string {
   const w = words.get(r.id);
   const text = cleanLabel(w?.out || "") || noteLabel(w?.note || "") || goalLabel(r.goal_head || "");
-  return text.slice(0, 96) || `${RUN_KIND[r.kind] || r.kind} · ${fmtTime(r.created_at)}`;
+  return text || `${RUN_KIND[r.kind] || r.kind} · ${fmtTime(r.created_at)}`;
 }
 
 export function runRowHTML(r: Run, opts: { showRoom?: boolean } = {}): string {
@@ -86,13 +86,14 @@ export function runRowHTML(r: Run, opts: { showRoom?: boolean } = {}): string {
   // В личке собеседник и комната — одно имя: не повторять.
   const sub = [RUN_KIND[r.kind] || r.kind, roomTitle, who && who !== roomTitle ? who : ""].filter(Boolean).join(" · ");
   return `<div class="ev ${S.evOpen.has(r.id) ? "open" : ""}" data-ev="${esc(r.id)}">
-    <div class="ev-head">
+    <button type="button" class="ev-head" aria-expanded="${S.evOpen.has(r.id)}" aria-controls="run-${esc(r.id)}">
       <span class="ev-title" title="${esc(r.goal_head || "")}">${esc(runLabel(r))}</span>
       <span class="ev-time">${day === "Сегодня" ? "" : esc(day) + " "}${fmtTime(r.created_at)}</span>
       <span class="dot ${dot}"></span>
-    </div>
+      <span class="ev-chevron" aria-hidden="true">›</span>
+    </button>
     ${sub ? `<div class="ev-sub">${esc(sub)}${opts.showRoom && r.chat_id != null && r.chat_title ? ` · <a href="#" data-room="${esc(roomKeyOf(r))}" data-room-name="${esc(r.chat_title)}">открыть чат</a>` : ""}</div>` : ""}
-    <div class="ev-steps" ${S.evOpen.has(r.id) ? "" : "hidden"}></div>
+    <div class="ev-steps" id="run-${esc(r.id)}" ${S.evOpen.has(r.id) ? "" : "hidden"}></div>
   </div>`;
 }
 
@@ -107,16 +108,12 @@ export async function runDetail(runId: string, fresh = false): Promise<RunDetail
 }
 
 /** Оживить раскрывающиеся ходы и ссылки «открыть чат» внутри узла. */
-export function bindRuns(box: HTMLElement, redraw: () => void, openRoom: (key: string, name: string) => void) {
+export function bindRuns(box: HTMLElement, _redraw: () => void, openRoom: (key: string, name: string) => void) {
   for (const node of box.querySelectorAll<HTMLElement>(".ev[data-ev]")) {
     const id = node.dataset.ev!;
-    node.querySelector(".ev-head")!.addEventListener("click", () => {
-      if (S.evOpen.has(id)) S.evOpen.delete(id);
-      else S.evOpen.add(id);
-      redraw();
-    });
-    if (S.evOpen.has(id)) {
-      const steps = node.querySelector<HTMLElement>(".ev-steps")!;
+    const head = node.querySelector<HTMLButtonElement>(".ev-head")!;
+    const steps = node.querySelector<HTMLElement>(".ev-steps")!;
+    const load = () => {
       steps.innerHTML = '<div class="muted">читаю шаги…</div>';
       void runDetail(id).then(
         (d) => {
@@ -126,7 +123,16 @@ export function bindRuns(box: HTMLElement, redraw: () => void, openRoom: (key: s
           if (steps.isConnected) steps.innerHTML = `<div class="muted">шаги не прочитались: ${esc(humanError(e).text)}</div>`;
         },
       );
-    }
+    };
+    head.addEventListener("click", () => {
+      const open = !S.evOpen.has(id);
+      if (open) S.evOpen.add(id); else S.evOpen.delete(id);
+      node.classList.toggle("open", open);
+      head.setAttribute("aria-expanded", String(open));
+      steps.hidden = !open;
+      if (open) load();
+    });
+    if (S.evOpen.has(id)) load();
   }
   for (const a of box.querySelectorAll<HTMLElement>("[data-room]")) {
     a.addEventListener("click", (e) => {

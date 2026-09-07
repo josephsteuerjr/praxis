@@ -34,7 +34,7 @@ function idleHTML(): string {
   const at = s.brain?.last_call_at;
   const age = at ? Math.round((Date.now() / 1000 - at) / 60) : null;
   const when = age == null ? "" : age < 1 ? "модель отвечала только что" : age < 60 ? `модель отвечала ${age} мин назад` : `модель отвечала ${Math.round(age / 60)} ч назад`;
-  const phrase = foreignHarness() ? `Хода сейчас нет${when ? " · " + when : ""}` : `${s.phrase}${when ? " · " + when : ""}`;
+  const phrase = foreignHarness() ? `Нет текущих действий${when ? " · " + when : ""}` : `${s.phrase}${when ? " · " + when : ""}`;
   const wake = s.next_wake ? ` · следующее пробуждение ${fmtTime(s.next_wake) || s.next_wake}` : "";
   return `<div class="now-idle"><span class="dot ${!foreignHarness() && s.level === "error" ? "failed" : "ok"}"></span><span>${esc(phrase)}${esc(wake)}</span></div>`;
 }
@@ -77,10 +77,10 @@ export async function render(container: HTMLElement): Promise<void> {
   const rest = list.filter((r) => r.id !== live?.id);
   container.innerHTML = `<div class="center now">
     ${liveHTML}
-    ${usageShell()}
-    ${frameStripHTML(strip, live ? "Кадр сейчас" : "Кадр последнего хода", '<a href="#" data-go="frame">зоны K·E·A·T →</a>')}
-    <h3 class="section-title">Недавние ходы <span class="muted">${rest.length}</span></h3>
-    ${rest.map((r) => runRowHTML(r, { showRoom: true })).join("") || '<div class="empty">Ходов ещё нет</div>'}
+    ${usageShell(true)}
+    ${frameStripHTML(strip, live ? "Контекст сейчас" : "Контекст последнего ответа", '<a href="#" data-go="frame">Посмотреть кадр →</a>')}
+    <h3 class="section-title">Последние действия <span class="muted">${rest.length}</span></h3>
+    ${rest.map((r) => runRowHTML(r, { showRoom: true })).join("") || '<div class="empty">Здесь появятся действия и результаты</div>'}
   </div>`;
   for (const a of container.querySelectorAll<HTMLElement>("[data-go]")) {
     a.addEventListener("click", (e) => {

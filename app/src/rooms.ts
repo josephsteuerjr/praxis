@@ -49,11 +49,11 @@ function unsupported(e: unknown): boolean {
 }
 
 /** Собрать список комнат из ответа канала, прогонов и заглушки. */
-export function buildRooms(runs: Run[], chats: ChatRow[]): Room[] {
+export function buildRooms(runs: Run[], chats?: ChatRow[]): Room[] {
   const byKey = new Map<string, Room>();
   // Комната окна носит имя агента, а не слово «Окно» (слово владельца 06.09).
   byKey.set(WINDOW_ROOM, { key: WINDOW_ROOM, name: S.agent, kind: "window", live: false, count: 0, mtime: Number.MAX_SAFE_INTEGER });
-  for (const c of chats) {
+  for (const c of chats || []) {
     const key = String(c.peer_id);
     if (key === "pult" || key === WINDOW_ROOM) continue;
     const kind: Room["kind"] = c.kind === "window" || (c.kind !== "telegram" && isWindowRoom(key)) ? "window" : "telegram";
@@ -75,6 +75,9 @@ export function buildRooms(runs: Run[], chats: ChatRow[]): Room[] {
     if (r.kind !== "chat_turn" || r.chat_id == null) continue;
     let key = String(r.chat_id);
     if (key === "pult") key = WINDOW_ROOM;
+    // A successful catalog is authoritative for local rooms. Historical runs
+    // remain visible in the activity list, but must not resurrect archived chats.
+    if (chats !== undefined && isWindowRoom(key) && !byKey.has(key)) continue;
     const room = byKey.get(key) ?? {
       key,
       name: r.chat_title || (isWindowRoom(key) ? "Новый чат" : "чат " + key),
@@ -141,7 +144,7 @@ export async function deleteRoom(room: Room): Promise<void> {
 }
 
 /** Комнаты и прогоны одним чтением; отказ `/api/chats` не роняет список. */
-export async function fetchRooms(): Promise<{ runs: Run[]; chats: ChatRow[] }> {
-  const [runs, chats] = await Promise.all([api<Run[]>("/api/runs?limit=200"), api<ChatRow[]>("/api/chats").catch(() => [] as ChatRow[])]);
+export async function fetchRooms(): Promise<{ runs: Run[]; chats?: ChatRow[] }> {
+  const [runs, chats] = await Promise.all([api<Run[]>("/api/runs?limit=200"), api<ChatRow[]>("/api/chats").catch(() => undefined)]);
   return { runs, chats };
 }
