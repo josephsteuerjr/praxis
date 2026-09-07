@@ -43,6 +43,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from deskd import readers
 from deskd import rooms
+from deskd import usage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("frame.desk")
@@ -126,7 +127,7 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
 # /tunnel и /events пускаем: внутри канала область проверяется ещё раз, по
 # каждому маршруту (_tunnel_dispatch), иначе телефон обошёл бы разбор прав.
 _DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health",
-                 "/api/rooms", "/api/runs", "/api/pulse", "/tunnel", "/events"}
+                 "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events"}
 _DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/", "/api/chat-turns/", "/api/run/")
 
 
@@ -832,6 +833,8 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/runs", _r_runs),
     Route("GET", "/api/run/{run_id}", _r_run),
     Route("GET", "/api/pulse", _reader(lambda: readers.pulse())),
+    Route("GET", "/api/usage", _reader(lambda: usage.statistics(readers.tree()))),
+    Route("GET", "/api/allowances", _reader(lambda: usage.allowances(readers.tree()))),
     Route("GET", "/api/errors", _reader(lambda: readers.errors())),
     Route("GET", "/api/board", _reader(lambda: readers.board())),
     Route("GET", "/api/agenda", _reader(lambda: readers.agenda())),

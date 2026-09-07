@@ -44,6 +44,9 @@ import botapi
 import broker
 import modes
 import transport
+import continuity
+import alarm_clock
+import forge_events
 
 # Уровень лога — ручкой, а не константой: две главные глухоты продукта (квитанция
 # читателя не пишется; сторож живых файлов сдох) диагностировались строками
@@ -69,6 +72,9 @@ _speaker = "владелец"
 _title = "Hélène"
 _agent_name = "Агент"
 _tree: Path | None = None
+_continuity = None
+_alarms = None
+_forge_events = None
 _busy: dict = {"busy": False, "run": "", "since": 0.0, "chat_id": ""}
 _mode: dict = {}       # картина режима (modes.resolve) — едет в анатомию
 _deliver_unspoken = True   # agent.deliver_unspoken в helene.json; см. _turn_in_window
@@ -695,6 +701,16 @@ def _set_busy(on: bool, run: str = "", *, chat_id: str = "") -> None:
         log.warning("квитанция занятости не записалась", exc_info=True)
 
 
+def _resume_due() -> None:
+    """Следующий шаг уже существующих задач — в том же потоке, что окно и бот."""
+    if _continuity is None or not _brain_ready():
+        return
+    try:
+        _continuity.resume_due()
+    finally:
+        _set_busy(False)
+
+
 _BIRTH_NOTE = (
     "Это твой первый запуск {where}. Тебе предлагается осмотреться "
     "и познакомиться.")
@@ -941,73 +957,45 @@ def _alarm_note(task: dict) -> str:
 
 
 def _fire_due_tasks() -> None:
-    """Будильники агента: созревшее намерение поднимает ЕГО ход в окне.
-
-    ⚠ Рука `remind_self` агенту предложена, `my_agenda` показывает намеченное — а
-    ЗВОНИТЬ было некому. `tasks.due()` во всём дереве зовёт ровно один файл,
-    `live/mtproto_runner.py`, а этот продукт его не запускает: главный цикл
-    руннера разбирал записки окна, очередь бота и раз в шесть часов подметал
-    архив. Значит собственного хода у агента не было вовсе — только ответ на
-    сообщение и однократное рождение, — тогда как конституция обещает будильники,
-    а доктрина инициативы на них стоит. Обещание без механизма хуже отсутствия
-    обещания: агент планирует вернуться к делу и молча не возвращается никогда.
-
-    Ход идёт в комнате окна: в этом продукте другой у него нет, и владелец
-    видит, ПОЧЕМУ агент заговорил сам, — строкой будильника перед его словом.
-    """
-    if _desk is None or _life is None or not _brain_ready():
+    """Адресное срабатывание: claim -> durable run -> погашение намерения."""
+    if _desk is None or _life is None or _alarms is None or not _brain_ready():
         return
-    try:
-        import tasks
-    except Exception:
-        log.warning("будильники: модуль намерений не загрузился", exc_info=True)
-        return
-    try:
-        # Микро-намерение «после рана» ждёт конца прогона; пока удержание не снято,
-        # оно не созреет никогда — снимаем его тем же тиком, что и в живом раннере.
-        for held in tasks.after_run_holds():
-            run_id = str(held.get("after_run") or "")
-            if run_id and _agent.run_is_terminal(run_id):
-                tasks.clear_after_run(str(held.get("id") or ""))
-                log.info("будильник #%s дождался прогона %s", held.get("id"), run_id[:12])
-        ready = list(tasks.due())
-    except Exception:
-        log.warning("будильники: список намерений не прочитался", exc_info=True)
-        return
-    if len(ready) > _ALARM_PER_TICK:
-        log.info("будильники: созрело %d, беру %d — остальные на следующем тике",
-                 len(ready), _ALARM_PER_TICK)
-    for task in ready[:_ALARM_PER_TICK]:
-        task_id = str(task.get("id") or "")
+    tasks = _alarms.tasks
+    _alarms.reconcile_claims()
+    for held in tasks.after_run_holds():
+        run_id = str(held.get("after_run") or "")
+        if run_id and _agent.run_is_terminal(run_id):
+            tasks.clear_after_run(str(held.get("id") or ""))
+    for task in list(tasks.due())[:_ALARM_PER_TICK]:
         now_ts = time.time()
         _ALARM_FIRED[:] = [t for t in _ALARM_FIRED if now_ts - t < 3600]
         if len(_ALARM_FIRED) >= _ALARM_HOUR_CAP:
-            # Намерение НЕ гасим: предохранитель откладывает, а не съедает.
-            log.warning("будильники: за час уже %d ходов без спроса — остальные "
-                        "жду следующего часа (предохранитель на расход)",
-                        len(_ALARM_FIRED))
+            log.warning("будильники: достигнут прежний часовой предел; намерения ждут")
             return
-        _ALARM_FIRED.append(now_ts)
-        # Гасим ДО хода, а не после. Цикл здесь один, ход идёт следующей строкой,
-        # а намерение, пережившее свой ход, зазвонит на следующем тике снова — и
-        # так без конца, на деньги владельца. Будильник, потерянный при падении
-        # руннера посреди хода, дешевле бесконечной петли вызовов модели.
+
+        def invoke(room):
+            now = _now()
+            source_id = f"alarm-{task['id']}-{int(now.timestamp() * 1000)}"
+            note = _alarm_note(task)
+            desk = _room(room)
+            desk.archive(note, outgoing=False, now=now, sender="Hélène")
+            desk.life(note, direction="in", actor="Hélène", source_id=source_id, now=now)
+            _turn_in_window(source_id, speaker="Hélène", room=room)
+
         try:
-            tasks.mark_fired(task_id)
+            if _alarms.fire(task, invoke):
+                _ALARM_FIRED.append(now_ts)
         except Exception:
-            log.exception("будильник #%s не погашен — ход не поднимаю", task_id)
-            continue
-        log.info("будильник #%s [%s]: %s", task_id, task.get("kind"),
-                 (str(task.get("goal") or "") or str(task.get("target") or ""))[:60])
-        now = _now()
-        source_id = f"alarm-{task_id}-{int(now.timestamp() * 1000)}"
-        note = _alarm_note(task)
-        try:
-            _desk.archive(note, outgoing=False, now=now, sender="Hélène")
-            _desk.life(note, direction="in", actor="Hélène", source_id=source_id, now=now)
-            _turn_in_window(source_id, speaker="Hélène")
-        except Exception:
-            log.exception("ход по будильнику #%s упал", task_id)
+            log.exception("будильник #%s не завершил передачу владения", task.get("id"))
+
+
+def _forge_events_due() -> None:
+    if _forge_events is None or not _brain_ready():
+        return
+    try:
+        _forge_events.tick()
+    finally:
+        _set_busy(False)
 
 
 def _name_the_owner(owner: str) -> None:
@@ -1191,7 +1179,7 @@ def _settle_mode(cfg: dict, config_path: Path) -> dict:
 
 
 def main() -> None:
-    global _desk, _desks, _bot, _speaker, _title, _agent_name, _tree, _deliver_unspoken, _mode
+    global _desk, _desks, _bot, _speaker, _title, _agent_name, _tree, _deliver_unspoken, _mode, _continuity, _alarms, _forge_events
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
@@ -1273,6 +1261,17 @@ def main() -> None:
                              agent_name=_agent_name)
     _desk = _desks.default
     transport.install(agent, _desks)
+    _continuity = continuity.Continuity(
+        agent, _desks, config_path,
+        lambda run, chat: _set_busy(True, run, chat_id=chat))
+    _continuity.install()
+    import tasks
+    import forge
+    import perception
+    from core import events as core_events
+    _alarms = alarm_clock.AlarmClock(_continuity, tasks)
+    _alarms.install()
+    _forge_events = forge_events.ForgeEvents(_continuity, core_events, forge, perception)
     # Песочница: shell в AppContainer, файловые руки — в папке Hélène, плюс
     # смонтированные владельцем папки (их список ограда перечитывает из
     # `config_path` на ходу — потому он сюда и передаётся). Не вышло — причина в
@@ -1323,8 +1322,8 @@ def main() -> None:
         log.exception("мозг не опросился")
     _write_anatomy(tree, cfg)
     try:
-        # Порт как есть: живой раннер тоже переигрывает прерванные ходы на старте.
-        # Окно закрыли посреди хода — она доводит его при следующем запуске.
+        # Здесь только структурное восстановление WAL. Модель и доставка
+        # продолжаются ниже, отдельным шагом того же последовательного цикла.
         recovered = agent.recover_durable_state()
         if recovered:
             log.warning("восстановлено прерванных ходов: %d", len(recovered))
@@ -1345,6 +1344,7 @@ def main() -> None:
     # окно видит «думает», а не мёртвый руннер, пока идёт первый ход.
     _maybe_birth(tree)
     alarms_at = 0.0
+    resume_at = 0.0
     while True:
         for path in sorted(inbox.glob("*.md")):
             if path.name.startswith(".tmp-"):
@@ -1375,6 +1375,12 @@ def main() -> None:
                 handle_bot(chat_id)
             except Exception:
                 log.exception("ход бота упал [%s]", chat_id)
+        if time.time() - resume_at > 45:
+            resume_at = time.time()
+            try:
+                _resume_due()
+            except Exception:
+                log.exception("продолжение задач не прошло (повтор на следующем тике)")
         # Часы агента: записка владельца и очередь бота разобраны — теперь его
         # собственные будильники. Порядок не случаен: живое слово владельца
         # вперёд, будильник подождёт полминуты.
@@ -1384,6 +1390,10 @@ def main() -> None:
                 _fire_due_tasks()
             except Exception:
                 log.exception("тик будильников упал (продукт работает дальше)")
+        try:
+            _forge_events_due()
+        except Exception:
+            log.exception("события Forge ждут следующего тика")
         if time.time() - swept_at > 6 * 3600:
             swept_at = time.time()
             _sweep_processed(processed)

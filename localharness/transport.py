@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import logging
 import os
@@ -277,6 +278,49 @@ class Desk:
         return out
 
     # ------------------------------------------------------------ доставка
+    def deliver_once(self, text: str, *, key: str) -> str:
+        """Принять конкретную доставку один раз, даже после рестарта процесса."""
+        if not key:
+            raise ValueError("delivery key must not be empty")
+        body = str(text)
+        now = dt.datetime.now(dt.timezone.utc)
+        archive = self.tree / "memory" / "groups" / (self.stream + ".jsonl")
+        message_id = "helene-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+        with _path_lock(archive):
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            existing = None
+            if archive.exists():
+                with archive.open(encoding="utf-8", errors="replace") as source:
+                    for line in source:
+                        try:
+                            row = json.loads(line)
+                        except ValueError:
+                            continue
+                        if row.get("delivery_key") == key:
+                            existing = row
+                            break
+            if existing is not None:
+                if existing.get("text") != body or existing.get("outgoing") is not True:
+                    raise ValueError("delivery key already belongs to different content")
+                message_id = existing["message_id"]
+                now = dt.datetime.fromisoformat(existing["timestamp"])
+            else:
+                row = {"timestamp": now.isoformat(timespec="seconds"), "outgoing": True,
+                       "text": body, "sender_name": self.agent_name,
+                       "delivery_key": key, "message_id": message_id}
+                data = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
+                with archive.open("ab+") as sink:
+                    if sink.tell():
+                        sink.seek(-1, os.SEEK_END)
+                        if sink.read(1) != b"\n":
+                            data = b"\n" + data
+                    sink.write(data)
+                    sink.flush()
+                    os.fsync(sink.fileno())
+        _registry(self.tree, self.stream, archive)
+        self.life(body, direction="out", actor=self.agent_name, source_id=key, now=now)
+        return str(message_id)
+
     def deliver(self, text: str, *, source_id: str = "", label: str = "",
                 system: bool = False, kind: str = "") -> str:
         """Её слово доехало до окна. Возвращаем расписку в том же виде, что транспорт.
@@ -427,6 +471,16 @@ def install(agent_mod, desks: Desks) -> None:
 
     hooks = agent_mod._TELETHON
 
+    def _deliver(desk, text, *, label=""):
+        scope = getattr(agent_mod, "_TOOL_EXECUTION", None)
+        execution = scope.get() if scope is not None else None
+        key = str((execution or {}).get("idempotency_key") or "")
+        if key:
+            message_id = desk.deliver_once(text, key=key)
+            desk.sent.append(str(text))
+            return f"Отправлено → {label or desk.title} (окно Hélène, id {message_id})"
+        return desk.deliver(text, label=label)
+
     def _refusal(target: str):
         # ⚠ Отказ СТРОКОЙ особого типа, а не исключением и не обычной квитанцией:
         # `DirectSendRefusal` — её способ отличить «не ушло» от «ушло», не нюхая текст.
@@ -442,15 +496,15 @@ def install(agent_mod, desks: Desks) -> None:
             return agent_mod.DirectSendRefusal(
                 f"не отправила: адрес «{chat_id}» — не комната окна. "
                 f"Комнаты окна: {desks.listing()}.")
-        return desk.deliver(text, label=desks.speaker)
+        return _deliver(desk, text, label=desks.speaker)
 
     def _send_message(to, text) -> str:
         target = str(to or "").strip()
         if target in ("", desks.speaker):
-            return desks.current(agent_mod).deliver(text, label=desks.speaker)
+            return _deliver(desks.current(agent_mod), text, label=desks.speaker)
         desk = desks.find(target)
         if desk is not None:
-            return desk.deliver(text, label=desks.speaker)
+            return _deliver(desk, text, label=desks.speaker)
         return _refusal(target)
 
     def _send_file(path, caption="", to="", media_kind="document",
@@ -467,7 +521,7 @@ def install(agent_mod, desks: Desks) -> None:
             return _refusal(target)
         # v1: файл остаётся на месте, в окно уезжает названный путь. Показ вложений
         # внутри чата — отдельная работа; обещать её распиской нельзя.
-        return desk.deliver(note, label=desks.speaker)
+        return _deliver(desk, note, label=desks.speaker)
 
     def _fetch_context(chat_id, limit: int = 50) -> str:
         desk = desks.find(chat_id)

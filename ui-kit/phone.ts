@@ -14,6 +14,7 @@ import "./version";
 import { esc, fmtDay, fmtDur, fmtTime, md } from "./text";
 import { frameStripHTML, renderSteps, stepsHTML, type RunDetail } from "./steps";
 import contract from "./contract.json";
+import { mountUsage, usageShell } from "./usage";
 
 export type Level = "ok" | "live" | "warn" | "error" | "off";
 
@@ -490,10 +491,12 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     const rest = list.filter((r) => r.id !== live?.id);
     screen.innerHTML =
       liveHTML +
+      usageShell() +
       frameStripHTML(strip, live ? "Кадр сейчас" : "Кадр последнего хода") +
       `<div class="screen-title">Недавние ходы</div>` +
       (closed.has("runs") ? notGiven("Ходы") : rest.map((r) => runRow(r, { showRoom: true })).join("") || '<div class="empty">Ходов ещё нет</div>');
     bindRuns(screen, () => void renderNow());
+    mountUsage(screen, api);
     scheduleLive(!!live);
   }
 

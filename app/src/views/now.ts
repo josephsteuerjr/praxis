@@ -2,6 +2,8 @@
 // текущий ход»): идущий ход во всю ширину, шаги живьём, кадр, недавние ходы
 // по всем комнатам с раскрывающимися шагами. Писать здесь нечего — это монитор.
 import { esc, fmtDur, fmtTime } from "../lib";
+import { api } from "../api";
+import { mountUsage, usageShell } from "../../../ui-kit/usage";
 import { frameStripHTML, renderSteps, stepsHTML, type RunDetail } from "../../../ui-kit/steps";
 import { S, foreignHarness, runIsRecent, type Run } from "../state";
 import { bindRuns, cleanLabel, loadWords, roomKeyOf, runDetail, runRowHTML } from "../runlist";
@@ -75,6 +77,7 @@ export async function render(container: HTMLElement): Promise<void> {
   const rest = list.filter((r) => r.id !== live?.id);
   container.innerHTML = `<div class="center now">
     ${liveHTML}
+    ${usageShell()}
     ${frameStripHTML(strip, live ? "Кадр сейчас" : "Кадр последнего хода", '<a href="#" data-go="frame">зоны K·E·A·T →</a>')}
     <h3 class="section-title">Недавние ходы <span class="muted">${rest.length}</span></h3>
     ${rest.map((r) => runRowHTML(r, { showRoom: true })).join("") || '<div class="empty">Ходов ещё нет</div>'}
@@ -86,6 +89,7 @@ export async function render(container: HTMLElement): Promise<void> {
     });
   }
   bindRuns(container, () => void render(container), (key, name) => dispatchEvent(new CustomEvent("frame-open-room", { detail: { key, name } })));
+  mountUsage(container, api);
   scheduleLive(!!live);
 }
 
