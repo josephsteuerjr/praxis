@@ -99,8 +99,20 @@ function details(key: string, parts: Array<[string, string]>): string {
   return body ? `<details class="action-details" data-detail="${esc(key)}"><summary>Подробности</summary>${body}</details>` : "";
 }
 
+/** Повод человеческими словами: служебные префиксы продукта («Hélène: Сработал твой будильник.
+ *  Намечено было вот что:», «[обещание] напоминание себе:») уходят в подпись, содержание остаётся. */
+function humanOrigin(text: string, label: string): { text: string; label: string } {
+  let t = text.replace(/^(?:Hélène|Praxis|Праксис):\s*/u, "");
+  const alarm = t.match(/^Сработал твой будильник[.:]\s*(?:Намечено было вот что:\s*|намечено\s+)?/iu);
+  if (alarm) { t = t.slice(alarm[0].length); label = "Будильник"; }
+  const promise = t.match(/^\[обещание\]\s*напоминание себе:\s*/iu);
+  if (promise) { t = t.slice(promise[0].length); label = "Напоминание себе"; }
+  return { text: t.trim() || text, label };
+}
+
 function readable(text: string, label: string, key: string): string {
   if (!text) return "";
+  if (key === "origin") ({ text, label } = humanOrigin(text, label));
   const body = `<div class="run-reading md">${md(text)}</div>`;
   return `<section class="run-message"><div class="action-detail-label">${label}</div>${text.length > 320 ? `<details data-detail="${key}" class="run-reading-more"><summary><div class="run-reading-preview">${md(clip(text, 240))}</div><span>Читать полностью</span></summary>${body}</details>` : body}</section>`;
 }

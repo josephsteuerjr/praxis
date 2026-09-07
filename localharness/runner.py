@@ -1254,6 +1254,11 @@ def main() -> None:
     _title = str(owner.get("room") or "Hélène")
     _agent_name = boot.agent_name(cfg)
     _deliver_unspoken = bool((cfg.get("agent") or {}).get("deliver_unspoken", True))
+    # Ядру — знать, что слово без руки reply доставит граница окна: иначе оно закрывает
+    # прогон молчанием до нас, и наши расписки доставки бьют в терминальный прогон
+    # (карточка не видела ни слова, ни доставки — 08.09).
+    if hasattr(_agent, "BOUNDARY_DELIVERS_UNSPOKEN"):
+        _agent.BOUNDARY_DELIVERS_UNSPOKEN = bool(_deliver_unspoken)
 
     log.info("%s", boot.project_brain(tree, cfg))
     # Тело для руки `computer` — ДО импорта дерева: импорт занимает секунды, а
