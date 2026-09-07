@@ -12,7 +12,7 @@
 import { applyTheme, el, q, toast, type Theme } from "./dom";
 import "./version";
 import { esc, fmtDay, fmtDur, fmtTime, md } from "./text";
-import { frameStripHTML, stepsHTML, type RunDetail } from "./steps";
+import { frameStripHTML, renderSteps, stepsHTML, type RunDetail } from "./steps";
 import contract from "./contract.json";
 
 export type Level = "ok" | "live" | "warn" | "error" | "off";
@@ -481,8 +481,8 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     }
     const since = live?.created_at ? fmtDur((Date.now() - new Date(live.created_at).getTime()) / 1000) : "";
     const liveHTML = live
-      ? `<div class="turn-live" id="turn-live">
-          <div class="turn-live-head"><span class="dot live"></span><span>Ведёт ход</span><span class="t" id="turn-live-t">${esc(since)}</span></div>
+      ? `<div class="turn-live" id="turn-live" data-run="${esc(live.id)}">
+          <div class="turn-live-head"><span class="dot live"></span><span>Действия сейчас</span><span class="t" id="turn-live-t">${esc(since)}</span></div>
           ${live.chat_title ? `<div class="turn-live-sub"><a href="#" data-room="${esc(roomKey(live))}" data-room-name="${esc(live.chat_title)}">${esc(live.chat_title)}</a>${live.goal_head ? " · " + esc(clean(live.goal_head).slice(0, 70)) : ""}</div>` : ""}
           <div class="ev-steps" id="turn-live-steps">${liveDetail ? stepsHTML(liveDetail, { limit: 12 }) : closed.has("run") ? '<div class="muted">шаги телефону пока не отдаются</div>' : '<div class="muted">читаю шаги…</div>'}</div>
         </div>`
@@ -504,20 +504,24 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
 
   async function refreshLive() {
-    if (liveBusy || tab !== "now" || document.hidden) return;
+    if (tab !== "now" || document.hidden) return;
+    if (liveBusy) { scheduleLive(true); return; }
     const live = liveRun();
     const card = screen.querySelector<HTMLElement>("#turn-live");
-    if (!live || !card) {
+    if (!live || !card || card.dataset.run !== live.id) {
       if (card || live) void renderNow();
       return;
     }
     liveBusy = true;
     try {
       const d = await runDetail(live.id, true);
-      const steps = screen.querySelector<HTMLElement>("#turn-live-steps");
-      const t = screen.querySelector<HTMLElement>("#turn-live-t");
+      if (!card.isConnected || liveRun()?.id !== live.id) return;
+      const steps = card.querySelector<HTMLElement>("#turn-live-steps");
+      const t = card.querySelector<HTMLElement>("#turn-live-t");
       if (t && live.created_at) t.textContent = fmtDur((Date.now() - new Date(live.created_at).getTime()) / 1000);
-      if (steps && d) steps.innerHTML = stepsHTML(d, { limit: 12 });
+      if (steps && d) renderSteps(steps, d, { limit: 12 });
+    } catch {
+      // После ошибки связи продолжаем перечитывать текущие действия.
     } finally {
       liveBusy = false;
     }
@@ -962,7 +966,11 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
         void loadRuns().then(() => {
           void loadRooms();
           paintTop();
-          if (tab === "now") void renderNow();
+          if (tab === "now") {
+            const card = screen.querySelector<HTMLElement>("#turn-live");
+            if (card && card.dataset.run === liveRun()?.id) void refreshLive();
+            else void renderNow();
+          }
           else if (tab === "wakes") void renderWakes();
         });
         bumpFeed();

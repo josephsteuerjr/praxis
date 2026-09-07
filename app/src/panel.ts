@@ -4,7 +4,7 @@
 // цена каждого — рядом с разговором, а не в отдельной таблице.
 import { api } from "./api";
 import { bindFail, esc, failHTML, fmtDur, fmtTime, humanError, q } from "./lib";
-import { frameStripHTML, stepsHTML, type RunDetail } from "../../ui-kit/steps";
+import { frameStripHTML, renderSteps, stepsHTML, type RunDetail } from "../../ui-kit/steps";
 export { stepsHTML, type RunDetail } from "../../ui-kit/steps";
 import { S, foreignHarness, isWindowRoom, runIsLive, runIsRecent, type Run } from "./state";
 
@@ -107,8 +107,8 @@ function liveSince(runId: string): string {
 function liveCardHTML(d: RunDetail | undefined, runId: string): string {
   const since = liveSince(runId);
   const goal = (d?.manifest?.goal || "").split("\n")[0].replace(/^[^:]{1,40}:\s*/, "").slice(0, 90);
-  return `<div class="turn-live" id="turn-live">
-    <div class="turn-live-head"><span class="dot live"></span><span>Ведёт ход</span><span class="t">${esc(since)}</span></div>
+  return `<div class="turn-live" id="turn-live" data-run="${esc(runId)}">
+    <div class="turn-live-head"><span class="dot live"></span><span>Действия сейчас</span><span class="t">${esc(since)}</span></div>
     ${goal ? `<div class="turn-live-sub">${esc(goal)}</div>` : ""}
     <div class="ev-steps" id="turn-live-steps">${d ? stepsHTML(d, { limit: 10 }) : '<div class="muted">читаю шаги…</div>'}</div>
   </div>`;
@@ -116,6 +116,11 @@ function liveCardHTML(d: RunDetail | undefined, runId: string): string {
 
 export async function render(): Promise<void> {
   const panel = panelBox();
+  const active = liveRunId();
+  if (active && panel.dataset.room === S.room && panel.querySelector<HTMLElement>("#turn-live")?.dataset.run === active) {
+    await refreshLive();
+    return;
+  }
   let turns: Turn[] = [];
   try {
     turns = await api<Turn[]>("/api/chat-turns/" + encodeURIComponent(S.room));
@@ -159,10 +164,11 @@ export async function render(): Promise<void> {
     })
     .join("");
   panel.innerHTML =
-    `<div class="panel-head"><span>Ход · ${esc(S.roomName)}</span><span class="n">${rows.length ? rows.length : ""}</span></div>` +
+    `<div class="panel-head"><span>Действия · ${esc(S.roomName)}</span><span class="n">${rows.length ? rows.length : ""}</span></div>` +
     (liveId ? liveCardHTML(liveDetail, liveId) : "") +
     frameStrip(stripDetail, !!liveId) +
     (list || (liveId ? "" : '<div class="empty">Ходов ещё нет</div>'));
+  panel.dataset.room = S.room;
   for (const a of panel.querySelectorAll<HTMLElement>("[data-go]")) {
     a.addEventListener("click", (e) => {
       e.preventDefault();
@@ -211,7 +217,8 @@ function scheduleLive(on: boolean) {
 }
 
 async function refreshLive() {
-  if (liveBusy || S.view !== "talk") return;
+  if (S.view !== "talk") return;
+  if (liveBusy) { scheduleLive(true); return; }
   const id = liveRunId();
   const card = panelBox().querySelector<HTMLElement>("#turn-live");
   if (!id) {
@@ -220,7 +227,7 @@ async function refreshLive() {
     if (card) void render();
     return;
   }
-  if (!card) {
+  if (!card || card.dataset.run !== id) {
     void render();
     return;
   }
@@ -230,7 +237,9 @@ async function refreshLive() {
     const steps = card.querySelector<HTMLElement>("#turn-live-steps");
     const t = card.querySelector<HTMLElement>(".t");
     if (t) t.textContent = liveSince(id);
-    if (steps && d) steps.innerHTML = stepsHTML(d, { limit: 10 });
+    if (steps && d && card.isConnected && liveRunId() === id) renderSteps(steps, d, { limit: 10 });
+  } catch {
+    // Краткий обрыв связи не должен останавливать обновление действий.
   } finally {
     liveBusy = false;
   }
@@ -254,4 +263,5 @@ export function onLlm() {
 
 export function onRunEvent(runId: string) {
   S.evCache.delete(runId);
+  onLlm();
 }

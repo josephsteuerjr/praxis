@@ -2,7 +2,7 @@
 // текущий ход»): идущий ход во всю ширину, шаги живьём, кадр, недавние ходы
 // по всем комнатам с раскрывающимися шагами. Писать здесь нечего — это монитор.
 import { esc, fmtDur, fmtTime } from "../lib";
-import { frameStripHTML, stepsHTML, type RunDetail } from "../../../ui-kit/steps";
+import { frameStripHTML, renderSteps, stepsHTML, type RunDetail } from "../../../ui-kit/steps";
 import { S, foreignHarness, runIsRecent, type Run } from "../state";
 import { bindRuns, cleanLabel, loadWords, roomKeyOf, runDetail, runRowHTML } from "../runlist";
 
@@ -66,8 +66,8 @@ export async function render(container: HTMLElement): Promise<void> {
     }
   }
   const liveHTML = live
-    ? `<div class="turn-live now-live" id="turn-live">
-        <div class="turn-live-head"><span class="dot live"></span><span>Ведёт ход</span><span class="t" id="turn-live-t">${esc(since(live))}</span></div>
+    ? `<div class="turn-live now-live" id="turn-live" data-run="${esc(live.id)}">
+        <div class="turn-live-head"><span class="dot live"></span><span>Действия сейчас</span><span class="t" id="turn-live-t">${esc(since(live))}</span></div>
         ${live.chat_title ? `<div class="turn-live-sub"><a href="#" data-room="${esc(roomKeyOf(live))}" data-room-name="${esc(live.chat_title)}">${esc(live.chat_title)}</a>${live.goal_head ? " · " + esc(cleanLabel(live.goal_head).slice(0, 90)) : ""}</div>` : ""}
         <div class="ev-steps" id="turn-live-steps">${liveDetail ? stepsHTML(liveDetail, { limit: 16 }) : '<div class="muted">читаю шаги…</div>'}</div>
       </div>`
@@ -96,20 +96,22 @@ function scheduleLive(on: boolean) {
 }
 
 async function refreshLive() {
-  if (liveBusy || S.view !== "now" || !root) return;
+  if (S.view !== "now" || !root) return;
+  if (liveBusy) { scheduleLive(true); return; }
   const live = liveRun();
   const card = root.querySelector<HTMLElement>("#turn-live");
-  if (!live || !card) {
+  if (!live || !card || card.dataset.run !== live.id) {
     if (card || live) void render(root);
     return;
   }
   liveBusy = true;
   try {
     const d = await runDetail(live.id, true);
-    const steps = root.querySelector<HTMLElement>("#turn-live-steps");
-    const t = root.querySelector<HTMLElement>("#turn-live-t");
+    if (!card.isConnected || liveRun()?.id !== live.id) return;
+    const steps = card.querySelector<HTMLElement>("#turn-live-steps");
+    const t = card.querySelector<HTMLElement>("#turn-live-t");
     if (t) t.textContent = since(live);
-    if (steps && d) steps.innerHTML = stepsHTML(d, { limit: 16 });
+    if (steps && d) renderSteps(steps, d, { limit: 16 });
   } catch {
     // следующий такт перечитает
   } finally {
@@ -121,8 +123,9 @@ async function refreshLive() {
 /** Событие прогона или вызова модели — обновить экран, если он открыт. */
 export function onEvent(kind: string) {
   if (S.view !== "now" || !root) return;
-  if (kind === "run") void render(root);
-  else if (kind === "llm") {
+  const card = root.querySelector<HTMLElement>("#turn-live");
+  if (kind === "run" && (!card || card.dataset.run !== liveRun()?.id)) void render(root);
+  else if (kind === "llm" || kind === "run") {
     clearTimeout(liveTimer);
     liveTimer = window.setTimeout(() => void refreshLive(), 300);
   }
@@ -131,6 +134,6 @@ export function onEvent(kind: string) {
 /** Состояние обновилось: ход начался или кончился. */
 export function tick() {
   if (S.view !== "now" || !root) return;
-  const has = !!root.querySelector("#turn-live");
-  if (!!liveRun() !== has) void render(root);
+  const id = root.querySelector<HTMLElement>("#turn-live")?.dataset.run;
+  if (liveRun()?.id !== id) void render(root);
 }

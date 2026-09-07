@@ -526,7 +526,8 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
         kind = row.get("kind")
         if kind == "model_started":
             current = {"at": row.get("at"), "seq": row.get("seq"),
-                       "call_id": row.get("call_id"), "tools": [], "text": ""}
+                       "call_id": row.get("call_id"), "tools": [], "text": "",
+                       "status": "running"}
             iterations.append(current)
         elif kind == "model_output":
             if current is not None:
@@ -539,17 +540,26 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
                            "call_id": row.get("call_id"), "tools": [], "text": ""}
                 iterations.append(current)
             current.update({
+                "status": "completed",
                 "model": row.get("model"), "role": row.get("role"),
                 "ms": row.get("duration_ms"), "stop": row.get("stop_reason"),
                 "usage": row.get("usage") or {},
                 "tool_calls": row.get("tool_calls"),
                 "text_chars": row.get("text_chars"),
             })
+        elif kind == "model_failed":
+            if current is None or current.get("call_id") != row.get("call_id"):
+                current = {"at": row.get("at"), "seq": row.get("seq"),
+                           "call_id": row.get("call_id"), "tools": [], "text": ""}
+                iterations.append(current)
+            current.update({"status": "failed", "error": row.get("error"),
+                            "ms": row.get("duration_ms")})
         elif kind == "tool_started":
             card = {"tool": row.get("tool"), "args": row.get("args"),
                     "at": row.get("at"), "seq": row.get("seq"),
                     "side_effect": bool(row.get("side_effect")),
-                    "call_id": row.get("call_id"), "result": None}
+                    "call_id": row.get("call_id"), "result": None,
+                    "status": "running"}
             tools_by_call[str(row.get("call_id") or row.get("seq"))] = card
             if current is None:
                 current = {"at": row.get("at"), "seq": row.get("seq"),
@@ -561,14 +571,35 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
             preview = _inline_preview(row.get("result") or {})
             if card is not None:
                 card["result"] = preview
+                card["status"] = "received"
+                card["finished_at"] = row.get("at")
             else:  # результат без старта — покажем как есть
                 if current is None:
                     current = {"at": row.get("at"), "seq": row.get("seq"),
                                "call_id": None, "tools": [], "text": ""}
                     iterations.append(current)
-                current["tools"].append({"tool": row.get("name"), "args": None,
-                                         "at": row.get("at"), "seq": row.get("seq"),
-                                         "result": preview})
+                card = {"tool": row.get("name"), "args": None,
+                        "at": row.get("at"), "seq": row.get("seq"),
+                        "call_id": row.get("call_id"),
+                        "status": "received", "result": preview}
+                current["tools"].append(card)
+                tools_by_call[str(row.get("call_id") or row.get("seq"))] = card
+        elif kind in ("tool_failed", "tool_completed", "tool_reconciled"):
+            card = tools_by_call.get(str(row.get("call_id") or ""))
+            if card is None:
+                if current is None:
+                    current = {"at": row.get("at"), "seq": row.get("seq"),
+                               "call_id": None, "tools": [], "text": ""}
+                    iterations.append(current)
+                card = {"tool": row.get("tool") or row.get("name"),
+                        "call_id": row.get("call_id"), "seq": row.get("seq"),
+                        "args": None, "result": None}
+                current["tools"].append(card)
+                tools_by_call[str(row.get("call_id") or row.get("seq"))] = card
+            # Receipt completion does not certify the external action's success.
+            card["status"] = "failed" if kind == "tool_failed" else "received"
+            card["error"] = row.get("error") or row.get("reason")
+            card["finished_at"] = row.get("at")
         elif kind == "status_changed":
             status_flow.append({"at": row.get("at"), "from": row.get("from_status"),
                                 "to": row.get("to_status")})

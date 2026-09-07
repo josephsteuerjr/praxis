@@ -112,7 +112,7 @@ function turnNotice(): string {
   const since = r.since ? ` (идёт ${fmtAge(r.since)})` : "";
   return `<div class="notice" data-turn-stop-box>
     <span class="dot live"></span>
-    <span>Агент сейчас ведёт ход${since} — шаги справа.</span>
+    <span>Агент сейчас работает${since} — действия справа.</span>
     <button class="notice-action" data-stop-turn="ask" type="button">Остановить ход</button>
   </div>`;
 }
