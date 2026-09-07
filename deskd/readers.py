@@ -404,6 +404,8 @@ def list_runs(limit: int = 80, kind: str = "", before: str = "",
             out.append({
                 "id": name,
                 "created_at": manifest.get("created_at") or "",
+                "updated_at": manifest.get("updated_at") or "",
+                "event_seq": manifest.get("event_seq"),
                 "status": manifest.get("status") or "",
                 "kind": run_kind,
                 "chat_id": chat_id,
@@ -499,6 +501,56 @@ def _model_text(result: dict) -> str:
             if extra and extra not in text:
                 text = (text + "\n" + extra).strip()
     return text
+
+
+def _run_origin(path: Path, manifest: dict) -> dict:
+    """Only the first authority block supplies the trigger, never conversation head.
+
+    v1/v2 snapshots share this JSON envelope. Decode JSON rather than searching
+    for closing fences inside potentially quoted user text. This is display data,
+    not an authority decision. Unsupported/incomplete envelopes remain unknown.
+    """
+    unknown = {"text": "", "source": "unknown"}
+    try:
+        with (path / "context.md").open(encoding="utf-8") as fh:
+            head = fh.read(256_000)
+        match = re.match(r'\A# Immutable run context\r?\n(?:<!--[^\n]*-->\r?\n)?\s*## Authority and address\s*\n\s*```json\s*\n', head)
+        if not match:
+            return unknown
+        authority, end = json.JSONDecoder().raw_decode(head[match.end():])
+        if not head[match.end() + end:].lstrip().startswith("```") or not isinstance(authority, dict):
+            return unknown
+        context = manifest.get("context") or {}
+        if authority.get("schema") not in ("praxis.run.authority.v1", "praxis.run.authority.v2"):
+            return unknown
+        if str(authority.get("origin_chat_id")) != str(context.get("origin_chat_id")):
+            return unknown
+        expected = [str(v) for v in context.get("origin_message_ids") or []]
+        actual = [str(v) for v in authority.get("origin_message_ids") or []]
+        if expected != actual:
+            return unknown
+        text = authority.get("origin_text")
+        return {"text": text, "source": "snapshot"} if isinstance(text, str) and text.strip() else unknown
+    except (OSError, ValueError, TypeError):
+        return unknown
+
+
+_RUN_WORDS_CACHE: dict[str, Any] = {"stamp": None, "value": {}}
+
+
+def _run_words(run_id: str) -> dict:
+    path = tree() / "memory" / ".state" / "turns.jsonl"
+    try:
+        stat = path.stat()
+        stamp = (str(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return {}
+    if stamp != _RUN_WORDS_CACHE["stamp"]:
+        _RUN_WORDS_CACHE.update(stamp=stamp, value={
+            str(r["run_id"]): {k: str(r.get(k) or "") for k in ("in", "out", "note", "who")}
+            for r in tail_jsonl(path, 4000) if r.get("run_id")
+        })
+    return _RUN_WORDS_CACHE["value"].get(run_id, {})
 
 
 def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
@@ -609,8 +661,16 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
     except OSError:
         pass
     context = manifest.get("context") or {}
+    words = _run_words(run_id)
+    origin = _run_origin(path, manifest)
+    if origin["source"] == "unknown" and words.get("in"):
+        origin = {"text": words["in"], "source": "turn_log"}
+    if context.get("kind") != "chat_turn" and origin["source"] == "unknown":
+        origin = {"text": str(context.get("goal") or ""), "source": "task_goal"}
     return {
         "id": run_id,
+        "origin": origin,
+        "outcome": {"text": words.get("out", ""), "note": words.get("note", "")},
         "manifest": {
             "created_at": manifest.get("created_at"),
             "status": manifest.get("status"),
@@ -990,9 +1050,9 @@ def chat_turns(peer_id: str, n: int = 120) -> list[dict]:
             continue
         out.append({"run_id": row.get("run_id"), "ts": row.get("ts"),
                     "kind": row.get("kind"), "who": row.get("who"),
-                    "in": str(row.get("in") or "")[:160],
-                    "out": str(row.get("out") or "")[:160],
-                    "note": str(row.get("note") or "")[:120],
+                    "in": str(row.get("in") or ""),
+                    "out": str(row.get("out") or ""),
+                    "note": str(row.get("note") or ""),
                     "delivery": row.get("delivery")})
     return out[-max(1, int(n)):]
 

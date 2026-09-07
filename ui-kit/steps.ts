@@ -4,6 +4,8 @@ import { esc, fmtK } from "./text";
 
 export interface RunDetail {
   id?: string;
+  origin?: { text: string; source: string };
+  outcome?: { text: string; note: string };
   manifest?: {
     status?: string;
     created_at?: string;
@@ -79,6 +81,12 @@ function details(key: string, parts: Array<[string, string]>): string {
   return body ? `<details class="action-details" data-detail="${esc(key)}"><summary>Подробности</summary>${body}</details>` : "";
 }
 
+function readable(text: string, label: string, key: string): string {
+  if (!text) return "";
+  const body = `<div class="run-reading">${esc(text)}</div>`;
+  return `<section class="run-message"><div class="action-detail-label">${label}</div>${text.length > 320 ? `<details data-detail="${key}" class="run-reading-more"><summary>${esc(clip(text, 240))}<span>Читать полностью</span></summary>${body}</details>` : body}</section>`;
+}
+
 /** Видимые действия и записанные результаты, без догадок об успехе инструмента. */
 export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
   const steps: string[] = [];
@@ -132,11 +140,13 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
       `<div class="ev-step"><b class="action-title">${esc(TERMINAL[term.status] || term.status)}</b>${details("terminal", [["Причина", term.reason || ""]])}${lesson("terminal")}</div>`,
     );
   }
+  const origin = readable(d.origin?.text || "", "Повод запуска", "origin") || (d.origin?.source === "unknown" ? '<div class="muted">Повод запуска не записан.</div>' : "");
+  const outcome = readable(d.outcome?.text || d.outcome?.note || "", "Итог", "outcome");
   if (opts.limit && steps.length > opts.limit) {
     const hidden = steps.length - opts.limit;
-    return `<div class="ev-step think"><span class="muted">…ещё ${hidden} шагов выше</span></div>` + steps.slice(-opts.limit).join("");
+    return origin + `<details class="action-earlier" data-detail="earlier"><summary>Показать предыдущие действия · ${hidden}</summary>${steps.slice(0, -opts.limit).join("")}</details>` + steps.slice(-opts.limit).join("") + outcome;
   }
-  return steps.join("") || '<div class="muted">шагов ещё нет</div>';
+  return origin + (steps.join("") || `<div class="muted">${live ? "Работа началась. Первые действия ещё не записаны." : "Подробности действий не записаны."}</div>`) + outcome;
 }
 
 /** Обновлять содержимое только при изменении, сохраняя раскрытие и фокус. */

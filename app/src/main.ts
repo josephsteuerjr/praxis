@@ -736,6 +736,7 @@ onEvent((ev) => {
     now.onEvent("llm");
   }
   if (ev.t === "run") {
+    if (ev.run_id) S.evCache.delete(String(ev.run_id));
     void loadRooms().then(() => now.onEvent("run"));
     talk.onRunEvent(String(ev.run_id ?? ""));
     void refreshState();

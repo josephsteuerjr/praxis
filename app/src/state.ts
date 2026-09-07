@@ -38,11 +38,12 @@ export function foreignHarness(): boolean {
 
 /** Прогон свежий: создан не позже получаса назад (для чужого харнесса). */
 export function runIsRecent(r: Run, minutes = 30): boolean {
-  const at = new Date(r.created_at ?? "").getTime();
+  const at = new Date(r.updated_at || r.created_at || "").getTime();
   return !isNaN(at) && Date.now() - at < minutes * 60_000;
 }
 
 export interface Run {
+  updated_at?: string;
   id: string;
   kind: string;
   status: string;

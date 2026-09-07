@@ -43,3 +43,21 @@
   font: 400 11.5px/1.6 var(--mono);
   color: var(--ink-2);
 }
+
+.activity-card:not([data-status="running"]) { background: transparent; border-color: var(--line); }
+.activity-card:not([data-status="running"]) .turn-live-head { color: var(--ink); }
+.run-message { padding: 10px 0 15px; border-bottom: 1px solid var(--line); }
+.run-reading, .run-reading-more summary { white-space: pre-wrap; overflow-wrap: anywhere; font: 14px/1.65 var(--sans); color: var(--ink); }
+.run-reading-more summary { cursor: pointer; list-style: none; }
+.run-reading-more summary::-webkit-details-marker { display: none; }
+.run-reading-more summary span { display: block; margin-top: 5px; font-size: 12px; color: var(--accent); }
+.run-reading-more[open] summary { font-size: 0; }
+.run-reading-more[open] summary span { font-size: 12px; }
+.run-reading-more[open] summary span::after { content: " · свернуть"; }
+.run-reading-more summary:focus-visible, .action-earlier summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.action-earlier > summary { cursor: pointer; color: var(--accent); font: 13px/1.5 var(--sans); padding: 14px 0; }
+@media(max-width:600px) {
+  .action-details pre { max-height: none; overflow: visible; }
+  .action-subject { font-size: 14px; }
+  .action-result { font-size: 12px; }
+}

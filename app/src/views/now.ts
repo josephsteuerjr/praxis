@@ -4,14 +4,16 @@
 import { esc, fmtDur, fmtTime } from "../lib";
 import { api } from "../api";
 import { mountUsage, usageShell } from "../../../ui-kit/usage";
-import { frameStripHTML, renderSteps, stepsHTML, type RunDetail } from "../../../ui-kit/steps";
+import { frameStripHTML, type RunDetail } from "../../../ui-kit/steps";
+import { activityHTML, selectActivity, updateActivity } from "../../../ui-kit/activity";
 import { S, foreignHarness, runIsRecent, type Run } from "../state";
-import { bindRuns, cleanLabel, loadWords, roomKeyOf, runDetail, runRowHTML } from "../runlist";
+import { bindRuns, loadWords, runDetail, runRowHTML } from "../runlist";
 
 let root: HTMLElement | null = null;
 let liveTimer = 0;
 let liveBusy = false;
 let gen = 0;
+let focusedRun: Run | undefined;
 
 /** Идущий ход по любой комнате: сердцебиение руннера, а у чужого харнесса — свежий running-манифест. */
 export function liveRun(): Run | undefined {
@@ -43,16 +45,24 @@ export async function render(container: HTMLElement): Promise<void> {
   root = container;
   const my = ++gen;
   const live = liveRun();
+  const list = S.runs.filter((r) => r.kind !== "wake").slice(0, 40);
+  focusedRun = selectActivity(focusedRun, live, list);
+  const shown = focusedRun;
   let liveDetail: RunDetail | undefined;
-  if (live) {
+  if (shown) {
     try {
-      liveDetail = await runDetail(live.id, true);
+      liveDetail = await runDetail(shown.id, true);
     } catch {
-      liveDetail = undefined;
+      liveDetail = S.evCache.get(shown.id) as RunDetail | undefined;
     }
   }
   if (my !== gen) return;
-  const list = S.runs.filter((r) => r.kind !== "wake").slice(0, 40);
+  const existing = container.querySelector<HTMLElement>("#turn-live");
+  if (shown && existing?.dataset.run === shown.id) {
+    if (liveDetail) updateActivity(existing, liveDetail, live ? since(live) : "");
+    scheduleLive(!!live);
+    return;
+  }
   await loadWords(list.slice(0, 15));
   if (my !== gen) return;
   let strip = liveDetail;
@@ -67,14 +77,10 @@ export async function render(container: HTMLElement): Promise<void> {
       if (my !== gen) return;
     }
   }
-  const liveHTML = live
-    ? `<div class="turn-live now-live" id="turn-live" data-run="${esc(live.id)}">
-        <div class="turn-live-head"><span class="dot live"></span><span>Действия сейчас</span><span class="t" id="turn-live-t">${esc(since(live))}</span></div>
-        ${live.chat_title ? `<div class="turn-live-sub"><a href="#" data-room="${esc(roomKeyOf(live))}" data-room-name="${esc(live.chat_title)}">${esc(live.chat_title)}</a>${live.goal_head ? " · " + esc(cleanLabel(live.goal_head).slice(0, 90)) : ""}</div>` : ""}
-        <div class="ev-steps" id="turn-live-steps">${liveDetail ? stepsHTML(liveDetail, { limit: 16 }) : '<div class="muted">читаю шаги…</div>'}</div>
-      </div>`
+  const liveHTML = shown
+    ? activityHTML(shown, liveDetail, live ? since(live) : fmtTime(shown.created_at))
     : idleHTML();
-  const rest = list.filter((r) => r.id !== live?.id);
+  const rest = list.filter((r) => r.id !== shown?.id);
   container.innerHTML = `<div class="center now">
     ${liveHTML}
     ${usageShell(true)}
@@ -115,7 +121,7 @@ async function refreshLive() {
     const steps = card.querySelector<HTMLElement>("#turn-live-steps");
     const t = card.querySelector<HTMLElement>("#turn-live-t");
     if (t) t.textContent = since(live);
-    if (steps && d) renderSteps(steps, d, { limit: 16 });
+    if (steps && d) updateActivity(card, d, since(live));
   } catch {
     // следующий такт перечитает
   } finally {

@@ -12,7 +12,8 @@
 import { applyTheme, el, q, toast, type Theme } from "./dom";
 import "./version";
 import { esc, fmtDay, fmtDur, fmtTime, md } from "./text";
-import { frameStripHTML, renderSteps, stepsHTML, type RunDetail } from "./steps";
+import { frameStripHTML, stepsHTML, type RunDetail } from "./steps";
+import { activityHTML, selectActivity, updateActivity } from "./activity";
 import contract from "./contract.json";
 import { mountUsage, usageShell } from "./usage";
 
@@ -52,6 +53,7 @@ export interface Room {
 }
 
 export interface Run {
+  updated_at?: string;
   id: string;
   kind: string;
   status: string;
@@ -317,7 +319,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
 
   // ---------------------------------------------------------------- прогоны и живой ход
   const recent = (r: Run, minutes = 30) => {
-    const at = new Date(r.created_at ?? "").getTime();
+    const at = new Date(r.updated_at || r.created_at || "").getTime();
     return !isNaN(at) && Date.now() - at < minutes * 60_000;
   };
   const runLive = (r: Run) => r.status === "running" && (foreign() ? recent(r) : !!state?.runner?.busy && state?.runner?.run === r.id);
@@ -329,7 +331,10 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
 
   async function loadRuns(): Promise<void> {
     const got = await scoped<Run[]>("/api/runs?limit=80", "runs");
-    if (got) runs = got;
+    if (got) {
+      for (const r of got) if (runs.find(old => old.id === r.id)?.status !== r.status) evCache.delete(r.id);
+      runs = got;
+    }
   }
 
   async function runDetail(id: string, fresh = false): Promise<RunDetail | undefined> {
@@ -470,30 +475,39 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   // ---------------------------------------------------------------- «Сейчас»
   let liveTimer = 0;
   let liveBusy = false;
+  let focusedRun: Run | undefined;
+  let nowGeneration = 0;
 
   async function renderNow(guard: () => boolean = () => tab === "now") {
+    const mine = ++nowGeneration;
+    const valid = () => mine === nowGeneration && guard() && tab === "now";
     if (!runs.length) await loadRuns();
-    if (!guard()) return;
+    if (!valid()) return;
     const live = liveRun();
-    const liveDetail = live ? await runDetail(live.id, true) : undefined;
     const list = runs.filter((r) => r.kind !== "wake").slice(0, 30);
+    focusedRun = selectActivity(focusedRun, live, list);
+    const shown = focusedRun;
+    const liveDetail = shown ? await runDetail(shown.id, true) || evCache.get(shown.id) : undefined;
+    if (!valid()) return;
+    const existing = screen.querySelector<HTMLElement>("#turn-live");
+    if (shown && existing?.dataset.run === shown.id) {
+      if (liveDetail) updateActivity(existing, liveDetail, live?.created_at ? fmtDur((Date.now() - new Date(live.created_at).getTime()) / 1000) : "");
+      scheduleLive(!!live);
+      return;
+    }
     await loadWords(list.slice(0, 12));
-    if (!guard()) return;
+    if (!valid()) return;
     let strip = liveDetail;
     if (!strip) {
       const last = list.find((r) => r.id !== live?.id && r.kind === "chat_turn");
       if (last) strip = await runDetail(last.id);
-      if (!guard()) return;
+      if (!valid()) return;
     }
     const since = live?.created_at ? fmtDur((Date.now() - new Date(live.created_at).getTime()) / 1000) : "";
-    const liveHTML = live
-      ? `<div class="turn-live" id="turn-live" data-run="${esc(live.id)}">
-          <div class="turn-live-head"><span class="dot live"></span><span>Действия сейчас</span><span class="t" id="turn-live-t">${esc(since)}</span></div>
-          ${live.chat_title ? `<div class="turn-live-sub"><a href="#" data-room="${esc(roomKey(live))}" data-room-name="${esc(live.chat_title)}">${esc(live.chat_title)}</a>${live.goal_head ? " · " + esc(clean(live.goal_head).slice(0, 70)) : ""}</div>` : ""}
-          <div class="ev-steps" id="turn-live-steps">${liveDetail ? stepsHTML(liveDetail, { limit: 12 }) : closed.has("run") ? '<div class="muted">шаги телефону пока не отдаются</div>' : '<div class="muted">читаю шаги…</div>'}</div>
-        </div>`
+    const liveHTML = shown
+      ? activityHTML(shown, liveDetail, live ? since : fmtTime(shown.created_at))
       : `<div class="now-idle"><span class="dot ${state && !foreign() && state.level === "error" ? "failed" : ""}"></span><span>${esc(state ? (foreign() ? "Нет текущих действий · " + foreignPhrase().phrase.replace(/^На связи · /, "") : state.phrase) : "Подключение…")}${state?.next_wake ? ` · пробуждение ${esc(fmtTime(state.next_wake) || state.next_wake)}` : ""}</span></div>`;
-    const rest = list.filter((r) => r.id !== live?.id);
+    const rest = list.filter((r) => r.id !== shown?.id);
     screen.innerHTML =
       liveHTML +
       usageShell(true) +
@@ -527,7 +541,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       const steps = card.querySelector<HTMLElement>("#turn-live-steps");
       const t = card.querySelector<HTMLElement>("#turn-live-t");
       if (t && live.created_at) t.textContent = fmtDur((Date.now() - new Date(live.created_at).getTime()) / 1000);
-      if (steps && d) renderSteps(steps, d, { limit: 12 });
+      if (steps && d) updateActivity(card, d, live.created_at ? fmtDur((Date.now() - new Date(live.created_at).getTime()) / 1000) : "");
     } catch {
       // После ошибки связи продолжаем перечитывать текущие действия.
     } finally {
@@ -936,7 +950,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     // сами — иначе «Сейчас» узнал бы о ходе только после перезагрузки.
     await loadRuns();
     paintTop();
-    if (tab === "now" && !screen.querySelector("#turn-live") && liveRun()) void renderNow();
+    if (tab === "now") void renderNow();
     scheduleRuns();
   }
   function bumpFeed() {
