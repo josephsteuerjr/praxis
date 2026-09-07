@@ -1420,7 +1420,10 @@ def _state_impl() -> dict:
     base = tree()
     st = base / "memory" / ".state"
     anatomy = _load_json(st / "anatomy.json")
-    agent = str(anatomy.get("agent_name") or "Агент")
+    # Дерево без снимка Hélène (Пульт Праксис) — имя из конфига продукта или
+    # среды сервера (КОНТРАКТ-B→A §9), а не «Агент».
+    agent = str(anatomy.get("agent_name") or product_config().get("agent_name")
+                or os.environ.get("HELENE_AGENT_NAME") or "").strip() or "Агент"
     runner = reader_status(base, now)
     runner_alive = runner["alive"]
     busy = runner["busy"]

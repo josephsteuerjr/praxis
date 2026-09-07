@@ -40,8 +40,11 @@ class Table(unittest.TestCase):
         table = {(r.method, r.path) for r in deskapp.ROUTES}
         missing = table - registered
         self.assertFalse(missing, f"строки таблицы без HTTP-ручки: {missing}")
+        # /pair/redeem и /pair/telegram — только HTTP: телефон и мини-апп
+        # приходят за ключом, которого у них ещё нет, а канал без ключа закрыт.
         api_only = {(m, p) for m, p in registered
-                    if (p.startswith("/api/") or p.startswith("/pair/")) and p != "/pair/redeem"}
+                    if (p.startswith("/api/") or p.startswith("/pair/"))
+                    and p not in ("/pair/redeem", "/pair/telegram")}
         stray = api_only - table
         self.assertFalse(stray, f"HTTP-ручки мимо таблицы: {stray}")
 

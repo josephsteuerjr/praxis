@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
+import hmac
 import datetime as dt
 import json
 import logging
@@ -110,17 +112,22 @@ _ALLOWED_HOST_SUFFIXES = (".ts.net", ".local")
 # него ещё нет. Без этого списка спаривание физически невозможно — телефон
 # получал 403 на самой первой странице, и в Wi-Fi, и через Tailscale.
 _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
-               "/m/icon-192.png", "/m/icon-512.png", "/m/apple-touch-icon.png"}
+               "/m/icon-192.png", "/m/icon-512.png", "/m/apple-touch-icon.png",
+               # service worker регистрируется до ключа, как и сама /m/;
+               # вход мини-аппа Telegram — по подписи initData, ключа ещё нет.
+               "/m/sw.js", "/pair/telegram"}
 
-# Область ключа устройства (телефона). Всё остальное — только окну: ключ
-# устройства уезжает в чужие руки легче всех (Wi-Fi, лог, чужая камера над
-# плечом), а /api/anatomy отдаёт OPENAI_API_KEY и /api/md переписывает
-# конституцию. Мобильный UI дальше этого списка и не ходит.
-# /tunnel и /events пускаем: внутри трубы область проверяется ещё раз, по
+# Область ключа устройства (телефона, мини-аппа). Всё остальное — только окну:
+# ключ устройства уезжает в чужие руки легче всех (Wi-Fi, лог, чужая камера
+# над плечом), а /api/anatomy отдаёт OPENAI_API_KEY и /api/md переписывает
+# конституцию. Телефон в новом виде (КОНТРАКТ-B→A §4) показывает те же
+# комнаты и «Действия», что окно: прогоны, ходы комнаты, пульс — читать
+# можно, править конституцию, режим и анатомию — нет.
+# /tunnel и /events пускаем: внутри канала область проверяется ещё раз, по
 # каждому маршруту (_tunnel_dispatch), иначе телефон обошёл бы разбор прав.
 _DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health",
-                 "/api/rooms", "/tunnel", "/events"}
-_DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/")
+                 "/api/rooms", "/api/runs", "/api/pulse", "/tunnel", "/events"}
+_DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/", "/api/chat-turns/", "/api/run/")
 
 
 def _hostname(raw: str) -> str:
@@ -448,8 +455,7 @@ async def api_pair_redeem(request):
     got = await asyncio.to_thread(
         _redeem, token, str(request.headers.get("User-Agent") or ""),
         str(peer[0]) if peer else "")
-    anatomy = readers.anatomy() or {}
-    response = _json({"key": got["key"], "agent": anatomy.get("agent_name") or "Агент",
+    response = _json({"key": got["key"], "agent": _agent_name(),
                       "uses_left": got["uses_left"]})
     response.set_cookie(COOKIE, got["key"], max_age=365 * 24 * 3600,
                         httponly=True, samesite="Lax")
@@ -463,17 +469,152 @@ MOBILE = next((d for d in (_HERE_DIR / "mobile", _HERE_DIR.parent / "mobile" / "
 
 
 async def mobile_index(request):
+    """Страница телефона и мини-аппа. `no-store`: WebView Telegram и PWA на
+    экране «Домой» живут неделями, и HTTP-кэш не должен подменять сетевой
+    ответ старым index.html — офлайн-копией управляет только service worker,
+    который знает штамп своей сборки (приём из hardbot, слово владельца 07.09;
+    сама страница сверяет свою сборку с серверной — ui-kit/version.ts)."""
     if not (MOBILE / "index.html").is_file():
         raise web.HTTPNotFound(text="мобильная страница не собрана")
-    return web.FileResponse(MOBILE / "index.html", headers={"Cache-Control": "no-cache"})
+    return web.FileResponse(MOBILE / "index.html", headers={
+        "Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"})
+
+
+async def mobile_sw(request):
+    """Service worker телефона (`/m/sw.js`, КОНТРАКТ-B→A §5): лежит в корне
+    области `/m/`, отдаётся с `no-cache`, чтобы новая сборка SW подхватывалась
+    браузером при следующем открытии."""
+    if not (MOBILE / "sw.js").is_file():
+        raise web.HTTPNotFound(text="service worker не собран")
+    return web.FileResponse(MOBILE / "sw.js", headers={
+        "Cache-Control": "no-cache", "Content-Type": "text/javascript; charset=utf-8"})
+
+
+def _agent_name() -> str:
+    """Имя агента для телефона и мини-аппа (КОНТРАКТ-B→A §9): снимок анатомии
+    → `agent.name` из helene.json → `HELENE_AGENT_NAME` (сервер без конфига
+    продукта) → «Агент». У дерева без снимка Hélène (Пульт Праксис) первого
+    источника нет — телефон получал «Агент»."""
+    anatomy = readers.anatomy() or {}
+    return str(anatomy.get("agent_name") or readers.product_config().get("agent_name")
+               or os.environ.get("HELENE_AGENT_NAME") or "").strip() or "Агент"
+
+
+# ---------------------------------------------------- вход мини-аппа Telegram
+
+def _tg_tokens() -> list[str]:
+    """Токены ботов, из которых открывается мини-апп: `telegram.bot_token`
+    конфига и `HELENE_TG_BOT_TOKENS` (список через запятую — у Праксис два
+    бота открывают один мини-апп). В чужой `.env` не лазим."""
+    tokens: list[str] = []
+    cfg_path = readers.config_path()
+    if cfg_path is not None:
+        raw = readers._load_json(cfg_path)
+        token = str((raw.get("telegram") or {}).get("bot_token") or "").strip()
+        if token:
+            tokens.append(token)
+    for token in (os.environ.get("HELENE_TG_BOT_TOKENS") or "").split(","):
+        if token.strip() and token.strip() not in tokens:
+            tokens.append(token.strip())
+    return tokens
+
+
+def _tg_owner_id() -> str:
+    cfg_path = readers.config_path()
+    owner = ""
+    if cfg_path is not None:
+        raw = readers._load_json(cfg_path)
+        owner = str((raw.get("telegram") or {}).get("owner_id") or "").strip()
+    if owner in ("", "0"):
+        owner = str(os.environ.get("HELENE_TG_OWNER_ID") or "").strip()
+    return "" if owner == "0" else owner
+
+
+def _telegram_init_user(init_data: str, tokens: list[str], *, max_age: float = 7 * 86400,
+                        now: float | None = None) -> dict:
+    """Пользователь из `Telegram.WebApp.initData` — по подписи, иначе ValueError словами.
+
+    Алгоритм Telegram Web Apps: `secret = HMAC_SHA256("WebAppData", bot_token)`,
+    `hash == HMAC_SHA256(secret, data_check_string)`, где строка — пары
+    `key=value` (без `hash`) через `\\n` в порядке ключей. Подпись сверяется с
+    каждым токеном по очереди; `auth_date` не старше `max_age`.
+    """
+    from urllib.parse import parse_qsl
+    data = dict(parse_qsl(str(init_data or ""), keep_blank_values=True))
+    given = str(data.pop("hash", "") or "")
+    if not given or not data:
+        raise ValueError("нет подписи Telegram")
+    check = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
+    for token in tokens:
+        secret = hmac.new(b"WebAppData", str(token).encode("utf-8"), hashlib.sha256).digest()
+        calc = hmac.new(secret, check.encode("utf-8"), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(calc, given.lower()):
+            break
+    else:
+        raise ValueError("подпись Telegram не сошлась")
+    try:
+        auth_date = int(data.get("auth_date") or 0)
+    except (TypeError, ValueError):
+        auth_date = 0
+    if (now if now is not None else time.time()) - auth_date > max_age:
+        raise ValueError("вход устарел — открой мини-апп заново")
+    try:
+        user = json.loads(data.get("user") or "{}")
+    except ValueError:
+        user = {}
+    if not isinstance(user, dict) or not user.get("id"):
+        raise ValueError("в подписи нет пользователя")
+    return user
+
+
+def _tg_login(user: dict, addr: str) -> dict:
+    """Ключ устройства для мини-аппа — той же природы, что у QR (`_redeem`).
+    Одно устройство на одного пользователя Telegram: прежняя строка того же
+    `pair` заменяется, иначе каждое открытие мини-аппа плодило бы строку в
+    списке устройств владельца."""
+    key = "dk-" + secrets.token_urlsafe(30)
+    pair = "tg:" + str(user.get("id"))
+    name = "Telegram · " + (str(user.get("first_name") or user.get("username") or "").strip()
+                            or str(user.get("id")))
+    stamp = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    with _DEVICES_LOCK:
+        rows = [d for d in _devices() if str(d.get("pair") or "") != pair]
+        rows.append({"id": secrets.token_hex(6), "pair": pair, "name": name,
+                     "hash": _key_hash(key), "addr": addr, "created": stamp,
+                     "last_seen": stamp})
+        _save_devices(rows)
+    return {"key": key, "name": name}
+
+
+async def api_pair_telegram(request):
+    """`POST /pair/telegram {initData}` → `{key, agent}` (КОНТРАКТ-B→A §6).
+    Только владельцу (`telegram.owner_id` или `HELENE_TG_OWNER_ID`); чужому —
+    403 словами. Открыт до ключа: ключа у мини-аппа ещё нет."""
+    payload = await _json_body(request) or {}
+    tokens = _tg_tokens()
+    if not tokens:
+        raise web.HTTPServiceUnavailable(
+            text="у канала нет токена бота — вход из Telegram не настроен")
+    try:
+        user = _telegram_init_user(str(payload.get("initData") or ""), tokens)
+    except ValueError as exc:
+        raise web.HTTPForbidden(text=str(exc))
+    owner = _tg_owner_id()
+    if not owner or str(user.get("id")) != owner:
+        raise web.HTTPForbidden(text="этот мини-апп открыт только владельцу агента")
+    peer = request.transport.get_extra_info("peername") if request.transport else None
+    got = await asyncio.to_thread(_tg_login, user, str(peer[0]) if peer else "")
+    response = _json({"key": got["key"], "agent": _agent_name(), "device": got["name"]})
+    response.set_cookie(COOKIE, got["key"], max_age=365 * 24 * 3600,
+                        httponly=True, samesite="Lax")
+    return response
 
 
 async def mobile_manifest(request):
     """Манифест PWA: start_url несёт токен пары, чтобы установленное на экран
     «Домой» приложение могло обменять его второй раз (iPhone)."""
     pair = str(request.query.get("pair") or "")
-    anatomy = readers.anatomy() or {}
-    name = str(anatomy.get("agent_name") or "Агент")
+    name = _agent_name()
     start = "/m/?pair=" + pair if pair else "/m/"
     manifest = {
         "name": name, "short_name": name, "start_url": start, "scope": "/m/",
@@ -1176,9 +1317,11 @@ def build_app() -> web.Application:
     for route in ROUTES:
         app.router.add_route(route.method, route.path, _http_handler(route))
     app.router.add_get("/pair/redeem", api_pair_redeem)
+    app.router.add_post("/pair/telegram", api_pair_telegram)   # только HTTP: ключа ещё нет
     app.router.add_get("/m/", mobile_index)
     app.router.add_get("/m", mobile_index)
     app.router.add_get("/m/manifest.webmanifest", mobile_manifest)
+    app.router.add_get("/m/sw.js", mobile_sw)
     if (MOBILE / "assets").is_dir():
         app.router.add_static("/m/assets/", MOBILE / "assets")
     for name in ("icon-192.png", "icon-512.png", "apple-touch-icon.png"):

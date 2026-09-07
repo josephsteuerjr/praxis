@@ -3446,6 +3446,8 @@ fn main() {
             });
             let handle = app.handle().clone();
             std::thread::spawn(move || watch_children(handle));
+            // Раз в сутки — есть ли версия новее; только уведомление.
+            std::thread::spawn(update_autocheck);
 
             // Трей: закрытие окна прячет его, харнесс-дети живут дальше;
             // настоящий выход — только из меню трея.
@@ -3858,12 +3860,18 @@ fn version_newer(candidate: &str, current: &str) -> bool {
 /// ссылку. Замена файлов — решение человека, по его же слову.
 #[tauri::command]
 async fn update_check(url: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || update_check_blocking(&url))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn update_check_blocking(url: &str) -> Result<serde_json::Value, String> {
     let url = url.trim().to_string();
     if url.is_empty() {
         return Err("адрес обновлений не задан".into());
     }
     outbound_url_ok(&url)?;
-    tauri::async_runtime::spawn_blocking(move || {
+    {
         // redirects(0) — та же причина, что и в probe_model: переадресация
         // уносит заголовки мимо разбора адреса, который сделан выше.
         let agent = ureq::AgentBuilder::new()
@@ -3939,9 +3947,70 @@ async fn update_check(url: String) -> Result<serde_json::Value, String> {
             "notes": notes,
             "sha256": if digest.is_empty() { sha_from_notes } else { digest },
         }))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    }
+}
+
+/// Проверка обновлений при старте — раз в сутки, без вопросов и без
+/// скачивания (слово владельца 07.09: «режима обновления нет»). Есть версия
+/// новее — уведомление Windows с адресом кнопки; ставить или нет — решение
+/// человека в «Настройках». Отпечаток проверки — в дереве данных
+/// (`memory/.state/update-check.json`), чтобы не дёргать GitHub на каждый
+/// запуск и не повторять уведомление о той же версии. Выключается
+/// `update.auto: false` в helene.json; без `update.url` молчит.
+fn update_autocheck() {
+    std::thread::sleep(Duration::from_secs(90));
+    let Some(cfg) = config_value() else { return };
+    let update = cfg.get("update").cloned().unwrap_or(serde_json::Value::Null);
+    if update.get("auto").and_then(|v| v.as_bool()) == Some(false) {
+        return;
+    }
+    let url = update.get("url").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    if url.is_empty() {
+        return;
+    }
+    let stamp_path = tree_dir().join("memory").join(".state").join("update-check.json");
+    let previous: serde_json::Value = std::fs::read_to_string(&stamp_path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let checked_at = previous.get("checked_at").and_then(|v| v.as_u64()).unwrap_or(0);
+    if now.saturating_sub(checked_at) < 24 * 3600 {
+        return;
+    }
+    let result = update_check_blocking(&url);
+    let (latest, newer) = match &result {
+        Ok(v) => (
+            v.get("latest").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            v.get("newer").and_then(|x| x.as_bool()).unwrap_or(false),
+        ),
+        Err(why) => {
+            log_line(&format!("проверка обновлений при старте: {why}"));
+            (String::new(), false)
+        }
+    };
+    let notified_before = previous.get("notified").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let notify = newer && !latest.is_empty() && notified_before != latest;
+    if notify {
+        toast(
+            PRODUCT_UI,
+            &format!("Есть версия {latest}. Настройки → О программе → «Скачать и установить»."),
+        );
+        log_line(&format!("проверка обновлений при старте: есть версия {latest}"));
+    }
+    let record = serde_json::json!({
+        "checked_at": now,
+        "latest": latest,
+        "newer": newer,
+        "notified": if notify { latest.clone() } else { notified_before },
+    });
+    if let Some(dir) = stamp_path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(&stamp_path, serde_json::to_string_pretty(&record).unwrap_or_default());
 }
 
 /// Папка «Загрузки» владельца: известная папка из реестра, а не склейка.
