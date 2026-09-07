@@ -136,4 +136,8 @@ export function tick() {
   if (S.view !== "now" || !root) return;
   const id = root.querySelector<HTMLElement>("#turn-live")?.dataset.run;
   if (liveRun()?.id !== id) void render(root);
+  else if (!id) {
+    const idle = root.querySelector<HTMLElement>(".now-idle");
+    if (idle) idle.outerHTML = idleHTML();
+  }
 }

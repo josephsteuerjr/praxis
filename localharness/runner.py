@@ -69,7 +69,7 @@ _speaker = "владелец"
 _title = "Hélène"
 _agent_name = "Агент"
 _tree: Path | None = None
-_busy: dict = {"busy": False, "run": "", "since": 0.0}   # для единой модели состояния
+_busy: dict = {"busy": False, "run": "", "since": 0.0, "chat_id": ""}
 _mode: dict = {}       # картина режима (modes.resolve) — едет в анатомию
 _deliver_unspoken = True   # agent.deliver_unspoken в helene.json; см. _turn_in_window
 
@@ -336,7 +336,7 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
                                 addressed=True, title=desk.title)
     desk.sent.clear()
     started = time.time()
-    _set_busy(True)
+    _set_busy(True, chat_id=room)
     envelope = None
     try:
         envelope = _run_turn(room, convo, speaker, ctx)
@@ -470,7 +470,7 @@ def handle_bot(chat_id: str) -> None:
         _bot.typing(chat_id)
     _bot.sent_now.clear()
     started = time.time()
-    _set_busy(True)
+    _set_busy(True, chat_id=chat_id)
     try:
         envelope = _run_turn(chat_id, convo, sender_name, ctx)
     finally:
@@ -667,7 +667,7 @@ def _heartbeat_forever(inbox: Path) -> None:
             _write_json(inbox / ".reader.json", {
                 "pid": os.getpid(), "at": time.time(),
                 "busy": bool(_busy["busy"]), "run": str(_busy["run"] or ""),
-                "since": float(_busy["since"] or 0.0)})
+                "since": float(_busy["since"] or 0.0), "chat_id": _busy["chat_id"]})
         except Exception:
             # ⚠ Было log.debug при жёстко прибитом уровне INFO: окно рисовало
             # красное «Не запущен» над живым руннером, а в собранном владельцем
@@ -677,16 +677,18 @@ def _heartbeat_forever(inbox: Path) -> None:
         time.sleep(_HEARTBEAT_SEC)
 
 
-def _set_busy(on: bool, run: str = "") -> None:
+def _set_busy(on: bool, run: str = "", *, chat_id: str = "") -> None:
     _busy["busy"], _busy["run"] = bool(on), str(run or "")
     _busy["since"] = time.time() if on else 0.0
+    _busy["chat_id"] = str(chat_id) if on else ""
     if _tree is None:
         return
     try:
         inbox = Path(_tree) / "memory" / ".control" / "desk_inbox"
         _write_json(inbox / ".reader.json", {
             "pid": os.getpid(), "at": time.time(),
-            "busy": bool(_busy["busy"]), "run": _busy["run"], "since": _busy["since"]})
+            "busy": bool(_busy["busy"]), "run": _busy["run"], "since": _busy["since"],
+            "chat_id": _busy["chat_id"]})
     except Exception:
         # Голое `pass` здесь означало, что «окно считает руннер мёртвым» —
         # диагноз без единой строки в логе. Молчать об этом нельзя.

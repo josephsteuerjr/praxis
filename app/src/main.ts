@@ -524,8 +524,8 @@ export async function refreshState() {
       : !!s.runner?.busy && !!s.runner?.alive;
     if (busy || wasBusy) {
       panel.tick(busy);
-      now.tick();
     }
+    now.tick();
   } catch {
     // связь решает пилюля через onConnection
   }

@@ -1305,6 +1305,50 @@ _SLEEP_KINDS = {"wake", "window"}
 READER_FRESH_S = 45
 
 
+def _receipt_run(base: Path, receipt: dict, now: float) -> str:
+    """Связать занятость локального раннера с созданным внутри ядра прогоном.
+
+    envelope отдаёт id только после завершения. Пока он выполняется, ищем
+    единственный running chat_turn в той же комнате, созданный после начала
+    занятости. Старые прогоны, другие комнаты и неоднозначность не подходят.
+    Читаем только свежие манифесты; журнал, кадры и замки ядра не трогаем.
+    """
+    import datetime as dt
+    since = _num(receipt.get("since"))
+    chat_id = str(receipt.get("chat_id") or "")
+    if not chat_id or not 0 < since <= now:
+        return ""
+    start = dt.datetime.fromtimestamp(since, dt.timezone.utc)
+    end = dt.datetime.fromtimestamp(now, dt.timezone.utc)
+    floor = start.strftime("run-%Y%m%dT%H%M%S")
+    root = base / "memory" / "runs"
+    found = ""
+    try:
+        months = sorted((p for p in root.iterdir() if p.is_dir()
+                         and start.strftime("%Y-%m") <= p.name <= end.strftime("%Y-%m")), reverse=True)
+        for month in months:
+            for path in sorted((p for p in month.iterdir() if _RUN_ID_RE.fullmatch(p.name)), reverse=True):
+                if path.name < floor:
+                    break
+                manifest = _load_json(path / "manifest.json")
+                ctx = manifest.get("context") or {}
+                if manifest.get("status") != "running" or ctx.get("kind") != "chat_turn":
+                    continue
+                if str(ctx.get("origin_chat_id") or ctx.get("delivery_chat_id") or "") != chat_id:
+                    continue
+                try:
+                    created = dt.datetime.fromisoformat(str(manifest.get("created_at") or "").replace("Z", "+00:00")).timestamp()
+                except (ValueError, OverflowError, OSError):
+                    continue
+                if since <= created <= now:
+                    if found:
+                        return ""  # Не выбираем между двумя возможными авторами.
+                    found = path.name
+    except OSError:
+        return ""
+    return found
+
+
 def reader_status(base: Path | None = None, now: float | None = None) -> dict:
     """Квитанция читателя desk_inbox: жив ли раннер и занят ли он ходом."""
     import time as _time
@@ -1313,10 +1357,14 @@ def reader_status(base: Path | None = None, now: float | None = None) -> dict:
     receipt = _load_json(base / "memory" / ".control" / "desk_inbox" / ".reader.json")
     age = (now - _num(receipt.get("at"))) if receipt else None
     alive = age is not None and 0 <= age < READER_FRESH_S
+    busy = bool(receipt.get("busy")) and alive
+    run = str(receipt.get("run") or "")
+    if busy and not run:
+        run = _receipt_run(base, receipt, now)
     return {"alive": alive,
             "age_s": None if age is None else round(age, 1),
-            "busy": bool(receipt.get("busy")) and alive,
-            "run": str(receipt.get("run") or ""),
+            "busy": busy,
+            "run": run,
             "since": _num(receipt.get("since"))}
 
 
