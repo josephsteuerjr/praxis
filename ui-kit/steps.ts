@@ -60,14 +60,14 @@ const TERMINAL: Record<string, string> = {
   cancelled: "Работа отменена", canceled: "Работа отменена", paused: "Работа приостановлена",
   in_doubt: "Нужно проверить результат", blocked: "Есть препятствие",
 };
-/** Причина завершения человеческими словами. `done` бывает разным: сказала, промолчала
- *  по решению, кончила ход без слова, оборвалась потолком — и это не одно и то же. */
+/** Причина завершения человеческими словами. `done` бывает разным: оборвалась потолком —
+ *  не то же, что «решила промолчать». Ход без руки reply НЕ помечается «без ответа»:
+ *  в Hélène слово, написанное текстом, доставляет граница окна, а прогон ядра об этом
+ *  не знает — такой ход остаётся просто «Работа завершена». */
 function terminalLabel(status: string, reason: string): { label: string; failed: boolean } {
   const r = (reason || "").toLowerCase();
   if (status === "done" || status === "completed") {
     if (r.includes("max_tokens")) return { label: "Ответ оборван потолком, работа не доведена", failed: true };
-    if (r.includes("without a reply hand")) return { label: "Завершено без ответа", failed: false };
-    if (r.includes("end_turn (no speech)")) return { label: "Завершено без слова, по её решению", failed: false };
     if (r === "silent decision") return { label: "Завершено: решила промолчать", failed: false };
   }
   return { label: TERMINAL[status] || status, failed: status === "failed" };
@@ -136,10 +136,11 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
       const received = t.result != null || t.status === "received";
       const failed = t.status === "failed";
       const active = !received && !failed && live;
-      // Системная доставка с нулём знаков — не «результат получен»: слов не было.
+      // Шаг доставки ядра с нулём знаков — не её действие и не «получила ноль»: на границе
+      // прогона доставлять было нечего (слово ушло рукой reply или границей окна).
       const emptyDelivery = t.tool === "telegram.deliver" && (t.args as { text_chars?: number } | null)?.text_chars === 0 && !(t.args as { media_count?: number } | null)?.media_count;
-      const status = failed ? "ошибка" : emptyDelivery ? "слов не было" : received ? "результат получен" : active ? "выполняется" : "результат неизвестен";
-      const title = emptyDelivery ? "Без доставки" : ACTIONS[t.tool || ""] || t.tool || "Действие";
+      const status = failed ? "ошибка" : emptyDelivery ? "нечего доставлять" : received ? "результат получен" : active ? "выполняется" : "результат неизвестен";
+      const title = emptyDelivery ? "Доставка ядра" : ACTIONS[t.tool || ""] || t.tool || "Действие";
       const what = subject(t.args);
       const result = t.result?.truncated ? [t.result.head, "… пропущена часть результата …", t.result.tail].filter(Boolean).join("\n") : head;
       // Квитанции содержат инструкции раннеру; сохраняем их в подробностях.
