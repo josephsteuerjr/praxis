@@ -1,6 +1,6 @@
 // Шаги одного прогона агента — одна разметка для окна (панель хода, урок на
 // экране «Система») и для телефона. Данные — `GET /api/run/{id}`.
-import { esc, fmtK } from "./text";
+import { esc, fmtK, md } from "./text";
 
 export interface RunDetail {
   id?: string;
@@ -34,6 +34,8 @@ export interface RunDetail {
 export interface StepsOptions {
   /** Показать только последние N шагов (живой ход). */
   limit?: number;
+  /** Обзор: повод и итог рядом, действия раскрываются отдельным блоком. */
+  overview?: boolean;
   /** Пояснения под шагами (урок на экране «Система»): ключи think_first, think, hand, reply, end_turn, terminal. */
   lesson?: Record<string, string>;
 }
@@ -48,6 +50,7 @@ const ACTIONS: Record<string, string> = {
   coding_process: "Процесс", coding_read: "Чтение кода", coding_search: "Поиск в коде",
   coding_patch: "Правка кода", coding_verify: "Проверка", coding_finish: "Завершение задачи",
   write_skill: "Запись навыка", consolidate_context: "Свёртка контекста",
+  "telegram.deliver": "Доставка сообщения",
 };
 const TERMINAL: Record<string, string> = {
   done: "Работа завершена", completed: "Работа завершена", failed: "Работа остановилась с ошибкой",
@@ -83,8 +86,8 @@ function details(key: string, parts: Array<[string, string]>): string {
 
 function readable(text: string, label: string, key: string): string {
   if (!text) return "";
-  const body = `<div class="run-reading">${esc(text)}</div>`;
-  return `<section class="run-message"><div class="action-detail-label">${label}</div>${text.length > 320 ? `<details data-detail="${key}" class="run-reading-more"><summary>${esc(clip(text, 240))}<span>Читать полностью</span></summary>${body}</details>` : body}</section>`;
+  const body = `<div class="run-reading md">${md(text)}</div>`;
+  return `<section class="run-message"><div class="action-detail-label">${label}</div>${text.length > 320 ? `<details data-detail="${key}" class="run-reading-more"><summary><div class="run-reading-preview">${md(clip(text, 240))}</div><span>Читать полностью</span></summary>${body}</details>` : body}</section>`;
 }
 
 /** Видимые действия и записанные результаты, без догадок об успехе инструмента. */
@@ -119,12 +122,14 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
       const title = ACTIONS[t.tool || ""] || t.tool || "Действие";
       const what = subject(t.args);
       const result = t.result?.truncated ? [t.result.head, "… пропущена часть результата …", t.result.tail].filter(Boolean).join("\n") : head;
+      // Квитанции содержат инструкции раннеру; сохраняем их в подробностях.
+      const receipt = ["reply", "end_turn", "telegram.deliver"].includes(t.tool || "");
       const lessonKey = t.tool === "reply" ? "reply" : t.tool === "end_turn" ? "end_turn" : "hand";
       steps.push(
         `<div class="ev-step action-tool ${active ? "action-active" : ""} ${failed ? "action-failed" : ""}">` +
           `<div class="action-head"><b class="action-title">${esc(title)}</b><span class="action-status">${status}</span></div>` +
           `${what ? `<div class="action-subject">${esc(clip(what, 240))}</div>` : ""}` +
-          `${head ? `<div class="action-result">${esc(clip(resultText(head), 280))}</div>` : ""}` +
+          `${head && !receipt ? `<div class="action-result">${esc(clip(resultText(head), 280))}</div>` : ""}` +
           details("tool:" + (t.call_id || String(t.seq ?? key + ":" + steps.length)), [["Инструмент", t.tool || ""], ["Параметры", args], [t.result?.truncated ? "Сохранённый фрагмент результата" : "Результат", result], ["Ошибка", t.error || ""]]) +
           lesson(lessonKey) +
           `</div>`,
@@ -142,11 +147,16 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
   }
   const origin = readable(d.origin?.text || "", "Повод запуска", "origin") || (d.origin?.source === "unknown" ? '<div class="muted">Повод запуска не записан.</div>' : "");
   const outcome = readable(d.outcome?.text || d.outcome?.note || "", "Итог", "outcome");
+  let actions = steps.join("") || `<div class="muted">${live ? "Работа началась. Первые действия ещё не записаны." : "Подробности действий не записаны."}</div>`;
   if (opts.limit && steps.length > opts.limit) {
     const hidden = steps.length - opts.limit;
-    return origin + `<details class="action-earlier" data-detail="earlier"><summary>Показать предыдущие действия · ${hidden}</summary>${steps.slice(0, -opts.limit).join("")}</details>` + steps.slice(-opts.limit).join("") + outcome;
+    actions = `<details class="action-earlier" data-detail="earlier"><summary>Показать предыдущие действия · ${hidden}</summary>${steps.slice(0, -opts.limit).join("")}</details>` + steps.slice(-opts.limit).join("");
   }
-  return origin + (steps.join("") || `<div class="muted">${live ? "Работа началась. Первые действия ещё не записаны." : "Подробности действий не записаны."}</div>`) + outcome;
+  if (opts.overview) {
+    const count = (d.iterations || []).reduce((n, it) => n + (it.tools?.length || 0), 0);
+    return origin + outcome + `<details class="run-actions" data-detail="actions" ${live ? "open" : ""}><summary>Действия${count ? ` · ${count}` : ""}</summary>${actions}</details>`;
+  }
+  return origin + actions + outcome;
 }
 
 /** Обновлять содержимое только при изменении, сохраняя раскрытие и фокус. */
@@ -154,12 +164,12 @@ const rendered = new WeakMap<HTMLElement, string>();
 export function renderSteps(box: HTMLElement, d: RunDetail, opts: StepsOptions = {}): void {
   const html = stepsHTML(d, opts);
   if (rendered.get(box) === html) return;
-  const open = new Set([...box.querySelectorAll<HTMLDetailsElement>("details[open][data-detail]")].map((el) => el.dataset.detail));
+  const expanded = new Map([...box.querySelectorAll<HTMLDetailsElement>("details[data-detail]")].map((el) => [el.dataset.detail, el.open]));
   const focused = box.contains(document.activeElement) ? document.activeElement?.closest<HTMLElement>("[data-detail]")?.dataset.detail : undefined;
   box.innerHTML = html;
   rendered.set(box, html);
   for (const el of box.querySelectorAll<HTMLDetailsElement>("details[data-detail]")) {
-    if (open.has(el.dataset.detail)) el.open = true;
+    if (expanded.has(el.dataset.detail)) el.open = expanded.get(el.dataset.detail)!;
     if (focused === el.dataset.detail) el.querySelector("summary")?.focus({ preventScroll: true });
   }
 }

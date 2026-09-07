@@ -1,6 +1,6 @@
 // Exercise the real phone/miniapp component with deterministic local events.
 import { mountPhone } from "../../ui-kit/phone";
-import type { RunDetail } from "../../ui-kit/steps";
+import { stepsHTML, type RunDetail } from "../../ui-kit/steps";
 import "../../ui-kit/phone.css";
 
 const wait = window.setTimeout.bind(window);
@@ -48,6 +48,11 @@ try {
   check(card?.dataset.run==="first","Actual miniapp shows the running card");
   check(card?.dataset.status==="running" && root.querySelector('#top-phrase')!.textContent!.includes('Ведёт ход'),"An older run with fresh activity stays live");
   check(card.textContent!.includes("CURRENT REQUEST")&&!card.textContent!.includes("OLD CONVERSATION START"),"The trigger comes from this run, not conversation head");
+  const actions=card.querySelector<HTMLDetailsElement>('[data-detail="actions"]')!;
+  check(actions.open,"Current actions are expanded by default");
+  actions.open=false;publish();await settle();
+  check(!card.querySelector<HTMLDetailsElement>('[data-detail="actions"]')!.open,"Refresh preserves a deliberately collapsed action list");
+  card.querySelector<HTMLDetailsElement>('[data-detail="actions"]')!.open=true;
   const earlier=card.querySelector<HTMLDetailsElement>('[data-detail="earlier"]')!;
   earlier.open=true;
   const origin=card.querySelector<HTMLDetailsElement>('[data-detail="origin"]')!;
@@ -57,6 +62,7 @@ try {
   phase=1;publish();await settle();
   check(root.querySelector("#turn-live")===card,"Completion keeps the same card DOM");
   check(card.dataset.status==="done"&&card.textContent!.includes("COMPLETE RESULT"),"Completion retains the actions and adds the result");
+  check(card.querySelector<HTMLDetailsElement>('[data-detail="actions"]')!.open,"Completion keeps previously visible actions expanded");
   check(card.querySelector<HTMLDetailsElement>('[data-detail="earlier"]')!.open&&card.querySelector<HTMLDetailsElement>('[data-detail="origin"]')!.open,"Completion preserves expanded earlier actions and source text");
   check(document.activeElement===card.querySelector('[data-detail="earlier"] > summary'),"Completion preserves keyboard focus");
   const result=card.querySelector<HTMLDetailsElement>('[data-detail="outcome"]')!;result.open=true;
@@ -67,6 +73,11 @@ try {
   check(root.querySelector<HTMLElement>("#turn-live")!.dataset.run==="second","An older late response cannot replace the new active run");
   const history=root.querySelector<HTMLButtonElement>('[data-ev="first"] .ev-head')!;history.click();await settle();
   check(root.querySelector('[data-ev="first"]')!.textContent!.includes("COMPLETE RESULT"),"The completed result remains available from history after a new run starts");
+  const preview=document.createElement('div');
+  preview.innerHTML=stepsHTML({...completed,outcome:{text:'**Готово.** <img src=x onerror=alert(1)>',note:''},iterations:[{tools:[{tool:'reply',args:{text:'Ответ'},result:{head:'INTERNAL RECEIPT'}}]}]},{overview:true});
+  check(!preview.querySelector<HTMLDetailsElement>('[data-detail="actions"]')!.open,"A freshly opened completed run starts with the outcome in view");
+  check(preview.querySelector('.run-reading b')?.textContent==='Готово.'&&!preview.querySelector('img'),"Saved answers use safe readable formatting");
+  check(!preview.querySelector('.action-result')&&preview.querySelector('.action-details')!.textContent!.includes('INTERNAL RECEIPT'),"Raw delivery receipts remain available only in details");
   // Leave the last finished run expanded for visual inspection of long content.
   document.body.dataset.testStatus="passed";
   const report=document.createElement('pre');report.id="test-results";report.hidden=true;report.textContent=JSON.stringify({passed:checks.length,checks});root.append(report);

@@ -19,7 +19,7 @@ export function activityHTML(run: ActivityRun, detail: RunDetail | undefined, du
   return `<section class="turn-live now-live activity-card" id="turn-live" data-run="${esc(run.id)}" data-status="${esc(d.manifest?.status || run.status)}">
     <div class="turn-live-head"><span class="dot ${d.manifest?.status === "running" ? "live" : ""}"></span><span data-activity-status>${esc(status(d))}</span><span class="t" id="turn-live-t">${esc(duration)}</span></div>
     ${run.chat_title ? `<div class="turn-live-sub"><a href="#" data-room="${esc(key)}" data-room-name="${esc(run.chat_title)}">${esc(run.chat_title)}</a></div>` : ""}
-    <div class="ev-steps" id="turn-live-steps">${detail ? stepsHTML(detail, { limit: 12 }) : '<div class="muted">Не удалось прочитать действия. Повторяю подключение…</div>'}</div>
+    <div class="ev-steps" id="turn-live-steps">${detail ? stepsHTML(detail, { limit: 12, overview: true }) : '<div class="muted">Не удалось прочитать действия. Повторяю подключение…</div>'}</div>
   </section>`;
 }
 
@@ -28,5 +28,5 @@ export function updateActivity(card: HTMLElement, detail: RunDetail, duration: s
   card.querySelector<HTMLElement>("[data-activity-status]")!.textContent = status(detail);
   card.querySelector<HTMLElement>(".turn-live-head .dot")!.classList.toggle("live", detail.manifest?.status === "running");
   card.querySelector<HTMLElement>("#turn-live-t")!.textContent = detail.manifest?.status === "running" ? duration : fmtTime(detail.manifest?.created_at);
-  renderSteps(card.querySelector<HTMLElement>("#turn-live-steps")!, detail, { limit: 12 });
+  renderSteps(card.querySelector<HTMLElement>("#turn-live-steps")!, detail, { limit: 12, overview: true });
 }
