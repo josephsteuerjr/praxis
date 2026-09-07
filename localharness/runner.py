@@ -347,6 +347,11 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
     ctx = _agent.ChannelContext(chat_id=room, is_dm=True, owner=True, known=True,
                                 addressed=True, title=desk.title,
                                 origin_text=str(origin_text or ""))
+    # Флаг ядру ставится ЗДЕСЬ, перед каждым ходом: при разборе конфига дерево ещё не
+    # загружено (`_agent is None`), и выставленный там флаг молча пропадал — первая
+    # проверка 08.09 показала прогон всё ещё с «without a reply hand».
+    if hasattr(_agent, "BOUNDARY_DELIVERS_UNSPOKEN"):
+        _agent.BOUNDARY_DELIVERS_UNSPOKEN = bool(_deliver_unspoken or birth)
     desk.sent.clear()
     started = time.time()
     _set_busy(True, chat_id=room)
