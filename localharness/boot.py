@@ -902,6 +902,12 @@ def _brain_config(cfg: dict) -> dict:
         effort = str(block.get("reasoning_effort") or "").strip().lower()
         if effort and not inherited:
             role_cfg["reasoning_effort"] = effort
+        elif inherited and role_cfg["model"].strip().lower().startswith("glm-"):
+            # 08.09: у GLM серверное умолчание глубины — max. Оценщик без ступени
+            # (свёртки, судья) думал дольше и дороже голоса, который владелец
+            # поставил на low. Ступень оценщика — low, если не задана явно блоком
+            # `evaluator`; чужим провайдерам ничего не подставляется.
+            role_cfg["reasoning_effort"] = "low"
         out["roles"][role] = role_cfg
     out["limits"]["max_tool_iters"] = _int_or(cfg.get("max_tool_iters") or 20, 20,
                                               what="max_tool_iters")

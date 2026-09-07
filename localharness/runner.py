@@ -320,12 +320,18 @@ def handle_desk(message: str, room: str = STREAM) -> None:
     # слой, и текущая реплика обязана быть в нём, иначе она отвечала бы на пустоту.
     desk.archive(message, outgoing=False, now=now)
     desk.life(message, direction="in", actor=_speaker, source_id=source_id, now=now)
-    _turn_in_window(source_id, speaker=_speaker, room=room)
+    _turn_in_window(source_id, speaker=_speaker, room=room, origin_text=message)
 
 
 def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
-                    room: str = STREAM) -> str:
+                    room: str = STREAM, origin_text: str = "") -> str:
     """Ход в комнате окна по уже записанному в память входящему.
+
+    `origin_text` — точный текст повода (записка владельца, текст будильника):
+    он ложится в неизменяемый authority-снимок прогона и в кадр как «настоящая
+    реплика» (recall по ней, а не по всей ленте). Без него читалка Пульта брала
+    повод из журнала ходов, где `in` режется до 200 знаков, — карточка
+    напоминания 08.09 показывала обрубок, раскрывать было нечего.
 
     -> исход хода: "spoken" (слово доехало), "silent" (её решение молчать),
     "deferred" (чекпойнт), "failed" (ход не состоялся). Исход НУЖЕН наверху:
@@ -339,7 +345,8 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
     desk = _room(room)
     convo = "\n".join(desk.lines(_last_n()))
     ctx = _agent.ChannelContext(chat_id=room, is_dm=True, owner=True, known=True,
-                                addressed=True, title=desk.title)
+                                addressed=True, title=desk.title,
+                                origin_text=str(origin_text or ""))
     desk.sent.clear()
     started = time.time()
     _set_busy(True, chat_id=room)
@@ -983,7 +990,7 @@ def _fire_due_tasks() -> None:
             desk = _room(room)
             desk.archive(note, outgoing=False, now=now, sender="Hélène")
             desk.life(note, direction="in", actor="Hélène", source_id=source_id, now=now)
-            _turn_in_window(source_id, speaker="Hélène", room=room)
+            _turn_in_window(source_id, speaker="Hélène", room=room, origin_text=note)
 
         try:
             if _alarms.fire(task, invoke):
