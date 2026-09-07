@@ -1,5 +1,6 @@
 // Exercise the real phone/miniapp component with deterministic local events.
 import { mountPhone } from "../../ui-kit/phone";
+import { selectActivity } from "../../ui-kit/activity";
 import { stepsHTML, type RunDetail } from "../../ui-kit/steps";
 import "../../ui-kit/phone.css";
 
@@ -43,6 +44,10 @@ const check=(ok:unknown,name:string)=>{if(!ok)throw new Error(name);checks.push(
 const root=document.querySelector<HTMLElement>("#app")!;
 mountPhone(root,{platform:"telegram",theme:()=>new URLSearchParams(location.search).get("theme")==="dark"?"dark":"light",agentFallback:"Праксис · тест",auth:{storageKey:"gui-cycle-test",hasCredential:()=>false,redeem:async()=>({result:"none"}),pairScreen:()=>({title:"Fixture",text:"Fixture",retry:false})}});
 try {
+  const oldDone={...first,status:'done'};
+  const fastDone={...next,status:'done'};
+  check(selectActivity(oldDone,undefined,[fastDone,oldDone])===fastDone,"A run completed between refreshes replaces the older result");
+  check(selectActivity(fastDone,undefined,[oldDone])===fastDone,"A temporary listing gap does not replace a newer observed result");
   await settle();
   const card=root.querySelector<HTMLElement>("#turn-live")!;
   check(card?.dataset.run==="first","Actual miniapp shows the running card");

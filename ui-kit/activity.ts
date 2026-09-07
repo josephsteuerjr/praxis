@@ -5,7 +5,12 @@ export interface ActivityRun { id: string; status: string; kind: string; chat_id
 
 /** Keep the observed run when it finishes or temporarily leaves the listing. */
 export function selectActivity<T extends ActivityRun>(previous: T | undefined, live: T | undefined, list: T[]): T | undefined {
-  return live || (previous && (list.find(r => r.id === previous.id) || previous)) || list[0];
+  if (live) return live;
+  if (!previous) return list[0];
+  const latest = list[0];
+  // A short run can start and finish entirely between two refreshes.
+  if (latest && Date.parse(latest.created_at || "") > Date.parse(previous.created_at || "")) return latest;
+  return list.find(r => r.id === previous.id) || previous;
 }
 
 function status(d: RunDetail): string {
