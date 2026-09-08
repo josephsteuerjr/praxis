@@ -899,6 +899,12 @@ def _brain_config(cfg: dict) -> dict:
             # (gpt-5.6-sol -> gpt-5.6-luna). Без явного слова фолбэк остаётся
             # в том же фреймворке, где есть ключ, а не уходит в пустой.
             role_cfg["fallback_framework"] = framework
+        # 09.09: зрячая замена текстовой модели на ход с картинкой (`model.vision_model`
+        # в helene.json). Пусто — ядро само берёт glm-5.3-flash для glm; оценщик без
+        # своего блока наследует ручку голоса вместе с адресом и моделью.
+        vision = str(block.get("vision_model") or "").strip()
+        if vision:
+            role_cfg["vision_model"] = vision
         effort = str(block.get("reasoning_effort") or "").strip().lower()
         if effort and not inherited:
             role_cfg["reasoning_effort"] = effort
