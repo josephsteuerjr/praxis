@@ -716,6 +716,10 @@ async def _r_run(c: Call):
     return detail
 
 
+async def _r_frame_stats(c: Call):
+    return await asyncio.to_thread(readers.frame_cuts, _int_arg(c.query, "days", 7, 1, 90))
+
+
 async def _r_run_result(c: Call):
     payload = await asyncio.to_thread(readers.run_result, c.match["run_id"], c.match["result_id"])
     if not payload:
@@ -840,6 +844,7 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/runs", _r_runs),
     Route("GET", "/api/run/{run_id}", _r_run),
     Route("GET", "/api/run/{run_id}/result/{result_id}", _r_run_result),
+    Route("GET", "/api/frame-stats", _r_frame_stats),
     Route("GET", "/api/pulse", _reader(lambda: readers.pulse())),
     Route("GET", "/api/usage", _reader(lambda: usage.statistics(readers.tree()))),
     Route("GET", "/api/allowances", _reader(lambda: usage.allowances(readers.tree()))),

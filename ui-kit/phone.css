@@ -1180,3 +1180,6 @@ details.fold > summary .dot {
   border: 1px solid var(--line);
   padding: 4px 8px;
 }
+
+/* Сообщение, к которому пришли с карточки хода: короткая подсветка, потом как было. */
+.msg.flash { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow 1.2s ease-out; }

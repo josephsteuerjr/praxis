@@ -204,7 +204,7 @@ export async function render(container: HTMLElement): Promise<void> {
     const head = m.outgoing
       ? `<span class="who-hand">${esc(S.agent)}</span><span>${fmtTime(m.timestamp)}${edited}</span>`
       : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}${edited}</span>`;
-    feed.push(`<div class="msg ${cls}">
+    feed.push(`<div class="msg ${cls}" data-at="${esc(m.timestamp || "")}">
       <div class="msg-head">${head}</div>
       <div class="msg-body">${md(m.text || "")}${media}</div>
     </div>`);
@@ -271,4 +271,24 @@ export function afterSend() {
   refreshTimer = window.setTimeout(() => {
     if (root && S.view === "talk") void render(root);
   }, 1500);
+}
+
+/** Показать в ленте сообщение, ближайшее к моменту `at` (ISO): ссылка «Открыть в чате» с карточки хода. */
+export function jumpTo(at: string): boolean {
+  if (!root || !at) return false;
+  const want = Date.parse(at);
+  if (isNaN(want)) return false;
+  let best: HTMLElement | null = null;
+  let gap = Infinity;
+  for (const el of root.querySelectorAll<HTMLElement>(".msg[data-at]")) {
+    const t = Date.parse(el.dataset.at || "");
+    if (isNaN(t)) continue;
+    const d = Math.abs(t - want);
+    if (d < gap) { gap = d; best = el; }
+  }
+  if (!best || gap > 5 * 60_000) return false;
+  best.scrollIntoView({ block: "center" });
+  best.classList.add("flash");
+  window.setTimeout(() => best?.classList.remove("flash"), 2400);
+  return true;
 }

@@ -623,6 +623,25 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     opts.onSheet?.(true);
   }
 
+  // Ссылки с карточки хода (steps.ts): открыть место в чате / надиктовать просьбу агенту в композер.
+  let pendingJump = "";
+  const roomByKey = (key: string) => {
+    const k = key === "pult" || key === "window" ? WINDOW_ROOM : key;
+    return { key: k, name: rooms.find((r) => r.key === k)?.name || (isWindowRoom(k) ? agent : k) };
+  };
+  window.addEventListener("steps-open", (e) => {
+    const d = (e as CustomEvent<{ room: string; at: string }>).detail;
+    const r = roomByKey(d.room);
+    pendingJump = d.at;
+    openRoom(r.key, r.name);
+  });
+  window.addEventListener("steps-compose", (e) => {
+    const d = (e as CustomEvent<{ room: string; text: string }>).detail;
+    const r = roomByKey(d.room);
+    openRoom(r.key, r.name);
+    window.setTimeout(() => { say.value = d.text; say.dispatchEvent(new Event("input")); say.focus(); }, 250);
+  });
+
   let lastFeed = "";
   let feedReady = false;
 
@@ -682,7 +701,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
         ? `<span class="who-hand">${esc(agent)}</span><span>${fmtTime(m.timestamp)}</span>`
         : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}</span>`;
       const media = m.media ? ` <span class="muted">[${esc(m.media)}]</span>` : "";
-      html.push(`<div class="msg ${cls}"><div class="msg-head">${head}</div><div class="msg-body">${md(m.text || "")}${media}</div></div>`);
+      html.push(`<div class="msg ${cls}" data-at="${esc(m.timestamp || "")}"><div class="msg-head">${head}</div><div class="msg-body">${md(m.text || "")}${media}</div></div>`);
     }
     const next = html.join("");
     if (next === lastFeed && feedReady) return false;
@@ -691,6 +710,23 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     feed.innerHTML = next || `<div class="empty"><b>Здесь пока тихо</b>${windowish ? "Напиши первое сообщение внизу." : "Архива этой комнаты ещё нет."}</div>`;
     if (nearBottom || !feedReady) screen.scrollTop = screen.scrollHeight;
     feedReady = true;
+    if (pendingJump) {
+      const want = Date.parse(pendingJump);
+      pendingJump = "";
+      let best: HTMLElement | null = null;
+      let gap = Infinity;
+      for (const el of feed.querySelectorAll<HTMLElement>(".msg[data-at]")) {
+        const t = Date.parse(el.dataset.at || "");
+        const d2 = Math.abs(t - want);
+        if (!isNaN(t) && d2 < gap) { gap = d2; best = el; }
+      }
+      if (best && gap <= 5 * 60_000) {
+        best.scrollIntoView({ block: "center" });
+        best.classList.add("flash");
+        const hit = best;
+        window.setTimeout(() => hit.classList.remove("flash"), 2400);
+      }
+    }
     return true;
   }
 

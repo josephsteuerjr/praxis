@@ -775,6 +775,24 @@ addEventListener("frame-open-room", (e) => {
   const room = S.rooms.find((r) => r.key === d.key) ?? { key: d.key, name: d.name, kind: isWindowRoom(d.key) ? "window" : "telegram", live: false, count: 0, mtime: 0 } as Room;
   selectRoom(room);
 });
+// Ссылки с карточки хода (ui-kit/steps): открыть место в чате; надиктовать агенту просьбу в композер.
+function roomFor(key: string): Room {
+  const k = key === "pult" || key === "window" ? WINDOW_ROOM : key;
+  return S.rooms.find((r) => r.key === k) ?? ({ key: k, name: isWindowRoom(k) ? S.agent : k, kind: isWindowRoom(k) ? "window" : "telegram", live: false, count: 0, mtime: 0 } as Room);
+}
+addEventListener("steps-open", (e) => {
+  const d = (e as CustomEvent<{ room: string; at: string }>).detail;
+  selectRoom(roomFor(d.room));
+  // Лента рисуется асинхронно: прыгаем, когда сообщение уже в DOM.
+  let tries = 0;
+  const hop = () => { if (talk.jumpTo(d.at) || ++tries > 20) return; window.setTimeout(hop, 150); };
+  window.setTimeout(hop, 150);
+});
+addEventListener("steps-compose", (e) => {
+  const d = (e as CustomEvent<{ room: string; text: string }>).detail;
+  selectRoom(roomFor(d.room));
+  window.setTimeout(() => { say.value = d.text; say.dispatchEvent(new Event("input")); say.focus(); }, 250);
+});
 loadRooms()
   .then(() => show("now"))
   .catch(() => {

@@ -10,6 +10,7 @@ export interface RunDetail {
     status?: string;
     created_at?: string;
     goal?: string;
+    chat_id?: string | number | null;
     terminal?: { status?: string; reason?: string };
     context?: { chat_id?: string | number; delivery_chat_id?: string | number; origin_chat_id?: string | number; kind?: string };
   };
@@ -104,20 +105,38 @@ function details(key: string, parts: Array<[string, string]>, label = "Подр�
 
 /** Повод человеческими словами: служебные префиксы продукта («Hélène: Сработал твой будильник.
  *  Намечено было вот что:», «[обещание] напоминание себе:») уходят в подпись, содержание остаётся. */
-function humanOrigin(text: string, label: string): { text: string; label: string } {
+function humanOrigin(text: string, label: string): { text: string; label: string; kind: string } {
   let t = text.replace(/^(?:Hélène|Praxis|Праксис):\s*/u, "");
+  let kind = "";
   const alarm = t.match(/^Сработал твой будильник[.:]\s*(?:Намечено было вот что:\s*|намечено\s+)?/iu);
-  if (alarm) { t = t.slice(alarm[0].length); label = "Будильник"; }
+  if (alarm) { t = t.slice(alarm[0].length); label = "Будильник"; kind = "alarm"; }
   const promise = t.match(/^\[обещание\]\s*напоминание себе:\s*/iu);
-  if (promise) { t = t.slice(promise[0].length); label = "Напоминание себе"; }
-  return { text: t.trim() || text, label };
+  if (promise) { t = t.slice(promise[0].length); label = "Напоминание себе"; kind = "promise"; }
+  return { text: t.trim() || text, label, kind };
 }
 
-function readable(text: string, label: string, key: string): string {
+/** Ссылки под поводом: место в чате и, для напоминаний, просьба агенту словами (в композер, не отправка). */
+function originLinks(d: RunDetail | undefined, kind: string, goal: string): string {
+  if (!d) return "";
+  const room = String(d.manifest?.chat_id ?? "").replace(/^pult$/, "window");
+  const at = d.manifest?.created_at || "";
+  const links: string[] = [];
+  if (room) links.push(`<a href="#" data-open-room="${esc(room)}" data-at="${esc(at)}">Открыть в чате</a>`);
+  if (room && (kind === "alarm" || kind === "promise")) {
+    const g = clip(goal.replace(/\s+/g, " ").trim(), 200);
+    links.push(`<a href="#" data-compose="${esc(room)}" data-text="${esc(`Повтори это напоминание через 10 минут: «${g}»`)}">Повторить через 10 минут</a>`);
+    links.push(`<a href="#" data-compose="${esc(room)}" data-text="${esc(`Сними напоминание: «${g}»`)}">Снять</a>`);
+  }
+  return links.length ? `<div class="run-links">${links.join(" · ")}</div>` : "";
+}
+
+function readable(text: string, label: string, key: string, d?: RunDetail): string {
   if (!text) return "";
-  if (key === "origin") ({ text, label } = humanOrigin(text, label));
+  let kind = "";
+  if (key === "origin") ({ text, label, kind } = humanOrigin(text, label));
   const body = `<div class="run-reading md">${md(text)}</div>`;
-  return `<section class="run-message"><div class="action-detail-label">${label}</div>${text.length > 320 ? `<details data-detail="${key}" class="run-reading-more"><summary><div class="run-reading-preview">${md(clip(text, 240))}</div><span>Читать полностью</span></summary>${body}</details>` : body}</section>`;
+  const links = key === "origin" ? originLinks(d, kind, text) : "";
+  return `<section class="run-message"><div class="action-detail-label">${label}</div>${text.length > 320 ? `<details data-detail="${key}" class="run-reading-more"><summary><div class="run-reading-preview">${md(clip(text, 240))}</div><span>Читать полностью</span></summary>${body}</details>` : body}${links}</section>`;
 }
 
 // ---------------------------------------------------------------- длинные тексты
@@ -171,7 +190,21 @@ function bindMore(): void {
   if (bound || typeof document === "undefined") return;
   bound = true;
   document.addEventListener("click", (e) => {
-    const btn = (e.target as HTMLElement | null)?.closest<HTMLButtonElement>("button[data-more]");
+    const target = e.target as HTMLElement | null;
+    // Ссылки с карточки: хозяин ленты (окно, телефон) решает, как открыть чат и композер.
+    const open = target?.closest<HTMLAnchorElement>("a[data-open-room]");
+    if (open) {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent("steps-open", { detail: { room: open.dataset.openRoom || "", at: open.dataset.at || "" } }));
+      return;
+    }
+    const compose = target?.closest<HTMLAnchorElement>("a[data-compose]");
+    if (compose) {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent("steps-compose", { detail: { room: compose.dataset.compose || "", text: compose.dataset.text || "" } }));
+      return;
+    }
+    const btn = target?.closest<HTMLButtonElement>("button[data-more]");
     if (!btn) return;
     e.preventDefault();
     const box = btn.closest<HTMLElement>(".run-text");
@@ -276,7 +309,7 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
       `<div class="ev-step ${t.failed ? "action-failed" : ""}"><b class="action-title">${esc(t.label)}</b>${details("terminal", [["Причина", term.reason || ""]])}${lesson("terminal")}</div>`,
     );
   }
-  const origin = readable(d.origin?.text || "", "Повод запуска", "origin") || (d.origin?.source === "unknown" ? '<div class="muted">Повод запуска не записан.</div>' : "");
+  const origin = readable(d.origin?.text || "", "Повод запуска", "origin", d) || (d.origin?.source === "unknown" ? '<div class="muted">Повод запуска не записан.</div>' : "");
   const outcome = readable(d.outcome?.text || d.outcome?.note || "", "Итог", "outcome");
   let actions = steps.join("") || `<div class="muted">${live ? "Работа началась. Первые шаги ещё не записаны." : "Шаги не записаны."}</div>`;
   if (opts.limit && steps.length > opts.limit) {

@@ -102,3 +102,8 @@
 .run-text-more:disabled { color: var(--ink-3); }
 .run-text-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .word .action-title { font-weight: 400; color: var(--ink-3); }
+
+/* Ссылки под поводом: открыть место в чате, повторить/снять напоминание словами агенту. */
+.run-links { margin-top: 8px; font: 400 12px/1.6 var(--sans); color: var(--ink-3); }
+.run-links a { color: var(--accent); text-decoration: none; }
+.run-links a:hover { text-decoration: underline; }

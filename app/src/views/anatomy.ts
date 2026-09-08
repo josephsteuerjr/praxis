@@ -1,7 +1,7 @@
 // Устройство: как этот агент работает, простыми словами, с разбором живого
 // хода и живым списком рук — снимок кода, не пересказ.
 import { api } from "../api";
-import { esc, fmtN, fmtTime, md, q, safeRender } from "../lib";
+import { esc, fmtK, fmtN, fmtTime, md, q, safeRender } from "../lib";
 import { stepsHTML, type RunDetail } from "../panel";
 import { loadMode, type ModeState } from "../mode";
 import { S } from "../state";
@@ -126,12 +126,33 @@ function modeHTML(m: ModeState | null): string {
     </div>`;
 }
 
+interface CutRow { group: string; calls: number; runs: number; cache_ratio: number | null; output_tokens: number; median_ms: number; p90_ms: number; cuts: number }
+interface FrameCuts { days: number; summary: { calls: number; runs: number; cache_ratio: number | null; cached_tokens: number; input_tokens: number; output_tokens: number; cuts: number }; by: Record<string, CutRow[]> }
+
+const CUT_AXES: Array<[string, string]> = [["iteration", "первая итерация против продолжений"], ["hand", "какой рукой ответила итерация"], ["kind", "род прогона"]];
+
+/** Кэш по группам действий: взвешенная доля (Σ из кэша / Σ входа), не среднее процентов. */
+function cutsHTML(c: FrameCuts | null): string {
+  if (!c || !c.summary.calls) return "";
+  const pct = (r: number | null) => (r == null ? "—" : `${Math.round(r * 100)}%`);
+  const sec = (ms: number) => `${(ms / 1000).toFixed(1)} с`;
+  const table = (rows: CutRow[]) => `<table class="grid"><tr><th>группа</th><th>вызовов</th><th>кэш</th><th>ответ</th><th>медиана</th><th>обрывов</th></tr>${rows
+    .slice(0, 12)
+    .map((r) => `<tr><td>${esc(r.group)}</td><td>${r.calls}</td><td>${pct(r.cache_ratio)}</td><td>${fmtK(r.output_tokens)}</td><td>${sec(r.median_ms)}</td><td>${r.cuts || ""}</td></tr>`)
+    .join("")}</table>`;
+  const s = c.summary;
+  return `<h3 class="section-title">Кэш по группам действий <span class="muted">${c.days} дней</span></h3>
+    <p class="muted">${s.calls} вызовов в ${s.runs} прогонах, из кэша ${pct(s.cache_ratio)} входа (${fmtK(s.cached_tokens)} из ${fmtK(s.input_tokens)}), ответ ${fmtK(s.output_tokens)}${s.cuts ? `, обрывов потолком ${s.cuts}` : ""}. Доля кэша считается по сумме токенов группы, а не как среднее процентов: первый кадр хода тяжёлый, продолжения лёгкие.</p>
+    ${CUT_AXES.map(([axis, title]) => (c.by[axis]?.length ? `<details class="fold" ${axis === "iteration" ? "open" : ""}><summary><b>${esc(title)}</b></summary><div class="fold-body">${table(c.by[axis])}</div></details>` : "")).join("")}`;
+}
+
 export async function render(container: HTMLElement): Promise<void> {
-  const [aR, pR, mR] = await Promise.allSettled([api<Anatomy>("/api/anatomy"), api("/api/pulse"), loadMode()]);
+  const [aR, pR, mR, cR] = await Promise.allSettled([api<Anatomy>("/api/anatomy"), api("/api/pulse"), loadMode(), api<FrameCuts>("/api/frame-stats?days=7")]);
   if (aR.status === "rejected") throw aR.reason;
   const a = aR.value;
   const spend = spendHTML(pR.status === "fulfilled" ? pR.value : null);
   const modeBox = modeHTML(mR.status === "fulfilled" ? mR.value : null);
+  const cutsBox = cutsHTML(cR.status === "fulfilled" ? cR.value : null);
   const modeName = mR.status === "fulfilled" && mR.value.name ? `режим: <b>${esc(mR.value.title)}</b> · ` : "";
   const tools = a.tools || [];
   const intro = INTRO.map(
@@ -149,6 +170,7 @@ export async function render(container: HTMLElement): Promise<void> {
     : '<p class="muted">Снимка ещё нет: руннер пишет его при старте.</p>';
   container.innerHTML = `<div class="center">
     ${meta}${modeBox}${spend}${intro}
+    ${cutsBox}
     <h3 class="section-title">Разбор живого хода</h3>
     <p class="muted">Не пример из документации, а последний настоящий ход этого агента, шаг за шагом, с пояснением каждого шага.</p>
     <details class="fold" id="lesson-box"><summary><b>Разобрать последний ход</b></summary><div class="fold-body ev-steps" id="lesson-steps"></div></details>

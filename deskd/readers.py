@@ -577,6 +577,12 @@ def run_result(run_id: str, result_id: str, *, max_bytes: int = RESULT_READ_MAX)
     return out
 
 
+def frame_cuts(days: int = 7) -> dict:
+    """Разрезы кэша/времени по группам действий за N дней — экран «Система»."""
+    from . import frame_cuts as _cuts
+    return _cuts.cuts(tree(), days=max(1, min(int(days or 7), 90)))
+
+
 def _run_origin(path: Path, manifest: dict) -> dict:
     """Only the first authority block supplies the trigger, never conversation head.
 
