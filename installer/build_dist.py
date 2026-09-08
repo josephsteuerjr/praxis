@@ -725,7 +725,11 @@ def _lock_crates(lock: Path) -> list[tuple[str, str]]:
     return out
 
 
-def collect_rust_licenses(out: Path, allow_partial: bool, live: Path | None = None) -> int:
+def collect_rust_licenses(out: Path, allow_partial: bool, live: Path | None = None,
+                          *, parts: tuple[str, ...] = ("shell", "setup", "svc"),
+                          include_body: bool = True,
+                          exes: str = ("helene.exe, helene-setup.exe, helene-svc.exe, "
+                                       "helene-bridge.exe и helene-body.exe")) -> int:
     """Тексты лицензий крейтов, статически влинкованных в наши exe.
 
     MIT требует включать уведомление об авторстве «in all copies or substantial
@@ -734,18 +738,19 @@ def collect_rust_licenses(out: Path, allow_partial: bool, live: Path | None = No
     локального реестра cargo, одинаковые тексты кладём один раз.
 
     С 0.3.1 сюда входит и `Cargo.lock` тела (tree/body): мост и тело едут в
-    поставке как helene-bridge.exe и helene-body.exe.
+    поставке как helene-bridge.exe и helene-body.exe. Вариант Praxis везёт одну
+    оболочку — `parts=("shell",)`, `include_body=False`.
     """
     dest = out / "licenses" / "rust"
     crates: set[tuple[str, str]] = set()
-    for part in ("shell", "setup", "svc"):
+    for part in parts:
         crates.update(_lock_crates(DESK / part / "Cargo.lock"))
     if not crates:
-        raise SystemExit("не прочитались Cargo.lock (shell/setup/svc) — "
+        raise SystemExit(f"не прочитались Cargo.lock ({'/'.join(parts)}) — "
                          "лицензии влинкованного собрать не из чего")
     body_lock = (live or LIVE_DEFAULT) / "body" / "Cargo.lock"
-    body_crates = _lock_crates(body_lock) if body_lock.is_file() else []
-    if not body_crates:
+    body_crates = _lock_crates(body_lock) if include_body and body_lock.is_file() else []
+    if include_body and not body_crates:
         msg = f"не прочитался Cargo.lock тела ({body_lock}) — лицензии моста и тела не собраны"
         if not allow_partial:
             raise SystemExit(msg)
@@ -784,8 +789,7 @@ def collect_rust_licenses(out: Path, allow_partial: bool, live: Path | None = No
             refs.append(f"[{f.name}](texts/{digest}.txt)")
         index.append(f"- **{name} {ver}** — " + ", ".join(refs))
     head = [
-        "# Лицензии Rust-крейтов, влинкованных в helene.exe, helene-setup.exe, "
-        "helene-svc.exe, helene-bridge.exe и helene-body.exe",
+        f"# Лицензии Rust-крейтов, влинкованных в {exes}",
         "",
         f"Собрано автоматически при сборке поставки из Cargo.lock ({len(crates)} крейтов).",
         "Одинаковые тексты лежат в `texts/` по одному разу; ссылки ниже ведут на них.",
@@ -1038,18 +1042,43 @@ def _git_field(path: Path, label: str) -> tuple[str, bool]:
 # VERSIONINFO (FileVersion в UTF-16); helene-svc.exe собирается голым cargo и
 # версии внутри не несёт вовсе — про него так и говорится строкой, а не
 # делается вид, что сверили.
-def _exe_version(path: Path) -> str:
+def _exe_string(path: Path, key_name: str) -> str:
+    """Значение строки VERSIONINFO (`FileVersion`, `ProductName`) как его несёт exe.
+
+    ⚠ Ключ и значение в ресурсе разделены нулями-заполнителями, а за значением
+    сразу лежит СЛЕДУЮЩАЯ строка таблицы. Прежний разбор нули просто выбрасывал,
+    и `ProductName` приезжал склеенным с соседом («Praxis» + «0.4.8» → «Praxis0»,
+    09.09) — поэтому режем по нулям и берём первый непустой кусок.
+    """
     try:
         raw = path.read_bytes()
     except OSError:
         return ""
-    key = "FileVersion".encode("utf-16-le")
+    key = key_name.encode("utf-16-le")
     i = raw.find(key)
     if i < 0:
         return ""
-    seg = raw[i + len(key): i + len(key) + 160].decode("utf-16-le", "replace").replace("\x00", "")
-    m = re.match(r"\d+(?:\.\d+){1,3}", seg)
+    seg = raw[i + len(key): i + len(key) + 160].decode("utf-16-le", "replace")
+    for piece in seg.split("\x00"):
+        piece = piece.strip()
+        if piece:
+            return piece
+    return ""
+
+
+def _exe_version(path: Path) -> str:
+    m = re.match(r"\d+(?:\.\d+){1,3}", _exe_string(path, "FileVersion"))
     return m.group(0) if m else ""
+
+
+# Имя продукта ВНУТРИ exe (Tauri пишет productName в VERSIONINFO.ProductName).
+# Оболочка Hélène и Пульт Praxis — один крейт с разным TAURI_CONFIG; по одному
+# лишь имени файла их не различить, и 08.09 копия с identity Hélène ушла в папку
+# Praxis: single-instance фокусировал окно Миры вместо своего.
+def _exe_product_name(path: Path) -> str:
+    seg = _exe_string(path, "ProductName")
+    m = re.match(r"[A-Za-z][A-Za-z0-9 ._-]{0,40}", seg)
+    return m.group(0).strip() if m else ""
 
 
 # --- главное ------------------------------------------------------------------
@@ -1062,6 +1091,136 @@ def _exe_version(path: Path) -> str:
 ROOT_KEEP = {"runtime"}   # дорого пересобирать; чистится отдельно, флагом
 
 
+# --- вариант Praxis: Пульт к своему серверу --------------------------------------
+
+# Та же оболочка, собранная с другим productName/identifier (shell/build-praxis.ps1),
+# в СВОЙ каталог сборки: target/ остаётся за helene.exe, target-praxis/ — за Praxis.
+SHELL_PRAXIS_EXE = DESK / "shell" / "target-praxis" / "release" / "helene.exe"
+PRAXIS_PRODUCT = "Praxis"
+PRAXIS_IDENTIFIER = "ru.praxis.pult"
+PRAXIS_BUILD_HINT = "собери вариант: pwsh -File shell/build-praxis.ps1"
+
+# Конфиг Пульта Praxis: режим remote, адрес и ключ впишет человек
+# (installer/ПУЛЬТ-PRAXIS.md). `setup_complete` стоит, чтобы оболочка не искала
+# helene-setup.exe: установщика у этого варианта нет по замыслу. Автопроверка
+# обновлений выключена — канал общий с Hélène, окно ищет в релизе свой
+# Praxis-<версия>.zip, а руками обновляться проще через распаковку поверх.
+PRAXIS_JSON = """{
+  "mode": "remote",
+  "base": "",
+  "key": "",
+  "agent": {
+    "name": "Praxis"
+  },
+  "owner": {
+    "name": ""
+  },
+  "notifications": {
+    "text": true
+  },
+  "update": {
+    "auto": false,
+    "url": "https://api.github.com/repos/josephsteuerjr/helene/releases/latest"
+  },
+  "setup_complete": true
+}
+"""
+
+
+def build_praxis_pult(args) -> None:
+    """Поставка варианта Praxis: окно в режиме remote без ядра, рантайма и тела.
+
+    Состав повторяет то, что 09.09 было собрано руками в Programs\\PraxisPult
+    (ПЕРЕДАЧА-09.09 §3): exe варианта, значок, статика окна, helene.json-заготовка,
+    документ подключения, лицензии. Ничего из дерева агента сюда не едет — и
+    поэтому секрет-гард здесь сканирует только то, что положено, кред-полом из
+    дерева, если оно есть рядом (без дерева гард честно объявляет себя пропущенным).
+    """
+    out = Path(args.out).resolve() / PRAXIS_PRODUCT
+    version, declared = product_version()
+    print(f"{PRAXIS_PRODUCT} (Пульт к своему серверу) {version}")
+    print(f"дистрибутив -> {out}")
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True, exist_ok=True)
+
+    print("оболочка:")
+    if not SHELL_PRAXIS_EXE.is_file():
+        raise SystemExit(f"нет {SHELL_PRAXIS_EXE}\n{PRAXIS_BUILD_HINT}")
+    inside = _exe_version(SHELL_PRAXIS_EXE)
+    want = declared.get("shell/Cargo.toml", "")
+    if inside and want and inside != want:
+        raise SystemExit(f"praxis-pult.exe: внутри {inside}, а shell/Cargo.toml объявляет {want} — "
+                         f"exe не пересобран после подъёма версии ({PRAXIS_BUILD_HINT})")
+    product_inside = _exe_product_name(SHELL_PRAXIS_EXE)
+    if product_inside != PRAXIS_PRODUCT:
+        raise SystemExit(f"в {SHELL_PRAXIS_EXE} productName «{product_inside or '?'}», а нужен "
+                         f"«{PRAXIS_PRODUCT}»: это оболочка Hélène, не вариант ({PRAXIS_BUILD_HINT})")
+    shutil.copy2(SHELL_PRAXIS_EXE, out / "praxis-pult.exe")
+    print(f"  praxis-pult.exe: положен (productName={product_inside}, версия {inside or '?'})")
+    icon = DESK / "shell" / "icons-praxis" / "icon.ico"
+    if not icon.is_file():
+        raise SystemExit(f"нет значка варианта: {icon}")
+    # Двумя именами: praxis.ico — то, что ищет оболочка для уведомлений и ярлыка
+    # (<productName>.ico), praxis-pult.ico — как в ручной поставке 09.09.
+    shutil.copy2(icon, out / "praxis.ico")
+    shutil.copy2(icon, out / "praxis-pult.ico")
+
+    print("окно:")
+    static_digest = copy_static(out / "app" / "static")
+    print(f"  app/static: {static_digest[:12]}")
+
+    print("документы:")
+    (out / "helene.json").write_text(PRAXIS_JSON, encoding="utf-8", newline="\n")
+    copy_text_lf(DESK / "installer" / "ПУЛЬТ-PRAXIS.md", out / "ПУЛЬТ-PRAXIS.md")
+    copy_text_lf(DESK / "installer" / "THIRD-PARTY.md", out / "ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md")
+    copy_text_lf(DESK / "installer" / "ЛИЦЕНЗИЯ.md", out / "ЛИЦЕНЗИЯ.md")
+    copy_text_lf(DESK / "installer" / "NOTICE", out / "NOTICE")
+    n_lic = collect_rust_licenses(out, args.allow_partial, parts=("shell",),
+                                  include_body=False, exes="praxis-pult.exe")
+    print(f"  лицензии крейтов: {n_lic}")
+
+    print("паспорт сборки:")
+    desk_head, desk_dirty = _git_field(DESK, "desk")
+    manifest = {
+        "product": PRAXIS_PRODUCT,
+        "variant": "praxis",
+        "identifier": PRAXIS_IDENTIFIER,
+        "version": version,
+        "built_utc": _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "complete": True,
+        "git": {"desk": desk_head, "desk_dirty": desk_dirty, "dirty": desk_dirty},
+        "declared_versions": declared,
+        "static": static_digest,
+    }
+    (out / "helene-build.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8", newline="\n")
+
+    print("секрет-гард:")
+    live = live_root(args.tree)
+    if live.is_dir():
+        scanned = scan_for_secrets(out, live, scan_runtime=False)
+        print(f"  просканировано файлов: {scanned} — чисто")
+    elif args.allow_partial:
+        print(f"  ⚠ пропущен: нет дерева агента ({live}) — кред-пол взять неоткуда")
+    else:
+        raise SystemExit(f"секрет-гарду нужен кред-пол из дерева агента, а его нет: {live}\n"
+                         "укажи --tree PATH или HELENE_TREE_SRC (для отладки: --allow-partial)")
+
+    total = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())
+    print(f"итого: {total / 1e6:.1f} МБ до сжатия")
+    archive = out.parent / f"{PRAXIS_PRODUCT}-{version}"
+    print("zip…")
+    shutil.make_archive(str(archive), "zip", out.parent, PRAXIS_PRODUCT)
+    zip_path = out.parent / f"{PRAXIS_PRODUCT}-{version}.zip"
+    digest = sha256(zip_path)
+    zip_path.with_suffix(".zip.sha256").write_text(
+        f"{digest} *{zip_path.name}\n", encoding="utf-8", newline="\n")
+    print(f"готово: {zip_path} ({zip_path.stat().st_size / 1e6:.1f} МБ)")
+    print(f"sha256: {digest}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default=str(DESK / "installer" / "build"))
@@ -1071,7 +1230,13 @@ def main() -> None:
                         help="разрешить неполную поставку (отладка); попадёт в паспорт сборки")
     parser.add_argument("--tree", default="",
                         help="путь к дереву агента (по умолчанию ../live или HELENE_TREE_SRC)")
+    parser.add_argument("--variant", choices=("helene", "praxis"), default="helene",
+                        help="helene — полная поставка Hélène (по умолчанию); praxis — Пульт "
+                             "Praxis: то же окно в режиме remote, без ядра, рантайма и тела")
     args = parser.parse_args()
+    if args.variant == "praxis":
+        build_praxis_pult(args)
+        return
     out = Path(args.out).resolve() / "Helene"   # имя папки — латиницей
     cache = Path(args.out).resolve() / "cache"
     live = live_root(args.tree)
@@ -1183,6 +1348,15 @@ def main() -> None:
                 continue
             if not inside:
                 print(f"  {name}: версии внутри нет — сверить нечем")
+        # Оболочка обязана быть СВОЕЙ: тот же крейт собирается и как Praxis
+        # (shell/build-praxis.ps1, свой target-praxis/), и exe с чужим
+        # productName в этой папке — смесь, а не поставка.
+        if name == "helene.exe":
+            product_inside = _exe_product_name(src)
+            if product_inside and product_inside != "Helene":
+                stale.append(f"{name}: внутри productName «{product_inside}», а это поставка "
+                             f"Hélène — собран не тот вариант оболочки ({how})")
+                continue
         shutil.copy2(src, out / name)
         print(f"  {name}: положен")
     if stale:

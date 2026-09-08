@@ -200,6 +200,73 @@ def _inbox_target(stem: str) -> str:
     return STREAM if target in ("", STREAM, "pult") else target
 
 
+_ATTACH_MARK = "[вложения]"
+
+
+def _split_attachments(message: str) -> tuple[str, list[str]]:
+    """Подвал `[вложения]` записки окна -> (текст без подвала, пути файлов).
+
+    Канал (deskapp._say) пишет вложения файлами в `desk_inbox/attachments/<stamp>/`
+    и называет их в подвале строками `- attachments/<stamp>/<имя> · <mime> · <байт>`.
+    Подвал — последний блок записки; всё до него — реплика владельца как есть.
+    """
+    text = str(message or "")
+    idx = text.rfind("\n" + _ATTACH_MARK + "\n") if not text.startswith(_ATTACH_MARK) else 0
+    if idx < 0 and text.rstrip() != _ATTACH_MARK:
+        return text.strip(), []
+    head = text[:idx] if idx > 0 else ""
+    tail = text[idx:].split(_ATTACH_MARK, 1)[1]
+    paths: list[str] = []
+    for line in tail.splitlines():
+        line = line.strip()
+        if not line.startswith("- "):
+            continue
+        rel = line[2:].split(" · ", 1)[0].strip()
+        if rel.startswith("attachments/") and ".." not in rel.split("/"):
+            paths.append(rel)
+    return head.strip(), paths
+
+
+def _ingest_attachments(paths: list[str], *, chat_id: str, message_id: str) -> tuple[list, list[str]]:
+    """Файлы окна -> медиа-спул дерева (`ingest_path`, перенос) -> ссылки для кадра.
+
+    Дерево кладёт картинку в кадр само (`_media_prompt`: блок `image` рядом с текстом)
+    и переключает модель на зрячую до вызова (`llm.vision_model`) — руннеру остаётся
+    только положить файл туда, откуда дерево его примет: в спул, с областью `owner`
+    (окно — дверь владельца) и адресом этой комнаты. Что не принялось — словами в
+    текст хода, а не молча.
+    """
+    if not paths or _tree is None:
+        return [], []
+    # Спул спрашиваем у САМОГО дерева (`agent._media_spool`) — тот же объект, что
+    # ведёт медиа живого раннера, с его квотами и леджером. Свой `MediaSpool()` —
+    # только если дерево его не отдаёт: два спула на одно дерево спорили бы за
+    # леджер.
+    try:
+        if hasattr(_agent, "_media_spool"):
+            spool = _agent._media_spool()
+        else:
+            import importlib
+            spool = importlib.import_module("media").MediaSpool()
+    except Exception:
+        log.warning("медиа-спул недоступен — вложения окна не поедут", exc_info=True)
+        return [], [f"[вложение не прочитано: {Path(p).name} — медиа-спул недоступен]" for p in paths]
+    inbox = (Path(_tree) / "memory" / ".control" / "desk_inbox").resolve()
+    refs, notes = [], []
+    for rel in paths:
+        src = (inbox / rel).resolve()
+        if inbox not in src.parents or not src.is_file():
+            notes.append(f"[вложение не найдено: {Path(rel).name}]")
+            continue
+        try:
+            refs.append(spool.ingest_path(src, kind="photo", chat_id=chat_id,
+                                          message_id=message_id, scope="owner", move=True))
+        except Exception as exc:  # MediaValidationError и родня — словами
+            log.warning("вложение окна отвергнуто спулом [%s]", rel, exc_info=True)
+            notes.append(f"[вложение не прочитано: {src.name} — {type(exc).__name__}: {exc}]")
+    return refs, notes
+
+
 def _orient(chat_id: str) -> str:
     bits = [_WINDOW_ORIENT] if transport.is_room(chat_id) else []
     if _ORIENT_EXTRA:
@@ -207,14 +274,19 @@ def _orient(chat_id: str) -> str:
     return " ".join(bits)
 
 
-def _run_turn(chat_id: str, convo: str, speaker: str, ctx) -> "object | None":
-    """Один её ход с уже собранным контекстом. -> envelope или None (упал)."""
+def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = ()) -> "object | None":
+    """Один её ход с уже собранным контекстом. -> envelope или None (упал).
+
+    `media_refs` — картинки из окна (0.5.0); без них вызов дерева тот же, что и
+    раньше (аргумент не передаётся вовсе — стенды с заглушкой дерева его не знают).
+    """
     history, current = _dialogue(chat_id)
     orient = _orient(chat_id)
+    extra = {"media_refs": tuple(media_refs)} if media_refs else {}
     try:
         return _agent.voice_turn_envelope(
             chat_id, convo, speaker, ctx=ctx, history=history, current_text=current,
-            orient=orient)
+            orient=orient, **extra)
     except Exception:
         log.exception("ход упал в дереве [%s]", chat_id)
         return None
@@ -311,20 +383,32 @@ def _deliver_outbound(envelope, chat_id: str) -> int:
     return delivered
 
 
-def handle_desk(message: str, room: str = STREAM) -> None:
-    """Одна записка из окна — один ход агента в комнате `room`."""
+def handle_desk(message: str, room: str = STREAM, attachments: list[str] | tuple[str, ...] = ()) -> None:
+    """Одна записка из окна — один ход агента в комнате `room`.
+
+    `attachments` — пути картинок из подвала записки (0.5.0): они уезжают в
+    медиа-спул и кладутся в кадр рядом с текстом; в памяти комнаты реплика
+    владельца получает строку `[изображение: имя]` на каждую, чтобы прожитое
+    не расходилось с тем, что видела модель.
+    """
     now = _now()
     source_id = f"{room}-{int(now.timestamp() * 1000)}"
     desk = _room(room)
+    refs, notes = _ingest_attachments(list(attachments or ()), chat_id=room, message_id=source_id)
+    labels = [f"[изображение: {Path(r.path).name}]" for r in refs] + notes
+    if labels:
+        message = (message + "\n" + "\n".join(labels)).strip()
     # Восприятие пишет память ДО кадра — как в живом раннере: кадр читает горячий
     # слой, и текущая реплика обязана быть в нём, иначе она отвечала бы на пустоту.
     desk.archive(message, outgoing=False, now=now)
     desk.life(message, direction="in", actor=_speaker, source_id=source_id, now=now)
-    _turn_in_window(source_id, speaker=_speaker, room=room, origin_text=message)
+    _turn_in_window(source_id, speaker=_speaker, room=room, origin_text=message,
+                    media_refs=tuple(refs))
 
 
 def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
-                    room: str = STREAM, origin_text: str = "") -> str:
+                    room: str = STREAM, origin_text: str = "",
+                    media_refs: tuple = ()) -> str:
     """Ход в комнате окна по уже записанному в память входящему.
 
     `origin_text` — точный текст повода (записка владельца, текст будильника):
@@ -357,7 +441,7 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
     _set_busy(True, chat_id=room)
     envelope = None
     try:
-        envelope = _run_turn(room, convo, speaker, ctx)
+        envelope = _run_turn(room, convo, speaker, ctx, media_refs=media_refs)
     finally:
         _set_busy(False, str(getattr(envelope, "run_id", "") or ""))
     if envelope is None:
@@ -1380,10 +1464,16 @@ def main() -> None:
             # владельца в telegram-комнату или в другую комнату окна
             # (`window-<hex>`). Без суффикса — комната окна по умолчанию.
             target = _inbox_target(path.stem)
+            message, attached = _split_attachments(message)
             try:
                 if transport.is_room(target):
-                    handle_desk(message, room=target)
+                    handle_desk(message, room=target, attachments=attached)
                 else:
+                    if attached:
+                        # Канал отказывает таким запискам сам; если файл всё же
+                        # приехал — не терять молча.
+                        log.warning("вложения окна в Telegram-комнату не едут [%s]: %s",
+                                    target, ", ".join(attached))
                     handle_owner_note(target, message)
             except Exception:
                 log.exception("ход окна упал [%s]", target)

@@ -76,8 +76,13 @@
              смена раздела объявляется отдельной строкой #live. -->
         <section id="view" class="view scroll"></section>
         <footer id="composer" class="composer">
+          <div id="composer-files" class="composer-files" hidden></div>
           <div class="composer-box">
             <div id="composer-target" class="composer-target"></div>
+            <button id="attach" class="attach" type="button" title="Приложить картинку · можно вставить из буфера или перетащить" aria-label="Приложить картинку">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.5 7.2 8.3 12.4a1.6 1.6 0 0 1-2.3-2.3l5.6-5.6a3 3 0 0 1 4.2 4.2l-6 6a4.4 4.4 0 0 1-6.2-6.2L9.2 3" /></svg>
+            </button>
+            <input id="attach-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
             <textarea id="say" rows="1" placeholder="Написать агенту…"></textarea>
             <button id="send" class="send" type="button" title="Отправить · Enter" aria-label="Отправить">
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.5v-11M5.8 8.7 10 4.5l4.2 4.2" /></svg>

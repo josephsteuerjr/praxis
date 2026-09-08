@@ -145,5 +145,9 @@ def cuts(tree: Path, *, days: int = 7) -> dict:
             "output_tokens": sum(r["out"] for r in rows),
             "cuts": sum(1 for r in rows if r["stop"] == "max_tokens"),
         },
-        "by": {axis: group(rows, axis) for axis in AXES if axis != "day"},
+        # «day» тоже едет в окно (0.5.0): не по числу вызовов, а по календарю,
+        # свежие дни сверху — иначе таблица дней прыгала бы от нагрузки.
+        "by": {axis: (sorted(group(rows, axis), key=lambda g: g["group"], reverse=True)
+                      if axis == "day" else group(rows, axis))
+               for axis in AXES},
     }

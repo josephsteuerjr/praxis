@@ -1011,6 +1011,82 @@ html:not(.native) #chrome .controls {
   opacity: 0.45;
 }
 
+/* Скрепка: приложить картинку к реплике (0.5.0). Сдержанно — как кнопка, а не палец. */
+.attach {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-3, var(--muted));
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.attach:hover,
+.attach:focus-visible {
+  color: var(--ink);
+  background: var(--hover, rgba(0, 0, 0, 0.05));
+}
+
+.attach svg {
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+.composer-files {
+  max-width: 800px;
+  margin: 0 auto 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.composer-files .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-2, var(--paper));
+  font-size: 12px;
+  color: var(--ink-2, var(--ink));
+}
+
+.composer-files .chip img {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 5px;
+}
+
+.composer-files .chip button {
+  border: 0;
+  background: transparent;
+  color: var(--ink-3, var(--muted));
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: default;
+}
+
+.composer-files .chip button:hover {
+  color: var(--ink);
+}
+
+.composer-box.dropping {
+  outline: 1.5px dashed var(--accent);
+  outline-offset: -2px;
+}
+
 .send svg {
   width: 17px;
   height: 17px;

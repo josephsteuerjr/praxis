@@ -43,6 +43,104 @@ const composerTarget = q<HTMLElement>("#composer-target");
 const composerNote = q<HTMLElement>("#composer-note");
 const say = q<HTMLTextAreaElement>("#say");
 const send = q<HTMLButtonElement>("#send");
+const attachBtn = q<HTMLButtonElement>("#attach");
+const attachInput = q<HTMLInputElement>("#attach-input");
+const composerFiles = q<HTMLElement>("#composer-files");
+const composerBox = q<HTMLElement>(".composer-box");
+
+// ---------------------------------------------------------------- вложения (0.5.0)
+// Картинка к реплике: скрепка, вставка из буфера, перетаскивание. Файл уезжает в
+// /api/say как base64 рядом с текстом; канал кладёт его в desk_inbox, руннер — в
+// медиа-спул, дерево — в кадр, а модель переключается на зрячую до вызова.
+// Только то, что модель читает (PNG/JPEG/WebP/GIF), до четырёх и до 8 МБ.
+interface Attachment { name: string; mime: string; data: string; url: string; size: number }
+const ATTACH_MIME = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+const ATTACH_MAX = 4;
+const ATTACH_BYTES = 8 * 1024 * 1024;
+let attachments: Attachment[] = [];
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = () => reject(r.error);
+    r.onload = () => resolve(String(r.result || "").split(",", 2)[1] || "");
+    r.readAsDataURL(file);
+  });
+}
+
+async function addFiles(files: Iterable<File>) {
+  for (const f of files) {
+    if (!ATTACH_MIME.has(f.type)) { toast(`${f.name || "файл"}: модель читает только PNG, JPEG, WebP и GIF`); continue; }
+    if (f.size > ATTACH_BYTES) { toast(`${f.name || "файл"}: больше 8 МБ`); continue; }
+    if (attachments.length >= ATTACH_MAX) { toast(`Не больше ${ATTACH_MAX} картинок за раз`); break; }
+    try {
+      const data = await fileToBase64(f);
+      attachments.push({ name: f.name || "image", mime: f.type, data, url: URL.createObjectURL(f), size: f.size });
+    } catch (e) {
+      toast("Не прочиталось: " + humanError(e).text);
+    }
+  }
+  paintFiles();
+}
+
+function dropFile(i: number) {
+  const [gone] = attachments.splice(i, 1);
+  if (gone) URL.revokeObjectURL(gone.url);
+  paintFiles();
+}
+
+function clearFiles() {
+  for (const a of attachments) URL.revokeObjectURL(a.url);
+  attachments = [];
+  paintFiles();
+}
+
+function paintFiles() {
+  composerFiles.hidden = attachments.length === 0;
+  composerFiles.innerHTML = attachments
+    .map((a, i) => `<span class="chip"><img src="${a.url}" alt=""><span>${esc(a.name)}</span> <span class="muted">${fmtK(a.size)}</span><button type="button" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></span>`)
+    .join("");
+  composerFiles.querySelectorAll<HTMLButtonElement>("button[data-i]").forEach((b) => {
+    b.addEventListener("click", () => dropFile(Number(b.dataset.i)));
+  });
+}
+
+attachBtn.addEventListener("click", () => attachInput.click());
+attachInput.addEventListener("change", () => {
+  void addFiles(attachInput.files ? Array.from(attachInput.files) : []);
+  attachInput.value = "";
+});
+say.addEventListener("paste", (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  const files: File[] = [];
+  for (const it of Array.from(items)) {
+    if (it.kind === "file") {
+      const f = it.getAsFile();
+      if (f) files.push(f);
+    }
+  }
+  if (files.length) {
+    e.preventDefault();
+    void addFiles(files);
+  }
+});
+for (const ev of ["dragenter", "dragover"] as const) {
+  composerBox.addEventListener(ev, (e) => {
+    if (e.dataTransfer?.types.includes("Files")) {
+      e.preventDefault();
+      composerBox.classList.add("dropping");
+    }
+  });
+}
+composerBox.addEventListener("dragleave", () => composerBox.classList.remove("dropping"));
+composerBox.addEventListener("drop", (e) => {
+  composerBox.classList.remove("dropping");
+  if (e.dataTransfer?.files?.length) {
+    e.preventDefault();
+    void addFiles(Array.from(e.dataTransfer.files));
+  }
+});
 const panelBox = q<HTMLElement>("#panel");
 const menu = q<HTMLElement>("#menu");
 
@@ -647,8 +745,11 @@ function sendNote(chat: string, midturn: boolean): string {
 
 async function doSend() {
   if (sending) return;
-  const text = say.value.trim();
-  if (!text) return;
+  const typedText = say.value.trim();
+  const files = attachments.slice();
+  if (!typedText && !files.length) return;
+  // Пустая реплика с картинкой — тоже реплика: в ленте и в памяти она названа словами.
+  const text = typedText || (files.length === 1 ? "[картинка]" : `[картинки: ${files.length}]`);
   const room = S.room;
   const current = S.rooms.find((r) => r.key === room);
   if (current?.stub) {
@@ -686,7 +787,11 @@ async function doSend() {
     }
   }, 5000);
   try {
-    const data = await post("/api/say", chat ? { text, chat } : { text });
+    const payload: Record<string, unknown> = { text: typedText };
+    if (chat) payload.chat = chat;
+    if (files.length) payload.attachments = files.map((a) => ({ name: a.name, mime: a.mime, data: a.data }));
+    const data = await post("/api/say", payload);
+    if (files.length) clearFiles();
     pending.state = "queued";
     pending.note = sendNote(chat, !!data?.midturn);
     composerNote.textContent = pending.note;

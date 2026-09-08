@@ -3039,7 +3039,12 @@ fn register_toast_identity(identifier: &str, name: &str, icon: Option<&Path>) {
     let path = format!("Software\\Classes\\AppUserModelId\\{identifier}");
     if let Ok((key, _)) = hkcu.create_subkey(path) {
         let _ = key.set_value("DisplayName", &name);
-        let icon = icon.map(Path::to_path_buf).unwrap_or_else(|| exe_dir().join("helene.ico"));
+        // Значок рядом с exe — по имени продукта (praxis.ico у варианта), helene.ico
+        // остаётся запасным именем для старых поставок.
+        let icon = icon.map(Path::to_path_buf).unwrap_or_else(|| {
+            let own = exe_dir().join(format!("{}.ico", product_fs().to_lowercase()));
+            if own.exists() { own } else { exe_dir().join("helene.ico") }
+        });
         if icon.exists() {
             let _ = key.set_value("IconUri", &icon.to_string_lossy().into_owned());
         }
@@ -3909,6 +3914,42 @@ fn version_newer(candidate: &str, current: &str) -> bool {
 /// Проверка обновлений: JSON по адресу владельца — {"version","url","notes"}.
 /// Ничего не скачивает и не подменяет, только говорит, есть ли новее, и даёт
 /// ссылку. Замена файлов — решение человека, по его же слову.
+/// Архив обновления из списка вложений релиза — СВОЙ, а не первый попавшийся .zip.
+///
+/// Канал релизов один на обе программы (`helene`), и в одном релизе лежат
+/// `Helene-<v>.zip` и `Praxis-<v>.zip`. До 0.5.0 бралось первое вложение с .zip —
+/// то есть Пульт Praxis скачал бы поставку Hélène с рантаймом и ядром, а Hélène
+/// могла получить пульт без ядра. Предпочтение — вложению `<productName>-…zip`
+/// (без учёта регистра); `allow_any` (только у Hélène: старые релизы звались
+/// просто `Helene.zip`) разрешает откат на любой .zip, у варианта отката нет —
+/// без своего архива кнопка ведёт на страницу релиза, как и раньше без вложений.
+fn pick_update_zip(
+    assets: &[serde_json::Value],
+    product: &str,
+    allow_any: bool,
+) -> Option<serde_json::Value> {
+    let url_of = |x: &serde_json::Value| {
+        x.get("browser_download_url")
+            .and_then(|u| u.as_str())
+            .map(|u| u.to_lowercase())
+            .unwrap_or_default()
+    };
+    let name_of = |x: &serde_json::Value| {
+        x.get("name")
+            .and_then(|n| n.as_str())
+            .map(|n| n.to_lowercase())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| url_of(x).rsplit('/').next().unwrap_or("").to_string())
+    };
+    let is_zip = |x: &serde_json::Value| url_of(x).ends_with(".zip");
+    let prefix = format!("{}-", product.trim().to_lowercase());
+    assets
+        .iter()
+        .find(|x| is_zip(x) && name_of(x).starts_with(&prefix))
+        .or_else(|| allow_any.then(|| assets.iter().find(|x| is_zip(x))).flatten())
+        .cloned()
+}
+
 #[tauri::command]
 async fn update_check(url: String) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || update_check_blocking(&url))
@@ -3949,16 +3990,10 @@ fn update_check_blocking(url: &str) -> Result<serde_json::Value, String> {
         if parse_version(&raw_latest).is_none() {
             return Err(format!("не понял ответ сервера обновлений: версия «{raw_latest}»"));
         }
-        let asset = v.get("assets").and_then(|a| a.as_array()).and_then(|a| {
-            a.iter()
-                .find(|x| {
-                    x.get("browser_download_url")
-                        .and_then(|u| u.as_str())
-                        .map(|u| u.to_lowercase().ends_with(".zip"))
-                        .unwrap_or(false)
-                })
-                .cloned()
-        });
+        let asset = v
+            .get("assets")
+            .and_then(|a| a.as_array())
+            .and_then(|a| pick_update_zip(a, product_fs(), product_fs() == PRODUCT));
         let asset_zip = asset
             .as_ref()
             .and_then(|a| a.get("browser_download_url").and_then(|u| u.as_str()).map(str::to_string));
@@ -5128,6 +5163,36 @@ mod tests {
         assert!(update_file_name("https://x/y/setup.exe").is_err());
         assert!(update_file_name("https://x/y/.zip").is_err());
         assert!(update_file_name("https://x/y/").is_err());
+    }
+
+    /// В одном релизе два архива — каждая программа берёт свой; у варианта отката
+    /// на чужой .zip нет.
+    #[test]
+    fn update_zip_is_the_products_own_archive() {
+        use super::pick_update_zip;
+        let both = serde_json::json!([
+            {"name": "Praxis-0.5.0.zip", "browser_download_url": "https://x/Praxis-0.5.0.zip"},
+            {"name": "Helene-0.5.0.zip.sha256", "browser_download_url": "https://x/Helene-0.5.0.zip.sha256"},
+            {"name": "Helene-0.5.0.zip", "browser_download_url": "https://x/Helene-0.5.0.zip"}
+        ]);
+        let both = both.as_array().unwrap();
+        assert_eq!(pick_update_zip(both, "Helene", true).unwrap()["name"], "Helene-0.5.0.zip");
+        assert_eq!(pick_update_zip(both, "Praxis", false).unwrap()["name"], "Praxis-0.5.0.zip");
+        // Старый релиз: только Helene.zip без версии в имени — Hélène берёт его как раньше,
+        // Praxis не берёт ничего.
+        let legacy = serde_json::json!([
+            {"name": "Helene.zip", "browser_download_url": "https://x/Helene.zip"}
+        ]);
+        let legacy = legacy.as_array().unwrap();
+        assert_eq!(pick_update_zip(legacy, "Helene", true).unwrap()["name"], "Helene.zip");
+        assert!(pick_update_zip(legacy, "Praxis", false).is_none());
+        // Имя вложения может отсутствовать — тогда оно из ссылки.
+        let nameless = serde_json::json!([
+            {"browser_download_url": "https://x/y/praxis-0.5.1.ZIP"}
+        ]);
+        let nameless = nameless.as_array().unwrap();
+        assert!(pick_update_zip(nameless, "Praxis", false).is_some());
+        assert!(pick_update_zip(nameless, "Helene", false).is_none());
     }
 
     #[test]

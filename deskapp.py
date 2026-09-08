@@ -22,6 +22,7 @@ memory/.state/devices.json (спаренные телефоны) и маркда
 from __future__ import annotations
 
 import asyncio
+import base64
 import dataclasses
 import hashlib
 import hmac
@@ -811,7 +812,8 @@ async def _r_mode(c: Call):
 
 async def _r_say(c: Call):
     body = c.body or {}
-    return await _say(body.get("text"), body.get("chat") or "")
+    return await _say(body.get("text"), body.get("chat") or "",
+                      attachments=body.get("attachments"))
 
 
 async def _r_rooms_create(c: Call):
@@ -935,7 +937,78 @@ _SAY_RE = re.compile(r"[^\w\-]+")
 _CHAT_KEY_RE = re.compile(r"^-?\d+(?:__topic__\d+)?$")
 
 
-async def _say(text: str, chat: str = "") -> dict:
+_ATTACH_MAX_FILES = 4
+_ATTACH_MAX_BYTES = 8 * 1024 * 1024
+_ATTACH_MIME = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
+                "image/gif": ".gif"}
+
+
+def _attachments_in(raw) -> list[dict]:
+    """Вложения из тела запроса: `[{name, mime, data(base64)}]` -> проверенные байты.
+
+    Только картинки (те, что читает модель — см. `_MODEL_IMAGE_MIME` в дереве), до
+    четырёх, до 8 МБ каждая. Всё остальное — отказ словами: окно показало бы
+    «отправлено», а руннер молча выбросил бы файл, который модель не прочтёт.
+    """
+    if raw in (None, "", []):
+        return []
+    if not isinstance(raw, list):
+        raise web.HTTPBadRequest(text="attachments должен быть списком")
+    if len(raw) > _ATTACH_MAX_FILES:
+        raise web.HTTPBadRequest(text=f"не больше {_ATTACH_MAX_FILES} вложений за раз")
+    out: list[dict] = []
+    for i, item in enumerate(raw, 1):
+        if not isinstance(item, dict):
+            raise web.HTTPBadRequest(text=f"вложение #{i}: не объект")
+        mime = str(item.get("mime") or "").strip().lower()
+        if mime not in _ATTACH_MIME:
+            raise web.HTTPBadRequest(
+                text=f"вложение #{i}: тип {mime or '?'} не читается моделью — "
+                     "можно PNG, JPEG, WebP, GIF")
+        try:
+            data = base64.b64decode(str(item.get("data") or ""), validate=True)
+        except (ValueError, TypeError):
+            raise web.HTTPBadRequest(text=f"вложение #{i}: data — не base64")
+        if not data:
+            raise web.HTTPBadRequest(text=f"вложение #{i}: пустой файл")
+        if len(data) > _ATTACH_MAX_BYTES:
+            raise web.HTTPBadRequest(text=f"вложение #{i}: больше 8 МБ")
+        name = re.sub(r"[^\w.\-]+", "_", str(item.get("name") or "").strip(), flags=re.UNICODE)
+        name = name.strip("._") or f"image{i}"
+        if not name.lower().endswith(_ATTACH_MIME[mime]) and not (
+                mime == "image/jpeg" and name.lower().endswith(".jpeg")):
+            name += _ATTACH_MIME[mime]
+        out.append({"name": name[:120], "mime": mime, "data": data})
+    return out
+
+
+def _write_attachments(control: Path, stamp: str, files: list[dict]) -> list[str]:
+    """Файлы вложений в `desk_inbox/attachments/<stamp>/` — атомарно, до записки.
+
+    -> относительные пути (от desk_inbox) для подвала записки; читатель (руннер)
+    переносит их в свой медиа-спул и отдаёт модели картинкой в кадре.
+    """
+    folder = control / "attachments" / stamp
+    folder.mkdir(parents=True, exist_ok=True)
+    rel_paths: list[str] = []
+    for i, f in enumerate(files, 1):
+        name = f["name"]
+        target = folder / name
+        if target.exists():
+            stem, ext = os.path.splitext(name)
+            name = f"{stem}-{i}{ext}"
+            target = folder / name
+        tmp = target.with_name(".part-" + target.name)
+        with open(tmp, "wb") as handle:
+            handle.write(f["data"])
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, target)
+        rel_paths.append(f"attachments/{stamp}/{name}")
+    return rel_paths
+
+
+async def _say(text: str, chat: str = "", attachments=None) -> dict:
     """Сообщение ей. Durable-файл в memory/.control/desk_inbox — и всё.
 
     `chat` — адрес комнаты (слово владельца 31.08: окно — ещё одна дверь владельца в
@@ -963,13 +1036,20 @@ async def _say(text: str, chat: str = "") -> dict:
     """
     text = str(text or "").strip()
     chat = str(chat or "").strip()
-    if not text:
+    files = _attachments_in(attachments)
+    if not text and not files:
         raise web.HTTPBadRequest(text="пустое сообщение")
     if len(text) > 20_000:
         raise web.HTTPBadRequest(text="слишком длинно (20k)")
     if chat and chat not in ("window", "pult") and not _CHAT_KEY_RE.match(chat) \
             and not rooms.is_room(chat):
         raise web.HTTPBadRequest(text=f"не похоже на адрес комнаты: {chat!r}")
+    if files and chat and _CHAT_KEY_RE.match(chat) and not rooms.is_room(chat):
+        # Вложения из окна едут только в комнаты окна: в Telegram-комнату записка
+        # уходит как реплика владельца через её бот-транспорт, и картинку туда
+        # переправить пока нечем — честный отказ вместо молча потерянного файла.
+        raise web.HTTPBadRequest(text="вложения из окна пока не едут в Telegram-комнаты — "
+                                      "отправь текст, а картинку пришли в Telegram сама")
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     body = (f"# Сообщение с окна владельца · {stamp}\n\n{text}\n")
     # Адресная записка — и в Telegram-комнату, и в другую комнату окна
@@ -979,6 +1059,16 @@ async def _say(text: str, chat: str = "") -> dict:
     def _write() -> dict:
         written = []
         control = readers.tree() / "memory" / ".control" / "desk_inbox"
+        # Вложения — файлами рядом с запиской, до её публикации: записка называет
+        # их в подвале `[вложения]`, и читатель, захвативший записку, уже видит
+        # готовые файлы (порядок записи = порядок видимости).
+        footer = ""
+        rel_paths: list[str] = []
+        if files:
+            rel_paths = _write_attachments(control, stamp, files)
+            footer = "\n[вложения]\n" + "".join(
+                f"- {rel} · {f['mime']} · {len(f['data'])}\n" for rel, f in zip(rel_paths, files))
+        body_text = body + footer
         # Квитанция читателя: её раннер (кандидат desk-midturn) пишет .reader.json
         # при старте и обновляет на ходу. Свежая квитанция = канал живой,
         # сообщение уедет mid-turn.
@@ -989,7 +1079,7 @@ async def _say(text: str, chat: str = "") -> dict:
         # и читатель, захватывающий rename-ом, не может получить обрезанный текст.
         def _publish(target: Path) -> None:
             tmp = target.with_name(".tmp-" + target.name)
-            tmp.write_text(body, encoding="utf-8", newline="\n")
+            tmp.write_text(body_text, encoding="utf-8", newline="\n")
             os.replace(tmp, target)
 
         if targeted and not reader_alive:
@@ -1004,7 +1094,7 @@ async def _say(text: str, chat: str = "") -> dict:
         except OSError:
             log.warning("mid-turn канал недоступен", exc_info=True)
         return {"written": written, "stamp": stamp, "midturn": reader_alive,
-                "chat": chat or "window"}
+                "chat": chat or "window", "attachments": rel_paths}
 
     result = await asyncio.to_thread(_write)
     if not result["written"]:

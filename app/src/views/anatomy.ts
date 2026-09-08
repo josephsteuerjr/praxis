@@ -129,7 +129,17 @@ function modeHTML(m: ModeState | null): string {
 interface CutRow { group: string; calls: number; runs: number; cache_ratio: number | null; output_tokens: number; median_ms: number; p90_ms: number; cuts: number }
 interface FrameCuts { days: number; summary: { calls: number; runs: number; cache_ratio: number | null; cached_tokens: number; input_tokens: number; output_tokens: number; cuts: number }; by: Record<string, CutRow[]> }
 
-const CUT_AXES: Array<[string, string]> = [["iteration", "первая итерация против продолжений"], ["hand", "какой рукой ответила итерация"], ["kind", "род прогона"]];
+// Все семь осей deskd/frame_cuts.py: до 0.5.0 экран рисовал три, а role/model/frame_mode/day
+// считались и были видны только через `python frame_stats.py --by …` в дереве.
+const CUT_AXES: Array<[string, string]> = [
+  ["iteration", "первая итерация против продолжений"],
+  ["hand", "какой рукой ответила итерация"],
+  ["kind", "род прогона"],
+  ["role", "роль вызова"],
+  ["model", "модель"],
+  ["frame_mode", "режим кадра"],
+  ["day", "по дням"],
+];
 
 /** Кэш по группам действий: взвешенная доля (Σ из кэша / Σ входа), не среднее процентов. */
 function cutsHTML(c: FrameCuts | null): string {
@@ -160,13 +170,21 @@ function spendCutsHTML(s: Spend | null): string {
   const pct = (r: number | null) => (r == null ? "—" : `${Math.round(r * 100)}%`);
   const cell = (r: SpendRow) => `<td>${r.calls}</td><td>${r.runs || ""}</td><td>${fmtK(r.total_tokens)}</td><td>${pct(r.cache_ratio)}</td><td>${fmtK(r.output_tokens)}</td>`;
   const head = `<tr><th>кто / где</th><th>вызовов</th><th>ходов</th><th>токенов</th><th>кэш</th><th>ответ</th></tr>`;
+  // Ключ рядом с именем — чтобы различить двух одинаково названных. Поэтому он
+  // показывается, ТОЛЬКО когда что-то добавляет: у комнаты без имени читалка
+  // отдаёт заголовком сам id («window-76f00fa5 window-76f00fa5» в таблице 09.09),
+  // а у человека принципал бывает заглушкой «unknown» — она не различает никого.
+  const idTail = (name: string, id: string) =>
+    id && id !== name && !["praxis:self", "unknown", "?", ""].includes(id)
+      ? ` <span class="muted mono">${esc(id)}</span>`
+      : "";
   const chats = `<table class="grid">${head}${s.by_chat
     .slice(0, 20)
-    .map((r) => `<tr><td>${esc(r.title || r.chat_id || "—")}${r.chat_id && r.title ? ` <span class="muted mono">${esc(r.chat_id)}</span>` : ""}</td>${cell(r)}</tr>`)
+    .map((r) => `<tr><td>${esc(r.title || r.chat_id || "—")}${idTail(r.title || r.chat_id, r.chat_id)}</td>${cell(r)}</tr>`)
     .join("")}</table>`;
   const people = `<table class="grid">${head}${s.by_person
     .slice(0, 20)
-    .map((r) => `<tr><td>${esc(r.name || r.who)}${r.name && r.who && r.who !== "praxis:self" ? ` <span class="muted mono">${esc(r.who)}</span>` : ""}${r.chats.length ? `<div class="muted">${esc(r.chats.join(" · "))}</div>` : ""}</td>${cell(r)}</tr>`)
+    .map((r) => `<tr><td>${esc(r.name || r.who)}${idTail(r.name || r.who, r.who)}${r.chats.length ? `<div class="muted">${esc(r.chats.join(" · "))}</div>` : ""}</td>${cell(r)}</tr>`)
     .join("")}</table>`;
   const when = (r: SpendRun) => {
     const d = new Date((r.first_ts || 0) * 1000);
