@@ -26,8 +26,37 @@ const date = (n: number) => new Date(n * 1000).toLocaleString("ru", { day: "nume
 let overviewOpen = false;
 let modelsOpen = false;
 
+interface SpendRow { calls: number; runs: number; total_tokens: number; output_tokens: number; cache_ratio: number | null }
+interface Spend {
+  days: number;
+  summary: SpendRow & { bound_calls: number; unbound_calls: number };
+  by_chat: (SpendRow & { chat_id: string; title: string })[];
+  by_person: (SpendRow & { who: string; name: string; chats: string[] })[];
+  unbound: (SpendRow & { role: string })[];
+}
+
+let spendOpen = false;
+
+/** Расход по чатам и людям за 7 дней (`/api/spend`, deskd/spend.py) — та же ревизия, что в окне
+ * на экране «Система», в сжатом виде для телефона и мини-аппа: топ-5 чатов и людей, остаток — числом. */
+function spendHTML(s: Spend): string {
+  if (!s.summary?.calls) return "";
+  const pct = (r: number | null) => (r == null ? "—" : num(r * 100) + "%");
+  const row = (name: string, sub: string, r: SpendRow) =>
+    `<tr><th scope="row">${esc(name)}${sub ? `<small>${esc(sub)}</small>` : ""}</th><td>${num(r.calls)}</td><td>${num(r.total_tokens)}</td><td>${pct(r.cache_ratio)}</td></tr>`;
+  const head = `<thead><tr><th>кто / где</th><th>Вызовы</th><th>Токены</th><th>Кэш</th></tr></thead>`;
+  const chats = s.by_chat.slice(0, 5).map((c) => row(c.title || c.chat_id || "—", c.title && c.chat_id ? c.chat_id : "", c)).join("");
+  const restChats = s.by_chat.length > 5 ? `<p class="usage-muted">и ещё ${s.by_chat.length - 5} ${s.by_chat.length - 5 === 1 ? "чат" : "чатов"}</p>` : "";
+  const people = s.by_person.slice(0, 5).map((p) => row(p.name || p.who, p.chats.slice(0, 2).join(" · "), p)).join("");
+  const unbound = s.summary.unbound_calls ? `<p class="usage-muted">Вне ходов (судья, Forge): ${num(s.summary.unbound_calls)} вызовов — их не приписать ни чату, ни человеку.</p>` : "";
+  return `<details class="usage-details usage-spend" ${spendOpen ? "open" : ""}><summary>По чатам и людям за ${s.days} дней <span>${s.by_chat.length}</span></summary>
+    <div class="usage-table-wrap"><table>${head}<tbody>${chats}</tbody></table></div>${restChats}
+    <div class="usage-table-wrap"><table>${head}<tbody>${people}</tbody></table></div>${unbound}
+    <p class="usage-muted">Токены, не деньги. «Сама, без человека» — её собственные ходы: будильник, задачи, Forge. Полный разрез — в окне, экран «Система».</p></details>`;
+}
+
 export function usageShell(compact = false): string {
-  const body = `<div class="usage-heading"><h2>Расход</h2><span>Загружаю счётчик…</span></div><div data-usage></div><div data-allowances></div>`;
+  const body = `<div class="usage-heading"><h2>Расход</h2><span>Загружаю счётчик…</span></div><div data-usage></div><div data-spend></div><div data-allowances></div>`;
   if (!compact) return `<section class="usage-panel" aria-label="Расход и лимиты">${body}</section>`;
   return `<details class="usage-panel usage-compact" ${overviewOpen ? "open" : ""}>
     <summary class="usage-summary"><span class="usage-summary-title">Расход и лимиты</span><span class="usage-summary-toggle">Подробнее <span aria-hidden="true">⌄</span></span>
@@ -99,6 +128,19 @@ export function mountUsage(container: HTMLElement, api: Fetcher): void {
           panel.querySelector<HTMLElement>(".usage-heading > span")!.textContent = "Счётчик недоступен";
           if (brief) brief.textContent = "Не удалось обновить расход";
         }
+      }),
+      api<Spend>("/api/spend?days=7").then(data => {
+        const box = panel.querySelector<HTMLElement>("[data-spend]");
+        if (!panel.isConnected || !box) return;
+        const focused = box.querySelector(".usage-spend > summary") === document.activeElement;
+        box.innerHTML = spendHTML(data);
+        const details = box.querySelector<HTMLDetailsElement>(".usage-spend");
+        if (details) {
+          details.addEventListener("toggle", () => { spendOpen = details.open; });
+          if (focused) details.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
+        }
+      }).catch(() => {
+        // Разреза нет (старый канал без /api/spend) — молчим: счётчик выше уже сказал главное.
       }),
       api<{providers: Allowance[]}>("/api/allowances").then(data => {
         if (panel.isConnected) {

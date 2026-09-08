@@ -27,7 +27,7 @@ interface Config {
   phone?: { enabled?: boolean };
   update?: { url?: string };
   owner?: { name?: string; room?: string };
-  model?: { framework?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string };
+  model?: { framework?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string; fallback_model?: string; vision_model?: string };
   // `instructions` экран не показывает, но обязан сохранить: этой ручкой
   // оболочка гасит 23 КБ чужого системного промпта Codex CLI перед конституцией
   // (shell/src/main.rs, RELAY_INSTRUCTIONS). Раньше блок relay пересобирался
@@ -441,7 +441,23 @@ export async function render(container: HTMLElement): Promise<void> {
     if (!plan.chips.length) effortRow.append(el("span", "receipt", "ступень сюда не передаётся"));
     effortHint.textContent = plan.hint;
   };
-  model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint);
+  // Запасная и зрячая модели — ручки того же блока `model`, общие для всех провайдеров.
+  // До 09.09 их можно было задать только правкой helene.json руками (boot.py их переносил,
+  // окно — нет): владелец спросил «есть ли фолбэк в интерфейсе» — не было.
+  let fallbackModel = String(draft.model.fallback_model || "");
+  let visionModel = String(draft.model.vision_model || "");
+  const spareGrid = el("div", "form-grid two");
+  spareGrid.style.marginTop = "14px";
+  spareGrid.append(
+    field("Запасная модель", fallbackModel, (v) => (fallbackModel = v), { mono: true, placeholder: "пусто — без запасной" }),
+    field("Зрячая модель", visionModel, (v) => (visionModel = v), { mono: true, placeholder: "пусто — glm-5.3-flash для GLM" }),
+  );
+  const spareHint = el("p", "field-hint",
+    "Запасная модель того же провайдера берёт ход, когда основная упала (обрыв, 5xx, пустой ответ). " +
+    "Зрячая модель получает ход, в котором есть картинка, если основная её не видит: для GLM это glm-5.3-flash " +
+    "того же ключа, у зрячих моделей (GPT, Claude) поле не нужно. Переключение происходит до вызова, роль и усилие не меняются.");
+  spareHint.style.marginTop = "8px";
+  model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint, spareGrid, spareHint);
   syncPick();
   syncEffort();
   center.append(card("Модель", model));
@@ -850,6 +866,11 @@ export async function render(container: HTMLElement): Promise<void> {
       const effortOut = clampEffort(provider, modelForEffort(), effort);
       if (effortOut) out.model.reasoning_effort = effortOut;
       else delete out.model.reasoning_effort;
+      // Запасная и зрячая модели: пустое поле — снять ручку, а не записать "".
+      if (fallbackModel.trim()) out.model.fallback_model = fallbackModel.trim();
+      else delete out.model.fallback_model;
+      if (visionModel.trim()) out.model.vision_model = visionModel.trim();
+      else delete out.model.vision_model;
       // Telegram: токен без числового id — молчащий бот, а не «почти готово».
       // Гейт харнесса пускает ход только от владельца (telegram.allow_from),
       // и при owner_id = 0 не проходит НИКТО: бот в окне числится включённым,
