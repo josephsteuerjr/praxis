@@ -521,17 +521,19 @@ def _result_file(path: Path, ref: dict) -> Path | None:
     return target if target.is_file() else None
 
 
-def _model_text_from_file(path: Path, ref: dict, *, max_bytes: int = 512_000) -> str:
+def _model_text_from_file(path: Path, ref: dict, *, max_bytes: int = 512_000) -> str | None:
+    """Текст слова из файла вывода модели. None — файл не прочитался или слишком велик;
+    "" — прочитан, но слова в нём нет (только вызовы рук)."""
     target = _result_file(path, ref)
     if target is None:
-        return ""
+        return None
     try:
         with target.open("rb") as fh:
             raw = fh.read(max_bytes + 1)
     except OSError:
-        return ""
+        return None
     if len(raw) > max_bytes:
-        return ""
+        return None
     return _model_text({"inline": {"head": raw.decode("utf-8", errors="replace"), "truncated": False}})
 
 
@@ -659,11 +661,15 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
                 text = _model_text(ref)
                 if not text and bool((ref.get("inline") or {}).get("truncated")):
                     # Слово длиннее inline-головы (2000 знаков) раньше пропадало из карточки
-                    # целиком. Файл вывода модели невелик — читаем его здесь, а ссылку
-                    # оставляем окну на случай, если и это не влезет.
-                    text = _model_text_from_file(path, ref)
-                    current["text_ref"] = str(ref.get("result_id") or "")
-                    current["text_truncated"] = not bool(text)
+                    # целиком. Файл вывода модели невелик — читаем его здесь; ссылка окну
+                    # остаётся только если файл не прочитался (велик/недоступен). Обрубленный
+                    # вывод без слова (одни tool_use) — не «длинный ответ», а его отсутствие.
+                    extracted = _model_text_from_file(path, ref)
+                    if extracted is None:
+                        current["text_ref"] = str(ref.get("result_id") or "")
+                        current["text_truncated"] = True
+                    else:
+                        text = extracted
                 if text:
                     current["text"] = text
         elif kind == "model_completed":

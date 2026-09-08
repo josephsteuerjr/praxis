@@ -73,9 +73,24 @@ class RunDisplay(unittest.TestCase):
         self._event(kind="model_completed", call_id="m1", seq=3, duration_ms=1200, stop_reason="end_turn", usage={"in": 10, "out": 900})
         it = readers.run_detail(self.rid)["iterations"][0]
         self.assertEqual(it["text"], word, "слово прочитано из файла, а не потеряно")
-        self.assertEqual(it["text_ref"], "result-0002")
-        self.assertFalse(it["text_truncated"])
+        self.assertNotIn("text_ref", it, "файл прочитан — дочитывать нечего")
         self.assertEqual(readers.run_result(self.rid, "result-0002")["model_text"], word)
+        # Обрубленный вывод без слова (одни вызовы рук) — не «длинный ответ»: ни text, ни ссылки.
+        tools_only = json.dumps({"text": "", "blocks": [{"type": "tool_use", "name": "computer", "input": {"content": "x" * 5000}}]})
+        (self.path / "results" / "0005-model-output.log").write_text(tools_only, encoding="utf-8")
+        ref2 = dict(ref, result_id="result-0005", path="results/0005-model-output.log", size=len(tools_only),
+                    inline={"head": tools_only[:2000], "tail": "", "truncated": True})
+        self._event(kind="model_started", call_id="m2", seq=4)
+        self._event(kind="model_output", call_id="m2", name="model-output", result=ref2, seq=5)
+        self._event(kind="model_completed", call_id="m2", seq=6, duration_ms=900, stop_reason="tool_use", usage={"in": 10, "out": 900})
+        it2 = readers.run_detail(self.rid)["iterations"][1]
+        self.assertEqual(it2["text"], "")
+        self.assertNotIn("text_ref", it2)
+        # Файл недоступен — ссылка остаётся, окно дочитает само.
+        (self.path / "results" / "0005-model-output.log").unlink()
+        it3 = readers.run_detail(self.rid)["iterations"][1]
+        self.assertEqual(it3["text_ref"], "result-0005")
+        self.assertTrue(it3["text_truncated"])
 
     def test_v1_and_v2_first_authority_supply_current_trigger(self):
         for prefix in ("", "<!-- praxis.run.context.v2 seal=example -->\n"):
