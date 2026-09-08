@@ -25,11 +25,14 @@ export interface RunDetail {
     stop?: string;
     text_chars?: number;
     text?: string;
+    /** Длинное слово сохранено файлом результата: дочитать через /api/run/{id}/result/{ref}. */
+    text_ref?: string;
+    text_truncated?: boolean;
     usage?: { in?: number; cache_read?: number; out?: number };
     tools?: Array<{
       call_id?: string; seq?: number; at?: string; status?: string; error?: string;
       tool?: string; args?: unknown;
-      result?: { head?: string; tail?: string; truncated?: boolean } | null;
+      result?: { head?: string; tail?: string; truncated?: boolean; result_id?: string; size?: number | null } | null;
     }>;
   }>;
 }
@@ -93,10 +96,10 @@ function subject(args: unknown): string {
   return "";
 }
 
-function details(key: string, parts: Array<[string, string]>): string {
-  const body = parts.filter(([, value]) => value).map(([label, value]) =>
-    `<div class="action-detail-label">${esc(label)}</div><pre>${esc(value)}</pre>`).join("");
-  return body ? `<details class="action-details" data-detail="${esc(key)}"><summary>Подробности</summary>${body}</details>` : "";
+function details(key: string, parts: Array<[string, string]>, label = "Подробности"): string {
+  const body = parts.filter(([, value]) => value).map(([name, value]) =>
+    `<div class="action-detail-label">${esc(name)}</div><pre>${esc(value)}</pre>`).join("");
+  return body ? `<details class="action-details" data-detail="${esc(key)}"><summary>${esc(label)}</summary>${body}</details>` : "";
 }
 
 /** Повод человеческими словами: служебные префиксы продукта («Hélène: Сработал твой будильник.
@@ -117,32 +120,121 @@ function readable(text: string, label: string, key: string): string {
   return `<section class="run-message"><div class="action-detail-label">${label}</div>${text.length > 320 ? `<details data-detail="${key}" class="run-reading-more"><summary><div class="run-reading-preview">${md(clip(text, 240))}</div><span>Читать полностью</span></summary>${body}</details>` : body}</section>`;
 }
 
-/** Видимые действия и записанные результаты, без догадок об успехе инструмента. */
+// ---------------------------------------------------------------- длинные тексты
+// Результат руки или её слово показываются целиком, а не обрубком в 280 знаков: длинный
+// текст складывается до 12 строк с кнопкой «Показать целиком» (без прокрутки внутри
+// коробки), а если сервер сохранил только голову и хвост (inline 2000 знаков), кнопка
+// дочитывает файл результата через /api/run/{run}/result/{id}. Слово владельца 08.09:
+// «не разворачивается текстовое окошко с ответом или выводом, если они длинные очень».
+export type ResultFetcher = (runId: string, resultId: string) => Promise<{ text?: string; model_text?: string; complete?: boolean } | null>;
+let fetchResult: ResultFetcher | null = null;
+const fetched = new Map<string, string>();
+const CLIP_LINES = 12;
+const CLIP_CHARS = 900;
+
+export function setResultFetcher(fn: ResultFetcher): void {
+  fetchResult = fn;
+}
+
+const lineCount = (s: string) => s.split("\n").length;
+const needsClip = (text: string) => text.length > CLIP_CHARS || lineCount(text) > CLIP_LINES;
+
+/** Коробка текста: ключ сохраняет раскрытие при перерисовке; data-full — что дочитать. */
+function textBox(key: string, text: string, opts: { truncated?: boolean; ref?: string; run?: string; size?: number | null } = {}): string {
+  const full = opts.ref && opts.run ? fetched.get(`${opts.run}/${opts.ref}`) : undefined;
+  const body = full ?? text;
+  const truncated = !!opts.truncated && full === undefined;
+  const folded = needsClip(body) || truncated;
+  const more = truncated
+    ? `Показать целиком${opts.size ? ` · ${fmtK(opts.size)} байт` : ""}`
+    : `Показать целиком · ${lineCount(body)} строк`;
+  const fullAttr = truncated && opts.ref && opts.run ? ` data-full="${esc(opts.run)}/${esc(opts.ref)}"` : "";
+  return `<div class="run-text" data-text="${esc(key)}">` +
+    `<pre class="run-text-body ${folded ? "clipped" : ""}">${esc(body)}</pre>` +
+    (folded ? `<button type="button" class="run-text-more" data-more="${esc(key)}"${fullAttr}>${more}</button>` : "") +
+    `</div>`;
+}
+
+function textOf(payload: { text?: string; model_text?: string } | null): string {
+  if (!payload) return "";
+  if (payload.model_text) return payload.model_text;
+  const raw = payload.text || "";
+  try {
+    return pretty(JSON.parse(raw));
+  } catch {
+    return raw;
+  }
+}
+
+let bound = false;
+function bindMore(): void {
+  if (bound || typeof document === "undefined") return;
+  bound = true;
+  document.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement | null)?.closest<HTMLButtonElement>("button[data-more]");
+    if (!btn) return;
+    e.preventDefault();
+    const box = btn.closest<HTMLElement>(".run-text");
+    const pre = box?.querySelector<HTMLElement>(".run-text-body");
+    if (!box || !pre) return;
+    const full = btn.dataset.full;
+    if (full && !fetched.has(full) && fetchResult) {
+      const [run, rid] = full.split("/");
+      btn.disabled = true;
+      btn.textContent = "читаю…";
+      fetchResult(run, rid).then((payload) => {
+        const text = textOf(payload);
+        if (text) {
+          fetched.set(full, text);
+          pre.textContent = text;
+        }
+        pre.classList.remove("clipped");
+        btn.disabled = false;
+        btn.textContent = text ? "Свернуть" : "Файл результата не прочитался";
+      }, () => {
+        btn.disabled = false;
+        btn.textContent = "Не прочиталось, попробовать ещё";
+      });
+      return;
+    }
+    const closed = pre.classList.toggle("clipped");
+    btn.textContent = closed ? `Показать целиком · ${lineCount(pre.textContent || "")} строк` : "Свернуть";
+  });
+}
+bindMore();
+
+// ---------------------------------------------------------------- лента шагов
+
+/** Шаги хода: один блок на итерацию модели — номер, время, токены, затем руки и слово. */
 export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
   const steps: string[] = [];
   const L = opts.lesson;
   const lesson = (key: string) => (L && L[key] ? `<div class="lesson">${esc(L[key])}</div>` : "");
-  let thought = 0;
   const live = d.manifest?.status === "running";
-  for (const it of d.iterations || []) {
+  const runId = d.id || "";
+  let hands = 0;
+  (d.iterations || []).forEach((it, i) => {
+    const n = i + 1;
     const u = it.usage || {};
-    thought += 1;
     const cached = u.cache_read || 0;
     const total = (u.in || 0) + cached;
     const share = total ? Math.round((100 * cached) / total) : 0;
-    const key = it.call_id || String(it.seq ?? thought);
+    const key = it.call_id || String(it.seq ?? n);
     const complete = it.status === "completed" || (it.status !== "failed" && it.ms != null);
     const thinking = !complete && it.status !== "failed" && !it.tools?.length && live;
-    // Обрыв потолком — не «получен»: 8192 токенов размышления и ноль текста (08.09).
     const cut = complete && it.stop === "max_tokens";
-    const label = it.status === "failed" ? "Ошибка ответа модели" : cut ? "Ответ модели оборван потолком" : complete ? "Ответ модели получен" : thinking ? "Ожидает ответа модели" : "Ответ модели не записан";
-    if (it.call_id || it.status || it.model || it.ms != null) steps.push(`<div class="ev-step action-model ${thinking ? "action-active" : ""} ${cut ? "action-failed" : ""}">
-      <div class="action-head"><span class="action-title">${label}</span>${thinking ? '<span class="action-status">сейчас</span>' : cut ? `<span class="action-status">${it.text_chars ? "фраза не закончена" : "ни слова не дошло"}</span>` : ""}</div>` +
-      details("model:" + key, [["Модель", it.model || ""], ["Время", it.ms != null ? `${(it.ms / 1000).toFixed(1)} с` : ""],
-        ["Токены", u.in != null ? `вход ${fmtK(total)}${cached ? ` (кэш ${share}%)` : ""} → ответ ${fmtK(u.out || 0)}` : ""],
-        ["Остановка", cut ? "max_tokens: потолок ответа исчерпан размышлением или длинным ответом" : ""], ["Ошибка", it.error || ""]]) +
-      lesson(thought === 1 ? "think_first" : "think") + `</div>`);
+    const status = it.status === "failed" ? "ошибка модели" : cut ? (it.text_chars ? "ответ оборван потолком, фраза не закончена" : "ответ оборван потолком, ни слова не дошло") : thinking ? "думает" : "";
+    const seconds = it.ms != null ? `${(it.ms / 1000).toFixed(1)} с` : "";
+    const tokens = u.in != null ? `${fmtK(total)}${cached ? ` (кэш ${share}%)` : ""} → ${fmtK(u.out || 0)}` : "";
+    const meta = [seconds, tokens].filter(Boolean).join(" · ");
+    const parts: string[] = [];
+    parts.push(`<div class="step-head"><span class="step-n">Шаг ${n}</span>${meta ? `<span class="step-meta">${esc(meta)}</span>` : ""}${status ? `<span class="action-status">${esc(status)}</span>` : ""}</div>`);
+    parts.push(details("model:" + key, [["Модель", it.model || ""], ["Время", seconds],
+      ["Токены", u.in != null ? `вход ${fmtK(total)}${cached ? ` (кэш ${share}%)` : ""} → ответ ${fmtK(u.out || 0)}` : ""],
+      ["Остановка", cut ? "max_tokens: потолок ответа исчерпан размышлением или длинным ответом" : ""], ["Ошибка", it.error || ""]], "Подробности шага"));
+    parts.push(lesson(n === 1 ? "think_first" : "think"));
     for (const t of it.tools || []) {
+      hands += 1;
       const args = t.args != null ? pretty(t.args) : "";
       const head = String(t.result?.head || t.result?.tail || "");
       const received = t.result != null || t.status === "received";
@@ -151,60 +243,74 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
       // Шаг доставки ядра с нулём знаков — не её действие и не «получила ноль»: на границе
       // прогона доставлять было нечего (слово ушло рукой reply или границей окна).
       const emptyDelivery = t.tool === "telegram.deliver" && (t.args as { text_chars?: number } | null)?.text_chars === 0 && !(t.args as { media_count?: number } | null)?.media_count;
-      const status = failed ? "ошибка" : emptyDelivery ? "нечего доставлять" : received ? "результат получен" : active ? "выполняется" : "результат неизвестен";
+      const tstatus = failed ? "ошибка" : emptyDelivery ? "нечего доставлять" : received ? "результат получен" : active ? "выполняется" : "результат неизвестен";
       const title = emptyDelivery ? "Доставка ядра" : ACTIONS[t.tool || ""] || t.tool || "Действие";
       const what = subject(t.args);
       const result = t.result?.truncated ? [t.result.head, "… пропущена часть результата …", t.result.tail].filter(Boolean).join("\n") : head;
       // Квитанции содержат инструкции раннеру; сохраняем их в подробностях.
       const receipt = ["reply", "end_turn", "telegram.deliver"].includes(t.tool || "");
       const lessonKey = t.tool === "reply" ? "reply" : t.tool === "end_turn" ? "end_turn" : "hand";
-      steps.push(
-        `<div class="ev-step action-tool ${active ? "action-active" : ""} ${failed ? "action-failed" : ""}">` +
-          `<div class="action-head"><b class="action-title">${esc(title)}</b><span class="action-status">${status}</span></div>` +
-          `${what ? `<div class="action-subject">${esc(clip(what, 240))}</div>` : ""}` +
-          `${head && !receipt ? `<div class="action-result">${esc(clip(resultText(head), 280))}</div>` : ""}` +
-          details("tool:" + (t.call_id || String(t.seq ?? key + ":" + steps.length)), [["Инструмент", t.tool || ""], ["Параметры", args], [t.result?.truncated ? "Сохранённый фрагмент результата" : "Результат", result], ["Ошибка", t.error || ""]]) +
+      const tkey = "tool:" + (t.call_id || String(t.seq ?? key + ":" + hands));
+      parts.push(
+        `<div class="hand ${active ? "action-active" : ""} ${failed ? "action-failed" : ""}">` +
+          `<div class="action-head"><b class="action-title">${esc(title)}</b><span class="action-status">${tstatus}</span></div>` +
+          `${what ? `<div class="action-subject">${esc(clip(what, 400))}</div>` : ""}` +
+          `${head && !receipt ? textBox(tkey + ":result", resultText(result), { truncated: t.result?.truncated, ref: t.result?.result_id, run: runId, size: t.result?.size }) : ""}` +
+          details(tkey, [["Инструмент", t.tool || ""], ["Параметры", args], [receipt ? (t.result?.truncated ? "Сохранённый фрагмент квитанции" : "Квитанция") : "", receipt ? result : ""], ["Ошибка", t.error || ""]]) +
           lesson(lessonKey) +
           `</div>`,
       );
     }
     if (it.text) {
-      steps.push(`<div class="ev-step word"><div class="action-subject">${esc(clip(it.text, 300))}</div>${details("text:" + key, [["Текст", it.text]])}</div>`);
+      parts.push(`<div class="hand word"><div class="action-head"><b class="action-title">Слово</b></div>${textBox("text:" + key, it.text, { truncated: !!it.text_truncated, ref: it.text_ref, run: runId })}</div>`);
+    } else if (it.text_ref) {
+      parts.push(`<div class="hand word"><div class="action-head"><b class="action-title">Слово</b><span class="action-status">длинный ответ сохранён файлом</span></div>${textBox("text:" + key, "", { truncated: true, ref: it.text_ref, run: runId })}</div>`);
     }
-  }
+    steps.push(`<div class="ev-step step ${thinking ? "action-active" : ""} ${cut || it.status === "failed" ? "action-failed" : ""}">${parts.join("")}</div>`);
+  });
   const term = d.manifest?.terminal || {};
+  const tail: string[] = [];
   if (term.status) {
     const t = terminalLabel(term.status, term.reason || "");
-    steps.push(
+    tail.push(
       `<div class="ev-step ${t.failed ? "action-failed" : ""}"><b class="action-title">${esc(t.label)}</b>${details("terminal", [["Причина", term.reason || ""]])}${lesson("terminal")}</div>`,
     );
   }
   const origin = readable(d.origin?.text || "", "Повод запуска", "origin") || (d.origin?.source === "unknown" ? '<div class="muted">Повод запуска не записан.</div>' : "");
   const outcome = readable(d.outcome?.text || d.outcome?.note || "", "Итог", "outcome");
-  let actions = steps.join("") || `<div class="muted">${live ? "Работа началась. Первые действия ещё не записаны." : "Подробности действий не записаны."}</div>`;
+  let actions = steps.join("") || `<div class="muted">${live ? "Работа началась. Первые шаги ещё не записаны." : "Шаги не записаны."}</div>`;
   if (opts.limit && steps.length > opts.limit) {
+    // Счёт один и тот же везде: шаги = итерации модели, не сумма рук и не строки ленты.
     const hidden = steps.length - opts.limit;
-    actions = `<details class="action-earlier" data-detail="earlier"><summary>Показать предыдущие действия · ${hidden}</summary>${steps.slice(0, -opts.limit).join("")}</details>` + steps.slice(-opts.limit).join("");
+    actions = `<details class="action-earlier" data-detail="earlier"><summary>Показать ранние шаги · ${hidden} из ${steps.length}</summary>${steps.slice(0, -opts.limit).join("")}</details>` + steps.slice(-opts.limit).join("");
   }
+  actions += tail.join("");
   if (opts.overview) {
-    const count = (d.iterations || []).reduce((n, it) => n + (it.tools?.length || 0), 0);
-    return origin + outcome + `<details class="run-actions" data-detail="actions" ${live ? "open" : ""}><summary>Действия${count ? ` · ${count}` : ""}</summary>${actions}</details>`;
+    const count = steps.length ? ` · ${steps.length}${hands ? `, рук ${hands}` : ""}` : "";
+    return origin + outcome + `<details class="run-actions" data-detail="actions" ${live ? "open" : ""}><summary>Шаги${count}</summary>${actions}</details>`;
   }
   return origin + actions + outcome;
 }
 
-/** Обновлять содержимое только при изменении, сохраняя раскрытие и фокус. */
+/** Обновлять содержимое только при изменении, сохраняя раскрытие, развёрнутые тексты и фокус. */
 const rendered = new WeakMap<HTMLElement, string>();
 export function renderSteps(box: HTMLElement, d: RunDetail, opts: StepsOptions = {}): void {
   const html = stepsHTML(d, opts);
   if (rendered.get(box) === html) return;
   const expanded = new Map([...box.querySelectorAll<HTMLDetailsElement>("details[data-detail]")].map((el) => [el.dataset.detail, el.open]));
+  const unclipped = new Set([...box.querySelectorAll<HTMLElement>(".run-text")].filter((el) => !el.querySelector(".run-text-body.clipped")).map((el) => el.dataset.text));
   const focused = box.contains(document.activeElement) ? document.activeElement?.closest<HTMLElement>("[data-detail]")?.dataset.detail : undefined;
   box.innerHTML = html;
   rendered.set(box, html);
   for (const el of box.querySelectorAll<HTMLDetailsElement>("details[data-detail]")) {
     if (expanded.has(el.dataset.detail)) el.open = expanded.get(el.dataset.detail)!;
     if (focused === el.dataset.detail) el.querySelector("summary")?.focus({ preventScroll: true });
+  }
+  for (const el of box.querySelectorAll<HTMLElement>(".run-text")) {
+    if (!unclipped.has(el.dataset.text)) continue;
+    el.querySelector(".run-text-body")?.classList.remove("clipped");
+    const btn = el.querySelector<HTMLButtonElement>(".run-text-more");
+    if (btn && !btn.dataset.full) btn.textContent = "Свернуть";
   }
 }
 

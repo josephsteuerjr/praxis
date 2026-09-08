@@ -13,7 +13,7 @@
 .usage-bar-track i { display: block; width: 100%; background: var(--accent); opacity: .65; border-radius: 3px; }
 .usage-history-label { width: 100%; font-size: 10px; text-align: center; }
 .usage-details { border-top: 1px solid var(--line); margin-top: 22px; padding-top: 12px; font-size: 13px; }
-.usage-details summary { cursor: pointer; color: var(--ink-2); }
+.usage-details summary { color: var(--ink-2); }
 .usage-details summary span { color: var(--ink-3); margin-left: 5px; }
 .usage-table-wrap { overflow-x: auto; }
 .usage-details table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -34,7 +34,7 @@
 .usage-quota-empty { margin-top: 14px; }
 .usage-muted { line-height: 1.6; }
 .usage-compact { padding: 0; margin: 18px 0; background: transparent; border-radius: 12px; }
-.usage-summary { display: grid; grid-template-columns: 1fr auto; gap: 12px 24px; padding: 16px 20px; cursor: pointer; list-style: none; }
+.usage-summary { display: grid; grid-template-columns: 1fr auto; gap: 12px 24px; padding: 16px 20px; list-style: none; }
 .usage-summary::-webkit-details-marker { display: none; }
 .usage-summary:focus-visible, .usage-details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 8px; }
 .usage-summary-title { font: 500 14px/1.4 var(--sans); }

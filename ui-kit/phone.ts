@@ -12,7 +12,7 @@
 import { applyTheme, el, q, toast, type Theme } from "./dom";
 import "./version";
 import { esc, fmtDay, fmtDur, fmtTime, md } from "./text";
-import { frameStripHTML, stepsHTML, type RunDetail } from "./steps";
+import { frameStripHTML, setResultFetcher, stepsHTML, type RunDetail } from "./steps";
 import { activityHTML, selectActivity, updateActivity } from "./activity";
 import contract from "./contract.json";
 import { mountUsage, usageShell } from "./usage";
@@ -313,6 +313,8 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       return null;
     }
   }
+
+  setResultFetcher((run, rid) => scoped(`/api/run/${encodeURIComponent(run)}/result/${encodeURIComponent(rid)}`, "run"));
 
   const notGiven = (what: string) =>
     `<div class="empty"><b>${esc(what)} телефону пока не отдаются</b>Канал откроет их телефону по контракту 0.3.3; в окне на компьютере они есть.</div>`;

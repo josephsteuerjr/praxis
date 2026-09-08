@@ -477,6 +477,7 @@ def _inline_preview(result: dict) -> dict:
         "head": str(inline.get("head") or "")[:4000],
         "tail": str(inline.get("tail") or "")[:1000],
         "truncated": bool(inline.get("truncated")),
+        "result_id": str(ref.get("result_id") or ""),
         "size": ref.get("size"),
         "line_count": ref.get("line_count"),
         "path": ref.get("path"),
@@ -501,6 +502,77 @@ def _model_text(result: dict) -> str:
             if extra and extra not in text:
                 text = (text + "\n" + extra).strip()
     return text
+
+
+_RESULT_ID_RE = re.compile(r"^result-\d{4,8}$")
+RESULT_READ_MAX = 2_000_000
+
+
+def _result_file(path: Path, ref: dict) -> Path | None:
+    """Файл результата строго внутри каталога прогона: чужие пути не читаются."""
+    rel = str(ref.get("path") or "")
+    if not rel or rel.startswith(("/", "\\")) or ".." in rel.replace("\\", "/").split("/"):
+        return None
+    target = (path / rel)
+    try:
+        target.resolve().relative_to(path.resolve())
+    except ValueError:
+        return None
+    return target if target.is_file() else None
+
+
+def _model_text_from_file(path: Path, ref: dict, *, max_bytes: int = 512_000) -> str:
+    target = _result_file(path, ref)
+    if target is None:
+        return ""
+    try:
+        with target.open("rb") as fh:
+            raw = fh.read(max_bytes + 1)
+    except OSError:
+        return ""
+    if len(raw) > max_bytes:
+        return ""
+    return _model_text({"inline": {"head": raw.decode("utf-8", errors="replace"), "truncated": False}})
+
+
+def run_result(run_id: str, result_id: str, *, max_bytes: int = RESULT_READ_MAX) -> dict:
+    """Сохранённый результат прогона целиком: то, что inline-превью (2000 знаков) обрезает.
+
+    Только чтение; путь берётся из расписки события и проверяется на принадлежность
+    каталогу прогона. Для вывода модели рядом отдаётся извлечённый текст (`model_text`)."""
+    path = run_dir(run_id)
+    if path is None or not _RESULT_ID_RE.match(str(result_id or "")):
+        return {}
+    ref: dict | None = None
+    row_name = ""
+    for line in tail_lines(path / "events.jsonl", 4000, max_bytes=16_000_000):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        candidate = row.get("result") if isinstance(row, dict) else None
+        if isinstance(candidate, dict) and str(candidate.get("result_id") or "") == result_id:
+            ref = candidate
+            row_name = str(row.get("name") or "")  # имя результата лежит на событии, не в ссылке
+            break
+    if ref is None:
+        return {}
+    target = _result_file(path, ref)
+    if target is None:
+        return {}
+    try:
+        with target.open("rb") as fh:
+            raw = fh.read(max_bytes)
+    except OSError:
+        return {}
+    text = raw.decode("utf-8", errors="replace")
+    size = int(ref.get("size") or len(raw))
+    out = {"run_id": run_id, "result_id": result_id, "name": ref.get("name"),
+           "media_type": ref.get("media_type"), "size": size, "complete": len(raw) >= size,
+           "text": text}
+    if row_name == "model-output" or str(ref.get("name") or "") == "model-output":
+        out["model_text"] = _model_text({"inline": {"head": text, "truncated": False}})
+    return out
 
 
 def _run_origin(path: Path, manifest: dict) -> dict:
@@ -583,7 +655,15 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
             iterations.append(current)
         elif kind == "model_output":
             if current is not None:
-                text = _model_text(row.get("result") or {})
+                ref = row.get("result") or {}
+                text = _model_text(ref)
+                if not text and bool((ref.get("inline") or {}).get("truncated")):
+                    # Слово длиннее inline-головы (2000 знаков) раньше пропадало из карточки
+                    # целиком. Файл вывода модели невелик — читаем его здесь, а ссылку
+                    # оставляем окну на случай, если и это не влезет.
+                    text = _model_text_from_file(path, ref)
+                    current["text_ref"] = str(ref.get("result_id") or "")
+                    current["text_truncated"] = not bool(text)
                 if text:
                     current["text"] = text
         elif kind == "model_completed":

@@ -110,7 +110,7 @@ function liveCardHTML(d: RunDetail | undefined, runId: string): string {
   return `<div class="turn-live" id="turn-live" data-run="${esc(runId)}">
     <div class="turn-live-head"><span class="dot live"></span><span>Действия сейчас</span><span class="t">${esc(since)}</span></div>
     ${goal ? `<div class="turn-live-sub">${esc(goal)}</div>` : ""}
-    <div class="ev-steps" id="turn-live-steps">${d ? stepsHTML(d, { limit: 10 }) : '<div class="muted">читаю шаги…</div>'}</div>
+    <div class="ev-steps" id="turn-live-steps">${d ? stepsHTML(d) : '<div class="muted">читаю шаги…</div>'}</div>
   </div>`;
 }
 
@@ -237,7 +237,7 @@ async function refreshLive() {
     const steps = card.querySelector<HTMLElement>("#turn-live-steps");
     const t = card.querySelector<HTMLElement>(".t");
     if (t) t.textContent = liveSince(id);
-    if (steps && d && card.isConnected && liveRunId() === id) renderSteps(steps, d, { limit: 10 });
+    if (steps && d && card.isConnected && liveRunId() === id) renderSteps(steps, d);
   } catch {
     // Краткий обрыв связи не должен останавливать обновление действий.
   } finally {

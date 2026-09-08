@@ -6,6 +6,7 @@ import "./styles/app.css";
 import { api, cfg, connect, inTauri, onConnection, onEvent, post, shell } from "./api";
 import { applyTheme } from "../../ui-kit/dom";
 import { watchShellVersion } from "../../ui-kit/version";
+import { setResultFetcher } from "../../ui-kit/steps";
 import { bindFail, esc, failHTML, fmtAge, fmtK, fmtTs, humanError, q, toast } from "./lib";
 import { PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "./state";
 import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "./rooms";
@@ -19,6 +20,9 @@ import * as files from "./views/files";
 import * as journal from "./views/journal";
 import * as anatomy from "./views/anatomy";
 import * as settings from "./views/settings";
+
+// Длинный результат руки или её слово дочитываются файлом прогона по кнопке в ленте шагов.
+setResultFetcher((run, rid) => api(`/api/run/${encodeURIComponent(run)}/result/${encodeURIComponent(rid)}`));
 
 const view = q<HTMLElement>("#view");
 const app = q<HTMLElement>("#app");
