@@ -455,6 +455,84 @@ def chat_titles(n: int = 4000) -> dict[str, str]:
     return titles
 
 
+_ROOM_TITLES_CACHE: dict[str, Any] = {"stamp": None, "value": {}}
+# «Комната -100…» / «Комната 4122…» — заглушка ядра, когда настоящего имени у
+# места ещё не было; заголовком чата такое не считается.
+_PLACEHOLDER_TITLE_RE = re.compile(r"^(комната|чат|room)\s+-?\d+$", re.IGNORECASE)
+
+
+def _room_titles() -> dict[str, str]:
+    """chat_id -> имя места из ПОСТОЯННЫХ реестров агента, не из хвоста журнала.
+
+    Хвост turns.jsonl (см. chat_titles) живёт 300–600 строк и после компакта
+    забывает чаты, где давно не было хода, — список «Чаты» показывал «чат
+    -1004301095307» вместо «mycelium» (замечено владельцем 08.09). Настоящие имена
+    лежат дольше: заголовок `# Имя` в memory/rooms/<peer>.md (профиль места) и
+    known_ids.json (id → имя для личек). Кэш — по mtime каталога rooms и файла
+    known_ids; топики докладываются из проекции group_context по запросу.
+    """
+    root = tree() / "memory"
+    rooms_dir = root / "rooms"
+    known_path = root / "known_ids.json"
+    stamp: list[Any] = []
+    for p in (rooms_dir, known_path):
+        try:
+            st = p.stat()
+            stamp.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            stamp.append(None)
+    if _ROOM_TITLES_CACHE["stamp"] == stamp:
+        return _ROOM_TITLES_CACHE["value"]
+    titles: dict[str, str] = {}
+    try:
+        for p in rooms_dir.glob("*.md"):
+            try:
+                with p.open(encoding="utf-8", errors="replace") as fh:
+                    first = fh.readline().strip()
+            except OSError:
+                continue
+            if not first.startswith("#"):
+                continue
+            name = first.lstrip("#").strip()
+            if name and not _PLACEHOLDER_TITLE_RE.match(name):
+                titles[p.stem] = name[:120]
+    except OSError:
+        pass
+    known = _load_json(known_path)
+    if isinstance(known, dict):
+        for k, v in known.items():
+            key = str(k)
+            if key not in titles and isinstance(v, str) and v.strip():
+                titles[key] = v.strip()[:120]
+    _ROOM_TITLES_CACHE["value"] = titles
+    _ROOM_TITLES_CACHE["stamp"] = stamp
+    return titles
+
+
+def _topic_title(peer: str, topic_id: str) -> str:
+    """Имя темы форума из проекции group_context (`topics[<id>].title`)."""
+    path = tree() / "memory" / ".state" / "group_context" / f"{peer}.json"
+    topics = _load_json(path).get("topics") or {}
+    row = topics.get(str(topic_id)) if isinstance(topics, dict) else None
+    title = str((row or {}).get("title") or "").strip()
+    return "" if _PLACEHOLDER_TITLE_RE.match(title) or title.startswith("topic") and title[5:].strip(": #").isdigit() else title[:120]
+
+
+def _last_foreign_sender(peer: str) -> str:
+    """Личка без профиля и без хода в хвосте: имя собеседника — из архива переписки."""
+    root = tree() / "memory" / ".state" / "group_context"
+    data = _load_json(root / f"{peer}.json")
+    rel = str(data.get("archive") or "").replace("\\", "/").lstrip("/")
+    if not rel.startswith("memory/groups/") or ".." in rel.split("/"):
+        return ""
+    for row in reversed(tail_jsonl(tree() / rel, 60)):
+        if row.get("kind") == "message" and not row.get("outgoing"):
+            name = str(row.get("sender_name") or "").strip()
+            if name:
+                return name[:120]
+    return ""
+
+
 def _title_for(chat_id, titles: dict[str, str]) -> str:
     key = str(chat_id or "")
     if not key:
@@ -466,8 +544,15 @@ def _title_for(chat_id, titles: dict[str, str]) -> str:
                            product_config().get("agent_name") or "")
     if key in titles:
         return titles[key]
-    base = key.split("__topic__")[0]
-    return titles.get(base, "")
+    base, _, topic = key.partition("__topic__")
+    stable = _room_titles()
+    name = titles.get(base) or stable.get(base) or ""
+    if not name and not base.startswith("-"):
+        name = _last_foreign_sender(base)
+    if topic and name:
+        sub = _topic_title(base, topic)
+        return f"{name} · {sub}" if sub else name
+    return name
 
 
 def _inline_preview(result: dict) -> dict:

@@ -102,11 +102,24 @@ export function md(src: unknown): string {
     if (safe.length > 4000) return safe;
     budget -= safe.length;
     if (budget < 0) return safe;
-    return safe
+    // Ссылки — до остальной разметки и через заглушки: `_` и `*` внутри адреса
+    // иначе читались как курсив, а голый https://… (так чаще всего цитирует
+    // модель и так пишут люди) вообще не становился ссылкой. Заглушка —
+    // управляющий символ U+0001: в тексте реплик его не бывает, а пробел и
+    // цифра бывают, и они бы подменялись ссылками.
+    const links: string[] = [];
+    const hold = (href: string, label: string) => {
+      links.push(`<a href="${href}" target="_blank" rel="noopener">${label}</a>`);
+      return `\u0001${links.length - 1}\u0001`;
+    };
+    const marked = safe
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_m, label: string, href: string) => hold(href, label))
+      .replace(/(^|[\s(>])(https?:\/\/[^\s<>"']+?)([.,;:!?)]*)(?=$|[\s<])/g, (_m, pre: string, href: string, tail: string) => pre + hold(href, href) + tail);
+    return marked
       .replace(/`([^`]+)`/g, "<code>$1</code>")
       .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
       .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<i>$2</i>")
-      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      .replace(/\u0001(\d+)\u0001/g, (_m, i: string) => links[Number(i)] ?? "");
   };
   const flushList = () => {
     if (listStack) {

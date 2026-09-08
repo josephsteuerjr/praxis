@@ -1,7 +1,7 @@
 // Устройство: как этот агент работает, простыми словами, с разбором живого
 // хода и живым списком рук — снимок кода, не пересказ.
 import { api } from "../api";
-import { esc, fmtK, fmtN, fmtTime, md, q, safeRender } from "../lib";
+import { esc, fmtK, fmtN, fmtTime, md, plural, q, safeRender } from "../lib";
 import { stepsHTML, type RunDetail } from "../panel";
 import { loadMode, type ModeState } from "../mode";
 import { S } from "../state";
@@ -146,13 +146,56 @@ function cutsHTML(c: FrameCuts | null): string {
     ${CUT_AXES.map(([axis, title]) => (c.by[axis]?.length ? `<details class="fold" ${axis === "iteration" ? "open" : ""}><summary><b>${esc(title)}</b></summary><div class="fold-body">${table(c.by[axis])}</div></details>` : "")).join("")}`;
 }
 
+interface SpendRow { calls: number; runs: number; input_tokens: number; cached_tokens: number; fresh_tokens: number; output_tokens: number; total_tokens: number; cache_ratio: number | null; seconds: number; errors: number; kinds: Record<string, number>; models: Record<string, number> }
+interface SpendChat extends SpendRow { chat_id: string; title: string }
+interface SpendPerson extends SpendRow { who: string; name: string; chats: string[] }
+interface SpendRun extends SpendRow { run_id: string; kind: string; chat_id: string; chat_title: string; who: string; who_name: string; goal_head: string; first_ts: number; last_ts: number; status: string }
+interface Spend { days: number; summary: SpendRow & { bound_calls: number; unbound_calls: number; fields_in_log: Record<string, boolean> }; by_chat: SpendChat[]; by_person: SpendPerson[]; by_run: SpendRun[]; by_kind: Array<SpendRow & { kind: string }>; unbound: Array<SpendRow & { role: string }> }
+
+const KIND_RU: Record<string, string> = { chat_turn: "ход в чате", task_window: "окно задачи", heartbeat: "будильник", forge_event: "Forge", wake: "пробуждение" };
+
+/** Ревизия расхода по чатам, людям и задачам (слово владельца 08.09): токены, не деньги. */
+function spendCutsHTML(s: Spend | null): string {
+  if (!s || !s.summary.calls) return "";
+  const pct = (r: number | null) => (r == null ? "—" : `${Math.round(r * 100)}%`);
+  const cell = (r: SpendRow) => `<td>${r.calls}</td><td>${r.runs || ""}</td><td>${fmtK(r.total_tokens)}</td><td>${pct(r.cache_ratio)}</td><td>${fmtK(r.output_tokens)}</td>`;
+  const head = `<tr><th>кто / где</th><th>вызовов</th><th>ходов</th><th>токенов</th><th>кэш</th><th>ответ</th></tr>`;
+  const chats = `<table class="grid">${head}${s.by_chat
+    .slice(0, 20)
+    .map((r) => `<tr><td>${esc(r.title || r.chat_id || "—")}${r.chat_id && r.title ? ` <span class="muted mono">${esc(r.chat_id)}</span>` : ""}</td>${cell(r)}</tr>`)
+    .join("")}</table>`;
+  const people = `<table class="grid">${head}${s.by_person
+    .slice(0, 20)
+    .map((r) => `<tr><td>${esc(r.name || r.who)}${r.name && r.who && r.who !== "praxis:self" ? ` <span class="muted mono">${esc(r.who)}</span>` : ""}${r.chats.length ? `<div class="muted">${esc(r.chats.join(" · "))}</div>` : ""}</td>${cell(r)}</tr>`)
+    .join("")}</table>`;
+  const when = (r: SpendRun) => {
+    const d = new Date((r.first_ts || 0) * 1000);
+    return isNaN(d.getTime()) ? "" : d.toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  };
+  const runs = `<table class="grid"><tr><th>задача (ход)</th><th>вызовов</th><th>токенов</th><th>кэш</th><th>ответ</th></tr>${s.by_run
+    .slice(0, 25)
+    .map((r) => `<tr><td><b>${esc(KIND_RU[r.kind] || r.kind || "ход")}</b> · ${esc(when(r))}${r.chat_title ? ` · ${esc(r.chat_title)}` : ""}${r.who_name && r.who !== "praxis:self" ? ` · ${esc(r.who_name)}` : ""}${r.goal_head ? `<div class="muted">${esc(r.goal_head)}</div>` : ""}</td><td>${r.calls}</td><td>${fmtK(r.total_tokens)}</td><td>${pct(r.cache_ratio)}</td><td>${fmtK(r.output_tokens)}</td></tr>`)
+    .join("")}</table>`;
+  const unbound = s.unbound.length
+    ? `<p class="muted">Вне прогонов (не приписать ни чату, ни человеку): ${s.unbound.map((u) => `${esc(u.role)} — ${u.calls} ${plural(u.calls, "вызов", "вызова", "вызовов")}, ${fmtK(u.total_tokens)}`).join("; ")}.</p>`
+    : "";
+  const sum = s.summary;
+  const source = sum.fields_in_log.chat ? "чат и человек записаны в самом журнале вызовов" : "чат и человек восстановлены через манифесты прогонов (ядро ещё не пишет их в журнал вызовов)";
+  return `<h3 class="section-title">Расход по чатам, людям и задачам <span class="muted">${s.days} дней</span></h3>
+    <p class="muted">${sum.calls} вызовов модели, ${fmtK(sum.total_tokens)} токенов (из кэша ${pct(sum.cache_ratio)} входа, ответ ${fmtK(sum.output_tokens)}); ${sum.bound_calls} вызовов внутри ходов, ${sum.unbound_calls} вне. Считаются токены, не деньги: прайс-листа по живым моделям в дереве нет. Источник: ${source}.</p>
+    <details class="fold" open><summary><b>по чатам</b></summary><div class="fold-body">${chats}</div></details>
+    <details class="fold"><summary><b>по людям</b></summary><div class="fold-body">${people}<p class="muted">«Сама, без человека» — её собственные ходы: будильник, окна задач, Forge. Незнакомый id показан числом: имён в журнале нет и не будет, только Telegram-id.</p></div></details>
+    <details class="fold"><summary><b>по задачам</b> <span class="muted">самые дорогие ходы</span></summary><div class="fold-body">${runs}</div></details>
+    ${unbound}`;
+}
+
 export async function render(container: HTMLElement): Promise<void> {
-  const [aR, pR, mR, cR] = await Promise.allSettled([api<Anatomy>("/api/anatomy"), api("/api/pulse"), loadMode(), api<FrameCuts>("/api/frame-stats?days=7")]);
+  const [aR, pR, mR, cR, sR] = await Promise.allSettled([api<Anatomy>("/api/anatomy"), api("/api/pulse"), loadMode(), api<FrameCuts>("/api/frame-stats?days=7"), api<Spend>("/api/spend?days=7")]);
   if (aR.status === "rejected") throw aR.reason;
   const a = aR.value;
   const spend = spendHTML(pR.status === "fulfilled" ? pR.value : null);
   const modeBox = modeHTML(mR.status === "fulfilled" ? mR.value : null);
-  const cutsBox = cutsHTML(cR.status === "fulfilled" ? cR.value : null);
+  const cutsBox = cutsHTML(cR.status === "fulfilled" ? cR.value : null) + spendCutsHTML(sR.status === "fulfilled" ? sR.value : null);
   const modeName = mR.status === "fulfilled" && mR.value.name ? `режим: <b>${esc(mR.value.title)}</b> · ` : "";
   const tools = a.tools || [];
   const intro = INTRO.map(

@@ -720,6 +720,13 @@ async def _r_frame_stats(c: Call):
     return await asyncio.to_thread(readers.frame_cuts, _int_arg(c.query, "days", 7, 1, 90))
 
 
+async def _r_spend(c: Call):
+    # Ревизия расхода по чатам, людям и задачам (deskd/spend.py) — из журнала
+    # вызовов и манифестов прогонов, дерево не трогает.
+    from deskd import spend
+    return await asyncio.to_thread(spend.collect, readers.tree(), _int_arg(c.query, "days", 7, 1, 90))
+
+
 async def _r_run_result(c: Call):
     payload = await asyncio.to_thread(readers.run_result, c.match["run_id"], c.match["result_id"])
     if not payload:
@@ -845,6 +852,7 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/run/{run_id}", _r_run),
     Route("GET", "/api/run/{run_id}/result/{result_id}", _r_run_result),
     Route("GET", "/api/frame-stats", _r_frame_stats),
+    Route("GET", "/api/spend", _r_spend),
     Route("GET", "/api/pulse", _reader(lambda: readers.pulse())),
     Route("GET", "/api/usage", _reader(lambda: usage.statistics(readers.tree()))),
     Route("GET", "/api/allowances", _reader(lambda: usage.allowances(readers.tree()))),

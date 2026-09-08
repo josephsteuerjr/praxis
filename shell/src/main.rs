@@ -60,6 +60,46 @@ const WINDOW_ROOM: &str = "window";
 /// AppUserModelID уведомлений = identifier из tauri.conf.json (см. register_toast_identity).
 const TOAST_ID: &str = "app.helene.desk";
 
+/// Имя продукта ЭТОЙ СБОРКИ. Константы выше — значения Hélène по умолчанию; та же
+/// оболочка, собранная с другим `productName`/`identifier` (через TAURI_CONFIG при
+/// сборке), зовётся своим именем: Пульт Праксис = «Praxis» / `ru.praxis.pult`. До
+/// 09.09 имя было вшито, и окно Праксис на компьютере владельца выглядело как второе
+/// окно Hélène: тот же заголовок, значок, подпись, ярлык и уведомления (слово владельца).
+/// Читается один раз в main() из generate_context!(); до этого — значения Hélène.
+struct ProductIdentity {
+    fs: String,
+    ui: String,
+    toast: String,
+}
+
+static PRODUCT_RT: std::sync::OnceLock<ProductIdentity> = std::sync::OnceLock::new();
+
+fn init_product(config: &tauri::Config) {
+    let name = config
+        .product_name
+        .clone()
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| PRODUCT.to_string());
+    let ui = if name == PRODUCT { PRODUCT_UI.to_string() } else { name.clone() };
+    let _ = PRODUCT_RT.set(ProductIdentity { fs: name, ui, toast: config.identifier.clone() });
+}
+
+/// Имя в файловой системе (ярлыки, правило брандмауэра, служба) — латиницей.
+fn product_fs() -> &'static str {
+    PRODUCT_RT.get().map(|p| p.fs.as_str()).unwrap_or(PRODUCT)
+}
+
+/// Имя на экране: заголовок окна, трей, уведомления, подпись внизу окна.
+fn product_ui() -> &'static str {
+    PRODUCT_RT.get().map(|p| p.ui.as_str()).unwrap_or(PRODUCT_UI)
+}
+
+/// AppUserModelID уведомлений = identifier сборки.
+fn toast_id() -> &'static str {
+    PRODUCT_RT.get().map(|p| p.toast.as_str()).unwrap_or(TOAST_ID)
+}
+
 /// Владелец уже убирал окно в трей: отложенный показ окна не должен вытаскивать
 /// его обратно поверх всего, чем человек занят.
 static HIDDEN_BY_OWNER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -89,7 +129,7 @@ fn log_line(text: &str) {
 #[cfg(windows)]
 fn toast(title: &str, body: &str) {
     use tauri_winrt_notification::{Duration as ToastDuration, Toast};
-    let result = Toast::new(TOAST_ID)
+    let result = Toast::new(toast_id())
         .title(title)
         .text1(body)
         .duration(ToastDuration::Short)
@@ -170,7 +210,7 @@ fn install_panic_hook() {
         log_line(&text);
         if !SHOWN.swap(true, std::sync::atomic::Ordering::SeqCst) {
             message_box(
-                &format!("{PRODUCT_UI}: сбой"),
+                &format!("{}: сбой", product_ui()),
                 &format!("{text}\n\nПодробности — в helene.log рядом с программой."),
             );
         }
@@ -1052,7 +1092,7 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
                     log_line(&format!(
                         "порт {port} занят ДРУГОЙ программой{whose} — свой харнесс не поднимаю и в её дерево не хожу; закрой её или смени порт в {CONFIG_NAME}"
                     ));
-                    toast(PRODUCT_UI, &format!(
+                    toast(product_ui(), &format!(
                         "Порт {port} занят другой программой. Пока она его держит, агент этого окна не поднимется. Закрой прежнюю копию или смени порт в {CONFIG_NAME}."
                     ));
                 }
@@ -1080,7 +1120,7 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
         let names = failed.join(", ");
         log_line(&format!("не поднялось с первого раза: {names} — пробую снова через 30 с"));
         toast(
-            PRODUCT_UI,
+            product_ui(),
             &format!("Не удалось запустить: {names}. Пробую снова; причина — в helene.log рядом с программой."),
         );
     }
@@ -1187,7 +1227,7 @@ fn restart_self(app: tauri::AppHandle) {
             // Не выходим: лучше живое окно без применённых настроек, чем
             // тишина после нажатия «Перезапустить сейчас».
             log_line(&format!("перезапуск не запустился: {err}"));
-            toast(PRODUCT_UI, "Перезапуск не запустился — закрой и открой программу сам.");
+            toast(product_ui(), "Перезапуск не запустился — закрой и открой программу сам.");
             return;
         }
     }
@@ -1312,7 +1352,7 @@ fn service_op_from_window(op: &str) -> Result<String, String> {
     let wrapper = std::env::temp_dir().join("helene-service-op.ps1");
     std::fs::write(&wrapper, SERVICE_OP_PS1).map_err(|e| format!("обёртка службы не записалась: {e}"))?;
     let mut cmd = Command::new(powershell_exe());
-    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &service_op_command(&wrapper, op, PRODUCT, Some(&script))]);
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &service_op_command(&wrapper, op, product_fs(), Some(&script))]);
     // Дедлайн — на окно UAC и сам скрипт (установка ждёт старта службы);
     // повисший вызов не должен держать окно вечно.
     let out = run_hidden_for(&mut cmd, Duration::from_secs(300))?;
@@ -1371,7 +1411,7 @@ async fn service_state() -> String {
 /// повисший sc.exe не должен вешать окно.
 fn service_state_blocking() -> String {
     let mut cmd = Command::new(sys_exe("sc.exe"));
-    cmd.args(["query", PRODUCT]);
+    cmd.args(["query", product_fs()]);
     match run_hidden_for(&mut cmd, Duration::from_secs(15)) {
         Ok(out) if out.status.success() => {
             let text = String::from_utf8_lossy(&out.stdout).to_uppercase();
@@ -1528,7 +1568,7 @@ fn programs_dir() -> Option<PathBuf> {
 
 fn startup_lnk() -> Option<PathBuf> {
     shell_folder("Startup", "Microsoft\\Windows\\Start Menu\\Programs\\Startup")
-        .map(|d| d.join(format!("{PRODUCT}.lnk")))
+        .map(|d| d.join(format!("{}.lnk", product_fs())))
 }
 
 /// Автозапуск — ярлык в папке автозагрузки пользователя, без реестра и прав.
@@ -1648,7 +1688,7 @@ include!("../../common/run_hidden.rs");
 include!("../../common/broker.rs");
 
 fn firewall_rule_name(port: u16) -> String {
-    format!("name={}", firewall_rule_title(PRODUCT, port))
+    format!("name={}", firewall_rule_title(product_fs(), port))
 }
 
 /// Текст, который сказала родная утилита Windows.
@@ -1717,7 +1757,7 @@ fn firewall_set_runs(port: u16, program: Option<&str>) -> Vec<Vec<String>> {
         // Сужение (profile=, remoteip=) — в common/firewall_rule.rs, общем со
         // службой: раньше эти две строки жили только здесь, и служба при каждой
         // загрузке машины меняла правило на открытое.
-        firewall_add_args(&firewall_rule_title(PRODUCT, port), port, program),
+        firewall_add_args(&firewall_rule_title(product_fs(), port), port, program),
     ]
 }
 
@@ -2873,7 +2913,7 @@ fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
             }
             shown += 1;
             if !ask_owner_yes(
-                &format!("{PRODUCT_UI}: агент просит права"),
+                &format!("{}: агент просит права", product_ui()),
                 &broker_confirm_text(&wish),
             ) {
                 refusal = Some("владелец отказал в окне подтверждения".to_string());
@@ -3018,7 +3058,7 @@ fn ensure_start_menu_shortcut(identifier: &str, name: &str, icon: Option<&Path>)
     // Папку меню «Пуск» спрашиваем у Windows, а не склеиваем из %APPDATA%:
     // при перенаправлении папок политикой склейка промахивалась молча.
     let Some(programs) = programs_dir() else { return };
-    if programs.join(format!("{name}.lnk")).exists() || programs.join(format!("{PRODUCT}.lnk")).exists() {
+    if programs.join(format!("{name}.lnk")).exists() || programs.join(format!("{}.lnk", product_fs())).exists() {
         return;
     }
     let Ok(exe) = std::env::current_exe() else { return };
@@ -3185,7 +3225,7 @@ fn hand_over_to_setup(base: &Path) -> bool {
             Ok(Some(status)) => {
                 log_line(&format!("helene-setup.exe вышел сразу ({status}) — открываю окно"));
                 message_box_async(
-                    format!("{PRODUCT_UI}: установка не открылась"),
+                    format!("{}: установка не открылась", product_ui()),
                     "Помощник установки закрылся сразу после запуска.\n\nЧастая причина — нет Microsoft Edge WebView2 Runtime.\nПодробности — в helene.log рядом с программой.".to_string(),
                 );
                 return false;
@@ -3264,7 +3304,10 @@ fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
 fn main() {
     let base = exe_dir();
     install_panic_hook();
-    log_line(&format!("старт {PRODUCT} {}", env!("CARGO_PKG_VERSION")));
+    // Контекст сборки — один раз и до первого слова в журнале: из него имя продукта.
+    let context = tauri::generate_context!();
+    init_product(context.config());
+    log_line(&format!("старт {} {} ({})", product_fs(), env!("CARGO_PKG_VERSION"), toast_id()));
     let read = read_config(&base.join(CONFIG_NAME));
     let broken = matches!(read, ConfigRead::Broken(_));
     // Битый конфиг НЕ ведёт к установщику: тот проходил по кругу и переписывал
@@ -3273,7 +3316,7 @@ fn main() {
         let path = base.join(CONFIG_NAME);
         log_line(&format!("{CONFIG_NAME} не разобрался ({why}) — установщик НЕ зову, открываю окно"));
         message_box_async(
-            format!("{PRODUCT_UI}: файл настроек повреждён"),
+            format!("{}: файл настроек повреждён", product_ui()),
             format!(
                 "{}\n\n{why}\n\nПочини файл или переустанови программу. Пока он не читается, агент не поднимется, а настройки и конституция остаются на месте.",
                 path.display()
@@ -3333,9 +3376,10 @@ fn main() {
                     }
                     _ => {
                         init_script = format!(
-                            "window.PULT_CONFIG_OVERRIDE = {{base: \"http://127.0.0.1:{port}\", key: {}, agent: {}}};",
+                            "window.PULT_CONFIG_OVERRIDE = {{base: \"http://127.0.0.1:{port}\", key: {}, agent: {}, product: {}}};",
                             serde_json::Value::String(desk_token().to_string()),
-                            serde_json::Value::String(agent.clone())
+                            serde_json::Value::String(agent.clone()),
+                            serde_json::Value::String(product_ui().to_string())
                         );
                     }
                 }
@@ -3346,7 +3390,7 @@ fn main() {
                 if !base_url.is_empty() {
                     init_script = format!(
                         "window.PULT_CONFIG_OVERRIDE = {};",
-                        serde_json::json!({"base": base_url, "key": key, "agent": agent})
+                        serde_json::json!({"base": base_url, "key": key, "agent": agent, "product": product_ui()})
                     );
                 }
             }
@@ -3404,11 +3448,18 @@ fn main() {
         .setup(move |app| {
             // Продукт зовётся своим именем: заголовок, ярлык, значок, уведомления —
             // Hélène; имя агента — только там, где говорит агент (слово владельца).
-            register_toast_identity(TOAST_ID, PRODUCT_UI, None);
-            ensure_start_menu_shortcut(TOAST_ID, PRODUCT, None);
-            let window_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?;
-            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
-            debug_assert_eq!(app.config().identifier, TOAST_ID);
+            register_toast_identity(toast_id(), product_ui(), None);
+            ensure_start_menu_shortcut(toast_id(), product_fs(), None);
+            // Каталог значков выбирает сборка (build.rs → HELENE_ICON_DIR): icons/ у
+            // Hélène, icons-praxis/ у Пульта Праксис. Тот же каталог даёт значок exe
+            // через bundle.icon в TAURI_CONFIG.
+            let window_icon = tauri::image::Image::from_bytes(include_bytes!(concat!(
+                "../", env!("HELENE_ICON_DIR"), "/icon.png"
+            )))?;
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!(concat!(
+                "../", env!("HELENE_ICON_DIR"), "/32x32.png"
+            )))?;
+            debug_assert_eq!(app.config().identifier, toast_id());
             let mut builder =
                 tauri::WebviewWindowBuilder::new(
                     app,
@@ -3420,7 +3471,7 @@ fn main() {
                         tauri::Url::parse("http://helene.localhost/index.html").expect("адрес окна"),
                     ),
                 )
-                    .title(PRODUCT_UI)
+                    .title(product_ui())
                     .icon(window_icon)?
                     .inner_size(1360.0, 860.0)
                     .min_inner_size(900.0, 600.0)
@@ -3453,7 +3504,7 @@ fn main() {
             // настоящий выход — только из меню трея.
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-            let open = MenuItem::with_id(app, "open", "Открыть Hélène", true, None::<&str>)?;
+            let open = MenuItem::with_id(app, "open", format!("Открыть {}", product_ui()), true, None::<&str>)?;
             let quit = MenuItem::with_id(
                 app,
                 "quit",
@@ -3464,7 +3515,7 @@ fn main() {
             let menu = Menu::with_items(app, &[&open, &quit])?;
             TrayIconBuilder::with_id("frame")
                 .icon(tray_icon)
-                .tooltip(PRODUCT_UI)
+                .tooltip(product_ui())
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -3515,18 +3566,18 @@ fn main() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!());
+        .run(context);
     // Было .expect(): паника в exe без консоли гасила процесс молча — окно
     // просто не появлялось, и причины не было нигде.
     if let Err(err) = run {
-        log_line(&format!("окно {PRODUCT_UI} не поднялось: {err}"));
+        log_line(&format!("окно {} не поднялось: {err}", product_ui()));
         let hint = if webview2_present() {
             String::new()
         } else {
             "\n\nНа этой машине не найден Microsoft Edge WebView2 Runtime — без него окно не откроется. Поставь его с сайта Microsoft (Evergreen Runtime) и запусти снова.".to_string()
         };
         message_box(
-            &format!("{PRODUCT_UI} не открылась"),
+            &format!("{} не открылась", product_ui()),
             &format!("{err}{hint}\n\nПодробности — в helene.log рядом с программой."),
         );
     }
@@ -3577,7 +3628,7 @@ fn close_hint(app: &tauri::AppHandle) {
         "Окно закрыто, {} продолжает работать. Открыть снова — значок у часов.",
         identity.agent
     );
-    toast(PRODUCT_UI, &body);
+    toast(product_ui(), &body);
 }
 
 fn show_main(app: &tauri::AppHandle) {
@@ -3733,14 +3784,14 @@ fn watch_children(app: tauri::AppHandle) {
                     log_line(&line);
                     if !human.is_empty() {
                         toast(
-                            PRODUCT_UI,
+                            product_ui(),
                             &format!("{human}: не удаётся запустить раз за разом. Открой Настройки → «Собрать логи для поддержки»."),
                         );
                     }
                 }
                 Act::Halt(line, said) => {
                     log_line(&line);
-                    toast(PRODUCT_UI, &said);
+                    toast(product_ui(), &said);
                 }
                 Act::Spawn(spec) => {
                     let label = spec.label();
@@ -3785,7 +3836,7 @@ fn watch_children(app: tauri::AppHandle) {
                         if BLOCKED_BY_FOREIGN.swap(false, Ordering::Relaxed) {
                             log_line("окно открывалось без адреса (чужая установка на порту) — прошу владельца перезапустить его");
                             toast(
-                                PRODUCT_UI,
+                                product_ui(),
                                 "Порт освободился, агент этого окна поднялся. Перезапусти Hélène, чтобы окно к нему подключилось.",
                             );
                         }
@@ -3996,7 +4047,7 @@ fn update_autocheck() {
     let notify = newer && !latest.is_empty() && notified_before != latest;
     if notify {
         toast(
-            PRODUCT_UI,
+            product_ui(),
             &format!("Есть версия {latest}. Настройки → О программе → «Скачать и установить»."),
         );
         log_line(&format!("проверка обновлений при старте: есть версия {latest}"));
@@ -4450,7 +4501,7 @@ fn logs_bundle_blocking(tree: PathBuf) -> Result<String, String> {
     // Возвращаемое значение остаётся путём: его получает reveal_path.
     log_line(&format!("архив логов собран: {} ({})", out.display(), copied.join(", ")));
     message_box_info(
-        &format!("{PRODUCT_UI}: логи для поддержки"),
+        &format!("{}: логи для поддержки", product_ui()),
         &format!(
             "Архив: {}\n\nВ него попали:\n · {}\n\nКлючи, токены и строки Bearer в тексте закрыты словом «скрыто». Всё остальное — как есть: пути на этой машине, имена файлов и куски сообщений об ошибках. Отправляй только тому, кому доверяешь.",
             out.display(),
