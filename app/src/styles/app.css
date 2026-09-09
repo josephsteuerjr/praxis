@@ -2392,3 +2392,55 @@ select.field-input {
 
 /* Сообщение, к которому пришли с карточки хода: короткая подсветка, потом как было. */
 .msg.flash { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow 1.2s ease-out; }
+
+/* Первый запуск Пульта к своему серверу: адрес и ключ спрашиваются в окне
+   (у варианта Praxis установщика нет по замыслу). Карточка занимает середину
+   пустого окна — полка и композер при этом молчат. */
+body.first-run .composer,
+body.first-run #panel,
+body.first-run #rooms,
+body.first-run #room-add,
+body.first-run #state {
+  display: none;
+}
+
+.first-run-card {
+  max-width: 520px;
+  margin: 10vh auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.first-run-card h2 {
+  font: 500 22px/1.3 var(--serif, Georgia, serif);
+  margin: 0;
+}
+
+.first-run-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-2, var(--ink));
+}
+
+.first-run-card input {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper-2, var(--paper));
+  color: var(--ink);
+  font: 14px/1.4 var(--sans, system-ui);
+}
+
+.first-run-card input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.first-run-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

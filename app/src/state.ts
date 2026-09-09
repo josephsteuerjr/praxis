@@ -7,7 +7,7 @@ export interface AgentState {
   level: "ok" | "live" | "warn" | "error";
   phrase: string;
   action: { label: string; target: string } | null;
-  runner: { alive: boolean; age_s: number | null; busy: boolean; run: string; since: number };
+  runner: { alive: boolean; age_s: number | null; busy: boolean; run: string; since: number; ever?: boolean };
   brain: {
     configured: boolean;
     model: string;

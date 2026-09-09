@@ -7,6 +7,8 @@ export interface Cfg {
   agent?: string;
   /** Имя продукта для подписи и заголовка (хостинг Пульта Праксис — «Praxis»). */
   product?: string;
+  /** Пульт распакован, но адрес сервера ещё не вписан: окно спрашивает его само. */
+  needs_remote?: boolean;
 }
 
 declare global {

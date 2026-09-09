@@ -1602,7 +1602,13 @@ def reader_status(base: Path | None = None, now: float | None = None) -> dict:
             "age_s": None if age is None else round(age, 1),
             "busy": busy,
             "run": run,
-            "since": _num(receipt.get("since"))}
+            "since": _num(receipt.get("since")),
+            # Была ли квитанция ХОТЬ РАЗ. Раннер Hélène пишет её при старте, поэтому
+            # «нет квитанции вовсе» значит не «агент сейчас выключен», а «этот агент
+            # окно не читает» — так живёт Пульт Праксис на сервере, где записка
+            # владельца ложится в дерево и ждёт читателя, которого нет. Окно обязано
+            # говорить это словами, а не обещать «прочитает в следующий ход».
+            "ever": bool(receipt)}
 
 
 def _short_error(err) -> str:

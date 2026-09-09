@@ -24,7 +24,7 @@ export interface AgentState {
   owner?: string;
   level: Level;
   phrase: string;
-  runner?: { alive: boolean; busy: boolean; run: string; since: number };
+  runner?: { alive: boolean; busy: boolean; run: string; since: number; ever?: boolean };
   brain?: { last_call_at: number | null };
   next_wake?: string | null;
   anatomy?: boolean;
@@ -820,7 +820,14 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       say.value = "";
       say.style.height = "auto";
       if (files.length) clearShots();
-      toast(isWindowRoom(room) ? "Ушло — агент прочитает в следующий ход" : `Ушло в «${roomName}»`);
+      const unread = state?.runner?.ever === false;
+      toast(
+        !isWindowRoom(room)
+          ? `Ушло в «${roomName}»`
+          : unread
+            ? "Легло в дерево: этот агент окно не читает"
+            : "Ушло — агент прочитает в следующий ход",
+      );
       setTimeout(() => bumpFeed(), 1200);
     } catch (e) {
       toast(

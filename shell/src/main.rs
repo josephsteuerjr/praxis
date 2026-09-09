@@ -3397,6 +3397,17 @@ fn main() {
                         "window.PULT_CONFIG_OVERRIDE = {};",
                         serde_json::json!({"base": base_url, "key": key, "agent": agent, "product": product_ui()})
                     );
+                } else {
+                    // Пульт распакован, но адрес сервера ещё не вписан. Раньше окно
+                    // открывалось «как есть» и билось об пустой адрес ошибками связи;
+                    // установщика у варианта нет по замыслу, поэтому первый запуск
+                    // спрашивает адрес и ключ сам (`needs_remote` → карточка в окне,
+                    // `config_save` + `restart_self` — те же команды, что у настроек).
+                    init_script = format!(
+                        "window.PULT_CONFIG_OVERRIDE = {};",
+                        serde_json::json!({"base": "", "key": "", "agent": agent,
+                                           "product": product_ui(), "needs_remote": true})
+                    );
                 }
             }
             _ => {}
