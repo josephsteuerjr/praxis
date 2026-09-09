@@ -466,7 +466,13 @@ async def api_pair_redeem(request):
 
 # ------------------------------------------------------------- PWA /m/
 _HERE_DIR = Path(__file__).resolve().parent
-MOBILE = next((d for d in (_HERE_DIR / "mobile", _HERE_DIR.parent / "mobile" / "dist")
+# Телефон: в поставке рядом лежит готовая `app/mobile` (её кладёт build_dist), в
+# репозитории — `mobile/dist` от Vite. ⚠ Порядок: сборка ПЕРВОЙ. У `mobile/` в
+# репозитории тоже есть index.html — но это вход Vite со ссылкой на /src/main.ts,
+# и на нём /m/ открывалась пустой страницей (третий кандидат, `../mobile/dist`,
+# не существует ни в одной раскладке — он и не срабатывал никогда).
+MOBILE = next((d for d in (_HERE_DIR / "mobile" / "dist", _HERE_DIR / "mobile",
+                           _HERE_DIR.parent / "mobile" / "dist")
                if (d / "index.html").is_file()), _HERE_DIR / "mobile")
 
 

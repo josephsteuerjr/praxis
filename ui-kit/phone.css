@@ -391,6 +391,63 @@ a {
   gap: 8px;
 }
 
+/* Картинка с телефона: скрепка слева от поля, миниатюры над ним. */
+.attach {
+  width: 40px;
+  height: 44px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.attach svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+.composer-files {
+  display: flex;
+  gap: 6px;
+  margin: 0 6px 8px;
+  flex-wrap: wrap;
+}
+
+.composer-files .chip {
+  position: relative;
+  display: inline-block;
+}
+
+.composer-files .chip img {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  display: block;
+}
+
+.composer-files .chip button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--ground);
+  color: var(--ink);
+  font: 13px/1 var(--sans);
+  padding: 0;
+}
+
 .composer textarea {
   flex: 1;
   min-height: 44px;

@@ -148,6 +148,22 @@ class RunnerIntake(unittest.TestCase):
         self.assertEqual(len(notes), 1)
         self.assertIn("не найдено", notes[0])
 
+    def test_sweeper_takes_empty_folders_and_leaves_fresh_ones(self):
+        import os
+        import time
+        attachments = self.inbox / "attachments"
+        (attachments / "empty").mkdir()
+        (attachments / "old").mkdir()
+        old_file = attachments / "old" / "старое.png"
+        old_file.write_bytes(b"x")
+        long_ago = time.time() - 30 * 86400
+        os.utime(old_file, (long_ago, long_ago))
+        os.utime(attachments / "old", (long_ago, long_ago))
+        runner._sweep_attachments(self.inbox, days=14)
+        self.assertFalse((attachments / "empty").exists(), "пустая папка убрана")
+        self.assertFalse((attachments / "old").exists(), "залежавшееся вложение убрано")
+        self.assertTrue((attachments / "st1" / "кот.png").is_file(), "свежее не тронуто")
+
     def test_without_a_tree_nothing_happens(self):
         runner._tree = None
         self.assertEqual(runner._ingest_attachments(["attachments/st1/кот.png"],

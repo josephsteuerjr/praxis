@@ -137,6 +137,7 @@ const ICON = {
   wakes: '<circle cx="10" cy="10.5" r="5.5"/><path d="M10 7.5v3l2 1.5M6 3.5 3.5 5.5M14 3.5l2.5 2"/>',
   more: '<circle cx="5" cy="10" r="1.4"/><circle cx="10" cy="10" r="1.4"/><circle cx="15" cy="10" r="1.4"/>',
   send: '<path d="M10 15.5v-11M5.8 8.7 10 4.5l4.2 4.2"/>',
+  attach: '<path d="M13.5 7.2 8.3 12.4a1.6 1.6 0 0 1-2.3-2.3l5.6-5.6a3 3 0 0 1 4.2 4.2l-6 6a4.4 4.4 0 0 1-6.2-6.2L9.2 3"/>',
   back: '<path d="M12.5 4.5 7 10l5.5 5.5"/>',
 };
 
@@ -205,7 +206,10 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     <section id="screen" class="screen"></section>
     <footer id="composer" class="composer" hidden>
       <div id="composer-target" class="composer-target"></div>
+      <div id="composer-files" class="composer-files" hidden></div>
       <div class="composer-row">
+        <button id="attach" class="attach" type="button" aria-label="Приложить картинку"><svg viewBox="0 0 20 20" aria-hidden="true">${ICON.attach}</svg></button>
+        <input id="attach-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
         <textarea id="say" rows="1" placeholder="Написать…" enterkeyhint="send"></textarea>
         <button id="send" class="send" type="button" aria-label="Отправить"><svg viewBox="0 0 20 20" aria-hidden="true">${ICON.send}</svg></button>
       </div>
@@ -739,6 +743,58 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     say.style.height = "auto";
     say.style.height = Math.min(say.scrollHeight, 140) + "px";
   });
+  // -------------------------------------------------------------- картинка с телефона
+  // Тот же контракт, что у окна (/api/say с `attachments`): камера или галерея —
+  // одна кнопка, снимок едет в кадр агента и включает зрячую модель. Только то,
+  // что читает модель: PNG, JPEG, WebP, GIF, до четырёх, до 8 МБ.
+  const attach = q<HTMLButtonElement>("#attach", root);
+  const attachInput = q<HTMLInputElement>("#attach-input", root);
+  const filesBox = q<HTMLElement>("#composer-files", root);
+  const SHOT_MIME = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+  let shots: Array<{ name: string; mime: string; data: string; url: string }> = [];
+
+  function clearShots() {
+    for (const s of shots) URL.revokeObjectURL(s.url);
+    shots = [];
+    paintShots();
+  }
+
+  function paintShots() {
+    filesBox.hidden = shots.length === 0;
+    filesBox.innerHTML = shots
+      .map((s, i) => `<span class="chip"><img src="${s.url}" alt=""><button type="button" data-i="${i}" aria-label="Убрать">×</button></span>`)
+      .join("");
+    filesBox.querySelectorAll<HTMLButtonElement>("button[data-i]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const [gone] = shots.splice(Number(b.dataset.i), 1);
+        if (gone) URL.revokeObjectURL(gone.url);
+        paintShots();
+      });
+    });
+  }
+
+  attach.addEventListener("click", () => attachInput.click());
+  attachInput.addEventListener("change", async () => {
+    for (const f of Array.from(attachInput.files || [])) {
+      if (!SHOT_MIME.includes(f.type)) { toast("Модель читает только PNG, JPEG, WebP и GIF."); continue; }
+      if (f.size > 8 * 1024 * 1024) { toast("Картинка больше 8 МБ — не влезет."); continue; }
+      if (shots.length >= 4) { toast("Не больше четырёх картинок за раз."); break; }
+      try {
+        const data = await new Promise<string>((resolve, reject) => {
+          const r = new FileReader();
+          r.onerror = () => reject(r.error);
+          r.onload = () => resolve(String(r.result || "").split(",", 2)[1] || "");
+          r.readAsDataURL(f);
+        });
+        shots.push({ name: f.name || "снимок", mime: f.type, data, url: URL.createObjectURL(f) });
+      } catch {
+        toast("Картинка не прочиталась.");
+      }
+    }
+    attachInput.value = "";
+    paintShots();
+  });
+
   say.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
@@ -749,12 +805,21 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
 
   async function doSend() {
     const text = say.value.trim();
-    if (!text || !room) return;
+    const files = shots.slice();
+    if ((!text && !files.length) || !room) return;
+    if (files.length && !isWindowRoom(room)) {
+      toast("Картинка едет только агенту: в Telegram-комнату её пока нечем везти.");
+      return;
+    }
     send.disabled = true;
     try {
-      await post("/api/say", room === WINDOW_ROOM ? { text } : { text, chat: room });
+      const payload: Record<string, unknown> = { text };
+      if (!isWindowRoom(room)) payload.chat = room;
+      if (files.length) payload.attachments = files.map((s) => ({ name: s.name, mime: s.mime, data: s.data }));
+      await post("/api/say", payload);
       say.value = "";
       say.style.height = "auto";
+      if (files.length) clearShots();
       toast(isWindowRoom(room) ? "Ушло — агент прочитает в следующий ход" : `Ушло в «${roomName}»`);
       setTimeout(() => bumpFeed(), 1200);
     } catch (e) {

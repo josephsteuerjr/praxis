@@ -1179,6 +1179,36 @@ def _sweep_processed(processed: Path, days: int = 14) -> None:
             continue
     if removed:
         log.info("уборка: удалено разобранных записок окна: %d", removed)
+    _sweep_attachments(processed.parent, days)
+
+
+def _sweep_attachments(inbox: Path, days: int = 14) -> None:
+    """Папки вложений: пустые — сразу, залежавшиеся с файлами — по возрасту.
+
+    Перенос в спул (`move=True`) оставляет пустой каталог `attachments/<stamp>/`, а
+    непрочитанное вложение (ход упал, записка не дошла) осталось бы там навсегда —
+    это картинка владельца открытым текстом мимо всякой уборки.
+    """
+    root = inbox / "attachments"
+    cutoff = time.time() - max(1, int(days)) * 86400
+    removed = 0
+    try:
+        folders = [p for p in root.iterdir() if p.is_dir()]
+    except OSError:
+        return
+    for folder in folders:
+        try:
+            files = list(folder.iterdir())
+            if files and folder.stat().st_mtime >= cutoff:
+                continue
+            for stale in files:
+                stale.unlink()
+            folder.rmdir()
+            removed += 1
+        except OSError:
+            continue
+    if removed:
+        log.info("уборка: удалено папок вложений окна: %d", removed)
 
 
 def _read_message(path: Path) -> str:
