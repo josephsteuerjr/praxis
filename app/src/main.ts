@@ -621,6 +621,7 @@ export async function refreshState() {
     }
     // Связь берём настоящую: api() умеет уйти на HTTP-фолбэк при мёртвом сокете.
     renderState(s, S.connected);
+    paintRailSign();
     const busy = foreignHarness()
       ? S.runs.some((r) => r.status === "running" && runIsRecent(r))
       : !!s.runner?.busy && !!s.runner?.alive;
@@ -870,8 +871,19 @@ S.agent = (cfg.agent || "").trim() || "Агент";
 const product = (cfg.product || "").trim() || PRODUCT_NAME;
 railSign.textContent = product;
 document.title = product;
+// Версию говорит оболочка (`app_info`). Её нет ровно там, где окно открыто
+// браузером — Пульт на сервере, — и подпись оставалась одним именем продукта.
+// Тогда версию берём у канала: он называет свой пакет desk в /api/state.
+let shellVersion = "";
+export function paintRailSign(): void {
+  const v = shellVersion || S.agentState?.desk?.version || "";
+  railSign.textContent = v ? `${product} ${v}` : product;
+}
 shell<{ version: string }>("app_info")
-  .then((i) => (railSign.textContent = `${product} ${i.version}`))
+  .then((i) => {
+    shellVersion = i.version;
+    paintRailSign();
+  })
   .catch(() => {});
 syncComposer();
 addEventListener("frame-room", syncComposer);

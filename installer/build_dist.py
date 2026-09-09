@@ -96,22 +96,29 @@ SHA256 = {
     MINGIT_URL:  "a0287b54d3ead0c5abd0d15094f5b4c909867aae6bf8b9f2aee7109d24fa0081",
 }
 
-# Зависимости ПОСТАВКИ — только то, что импортируется на пути продукта:
-# ход (agent/llm/webtool) + труба (deskapp). Telethon/aiogram/paramiko/stt —
-# другие тела, в продукт не едут; cryptography не нужна (telegram_confirmation
-# агентом не импортируется — проверено грепом 31.08).
-DEPS = [
+DESK = Path(__file__).resolve().parent.parent
+ROOT = DESK.parent
+sys.path.insert(0, str(DESK))
+import deskpkg  # noqa: E402 — объявление пакета desk живёт в репозитории, а не в сборке
+
+# Зависимости ДЕРЕВА: то, что импортирует ход (agent/llm/webtool).
+# Aiogram/paramiko/stt — другие тела, в продукт не едут; cryptography не нужна
+# (telegram_confirmation агентом не импортируется — проверено грепом 31.08).
+TREE_DEPS = [
     "anthropic", "openai", "httpx", "python-dotenv", "pillow",
-    "aiohttp", "pypdf", "trafilatura", "charset-normalizer",
-    "telethon==1.44.0",   # Telegram своим аккаунтом (MTProto)
+    "pypdf", "trafilatura", "charset-normalizer",
 ]
+
+# Зависимости ПОСТАВКИ = дерево + пакет desk (канал просит aiohttp, раннер —
+# telethon). Свой список desk объявляет сам (deskpkg.DEPS_*), и сервер ставит
+# ровно его: раньше про зависимости канала знала только эта строка, а на
+# сервере они держались тем, что кто-то однажды поставил их в образ руками.
+DEPS = TREE_DEPS + deskpkg.requirements(deskpkg.WINDOWS)
 
 # Дымовой тест рантайма: ровно то, что продукт импортирует на своём пути.
 SMOKE_IMPORTS = ("anthropic", "openai", "httpx", "dotenv", "PIL",
                  "aiohttp", "pypdf", "trafilatura", "telethon")
 
-DESK = Path(__file__).resolve().parent.parent
-ROOT = DESK.parent
 APP_DIST = DESK / "app" / "dist"     # UI окна — сборка Vite (npm --prefix app run build)
 MOBILE_DIST = DESK / "mobile" / "dist"   # PWA телефона (npm --prefix mobile run build)
 
@@ -211,72 +218,12 @@ def copy_tree(src: Path, dst: Path) -> tuple[int, list[str]]:
     return count, secrets
 
 
-STATIC_MANIFEST = ".helene-static.json"
-
-
-def static_manifest(root: Path) -> dict:
-    """Манифест статики окна: sha256 каждого файла и один общий отпечаток.
-
-    По нему установщик решает, менял ли ВЫПУСК интерфейс (задача A §2, слово
-    владельца 07.09: «если я не трогал статику — оставлять пользовательскую»).
-    Сравниваются манифесты двух поставок — новой и той, что ставилась раньше, —
-    а не файлы пользователя: правил ли он их, нас не касается.
-    """
-    files: dict[str, str] = {}
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
-        rel = path.relative_to(root).as_posix()
-        if rel == STATIC_MANIFEST:
-            continue
-        files[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
-    digest = hashlib.sha256(
-        "\n".join(f"{rel} {sha}" for rel, sha in files.items()).encode("utf-8")).hexdigest()
-    return {"v": 1, "digest": digest, "files": files}
-
-
-def copy_static(dst: Path) -> str:
-    """UI окна — только сборка Vite; без неё сборка честно падает. -> отпечаток."""
-    if not (APP_DIST / "index.html").is_file():
-        raise SystemExit("нет app/dist — собери UI: npm --prefix app run build")
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(APP_DIST, dst)
-    manifest = static_manifest(dst)
-    (dst / STATIC_MANIFEST).write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=1) + "\n",
-        encoding="utf-8", newline="\n")
-    return manifest["digest"]
-
-
-def copy_mobile(dst: Path, allow_partial: bool) -> bool:
-    """PWA телефона. Раньше её отсутствие было предупреждением, и поставка
-    уезжала без страницы телефона — а README обещает её, и узнавал владелец об
-    этом по 404 от /m/. Теперь это отказ, как и у окна."""
-    if not (MOBILE_DIST / "index.html").is_file():
-        if not allow_partial:
-            raise SystemExit(
-                "нет mobile/dist — собери телефон: npm --prefix mobile run build\n"
-                "(для отладочной полусборки: --allow-partial)")
-        print("  ⚠ mobile/dist нет — ТЕЛЕФОНА В ЭТОЙ ПОСТАВКЕ НЕТ (--allow-partial)")
-        return False
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(MOBILE_DIST, dst)
-    return True
-
-
-def copy_resources(dst: Path) -> None:
-    """Ресурсы продукта: каноническая конституция и всё, что читает boot.py.
-
-    Рекурсивно: раньше брался только верхний уровень, и подпапка в resources/
-    не поехала бы и не пожаловалась.
-
-    __pycache__ и .pyc не едут: это байт-код с машины сборщика, поставке он не
-    нужен, а секрет-гард бинарь не читает по построению — то есть через эту
-    папку в архив уезжало то, что никем не проверено."""
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(DESK / "resources", dst,
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+# Статика окна и её отпечаток объявлены в пакете desk — одной реализацией на
+# поставку, вариант Praxis и сервер. Имена оставлены здесь: их читает и вариант
+# Praxis, и установщик (сверка «менял ли выпуск интерфейс»).
+STATIC_MANIFEST = deskpkg.STATIC_MANIFEST
+static_manifest = deskpkg.static_manifest
+copy_static = deskpkg.copy_static
 
 
 def copy_text_lf(src: Path, dst: Path) -> None:
@@ -290,47 +237,26 @@ def copy_text_lf(src: Path, dst: Path) -> None:
     dst.write_text(text, encoding="utf-8", newline="\n")
 
 
-def desk_module() -> list[tuple[str, str]]:
-    """Состав модуля desk из server/deploy_desk.py — единственного объявления.
-
-    Только питонья часть (deskapp.py и deskd/): фронты сюда не входят, их кладут
-    copy_static/copy_mobile — на сервере они зовутся static/mobile/miniapp, а в
-    поставке лежат в app/ рядом с окном.
-    """
-    spec = importlib.util.spec_from_file_location(
-        "_helene_deploy_desk", DESK / "server" / "deploy_desk.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)   # модуль на стандартной библиотеке
-    return [(src, dst) for src, dst in module.MODULE if not src.endswith("/dist")]
-
-
 def stage_payload(dest: Path, live: Path, allow_partial: bool) -> dict:
     """app/ + tree/ + requirements — общий груз поставки.
 
     Одна функция на всех потребителей, чтобы состав не расходился молча.
     Раньше её тело было ещё раз переписано внутри main() — и уже разошлось
     (requirements.txt писала только эта функция, а звали только main).
+
+    ``app/`` — это ПАКЕТ desk целиком (``deskpkg.build``), тот же, что уезжает
+    на сервер: канал, читалки, окно, телефон, раннер и ресурсы одним списком с
+    манифестом и версией. Перечислять пути здесь больше нечего — до 10.09 их
+    перечисляли дважды, и мини-апп, например, ехал только на сервер, потому что
+    про него знал только тот список.
     """
-    (dest / "app" / "deskd").mkdir(parents=True, exist_ok=True)
-    # Состав модуля desk (канал и его читалки) объявлен ОДИН раз — в
-    # server/deploy_desk.py::MODULE, и оттуда же его берёт выкладка на сервер.
-    # Пока списка было два, «что считается Пультом» на сервере и на Windows
-    # расходилось молча (rooms.py 07.09 однажды так и не уехал).
-    for src, _dest_name in desk_module():
-        path = DESK / src
-        if path.is_file():
-            shutil.copy2(path, dest / "app" / path.name)
-        elif path.is_dir() and path.name == "deskd":
-            for f in sorted(path.glob("*.py")):
-                shutil.copy2(f, dest / "app" / "deskd" / f.name)
-    static_digest = copy_static(dest / "app" / "static")
-    copy_resources(dest / "app" / "resources")
-    phone = copy_mobile(dest / "app" / "mobile", allow_partial)
-    # rglob, а не glob: подпакет в localharness раньше молча не уехал бы.
-    for f in sorted((DESK / "localharness").rglob("*.py")):
-        target = dest / "app" / "localharness" / f.relative_to(DESK / "localharness")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(f, target)
+    print("desk:")
+    pkg = deskpkg.build(dest / "app", deskpkg.WINDOWS, allow_partial=allow_partial,
+                        log=print)
+    for part in pkg["parts"]:
+        print(f"  {part['name']:<14} {part['files']:>4}")
+    static_digest = pkg["static"]
+    phone = any(part["name"] == "mobile" for part in pkg["parts"])
 
     print("tree:")
     copied, secrets = copy_tree(live, dest / "tree")
@@ -346,7 +272,7 @@ def stage_payload(dest: Path, live: Path, allow_partial: bool) -> dict:
     (dest / "requirements.txt").write_text("\n".join(DEPS) + "\n",
                                            encoding="utf-8", newline="\n")
     return {"tree_files": copied, "phone": phone, "secrets_skipped": secrets,
-            "static_digest": static_digest}
+            "static_digest": static_digest, "desk": pkg}
 
 
 # --- сеть ---------------------------------------------------------------------
@@ -919,52 +845,10 @@ HELENE_JSON = """{
 
 # --- версии -------------------------------------------------------------------
 
-def _cargo_version(path: Path) -> str:
-    if not path.is_file():
-        return ""
-    in_pkg = False
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        s = line.strip()
-        if s.startswith("["):
-            in_pkg = s == "[package]"
-        elif in_pkg and s.startswith("version"):
-            return s.split("=", 1)[1].strip().strip('"')
-    return ""
-
-
-def _json_version(path: Path) -> str:
-    if not path.is_file():
-        return ""
-    try:
-        return str(json.loads(path.read_text(encoding="utf-8")).get("version", ""))
-    except (ValueError, OSError):
-        return ""
-
-
-def product_version() -> tuple[str, dict]:
-    """Версия продукта = версия трёх Cargo.toml, и они обязаны совпадать.
-
-    Раньше сверять было нечем: RELEASE.md просил поднять три числа, а
-    разъехаться они могли молча, и в поставке версии не было вообще.
-    """
-    declared = {
-        "shell/Cargo.toml": _cargo_version(DESK / "shell" / "Cargo.toml"),
-        "setup/Cargo.toml": _cargo_version(DESK / "setup" / "Cargo.toml"),
-        "svc/Cargo.toml": _cargo_version(DESK / "svc" / "Cargo.toml"),
-        "shell/tauri.conf.json": _json_version(DESK / "shell" / "tauri.conf.json"),
-        "setup/tauri.conf.json": _json_version(DESK / "setup" / "tauri.conf.json"),
-        "app/package.json": _json_version(DESK / "app" / "package.json"),
-        "mobile/package.json": _json_version(DESK / "mobile" / "package.json"),
-        "setup/ui/package.json": _json_version(DESK / "setup" / "ui" / "package.json"),
-    }
-    core = {k: v for k, v in declared.items() if k.endswith("Cargo.toml")}
-    if not all(core.values()):
-        raise SystemExit("не прочиталась версия из Cargo.toml: " +
-                         ", ".join(k for k, v in core.items() if not v))
-    if len(set(core.values())) != 1:
-        raise SystemExit("версии разъехались, поставка была бы смесью:\n  " +
-                         "\n  ".join(f"{k} = {v}" for k, v in core.items()))
-    return next(iter(core.values())), declared
+# Версия продукта объявлена в пакете desk: её спрашивает и эта сборка, и
+# выкладка Пульта на сервер, и один разбор Cargo.toml на обоих — то же правило,
+# что и для состава.
+product_version = deskpkg.product_version
 
 
 def _git(path: Path, *args: str) -> str | None:
@@ -1455,6 +1339,13 @@ def main() -> None:
         # Отпечаток статики окна (тот же, что в app/static/.helene-static.json):
         # по нему установщик решает, менял ли выпуск интерфейс.
         "static": staged["static_digest"],
+        # Пакет desk в этой поставке — тем же манифестом, что уезжает на
+        # сервер: по отпечатку видно, одна ли там и здесь версия канала.
+        "desk": {"version": staged["desk"]["version"],
+                 "flavor": staged["desk"]["flavor"],
+                 "digest": staged["desk"]["digest"],
+                 "files": len(staged["desk"]["files"]),
+                 "skipped": [s["name"] for s in staged["desk"]["skipped"]]},
         # Точный состав скачанного и установленного. Пинов по хэшам у pip нет
         # (открытый остаток, см. RELEASE.md), но по этим двум спискам сборку
         # можно опознать и повторить: раньше выложенный архив нельзя было

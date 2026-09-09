@@ -22,6 +22,13 @@ export interface AgentState {
   alarms: Array<{ kind: string; text: string }>;
   /** Есть ли снимок харнесса (`memory/.state/anatomy.json`). false — дерево ведёт чужой харнесс. */
   anatomy?: boolean;
+  /**
+   * Чем поднят канал: пакет desk (`desk.json` рядом с `deskapp.py`). Пусто —
+   * канал запущен из репозитория или поставкой старше 0.5.1. На сервере это
+   * единственный источник версии: оболочки, которая отвечает `app_info`, там
+   * нет, и окно в браузере знало только имя продукта.
+   */
+  desk?: { version: string; flavor: string; digest: string; built_utc: string; skipped?: string[] };
 }
 
 /**

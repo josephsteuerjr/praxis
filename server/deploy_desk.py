@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
-"""Выкладка Пульта на сервер: тот же desk, что ставится на Windows, одним списком.
+"""Выкладка Пульта на сервер: тот же пакет desk, что ставится на Windows.
 
 Зачем в репозитории. Сервер получал копию руками — скриптом из временной папки
 очередной сессии, и состав «что именно считается Пультом» жил в голове того, кто
-последним его писал. Теперь состав объявлен ЗДЕСЬ (``MODULE``), и его же берёт
-поставка Hélène (``installer/build_dist.py`` кладёт те же файлы в ``app/``).
-Расхождение между сервером и ПК с этого места видно диффом, а не памятью.
+последним его писал. Теперь состав, версия и зависимости объявлены в
+``deskpkg.py``, а эта выкладка ставит СОБРАННЫЙ ПАКЕТ целиком — тот же, что
+``installer/build_dist.py`` кладёт в ``app/`` поставки Hélène. Расхождение между
+сервером и ПК с этого места видно отпечатком, а не памятью.
 
 Что делает:
 
-1. собирает фронты (можно пропустить: ``--skip-build``) и проверяет, что сборки
-   на месте — выкладывать исходники Vite бессмысленно, страница будет пустой;
-2. пакует ``MODULE`` в tar и кладёт во временный каталог на сервере;
+1. собирает фронты (можно пропустить: ``--skip-build``) и собирает пакет
+   ``deskpkg.build(flavor="server")`` — без index.html сборки Vite это не пакет,
+   и выкладка падает здесь, а не страницей-пустышкой у владельца;
+2. пакует пакет в tar и кладёт во временный каталог на сервере;
 3. распаковывает в ``<цель>.stage``, снимает копию живого каталога в
-   ``<цель>-backup-<штамп>`` с квитанцией и подменяет содержимое;
+   ``<цель>-backup-<штамп>`` с квитанцией и подменяет ТОЛЬКО то, что объявлено
+   пакетом (``desk.env``, данные и чужие копии рядом не трогает);
 4. перезапускает контейнер и проверяет живьём: ``/api/health``, ``/api/state``,
-   ``/api/spend`` (на её данных отвечает несколько секунд — срок 90 с);
+   ``/api/spend`` (на её данных отвечает несколько секунд — срок 90 с), а по
+   ``/api/state`` ещё и сверяет, что канал поднялся ИМЕННО с этим пакетом:
+   версия и отпечаток в ответе — те же, что в собранном манифесте;
 5. при любой ошибке возвращает прежний каталог из копии и перезапускает снова.
 
 Чужие контейнеры и сети не трогает: только свой ``--container``.
@@ -35,26 +40,17 @@ import os
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 from pathlib import Path
 
 DESK = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(DESK))
+import deskpkg  # noqa: E402 — объявление пакета desk лежит в корне репозитория
 
-# Состав модуля desk: слева — что лежит в репозитории, справа — как это зовётся
-# на сервере. Один список на обе установки; поставка Hélène кладёт то же самое в
-# ``app/`` рядом с окном (build_dist.stage_payload).
-MODULE: list[tuple[str, str]] = [
-    ("deskapp.py", "deskapp.py"),
-    ("deskd", "deskd"),
-    ("app/dist", "static"),
-    ("mobile/dist", "mobile"),
-    ("miniapp/dist", "miniapp"),
-]
-
-# Что собирается перед выкладкой (npm --prefix <первый> run build).
-FRONTS = [("app", "app/dist"), ("mobile", "mobile/dist"), ("miniapp", "miniapp/dist")]
-
-SKIP = {"__pycache__", ".DS_Store"}
+# Что собирается перед выкладкой (npm --prefix <первый> run build). Список
+# берётся из состава пакета: фронт, который в пакет входит, обязан быть собран.
+FRONTS = sorted({p.src.split("/")[0] for p in deskpkg.parts(deskpkg.SERVER) if p.dist})
 
 
 def log(msg: str) -> None:
@@ -62,45 +58,25 @@ def log(msg: str) -> None:
 
 
 def build_fronts() -> None:
-    for prefix, dist in FRONTS:
+    for prefix in FRONTS:
         log(f"сборка {prefix}…")
         r = subprocess.run(["npm", "--prefix", prefix, "run", "build"], cwd=DESK,
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
                            shell=os.name == "nt")
         if r.returncode != 0:
             raise SystemExit(f"{prefix}: сборка не прошла\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
-        if not (DESK / dist / "index.html").is_file():
-            raise SystemExit(f"{prefix}: после сборки нет {dist}/index.html")
+        if not (DESK / prefix / "dist" / "index.html").is_file():
+            raise SystemExit(f"{prefix}: после сборки нет {prefix}/dist/index.html")
 
 
-def check_ready() -> None:
-    for src, _ in MODULE:
-        p = DESK / src
-        if not p.exists():
-            raise SystemExit(f"нет {src} — собери фронты или запусти без --skip-build")
-        if p.is_dir() and (p.name == "dist") and not (p / "index.html").is_file():
-            raise SystemExit(f"{src} без index.html — это не сборка Vite")
-
-
-def pack() -> tuple[bytes, list[str]]:
-    """tar модуля в память -> (байты, список файлов для квитанции)."""
-    names: list[str] = []
+def pack(root: Path) -> bytes:
+    """tar собранного пакета в память — целиком, как он лежит."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for src, dest in MODULE:
-            path = DESK / src
-            if path.is_file():
-                tar.add(path, arcname=dest)
-                names.append(dest)
-                continue
-            for item in sorted(path.rglob("*")):
-                if any(part in SKIP for part in item.parts):
-                    continue
-                if item.is_file():
-                    rel = f"{dest}/{item.relative_to(path).as_posix()}"
-                    tar.add(item, arcname=rel)
-                    names.append(rel)
-    return buf.getvalue(), names
+        for item in sorted(root.rglob("*")):
+            if item.is_file():
+                tar.add(item, arcname=item.relative_to(root).as_posix())
+    return buf.getvalue()
 
 
 def main() -> int:
@@ -117,18 +93,24 @@ def main() -> int:
 
     if not args.skip_build:
         build_fronts()
-    check_ready()
-    blob, names = pack()
-    log(f"модуль: {len(names)} файлов, {len(blob) / 1e6:.1f} МБ в архиве")
-    if args.dry_run:
-        for n in names[:20]:
-            log("  " + n)
-        if len(names) > 20:
-            log(f"  … ещё {len(names) - 20}")
-        return 0
-    if not args.host:
-        raise SystemExit("нужен --host (или PRAXIS_DEPLOY_HOST)")
 
+    with tempfile.TemporaryDirectory(prefix="desk-pkg-") as tmp:
+        pkg_root = Path(tmp) / "desk"
+        man = deskpkg.build(pkg_root, deskpkg.SERVER, clean=True, log=log)
+        blob = pack(pkg_root)
+        names = sorted(man["files"])
+        log(f"пакет desk {man['version']} ({man['flavor']}), отпечаток {man['digest'][:12]}: "
+            f"{len(names)} файлов, {len(blob) / 1e6:.1f} МБ в архиве")
+        for part in man["parts"]:
+            log(f"  {part['name']:<14} {part['files']:>4}  {part['why']}")
+        if args.dry_run:
+            return 0
+        if not args.host:
+            raise SystemExit("нужен --host (или PRAXIS_DEPLOY_HOST)")
+        return deploy(args, man, blob)
+
+
+def deploy(args, man: dict, blob: bytes) -> int:
     try:
         import paramiko  # noqa: PLC0415 — зависимость только выкладки, не продукта
     except ImportError:
@@ -151,6 +133,7 @@ def main() -> int:
     backup = f"{target}-backup-{stamp}"
     tmp_tar = f"/tmp/desk-{stamp}.tar.gz"
     base = args.base or f"https://{args.host}"
+    top = deskpkg.top_level(man["flavor"])
     try:
         sftp = client.open_sftp()
         with sftp.open(tmp_tar, "wb") as sink:
@@ -162,21 +145,31 @@ def main() -> int:
         if code != 0:
             raise RuntimeError(f"распаковка не прошла: {err.strip() or out.strip()}")
 
+        # Что лежит в цели сверх пакета — говорим вслух и не трогаем: там
+        # desk.env с ключами и копии прошлых выкладок руками (mobile.old и
+        # соседи от 06.09). Молча снести чужое — не наше дело.
+        code, out, _err = run(f"ls -1 {target}")
+        extra = [n for n in out.split() if n and n not in top and n != "receipt.json"]
+        if extra:
+            log("  рядом с пакетом (не трогаем): " + ", ".join(extra))
+
         # Копия живого каталога с квитанцией: по ней видно, что и когда заменено.
         code, out, err = run(f"cp -a {target} {backup}")
         if code != 0:
             raise RuntimeError(f"копия не снялась: {err.strip()}")
-        receipt = json.dumps({"at": stamp, "target": target, "files": len(names),
+        receipt = json.dumps({"at": stamp, "target": target, "files": len(man["files"]),
+                              "version": man["version"], "digest": man["digest"],
                               "from": "server/deploy_desk.py"}, ensure_ascii=False)
         run(f"cat > {backup}/receipt.json <<'EOF'\n{receipt}\nEOF")
         log(f"копия: {backup}")
 
-        # Подменяем только объявленное: desk.env и данные рядом остаются на месте.
-        for _src, dest in MODULE:
-            code, out, err = run(f"rm -rf {target}/{dest} && cp -a {stage}/{dest} {target}/{dest}")
+        # Подменяем ровно то, что объявляет пакет: desk.env и данные рядом
+        # остаются на месте.
+        for name in top:
+            code, out, err = run(f"rm -rf {target}/{name} && cp -a {stage}/{name} {target}/{name}")
             if code != 0:
-                raise RuntimeError(f"{dest}: не подменилось — {err.strip()}")
-        log("файлы подменены")
+                raise RuntimeError(f"{name}: не подменилось — {err.strip()}")
+        log(f"файлы подменены ({len(top)} имён в корне)")
 
         code, out, err = run(f"docker restart {args.container}", timeout=180)
         if code != 0:
@@ -184,15 +177,37 @@ def main() -> int:
         time.sleep(5)
 
         checks = [("/api/health", 30), ("/api/state", 60), ("/api/spend?days=1", 90)]
+        state_body = ""
         for path, wait in checks:
             # Ключ приклеивается с учётом уже стоящего вопроса: «?days=1?key=…» —
             # это не адрес, и канал честно отвечал на него 403 (первый прогон 09.09).
             url = f"{base}{path}" + (("&" if "?" in path else "?") + f"key={args.key}" if args.key else "")
             code, out, err = run(
-                f"curl -sS -m {wait} -o /dev/null -w '%{{http_code}}' '{url}'", timeout=wait + 30)
-            if out.strip() != "200":
-                raise RuntimeError(f"{path}: сервер ответил {out.strip() or err.strip()}")
+                f"curl -sS -m {wait} -w '\\n%{{http_code}}' '{url}'", timeout=wait + 30)
+            body, _, status = out.rpartition("\n")
+            if status.strip() != "200":
+                raise RuntimeError(f"{path}: сервер ответил {status.strip() or err.strip()}")
+            if path == "/api/state":
+                state_body = body
             log(f"  {path}: 200")
+
+        # Канал поднялся именно с этим пакетом? Ответ читаем не «на глаз»:
+        # версия и отпечаток в /api/state берутся из desk.json рядом с
+        # deskapp.py, то есть из того, что мы сейчас положили.
+        got = {}
+        try:
+            got = (json.loads(state_body) or {}).get("desk") or {}
+        except ValueError:
+            got = {}
+        if not got:
+            log("  ⚠ канал не назвал свой пакет (старая сборка без desk.json) — "
+                "сверить нечем")
+        elif got.get("digest") != man["digest"][:12] or got.get("version") != man["version"]:
+            raise RuntimeError(
+                f"канал живёт не тем пакетом: у него {got.get('version')} "
+                f"{got.get('digest')}, а положено {man['version']} {man['digest'][:12]}")
+        else:
+            log(f"  пакет на сервере: desk {got['version']} {got['digest']}")
         log("выложено")
         return 0
     except Exception as exc:  # откат — обязателен, а не «по возможности»

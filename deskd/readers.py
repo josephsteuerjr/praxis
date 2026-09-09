@@ -88,6 +88,45 @@ def config_path() -> Path | None:
     return None
 
 
+_DESK_CACHE: dict = {"stamp": None, "value": {}}
+
+
+def desk_build(root: Path | None = None) -> dict:
+    """Чем поднят канал: версия и отпечаток пакета desk (``desk.json`` рядом).
+
+    Пакет кладут обе установки — и поставка Windows в ``app/``, и выкладка
+    Пульта на сервер (``deskpkg.build``). На сервере это ЕДИНСТВЕННЫЙ способ
+    узнать версию: оболочки, которая отвечает окну ``app_info``, там нет, и
+    подпись в окне до 0.5.1 показывала одно имя продукта без числа.
+
+    Пусто — пакета нет (запуск из репозитория или поставка старше 0.5.1):
+    окно тогда молчит о версии, а не выдумывает её.
+    """
+    path = (Path(root) if root else Path(__file__).resolve().parent.parent) / "desk.json"
+    try:
+        stat = path.stat()
+        stamp = (str(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        _DESK_CACHE.update(stamp=None, value={})
+        return {}
+    if _DESK_CACHE["stamp"] == stamp:
+        return _DESK_CACHE["value"]
+    raw = _load_json(path)
+    value: dict = {}
+    if isinstance(raw, dict) and raw.get("product") == "desk":
+        value = {"version": str(raw.get("version") or ""),
+                 "flavor": str(raw.get("flavor") or ""),
+                 # Двенадцати знаков хватает, чтобы сверить выкладку с
+                 # собранным пакетом, и они не превращают ответ в простыню.
+                 "digest": str(raw.get("digest") or "")[:12],
+                 "built_utc": str(raw.get("built_utc") or "")}
+        skipped = [s.get("name") for s in (raw.get("skipped") or []) if isinstance(s, dict)]
+        if skipped:
+            value["skipped"] = skipped
+    _DESK_CACHE.update(stamp=stamp, value=value)
+    return value
+
+
 def product_config() -> dict:
     path = config_path()
     if path is None:
@@ -1721,6 +1760,7 @@ def state() -> dict:
             # без проверок. Режим здесь пробуем отдельно — он читается из
             # helene.json и обычно жив, даже когда упало всё остальное.
             "mode": _mode_state_safe(),
+            "desk": desk_build(),
             "next_wake": None,
             "alarms": [{"kind": "reader_failed",
                         "text": "состояние агента не прочиталось — "
@@ -1859,6 +1899,10 @@ def _state_impl() -> dict:
         "mode": mode_state(),
         "next_wake": next_wake.isoformat() if next_wake else None,
         "alarms": health().get("alarms", []),
+        # Чем поднят сам канал: версия пакета desk. На сервере это
+        # единственный источник версии (оболочки там нет), а выкладка по нему
+        # сверяет, что канал встал именно с тем пакетом, который положен.
+        "desk": desk_build(),
     }
 
 

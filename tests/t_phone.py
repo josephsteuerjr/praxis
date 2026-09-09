@@ -128,6 +128,39 @@ class Scope(unittest.TestCase):
         self.assertIn(("POST", "/pair/telegram"), registered)
 
 
+class ConfigJs(unittest.TestCase):
+    """`config.js` — имя агента и продукта для страницы. До 10.09 его клали на
+    сервер руками рядом с каждой сборкой, и выкладка фронта уносила его с
+    собой: `/m/config.js` отвечал 404, телефон Праксис звался «Агент»."""
+
+    def setUp(self):
+        self.saved = (readers.anatomy, readers.product_config)
+        readers.anatomy = lambda: {}
+        readers.product_config = lambda: {"agent_name": "Праксис"}
+        self.addCleanup(self._restore)
+        os.environ.pop("HELENE_PRODUCT", None)
+
+    def _restore(self):
+        readers.anatomy, readers.product_config = self.saved
+        os.environ.pop("HELENE_PRODUCT", None)
+
+    def test_channel_names_the_agent(self):
+        text = deskapp._config_js()
+        self.assertIn("window.PULT_CONFIG = ", text)
+        self.assertIn('"agent": "Праксис"', text)
+        # Имя продукта не выдумывается: пусто — страница возьмёт своё.
+        self.assertNotIn("product", text)
+        os.environ["HELENE_PRODUCT"] = "Praxis"
+        self.assertIn('"product": "Praxis"', deskapp._config_js())
+
+    def test_both_paths_are_registered(self):
+        app = deskapp.build_app()
+        paths = {(route.method, resource.get_info().get("path") or "")
+                 for resource in app.router.resources() for route in resource}
+        self.assertIn(("GET", "/config.js"), paths)
+        self.assertIn(("GET", "/m/config.js"), paths)
+
+
 class AgentName(unittest.TestCase):
     def test_name_falls_back_to_config_then_env(self):
         saved = (readers.anatomy, readers.product_config)

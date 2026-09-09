@@ -700,7 +700,14 @@ export async function render(container: HTMLElement): Promise<void> {
       aboutInfo = i;
       ver.textContent = `версия ${i.version}`;
     })
-    .catch(() => (ver.textContent = "версия видна в окне программы"));
+    .catch(() => {
+      // Оболочки нет — окно открыто браузером (Пульт на сервере). Версию
+      // тогда называет канал: пакет desk, которым он поднят.
+      const d = S.agentState?.desk;
+      ver.textContent = d?.version
+        ? `канал: desk ${d.version} (${d.digest})`
+        : "версия видна в окне программы";
+    });
   const updOut = el("span", "receipt");
   // Кнопка создаётся один раз и переключается. Раньше её добавляли внутрь
   // обработчика: три нажатия «Проверить обновления» — три кнопки «Скачать» в

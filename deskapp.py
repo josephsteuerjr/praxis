@@ -1415,6 +1415,39 @@ async def index(request):
                         headers={"Cache-Control": "no-cache"})
 
 
+def _config_js() -> str:
+    """`config.js` страницы, когда его нет на диске: имя агента и продукта.
+
+    Файл кладёт ХОСТИНГ — на сервере его три года клали руками рядом с каждой
+    сборкой (static/, mobile/, miniapp/). Так и выяснилось 10.09, что выкладка,
+    подменяющая фронт целиком, уносит его с собой: `/m/config.js` отвечал 404,
+    и телефон Праксис звался «Агент». Хостовые данные не должны жить файлом,
+    который затирает выкладка: канал знает и имя агента, и своё имя, и отдаёт
+    их сам. Файл на диске по-прежнему главнее — если он есть, отдаём его.
+
+    `base` и `key` пустые: страница пришла тем же адресом, что и канал
+    (same-origin), ключ приезжает в `?key=` и живёт в куке.
+    """
+    product = (os.environ.get("HELENE_PRODUCT") or "").strip()
+    cfg = {"base": "", "key": "", "agent": _agent_name()}
+    if product:
+        # Пусто — страница возьмёт своё имя по умолчанию. Врать «Hélène» там,
+        # где стоит Пульт Праксис, нельзя, а угадывать неоткуда.
+        cfg["product"] = product
+    return ("/* config.js: канал называет себя сам, файла на диске нет */\n"
+            "window.PULT_CONFIG = " + json.dumps(cfg, ensure_ascii=False) + ";\n")
+
+
+async def config_js(request):
+    """`/config.js` окна и `/m/config.js` телефона — с диска или из канала."""
+    root = MOBILE if request.path.startswith("/m/") else STATIC
+    if (root / "config.js").is_file():
+        return web.FileResponse(root / "config.js",
+                                headers={"Cache-Control": "no-cache"})
+    return web.Response(text=_config_js(), content_type="application/javascript",
+                        charset="utf-8", headers={"Cache-Control": "no-cache"})
+
+
 def _static_file(name: str):
     async def handler(request):
         # no-cache = «можно хранить, но каждый раз ревалидируй» (ETag → 304):
@@ -1442,6 +1475,7 @@ def build_app() -> web.Application:
     app.router.add_get("/m", mobile_index)
     app.router.add_get("/m/manifest.webmanifest", mobile_manifest)
     app.router.add_get("/m/sw.js", mobile_sw)
+    app.router.add_get("/m/config.js", config_js)
     if (MOBILE / "assets").is_dir():
         app.router.add_static("/m/assets/", MOBILE / "assets")
     for name in ("icon-192.png", "icon-512.png", "apple-touch-icon.png"):
@@ -1453,9 +1487,10 @@ def build_app() -> web.Application:
         app.router.add_static("/static/", STATIC)
     # Те же ассеты с корня: index.html ссылается относительно, чтобы один и тот
     # же дистрибутив жил и в вебе, и в нативной оболочке.
-    for name in ("config.js", "favicon.svg"):
-        if (STATIC / name).is_file():
-            app.router.add_get("/" + name, _static_file(name))
+    # config.js — всегда: нет файла, значит канал соберёт его сам (см. _config_js).
+    app.router.add_get("/config.js", config_js)
+    if (STATIC / "favicon.svg").is_file():
+        app.router.add_get("/favicon.svg", _static_file("favicon.svg"))
     # Сборка Vite кладёт ассеты в assets/ с хэшами в именах.
     if (STATIC / "assets").is_dir():
         app.router.add_static("/assets/", STATIC / "assets")
