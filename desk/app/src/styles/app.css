@@ -1,0 +1,2446 @@
+@import "../../../ui-kit/fonts.css";
+@import "../../../ui-kit/tokens.css";
+@import "../../../ui-kit/actions.css";
+
+/* Hélène — окно. Тёплая бумага, воздух, один акцент. Три колонки: полка
+   (разделы и чаты), центр (переписка как документ), ход агента справа.
+   Язык: сериф — продукт и заголовки, гротеск — интерфейс, моно — код,
+   почерк — только имя агента. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font: 15px/1.5 var(--sans);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: default;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+
+.muted {
+  color: var(--ink-3);
+}
+
+.hand {
+  font-family: var(--hand);
+  font-weight: 300;
+}
+
+.scroll {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- каркас ---------- */
+
+:root {
+  --rail-w: 272px;
+  --panel-w: 380px;
+  --chrome-h: 36px;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  grid-template-rows: var(--chrome-h) minmax(0, 1fr);
+  height: 100vh;
+  position: relative;
+}
+
+/* Полка на всю высоту, включая заголовок окна: линия — псевдоэлемент в первой
+   колонке на обе строки. Фон ровный, одна бумага на всё окно (слово владельца
+   02.09: без пятен и подкрашенных зон), полку и панель отделяют только линии. */
+#app::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1 / -1;
+  background: var(--ground);
+  border-right: 1px solid var(--line);
+}
+
+#app.with-panel:not(.panel-collapsed) {
+  grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--panel-w);
+}
+
+#app.rail-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+#app.with-panel.rail-collapsed:not(.panel-collapsed) {
+  grid-template-columns: 0 minmax(0, 1fr) var(--panel-w);
+}
+
+#app.rail-collapsed #rail,
+#app.rail-collapsed::before,
+#app.panel-collapsed #panel {
+  display: none;
+}
+
+#chrome {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  height: var(--chrome-h);
+  user-select: none;
+  -webkit-user-select: none;
+  z-index: 2;
+}
+
+#rail {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+#main {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+#panel {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.chrome-left,
+.chrome-right {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.chrome-left {
+  width: var(--rail-w);
+  padding-left: 8px;
+}
+
+#app.rail-collapsed .chrome-left {
+  width: auto;
+}
+
+.chrome-drag {
+  flex: 1;
+  height: 100%;
+}
+
+.chrome-btn {
+  width: 32px;
+  height: 28px;
+  border: 0;
+  padding: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-3);
+  display: grid;
+  place-items: center;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.chrome-btn svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  fill: none;
+}
+
+.chrome-btn:hover {
+  background: var(--ctrl-hover);
+  color: var(--ink);
+}
+
+.chrome-btn[aria-pressed="false"] {
+  color: var(--muted);
+}
+
+html:not(.native) #chrome .controls {
+  display: none;
+}
+
+#chrome .controls {
+  display: flex;
+  height: 100%;
+  margin-left: 6px;
+}
+
+.win {
+  width: 46px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.win svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  fill: none;
+}
+
+.win:hover {
+  background: var(--ctrl-hover);
+  color: var(--ink);
+}
+
+.win-close:hover {
+  background: var(--close-hover);
+  color: #fff;
+}
+
+/* ---------- полка слева ---------- */
+
+#rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px 14px 14px 18px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.rail-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Разделы — серифом: это голос продукта, не меню программы. */
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-2);
+  font: 400 16px/1 var(--serif);
+  font-variation-settings: "opsz" 16;
+  text-align: left;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.rail-item:hover {
+  background: var(--ctrl-hover);
+  color: var(--ink);
+}
+
+.rail-item[aria-current="page"] {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.rail-item svg {
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+
+.rail-item[aria-current="page"] svg {
+  color: var(--accent);
+}
+
+.rail-item kbd {
+  margin-left: auto;
+  font: 400 10.5px/1 var(--mono);
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.rail-item:hover kbd {
+  opacity: 1;
+}
+
+.rail-rooms {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  margin-top: 16px;
+}
+
+.rail-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 4px 4px 9px;
+  font: 500 10.5px/1 var(--sans);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.icon-btn {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-3);
+  display: grid;
+  place-items: center;
+}
+
+.icon-btn svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+.icon-btn:hover {
+  background: var(--ctrl-hover);
+  color: var(--ink);
+}
+
+.rooms {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-right: 2px;
+}
+
+.rooms-group {
+  margin: 12px 9px 4px;
+  font: 500 10.5px/1 var(--sans);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.room {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 34px;
+  padding: 0 6px 0 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-2);
+  font: 400 14.5px/1 var(--sans);
+  text-align: left;
+}
+
+.room:hover {
+  background: var(--ctrl-hover);
+}
+
+.room[aria-current="true"] {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.room-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-name.hand {
+  font-size: 18px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+
+.room-count {
+  font: 400 11px/1 var(--mono);
+  color: var(--muted);
+}
+
+.room-more {
+  opacity: 0;
+  width: 22px;
+  height: 22px;
+}
+
+.room:hover .room-more,
+.room[aria-current="true"] .room-more {
+  opacity: 1;
+}
+
+.room.stub .room-name {
+  color: var(--ink-3);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--line-strong);
+  flex-shrink: 0;
+}
+
+.dot.live {
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.dot.failed {
+  background: var(--err);
+}
+
+.dot.ok {
+  background: var(--ok);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.rail-foot {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+/* Маленькая подпись слева снизу — единственное место, где стоит имя
+   продукта (слово владельца 07.09: без большой надписи, без слоганов). */
+.rail-sign {
+  margin: 10px 10px 0;
+  font: 400 13px/1 var(--serif);
+  font-variation-settings: "opsz" 12;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.rail-sign:empty {
+  display: none;
+}
+
+/* контекстное меню комнаты */
+.menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 180px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.menu[hidden] {
+  display: none;
+}
+
+.menu button {
+  display: block;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+  font: 400 13.5px/1 var(--sans);
+  color: var(--ink);
+}
+
+.menu button:hover {
+  background: var(--ctrl-hover);
+}
+
+.menu button.danger:hover {
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+  color: var(--err);
+}
+
+/* ---------- центр ---------- */
+
+#main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  container-type: inline-size;
+}
+
+/* Центр узкий (обе панели открыты на 1280) — пульс уступает место заголовку:
+   цифры расхода есть и на экране «Система», заголовок комнаты — только здесь. */
+@container (max-width: 720px) {
+  .pulse {
+    display: none;
+  }
+}
+
+#head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 60px;
+  padding: 8px 32px 12px;
+}
+
+/* Заголовок не отдаёт всю ширину правой части: пульс сжимается первым, пилюля
+   состояния — последней, заголовок держит хотя бы 140px (найдено живьём:
+   на 1280 с обеими панелями заголовок ужимался в ноль). */
+.head-copy {
+  flex: 1 1 auto;
+  min-width: 140px;
+}
+
+.head-kicker {
+  font: 500 10.5px/1 var(--sans);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.head-kicker:empty {
+  display: none;
+}
+
+.head-title {
+  margin: 0;
+  font: 400 28px/1.2 var(--serif);
+  font-variation-settings: "opsz" 32;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Почерк — только там, где говорит агент: его имя над его комнатой. */
+.head-title.hand {
+  font: 300 32px/1.15 var(--hand);
+  letter-spacing: 0.01em;
+}
+
+.head-side {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.pulse {
+  font: 400 12px/1 var(--sans);
+  color: var(--muted);
+  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pulse b {
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.pulse.stale {
+  opacity: 0.55;
+}
+
+.cachebar {
+  display: inline-block;
+  width: 52px;
+  height: 5px;
+  margin: 0 3px 0 4px;
+  border-radius: 3px;
+  background: var(--line);
+  vertical-align: middle;
+  overflow: hidden;
+}
+
+.cachebar i {
+  display: block;
+  height: 100%;
+  background: var(--ok);
+}
+
+/* состояние агента: одна фраза и одно действие */
+.state-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  font: 500 12.5px/1 var(--sans);
+  color: var(--ink);
+  white-space: nowrap;
+  max-width: min(46ch, 38vw);
+  flex: 0 0 auto;
+}
+
+#state-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  flex-shrink: 0;
+}
+
+.state-pill[data-level="live"] .state-dot {
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.state-pill[data-level="warn"] .state-dot {
+  background: var(--warn);
+}
+
+.state-pill[data-level="error"] .state-dot {
+  background: var(--err);
+}
+
+.state-pill[data-level="off"] .state-dot {
+  background: var(--line-strong);
+}
+
+.state-action {
+  height: 22px;
+  margin-left: 2px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: 500 12px/1 var(--sans);
+}
+
+.state-action:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.alarm {
+  margin: 0 28px 8px;
+  padding: 9px 14px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.view {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 32px 24px;
+}
+
+.center {
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.wide {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.empty {
+  padding: 48px 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.empty b {
+  display: block;
+  margin-bottom: 6px;
+  font: 400 25px/1.3 var(--serif);
+  font-variation-settings: "opsz" 24;
+  color: var(--ink-2);
+}
+
+/* ---------- переписка ---------- */
+
+.feed {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 10px;
+}
+
+.day {
+  margin: 20px 0 10px;
+  text-align: center;
+  font: 500 11px/1 var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin: 8px 0;
+  max-width: 100%;
+}
+
+/* Владелец — справа, мягким пузырём; агент — слева, текстом как документ,
+   без пузыря: его слово читается, а не «сообщается». */
+.msg.own {
+  align-self: flex-end;
+  align-items: flex-end;
+  margin-left: auto;
+  max-width: 76%;
+}
+
+.msg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 2px 3px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.msg-head b {
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.msg-head .who-hand {
+  font: 300 17px/1 var(--hand);
+  color: var(--ink-2);
+}
+
+.msg-body {
+  padding: 11px 16px;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* Слово агента — серифом, как текст книги: это голос продукта. Реплики
+   владельца и чужие — гротеском, в пузыре. */
+.msg.agent .msg-body {
+  padding: 2px 0 4px;
+  border: 0;
+  background: transparent;
+  max-width: 100%;
+  font: 400 16.5px/1.65 var(--serif);
+  font-variation-settings: "opsz" 16;
+}
+
+.msg.agent .msg-body code,
+.msg.agent .msg-body pre {
+  font-family: var(--mono);
+}
+
+.msg.own .msg-body {
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.msg.system .msg-body {
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+  color: var(--ink-3);
+  font-size: 13px;
+  padding: 7px 12px;
+}
+
+/* Молчание по решению / ход без реплики (КОНТРАКТ A→B §3): серая плашка,
+   без авторства — это не слово агента и не тревога. */
+.msg.silence .msg-body {
+  border-style: dotted;
+  border-color: var(--line);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.msg-body p {
+  margin: 0 0 0.65em;
+}
+
+.msg-body p:last-child {
+  margin-bottom: 0;
+}
+
+.msg-body pre {
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  overflow-x: auto;
+  font: 12.5px/1.5 var(--mono);
+}
+
+.msg-body code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-2);
+}
+
+.msg-body pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.msg.pending .msg-body {
+  opacity: 0.72;
+}
+
+.msg-note {
+  margin: 3px 4px 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.pending-box {
+  display: flex;
+  flex-direction: column;
+}
+
+/* плашка на месте: под ходом, человеческим словом, с действием */
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 12px;
+  padding: 9px 13px;
+  border-radius: 11px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.notice.err {
+  border-color: color-mix(in srgb, var(--err) 35%, transparent);
+}
+
+.notice .dot {
+  width: 8px;
+  height: 8px;
+}
+
+.notice-action {
+  margin-left: auto;
+  height: 25px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  font: 500 12px/1 var(--sans);
+  color: var(--ink);
+}
+
+.notice-action:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.notice-detail {
+  flex-basis: 100%;
+  margin-top: 4px;
+}
+
+.read-fail {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+
+/* ---------- композер ---------- */
+
+.composer {
+  padding: 6px 32px 14px;
+}
+
+.composer-box {
+  position: relative;
+  max-width: 800px;
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 11px 10px 11px 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  transition: border-color 0.15s ease;
+}
+
+.composer-box:focus-within {
+  border-color: var(--line-strong);
+}
+
+.composer-target {
+  position: absolute;
+  top: -20px;
+  left: 14px;
+  font: 500 10.5px/1 var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.composer-target:empty {
+  display: none;
+}
+
+#say {
+  flex: 1;
+  min-height: 26px;
+  max-height: 180px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 15px/1.5 var(--sans);
+  resize: none;
+  outline: none;
+}
+
+#say::placeholder {
+  color: var(--muted);
+}
+
+.send {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  transition: opacity 0.15s ease;
+}
+
+.send:disabled {
+  opacity: 0.45;
+}
+
+/* Скрепка: приложить картинку к реплике (0.5.0). Сдержанно — как кнопка, а не палец. */
+.attach {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-3, var(--muted));
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.attach:hover,
+.attach:focus-visible {
+  color: var(--ink);
+  background: var(--hover, rgba(0, 0, 0, 0.05));
+}
+
+.attach svg {
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+.composer-files {
+  max-width: 800px;
+  margin: 0 auto 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.composer-files .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-2, var(--paper));
+  font-size: 12px;
+  color: var(--ink-2, var(--ink));
+}
+
+.composer-files .chip img {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 5px;
+}
+
+.composer-files .chip button {
+  border: 0;
+  background: transparent;
+  color: var(--ink-3, var(--muted));
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: default;
+}
+
+.composer-files .chip button:hover {
+  color: var(--ink);
+}
+
+.composer-box.dropping {
+  outline: 1.5px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+.send svg {
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+
+.composer-hint {
+  max-width: 800px;
+  margin: 6px auto 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ---------- панель хода справа ---------- */
+
+.panel {
+  background: var(--ground);
+  border-left: 1px solid var(--line);
+  padding: 10px 14px 20px;
+  min-height: 0;
+}
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 6px 12px;
+  font: 400 19px/1.2 var(--serif);
+  font-variation-settings: "opsz" 20;
+  color: var(--ink);
+}
+
+.panel-head .n {
+  font: 400 11px/1 var(--mono);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* идущий ход: карточка с акцентной кромкой */
+.turn-live {
+  margin: 0 0 12px;
+  padding: 10px 12px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.turn-live-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 400 15px/1.3 var(--serif);
+  font-variation-settings: "opsz" 16;
+  color: var(--ink);
+}
+
+.turn-live-head .dot {
+  width: 8px;
+  height: 8px;
+}
+
+.turn-live-head .t {
+  margin-left: auto;
+  font: 400 11.5px/1 var(--mono);
+  color: var(--muted);
+}
+
+.turn-live-sub {
+  margin: 4px 0 6px 16px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* кадр: полоса «из кэша / заново» и цифры */
+.frame-strip {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.frame-strip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font: 400 15px/1.3 var(--serif);
+  font-variation-settings: "opsz" 16;
+  color: var(--ink);
+}
+
+.frame-strip-head a {
+  font: 400 11.5px/1 var(--sans);
+}
+
+.frame-bar {
+  display: flex;
+  height: 8px;
+  margin: 8px 0 6px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--line);
+}
+
+.frame-bar i {
+  display: block;
+  height: 100%;
+}
+
+.frame-bar .cached {
+  background: var(--ok);
+}
+
+.frame-bar .fresh {
+  background: var(--accent);
+}
+
+.frame-bar .out {
+  background: var(--ink-3);
+}
+
+.frame-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.frame-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: baseline;
+}
+
+.frame-legend .cached i {
+  background: var(--ok);
+}
+
+.frame-legend .fresh i {
+  background: var(--accent);
+}
+
+.frame-legend .out i {
+  background: var(--ink-3);
+}
+
+/* прошлые ходы */
+.ev {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  margin: 2px 0;
+}
+
+.ev-head {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 10px;
+  min-width: 0;
+}
+
+.ev-head:hover {
+  background: var(--ctrl-hover);
+}
+
+.ev.open {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.ev.open .ev-head:hover {
+  background: transparent;
+}
+
+.ev-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+
+.ev-time {
+  font: 400 11px/1 var(--mono);
+  color: var(--muted);
+}
+
+.ev-sub {
+  margin: -4px 9px 6px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ev-steps {
+  padding: 2px 9px 9px;
+  font-size: 12.5px;
+}
+
+.ev-chevron { color: var(--ink-3); font: 20px/1 var(--sans); transition: transform .15s; }
+.ev.open .ev-chevron { transform: rotate(90deg); }
+.now .ev { margin: 0; border-bottom-color: var(--line); border-radius: 0; padding: 6px 0; }
+.now .ev-title { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 14px; line-height: 1.5; color: var(--ink); }
+.now .ev-head { align-items: start; }
+.now .ev-time { padding-top: 5px; white-space: nowrap; color: var(--ink-3); }
+.now .ev-head .dot { margin-top: 7px; }
+
+.ev-step {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px solid var(--line);
+  padding: 6px 2px;
+  color: var(--ink-2);
+}
+
+.ev-step .kind {
+  display: inline-block;
+  min-width: 52px;
+  font: 500 10.5px/1.6 var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ev-step .hand,
+.ev-step b.tool {
+  font: 500 12.5px/1.4 var(--mono);
+  color: var(--ink);
+}
+
+.ev-step .args {
+  font: 400 11.5px/1.4 var(--mono);
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.ev-step .res {
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.ev-step .lesson {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.ev-step.think {
+  color: var(--ink-3);
+}
+
+.ev-step.word {
+  color: var(--ink);
+}
+
+/* ---------- карточки и общие блоки экранов ---------- */
+
+.card {
+  padding: 16px 20px;
+  margin: 0 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.card h3,
+.section-title {
+  margin: 0 0 10px;
+  font: 400 22px/1.3 var(--serif);
+  font-variation-settings: "opsz" 24;
+  color: var(--ink);
+}
+
+.section-title {
+  margin: 26px 0 12px;
+}
+
+.section-title .muted {
+  font: 400 13px/1 var(--sans);
+  margin-left: 8px;
+}
+
+.card h4,
+.mode-service h4,
+.mount-list h4 {
+  margin: 6px 0 0;
+  font: 600 13.5px/1.3 var(--sans);
+  color: var(--ink);
+}
+
+details.fold {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  margin: 6px 0;
+}
+
+details.fold > summary {
+  padding: 9px 13px;
+  cursor: default;
+  font-size: 13.5px;
+  color: var(--ink);
+  list-style: none;
+}
+
+details.fold > summary::before {
+  content: "›";
+  display: inline-block;
+  width: 14px;
+  margin-right: 4px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+details.fold[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+details.fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fold-body {
+  padding: 4px 13px 12px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.row {
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.row:first-child {
+  border-top: 0;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: 500 11px/1.4 var(--sans);
+  vertical-align: middle;
+}
+
+.badge.ok {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  color: var(--ok);
+}
+
+.badge.err {
+  background: color-mix(in srgb, var(--err) 14%, transparent);
+  color: var(--err);
+}
+
+.badge.quiet {
+  background: var(--surface-2);
+  color: var(--ink-3);
+}
+
+table.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+table.grid th,
+table.grid td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+table.grid th {
+  font: 500 11px/1 var(--sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.err-msg {
+  color: var(--err);
+}
+
+/* маркдаун */
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-family: var(--serif);
+  font-weight: 400;
+  color: var(--ink);
+  margin: 1.1em 0 0.4em;
+}
+
+.md h1 {
+  font-size: 26px;
+}
+
+.md h2 {
+  font-size: 22px;
+}
+
+.md h3 {
+  font-size: 18px;
+}
+
+.md p,
+.md li {
+  line-height: 1.6;
+}
+
+.md code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-2);
+}
+
+.md pre {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.md pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.md blockquote {
+  margin: 0.8em 0;
+  padding: 2px 14px;
+  border-left: 2px solid var(--line-strong);
+  color: var(--ink-3);
+}
+
+.md table {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  font-size: 13px;
+}
+
+.md th,
+.md td {
+  border: 1px solid var(--line);
+  padding: 5px 9px;
+}
+
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1.2em 0;
+}
+
+/* двухколоночные экраны: список слева, чтение справа */
+.split {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 22px;
+  height: 100%;
+  min-height: 0;
+}
+
+.split > .list {
+  overflow-y: auto;
+  min-height: 0;
+  scrollbar-width: thin;
+}
+
+.split > .reading {
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 6px;
+  scrollbar-width: thin;
+}
+
+.item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.item:hover {
+  background: var(--ctrl-hover);
+}
+
+.item[aria-current="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.item .n {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* кнопки, поля, переключатели — форм-кит ui-kit/dom.ts */
+.btn {
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font: 500 13.5px/1 var(--sans);
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn-primary:hover {
+  background: color-mix(in srgb, var(--accent) 88%, #000);
+}
+
+.btn-quiet {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.btn-quiet:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.btn-ghost:hover {
+  background: var(--ctrl-hover);
+  color: var(--ink);
+}
+
+.btn-danger {
+  background: transparent;
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 40%, transparent);
+}
+
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--err) 10%, transparent);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+}
+
+/* Заперта, но не выключена: на клик ОБЪЯСНЯЕМ, почему нельзя. */
+.btn[aria-disabled="true"] {
+  opacity: 0.55;
+}
+
+.btn[aria-disabled="true"]:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field-label {
+  font: 500 11px/1 var(--sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.field-input,
+select.field-input {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 400 14px/1 var(--sans);
+  outline: none;
+}
+
+.field-input.mono {
+  font: 400 12.5px/1 var(--mono);
+}
+
+.field-input:focus {
+  border-color: var(--accent);
+}
+
+.field-hint {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.form-grid {
+  display: grid;
+  gap: 14px 18px;
+}
+
+.form-grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.choice {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.choice.stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.choice-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 13px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: transparent;
+  text-align: left;
+}
+
+.choice-item:hover {
+  border-color: var(--ink-3);
+}
+
+.choice-item[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.choice-item[aria-disabled="true"] {
+  opacity: 0.6;
+}
+
+.choice-item[aria-disabled="true"]:hover {
+  border-color: var(--line);
+}
+
+.choice-title {
+  font: 500 13.5px/1.25 var(--sans);
+  color: var(--ink);
+}
+
+.choice.stack .choice-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.choice-text {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 500 13.5px/1.3 var(--sans);
+  text-align: left;
+}
+
+.switch[aria-disabled="true"] {
+  opacity: 0.55;
+}
+
+.switch-knob {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  transition: background-color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.switch-knob::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  transition: transform 0.2s ease;
+}
+
+.switch[aria-checked="true"] .switch-knob {
+  background: var(--accent);
+}
+
+.switch[aria-checked="true"] .switch-knob::after {
+  transform: translateX(16px);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.receipt {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.receipt.ok {
+  color: var(--ok);
+}
+
+.receipt.err {
+  color: var(--err);
+}
+
+/* тост — единственный канал для отказов: дать выделить и скопировать текст */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 84px;
+  transform: translate(-50%, 8px);
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--ground);
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  pointer-events: auto;
+  user-select: text;
+  cursor: pointer;
+  max-width: min(560px, 80vw);
+  text-align: center;
+  z-index: 50;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* дифф кадра */
+.diff {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.diff .add {
+  color: var(--ok);
+}
+
+.diff .del {
+  color: var(--err);
+}
+
+.diff .hunk {
+  color: var(--muted);
+}
+
+.zstate {
+  font-size: 12px;
+}
+
+.zstate.same {
+  color: var(--ok);
+}
+
+.zstate.changed {
+  color: var(--err);
+}
+
+.zstate.new {
+  color: var(--warn);
+}
+
+/* зоны кадра K|E|A|T — полоса пропорций */
+.zones {
+  display: flex;
+  height: 14px;
+  margin: 10px 0 6px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--line);
+}
+
+.zones i {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  font: 500 9.5px/1 var(--mono);
+  color: var(--accent-ink);
+  min-width: 14px;
+}
+
+.zones .same {
+  background: var(--ok);
+}
+
+.zones .changed {
+  background: var(--err);
+}
+
+.zones .new {
+  background: var(--warn);
+}
+
+.tools-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+/* правка маркдауна на месте */
+.md-editor {
+  width: 100%;
+  min-height: 520px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 400 13.5px/1.6 var(--mono);
+  resize: vertical;
+  outline: none;
+}
+
+.md-editor:focus {
+  border-color: var(--accent);
+}
+
+.md.diff {
+  font: 12.5px/1.55 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 12px 14px;
+}
+
+.diff-gone {
+  color: var(--err);
+  background: color-mix(in srgb, var(--err) 8%, transparent);
+}
+
+.diff-came {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+}
+
+/* телефон: QR и устройства */
+.qr-out {
+  display: block;
+  margin-top: 16px;
+}
+
+.qr-pair {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+  margin-bottom: 18px;
+}
+
+@media (max-width: 900px) {
+  .qr-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.qr {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.qr-text p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.qr-url {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.devices {
+  margin-top: 14px;
+}
+
+.device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+
+/* список моделей после проверки: выбор одним нажатием */
+.models {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.models-label {
+  width: 100%;
+  font: 500 12px/1.3 var(--sans);
+  color: var(--ink-3);
+}
+
+.model-chip {
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font: 500 12.5px/1 var(--mono);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.model-chip:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.model-chip[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+
+/* ---------- отказ, объяснённый словом ---------- */
+
+.fail {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.fail b {
+  display: block;
+  margin-bottom: 12px;
+  font: 400 21px/1.35 var(--serif);
+  color: var(--ink-2);
+}
+
+.fail-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.fail-detail {
+  margin-top: 14px;
+  text-align: left;
+}
+
+.fail-detail summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.fail-detail pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink-3);
+  user-select: text;
+}
+
+/* ---------- настройки: карточки и оглавление ---------- */
+
+.settings {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: 28px;
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.settings-nav {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 4px;
+}
+
+.settings-nav a {
+  display: block;
+  padding: 6px 9px;
+  border-radius: 7px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.settings-nav a:hover {
+  background: var(--ctrl-hover);
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.settings-nav a[aria-current="true"] {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.settings-body {
+  min-width: 0;
+}
+
+.settings-body .card {
+  scroll-margin-top: 8px;
+}
+
+.save-bar {
+  position: sticky;
+  bottom: 0;
+  margin-top: 8px;
+  padding: 12px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--ground) 92%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+@media (max-width: 1100px) {
+  .settings {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    display: none;
+  }
+}
+
+/* карточка «Режим» */
+.mode-locked {
+  margin-top: 2px;
+}
+
+.mode-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.mode-block:empty {
+  display: none;
+}
+
+.mode-block[hidden] {
+  display: none;
+}
+
+.mode-service {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+/* монтирование */
+.mount-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.mount-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.mount-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mount-path {
+  flex: 1 1 220px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font: 400 12.5px/1.4 var(--mono);
+  color: var(--ink);
+}
+
+.mount-access {
+  height: 32px;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 150px;
+}
+
+.mount-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mount-add .field-input {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+/* ---------- узкое окно ---------- */
+
+@media (max-width: 980px) {
+  :root {
+    --panel-w: 300px;
+  }
+
+  #head,
+  .view,
+  .composer,
+  .alarm {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .pulse {
+    display: none;
+  }
+
+  .split {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
+  .form-grid.three,
+  .form-grid.two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  #app.with-panel:not(.panel-collapsed),
+  #app.with-panel.rail-collapsed:not(.panel-collapsed) {
+    grid-template-columns: 0 minmax(0, 1fr);
+  }
+
+  #app.with-panel:not(.panel-collapsed) #panel {
+    display: none;
+  }
+
+  .split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .msg.own {
+    max-width: 90%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ---------- «Сейчас»: монитор хода ---------- */
+
+.now .turn-live {
+  margin: 4px 0 14px;
+  padding: 14px 18px 10px;
+}
+
+.now .turn-live-head {
+  font-size: 17px;
+}
+
+.now .ev-steps {
+  font-size: 13px;
+}
+
+.now-idle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 14px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font: 400 15px/1.4 var(--serif);
+  color: var(--ink-2);
+}
+
+.now .frame-strip {
+  margin-bottom: 8px;
+}
+
+.now .ev {
+  margin: 3px 0;
+}
+
+.now .ev-sub a {
+  color: var(--accent);
+}
+
+/* Сообщение, к которому пришли с карточки хода: короткая подсветка, потом как было. */
+.msg.flash { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow 1.2s ease-out; }
+
+/* Первый запуск Пульта к своему серверу: адрес и ключ спрашиваются в окне
+   (у варианта Praxis установщика нет по замыслу). Карточка занимает середину
+   пустого окна — полка и композер при этом молчат. */
+body.first-run .composer,
+body.first-run #panel,
+body.first-run #rooms,
+body.first-run #room-add,
+body.first-run #state {
+  display: none;
+}
+
+.first-run-card {
+  max-width: 520px;
+  margin: 10vh auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.first-run-card h2 {
+  font: 500 22px/1.3 var(--serif, Georgia, serif);
+  margin: 0;
+}
+
+.first-run-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-2, var(--ink));
+}
+
+.first-run-card input {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper-2, var(--paper));
+  color: var(--ink);
+  font: 14px/1.4 var(--sans, system-ui);
+}
+
+.first-run-card input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.first-run-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

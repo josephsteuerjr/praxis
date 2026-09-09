@@ -1,0 +1,13 @@
+Hélène
+Copyright 2026 Egor
+
+This product includes software developed as part of the Hélène agent runtime.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use these files except in compliance with the License. A copy of the License
+is distributed with this product as LICENSE (and, in Russian with the full
+English text, as ЛИЦЕНЗИЯ.md).
+
+Third-party components and their licenses are listed in
+ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md; the license texts of statically linked Rust crates
+are collected under licenses/rust/.

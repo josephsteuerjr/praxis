@@ -1,0 +1,47 @@
+# Пульт Праксис: тем же окном владелец ходит в дерево агента на сервере.
+#
+# Запуск из каталога Пульта (сюда его кладёт `server/deploy_desk.py` вместе с
+# пакетом — `/opt/praxisdesk/recipe/`):
+#
+#   docker compose -f /opt/praxisdesk/recipe/docker-compose.yml up -d --build
+#
+# Наружу канал выходит ТОЛЬКО на 127.0.0.1:8094; в мир его выпускает Caddy
+# владельца (см. README-СЕРВЕР.md). Имя проекта — явное: без него compose берёт
+# имя папки и на общем сервере видит в «своём» проекте чужие контейнеры.
+# Никогда не запускать с --remove-orphans.
+name: praxis-desk
+
+services:
+  desk:
+    build:
+      # Контекст — каталог Пульта: в нём лежит requirements-desk.txt пакета.
+      context: ..
+      dockerfile: recipe/Dockerfile
+    image: praxis-desk:local
+    container_name: praxis-desk
+    restart: unless-stopped
+    # Ключ канала, токены ботов и имена хостов — рядом с Пультом, вне
+    # репозитория: это данные установки, а не продукта.
+    env_file:
+      - ../desk.env
+    environment:
+      # Дерево смонтировано в /data — канал читает только его.
+      HELENE_TREE: /data
+      # Своё состояние канала: ключи спаренных телефонов. В дерево их писать
+      # нельзя — оно чужое и смонтировано на чтение, и до 09.09 телефон к
+      # серверному Пульту не подключался вовсе: `/pair/redeem` падал
+      # «Read-only file system» и отвечал 503.
+      HELENE_DESK_STATE: /desk-state
+    ports:
+      - "127.0.0.1:${PRAXIS_DESK_PORT:-8094}:8094"
+    volumes:
+      # Дерево агента — ТОЛЬКО чтение: Пульт смотрит, а не правит.
+      - ${PRAXIS_TREE_DIR:-/opt/praxis}:/data:ro
+      # Два исключения, куда окно пишет: команды харнессу и записка владельца.
+      - ${PRAXIS_TREE_DIR:-/opt/praxis}/memory/.control:/data/memory/.control
+      - ${PRAXIS_TREE_DIR:-/opt/praxis}/workspace/inbox:/data/workspace/inbox
+      # Сам пакет desk — тоже только чтение: его подменяет выкладка, не контейнер.
+      - ${PRAXIS_DESK_DIR:-/opt/praxisdesk}:/desk:ro
+      # Единственное место, куда канал пишет: ключи спаренных телефонов.
+      # Рядом с Пультом, а не в дереве агента, и выкладка его не трогает.
+      - ${PRAXIS_DESK_STATE:-/opt/praxisdesk-state}:/desk-state

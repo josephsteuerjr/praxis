@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Морда без рамки: перетаскивание за тайтлбар и кнопки окна из веб-части","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-minimize","core:window:allow-toggle-maximize","core:window:allow-close","core:window:allow-start-dragging"]}}

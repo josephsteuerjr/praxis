@@ -1,0 +1,20 @@
+{
+  "name": "frame-app",
+  "private": true,
+  "version": "0.5.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5174 --strictPort",
+    "build": "tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "motion": "^13.1.1",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
+  }
+}

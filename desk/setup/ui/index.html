@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Установка Hélène</title>
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
+    <div id="viewport">
+      <div class="gust" aria-hidden="true"><div class="gust-band"></div></div>
+
+      <div id="stage">
+        <section class="scene scene-wordmark" data-scene="wordmark">
+          <h1 class="wordmark"></h1>
+        </section>
+        <section class="scene scene-about" data-scene="about" hidden></section>
+        <section class="scene scene-typewriter" data-scene="typewriter" hidden></section>
+        <section class="scene scene-form scene-name" data-scene="name" hidden></section>
+        <section class="scene scene-form scene-constitution" data-scene="constitution" hidden></section>
+        <section class="scene scene-form scene-keys" data-scene="keys" hidden></section>
+        <section class="scene scene-form scene-legacy" data-scene="legacy" hidden></section>
+        <section class="scene scene-form scene-mode" data-scene="mode" hidden></section>
+        <section class="scene scene-form scene-install" data-scene="install" hidden></section>
+        <section class="scene scene-form scene-uninstall" data-scene="uninstall" hidden></section>
+      </div>
+
+      <div class="edge edge-left" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" /></svg>
+        <span>Назад</span>
+      </div>
+      <div class="edge edge-right" aria-hidden="true">
+        <span class="edge-next-label">Далее</span>
+        <svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" /></svg>
+      </div>
+
+      <p id="hint" aria-live="polite"></p>
+
+      <header id="chrome" data-tauri-drag-region>
+        <div class="controls">
+          <button class="theme" data-control type="button" aria-label="Тема оформления">
+            <svg class="theme-ico" viewBox="0 0 16 16" aria-hidden="true"></svg>
+            <span class="theme-label"></span>
+          </button>
+          <button class="win" data-control data-win="minimize" type="button" aria-label="Свернуть">
+            <svg viewBox="0 0 12 12"><path d="M1 6h10" /></svg>
+          </button>
+          <button class="win" data-control data-win="maximize" type="button" aria-label="Развернуть или восстановить">
+            <svg viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="1" /></svg>
+          </button>
+          <button class="win win-close" data-control data-win="close" type="button" aria-label="Закрыть">
+            <svg viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+          </button>
+        </div>
+      </header>
+    </div>
+  </body>
+</html>

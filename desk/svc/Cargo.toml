@@ -1,0 +1,38 @@
+[package]
+name = "helene-svc"
+version = "0.5.0"
+edition = "2021"
+
+[dependencies]
+serde_json = "1"
+windows-service = "0.8"
+# Job-объект (внуки не переживают остановку службы) и местное время в журнале.
+# Та же версия, что у оболочки — супервизоров два, механика одна.
+# Win32_System_RemoteDesktop — узнать, вошёл ли кто-нибудь в систему (служба
+# живёт в Session 0 и обязана это спрашивать, а не предполагать).
+# Win32_System_Console — отпустить консоль в режиме session-host: планировщик
+# запускает консольное приложение с новым окном, и оно висело бы на экране.
+#
+# Брокер прав (A2/A3) добавил четыре набора:
+#   Win32_System_Pipes        — сама труба (CreateNamedPipeW, ConnectNamedPipe,
+#                               GetNamedPipeClientProcessId — им проверяется,
+#                               из какой сессии пришёл клиент);
+#   Win32_Storage_FileSystem  — чтение и запись в трубу (ReadFile/WriteFile) и
+#                               флаг FILE_FLAG_FIRST_PIPE_INSTANCE;
+#   Win32_System_IO           — тип OVERLAPPED в подписях этих двух (мы ходим
+#                               синхронно и передаём NULL, но тип обязан быть);
+#   Win32_Security_Authorization — SDDL-дескриптор трубы и SID строкой;
+#   Win32_System_Environment  — окружение владельца для процесса, поднятого в
+#                               его сессии (без него у процесса окружение СИСТЕМЫ).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Environment", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+
+[target.'cfg(windows)'.build-dependencies]
+# Паспорт exe (VERSIONINFO) — см. build.rs. Крейт уже в дереве зависимостей
+# оболочки: Tauri собирает свой ресурс им же.
+tauri-winres = "0.3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true

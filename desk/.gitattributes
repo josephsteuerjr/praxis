@@ -1,0 +1,20 @@
+# Одна норма переводов строк на репозиторий.
+# Было: .gitattributes нет, core.autocrlf=false — в дереве лежат .md с CRLF, а
+# сборщик пишет свои .md и .json с LF, и в одной папке у пользователя ехали
+# оба вида. Хуже: resources/SOUL.md — единственный файл, который сравнивается с
+# каноном (boot.py читает канон, install.rs отдельно нормализует \r\n), и у
+# соавтора с core.autocrlf=true он получил бы другой байтовый состав.
+* text=auto eol=lf
+
+# PowerShell читает свои скрипты как файлы Windows; оставляем им CRLF.
+*.ps1 text eol=crlf
+
+# Бинарное — не трогать.
+*.png binary
+*.ico binary
+*.jpg binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.exe binary
+*.zip binary

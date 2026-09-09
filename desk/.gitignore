@@ -1,0 +1,69 @@
+local-demo/data/
+local-demo/pult.exe
+local-demo/pult.json
+__pycache__/
+installer/build/
+emulate/
+
+# установщик: производные
+setup/dist/
+setup/target/
+setup/gen/
+setup/ui/node_modules/
+local-demo/frame.json
+local-demo/frame.exe
+local-demo/.close-hint-shown
+shell/target/
+# сборка варианта Praxis (shell/build-praxis.ps1) — свой каталог, чтобы
+# helene.exe и praxis-pult.exe не затирали друг друга
+shell/target-praxis/
+svc/target/
+app/dist/
+app/node_modules/
+
+# сборки и зависимости
+svc/target/
+setup/ui/dist/
+mobile/dist/
+mobile/node_modules/
+installer/build/
+installer/logs/
+installer/emulate/
+# секреты и сессии — никогда.
+# Было: список из пяти строк, подписанный «никогда», который не покрывал ни
+# .deploy.env (он лежал в рабочем дереве с root-паролем от VPS), ни helene.json
+# (в нём после установки ключ модели и токен бота открытым текстом), ни ключей,
+# ни файлов учёток. Игнор — последняя преграда перед публичным репозиторием,
+# поэтому здесь перечислены ФОРМЫ секретов, а не имена, которые вспомнились.
+*.env
+.env
+.env.*
+!*.env.example
+helene.json
+**/llm.json
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.keystore
+id_rsa*
+id_ecdsa*
+id_ed25519*
+*.ppk
+credentials*.json
+client_secret*.json
+service-account*.json
+auth.json
+.netrc
+_netrc
+.npmrc
+.pypirc
+.pgpass
+.git-credentials
+secret-strings.txt
+*.session
+*.session-journal
+*.log
+# локальные пробы
+local-demo/

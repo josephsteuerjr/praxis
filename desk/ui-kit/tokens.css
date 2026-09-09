@@ -1,0 +1,94 @@
+/* Frame — общие токены установщика и программы. Светлая тема — основная и
+   самая светлая из набора (слово владельца 02.09): почти белая тёплая бумага,
+   воздух, один тёплый акцент. Тёмная — тёплый уголь. */
+
+:root {
+  color-scheme: light;
+  --ground: #fdfcfa;
+  --surface: #ffffff;
+  --surface-2: #f8f6f2;
+  --ink: #262320;
+  --ink-2: #4f4a43;
+  --ink-3: #7a7369;
+  --muted: #a39b8c;
+  --line: rgba(38, 35, 32, 0.1);
+  --line-strong: rgba(38, 35, 32, 0.18);
+  --accent: #b9651e;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(185, 101, 30, 0.1);
+  --ok: #5e805b;
+  --warn: #a67727;
+  --err: #b8432f;
+  --gust: rgba(38, 35, 32, 0.045);
+  --light-a: rgba(255, 232, 196, 0.42);
+  --light-m: rgba(255, 232, 196, 0.16);
+  --light-b: rgba(255, 232, 196, 0);
+  --ctrl-hover: rgba(38, 35, 32, 0.06);
+  --close-hover: #c8412f;
+  --shadow: 0 1px 2px rgba(38, 35, 32, 0.04), 0 10px 30px rgba(38, 35, 32, 0.05);
+  /* полка слева и панель хода справа — на полтона темнее бумаги (окно, 07.09) */
+  --rail: #f6f3ee;
+  --panel: #faf8f4;
+  --radius: 12px;
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --sans: "Golos Text", "Segoe UI", system-ui, sans-serif;
+  --mono: "PT Mono", Consolas, "Courier New", monospace;
+  /* почерк агента: только его имя над его комнатой и подпись (06.09) */
+  --hand: "Shantell Sans", "Segoe Print", "Comic Sans MS", cursive;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #1a1815;
+    --surface: #221f1b;
+    --surface-2: #29251f;
+    --ink: #efe9df;
+    --ink-2: #c9c0b2;
+    --ink-3: #9b9286;
+    --muted: #6f675c;
+    --line: rgba(239, 233, 223, 0.1);
+    --line-strong: rgba(239, 233, 223, 0.2);
+    --accent: #e2a25e;
+    --accent-ink: #1a1815;
+    --accent-soft: rgba(226, 162, 94, 0.14);
+    --ok: #8fb08b;
+    --warn: #d4a256;
+    --err: #e07b68;
+    --gust: rgba(255, 238, 215, 0.05);
+    --light-a: rgba(255, 196, 132, 0.1);
+    --light-m: rgba(255, 196, 132, 0.04);
+    --light-b: rgba(255, 196, 132, 0);
+    --ctrl-hover: rgba(239, 233, 223, 0.08);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 10px 30px rgba(0, 0, 0, 0.25);
+    --rail: #161412;
+    --panel: #1c1a17;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #1a1815;
+  --surface: #221f1b;
+  --surface-2: #29251f;
+  --ink: #efe9df;
+  --ink-2: #c9c0b2;
+  --ink-3: #9b9286;
+  --muted: #6f675c;
+  --line: rgba(239, 233, 223, 0.1);
+  --line-strong: rgba(239, 233, 223, 0.2);
+  --accent: #e2a25e;
+  --accent-ink: #1a1815;
+  --accent-soft: rgba(226, 162, 94, 0.14);
+  --ok: #8fb08b;
+  --warn: #d4a256;
+  --err: #e07b68;
+  --gust: rgba(255, 238, 215, 0.05);
+  --light-a: rgba(255, 196, 132, 0.1);
+  --light-m: rgba(255, 196, 132, 0.04);
+  --light-b: rgba(255, 196, 132, 0);
+  --ctrl-hover: rgba(239, 233, 223, 0.08);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 10px 30px rgba(0, 0, 0, 0.25);
+  --rail: #161412;
+  --panel: #1c1a17;
+}

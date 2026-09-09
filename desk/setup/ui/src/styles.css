@@ -1,0 +1,1081 @@
+@import "../../../ui-kit/fonts.css";
+
+@import "../../../ui-kit/tokens.css";
+
+/* ------------------------------------------------------------------ */
+/* База. Текст не выделяется; выделяются только настоящие поля ввода.   */
+/* ------------------------------------------------------------------ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font: 16px/1.5 var(--sans);
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+  cursor: default;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: default;
+}
+
+button:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 2px;
+}
+
+#viewport {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: var(--ground);
+  transition: background-color 0.45s ease;
+}
+
+#viewport[data-edge="left"],
+#viewport[data-edge="right"] {
+  cursor: pointer;
+}
+
+/* Фон ровный: один цвет бумаги без пятен света — слово владельца. */
+
+/* Порыв: широкая мягкая полоса, проходящая через окно вместе с ветром. */
+.gust {
+  position: absolute;
+  top: -20%;
+  left: 0;
+  width: 36%;
+  height: 140%;
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.gust-band {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-14deg);
+  background: linear-gradient(90deg, transparent, var(--gust) 50%, transparent);
+}
+
+/* ------------------------------------------------------------------ */
+/* Кадр: 1920×1080, пропорциональный масштаб, ниже порога — обрезка.     */
+/* ------------------------------------------------------------------ */
+
+#stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1920px;
+  height: 1080px;
+  transform: translate(-50%, -50%) scale(var(--scale, 1));
+  transform-origin: 50% 50%;
+}
+
+.scene {
+  position: absolute;
+  inset: 0;
+}
+
+.scene[hidden] {
+  display: none;
+}
+
+/* ---------- сцена 1: надпись ---------- */
+
+.scene-wordmark {
+  display: grid;
+  place-items: center;
+  padding-bottom: 5%;
+}
+
+.wordmark {
+  margin: 0;
+  font: 380 216px/1 var(--serif);
+  font-variation-settings: "opsz" 60;
+  letter-spacing: 0.012em;
+  color: var(--ink);
+  white-space: pre;
+}
+
+.wordmark .g {
+  display: inline-block;
+  opacity: 0;
+  will-change: transform, opacity, filter;
+}
+
+/* ---------- сцена 2: о программе ---------- */
+
+.scene-about {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 320px 56px 240px;
+}
+
+.about-block {
+  opacity: 0;
+  will-change: transform, opacity, filter;
+}
+
+.headline {
+  margin: 0;
+  font: 400 92px/1.06 var(--serif);
+  font-variation-settings: "opsz" 60;
+  letter-spacing: -0.008em;
+  max-width: 1180px;
+  color: var(--ink);
+}
+
+.headline .line {
+  display: block;
+}
+
+.lead {
+  margin: 40px 0 0;
+  max-width: 880px;
+  font-size: 26px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 56px;
+  margin-top: 96px;
+  max-width: 1240px;
+}
+
+.fact {
+  border-top: 1px solid var(--line);
+  padding-top: 22px;
+}
+
+.fact h3 {
+  margin: 0 0 10px;
+  font: 400 25px/1.3 var(--serif);
+  font-variation-settings: "opsz" 24;
+  color: var(--ink);
+}
+
+.fact p {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+/* ---------- сцена 3: печатная машинка ---------- */
+
+/* Композиция стоит на месте, пока текст растёт: верх фиксирован, не центр. */
+.scene-typewriter {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  padding: 140px 320px 56px 240px;
+}
+
+.tw-title {
+  margin: 0 0 44px;
+  font: 400 44px/1.1 var(--serif);
+  font-variation-settings: "opsz" 40;
+  color: var(--ink-3);
+}
+
+.tw-body {
+  max-width: 980px;
+  font: 400 21px/1.6 var(--mono);
+  color: var(--ink);
+}
+
+.tw-body p {
+  margin: 0 0 1.05em;
+  min-height: 1.6em;
+  white-space: pre-wrap;
+}
+
+.tw-cursor {
+  display: inline-block;
+  width: 0.56em;
+  height: 1.08em;
+  margin-left: 1px;
+  vertical-align: -0.16em;
+  background: var(--accent);
+  animation: tw-blink 1.05s steps(1) infinite;
+  transition: opacity 0.9s ease;
+}
+
+.tw-cursor.typing {
+  animation: none;
+}
+
+.tw-cursor.gone {
+  opacity: 0;
+  animation: none;
+}
+
+@keyframes tw-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Навигация четвертями: зоны невидимы, подпись проявляется у края.     */
+/* ------------------------------------------------------------------ */
+
+.edge {
+  position: absolute;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 500 15px/1 var(--sans);
+  letter-spacing: 0.01em;
+  color: var(--ink-2);
+  opacity: 0;
+  transition: opacity 0.35s ease, transform 0.35s ease;
+  pointer-events: none;
+}
+
+.edge svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.edge-left {
+  left: 44px;
+  transform: translate(-8px, -50%);
+}
+
+.edge-right {
+  right: 44px;
+  transform: translate(8px, -50%);
+}
+
+#viewport[data-edge="left"] .edge-left,
+#viewport[data-edge="right"] .edge-right {
+  opacity: 1;
+  transform: translate(0, -50%);
+}
+
+#hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 44px;
+  margin: 0;
+  text-align: center;
+  font: 400 14px/1.4 var(--sans);
+  letter-spacing: 0.01em;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.7s ease;
+  pointer-events: none;
+}
+
+#hint.show {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Верхняя полоса окна: перетаскивание, тема, кнопки окна.              */
+/* ------------------------------------------------------------------ */
+
+#chrome {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  z-index: 10;
+}
+
+#chrome .controls {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 6px 8px 0 0;
+  gap: 2px;
+}
+
+.win {
+  width: 44px;
+  height: 34px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-3);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.win svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  fill: none;
+}
+
+.win:hover {
+  background: var(--ctrl-hover);
+  color: var(--ink);
+}
+
+.win-close:hover {
+  background: var(--close-hover);
+  color: #fff;
+}
+
+.win[disabled] {
+  opacity: 0.35;
+}
+
+.theme {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  margin-right: 10px;
+  padding: 0 12px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-3);
+  font: 500 12.5px/1 var(--sans);
+  letter-spacing: 0.02em;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.theme:hover {
+  color: var(--ink);
+  border-color: var(--ink-3);
+}
+
+.theme svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.theme svg .fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Сцены с вводом: поля, объяснения, выбор, переключатель, кнопки.      */
+/* ------------------------------------------------------------------ */
+
+.scene-form {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 36px;
+  padding: 120px 240px 56px 240px;
+}
+
+.form-head {
+  margin: 0;
+  font: 400 64px/1.08 var(--serif);
+  font-variation-settings: "opsz" 60;
+  letter-spacing: -0.006em;
+  color: var(--ink);
+}
+
+.form-lead {
+  margin: -12px 0 0;
+  max-width: 880px;
+  font-size: 22px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.form-sub {
+  margin: 0 0 14px;
+  font: 400 26px/1.3 var(--serif);
+  font-variation-settings: "opsz" 24;
+  color: var(--ink);
+}
+
+.form-grid {
+  display: grid;
+  gap: 24px 32px;
+  max-width: 1240px;
+}
+
+.form-grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-label {
+  font: 500 13px/1 var(--sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.field-input {
+  height: 54px;
+  padding: 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--ground);
+  color: var(--ink);
+  font: 400 19px/1 var(--sans);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.field-input.mono {
+  font: 400 17px/1 var(--mono);
+}
+
+.field-input::placeholder {
+  color: var(--muted);
+}
+
+.field-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.field-hint {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.explain-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  /* Отступ между рядами нужен с тех пор, как объяснений на сцене «Служба»
+     стало четыре: четвёртое переносится на второй ряд, и без зазора его
+     верхняя линейка ложилась вплотную к тексту над ней. */
+  gap: 34px 56px;
+  max-width: 1240px;
+}
+
+.explain {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+  max-width: 560px;
+}
+
+.explain h3 {
+  margin: 0 0 8px;
+  font: 400 23px/1.3 var(--serif);
+  font-variation-settings: "opsz" 24;
+  color: var(--ink);
+}
+
+.explain p {
+  margin: 0;
+  font-size: 16.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.choice {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  max-width: 1240px;
+}
+
+.choice-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: transparent;
+  text-align: left;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.choice-item:hover {
+  border-color: var(--ink-3);
+}
+
+.choice-item[aria-checked="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.choice-title {
+  font: 500 18px/1.2 var(--sans);
+  color: var(--ink);
+}
+
+.choice-text {
+  font-size: 14.5px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.panes {
+  max-width: 1240px;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.pane[hidden] {
+  display: none;
+}
+
+.tg {
+  max-width: 1240px;
+  border-top: 1px solid var(--line);
+  padding-top: 26px;
+}
+
+.tg .form-grid {
+  margin-bottom: 16px;
+}
+
+.tg .explain {
+  border-top: 0;
+  padding-top: 0;
+  max-width: 900px;
+}
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 500 18px/1 var(--sans);
+}
+
+.switch-knob {
+  position: relative;
+  width: 52px;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--line);
+  transition: background-color 0.2s ease;
+}
+
+.switch-knob::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--ground);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  transition: transform 0.2s ease;
+}
+
+.switch[aria-checked="true"] .switch-knob {
+  background: var(--accent);
+}
+
+.switch[aria-checked="true"] .switch-knob::after {
+  transform: translateX(22px);
+}
+
+.btn {
+  height: 52px;
+  padding: 0 28px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font: 500 17px/1 var(--sans);
+  letter-spacing: 0.01em;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: color-mix(in srgb, var(--accent) 88%, #000);
+}
+
+.btn-quiet {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+/* конституция */
+
+.const-row {
+  display: grid;
+  grid-template-columns: 420px minmax(0, 1fr);
+  gap: 0 56px;
+  max-width: 1440px;
+  align-items: start;
+}
+
+.const-aside {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.const-editor {
+  width: 100%;
+  height: 700px;
+  padding: 26px 30px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--ground);
+  color: var(--ink);
+  font: 400 15.5px/1.6 var(--mono);
+  resize: none;
+  outline: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.const-editor:focus {
+  border-color: var(--accent);
+}
+
+/* Ограда и служба — ДВА измерения, и на экране они не в одном ряду.
+   Ряд `.modes` — выбор одного из двух (песочница | интерактивный);
+   `.service-card` под ним — отдельная опция поверх любого из них, внутри неё
+   галочка нулевой сессии. Пока служба была третьей карточкой ряда, выбор
+   службы молча снимал ограду — см. шапку scenes/mode.ts. */
+
+.modes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  max-width: 1240px;
+  align-items: start;
+}
+
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px 24px 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: transparent;
+  transition: border-color 0.15s ease, background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.mode-card:hover {
+  border-color: var(--ink-3);
+}
+
+.mode-card[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.mode-card:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mode-title {
+  font: 400 28px/1.2 var(--serif);
+  font-variation-settings: "opsz" 28;
+  color: var(--ink);
+}
+
+.mode-text {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.mode-note {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+
+.mode-why {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--err);
+}
+
+.mode-why[hidden] {
+  display: none;
+}
+
+/* Опция службы. Не карточка выбора: у неё свой выключатель, и стоит она под
+   рядом оград, во всю его ширину. Галочка нулевой сессии — вторым столбцом
+   справа, а не под текстом: так она видимо ВНУТРИ опции и сцена умещается в
+   кадр 1080 без прокрутки (её тут нет). */
+.service-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 440px);
+  gap: 12px 40px;
+  align-items: start;
+  padding: 22px 24px 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  max-width: 1240px;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.service-card:has(.switch[aria-checked="true"]) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Опция недоступна не «просто серостью»: причину печатаем тут же (.mode-why),
+   и она остаётся в полную силу — гаснет только то, чего нельзя выбрать.
+   ⚠ Гасим ВНУТРЕННОСТИ, а не саму карточку: карточка — блок сцены, и ветер
+   держит на ней собственную inline-прозрачность (wind.settle). Правило
+   `opacity` на самой карточке не действует вовсе — проверено в превью. */
+.service-card:has(.switch:disabled) .switch,
+.service-card:has(.switch:disabled) .mode-text,
+.service-card:has(.switch:disabled) .mode-note {
+  opacity: 0.55;
+}
+
+.service-main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.switch:disabled {
+  cursor: default;
+}
+
+.mode-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 32px;
+  border-left: 1px solid var(--line);
+  min-width: 0;
+}
+
+.mode-extra[hidden] {
+  display: none;
+}
+
+.mode-extra .switch {
+  font-size: 16px;
+  text-align: left;
+}
+
+/* Две опции поверх ограды — служба и управление компьютером — в один ряд:
+   столбиком они выталкивают врезки за кадр 1080, а кадр не прокручивается.
+   Внутри ряда карточка складывает свои колонки: галочка нулевой сессии и
+   оговорка тела уходят под текст, отчёркнутые сверху, а не справа. */
+.options-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  max-width: 1240px;
+  align-items: start;
+}
+
+.options-row .service-card {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 18px 22px 20px;
+}
+
+/* В два столбца длинные описания опций (слова харнесса, здесь не режем)
+   набраны на кегль меньше — иначе ряд не умещается в кадр. */
+.options-row .mode-text {
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.scene-foot {
+  max-width: 1240px;
+}
+
+.options-row .mode-extra {
+  padding-left: 0;
+  padding-top: 12px;
+  border-left: 0;
+  border-top: 1px solid var(--line);
+}
+
+.mode-warn {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+
+/* Включённая нулевая сессия говорит словами самого харнесса и цветом тревоги. */
+.mode-warn.on {
+  color: var(--warn);
+}
+
+/* прежние поколения продукта: службы Vera/Frame, оставшиеся от прошлых версий */
+
+.legacy-list {
+  /* Служб бывает больше одной (Vera и Frame сразу): в два столбца они
+     умещаются в кадр, в столбик — нет, а кадр у сцены не прокручивается. */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 28px 56px;
+  max-width: 1240px;
+}
+
+.legacy-item {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.legacy-item h3 {
+  margin: 0 0 8px;
+  font: 400 26px/1.3 var(--serif);
+  font-variation-settings: "opsz" 24;
+  color: var(--ink);
+}
+
+.legacy-item p {
+  margin: 0 0 10px;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.legacy-path {
+  font-family: var(--mono);
+  font-size: 14.5px;
+  color: var(--ink-3);
+  word-break: break-all;
+}
+
+.legacy-item .install-actions {
+  margin-top: 4px;
+}
+
+/* установка */
+
+.summary {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 14px 32px;
+  margin: 0;
+  max-width: 1100px;
+  font-size: 19px;
+  line-height: 1.4;
+}
+
+.summary dt {
+  color: var(--ink-3);
+}
+
+.summary dd {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.install-actions[hidden],
+.progress[hidden],
+.install-result[hidden] {
+  display: none;
+}
+
+.progress {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 18px;
+  color: var(--ink-2);
+}
+
+.step::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: 1px;
+  animation: tw-blink 1s steps(1) infinite;
+}
+
+.step.done {
+  color: var(--ink-3);
+}
+
+.step.done::before {
+  background: var(--ink-3);
+  animation: none;
+}
+
+.step.failed {
+  color: var(--close-hover);
+}
+
+.step.failed::before {
+  background: var(--close-hover);
+  animation: none;
+}
+
+.install-result h3 {
+  margin: 0 0 10px;
+  font: 400 40px/1.15 var(--serif);
+  font-variation-settings: "opsz" 40;
+}
+
+.install-result p {
+  margin: 0 0 26px;
+  max-width: 900px;
+  font-size: 19px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.receipt {
+  font-size: 15px;
+  color: var(--ink-3);
+}
+
+.receipt.ok {
+  color: var(--ok);
+}
+
+.receipt.err {
+  color: var(--err);
+}
+
+/* Список моделей после проверки: выбор одним нажатием. */
+.models {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* display:flex перебивает [hidden]: без этого box.hidden = true не скрывал
+   список, и пустой контейнер оставался в потоке со своим margin-top. */
+.models[hidden] {
+  display: none;
+}
+
+.models-label {
+  width: 100%;
+  font: 500 12.5px/1.3 var(--sans);
+  color: var(--ink-3);
+}
+
+.model-chip {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font: 500 13px/1 var(--mono);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.model-chip:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.model-chip[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+
+/* Подпись на сцене имени: имя агента его почерком — так оно встанет над его
+   комнатой в окне. Пока поле пустое — многоточие цветом подсказки. */
+.signature {
+  margin: 4px 0 0;
+  min-height: 52px;
+  font: 300 40px/1.25 var(--hand);
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signature.empty {
+  color: var(--muted);
+}

@@ -1,0 +1,17 @@
+{
+  "_": "Константы продукта в ОДНОМ месте (ревью 06.09, решение 2 / задача A п. 1.12). Читают все три языка: Python (tests/t_contract.py сверяет modes.py, body.py, deskapp.py, deskd/readers.py), Rust (тесты в shell/svc/setup через include_str!) и TypeScript (окно, установщик, телефон — подключает B). Менять число здесь = менять его везде; тесты падают, пока копии не сведены.",
+  "v": 1,
+  "ports": {
+    "desk": 8094,
+    "relay": 5011,
+    "body": 9480
+  },
+  "computer_scopes": ["computer.read", "computer.files", "computer.process", "computer.apps"],
+  "protocol": "frame.desk.v1",
+  "config_name": "helene.json",
+  "rooms": {
+    "default": "window",
+    "pattern": "^window-[0-9a-f]{8}$",
+    "archive_dir": "memory/groups/archive"
+  }
+}

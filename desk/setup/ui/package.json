@@ -1,0 +1,19 @@
+{
+  "name": "setup-ui",
+  "private": true,
+  "version": "0.5.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5173 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 5174"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "motion": "^13.1.1"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
+  }
+}

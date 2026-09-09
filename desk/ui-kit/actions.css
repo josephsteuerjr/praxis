@@ -1,0 +1,109 @@
+/* Общая лента действий окна, телефона и мини-аппа. */
+.ev-steps .ev-step {
+  padding: 12px 2px;
+  gap: 7px;
+  min-width: 0;
+}
+.action-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.action-title { font: 500 13px/1.5 var(--sans); color: var(--ink); }
+.action-status { font: 400 11px/1.5 var(--sans); color: var(--ink-3); }
+.action-model .action-title { font-weight: 400; color: var(--ink-3); }
+.action-active { border-left: 2px solid var(--accent); padding-left: 12px !important; }
+.action-active .action-status, .action-active .action-title { color: var(--accent); }
+.action-failed .action-status { color: var(--err); }
+.action-subject, .action-result { white-space: pre-wrap; overflow-wrap: anywhere; }
+.action-subject { font: 400 13px/1.55 var(--sans); color: var(--ink-2); }
+.action-result {
+  font: 400 12px/1.6 var(--mono);
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border-radius: 4px;
+  color: var(--ink-2);
+}
+.action-details { min-width: 0; }
+.action-details summary { width: fit-content; font-size: 11.5px; color: var(--ink-3); }
+.action-details summary:hover { color: var(--accent); }
+.action-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.action-detail-label { margin-top: 10px; font-size: 11px; color: var(--ink-3); }
+.action-details pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-2);
+  border-radius: 4px;
+  font: 400 11.5px/1.6 var(--mono);
+  color: var(--ink-2);
+}
+
+.activity-card:not([data-status="running"]) { background: transparent; border-color: var(--line); }
+.activity-card:not([data-status="running"]) .turn-live-head { color: var(--ink); }
+.run-message { padding: 10px 0 15px; border-bottom: 1px solid var(--line); }
+.run-reading, .run-reading-more summary { overflow-wrap: anywhere; font: 14px/1.65 var(--sans); color: var(--ink); }
+.run-reading p, .run-reading-preview p { margin: 5px 0 10px; }
+.run-reading p:last-child, .run-reading-preview p:last-child { margin-bottom: 0; }
+.run-reading pre, .run-reading-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-reading table, .run-reading-preview table { display: block; max-width: 100%; overflow-x: auto; }
+.run-reading-more summary { list-style: none; }
+.run-reading-more summary::-webkit-details-marker { display: none; }
+.run-reading-more summary span { display: block; margin-top: 5px; font-size: 12px; color: var(--accent); }
+.run-reading-more[open] .run-reading-preview { display: none; }
+.run-reading-more[open] summary span { font-size: 12px; }
+.run-reading-more[open] summary span::after { content: " · свернуть"; }
+.run-reading-more summary:focus-visible, .action-earlier summary:focus-visible, .run-actions > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.run-actions > summary { padding: 14px 0; color: var(--ink-2); font: 13px/1.5 var(--sans); }
+.run-actions[open] > summary { border-bottom: 1px solid var(--line); }
+.action-earlier > summary { color: var(--accent); font: 13px/1.5 var(--sans); padding: 14px 0; }
+@media(max-width:600px) {
+  .action-subject { font-size: 14px; }
+  .action-result { font-size: 12px; }
+}
+
+/* Шаг хода: номер, время и токены, ниже — руки и слово этого шага. */
+.ev-step.step { gap: 4px; }
+.step-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+.step-n { font: 500 11px/1.6 var(--sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+.step-meta { font: 400 11px/1.6 var(--sans); color: var(--ink-3); }
+.hand { display: flex; flex-direction: column; gap: 6px; padding: 8px 0 2px; min-width: 0; }
+.hand.action-active { border-left: 2px solid var(--accent); padding-left: 12px; }
+.run-text { min-width: 0; }
+.run-text-body {
+  margin: 0;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-2);
+  border-radius: 4px;
+  font: 400 12px/1.6 var(--mono);
+  color: var(--ink-2);
+}
+.run-text-body.clipped {
+  max-height: calc(1.6em * 12 + 16px);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(#000 72%, transparent);
+  mask-image: linear-gradient(#000 72%, transparent);
+}
+.run-text-more {
+  display: block;
+  margin: 4px 0 0;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font: 400 12px/1.5 var(--sans);
+  color: var(--accent);
+  text-align: left;
+}
+.run-text-more:disabled { color: var(--ink-3); }
+.run-text-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.word .action-title { font-weight: 400; color: var(--ink-3); }
+
+/* Ссылки под поводом: открыть место в чате, повторить/снять напоминание словами агенту. */
+.run-links { margin-top: 8px; font: 400 12px/1.6 var(--sans); color: var(--ink-3); }
+.run-links a { color: var(--accent); text-decoration: none; }
+.run-links a:hover { text-decoration: underline; }
