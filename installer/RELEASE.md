@@ -91,7 +91,7 @@
    скачавший может проверить, что получил именно этот файл.
 
 6. **Обновление у пользователя.** Адрес проверки уже записан в `helene.json`
-   поставки: `https://api.github.com/repos/josephsteuerjr/helene/releases/latest`.
+   поставки: `https://api.github.com/repos/josephsteuerjr/praxis/releases/latest`.
    Окно сравнивает `tag_name` со своей версией, показывает первую строку
    описания и берёт sha256 — из digest ассета GitHub, а без него из второй
    строки заметок релиза (поэтому она обязательна). «Скачать и установить»

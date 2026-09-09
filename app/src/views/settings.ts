@@ -83,7 +83,7 @@ type Provider = "api" | "anthropic" | "chatgpt" | "local";
  * честно отвечает «адрес обновлений не задан», и кнопка «Проверить обновления»
  * мертва (живой Пульт Праксис, 09.09). Поле в настройках по-прежнему главнее.
  */
-const UPDATE_URL_DEFAULT = "https://api.github.com/repos/josephsteuerjr/helene/releases/latest";
+const UPDATE_URL_DEFAULT = "https://api.github.com/repos/josephsteuerjr/praxis/releases/latest";
 
 /**
  * Годный ли Telegram-id владельца. То же правило, что в визарде

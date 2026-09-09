@@ -838,7 +838,7 @@ HELENE_JSON = """{
     "scopes": ["computer.read", "computer.files", "computer.process", "computer.apps"]
   },
   "update": {
-    "url": "https://api.github.com/repos/josephsteuerjr/helene/releases/latest"
+    "url": "https://api.github.com/repos/josephsteuerjr/praxis/releases/latest"
   },
   "read_dotenv": false
 }
@@ -1026,7 +1026,7 @@ PRAXIS_JSON = """{
   },
   "update": {
     "auto": false,
-    "url": "https://api.github.com/repos/josephsteuerjr/helene/releases/latest"
+    "url": "https://api.github.com/repos/josephsteuerjr/praxis/releases/latest"
   },
   "setup_complete": true
 }

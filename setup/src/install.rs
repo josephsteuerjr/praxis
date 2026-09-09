@@ -36,7 +36,18 @@ pub const RELAY_PORT: u16 = 5011;
 /// Куда смотреть за новой версией. Тот же адрес, что в шаблоне поставки
 /// (installer/build_dist.py::HELENE_JSON): установщик шаблон не переносит и
 /// писал свой конфиг без этого ключа — «Проверить обновления» отказывало всегда.
-pub const UPDATE_URL: &str = "https://api.github.com/repos/josephsteuerjr/helene/releases/latest";
+///
+/// Выпуски переехали в репозиторий ядра (`praxis`): отдельный репозиторий «для
+/// поставок» больше не живёт — решение владельца 09.09.
+pub const UPDATE_URL: &str = "https://api.github.com/repos/josephsteuerjr/praxis/releases/latest";
+
+/// Прежний адрес выпусков. Он стоит в конфигах всех установок до 0.5.1, а
+/// адрес обновлений установщик по правилу НЕ переписывает — это решение
+/// владельца. Здесь ровно одно исключение: наше собственное прежнее значение,
+/// буква в букву, переносится на новое. Иначе установленная копия осталась бы
+/// смотреть в архивный репозиторий и молча перестала бы видеть выпуски —
+/// человек об этом узнал бы только по тишине.
+pub const UPDATE_URL_WAS: &str = "https://api.github.com/repos/josephsteuerjr/helene/releases/latest";
 
 // Общее с оболочкой и службой (ревью 06.09, §4): проба модели и гард
 // исходящего адреса, экранирование PowerShell, поднятая операция со службой,
@@ -712,6 +723,15 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
             }
         }
         out.insert(block.to_string(), serde_json::Value::Object(b));
+    }
+    // Единственный случай, когда адрес обновлений всё-таки переписывается:
+    // там стоит НАШ прежний адрес (буква в букву). Выпуски переехали, и копия
+    // с прежним адресом перестала бы их видеть; чужой адрес, вписанный
+    // владельцем, по-прежнему неприкосновенен.
+    if let Some(serde_json::Value::Object(upd)) = out.get_mut("update") {
+        if upd.get("url").and_then(|v| v.as_str()) == Some(UPDATE_URL_WAS) {
+            upd.insert("url".into(), serde_json::Value::String(UPDATE_URL.to_string()));
+        }
     }
     // Ключи, которые визард НЕ переписывает, но доставляет, если их нет вовсе:
     // конфиг прошлой установки мог родиться до того, как ключ появился, и
@@ -2458,6 +2478,23 @@ mod tests {
         let mine = serde_json::json!({ "update": { "url": "https://example.org/my.json" } });
         let out = merge_config(Some(mine), config_json(&s, None, RELAY_PORT), &s);
         assert_eq!(out["update"]["url"], "https://example.org/my.json");
+    }
+
+    /// Переезд выпусков: наш ПРЕЖНИЙ адрес переносится на новый, чужой — нет.
+    /// Без этого установка, обновлённая с прежнего канала, осталась бы смотреть
+    /// в архивный репозиторий и перестала бы видеть выпуски молча.
+    #[test]
+    fn our_old_update_url_migrates_but_a_custom_one_does_not() {
+        let s = setup_for("api");
+        let old = serde_json::json!({ "update": { "url": UPDATE_URL_WAS, "auto": false } });
+        let out = merge_config(Some(old), config_json(&s, None, RELAY_PORT), &s);
+        assert_eq!(out["update"]["url"], UPDATE_URL);
+        assert_eq!(out["update"]["auto"], false, "чужие поля блока не теряются");
+
+        let custom = serde_json::json!({ "update": { "url": "https://example.org/my.json" } });
+        let out = merge_config(Some(custom), config_json(&s, None, RELAY_PORT), &s);
+        assert_eq!(out["update"]["url"], "https://example.org/my.json");
+        assert_ne!(UPDATE_URL, UPDATE_URL_WAS, "переезд объявлен, а адреса совпадают");
     }
 
     /// Ограда уезжает в СВОЙ ключ. `mode` в helene.json занят под
