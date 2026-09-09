@@ -1,0 +1,33 @@
+Praxis
+Copyright 2026 Yegor Kosyrev <y.kosyrev@mailfence.com>
+Telegram: @tatarskiy_e4pochmak
+https://github.com/josephsteuerjr/praxis
+
+Licensed under the Apache License, Version 2.0.  The complete terms are in
+LICENSE, verbatim and unannotated: any addition inside that file breaks
+automatic license detection, so everything the authors want to say themselves
+lives here instead.
+
+This repository holds four things, and the licence above covers all of them:
+
+  praxis/   the core of the agent
+  helene/   the Windows edition of that core, declared as a layer
+  desk/     the Hélène application around it
+  pult/     the Pult application
+
+Components under a different licence, carried here rather than relicensed:
+
+  praxis/relay/   Praxis Relay, under the MIT Licence; its copyright and
+                  permission notice is in praxis/relay/LICENSE and must be
+                  preserved when redistributing Relay or substantial portions
+                  of it.  The maintained source of Relay now lives in its own
+                  repository, https://github.com/josephsteuerjr/praxis-relay .
+
+Third-party components carried by the application are listed in
+desk/installer/ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md, and the licence texts of statically
+linked Rust crates travel inside the distribution under licenses/rust/.  Their
+presence in one repository does not replace any component's own notice.
+
+"Praxis" and "Hélène" are the names of this project and its Windows edition.
+The licence covers the code, not the names: a fork is welcome and should carry
+its own.

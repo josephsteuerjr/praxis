@@ -24,5 +24,8 @@ program points here.
 
 ## Licence
 
-The core is Apache-2.0 (`praxis/LICENSE`, `praxis/NOTICE`). The relay is MIT in its own
-repository. The application carries its own notices in `desk/installer`.
+Apache-2.0 for everything in this repository — the core, its Windows edition and both
+applications: `LICENSE` and `NOTICE` at the root. Praxis Relay, carried under
+`praxis/relay/`, stays MIT under its own notice, and is maintained in
+[its own repository](https://github.com/josephsteuerjr/praxis-relay). The third-party
+components the application ships are listed in `desk/installer`.
