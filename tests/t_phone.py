@@ -159,6 +159,9 @@ class ConfigJs(unittest.TestCase):
                  for resource in app.router.resources() for route in resource}
         self.assertIn(("GET", "/config.js"), paths)
         self.assertIn(("GET", "/m/config.js"), paths)
+        # До ключа: страница читает config.js первым тегом, ключа у неё ещё нет.
+        self.assertIn("/m/config.js", deskapp._OPEN_PATHS)
+        self.assertIn("/config.js", deskapp._OPEN_PATHS)
 
 
 class AgentName(unittest.TestCase):

@@ -99,7 +99,9 @@ SHA256 = {
 DESK = Path(__file__).resolve().parent.parent
 ROOT = DESK.parent
 sys.path.insert(0, str(DESK))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import deskpkg  # noqa: E402 — объявление пакета desk живёт в репозитории, а не в сборке
+import relay_src  # noqa: E402 — происхождение исходника реле
 
 # Зависимости ДЕРЕВА: то, что импортирует ход (agent/llm/webtool).
 # Aiogram/paramiko/stt — другие тела, в продукт не едут; cryptography не нужна
@@ -1031,6 +1033,52 @@ PRAXIS_JSON = """{
 """
 
 
+def relay_provenance(exe: Path, allow_partial: bool) -> dict:
+    """Из чего собран `helene-relay.exe` в этой поставке.
+
+    Реле — единственный бинарь поставки, исходник которого лежит ВНЕ обоих
+    репозиториев: `_relay_prod_src/` — копия живого `/opt/relay/Code`. Пока о
+    ней не спрашивал никто, поставка 09.09 уехала с реле от 03.09 при починке
+    ссылок от 09.09, и узнали об этом случайно.
+
+    Сборка отвечает на два вопроса сама: чем этот исходник является (отпечаток
+    и записка о происхождении) и тем ли исходником собран бинарь. Второе — по
+    отпечатку, записанному СБОРКОЙ реле (`installer/relay_src.py --build`), а
+    не по времени файлов: обновление зеркала переписывает mtime, ничего не
+    меняя по существу, и такая проверка кричала бы всегда.
+    """
+    total, files = relay_src.digest(relay_src.MIRROR)
+    note = relay_src.stamp(relay_src.MIRROR)
+    made = relay_src.built(relay_src.MIRROR)
+    info = {"digest": total, "files": len(files), "source": note or None,
+            "built": made or None}
+    print(f"  исходник реле: {len(files)} файлов, отпечаток {total[:12]}")
+    if note:
+        print(f"  снят с {note.get('from', '?')} @ {str(note.get('commit', ''))[:7]}"
+              f" ({note.get('pulled_utc', '?')})")
+    else:
+        print(f"  ⚠ происхождение исходника реле НЕ ЗАПИСАНО ({relay_src.STAMP} нет): "
+              "installer/relay_src.py --pull --host <адрес>")
+
+    if not made:
+        print(f"  ⚠ чем собран helene-relay.exe — неизвестно ({relay_src.BUILT} нет): "
+              "installer/relay_src.py --build")
+        return info
+    same_exe = (exe.is_file()
+                and hashlib.sha256(exe.read_bytes()).hexdigest() == made.get("exe_sha256"))
+    if made.get("digest") != total or not same_exe:
+        line = ("helene-relay.exe собран не из этого исходника — пересобрать: "
+                f"installer/relay_src.py --build (отпечаток бинаря "
+                f"{str(made.get('digest', ''))[:12]}, исходника {total[:12]})")
+        if not allow_partial:
+            raise SystemExit(line)
+        print(f"  ⚠ {line}")
+        info["stale"] = True
+    else:
+        print(f"  собран из него же ({made.get('built_utc')})")
+    return info
+
+
 def build_praxis_pult(args) -> None:
     """Поставка варианта Praxis: окно в режиме remote без ядра, рантайма и тела.
 
@@ -1234,6 +1282,7 @@ def main() -> None:
     ]
     missing = []
     stale = []
+    relay: dict = {}
     for src, name, how, decl in binaries:
         if not src.is_file():
             missing.append(f"{name} — {how}")
@@ -1263,6 +1312,8 @@ def main() -> None:
                 continue
         shutil.copy2(src, out / name)
         print(f"  {name}: положен")
+        if name == "helene-relay.exe":
+            relay = relay_provenance(src, args.allow_partial)
     if stale:
         raise SystemExit(
             "версия внутри exe не совпадает с объявленной, поставка была бы смесью:\n  "
@@ -1341,6 +1392,9 @@ def main() -> None:
         "static": staged["static_digest"],
         # Пакет desk в этой поставке — тем же манифестом, что уезжает на
         # сервер: по отпечатку видно, одна ли там и здесь версия канала.
+        # Реле: единственный бинарь, исходник которого лежит вне обоих
+        # репозиториев. Отпечаток исходника и записка о происхождении — здесь.
+        "relay": relay or None,
         "desk": {"version": staged["desk"]["version"],
                  "flavor": staged["desk"]["flavor"],
                  "digest": staged["desk"]["digest"],

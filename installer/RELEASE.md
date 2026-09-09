@@ -11,9 +11,23 @@
    `mobile/package.json`, `setup/ui/package.json`.
 
 2. **Собрать всё.** Интерфейсы: `npm --prefix app run build`,
-   `npm --prefix mobile run build`, `npm --prefix setup/ui run build`.
+   `npm --prefix mobile run build`, `npm --prefix miniapp run build`,
+   `npm --prefix setup/ui run build`. Мини-апп — тоже: он входит в пакет desk
+   (`deskpkg.py`), и без сборки пакет не соберётся.
    Затем `cargo build --release --features custom-protocol` в `shell` и `setup`,
-   `cargo build --release` в `svc` и в `_relay_prod_src`.
+   `cargo build --release` в `svc`.
+
+   Реле — отдельным шагом, потому что его исходник лежит ВНЕ репозиториев
+   (`_relay_prod_src/` — копия живого `/opt/relay/Code`):
+
+       python installer/relay_src.py --check --host <адрес>   # зеркало = живой?
+       python installer/relay_src.py --pull  --host <адрес>   # если разошлось
+       python installer/relay_src.py --build                  # собрать и записать
+
+   `--build` кладёт рядом `RELAY-BUILD.json` с отпечатком исходника, из
+   которого собран бинарь, и `build_dist` падает, если в поставку едет реле от
+   другого исходника. Ровно это и случилось 09.09: в архив уехало реле от
+   03.09, а починка ссылок была от 09.09.
    Тело руки `computer` — из дерева, но в чужой target-каталог, чтобы `live/`
    оставалось чистым: в `live/body` —
    `cargo build --release -p praxis-body -p praxis-bridge --target-dir ../../_body_target`
@@ -38,7 +52,10 @@
    их `Cargo.toml` (подняли версию, но не пересобрали — сборка падает);
    ни в одном едущем файле нет ничего похожего на кред (сканируется
    содержимое, кред-полом самого дерева агента, плюс форма присвоения
-   `PASS=…`; при полной сборке — ещё и текстовые файлы рантайма). Прошла
+   `PASS=…`; при полной сборке — ещё и текстовые файлы рантайма);
+   пакет desk собирается целиком (`deskpkg`), то есть все его части на месте —
+   канал, читалки, окно, телефон, раннер и ресурсы; реле собрано из того же
+   исходника, что лежит в зеркале (`RELAY-BUILD.json` против отпечатка). Прошла
    сборка — прошло перечисленное здесь, и только оно; «состав архива
    проверен» это не значит.
 

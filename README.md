@@ -1,6 +1,6 @@
 # Hélène
 
-Публичный harness [Praxis](https://github.com/josephsteuerjr/praxis-open-source),
+Публичный harness [Praxis](https://github.com/josephsteuerjr/praxis),
 программный комплекс для создания ИИ-агента на ПК с сотней готовых инструментов,
 полноценной интеграцией в Telegram (aiogram и telethon), computer use
 (делегированный из песочницы, интерактивный и в Session 0), функцией фиксации
@@ -24,7 +24,7 @@ API харнесса, телефоном и драйвером компьюте�
 | API харнесса | HTTP + WebSocket `frame.desk.v1` между окном, телефоном, мини-аппом и данными агента | `deskapp.py`, `deskd/` |
 | Окно | чат, комнаты, контекст хода, файлы, журнал, система, настройки | `shell/` (Tauri 2, Rust), `app/` (TypeScript) |
 | Телефон и мини-апп Telegram | одно приложение на PWA и Telegram Web Apps | `mobile/`, `miniapp/`, `ui-kit/` |
-| Прокси подписки ChatGPT | локальный OpenAI-совместимый API поверх протокола Codex | [praxis-relay-windows](https://github.com/josephsteuerjr/praxis-relay-windows) |
+| Прокси подписки ChatGPT | локальный OpenAI-совместимый API поверх протокола Codex | [praxis-relay](https://github.com/josephsteuerjr/praxis-relay) |
 | Драйвер компьютера | мост и драйвер компьютера: UIA, экран, ввод, файлы, процессы | `tree/body/crates` (Rust) |
 | Служба Windows, брокер прав | LocalSystem, Session 0, именованный канал с журналом | `svc/`, `common/` (Rust) |
 | Установщик, сборка | сцены первого запуска, тихая установка, обновление поверх, снятие | `setup/`, `installer/` |
@@ -120,7 +120,7 @@ recovery, resume по строгому плану с бюджетами).
 
 ## Прокси подписки ChatGPT
 
-[praxis-relay-windows](https://github.com/josephsteuerjr/praxis-relay-windows)
+[praxis-relay](https://github.com/josephsteuerjr/praxis-relay)
 едет в поставке как `helene-relay.exe`: локальный OpenAI-совместимый API
 (`http://127.0.0.1:5011`) поверх протокола Codex к бэкенду подписки
 Plus / Pro. Системный промпт Codex не подставляется — над запросом стоит
