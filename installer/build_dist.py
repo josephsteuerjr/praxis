@@ -290,6 +290,20 @@ def copy_text_lf(src: Path, dst: Path) -> None:
     dst.write_text(text, encoding="utf-8", newline="\n")
 
 
+def desk_module() -> list[tuple[str, str]]:
+    """Состав модуля desk из server/deploy_desk.py — единственного объявления.
+
+    Только питонья часть (deskapp.py и deskd/): фронты сюда не входят, их кладут
+    copy_static/copy_mobile — на сервере они зовутся static/mobile/miniapp, а в
+    поставке лежат в app/ рядом с окном.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_helene_deploy_desk", DESK / "server" / "deploy_desk.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)   # модуль на стандартной библиотеке
+    return [(src, dst) for src, dst in module.MODULE if not src.endswith("/dist")]
+
+
 def stage_payload(dest: Path, live: Path, allow_partial: bool) -> dict:
     """app/ + tree/ + requirements — общий груз поставки.
 
@@ -298,11 +312,17 @@ def stage_payload(dest: Path, live: Path, allow_partial: bool) -> dict:
     (requirements.txt писала только эта функция, а звали только main).
     """
     (dest / "app" / "deskd").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(DESK / "deskapp.py", dest / "app" / "deskapp.py")
-    # Все модули пакета, а не перечисление имён: `rooms.py` (07.09) не уехал бы
-    # в поставку, и канал падал бы на импорте — поставка без комнат нерабочая.
-    for f in sorted((DESK / "deskd").glob("*.py")):
-        shutil.copy2(f, dest / "app" / "deskd" / f.name)
+    # Состав модуля desk (канал и его читалки) объявлен ОДИН раз — в
+    # server/deploy_desk.py::MODULE, и оттуда же его берёт выкладка на сервер.
+    # Пока списка было два, «что считается Пультом» на сервере и на Windows
+    # расходилось молча (rooms.py 07.09 однажды так и не уехал).
+    for src, _dest_name in desk_module():
+        path = DESK / src
+        if path.is_file():
+            shutil.copy2(path, dest / "app" / path.name)
+        elif path.is_dir() and path.name == "deskd":
+            for f in sorted(path.glob("*.py")):
+                shutil.copy2(f, dest / "app" / "deskd" / f.name)
     static_digest = copy_static(dest / "app" / "static")
     copy_resources(dest / "app" / "resources")
     phone = copy_mobile(dest / "app" / "mobile", allow_partial)
