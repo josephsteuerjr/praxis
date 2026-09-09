@@ -113,6 +113,47 @@ class Scope(unittest.TestCase):
                      "/pair/devices", "/pair/new"):
             self.assertFalse(deskapp._scope_ok("device", path), path)
 
+    def test_pairing_is_owner_only_but_not_machine_only(self):
+        """Пару выдаёт владелец — и с этой машины, и из Пульта на сервере.
+
+        `local_only` на /pair/* делал QR невозможным ровно там, где он нужен:
+        окно Пульта стоит не на той машине, где канал, и получало 403.
+        Ключу устройства сюда по-прежнему нельзя.
+        """
+        for path in ("/pair/new", "/pair/devices", "/pair/revoke"):
+            route, _ = deskapp.match_route(
+                "GET" if path == "/pair/devices" else "POST", path)
+            self.assertIsNotNone(route, path)
+            self.assertFalse(route.local_only, f"{path}: снова только с этой машины")
+            self.assertFalse(deskapp._scope_ok("device", path), f"{path}: телефону нельзя")
+            self.assertTrue(deskapp._scope_ok("owner", path))
+            self.assertFalse(deskapp._open_path(path), f"{path}: без ключа нельзя")
+
+    def test_device_keys_live_where_the_channel_can_write(self):
+        """Ключи телефонов — данные КАНАЛА, а не агента.
+
+        На сервере дерево смонтировано на чтение, и запись в него падала
+        `Read-only file system`: телефон получал 503 и не подключался вовсе.
+        `HELENE_DESK_STATE` уводит файл в свою папку; без переменной — как было,
+        рядом с состоянием агента (на Windows канал и дерево живут вместе).
+        """
+        saved = readers.tree
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                readers.tree = lambda: Path(tmp) / "tree"
+                os.environ.pop("HELENE_DESK_STATE", None)
+                self.assertEqual(deskapp._devices_path(),
+                                 Path(tmp) / "tree" / "memory" / ".state" / "devices.json")
+                os.environ["HELENE_DESK_STATE"] = str(Path(tmp) / "state")
+                self.assertEqual(deskapp._devices_path(), Path(tmp) / "state" / "devices.json")
+                # И запись туда действительно идёт — с созданием папки.
+                deskapp._save_devices([{"id": "x"}])
+                self.assertTrue((Path(tmp) / "state" / "devices.json").is_file())
+        finally:
+            readers.tree = saved
+            os.environ.pop("HELENE_DESK_STATE", None)
+            deskapp._DEVICES_CACHE["stamp"] = None
+
     def test_open_paths_and_routes(self):
         self.assertIn("/m/sw.js", deskapp._OPEN_PATHS)
         self.assertIn("/pair/telegram", deskapp._OPEN_PATHS)

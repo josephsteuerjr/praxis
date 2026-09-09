@@ -92,10 +92,15 @@ class Dispatch(unittest.TestCase):
 
     def test_404_and_403_are_words(self):
         self.assertEqual(self._run(deskapp._tunnel_dispatch("GET", "/api/nope", None))["status"], 404)
+        # Пара телефона — владельцу, откуда бы он ни пришёл: у Пульта окно
+        # стоит не на той машине, где канал (правка 09.09, см. t_phone.py).
         remote = self._run(deskapp._tunnel_dispatch("POST", "/pair/new", None, local=False))
-        self.assertEqual(remote["status"], 403)
+        self.assertEqual(remote["status"], 200)
         device = self._run(deskapp._tunnel_dispatch("GET", "/api/anatomy", None, role="device"))
         self.assertEqual(device["status"], 403)
+        # А ключу устройства — нельзя ни с какой машины.
+        phone = self._run(deskapp._tunnel_dispatch("POST", "/pair/new", None, role="device"))
+        self.assertEqual(phone["status"], 403)
 
     def test_fail_carries_code_in_the_channel(self):
         async def failing(call):

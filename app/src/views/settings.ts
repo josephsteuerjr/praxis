@@ -77,6 +77,15 @@ interface Loaded {
 type Provider = "api" | "anthropic" | "chatgpt" | "local";
 
 /**
+ * Адрес выпусков по умолчанию — тот же, что сборка кладёт в `helene.json`
+ * (installer/build_dist.py: HELENE_JSON и PRAXIS_JSON). Нужен, потому что
+ * конфиг мог быть собран руками и без этого поля: оболочка на пустом адресе
+ * честно отвечает «адрес обновлений не задан», и кнопка «Проверить обновления»
+ * мертва (живой Пульт Праксис, 09.09). Поле в настройках по-прежнему главнее.
+ */
+const UPDATE_URL_DEFAULT = "https://api.github.com/repos/josephsteuerjr/helene/releases/latest";
+
+/**
  * Годный ли Telegram-id владельца. То же правило, что в визарде
  * (setup/ui/src/scenes/keys.ts): только цифры. Плюс ноль — не id, а ровно то
  * значение, которое окно молча клало вместо пустого поля: гейт харнесса при
@@ -167,6 +176,34 @@ export async function render(container: HTMLElement): Promise<void> {
   const keyOf = (p: Provider) => String(keyStore[p] || "");
   const center = el("div", "center");
 
+  // Окно ходит к харнессу НА СЕРВЕРЕ (карточка «Перенос» ниже) — значит агент
+  // живёт там, и его настройки правятся там же. Этот файл к ним отношения не
+  // имеет вовсе: модель, Telegram, режим, ограда, монтирование и управление
+  // компьютером читаются и применяются на той машине, где стоит харнесс.
+  //
+  // ⚠ Пока карточки рисовались всегда, Пульт показывал их пустыми и с красными
+  // строками про чужой харнесс: «модуль режима не нашёлся рядом с каналом»,
+  // «Про управление компьютером харнесс ничего не рассказал», «Снимок
+  // устройства пуст». Ни одна из них не была поломкой — окно ругалось на
+  // отсутствие того, чего у чужого харнесса и не должно быть, а поля модели
+  // стояли пустыми, потому что читались из ЛОКАЛЬНОГО файла Пульта. Найдено
+  // владельцем на живом Пульте Праксис 09.09.
+  const remoteBase = String(c.base || "").trim();
+  const remote = String(c.mode || "").trim() === "remote" && !!remoteBase;
+  if (remote) {
+    const box = el("div");
+    box.append(el("p", "field-hint",
+      `Окно ходит к харнессу по адресу ${remoteBase}. Настройки самого агента — модель и ключ, Telegram, ` +
+      "режим и ограда, монтирование, управление компьютером — правятся там, где он живёт: на сервере, " +
+      "в его собственном конфиге. Отсюда они не читаются и туда не применяются, поэтому их карточек здесь нет."));
+    box.append(el("p", "field-hint",
+      "Здесь остаётся то, что относится к этому окну: имена в подписи, подключение телефона к серверному " +
+      "каналу, адрес сервера и обновления программы. Данные агента лежат на сервере, а не в папке рядом с окном."));
+    box.append(el("p", "field-hint",
+      "Вернуть окно к агенту на этом компьютере — тумблер «Окно ходит к харнессу на сервере» в «Переносе» ниже."));
+    center.append(card("Агент живёт на сервере", box));
+  }
+
   // --- имена
   const names = el("div", "form-grid two");
   names.append(
@@ -176,10 +213,12 @@ export async function render(container: HTMLElement): Promise<void> {
   // Настройки пишут только helene.json. Конституцию (data/soul/SOUL.md) не
   // переписывает никто, кроме установщика, — а в ней старые имена остаются
   // навсегда, и агент в своём K-слое читает именно их. Обещать обратное нельзя.
-  center.append(card("Имена", names,
-    "Имя агента войдёт в подписи и в снимок состояния; имя владельца нужно агенту, чтобы знать, чьё слово решает. " +
-    "Конституция агента этим не меняется: имена в ней он написал при рождении, и правит их только он сам или ты руками — " +
-    "раздел «Файлы», soul/SOUL.md."));
+  center.append(card("Имена", names, remote
+    ? "Это подписи ЭТОГО окна: как оно зовёт агента и тебя. Сам агент живёт на сервере и своих имён отсюда не узнает — " +
+      "они правятся там, где он живёт."
+    : "Имя агента войдёт в подписи и в снимок состояния; имя владельца нужно агенту, чтобы знать, чьё слово решает. " +
+      "Конституция агента этим не меняется: имена в ней он написал при рождении, и правит их только он сам или ты руками — " +
+      "раздел «Файлы», soul/SOUL.md."));
 
   // --- модель
   const model = el("div");
@@ -460,7 +499,7 @@ export async function render(container: HTMLElement): Promise<void> {
   model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint, spareGrid, spareHint);
   syncPick();
   syncEffort();
-  center.append(card("Модель", model));
+  if (!remote) center.append(card("Модель", model));
 
   // --- Telegram: бот или свой аккаунт агента
   const tgBox = el("div");
@@ -574,7 +613,7 @@ export async function render(container: HTMLElement): Promise<void> {
   tgBox.append(tgPick, tgPanes.bot, tgPanes.account, ownerField);
   syncTg();
   if (tgMode === "account" && draft.telegram.api_id) void accCall("status");
-  center.append(card("Telegram", tgBox));
+  if (!remote) center.append(card("Telegram", tgBox));
 
   // --- ограда рук (песочница | интерактивный) и ОТДЕЛЬНО от неё служба
   //
@@ -604,7 +643,7 @@ export async function render(container: HTMLElement): Promise<void> {
     // показывать; список в конфиге живёт и оживает вместе с песочницей.
     mounts.el.hidden = !sandbox;
   });
-  center.append(mode.el);
+  if (!remote) center.append(mode.el);
 
   // --- песочница: сеть контейнера остаётся выбором владельца, ограду ставит режим
   const sb = el("div");
@@ -633,7 +672,7 @@ export async function render(container: HTMLElement): Promise<void> {
   }
   syncSandboxState(mode.name() ? mode.sandbox() : draft.sandbox.enabled !== false, mode.title());
   sb.append(sandboxState, sbNet);
-  center.append(card("Песочница", sb, "Что вышло на самом деле — видно на экране «Система». Применяется перезапуском."));
+  if (!remote) center.append(card("Песочница", sb, "Что вышло на самом деле — видно на экране «Система». Применяется перезапуском."));
 
   // --- монтирование: папки владельца, открытые агенту сверх его дома
   //
@@ -649,7 +688,7 @@ export async function render(container: HTMLElement): Promise<void> {
     mode.title() || modeLive?.title || "",
   );
   mounts.el.hidden = !(mode.name() ? mode.sandbox() : draft.sandbox.enabled !== false);
-  center.append(mounts.el);
+  if (!remote) center.append(mounts.el);
 
   // --- управление компьютером: опция ПОВЕРХ любого режима (06.09)
   //
@@ -658,9 +697,9 @@ export async function render(container: HTMLElement): Promise<void> {
   // живое состояние тела — из снимка харнесса (`computer_live`); окно
   // пишет ровно два ключа блока и сливает остальное.
   const computer = computerCard(modeLive, storedComputer(draft.computer));
-  center.append(computer.el);
+  if (!remote) center.append(computer.el);
 
-  center.append(phoneCard(draft, !!c.phone?.enabled));
+  center.append(phoneCard(draft, !!c.phone?.enabled, remote ? remoteBase : ""));
 
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
   center.append(transferCard(draft));
@@ -687,7 +726,11 @@ export async function render(container: HTMLElement): Promise<void> {
     el("span", "mono", loaded.tree),
     button("Открыть папку", "quiet", () => void shell("open_path", { path: loaded.tree }).catch((e) => toast(humanError(e).text))),
   );
-  center.append(card("Данные агента", data, "Память, дневник, конституция и настройки лежат здесь. Перенос агента на другую машину — перенос этой папки вместе с программой."));
+  // В remote эта папка пуста: агент живёт на сервере, и показывать её как
+  // «данные агента» значило бы врать путём.
+  if (!remote) {
+    center.append(card("Данные агента", data, "Память, дневник, конституция и настройки лежат здесь. Перенос агента на другую машину — перенос этой папки вместе с программой."));
+  }
 
   // --- о программе
   draft.update = draft.update || {};
@@ -750,7 +793,7 @@ export async function render(container: HTMLElement): Promise<void> {
       updOut.textContent = "спрашиваю…";
       try {
         const r = await shell<{ current: string; latest: string; newer: boolean; url: string; notes: string; sha256?: string }>("update_check", {
-          url: String(draft.update?.url || ""),
+          url: String(draft.update?.url || "").trim() || UPDATE_URL_DEFAULT,
         });
         if (r.newer) {
           updOut.className = "receipt ok";
@@ -1158,8 +1201,19 @@ function transferCard(draft: Config): HTMLElement {
   return card("Перенос", box, "Применяется перезапуском.");
 }
 
-function phoneCard(draft: Config, savedEnabled = false): HTMLElement {
+/**
+ * Карточка «Телефон»: QR, по которому телефон получает свой ключ.
+ *
+ * `remoteBase` не пуст — окно ходит к харнессу на сервере, и тогда всё здесь
+ * другое: слушать сеть решает сервер (тумблера нет), QR ведёт на его адрес по
+ * https, правило брандмауэра этой машины ни при чём. До 09.09 карточка знала
+ * только местную раскладку: кнопка звала `/pair/new` на сервер и получала
+ * «только с этой машины (403)», а если бы и получила пару — свела бы QR на
+ * локальный адрес, куда телефону идти незачем.
+ */
+function phoneCard(draft: Config, savedEnabled = false, remoteBase = ""): HTMLElement {
   draft.phone = draft.phone || {};
+  const remote = !!remoteBase;
   const phone = el("div");
   const phoneToggle = toggle("Разрешить подключение телефона по сети", !!draft.phone.enabled, (v) => {
     draft.phone!.enabled = v;
@@ -1169,7 +1223,11 @@ function phoneCard(draft: Config, savedEnabled = false): HTMLElement {
   // общей Wi-Fi (кафе, отель, коворкинг) ключ устройства и вся переписка с
   // агентом видны соседям. Прежняя подсказка обещала «доступ только по ключу»
   // и про отсутствие шифрования молчала.
-  const phoneHint = el("p", "field-hint", "Канал начнёт слушать сеть, а не только эту машину. Внимание: соединение НЕ шифруется (обычный http). В чужой или общей Wi-Fi — кафе, отель, коворкинг — ключ телефона и переписка с агентом идут открытым текстом, их видно соседям по сети. Дома в своей сети это приемлемо; в любой другой пользуйся Tailscale: поставь его на компьютер и телефон, войди в один аккаунт, и QR даст его адрес. Включение применяется перезапуском.");
+  const phoneHint = el("p", "field-hint", remote
+    ? `Телефон подключается к серверу: QR ведёт на ${remoteBase}. Слушает ли канал сеть и как он закрыт снаружи — ` +
+      "решает сам сервер (Caddy, Tailscale), поэтому тумблера здесь нет. Ключ телефона живёт в его браузере; " +
+      "отвязать устройство можно ниже."
+    : "Канал начнёт слушать сеть, а не только эту машину. Внимание: соединение НЕ шифруется (обычный http). В чужой или общей Wi-Fi — кафе, отель, коворкинг — ключ телефона и переписка с агентом идут открытым текстом, их видно соседям по сети. Дома в своей сети это приемлемо; в любой другой пользуйся Tailscale: поставь его на компьютер и телефон, войди в один аккаунт, и QR даст его адрес. Включение применяется перезапуском.");
   const qrRow = el("div", "actions");
   qrRow.style.marginTop = "12px";
   const qrWhy = el("span", "receipt");
@@ -1199,6 +1257,22 @@ function phoneCard(draft: Config, savedEnabled = false): HTMLElement {
   const qrBtn = button("Показать QR", "quiet", async () => {
     try {
       const pair = await post<{ path: string; expires_in: number; uses: number }>("/pair/new", {});
+      if (remote) {
+        // Адрес один и он известен: тот, по которому это окно и само ходит.
+        // Ни LAN, ни Tailscale этой машины к серверному каналу отношения не имеют.
+        const link = remoteBase.replace(/\/+$/, "") + pair.path;
+        const svg = await QRCode.toString(link, { type: "svg", margin: 1, width: 240, color: { dark: "#262320", light: "#ffffff" } });
+        qrOut.hidden = false;
+        qrOut.innerHTML = `<div class="qr-pair"><div class="qr">${svg}</div>
+          <div class="qr-text"><p><b>Телефон пойдёт на сервер.</b></p>
+            <p class="mono qr-url">${esc(link)}</p></div></div>` +
+          `<div class="qr-text">
+            <p>Открой камеру телефона и наведи на код. Ссылка живёт десять минут и годится дважды.</p>
+            <p><b>iPhone:</b> страница откроется в Safari; нажми «Поделиться» → «На экран „Домой“». Второе открытие из значка допишет ключ, поэтому код и двухразовый.</p>
+          </div>`;
+        void drawDevices();
+        return;
+      }
       const port = new URL(cfg.base || "http://127.0.0.1:8094").port || "8094";
       // Оба адреса, а не выбор за владельца: Tailscale мог быть запущен для
       // других дел, а телефон в тайлнет не добавлен — тогда QR со 100.x.y.z
@@ -1242,6 +1316,12 @@ function phoneCard(draft: Config, savedEnabled = false): HTMLElement {
   // ещё слушала 127.0.0.1, владелец получал красивый QR на адрес, где никто не
   // отвечает, а телефон обвинял в этом Wi-Fi.
   const syncPhone = () => {
+    if (remote) {
+      // Сервер уже слушает сеть — иначе это окно к нему не ходило бы.
+      qrBtn.disabled = false;
+      qrWhy.textContent = "";
+      return;
+    }
     const on = !!draft.phone?.enabled;
     qrBtn.disabled = !on || !savedEnabled;
     qrWhy.className = "receipt";
@@ -1253,7 +1333,8 @@ function phoneCard(draft: Config, savedEnabled = false): HTMLElement {
   };
   qrRow.append(qrBtn, qrWhy);
   syncPhone();
-  phone.append(phoneToggle, phoneHint, qrRow, qrOut, devicesBox);
+  if (remote) phone.append(phoneHint, qrRow, qrOut, devicesBox);
+  else phone.append(phoneToggle, phoneHint, qrRow, qrOut, devicesBox);
   void drawDevices();
   return card("Телефон", phone);
 

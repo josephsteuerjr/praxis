@@ -203,6 +203,22 @@ _PAIR_USES = 2
 
 
 def _devices_path() -> Path:
+    """Где лежат ключи спаренных телефонов.
+
+    По умолчанию — в состоянии агента (`memory/.state/devices.json`): на
+    Windows канал и дерево живут вместе, и файл там с самого начала.
+
+    ⚠ На сервере это НЕ РАБОТАЛО и работать не могло: Пульт смотрит в чужое
+    дерево, смонтированное только на чтение, и запись ключа падала
+    `OSError: Read-only file system` — телефон получал 503 «устройство не
+    записалось», а владелец видел это как «телефон не подключается» (найдено
+    живьём 09.09). Ключи устройств — данные КАНАЛА, а не агента: чужое дерево
+    им не место. Своя папка задаётся `HELENE_DESK_STATE` (сервер монтирует её
+    на запись, см. server/desk-recipe/docker-compose.yml).
+    """
+    own = (os.environ.get("HELENE_DESK_STATE") or "").strip()
+    if own:
+        return Path(own) / "devices.json"
     return readers.tree() / "memory" / ".state" / "devices.json"
 
 
@@ -445,10 +461,17 @@ def _redeem(token: str, ua: str, addr: str) -> dict:
                      .isoformat(timespec="seconds")})
         try:
             _save_devices(rows)
-        except OSError:
-            log.warning("устройство не записалось", exc_info=True)
+        except OSError as exc:
+            log.warning("устройство не записалось (%s)", _devices_path(), exc_info=True)
+            # Причину называем прямо: на сервере дерево смонтировано на чтение,
+            # и «проверь, что папка данных доступна» отправляло владельца
+            # проверять не то. Своя папка канала — HELENE_DESK_STATE.
+            why = ("дерево смонтировано только на чтение"
+                   if getattr(exc, "errno", None) == 30 else str(exc)[:120])
             raise web.HTTPServiceUnavailable(
-                text="не смог записать устройство — проверь, что папка данных доступна")
+                text=f"не смог записать ключ устройства в {_devices_path()}: {why}. "
+                     "Канал пишет ключи телефонов туда, куда указывает HELENE_DESK_STATE — "
+                     "на сервере это отдельная папка на запись (server/desk-recipe).")
         row["key"] = key
         row["uses"] -= 1
         return {"key": key, "uses_left": row["uses"]}
@@ -896,10 +919,20 @@ ROUTES: tuple[Route, ...] = (
     Route("POST", "/api/rooms", _r_rooms_create),
     Route("POST", "/api/rooms/{peer}", _r_rooms_rename),
     Route("DELETE", "/api/rooms/{peer}", _r_rooms_delete),
-    # Телефон: пары выдаёт и отзывает только окно на этой машине.
-    Route("POST", "/pair/new", _r_pair_new, local_only=True),
-    Route("GET", "/pair/devices", _r_devices, local_only=True),
-    Route("POST", "/pair/revoke", _r_revoke, local_only=True),
+    # Телефон: пары выдаёт и отзывает ВЛАДЕЛЕЦ — тот, у кого ключ окна.
+    #
+    # ⚠ Здесь стояло `local_only=True` («только окно на этой машине»), и это
+    # ломало единственную раскладку, в которой QR по-настоящему нужен: Пульт к
+    # харнессу на сервере. Окно там по определению не на той машине, канал
+    # отвечал 403 «только с этой машины», и телефон подключить было НЕЧЕМ
+    # (найдено владельцем 09.09 на живом Пульте Праксис).
+    # Защиты эта строка не добавляла: пару выдаёт только роль `owner`, а ключ
+    # окна и так открывает всё — переписку, конституцию (`/api/md`) и отправку
+    # реплик. Ключу устройства сюда по-прежнему нельзя: /pair/* нет ни в
+    # _DEVICE_PATHS, ни в префиксах (стенд t_phone.py).
+    Route("POST", "/pair/new", _r_pair_new),
+    Route("GET", "/pair/devices", _r_devices),
+    Route("POST", "/pair/revoke", _r_revoke),
 )
 
 

@@ -27,6 +27,11 @@ services:
     environment:
       # Дерево смонтировано в /data — канал читает только его.
       HELENE_TREE: /data
+      # Своё состояние канала: ключи спаренных телефонов. В дерево их писать
+      # нельзя — оно чужое и смонтировано на чтение, и до 09.09 телефон к
+      # серверному Пульту не подключался вовсе: `/pair/redeem` падал
+      # «Read-only file system» и отвечал 503.
+      HELENE_DESK_STATE: /desk-state
     ports:
       - "127.0.0.1:${PRAXIS_DESK_PORT:-8094}:8094"
     volumes:
@@ -37,3 +42,6 @@ services:
       - ${PRAXIS_TREE_DIR:-/opt/praxis}/workspace/inbox:/data/workspace/inbox
       # Сам пакет desk — тоже только чтение: его подменяет выкладка, не контейнер.
       - ${PRAXIS_DESK_DIR:-/opt/praxisdesk}:/desk:ro
+      # Единственное место, куда канал пишет: ключи спаренных телефонов.
+      # Рядом с Пультом, а не в дереве агента, и выкладка его не трогает.
+      - ${PRAXIS_DESK_STATE:-/opt/praxisdesk-state}:/desk-state
