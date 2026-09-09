@@ -1348,14 +1348,26 @@ def main() -> None:
     if server_out.exists():
         shutil.rmtree(server_out)
     server_out.mkdir()
-    for item in sorted((DESK / "server").iterdir()):
-        if item.name.startswith(".") or item.name == "__pycache__":
-            continue
-        if item.suffix in (".md", ".py", ".yml", ".yaml", ".txt", ".json") or item.name == "Dockerfile":
-            copy_text_lf(item, server_out / item.name)
-        else:
-            shutil.copy2(item, server_out / item.name)
-    print(f"  server/: {len(list(server_out.iterdir()))} файлов")
+    # Рекурсивно: у server/ появились ПОДПАПКИ (рецепт контейнера Пульта), а
+    # плоский обход отдавал каталог в shutil.copy2 и валил сборку голым
+    # PermissionError на предпоследнем шаге — после всей долгой работы.
+    def _copy_server(src: Path, dst: Path) -> int:
+        count = 0
+        for item in sorted(src.iterdir()):
+            if item.name.startswith(".") or item.name == "__pycache__":
+                continue
+            if item.is_dir():
+                (dst / item.name).mkdir(parents=True, exist_ok=True)
+                count += _copy_server(item, dst / item.name)
+            elif item.suffix in (".md", ".py", ".yml", ".yaml", ".txt", ".json") or item.name == "Dockerfile":
+                copy_text_lf(item, dst / item.name)
+                count += 1
+            else:
+                shutil.copy2(item, dst / item.name)
+                count += 1
+        return count
+
+    print(f"  server/: {_copy_server(DESK / 'server', server_out)} файлов")
     # Apache-2.0 §4(a): получатель кода обязан получить копию лицензии, §4(d) —
     # NOTICE. Дерево агента объявлено под Apache-2.0 в обоих документах, а
     # рядом с ним не было ни LICENSE, ни NOTICE.
