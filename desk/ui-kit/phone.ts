@@ -103,7 +103,7 @@ export interface PhoneApp {
   back(): boolean;
 }
 
-type Tab = "now" | "chats" | "tasks" | "wakes";
+type Tab = "now" | "chats" | "tasks" | "wakes" | "system";
 
 const WINDOW_ROOM: string = contract.rooms.default;
 const WINDOW_PREFIX: string = contract.rooms.pattern.replace(/^\^/, "").split("[")[0];
@@ -135,6 +135,7 @@ const ICON = {
   chats: '<path d="M4 5.5h12v8H8l-4 3z"/>',
   tasks: '<rect x="3.5" y="4" width="13" height="12" rx="2"/><path d="M6.5 2.8v2.5M13.5 2.8v2.5M6.5 8h7M6.5 11h4"/>',
   wakes: '<circle cx="10" cy="10.5" r="5.5"/><path d="M10 7.5v3l2 1.5M6 3.5 3.5 5.5M14 3.5l2.5 2"/>',
+  system: '<rect x="3.5" y="4.5" width="13" height="5" rx="1.5"/><rect x="3.5" y="11" width="13" height="4.5" rx="1.5"/><path d="M6.2 7h.01M6.2 13.2h.01"/>',
   more: '<circle cx="5" cy="10" r="1.4"/><circle cx="10" cy="10" r="1.4"/><circle cx="15" cy="10" r="1.4"/>',
   send: '<path d="M10 15.5v-11M5.8 8.7 10 4.5l4.2 4.2"/>',
   attach: '<path d="M13.5 7.2 8.3 12.4a1.6 1.6 0 0 1-2.3-2.3l5.6-5.6a3 3 0 0 1 4.2 4.2l-6 6a4.4 4.4 0 0 1-6.2-6.2L9.2 3"/>',
@@ -146,6 +147,11 @@ const TABS: Array<[Tab, string]> = [
   ["chats", "Чаты"],
   ["tasks", "Задачи"],
   ["wakes", "Вейки"],
+  // Пятая вкладка — пульт в кармане: перезапустить упавшее, посмотреть ошибки,
+  // сменить модель. Она появляется, только если рядом с каналом объявлена
+  // служба управления; у телефона к домашней Элен её нет, и вкладка молчит об
+  // этом словами, а не пустым экраном.
+  ["system", "Система"],
 ];
 
 const RUN_KIND: Record<string, string> = {
@@ -469,12 +475,68 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
   for (const b of tabsNav.querySelectorAll<HTMLElement>(".tab")) b.addEventListener("click", () => showTab(b.dataset.tab as Tab));
 
+  // Кнопки вкладки «Система» — делегированием на экран: разметка перерисовывается
+  // целиком, и вешать слушателей на каждую кнопку значило бы копить их пачками.
+  screen.addEventListener("click", async (ev) => {
+    const spot = (ev.target as HTMLElement).closest<HTMLElement>(
+      "[data-restart-box],[data-box-log],[data-brain-apply]");
+    if (!spot) return;
+    const note = screen.querySelector<HTMLElement>("#sys-note");
+    const view = screen.querySelector<HTMLPreElement>("#sys-log");
+    const say = (text: string, bad = false) => {
+      if (!note) return;
+      note.className = bad ? "err" : "muted";
+      note.textContent = text;
+    };
+    const logName = spot.getAttribute("data-box-log");
+    if (logName && view) {
+      const errors = spot.hasAttribute("data-errors");
+      view.hidden = false;
+      view.textContent = "читаю…";
+      try {
+        const got = await api<{ ok: boolean; text?: string; note?: string }>(
+          `/api/container-log/${encodeURIComponent(logName)}?lines=120${errors ? "&errors=1" : ""}`);
+        view.textContent = got.ok
+          ? got.text || (errors ? "ошибок в хвосте журнала нет" : "(пусто)")
+          : got.note || "журнал не прочитался";
+      } catch (e) {
+        view.textContent = e instanceof Denied ? "журналы телефону не отдаются" : "не прочиталось";
+      }
+      return;
+    }
+    const boxName = spot.getAttribute("data-restart-box");
+    if (boxName) {
+      say(`перезапускаю ${boxName}…`);
+      try {
+        const answer = await post<{ ok: boolean; note: string }>("/api/containers/restart", { name: boxName });
+        say(answer.note, !answer.ok);
+        if (answer.ok) setTimeout(() => void renderSystem(), 3000);
+      } catch (e) {
+        say(e instanceof Denied ? "перезапуск этому телефону не разрешён" : "не дошло", true);
+      }
+      return;
+    }
+    const role = spot.getAttribute("data-brain-apply");
+    if (role) {
+      const picker = screen.querySelector<HTMLSelectElement>(`[data-brain-role="${role}"]`);
+      const model = picker?.value || "";
+      say(`меняю модель роли ${role}…`);
+      try {
+        const answer = await post<{ ok: boolean; note?: string }>("/api/brain", { role, fields: { model } });
+        say(answer.ok ? `${role}: ${model}. ${answer.note || ""}` : answer.note || "не вышло", !answer.ok);
+      } catch (e) {
+        say(e instanceof Denied ? "смена модели этому телефону не разрешена" : "не дошло", true);
+      }
+    }
+  });
+
   function render() {
     const my = ++gen;
     const guard = () => my === gen;
     if (tab === "now") void renderNow(guard);
     else if (tab === "chats") void (room ? renderRoom(guard) : renderChats(guard));
     else if (tab === "tasks") void renderTasks(guard);
+    else if (tab === "system") void renderSystem(guard);
     else void renderWakes(guard);
   }
 
@@ -852,6 +914,59 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     priority?: string;
     goal?: string;
     agents?: Array<{ id: string; role?: string; status?: string; error?: string; result_head?: string }>;
+  }
+
+  async function renderSystem(guard: () => boolean = () => tab === "system") {
+    screen.innerHTML = '<div class="empty">читаю…</div>';
+    const [boxes, brain, models] = await Promise.all([
+      scoped<{ available: boolean; why: string; containers: Array<{ name: string; up: boolean; status: string; image: string }> }>("/api/containers", "containers"),
+      scoped<{ ok: boolean; note?: string; roles?: Record<string, Record<string, string>> }>("/api/brain", "brain"),
+      scoped<{ ok: boolean; by_framework?: Record<string, { ok: boolean; models?: string[] }> }>("/api/brain-models", "brain"),
+    ]);
+    if (!guard()) return;
+    if (!boxes || !boxes.available) {
+      screen.innerHTML = `<div class="screen-title">Система</div>` +
+        (closed.has("containers")
+          ? notGiven("Система")
+          : `<div class="empty">${esc(boxes?.why || "управление контейнерами рядом с этим каналом не объявлено")}</div>`);
+      return;
+    }
+    const rows = boxes.containers
+      .map(
+        (c) => `<div class="task-row" data-box="${esc(c.name)}">
+          <div class="task-head"><b>${esc(c.name)}</b> <span class="${c.up ? "muted" : "err"}">${esc(c.status)}</span></div>
+          <div class="muted">${esc(c.image)}</div>
+          <div class="actions">
+            <button type="button" class="chip" data-restart-box="${esc(c.name)}">Перезапустить</button>
+            <button type="button" class="chip" data-box-log="${esc(c.name)}">Журнал</button>
+            <button type="button" class="chip" data-box-log="${esc(c.name)}" data-errors="1">Ошибки</button>
+          </div>
+        </div>`,
+      )
+      .join("");
+    const live: string[] = [];
+    for (const spec of Object.values(models?.by_framework || {})) if (spec.ok && spec.models) live.push(...spec.models);
+    const brainRows = brain?.ok
+      ? Object.entries(brain.roles || {})
+          .map(([role, spec]) => {
+            const current = String(spec.model ?? "");
+            const options = [...new Set([current, ...live].filter(Boolean))]
+              .map((m) => `<option value="${esc(m)}"${m === current ? " selected" : ""}>${esc(m)}</option>`)
+              .join("");
+            return `<div class="task-row">
+              <div class="task-head"><b>${esc(role)}</b> <span class="muted">${esc(String(spec.framework ?? ""))}</span></div>
+              <div class="actions"><select data-brain-role="${esc(role)}">${options}</select>
+                <button type="button" class="chip" data-brain-apply="${esc(role)}">Сменить</button></div>
+            </div>`;
+          })
+          .join("")
+      : `<div class="empty">${esc(brain?.note || "мозг отсюда не читается")}</div>`;
+    screen.innerHTML =
+      `<div class="screen-title">Контейнеры <span class="n">${boxes.containers.length}</span></div>${rows}` +
+      `<p class="muted" style="padding:0 14px">Идёт мимо агента: перезапуск нужен тогда, когда он не отвечает.</p>` +
+      `<div class="screen-title">Мозг</div>${brainRows}` +
+      `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
+      `<pre class="mono" id="sys-log" style="padding:0 14px;white-space:pre-wrap;overflow:auto;max-height:50vh" hidden></pre>`;
   }
 
   async function renderTasks(guard: () => boolean = () => tab === "tasks") {

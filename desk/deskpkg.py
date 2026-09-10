@@ -100,6 +100,11 @@ PARTS: tuple[Part, ...] = (
          why="мини-апп Telegram: его отдаёт Caddy, и только с публичного адреса"),
     Part("server/desk-recipe", "recipe", (SERVER,),
          why="рецепт контейнера Пульта: образ на requirements-desk.txt пакета"),
+    # Служба управления рядом с Пультом: перезапуск контейнеров, их журналы и
+    # смена модели. Едет только на сервер: у Windows-издания надзор — оболочка,
+    # и докера рядом нет вовсе.
+    Part("server/deskctl.py", "deskctl.py", (SERVER,), kind="file",
+         why="пультовой надзор: контейнеры, их журналы и мозг — мимо агента"),
     Part("localharness", "localharness", (WINDOWS,), kind="py",
          why="раннер Windows: первый запуск, ходы, доставка слова, Telegram"),
     Part("resources", "resources", (WINDOWS,),

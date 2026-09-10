@@ -218,6 +218,86 @@ def tail(tree: Path, name: str, lines: int = 200) -> dict:
             "size": size, "lines": len(rows), "text": "\n".join(rows)}
 
 
+# --- контейнеры: то, что живёт НЕ в дереве ------------------------------------
+#
+# Файловый протокол выше бесполезен ровно тогда, когда он нужнее всего: если
+# агент лёг, просьбу со стола некому взять. Поэтому рядом с Пультом может стоять
+# отдельная служба (`server/deskctl.py`) — она вне агента, знает закрытый список
+# контейнеров и умеет три вещи: показать их состояние, отдать хвост журнала,
+# перезапустить. Канал сюда только ходит; решать, что позволено, — её дело.
+#
+# Нет адреса службы — нет и раздела: окно говорит «управления контейнерами здесь
+# нет», а не рисует мёртвые кнопки.
+
+DESKCTL_URL = "HELENE_DESKCTL"
+DESKCTL_TOKEN = "HELENE_DESKCTL_TOKEN"
+DESKCTL_TIMEOUT = 20
+
+
+def deskctl_where() -> tuple[str, str]:
+    """Адрес и ключ службы контейнеров. Пустой адрес — службы нет."""
+    return ((os.environ.get(DESKCTL_URL) or "").strip().rstrip("/"),
+            (os.environ.get(DESKCTL_TOKEN) or "").strip())
+
+
+def deskctl_call(path: str, method: str = "GET", body: dict | None = None) -> dict:
+    """Один запрос к службе контейнеров. Отказ — обычный ответ с причиной."""
+    import urllib.error  # noqa: PLC0415 — нужны только здесь
+    import urllib.request
+
+    base, token = deskctl_where()
+    if not base:
+        return {"ok": False, "available": False,
+                "why": "служба управления контейнерами рядом с этим каналом не объявлена "
+                       f"({DESKCTL_URL})"}
+    data = json.dumps(body or {}).encode("utf-8") if method == "POST" else None
+    request = urllib.request.Request(base + path, data=data, method=method)
+    request.add_header("Authorization", f"Bearer {token}")
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request, timeout=DESKCTL_TIMEOUT) as answer:
+            return json.loads(answer.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        return {"ok": False, "available": True,
+                "why": f"служба ответила {exc.code}: {exc.read()[:200].decode('utf-8', 'replace')}"}
+    except Exception as exc:  # noqa: BLE001 — причина обязана доехать до окна
+        return {"ok": False, "available": False,
+                "why": f"служба не ответила: {type(exc).__name__}: {exc}"}
+
+
+def containers() -> dict:
+    """Что за контейнеры рядом и живы ли они."""
+    got = deskctl_call("/state")
+    if "containers" not in got:
+        return {"available": False, "why": got.get("why", "служба молчит"), "containers": []}
+    return {"available": True, "why": "", "containers": got.get("containers", []),
+            "allowed": got.get("allowed", []), "at": got.get("at", "")}
+
+
+def container_log(name: str, lines: int = 200, only_errors: bool = False) -> dict:
+    query = f"?lines={max(1, min(int(lines or 200), 400))}" + ("&errors=1" if only_errors else "")
+    return deskctl_call(f"/logs/{name}{query}")
+
+
+def container_restart(name: str) -> dict:
+    return deskctl_call(f"/restart/{name}", method="POST")
+
+
+def brain() -> dict:
+    """Роли мозга и их модели. Ключи провайдеров служба не отдаёт вовсе."""
+    return deskctl_call("/brain")
+
+
+def brain_models() -> dict:
+    """Живой список моделей у мозга — не наш список, а его собственный ответ."""
+    return deskctl_call("/brain/models")
+
+
+def brain_set(role: str, fields: dict) -> dict:
+    return deskctl_call("/brain", method="POST", body={"role": role, "fields": fields})
+
+
 # --- сторона надзора ---------------------------------------------------------
 #
 # Ниже — то, что зовёт `serverboot`. Оно живёт здесь же, чтобы обе стороны

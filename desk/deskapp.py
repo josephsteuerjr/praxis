@@ -147,9 +147,16 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
 # можно, править конституцию, режим и анатомию — нет.
 # /tunnel и /events пускаем: внутри канала область проверяется ещё раз, по
 # каждому маршруту (_tunnel_dispatch), иначе телефон обошёл бы разбор прав.
+# ⚠ Управление (контейнеры, журналы, мозг) телефону ОТКРЫТО намеренно: пара —
+# это пульт владельца, он выдаёт её сам и отзывает одной кнопкой. Смысл кнопки
+# «перезапустить» в том, чтобы она была под рукой, когда до компьютера не
+# дойти; закрытая от телефона, она бесполезна ровно в этом случае. Что можно
+# трогать — решает служба на сервере закрытым списком, а не эта строка.
 _DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health",
-                 "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events"}
-_DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/", "/api/chat-turns/", "/api/run/")
+                 "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
+                 "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models"}
+_DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/", "/api/chat-turns/", "/api/run/",
+                    "/api/container-log/")
 
 
 def _hostname(raw: str) -> str:
@@ -953,6 +960,41 @@ async def _r_voice(c: Call):
     return await asyncio.to_thread(lambda: voice.state(readers.tree(), _voice_config()))
 
 
+
+async def _r_containers(c: Call):
+    """Контейнеры рядом с этим каналом: живы ли, с каких пор (deskd/control.py)."""
+    return await asyncio.to_thread(control.containers)
+
+
+async def _r_container_restart(c: Call):
+    """Перезапустить названный контейнер. Что позволено — решает служба, не окно."""
+    body = c.body or {}
+    return await asyncio.to_thread(control.container_restart, str(body.get("name") or ""))
+
+
+async def _r_container_log(c: Call):
+    return await asyncio.to_thread(control.container_log, c.match["name"],
+                                   _int_arg(c.query, "lines", 200, 1, 400),
+                                   (c.query.get("errors") or "") in ("1", "true", "yes"))
+
+
+async def _r_brain(c: Call):
+    """Роли мозга и их модели. Ключи провайдеров сюда не попадают никогда."""
+    return await asyncio.to_thread(control.brain)
+
+
+async def _r_brain_models(c: Call):
+    """Что мозг отдаёт СЕЙЧАС: список у него, не у нас (каталог реле сжимается)."""
+    return await asyncio.to_thread(control.brain_models)
+
+
+async def _r_brain_set(c: Call):
+    body = c.body or {}
+    fields = body.get("fields")
+    return await asyncio.to_thread(control.brain_set, str(body.get("role") or ""),
+                                   fields if isinstance(fields, dict) else {})
+
+
 ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/runs", _r_runs),
     Route("GET", "/api/run/{run_id}", _r_run),
@@ -989,6 +1031,15 @@ ROUTES: tuple[Route, ...] = (
     # Управление харнессом, который живёт не здесь (deskd/control.py). В
     # _DEVICE_PATHS их нет намеренно: перезапуск и журналы — дело владельца, а
     # не спаренного телефона.
+    # Контейнеры и мозг — через службу рядом с Пультом (server/deskctl.py). Она
+    # вне агента: перезапуск нужен ровно тогда, когда агент лёг и файловый
+    # протокол выше уже некому исполнить.
+    Route("GET", "/api/containers", _r_containers),
+    Route("POST", "/api/containers/restart", _r_container_restart),
+    Route("GET", "/api/container-log/{name}", _r_container_log),
+    Route("GET", "/api/brain", _r_brain),
+    Route("GET", "/api/brain-models", _r_brain_models),
+    Route("POST", "/api/brain", _r_brain_set),
     Route("GET", "/api/voice", _r_voice),
     Route("GET", "/api/supervisor", _r_supervisor),
     Route("POST", "/api/supervisor/restart", _r_supervisor_restart),

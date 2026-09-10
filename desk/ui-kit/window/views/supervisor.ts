@@ -122,6 +122,109 @@ export function supervisorHTML(s: Supervisor | null): string {
   return head + table + buttons + pending + receipt + update;
 }
 
+export interface ContainerRow {
+  name: string;
+  known: boolean;
+  up: boolean;
+  status: string;
+  image: string;
+  since: string;
+}
+
+export interface Containers {
+  available: boolean;
+  why: string;
+  containers: ContainerRow[];
+  allowed?: string[];
+}
+
+export interface Brain {
+  ok: boolean;
+  note?: string;
+  why?: string;
+  path?: string;
+  writable?: boolean;
+  roles?: Record<string, Record<string, string | number>>;
+  frameworks?: Record<string, { base_url: string; key_present: boolean }>;
+}
+
+export interface BrainModels {
+  ok: boolean;
+  why?: string;
+  by_framework?: Record<string, { ok: boolean; models?: string[]; why?: string; url?: string }>;
+}
+
+/**
+ * Контейнеры рядом с агентом: живы ли, и кнопка поднять.
+ *
+ * ⚠ Почему это отдельно от надзора выше. Файловый протокол просит АГЕНТА
+ * перезапустить своих детей — и он бесполезен ровно тогда, когда нужнее всего:
+ * если агент лёг, просьбу со стола некому взять. Здесь просьба идёт мимо него,
+ * в службу рядом (`server/deskctl.py`), и потому работает над мёртвым агентом.
+ * Что ей позволено трогать, решает её закрытый список, а не это окно.
+ */
+export function containersHTML(state: Containers | null): string {
+  if (!state || !state.available) {
+    const why = state?.why || "служба управления контейнерами рядом с этим каналом не объявлена";
+    return `<h3 class="section-title">Контейнеры</h3><p class="muted">${esc(why)}.</p>`;
+  }
+  const rows = state.containers
+    .map(
+      (c) => `<tr><td><b>${esc(c.name)}</b></td>
+        <td>${c.up ? `<span class="mono">${esc(c.status)}</span>` : `<span class="receipt err">${esc(c.status)}</span>`}</td>
+        <td class="muted">${esc(c.image)}</td>
+        <td class="actions">
+          <button class="btn quiet" data-restart-container="${esc(c.name)}">Перезапустить</button>
+          <button class="btn quiet" data-clog="${esc(c.name)}">Журнал</button>
+          <button class="btn quiet" data-clog="${esc(c.name)}" data-errors="1">Ошибки</button>
+        </td></tr>`,
+    )
+    .join("");
+  return `<h3 class="section-title">Контейнеры</h3>
+    <p class="muted">Идёт мимо агента: перезапуск нужен ровно тогда, когда он не отвечает.
+      Список закрыт службой на сервере — чужие контейнеры ей не видны.</p>
+    <table class="grid">${rows}</table>
+    <p class="receipt" id="cnt-note"></p>
+    <pre class="mono" id="clog-view" style="max-height:320px;overflow:auto;white-space:pre-wrap;margin-top:8px" hidden></pre>`;
+}
+
+/** Мозг: какая модель у какой роли и чем её заменить, если эта замолчала. */
+export function brainHTML(state: Brain | null, models: BrainModels | null): string {
+  if (!state || !state.ok) {
+    const why = state?.note || state?.why || "мозг отсюда не читается";
+    return `<h3 class="section-title">Мозг</h3><p class="muted">${esc(why)}.</p>`;
+  }
+  const live: string[] = [];
+  for (const spec of Object.values(models?.by_framework || {})) {
+    if (spec.ok && spec.models) live.push(...spec.models);
+  }
+  const options = (current: string) => {
+    const seen = new Set<string>([current, ...live].filter(Boolean));
+    return [...seen]
+      .map((m) => `<option value="${esc(m)}"${m === current ? " selected" : ""}>${esc(m)}</option>`)
+      .join("");
+  };
+  const rows = Object.entries(state.roles || {})
+    .map(([role, spec]) => {
+      const model = String(spec.model ?? "");
+      const fallback = String(spec.fallback_model ?? "");
+      return `<tr><td><b>${esc(role)}</b><div class="muted">${esc(String(spec.framework ?? ""))}${
+        fallback ? " · запасная " + esc(fallback) : ""
+      }</div></td>
+      <td><select class="field-input" data-brain-role="${esc(role)}">${options(model)}</select></td>
+      <td class="actions"><button class="btn quiet" data-brain-apply="${esc(role)}">Сменить</button></td></tr>`;
+    })
+    .join("");
+  const liveNote = live.length
+    ? `Список моделей — живой ответ мозга (${live.length}), а не наш перечень.`
+    : "Живой список моделей получить не удалось, поэтому в выборе только то, что уже стоит.";
+  return `<h3 class="section-title">Мозг</h3>
+    <p class="muted">${esc(liveNote)} Смена пишется в его конфиг и применяется, когда агент перечитает мозг —
+      перезапусти его выше, если нужно сейчас. Ключи провайдеров сюда не отдаются вовсе.</p>
+    <table class="grid">${rows}</table>
+    <p class="receipt" id="brain-note"></p>`;
+}
+
 /** Журналы: что есть, насколько свежо, и место под хвост выбранного. */
 export function logsHTML(rows: LogRow[] | null): string {
   if (!rows || !rows.length) return "";
@@ -141,10 +244,22 @@ export function logsHTML(rows: LogRow[] | null): string {
 
 /** Перерисовать панель свежим ответом канала. Обработчики при этом не трогаются. */
 async function draw(box: HTMLElement): Promise<void> {
-  const [sR, lR] = await Promise.allSettled([api<Supervisor>("/api/supervisor"), api<LogRow[]>("/api/logs")]);
+  const [sR, lR, cR, bR, mR] = await Promise.allSettled([
+    api<Supervisor>("/api/supervisor"),
+    api<LogRow[]>("/api/logs"),
+    api<Containers>("/api/containers"),
+    api<Brain>("/api/brain"),
+    api<BrainModels>("/api/brain-models"),
+  ]);
   const state = sR.status === "fulfilled" ? sR.value : null;
   const logs = lR.status === "fulfilled" ? lR.value : null;
-  box.innerHTML = `<h3 class="section-title">Управление</h3>${supervisorHTML(state)}${logsHTML(logs)}`;
+  const boxes = cR.status === "fulfilled" ? cR.value : null;
+  const brain = bR.status === "fulfilled" ? bR.value : null;
+  const models = mR.status === "fulfilled" ? mR.value : null;
+  // Контейнеры и мозг рисуются, только когда служба рядом объявлена: у окна
+  // Элен её нет, и пустой раздел там был бы обещанием без исполнителя.
+  const extra = boxes?.available ? containersHTML(boxes) + brainHTML(brain, models) : "";
+  box.innerHTML = `<h3 class="section-title">Управление</h3>${supervisorHTML(state)}${extra}${logsHTML(logs)}`;
 }
 
 /**
@@ -181,7 +296,84 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
     }
   };
 
+  const showContainerLog = async (name: string, onlyErrors: boolean) => {
+    const view = box.querySelector<HTMLPreElement>("#clog-view");
+    if (!view) return;
+    view.hidden = false;
+    view.textContent = "читаю…";
+    try {
+      const got = await api<{ ok: boolean; text?: string; note?: string; lines?: number }>(
+        `/api/container-log/${encodeURIComponent(name)}?lines=200${onlyErrors ? "&errors=1" : ""}`,
+      );
+      view.textContent = got.ok
+        ? got.text || (onlyErrors ? "ошибок в хвосте журнала нет" : "(пусто)")
+        : got.note || "журнал не прочитался";
+    } catch (e) {
+      view.textContent = "не прочиталось: " + String(e);
+    }
+  };
+
   box.addEventListener("click", async (ev) => {
+    const spot = (ev.target as HTMLElement).closest<HTMLElement>(
+      "[data-clog],[data-restart-container],[data-brain-apply]");
+    if (spot) {
+      const note = box.querySelector<HTMLElement>(
+        spot.hasAttribute("data-brain-apply") ? "#brain-note" : "#cnt-note");
+      const clog = spot.getAttribute("data-clog");
+      if (clog) {
+        await showContainerLog(clog, spot.hasAttribute("data-errors"));
+        return;
+      }
+      const restartName = spot.getAttribute("data-restart-container");
+      if (restartName) {
+        if (note) {
+          note.className = "receipt";
+          note.textContent = `перезапускаю ${restartName}…`;
+        }
+        try {
+          const answer = await post<{ ok: boolean; note: string }>("/api/containers/restart", { name: restartName });
+          if (note) {
+            note.className = answer.ok ? "receipt ok" : "receipt err";
+            note.textContent = answer.note;
+          }
+          if (answer.ok) {
+            await new Promise((done) => setTimeout(done, 3000));
+            await draw(box);
+          }
+        } catch (e) {
+          if (note) {
+            note.className = "receipt err";
+            note.textContent = "не дошло: " + String(e);
+          }
+        }
+        return;
+      }
+      const role = spot.getAttribute("data-brain-apply");
+      if (role) {
+        const picker = box.querySelector<HTMLSelectElement>(`[data-brain-role="${role}"]`);
+        const model = picker?.value || "";
+        if (note) {
+          note.className = "receipt";
+          note.textContent = `меняю модель роли ${role}…`;
+        }
+        try {
+          const answer = await post<{ ok: boolean; note?: string; now?: Record<string, string> }>(
+            "/api/brain", { role, fields: { model } });
+          if (note) {
+            note.className = answer.ok ? "receipt ok" : "receipt err";
+            note.textContent = answer.ok
+              ? `роль ${role}: ${model}. ${answer.note || ""}`
+              : answer.note || "не вышло";
+          }
+        } catch (e) {
+          if (note) {
+            note.className = "receipt err";
+            note.textContent = "не дошло: " + String(e);
+          }
+        }
+        return;
+      }
+    }
     const target = (ev.target as HTMLElement).closest<HTMLElement>("[data-log],[data-restart],[data-log-again]");
     if (!target) return;
     if (target.hasAttribute("data-log-again")) {
