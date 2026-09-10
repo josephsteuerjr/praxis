@@ -264,6 +264,141 @@ html:not(.native) #chrome .controls {
   gap: 2px;
 }
 
+/* ---------- переключатель агентов (несколько агентов в одной установке) ----
+   Появляется только там, где агентов больше одного; у единственного полка
+   выглядит ровно так, как выглядела. */
+.agent-switch {
+  position: relative;
+  margin: 0 0 10px;
+}
+
+.agent-current {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink);
+  font: 500 14px/1 var(--serif);
+  cursor: pointer;
+}
+
+.agent-current:hover {
+  background: var(--hover);
+}
+
+.agent-current .agent-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.agent-current svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  opacity: 0.6;
+}
+
+/* Точка — «этот агент сейчас перед глазами», а не «жив»: живость видно на
+   плашке состояния, и вторая зелёная точка рядом врала бы про поднятость. */
+.agent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent, currentColor);
+  opacity: 0.75;
+}
+
+.agent-menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel, var(--bg));
+  box-shadow: 0 10px 30px rgb(0 0 0 / 22%);
+}
+
+.agent-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-row:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.agent-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.agent-row.is-current {
+  background: var(--hover);
+}
+
+.agent-row .agent-name {
+  font: 500 14px/1.2 var(--serif);
+}
+
+.agent-row .agent-why {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* Список агентов в настройках: строка на агента, состояние словами. */
+.agents-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.agent-line {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  align-items: center;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.agent-line-name {
+  font: 500 14px/1.3 var(--serif);
+}
+
+.agent-line-state,
+.agent-line-home {
+  grid-column: 1 / -1;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+
 /* Разделы — серифом: это голос продукта, не меню программы. */
 .rail-item {
   display: flex;

@@ -1,0 +1,85 @@
+{
+  "_": "Правила списка агентов — одним набором случаев на два языка. Питон читает его в tests/t_agents.py, Rust — в тесте common/agents.rs (include_str!). Каждый случай: `files` раскладывается во временной папке (значение-объект пишется JSON-ом, строка — как есть, чтобы можно было положить битый файл), `expect` — что обязан вернуть roster() по порядку. Пути в expect — от корня установки, через прямой слэш.",
+  "v": 1,
+  "cases": [
+    {
+      "name": "установка без agents/ — ровно один агент, корневой",
+      "files": {
+        "helene.json": { "agent": { "name": "Hélène" }, "port": 8094, "tree": "data" }
+      },
+      "expect": [
+        { "id": "main", "name": "Hélène", "tree": "data", "port": 8094, "enabled": true, "base": true, "conflict": "" }
+      ]
+    },
+    {
+      "name": "конфига нет вовсе — корневой агент всё равно в списке",
+      "files": {},
+      "expect": [
+        { "id": "main", "name": "Агент", "tree": "data", "port": 8094, "enabled": true, "base": true, "conflict": "" }
+      ]
+    },
+    {
+      "name": "два соседа: по алфавиту, порты по месту в списке",
+      "files": {
+        "helene.json": { "agent": { "name": "Hélène" } },
+        "agents/mira/helene.json": { "agent": { "name": "Мира" }, "tree": "data" },
+        "agents/dobrynya/helene.json": { "agent": { "name": "Добрыня" }, "tree": "data" }
+      },
+      "expect": [
+        { "id": "main", "name": "Hélène", "tree": "data", "port": 8094, "enabled": true, "base": true, "conflict": "" },
+        { "id": "dobrynya", "name": "Добрыня", "tree": "agents/dobrynya/data", "port": 8095, "enabled": true, "base": false, "conflict": "" },
+        { "id": "mira", "name": "Мира", "tree": "agents/mira/data", "port": 8096, "enabled": true, "base": false, "conflict": "" }
+      ]
+    },
+    {
+      "name": "названный порт и снятый агент: в списке видно обоих",
+      "files": {
+        "helene.json": { "agent": { "name": "Hélène" }, "port": 9000 },
+        "agents/mira/helene.json": { "agent": { "name": "Мира" }, "port": 9100, "enabled": false, "tree": "home" }
+      },
+      "expect": [
+        { "id": "main", "name": "Hélène", "tree": "data", "port": 9000, "enabled": true, "base": true, "conflict": "" },
+        { "id": "mira", "name": "Мира", "tree": "agents/mira/home", "port": 9100, "enabled": false, "base": false, "conflict": "" }
+      ]
+    },
+    {
+      "name": "спор за порт называется вслух и не молчит",
+      "files": {
+        "helene.json": { "agent": { "name": "Hélène" }, "port": 8094 },
+        "agents/mira/helene.json": { "agent": { "name": "Мира" }, "port": 8094 }
+      },
+      "expect": [
+        { "id": "main", "name": "Hélène", "tree": "data", "port": 8094, "enabled": true, "base": true, "conflict": "" },
+        { "id": "mira", "name": "Мира", "tree": "agents/mira/data", "port": 8094, "enabled": true, "base": false, "conflict": "main" }
+      ]
+    },
+    {
+      "name": "мусор в agents/ агентом не считается",
+      "files": {
+        "helene.json": { "agent": { "name": "Hélène" } },
+        "agents/README.txt": "не конфиг",
+        "agents/empty/.keep": "",
+        "agents/Mira/helene.json": { "agent": { "name": "Заглавная" } },
+        "agents/main/helene.json": { "agent": { "name": "Спорит с корневым" } },
+        "agents/ok/helene.json": { "agent": { "name": "Годный" } }
+      },
+      "expect": [
+        { "id": "main", "name": "Hélène", "tree": "data", "port": 8094, "enabled": true, "base": true, "conflict": "" },
+        { "id": "ok", "name": "Годный", "tree": "agents/ok/data", "port": 8095, "enabled": true, "base": false, "conflict": "" }
+      ]
+    },
+    {
+      "name": "битый конфиг соседа не прячет ни его, ни остальных",
+      "files": {
+        "helene.json": { "agent": { "name": "Hélène" } },
+        "agents/broken/helene.json": "{ это не json",
+        "agents/zoe/helene.json": { "agent": { "name": "Зоя" } }
+      },
+      "expect": [
+        { "id": "main", "name": "Hélène", "tree": "data", "port": 8094, "enabled": true, "base": true, "conflict": "" },
+        { "id": "broken", "name": "broken", "tree": "agents/broken/data", "port": 8095, "enabled": true, "base": false, "conflict": "" },
+        { "id": "zoe", "name": "Зоя", "tree": "agents/zoe/data", "port": 8096, "enabled": true, "base": false, "conflict": "" }
+      ]
+    }
+  ]
+}

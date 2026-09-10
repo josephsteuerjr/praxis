@@ -52,7 +52,8 @@ const PRODUCT: &str = "Helene";
 const PRODUCT_UI: &str = "Hélène";
 /// Порты по умолчанию — те же, что в `ui-kit/contract.json` (тест
 /// `contract_json_matches_constants` сверяет): канал окна и встроенное реле.
-const DESK_PORT: u16 = 8094;
+/// ⚠ `DESK_PORT` живёт в `common/agents.rs`: список агентов считает от него
+/// порты соседей, и служба берёт оттуда же — двух умолчаний быть не должно.
 const RELAY_PORT: u16 = 5011;
 const CONFIG_NAME: &str = "helene.json";
 /// Комната окна в памяти агента: memory/groups/<WINDOW_ROOM>.jsonl.
@@ -262,9 +263,14 @@ fn explorer_exe() -> PathBuf {
 
 /// Как поднять ребёнка заново, если он упал: оболочка — надзиратель, а не
 /// просто запускатель. Всё нужное для повторного spawn лежит здесь.
+/// ⚠ `token` появился 11.09 вместе с несколькими агентами. Раньше секрет брался
+/// из глобального `desk_token()` прямо в момент спавна — при одном агенте это
+/// было одно и то же. При двух глобальный секрет принадлежит ТОМУ, кого окно
+/// показывает сейчас, и дети второго получали бы чужой ключ: канал ответил бы
+/// им 403 в собственном доме. Секрет — свойство дерева, поэтому едет со спекой.
 #[derive(Clone)]
 enum ChildSpec {
-    Script { python: PathBuf, script: PathBuf, args: Vec<String>, tree: PathBuf, host: String },
+    Script { python: PathBuf, script: PathBuf, args: Vec<String>, tree: PathBuf, host: String, token: String },
     Relay { base: PathBuf, cfg: serde_json::Value, tree: PathBuf },
 }
 
@@ -308,7 +314,9 @@ impl ChildSpec {
 
     fn spawn(&self) -> Option<Child> {
         match self {
-            ChildSpec::Script { python, script, args, tree, host } => spawn_child(python, script, args, tree, host),
+            ChildSpec::Script { python, script, args, tree, host, token } => {
+                spawn_child(python, script, args, tree, host, token)
+            }
             ChildSpec::Relay { base, cfg, tree } => spawn_relay(base, cfg, tree),
         }
     }
@@ -318,6 +326,8 @@ impl ChildSpec {
 /// «забыть навсегда»: раньше провал ПЕРВОГО спавна выбрасывал спеку из
 /// надзора (filter_map), и агент не поднимался уже никогда, молча.
 struct Managed {
+    /// Чей это ребёнок (id агента) — надзор считает пропажу по каждому отдельно.
+    agent: String,
     spec: ChildSpec,
     child: Option<Child>,
     falls: Vec<Instant>,
@@ -331,24 +341,44 @@ struct Managed {
 
 /// Что оболочка должна поднять и где. Живёт после первой попытки: занятый
 /// порт или придержавший запуск антивирус — не приговор на весь сеанс.
+///
+/// План теперь ПЕР-АГЕНТНЫЙ: `agent` — чей он, и по нему же надзор понимает,
+/// чьих детей не хватает. Без этого поля «детей нет вовсе» считалось по всему
+/// списку сразу, и упавший второй агент не поднимался, пока жив первый.
 #[derive(Clone)]
 struct SpawnPlan {
+    agent: String,
+    /// Имя агента словами владельца — для журнала и уведомлений: «порт занят»
+    /// про безымянный `mira` владельцу не говорит ничего.
+    name: String,
+    /// Файл настроек этого агента: его и надо называть в отказах, а не общий
+    /// `helene.json` рядом с программой.
+    config: PathBuf,
     specs: Vec<ChildSpec>,
     port: u16,
     tree: PathBuf,
+    /// Секрет канала ЭТОГО дерева: им же оболочка стучится в занятый порт.
+    token: String,
+}
+
+impl SpawnPlan {
+    /// Как назвать этого агента в строке журнала: у единственного — никак
+    /// (он и есть «агент»), у соседа — по имени.
+    fn whose(&self) -> String {
+        if self.agent == BASE_AGENT_ID {
+            String::new()
+        } else {
+            format!(" (агент «{}»)", self.name)
+        }
+    }
 }
 
 struct LocalHarness {
     children: Mutex<Vec<Managed>>,
     stopping: std::sync::atomic::AtomicBool,
-    /// Локальный режим: план подъёма для повторных попыток. None — удалённый.
-    plan: Mutex<Option<SpawnPlan>>,
-}
-
-/// Кто здесь живёт: имя агента и дерево данных (None — удалённый режим).
-struct Identity {
-    agent: String,
-    tree: Option<PathBuf>,
+    /// Локальный режим: планы подъёма для повторных попыток, по одному на
+    /// агента. Пусто — удалённый режим либо ничего не настроено.
+    plans: Mutex<Vec<SpawnPlan>>,
 }
 
 fn exe_dir() -> PathBuf {
@@ -539,12 +569,24 @@ fn config_value() -> Option<serde_json::Value> {
 /// Дерево данных: из конфига, но ОТ ПАПКИ ПРОГРАММЫ, а не от текущей папки
 /// процесса. Относительный "data" при запуске helene.exe из другой папки
 /// уводил сессию Telegram и сбор логов в чужое место.
-fn tree_dir() -> PathBuf {
+fn base_tree() -> PathBuf {
     let base = exe_dir();
     let raw = config_value()
         .and_then(|c| c.get("tree").and_then(|v| v.as_str()).map(str::to_string))
         .unwrap_or_else(|| "data".into());
     resolve(&base, &raw)
+}
+
+/// Дерево ТОГО агента, которого показывает окно. С 11.09 их несколько, и почти
+/// всё в оболочке (журналы, брокер, сессия Telegram, отметка обновления) —
+/// про текущего, а не про корневого.
+fn current_tree() -> PathBuf {
+    with_current(base_tree(), |c| c.tree.clone().unwrap_or_else(base_tree))
+}
+
+/// Прежнее имя оставлено для читаемости мест, где смысл именно «дерево окна».
+fn tree_dir() -> PathBuf {
+    current_tree()
 }
 
 /// Имя агента даёт владелец при установке (`agent.name`); старые конфиги
@@ -696,10 +738,91 @@ fn adopt(child: &Child) {
 /// поднимает либо окно, либо служба, а предъявлять трубе один и тот же ключ
 /// должны оба плюс второе окно, которое подключается к уже живому харнессу.
 /// Свой собственный ключ у каждого = 403 от собственного харнесса и пустое окно.
-static DESK_TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+///
+/// ⚠ 11.09: секретов стало столько же, сколько агентов, и `OnceLock` (один на
+/// процесс) перестал быть правдой. Здесь живёт секрет ТОГО агента, которого
+/// окно показывает сейчас; секреты остальных едут в их спеках детей.
+static DESK_TOKEN: Mutex<String> = Mutex::new(String::new());
 
-fn desk_token() -> &'static str {
-    DESK_TOKEN.get().map(String::as_str).unwrap_or("")
+fn desk_token() -> String {
+    DESK_TOKEN.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+fn set_desk_token(token: &str) {
+    if let Ok(mut guard) = DESK_TOKEN.lock() {
+        *guard = token.to_string();
+    }
+}
+
+/// Кого окно показывает сейчас. Меняется переключателем агентов и трея; всё,
+/// что раньше считалось «от единственного конфига рядом с exe» (дерево, файл
+/// настроек, имя в заголовке), спрашивает ЭТО, а не раскладку.
+struct CurrentAgent {
+    id: String,
+    name: String,
+    /// Дом агента; None — удалённый режим, дерева на этой машине нет.
+    tree: Option<PathBuf>,
+    /// Файл настроек ИМЕННО этого агента (у корневого — рядом с программой).
+    config: PathBuf,
+}
+
+static CURRENT: Mutex<Option<CurrentAgent>> = Mutex::new(None);
+
+/// Идёт переключение агента: старое окно сносится, чтобы отдать метку `main`
+/// новому.
+///
+/// ⚠⚠ ПОЙМАНО ЖИВОЙ ПРОБОЙ 11.09, и обе половины здесь несущие.
+/// `close()` окно НЕ закрывает: обработчик `CloseRequested` прячет его в трей
+/// (закрыть окно ≠ убить организм), метка `main` остаётся занятой, и новое
+/// окно отвечает «a webview with label `main` already exists» — владелец
+/// оставался БЕЗ окна вовсе. Значит нужен `destroy()`.
+/// Но `destroy()` поднимает `Destroyed`, а тот гасит детей — то есть
+/// переключение агента убивало бы всех агентов установки. Поэтому на время
+/// переключения смерть окна не считается выходом.
+static SWITCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn set_current(who: CurrentAgent) {
+    if let Ok(mut guard) = CURRENT.lock() {
+        *guard = Some(who);
+    }
+}
+
+/// Значение именованного аргумента командной строки: `--agent mira`.
+/// Форму `--agent=mira` понимаем тоже — ярлыки Windows пишут и так.
+fn arg_after(flag: &str) -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == flag {
+            return args.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        }
+        if let Some(tail) = arg.strip_prefix(&format!("{flag}=")) {
+            let tail = tail.trim().to_string();
+            if !tail.is_empty() {
+                return Some(tail);
+            }
+        }
+    }
+    None
+}
+
+fn with_current<T>(fallback: T, take: impl FnOnce(&CurrentAgent) -> T) -> T {
+    match CURRENT.lock() {
+        Ok(guard) => match guard.as_ref() {
+            Some(cur) => take(cur),
+            None => fallback,
+        },
+        Err(_) => fallback,
+    }
+}
+
+fn current_id() -> String {
+    with_current(BASE_AGENT_ID.to_string(), |c| c.id.clone())
+}
+
+/// Файл настроек текущего агента. У корневого это `helene.json` рядом с
+/// программой — то же место, что и до 11.09.
+fn current_config_path() -> PathBuf {
+    with_current(exe_dir().join(CONFIG_NAME), |c| c.config.clone())
 }
 
 fn desk_token_path(tree: &Path) -> PathBuf {
@@ -738,7 +861,7 @@ fn ensure_desk_token(tree: &Path) -> Option<String> {
     }
 }
 
-fn spawn_child(python: &Path, script: &Path, args: &[String], tree: &Path, host: &str) -> Option<Child> {
+fn spawn_child(python: &Path, script: &Path, args: &[String], tree: &Path, host: &str, token: &str) -> Option<Child> {
     let mut cmd = Command::new(python);
     // -u: без него вывод питона в файл буферизован блоками, и аварийное
     // завершение теряло ровно те килобайты, где причина. Служба (svc) делает
@@ -753,7 +876,8 @@ fn spawn_child(python: &Path, script: &Path, args: &[String], tree: &Path, host:
         // тот, кто поднял харнесс, а не переменная окружения владельца, —
         // иначе системная PRAXIS_DESK_TOKEN закрывала бы трубу ключом,
         // которого окно не знает (deskapp.py принимает обе переменные).
-        .env("HELENE_TOKEN", desk_token())
+        // Секрет — этого дерева, а не «текущего агента окна»: см. ChildSpec.
+        .env("HELENE_TOKEN", token)
         .env_remove("PRAXIS_DESK_TOKEN");
     if let Some(dir) = script.parent() {
         cmd.current_dir(dir);
@@ -872,10 +996,9 @@ fn home_probe(port: u16, key: &str) -> Holder {
 /// только тому, кто ответил «нужен ключ» (401/403): под замком собственная
 /// труба иначе выглядела бы «чужой программой», а это ложное обвинение и
 /// мёртвое окно.
-fn harness_holder(port: u16) -> Holder {
+fn harness_holder(port: u16, key: &str) -> Holder {
     match home_probe(port, "") {
         Holder::Guarded => {
-            let key = desk_token();
             if key.is_empty() {
                 Holder::Guarded
             } else {
@@ -904,9 +1027,12 @@ enum Verdict {
     Foreign(Option<PathBuf>),
 }
 
-fn harness_verdict(port: u16, tree: &Path) -> Verdict {
+/// Ключ предъявляется ТОГО агента, чей это порт (`key`), а не «текущего в
+/// окне»: у второго агента ключ свой, и чужим он получил бы «под замком» от
+/// собственного харнесса.
+fn harness_verdict(port: u16, tree: &Path, key: &str) -> Verdict {
     let ours = tree.canonicalize().unwrap_or_else(|_| tree.to_path_buf());
-    match harness_holder(port) {
+    match harness_holder(port, key) {
         Holder::Tree(theirs) => {
             let canon = theirs.canonicalize().unwrap_or_else(|_| theirs.clone());
             if canon == ours {
@@ -1007,18 +1133,27 @@ fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> Option<Chil
     }
 }
 
-/// Локальный режим: что и где поднимать. Чистый расчёт, ничего не запускает —
-/// план живёт весь сеанс, чтобы повторная попытка была возможна.
-fn build_plan(base: &Path, cfg: &serde_json::Value) -> SpawnPlan {
-    let port = cfg
-        .get("port")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(DESK_PORT as u64)
-        .min(u16::MAX as u64) as u16;
-    let tree = resolve(
-        base,
-        cfg.get("tree").and_then(|v| v.as_str()).unwrap_or("data"),
-    );
+/// Локальный режим: что и где поднимать для ОДНОГО агента. Чистый расчёт,
+/// ничего не запускает — план живёт весь сеанс, чтобы повторная попытка была
+/// возможна.
+///
+/// `base` — папка КОНФИГА этого агента (у корневого = папка программы, у
+/// соседей = `agents/<id>/`): все относительные пути внутри файла считаются от
+/// неё, и это единственная база (см. `localharness/agents.py`).
+///
+/// `relay_here` — поднимать ли реле подписки. Реле одно на установку: порт у
+/// него один, вход в подписку один, и два реле дрались бы за него сами с
+/// собой. Поэтому его просит только корневой агент.
+fn build_plan(
+    agent: &AgentEntry,
+    base: &Path,
+    cfg: &serde_json::Value,
+    relay_here: bool,
+    with_runner: bool,
+) -> SpawnPlan {
+    let port = agent.port;
+    let tree = agent.tree.clone();
+    let token = ensure_desk_token(&tree).unwrap_or_default();
     let python = python_path(base, cfg);
     let app = resolve(
         base,
@@ -1026,9 +1161,9 @@ fn build_plan(base: &Path, cfg: &serde_json::Value) -> SpawnPlan {
     );
     let host = if phone_enabled(cfg) { "0.0.0.0" } else { "127.0.0.1" };
     let mut specs = Vec::new();
-    if relay_enabled(cfg) {
+    if relay_here && relay_enabled(cfg) {
         specs.push(ChildSpec::Relay {
-            base: base.to_path_buf(),
+            base: exe_dir(),
             cfg: cfg.clone(),
             tree: tree.clone(),
         });
@@ -1039,18 +1174,56 @@ fn build_plan(base: &Path, cfg: &serde_json::Value) -> SpawnPlan {
         args: vec![port.to_string()],
         tree: tree.clone(),
         host: host.into(),
+        token: token.clone(),
     });
-    if let Some(runner_raw) = cfg.get("runner").and_then(|v| v.as_str()) {
-        let config = base.join(CONFIG_NAME).to_string_lossy().into_owned();
+    if let Some(runner_raw) = cfg.get("runner").and_then(|v| v.as_str()).filter(|_| with_runner) {
+        let config = agent.config.to_string_lossy().into_owned();
         specs.push(ChildSpec::Script {
             python,
             script: resolve(base, runner_raw),
             args: vec!["--config".into(), config],
             tree: tree.clone(),
             host: "127.0.0.1".into(),
+            token: token.clone(),
         });
     }
-    SpawnPlan { specs, port, tree }
+    SpawnPlan {
+        agent: agent.id.clone(),
+        name: agent.name.clone(),
+        config: agent.config.clone(),
+        specs,
+        port,
+        tree,
+        token,
+    }
+}
+
+/// Планы всех агентов установки, кого можно поднимать. Реле — только у
+/// корневого; спорящие за порт и снятые сюда не попадают (`raisable`).
+fn build_plans(base: &Path) -> Vec<SpawnPlan> {
+    let mut out = Vec::new();
+    for agent in raisable(base) {
+        let cfg = agent_config(&agent.config);
+        if cfg.get("mode").and_then(|v| v.as_str()).unwrap_or("local") != "local" {
+            continue;               // удалённый агент живёт не здесь — поднимать нечего
+        }
+        // ⚠ Ненастроенному соседу канал поднимаем ВСЁ РАВНО, а раннер — нет.
+        // Окно продукта — это страница, которую отдаёт канал агента: без него
+        // владельцу негде вписать мозг новому агенту, и «добавить агента»
+        // упиралось бы в пустое окно. А раннер без ключа модели не думает, а
+        // ошибается на каждом ходе — поэтому его подъём ждёт настройки.
+        // Установщик ради соседа не зовём: он настраивается в своём окне.
+        let ready = !unconfigured(&Some(cfg.clone()));
+        if !ready {
+            log_line(&format!(
+                "агент «{}» ({}) ещё не настроен — поднимаю только канал; впиши мозг в его окне",
+                agent.name, agent.id
+            ));
+        }
+        let dir = agent.dir.clone();
+        out.push(build_plan(&agent, &dir, &cfg, agent.base, ready));
+    }
+    out
 }
 
 /// Поднять своих детей, если порт свободен. Пустой список — «не сейчас», а не
@@ -1067,19 +1240,21 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
     let _ = std::fs::create_dir_all(&plan.tree);
     let port = plan.port;
     if harness_alive(port) {
-        let verdict = harness_verdict(port, &plan.tree);
+        let verdict = harness_verdict(port, &plan.tree, &plan.token);
         match &verdict {
             Verdict::Ours => {
                 if announce {
                     log_line(&format!(
-                        "харнесс уже жив на 127.0.0.1:{port} — подключаюсь без своих детей"
+                        "харнесс{} уже жив на 127.0.0.1:{port} — подключаюсь без своих детей",
+                        plan.whose()
                     ));
                 }
             }
             Verdict::Guarded => {
                 if announce {
                     log_line(&format!(
-                        "порт {port} держит харнесс под ключом, которого у меня нет — подключаюсь без своих детей"
+                        "порт {port} держит харнесс под ключом, которого у меня нет — подключаюсь без своих детей{}",
+                        plan.whose()
                     ));
                 }
             }
@@ -1089,11 +1264,14 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
                         Some(t) => format!(" (её дерево: {})", t.display()),
                         None => String::new(),
                     };
+                    let file = plan.config.display();
                     log_line(&format!(
-                        "порт {port} занят ДРУГОЙ программой{whose} — свой харнесс не поднимаю и в её дерево не хожу; закрой её или смени порт в {CONFIG_NAME}"
+                        "порт {port} занят ДРУГОЙ программой{whose} — свой харнесс{} не поднимаю и в её дерево не хожу; закрой её или смени порт в {file}",
+                        plan.whose()
                     ));
                     toast(product_ui(), &format!(
-                        "Порт {port} занят другой программой. Пока она его держит, агент этого окна не поднимется. Закрой прежнюю копию или смени порт в {CONFIG_NAME}."
+                        "Порт {port} занят другой программой. Пока она его держит, агент{} не поднимется. Закрой прежнюю копию или смени порт в {file}.",
+                        plan.whose()
                     ));
                 }
             }
@@ -1108,6 +1286,7 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
             failed.push(spec.human());
         }
         children.push(Managed {
+            agent: plan.agent.clone(),
             spec: spec.clone(),
             // Не поднялся — спеку НЕ выбрасываем: надзор попробует через 30 с.
             retry_at: child.is_none().then(|| Instant::now() + Duration::from_secs(30)),
@@ -1169,7 +1348,10 @@ fn file_mtime_ns(path: &Path) -> Option<String> {
 /// Старое окно без отпечатка пишет как раньше.
 #[tauri::command]
 fn config_save(config: String, mtime_ns: Option<String>) -> Result<serde_json::Value, String> {
-    config_save_at(&exe_dir().join(CONFIG_NAME), &config, mtime_ns.as_deref())
+    // Файл ТОГО агента, которого показывает окно: у корневого — рядом с
+    // программой, у соседа — его собственный. Иначе настройки второго агента
+    // молча уезжали бы в конфиг первого.
+    config_save_at(&current_config_path(), &config, mtime_ns.as_deref())
 }
 
 fn config_save_at(target: &Path, config: &str, mtime_ns: Option<&str>) -> Result<serde_json::Value, String> {
@@ -1270,7 +1452,10 @@ fn relay_abort() {
 /// статус смотрели в захардкоженный data/relay: у владельца, перенёсшего
 /// дерево, вход «выполнялся» туда, где реле его никогда не искало.
 fn relay_home() -> PathBuf {
-    tree_dir().join("relay")
+    // ⚠ Именно КОРНЕВОЕ дерево, а не дерево текущего агента: реле одно на
+    // установку (§ build_plan), и после переключения агента в окне кнопка
+    // «Войти в подписку» иначе писала бы вход туда, где реле его не ищет.
+    base_tree().join("relay")
 }
 
 #[tauri::command]
@@ -1380,18 +1565,23 @@ fn notify(title: String, body: String) {
 #[tauri::command]
 fn config_load() -> Result<serde_json::Value, String> {
     let base = exe_dir();
-    let path = base.join(CONFIG_NAME);
+    let path = current_config_path();
     let cfg = match read_config(&path) {
         ConfigRead::Ok(v) => v,
         ConfigRead::Missing => serde_json::json!({}),
-        ConfigRead::Broken(why) => return Err(format!("{CONFIG_NAME} не разобрался: {why}")),
+        ConfigRead::Broken(why) => return Err(format!("{} не разобрался: {why}", path.display())),
     };
-    let tree = resolve(&base, cfg.get("tree").and_then(|v| v.as_str()).unwrap_or("data"));
+    let home = path.parent().map(Path::to_path_buf).unwrap_or_else(exe_dir);
+    let tree = resolve(&home, cfg.get("tree").and_then(|v| v.as_str()).unwrap_or("data"));
     Ok(serde_json::json!({
         "config": cfg,
         "path": path.display().to_string(),
         "tree": tree.display().to_string(),
         "exe_dir": base.display().to_string(),
+        // Кого правим: экран настроек показывает это владельцу, чтобы правка
+        // мозга у одного агента не выглядела правкой у всех.
+        "agent_id": current_id(),
+        "agent_name": with_current(String::new(), |c| c.name.clone()),
         // Отпечаток свежести: окно возвращает его в `config_save`.
         "mtime_ns": file_mtime_ns(&path),
     }))
@@ -1673,6 +1863,9 @@ include!("../../common/firewall_rule.rs");
 // штамп времени журналов, случайные байты из CSPRNG.
 include!("../../common/model_probe.rs");
 include!("../../common/ps.rs");
+// Список агентов установки — общий со службой: кого поднимать, что показывать
+// в трее и на каком порту чей канал (`common/agents.rs`, правило — там же).
+include!("../../common/agents.rs");
 include!("../../common/service_op.rs");
 include!("../../common/stamp.rs");
 include!("../../common/random_hex.rs");
@@ -3252,6 +3445,35 @@ fn hand_over_to_setup(base: &Path) -> bool {
 ///
 /// Рисуем из init-скрипта, а не из `app/`: страница окна — общая с браузером и
 /// телефоном, а это состояние знает только оболочка.
+/// Адрес канала и список агентов — тем же init-скриптом, что и раньше.
+///
+/// Список нужен окну, чтобы нарисовать переключатель, и он ЖИВОЙ: считается в
+/// момент открытия окна, а не берётся из конфига. Ключи каналов соседей сюда
+/// не кладём — окно ходит только к своему, а переключение поднимает окно заново
+/// с ключом того, к кому переключились.
+fn channel_script(base: &Path, port: u16, key: &str, agent: &str, id: &str) -> String {
+    let roster: Vec<serde_json::Value> = roster(base)
+        .iter()
+        .map(|a| {
+            serde_json::json!({
+                "id": a.id, "name": a.name, "port": a.port,
+                "enabled": a.enabled, "conflict": a.conflict, "base": a.base,
+            })
+        })
+        .collect();
+    format!(
+        "window.PULT_CONFIG_OVERRIDE = {};",
+        serde_json::json!({
+            "base": format!("http://127.0.0.1:{port}"),
+            "key": key,
+            "agent": agent,
+            "agent_id": id,
+            "agents": roster,
+            "product": product_ui(),
+        })
+    )
+}
+
 fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
     let whose = match theirs {
         Some(p) => format!("Её данные лежат здесь: {}", p.display()),
@@ -3344,32 +3566,69 @@ fn main() {
     let mut children: Vec<Managed> = Vec::new();
     let mut init_script = String::new();
     let mut tree: Option<PathBuf> = None;
-    let mut plan: Option<SpawnPlan> = None;
+    let mut plans: Vec<SpawnPlan> = Vec::new();
     let notify_text = cfg
         .as_ref()
         .and_then(|c| c.get("notifications"))
         .and_then(|n| n.get("text"))
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
+    // Кого показывать: `--agent <id>` из ярлыка, иначе корневой. Неизвестный id
+    // не подменяется корневым молча — ярлык на удалённого агента обязан сказать
+    // об этом, иначе владелец пишет не тому.
+    let wanted = arg_after("--agent");
+    let mut current = find_agent(&base, wanted.as_deref().unwrap_or(BASE_AGENT_ID))
+        .or_else(|| find_agent(&base, BASE_AGENT_ID));
+    if let Some(said) = wanted.as_deref() {
+        if find_agent(&base, said).is_none() {
+            log_line(&format!("агента «{said}» в этой установке нет — открываю корневого"));
+            message_box_async(
+                format!("{}: такого агента нет", product_ui()),
+                format!("Ярлык просит агента «{said}», но в этой установке его нет. Открываю того, кто здесь первый."),
+            );
+        }
+    }
+    let agent = current.as_ref().map(|a| a.name.clone()).unwrap_or(agent);
     // Без настройки харнесс не поднимаем: без ключа модели дети бесполезны.
     if let Some(cfg) = cfg.as_ref().filter(|_| configured) {
+        // Настройки ТЕКУЩЕГО агента: у корневого это тот же файл, у соседа —
+        // его собственный. Всё, что ниже смотрит в `cfg` (режим, уведомления,
+        // адрес удалённого), обязано смотреть в его файл, а не в чужой.
+        let own = current
+            .as_ref()
+            .filter(|a| !a.base)
+            .map(|a| agent_config(&a.config));
+        let cfg = own.as_ref().unwrap_or(cfg);
         match cfg.get("mode").and_then(|v| v.as_str()).unwrap_or("") {
             "local" => {
-                let made = build_plan(&base, cfg);
-                let port = made.port;
+                plans = build_plans(&base);
                 // Секрет трубы заводится ДО подъёма детей: он уходит им в
-                // окружение и он же предъявляется трубе из окна.
-                let _ = std::fs::create_dir_all(&made.tree);
-                if let Some(t) = ensure_desk_token(&made.tree) {
-                    let _ = DESK_TOKEN.set(t);
+                // окружение и он же предъявляется трубе из окна. У каждого
+                // агента он свой и лежит в его дереве.
+                let here = current.as_ref().map(|a| a.id.clone()).unwrap_or_default();
+                let mine = plans.iter().find(|p| p.agent == here).cloned();
+                if let Some(p) = &mine {
+                    set_desk_token(&p.token);
                 }
+                let port = mine.as_ref().map(|p| p.port)
+                    .or_else(|| current.as_ref().map(|a| a.port))
+                    .unwrap_or(DESK_PORT);
                 // Пустой список детей — не провал и не приговор: харнесс уже
                 // живёт (служба или другое окно) либо порт занят; надзор
                 // попробует снова, когда порт освободится.
-                let (kids, verdict) = start_children(&made, true);
-                children = kids;
-                tree = Some(made.tree.clone());
-                plan = Some(made);
+                let mut verdict = None;
+                for plan in &plans {
+                    let (kids, said) = start_children(plan, true);
+                    children.extend(kids);
+                    if plan.agent == here {
+                        verdict = said;
+                    }
+                }
+                tree = mine.as_ref().map(|p| p.tree.clone())
+                    .or_else(|| current.as_ref().map(|a| a.tree.clone()));
+                if let Some(cur) = current.as_mut() {
+                    cur.port = port;
+                }
                 match verdict {
                     // ЧУЖАЯ установка на нашем порту. Адрес вебвью на неё не
                     // строим вовсе: иначе окно показывало бы чужую переписку,
@@ -3380,12 +3639,7 @@ fn main() {
                         init_script = blocked_script(port, theirs.as_deref(), &agent);
                     }
                     _ => {
-                        init_script = format!(
-                            "window.PULT_CONFIG_OVERRIDE = {{base: \"http://127.0.0.1:{port}\", key: {}, agent: {}, product: {}}};",
-                            serde_json::Value::String(desk_token().to_string()),
-                            serde_json::Value::String(agent.clone()),
-                            serde_json::Value::String(product_ui().to_string())
-                        );
+                        init_script = channel_script(&base, port, &desk_token(), &agent, &here);
                     }
                 }
             }
@@ -3414,7 +3668,19 @@ fn main() {
         }
     }
 
-    let run = tauri::Builder::default()
+    // Кто сейчас в окне. Не `State<T>` Tauri, а глобал: переключатель агентов
+    // меняет это на живом процессе, а состояние Tauri неизменяемо по замыслу.
+    set_current(CurrentAgent {
+        id: current.as_ref().map(|a| a.id.clone()).unwrap_or_else(|| BASE_AGENT_ID.into()),
+        name: agent.clone(),
+        tree: tree.clone(),
+        config: current
+            .as_ref()
+            .map(|a| a.config.clone())
+            .unwrap_or_else(|| exe_dir().join(CONFIG_NAME)),
+    });
+
+    let built = tauri::Builder::default()
         // Один экземпляр — ПЕРВЫМ плагином: повторный запуск не доходит до
         // окна, а поднимает и фокусирует уже живое.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -3425,11 +3691,7 @@ fn main() {
         .manage(LocalHarness {
             children: Mutex::new(children),
             stopping: std::sync::atomic::AtomicBool::new(false),
-            plan: Mutex::new(plan),
-        })
-        .manage(Identity {
-            agent: agent.clone(),
-            tree: tree.clone(),
+            plans: Mutex::new(plans),
         })
         // Статика окна — с диска (app/static), см. serve_static.
         .register_uri_scheme_protocol("helene", |ctx, request| serve_static(ctx, request))
@@ -3460,7 +3722,10 @@ fn main() {
             reveal_path,
             telegram_account,
             voice_fetch,
-            carry_export
+            carry_export,
+            agents_list,
+            switch_agent,
+            agent_add
         ])
         .setup(move |app| {
             // Продукт зовётся своим именем: заголовок, ярлык, значок, уведомления —
@@ -3477,29 +3742,7 @@ fn main() {
                 "../", env!("HELENE_ICON_DIR"), "/32x32.png"
             )))?;
             debug_assert_eq!(app.config().identifier, toast_id());
-            let mut builder =
-                tauri::WebviewWindowBuilder::new(
-                    app,
-                    "main",
-                    // Свой протокол вместо вшитого `tauri://`: файлы берутся из
-                    // app/static на диске (serve_static). На Windows WebView2
-                    // видит зарегистрированную схему как http://<схема>.localhost.
-                    tauri::WebviewUrl::CustomProtocol(
-                        tauri::Url::parse("http://helene.localhost/index.html").expect("адрес окна"),
-                    ),
-                )
-                    .title(product_ui())
-                    .icon(window_icon)?
-                    .inner_size(1360.0, 860.0)
-                    .min_inner_size(900.0, 600.0)
-                    .center()
-                    .maximized(true)
-                    .decorations(false)
-                    .shadow(true);
-            if !init_script.is_empty() {
-                builder = builder.initialization_script(&init_script);
-            }
-            builder.build()?;
+            open_window(app, &init_script, Some(window_icon))?;
             // Передний план: Windows отдаёт его неохотно, когда запустивший нас
             // процесс (установщик) уже вышел, — окно появлялось позади других,
             // и казалось, что не открылось. Короткий «поверх всех» лечит.
@@ -3519,17 +3762,45 @@ fn main() {
 
             // Трей: закрытие окна прячет его, харнесс-дети живут дальше;
             // настоящий выход — только из меню трея.
-            use tauri::menu::{Menu, MenuItem};
+            use tauri::menu::{Menu, MenuItem, Submenu};
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
             let open = MenuItem::with_id(app, "open", format!("Открыть {}", product_ui()), true, None::<&str>)?;
             let quit = MenuItem::with_id(
                 app,
                 "quit",
-                "Выход (остановить агента)",
+                "Выход (остановить агентов)",
                 true,
                 None::<&str>,
             )?;
-            let menu = Menu::with_items(app, &[&open, &quit])?;
+            // Агенты в трее — только когда их больше одного: у единственного
+            // подменю из одной строки было бы шумом, а не выбором.
+            let here = roster(&base);
+            let menu = if here.len() > 1 {
+                let mut rows: Vec<MenuItem<tauri::Wry>> = Vec::new();
+                for a in &here {
+                    let mark = if a.id == current_id() { "• " } else { "   " };
+                    let tail = if !a.conflict.is_empty() {
+                        format!("  — спорит за порт с «{}»", a.conflict)
+                    } else if !a.enabled {
+                        "  — снят".to_string()
+                    } else {
+                        String::new()
+                    };
+                    rows.push(MenuItem::with_id(
+                        app,
+                        format!("agent:{}", a.id),
+                        format!("{mark}{}{tail}", a.name),
+                        a.conflict.is_empty(),
+                        None::<&str>,
+                    )?);
+                }
+                let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
+                    rows.iter().map(|r| r as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect();
+                let agents_menu = Submenu::with_items(app, "Агенты", true, &refs)?;
+                Menu::with_items(app, &[&open, &agents_menu, &quit])?
+            } else {
+                Menu::with_items(app, &[&open, &quit])?
+            };
             TrayIconBuilder::with_id("frame")
                 .icon(tray_icon)
                 .tooltip(product_ui())
@@ -3542,7 +3813,16 @@ fn main() {
                         kill_children(&state);
                         app.exit(0);
                     }
-                    _ => {}
+                    other => {
+                        if let Some(id) = other.strip_prefix("agent:") {
+                            // Из трея переключаемся так же, как из окна: одна
+                            // дорога, один журнал, одни и те же отказы.
+                            if let Err(err) = switch_agent(app.clone(), id.to_string()) {
+                                log_line(&format!("переключение на «{id}» не вышло: {err}"));
+                                toast(product_ui(), &err);
+                            }
+                        }
+                    }
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
@@ -3557,12 +3837,18 @@ fn main() {
                 .build(app)?;
 
             // Слово агента, когда окно не перед глазами, — уведомлением.
-            if let Some(data) = tree.clone() {
-                watch_outbound(app.handle().clone(), data.clone(), agent.clone(), notify_text);
-                // …и его просьба к брокеру — окном подтверждения. Тоже не через
-                // вебвью: просьба приходит, когда владелец занят другим, а окно
-                // продукта в этот момент чаще всего в трее.
-                watch_broker_wishes(data);
+            // ⚠ Смотрим за КАЖДЫМ поднятым агентом, а не только за тем, кто в
+            // окне: у второго агента свой Telegram и свои люди, и его слово,
+            // пришедшее в закрытую вкладку, иначе не заметил бы никто.
+            // Уведомление подписано его именем — оно же стоит в заголовке.
+            if tree.is_some() {
+                for a in raisable(&base) {
+                    watch_outbound(app.handle().clone(), a.tree.clone(), a.name.clone(), notify_text);
+                    // …и его просьба к брокеру — окном подтверждения. Тоже не через
+                    // вебвью: просьба приходит, когда владелец занят другим, а окно
+                    // продукта в этот момент чаще всего в трее.
+                    watch_broker_wishes(a.tree.clone());
+                }
             }
             Ok(())
         })
@@ -3573,17 +3859,49 @@ fn main() {
                     api.prevent_close();
                     HIDDEN_BY_OWNER.store(true, std::sync::atomic::Ordering::Relaxed);
                     let _ = window.hide();
-                    close_hint(window.app_handle());
+                    close_hint();
                 }
                 // Настоящая смерть окна (выход) — дети не остаются сиротами.
+                // Кроме переключения агента: там окно сносится нарочно, а
+                // агенты установки продолжают жить (см. SWITCHING).
                 tauri::WindowEvent::Destroyed => {
+                    if SWITCHING.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
                     let state = window.app_handle().state::<LocalHarness>();
                     kill_children(&state);
                 }
                 _ => {}
             }
         })
-        .run(context);
+        .build(context);
+    // ⚠⚠ ТРЕТИЙ СЛОЙ ТОЙ ЖЕ ЛОВУШКИ, пойманный живой пробой 11.09. Tauri
+    // выходит из программы, когда закрылось последнее окно, — а при
+    // переключении агента окон на миг нет вовсе: старое снесено, новое ещё
+    // строится. Программа выходила молча, вместе со ВСЕМИ агентами установки.
+    // Поэтому выход разбирается вручную: пока идёт переключение, «окон не
+    // осталось» не значит «владелец закончил».
+    let run = match built {
+        Ok(app) => {
+            app.run(|_app, event| {
+                if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
+                    // ⚠⚠ Выход — только по слову владельца («Выход» у значка
+                    // часов, `app.exit(0)`, и тогда код назван). Исчезнувшее
+                    // окно выходом НЕ считается: при переключении агента окон
+                    // на миг нет вовсе, и Tauri гасил всю программу — вместе со
+                    // всеми агентами установки. Флага «идёт переключение» здесь
+                    // не хватило: просьба о выходе разбирается ПОЗЖЕ, чем
+                    // строится новое окно, и к этому мигу флаг уже снят
+                    // (поймано живой пробой 11.09, видно по журналу событий).
+                    if code.is_none() {
+                        api.prevent_exit();
+                    }
+                }
+            });
+            Ok(())
+        }
+        Err(err) => Err(err),
+    };
     // Было .expect(): паника в exe без консоли гасила процесс молча — окно
     // просто не появлялось, и причины не было нигде.
     if let Err(err) = run {
@@ -3634,18 +3952,59 @@ fn webview2_present() -> bool {
 
 /// Первое закрытие окна: сказать, что агент жив и где его найти. Один раз —
 /// отметка рядом с exe, чтобы не повторять очевидное.
-fn close_hint(app: &tauri::AppHandle) {
+fn close_hint() {
     let flag = exe_dir().join(".close-hint-shown");
     if flag.exists() {
         return;
     }
     let _ = std::fs::write(&flag, "1");
-    let identity = app.state::<Identity>();
     let body = format!(
         "Окно закрыто, {} продолжает работать. Открыть снова — значок у часов.",
-        identity.agent
+        with_current("агент".to_string(), |c| c.name.clone())
     );
     toast(product_ui(), &body);
+}
+
+/// Построить окно. Вынесено из `setup` целиком, потому что переключение агента
+/// строит его ЗАНОВО: init-скрипт (адрес канала и ключ) задаётся только при
+/// создании вебвью, и подменить его у живого окна нечем. Закрыть и открыть с
+/// новым скриптом — честнее, чем держать в окне два адреса сразу.
+/// ⚠⚠ Принимает ЛЮБОГО менеджера, и это несущее свойство, а не удобство.
+/// В `setup` окно обязано строиться от самого `App`: собранное там из
+/// `AppHandle`, оно уходит в очередь ещё не запущенного цикла событий и не
+/// появляется НИКОГДА — процесс жив, дети подняты, журнал чист, окна нет.
+/// Поймано живой пробой 11.09; из `switch_agent` (цикл уже крутится) годится
+/// и `AppHandle`.
+fn open_window<M: tauri::Manager<tauri::Wry>>(
+    manager: &M,
+    init_script: &str,
+    icon: Option<tauri::image::Image<'_>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        manager,
+        "main",
+        // Свой протокол вместо вшитого `tauri://`: файлы берутся из
+        // app/static на диске (serve_static). На Windows WebView2
+        // видит зарегистрированную схему как http://<схема>.localhost.
+        tauri::WebviewUrl::CustomProtocol(
+            tauri::Url::parse("http://helene.localhost/index.html").expect("адрес окна"),
+        ),
+    )
+    .title(product_ui())
+    .inner_size(1360.0, 860.0)
+    .min_inner_size(900.0, 600.0)
+    .center()
+    .maximized(true)
+    .decorations(false)
+    .shadow(true);
+    if let Some(icon) = icon {
+        builder = builder.icon(icon)?;
+    }
+    if !init_script.is_empty() {
+        builder = builder.initialization_script(init_script);
+    }
+    builder.build()?;
+    Ok(())
 }
 
 fn show_main(app: &tauri::AppHandle) {
@@ -3706,10 +4065,22 @@ fn watch_children(app: tauri::AppHandle) {
         // 1) Осмотр под замком: только try_wait и учёт падений.
         let mut acts: Vec<(usize, Act)> = Vec::new();
         let logs: Vec<PathBuf>;
-        let empty;
+        // Чьих детей нет НИ ОДНОГО — по каждому агенту отдельно.
+        let missing: Vec<String>;
         {
             let Ok(mut guard) = state.children.lock() else { continue };
-            empty = guard.is_empty();
+            let alive: Vec<String> = guard.iter().map(|m| m.agent.clone()).collect();
+            missing = state
+                .plans
+                .lock()
+                .map(|plans| {
+                    plans
+                        .iter()
+                        .map(|p| p.agent.clone())
+                        .filter(|id| !alive.contains(id))
+                        .collect()
+                })
+                .unwrap_or_default();
             let now = Instant::now();
             for (i, m) in guard.iter_mut().enumerate() {
                 let label = m.spec.label();
@@ -3831,26 +4202,34 @@ fn watch_children(app: tauri::AppHandle) {
                 }
             }
         }
-        // 3) Своих детей нет совсем — попробовать поднять харнесс заново.
-        if empty && last_lift.elapsed() >= Duration::from_secs(15) {
+        // 3) Чьих-то детей нет совсем — попробовать поднять его харнесс заново.
+        // ⚠ Считается ПО АГЕНТУ, а не по всему списку: пока условие было
+        // «детей нет вовсе», упавший второй агент не поднимался, пока жив
+        // первый, — и молчал об этом.
+        if !missing.is_empty() && last_lift.elapsed() >= Duration::from_secs(15) {
             last_lift = Instant::now();
-            let plan = state.plan.lock().ok().and_then(|p| p.clone());
-            if let Some(plan) = plan {
+            let plans: Vec<SpawnPlan> = state
+                .plans
+                .lock()
+                .map(|p| p.iter().filter(|p| missing.contains(&p.agent)).cloned().collect())
+                .unwrap_or_default();
+            for plan in plans {
                 let (mut lifted, _) = start_children(&plan, false);
                 if !lifted.is_empty() {
                     let mut installed = false;
                     if let Ok(mut guard) = state.children.lock() {
-                        if guard.is_empty() && !state.stopping.load(Ordering::Relaxed) {
-                            *guard = std::mem::take(&mut lifted);
+                        let still_gone = !guard.iter().any(|m| m.agent == plan.agent);
+                        if still_gone && !state.stopping.load(Ordering::Relaxed) {
+                            guard.append(&mut lifted);
                             installed = true;
                         }
                     }
                     if installed {
-                        log_line("порт освободился — свой харнесс поднят окном");
+                        log_line(&format!("порт освободился — харнесс{} поднят окном", plan.whose()));
                         // Окно открывалось с экраном «здесь чужая установка»:
                         // адреса харнесса в нём нет, и само оно к своему уже
                         // поднятому агенту не подключится.
-                        if BLOCKED_BY_FOREIGN.swap(false, Ordering::Relaxed) {
+                        if plan.agent == current_id() && BLOCKED_BY_FOREIGN.swap(false, Ordering::Relaxed) {
                             log_line("окно открывалось без адреса (чужая установка на порту) — прошу владельца перезапустить его");
                             toast(
                                 product_ui(),
@@ -3871,6 +4250,146 @@ fn watch_children(app: tauri::AppHandle) {
             }
         }
     }
+}
+
+/// Список агентов установки для окна: кто есть, кто сейчас в окне, кто поднят.
+///
+/// «Поднят» считается по ЖИВЫМ детям этого процесса, а не по конфигу: агент,
+/// чей порт занят чужой программой, в конфиге включён — и молчаливая галочка
+/// «работает» была бы враньём.
+#[tauri::command]
+fn agents_list(state: tauri::State<LocalHarness>) -> serde_json::Value {
+    let base = exe_dir();
+    let raised: Vec<String> = state
+        .children
+        .lock()
+        .map(|g| g.iter().filter(|m| m.child.is_some()).map(|m| m.agent.clone()).collect())
+        .unwrap_or_default();
+    let list: Vec<serde_json::Value> = roster(&base)
+        .iter()
+        .map(|a| {
+            let mut got = a.as_json();
+            got["raised"] = serde_json::Value::Bool(raised.contains(&a.id));
+            got["current"] = serde_json::Value::Bool(a.id == current_id());
+            got
+        })
+        .collect();
+    serde_json::json!({ "agents": list, "current": current_id() })
+}
+
+/// Показать в окне другого агента этой установки.
+///
+/// Переключение — это НЕ переезд окна на другой адрес на лету: окно строится
+/// заново с init-скриптом того агента (адрес канала + его ключ). Детей при
+/// этом никто не гасит: остальные агенты продолжают жить, и переписка в них
+/// идёт своим чередом — окно просто смотрит в другую сторону.
+#[tauri::command]
+fn switch_agent(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, String> {
+    let base = exe_dir();
+    let Some(agent) = find_agent(&base, &id) else {
+        return Err(format!("агента «{id}» в этой установке нет"));
+    };
+    if agent.id == current_id() {
+        show_main(&app);
+        return Ok(serde_json::json!({ "ok": true, "same": true }));
+    }
+    if !agent.conflict.is_empty() {
+        return Err(format!(
+            "у агента «{}» тот же порт {}, что у «{}» — окно к нему не пойдёт, пока порт не разведён",
+            agent.name, agent.port, agent.conflict
+        ));
+    }
+    let token = ensure_desk_token(&agent.tree).unwrap_or_default();
+    set_desk_token(&token);
+    set_current(CurrentAgent {
+        id: agent.id.clone(),
+        name: agent.name.clone(),
+        tree: Some(agent.tree.clone()),
+        config: agent.config.clone(),
+    });
+    log_line(&format!("окно переключено на агента «{}» ({})", agent.name, agent.id));
+    let script = channel_script(&base, agent.port, &token, &agent.name, &agent.id);
+    SWITCHING.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(window) = app.get_webview_window("main") {
+        // Именно destroy: close() у этого окна означает «спрятать в трей».
+        let _ = window.destroy();
+    }
+    // Метка освобождается не мгновенно; строим новое окно, когда старое её
+    // отпустило, иначе Tauri отвечает «окно с таким именем уже есть».
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        for _ in 0..60 {
+            if handle.get_webview_window("main").is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let made = open_window(&handle, &script, None);
+        // Флаг снимаем ПОСЛЕ постройки: пока он поднят, смерть окна не гасит
+        // детей — а до этой строки как раз и умирает старое.
+        SWITCHING.store(false, std::sync::atomic::Ordering::Relaxed);
+        if let Err(err) = made {
+            log_line(&format!("окно не открылось после переключения: {err}"));
+            toast(product_ui(), "Окно не открылось после переключения агента — открой программу заново.");
+            return;
+        }
+        show_main(&handle);
+    });
+    Ok(serde_json::json!({ "ok": true, "id": agent.id, "name": agent.name }))
+}
+
+/// Завести ещё одного агента в этой же установке.
+///
+/// Делает ровно две вещи: папку с конфигом (`agents/<id>/helene.json`) и запись
+/// в списке. Дом агента засевает раннер при первом старте — второй реализации
+/// засева здесь нет и не будет. Мозг и ограда наследуются от корневого (владелец
+/// настроил их один раз), бот и тело — нет: они у каждого свои.
+#[tauri::command]
+async fn agent_add(app: tauri::AppHandle, name: String) -> Result<serde_json::Value, String> {
+    let base = exe_dir();
+    let named = name.trim().to_string();
+    if named.is_empty() {
+        return Err("у агента должно быть имя — им он подписывает свои слова".into());
+    }
+    if roster(&base).len() >= 16 {
+        return Err("шестнадцать агентов в одной установке — это уже сервер, а не рабочий стол".into());
+    }
+    let python = python_path(&base, &config_value().unwrap_or(serde_json::json!({})));
+    let script = base.join("app").join("localharness").join("agents_cli.py");
+    if !script.exists() {
+        return Err(format!("в этой поставке нет {}", script.display()));
+    }
+    let named_for_cmd = named.clone();
+    let made: serde_json::Value = tauri::async_runtime::spawn_blocking(move || {
+        // Заводит агента ПИТОН — тот самый модуль, которым список читают раннер
+        // и канал. Второй реализации правил (slug, свободный порт, что
+        // наследуется) в Rust нет: разъезд двух «завести агента» стоил бы
+        // владельцу папки с чужим именем и порта, занятого дважды.
+        let mut cmd = Command::new(&python);
+        cmd.arg("-u").arg(&script).arg("add").arg("--name").arg(&named_for_cmd)
+            .arg("--base").arg(&base)
+            .env("PYTHONUTF8", "1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let out = cmd.output().map_err(|e| format!("не запустился: {e}"))?;
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(if err.is_empty() { format!("не вышло: {text}") } else { err });
+        }
+        serde_json::from_str::<serde_json::Value>(text.trim())
+            .map_err(|e| format!("ответ не разобрался ({e}): {text}"))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let id = made.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    log_line(&format!("заведён агент «{named}» ({id}) — поднимется после перезапуска"));
+    // Поднимать его прямо сейчас нечем: детей заводит план, а план строится на
+    // старте. Перезапуск оболочки — то же, что владелец делает после правки
+    // настроек, и он уже описан словами в окне.
+    let _ = app;
+    Ok(made)
 }
 
 /// Версия, папка, журнал — для экрана «О программе».
@@ -4285,7 +4804,6 @@ async fn update_install(path: String) -> Result<serde_json::Value, String> {
 /// выполняет помощник на встроенном Python; ответ — его JSON как есть.
 #[tauri::command]
 async fn telegram_account(
-    app: tauri::AppHandle,
     step: String,
     api_id: String,
     api_hash: String,
@@ -4297,7 +4815,7 @@ async fn telegram_account(
     // Дерево — то же, с которым живёт окно, а не «data» от текущей папки
     // процесса: запущенный не ярлыком helene.exe клал сессию Telethon в чужое
     // место, и руннер не находил её никогда.
-    let tree = app.state::<Identity>().tree.clone().unwrap_or_else(tree_dir);
+    let tree = current_tree();
     tauri::async_runtime::spawn_blocking(move || {
         let python = base.join("runtime").join("python.exe");
         let script = base.join("app").join("localharness").join("mtproto_login.py");
@@ -4334,7 +4852,8 @@ async fn telegram_account(
     .map_err(|e| e.to_string())?
 }
 
-/// Скачать модель голоса — `app/localharness/voice.py --get <модель>`.
+/// Скачать модель слуха или голос синтеза — `app/localharness/voice.py`
+/// (`--get <модель>` либо `--get-voice <голос>`, по `kind`).
 ///
 /// Ждать здесь нечего: модель весит от 0,5 до 1,6 ГБ, и на медленной сети это
 /// минуты. Поэтому команда только ЗАПУСКАЕТ помощника и возвращается, а ход
@@ -4343,7 +4862,7 @@ async fn telegram_account(
 /// остальные: закрыл окно — качать некому, и окно об этом скажет, увидев
 /// протухшую запись, вместо вечного «качаю…».
 #[tauri::command]
-fn voice_fetch(model: String) -> Result<String, String> {
+fn voice_fetch(model: String, kind: Option<String>) -> Result<String, String> {
     let base = exe_dir();
     let python = base.join("runtime").join("python.exe");
     let script = base.join("app").join("localharness").join("voice.py");
@@ -4354,12 +4873,15 @@ fn voice_fetch(model: String) -> Result<String, String> {
     if name.is_empty() {
         return Err("не сказано, какую модель качать".into());
     }
+    // Слух и речь качает ОДИН помощник, и кнопка у них одна: две команды с
+    // разными путями расходились бы на первой же правке раскладки.
+    let speaking = kind.as_deref().unwrap_or("hear") == "speak";
     let mut cmd = Command::new(python);
     cmd.arg("-u")
         .arg(script)
         .arg("--tree")
         .arg(tree_dir())
-        .arg("--get")
+        .arg(if speaking { "--get-voice" } else { "--get" })
         .arg(&name)
         .current_dir(&base)
         .env("PYTHONUTF8", "1");
@@ -4368,7 +4890,11 @@ fn voice_fetch(model: String) -> Result<String, String> {
     match cmd.spawn() {
         Ok(child) => {
             adopt(&child);
-            Ok(format!("качаю модель {name}"))
+            Ok(if speaking {
+                format!("качаю голос {name}")
+            } else {
+                format!("качаю модель {name}")
+            })
         }
         Err(err) => Err(format!("помощник голоса не запустился: {err}")),
     }
@@ -4393,7 +4919,9 @@ async fn carry_export() -> Result<String, String> {
             .arg(script)
             .arg("export")
             .arg("--config")
-            .arg(base.join(CONFIG_NAME))
+            // Конфиг ТЕКУЩЕГО агента: перенос увозит того, кто в окне, а не
+            // всегда первого. Раньше это было одно и то же — с 11.09 нет.
+            .arg(current_config_path())
             .current_dir(&base)
             .env("PYTHONUTF8", "1");
         // Память агента бывает на сотни мегабайт; десять минут — не бесконечность.
@@ -4421,10 +4949,10 @@ async fn carry_export() -> Result<String, String> {
 /// вывод харнесса, службы и реле. Файлы сперва копируются: дети держат свои
 /// логи открытыми, и архиватор напрямую их не читает.
 #[tauri::command]
-async fn logs_bundle(app: tauri::AppHandle) -> Result<String, String> {
+async fn logs_bundle() -> Result<String, String> {
     // Дерево берём то, с которым это окно живёт (Identity), а не считаем
     // заново от текущей папки процесса.
-    let tree = app.state::<Identity>().tree.clone().unwrap_or_else(tree_dir);
+    let tree = current_tree();
     tauri::async_runtime::spawn_blocking(move || logs_bundle_blocking(tree))
         .await
         .map_err(|e| e.to_string())?
@@ -5154,6 +5682,119 @@ mod tests {
         let plain = mask_secrets("задача task-17, приставка sk-1 и слово monkey= пустое");
         assert!(plain.contains("task-17"), "{plain}");
         assert!(plain.contains("sk-1"), "{plain}");
+    }
+
+    // Несколько агентов в одной установке (11.09): планы подъёма и адрес окна.
+    use super::*;
+
+    /// Установка с двумя агентами на диске — для тестов ниже.
+    fn two_agents(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("helene-two-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("agents").join("mira")).unwrap();
+        std::fs::write(
+            root.join(CONFIG_NAME),
+            r#"{"mode":"local","app":"app/deskapp.py","runner":"app/localharness/runner.py",
+                "python":"runtime/python.exe","tree":"data","port":8094,
+                "agent":{"name":"Hélène"},"relay":{"enabled":true},
+                "model":{"key":"sk-live"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("agents").join("mira").join(CONFIG_NAME),
+            r#"{"mode":"local","app":"../../app/deskapp.py","runner":"../../app/localharness/runner.py",
+                "python":"../../runtime/python.exe","tree":"data","port":8095,
+                "agent":{"name":"Мира"},"relay":{"enabled":true},
+                "model":{"key":"sk-second"}}"#,
+        )
+        .unwrap();
+        root
+    }
+
+    /// Каждый агент поднимается СВОЕЙ парой, в своём доме и на своём порту.
+    #[test]
+    fn every_agent_gets_its_own_pair_and_port() {
+        let root = two_agents("plans");
+        let plans = build_plans(&root);
+        assert_eq!(plans.len(), 2, "оба агента обязаны попасть в планы");
+        assert_eq!(plans[0].agent, "main");
+        assert_eq!(plans[1].agent, "mira");
+        assert_eq!((plans[0].port, plans[1].port), (8094, 8095));
+        assert_ne!(plans[0].tree, plans[1].tree);
+        // Секрет канала у каждого дерева свой: общий означал бы, что окно
+        // одного агента открывает канал другого.
+        assert!(!plans[0].token.is_empty() && plans[0].token != plans[1].token);
+        // Руннер каждого читает ЕГО конфиг, а не корневой.
+        let runner_cfg = |p: &SpawnPlan| {
+            p.specs
+                .iter()
+                .find_map(|s| match s {
+                    ChildSpec::Script { script, args, .. }
+                        if script.to_string_lossy().contains("runner.py") =>
+                    {
+                        args.last().cloned()
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        assert!(runner_cfg(&plans[0]).ends_with(CONFIG_NAME));
+        assert!(runner_cfg(&plans[1]).contains("mira"), "{}", runner_cfg(&plans[1]));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Реле одно на установку: порт у него один, вход в подписку один, и второе
+    /// реле дралось бы за них с первым.
+    #[test]
+    fn only_the_base_agent_raises_the_relay() {
+        let root = two_agents("relay");
+        let plans = build_plans(&root);
+        let relays = |p: &SpawnPlan| {
+            p.specs
+                .iter()
+                .filter(|s| matches!(s, ChildSpec::Relay { .. }))
+                .count()
+        };
+        assert_eq!(relays(&plans[0]), 1, "у корневого реле просили — оно в плане");
+        assert_eq!(relays(&plans[1]), 0, "у соседа реле в плане быть не должно");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Ненастроенный сосед получает канал (иначе его негде настроить), но не
+    /// раннер (иначе он ошибался бы на каждом ходе без ключа модели).
+    #[test]
+    fn a_neighbour_without_a_brain_gets_the_channel_but_not_the_runner() {
+        let root = two_agents("half");
+        std::fs::write(
+            root.join("agents").join("mira").join(CONFIG_NAME),
+            r#"{"mode":"local","app":"../../app/deskapp.py","runner":"../../app/localharness/runner.py",
+                "python":"../../runtime/python.exe","tree":"data","port":8095,
+                "agent":{"name":"Мира"},"model":{"key":""}}"#,
+        )
+        .unwrap();
+        let plans = build_plans(&root);
+        let scripts: Vec<String> = plans[1]
+            .specs
+            .iter()
+            .map(|s| s.label())
+            .collect();
+        assert!(scripts.iter().any(|s| s == "deskapp.py"), "{scripts:?}");
+        assert!(!scripts.iter().any(|s| s == "runner.py"), "{scripts:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Окно получает адрес СВОЕГО агента и список остальных — по нему рисуется
+    /// переключатель. Ключей соседей в скрипте нет: окно ходит только к своему.
+    #[test]
+    fn the_window_learns_its_own_channel_and_the_roster() {
+        let root = two_agents("script");
+        let script = channel_script(&root, 8095, "secret-of-mira", "Мира", "mira");
+        assert!(script.contains("http://127.0.0.1:8095"), "{script}");
+        assert!(script.contains("secret-of-mira"));
+        assert!(script.contains(r#""agent_id":"mira""#), "{script}");
+        assert!(script.contains("Hélène") && script.contains("Мира"), "{script}");
+        assert_eq!(script.matches("secret-of-mira").count(), 1, "чужих ключей в окне нет");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

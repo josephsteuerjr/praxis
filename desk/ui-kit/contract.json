@@ -9,6 +9,12 @@
   "computer_scopes": ["computer.read", "computer.files", "computer.process", "computer.apps"],
   "protocol": "frame.desk.v1",
   "config_name": "helene.json",
+  "agents": {
+    "_": "Несколько агентов в одной установке (11.09). Корневой helene.json — агент `main`; каждая папка agents/<id>/ со своим helene.json — ещё один. Порт по умолчанию: ports.desk + место в списке. Читают: localharness/agents.py, common/agents.rs, окно.",
+    "dir": "agents",
+    "base_id": "main",
+    "id_pattern": "^[a-z0-9][a-z0-9-]{0,31}$"
+  },
   "rooms": {
     "default": "window",
     "pattern": "^window-[0-9a-f]{8}$",

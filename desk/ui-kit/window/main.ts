@@ -16,6 +16,7 @@ import { setResultFetcher } from "../../ui-kit/steps";
 import { bindFail, esc, failHTML, fmtAge, fmtK, fmtTs, humanError, q, toast } from "../../ui-kit/window/lib";
 import { PRODUCT_NAME, S, setProductName, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "../../ui-kit/window/state";
 import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "../../ui-kit/window/rooms";
+import { mountSwitch } from "../../ui-kit/window/agents";
 import * as panel from "../../ui-kit/window/panel";
 import * as now from "../../ui-kit/window/views/now";
 import * as talk from "../../ui-kit/window/views/talk";
@@ -241,6 +242,9 @@ export function start(opts: WindowOptions): void {
 
   for (const s of SECTIONS) railNav.append(railButton(s.id, s.label, s.key));
   railBottom.append(railButton("settings", "Настройки", ","));
+  // Кого показывает окно — первой строкой полки, и только когда агентов в
+  // установке больше одного (см. agents.ts).
+  mountSwitch(q<HTMLElement>("#rail"));
 
   // Панели сворачиваются как в IDE и помнят состояние.
   const railBtn = q<HTMLButtonElement>("#toggle-rail");

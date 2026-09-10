@@ -22,6 +22,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(ROOT / "localharness"))
 sys.path.insert(0, str(ROOT))
 
+import agents  # noqa: E402
 import body  # noqa: E402
 import modes  # noqa: E402
 
@@ -35,6 +36,23 @@ class Contract(unittest.TestCase):
             self.assertIsInstance(CONTRACT["ports"][key], int)
         self.assertEqual(len(CONTRACT["computer_scopes"]), 4)
         re.compile(CONTRACT["rooms"]["pattern"])
+        re.compile(CONTRACT["agents"]["id_pattern"])
+
+    def test_agents_match(self):
+        """Список агентов читают трое: питон здесь, Rust в common/agents.rs,
+        окно — из init-скрипта оболочки. Числа и имена — из контракта."""
+        self.assertEqual(agents.ROSTER_DIR, CONTRACT["agents"]["dir"])
+        self.assertEqual(agents.BASE_ID, CONTRACT["agents"]["base_id"])
+        self.assertEqual(agents.ID_PATTERN.pattern, CONTRACT["agents"]["id_pattern"])
+        self.assertEqual(agents.DESK_PORT, CONTRACT["ports"]["desk"])
+        self.assertEqual(agents.BODY_PORT, CONTRACT["ports"]["body"])
+        self.assertEqual(agents.CONFIG_NAME, CONTRACT["config_name"])
+        self.assertEqual(list(agents.COMPUTER_SCOPES), CONTRACT["computer_scopes"])
+        # Rust держит те же две константы своим текстом — сверяем буквально.
+        rust = (ROOT / "common" / "agents.rs").read_text(encoding="utf-8")
+        self.assertIn(f'ROSTER_DIR: &str = "{CONTRACT["agents"]["dir"]}"', rust)
+        self.assertIn(f'BASE_AGENT_ID: &str = "{CONTRACT["agents"]["base_id"]}"', rust)
+        self.assertIn(f'DESK_PORT: u16 = {CONTRACT["ports"]["desk"]}', rust)
 
     def test_harness_matches(self):
         self.assertEqual(modes.COMPUTER_PORT_DEFAULT, CONTRACT["ports"]["body"])
@@ -61,10 +79,11 @@ class Contract(unittest.TestCase):
             "localharness/body.py": {"9480"},         # DEFAULT_PORT
             "deskapp.py": {"8094"},                   # DEFAULT_PORT
             "deskd/readers.py": {"5011"},             # RELAY_PORT_DEFAULT
+            "localharness/agents.py": {"8094", "9480"},  # DESK_PORT, BODY_PORT
         }
         for rel in ("localharness/modes.py", "localharness/body.py", "localharness/runner.py",
                     "localharness/transport.py", "localharness/boot.py", "deskapp.py",
-                    "deskd/readers.py"):
+                    "deskd/readers.py", "localharness/agents.py"):
             text = (ROOT / rel).read_text(encoding="utf-8")
             code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
             for port in ("8094", "5011", "9480"):

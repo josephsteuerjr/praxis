@@ -23,6 +23,7 @@ import { MODE_KEY, loadMode, type ModeState } from "../../ui-kit/window/mode";
 import { modeCard } from "./modecard";
 import { mountsCard, type LiveSandbox } from "./mounts";
 import { voiceCard } from "./voicecard";
+import { agentsCard } from "./agentscard";
 import { RELAY_PORT, relayBaseUrl, relayProbeUrl, newRelayKey } from "./relay";
 import type { Config, Edition, EditionContext } from "../../ui-kit/window/views/settings-frame";
 
@@ -587,6 +588,12 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
   const voice = voiceCard(draft);
   cards.push(voice.el);
 
+  // --- агенты этой установки (11.09)
+  //
+  // Карточка стоит перед «Данными агента» намеренно: сразу за ней идёт папка
+  // ЭТОГО агента, и владелец видит, чей дом ему показывают.
+  cards.push(agentsCard().el);
+
   // --- данные
   const data = el("div", "actions");
   data.append(
@@ -738,6 +745,10 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
           enabled: voice.enabled(),
           model: voice.model(),
           keep_loaded: voice.keepLoaded(),
+          // Речь — свои две ручки в том же блоке: слух и голос настраиваются
+          // одной карточкой, но включаются порознь.
+          speak: voice.speak(),
+          voice: voice.speakVoice(),
         });
       const needKey = provider === "api" || provider === "anthropic";
       noKeyNote = needKey && !String(out.model?.key || "").trim()

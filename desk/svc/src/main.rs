@@ -637,6 +637,9 @@ include!("../../common/firewall_rule.rs");
 // Штамп журналов и случайные байты — общие с оболочкой и установщиком.
 include!("../../common/stamp.rs");
 include!("../../common/random_hex.rs");
+// Список агентов установки — общий с оболочкой: служба поднимает ВСЕХ, кого
+// оболочка показывает в трее, и берёт оттуда же порт по умолчанию.
+include!("../../common/agents.rs");
 
 /// Правило брандмауэра для трубы, когда разрешён телефон.
 ///
@@ -718,14 +721,35 @@ struct Kid {
     started: Option<Instant>,
     not_before: Instant,
     backoff: u64,
+    /// Чей это ребёнок. С 11.09 в установке может быть несколько агентов, и
+    /// служба поднимает пару КАЖДОМУ: дерево, порт и секрет у них свои.
+    agent: String,
+    /// Имя агента словами владельца — для строк журнала службы.
+    whose: String,
+    python: PathBuf,
+    tree: PathBuf,
+    token: String,
+    port: u16,
+    phone: bool,
 }
 
 impl Kid {
-    fn host(&self, phone: bool) -> &'static str {
+    fn host(&self) -> &'static str {
         // Труба слушает Wi-Fi только если разрешён телефон; руннер — всегда петля.
         match self.role {
-            Role::Trube if phone => "0.0.0.0",
+            Role::Trube if self.phone => "0.0.0.0",
             _ => "127.0.0.1",
+        }
+    }
+
+    /// Как назвать ребёнка в журнале: у единственного агента — как раньше
+    /// («канал», «руннер»), у соседей — с именем, иначе две пары строк в одном
+    /// файле неразличимы.
+    fn said(&self) -> String {
+        if self.agent == BASE_AGENT_ID {
+            self.label.to_string()
+        } else {
+            format!("{} · {}", self.whose, self.label)
         }
     }
     /// Следующая пауза: 5 → 10 → 20 → 40 → 60 с. Раньше это получалось
@@ -752,6 +776,15 @@ fn supervise(
     stopping: &mut dyn FnMut(),
 ) {
     let now = Instant::now();
+    // Секрет трубы заводится до подъёма детей: он уходит им в окружение, и его
+    // же читает окно, чтобы говорить с харнессом службы. У каждого агента он
+    // свой и лежит в его дереве.
+    let token = ensure_desk_token(&plan.tree);
+    if token.is_empty() {
+        log.line(
+            "секрет канала не завёлся — канал останется открытым любому процессу этой машины",
+        );
+    }
     let mut kids: Vec<Kid> = vec![Kid {
         role: Role::Trube,
         label: "канал",
@@ -761,6 +794,13 @@ fn supervise(
         started: None,
         not_before: now,
         backoff: 0,
+        agent: BASE_AGENT_ID.to_string(),
+        whose: String::new(),
+        python: plan.python.clone(),
+        tree: plan.tree.clone(),
+        token: token.clone(),
+        port: plan.port,
+        phone: plan.phone,
     }];
     if let Some(runner) = &plan.runner {
         kids.push(Kid {
@@ -772,26 +812,95 @@ fn supervise(
             started: None,
             not_before: now,
             backoff: 0,
+            agent: BASE_AGENT_ID.to_string(),
+            whose: String::new(),
+            python: plan.python.clone(),
+            tree: plan.tree.clone(),
+            token: token.clone(),
+            port: plan.port,
+            phone: false,
         });
     }
+    // Соседи по установке (`agents/<id>/helene.json`). Служба поднимает их так
+    // же, как окно: канал — всегда, руннер — когда мозг настроен. Иначе
+    // владелец, живущий без окна, получал бы второго агента только по
+    // нажатию — то есть не получал бы вовсе.
+    let install = plan.config.parent().unwrap_or(Path::new(".")).to_path_buf();
+    for a in raisable(&install).into_iter().filter(|a| !a.base) {
+        let cfg = agent_config(&a.config);
+        if cfg.get("mode").and_then(|v| v.as_str()).unwrap_or("local") != "local" {
+            continue;
+        }
+        let their_token = ensure_desk_token(&a.tree);
+        let python = match cfg.get("python").and_then(|v| v.as_str()) {
+            Some(raw) if raw != "python" => resolve(&a.dir, raw),
+            _ => plan.python.clone(),
+        };
+        let app = resolve(&a.dir, cfg.get("app").and_then(|v| v.as_str()).unwrap_or("deskapp.py"));
+        let phone = cfg
+            .get("phone")
+            .and_then(|p| p.get("enabled"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        kids.push(Kid {
+            role: Role::Trube,
+            label: "канал",
+            script: app,
+            args: vec![a.port.to_string()],
+            child: None,
+            started: None,
+            not_before: now,
+            backoff: 0,
+            agent: a.id.clone(),
+            whose: a.name.clone(),
+            python: python.clone(),
+            tree: a.tree.clone(),
+            token: their_token.clone(),
+            port: a.port,
+            phone,
+        });
+        let ready = !cfg
+            .get("model")
+            .and_then(|m| m.get("key"))
+            .and_then(|v| v.as_str())
+            .map(|k| k.trim().is_empty())
+            .unwrap_or(true)
+            || cfg.get("setup_complete").and_then(|v| v.as_bool()).unwrap_or(false);
+        match cfg.get("runner").and_then(|v| v.as_str()) {
+            Some(runner) if ready => kids.push(Kid {
+                role: Role::Runner,
+                label: "руннер",
+                script: resolve(&a.dir, runner),
+                args: vec!["--config".into(), a.config.to_string_lossy().into_owned()],
+                child: None,
+                started: None,
+                not_before: now,
+                backoff: 0,
+                agent: a.id.clone(),
+                whose: a.name.clone(),
+                python,
+                tree: a.tree.clone(),
+                token: their_token,
+                port: a.port,
+                phone: false,
+            }),
+            _ => log.line(&format!(
+                "{}: мозг не настроен — поднимаю только канал, впиши ключ в окне этого агента",
+                a.name
+            )),
+        }
+    }
     log.line(&format!(
-        "служба: python={} · дерево={} · детей={} · порт={} · телефон={}",
+        "служба: python={} · дерево={} · детей={} · порт={} · телефон={} · агентов={}",
         plan.python.display(),
         plan.tree.display(),
         kids.len(),
         plan.port,
-        if plan.phone { "да" } else { "нет" }
+        if plan.phone { "да" } else { "нет" },
+        kids.iter().map(|k| k.agent.clone()).collect::<std::collections::BTreeSet<_>>().len()
     ));
     if let Some(warn) = user_writable_warning() {
         log.line(&warn);
-    }
-    // Секрет трубы заводится до подъёма детей: он уходит им в окружение, и его
-    // же читает окно, чтобы говорить с харнессом службы.
-    let token = ensure_desk_token(&plan.tree);
-    if token.is_empty() {
-        log.line(
-            "секрет канала не завёлся — канал останется открытым любому процессу этой машины",
-        );
     }
     if plan.phone && firewall {
         firewall_ensure(&plan.python, plan.port, log);
@@ -803,7 +912,8 @@ fn supervise(
     // Реле, которого нет в поставке, раньше писало «не поднялось» вечно.
     let mut relay_enabled = plan.relay_enabled;
     let mut port_checked: Option<Instant> = None;
-    let mut port_busy = false;
+    // Агенты, чей порт держит не наша труба, — по прошлой проверке.
+    let mut port_busy_ids: Vec<String> = Vec::new();
     let mut port_noted: Option<Instant> = None;
 
     while !stop.load(Ordering::Relaxed) {
@@ -824,7 +934,8 @@ fn supervise(
                     kid.back_off(now);
                     log.line(&format!(
                         "{}: завершился ({status}) — подниму через {} c",
-                        kid.label, kid.backoff
+                        kid.said(),
+                        kid.backoff
                     ));
                 }
                 Ok(None) => {}
@@ -838,23 +949,38 @@ fn supervise(
 
         // Замок один на пару детей — порт трубы. Пока его держит не наш ребёнок
         // (открытое окно владельца, прежняя копия, посторонняя программа),
-        // служба не поднимает НИКОГО: иначе её deskapp вечно падал бы на
+        // служба не поднимает эту пару: иначе её deskapp вечно падал бы на
         // WinError 10048, а руннер стал бы ВТОРЫМ агентом на том же дереве —
         // два хода, две записи в window.jsonl, два рождения. Окно эту проверку
         // делает с самого начала (shell/main.rs::spawn_local), служба — нет.
-        let we_hold_port = kids
-            .iter()
-            .any(|k| k.role == Role::Trube && k.child.is_some());
-        if !we_hold_port {
-            if port_checked.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(3)) {
-                port_checked = Some(now);
-                port_busy = harness_alive(plan.port);
-                if port_busy
-                    && port_noted.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(60))
-                {
-                    port_noted = Some(now);
-                    let whose = match harness_holder(plan.port, &token) {
-                        Holder::Tree(t) if same_tree(&t, &plan.tree) => {
+        //
+        // ⚠ Считается ПО АГЕНТУ: у каждого свой порт и своё дерево, и занятый
+        // порт одного не имеет права держать взаперти остальных.
+        if port_checked.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(3)) {
+            port_checked = Some(now);
+            let ids: Vec<String> = kids
+                .iter()
+                .map(|k| k.agent.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let mut busy = Vec::new();
+            let mut said_now = false;
+            for id in &ids {
+                let hold = kids
+                    .iter()
+                    .any(|k| &k.agent == id && k.role == Role::Trube && k.child.is_some());
+                if hold {
+                    continue;
+                }
+                let Some(any) = kids.iter().find(|k| &k.agent == id) else { continue };
+                if !harness_alive(any.port) {
+                    continue;
+                }
+                busy.push(id.clone());
+                if port_noted.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(60)) {
+                    let whose = match harness_holder(any.port, &any.token) {
+                        Holder::Tree(t) if same_tree(&t, &any.tree) => {
                             "то же дерево — похоже, открыто окно; детей не поднимаю".to_string()
                         }
                         Holder::Tree(t) => format!("ЧУЖОЕ дерево {} — детей не поднимаю", t.display()),
@@ -867,56 +993,54 @@ fn supervise(
                         }
                         Holder::Silent => "это не харнесс — детей не поднимаю".to_string(),
                     };
-                    log.line(&format!("порт {} занят: {whose}", plan.port));
+                    log.line(&format!("{}: порт {} занят: {whose}", any.said(), any.port));
+                    said_now = true;
                 }
             }
-            if port_busy {
-                // Порт держит не наша труба — значит харнесс на этом дереве
-                // сейчас не мы. Свой руннер в таком положении гасим: два
-                // руннера на одном дереве — это два агента, чинящих один и тот
-                // же прерванный ход.
-                for kid in kids.iter_mut().filter(|k| k.role != Role::Trube) {
-                    if let Some(child) = &mut kid.child {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        kid.child = None;
-                        kid.started = None;
-                        log.line(&format!(
-                            "{}: остановлен — порт {} держит другой харнесс",
-                            kid.label, plan.port
-                        ));
-                    }
-                }
-                std::thread::sleep(Duration::from_millis(500));
-                continue;
+            if said_now {
+                port_noted = Some(now);
+            }
+            port_busy_ids = busy;
+        }
+        // Порт держит не наша труба — значит харнесс на этом дереве сейчас не
+        // мы. Руннер ЭТОГО агента гасим: два руннера на одном дереве — это два
+        // агента, чинящих один и тот же прерванный ход.
+        for kid in kids
+            .iter_mut()
+            .filter(|k| k.role != Role::Trube && port_busy_ids.contains(&k.agent))
+        {
+            if let Some(child) = &mut kid.child {
+                let _ = child.kill();
+                let _ = child.wait();
+                kid.child = None;
+                kid.started = None;
+                let (said, port) = (kid.said(), kid.port);
+                log.line(&format!("{said}: остановлен — порт {port} держит другой харнесс"));
             }
         }
 
         for kid in kids.iter_mut() {
-            if kid.child.is_some() || now < kid.not_before {
+            if kid.child.is_some() || now < kid.not_before || port_busy_ids.contains(&kid.agent) {
                 continue;
             }
-            match spawn_child(
-                &plan.python,
-                &kid.script,
-                &kid.args,
-                &plan.tree,
-                kid.host(plan.phone),
-                &token,
-            ) {
+            let host = kid.host();
+            let python = kid.python.clone();
+            let tree = kid.tree.clone();
+            let token = kid.token.clone();
+            match spawn_child(&python, &kid.script, &kid.args, &tree, host, &token) {
                 Ok(child) => {
                     kid.child = Some(child);
                     kid.started = Some(now);
                     // Паузу здесь НЕ сбрасываем: она обнуляется только тем, что
                     // ребёнок прожил больше двух минут (см. выше). Сброс на
                     // подъёме держал бы паузу вечно на пяти секундах.
-                    log.line(&format!("{}: поднят ({})", kid.label, kid.script.display()));
+                    log.line(&format!("{}: поднят ({})", kid.said(), kid.script.display()));
                 }
                 Err(err) => {
                     kid.back_off(now);
                     log.line(&format!(
                         "{}: не поднялся ({}): {err} — ещё попытка через {} c",
-                        kid.label,
+                        kid.said(),
                         kid.script.display(),
                         kid.backoff
                     ));
