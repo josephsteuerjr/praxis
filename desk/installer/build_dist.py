@@ -1394,7 +1394,13 @@ def main() -> None:
         (DESK / "setup" / "target" / "release" / "helene-setup.exe", "helene-setup.exe",
          "собери setup: npm --prefix setup/ui run build + cargo build --release --features custom-protocol",
          "setup/Cargo.toml"),
-        (ROOT / "_relay_prod_src" / "target" / "release" / "codex-proxy-server.exe", "helene-relay.exe",
+        # ⚠ Путь к зеркалу берётся у раскладки, а не собирается из ROOT: после
+        # переезда `desk/` внутрь репозитория `ROOT / "_relay_prod_src"` стал
+        # указывать в пустоту, и первая же сборка после переезда объявила
+        # поставку неполной — при живом, только что собранном exe рядом.
+        # Ровно от этого класса и заведён `layout.py`; здесь строка его
+        # пережила.
+        (relay_src.MIRROR / "target" / "release" / "codex-proxy-server.exe", "helene-relay.exe",
          "собери реле: cargo build --release в _relay_prod_src",
          None),
         # То же реле под Linux — для сервера: `server/serverboot.py` поднимает
