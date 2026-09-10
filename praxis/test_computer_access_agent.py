@@ -307,6 +307,7 @@ class AgentComputerAccessTests(unittest.TestCase):
 
         with mock.patch.object(agent, "MEM_DIR", Path(self.tmp.name) / "memory"), \
                 mock.patch.object(agent, "_computer_allowed", return_value=True), \
+                mock.patch.object(agent.llm, "can_see", return_value=True), \
                 mock.patch("body_client.desktop_screen_capture", return_value={
                     "ok": True, "artifact": artifact,
                 }), \

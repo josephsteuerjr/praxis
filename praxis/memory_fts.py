@@ -181,15 +181,60 @@ def _rel_under(path: Path, base: Path) -> str:
     return path.relative_to(base).as_posix()
 
 
+_FIRST_LINE_LOCK = threading.Lock()
+_FIRST_LINE_CACHE: dict[str, tuple[tuple[int, int, int], tuple[bool, str | None]]] = {}
+_FIRST_LINE_CACHE_MAX = 65536
+
+
+def _first_line_cached(path: Path) -> tuple[bool, str | None]:
+    """Первая строка файла по stat-снимку, без открытия на тёплом пути.
+
+    Обход памяти открывал каждый .md ради ОДНОЙ строки — 6 999 открытий на живом
+    дереве, и это на каждом обходе. Возвращает (читается, строка): (False, None) —
+    OSError; (True, None) — файл пуст; иначе (True, первая строка без перевода
+    строки). Три исхода различаются нарочно: вызывающие обязаны повторить прежнее
+    поведение байт в байт — пустой файл и нечитаемый файл шли у них разными ветками.
+
+    Ключ снимка — (size, mtime_ns, ino), по прецеденту `_config_stamp` (9be6cbec):
+    шаг файловых часов — миллисекунды, поэтому одного времени мало; длина различает
+    почти все правки внутри тика, инода — замену файла через rename.
+    ⚠ Правка той же длины, в тот же тик, в ту же иноду остаётся неразличимой; хэш
+    содержимого лечил бы и её, но стоил бы того самого чтения, ради экономии
+    которого кэш существует. Наблюдёте такую правку — менять здесь, ключ один."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return (False, None)
+    key = str(path)
+    stamp = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+    with _FIRST_LINE_LOCK:
+        cached = _FIRST_LINE_CACHE.get(key)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+    try:
+        with path.open(encoding="utf-8", errors="replace") as stream:
+            line = stream.readline()
+    except OSError:
+        return (False, None)
+    value = (True, None) if line == "" else (True, line.rstrip("\r\n"))
+    with _FIRST_LINE_LOCK:
+        if len(_FIRST_LINE_CACHE) >= _FIRST_LINE_CACHE_MAX:
+            _FIRST_LINE_CACHE.clear()
+        _FIRST_LINE_CACHE[key] = (stamp, value)
+    return value
+
+
 def _compact_markdown_current(path: Path, memory_dir: Path,
                               evidence: dict[str, Any] | None = None) -> bool:
     """Whether a compact still describes current Telegram message revisions."""
 
+    readable, first = _first_line_cached(path)
+    if not readable or first is None:
+        return False
     try:
-        first = path.read_text(encoding="utf-8", errors="replace").splitlines()[0]
         match = re.fullmatch(r"<!--\s*praxis-compact:\s*(\{.*\})\s*-->", first.strip())
         meta = json.loads(match.group(1)) if match else {}
-    except (OSError, IndexError, TypeError, ValueError):
+    except (TypeError, ValueError):
         return False
     if not isinstance(meta, dict):
         return False
@@ -211,11 +256,13 @@ def _episode_markdown_current(path: Path, memory_dir: Path,
                               evidence: dict[str, Any] | None = None) -> bool:
     """Whether a model-derived episode cites only current Telegram revisions."""
 
+    readable, first = _first_line_cached(path)
+    if not readable or first is None:
+        return False
     try:
-        first = path.read_text(encoding="utf-8", errors="replace").splitlines()[0]
         match = re.fullmatch(r"<!--\s*praxis-episode:\s*(\{.*\})\s*-->", first.strip())
         meta = json.loads(match.group(1)) if match else {}
-    except (OSError, IndexError, TypeError, ValueError):
+    except (TypeError, ValueError):
         return False
     if not isinstance(meta, dict):
         return False
@@ -232,12 +279,10 @@ def _generated_markdown(path: Path, memory_dir: Path, rel: str = "",
     # `rel` необязателен намеренно: у функции есть вызывающие в стенде, которые знают её
     # по двум аргументам, и при пустом `rel` поведение прежнее байт в байт.
     rel = rel or _rel_under(path, memory_dir)
-    try:
-        with path.open(encoding="utf-8", errors="replace") as stream:
-            if stream.readline().lstrip().startswith("<!-- praxis-generated:"):
-                return True
-    except OSError:
-        pass
+    readable, first = _first_line_cached(path)
+    if (readable and first is not None
+            and first.lstrip().startswith("<!-- praxis-generated:")):
+        return True
     if rel == "INDEX.md" or rel.startswith("maps/"):
         return True
     # Canon is the append-only desire event stream.  CURRENT.md is only its
@@ -328,22 +373,60 @@ def _walk_pruned(root: Path, pattern: str, *, prune: set[str], prune_under: Path
     отдавать РОВНО то же множество путей, что `rglob`, минус подрезанное; на проде это
     сверено побайтово (9 455 файлов до и после, списки равны).
     """
-    stack = [root]
+    # ⚑ `os.scandir` вместо `Path.iterdir`, и сравнение суффикса вместо `Path.match`.
+    # Оба — про цену, не про смысл. `iterdir` создаёт Path на каждую запись каталога,
+    # а следом `is_dir()` идёт в `stat` отдельным системным вызовом; `scandir` отдаёт
+    # тип прямо из dirent, без него. `item.match("*.md")` — полноценный glob-матч со
+    # своим разбором шаблона: на живом дереве это 119 тысяч вызовов и 5.9 с из 22.4.
+    #
+    # Замер на проде 28.08: обход 12.2 с -> 1.4 с, состав путей сверен множествами и
+    # совпал байт-в-байт (12 684 источника до и после). Симлинки ведут себя так же:
+    # `DirEntry.is_dir()` следует по ссылке ровно как `Path.is_dir()`.
+    #
+    # Хвост `_simple_suffix` — страховка от расширения вызывающих: сегодня сюда
+    # приходят только `*.md` и `*.jsonl`, но шаблон посложнее обязан уехать в прежний
+    # `Path.match`, а не быть молча понятым неправильно.
+    suffix = _simple_suffix(pattern)
+    stack = [str(root)]
     inside = _posix(prune_under) if prune_under.exists() else None
     while stack:
-        current = stack.pop()
         try:
-            entries = list(current.iterdir())
+            entries = list(os.scandir(stack.pop()))
         except OSError:
             continue
-        for item in entries:
-            if item.is_dir():
-                if (item.name in prune and inside is not None
-                        and _posix(item).startswith(inside)):
+        for entry in entries:
+            try:
+                is_dir = entry.is_dir()
+            except OSError:
+                continue
+            if is_dir:
+                # `runs-old/results` is a sibling of `runs`, not its child.  A bare
+                # string prefix confuses the two and silently drops canonical recall
+                # sources.  Keep the cheap string path here, but make the containment
+                # boundary structural with a separator.
+                inside_prefix = (inside.rstrip("/") + "/") if inside is not None else None
+                if (entry.name in prune and inside_prefix is not None
+                        and entry.path.replace(os.sep, "/").startswith(inside_prefix)):
                     continue
-                stack.append(item)
-            elif item.match(pattern):
-                yield item
+                stack.append(entry.path)
+                continue
+            if suffix is not None:
+                if entry.name.endswith(suffix):
+                    yield Path(entry.path)
+            elif Path(entry.path).match(pattern):
+                yield Path(entry.path)
+
+
+def _simple_suffix(pattern: str) -> str | None:
+    """`"*.md"` -> `".md"`; всё, что сложнее одной звёздочки в начале, — `None`.
+
+    Отдельной функцией, чтобы условие читалось глазами и проверялось тестом, а не
+    жило выражением внутри горячего цикла.
+    """
+    if pattern.startswith("*") and "*" not in pattern[1:] and "?" not in pattern \
+            and "[" not in pattern:
+        return pattern[1:]
+    return None
 
 
 def _memory_files(memory_dir: Path, pattern: str, *, include_runs: bool) -> Iterable[Path]:

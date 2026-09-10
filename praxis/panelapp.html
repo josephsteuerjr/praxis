@@ -1025,7 +1025,7 @@ async function loadPercept() {
       ${(() => { const amb = Object.values(p.ambient_today || {}).reduce((a, b) => a + b, 0);
         return amb ? `<div class="row"><span class="k">фон групп (среда, не пропуск)</span><span class="v mono">${amb}</span></div>` : ""; })()}</div>
     <div class="card"><h3>Журнал пропусков</h3>${(p.skips || []).length ? (p.skips || []).map(r => `
-      <div class="list-item"><div class="small mono muted">${new Date(r.ts * 1000).toLocaleString("ru", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} · ${esc(r.class)} · ${esc(r.stage)}${r.prev_n ? ` ×${1 + r.prev_n}` : ""}</div>
+      <div class="list-item"><div class="small mono muted">${new Date(r.ts * 1000).toLocaleString("ru", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} · ${esc(r.class)} · ${esc(r.stage)}${r.repeat_count > 1 ? ` ×${r.repeat_count}` : ""}</div>
       <div class="small">${esc(r.detail || "")}${r.chat ? ` · чат ${esc(r.chat)}` : ""}</div></div>`).join("") : `<div class="small muted">пусто — всё, что доходило, она видела и решала</div>`}</div>`;
   b.querySelectorAll("[data-pset]").forEach(btn => btn.onclick = async () => {
     hap(); const knob = btn.dataset.pset;

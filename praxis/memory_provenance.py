@@ -87,8 +87,18 @@ _PLACES_CACHE: dict[str, tuple[tuple[int, int], dict[str, str]]] = {}
 _EVIDENCE_LOCK = threading.RLock()
 _EVIDENCE_CACHE: dict[
     str,
-    tuple[tuple[tuple[str, int, int, str], ...], dict[str, Any]],
+    tuple[tuple[tuple[str, int, int, int, str], ...], dict[str, Any]],
 ] = {}
+# Пофайловый разбор журнала жизни: путь -> (отпечаток файла, его вклад в индекс).
+# Живёт отдельно от _EVIDENCE_CACHE и потому переживает пересборку индекса: дозапись
+# в сегодняшний день заставляет перечитать ОДИН файл, а не весь корпус. Прежде каждая
+# её запись в жизнь (раз в минуту) оплачивалась полным перечитыванием 65 МБ.
+_EVIDENCE_FILE_CACHE: dict[
+    str,
+    dict[str, tuple[tuple[str, int, int, int, str],
+                    tuple[dict[str, int], dict[str, dict[str, Any]]]]],
+] = {}
+_EVIDENCE_TAIL_BYTES = 64 * 1024
 
 _UNTRUSTED_PATH_PREFIXES = ("memory/journal/", "memory/life/reflections/")
 _UNTRUSTED_EXACT_PATHS = {"memory/reflections.md"}
@@ -494,24 +504,88 @@ def _valid_event(row: dict[str, Any], path: Path) -> bool:
     return True
 
 
-def _event_index(memory_dir: Path) -> tuple[dict[str, dict[str, Any]], set[str]]:
+def _life_file_signature(path: Path) -> tuple[str, int, int, int, str] | None:
+    """Отпечаток файла жизни: stat И sha256 хвоста, а не хэш всех байтов.
+
+    Прежний отпечаток честно читал каждый файл целиком — 65 МБ событий и свёрток на
+    КАЖДУЮ проверку кэша, 0,26 с даже при попадании. Хвоста хватает, потому что все
+    писатели журнала жизни либо дописывают в конец (события — дописанные байты всегда
+    в окне хвоста), либо кладут файл заново (свёртки, places — меняются длина и/или
+    инода). Голого (mtime, size) мало: шаг часов файла — миллисекунды, не наносекунды
+    (замер 9be6cbec), а дозапись в тот же тик обязана сбрасывать решение о
+    каноничности — хвост это гарантирует и при слепом тике.
+
+    ⚠ Слепое пятно, названное вслух: правка СЕРЕДИНЫ файла — той же длины, в тот же
+    миллисекундный тик, в ту же иноду, дальше 64К от конца. Такого писателя в дереве
+    нет; появится — менять здесь, отпечаток один.
+    """
+    try:
+        stat = path.stat()
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            if stat.st_size > _EVIDENCE_TAIL_BYTES:
+                stream.seek(stat.st_size - _EVIDENCE_TAIL_BYTES)
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return (path.as_posix(), stat.st_size, stat.st_mtime_ns, stat.st_ino,
+            digest.hexdigest())
+
+
+def _cached_file_parse(path, parser, file_cache, signatures):
+    """Вклад одного файла в индекс — через пофайловый кэш по его отпечатку.
+
+    Ошибка чтения кэшируется вместе с отпечатком нарочно: битый файл остаётся
+    битым, пока не изменится, и его не надо перечитывать на каждой пересборке."""
+    key = path.as_posix()
+    signature = (signatures or {}).get(key)
+    if signature is None:
+        signature = _life_file_signature(path)
+        if signature is None:
+            return None
+    if file_cache is not None:
+        cached = file_cache.get(key)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+    payload = parser(path)
+    if file_cache is not None:
+        file_cache[key] = (signature, payload)
+    return payload
+
+
+def _event_file_index(path: Path) -> tuple[dict[str, int], dict[str, dict[str, Any]]]:
+    counts: dict[str, int] = {}
+    candidates: dict[str, dict[str, Any]] = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="strict").splitlines()
+    except (OSError, UnicodeError):
+        return counts, candidates
+    for line in lines:
+        row = _json_object(line)
+        identity = row or _loose_json_object(line)
+        event_id = identity.get("id") if type(identity.get("id")) is str else ""
+        if not _EVENT_ID_RE.fullmatch(event_id):
+            continue
+        counts[event_id] = counts.get(event_id, 0) + 1
+        if _valid_event(row, path):
+            candidates[event_id] = row
+    return counts, candidates
+
+
+def _event_index(memory_dir: Path, *, file_cache=None, signatures=None,
+                 ) -> tuple[dict[str, dict[str, Any]], set[str]]:
     candidates: dict[str, dict[str, Any]] = {}
     counts: dict[str, int] = {}
     root = memory_dir / "life" / "events"
     for path in sorted(root.glob("*.jsonl")) if root.exists() else []:
-        try:
-            lines = path.read_text(encoding="utf-8", errors="strict").splitlines()
-        except (OSError, UnicodeError):
+        parsed = _cached_file_parse(path, _event_file_index, file_cache, signatures)
+        if parsed is None:
             continue
-        for line in lines:
-            row = _json_object(line)
-            identity = row or _loose_json_object(line)
-            event_id = identity.get("id") if type(identity.get("id")) is str else ""
-            if not _EVENT_ID_RE.fullmatch(event_id):
-                continue
-            counts[event_id] = counts.get(event_id, 0) + 1
-            if _valid_event(row, path):
-                candidates[event_id] = row
+        file_counts, file_candidates = parsed
+        for event_id, count in file_counts.items():
+            counts[event_id] = counts.get(event_id, 0) + count
+        candidates.update(file_candidates)
     duplicates = {event_id for event_id, count in counts.items() if count != 1}
     return ({key: value for key, value in candidates.items() if key not in duplicates}, duplicates)
 
@@ -572,23 +646,40 @@ def _valid_compact(meta: dict[str, Any], text: str, path: Path, memory_dir: Path
     return True
 
 
-def _compact_index(memory_dir: Path) -> tuple[dict[str, dict[str, Any]], set[str]]:
+def _compact_file_index(path: Path, memory_dir: Path,
+                        ) -> tuple[dict[str, int], dict[str, dict[str, Any]]]:
+    counts: dict[str, int] = {}
+    candidates: dict[str, dict[str, Any]] = {}
+    meta, text = _load_json_first_line(path, _ARTIFACT_META_RE, 2)
+    identity = meta
+    if not identity:
+        lines = text.splitlines()
+        match = _ARTIFACT_META_RE.fullmatch(lines[0].strip()) if lines else None
+        identity = _loose_json_object(match.group(2)) if match else {}
+    compact_id = identity.get("id") if type(identity.get("id")) is str else ""
+    if not _COMPACT_ID_RE.fullmatch(compact_id):
+        return counts, candidates
+    counts[compact_id] = 1
+    if _valid_compact(meta, text, path, memory_dir):
+        candidates[compact_id] = meta
+    return counts, candidates
+
+
+def _compact_index(memory_dir: Path, *, file_cache=None, signatures=None,
+                   ) -> tuple[dict[str, dict[str, Any]], set[str]]:
     candidates: dict[str, dict[str, Any]] = {}
     counts: dict[str, int] = {}
     root = memory_dir / "life" / "compacts"
     for path in sorted(root.glob("*/*.md")) if root.exists() else []:
-        meta, text = _load_json_first_line(path, _ARTIFACT_META_RE, 2)
-        identity = meta
-        if not identity:
-            lines = text.splitlines()
-            match = _ARTIFACT_META_RE.fullmatch(lines[0].strip()) if lines else None
-            identity = _loose_json_object(match.group(2)) if match else {}
-        compact_id = identity.get("id") if type(identity.get("id")) is str else ""
-        if not _COMPACT_ID_RE.fullmatch(compact_id):
+        parsed = _cached_file_parse(
+            path, lambda target: _compact_file_index(target, memory_dir),
+            file_cache, signatures)
+        if parsed is None:
             continue
-        counts[compact_id] = counts.get(compact_id, 0) + 1
-        if _valid_compact(meta, text, path, memory_dir):
-            candidates[compact_id] = meta
+        file_counts, file_candidates = parsed
+        for compact_id, count in file_counts.items():
+            counts[compact_id] = counts.get(compact_id, 0) + count
+        candidates.update(file_candidates)
     duplicates = {compact_id for compact_id, count in counts.items() if count != 1}
     return ({key: value for key, value in candidates.items() if key not in duplicates}, duplicates)
 
@@ -604,26 +695,25 @@ def claim_evidence_index(memory_dir: str | Path) -> dict[str, Any]:
         # секунду назад, не действовала бы до первого нового компакта.
         root / "life" / "places.json",
     ]
-    fingerprint: list[tuple[str, int, int, str]] = []
+    signatures: dict[str, tuple[str, int, int, int, str]] = {}
     for path in sorted(paths):
-        try:
-            stat = path.stat()
-            digest = hashlib.sha256()
-            with path.open("rb") as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
-        except OSError:
-            continue
-        fingerprint.append((path.as_posix(), stat.st_size, stat.st_mtime_ns,
-                            digest.hexdigest()))
-    key, frozen = root.as_posix(), tuple(fingerprint)
+        signature = _life_file_signature(path)
+        if signature is not None:
+            signatures[signature[0]] = signature
+    key = root.as_posix()
+    frozen = tuple(signatures[name] for name in sorted(signatures))
     with _EVIDENCE_LOCK:
         cached = _EVIDENCE_CACHE.get(key)
         if cached and cached[0] == frozen:
             return cached[1]
-        events, duplicate_events = _event_index(root)
+        file_cache = _EVIDENCE_FILE_CACHE.setdefault(key, {})
+        events, duplicate_events = _event_index(
+            root, file_cache=file_cache, signatures=signatures)
         current_event_ids = current_conversation_event_ids(events.values())
-        compacts, duplicate_compacts = _compact_index(root)
+        compacts, duplicate_compacts = _compact_index(
+            root, file_cache=file_cache, signatures=signatures)
+        for stale in set(file_cache) - set(signatures):
+            del file_cache[stale]
         result = {
             "memory_dir": root,
             "events": events,
@@ -633,6 +723,8 @@ def claim_evidence_index(memory_dir: str | Path) -> dict[str, Any]:
             "duplicate_compacts": duplicate_compacts,
             "places": places_index(root),
         }
+        if cached:
+            _carry_resolutions(cached[1], result)
         _EVIDENCE_CACHE[key] = (frozen, result)
         return result
 
@@ -884,7 +976,9 @@ def _resolve_claim_evidence(meta: dict[str, Any], evidence: dict[str, Any]) -> d
             automatic = automatic and event_automatic
             direct = direct and event_direct
         elif _COMPACT_ID_RE.fullmatch(ref):
-            resolved = _resolve_compact(ref, evidence, set())
+            # Через memo: тот же строгий режим и тот же ответ (функция чистая),
+            # но родословная свёртки не переигрывается на каждый claim заново.
+            resolved = _memoized_resolution(ref, evidence, require_current=True)
             if not resolved["valid"]:
                 return resolved
             leaves.extend(resolved["leaves"])
@@ -901,11 +995,157 @@ def _resolve_claim_evidence(meta: dict[str, Any], evidence: dict[str, Any]) -> d
     }
 
 
+_RESOLUTION_MEMO_KEY = "_compact_resolutions"
+_RESOLUTION_DEPS_KEY = "_compact_resolution_deps"
+
+
+class _RecordingMap:
+    """`.get`-обёртка словаря, записывающая КАЖДЫЙ спрошенный ключ.
+
+    И найденный, и отсутствующий: отсутствие — тоже основание. Разрешение, упавшее
+    на пропавшем событии, обязано пересчитаться, когда событие появится."""
+    __slots__ = ("_base", "_seen")
+
+    def __init__(self, base: dict[str, Any], seen: set[str]) -> None:
+        self._base = base
+        self._seen = seen
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        self._seen.add(str(key))
+        return self._base.get(key, default)
+
+    def __bool__(self) -> bool:
+        # `(evidence.get("events") or {})` не должен подменить регистратор пустышкой.
+        return True
+
+
+class _RecordingEvidence:
+    """Индекс глазами `_resolve_compact`: та же семантика, плюс запись оснований.
+
+    `_resolve_compact` читает из индекса ровно четыре ключа (проверено построчно в
+    докстринге `_memoized_resolution`): `events` и `compacts` заворачиваются в
+    регистраторы, `current_event_ids` и `places` отдаются как есть — членство в них
+    влияет только на события и свёртки, которые разрешение и так спросило."""
+    __slots__ = ("_base", "_events", "_compacts", "events_seen", "compacts_seen")
+
+    def __init__(self, base: dict[str, Any]) -> None:
+        self._base = base
+        self.events_seen: set[str] = set()
+        self.compacts_seen: set[str] = set()
+        self._events = _RecordingMap(base.get("events") or {}, self.events_seen)
+        self._compacts = _RecordingMap(base.get("compacts") or {}, self.compacts_seen)
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        if key == "events":
+            return self._events
+        if key == "compacts":
+            return self._compacts
+        return self._base.get(key, default)
+
+
+def _carry_resolutions(previous: dict[str, Any], result: dict[str, Any]) -> None:
+    """Перенести в новый индекс разрешения, чьё основание не менялось.
+
+    Прежде memo умирал ЦЕЛИКОМ на каждой пересборке — а она дописывает жизнь раз в
+    минуту, то есть все ~1000 разрешений пересчитывались на каждый ход. Дозапись в
+    конец журнала не меняет прошлого: переносится всякое разрешение, из чьих
+    оснований (записанных `_RecordingEvidence`) не изменилось НИ ОДНО.
+
+    «Изменилось» для события: появилось, исчезло, поменяло строку, сменило членство
+    в current_event_ids (поздняя ревизия вытесняет раннюю!) или в дубликатах. Для
+    свёртки — то же самое по её мете. Смена places роняет перенос целиком: карта мест
+    участвует в same_conversation, а какие разрешения на неё опирались, дёшево не
+    узнать. Чистота `_resolve_compact` от всего, кроме этих входов, — её же
+    задокументированное свойство, на нём и стоит перенос."""
+    memo = dict(previous.get(_RESOLUTION_MEMO_KEY) or {})
+    deps = dict(previous.get(_RESOLUTION_DEPS_KEY) or {})
+    if not memo:
+        return
+    if (previous.get("places") or {}) != (result.get("places") or {}):
+        return
+    old_events = previous.get("events") or {}
+    new_events = result.get("events") or {}
+    changed_events: set[str] = set(old_events.keys() ^ new_events.keys())
+    for event_id in old_events.keys() & new_events.keys():
+        old_row, new_row = old_events[event_id], new_events[event_id]
+        # Строки из неизменённых файлов — те же объекты (пофайловый кэш), поэтому
+        # почти всё решается сравнением идентичности, без сравнения словарей.
+        if old_row is not new_row and old_row != new_row:
+            changed_events.add(event_id)
+    changed_events |= ((previous.get("current_event_ids") or frozenset())
+                       ^ (result.get("current_event_ids") or frozenset()))
+    changed_events |= ((previous.get("duplicate_events") or set())
+                       ^ (result.get("duplicate_events") or set()))
+    old_compacts = previous.get("compacts") or {}
+    new_compacts = result.get("compacts") or {}
+    changed_compacts: set[str] = set(old_compacts.keys() ^ new_compacts.keys())
+    for compact_id in old_compacts.keys() & new_compacts.keys():
+        old_meta, new_meta = old_compacts[compact_id], new_compacts[compact_id]
+        if old_meta is not new_meta and old_meta != new_meta:
+            changed_compacts.add(compact_id)
+    changed_compacts |= ((previous.get("duplicate_compacts") or set())
+                         ^ (result.get("duplicate_compacts") or set()))
+    carried_memo: dict[Any, dict[str, Any]] = {}
+    carried_deps: dict[Any, tuple[frozenset[str], frozenset[str]]] = {}
+    for memo_key, resolved in memo.items():
+        dep = deps.get(memo_key)
+        if dep is None:
+            continue
+        dep_events, dep_compacts = dep
+        if (dep_events.isdisjoint(changed_events)
+                and dep_compacts.isdisjoint(changed_compacts)):
+            carried_memo[memo_key] = resolved
+            carried_deps[memo_key] = dep
+    if carried_memo:
+        result[_RESOLUTION_MEMO_KEY] = carried_memo
+        result[_RESOLUTION_DEPS_KEY] = carried_deps
+
+
+def _memoized_resolution(compact_id: str, evidence_index: dict[str, Any], *,
+                         require_current: bool) -> dict[str, Any]:
+    """Разрешение свёртки — ЧИСТАЯ функция от индекса доказательств.
+
+    Проверено построчно: `_resolve_compact` не открывает ни одного файла и читает
+    только `events`, `compacts`, `current_event_ids` и `places` того словаря, который
+    ему передали. Значит один и тот же ответ на один и тот же индекс — не оптимизм,
+    а свойство функции, и хранить его можно ровно столько, сколько живёт индекс.
+
+    Память лежит В САМОМ индексе намеренно. Он уже кэшируется в `_EVIDENCE_CACHE` по
+    отпечатку файлов жизни, и любое их изменение отдаёт НОВЫЙ словарь — вместе с
+    которым уходит и память. Отдельный кэш пришлось бы сбрасывать вручную, и он бы
+    однажды пережил своё основание.
+
+    Зачем: на живом дереве 1056 компактов разрешались 2232 раза за один обход, каждый
+    раз с нуля вместе со всей родословной. Замер 28.08: 12.4 с -> 8.5 с, состав
+    источников тот же (12 684).
+    """
+    memo = evidence_index.get(_RESOLUTION_MEMO_KEY)
+    if memo is None:
+        memo = evidence_index[_RESOLUTION_MEMO_KEY] = {}
+    key = (str(compact_id), bool(require_current))
+    hit = memo.get(key)
+    if hit is None:
+        deps = evidence_index.get(_RESOLUTION_DEPS_KEY)
+        if deps is None:
+            deps = evidence_index[_RESOLUTION_DEPS_KEY] = {}
+        # Основания пишутся ЗДЕСЬ, на промахе: разрешение считается один раз на
+        # индекс, и вместе с ответом запоминается, какие события и свёртки оно
+        # спрашивало. `_carry_resolutions` переносит ответ в следующий индекс, пока
+        # ни одно из оснований не изменилось. Гонка двух потоков на одном ключе
+        # безвредна: функция чистая, оба посчитают одно и то же.
+        view = _RecordingEvidence(evidence_index)
+        hit = _resolve_compact(str(compact_id), view, set(),
+                               require_current=require_current)
+        memo[key] = hit
+        deps[key] = (frozenset(view.events_seen), frozenset(view.compacts_seen))
+    return hit
+
+
 def compact_evidence(compact_id: str, evidence_index: dict[str, Any]) -> dict[str, Any]:
     """Public, read-only resolution used by formation before it cites a compact.
 
     СТРОГИЙ путь: показ, цитирование, обычный поиск. Не ослаблен ни на знак."""
-    return _resolve_compact(str(compact_id), evidence_index, set())
+    return _memoized_resolution(compact_id, evidence_index, require_current=True)
 
 
 def compact_coverage(compact_id: str, evidence_index: dict[str, Any]) -> dict[str, Any]:
@@ -915,8 +1155,7 @@ def compact_coverage(compact_id: str, evidence_index: dict[str, Any]) -> dict[st
     горячее кольцо. Для показа и цитаты этого мало: `superseded` называет исходные
     события, чья ревизия устарела, и такая свёртка обязана считаться `needs_refresh`,
     а её recap — не ехать в живой кадр."""
-    return _resolve_compact(str(compact_id), evidence_index, set(),
-                            require_current=False)
+    return _memoized_resolution(compact_id, evidence_index, require_current=False)
 
 
 def claim_source(path: str | Path, *, evidence_index: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:

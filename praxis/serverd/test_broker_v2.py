@@ -1267,10 +1267,31 @@ class _HostProcStand(unittest.TestCase):
         self._assert_alive(victim, "посторонний не дожил до стенда")
         return pgid, victim
 
-    def _live_group(self, command: str = "sleep 300") -> int:
-        proc = subprocess.Popen(["sh", "-c", command], start_new_session=True)
+    def _live_group(self, *, ignore_term: bool = False) -> int:
+        # The marker is emitted by the shell only AFTER installing the trap.
+        # Popen returning does not mean the child is ready to receive SIGTERM.
+        command = ("trap '' TERM; " if ignore_term else "") + (
+            "printf R; exec >/dev/null; sleep 300"
+        )
+        proc = subprocess.Popen(["sh", "-c", command], start_new_session=True,
+                                stdout=subprocess.PIPE)
+        pgid = proc.pid  # start_new_session makes the child its own group leader
+        try:
+            import select
+            ready, _, _ = select.select([proc.stdout], [], [], 5.0)
+            if not ready or proc.stdout.read(1) != b"R":
+                raise AssertionError("live group readiness handshake failed")
+        except BaseException:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            finally:
+                proc.wait(timeout=5)
+            raise
+        finally:
+            proc.stdout.close()
         self.procs.append(proc)
-        pgid = os.getpgid(proc.pid)
         self.groups.append(pgid)
         return pgid
 
@@ -1405,7 +1426,7 @@ class RootStillStopsWhatIsProvablyHersCase(_HostProcStand):
         self.assertEqual(self._result(unit).get("status"), "stopped")
 
     def test_a_group_that_ignores_sigterm_is_killed_and_the_deadline_is_named(self):
-        pgid = self._live_group("trap '' TERM; sleep 300")
+        pgid = self._live_group(ignore_term=True)
         unit = self._unit("op-stubborn", status="running", pgid=pgid, child_pid=pgid,
                           supervisor_pid=self._dead_pid(), boot_id=hostproc.boot_id(),
                           child_starttime=hostproc._starttime(pgid))
@@ -1474,7 +1495,7 @@ class StopNeverOverwritesTheTruthCase(_HostProcStand):
         Тогда группа скорее всего ЖИВА. Написать в result.json «stopped» — соврать про смерть
         команды; в первой редакции этой правки здесь стояло «исход записать можно» = True.
         """
-        pgid = self._live_group("trap '' TERM; sleep 300")
+        pgid = self._live_group(ignore_term=True)
         unit = self._unit("op-eperm", status="running", pgid=pgid, child_pid=pgid,
                           supervisor_pid=self._dead_pid(), boot_id=hostproc.boot_id(),
                           child_starttime=hostproc._starttime(pgid))
@@ -1498,7 +1519,7 @@ class StopNeverOverwritesTheTruthCase(_HostProcStand):
         Приписка «останавливать нечего, надгробие не пишу» верна только там, где сигнала
         НЕ было. После посланного SIGTERM она превращается во второе враньё подряд.
         """
-        pgid = self._live_group("trap '' TERM; sleep 300")
+        pgid = self._live_group(ignore_term=True)
         unit = self._unit("op-both", status="running", pgid=pgid, child_pid=pgid,
                           supervisor_pid=self._dead_pid(), boot_id=hostproc.boot_id(),
                           child_starttime=hostproc._starttime(pgid))

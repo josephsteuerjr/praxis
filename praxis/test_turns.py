@@ -473,6 +473,32 @@ class TestTurnsCore(TurnsBase):
         self.assertIn("что ушло — см. «делала»", line)
         self.assertNotIn("отправок в следе нет", line)
 
+    def test_empty_background_out_does_not_imply_no_delivery(self):
+        send = "send_message(chat_id=777, text=…) → Отправила → message_id=3774"
+        traces = {
+            "send_trace": [send],
+            # Legacy wake rows can retain only the first eight tools, with no
+            # run_id or truncation marker. The later send is no longer visible.
+            "truncated_eight_tools": (["read_file(path=fixture) → ok"] * 8 + [send])[:8],
+            "no_trace": [],
+        }
+        for kind in ("wake", "forge_event", "task_window", "heartbeat"):
+            for trace_name, tools in traces.items():
+                with self.subTest(kind=kind, trace=trace_name):
+                    row = {"kind": kind, "chat_id": None, "run_id": None,
+                           "out": "", "held": "", "tools": tools}
+                    before = dict(row)
+                    line = turns.format_line(row)
+                    self.assertIn("текст хода пуст", line)
+                    self.assertIn("не свидетельствует об отсутствии отправок", line)
+                    self.assertNotIn("ничего не ушло наружу", line)
+                    self.assertNotIn("отправок в следе нет", line)
+                    self.assertNotIn("сказала", line)
+                    self.assertNotIn("записала себе", line)
+                    self.assertEqual(row, before)
+                    if tools:
+                        self.assertIn("делала: " + "; ".join(tools), line)
+
     def test_a_wake_without_text_is_not_counted_as_a_note_to_self(self):
         """Большинство таких пробуждений текста не рождает. Считать их «записала
         себе» — та же ложь, что и «сказала», только в новом счётчике; а строка

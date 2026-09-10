@@ -46,6 +46,7 @@ import os
 import statistics
 from pathlib import Path
 
+import perception
 import telegram_routes
 
 TERMINAL = frozenset({"done", "cancelled", "failed"})
@@ -170,15 +171,19 @@ def dropped_addresses(base=None, *, hours: float = 24.0, now: float | None = Non
             records.append(rec)
     except OSError:
         pass
-    drops = sum(1 + int(r.get("prev_n") or 0) for r in records)
-    owner_lost = sum(1 + int(r.get("prev_n") or 0) for r in records
+    drops = sum(perception.skip_record_count(r) for r in records)
+    owner_lost = sum(perception.skip_record_count(r) for r in records
                      if (r.get("meta") or {}).get("owner_lost"))
+    by_room: dict[str, int] = {}
+    for record in records:
+        room = telegram_routes.room_of(record.get("chat"))
+        by_room[room] = by_room.get(room, 0) + perception.skip_record_count(record)
     return {
         "window_hours": hours,
         "span_hours": round((moment - oldest) / 3600.0, 1) if oldest else 0.0,
         "drops": drops,
         "owner_lost": owner_lost,
-        "by_room": _counts(telegram_routes.room_of(r.get("chat")) for r in records),
+        "by_room": dict(sorted(by_room.items(), key=lambda item: -item[1])),
         "rows": [{"ts": r.get("ts"), "chat": r.get("chat"), "detail": r.get("detail")}
                  for r in records[-10:]],
     }

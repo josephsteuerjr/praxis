@@ -54,6 +54,26 @@ class Msg:
 
 
 class TestParameterValidation(unittest.TestCase):
+    def test_resolved_name_or_username_is_transport_authoritative(self):
+        self.assertTrue(history_scan.resolved_peer_matches_target(
+            "AbstractDL Chat", 1240718803))
+        self.assertTrue(history_scan.resolved_peer_matches_target(
+            "@abstractdl_chat", 1240718803))
+
+    def test_explicit_numeric_peer_forms_remain_fail_closed(self):
+        self.assertTrue(history_scan.resolved_peer_matches_target(
+            "-1001240718803", 1240718803))
+        self.assertTrue(history_scan.resolved_peer_matches_target(
+            "1240718803", 1240718803))
+        self.assertTrue(history_scan.resolved_peer_matches_target("-123", 123))
+        self.assertFalse(history_scan.resolved_peer_matches_target(
+            "-1001240718803", 1240718804))
+        self.assertFalse(history_scan.resolved_peer_matches_target(
+            "1240718803", 1240718804))
+        self.assertFalse(history_scan.resolved_peer_matches_target("-123", 124))
+        self.assertFalse(history_scan.resolved_peer_matches_target("-100", 100))
+        self.assertFalse(history_scan.resolved_peer_matches_target("", 1240718803))
+
     def test_page_size_zero_rejected_before_scan(self):
         async def fp(offset, size):
             return []

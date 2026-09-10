@@ -51,6 +51,9 @@ import context_envelope
 import desires
 import frame_layout
 import frame_shadow
+import frame_measure
+import pre_model_timing
+import frame_serve
 import frame_trace
 import graph
 import group_context
@@ -308,6 +311,11 @@ _TELETHON: dict = {}
 # read-before-write guard. ContextVar не смешивает параллельные asyncio.to_thread ходы.
 _TURN_CHANNEL: ContextVar["ChannelContext | None"] = ContextVar("praxis_turn_channel", default=None)
 _TURN_HISTORY: ContextVar[list | None] = ContextVar("praxis_turn_history", default=None)
+# Может ли мутация `_TURN_HISTORY` изменить источник следующего хода. В живом Telegram
+# сюда приезжает очищенный снимок ролей, а не хранилище ленты; direct `respond` передаёт
+# caller-owned список и потому может устойчиво укоротить именно его.
+_TURN_HISTORY_PERSISTENT: ContextVar[bool] = ContextVar(
+    "praxis_turn_history_persistent", default=False)
 # Лента разговора и ориентировка этого хода — чтобы рука ответа могла отдать их советнику
 # приватности. Пишет их исходящий путь хода, читает рука из своего потока: чтение копии
 # контекста работает, теряется только запись (разбор — в шапке work_loop.py).
@@ -1651,7 +1659,7 @@ def _summarize_history(records: list[dict]) -> str:
 
 
 def tool_consolidate_context(note: str = "") -> str:
-    """Свести самые старые сообщения диалога в дневник и освободить контекст."""
+    """Свести старую часть доступной истории; устойчиво обрезать только её источник."""
     hist = _active_history()
     if not isinstance(hist, list) or len(hist) < 8:
         return "Контекст ещё короткий — сводить рано."
@@ -1662,9 +1670,16 @@ def tool_consolidate_context(note: str = "") -> str:
     summary = (note or "").strip() or _summarize_history(old)
     if summary:
         tool_journal(f"[контекст] {summary}", salience=2)
-    del hist[:n]
-    log.info("consolidate_context: свела %d записей, осталось %d", n, len(hist))
-    return f"Свела {n} старых сообщений в дневник, контекст освобождён (осталось {len(hist)})."
+    turn_history = _TURN_HISTORY.get()
+    persistent = turn_history is None or _TURN_HISTORY_PERSISTENT.get()
+    if persistent:
+        del hist[:n]
+        log.info("consolidate_context: свела %d записей, осталось %d", n, len(hist))
+        return (f"Свела {n} старых сообщений в дневник; источник истории укорочен "
+                f"(осталось {len(hist)}).")
+    log.info("consolidate_context: записала сводку %d записей; источник — снимок", n)
+    return (f"Свела {n} старых сообщений в дневник. Текущая ролевая история — снимок: "
+            "его мутация не освободила бы источник Telegram-контекста, поэтому я его не обрезала.")
 
 
 # --- §6: компактирование контекста субагентом (бегущая сводка, не её голос) - #
@@ -2121,8 +2136,112 @@ def _schedule_exit() -> None:
     threading.Thread(target=_later, daemon=True).start()
 
 
-def tool_restart_self(reason: str = "") -> str:
-    """Контролируемый перезапуск: журнал + снапшот + выход (контейнер поднимет на новом коде)."""
+def _restart_replay_winner() -> str | None:
+    """Return the winning run for one exact owner-DM restart request.
+
+    A Telegram catch-up after an intentional exit can replay the very message
+    that asked us to restart.  Intake-level life dedupe is deliberately not
+    sufficient here: the old process may have persisted the message and died
+    before it ever created a voice run.  Instead, suppress only this *effect*
+    after a durable ``tool_started(restart_self)`` receipt exists for the exact
+    immutable origin.  The normal tool loop writes the current receipt before
+    entering this function.
+
+    If two duplicate runs somehow overlap, their immutable creation order makes
+    one deterministic winner.  A direct/internal call without its own durable
+    tool-start remains an ordinary restart rather than being silently changed
+    by an unrelated historical receipt.
+    """
+    current = run_context.current_run()
+    evidence = current_origin_evidence()
+    if (current is None or evidence is None or not evidence.get("is_dm")
+            or str(current.scope) != "owner"):
+        return None
+
+    chat_id = str(evidence["chat_id"])
+    message_id = int(evidence["message_id"])
+    principal_id = str(evidence["principal_id"])
+    manager = _runs()
+    matches: list[tuple[str, str]] = []
+    current_started = False
+    try:
+        listed = manager.list_runs(limit=None)
+    except Exception:
+        log.warning("cannot inspect durable restart receipts", exc_info=True)
+        return None
+    for listed_run in listed:
+        run_id = str(listed_run.get("run_id") or "")
+        if not run_id:
+            continue
+        try:
+            context = manager.context(run_id)
+            if (str(context.scope) != "owner"
+                    or str(context.principal_id) != principal_id
+                    or str(context.origin_chat_id) != chat_id
+                    or tuple(context.origin_message_ids) != (message_id,)):
+                continue
+            # Context fields are only a cheap prefilter.  Confirm the prior
+            # owner-DM origin from its immutable, hash-verified snapshot.
+            prior_channel, _snapshot = _load_exact_run_channel(manager, context)
+            if (not prior_channel.owner or not prior_channel.is_dm
+                    or str(prior_channel.chat_id) != chat_id
+                    or prior_channel.origin_message_id != message_id
+                    or str(prior_channel.principal_id) != principal_id):
+                continue
+            started = any(
+                row.get("kind") == "tool_started" and row.get("tool") == "restart_self"
+                for row in manager.iter_events(run_id, strict=True)
+            )
+            if not started:
+                continue
+        except Exception:
+            log.warning("cannot verify durable restart receipt for %s", run_id, exc_info=True)
+            continue
+        matches.append((str(context.created_at), run_id))
+        if run_id == current.run_id:
+            current_started = True
+
+    # This helper protects the normal durable tool loop only.  Do not turn a
+    # direct/test invocation that lacks its own intent receipt into a no-op.
+    if not current_started:
+        return None
+    return min(matches)[1] if matches else None
+
+
+_RESTART_FUSE_SECONDS = 300
+
+
+def tool_restart_self(reason: str = "", force: bool = False) -> str:
+    """Контролируемый перезапуск: журнал + снапшот + выход (контейнер поднимет на новом коде).
+
+    Exact-origin suppression stops a replay of the same owner-DM request after
+    its durable receipt exists.  The short fuse remains a broader safety net
+    for any rapid repeated restart, including sources without an owner-DM
+    origin; ``force`` is the explicit override for a deliberate second restart.
+    """
+    winner = _restart_replay_winner()
+    current = run_context.current_run()
+    if winner is not None and current is not None and winner != current.run_id:
+        log.warning("RESTART_SELF replay suppressed: winner=%s current=%s", winner, current.run_id)
+        return ("Этот запрос на перезапуск уже принят тем же входящим сообщением; "
+                "не запускаю второй цикл.")
+    if not force:
+        marker = STATE_DIR / "restart_reason.txt"
+        try:
+            age = time.time() - marker.stat().st_mtime
+        except OSError:
+            age = None
+        if age is not None and 0 <= age < _RESTART_FUSE_SECONDS:
+            prev = ""
+            try:
+                prev = marker.read_text(encoding="utf-8").strip()[:300]
+            except OSError:
+                pass
+            return (f"НЕ перезапускаюсь: предыдущий рестарт был {int(age)} с назад"
+                    + (f" — «{prev}»" if prev else "") + ". "
+                    "Если просьба о рестарте пришла сообщением, она УЖЕ исполнена тем "
+                    "рестартом — ответь человеку текстом, не перезапускайся снова. "
+                    "Действительно нужен ещё один подряд — повтори с force=true.")
     tool_journal(f"[restart] перезапускаюсь: {reason or 'без причины'}", salience=3)
     try:  # PASS 5: причина — в STATE, чтобы после подъёма она ЗНАЛА, почему рестарт (не «видимо…»)
         STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -2818,13 +2937,24 @@ def tool_rest(note: str = "", when: str = "") -> str:
 
 
 def _target_is_stranger(resolved_id, target: str) -> bool:
-    """9.4: адресат незнаком, если id не в known_ids/owner И на него нет досье (по алиасам)."""
+    """9.4: адресат незнаком, если id не known/owner и нет однозначного досье.
+
+    Числовая привязка ``telegram_id:`` сильнее имени/алиаса: именно resolved_id
+    пришёл от Telegram-моста. Дубликаты fail closed через slug_for_principal().
+    """
     if resolved_id is not None and social.category(resolved_id) in ("owner", "known"):
         return False
     try:
+        if resolved_id is not None and people.slug_for_principal(resolved_id):
+            return False
         ref = str(target or "").lstrip("@").strip()
         slug = graph.resolve(ref)
         if slug and people.path_for(slug).exists():
+            # A unique matching binding was handled above. An alias must not hide
+            # a conflicting ID or duplicate bindings; legacy unbound dossiers keep
+            # their previous recognition behavior.
+            if resolved_id is not None and people.telegram_id(slug):
+                return True
             return False
     except Exception:
         log.debug("people-проверка адресата не удалась", exc_info=True)
@@ -2891,6 +3021,12 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
             nothing_to_wait_for = f"ран {after_run[:12]} уже завершился"
     # Созреет ли намерение на ближайшем тике — вопрос механики, а не смысла.
     when_iso, recur = tasks.parse_when(when or None)
+    when_text = (when or "").strip()
+    if when_text.lower() not in ("", "now", "сейчас") and not when_iso and not recur:
+        # parse_when uses (None, None) for both absent and invalid deadlines.
+        # An explicit invalid deadline must not become an immediate task.
+        return (f"Не распознала срок «{when_text}» — намерение не создано. "
+                "Укажи корректные дату и время, например 'tomorrow 09:30' или 'in 1h'.")
     waits_for_a_real_pause = bool(
         after_run and not nothing_to_wait_for and after_run != current_run_id)
     if when_iso:
@@ -2911,6 +3047,15 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
             future = True
     else:
         future = False
+    # Ночь 3.09: «today 09:45», сказанная в 23:42, легла просроченной задачей — и
+    # «утренние» сообщения ушли двум адресатам в полночь, сырым телом задачи.
+    # Планировщик прав (просроченное зреет на ближайшем тике); неправильно молчание
+    # тула: она назвала срок, не зная, что он уже в прошлом. Поэтому здесь факт, а не
+    # тихая подмена «сегодня» на «завтра»: иногда немедленное и хотят («in 0m» так и
+    # пишется), но пусть она видит, что именно наметила.
+    _explicit_now = (when or "").strip().lower() in ("", "in 0m", "in 0h", "сейчас", "now")
+    overdue = (bool(when_iso) and not recur and not future
+               and not waits_for_a_real_pause and not _explicit_now)
     matures_at_once = not recur and not future and not waits_for_a_real_pause
     # ⚠ ЗДЕСЬ БЫЛ КОРЕНЬ ПЕТЛИ 26.07 — и две мои неудачные попытки его залатать.
     #
@@ -2974,6 +3119,17 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
             # 26.07 и держала её вне связи час. Факт называю, решение оставляю ей.
             note += (" И имей в виду: я сейчас в окне, так что это будет второе подряд — "
                      "связь между ними поднимется на секунды.")
+    if overdue:
+        note += (f" ⚠ Срок {when_iso} уже прошёл — задача сработает на ближайшем тике, "
+                 f"а не когда, возможно, имелось в виду. Если это про другое утро — "
+                 f"скажи 'tomorrow HH:MM' или явную дату, перепоставлю.")
+        if t["kind"] == "message":
+            # Той же ночи вторая половина беды: goal kind=message ушёл адресатам сырым
+            # текстом задачи — с «Написать <имя> (<имя>, @<handle>…)» и «ПРИОРИТЕТ».
+            # Тело письма = текст цели, дословно; напоминание об этом — здесь, где оно
+            # ещё можно успеть прочитать.
+            note += (" И помни: текст цели уйдёт адресату как есть — держи в нём только "
+                     "само письмо, без служебных пометок.")
     if nothing_to_wait_for:
         note += f" Ждать нечего: {nothing_to_wait_for} — созреет на ближайшем тике."
     if crowded:
@@ -3470,6 +3626,20 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
             return str(fn(params=parsed, _principal=_active_principal() or "unknown"))
         except Exception as exc:
             return f"telegram_account moderate_abstractdl: {type(exc).__name__}: {exc}"
+    if action == "admin_abstractdl":
+        fn = _TELETHON.get("admin_abstractdl")
+        if not fn:
+            return "telegram_account admin_abstractdl: Telethon hook недоступен"
+        try:
+            parsed = dict(params or {})
+            if params_json:
+                decoded = json.loads(params_json)
+                if not isinstance(decoded, dict):
+                    return "telegram_account admin_abstractdl: params_json должен быть JSON object"
+                parsed.update(decoded)
+            return str(fn(params=parsed, _principal=_active_principal() or "unknown"))
+        except Exception as exc:
+            return f"telegram_account admin_abstractdl: {type(exc).__name__}: {exc}"
     if action in {"followups", "cancel_followup", "watch_reply", "unwatch_reply"}:
         fn = _TELETHON.get("followups")
         if not fn:
@@ -3931,6 +4101,21 @@ def _observe_image_pixels(local: Path, transfer_dir: Path | None, *, mime: str,
                 "size": size, "media_type": mime,
             }
             image_path = local
+        if not llm.can_see("voice"):
+            # Text-only модель (GLM-5.3) пикселей не получит, а фраза «inspect the attached
+            # pixels» толкала описывать экран по памяти о вводе (06.09, отозвано ею 07.09).
+            # Честно: снимок сохранён для владельца, ей — структура окна. 09.09: если у
+            # роли есть зрячая замена (llm.vision_model, для glm — glm-5.3-flash), пиксели
+            # кладём — llm.chat переключит модель на этот вызов сам.
+            return (
+                f"Snapshot saved as a run artifact{note}, but the configured voice route "
+                f"({llm.role_model('voice') or 'unknown'}) has neither verified image capability "
+                "nor a same-framework catalog-valid vision replacement: NO pixels reach your "
+                "context, so do not describe the screen from this. The owner can open the "
+                "artifact; for your own eyes use computer action=read_window (UI Automation "
+                "tree with names, values and centre coordinates), clipboard_read or file reads.\n"
+                + json.dumps(ref, ensure_ascii=False, indent=2)
+            )
         text = (
             f"Visual observation captured{note}. Inspect the attached pixels before claiming "
             "what is on screen or choosing the next input.\n" +
@@ -4305,9 +4490,10 @@ def tool_coding_process(task_id: str, action: str, process_id: str = "",
 
 
 def tool_coding_agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
-                      role: str = "worker", max_iters: int = 0, tail: int = 10000) -> str:
+                      role: str = "worker", max_iters: int = 0, tail: int = 10000,
+                      model: str = "") -> str:
     return forge.agent(task_id, action=action, agent_id=agent_id, brief=brief, role=role,
-                       max_iters=max_iters, tail=tail)
+                       model=model, max_iters=max_iters, tail=tail)
 
 
 def tool_coding_checkpoint(task_id: str, message: str = "forge checkpoint") -> str:
@@ -4844,7 +5030,7 @@ def tool_manage_perception(action: str, knob: str = "", value: str = "",
 
 
 def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "",
-                      effort: str = "") -> str:
+                      effort: str = "", profile: str = "") -> str:
     """PASS 22: мой мозг — мой выбор. status — каталог+наблюдаемые свойства;
     switch — сменить модель роли (рукопожатие после; ключи не мои — пульт);
     reasoning — её ступень рассуждения роли (19.08, реле-словарь)."""
@@ -4852,6 +5038,18 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
     action = (action or "").strip().lower()
     if action in ("status", "catalog", ""):
         return brain.describe()
+    if action == "profile":
+        if not (_is_sovereign_actor() or _active_scope() == "owner"):
+            rails.deny("brain_switch", action,
+                       f"принципал={_active_principal() or 'unknown'}, "
+                       f"скоуп={_active_scope()}, профиль {profile}")
+            return ("Не отсюда: профиль сложности я меняю как принципал — из своего "
+                    "хода или из owner-скоупа.")
+        res = brain.apply_profile(profile, why=why)
+        if not res.get("ok"):
+            return f"Профиль не применился ({res.get('stage', 'validation')}): {res.get('error')}"
+        return (f"Профиль {res['profile']} применён: voice {res['model']}, "
+                f"рассуждение {res['effort']}. Текущее состояние проверяется через status.")
     if action == "reasoning":
         # Тот же разворот двери, что у switch: глубина нужна другая ровно тогда,
         # когда трудно, а трудно бывает не только в ЛС Егора.
@@ -4897,7 +5095,7 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
             return ("Не отсюда: подписку я меняю как принципал — из своего хода или из "
                     "owner-скоупа, — а этот вызов пришёл без опознанного принципала.")
         return brain.use_account(model or role, why=why)
-    return ("action: status | switch (role+model+why) | reasoning (role+effort+why) | "
+    return ("action: status | profile (profile+why) | switch (role+model+why) | reasoning (role+effort+why) | "
             "accounts | use_account (model=слот)")
 
 
@@ -5750,7 +5948,8 @@ BASE_TOOLS = [
         "name": "switch_brain",
         "description": "PASS 22, мой мозг: status — каталог моделей по ролям с наблюдаемыми "
                        "свойствами на моих задачах (сбои, латентность, токены, остаток "
-                       "провайдера); switch — сменить модель роли из каталога (why обязателен; "
+                       "провайдера); profile — применить именованный профиль сложности; "
+                       "switch — сменить модель роли из каталога (why обязателен; "
                        "после — ping-рукопожатие, не прошло — верну как было). Дисциплина "
                        "сложности: рутина на дешёвой, сложное эскалирует. Ключи — не мои (пульт). "
                        "accounts — какие ПОДПИСКИ настроены и какая работает сейчас; "
@@ -5764,13 +5963,16 @@ BASE_TOOLS = [
             "type": "object",
             "properties": {
                 "action": {"type": "string",
-                           "enum": ["status", "switch", "reasoning",
+                           "enum": ["status", "profile", "switch", "reasoning",
                                     "accounts", "use_account"]},
+                "profile": {"type": "string",
+                            "enum": ["chat", "routine-code", "deep-review"],
+                            "description": "action=profile: именованный профиль сложности"},
                 "role": {"type": "string", "description": "voice | evaluator"},
                 "model": {"type": "string",
                           "description": "имя модели из каталога; для use_account — имя слота"},
                 "why": {"type": "string",
-                        "description": "зачем — обязательно для switch и reasoning"},
+                        "description": "зачем — обязательно для profile, switch и reasoning"},
                 "effort": {"type": "string",
                            "enum": ["none", "minimal", "low", "medium", "high",
                                     "xhigh", ""],
@@ -5782,9 +5984,11 @@ BASE_TOOLS = [
     {
         "name": "consolidate_context",
         "description": (
-            "Свести самые старые сообщения текущего диалога в дневник, чтобы освободить контекст "
-            "и не потерять суть. Вызывай, когда система подскажет, что контекст почти заполнен. "
-            "В note передай саммари своими словами (решения > договорённости > важные факты, коротко); "
+            "Свести старую часть доступной истории в дневник, не потеряв суть. "
+            "Если история принадлежит вызывающему коду, тул укоротит её источник; "
+            "в живом Telegram ролевая история может быть только снимком, и тогда тул честно "
+            "запишет сводку без обещания освободить следующий кадр. В note передай саммари "
+            "своими словами (решения > договорённости > важные факты, коротко); "
             "без note я сама сожму уходящее."
         ),
         "input_schema": {
@@ -6554,7 +6758,7 @@ TELEGRAM_ACCOUNT_TOOL = {
         "properties": {
             "action": {"type": "string", "enum": [
                 "join", "leave", "followups", "watch_reply", "unwatch_reply", "cancel_followup",
-                "history_scan", "moderate_abstractdl",
+                "history_scan", "moderate_abstractdl", "admin_abstractdl",
                 "list", "search", "registry_list", "registry_search", "describe", "call",
                 "confirm", "pending_confirmations", "cancel_confirmation",
             ]},
@@ -6563,7 +6767,7 @@ TELEGRAM_ACCOUNT_TOOL = {
             "query": {"type": "string"},
             "request": {"type": "string", "description": "exact functions.*Request name"},
             "challenge_id": {"type": "string", "description": "critical challenge selector"},
-            "params_json": {"type": "string", "description": "call parameters as one JSON object; moderate_abstractdl expects peer_id/message_id/sender_id/decision"},
+            "params_json": {"type": "string", "description": "call parameters as one JSON object; moderate_abstractdl expects peer_id/message_id/sender_id/decision; admin_abstractdl expects peer_id/action/params, where action is slow_mode {seconds: 0|10|30|60|300|900|3600}, default_rights {allow:[...], deny:[...]}, restrict {user_id, seconds} or unrestrict {user_id} \u2014 or {history: true} to read what has already been done to the room"},
             "scope": {"type": "string", "description": "optional telegram.* registry filter"},
             "namespace": {"type": "string", "description": "optional registry namespace filter"},
             "risk": {"type": "string", "description": "optional registry risk filter"},
@@ -6753,6 +6957,7 @@ FORGE_TOOLS = [
          "action": {"type": "string", "enum": ["spawn", "poll", "stop", "list"]},
          "agent_id": {"type": "string"}, "brief": {"type": "string"},
          "role": {"type": "string", "enum": ["scout", "worker", "reviewer"]},
+         "model": {"type": "string", "description": "Optional per-agent model from the live/configured catalogue; omitted keeps the voice-role default."},
          "max_iters": {"type": "integer"}, "tail": {"type": "integer"},
      }, ["task_id", "action"])} ,
     {"name": "coding_checkpoint",
@@ -8067,7 +8272,15 @@ def _strip_participant_private_blocks(text: str) -> tuple[str, int]:
                 hidden += 1
                 blank_seen = False
                 continue
-            elif (col == indent and not listish and not blank_seen
+            # ⚠ БЕЗ `not listish`. До 28.08 здесь стояло `and not listish`, и живой фильтр
+            # расходился с теневым (`frame_shadow.py:1080`), который c82f38c8 починил, а этот
+            # нет. Последствие было замерено: из 36 минимальных входов расходятся 7,
+            # и во всех живой ОСТАВЛЯЛ больше тени: вторая строка приватной записи
+            # уезжала в промпт голоса, а рядом стояла подпись «снято 1».
+            # Направление согласия — её решение; здесь взято более осторожное
+            # (скрываем больше). Сторож ниже прибивает СОГЛАСИЕ двух фильтров,
+            # а не конкретное поведение: если она решит иначе, менять надо ОБА, и тест это скажет.
+            elif (col == indent and not blank_seen
                   and not _PARTICIPANT_NEW_BLOCK.match(stripped)):
                 hidden += 1
                 continue
@@ -8591,6 +8804,10 @@ def _build_prompt_parts(
          "результат.\n")),
     ]
     desire_context = _active_desires_block()
+    # Структурный тег — вторая проекция той же развилки, что описывает аудиторию
+    # ниже. `llm.cache_address` предпочитает его прозовым маркерам: смена слов кадра
+    # не должна молча отключать prompt_cache_key.
+    audience_key = ""
     if owner_context:
         trust_tool = ", `admit`" if ctx.owner else ""
         # ⚠ Третья ветка появилась 04.08. До неё окно, пульс, будильник и forge-событие
@@ -8609,6 +8826,8 @@ def _build_prompt_parts(
         # без variant диффы длины этой секции читались бы как «изменился код».
         place_variant = ("own_run" if ctx.chat_id is None
                          else "owner_dm" if owner_audience else "public_room")
+        audience_key = {"own_run": "run", "owner_dm": "owner",
+                        "public_room": "room"}[place_variant]
         # Единственный шов кадра, который делится байт-в-байт: owner_place уже отдельная
         # переменная. Внутри контракта рук четыре разных по смыслу куска склеены без шва в
         # самом литерале — делить их подстроками запрещено, это была бы привязка к дословному
@@ -8675,6 +8894,7 @@ def _build_prompt_parts(
         )
         _frame_absent_branch(*_FRAME_OWNER_TAIL, "contract.unknown_authority")
     elif not known:
+        audience_key = "guest"
         tail.append(
             frame_trace.mark("contract.unknown_authority", "dynamic", "text",
             "\nAuthority fact: this interlocutor is not in the known set and has no delegated "
@@ -8718,9 +8938,14 @@ def _build_prompt_parts(
     scope_fact = ctx.scope if ctx.scope in ("owner", "family", "known", "unknown", "group") else "unknown"
     members = (str(ctx.size) if isinstance(ctx.size, int) and not isinstance(ctx.size, bool)
                and 0 <= ctx.size <= 10 ** 8 else "unknown")
+    # Room identity is stronger than who happened to speak: all group turns share one
+    # cache line, while DMs retain their distinct audience tags.
+    if not ctx.is_dm:
+        audience_key = "room"
+    key_fact = f"; audience_key={audience_key}" if audience_key else ""
     tail.append(frame_trace.mark("state.channel_facts", "dynamic", "text",
         f"\nChannel facts: kind={ctx.kind}; audience_scope={scope_fact}; "
-        f"room_id={room_id}; members={members}.\n"
+        f"room_id={room_id}; members={members}{key_fact}.\n"
     ))
     tail_text = "".join(tail)
 
@@ -9694,6 +9919,19 @@ def _durable_model_blocks(blocks: list | tuple, *,
     )
     safe = _scrub_critical_value(raw, secrets)
     for raw_block, block in zip(raw, safe):
+        if isinstance(raw_block, dict) and isinstance(block, dict) and (
+                raw_block.get("type") == "tool_use_fragment"
+                or llm.is_malformed_json_input(raw_block.get("input"))):
+            # An incomplete JSON value has no trustworthy secret-field schema.
+            # Retain an opaque commitment, never persist raw partial credentials.
+            encoded = json.dumps(raw_block, sort_keys=True, ensure_ascii=False,
+                                 default=str).encode("utf-8")
+            block.clear()
+            block.update({"type": "tool_use_fragment", "redacted": True,
+                          "schema": "praxis.truncated-tool.v1",
+                          "commitment": hmac.new(_CRITICAL_PARAM_COMMITMENT_KEY,
+                                                 encoded, hashlib.sha256).hexdigest()})
+            continue
         if (not isinstance(raw_block, dict) or not isinstance(block, dict)
                 or raw_block.get("type") != "tool_use"):
             continue
@@ -9731,6 +9969,7 @@ def _durable_model_messages(messages: list[dict]) -> list[dict]:
 def _model_call(system: str, messages: list[dict], tools: list | None = None):
     """Call the voice model while journaling the full model phase into the bound run."""
     started = time.monotonic()
+    phase_timer = pre_model_timing.start()
     current = run_context.current_run()
     call_id = f"model-{uuid.uuid4().hex}"
     prior_secrets = _critical_secret_values_from_messages(messages)
@@ -9745,6 +9984,24 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
                 system, call_id=call_id, receipt_scrubbed=bool(prior_secrets))
         except Exception:
             frame_meta = None
+    pre_model_timing.mark(phase_timer, "call_setup")
+    # Opt-in observation only: never use candidate bytes as call arguments.
+    # Keep this outside durability handling: a broken meter cannot stop speech.
+    try:
+        measured = frame_measure.measure(system=system, messages=messages, tools=tools)
+        if measured is not None:
+            frame_meta = dict(frame_meta or {}, variant="measure", frame_measure=measured)
+    except Exception:
+        pass  # no exception text: the meter has seen private model input
+    pre_model_timing.mark(phase_timer, "measure")
+    live_system = system
+    system, served = frame_serve.select(system=system, messages=messages, tools=tools)
+    if served is not None:
+        # Trace geometry describes LIVE input, not the replacement system.
+        frame_meta = {"variant": "serve", "frame_serve": served}
+    pre_model_timing.mark(phase_timer, "canary")
+    rollback_input = ({"frame_v6_live_system": _scrub_critical_value(live_system, prior_secrets)}
+                      if served is not None and served["status"] == "served" else {})
     if current is not None:
         _run_status_gate(phase="before model input")
         try:
@@ -9760,7 +10017,7 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
                 # приезжала к ней дампом объекта. Заодно ломались кэш-маркеры: блоки
                 # переставали быть блоками, а repr выбирает кавычки по содержимому, поэтому
                 # один и тот же текст давал разные байты и убивал префиксный кэш.
-                json.dumps({"system": _scrub_critical_value(system, prior_secrets),
+                json.dumps({**rollback_input, "system": _scrub_critical_value(system, prior_secrets),
                             "messages": _durable_model_messages(messages),
                             "tools": _scrub_critical_value(tools or [], prior_secrets)},
                            ensure_ascii=False, indent=2, default=str),
@@ -9778,6 +10035,15 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
                 current.run_id, phase="model intent persistence",
                 uncertain_effect=False, error=exc,
             )
+    pre_model_timing.mark(phase_timer, "model_input_artifact")
+    # Variable timing must not enter idempotent model-input/trace metadata.
+    # Observability cannot gate the model or persist exception/request contents.
+    try:
+        timing = pre_model_timing.payload(phase_timer)
+        if current is not None:
+            _run_event_strict("model_preparation_timing", call_id=call_id, **timing)
+    except Exception:
+        pass
     try:
         kwargs = {"system": system, "messages": messages}
         if tools is not None:
@@ -9824,6 +10090,7 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
                         getattr(response, "framework", ""), response_secrets),
                     "model": _scrub_critical_text(
                         getattr(response, "model", ""), response_secrets),
+                    "vision": bool(getattr(response, "vision", False)),
                     "usage": _scrub_critical_value(
                         dict(getattr(response, "usage", None) or {}), response_secrets),
                 }, ensure_ascii=False, indent=2, default=str),
@@ -9840,6 +10107,7 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
                     getattr(response, "framework", ""), response_secrets),
                 model=_scrub_critical_text(
                     getattr(response, "model", ""), response_secrets),
+                vision=bool(getattr(response, "vision", False)),
                 usage=_scrub_critical_value(
                     dict(getattr(response, "usage", None) or {}), response_secrets),
                 text_chars=len(str(getattr(response, "text", "") or "")),
@@ -10351,6 +10619,11 @@ def run_delivery_started(run_id: str, *, chat_id: str | int | None,
     )
 
 
+# Product boundaries may opt in; the server keeps reply-hand-only delivery.
+# Opt-in does not send or authorize a draft: the boundary must guard and receipt it.
+BOUNDARY_DELIVERS_UNSPOKEN = False
+
+
 def run_delivery_completed(run_id: str, *, text: str = "", message_ids: list[str] | None = None,
                            media_count: int = 0, silent: bool = False,
                            silent_reason: str = "Praxis chose silence") -> bool:
@@ -10426,7 +10699,8 @@ def project_delivery_outcome(run_id: str, outcome: str, *, text: str = "",
     if not rid:
         return
     try:
-        row = turns.update_delivery(rid, outcome)
+        row = turns.update_delivery(
+            rid, outcome, out=str(text) if outcome == _DELIVERY_SPOKEN and text else None)
     except Exception:
         row = None
         log.debug("исход доставки не спроецирован в ход [%s]", rid, exc_info=True)
@@ -10459,8 +10733,7 @@ def run_delivery_text_accepted(run_id: str, *, text: str,
     """Commit the exact visible Telegram prefix before optional media uploads."""
     if not run_id:
         return
-    project_delivery_outcome(run_id, _DELIVERY_SPOKEN, text=str(text or ""))
-    return _runs().store_result(
+    receipt = _runs().store_result(
         run_id,
         json.dumps({"text": str(text or ""), "message_ids": list(message_ids or ())},
                    ensure_ascii=False, indent=2),
@@ -10468,6 +10741,12 @@ def run_delivery_text_accepted(run_id: str, *, text: str,
         media_type="application/json; charset=utf-8",
         idempotent=True,
     )
+    # Project only committed evidence (including on an idempotent retry), never
+    # the callback argument before storage succeeds. Recovery uses the same reducer.
+    evidence = _delivery_evidence(run_id)
+    project_delivery_outcome(run_id, _DELIVERY_SPOKEN,
+                             text=str(evidence.get("final_text") or ""))
+    return receipt
 
 
 def _delivery_text_plan_from_intent(run_id: str, intent: dict | None) -> dict | None:
@@ -11550,46 +11829,9 @@ def current_origin_evidence() -> dict[str, object] | None:
 
 
 def _split_durable_telegram_text(text: str, limit: int = 3800) -> tuple[str, ...]:
-    """Losslessly mirror Telegram's UTF-16 chunk contract without runner state."""
-
-    text = str(text or "")
-    if not text:
-        return ()
-    if limit < 1:
-        raise ValueError("Telegram text limit must be positive")
-    chunks: list[str] = []
-    start = 0
-    while start < len(text):
-        units = 0
-        hard_end = start
-        while hard_end < len(text):
-            width = 2 if ord(text[hard_end]) > 0xFFFF else 1
-            if units + width > limit:
-                break
-            units += width
-            hard_end += 1
-        if hard_end == start:
-            raise ValueError("one character exceeds Telegram's text limit")
-        split_at = hard_end
-        if hard_end < len(text):
-            floor = start + max(1, (hard_end - start) // 2)
-            paragraph = text.rfind("\n\n", floor, hard_end)
-            if paragraph >= floor:
-                split_at = paragraph + 2
-            else:
-                newline = text.rfind("\n", floor, hard_end)
-                if newline >= floor:
-                    split_at = newline + 1
-                else:
-                    for position in range(hard_end - 1, floor - 1, -1):
-                        if text[position].isspace():
-                            split_at = position + 1
-                            break
-        chunks.append(text[start:split_at])
-        start = split_at
-    if "".join(chunks) != text:
-        raise DurableExecutionError("Telegram text splitter was not lossless")
-    return tuple(chunks)
+    """Lossless shared UTF-16/Markdown boundary contract."""
+    from telegram_text import split_text
+    return split_text(text, limit)
 
 
 def _resume_outbound_items(plan: run_resume.ResumePlan,
@@ -12478,11 +12720,11 @@ class _AgentResumeRuntime:
             frame_trace.clear()
             _persist_tool_loop_checkpoint(
                 current=run_context.current_run(), iteration=completed_iteration,
-                system=copy.deepcopy(model_input["system"]), messages=messages,
+                system=copy.deepcopy(frame_serve.resume_system(model_input)), messages=messages,
                 tools=copy.deepcopy(model_input["tools"]),
             )
             reply = _terminal_tool_loop(
-                system=copy.deepcopy(model_input["system"]), messages=messages,
+                system=copy.deepcopy(frame_serve.resume_system(model_input)), messages=messages,
                 tools=copy.deepcopy(model_input["tools"]), max_iters=None,
                 tool_trace=self.tool_trace,
                 start_iteration=completed_iteration,
@@ -13930,6 +14172,15 @@ def offered_tools_for(ctx: "ChannelContext") -> list:
     # сообщение, и оно уже закрывает ход прежним путём.
     if work_loop.active_for(_current_run_kind()):
         tools = tools + [TASK_CONTROL_TOOL]
+    # Tools that exist only because a human owner is speaking differ between otherwise
+    # identical room turns. Keep that pair at the tail so their absence does not split the
+    # serialized tool-schema prefix before every following common tool.
+    speaker_bound = [tool for tool in tools
+                     if tool.get("name") in _HUMAN_OWNER_ONLY_TOOL_NAMES]
+    if speaker_bound:
+        tools = ([tool for tool in tools
+                  if tool.get("name") not in _HUMAN_OWNER_ONLY_TOOL_NAMES]
+                 + speaker_bound)
     # 18.08, её слово (Уроборос 16:12 + личка №12): `end_turn` — НИЖЕ рабочих рук.
     # Рука конца в середине списка подсказывала дешёвый паттерн «ответила → закрыла»
     # одной позицией. Состав не меняется — только порядок; байты tools сменятся один
@@ -14040,6 +14291,22 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
         # k-й — то самое редкое событие, которое ломает префикс посреди хода.
         llm.note_iteration(iteration)
         resp = _model_call(system, messages, tools)
+        if resp.stop_reason == "max_tokens":
+            # _model_call has already persisted the incomplete output. Never execute
+            # even a parseable tool prefix, continue the work loop, or report done.
+            reason = "model response cut by max_tokens; no automatic replay"
+            current = run_context.current_run()
+            if current is not None:
+                try:
+                    snapshot = _runs().status(current.run_id)
+                    target = "failed" if snapshot.get("terminalizable") else "in_doubt"
+                    _finish_durable_run(current.run_id, target, reason=reason,
+                                        details={"stop_reason": "max_tokens"}, strict=True)
+                except Exception as exc:
+                    _stop_for_durability(current.run_id, phase="truncated model stop",
+                                         uncertain_effect=True, error=exc)
+                raise RunStopped(current.run_id, target, reason)
+            raise DurableExecutionError(reason)
         if resp.stop_reason != "tool_use":
             _run_status_gate(phase="after terminal model step")
             reply = _durable_model_text(
@@ -14368,6 +14635,7 @@ def _voice_impl(
     tools_override: list | None = None,
     tool_trace: list[str] | None = None,
 ) -> str:
+    preparation_timer = pre_model_timing.start()
     if ctx is None:
         ctx = ChannelContext.from_legacy(chat_id, is_dm=is_dm, owner=is_owner, known=known, scope=scope)
     elif ctx.chat_id is None and chat_id is not None:
@@ -14385,6 +14653,7 @@ def _voice_impl(
     persona, dynamic, memory_evidence = _build_prompt_parts(
         speaker, query=recall_query, ctx=ctx,
     )
+    pre_model_timing.mark(preparation_timer, "old_context")
     evidence_parts = [memory_evidence.strip()] if memory_evidence.strip() else []
     # ⚠ СОСЕД ПО КОНВЕРТУ — ТОЖЕ ЧУЖОЙ ТЕКСТ. `extra_evidence` приходит из ориентации хода
     # и уезжает в тот же конверт evidence; пока он ехал голым, любая его строка вставала в
@@ -14445,8 +14714,8 @@ def _voice_impl(
     if len(history) >= CONSOLIDATE_AT and os.getenv("PRAXIS_CONSOLIDATE_NUDGE", "0").lower() in ("1", "true", "yes", "on"):
         dynamic += frame_trace.mark("contract.consolidate_nudge", "dynamic", "text",
             "\n\n⚙️ Context is almost full. Call `consolidate_context` — pass into `note` the gist of the "
-            "departing messages (decisions, agreements, what matters); I'll save it to the journal and free "
-            "up room. Otherwise the old tail will quietly start getting lost."
+            "departing messages (decisions, agreements, what matters). It will save the summary; "
+            "it will prune only if this turn owns the authoritative history source."
         )
     if extra_system:
         # Слепая зона по построению: пульс, будильник, forge-событие и оконные рамки едут
@@ -14468,6 +14737,7 @@ def _voice_impl(
     # кадр и набор рук уже финальны, пишется на диск и в модель не уходит — возврат
     # capture никем не читается, llm.py модуля не знает (оба факта закреплены тестами).
     # Ошибка тени не смеет стоить хода — та же дисциплина, что у frame_trace выше.
+    pre_model_timing.mark(preparation_timer, "message_tools")
     if frame_shadow.enabled():
         try:
             frame_shadow.capture(ctx=ctx, history=history, speaker=speaker,
@@ -14475,10 +14745,14 @@ def _voice_impl(
                                  live_sections=frame_trace.sections())
         except Exception:
             log.exception("теневой сборщик упал; ход не тронут")
-    return _terminal_tool_loop(
-        system=system, messages=messages, tools=tools,
-        max_iters=max_iters, tool_trace=tool_trace,
-    )
+    pre_model_timing.mark(preparation_timer, "shadow")
+    with pre_model_timing.safe_bind(preparation_timer), \
+         frame_measure.bind(system=system, ctx=ctx, live_sections=frame_trace.sections), \
+         frame_serve.bind(system=system, ctx=ctx, dynamic=dynamic):
+        return _terminal_tool_loop(
+            system=system, messages=messages, tools=tools,
+            max_iters=max_iters, tool_trace=tool_trace,
+        )
 
 
 def _voice(
@@ -14497,6 +14771,7 @@ def _voice(
     no_tools: bool = False,
     tools_override: list | None = None,
     tool_trace: list[str] | None = None,
+    history_persistent: bool = False,
 ) -> str:
     """Bind immutable per-turn authority/address state before any prompt or tool work."""
     if ctx is None:
@@ -14519,6 +14794,7 @@ def _voice(
         )
     channel_token = _TURN_CHANNEL.set(ctx)
     history_token = _TURN_HISTORY.set(history)
+    history_persistent_token = _TURN_HISTORY_PERSISTENT.set(bool(history_persistent))
     # След кадра живёт ровно в том скоупе, где кадр и собирается. Прямые вызовы
     # `_build_prompt_parts` (18 распаковок в 8 тест-файлах) остаются целы: без привязанного следа
     # каждая метка — no-op, возвращающая тот же объект текста.
@@ -14550,6 +14826,7 @@ def _voice(
         raise
     finally:
         frame_trace.finish(trace_token)
+        _TURN_HISTORY_PERSISTENT.reset(history_persistent_token)
         _TURN_HISTORY.reset(history_token)
         _TURN_CHANNEL.reset(channel_token)
 
@@ -14583,6 +14860,7 @@ def respond(
     )
     reply = _voice(
         user_msg, history, speaker, chat_id=chat_id, is_owner=is_owner, known=known, ctx=ctx,
+        history_persistent=True,
     )
     history.append({"role": "user", "content": user_msg})
     history.append({"role": "assistant", "content": reply})
@@ -15861,7 +16139,7 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
                 run_delivery_completed(durable_id, silent=True)
         elif already <= 0:
             turn["held"] = turn.get("held") or "unspoken"
-            if durable_id:
+            if durable_id and not (BOUNDARY_DELIVERS_UNSPOKEN and str(reply or "").strip()):
                 run_delivery_completed(
                     durable_id, silent=True,
                     silent_reason=("turn ended by her explicit end_turn (no speech)"

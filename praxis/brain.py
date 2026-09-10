@@ -40,6 +40,13 @@ JOURNAL_DIR = BASE / "memory" / "journal"
 _EMA_ALPHA = 0.2
 _ERR_CLASSES_KEEP = 12
 
+# Named choices are deliberately explicit: profiles are a hand, not a router.
+PROFILES = {
+    "chat": {"role": "voice", "model": "gpt-5.6-terra", "effort": "medium"},
+    "routine-code": {"role": "voice", "model": "gpt-5.6-terra", "effort": "high"},
+    "deep-review": {"role": "voice", "model": "gpt-5.6-sol", "effort": "high"},
+}
+
 
 # --------------------------------------------------------------------------- #
 #  наблюдаемые свойства: per-model статистика вызовов
@@ -127,6 +134,7 @@ def catalog() -> dict:
     """Каталог для тула/пульта: роли, доступные модели по фреймворкам, наблюдения, лимит."""
     import llm
     out: dict = {"roles": {}, "frameworks": {}, "stats": model_stats(),
+                 "profiles": {name: dict(spec) for name, spec in PROFILES.items()},
                  "provider_remaining": "unknown"}
     try:
         snap = llm.snapshot()
@@ -136,6 +144,12 @@ def catalog() -> dict:
                                    "last_error", "fallback_armed", "reasoning_effort")}
     except Exception:
         log.debug("brain.catalog: snapshot не собрался", exc_info=True)
+    voice = out["roles"].get("voice") or {}
+    out["current_profiles"] = [
+        name for name, spec in PROFILES.items()
+        if voice.get("model") == spec["model"]
+        and (voice.get("reasoning_effort") or "") == spec["effort"]
+    ]
     for fw in ("anthropic", "openai"):
         out["frameworks"][fw] = {"allowlist": allowlist(fw)}
     try:  # usage за 7 дней по-модельно — токены как наблюдаемое свойство
@@ -232,6 +246,52 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis") -> dict:
             "framework": target_fw, "model": model, "why": (why or "")[:300], "by": by})
     return {"ok": True, "role": role, "framework": target_fw, "model": model,
             "was": f"{cur_fw}/{cur_model}"}
+
+
+def apply_profile(name: str, *, why: str = "", by: str = "praxis") -> dict:
+    """Atomically apply one explicit complexity profile to voice, with ping rollback."""
+    import llm
+    name = (name or "").strip().lower()
+    if name not in PROFILES:
+        return {"ok": False, "error": "не знаю профиль; мои: " + " | ".join(PROFILES)}
+    if not (why or "").strip():
+        return {"ok": False, "error": "профиль без «зачем» не имеет провенанса — назови причину"}
+    spec = PROFILES[name]
+    before = dict((llm._config().get("roles") or {}).get("voice") or {})
+    old_fw = str(before.get("framework") or "")
+    old_model = str(before.get("model") or "")
+    old_effort = str(before.get("reasoning_effort") or "")
+    fws = [fw for fw in ("anthropic", "openai") if spec["model"] in allowlist(fw)]
+    if not fws:
+        return {"ok": False, "error": f"«{spec['model']}» нет в моём каталоге", "stage": "model"}
+    target_fw = old_fw if old_fw in fws else fws[0]
+    target = dict(before)
+    target["framework"] = target_fw
+    target["model"] = spec["model"]
+    target["reasoning_effort"] = spec["effort"]
+    if target_fw != old_fw:
+        target["fallback_model"] = old_model
+    try:
+        llm.update_config({"roles": {"voice": target}})
+    except Exception as error:
+        return {"ok": False, "error": f"{type(error).__name__}: {error}", "stage": "write"}
+    ok, err = llm.ping("voice")
+    if not ok:
+        try:
+            llm.update_config({"roles": {"voice": before}})
+        except Exception as rollback_error:
+            return {"ok": False, "error": err, "profile": name, "stage": "ping",
+                    "rollback_error": str(rollback_error)}
+        return {"ok": False, "error": err, "profile": name, "stage": "ping",
+                "rolled_back": True}
+    _journal(f"профиль сложности {name}: voice {old_model or '—'}/{old_effort or '—'} → "
+             f"{spec['model']}/{spec['effort']} — {why.strip()[:160]}")
+    _spine(f"профиль сложности: {name}", {"profile": name, **spec,
+            "old_framework": old_fw, "old_model": old_model, "old_effort": old_effort,
+            "framework": target_fw, "why": why.strip()[:300], "by": by})
+    return {"ok": True, "profile": name, **spec, "framework": target_fw,
+            "was_model": old_model, "was_effort": old_effort,
+            "model_changed": old_model != spec["model"]}
 
 
 def _journal(msg: str) -> None:
@@ -393,6 +453,10 @@ def describe() -> str:
                  if rc.get("reasoning_effort")
                  else ", рассуждение погашено (умолчание реле)")
         lines.append(f"- {role}: {rc.get('framework')}/{rc.get('model')}{fb}{depth}{state}")
+    active = cat.get("current_profiles") or []
+    lines.append("- профили сложности: " + "; ".join(
+        f"{name}={spec['model']}/{spec['effort']}" for name, spec in PROFILES.items())
+        + (f"; совпадает сейчас: {', '.join(active)}" if active else "; сейчас вне профиля"))
     for fw, d in cat["frameworks"].items():
         al = d.get("allowlist") or []
         al_text = ", ".join(al) if al else "(провайдер не ответил — наблюдаю только сконфигурированные имена)"

@@ -564,6 +564,26 @@ class TestShellAndRender(EnvBase):
         self.assertIn("[рендер]", out)
         self.assertIn("Отрендеренный текст", out)
 
+    def test_render_continuation_keeps_same_cached_source(self):
+        import re
+        calls = []
+        rendered = "rendered evidence " * 800
+
+        def fetch(url, **kw):
+            calls.append(url)
+            return url, rendered.encode(), "text/plain; charset=utf-8"
+
+        self._patch(webtool, _check_url=lambda url: None,
+                    _fetch_raw=fetch, RENDER_URL="https://renderer.example/")
+        first = webtool.web_read("https://spa.example/", render=True)
+        continuation = re.search(r"web_read\(url, start=(\d+), render=true\)", first)
+        self.assertIsNotNone(continuation)
+        start = int(continuation.group(1))
+        second = webtool.web_read("https://spa.example/", start=start, render=True)
+        self.assertIn(rendered[start:start + 100], second)
+        self.assertIn("[рендер]", second)
+        self.assertEqual(calls, ["https://renderer.example/https://spa.example/"])
+
     def test_render_disabled_message(self):
         self._patch(webtool, RENDER_URL="")
         out = webtool.web_read("https://spa.example/", render=True)

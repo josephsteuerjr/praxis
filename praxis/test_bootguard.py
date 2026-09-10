@@ -12,8 +12,10 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
+import types
 import unittest
 from pathlib import Path
 
@@ -121,6 +123,36 @@ class TestRollbackJournal(unittest.TestCase):
         jtext = "".join(p.read_text(encoding="utf-8") for p in bg.JOURNAL_DIR.glob("*.md"))
         self.assertIn("[boot]", jtext)
         self.assertIn("git show abc123", jtext)
+
+
+class TestLostRunnerStatusIsNotACleanExit(unittest.TestCase):
+    """Потерянный статус раннера читался как rc=0 — «остановиться навсегда».
+
+    subprocess.Popen при ECHILD молча подставляет ноль; для decide_after ноль —
+    команда стоп, PID 1 выходит, контейнер умирает решением, которого никто не
+    принимал. Мина, названная адверсаркой 28.08: пути к ней сегодня нет, но любой
+    будущий SIGCHLD-хендлер или чужой waitpid(-1) её взводит."""
+
+    def test_a_reaped_elsewhere_child_means_restart_not_stop(self):
+        proc = types.SimpleNamespace(returncode=None, pid=2 ** 22 + 12345)
+        self.assertEqual(bg._runner_status_or_restart(proc),
+                         bg.RESTART_CODE,
+                         "потерянный статус снова читается как чистый выход")
+
+    def test_an_honest_code_is_passed_through(self):
+        proc = types.SimpleNamespace(returncode=7, pid=1)
+        self.assertEqual(bg._runner_status_or_restart(proc), 7)
+        proc = types.SimpleNamespace(returncode=0, pid=1)
+        self.assertEqual(bg._runner_status_or_restart(proc), 0,
+                         "честный ноль обязан остаться нулём")
+
+    @unittest.skipUnless(hasattr(os, "WNOHANG"), "нужен POSIX waitpid")
+    def test_the_full_wait_survives_a_stolen_runner(self):
+        proc = subprocess.Popen([sys.executable, "-c", "raise SystemExit(3)"])
+        os.waitpid(proc.pid, 0)  # «кто-то другой» снял ребёнка и унёс статус
+        self.assertEqual(bg._wait_runner_reaping(proc),
+                         bg.RESTART_CODE,
+                         "украденный статус превратился в «остановиться навсегда»")
 
 
 class TestReapOrphans(unittest.TestCase):

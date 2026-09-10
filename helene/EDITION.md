@@ -8,9 +8,20 @@ of the machine under them. Pretending otherwise produced a phantom task — "mer
 
 So the difference is declared instead. `core/` holds every file of the agent's core that
 Hélène carries differently, and nothing else: everything not listed here comes from
-`praxis/` unchanged. On 2026-09-09 that was **18 files out of 513** — 435 of the rest are
-byte-for-byte identical, and the remaining 60 are the agent's own writing (`soul/`, her
-constitution and skills), which belongs to her and is hers to differ.
+`praxis/` unchanged.
+
+**The declaration is now checkable, and it was checked.** `desk/installer/core_src.py
+--check` compares the layer against the ACTUAL difference between `praxis/` and the working
+copy, and names three outcomes: undeclared, declared in vain, ours alone. Run it before
+trusting any number on this page.
+
+⚠ What it said on 2026-09-10, right after the core was re-exported from production
+(`64f1588c`): 19 files declared here really do differ, **0 are declared in vain** — and 40
+differ without being declared. Those forty are not a hidden edition. Three are the
+element-acting verb written that same morning and not yet offered; the rest are this
+working copy lagging a core that moved the day it was published. The layer is regenerated
+after the working copy catches up, not before: copying "we are behind" into a file called
+"the Windows edition" is exactly the lie the previous measurement made.
 
 ## What is here, and how far it is from the core
 
@@ -46,11 +57,22 @@ Files that exist only here:
 
 ## The honest part
 
-Some of what is here is not an edition at all — it is a patch waiting for its author. The
-vision routing, the effort step, the call ledger and the window-reading hand were written
-for Hélène and offered to the core; until they are taken there, they live here, and this
-table is the only place that says so out loud.
+Some of what was here was not an edition at all — it was a patch waiting for its author.
+The vision routing, the effort step for GLM, the call ledger and the window-reading hand
+were written for Hélène and offered to the core; until taken there, they lived here, and
+this table was the only place that said so out loud.
 
-The numbers above were measured on 2026-09-09 against the core as it runs in production.
-They drift the moment either side moves, and a drifting number that nobody re-measures is
-the same lie the phantom "one core" was. Re-measure before trusting them.
+**They were taken.** The core's own commit of 2026-09-10 — "GLM effort wire dialect and
+durable Forge call attribution" — carries the effort step (`output_config.effort` in
+`llm.py`, the z.ai Anthropic dialect) and the call ledger (`forge_task_id` in `llm.py` and
+`forge_worker.py`); the vision routing and `read_window` are in there too. All four are now
+the core's, not an edition of it, and the rows below shrink accordingly at the next
+regeneration.
+
+One patch is still offered and not yet taken: `desktop.element.act` — acting on a named
+element through UI Automation patterns instead of a point on screen. It is not in `core/`
+either, because it was written on 2026-09-10 and its letter went out the same day.
+
+The numbers on this page drift the moment either side moves, and a drifting number that
+nobody re-measures is the same lie the phantom "one core" was. There is now an instrument;
+use it.

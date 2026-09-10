@@ -37,6 +37,16 @@ class TestParseWhen(Base):
     def test_garbage(self):
         self.assertEqual(tasks.parse_when("бла-бла"), (None, None))
 
+    def test_today_and_tomorrow_reject_invalid_clock_values(self):
+        """Опечатка в разовом сроке не должна ронять руку remind_self."""
+        self.assertEqual(tasks.parse_when("today 24:00"), (None, None))
+        self.assertEqual(tasks.parse_when("today 09:99"), (None, None))
+        self.assertEqual(tasks.parse_when("tomorrow 24:00"), (None, None))
+        when, recur = tasks.parse_when("tomorrow 09:30")
+        self.assertIsNotNone(when)
+        self.assertTrue(when.endswith("T09:30"))
+        self.assertIsNone(recur)
+
 
 class TestCrud(Base):
     def test_add_list_cancel(self):

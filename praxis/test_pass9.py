@@ -358,7 +358,12 @@ class TestUsageMeter(BufBase):
 
     def test_usage_persists_cache_metrics(self):
         """cache_read/cache_creation накапливаются в daily usage и видны в usage_line."""
-        llm._usage_add("voice", {"in": 1000, "out": 100, "cache_read": 800, "cache_creation": 200},
+        # ⚠ 27.08: фикстура описывала вызов glm (anthropic) числами в OPENAI-форме —
+        # `in` вместе с кэшем. Ровно та путаница, из-за которой дневное ведро держало
+        # две семантики. Тот же самый ход в схеме 2: промпт 1000, из кэша 800, значит
+        # свежих 200. Все три пина ниже сошлись к прежним числам без правки — это и
+        # есть проверка, что формула та.
+        llm._usage_add("voice", {"in": 200, "out": 100, "cache_read": 800, "cache_creation": 200},
                         model="glm-5.2")
         data = llm._usage_load()
         day = data.get(self._today(), {})
@@ -368,9 +373,10 @@ class TestUsageMeter(BufBase):
         # model breakdown тоже хранит
         self.assertEqual(v.get("models", {}).get("glm-5.2", {}).get("cache_read"), 800)
         # 02.08: прибор показывает не сырую пару r/c, а то, что действительно означает
-        # расход — долю кэша и СВЕЖИЙ вход (`in − cache_read`). Кэшированный префикс
-        # провайдер уже держит; платится за остальное. Контракт этого теста — «метрики
-        # видны в usage_line» — прежний, проверяется по смыслу, а не по слову «cache».
+        # расход — долю кэша и СВЕЖИЙ вход. Кэшированный префикс провайдер уже держит;
+        # платится за остальное. 27.08: свежий вход — это сам `in` (схема 2), а доля
+        # берётся от полного промпта `cache_read + in`. Контракт теста — «метрики видны
+        # в usage_line» — прежний, проверяется по смыслу, а не по слову «cache».
         line = llm.usage_line()
         self.assertIn("кэш 80%", line)
         self.assertIn("свежего входа 200", line)
@@ -787,6 +793,7 @@ class TestInboxRunner(InboxBase):
 # --------------------------------------------------------------------------- #
 
 import heartbeat
+import people
 import social
 import tasks as tasks_mod
 
@@ -798,11 +805,42 @@ class TaskTargetBase(BufBase):
         heartbeat.DECISIONS_PATH = self.tmp / "memory" / ".state" / "window_decisions.json"
         self._orig.append((tasks_mod, "TASKS", tasks_mod.TASKS))
         tasks_mod.TASKS = self.tmp / "memory" / "tasks.json"
+        self._orig.append((people, "BASE", people.BASE))
+        self._orig.append((people, "PEOPLE_DIR", people.PEOPLE_DIR))
+        people.BASE = self.tmp
+        people.PEOPLE_DIR = self.tmp / "memory" / "people"
+        people.PEOPLE_DIR.mkdir(parents=True, exist_ok=True)
         agent._TELETHON.pop("get_id", None)
         self.addCleanup(lambda: agent._TELETHON.pop("get_id", None))
 
 
 class TestMessageTaskResolve(TaskTargetBase):
+    def test_alias_cannot_override_a_different_telegram_binding(self):
+        people.set_telegram_id("alice", "Alice", 10101)
+        self._orig.extend([(social, "category", social.category),
+                           (agent.graph, "resolve", agent.graph.resolve)])
+        social.category = lambda sid: "unknown"
+        agent.graph.resolve = lambda ref: "alice"
+        self.assertTrue(agent._target_is_stranger(20202, "@alice"))
+
+    def test_alias_cannot_disambiguate_duplicate_telegram_bindings(self):
+        for slug in ("alice", "another"):
+            people.path_for(slug).write_text(
+                f"# {slug}\n\ntelegram_id: 10101\n", encoding="utf-8")
+        self._orig.extend([(social, "category", social.category),
+                           (agent.graph, "resolve", agent.graph.resolve)])
+        social.category = lambda sid: "unknown"
+        agent.graph.resolve = lambda ref: "alice"
+        self.assertTrue(agent._target_is_stranger(10101, "@alice"))
+
+    def test_legacy_alias_without_telegram_binding_still_recognized(self):
+        people.path_for("alice").write_text("# Alice\n", encoding="utf-8")
+        self._orig.extend([(social, "category", social.category),
+                           (agent.graph, "resolve", agent.graph.resolve)])
+        social.category = lambda sid: "unknown"
+        agent.graph.resolve = lambda ref: "alice"
+        self.assertFalse(agent._target_is_stranger(10101, "@alice"))
+
     def test_resolved_known_target_no_risky(self):
         agent._TELETHON["get_id"] = lambda ref: 555
         self._orig.append((social, "category", social.category))
@@ -813,6 +851,36 @@ class TestMessageTaskResolve(TaskTargetBase):
         t = tasks_mod.list_open()[-1]
         self.assertEqual(t["target_id"], 555, "id должен резолвиться при постановке")
         self.assertFalse(t.get("risky", False))
+
+    def test_dossier_telegram_id_makes_numeric_target_known(self):
+        people.set_telegram_id("boris", "Борис", 30303)
+        agent._TELETHON["get_id"] = lambda ref: 30303
+        self._orig.append((social, "category", social.category))
+        social.category = lambda sid: "unknown"
+
+        out = agent.tool_remind_self(
+            "message", "разбуди Егора", "in 2h", "30303")
+
+        self.assertIn("Наметила #", out)
+        self.assertNotIn("незнаком", out)
+        task = tasks_mod.list_open()[-1]
+        self.assertEqual(task["target_id"], 30303)
+        self.assertFalse(task.get("risky", False))
+
+    def test_ambiguous_dossier_binding_stays_risky(self):
+        people.path_for("alice").write_text(
+            "# Alice\n\ntelegram_id: 777000\n", encoding="utf-8")
+        people.path_for("mallory").write_text(
+            "# Mallory\n\ntelegram_id: 777000\n", encoding="utf-8")
+        agent._TELETHON["get_id"] = lambda ref: 777000
+        self._orig.append((social, "category", social.category))
+        social.category = lambda sid: "unknown"
+
+        out = agent.tool_remind_self(
+            "message", "напиши как договорились", "in 1h", "777000")
+
+        self.assertIn("незнаком", out)
+        self.assertTrue(tasks_mod.list_open()[-1]["risky"])
 
     def test_unresolved_honest_error_no_task(self):
         agent._TELETHON["get_id"] = lambda ref: (_ for _ in ()).throw(ValueError("нет такого"))
@@ -843,6 +911,65 @@ class TestMessageTaskResolve(TaskTargetBase):
     def test_other_kinds_untouched(self):
         out = agent.tool_remind_self("note", "не забыть про бэкап", "in 1h")
         self.assertIn("Наметила #", out)
+
+
+class TestOverdueWhenWarning(TaskTargetBase):
+    """Ночь 3.09: «today 09:45» в 23:42 легла просроченной — ушла в полночь.
+
+    Планировщик прав, просроченное и должно зреть немедленно. Молчала постановка:
+    она не видела, что названный срок уже в прошлом. Теперь — громкий факт в
+    подтверждении, а не тихая подмена «сегодня» на «завтра».
+    """
+
+    def _ok(self):
+        agent._TELETHON["get_id"] = lambda ref: 555
+        self._orig.append((social, "category", social.category))
+        social.category = lambda sid: "known"
+
+    def test_overdue_message_warns_and_reminds_about_raw_body(self):
+        self._ok()
+        past = (_dt.datetime.now() - _dt.timedelta(hours=6)).isoformat(timespec="minutes")
+        out = agent.tool_remind_self("message", "поздравь с релизом", past, "@vasya")
+        self.assertIn("Наметила #", out)
+        self.assertIn("уже прошёл", out, "прошедший срок обязан быть назван громко")
+        self.assertIn("как есть", out, "kind=message: тело письма = текст цели, напомнить")
+        t = tasks_mod.list_open()[-1]
+        self.assertEqual(t["when"], past, "срок не переписывается за её спиной")
+
+        # Контроль: будущее — без предупреждения, и без служебной подсказки про письмо.
+        future = (_dt.datetime.now() + _dt.timedelta(hours=6)).isoformat(timespec="minutes")
+        out2 = agent.tool_remind_self("message", "поздравь с релизом", future, "@vasya")
+        self.assertNotIn("уже прошёл", out2)
+        self.assertNotIn("как есть", out2)
+
+    def test_overdue_note_warns_without_letter_hint(self):
+        past = (_dt.datetime.now() - _dt.timedelta(hours=6)).isoformat(timespec="minutes")
+        out = agent.tool_remind_self("note", "напомнить про бэкап", past)
+        self.assertIn("уже прошёл", out)
+        self.assertNotIn("как есть", out, "подсказка про письмо — только для kind=message")
+
+    def test_instant_note_stays_quiet(self):
+        # «in 0m» и пустой when — осознанное «сейчас»; предупреждение их не трогает,
+        # иначе крикливость отучит читать предупреждения вообще.
+        out = agent.tool_remind_self("note", "сейчас же", "in 0m")
+        self.assertIn("Наметила #", out)
+        self.assertNotIn("уже прошёл", out)
+
+    def test_invalid_time_does_not_create_an_immediate_task(self):
+        for when in ("today 24:00", "tomorrow 09:99", "daily 25:00", "every 0h", "bad time"):
+            with self.subTest(when=when):
+                before = tasks_mod._load()
+                out = agent.tool_remind_self("note", "only at the requested time", when)
+                self.assertIn("Не распознала срок", out)
+                self.assertEqual(tasks_mod._load(), before)
+
+    def test_explicit_now_spellings_still_create_immediate_tasks(self):
+        for when in ("", "  ", "now", "сейчас", "in 0m", "in 0h"):
+            with self.subTest(when=when):
+                out = agent.tool_remind_self("note", "explicit immediate task", when)
+                self.assertIn("Наметила #", out)
+                self.assertNotIn("уже прошёл", out)
+
 
 
 # ⚠ Отсюда удалён класс TestWindowTransparency: он целиком проверял

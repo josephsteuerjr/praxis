@@ -1383,15 +1383,68 @@ class TestTheManifestCanLieByValue(Base):
         self.assertIn("значение врёт", rails.manifest_state())
         self.assertIn("ОТСТАЛ", rails.state_line())
 
-    def test_a_moved_lever_makes_the_file_stale(self):
-        """Рычаг речи подняли — файл, писанный при опущенном, отстал. Это не флап."""
+    def test_a_moved_live_lever_does_not_make_the_isolated_manifest_stale(self):
+        """Продовый env-факт показывается в тексте, но gate сверяет только структуру."""
         with mock.patch.dict(os.environ, {"PRAXIS_CHAT_REPLY_HAND": "off"}):
             rails.sync_md()
             self.assertTrue(rails.manifest_drift()["ok"])
         with mock.patch.dict(os.environ, {"PRAXIS_CHAT_REPLY_HAND": "on"}):
+            value = str(self.rail("chat_reply_contract")["value"])
             drift = rails.manifest_drift()
-            self.assertIn("chat_reply_contract", drift["value_stale"])
-            self.assertFalse(drift["ok"])
+        self.assertIn("ПОДНЯТ", value)
+        self.assertNotIn("chat_reply_contract", drift["value_stale"])
+        self.assertTrue(drift["ok"])
+
+    def test_a_changed_contract_structure_makes_the_file_stale(self):
+        """Развязка env не должна превратить свидетель структуры в декоративный текст."""
+        rails.sync_md()
+        original = rails._chat_reply_contract_structure
+        try:
+            rails._chat_reply_contract_structure = lambda: "проверяемая структура: СЛОМАНА"
+            drift = rails.manifest_drift()
+        finally:
+            rails._chat_reply_contract_structure = original
+        self.assertIn("chat_reply_contract", drift["value_stale"])
+        self.assertFalse(drift["ok"])
+
+    def test_an_unread_source_is_not_passed_off_as_a_checked_fact(self):
+        """⚠ внутри значения — это «не смогла проверить», а не проверенный факт.
+
+        `_chat_reply_contract_structure` собирает строку из трёх кусков и ВСЕГДА
+        начинает её с `проверяемая структура: `, а свои три «не прочиталось» кладёт
+        в СЕРЕДИНУ. Свидетель при этом смотрел `value.startswith("⚠")` — то есть
+        ветка отказа была мёртвой, и непрочитанный `work_loop.py` ехал дальше как
+        проверенный факт. Ближайший `sync_md()` вписал бы ⚠-текст в `soul/rails.md`
+        и объявил его свежим.
+
+        Правило проекта: молчание прибора не имеет права выглядеть как факт о мире.
+        """
+        original = rails._REPLY_HAND_DEFAULT_RE
+        try:
+            rails._REPLY_HAND_DEFAULT_RE = re.compile(r"этого-в-исходнике-нет-никогда")
+            value = rails._chat_reply_contract_structure()
+            self.assertIsNotNone(value, "проба построена неверно: значение должно собраться")
+            self.assertIn("⚠", value, "проба построена неверно: значок должен появиться")
+            self.assertFalse(value.startswith("⚠"),
+                             "проба построена неверно: значок обязан быть В СЕРЕДИНЕ, "
+                             "иначе тест ничего не сторожит")
+            self.assertIsNone(
+                rails._witness_chat_reply_contract(),
+                "непрочитанный исходник выдан за проверенный факт")
+        finally:
+            rails._REPLY_HAND_DEFAULT_RE = original
+
+    def test_the_unread_source_lands_in_unchecked_not_in_fresh(self):
+        """Сквозь весь контур: рельс уходит в названную категорию «сверять нечем»."""
+        rails.sync_md()
+        original = rails._REPLY_HAND_DEFAULT_RE
+        try:
+            rails._REPLY_HAND_DEFAULT_RE = re.compile(r"этого-в-исходнике-нет-никогда")
+            drift = rails.manifest_drift()
+            self.assertIn("chat_reply_contract", drift["unchecked"])
+            self.assertNotIn("chat_reply_contract", drift["value_stale"])
+        finally:
+            rails._REPLY_HAND_DEFAULT_RE = original
 
     def test_an_uncomputable_witness_is_not_called_fresh(self):
         """«Не смогла проверить» обязано звучать иначе, чем «совпало»."""

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import atexit
+import asyncio
 import json
 import os
 import shutil
@@ -624,11 +625,13 @@ class OneMindSkipVisibilityTests(unittest.IsolatedAsyncioTestCase):
         self._old_path = perception.SKIPS_PATH
         perception.SKIPS_PATH = self.skips
         perception._LAST_SKIP.clear()
+        runner._ONE_MIND_DEFERRED.clear()
         self.addCleanup(self._restore)
 
     def _restore(self):
         perception.SKIPS_PATH = self._old_path
         perception._LAST_SKIP.clear()
+        runner._ONE_MIND_DEFERRED.clear()
 
     def _rows(self) -> list[dict]:
         if not self.skips.exists():
@@ -650,6 +653,47 @@ class OneMindSkipVisibilityTests(unittest.IsolatedAsyncioTestCase):
         rows = self._rows()
         self.assertEqual([row["stage"] for row in rows], ["one_mind:wake_pass"])
         self.assertIn("разбуди меня со связью", rows[0]["detail"])
+
+    async def test_scheduler_retries_in_one_busy_period_are_one_visible_deferral(self):
+        async with runner._ONE_MIND:
+            for _ in range(25):
+                self.assertIsNone(await runner._wake_pass("тот же due wake"))
+                self.assertIsNone(await runner._task_window("тот же due window"))
+        rows = self._rows()
+        self.assertEqual(
+            [(row["stage"], row.get("prev_n")) for row in rows],
+            [("one_mind:wake_pass", None), ("one_mind:task_window", None)],
+        )
+
+    async def test_a_queued_handoff_stays_in_the_same_busy_period(self):
+        second_acquired = asyncio.Event()
+        release_second = asyncio.Event()
+
+        async def queued_holder():
+            async with runner._ONE_MIND:
+                second_acquired.set()
+                await release_second.wait()
+
+        async with runner._ONE_MIND:
+            self.assertIsNone(await runner._wake_pass("непрерывно due"))
+            waiter = asyncio.create_task(queued_holder())
+            await asyncio.sleep(0)
+        await second_acquired.wait()
+        self.assertIsNone(await runner._wake_pass("непрерывно due"))
+        release_second.set()
+        await waiter
+
+        rows = self._rows()
+        self.assertEqual([row["stage"] for row in rows], ["one_mind:wake_pass"])
+
+    async def test_a_later_busy_period_makes_the_same_deferral_visible_again(self):
+        with patch.object(perception, "_COALESCE_SEC", 0):
+            for _ in range(2):
+                async with runner._ONE_MIND:
+                    self.assertIsNone(await runner._wake_pass("повторно due"))
+        rows = self._rows()
+        self.assertEqual([row["stage"] for row in rows],
+                         ["one_mind:wake_pass", "one_mind:wake_pass"])
 
     async def test_an_open_lock_records_nothing(self):
         with patch.object(runner.agent, "wake_turn", return_value=None):

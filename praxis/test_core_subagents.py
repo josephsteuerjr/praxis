@@ -60,6 +60,12 @@ class NormalizeTests(unittest.TestCase):
         p = self._payload({"status": "done", "result": "д" * 9000})
         self.assertLessEqual(len(p["recap"]), core_subagents.RECAP_CHARS)
 
+    def test_requested_and_actual_models_are_both_preserved(self):
+        p = self._payload({"status": "done", "model": "gpt-5.6-terra"},
+                          request={"model": "gpt-5.6-sol"})
+        self.assertEqual(p["model_requested"], "gpt-5.6-sol")
+        self.assertEqual(p["model"], "gpt-5.6-terra")
+
     def test_causality_receipts_not_self_assessment(self):
         p = self._payload({"status": "stopped"}, request={"brief": "b"})
         c = p["causality"]

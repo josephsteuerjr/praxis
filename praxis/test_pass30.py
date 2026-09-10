@@ -82,6 +82,7 @@ class FsProbeImageTests(unittest.TestCase):
         memory = self.base / "memory"
         with mock.patch.object(workshop, "BASE", self.base), \
                 mock.patch.object(agent, "MEM_DIR", memory), \
+                mock.patch.object(agent.llm, "can_see", return_value=True), \
                 mock.patch("hands.guard", return_value=None):
             seen = agent.tool_fs_read(str(image))
             self.assertIsInstance(seen, agent.ToolObservation)
@@ -131,6 +132,7 @@ class ObserveFileTests(unittest.TestCase):
 
         with mock.patch.object(agent, "MEM_DIR", Path(self.tmp.name) / "memory"), \
                 mock.patch.object(agent, "_computer_allowed", return_value=True), \
+                mock.patch.object(agent.llm, "can_see", return_value=True), \
                 mock.patch("body_client.call", return_value={"ok": True, "artifact": artifact}) as export, \
                 mock.patch("body_client.fetch_artifact", side_effect=fake_fetch), \
                 mock.patch("body_client.desktop_screen_capture") as capture, \
@@ -214,6 +216,7 @@ class ObserveFileTests(unittest.TestCase):
 
         with mock.patch.object(agent, "MEM_DIR", Path(self.tmp.name) / "memory"), \
                 mock.patch.object(agent, "_computer_allowed", return_value=True), \
+                mock.patch.object(agent.llm, "can_see", return_value=True), \
                 mock.patch("body_client.desktop_screen_capture",
                            return_value={"ok": True, "artifact": artifact}), \
                 mock.patch("body_client.fetch_artifact", side_effect=fake_fetch):
@@ -370,6 +373,47 @@ class PromiseWakeTests(unittest.TestCase):
         self.assertIsNone(promises.detect("Люблю котиков — они пушистые."))
         self.assertIsNone(promises.detect("Вчера всё сделала и рассказала."))
         self.assertIsNone(promises.detect(""))
+
+    def test_detect_action_requires_both_word_boundaries(self):
+        import promises
+
+        for text in ("Сейчас вернусь", "Теперь проверю", "Сейчас, проверю!",
+                     "(Сейчас вернусь.)"):
+            with self.subTest(text=text):
+                self.assertIsNotNone(promises.detect(text))
+        for text in ("сейчас вернула 0", "Теперь проверяла дважды",
+                     "Сейчас подверну", "Сейчас проверюка", "Сейчас проверю_лог",
+                     "Сейчас проверю2", "несейчас проверю"):
+            with self.subTest(text=text):
+                self.assertIsNone(promises.detect(text))
+
+    def test_detect_gist_expands_both_unicode_word_boundaries(self):
+        import promises
+
+        left, right = "ё" * 50, "я" * 90
+        text = "Вступление. " + left + " Сейчас проверю " + right + ". Хвост."
+        self.assertEqual(promises.detect(text), left + " Сейчас проверю " + right)
+        # Punctuation is a valid boundary even without whitespace.
+        text = "в" * 250 + ";Сейчас проверю:" + "я" * 250
+        self.assertEqual(promises.detect(text), "Сейчас проверю:")
+        self.assertEqual(promises.detect("Сейчас\tпроверю,\nвсё — готово!"),
+                         "Сейчас проверю, всё — готово!")
+
+    def test_detect_gist_cap_is_word_safe_and_keeps_the_promise(self):
+        import promises
+
+        phrase = "Сейчас проверю"
+        left = "ё" * 70
+        right = "я" * (200 - len(left) - len(phrase) - 2)
+        exact = left + " " + phrase + " " + right
+        self.assertEqual(len(exact), 200)
+        self.assertEqual(promises.detect(exact), exact)
+        # Expanding the right edge must not reintroduce a cut at character 200.
+        self.assertEqual(promises.detect(exact + "я"), left + " " + phrase)
+        self.assertEqual(promises.detect(phrase + " " + "я" * 500), phrase)
+        self.assertEqual(promises.detect("ё" * 500 + " " + phrase), phrase)
+        self.assertEqual(promises.detect("ё" * 500 + " " + phrase + " " + "я" * 500),
+                         phrase)
 
     def test_detect_ignores_quoted_or_meta_descriptions_but_keeps_direct_promises(self):
         import promises

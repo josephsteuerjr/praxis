@@ -72,6 +72,7 @@ else:
 class TempGroupMemory(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
         self.memory = self.base / "memory"
         self.groups = self.memory / "groups"
@@ -81,6 +82,18 @@ class TempGroupMemory(unittest.TestCase):
             patch.object(group_context, "MEM_DIR", self.memory),
             patch.object(group_context, "GROUPS_DIR", self.groups),
             patch.object(group_context, "STATE_DIR", self.state),
+            patch.object(group_context, "_KEY_CACHE", {}),
+            # Real hot rebuilds must read only this test's journal and projections.
+            patch.object(runner.bufstore, "BASE", self.base),
+            patch.object(runner.bufstore, "BUF_DIR", self.memory / ".buffers"),
+            patch.object(runner.bufstore, "STATE_DIR", self.memory / ".state"),
+            patch.object(runner.bufstore, "META_PATH",
+                         self.memory / ".state" / "buf_meta.json"),
+            patch.object(runner, "_buf", defaultdict(lambda: deque(maxlen=runner.BUF_MAXLEN))),
+            patch.object(runner, "_buffer_message_ids",
+                         defaultdict(lambda: deque(maxlen=runner.BUF_MAXLEN))),
+            patch.object(runner, "_buf_dirty", set()),
+            patch.object(runner, "_persisted_life_sources", set()),
             # Реестр маршрутов тоже в песочницу: иначе свидетельство, записанное
             # одним тестом, доживает до чужого и молча меняет place_of соседям
             # (поймано 22.08: verdict от бэкфил-теста уводил tombstone удаления в
@@ -88,15 +101,22 @@ class TempGroupMemory(unittest.TestCase):
             patch.object(runner.telegram_routes, "DIR",
                          self.memory / ".state" / "group_context"),
         ]
+        life = self.memory / "life"
+        life_paths = {
+            "BASE": self.base, "MEM_DIR": self.memory, "LIFE_DIR": life,
+            "STATE_DIR": self.memory / ".state" / "life",
+            "LEGACY_SUMMARIES_DIR": self.memory / ".summaries",
+            "DIALOGUES_DIR": self.memory / "dialogues",
+            **{name.upper() + "_DIR": life / name for name in (
+                "events", "compacts", "episodes", "claims", "patches", "reflections",
+            )},
+        }
+        self.patchers.extend(patch.object(runner.memory_life, name, path)
+                             for name, path in life_paths.items())
         for item in self.patchers:
             item.start()
-        group_context._KEY_CACHE.clear()
-
-    def tearDown(self):
-        group_context._KEY_CACHE.clear()
-        for item in reversed(self.patchers):
-            item.stop()
-        self.temp.cleanup()
+            # LIFO restoration also runs if a later setUp step or the test fails.
+            self.addCleanup(item.stop)
 
     def add(self, peer, topic, mid, text, sender=10, name="Alice", reply=None,
             title=""):
@@ -933,6 +953,7 @@ class TestDeletedIncoming(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
             patch.object(runner.rooms, "is_allowed", return_value=True),
             patch.object(runner.rooms, "effective_mode", return_value="normal"),
             patch.object(runner, "_group_archive_enabled", return_value=True),
+            patch.object(runner.telegram_routes, "place_of", side_effect=lambda cid: cid),
             patch.object(runner, "_buf", buffers),
             patch.object(runner, "_buf_dirty", set()),
             patch.object(runner, "_meta", {}),
@@ -950,14 +971,128 @@ class TestDeletedIncoming(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
         rows = [row for row in group_context.iter_records("-1001", max_records=None)
                 if row.get("message_id") == 41]
         self.assertEqual([row["kind"] for row in rows], ["message", "deletion"])
+        self.assertEqual(len(buffers["-1001"]), 1)
         self.assertEqual(len(buffers["-1001__topic__77"]), 1)
         self.assertIn("deleted #41", buffers["-1001__topic__77"][0])
         self.assertIn("former sender: Alice", buffers["-1001__topic__77"][0])
-        life.assert_called_once()
-        self.assertEqual(life.call_args.kwargs["source_id"], "41:delete")
+        self.assertEqual(life.call_count, 2)
+        self.assertEqual(
+            {call.args[0] for call in life.call_args_list},
+            {"-1001", "-1001__topic__77"},
+        )
+        self.assertEqual(
+            {call.kwargs["source_id"] for call in life.call_args_list}, {"41:delete"})
         arms.assert_called_once_with("-1001__topic__77")
         refresh.assert_not_called()
         self.assertEqual(wakes, {})
+
+    async def test_deletion_ignores_hundreds_of_local_phantom_topic_buffers(self):
+        """Buffer sightings cannot mint deletion routes for a peer-local message id."""
+        self.add("-1001", 77, 41, "soon removed", reply=77, title="Ideas")
+        buffers = defaultdict(lambda: deque(maxlen=600))
+        source_ids = defaultdict(lambda: deque(maxlen=600))
+        recent = defaultdict(lambda: deque(maxlen=12))
+        pending_media = defaultdict(lambda: deque(maxlen=16))
+        stale_line = "Alice: stale local clone"
+        for topic_id in range(1000, 1450):
+            chat_id = f"-1001__topic__{topic_id}"
+            buffers[chat_id].append(stale_line)
+            source_ids[chat_id].append("41")
+            recent[chat_id].append((41, "Alice", "stale local clone"))
+            pending_media[chat_id].append(types.SimpleNamespace(message_id=41))
+
+        true_chat = "-1001__topic__77"
+        buffers[true_chat].append("Alice: soon removed")
+        source_ids[true_chat].append("41")
+        recent[true_chat].append((41, "Alice", "soon removed"))
+        pending_media[true_chat].append(types.SimpleNamespace(message_id=41))
+        wake = runner.GroupWake(
+            message_id=41, message_ts=1.0, kind="mention", speaker="Alice",
+            sender_id=10, owner=False, known=True, family=False,
+            context_snapshot="Alice: soon removed", reply_targets_snapshot=(),
+            media_snapshot=(), addressed=True, query="soon removed",
+        )
+        wakes = {true_chat: wake}
+        life = Mock(return_value={"id": "life-delete-41"})
+        arms = Mock()
+
+        with (
+            patch.object(runner.rooms, "is_allowed", return_value=True),
+            patch.object(runner.rooms, "effective_mode", return_value="normal"),
+            patch.object(runner, "_group_archive_enabled", return_value=True),
+            patch.object(runner.telegram_routes, "place_of", side_effect=lambda cid: cid),
+            patch.object(runner, "_buf", buffers),
+            patch.object(runner, "_buffer_message_ids", source_ids),
+            patch.object(runner, "_recent_msgs", recent),
+            patch.object(runner, "_pending_media", pending_media),
+            patch.object(runner, "_buf_dirty", set()),
+            patch.object(runner, "_meta", {}),
+            patch.object(runner, "_persisted_life_sources", set()),
+            patch.object(runner, "_under_tests", return_value=False),
+            patch.object(runner.memory_life, "record_message", life),
+            patch.object(runner.memory_life, "note_message_revision"),
+            patch.object(runner, "_sync_buffer_from_hot", return_value=False),
+            patch.object(runner.bufstore, "meta_update"),
+            patch.object(runner.telegram_followups.LEDGER, "delete_response", return_value=None),
+            patch.object(runner, "_group_wakes", wakes),
+            patch.object(runner, "_arm", arms),
+            patch.object(runner.time, "time", return_value=1787170200.0),
+        ):
+            await runner.on_deleted(_DeletedEvent([41]))
+            await runner.on_deleted(_DeletedEvent([41]))
+
+        projected = {call.args[0] for call in life.call_args_list}
+        self.assertEqual(projected, {"-1001", true_chat})
+        self.assertEqual(life.call_count, 2, "replayed tombstone must dedupe per true route")
+        self.assertEqual(len(buffers["-1001"]), 1)
+        self.assertIn("deleted #41", buffers["-1001"][0])
+        self.assertEqual(len(buffers[true_chat]), 1)
+        self.assertIn("deleted #41", buffers[true_chat][0])
+        self.assertEqual(list(recent[true_chat]), [])
+        self.assertNotIn(true_chat, pending_media)
+        self.assertEqual(wakes, {})
+        arms.assert_called_once_with(true_chat)
+
+        phantom_ids = [f"-1001__topic__{topic_id}" for topic_id in range(1000, 1450)]
+        self.assertTrue(all(list(buffers[key]) == [stale_line] for key in phantom_ids))
+        self.assertTrue(all(list(source_ids[key]) == ["41"] for key in phantom_ids))
+        self.assertTrue(all(list(recent[key]) == [(41, "Alice", "stale local clone")]
+                            for key in phantom_ids))
+        self.assertTrue(all(len(pending_media[key]) == 1 for key in phantom_ids))
+
+    async def test_unknown_and_general_deletions_project_only_to_root(self):
+        for previous, expected in (({}, ("-1001",)), ({"topic_id": 1}, ("-1001",))):
+            with self.subTest(previous=previous):
+                self.assertEqual(
+                    runner._deletion_projection_conversations("-1001", previous), expected)
+
+    def test_boot_restore_skips_absorbed_aliases_but_keeps_true_topics(self):
+        restored = {
+            "-1001": ["root"],
+            "-1001__topic__77": ["true topic"],
+            "-1001__topic__900": ["legacy clone"],
+        }
+
+        def place_of(cid):
+            return "-1001" if cid == "-1001__topic__900" else cid
+
+        with patch.object(runner.telegram_routes, "place_of", side_effect=place_of):
+            accepted, absorbed = runner._restored_buffer_partition(restored)
+
+        self.assertEqual(accepted, {
+            "-1001": ["root"],
+            "-1001__topic__77": ["true topic"],
+        })
+        self.assertEqual(absorbed, (("-1001__topic__900", "-1001"),))
+        self.assertEqual(restored["-1001__topic__900"], ["legacy clone"],
+                         "partition is read-only; migration/quarantine remains separate")
+
+    def test_boot_restore_fails_open_when_route_registry_is_unreadable(self):
+        restored = {"-1001__topic__900": ["unclassified"]}
+        with patch.object(runner.telegram_routes, "place_of", side_effect=OSError("down")):
+            accepted, absorbed = runner._restored_buffer_partition(restored)
+        self.assertEqual(accepted, restored)
+        self.assertEqual(absorbed, ())
 
     async def test_deletion_archive_retries_a_transient_first_failure(self):
         self.add("-1001", 77, 42, "remove after transient failure", title="Ideas")
@@ -1179,6 +1314,187 @@ class TestBoundedBackfill(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["added"], 0)
         self.assertEqual(group_context.archived_message_count("-1001"), 2)
         voice.assert_not_called()
+
+
+class TheSeamOfTheFeedMustNotMove(TempGroupMemory):
+    """27.08. Пометка обреза стояла в ГОЛОВЕ ленты вместе с живыми счётчиками.
+
+    Три подряд идущих хода в Грибнице: «выше ещё 1736» → «1740» → «1750», показано
+    200 → 193 → 188. Голова ленты — начало префикса, который провайдер кэширует;
+    сдвинулась она, и весь кадр за ней оплачивается заново. Замер по 143 парам
+    соседних ходов: общий префикс ленты в комнатах был РОВНО НОЛЬ сообщений, без этой
+    одной строки становится 6–10 — то есть 20–32 тысячи знаков на ход. В личке пометки
+    нет, там префикс и так целый (48 сообщений), поэтому болезнь жила только в комнатах.
+
+    Факт обреза остаётся наверху: ради него пометка и заведена, срез без неё читается
+    как «вот вся ветка». Вниз уезжают только числа и совет.
+    """
+
+    ROOM = "-1002222"
+
+    def _room(self):
+        self.add(self.ROOM, None, 7, "тема ветки")
+        for mid in range(20, 60):
+            self.add(self.ROOM, 7, mid, "реплика " + "д" * 400, reply=7)
+
+    def _rows(self):
+        return group_context.context_rows(self.ROOM, topic_id=7, limit=200,
+                                          max_chars=4000)
+
+    @staticmethod
+    def _is_service(line: str) -> bool:
+        """Служебная строка ленты — по её же разметке `…[…]`, а не по содержимому."""
+        return line.lstrip().startswith("…[")
+
+    def _head(self, rows):
+        """Голова ленты — всё до первой строки ЖИВОГО разговора.
+
+        Корень ветки (`[root; …]`) в голове остаётся: он рендерится как сообщение, но
+        стоит вне хронологии и между ходами не меняется. Разговор начинается с первой
+        строки `[topic …]` — по ней и режем.
+        """
+        head = []
+        for row in rows:
+            if row["line"].startswith("[topic"):
+                break
+            head.append(row["line"])
+        return head
+
+    # ---- то, ради чего правка
+
+    def test_the_head_of_the_feed_is_byte_identical_across_turns(self):
+        """Главный пин: лента выросла, а её служебная голова не шевельнулась."""
+        self._room()
+        before = self._head(self._rows())
+        for mid in range(60, 66):
+            self.add(self.ROOM, 7, mid, "новая реплика " + "е" * 400, reply=7)
+        after = self._head(self._rows())
+        self.assertTrue(before, "головы ленты нет — тест ничего не проверяет")
+        self.assertEqual(before, after,
+                         "голова ленты сдвинулась — префикс кэша разорван")
+
+    def test_no_live_counter_stands_before_the_conversation(self):
+        """Никакого счётчика до первой живой строки: он и есть то, что двигалось."""
+        self._room()
+        for line in self._head(self._rows()):
+            self.assertNotIn("показано", line)
+            self.assertNotIn("выше ещё", line)
+
+    def test_the_feed_prefix_survives_new_messages(self):
+        """Следствие в том виде, в каком его считает провайдер: общий префикс ленты
+        перестал быть нулевым."""
+        self._room()
+        before = [row["line"] for row in self._rows()]
+        for mid in range(60, 64):
+            self.add(self.ROOM, 7, mid, "новая реплика " + "е" * 400, reply=7)
+        after = [row["line"] for row in self._rows()]
+        common = 0
+        for a, b in zip(before, after):
+            if a != b:
+                break
+            common += 1
+        self.assertGreater(common, 1,
+                           "общий префикс ленты по-прежнему рвётся в голове")
+
+    # ---- ничего не потеряно
+
+    def test_the_cut_is_still_named_at_the_seam(self):
+        self._room()
+        head = self._head(self._rows())
+        self.assertTrue(any("ЛЕНТА ОБРЕЗАНА" in line for line in head),
+                        "срез без пометки читается как «вот вся ветка»")
+
+    def test_the_exact_numbers_moved_but_did_not_vanish(self):
+        self._room()
+        rows = self._rows()
+        tail = rows[-1]["line"]
+        self.assertIn("показано", tail, "маркер обязан называть, сколько показано")
+        self.assertIn("выше ещё", tail)
+        self.assertIn("context_summary_chars", tail, "совет уехал вместе с числами")
+        whole = "\n".join(row["line"] for row in rows)
+        for kept in ("ЛЕНТА ОБРЕЗАНА", "показано", "выше ещё", "бюджет символов",
+                     "manage_room", "group_context"):
+            self.assertIn(kept, whole, f"из пометки пропало: {kept}")
+
+    def test_the_numbers_are_exact_not_rounded(self):
+        """Округлённый счётчик врал бы тихо — этого не делаем."""
+        import re as _re
+        self._room()
+        rows = self._rows()
+        shown = sum(1 for row in rows if not self._is_service(row["line"]))
+        found = _re.search(r"показано (\d+) сообщений", rows[-1]["line"])
+        self.assertIsNotNone(found, "числа в хвосте не нашлись")
+        self.assertEqual(int(found.group(1)), shown,
+                         "счётчик разошёлся с тем, что реально в ленте")
+
+    # ---- границы
+
+    def test_both_service_lines_are_setting_not_speech(self):
+        """`self=False`: это строки обстановки, приписать их ей нельзя."""
+        self._room()
+        rows = self._rows()
+        service = [row for row in rows if self._is_service(row["line"])]
+        self.assertTrue(service)
+        for row in service:
+            self.assertFalse(row["self"], row["line"][:60])
+            self.assertEqual(row["line"], row["role_line"])
+            self.assertTrue(row.get("service"), row["line"][:60])
+
+    def test_service_rows_stay_out_of_role_dialogue(self):
+        """Footer numbers are context, never the current user turn after Praxis spoke."""
+        self._room()
+        group_context.observe_message(
+            peer_id=self.ROOM, topic_id=7, message_id=60, sender_id=5,
+            sender_name="Praxis", reply_to_message_id=7,
+            timestamp="2026-07-14T13:00:00Z", text="мой последний ответ",
+            topic_title="", outgoing=True)
+        rows = group_context.context_rows(self.ROOM, topic_id=7, limit=50,
+                                          max_chars=4000)
+        turns = tuple((bool(row["self"]), str(row["line"]), str(row["role_line"]))
+                      for row in rows if not row.get("service"))
+        self.assertTrue(all("ОБРЕЗ ЛЕНТЫ" not in row[1] for row in turns))
+        self.assertTrue(all("ЛЕНТА ОБРЕЗАНА" not in row[1] for row in turns))
+        history, current = runner._group_dialogue(turns)
+        self.assertEqual(history, [])
+        self.assertEqual(current, "", "footer must not manufacture a user turn")
+
+    def test_the_cut_and_the_topic_still_reach_the_model_inside_turns(self):
+        """Адверсарка 28.08: c82f38c8 вырезал из ролевого пути ВСЕ службы разом —
+        модель не видела ни «лента обрезана», ни темы ветки, отвечала на срез как
+        на целую ветку. Службы обязаны доехать — внутри соседних реплик."""
+        self._room()
+        rows = self._rows()
+        folded = runner._fold_service_rows(rows)
+        real = [r for r in rows if not r.get("service")]
+        self.assertEqual(len(folded), len(real),
+                         "службы стали отдельными ходами — граница ролей снова дырявая")
+        self.assertTrue(any(r.get("service") for r in rows),
+                        "фикстура без служб ничего не проверяет")
+        first_role = folded[0][2]
+        self.assertIn("ЛЕНТА ОБРЕЗАНА", first_role,
+                      "пометка обреза не доехала до модели")
+        self.assertIn("[root;", first_role, "тема ветки не доехала до модели")
+        self.assertLess(first_role.index("[root;"), first_role.index("ЛЕНТА ОБРЕЗАНА"),
+                        "корень ветки обязан стоять раньше пометки, как в ленте")
+        self.assertIn("ОБРЕЗ ЛЕНТЫ, точные числа", folded[-1][2],
+                      "точные числа не доехали до модели")
+        for _is_self, line, _role in folded:
+            self.assertFalse(self._is_service(line),
+                             "служебный текст пролез в line — расписки и дифф съедут")
+
+    def test_a_feed_of_only_service_rows_makes_no_turns(self):
+        """Граница ролей дословно: службы без реплик — ноль ходов, не «реплика человека»."""
+        service_only = [{"self": False, "line": "…[ЛЕНТА ОБРЕЗАНА: …]",
+                         "role_line": "…[ЛЕНТА ОБРЕЗАНА: …]", "service": True}]
+        self.assertEqual(runner._fold_service_rows(service_only), ())
+
+    def test_the_living_feed_is_untouched_between_the_two_lines(self):
+        """Названная цена: числа приезжают ПОСЛЕ ленты. Сама лента цела."""
+        self._room()
+        rows = self._rows()
+        self.assertIn("ОБРЕЗ ЛЕНТЫ", rows[-1]["line"])
+        self.assertTrue(any(row["line"].startswith("[topic") for row in rows[:-1]),
+                        "живые реплики пропали из ленты")
 
 
 if __name__ == "__main__":

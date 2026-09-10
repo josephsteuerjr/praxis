@@ -256,13 +256,16 @@ class OneGuardNotFourCopies(unittest.TestCase):
         src = Path(llm.__file__).read_text(encoding="utf-8")
         body = src[src.index("def _guard_answer"):src.index("def _call_anthropic")]
         self.assertIn("not out.blocks and not out.text.strip()", body)
-        # Два `raise` — это два НАЗВАННЫХ вида пустоты внутри одного сторожа, а не две копии
-        # правила по разным путям. Оба обязаны оставаться здесь же, в теле `_guard_answer`.
+        # Физический HTTP/SSE-адаптер обязан собрать stop=error и отдать его ЭТОМУ
+        # сторожу, а не размножать условия Empty/Torn по транспортным путям.
         self.assertEqual(body.count("raise EmptyResponseError"),
-                         src.count("raise EmptyResponseError"),
-                         "условие пустоты снова размножилось по путям")
+                         src.count("raise EmptyResponseError"))
         self.assertEqual(body.count("raise TornStreamError"),
                          src.count("raise TornStreamError"))
+        adapter = src[src.index("def _stream_transport_error"):
+                      src.index("# --------------------------------------------------------------------------- #",
+                                src.index("def _stream_transport_error"))]
+        self.assertIn("return _guard_answer(partial)", adapter)
 
     def test_every_return_of_both_frameworks_goes_through_it(self):
         src = Path(llm.__file__).read_text(encoding="utf-8")
@@ -276,6 +279,71 @@ class OneGuardNotFourCopies(unittest.TestCase):
                 for ln in returns:
                     self.assertIn("_guard_answer", ln,
                                   f"{name}: возврат «{ln}» уходит мимо сторожа")
+
+
+class _BrokenStream:
+    def __init__(self, chunks, exc):
+        self.chunks = list(chunks)
+        self.exc = exc
+
+    def __iter__(self):
+        yield from self.chunks
+        raise self.exc
+
+
+class RemoteProtocolError(RuntimeError):
+    """Фейк реального httpx-класса без зависимости теста от версии SDK."""
+
+
+RemoteProtocolError.__module__ = "httpx"
+
+
+class RawSseTransportBreak(unittest.TestCase):
+    """Голый обрыв HTTP-итератора получает ту же смысловую границу, что SSE error."""
+
+    def test_break_before_any_content_is_retryable_emptiness(self):
+        stream = _BrokenStream([], RemoteProtocolError("incomplete chunked read"))
+        with self.assertRaises(llm.EmptyResponseError):
+            llm._openai_from_stream(stream, "gpt-5.6-sol")
+
+    def test_break_after_text_preserves_partial_and_is_not_same_channel_retryable(self):
+        stream = _BrokenStream([_chunk(content="начало")],
+                               RemoteProtocolError("incomplete chunked read"))
+        with self.assertRaises(llm.TornStreamError) as caught:
+            llm._openai_from_stream(stream, "gpt-5.6-sol")
+        self.assertEqual(caught.exception.partial.text, "начало")
+        self.assertEqual(caught.exception.partial.stop_reason, "error")
+
+    def test_break_after_tool_fragment_is_also_a_torn_stream(self):
+        tool = types.SimpleNamespace(index=0, id="call_1", function=types.SimpleNamespace(
+            name="inspect", arguments='{"action":'))
+        stream = _BrokenStream([_chunk(tool_calls=[tool])],
+                               RemoteProtocolError("incomplete chunked read"))
+        with self.assertRaises(llm.TornStreamError) as caught:
+            llm._openai_from_stream(stream, "gpt-5.6-sol")
+        self.assertEqual(caught.exception.partial.stop_reason, "error")
+        self.assertEqual(caught.exception.partial.blocks[0]["type"], "tool_use")
+
+    def test_break_after_id_only_tool_fragment_is_not_retryable_emptiness(self):
+        tool = types.SimpleNamespace(index=0, id="call_1", function=types.SimpleNamespace(
+            name="", arguments=""))
+        stream = _BrokenStream([_chunk(tool_calls=[tool])],
+                               RemoteProtocolError("incomplete chunked read"))
+        with self.assertRaises(llm.TornStreamError) as caught:
+            llm._openai_from_stream(stream, "gpt-5.6-sol")
+        self.assertEqual(caught.exception.partial.stop_reason, "error")
+        self.assertEqual(caught.exception.partial.blocks[0]["type"], "tool_use_fragment")
+
+    def test_collector_bug_is_not_mislabelled_as_transport(self):
+        with self.assertRaisesRegex(RuntimeError, "collector bug"):
+            llm._openai_from_stream(_BrokenStream([], RuntimeError("collector bug")),
+                                    "gpt-5.6-sol")
+
+    def test_same_class_name_from_another_module_is_not_transport(self):
+        fake_type = type("RemoteProtocolError", (RuntimeError,), {"__module__": "our_collector"})
+        with self.assertRaises(fake_type):
+            llm._openai_from_stream(_BrokenStream([], fake_type("not httpx")),
+                                    "gpt-5.6-sol")
 
 
 if __name__ == "__main__":

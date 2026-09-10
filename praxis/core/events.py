@@ -104,7 +104,20 @@ def emit(kind: str, source: str, payload: dict | None = None,
                 pass  # файла ещё нет / пустой
             fd = os.open(str(JOURNAL), os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
             try:
-                os.write(fd, line)
+                written = os.write(fd, line)
+                # Короткая запись — не успех. 28.08 на полном диске os.write вернул
+                # меньше len(line) в 12 пробах из 124 (все по границе 4096), рвал
+                # многобайтовый символ, а emit рапортовал событие записанным. Остаток
+                # дописывается; не дописался — честный отказ (None) через общий
+                # except, а не тихий обрыв. Оставшийся в журнале огрызок читателя не
+                # слепит (_read_journal разбирает по байтам), следующий emit отделит
+                # себя превентивным переводом строки.
+                while written < len(line):
+                    more = os.write(fd, line[written:])
+                    if more <= 0:
+                        raise OSError(
+                            f"короткая запись журнала: {written} из {len(line)} байт")
+                    written += more
                 os.fsync(fd)
             finally:
                 os.close(fd)
@@ -117,16 +130,25 @@ def emit(kind: str, source: str, payload: dict | None = None,
 def _read_journal() -> list[dict]:
     out: list[dict] = []
     try:
-        with JOURNAL.open(encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    d = json.loads(line)
-                    if isinstance(d, dict) and d.get("ts"):
-                        out.append(d)
-                except Exception:
-                    continue  # оборванный хвост/битая строка — не слепим весь журнал
+        raw = JOURNAL.read_bytes()
     except OSError:
-        pass
+        return out
+    # Построчно ПО БАЙТАМ, а не текстовым итератором. Рваный многобайтовый символ
+    # (короткая запись при полном диске: 28.08 — 12 обрывов из 124 проб, все по
+    # границе 4096) ронял UnicodeDecodeError В САМОМ итераторе — мимо построчного
+    # except и мимо except OSError. Один битый байт делал журнал нечитаемым НАВСЕГДА,
+    # даже когда место освободилось: undelivered падал на каждом вызове, флаг
+    # приоритета стоял, все чаты уходили в defer — глухота до рестарта.
+    # Байтовый разбор платит за битую строку только ею самой.
+    for chunk in raw.split(b"\n"):
+        if not chunk:
+            continue
+        try:
+            d = json.loads(chunk)
+            if isinstance(d, dict) and d.get("ts"):
+                out.append(d)
+        except Exception:
+            continue  # оборванный хвост/битая строка — не слепим весь журнал
     return out
 
 

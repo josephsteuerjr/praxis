@@ -451,6 +451,7 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
         deferred.assert_called_once_with(chat_id, 80.05)
         self.assertIn("transport retry", notes[0][1]["detail"])
         self.assertIn("актуальность", notes[0][1]["detail"])
+        self.assertIs(notes[0][1]["count_repeats"], False)
 
     async def test_ambient_and_addressed_group_cooldowns_are_distinct(self):
         with patch.object(runner.perception, "value", side_effect=lambda name: {

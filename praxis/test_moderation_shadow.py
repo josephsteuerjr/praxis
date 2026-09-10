@@ -164,6 +164,16 @@ class ObservationContractTests(unittest.TestCase):
         emit.assert_not_called()
         self.assertFalse(self.state.exists())
 
+    def test_phrase_po_faktu_is_not_a_commercial_offer_by_itself(self):
+        result = detect_message(
+            peer_id=TARGET_PEER_ID,
+            text="Прикольно, что бенчмарк по факту saturated с provider adapter harness",
+            first_message=True,
+            repeated_within_hour=False,
+        )
+        self.assertEqual(result.verdict, "pass")
+        self.assertEqual(result.matched_features, ("first_message",))
+
     def test_same_sender_repeat_within_hour_is_explainable(self):
         with mock.patch("core.events.emit") as emit:
             first = self.module.observe_message(
@@ -200,6 +210,11 @@ class ObservationContractTests(unittest.TestCase):
         with mock.patch.object(mtproto_runner.agent.llm, "configured", return_value=True), \
              mock.patch("core.events.undelivered", return_value=[bad, good]), \
              mock.patch("core.events.bump_attempts", return_value={"good": 1}) as bump, \
+             mock.patch.object(mtproto_runner.group_context, "latest_message", return_value={
+                 "text": "Срочный доход 5000 ₽, пиши в личку", "sender_name": "Synthetic",
+                 "topic_id": 0, "topic_title": "", "timestamp": "2026-09-04T00:00:00Z",
+                 "kind": "message",
+             }), \
              mock.patch.object(mtproto_runner.agent, "wake_turn", return_value="") as wake, \
              mock.patch("core.events.mark_delivered",
                         side_effect=lambda keys: marked.extend(keys)), \
@@ -222,6 +237,12 @@ class ObservationContractTests(unittest.TestCase):
         with mock.patch.object(mtproto_runner.agent.llm, "configured", return_value=True), \
              mock.patch("core.events.undelivered", return_value=[event]), \
              mock.patch("core.events.bump_attempts", return_value={event["dedup_key"]: 1}), \
+             mock.patch.object(mtproto_runner.group_context, "latest_message", return_value={
+                 "text": "Срочный доход 5000 ₽, пиши в личку",
+                 "sender_name": "Synthetic Sender", "topic_id": 0,
+                 "topic_title": "", "timestamp": "2026-09-04T00:00:00Z",
+                 "kind": "message",
+             }), \
              mock.patch.object(mtproto_runner.agent, "wake_turn",
                                side_effect=lambda goal: order.append(("wake", goal)) or ""), \
              mock.patch("core.events.mark_delivered",
@@ -233,15 +254,82 @@ class ObservationContractTests(unittest.TestCase):
         goal = order[0][1]
         self.assertIn('"message_id":77', goal)
         self.assertIn('"sender_id":88', goal)
-        self.assertNotIn("доход", goal.lower())
+        self.assertIn("доход", goal.lower())
         self.assertEqual(order[1][1], [event["dedup_key"]])
 
-    def test_failed_wake_does_not_mark_event_delivered(self):
-        event = {"id": "evt-2", "dedup_key": "moderation:x:1",
-                 "kind": "moderation_review", "payload": {}}
+    def test_missing_message_evidence_is_consumed_without_waking_moderator(self):
+        event = {
+            "id": "evt-missing", "dedup_key": f"moderation:{TARGET_PEER_ID}:91",
+            "kind": "moderation_review",
+            "payload": {"peer_id": TARGET_PEER_ID, "message_id": 91,
+                        "sender_id": 92, "verdict": "review",
+                        "matched_features": ["first_message", "commercial_offer"]},
+        }
+        marked = []
         with mock.patch.object(mtproto_runner.agent.llm, "configured", return_value=True), \
              mock.patch("core.events.undelivered", return_value=[event]), \
              mock.patch("core.events.bump_attempts", return_value={event["dedup_key"]: 1}), \
+             mock.patch.object(mtproto_runner.group_context, "latest_message", return_value=None), \
+             mock.patch.object(mtproto_runner.agent, "wake_turn") as wake, \
+             mock.patch("core.events.mark_delivered",
+                        side_effect=lambda keys: marked.extend(keys)), \
+             mock.patch("core.events.compact"):
+            import asyncio
+            asyncio.run(mtproto_runner._run_moderation_event_pass())
+        wake.assert_not_called()
+        self.assertEqual(marked, [event["dedup_key"]])
+
+    def test_missing_evidence_is_consumed_but_actionable_neighbor_retries_on_wake_failure(self):
+        missing = {
+            "id": "evt-missing-neighbor",
+            "dedup_key": f"moderation:{TARGET_PEER_ID}:95",
+            "kind": "moderation_review",
+            "payload": {"peer_id": TARGET_PEER_ID, "message_id": 95,
+                        "sender_id": 96, "verdict": "review",
+                        "matched_features": ["first_message", "commercial_offer"]},
+        }
+        actionable = {
+            "id": "evt-actionable-neighbor",
+            "dedup_key": f"moderation:{TARGET_PEER_ID}:97",
+            "kind": "moderation_review",
+            "payload": {"peer_id": TARGET_PEER_ID, "message_id": 97,
+                        "sender_id": 98, "verdict": "review",
+                        "matched_features": ["money", "call_to_action"]},
+        }
+
+        def lookup(_peer, message_id):
+            if int(message_id) == 95:
+                return None
+            return {"text": "Срочный доход 5000 ₽, пиши в личку",
+                    "sender_name": "Synthetic", "topic_id": 0, "topic_title": "",
+                    "timestamp": "2026-09-04T00:00:00Z", "kind": "message"}
+
+        with mock.patch.object(mtproto_runner.agent.llm, "configured", return_value=True), \
+             mock.patch("core.events.undelivered", return_value=[missing, actionable]), \
+             mock.patch("core.events.bump_attempts", return_value={
+                 missing["dedup_key"]: 1, actionable["dedup_key"]: 1}), \
+             mock.patch.object(mtproto_runner.group_context, "latest_message", side_effect=lookup), \
+             mock.patch.object(mtproto_runner.agent, "wake_turn", side_effect=RuntimeError("boom")), \
+             mock.patch("core.events.mark_delivered") as mark, \
+             mock.patch("core.events.compact"):
+            import asyncio
+            asyncio.run(mtproto_runner._run_moderation_event_pass())
+        mark.assert_called_once_with([missing["dedup_key"]])
+
+    def test_failed_wake_does_not_mark_event_delivered(self):
+        event = {"id": "evt-2", "dedup_key": f"moderation:{TARGET_PEER_ID}:93",
+                 "kind": "moderation_review",
+                 "payload": {"peer_id": TARGET_PEER_ID, "message_id": 93,
+                             "sender_id": 94, "verdict": "review",
+                             "matched_features": ["money", "call_to_action"]}}
+        with mock.patch.object(mtproto_runner.agent.llm, "configured", return_value=True), \
+             mock.patch("core.events.undelivered", return_value=[event]), \
+             mock.patch("core.events.bump_attempts", return_value={event["dedup_key"]: 1}), \
+             mock.patch.object(mtproto_runner.group_context, "latest_message", return_value={
+                 "text": "Срочный доход 5000 ₽, пиши в личку", "sender_name": "Synthetic",
+                 "topic_id": 0, "topic_title": "", "timestamp": "2026-09-04T00:00:00Z",
+                 "kind": "message",
+             }), \
              mock.patch.object(mtproto_runner.agent, "wake_turn", side_effect=RuntimeError("boom")), \
              mock.patch("core.events.mark_delivered") as mark, \
              mock.patch("core.events.compact"):

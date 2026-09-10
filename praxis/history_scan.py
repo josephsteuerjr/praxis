@@ -63,6 +63,31 @@ class ParameterError(HistoryScanError, ValueError):
     """Некорректные параметры — до любого прохода."""
 
 
+def resolved_peer_matches_target(target: Any, resolved_id: int) -> bool:
+    """Check an explicit numeric peer ref without rejecting resolved names.
+
+    A title or ``@username`` is resolved by the runtime transport, so it has
+    no independently meaningful numeric spelling to compare here. A numeric
+    target does make an identity claim; preserve fail-closed validation for
+    both Telethon's ``-100<channel_id>`` form and a bare entity id.
+    """
+    value = str(target or "").strip()
+    if not value:
+        return False
+    if not value.lstrip("-").isdigit():
+        return True
+    if value.startswith("-100"):
+        # ``-100`` alone is a prefix, not a complete marked-channel id.
+        if len(value) == 4:
+            return False
+        expected_id = int(value[4:])
+    else:
+        # Telethon's basic-group representation is ``-<entity_id>``;
+        # preserve the prior strict check for that explicit form as well.
+        expected_id = int(value.lstrip("-"))
+    return expected_id > 0 and resolved_id == expected_id
+
+
 @dataclass(frozen=True)
 class ScanRange:
     floor_id: int

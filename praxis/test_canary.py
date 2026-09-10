@@ -125,7 +125,17 @@ class TestDroppedAddresses(Base):
     def test_collapsed_repeats_are_not_lost(self):
         self._skip(ts=self.now - 100, stage="group_wake", **{"class": "отложила"},
                    chat=PEER, meta={"dropped": "addressed"}, prev_n=4)
-        self.assertEqual(canary.dropped_addresses(self.tmp, now=self.now)["drops"], 5)
+        out = canary.dropped_addresses(self.tmp, now=self.now)
+        self.assertEqual(out["drops"], 5)
+        self.assertEqual(out["by_room"], {PEER: 5})
+
+    def test_non_counting_episode_ignores_legacy_prev_n(self):
+        self._skip(ts=self.now - 100, stage="group_wake", **{"class": "отложила"},
+                   chat=PEER, meta={"dropped": "addressed", "owner_lost": "1"},
+                   count_repeats=False, prev_n=1189)
+        out = canary.dropped_addresses(self.tmp, now=self.now)
+        self.assertEqual((out["drops"], out["owner_lost"]), (1, 1))
+        self.assertEqual(out["by_room"], {PEER: 1})
 
     def test_short_journal_says_how_far_it_sees(self):
         """«Ноль за сутки» и «ноль за час, дальше не видно» — разные ответы."""

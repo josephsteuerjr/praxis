@@ -185,6 +185,15 @@ class TestUnansweredInvariants(UnansweredHarness):
         self.assertAlmostEqual(items[0]["since"], t0, delta=1.0,
                                msg="since честно держит ПЕРВУЮ неотвеченную")
 
+    def test_automated_sender_is_not_unanswered_and_cleans_legacy_entry(self):
+        unanswered.note_incoming("429000", "Stickers", ts=time.time() - 3600)
+        unanswered.note_incoming("429000", "Stickers", automated=True)
+        self.assertEqual(unanswered.entries(now=time.time() + 10 * 3600), [])
+
+    def test_automated_sender_never_creates_entry(self):
+        unanswered.note_incoming("429000", "Stickers", automated=True)
+        self.assertFalse(unanswered.PATH.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -96,11 +96,46 @@ def run_shard_here(names: list[str]) -> int:
     import praxis_test  # noqa: F401 — импорт активирует песочницу ДО импорта тестов
     import unittest
 
+    class _PerModuleResult(unittest.TextTestResult):
+        """Накопитель времени каждого модуля.
+
+        Граница намеренно стоит вокруг suite модуля, а не вокруг отдельных
+        `startTest`/`stopTest`: unittest вызывает `setUpClass` до первого и
+        `tearDownClass` после последнего такого хука. Для балансировки важна вся
+        реальная работа модуля, включая эти общие фикстуры.
+        """
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.module_seconds: dict[str, float] = {}
+
+    class _MeasuredModuleSuite(unittest.TestSuite):
+        """Одна named suite с честной границей class fixtures вокруг неё."""
+
+        def __init__(self, name: str, tests):
+            super().__init__(tests)
+            self._module_name = name
+
+        def run(self, result, debug=False):
+            started = time.perf_counter()
+            try:
+                return super().run(result, debug)
+            finally:
+                # The outer aggregate suite would normally close the last test class
+                # only after this wrapper returns.  Close at the module boundary so
+                # `tearDownClass` belongs to the module that opened it — and so the
+                # measured interval is the work the shard actually spends on it.
+                self._tearDownPreviousClass(None, result)
+                result.module_seconds[self._module_name] = (
+                    result.module_seconds.get(self._module_name, 0.0)
+                    + time.perf_counter() - started
+                )
+
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     for name in names:
         try:
-            suite.addTests(loader.loadTestsFromName(name))
+            tests = loader.loadTestsFromName(name)
         except Exception as exc:  # noqa: BLE001 — любой отказ импорта равен падению теста
             message = f"{type(exc).__name__}: {exc}"
 
@@ -111,10 +146,25 @@ def run_shard_here(names: list[str]) -> int:
                 self.fail(f"модуль {_name} не импортировался: {_msg}")
 
             setattr(_ImportFailure, f"test_import_{name}", _fail)
+            # ⚑ И `__module__` тоже: по нему счётчик относит время, и без него
+            # непроимпортировавшийся модуль записался бы в счёт самого гейта.
             _ImportFailure.__qualname__ = _ImportFailure.__name__ = name
-            suite.addTest(_ImportFailure(f"test_import_{name}"))
-    result = unittest.TextTestRunner(verbosity=1).run(suite)
+            _ImportFailure.__module__ = name
+            # ⚠ Именно СПИСКОМ: `_MeasuredModuleSuite.__init__` отдаёт аргумент
+            # в `TestSuite.__init__` → `addTests`, а тот по нему итерируется. Голый
+            # TestCase не итерируем: шард падал TypeError'ом ДО первого теста
+            # и объявлял весь прогон недействительным — ровно та немота,
+            # которую эта ветвь и заводилась предотвращать.
+            tests = [_ImportFailure(f"test_import_{name}")]
+        suite.addTest(_MeasuredModuleSuite(name, tests))
+    result = unittest.TextTestRunner(verbosity=1, resultclass=_PerModuleResult).run(suite)
+    # Родитель разбирает вывод регулярками — отдаём ему числа тем же способом.
+    for name, seconds in sorted(getattr(result, "module_seconds", {}).items()):
+        print(f"#module-seconds {name} {seconds:.3f}")
     return 0 if result.wasSuccessful() else 1
+
+
+_MODSECS = re.compile(r"^#module-seconds (\S+) ([0-9.]+)$", re.M)
 
 
 def run_shard(names: list[str], index: int) -> dict:
@@ -142,6 +192,8 @@ def run_shard(names: list[str], index: int) -> dict:
         "ok": bool(outcome and outcome.group(1) == "OK"),
         "detail": outcome.group(2) if (outcome and outcome.group(2)) else "",
         "failures": sorted(set(_FAILNAME.findall(blob))),
+        "module_seconds": {name: float(value)
+                           for name, value in _MODSECS.findall(blob)},
         "returncode": proc.returncode,
         "blob": blob,
     }
@@ -152,10 +204,26 @@ def run_serial(names: list[str]) -> dict:
 
 
 def _save_durations(results: list[dict]) -> None:
-    """Длительность шарда делим по модулям поровну — грубо, но сходится за пару прогонов."""
+    """Пишем измеренное время каждого модуля; деление поровну осталось запасным путём.
+
+    ⚠ ПОЧЕМУ ЭТО НЕ МЕЛОЧЬ. Прежняя запись делила время шарда поровну между его
+    модулями, и комментарий обещал, что «сходится за пару прогонов». Не сходилось:
+    каждый прогон заново размазывал среднее по тем же модулям, и в файле оказалось
+    141 модуль из 143 всего с ТРЕМЯ различными значениями — тремя средними по шардам.
+    Жадная упаковка честно паковала по этим числам, то есть по вымыслу; на проде это
+    давало 173 с в одном шарде против 51 в другом.
+
+    Запасной путь нужен: `run_serial` и старые записи чисел по модулям не дают, и
+    отсутствие измерения не должно стирать то, что уже известно.
+    """
     known = _load_durations()
     for row in results:
         if not row["modules"]:
+            continue
+        measured = row.get("module_seconds") or {}
+        if measured:
+            for name, seconds in measured.items():
+                known[name] = round((known.get(name, seconds) + seconds) / 2, 2)
             continue
         share = row["seconds"] / len(row["modules"])
         for name in row["modules"]:

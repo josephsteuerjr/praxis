@@ -191,7 +191,93 @@ def decide_after(rc: int, elapsed: float, launch_sha: str, last_good: str | None
 # --------------------------------------------------------------------------- #
 
 def _run_runner() -> int:
-    return subprocess.run([sys.executable, RUNNER], cwd=str(BASE)).returncode
+    """Запустить раннер и, пока он жив, хоронить осиротевших внуков.
+
+    ⚠ ЧТО БЫЛО. Здесь стоял `subprocess.run`, который БЛОКИРУЕТ до выхода раннера,
+    а `_reap_orphans()` звался только ПОСЛЕ. То есть пока она работает — часами —
+    сирот не подбирал никто, хотя PID 1 обязан. Замер на проде 28.08: через 56 минут
+    после её перезапуска в контейнере висело 1797 зомби из 1807 процессов, 1716 из
+    них — `git`, прирост 31 в минуту. Источником оказались не самоперезапуски (так
+    было написано в комментарии ниже), а форж: рабочий процесс порождает git, выходит
+    не дождавшись, и дети переезжают к PID 1.
+
+    ⚠⚠ И ПОЧЕМУ ЭТО НЕЛЬЗЯ БЫЛО СДЕЛАТЬ ПРОСТО. `waitpid(-1)` не выбирает, кого ждать:
+    он одинаково охотно снимет и осиротевшего внука, и самого раннера — а на коде
+    выхода раннера висит вся логика отката. Прежний код обходил это тем, что жал
+    только там, где своих живых детей нет. Здесь вместо обхода — разбор: поймав pid
+    раннера, забираем его статус себе и отдаём наверх, вместо того чтобы потерять.
+    """
+    proc = subprocess.Popen([sys.executable, RUNNER], cwd=str(BASE))
+    return _wait_runner_reaping(proc)
+
+
+def _runner_status_or_restart(proc) -> int:
+    """Код выхода раннера, не доверяя нулю из ПОТЕРЯННОГО статуса.
+
+    subprocess.Popen при ECHILD (ребёнка уже снял кто-то другой: чужой waitpid(-1),
+    SIGCHLD-хендлер) молча подставляет returncode=0 — «мы не смогли узнать, значит
+    считаем, что всё хорошо». Здесь этот ноль означает «остановиться навсегда»
+    (decide_after: rc==0 -> stop, PID 1 выходит, контейнер умирает) — решение,
+    которого никто не принимал. Потерянный статус — это «перезапустить», не «стоп»:
+    честный ноль Popen узнаёт только из СВОЕГО waitpid, и тогда returncode уже
+    стоит до всякого ECHILD.
+    """
+    if proc.returncode is not None:
+        return proc.returncode
+    try:
+        _pid, status = os.waitpid(proc.pid, 0)
+    except ChildProcessError:
+        log.warning("статус раннера потерян (ребёнка снял не супервизор) — "
+                    "перезапускаю, а не останавливаюсь")
+        proc.returncode = RESTART_CODE
+        return RESTART_CODE
+    except OSError:
+        log.warning("waitpid по раннеру не удался — перезапускаю, не останавливаюсь",
+                    exc_info=True)
+        proc.returncode = RESTART_CODE
+        return RESTART_CODE
+    try:
+        code = os.waitstatus_to_exitcode(status)
+    except ValueError:
+        code = RESTART_CODE
+    proc.returncode = code
+    return code
+
+
+def _wait_runner_reaping(proc, *, poll: float = 0.5) -> int:
+    """Ждать именно `proc`, попутно сжимая всех прочих детей."""
+    if not hasattr(os, "WNOHANG"):  # не-POSIX: зомби там не бывает
+        return proc.wait()
+    reaped = 0
+    while True:
+        try:
+            pid, status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            # Детей не осталось вовсе — раннер сжат не нами, и его статус мог
+            # потеряться. Прежний `proc.wait()` в этой ветке возвращал подставной
+            # ноль Popen-а — и супервизор «чисто останавливался» по чужой ошибке.
+            return _runner_status_or_restart(proc)
+        except OSError:
+            log.debug("waitpid в ожидании раннера не удался", exc_info=True)
+            return _runner_status_or_restart(proc)
+        if pid == 0:
+            time.sleep(poll)   # дети есть, все живые — не жжём процессор
+            continue
+        if pid == proc.pid:
+            try:
+                code = os.waitstatus_to_exitcode(status)
+            except ValueError:
+                # Остановлен, а не завершён: продолжаем ждать настоящего конца.
+                continue
+            # Popen не знает, что мы сняли его ребёнка сами. Скажем ему, иначе он
+            # будет ждать уже несуществующий процесс и ругаться в деструкторе.
+            proc.returncode = code
+            if reaped:
+                log.info("сжато осиротевших процессов: %d", reaped)
+            return code
+        reaped += 1
+        if reaped % 500 == 0:
+            log.info("сжато осиротевших процессов: %d (раннер жив)", reaped)
 
 
 def _reap_orphans() -> int:

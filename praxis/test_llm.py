@@ -141,6 +141,36 @@ class TestConfig(Base):
         self.assertEqual(loaded["limits"], {"max_tool_iters": 20})
         self.assertEqual(stored["limits"], {"max_tool_iters": 20})
 
+    def test_vision_model_survives_normalize(self):
+        cfg = llm._normalize({
+            "roles": {"voice": {
+                "framework": "anthropic", "model": "glm-5.3",
+                "vision_model": "glm-5.3-flash",
+            }},
+        })
+        self.assertEqual(cfg["roles"]["voice"]["vision_model"], "glm-5.3-flash")
+
+    def test_stamp_distinguishes_same_size_replacement_even_when_clock_collides(self):
+        """Atomic panel writes must reload even if filesystem time is coarsened.
+
+        Model identifiers ``alpha`` and ``bravo`` serialize to the same byte count.
+        Preserve the old mtime explicitly to model the observed filesystem tick;
+        ``save_config`` replaces the file, so its identity is the remaining
+        independent witness.
+        """
+        cfg = self._write_cfg(voice={"framework": "openai", "model": "alpha"})
+        before = llm._config_stamp()
+        cfg2 = json.loads(json.dumps(cfg))
+        cfg2["roles"]["voice"].update(model="bravo", framework="openai")
+        llm.save_config(cfg2)
+        os.utime(llm.CONFIG_PATH, ns=(before[0], before[0]))
+        self.assertNotEqual(before, llm._config_stamp(),
+                            "atomic replacement must remain visible without clock resolution")
+        fresh = llm._config()
+        self.assertEqual(fresh["roles"]["voice"]["model"], "bravo")
+        jr = "".join(p.read_text(encoding="utf-8") for p in llm.JOURNAL_DIR.glob("*.md"))
+        self.assertIn("мозг сменился", jr)
+
     def test_mtime_hot_reload_and_brain_change_journal(self):
         cfg = self._write_cfg()
         # другой процесс (панель) переписал файл: save_config кэша НЕ трогает
@@ -537,6 +567,80 @@ class TestWebSearchBlockLeak(unittest.TestCase):
         self.assertEqual(llm.text_of(resp), "настоящий ответ")
 
 
+class TestAddressedModel(Base):
+    def test_cross_framework_override_preserves_configured_fallback_association(self):
+        cfg = llm._from_env()
+        cfg["frameworks"]["openai"]["api_key"] = "sk-test"
+        cfg["frameworks"]["anthropic"]["api_key"] = "zai-test"
+        cfg["roles"]["voice"].update(framework="openai", model="gpt-primary",
+                                     fallback_model="glm-fallback", fallback_framework="")
+        llm.save_config(cfg)
+        failure = RateLimitError("429")
+        calls = []
+
+        def call(framework, model, **kwargs):
+            calls.append((framework, model))
+            if model == "glm-requested":
+                raise failure
+            return llm.LLMResponse(text="fallback", model=model, framework=framework)
+
+        with mock.patch.object(llm, "_available_models", side_effect=lambda fw:
+                ["glm-requested", "glm-fallback"] if fw == "anthropic" else ["gpt-primary"]), \
+                mock.patch.object(llm, "_client_for", return_value=object()), \
+                mock.patch.object(llm, "_call", side_effect=call):
+            response = llm.chat("voice", model="glm-requested", messages=[])
+        self.assertEqual(calls, [("anthropic", "glm-requested"), ("anthropic", "glm-fallback")])
+        self.assertEqual(response.model, "glm-fallback")
+        self.assertEqual(llm._config()["roles"]["voice"]["model"], "gpt-primary")
+
+    def test_override_uses_requested_model_without_mutating_voice_config(self):
+        cfg = llm._from_env()
+        cfg["frameworks"]["openai"]["api_key"] = "sk-test"
+        cfg["roles"]["voice"].update(framework="openai", model="gpt-5.6-sol")
+        llm.save_config(cfg)
+        client = FakeOpenAI(_openai_resp(text="terra answer"))
+        llm.use_test_client(client, "openai")
+        with mock.patch.object(llm, "_available_models",
+                               side_effect=lambda fw: ["gpt-5.6-sol", "gpt-5.6-terra"]
+                               if fw == "openai" else []):
+            resp = llm.chat("voice", model="gpt-5.6-terra",
+                            messages=[{"role": "user", "content": "hi"}])
+        self.assertEqual(client.calls[0]["model"], "gpt-5.6-terra")
+        self.assertEqual(resp.model, "gpt-5.6-terra")
+        self.assertEqual(llm._config()["roles"]["voice"]["model"], "gpt-5.6-sol")
+
+    def test_override_can_select_the_other_framework_without_mutating_voice_config(self):
+        cfg = llm._from_env()
+        cfg["frameworks"]["anthropic"]["api_key"] = "zai-key"
+        cfg["frameworks"]["openai"]["api_key"] = "sk-test"
+        cfg["roles"]["voice"].update(framework="anthropic", model="glm-5.2")
+        llm.save_config(cfg)
+        client = FakeOpenAI(_openai_resp(text="terra answer"))
+        llm.use_test_client(client, "openai")
+        with mock.patch.object(llm, "_available_models",
+                               side_effect=lambda fw: ["gpt-5.6-terra"]
+                               if fw == "openai" else ["glm-5.2"]):
+            resp = llm.chat("voice", model="gpt-5.6-terra",
+                            messages=[{"role": "user", "content": "hi"}])
+        self.assertEqual(resp.framework, "openai")
+        self.assertEqual(client.calls[0]["model"], "gpt-5.6-terra")
+        self.assertEqual(llm._config()["roles"]["voice"]["framework"], "anthropic")
+        self.assertEqual(llm._config()["roles"]["voice"]["model"], "glm-5.2")
+
+    def test_unknown_override_fails_before_provider_call(self):
+        cfg = llm._from_env()
+        cfg["frameworks"]["openai"]["api_key"] = "sk-test"
+        cfg["roles"]["voice"].update(framework="openai", model="gpt-5.6-sol")
+        llm.save_config(cfg)
+        client = FakeOpenAI()
+        llm.use_test_client(client, "openai")
+        with mock.patch.object(llm, "_available_models", return_value=[]):
+            with self.assertRaisesRegex(ValueError, "отсутствует в доступном каталоге"):
+                llm.chat("voice", model="invented-model",
+                         messages=[{"role": "user", "content": "hi"}])
+        self.assertEqual(client.calls, [])
+
+
 class TestFallback(Base):
     def _arm(self):
         cfg = llm._from_env()
@@ -652,6 +756,56 @@ class TestFallback(Base):
         self.assertEqual(fo.calls[-1]["model"], "gpt-luna",
                          "после пустой терры (со всеми её ретраями) ответ обязан прийти луной")
         self.assertTrue(llm.snapshot()["voice"]["on_fallback"])
+
+    def test_missing_same_framework_fallback_slug_cannot_rotate_back_to_primary(self):
+        # Живой конфиг 03.09: openai/sol + fallback openai/glm-5.3. Relay не знает
+        # glm, поэтому обычная ротация имени выбирала sol и называла повтор той же
+        # модели fallback'ом. При наличии terra обязаны уйти именно на неё.
+        cfg = llm._from_env()
+        cfg["frameworks"]["openai"]["api_key"] = "sk-test"
+        cfg["roles"]["voice"].update(
+            framework="openai", model="gpt-5.6-sol",
+            fallback_model="glm-5.3", fallback_framework="openai",
+        )
+        llm.save_config(cfg)
+
+        class SolTearsTerraAnswers(FakeStreamOpenAI):
+            def create(self, **kw):
+                self.calls.append(kw)
+                if kw.get("model") == "gpt-5.6-sol":
+                    return iter([_chunk(finish="stop")])
+                return iter([_chunk(content="ответ терры", finish="stop")])
+
+        fo = SolTearsTerraAnswers([])
+        llm.use_test_client(fo, "openai")
+        models = ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+        with mock.patch.object(llm, "_available_models", return_value=models):
+            resp = llm.chat("voice", messages=[{"role": "user", "content": "hi"}])
+
+        self.assertEqual(resp.text, "ответ терры")
+        self.assertEqual(fo.calls[-1]["model"], "gpt-5.6-terra")
+        self.assertEqual(sum(c["model"] == "gpt-5.6-sol" for c in fo.calls),
+                         llm.EMPTY_RETRIES + 1,
+                         "primary получает только положенные empty-retry, не ложный fallback")
+
+    def test_same_framework_fallback_fails_closed_when_only_primary_is_live(self):
+        cfg = llm._from_env()
+        cfg["frameworks"]["openai"]["api_key"] = "sk-test"
+        cfg["roles"]["voice"].update(
+            framework="openai", model="gpt-5.6-sol",
+            fallback_model="glm-5.3", fallback_framework="openai",
+        )
+        llm.save_config(cfg)
+        fo = FakeStreamOpenAI([_chunk(finish="stop")])
+        llm.use_test_client(fo, "openai")
+
+        with mock.patch.object(llm, "_available_models", return_value=["gpt-5.6-sol"]):
+            with self.assertRaises(llm.EmptyResponseError):
+                llm.chat("voice", messages=[{"role": "user", "content": "hi"}])
+
+        self.assertEqual(len(fo.calls), llm.EMPTY_RETRIES + 1,
+                         "при отсутствии иной модели не повторяем primary под именем fallback")
+        self.assertTrue(all(c["model"] == "gpt-5.6-sol" for c in fo.calls))
 
     def test_fallback_framework_survives_normalize_and_arms_state(self):
         # Поле обязано пережить _normalize (роль переписывается целиком) и взводить
@@ -978,7 +1132,7 @@ class TestGlmEffortDialect(Base):
         kw = fake.calls[0]
         self.assertEqual(kw.get("thinking"), {"type": "enabled"},
                          "без thinking z.ai думает на серверном max")
-        self.assertEqual(kw.get("extra_body"), {"reasoning_effort": "low"})
+        self.assertEqual(kw.get("extra_body"), {"output_config": {"effort": "low"}})
 
     def test_relay_steps_project_to_glm_dialect(self):
         for step, glm_step in (("xhigh", "max"), ("high", "high"),
@@ -988,7 +1142,7 @@ class TestGlmEffortDialect(Base):
             llm.use_test_client(fake)
             llm.chat("voice", messages=[{"role": "user", "content": "привет"}])
             self.assertEqual(
-                fake.calls[0].get("extra_body"), {"reasoning_effort": glm_step},
+                fake.calls[0].get("extra_body"), {"output_config": {"effort": glm_step}},
                 f"ступень реле {step!r} обязана проецироваться в {glm_step!r}")
 
     def test_explicit_budget_beats_effort_step(self):
@@ -1000,8 +1154,7 @@ class TestGlmEffortDialect(Base):
         kw = fake.calls[0]
         self.assertEqual(kw.get("thinking"),
                          {"type": "enabled", "budget_tokens": 2048})
-        self.assertNotIn("extra_body", kw,
-                         "две ручки глубины в одном запросе — неоднозначность")
+        self.assertEqual(kw.get("extra_body"), {"output_config": {"effort": "low"}})
 
     def test_non_glm_model_keeps_effort_ignored(self):
         cfg = llm._from_env()
@@ -1040,7 +1193,33 @@ class TestGlmEffortDialect(Base):
         kw = fake.calls[0]
         self.assertEqual(kw.get("thinking"), {"type": "enabled"},
                          "glm-5.3 как фолбэк мёртв без thinking на фолбэк-плече")
-        self.assertEqual(kw.get("extra_body"), {"reasoning_effort": "low"})
+        self.assertEqual(kw.get("extra_body"), {"output_config": {"effort": "low"}})
+
+
+class TheCallTraceJournalIsBounded(unittest.TestCase):
+    """`_CALL_TRACE_MAX = 20000` был мёртвой константой: её никто не читал, журнал
+    рос без потолка (21 368 строк на 28.08 при диске 86%). Ротация — по размеру,
+    атомарным rename в `.1`: параллельный дописывающий уезжает вместе со старым
+    файлом, и на шве не теряется ни строки."""
+
+    def test_rotation_is_atomic_and_loses_no_seam_rows(self):
+        tmp = Path(tempfile.mkdtemp(prefix="trace_"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        with mock.patch.object(llm, "_CALL_TRACE", tmp / "llm_calls.jsonl"), \
+             mock.patch.object(llm, "_CALL_TRACE_ROTATE_BYTES", 700):
+            for i in range(30):
+                llm._call_trace(f"r{i:02d}", "m", ok=True, cached=0, prompt=1,
+                                out_tokens=1, latency_ms=1.0)
+        main = tmp / "llm_calls.jsonl"
+        rolled = tmp / "llm_calls.jsonl.1"
+        self.assertTrue(rolled.exists(), "ротация не случилась")
+        self.assertLess(main.stat().st_size, 1400, "потолок не ограничивает файл")
+        rows = [json.loads(line) for line in
+                (rolled.read_text(encoding="utf-8")
+                 + main.read_text(encoding="utf-8")).splitlines()]
+        indices = [int(row["role"][1:]) for row in rows]
+        self.assertEqual(indices, list(range(indices[0], 30)),
+                         "на шве ротации потерялись строки")
 
 
 if __name__ == "__main__":

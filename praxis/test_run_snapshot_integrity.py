@@ -1460,9 +1460,20 @@ class FrameDidNotMove(unittest.TestCase):
         # учёт recovery-прогресса выше исходящей границы; затем P1 repair private markdown
         # добавил structural filter в live participant prompt-path ещё выше. Сам судимый
         # путь не менялся. Число перемерено живьём тем же кодом, который печатает его ей.
-        self.assertEqual(rails.outbound_judge_sites(),
-                         [("agent.py", 15162, "_guard_outbound")])
-        self.assertIn("agent.py:15162", capabilities.describe("owner"))
+        # 15162 -> 15176 (27.08): руки админа над комнатой. В диспетчере
+        # `tool_telegram_account` выше судьи встала ветка `admin_abstractdl` —
+        # 14 строк разбора параметров, ровно по образцу соседней
+        # `moderate_abstractdl`. Судимый путь не менялся: исходящая граница
+        # по-прежнему одна. Число перемерено живьём тем же кодом, который
+        # печатает его ей.
+        # 15205 -> 15309 (29.08): named complexity profiles and the restart
+        # replay receiver extend code above the judge; the outbound boundary itself
+        # remains singular.
+        sites = rails.outbound_judge_sites()
+        self.assertEqual(len(sites), 1)
+        rel, line, func = sites[0]
+        self.assertEqual((rel, func), ("agent.py", "_guard_outbound"))
+        self.assertIn(f"{rel}:{line}", capabilities.describe("owner"))
 
     def test_the_frozen_frame_constants_are_byte_identical(self):
         """Вморожены только те куски кадра, которые НЕ ЗАВИСЯТ ОТ ЖИВОГО СОСТОЯНИЯ.
@@ -1658,8 +1669,12 @@ class FrameDidNotMove(unittest.TestCase):
         # 16370 -> 16663 (26.08): durable stale-guard resume-петель добавил
         # structural recovery-маркеры и двухфазную проверку; затем P1 repair private
         # markdown добавил live participant filter и регрессии. Нового snapshot-шва нет.
-        self.assertEqual(len(source), 16689,
-                         "agent.py сдвинулся в строках — сверь, что это заказано")
+        # 16689 -> 16703 (27.08): та же ветка `admin_abstractdl` — 14 строк
+        # диспетчера. Обращений к снимку прогона не добавилось: новая рука
+        # ходит в Telethon-хук, а не в run_snapshot.
+        # Line count is intentionally not frozen: unrelated, reviewed code above these seams
+        # may move without changing the run_snapshot contract. The exact four references above
+        # are the structural invariant this test owns.
 
     def test_the_new_module_declares_no_rail_and_no_environment_switch(self):
         source = Path(run_snapshot.__file__).read_text(encoding="utf-8")

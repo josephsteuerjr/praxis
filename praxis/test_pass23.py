@@ -17,6 +17,24 @@ import forge
 
 
 class ForgeCase(unittest.TestCase):
+    def test_agent_spawn_preserves_positional_iteration_budget(self):
+        task_id = self.start()
+        with mock.patch.object(forge, "_spawn_runner", return_value=424242):
+            out = forge.agent(task_id, "spawn", "", "map", "scout", 3, 5000)
+        agent_id = re.search(r"(agent-[0-9a-f]+)", out).group(1)
+        req = forge._read_json(forge._unit_dir(task_id, "agents", agent_id) / "request.json")
+        self.assertEqual(req["max_iters"], 3)
+        self.assertEqual(req["model"], "")
+
+    def test_coding_agent_wrapper_preserves_positional_iteration_budget(self):
+        import agent as main_agent
+        with mock.patch.object(forge, "agent", return_value="spawned") as spawn:
+            self.assertEqual(main_agent.tool_coding_agent(
+                "code-test", "spawn", "", "map", "scout", 3, 5000,
+                model="gpt-5.6-terra"), "spawned")
+        self.assertEqual(spawn.call_args.kwargs["max_iters"], 3)
+        self.assertEqual(spawn.call_args.kwargs["model"], "gpt-5.6-terra")
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp.name)
@@ -157,6 +175,16 @@ new file mode 100644
         self.assertEqual(req["role"], "scout")
         self.assertEqual(req["root"], str(self.project.resolve()))
         self.assertEqual(req["brief"], "map the test seams")
+        self.assertEqual(req["model"], "")
+
+    def test_agent_spawn_persists_requested_model(self):
+        task_id = self.start()
+        with mock.patch.object(forge, "_spawn_runner", return_value=424242):
+            out = forge.agent(task_id, "spawn", brief="map with terra", role="scout",
+                              model="gpt-5.6-terra")
+        agent_id = re.search(r"(agent-[0-9a-f]+)", out).group(1)
+        req = forge._read_json(forge._unit_dir(task_id, "agents", agent_id) / "request.json")
+        self.assertEqual(req["model"], "gpt-5.6-terra")
 
     def test_worker_executes_real_tool_loop_and_writes_result(self):
         import forge_worker
@@ -176,14 +204,177 @@ new file mode 100644
             stop_reason="tool_use", model="fake-coder")
         final = llm.LLMResponse(text="Changed app.py and verified the resulting diff.",
                                 stop_reason="end_turn", model="fake-coder")
-        with mock.patch.object(forge_worker.llm, "chat", side_effect=[tool_call, final]):
+        with mock.patch.object(forge_worker.llm, "chat", side_effect=[tool_call, final]) as chat:
             code = forge_worker.run(request_path)
         self.assertEqual(code, 0)
+        self.assertTrue(all(call.kwargs.get("model") is None for call in chat.call_args_list))
         self.assertIn("return 42", (self.project / "app.py").read_text(encoding="utf-8"))
         result = forge._read_json(request_path.parent / "result.json")
         self.assertEqual(result["status"], "done")
         self.assertEqual(result["tool_calls"], 1)
+        self.assertEqual(result["model_requested"], "")
+        self.assertEqual(result["model"], "fake-coder")
         self.assertIn("Changed app.py", result["result"])
+
+    def test_worker_passes_model_override_and_records_actual_model(self):
+        import forge_worker
+        import llm
+
+        task_id = self.start()
+        agent_id = "agent-model-override"
+        request_path = forge._unit_dir(task_id, "agents", agent_id) / "request.json"
+        request = {"id": agent_id, "task_id": task_id, "goal": "inspect",
+                   "root": str(self.project), "proposal_id": "", "role": "scout",
+                   "brief": "inspect without edits", "model": "gpt-5.6-terra",
+                   "max_iters": 2, "created": forge._now()}
+        forge._atomic_json(request_path, request)
+        final = llm.LLMResponse(text="Mapped the seams.", stop_reason="end_turn",
+                                model="gpt-5.6-terra")
+        with mock.patch.object(forge_worker.llm, "chat", return_value=final) as chat:
+            code = forge_worker.run(request_path)
+        self.assertEqual(code, 0)
+        self.assertEqual(chat.call_args.kwargs["model"], "gpt-5.6-terra")
+        result = forge._read_json(request_path.parent / "result.json")
+        self.assertEqual(result["model_requested"], "gpt-5.6-terra")
+        self.assertEqual(result["model"], "gpt-5.6-terra")
+        self.assertEqual(result["status"], "done")
+
+    def test_worker_retries_torn_iteration_before_dispatching_any_tool(self):
+        import forge_worker
+        import llm
+
+        task_id = self.start()
+        agent_id = "agent-retry-torn"
+        request_path = forge._unit_dir(task_id, "agents", agent_id) / "request.json"
+        request = {"id": agent_id, "task_id": task_id, "goal": "make answer exact",
+                   "root": str(self.project), "proposal_id": "", "role": "worker",
+                   "brief": "change 41 to 42", "max_iters": 4, "created": forge._now()}
+        forge._atomic_json(request_path, request)
+        partial = llm.LLMResponse(
+            text="I was about to edit",
+            blocks=[{"type": "tool_use", "id": "partial-call", "name": "edit",
+                     "input": {"action": "replace", "path": "app.py",
+                               "old": "return 41", "new": "return 99"}}],
+            stop_reason="error", model="fake-coder")
+        torn = llm.TornStreamError("incomplete chunked read", partial=partial)
+        tool_call = llm.LLMResponse(
+            blocks=[{"type": "tool_use", "id": "call-1", "name": "edit",
+                     "input": {"action": "replace", "path": "app.py",
+                               "old": "return 41", "new": "return 42"}}],
+            stop_reason="tool_use", model="fake-coder")
+        final = llm.LLMResponse(text="Changed once after transport recovery.",
+                                stop_reason="end_turn", model="fake-coder")
+        with mock.patch.dict(os.environ, {
+                "PRAXIS_FORGE_TRANSPORT_RETRIES": "1",
+                "PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC": "0"}), \
+                mock.patch.object(forge_worker.llm, "chat",
+                                  side_effect=[torn, tool_call, final]) as chat:
+            code = forge_worker.run(request_path)
+        self.assertEqual(code, 0)
+        self.assertEqual(chat.call_count, 3)
+        file_text = (self.project / "app.py").read_text(encoding="utf-8")
+        self.assertIn("return 42", file_text)
+        self.assertNotIn("return 99", file_text,
+                         "tool-looking partial from TornStreamError must never be dispatched")
+        result = forge._read_json(request_path.parent / "result.json")
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(result["tool_calls"], 1,
+                         "retry before response must not dispatch either partial or final tool twice")
+        first_system = chat.call_args_list[0].kwargs["system"]
+        retry_system = chat.call_args_list[1].kwargs["system"]
+        self.assertEqual(first_system, retry_system,
+                         "transport retry must reuse the exact logical-turn frame")
+
+    def test_worker_retries_the_no_tools_final_summary(self):
+        import forge_worker
+        import llm
+
+        task_id = self.start()
+        agent_id = "agent-summary-retry"
+        request_path = forge._unit_dir(task_id, "agents", agent_id) / "request.json"
+        request = {"id": agent_id, "task_id": task_id, "goal": "make answer exact",
+                   "root": str(self.project), "proposal_id": "", "role": "worker",
+                   "brief": "change 41 to 42", "max_iters": 1, "created": forge._now()}
+        forge._atomic_json(request_path, request)
+        tool_call = llm.LLMResponse(
+            blocks=[{"type": "tool_use", "id": "call-1", "name": "edit",
+                     "input": {"action": "replace", "path": "app.py",
+                               "old": "return 41", "new": "return 42"}}],
+            stop_reason="tool_use", model="fake-coder")
+        recovered = llm.LLMResponse(text="Summary recovered after the transport break.",
+                                    stop_reason="end_turn", model="fake-coder")
+        with mock.patch.dict(os.environ, {
+                "PRAXIS_FORGE_TRANSPORT_RETRIES": "1",
+                "PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC": "0"}), \
+                mock.patch.object(forge_worker.llm, "chat", side_effect=[
+                    tool_call, llm.BrokenChannelError("summary EOF"), recovered,
+                ]) as chat:
+            code = forge_worker.run(request_path)
+        self.assertEqual(code, 0)
+        self.assertEqual(chat.call_count, 3)
+        self.assertIsNone(chat.call_args_list[1].kwargs["tools"])
+        self.assertIsNone(chat.call_args_list[2].kwargs["tools"])
+        result = forge._read_json(request_path.parent / "result.json")
+        self.assertEqual(result["status"], "stalled")
+        self.assertEqual(result["tool_calls"], 1)
+        self.assertIn("Summary recovered", result["result"])
+
+    def test_transport_retry_environment_is_bounded_and_finite(self):
+        import forge_worker
+
+        with mock.patch.dict(os.environ, {
+                "PRAXIS_FORGE_TRANSPORT_RETRIES": "999999",
+                "PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC": "nan"}):
+            self.assertEqual(forge_worker._bounded_env_int(
+                "PRAXIS_FORGE_TRANSPORT_RETRIES", 2, low=0, high=8), 8)
+            self.assertEqual(forge_worker._bounded_env_float(
+                "PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC", 2.0,
+                low=0.0, high=60.0), 2.0)
+
+    def test_worker_records_final_transport_error_after_retry_budget(self):
+        import forge_worker
+        import llm
+
+        task_id = self.start()
+        agent_id = "agent-retry-exhausted"
+        request_path = forge._unit_dir(task_id, "agents", agent_id) / "request.json"
+        request = {"id": agent_id, "task_id": task_id, "goal": "inspect",
+                   "root": str(self.project), "proposal_id": "", "role": "scout",
+                   "brief": "inspect without edits", "max_iters": 2, "created": forge._now()}
+        forge._atomic_json(request_path, request)
+        with mock.patch.dict(os.environ, {
+                "PRAXIS_FORGE_TRANSPORT_RETRIES": "2",
+                "PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC": "0"}), \
+                mock.patch.object(forge_worker.llm, "chat",
+                                  side_effect=llm.BrokenChannelError("upstream EOF")) as chat:
+            code = forge_worker.run(request_path)
+        self.assertEqual(code, 2)
+        self.assertEqual(chat.call_count, 3)
+        result = forge._read_json(request_path.parent / "result.json")
+        self.assertEqual(result["status"], "error")
+        self.assertIn("BrokenChannelError: upstream EOF", result["error"])
+        self.assertEqual(result["trace"], [])
+
+    def test_worker_does_not_retry_non_transport_exceptions(self):
+        import forge_worker
+
+        task_id = self.start()
+        agent_id = "agent-no-retry-bug"
+        request_path = forge._unit_dir(task_id, "agents", agent_id) / "request.json"
+        request = {"id": agent_id, "task_id": task_id, "goal": "inspect",
+                   "root": str(self.project), "proposal_id": "", "role": "scout",
+                   "brief": "inspect without edits", "max_iters": 2, "created": forge._now()}
+        forge._atomic_json(request_path, request)
+        with mock.patch.dict(os.environ, {
+                "PRAXIS_FORGE_TRANSPORT_RETRIES": "8",
+                "PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC": "0"}), \
+                mock.patch.object(forge_worker.llm, "chat",
+                                  side_effect=RuntimeError("collector bug")) as chat:
+            code = forge_worker.run(request_path)
+        self.assertEqual(code, 2)
+        self.assertEqual(chat.call_count, 1)
+        result = forge._read_json(request_path.parent / "result.json")
+        self.assertIn("RuntimeError: collector bug", result["error"])
 
     def test_finish_direct_task_builds_evidence_bundle(self):
         task_id = self.start()

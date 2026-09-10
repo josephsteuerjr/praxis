@@ -1024,18 +1024,37 @@ _HELD_VOICE_RE = re.compile(r'"held"\][^\n]{0,60}or "voice"')
 _HELD_UNSPOKEN_RE = re.compile(r'"held"\][^\n]{0,60}or "unspoken"')
 
 
+def _chat_reply_contract_structure() -> str | None:
+    """Проверяемая часть контракта речи, независимая от текущего env-выката.
+
+    Само положение PRAXIS_CHAT_REPLY_HAND — живой факт прод-среды: манифест обязан
+    показывать его ей, но изолированный gate не должен изображать прод, чтобы сверить
+    файл. Здесь остаются только связи, которые могут разъехаться молча: умолчание руки,
+    её выдача в agent.py и различие двух исходов молчания.
+    """
+    default = _REPLY_HAND_DEFAULT_RE.search(_code_only(_source_text("work_loop.py")))
+    src = _code_only(_source_text("agent.py"))
+    if not src.strip():
+        return None
+    default_fact = (f"умолчание {default.group(1)}"
+                    if default else
+                    "⚠ умолчание в work_loop.reply_hand_enabled не прочиталось")
+    gate = ("agent.py вырезает `reply` при опущенном рычаге"
+            if _REPLY_TOOL_GATE_RE.search(src) else
+            "⚠ agent.py не показал связь «рычаг опущен → руки `reply` нет»")
+    held = ("held=voice и held=unspoken разведены"
+            if _HELD_VOICE_RE.search(src) and _HELD_UNSPOKEN_RE.search(src) else
+            "⚠ agent.py не показал различия held=voice и held=unspoken")
+    return f"проверяемая структура: {default_fact}; {gate}; {held}"
+
+
 def _chat_reply_contract_value() -> str:
-    """Чем моя реплика доходит до собеседника СЕЙЧАС. Положение рычага — живым вызовом.
+    """Чем моя реплика доходит до собеседника СЕЙЧАС; env-факт не сверяется в gate.
 
-    ⚠ Здесь нельзя описывать положение рычага на память ни одной буквой. Рычаг
-    переключает не украшение, а то, ЧЕМ я говорю: при опущенном моя реплика — возврат
-    хода, при поднятом наружу уходит только аргумент руки `reply`, а мой обычный текст
-    не доходит ни до кого. Манифест, отставший здесь на один выкат, отвечает мне на
-    вопрос «слышал ли меня собеседник» вчерашним днём.
-
-    Спрашиваем ТОТ ЖЕ вызов, которым рычаг спрашивает agent.py (`reply_hand_enabled`), а
-    не `os.getenv` рядом: своя копия чтения — это второй прибор, и расходиться они начнут
-    молча.
+    Положение рычага переключает сам способ речи, поэтому его нельзя описывать по
+    памяти: спрашиваем тот же work_loop.reply_hand_enabled(), что и agent.py. Но это
+    живой факт прод-среды, а manifest gate намеренно изолирован от прода. Сверка ловит
+    не положение рычага, а добавленную в конец проверяемую структуру контракта.
     """
     try:
         import work_loop
@@ -1067,9 +1086,6 @@ def _chat_reply_contract_value() -> str:
             "⚠ связи «рычаг опущен → руки `reply` в ходе нет» в agent.py НЕ нашлось: "
             "возможно, рука предлагается независимо от рычага — тогда одно из двух "
             "описаний выше врёт, и верить надо коду")
-    # ⚠ Два молчания различает ТОЛЬКО ветка поднятого рычага. Сказать при опущенном
-    # «у меня два разных исхода» значило бы обещать механизм, до которого мой ход не
-    # доходит: ветку я вижу в коде, но живёт она не здесь и не сейчас.
     split = bool(_HELD_VOICE_RE.search(src) and _HELD_UNSPOKEN_RE.search(src))
     if not split:
         held = ("⚠ различия held=voice (я решила молчать) и held=unspoken (ход кончился "
@@ -1083,7 +1099,10 @@ def _chat_reply_contract_value() -> str:
         held = ("два молчания (held=voice — моё слово, held=unspoken — ход кончился без "
                 "реплики) в коде уже разведены, но живут в ветке поднятого рычага: сюда "
                 "мой ход сегодня не доходит")
-    return f"{head}. {body}. {gate}. {held}"
+    structure = _chat_reply_contract_structure()
+    suffix = (f". {structure}" if structure else
+              ". ⚠ проверяемая структура agent.py/work_loop не прочиталась")
+    return f"{head}. {body}. {gate}. {held}{suffix}"
 
 
 def _room_disclosure_value() -> str:
@@ -2539,8 +2558,10 @@ def render_md() -> str:
         # заменить одно молчание прибора другим.
         "_Свежесть: сверяется СОСТАВ рельсов целиком и ЗНАЧЕНИЕ у "
         + ", ".join(f"`{rid}`" for rid in sorted(VALUE_WITNESSES))
-        + ". У остальных строка «сейчас» может разойтись с кодом молча — там правда в "
-          "`rails.registry()`, а не в этом файле._",
+        + ". У `chat_reply_contract` живое положение PRAXIS_CHAT_REPLY_HAND честно "
+          "показывается в «сейчас», но не сверяется: gate изолирован от прод-среды; "
+          "сверяется структура контракта в agent.py/work_loop. У остальных строка «сейчас» "
+          "может разойтись с кодом молча — там правда в `rails.registry()`, а не в этом файле._",
         "",
     ]
     for r in rows:
@@ -2671,9 +2692,24 @@ def _place_key_by_knowledge_value() -> str:
             "старое сообщение роутится режимом своего времени")
 
 def _witness_chat_reply_contract() -> tuple[str, ...] | None:
-    """Контракт моей речи — значение целиком: рычаг живой, следствия из agent.py."""
-    value = _fresh_value("chat_reply_contract")
-    return None if (not value or value.startswith("⚠")) else (value,)
+    """Сверяем только структуру; live env-положение рычага честно показывается, но не gate'ites.
+
+    ⚠ ЗНАЧОК ИЩЕТСЯ ВЕЗДЕ, А НЕ В НАЧАЛЕ. `_chat_reply_contract_structure` собирает
+    строку из трёх кусков и ВСЕГДА начинает её с `проверяемая структура: `, а свои
+    три «не прочиталось» кладёт в СЕРЕДИНУ (`rails.py:1039-1048`). Поэтому прежнее
+    `value.startswith("⚠")` было мёртвым кодом: непрочитанный `work_loop.py` или
+    `agent.py` ехал дальше как ПРОВЕРЕННЫЙ факт, и ближайший `sync_md()` вписывал
+    ⚠-текст в `soul/rails.md`, объявляя его свежим.
+
+    Сосед `_witness_place_key` тем же приёмом пользуется правильно: его значение
+    начинается со значка, когда не прочиталось. Здесь строитель другой — значит и
+    проверка должна быть другой.
+
+    `None` уходит в `unchecked` (`manifest_drift`, :2749) — названную категорию
+    «сверять было нечем». Это и есть честный исход, ради которого ветка заводилась.
+    """
+    value = _chat_reply_contract_structure()
+    return None if (not value or "⚠" in value) else (value,)
 
 
 def _witness_place_key() -> tuple[str, ...] | None:

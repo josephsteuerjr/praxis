@@ -186,5 +186,72 @@ class ToolBoundaryTests(unittest.TestCase):
         self.assertIn('"message_id": 1', out)
 
 
+class HistoryOfMeasuresAgainstOneSender(unittest.TestCase):
+    """27.08. Пробуждение на спам получало одни идентификаторы, и повторность
+    приходилось выяснять руками уже внутри хода.
+
+    Пока история не лежала в руках, ПЕРВОЕ срабатывание выглядело как одиночное:
+    живой леджер 27.08 показывает три удаления одному отправителю подряд и только
+    потом бан. Здесь закреплено, что история читается той же ПРОВЕРЕННОЙ цепью,
+    что и всё остальное, и не путает людей.
+
+    Про места тест не пишется и не нужен: актуатор привязан к одному peer
+    (`validate` отказывает всем прочим), поэтому расписки другого места в леджере
+    появиться не может по построению. Это её забор, и он сильнее любого пина.
+    """
+
+    PEER = telegram_moderation.TARGET_PEER_ID
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ledger = Path(self.tmp.name) / "moderation.jsonl"
+        self.patch = mock.patch.object(telegram_moderation, "LEDGER", self.ledger)
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+        self.addCleanup(self.tmp.cleanup)
+
+    def _receipt(self, mid, sender, action, status, deleted=False, banned=False):
+        key = telegram_moderation.validate(self.PEER, mid, sender, action)
+        return telegram_moderation.append_receipt({
+            "idempotency_key": key, "actor": "praxis:self", "peer_id": self.PEER,
+            "message_id": mid, "sender_id": sender, "action": action,
+            "status": status, "deleted": deleted, "banned": banned,
+            "sender_verified": True, "error": "",
+        })
+
+    def test_only_completed_measures_against_this_sender(self):
+        self._receipt(1, 55, "delete", "completed", deleted=True)
+        self._receipt(2, 55, "delete_and_ban", "completed", deleted=True, banned=True)
+        self._receipt(3, 77, "delete", "completed", deleted=True)   # другой человек
+        self._receipt(5, 55, "delete", "verified")                  # ещё не свершилось
+        rows = telegram_moderation.history_for_sender(self.PEER, 55)
+        self.assertEqual([r["message_id"] for r in rows], [1, 2])
+        self.assertEqual([r["action"] for r in rows], ["delete", "delete_and_ban"])
+        self.assertTrue(rows[1]["banned"])
+        self.assertFalse(rows[0]["banned"])
+
+    def test_a_first_time_sender_has_an_empty_history_not_a_guess(self):
+        self._receipt(1, 55, "delete", "completed", deleted=True)
+        self.assertEqual(telegram_moderation.history_for_sender(self.PEER, 999), [])
+
+    def test_another_place_cannot_even_appear_in_this_ledger(self):
+        """Забор актуатора и есть гарантия, что история не смешает места."""
+        with self.assertRaises(PermissionError):
+            telegram_moderation.validate(-100500, 1, 55, "delete")
+
+    def test_a_torn_chain_refuses_instead_of_returning_a_plausible_stump(self):
+        """Порванная цепь расписок обязана уронить и эту функцию: половина правды о
+        том, банили ли человека, хуже честного отказа."""
+        self._receipt(1, 55, "delete", "completed", deleted=True)
+        self._receipt(2, 55, "delete", "completed", deleted=True)
+        lines = self.ledger.read_text(encoding="utf-8").splitlines()
+        row = json.loads(lines[0])
+        row["deleted"] = False                      # подмена задним числом
+        lines[0] = json.dumps(row, ensure_ascii=False)
+        self.ledger.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        with self.assertRaises(Exception):
+            telegram_moderation.history_for_sender(self.PEER, 55)
+
+
 if __name__ == "__main__":
     unittest.main()

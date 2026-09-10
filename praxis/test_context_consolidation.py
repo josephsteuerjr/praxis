@@ -115,7 +115,7 @@ class TestConsolidateTool(Base):
         j = self._journal()
         self.assertIn("[контекст]", j)
         self.assertIn("договорились созвониться", j)
-        self.assertIn("освобождён", out)
+        self.assertIn("источник истории укорочен", out)
 
     def test_fold_without_note_uses_summary(self):
         orig = agent._summarize_history
@@ -142,6 +142,60 @@ class TestConsolidateTool(Base):
         agent._CURRENT_HISTORY = hist
         agent.tool_consolidate_context("суть")
         self.assertEqual(len(hist), 6, "должен оставить живой хвост")
+
+    def test_turn_snapshot_is_journaled_but_not_claimed_as_pruned(self):
+        """Telegram binds a cleaned role snapshot, not the runner's authoritative history."""
+        hist = self._hist(10)
+        result = {}
+        original_loop = agent._terminal_tool_loop
+        original_configured = agent.llm.configured
+
+        def fake_loop(**_kwargs):
+            result["text"] = agent.tool_consolidate_context("суть снимка")
+            result["len"] = len(agent._active_history())
+            return ""
+
+        agent._terminal_tool_loop = fake_loop
+        agent.llm.configured = lambda *a, **k: True
+        try:
+            agent.voice_turn_envelope(
+                "101", "Егор: новое", "Егор",
+                ctx=agent.ChannelContext.from_legacy(
+                    "101", is_dm=True, owner=True, known=True),
+                history=hist, current_text="новое",
+            )
+        finally:
+            agent._terminal_tool_loop = original_loop
+            agent.llm.configured = original_configured
+
+        self.assertEqual(len(hist), 10, "снимок хода не должен выдавать себя за источник")
+        self.assertEqual(result["len"], 10)
+        self.assertIn("снимок", result["text"].lower())
+        self.assertNotIn("освобожд", result["text"].lower())
+        self.assertIn("суть снимка", self._journal())
+
+    def test_authoritative_turn_history_is_pruned(self):
+        hist = self._hist(10)
+        result = {}
+        original_loop = agent._terminal_tool_loop
+
+        def fake_loop(**_kwargs):
+            result["text"] = agent.tool_consolidate_context("суть источника")
+            return ""
+
+        agent._terminal_tool_loop = fake_loop
+        try:
+            agent._voice(
+                "новое", hist, "Егор",
+                ctx=agent.ChannelContext.from_legacy(
+                    "101", is_dm=True, owner=True, known=True),
+                history_persistent=True,
+            )
+        finally:
+            agent._terminal_tool_loop = original_loop
+
+        self.assertEqual(len(hist), 6)
+        self.assertIn("источник истории укорочен", result["text"])
 
 
 class TestNudge(Base):

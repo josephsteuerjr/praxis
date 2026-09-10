@@ -44,7 +44,8 @@ _PROMISE_PATTERNS = (
     # «сейчас добью просмотр», «щас проверю и скажу», «теперь сделаю зеркало»
     # (промежуточный пасс A: «теперь …» — то же объявление следующего действия;
     # 17:37 23.07 «теперь обратно к audit-demo» ушло в простой без окна-возврата)
-    re.compile(rf"(?is)\b(?:сейчас|щас|ща|теперь)\b[^.!?\n]{{0,60}}?\b{_ACT}"),
+    # Не принимать прошедшее «сейчас вернула» за будущее «сейчас верну».
+    re.compile(rf"(?is)\b(?:сейчас|щас|ща|теперь)\b[^.!?\n]{{0,60}}?\b{_ACT}\b"),
     # «добью сейчас», «пришлю сегодня»
     re.compile(rf"(?is)\b{_ACT}\b[^.!?\n]{{0,40}}?\b(?:сейчас|щас|ща|сегодня|теперь)\b"),
     # «вернусь с кадром через пару минут», «через 10 минут доложу»
@@ -120,9 +121,25 @@ def detect(text: str) -> str | None:
     for pattern in _PROMISE_PATTERNS:
         found = pattern.search(searchable)
         if found:
+            # Expand the context to Unicode word boundaries, including punctuation
+            # as a boundary. Never let a long preceding word crowd out the promise.
+            def word_char(char: str) -> bool:
+                return char.isalnum() or char == "_"
+
             start = max(0, found.start() - 40)
-            gist = value[start:found.end() + 80]
-            return re.sub(r"\s+", " ", gist).strip()[:200]
+            while start > 0 and word_char(value[start - 1]) and word_char(value[start]):
+                start -= 1
+            if found.end() - start > 200:
+                start = found.start()
+            end = min(len(value), found.end() + 80)
+            while end < len(value) and word_char(value[end - 1]) and word_char(value[end]):
+                end += 1
+            gist = re.sub(r"\s+", " ", value[start:end]).strip()
+            # The final cap must respect the same boundary, not undo the repair.
+            cap = min(len(gist), 200)
+            while 0 < cap < len(gist) and word_char(gist[cap - 1]) and word_char(gist[cap]):
+                cap -= 1
+            return gist[:cap].strip()
     return None
 
 

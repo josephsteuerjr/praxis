@@ -138,8 +138,11 @@ def parse_when(s: str | None) -> tuple[str | None, str | None]:
         return (_now() + delta).isoformat(timespec="minutes"), None
     m = re.match(r"(today|tomorrow)\s+(\d{1,2}):(\d{2})$", s)
     if m:
+        hour, minute = int(m.group(2)), int(m.group(3))
+        if hour > 23 or minute > 59:
+            return None, None
         day = _now().date() + (_dt.timedelta(days=1) if m.group(1) == "tomorrow" else _dt.timedelta())
-        return _dt.datetime.combine(day, _dt.time(int(m.group(2)), int(m.group(3)))).isoformat(timespec="minutes"), None
+        return _dt.datetime.combine(day, _dt.time(hour, minute)).isoformat(timespec="minutes"), None
     try:
         return _dt.datetime.fromisoformat(s).isoformat(timespec="minutes"), None
     except Exception:

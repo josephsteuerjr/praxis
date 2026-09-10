@@ -131,6 +131,64 @@ class CrashOrderTests(Base):
         self.assertIsNotNone(core_events.emit("k", "s", {}, dedup_key="after"),
                              "запись после оборванного хвоста работает")
 
+    def test_torn_multibyte_line_does_not_blind_journal_forever(self):
+        """Разрыв ПО БАЙТАМ, не по строке — живая цепь 28.08: полный диск, короткая
+        os.write ровно по границе 4096, двухбайтовый символ рассечён пополам.
+
+        Прежний читатель падал UnicodeDecodeError В САМОМ текстовом итераторе — мимо
+        построчного except — на каждом вызове и навсегда, даже когда место
+        освободилось. Наверху это держало флаг приоритета, и она глохла во всех
+        чатах до рестарта. Плата за битую строку — одна эта строка."""
+        core_events.emit("k", "s", {}, dedup_key="до-обрыва")
+        with core_events.JOURNAL.open("ab") as fh:
+            fh.write('{"kind": "модерация'.encode("utf-8")[:-1])  # рассечённый символ
+        after = core_events.emit("k", "s", {}, dedup_key="после-обрыва")
+        self.assertIsNotNone(after, "запись после рваного байта обязана работать")
+        keys = [p["dedup_key"] for p in core_events.undelivered()]
+        self.assertEqual(keys, ["до-обрыва", "после-обрыва"],
+                         "рваный байт ослепил журнал целиком")
+
+    def test_short_write_is_reported_not_swallowed(self):
+        """emit, записавший половину строки, не имеет права рапортовать успех.
+
+        28.08: os.write на полном диске вернул часть байтов, emit вернул событие,
+        а журнал получил огрызок. Теперь остаток дописывается; если не дописался —
+        честный None. Огрызок в журнале читателя не слепит."""
+        real_write = os.write
+        cuts = []
+
+        def half_then_fail(fd, data):
+            if not cuts:
+                cuts.append(len(data) // 2)
+                return real_write(fd, data[:cuts[0]])
+            raise OSError(28, "No space left on device")
+
+        with mock.patch.object(os, "write", side_effect=half_then_fail):
+            self.assertIsNone(core_events.emit("k", "s", {"поле": "значение"},
+                                               dedup_key="обрыв"),
+                              "короткая запись отрапортована успехом")
+        self.assertEqual(core_events.undelivered(), [],
+                         "огрызок короткой записи прочитался как событие")
+        healed = core_events.emit("k", "s", {}, dedup_key="после")
+        self.assertIsNotNone(healed)
+        self.assertEqual([p["dedup_key"] for p in core_events.undelivered()],
+                         ["после"], "журнал после огрызка не читается")
+
+    def test_a_partial_write_that_can_continue_is_completed(self):
+        """Дружелюбная короткая запись (сигнал, большой буфер) дописывается до конца."""
+        real_write = os.write
+        calls = []
+
+        def dribble(fd, data):
+            calls.append(len(data))
+            return real_write(fd, data[:max(1, len(data) // 2)])
+
+        with mock.patch.object(os, "write", side_effect=dribble):
+            self.assertIsNotNone(core_events.emit("k", "s", {}, dedup_key="капли"))
+        self.assertGreater(len(calls), 1, "остаток не дописывался")
+        self.assertEqual([p["dedup_key"] for p in core_events.undelivered()],
+                         ["капли"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

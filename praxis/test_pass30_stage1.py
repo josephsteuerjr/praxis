@@ -482,6 +482,28 @@ class RunnerPumpTests(ForgeEventsBase):
             asyncio.run(mtproto_runner._forge_events_once())
         und.assert_not_called()
 
+    def test_an_emit_in_the_same_tick_is_still_seen(self):
+        """Обратная сторона гварда — худшее из шести мест «кэша по голому mtime».
+
+        Шаг файловых часов — миллисекунды: emit субагента в тот же тик, что прошлое
+        «пусто», оставлял отпечаток журнала неизменным, и гвард не парсил его до
+        СЛЕДУЮЩЕЙ записи. Ночью следующей записи нет — subagent_result лежал
+        недоставленным часами (адверсарка 28.08). Размер в отпечатке обязан ловить
+        дозапись слепого тика; здесь тик подделан honesty-жёстче — utime назад."""
+        self._emit("t8", "a8", "done")
+        with mock.patch.object(mtproto_runner.agent, "forge_event_turn", return_value=""):
+            asyncio.run(mtproto_runner._run_forge_event_pass())      # доставлено
+            asyncio.run(mtproto_runner._forge_events_once())          # пусто -> запомнил
+        quiet = core_events.JOURNAL.stat()
+        self._emit("t9", "a9", "done")                                # дозапись...
+        os.utime(core_events.JOURNAL,
+                 ns=(quiet.st_atime_ns, quiet.st_mtime_ns))           # ...в «тот же» тик
+        mtproto_runner._FORGE_EVENT_LAST["ts"] = 0.0
+        with mock.patch.object(core_events, "undelivered",
+                               wraps=core_events.undelivered) as und:
+            asyncio.run(mtproto_runner._forge_events_once())
+        und.assert_called()
+
     def test_old_urgent_poller_sleeps_while_events_enabled(self):
         self._unit("code-u", "agent-u1", priority="urgent",
                    request={"id": "agent-u1", "role": "worker", "created": _now_iso(5)},

@@ -148,6 +148,7 @@ def normalize(task_id: str, agent_id: str, result: dict | None,
         "started_at": str(request.get("created") or ""),
         "finished_at": str(result.get("finished") or ""),
         "cost": {"tokens": 0, "calls": int(result.get("tool_calls") or 0)},
+        "model_requested": str(result.get("model_requested") or request.get("model") or ""),
         "model": str(result.get("model") or ""),
         "error": _clip(result.get("error"), ERROR_CHARS),
         # отказ уже отдан синхронно в ходе спавнера — событие не будит второй раз

@@ -215,6 +215,43 @@ class ToolTests(Pass22Base):
                                       why="рутина дешевле")
         self.assertIn("Сменила", out)
 
+    def test_named_complexity_profile_and_status(self):
+        import agent
+        import brain
+        self.patch(agent, _CURRENT_SCOPE="owner")
+        self.patch(llm, ping=lambda role: (True, ""))
+        out = agent.tool_switch_brain("profile", profile="deep-review", why="несущий review")
+        self.assertIn("deep-review", out)
+        role = llm._config()["roles"]["voice"]
+        self.assertEqual(role["model"], "gpt-5.6-sol")
+        self.assertEqual(role["reasoning_effort"], "high")
+        self.assertIn("совпадает сейчас: deep-review", brain.describe())
+
+        out = agent.tool_switch_brain("profile", profile="chat", why="вернуться в личку")
+        self.assertIn("chat", out)
+        role = llm._config()["roles"]["voice"]
+        self.assertEqual(role["model"], "gpt-5.6-terra")
+        self.assertEqual(role["reasoning_effort"], "medium")
+
+        out = agent.tool_switch_brain("profile", profile="routine-code",
+                                      why="обычная кодинг-работа")
+        self.assertIn("routine-code", out)
+        role = llm._config()["roles"]["voice"]
+        self.assertEqual(role["model"], "gpt-5.6-terra")
+        self.assertEqual(role["reasoning_effort"], "high")
+        self.assertIn("совпадает сейчас: routine-code", brain.describe())
+
+    def test_profile_works_when_model_already_selected(self):
+        import brain
+        self.patch(llm, ping=lambda role: (True, ""))
+        llm.update_config({"roles": {"voice": {"framework": "openai",
+                                                  "model": "gpt-5.6-terra",
+                                                  "reasoning_effort": "low"}}})
+        res = brain.apply_profile("chat", why="обычный разговор")
+        self.assertTrue(res["ok"])
+        self.assertFalse(res["model_changed"])
+        self.assertEqual(llm._config()["roles"]["voice"]["reasoning_effort"], "medium")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -382,6 +382,80 @@ class AgentResumeRuntimeTests(unittest.TestCase):
         self.assertEqual(captured["tools"], tools)
         self.assertIsNone(captured["max_iters"])
 
+    def test_served_receipt_real_resume_rolls_back_without_repeating_effect(self):
+        import copy
+        import os
+        from types import SimpleNamespace
+        import frame_measure
+        import frame_serve
+
+        channel = agent.ChannelContext(chat_id="100", principal_id="100",
+                                       is_dm=True, owner=True, known=True)
+        context = self._create("served-receipt", channel=channel)
+        live = [{"type": "text", "text": "LIVE SYSTEM",
+                 "cache_control": {"type": "ephemeral"}}]
+        messages = [{"role": "user", "content": "send once"}]
+        tools = [{"name": "send_message", "input_schema": {"type": "object"}}]
+        use = {"type": "tool_use", "id": "sent", "name": "send_message",
+               "input": {"to": "42", "text": "ping"}}
+        first = SimpleNamespace(blocks=[use], text="", stop_reason="tool_use")
+        final = SimpleNamespace(blocks=[{"type": "text", "text": "Done."}],
+                                text="Done.", stop_reason="end_turn")
+        seen = []
+
+        def provider(*args, **kwargs):
+            seen.append(copy.deepcopy(kwargs))
+            return first if len(seen) == 1 else final
+
+        prefix = "K\n\n---\nK" + frame_serve.frame_shadow._SEP_E
+        effect = mock.Mock(return_value="sent once")
+        with mock.patch.dict(os.environ, PRAXIS_FRAME_V6="serve",
+                             PRAXIS_FRAME_V6_STREAMS="dm-100", PRAXIS_OWNER_ID="100"), \
+                mock.patch.object(agent.social, "owner_id", return_value="100"), \
+                mock.patch.object(frame_serve.frame_shadow, "_read", return_value="K"), \
+                mock.patch.object(frame_measure, "assemble", return_value={"system": prefix + "E T"}), \
+                mock.patch.object(agent.llm, "chat", side_effect=provider), \
+                mock.patch.object(agent, "guard_outbound_reply", side_effect=self._guard_passthrough), \
+                mock.patch.dict(agent.TOOL_IMPL, {"send_message": effect}):
+            with run_context.bind_run(context), \
+                    frame_serve.bind(system=live, ctx=channel, dynamic="TRANSPORT"):
+                agent._model_call(live, messages, tools)
+            # Crash after an external effect and its durable receipt, before continuation.
+            self.manager.start_tool(context.run_id, "sent", "send_message", use["input"],
+                                    side_effect=True, idempotency_key="synthetic-send-once")
+            result = effect(**use["input"])
+            ref = self.manager.store_result(context.run_id, result, call_id="sent",
+                                            name="send_message", idempotent=True)
+            self._pause(context)
+            report = agent.resume_durable_run(context.run_id)
+            agent.resume_durable_run(context.run_id)
+
+        self.assertEqual(report["plan_kind"], "replay_model_tool_response")
+        self.assertTrue(report["lease_acquired"])
+        self.assertEqual(len(seen), 2)
+        self.assertTrue(seen[0]["system"].startswith(prefix))
+        self.assertEqual(seen[1]["system"], live)
+        self.assertEqual(seen[1]["tools"], tools)
+        self.assertEqual(seen[1]["messages"][:-2], messages)
+        self.assertEqual(seen[1]["messages"][-2], {"role": "assistant", "content": [use]})
+        result_block = seen[1]["messages"][-1]["content"][0]
+        self.assertEqual(result_block["tool_use_id"], "sent")
+        self.assertIn(ref["result_id"], result_block["content"])
+        effect.assert_called_once_with(**use["input"])
+        events = self.manager.events(context.run_id)
+        inputs = [e for e in events if e.get("kind") == "model_input"]
+        self.assertEqual(len(inputs), 2)
+        saved = [json.loads(self.manager.read_result(
+            context.run_id, e["result"]["result_id"])["text"]) for e in inputs]
+        self.assertEqual(saved[0]["system"], seen[0]["system"])
+        self.assertEqual(saved[0]["frame_v6_live_system"], live)
+        self.assertEqual(inputs[0]["metadata"]["frame_serve"]["served_variant"], "v6")
+        self.assertEqual(saved[1]["system"], live)
+        self.assertNotIn("frame_v6_live_system", saved[1])
+        self.assertEqual(sum(e.get("kind") == "tool_result" and e.get("call_id") == "sent"
+                             for e in events), 1)
+        self.assertEqual(sum(e.get("tool") == "telegram.deliver" for e in events), 1)
+
     def test_tool_replay_reuses_completed_and_runs_only_safe_calls(self):
         context = self._create("tool-replay")
         blocks = [

@@ -10,19 +10,80 @@ restart and several workers can run concurrently.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import hashlib
 import json
+import math
 import os
+import time
 import traceback
 from pathlib import Path
 
 import forge
 import llm
+import run_context
 
 
 def _now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def _bounded_env_int(name: str, default: int, *, low: int, high: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(low, min(high, value))
+
+
+def _bounded_env_float(name: str, default: float, *, low: float, high: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)) or default)
+    except (TypeError, ValueError):
+        value = default
+    if not math.isfinite(value):
+        value = default
+    return max(low, min(high, value))
+
+
+def _chat_with_transport_retry(request: dict, *, system: str, messages: list[dict],
+                               tools: list[dict] | None, logical_iteration: int):
+    """Retry an LLM iteration only while no response/tool call has reached the worker.
+
+    ``llm.chat`` either returns a complete response object or raises.  Tool dispatch starts
+    only after this helper returns, so repeating a ``BrokenChannelError`` cannot execute a
+    tool twice.  The retry budget is deliberately separate from ``max_iters``: a torn HTTP
+    body is not a model turn and must not consume the agent's reasoning budget.
+    """
+    retries = _bounded_env_int("PRAXIS_FORGE_TRANSPORT_RETRIES", 2, low=0, high=8)
+    pause = _bounded_env_float("PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC", 2.0,
+                               low=0.0, high=60.0)
+    for attempt in range(retries + 1):
+        try:
+            return llm.chat("voice", system=system, messages=messages, tools=tools,
+                            model=str(request.get("model") or "").strip() or None)
+        except llm.BrokenChannelError as exc:
+            if attempt >= retries:
+                raise
+            retry_number = attempt + 1
+            print(
+                f"{request.get('id') or 'forge-agent'}: transport broke on logical "
+                f"iteration {logical_iteration}; retry {retry_number}/{retries} after "
+                f"{pause:g}s ({type(exc).__name__}: {str(exc)[:160]})",
+                flush=True,
+            )
+            try:
+                forge._event(
+                    request.get("task_id") or "", "agent_transport_retry",
+                    agent_id=request.get("id"), iteration=logical_iteration,
+                    attempt=retry_number, retries=retries,
+                    summary=f"{type(exc).__name__}: {str(exc)[:240]}",
+                )
+            except Exception:
+                pass
+            if pause:
+                time.sleep(pause)
 
 
 def _write(path: Path, data: dict) -> None:
@@ -126,6 +187,7 @@ DELEGATE_TOOL = {
     "input_schema": _obj({
         "brief": {"type": "string"},
         "role": {"type": "string", "enum": ["scout", "worker", "reviewer"]},
+        "model": {"type": "string", "description": "Optional per-agent model; omitted keeps the voice-role default."},
         "max_iters": {"type": "integer"},
     }, ["brief", "role"]),
 }
@@ -200,9 +262,25 @@ def _dispatch(request: dict, name: str, args: dict) -> str:
 
 def run(request_path: Path) -> int:
     request = json.loads(request_path.read_text(encoding="utf-8"))
+    return _run_request(request_path, request)
+
+
+def _run_request(request_path: Path, request: dict) -> int:
     result_path = request_path.parent / "result.json"
     trace: list[dict] = []
+    bindings = contextlib.ExitStack()
     try:
+        # Clear ambient authority even for legacy requests; always restore it.
+        bindings.enter_context(run_context.bind_run(None))
+        captured = request.get("run_context")
+        # Empty dict is the historical serialized no-context marker.
+        if captured is not None and captured != {}:
+            if not isinstance(captured, dict):
+                raise TypeError("run_context must be an object or null")
+            context = run_context.RunContext.from_dict(captured)
+            from dataclasses import replace
+            context = replace(context, forge_task_id=str(request["task_id"]))
+            bindings.enter_context(run_context.bind_run(context))
         role = request.get("role") or "worker"
         tools = [INSPECT_TOOL, RUN_TOOL, PROCESS_TOOL, VERIFY_TOOL, SIGNAL_TOOL, DELEGATE_TOOL]
         if role == "worker":
@@ -220,7 +298,14 @@ def run(request_path: Path) -> int:
         used = 0
         for _ in range(max_iters):
             used += 1
-            response = llm.chat("voice", system=_system(request), messages=messages, tools=tools)
+            # Re-orient for each logical model turn, but freeze that exact frame across
+            # transport retries of this turn. A retry must not observe a half-new system
+            # prompt; the next successful tool iteration may legitimately see new state.
+            system = _system(request)
+            response = _chat_with_transport_retry(
+                request, system=system, messages=messages, tools=tools,
+                logical_iteration=used,
+            )
             final_model = response.model
             if response.stop_reason != "tool_use":
                 reply = response.text.strip()
@@ -244,8 +329,13 @@ def run(request_path: Path) -> int:
             messages.append({"role": "assistant", "content": assistant_blocks})
             messages.append({"role": "user", "content": tool_results})
         if not reply:
-            reply = llm.chat("voice", system=_system(request), messages=messages,
-                             tools=None).text.strip()
+            system = _system(request)
+            summary_response = _chat_with_transport_retry(
+                request, system=system, messages=messages, tools=None,
+                logical_iteration=used + 1,
+            )
+            final_model = summary_response.model
+            reply = summary_response.text.strip()
         diff = forge.inspect(request["task_id"], "diff")
         data = {
             "status": "done" if stopped_himself else "stalled",
@@ -258,7 +348,9 @@ def run(request_path: Path) -> int:
             # число едет в запись и видно рядом со статусом.
             "tool_errors": sum(1 for t in trace
                                if str(t.get("output") or "").startswith("Tool error")),
-            "finished": _now(), "role": role, "model": final_model,
+            "finished": _now(), "role": role,
+            "model_requested": str(request.get("model") or ""),
+            "model": final_model,
             "result": reply, "tool_calls": len(trace), "trace": trace[-30:],
             "diff_tail": diff[-8000:],
         }
@@ -276,6 +368,8 @@ def run(request_path: Path) -> int:
         return 0
     except Exception as exc:
         data = {"status": "error", "finished": _now(),
+                "model_requested": str(request.get("model") or ""),
+                "model": str(locals().get("final_model") or ""),
                 "error": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc()[-8000:],
                 "trace": trace[-20:]}
         _write(result_path, data)
@@ -288,6 +382,8 @@ def run(request_path: Path) -> int:
                               data, request=request)
         print(data["traceback"], flush=True)
         return 2
+    finally:
+        bindings.close()
 
 
 if __name__ == "__main__":

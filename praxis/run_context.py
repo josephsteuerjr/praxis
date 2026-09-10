@@ -171,9 +171,9 @@ def reset_run(token: Token) -> None:
 
 
 @contextlib.contextmanager
-def bind_run(context: RunContext) -> Iterator[RunContext]:
-    """Bind one immutable run and restore the previous binding afterwards."""
-    token = set_run(context)
+def bind_run(context: RunContext | None) -> Iterator[RunContext | None]:
+    """Bind a run (or explicitly clear it), then restore the previous binding."""
+    token = _CURRENT_RUN.set(None) if context is None else set_run(context)
     try:
         yield context
     finally:

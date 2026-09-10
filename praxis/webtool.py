@@ -417,7 +417,8 @@ def web_read(url: str, start: int = 0, render: bool = False) -> str:
     rest = len(text) - (start + len(window))
     if rest > 0:
         out += (f"\n\n[…ещё ~{rest} символов из {len(text)}: "
-                f"web_read(url, start={start + len(window)}) — страница в кэше, это дёшево]")
+                f"web_read(url, start={start + len(window)}"
+                f"{', render=true' if render else ''}) — страница в кэше, это дёшево]")
     if have_links:
         lines = [f"[{i + 1}] {t} — {u}" for i, (t, u) in enumerate(page.links[:MAX_LINKS])]
         block = "\n\nСсылки:\n" + "\n".join(lines)

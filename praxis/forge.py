@@ -1958,6 +1958,19 @@ def task_origin(task_id: str) -> str:
         return ""
 
 
+def _task_run_context(task_id: str) -> dict:
+    """Capture the server-bound origin before detached workers lose ContextVars.
+
+    Never infer a principal from an origin chat (groups are not people). Legacy
+    tasks without a captured context stay unattributed when resumed unbound.
+    """
+    from dataclasses import replace
+    import run_context
+
+    context = run_context.current_run()
+    return replace(context, forge_task_id=task_id).to_dict() if context else {}
+
+
 def start(goal: str, target: str = "self", isolation: str = "auto",
           priority: str = "normal", origin_chat: str = "") -> str:
     """Open a durable coding task and return its factual orientation."""
@@ -2050,6 +2063,7 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
         "isolation_note": isolation_note,
         # PASS 30 Этап 2: тред-заказчик — для наррации по ходу и forge_event
         "origin_chat": str(origin_chat or ""),
+        "run_context": _task_run_context(task_id),
         "status": "active", "created": _now(), "updated": _now(),
     }
     _save_task(task)
@@ -2083,6 +2097,7 @@ def start_host(goal: str, target: str, priority: str = "normal",
         "base_commit": str(probe.get("head") or ""), "source_git": str(probe.get("git_root") or ""),
         "source_branch": "", "worktree_root": "", "priority": _norm_priority(priority),
         "origin_chat": str(origin_chat or ""),
+        "run_context": _task_run_context(task_id),
         "status": "active", "created": _now(), "updated": _now(),
     }
     _save_task(task)
@@ -2122,6 +2137,7 @@ def start_windows(goal: str, target: str, priority: str = "normal",
         "source_git": str(probe.get("git_root") or ""), "source_branch": "",
         "worktree_root": "", "priority": _norm_priority(priority),
         "origin_chat": str(origin_chat or ""),
+        "run_context": _task_run_context(task_id),
         "status": "active", "created": _now(), "updated": _now(),
     }
     _save_task(task)
@@ -2913,7 +2929,7 @@ def verify(task_id: str, action: str = "plan", verification_id: str = "",
 def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
           role: str = "worker", max_iters: int = 0, tail: int = 10000,
           node_id: str = "", owns: list[str] | None = None,
-          spawned_by: str = "") -> str:
+          spawned_by: str = "", model: str = "") -> str:
     task, root, err = _task_root(task_id)
     if err:
         return err
@@ -2934,8 +2950,10 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
         d = _unit_dir(task_id, "agents", unit_id)
         request = {
             "id": unit_id, "task_id": task_id, "goal": task.get("goal"),
+            "run_context": task.get("run_context") or _task_run_context(task_id),
             "root": str(root), "proposal_id": task.get("proposal_id") or "",
-            "role": role, "brief": brief, "max_iters": max(0, int(max_iters or 0)),
+            "role": role, "brief": brief, "model": str(model or "").strip(),
+            "max_iters": max(0, int(max_iters or 0)),
             "node_id": str(node_id or ""), "owns": list(owns or []),
             # расписка манометра: кто породил (пусто = она сама тулом)
             "spawned_by": str(spawned_by or ""),

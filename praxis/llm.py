@@ -43,6 +43,13 @@ CONFIG_PATH = MEM_DIR / "llm.json"
 JOURNAL_DIR = MEM_DIR / "journal"
 USAGE_PATH = MEM_DIR / ".state" / "usage.json"   # PASS 9.1: расход токенов по ролям/дням
 USAGE_KEEP_DAYS = 60
+# Схема записи расхода. 1 — до 27.08.2026: `in` значил РАЗНОЕ у разных фреймворков
+# (anthropic — только свежие токены, openai — весь промпт ВМЕСТЕ с кэшем), и одна
+# формула поверх общего ведра давала число, которое ничего не измеряет. 2 — `in`
+# везде значит ОДНО: токены, НЕ пришедшие из кэша, то есть оплаченные полностью.
+# Старые записи не переписываются: у них схемы нет, и доля кэша по ним не считается —
+# «не знаю» честнее пересчитанного задним числом.
+USAGE_SCHEMA = 2
 
 FRAMEWORKS = ("anthropic", "openai")
 ROLES = ("voice", "evaluator")
@@ -120,6 +127,9 @@ class LLMResponse:
     usage: dict = field(default_factory=dict)    # {"in": int, "out": int}
     framework: str = ""
     model: str = ""
+    # Local routing fact, not provider-reported usage: this logical call selected a
+    # sighted replacement because the input contained pixels.
+    vision: bool = False
 
 
 @dataclass(frozen=True)
@@ -184,6 +194,21 @@ def _normalize(cfg: dict) -> dict:
         effort = str(cur.get("reasoning_effort") or "").strip().lower()
         if effort in REASONING_EFFORTS:
             out["roles"][role]["reasoning_effort"] = effort
+        # 09.09: зрячая замена текстовой модели на ход с изображением (vision_model) —
+        # тот же класс: без строки здесь нормализация стирала бы ручку владельца.
+        vision = str(cur.get("vision_model") or "").strip()
+        if vision:
+            out["roles"][role]["vision_model"] = vision
+        # Framework/account-specific replacements. The legacy singular key stays
+        # valid only for the configured primary leg; it must never leak to a
+        # fallback using another framework/account.
+        visions = cur.get("vision_models")
+        if isinstance(visions, dict):
+            clean_visions = {name: str(visions.get(name) or "").strip()
+                             for name in FRAMEWORKS
+                             if str(visions.get(name) or "").strip()}
+            if clean_visions:
+                out["roles"][role]["vision_models"] = clean_visions
     lim = cfg.get("limits") or {}
     try:
         out["limits"]["max_tool_iters"] = max(1, min(600, int(lim.get("max_tool_iters"))))  # 07.07: потолок 300->600, владелец хочет управлять сам
@@ -242,18 +267,46 @@ def _diff_roles(old: dict, new: dict) -> list[str]:
     return out
 
 
-def _config() -> dict:
-    """Живой конфиг: перечитывается при смене mtime; нет файла — миграция из env (и запись)."""
+def _config_stamp():
+    """Отпечаток файла конфига: время, размер и identity атомарно заменённого файла.
+
+    Одного `st_mtime_ns` мало не в теории, а на этих машинах: шаг часов файла —
+    миллисекунда на ext4 сервера и четыре в контейнере, замерено 28.08 (шесть
+    записей подряд дают ДВА различных значения). Две записи внутри одного тика
+    для кэша неразличимы, и чтение сразу после записи возвращает ПРЕЖНИЙ конфиг.
+
+    Размер различает большинство правок внутри тика; identity файла закрывает и
+    одинаковую длину после штатного ``tmp.replace``. Именно так это и ловилось:
+    `test_relay_steps_project_to_glm_dialect` ставит ступени подряд, и `xhigh`
+    (пять знаков) от `high` (четыре) кэш не отличал.
+
+    ⚠ Это опирается на единственного штатного писателя ``save_config``, который
+    всегда делает ``tmp.replace``. Внешняя перезапись *того же inode* с теми же
+    временем и размером всё ещё неотличима; если такой писатель появится, ключ
+    надо заменить на content hash или версию записи.
+
+    ⚠⚠ И чего тут НЕ делать: заставить `save_config` обновлять кэш самому.
+    Выглядит очевидным (писатель знает, что записал) и ломает её дневник:
+    строка «мозг сменился» пишется, когда СМЕНУ ЗАМЕТИЛ `_config()`. Обновив
+    кэш заранее, писатель лишает её уведомления о том, что мозг подменили.
+    Пробовал 28.08 — `test_mtime_hot_reload_and_brain_change_journal` поймал.
+    """
     try:
-        mtime = CONFIG_PATH.stat().st_mtime_ns
+        st = CONFIG_PATH.stat()
     except OSError:
-        mtime = None
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
+def _config() -> dict:
+    """Живой конфиг: перечитывается при смене отпечатка; нет файла — миграция из env."""
+    mtime = _config_stamp()
     if mtime is None:
         if _CACHE["cfg"] is None or _CACHE["mtime"] is not None:
             _CACHE.update(mtime=None, cfg=_from_env())
             try:
                 save_config(_CACHE["cfg"])
-                _CACHE["mtime"] = CONFIG_PATH.stat().st_mtime_ns
+                _CACHE["mtime"] = _config_stamp()
                 log.info("llm: конфиг мигрирован из env → %s", CONFIG_PATH)
             except OSError:
                 log.warning("llm: конфиг из env не записался (работаю из памяти)", exc_info=True)
@@ -276,7 +329,7 @@ def _config() -> dict:
         # surprise a later process or operator merely because it is inert today.
         try:
             save_config(fresh)
-            mtime = CONFIG_PATH.stat().st_mtime_ns
+            mtime = _config_stamp()
             log.info("llm: конфиг нормализован и устаревшие policy-поля удалены")
         except OSError:
             log.warning("llm: нормализованный конфиг не записался", exc_info=True)
@@ -346,7 +399,7 @@ def update_config(changes: dict) -> dict:
     save_config(cfg)
     fresh = _normalize(cfg)
     try:
-        _CACHE.update(mtime=CONFIG_PATH.stat().st_mtime_ns, cfg=fresh)
+        _CACHE.update(mtime=_config_stamp(), cfg=fresh)
     except OSError:
         _CACHE.update(cfg=fresh)
     return fresh
@@ -372,7 +425,7 @@ def swap_fallback(role: str) -> dict:
     save_config(cfg)
     fresh = _normalize(cfg)
     try:
-        _CACHE.update(mtime=CONFIG_PATH.stat().st_mtime_ns, cfg=fresh)
+        _CACHE.update(mtime=_config_stamp(), cfg=fresh)
     except OSError:
         _CACHE.update(cfg=fresh)
     _journal(f"{_ROLE_RU[role]}: своп основной/запасной ({other}/{fb})")
@@ -559,6 +612,8 @@ def messages_to_anthropic(messages: list) -> list:
                 mime, data = _image_payload(b)
                 blocks.append({"type": "image", "source": {
                     "type": "base64", "media_type": mime, "data": data}})
+            elif _is_image_block(b):
+                raise ValueError("non-canonical image block reached anthropic adapter")
             else:
                 blocks.append(b)
         out.append(dict(m, content=blocks))
@@ -612,6 +667,8 @@ def messages_to_openai(messages: list) -> list:
                     image_url["detail"] = detail
                 multimodal.append({"type": "image_url", "image_url": image_url})
                 has_image = True
+            elif _is_image_block(b):
+                raise ValueError("non-canonical image block reached openai adapter")
         if has_image:
             out.append({"role": role, "content": multimodal})
         elif texts:
@@ -712,7 +769,8 @@ def _usage_load() -> dict:
         return {}  # битый/нет — честный старт с нуля (это счётчик, не память)
 
 
-def _usage_add(role: str, usage: dict, fallback: bool = False, model: str = "") -> None:
+def _usage_add(role: str, usage: dict, fallback: bool = False, model: str = "",
+               vision: bool = False) -> None:
     """Прибавить успешный вызов. Ошибки записи НЕ роняют вызов модели — только debug-лог.
 
     PASS 18.5: model — по-модельный подразрез дня (день→роль→models→{in,out,calls}):
@@ -728,13 +786,21 @@ def _usage_add(role: str, usage: dict, fallback: bool = False, model: str = "") 
         cutoff = praxis_time.day_key(praxis_time.today() - _dt.timedelta(days=USAGE_KEEP_DAYS))
         for k in [k for k in data if isinstance(k, str) and k < cutoff]:
             del data[k]  # ротация: 60 дней достаточно для панели и трендов
-        d = data.setdefault(day, {}).setdefault(role, {"in": 0, "out": 0, "calls": 0, "fallback": 0})
+        # ⚠ Стамп ставится ТОЛЬКО новой записи. Запись, начатая старым кодом сегодня,
+        # остаётся без схемы до конца суток: внутри неё семантики уже смешаны, и
+        # никакая формула их не разделит. Ключ живёт ВНУТРИ записи роли, а не в дне:
+        # день перебирают `.values()` и зовут `.get` — лишний скаляр рядом с ролями
+        # уронил бы appetite и brain (там это ловится общим except и молча даёт ноль).
+        d = data.setdefault(day, {}).setdefault(
+            role, {"in": 0, "out": 0, "calls": 0, "fallback": 0, "schema": USAGE_SCHEMA})
         u_in = int((usage or {}).get("in", 0) or 0)
         u_out = int((usage or {}).get("out", 0) or 0)
         d["in"] = int(d.get("in", 0)) + u_in
         d["out"] = int(d.get("out", 0)) + u_out
         d["calls"] = int(d.get("calls", 0)) + 1
         d["fallback"] = int(d.get("fallback", 0)) + (1 if fallback else 0)
+        if vision:
+            d["vision"] = int(d.get("vision", 0)) + 1
         u_cr = int((usage or {}).get("cache_read", 0) or 0)
         u_cc = int((usage or {}).get("cache_creation", 0) or 0)
         if u_cr or u_cc:
@@ -748,11 +814,15 @@ def _usage_add(role: str, usage: dict, fallback: bool = False, model: str = "") 
             # различения настроенного и наблюдённого действительно вводит меня в
             # заблуждение». Накопительная статистика по моделям была и раньше; не было
             # ФАКТА последнего ответа, а он, по её словам, не должен подменяться средним.
-            d["last"] = {"model": str(model), "at": praxis_time.stamp()}
-            m = d.setdefault("models", {}).setdefault(str(model), {"in": 0, "out": 0, "calls": 0})
+            d["last"] = {"model": str(model), "at": praxis_time.stamp(),
+                         "vision": bool(vision)}
+            m = d.setdefault("models", {}).setdefault(
+                str(model), {"in": 0, "out": 0, "calls": 0, "schema": USAGE_SCHEMA})
             m["in"] += u_in
             m["out"] += u_out
             m["calls"] += 1
+            if vision:
+                m["vision"] = int(m.get("vision", 0)) + 1
             if u_cr or u_cc:
                 m["cache_read"] = m.get("cache_read", 0) + u_cr
                 m["cache_creation"] = m.get("cache_creation", 0) + u_cc
@@ -787,16 +857,22 @@ def usage_line() -> str:
             continue
         fb = f", фолбэков {d['fallback']}" if d.get("fallback") else ""
         # 02.08: не сырая пара r/c, а величина, которая действительно означает расход.
-        # Кэшированный префикс провайдер уже держит; платит она за СВЕЖИЙ вход —
-        # `in − cache_read`. На живом прогоне это 42к на ход при 85% кэша ≈ 6.3к свежего.
-        # До этой ночи `cache_read` через gpt не приходил вовсе, и строка молчала —
-        # молчание читалось как «кэша нет», хотя означало «нам не сказали».
+        # Кэшированный префикс провайдер уже держит; платит она за СВЕЖИЙ вход.
+        #
+        # ⚠ 27.08: прежняя строка делила `cr / in` и звала свежим `in − cr`. Это верно
+        # ровно для openai, где `in` — ВЕСЬ промпт вместе с кэшем. У anthropic `in` —
+        # только свежее, кэш лежит отдельно, и там `cr` бывает в пятнадцать раз больше
+        # `in` (замер 26.08: glm `in` 849 137 при `cache_read` 13 205 312). Одна формула
+        # поверх общего ведра занижала свежий вход в семь раз: 2,2 млн вместо 15,4 млн.
+        # Со схемой 2 `in` везде значит одно — НЕ из кэша, — поэтому знаменатель полный:
+        # `cr + in`, а свежее это сам `in`.
         cr = int(d.get("cache_read", 0))
         cc = int(d.get("cache_creation", 0))
         u_in = int(d.get("in", 0))
-        if cr or cc:
-            share = f", кэш {100 * cr / u_in:.0f}%" if u_in else ""
-            fresh = f", свежего входа {_k(max(0, u_in - cr))}" if u_in else ""
+        if (cr or cc) and int(d.get("schema", 1)) >= USAGE_SCHEMA:
+            total = cr + u_in
+            share = f", кэш {100 * cr / total:.0f}%" if total else ""
+            fresh = f", свежего входа {_k(u_in)}" if u_in else ""
             cache = f"{share}{fresh}"
             if cc:
                 cache += f", записи в кэш {_k(cc)}"
@@ -834,23 +910,17 @@ _OPENAI_COMPLETION_TOKENS_RE = re.compile(r"^(o\d|gpt-5)")
 #   * сам сторож был дизъюнкцией и путал два разных случая (см. TornStreamError).
 # Поэтому сторож теперь один и зовётся на КАЖДОМ возврате обоих фреймворков.
 #
-# ПОРЯДОК ПРОВЕРОК ЗДЕСЬ СОДЕРЖАТЕЛЕН, А НЕ СЛУЧАЕН.
-# Сначала «ни текста, ни блока» — это её граница из 10.08, и она сильнее всего: пусто
-# значит пусто, каким бы ни был stop_reason, и повторить такое безопасно. Только то, что
-# пустотой НЕ является, может оказаться оборванным стримом.
-#
-# ЧТО СЮДА СОЗНАТЕЛЬНО НЕ ВНЕСЕНО.
-# Ответ, срезанный потолком ДО первого блока (`stop_reason='max_tokens'`, ни текста, ни
-# блока), тоже попадает под «пусто» и поднимет EmptyResponseError. Соблазн сделать для него
-# исключение был: повтор упрётся в тот же потолок, а `ping()` ходит к модели с
-# `max_tokens=1` и на anthropic получил бы красноту вместо «канал жив». Исключение не
-# сделано намеренно — молча вернуть пустой ответ значит отдать наверх ровно ту вещь, ради
-# которой писан `_note_truncation`: обрыв до первого блока записывался как «промолчала
-# сама», байт-в-байт как настоящее решение промолчать. Громкая ложная тревога на пинге
-# честнее тихой подмены её молчания; если пинг однажды начнёт краснеть на живом канале —
-# чинить надо пинг (просить не 1 токен), а не сторожа.
+# Explicit max_tokens is an incomplete generation, not an empty transport response.
+# Preserve it even before the first visible block: server-side work may already have
+# happened. The caller must persist its evidence and stop without success or replay.
+# Other empty responses retain the existing narrow transport-retry contract.
 def _guard_answer(out: LLMResponse) -> LLMResponse:
     """Единственная проверка «это вообще ответ?». Возвращает ответ или поднимает свой класс."""
+    # An explicit budget stop is not transport emptiness, even if all tokens went
+    # into hidden reasoning/server work. Retrying could repeat that work. Return
+    # the incomplete response for the caller to persist and terminalize honestly.
+    if str(out.stop_reason or "") == "max_tokens":
+        return out
     if not out.blocks and not out.text.strip():
         raise EmptyResponseError(out.text[:200] or "пустой ответ (ни текста, ни инструмента)")
     # ⚠ Три пути расходились ещё и ЗДЕСЬ, и это нашлось прогоном, а не глазами. Ответ из
@@ -860,7 +930,8 @@ def _guard_answer(out: LLMResponse) -> LLMResponse:
     # котором нечего сказать, ответом не является. Инструмент — является всегда, даже без
     # текста: `stay_silent` это её решение, а не пустота канала.
     if not out.text.strip() and not any(
-            (b or {}).get("type") == "tool_use" for b in (out.blocks or ())):
+            (b or {}).get("type") in {"tool_use", "tool_use_fragment"}
+            for b in (out.blocks or ())):
         raise EmptyResponseError("пустой ответ (блок есть, знаков в нём нет)")
     if str(out.stop_reason or "") == "error":
         # Текст/блоки есть, но канал закончил ошибкой — оборванный стрим, НЕ пустота.
@@ -883,17 +954,20 @@ def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thi
     anthropic_tools = tools_to_anthropic(tools)
     if anthropic_tools:
         kw["tools"] = anthropic_tools
+    glm = model.strip().lower().startswith("glm-")
     if thinking:
         kw["thinking"] = {"type": "enabled", "budget_tokens": int(thinking)}
         kw["max_tokens"] = max(int(max_tokens), int(thinking) + 1024)
-    elif reasoning_effort and model.strip().lower().startswith("glm-"):
-        # 25.08: у GLM-5.3 thinking обязателен, глубину задаёт ступень; без неё
-        # z.ai молча думает на max каждый вызов (замер 24.08: 10-15с на ответ).
-        # Поле не из словаря Anthropic SDK — едет через extra_body. Явный
-        # thinking-бюджет вызова по-прежнему сильнее ступени роли.
-        kw["thinking"] = {"type": "enabled"}
-        kw["extra_body"] = {"reasoning_effort": _GLM_EFFORT.get(
-            str(reasoning_effort).strip().lower(), "low")}
+    if glm and (thinking or reasoning_effort):
+        # The z.ai Anthropic dialect uses output_config.effort, NOT the
+        # OpenAI reasoning_effort field. Explicit budgets outrank role effort,
+        # using the same projection as the OpenAI path. Keep the budget too.
+        # extra_body merges this field into the wire body and supports older
+        # Anthropic SDKs allowed by requirements.txt (no native kwarg needed).
+        effort = (_openai_reasoning_effort(thinking) if thinking
+                  else str(reasoning_effort).strip().lower())
+        kw.setdefault("thinking", {"type": "enabled"})
+        kw["extra_body"] = {"output_config": {"effort": _GLM_EFFORT.get(effort, "low")}}
     # PASS 10.0: всегда стримом — SDK кидает «Streaming is required for operations that
     # may take longer than 10 minutes» на больших max_tokens (ночные окна умирали, кап
     # сгорал впустую). get_final_message() возвращает тот же Message (blocks/usage/
@@ -970,6 +1044,197 @@ def _effective_effort(thinking, role_effort) -> str | None:
     value = str(role_effort or "").strip().lower()
     return value if value in REASONING_EFFORTS else None
 
+
+# Image capability is an allowlist. Unknown/empty names fail closed: passing pixels
+# merely because a slug is unfamiliar is the dangerous direction. Keep the currently
+# deployed GPT family and established Claude vision families sighted; for GLM retain
+# only the explicitly verified v-family shape and exactly the tested 5.3-flash slug.
+# Keep each accepted family syntactically bounded. Prefix matching is not enough here:
+# `gpt-5-text-only` or `claude-sonnet-text-only` must remain unknown and fail closed.
+# GPT codenames are the sighted relay models actually deployed in this installation;
+# the Claude shapes cover the established dated 3.x and numbered family slugs only.
+_SIGHTED_GPT_RE = re.compile(
+    r"(?i)^gpt-(?:4o(?:-mini)?|4\.\d+(?:-(?:mini|nano))?|"
+    r"(?:5|6)(?:\.\d+)?-(?:sol|terra|luna|astra))$"
+)
+_SIGHTED_CLAUDE_RE = re.compile(
+    r"(?i)^claude-(?:"
+    r"3(?:[.-]\d+){0,2}-(?:sonnet|opus|haiku)(?:-\d{8})?|"
+    r"(?:sonnet|opus|haiku)-\d+(?:-\d+)?(?:-\d{8})?"
+    r")$"
+)
+_SIGHTED_GLM_V_RE = re.compile(r"(?i)^glm-\d+(?:\.\d+)?v(?:$|-flashx?$)")
+_DEFAULT_VISION_MODEL = "glm-5.3-flash"
+
+
+def role_model(role: str = "voice") -> str:
+    """Имя модели роли по конфигу (без ротации каталога): для честных сообщений в кадре."""
+    try:
+        return str(_config()["roles"][role].get("model") or "")
+    except Exception:
+        return ""
+
+
+def accepts_images(role: str = "voice", model: str | None = None) -> bool:
+    """Whether a model is in a deliberately verified sighted family."""
+    name = str(model if model is not None else role_model(role) or "").strip()
+    return bool(
+        name == _DEFAULT_VISION_MODEL
+        or _SIGHTED_GLM_V_RE.fullmatch(name)
+        or _SIGHTED_GPT_RE.match(name)
+        or _SIGHTED_CLAUDE_RE.match(name)
+    )
+
+
+def _is_verified_zai_route(framework: str) -> bool:
+    """The narrow default is valid only on the verified z.ai Anthropic account."""
+    if framework != "anthropic":
+        return False
+    try:
+        base = str(_config()["frameworks"][framework].get("base_url") or "").lower()
+    except Exception:
+        return False
+    return base.startswith("https://api.z.ai/")
+
+
+def _catalog_has_model(framework: str, model: str) -> bool:
+    """Validate against a known catalog; an unavailable catalog is not authorization."""
+    available = _available_models(framework)
+    return bool(available) and model in available
+
+
+def vision_model(role: str = "voice", model: str | None = None,
+                 framework: str | None = None) -> str:
+    """Validated sighted replacement for one effective framework/account leg.
+
+    ``vision_models.<framework>`` is the cross-leg configuration. The legacy
+    ``vision_model`` belongs only to the role's configured primary framework.
+    Catalog absence, a text-only/unknown candidate, or a missing catalog fails closed.
+    """
+    name = str(model if model is not None else role_model(role) or "").strip()
+    if not name or accepts_images(model=name):
+        return ""
+    try:
+        rc = _config()["roles"][role]
+    except Exception:
+        return ""
+    primary_fw = str(rc.get("framework") or "")
+    fw = str(framework or primary_fw)
+    configured = ""
+    by_framework = rc.get("vision_models")
+    if isinstance(by_framework, dict):
+        configured = str(by_framework.get(fw) or "").strip()
+    if not configured and fw == primary_fw:
+        configured = str(rc.get("vision_model") or "").strip()
+    candidate = configured
+    if not candidate and name == "glm-5.3" and _is_verified_zai_route(fw):
+        candidate = _DEFAULT_VISION_MODEL
+    if not candidate or not accepts_images(model=candidate):
+        return ""
+    return candidate if _catalog_has_model(fw, candidate) else ""
+
+
+def can_see(role: str = "voice") -> bool:
+    """Will pixels reach the configured primary model or a validated replacement?"""
+    try:
+        rc = _config()["roles"][role]
+        framework = str(rc.get("framework") or "")
+        model = _resolve_model(framework, str(rc.get("model") or ""))
+    except Exception:
+        return False
+    return accepts_images(model=model) or bool(vision_model(role, model, framework))
+
+
+_IMAGE_BLOCK_TYPES = frozenset({"image", "image_url", "input_image"})
+_DATA_IMAGE_RE = re.compile(r"^data:([^;,]+);base64,([A-Za-z0-9+/=\r\n]+)$")
+
+
+def _is_image_block(block) -> bool:
+    return isinstance(block, dict) and str(block.get("type") or "") in _IMAGE_BLOCK_TYPES
+
+
+def _has_image_blocks(messages) -> bool:
+    """Detect every image block shape accepted by either transport adapter."""
+    return any(_is_image_block(block)
+               for message in (messages or []) if isinstance(message, dict)
+               for block in ([*message.get("content", [])]
+                             if isinstance(message.get("content"), list) else ()))
+
+
+def _omit_image_blocks(messages, model: str):
+    """Copy the tape and replace every image-bearing block with a payload-free fact."""
+    marker = (f"[image omitted before model call: {model or 'text-only model'} "
+              "does not accept images and no valid sighted replacement is configured; "
+              "NO pixels are available, so do not describe them]")
+    out = []
+    for message in messages or []:
+        if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+            out.append(message)
+            continue
+        blocks = [({"type": "text", "text": marker} if _is_image_block(block) else block)
+                  for block in message["content"]]
+        out.append(dict(message, content=blocks))
+    return out
+
+
+def _canonicalize_image_blocks(messages):
+    """Convert adapter-native image_url/input_image blocks to canonical images.
+
+    Only data URLs are accepted here: remote URL fetching is not an adapter feature and
+    must not be introduced implicitly. Invalid native shapes remain image-bearing and
+    will be removed if the effective route is text-only; sighted calls reject them
+    locally rather than forwarding an unnormalised payload.
+    """
+    out = []
+    for message in messages or []:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            out.append(message)
+            continue
+        blocks = []
+        for block in content:
+            if not _is_image_block(block) or block.get("type") == "image":
+                blocks.append(block)
+                continue
+            raw = block.get("image_url")
+            if isinstance(raw, dict):
+                raw = raw.get("url")
+            raw = str(raw or block.get("url") or "")
+            match = _DATA_IMAGE_RE.fullmatch(raw)
+            if not match:
+                raise ValueError("image_url/input_image must contain a base64 data image")
+            blocks.append({"type": "image", "source": {
+                "type": "base64", "media_type": match.group(1).lower(),
+                "data": match.group(2).replace("\r", "").replace("\n", ""),
+            }})
+        out.append(dict(message, content=blocks))
+    return out
+
+
+def _route_image_leg(role: str, framework: str, model: str, messages):
+    """Return (effective_model, leg_messages, substituted, omitted) for one leg."""
+    if not _has_image_blocks(messages):
+        return model, messages, False, False
+    if accepts_images(model=model):
+        return model, _canonicalize_image_blocks(messages), False, False
+    replacement = vision_model(role, model, framework)
+    if replacement:
+        return replacement, _canonicalize_image_blocks(messages), True, False
+    return model, _omit_image_blocks(messages, model), False, True
+
+
+_NO_PIXELS_RESPONSE = (
+    "NO pixels were available to this model; image payloads were removed before the call. "
+    "I cannot describe or verify the image."
+)
+
+
+def _mark_no_pixels_response(response: LLMResponse) -> LLMResponse:
+    """Make central fail-closed sanitation visible in the returned and durable answer."""
+    response.text = (_NO_PIXELS_RESPONSE + ("\n\n" + response.text if response.text else ""))
+    response.blocks = ([{"type": "text", "text": _NO_PIXELS_RESPONSE}]
+                       + list(response.blocks or ()))
+    return response
 
 # --------------------------------------------------------------- адрес кэша префикса
 #
@@ -1184,14 +1449,35 @@ def _openai_from_completion(resp, model: str) -> LLMResponse:
     finish = str(getattr(choice, "finish_reason", None) or "stop")
     blocks = blocks_from_openai(msg) if msg is not None else []
     usage = getattr(resp, "usage", None)
+    cached = _openai_cached_tokens(usage)
     return LLMResponse(
         text="\n".join(b["text"] for b in blocks if b["type"] == "text").strip(),
         blocks=blocks, stop_reason=_OPENAI_STOP.get(finish, finish),
-        usage={"in": int(getattr(usage, "prompt_tokens", 0) or 0),
+        usage={"in": _openai_fresh_in(usage, cached),
                "out": int(getattr(usage, "completion_tokens", 0) or 0),
-               **({"cache_read": _openai_cached_tokens(usage)}
-                  if _openai_cached_tokens(usage) else {})},
+               **({"cache_read": cached} if cached else {})},
         framework="openai", model=model)
+
+
+def _openai_fresh_in(usage, cached: int) -> int:
+    """Вход, НЕ пришедший из кэша, — общая мера для обоих фреймворков (схема 2).
+
+    27.08.2026. openai отдаёт `prompt_tokens` как ВЕСЬ промпт, включая кэшированный
+    префикс (`prompt_tokens_details.cached_tokens` — его подмножество). anthropic
+    отдаёт `input_tokens` уже БЕЗ кэша, отдельным полем `cache_read_input_tokens`.
+    Мы клали и то и другое в одно имя `in`, и любое отношение поверх дневного ведра
+    переставало быть величиной. Проверка на 4058 живых вызовах: у anthropic
+    `cache_read > in` в 96.4% случаев, у openai — в 0.0%; двух семантик в одном поле
+    хватило, чтобы свежий вход за сутки показался 2,2 млн вместо 15,4 млн.
+
+    Здесь openai приводится к anthropic-смыслу: платим полностью за то, что вернулось
+    НЕ из кэша. `max(0, …)` — на случай, если провайдер однажды посчитает иначе:
+    отрицательного расхода не бывает, а тихо уехавший в минус счётчик заметить нечем.
+    """
+    total = int(getattr(usage, "prompt_tokens", 0) or 0)
+    if not total and isinstance(usage, dict):
+        total = int(usage.get("prompt_tokens", 0) or 0)
+    return max(0, total - max(0, int(cached or 0)))
 
 
 def _openai_cached_tokens(usage) -> int:
@@ -1219,63 +1505,115 @@ def _openai_cached_tokens(usage) -> int:
         return 0
 
 
+def _stream_transport_error(exc: Exception) -> bool:
+    """Узкий класс физического обрыва HTTP/SSE при чтении уже открытого ответа.
+
+    OpenAI SDK отдаёт такой сбой не как финальный SSE `finish_reason=error`, а голым
+    исключением из итератора (`httpx.RemoteProtocolError`, иногда через `__cause__`).
+    Не называем транспортом произвольную ошибку разбора: иначе баг нашего коллектора
+    превратится в безобидный fallback и исчезнет из диагностики.
+    """
+    allowed = {
+        ("httpx", "RemoteProtocolError"),
+        ("httpcore", "RemoteProtocolError"),
+        ("httpx", "ReadError"),
+        ("httpcore", "ReadError"),
+    }
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        module = type(cur).__module__.split(".", 1)[0]
+        if (module, type(cur).__name__) in allowed:
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
 def _openai_from_stream(stream, model: str) -> LLMResponse:
     """Собрать ответ из SSE-чанков openai-протокола (delta.content + delta.tool_calls)."""
     parts: list[str] = []
     tools_acc: dict[int, dict] = {}
     finish = "stop"
     u_in = u_out = u_cached = 0
-    for chunk in stream:
-        u = getattr(chunk, "usage", None)
-        if u is not None:
-            u_in = int(getattr(u, "prompt_tokens", 0) or 0) or u_in
-            u_out = int(getattr(u, "completion_tokens", 0) or 0) or u_out
-            u_cached = _openai_cached_tokens(u) or u_cached
-        chs = getattr(chunk, "choices", None) or []
-        if not chs:
-            continue
-        ch = chs[0]
-        d = getattr(ch, "delta", None)
-        if d is not None:
-            c = getattr(d, "content", None)
-            if c:
-                parts.append(c)
-            for tc in getattr(d, "tool_calls", None) or []:
-                idx = int(getattr(tc, "index", 0) or 0)
-                slot = tools_acc.setdefault(idx, {"id": "", "name": "", "args": ""})
-                if getattr(tc, "id", None):
-                    slot["id"] = tc.id
-                fn = getattr(tc, "function", None)
-                if fn is not None:
-                    if getattr(fn, "name", None):
-                        slot["name"] = fn.name
-                    if getattr(fn, "arguments", None):
-                        slot["args"] += fn.arguments
-        if getattr(ch, "finish_reason", None):
-            finish = ch.finish_reason
+    try:
+        for chunk in stream:
+            u = getattr(chunk, "usage", None)
+            if u is not None:
+                u_in = int(getattr(u, "prompt_tokens", 0) or 0) or u_in
+                u_out = int(getattr(u, "completion_tokens", 0) or 0) or u_out
+                u_cached = _openai_cached_tokens(u) or u_cached
+            chs = getattr(chunk, "choices", None) or []
+            if not chs:
+                continue
+            ch = chs[0]
+            d = getattr(ch, "delta", None)
+            if d is not None:
+                c = getattr(d, "content", None)
+                if c:
+                    parts.append(c)
+                for tc in getattr(d, "tool_calls", None) or []:
+                    idx = int(getattr(tc, "index", 0) or 0)
+                    slot = tools_acc.setdefault(idx, {"id": "", "name": "", "args": ""})
+                    if getattr(tc, "id", None):
+                        slot["id"] = tc.id
+                    fn = getattr(tc, "function", None)
+                    if fn is not None:
+                        if getattr(fn, "name", None):
+                            slot["name"] = fn.name
+                        if getattr(fn, "arguments", None):
+                            slot["args"] += fn.arguments
+            if getattr(ch, "finish_reason", None):
+                finish = ch.finish_reason
+    except Exception as exc:
+        if not _stream_transport_error(exc):
+            raise
+        # Физический HTTP-обрыв переводим в обычный LLMResponse с stop=error и отдаём
+        # ЕДИНСТВЕННОМУ семантическому сторожу. Он сам различит: до первого содержимого
+        # это EmptyResponseError (same-channel retry допустим), после текста/фрагмента руки
+        # — TornStreamError с partial (повтор поверх уже начатого ответа запрещён).
+        partial = _openai_stream_result(parts, tools_acc, "error", u_in, u_out, u_cached, model)
+        try:
+            return _guard_answer(partial)
+        except BrokenChannelError as broken:
+            raise broken from exc
+    return _openai_stream_result(parts, tools_acc, finish, u_in, u_out, u_cached, model)
+
+
+def _openai_stream_result(parts: list[str], tools_acc: dict[int, dict], finish: str,
+                           u_in: int, u_out: int, u_cached: int, model: str) -> LLMResponse:
     text = "".join(parts).strip()
     blocks: list[dict] = [{"type": "text", "text": text}] if text else []
     for idx in sorted(tools_acc):
         s = tools_acc[idx]
         if not s["name"]:
+            if _OPENAI_STOP.get(finish, finish) in {"error", "max_tokens"}:
+                # Начало tool-call уже приехало, даже если имя ещё не успело. Это не
+                # исполнимый tool_use, но и не пустота: partial обязан удержать факт,
+                # чтобы общий сторож дал TornStreamError, а не same-channel retry.
+                blocks.append({"type": "tool_use_fragment", "id": s["id"] or f"call_{idx}",
+                               "name": "", "arguments": s["args"]})
             continue
+        malformed = {MALFORMED_JSON_KEY: str(s["args"])[:MALFORMED_JSON_KEEP]}
         try:
             args = json.loads(s["args"]) if (s["args"] or "").strip() else {}
         except Exception:
-            args = {}
+            args = malformed
         blocks.append({"type": "tool_use", "id": s["id"] or f"call_{idx}",
-                       "name": s["name"], "input": args if isinstance(args, dict) else {}})
+                       "name": s["name"],
+                       "input": args if isinstance(args, dict) else malformed})
     # ⚠ 15.08.2026, найдено враждебной сверкой. `finish_reason='error'` НЕ имеет права
     # спрятаться за `tool_use`. Прежний порядок («есть инструмент → значит tool_use»)
     # затирал признак обрыва, сторож его не видел и отдавал наверх ГОТОВЫЙ ход с рукой,
     # чьи аргументы приехали наполовину: обрезанный json не парсится и молча становится
     # `{}` (ниже). То есть оборванный стрим выглядел как её решение вызвать руку — ровно
     # та подмена, ради которой писан весь этот участок, только на другом пути.
+    # Budget exhaustion likewise dominates even syntactically complete tool calls.
     mapped = _OPENAI_STOP.get(finish, finish)
-    stop = (mapped if mapped == "error"
+    stop = (mapped if mapped in {"error", "max_tokens"}
             else "tool_use" if any(b["type"] == "tool_use" for b in blocks) else mapped)
     return LLMResponse(text=text, blocks=blocks, stop_reason=stop,
-                       usage={"in": u_in, "out": u_out,
+                       usage={"in": max(0, u_in - u_cached), "out": u_out,
                               **({"cache_read": u_cached} if u_cached else {})},
                        framework="openai", model=model)
 
@@ -1358,6 +1696,11 @@ def _resolve_model(framework: str, model: str) -> str:
         return model
     else:
         pick = _pick_replacement(model, avail)
+    # `_pick_replacement` can itself select the stale generic alias.  Normalize
+    # the selected candidate too, otherwise a caller that resolves twice sees
+    # two different models (`gpt-5.6` first, `gpt-5.6-sol` second).
+    if framework == "openai" and pick == "gpt-5.6" and "gpt-5.6-sol" in avail:
+        pick = "gpt-5.6-sol"
     if pick and pick != model:
         log.warning("llm: модель %s пропала у %s — ротация имени на %s", model, framework, pick)
         try:
@@ -1368,11 +1711,60 @@ def _resolve_model(framework: str, model: str) -> str:
     return model
 
 
-def _call(framework: str, model: str, **kw) -> LLMResponse:
+def _resolve_fallback_model(primary_framework: str, primary_model: str,
+                            fallback_framework: str, fallback_model: str) -> str:
+    """Разрешить fallback так, чтобы он не схлопнулся обратно в ту же модель.
+
+    Ротация имён полезна, когда провайдер переименовал модель, но опасна для явно
+    заданного fallback: отсутствующий slug другого семейства мог ротироваться в
+    текущую primary-модель. Тогда после обрыва мы не переключались, а повторяли тот
+    же самый запрос тому же самому backend, хотя журнал называл это fallback.
+
+    Если каталогу известна другая живая модель того же framework, выбираем её.
+    Если другой модели нет, возвращаем пустую строку: вызывающий сохранит исходную
+    ошибку вместо ложного повторного исполнения той же моделью.
+    """
+    resolved = _resolve_model(fallback_framework, fallback_model)
+    if fallback_framework != primary_framework:
+        return resolved
+
+    primary = primary_model
+    if resolved != primary:
+        return resolved
+
+    available: list[str] = []
+    for candidate in _available_models(fallback_framework):
+        normalized = _resolve_model(fallback_framework, candidate)
+        if normalized != primary and normalized not in available:
+            available.append(normalized)
+    alternate = _pick_replacement(fallback_model, available)
+    if alternate:
+        log.warning(
+            "llm: fallback %s/%s схлопнулся в primary %s — беру отличающуюся модель %s",
+            fallback_framework, fallback_model, primary, alternate,
+        )
+        try:
+            _journal(
+                f"fallback {fallback_framework}/{fallback_model} совпал с primary {primary} "
+                f"после ротации имени; взяла отличающуюся модель {alternate}"
+            )
+        except Exception:
+            pass
+        return alternate
+
+    log.error(
+        "llm: fallback %s/%s схлопнулся в primary %s, другой живой модели нет",
+        fallback_framework, fallback_model, primary,
+    )
+    return ""
+
+
+def _call(framework: str, model: str, *, _resolved: bool = False, **kw) -> LLMResponse:
     cli = _client_for(framework)
     if cli is None:
         raise RuntimeError(f"llm: фреймворк {framework} не настроен (нет ключа)")
-    model = _resolve_model(framework, model)  # ротация наименований провайдера
+    if not _resolved:
+        model = _resolve_model(framework, model)  # ротация наименований провайдера
     if framework == "anthropic":
         return _call_anthropic(cli, model, **kw)
     return _call_openai(cli, model, **kw)
@@ -1417,7 +1809,8 @@ EMPTY_RETRIES = max(0, int(os.getenv("PRAXIS_EMPTY_RETRIES", "2") or 0))
 EMPTY_RETRY_PAUSE_SEC = float(os.getenv("PRAXIS_EMPTY_RETRY_PAUSE_SEC", "2.0") or 0.0)
 
 
-def _call_retrying_empty(fw: str, model: str, retries: int | None = None, **kw):
+def _call_retrying_empty(fw: str, model: str, retries: int | None = None,
+                         *, _resolved: bool = False, **kw):
     """(ответ, сколько повторов понадобилось). Повторяет ТОЛЬКО EmptyResponseError.
 
     Любая другая ошибка уходит наверх немедленно и попадает в прежний фолбэк-путь:
@@ -1432,7 +1825,7 @@ def _call_retrying_empty(fw: str, model: str, retries: int | None = None, **kw):
     retries = EMPTY_RETRIES if retries is None else max(0, int(retries))
     for attempt in range(retries + 1):
         try:
-            return _call(fw, model, **kw), attempt
+            return _call(fw, model, _resolved=_resolved, **kw), attempt
         except EmptyResponseError as exc:
             last = exc
             if attempt >= retries:
@@ -1443,10 +1836,47 @@ def _call_retrying_empty(fw: str, model: str, retries: int | None = None, **kw):
     raise last
 
 
+def _resolve_requested_model(role: str, requested: str) -> tuple[str, str]:
+    """Resolve a per-call model without mutating the configured role.
+
+    A bare model name is addressable when it appears either in a provider's live
+    catalogue or in the configured main/fallback slots.  If both frameworks expose
+    the same name, the role's configured framework wins.  Returning the resolved
+    slug keeps the ordinary provider-rotation compatibility while callers can retain
+    the original request separately as provenance.
+    """
+    requested = str(requested or "").strip()
+    if not requested:
+        raise ValueError("llm: пустой адрес модели")
+    cfg = _config()
+    rc = (cfg.get("roles") or {}).get(role) or {}
+    matches: list[str] = []
+    for framework in FRAMEWORKS:
+        names = set(_available_models(framework))
+        for role_cfg in (cfg.get("roles") or {}).values():
+            role_fw = str(role_cfg.get("framework") or "")
+            if role_fw == framework and role_cfg.get("model"):
+                names.add(str(role_cfg["model"]))
+            fallback_fw = (str(role_cfg.get("fallback_framework") or "").strip()
+                           or ("openai" if role_fw == "anthropic" else "anthropic"))
+            if fallback_fw == framework and role_cfg.get("fallback_model"):
+                names.add(str(role_cfg["fallback_model"]))
+        if requested in names:
+            matches.append(framework)
+    if not matches:
+        raise ValueError(f"llm: модель {requested!r} отсутствует в доступном каталоге")
+    framework = str(rc.get("framework") or "")
+    if framework not in matches:
+        framework = matches[0]
+    return framework, _resolve_model(framework, requested)
+
+
 def chat(role: str, *, system=None, messages: list, tools: list | None = None,
          max_tokens: int | None = None, thinking: int | None = None,
-         end_after_spoken: bool = False) -> LLMResponse:
-    """Вызов модели по роли. Фолбэк на противоположный фреймворк — один повтор, честно в дневник.
+         end_after_spoken: bool = False, model: str | None = None) -> LLMResponse:
+    """Вызов модели по роли, с необязательным адресным override без смены роли.
+
+    Фолбэк на противоположный фреймворк — один повтор, честно в дневник.
 
     `end_after_spoken=True` — контракт v3 (17.08): в этом ходе реплика УЖЕ доставлена
     рукой, поэтому фолбэк обезоружен — вторая модель не смеет переисполнить принятое
@@ -1457,7 +1887,26 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         raise ValueError(f"llm: неизвестная роль {role!r}")
     cfg = _config()
     rc = cfg["roles"][role]
-    fw, model = rc["framework"], rc["model"]
+    requested_model = str(model or "").strip()
+    if requested_model:
+        fw, resolved_model = _resolve_requested_model(role, requested_model)
+    else:
+        fw = rc["framework"]
+        resolved_model = _resolve_model(fw, rc["model"])
+    # Resolve the primary exactly once for this logical call.  Retries and fallback
+    # comparison must use the model that was actually sent, not a fresh catalog
+    # interpretation that may change between attempts.
+    model = resolved_model
+    # Keep the caller's original image tape available to a different fallback leg.
+    # Sanitising one text-only leg must not blind a later natively sighted leg.
+    image_messages = messages
+    model, messages, vision_used, pixels_omitted = _route_image_leg(
+        role, fw, model, image_messages)
+    if vision_used:
+        log.info("llm: %s — image turn routed to %s/%s", _ROLE_RU[role], fw, model)
+    elif pixels_omitted:
+        log.warning("llm: %s — %s/%s has no valid sighted replacement; pixels removed",
+                    _ROLE_RU[role], fw, model)
     mt = int(max_tokens or rc.get("max_tokens") or DEFAULT_MAX_TOKENS[role])
     # ЕЁ фоновая ступень рассуждения роли (switch_brain action=reasoning, 19.08).
     # Явный thinking вызывающего кода сильнее — правило в _effective_effort.
@@ -1473,7 +1922,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     _tools = tool_offerings.fingerprint(tools)[:16]
     try:
         resp, empty_retries = _call_retrying_empty(
-            fw, model, retries=(1 if end_after_spoken else None),
+            fw, model, retries=(1 if end_after_spoken else None), _resolved=True,
             system=system, messages=messages, tools=tools,
             max_tokens=mt, thinking=thinking, reasoning_effort=role_effort)
         if empty_retries:
@@ -1489,14 +1938,17 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         st["on_fallback"], st["last_error"] = False, ""
         # 9.1: расход копится; сбой записи вызова не роняет. PASS 22: по ФАКТИЧЕСКОМУ имени
         # (после ротации _resolve_model конфигное имя может врать в by-model разрезе).
-        _usage_add(role, resp.usage, model=(resp.model or model))
+        resp.vision = bool(vision_used)
+        if pixels_omitted:
+            _mark_no_pixels_response(resp)
+        _usage_add(role, resp.usage, model=(resp.model or model), vision=vision_used)
         _lat = (_time.time() - t0) * 1000
         _brain_note(role, fw, resp.model or model, ok=True, latency_ms=_lat)
         _u = resp.usage if isinstance(resp.usage, dict) else {}
         _call_trace(role, resp.model or model, ok=True,
                     cached=_u.get("cache_read", 0), prompt=_u.get("in", 0),
                     out_tokens=_u.get("out", 0), latency_ms=_lat,
-                    retries=empty_retries, gap_sec=_gap, tools_digest=_tools)
+                    retries=empty_retries, gap_sec=_gap, tools_digest=_tools, vision=vision_used)
         return resp
     except Exception as e:
         if end_after_spoken and isinstance(e, BrokenChannelError):
@@ -1505,9 +1957,9 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             # нулями: вызов состоялся, продолжения не будет, мы это услышали.
             _call_trace(role, model, ok=True, cached=0, prompt=0, out_tokens=0,
                         latency_ms=(_time.time() - t0) * 1000, error="end_after_spoken",
-                        gap_sec=_gap, tools_digest=_tools)
+                        gap_sec=_gap, tools_digest=_tools, vision=vision_used)
             return LLMResponse(text="", blocks=[], stop_reason="end_turn",
-                               usage={}, framework=fw, model=model)
+                               usage={}, framework=fw, model=model, vision=vision_used)
         err = f"{type(e).__name__}: {str(e)[:120]}"
         st["last_error"] = err
         # Счётчик `empty` в brain — это «канал вернул вырожденный ответ», и оборванный стрим
@@ -1520,7 +1972,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         # и это честный ноль «не знаем», а не «кэша не было».
         _call_trace(role, model, ok=False, cached=0, prompt=0, out_tokens=0,
                     latency_ms=(_time.time() - t0) * 1000, error=err, gap_sec=_gap,
-                    tools_digest=_tools)
+                    tools_digest=_tools, vision=vision_used)
         if isinstance(e, TornStreamError):
             # Потеря названа вслух. Оборванный стрим — единственный случай, где мы выбрасываем
             # уже сказанное: снаружи это неотличимо от «модель ответила иначе», и без записи
@@ -1536,28 +1988,67 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         # даёт фолбэк ЧЕРЕЗ ТО ЖЕ РЕЛЕ другой моделью (terra → luna): обрывы апстрима
         # спорадические, и повтор другой моделью почти всегда проходит — вторая подписка
         # не нужна. Это не «повтор поверх сказанного»: модель другая, канал тот же.
+        # fallback_model belongs to the configured role contract, not to the
+        # per-call override.  When an override crosses frameworks, deriving the
+        # fallback from `fw` would reinterpret (for example) an Anthropic slug as
+        # an OpenAI model.  Keep the configured association; without an override
+        # rc.framework == fw, so this is byte-for-byte the old default.
+        configured_fw = str(rc.get("framework") or fw)
         other = ((rc.get("fallback_framework") or "").strip()
-                 or ("openai" if fw == "anthropic" else "anthropic"))
+                 or ("openai" if configured_fw == "anthropic" else "anthropic"))
         fb_model = (rc.get("fallback_model") or "").strip()
         if not fb_model or _client_for(other) is None:
             raise
-        log.warning("llm: %s упал (%s) — фолбэк на %s/%s", _ROLE_RU[role], err, other, fb_model)
+        resolved_fb_model = _resolve_fallback_model(fw, model, other, fb_model)
+        if not resolved_fb_model:
+            raise
+        # Route each effective leg independently from the original image tape. A
+        # fallback framework may use only its own explicit vision_models entry.
+        resolved_fb_model, fallback_messages, fallback_vision_used, fallback_omitted = (
+            _route_image_leg(role, other, resolved_fb_model, image_messages)
+        )
+        # Vision substitution can collapse two same-account legs even when their
+        # configured text models differed. Never retry the failed effective channel.
+        if other == fw and resolved_fb_model == model:
+            log.error("llm: fallback collapsed to failed effective route %s/%s", fw, model)
+            raise
+        log.warning("llm: %s упал (%s) — фолбэк на %s/%s", _ROLE_RU[role], err,
+                    other, resolved_fb_model)
         t1 = _time.time()
         try:
-            resp = _call(other, fb_model, system=system, messages=messages, tools=tools,
+            resp = _call(other, resolved_fb_model, _resolved=True,
+                         system=system, messages=fallback_messages, tools=tools,
                          max_tokens=mt, thinking=None, reasoning_effort=role_effort)
         except Exception as e2:
-            _brain_note(role, other, fb_model, ok=False,
+            _brain_note(role, other, resolved_fb_model, ok=False,
                         error=f"{type(e2).__name__}: {str(e2)[:80]}",
                         empty=isinstance(e2, BrokenChannelError))
+            _call_trace(role, resolved_fb_model, ok=False, cached=0, prompt=0,
+                        out_tokens=0, latency_ms=(_time.time() - t1) * 1000,
+                        error=f"{type(e2).__name__}: {str(e2)[:120]}",
+                        fallback=True, tools_digest=_tools, vision=fallback_vision_used)
             raise
         _note_truncation(resp, role)   # фолбэк-модель обрывается ровно так же
         if not st["on_fallback"]:  # событие — один раз на уход, не на каждый вызов
-            _journal(f"{_ROLE_RU[role]} упал ({type(e).__name__}), ушла на фолбэк {other}/{fb_model}")
+            _journal(f"{_ROLE_RU[role]} упал ({type(e).__name__}), ушла на фолбэк "
+                     f"{other}/{resolved_fb_model}")
         st["on_fallback"] = True
-        _usage_add(role, resp.usage, fallback=True, model=(resp.model or fb_model))
-        _brain_note(role, other, resp.model or fb_model, ok=True,
+        resp.vision = bool(fallback_vision_used)
+        if fallback_omitted:
+            _mark_no_pixels_response(resp)
+        _usage_add(role, resp.usage, fallback=True,
+                   model=(resp.model or resolved_fb_model), vision=fallback_vision_used)
+        _brain_note(role, other, resp.model or resolved_fb_model, ok=True,
                     latency_ms=(_time.time() - t1) * 1000, fallback=True)
+        # Keep the successful fallback visible in per-call spend, under its actual
+        # model rather than only the failed primary.  Usage is already normalized.
+        _fu = resp.usage if isinstance(resp.usage, dict) else {}
+        _call_trace(role, resp.model or resolved_fb_model, ok=True,
+                    cached=_fu.get("cache_read", 0), prompt=_fu.get("in", 0),
+                    out_tokens=_fu.get("out", 0),
+                    latency_ms=(_time.time() - t1) * 1000,
+                    fallback=True, tools_digest=_tools,
+                    vision=fallback_vision_used)
         return resp
 
 
@@ -1575,13 +2066,19 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
 # JSONL, а не счётчики в brain: brain пишется read-modify-write без замка (оговорка на
 # `_usage_add` рядом), и на частой записи инкременты теряются. Дозапись строки не теряет.
 _CALL_TRACE = USAGE_PATH.parent / "llm_calls.jsonl"
-_CALL_TRACE_MAX = 20000
+# Потолок журнала вызовов. Прежний `_CALL_TRACE_MAX = 20000` был МЁРТВОЙ константой:
+# её никто не читал, файл рос без потолка (21 368 строк / 4,8 МБ на 28.08 при диске
+# 86%). Ротация — по размеру и атомарным rename в `.1`: дописывающий параллельно
+# процесс уезжает вместе со старым файлом (open("a") на каждый вызов — новый файл
+# подхватится следующей строкой), ни одна строка не теряется.
+_CALL_TRACE_ROTATE_BYTES = 8_000_000  # ~35 тыс. строк по ~230 байт
 
 
 def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
                 out_tokens: int, latency_ms: float, error: str = "",
                 retries: int = 0, gap_sec: float = -1.0,
-                tools_digest: str = "") -> None:
+                tools_digest: str = "", vision: bool = False,
+                fallback: bool = False) -> None:
     """Одна строка на вызов: доля кэша рядом с исходом. Никогда не роняет вызов.
 
     `tools` рядом с `cached` — отпечаток набора рук этого вызова. Схемы едут ВЫШЕ
@@ -1594,8 +2091,14 @@ def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
                "ok": bool(ok), "cached": int(cached or 0), "in": int(prompt or 0),
                "out": int(out_tokens or 0), "ms": int(latency_ms),
                "retries": int(retries or 0), "iter": int(_CALL_ITER.get() or 0)}
+        if fallback:
+            row["fallback"] = True
         if tools_digest:
             row["tools"] = str(tools_digest)[:16]
+        if vision:
+            # 09.09: вызов ушёл зрячей замене из-за картинки в кадре — разрез расхода
+            # «сколько стоит зрение» и честный ответ на «почему модель не та, что в конфиге».
+            row["vision"] = 1
         try:
             import run_context
             _run = run_context.current_run()
@@ -1603,6 +2106,16 @@ def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
                 # Без id прогона вызовы одного хода не собрать в цепочку, а вся суть
                 # замера — увидеть профиль кэша ВДОЛЬ одного цикла.
                 row["run"] = str(getattr(_run, "run_id", "") or "")[:64]
+                # Persist attribution before run manifests rotate away.  Only
+                # opaque identifiers belong here, never names or message text.
+                chat = (getattr(_run, "origin_chat_id", None)
+                        or getattr(_run, "delivery_chat_id", None))
+                if chat:
+                    row["chat"] = str(chat)[:48]
+                for field, attr in (("who", "principal_id"), ("task", "forge_task_id")):
+                    value = getattr(_run, attr, "")
+                    if value:
+                        row[field] = str(value)[:32]
         except Exception:
             pass
         if gap_sec >= 0:
@@ -1610,6 +2123,11 @@ def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
         if error:
             row["err"] = str(error)[:120]
         _CALL_TRACE.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if _CALL_TRACE.stat().st_size >= _CALL_TRACE_ROTATE_BYTES:
+                _CALL_TRACE.replace(_CALL_TRACE.with_name(_CALL_TRACE.name + ".1"))
+        except OSError:
+            pass  # файла ещё нет / гонка ротаций — обе безвредны
         with _CALL_TRACE.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     except Exception:

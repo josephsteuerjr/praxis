@@ -88,6 +88,37 @@ def prior(key: str) -> dict | None:
     return row if row and row["status"] == "completed" else None
 
 
+def history_for_sender(peer_id: int, sender_id: int) -> list[dict]:
+    """Завершённые меры к этому отправителю в этом месте — по ПРОВЕРЕННОЙ цепи.
+
+    27.08. Заведено ради пробуждения на спам: раньше туда ехали одни идентификаторы,
+    и повторность приходилось выяснять руками уже внутри хода. Пока история не
+    лежала в руках, первое срабатывание выглядело как одиночное — и бан наступал
+    только с третьего захода того же человека.
+
+    Читается тем же `_read_verified`, что и всё остальное: если цепь расписок
+    порвана, эта функция обязана падать вместе с остальными, а не отдавать
+    правдоподобный огрызок.
+    """
+    with _LOCK:
+        rows = _read_verified()
+    out: list[dict] = []
+    for row in rows:
+        if str(row.get("status")) != "completed":
+            continue
+        try:
+            same = (int(row.get("peer_id")) == int(peer_id)
+                    and int(row.get("sender_id")) == int(sender_id))
+        except (TypeError, ValueError):
+            continue
+        if same:
+            out.append({"ts": row.get("ts"), "message_id": row.get("message_id"),
+                        "action": row.get("action"),
+                        "deleted": bool(row.get("deleted")),
+                        "banned": bool(row.get("banned"))})
+    return out
+
+
 def append_receipt(payload: dict) -> dict:
     with _LOCK:
         rows = _read_verified()

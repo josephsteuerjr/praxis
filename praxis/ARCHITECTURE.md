@@ -349,3 +349,41 @@ Living-контракт хранится здесь; структура файл
 старый exact-phrase PASS 8 soul test и tracked personality archive: точные версии остаются в Git.
 Приватные dialogues/access/goals сохранены как ignored runtime data, но исключены из source
 tracking.
+
+### Candidate-only frame measurement boundary
+
+`frame_measure` is an opt-in observer at `agent._model_call`, scoped by
+`_voice_impl`. Default is off. `PRAXIS_FRAME_V6=measure` **and** an explicit
+comma-separated `PRAXIS_FRAME_V6_STREAMS` selection (exact shadow stream keys,
+e.g. `dm-101`, `chat--202`, `no-chat-heartbeat`; no wildcard) enable local
+measurement for new voice turns. These are process environment settings, not a
+live panel switch. Unset either setting to stop measurement; `serve` is not
+implemented. Nothing here activates canaries or changes served input.
+
+The candidate assembly `fresh_e_original_role_tape_v1` reads current K/E sources
+using shadow's audience-aware builders on each model iteration, carries the live
+machine tail, and retains the **complete original role messages and tool schemas**
+(including current situation, evidence, images and outstanding tool transactions).
+Compacted dialogue recap is retained in the historical A section, including when
+it is absent from the role tape. Freshness is bounded: file-backed K/E sources are
+reread per call, while context, recap and machine sections are turn-bound snapshots;
+this is not an atomic snapshot or proof that every source is fresh.
+It deliberately does not promote dialogue into system text or load/write frozen
+shadow epochs. This is a conservative measurement envelope, **not** the final
+frozen K/E/A/T serving design: role-tape evidence can duplicate freshly assembled
+E; it cannot establish semantic equivalence or predict prefix-cache retention.
+An independently built frozen shadow capture remains a separate instrument.
+
+The original `system`, `messages`, and `tools` are passed unchanged to `llm.chat`.
+Candidate assembly receives detached copies; setup/measurement exceptions cannot
+stop that call. Context is reset after nested/error turns; an unbound or resumed
+request with a different system object is not paired with stale context. Measurement
+output contains only counts and fixed enums under `model_input.metadata.frame_measure`,
+with `variant=measure`, `served_variant=live` and the existing receipt `call_id`.
+No candidate bodies, identifiers, hashes or exception text are persisted by this
+observer. Failure is recorded as missing candidate, not a zero-sized request.
+
+The estimator is local JSON UTF-8 bytes divided by four, includes the entire
+request envelope, and leaves provider token counts/cache savings unknown. Provider
+serialization, multimodal token prices and actual usage attribution still require
+separate evidence. These offline tests do not authorize activation or serving.

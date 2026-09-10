@@ -270,34 +270,50 @@ def _skip_meta(meta: dict | None) -> dict:
 
 
 def note_skip(stage: str, klass: str, *, chat_id=None, detail: str = "",
-              meta: dict | None = None) -> None:
-    """Причина пропуска — дешёвая строка в кольцо. Повторы (stage, chat) схлопываются."""
+              meta: dict | None = None, count_repeats: bool = True) -> None:
+    """Причина пропуска — дешёвая строка в кольцо.
+
+    Обычные повторы считаются событиями и периодически сбрасывают число повторов в новую
+    строку. Механический retry одного непрерывного условия может передать
+    ``count_repeats=False``: тогда журнал показывает эпизод, а не частоту scheduler tick.
+    """
     try:
         if klass not in CLASSES:
             klass = "не_увидела"
         skip_meta = _skip_meta(meta)
+        signature_detail = "" if not count_repeats else str(detail or "")[:_DETAIL_MAX]
         signature = (
             stage,
             str(chat_id) if chat_id is not None else "",
             klass,
-            str(detail or "")[:_DETAIL_MAX],
+            signature_detail,
             json.dumps(skip_meta, ensure_ascii=False, sort_keys=True),
+            bool(count_repeats),
         )
         now = time.time()
         prev = _LAST_SKIP.get(signature)
         if prev and now - prev["ts"] < _COALESCE_SEC:
-            prev["n"] += 1  # только действительно одинаковые причины схлопываются
+            if count_repeats:
+                prev["n"] += 1  # только действительно отдельные причины считаются
+            else:
+                # Скользящее окно: пока механический retry не замолкал на десять минут,
+                # это один и тот же эпизод, а не новая тысяча решений Praxis.
+                prev["ts"] = now
             return
         n_prev = (prev or {}).get("n", 0)
         _LAST_SKIP[signature] = {"ts": now, "n": 1}
         rec = {"ts": round(now, 1), "stage": str(stage)[:40], "class": klass,
                "detail": str(detail or "")[:_DETAIL_MAX]}
+        if not count_repeats:
+            rec["count_repeats"] = False
         if skip_meta:
             rec["meta"] = skip_meta
         if chat_id is not None:
             rec["chat"] = str(chat_id)
         if n_prev > 1:
-            rec["prev_n"] = n_prev  # сколько таких же схлопнулось в прошлое окно
+            # Начальное событие прошлого окна уже записано собственной строкой; переносим
+            # только повторы, иначе каждое окно считает это событие второй раз.
+            rec["prev_n"] = n_prev - 1
         SKIPS_PATH.parent.mkdir(parents=True, exist_ok=True)
         with SKIPS_PATH.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -360,6 +376,22 @@ def recent_skips(n: int = 12) -> list[dict]:
         return []
 
 
+def skip_record_count(rec: dict) -> int:
+    """Multiplicity represented by one persisted row, including legacy retry storms."""
+    # `moderation_priority` historically recorded every 0.5-second scheduler retry and
+    # carried that raw tick count into prev_n.  Those ticks are one continuous deferral,
+    # not thousands of decisions; old rows have no count_repeats marker, so stage is the
+    # migration discriminator.  New non-counting producers mark themselves explicitly.
+    if rec.get("count_repeats") is False or rec.get("stage") in {
+        "moderation_priority", "cooldown",
+    }:
+        return 1
+    try:
+        return 1 + max(0, int(rec.get("prev_n") or 0))
+    except (TypeError, ValueError):
+        return 1
+
+
 def skips_today() -> dict:
     """Счёт пропусков за сегодня по классам (по записям кольца; схлопнутые — по счётчику)."""
     # ⚠ Полночь ЕЁ суток, а не контейнера: граница «сегодня» уезжала на четыре часа.
@@ -367,7 +399,8 @@ def skips_today() -> dict:
     acc: dict[str, int] = {}
     for rec in recent_skips(SKIPS_KEEP):
         if float(rec.get("ts") or 0) >= midnight:
-            acc[rec.get("class", "?")] = acc.get(rec.get("class", "?"), 0) + 1 + int(rec.get("prev_n") or 0)
+            klass = rec.get("class", "?")
+            acc[klass] = acc.get(klass, 0) + skip_record_count(rec)
     return acc
 
 
@@ -403,7 +436,8 @@ def skips_text(n: int = 12, *, chat_id=None, include_provenance: bool = True) ->
     lines = ["Последние пропуски до голоса (класс · этап · чат · деталь):"]
     for r in recs:
         ts = _dt.datetime.fromtimestamp(float(r.get("ts") or 0)).strftime("%d.%m %H:%M")
-        extra = f" ×{1 + int(r.get('prev_n') or 0)}" if r.get("prev_n") else ""
+        count = skip_record_count(r)
+        extra = f" ×{count}" if count > 1 else ""
         meta = r.get("meta") if include_provenance and isinstance(r.get("meta"), dict) else {}
         provenance = []
         if meta.get("mode_set_by"):
@@ -432,5 +466,10 @@ def state_line() -> str:
 
 
 def panel_state() -> dict:
-    return {"knobs": effective(), "skips": list(reversed(recent_skips(20))),
+    skips = []
+    for rec in reversed(recent_skips(20)):
+        item = dict(rec)
+        item["repeat_count"] = skip_record_count(rec)
+        skips.append(item)
+    return {"knobs": effective(), "skips": skips,
             "skips_today": skips_today(), "ambient_today": ambient_today()}

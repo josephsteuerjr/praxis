@@ -54,10 +54,26 @@ def _save(data: dict) -> None:
     tmp.replace(PATH)
 
 
-def note_incoming(chat_id, name: str = "", ts: float | None = None) -> None:
-    """Чужая реплика в ЛС: завести/освежить запись. `since` — первая неотвеченная (не двигаем)."""
+def note_incoming(
+    chat_id,
+    name: str = "",
+    ts: float | None = None,
+    *,
+    automated: bool = False,
+) -> None:
+    """Чужая реплика в ЛС: завести/освежить запись о человеке.
+
+    Telegram-боты могут будить обычный голосовой проход, но не являются
+    «неотвеченными собеседниками». Если бот был записан старой версией раннера,
+    следующий его апдейт заодно снимает устаревшую запись.
+    """
     data = _load()
     key = str(chat_id)
+    if automated:
+        if key in data:
+            data.pop(key, None)
+            _save(data)
+        return
     cur = data.get(key) if isinstance(data.get(key), dict) else None
     if cur is None:
         data[key] = {"name": str(name or ""), "since": float(ts if ts is not None else time.time())}
