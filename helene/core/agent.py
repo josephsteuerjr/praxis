@@ -4081,6 +4081,12 @@ _COMPUTER_ACTION_SCOPES = {
     # (desktop.window.read), но до руки глагол не доходил — «наружу торчит только
     # верхний уровень, дерево контролов не отдаётся» (Мира, 07.09).
     "read_window": "computer.apps",
+    # 10.09: ДЕЙСТВИЕ над названным элементом, а не над точкой экрана. Между чтением
+    # окна и ударом по координатам был провал: пиксель, верный секунду назад, указывает
+    # мимо, если окно проехало, список прокрутился или система стоит на другом масштабе.
+    # Здесь элемент называется тем, что переживает перерисовку (automation_id, роль,
+    # надпись), и действие идёт паттерном UI Automation — координат в этом пути нет.
+    "act_element": "computer.apps",
 }
 
 
@@ -4213,7 +4219,9 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
                   start: int = 1, end: int = 0, content: str = "", old: str = "",
                   new: str = "", expected_sha256: str = "", backup: bool = False,
                   shape: str = "", text_contains: str = "", max_nodes: int = 0,
-                  max_depth: int = 0) -> str:
+                  max_depth: int = 0,
+                  automation_id: str = "", role: str = "", nth: int = -1,
+                  element_action: str = "") -> str:
     """Caller-authorized body actions; the Windows client still makes no decisions."""
     import computer_inventory
     action = str(action or "").strip().lower()
@@ -4224,8 +4232,8 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
     if not required:
         return ("action: status | inventory | list | stat | read | hash | write | replace | "
                 "send | run | poll | stop | "
-                "desktop_status | windows | read_window | activate | input | type_text | "
-                "hotkey | key | move | click | scroll | screenshot | observe | "
+                "desktop_status | windows | read_window | act_element | activate | input | "
+                "type_text | hotkey | key | move | click | scroll | screenshot | observe | "
                 "clipboard_read | clipboard_write | processes")
     if not _computer_allowed(required):
         return f"Нет выданного владельцем права `{required}` для этого Telegram id."
@@ -4344,6 +4352,25 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
             execution=execution,
         )
         return body_client.format_window_read(result)
+    elif action == "act_element":
+        # Отбор обязан быть НЕПУСТЫМ, и это проверяет тело: действовать над «любым
+        # элементом окна» — промах по устройству. Двое подошедших — тоже ответ тела
+        # («ambiguous» со списком кандидатов), а не наш выбор первого попавшегося.
+        if not str(element_action or "").strip():
+            return ("act_element: скажи element_action — invoke, set_value, toggle, expand, "
+                    "collapse, select, scroll_into_view или focus")
+        result = body_client.desktop_element_act(
+            str(element_action).strip(), hwnd=(hwnd or None),
+            automation_id=automation_id, role=role, name=name,
+            name_contains=name_contains, value_contains=text_contains,
+            nth=(int(nth) if nth is not None and int(nth) >= 0 else None),
+            text=(text if str(element_action).strip() == "set_value" else None),
+            timeout_ms=(timeout_ms if timeout_ms else 3000),
+            max_nodes=(int(max_nodes) if max_nodes else None),
+            max_depth=(int(max_depth) if max_depth else None),
+            execution=execution,
+        )
+        return body_client.format_element_act(result)
     elif action == "activate":
         if not hwnd:
             return "activate: нужен hwnd из action=windows"
@@ -7049,6 +7076,14 @@ COMPUTER_TOOL = {
         "status/inventory/list/stat are eyes; send exports an exact local path and sends the verified file to the "
         "CURRENT chat; run/poll/stop manage PowerShell processes. desktop_status/windows/read_window/activate/input/"
         "screenshot/observe/clipboard_read/clipboard_write/processes are native interactive-desktop hands (no Office COM). "
+        "act_element does something TO A NAMED ELEMENT instead of to a point on screen: name it with automation_id "
+        "(exact), role, name or name_contains and say element_action=invoke|set_value|toggle|expand|collapse|select|"
+        "scroll_into_view|focus. It goes through UI Automation patterns, so no pixels are involved: DPI, a window that "
+        "moved and a list that scrolled stop being your problem, and set_value types INTO THE FIELD rather than into "
+        "whatever has focus. It WAITS for the element up to timeout_ms, so no sleep before it. Several matches are "
+        "REFUSED with the candidates listed — narrow the selector or say nth; an element without the needed pattern is "
+        "refused with the patterns it does have, never silently clicked at coordinates. ok:true means the pattern was "
+        "invoked and the element re-read (element_after) — whether that achieved your goal is yours to judge. "
         "read_window returns the UI Automation control tree of a window as text (role, name, value, automation id, "
         "rect and centre x,y of every node) — your primary eyes on a window, cheaper than a screenshot and the only "
         "eyes when the voice model is text-only; pass hwnd from windows (omit for the foreground window), "
@@ -7082,8 +7117,8 @@ COMPUTER_TOOL = {
         "action": {"type": "string", "enum": [
             "status", "inventory", "list", "stat", "read", "hash", "write", "replace",
             "send", "run", "poll", "stop",
-            "desktop_status", "windows", "read_window", "activate", "input", "type_text",
-            "hotkey", "key", "move", "click", "scroll", "screenshot", "observe",
+            "desktop_status", "windows", "read_window", "act_element", "activate", "input",
+            "type_text", "hotkey", "key", "move", "click", "scroll", "screenshot", "observe",
             "clipboard_read", "clipboard_write", "processes",
         ]},
         "shape": {"type": "string", "enum": ["tree", "flat"],
@@ -7091,7 +7126,17 @@ COMPUTER_TOOL = {
         "text_contains": {"type": "string",
                           "description": "read_window: keep nodes whose name/value contains this text"},
         "max_nodes": {"type": "integer", "description": "read_window: cap on nodes read (body clamps)"},
-        "max_depth": {"type": "integer", "description": "read_window: cap on tree depth (body clamps)"},
+        "max_depth": {"type": "integer", "description": "read_window/act_element: cap on tree depth (body clamps)"},
+        "element_action": {"type": "string",
+                           "enum": ["invoke", "set_value", "toggle", "expand", "collapse",
+                                    "select", "scroll_into_view", "focus"],
+                           "description": "act_element: what to do to the named element"},
+        "automation_id": {"type": "string",
+                          "description": "act_element: the element's AutomationId (exact, case-sensitive) — the most durable way to name it"},
+        "role": {"type": "string",
+                 "description": "act_element: control role as read_window reports it (button, edit, list_item...)"},
+        "nth": {"type": "integer",
+                "description": "act_element: which of several matches to take, from 0; omit and several matches are refused rather than guessed"},
         "path": {"type": "string"}, "caption": {"type": "string"},
         "command": {"type": "string"}, "cwd": {"type": "string"},
         "operation_id": {"type": "string"},

@@ -10,50 +10,78 @@ So the difference is declared instead. `core/` holds every file of the agent's c
 Hélène carries differently, and nothing else: everything not listed here comes from
 `praxis/` unchanged.
 
-**The declaration is now checkable, and it was checked.** `desk/installer/core_src.py
---check` compares the layer against the ACTUAL difference between `praxis/` and the working
-copy, and names three outcomes: undeclared, declared in vain, ours alone. Run it before
-trusting any number on this page.
+**The declaration is checkable, and every number below came from the check rather than from
+memory.** Run `desk/installer/core_src.py --check` before trusting any of them.
 
-⚠ What it said on 2026-09-10, right after the core was re-exported from production
-(`64f1588c`): 19 files declared here really do differ, **0 are declared in vain** — and 40
-differ without being declared. Those forty are not a hidden edition. Three are the
-element-acting verb written that same morning and not yet offered; the rest are this
-working copy lagging a core that moved the day it was published. The layer is regenerated
-after the working copy catches up, not before: copying "we are behind" into a file called
-"the Windows edition" is exactly the lie the previous measurement made.
+⚠ The order matters and it cost a lesson. When the core was re-exported on 2026-09-10 the
+mirror moved ahead of the working copy, and forty files differed without being declared.
+Copying them into a file called "the Windows edition" would have declared a lag as a
+design. The working copy caught up first — taking her fixes where they apply, keeping the
+edition where the machine underneath is genuinely different — and only then was the layer
+regenerated from what actually differs.
 
-## What is here, and how far it is from the core
+## What is here — 55 files, checked rather than remembered
 
-| file | lines in the core | added here | removed here | why |
-|---|---:|---:|---:|---|
-| `agent.py` | 16949 | 165 | 109 | vision routing before the call; the model-call ledger carries chat, principal and Forge task |
-| `llm.py` | 2025 | 214 | 41 | vision model of the same framework; the reasoning-effort step for GLM (`output_config.effort`); fallback trace |
-| `frame_stats.py` | 250 | 189 | 223 | the cache cuts the window's System screen reads (seven axes) |
-| `mtproto_runner.py` | 9482 | 92 | 91 | Telegram from a Windows runner rather than a service |
-| `body/crates/praxis-body/src/desktop.rs` | 2459 | 84 | 3 | the `computer` hand on Windows: input by keystroke, not one packet burst |
-| `body/crates/praxis-body/src/uia.rs` | 1826 | 34 | 3 | UI Automation: reading a window's live value when the cached pattern is empty |
-| `turns.py` | 1017 | 39 | 28 | the turn tail the window's card opens in full |
-| `run_manager.py` | 2611 | 21 | 1 | `os.replace` retries on Windows sharing violations |
-| `perception.py` | 475 | 8 | 47 | perception without the server's transports |
-| `promises.py` | 243 | 9 | 16 | the promise regexp reads a feminine past tense too |
-| `forge.py` | 3504 | 12 | 2 | Forge without the server's workers |
-| `unanswered.py` | 130 | 2 | 18 | the same, minus the server's mailbox |
-| `panel.py` | 1861 | 3 | 12 | the panel the desk application replaces |
-| `canary.py` | 339 | 3 | 8 | the frame canary on a single-machine layout |
-| `frame_shadow.py` | 2404 | 4 | 0 | shadow snapshots beside a portable data folder |
-| `webtool.py` | 591 | 1 | 2 | the web hand without the server's proxy |
-| `moderation_shadow.py` | 149 | 1 | 1 | one path |
-| `ARCHITECTURE.md` | 389 | 0 | 38 | the sections that describe the server this edition does not have |
+`desk/installer/core_src.py --check` compares this layer against the ACTUAL difference
+between `praxis/` and the working copy. On 2026-09-10, after the core was re-exported from
+production (`64f1588c`) and the working copy took her fixes that apply, it reports:
 
-Files that exist only here:
+| | files |
+|---|---:|
+| declared here and genuinely differing | **50** |
+| differing but NOT declared | **0** |
+| declared in vain (identical) | **0** |
+| ours alone and not declared | **0** |
 
-| file | why |
-|---|---|
-| `sitecustomize.py` | the sandbox root the Windows runner sets before the first import |
-| `test_atomic_replace_retry.py` | proves the sharing-violation retry above |
-| `test_compact_refresh.py` | proves the compaction the window shows |
-| `test_vision_switch.py` | proves the vision routing above |
+Overlaying `praxis/` with `core/` reproduces the working copy **byte for byte**: 478 of 478
+files, nothing diverging, nothing missing. That is what makes
+`build_dist.py --from-core` possible at all; before this it refused, and rightly.
+
+### Carried differently (50)
+
+| `ARCHITECTURE.md` | `agent.py` | `body/crates/praxis-body/src/desktop.rs` |
+| `body/crates/praxis-body/src/main.rs` | `body/crates/praxis-body/src/runtime.rs` | `body/crates/praxis-body/src/uia.rs` |
+| `body_client.py` | `canary.py` | `forge.py` |
+| `frame_shadow.py` | `frame_stats.py` | `llm.py` |
+| `moderation_shadow.py` | `mtproto_runner.py` | `panel.py` |
+| `perception.py` | `run_manager.py` | `test_agent_resume_runtime.py` |
+| `test_cache_prefix_stability.py` | `test_canary.py` | `test_claim_conflicts.py` |
+| `test_computer_access_agent.py` | `test_coverage_vs_current.py` | `test_fast_hand.py` |
+| `test_forge_lean.py` | `test_gate_hermetic.py` | `test_group_wake_snapshot.py` |
+| `test_history_scan.py` | `test_invariants.py` | `test_llm.py` |
+| `test_moderation_shadow.py` | `test_panel.py` | `test_pass21.py` |
+| `test_pass23.py` | `test_pass23_2.py` | `test_pass23_complete.py` |
+| `test_pass30.py` | `test_pass9.py` | `test_run_integration.py` |
+| `test_shell_selfdev.py` | `test_silero_tts_client.py` | `test_silero_tts_worker.py` |
+| `test_truncation_owner.py` | `test_truth_runner.py` | `test_turns.py` |
+| `test_vision_switch.py` | `test_webtool.py` | `turns.py` |
+| `unanswered.py` | `webtool.py` | |
+
+### Existing only here (5)
+
+| `body/crates/praxis-body/src/element.rs` | `sitecustomize.py` | `test_atomic_replace_retry.py` |
+| `test_compact_refresh.py` | `test_element_act.py` | |
+
+## What the edition does NOT carry (26)
+
+The third category, and the one a layer cannot express by itself: files that exist in the
+core and not in this edition. Most are her newest modules, written after the last time the
+working copy was reconciled, and nothing here imports them — `keat_*`, `frame_measure`,
+`frame_serve`, `pre_model_timing`, `telegram_text` and their docs.
+
+They are named rather than filtered: assembling from the core brings them along, and the
+distribution grows by exactly this list. Silently dropping them would be a second, hidden
+declaration; silently shipping them without saying so would be worse.
+
+| `docs/frame-v6-canary.md` | `docs/keat-candidate-contract.md` | `docs/keat-durable-epoch.md` |
+| `docs/keat-input-boundaries.md` | `docs/keat-source-adapter.md` | `frame_measure.py` |
+| `frame_serve.py` | `keat_candidate.py` | `keat_epoch.py` |
+| `keat_source.py` | `pre_model_timing.py` | `telegram_text.py` |
+| `test_boundary_turn_delivery.py` | `test_call_attribution.py` | `test_frame_measure.py` |
+| `test_frame_measure_boundary.py` | `test_frame_serve.py` | `test_frame_stats.py` |
+| `test_glm_effort.py` | `test_keat_candidate.py` | `test_keat_epoch.py` |
+| `test_keat_source.py` | `test_llm_inbox_audit.py` | `test_pre_model_timing.py` |
+| `test_telegram_text.py` | `test_truncated_tool_use.py` | |
 
 ## The honest part
 
@@ -66,8 +94,7 @@ this table was the only place that said so out loud.
 durable Forge call attribution" — carries the effort step (`output_config.effort` in
 `llm.py`, the z.ai Anthropic dialect) and the call ledger (`forge_task_id` in `llm.py` and
 `forge_worker.py`); the vision routing and `read_window` are in there too. All four are now
-the core's, not an edition of it, and the rows below shrink accordingly at the next
-regeneration.
+the core's, not an edition of it, and the tables above no longer count them.
 
 One patch is still offered and not yet taken: `desktop.element.act` — acting on a named
 element through UI Automation patterns instead of a point on screen. It is not in `core/`

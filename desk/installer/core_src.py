@@ -59,12 +59,28 @@ SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".vectors", ".proposals",
 #: Чего нет в сверке по имени: следы среды и снимки «до правки», которые дерево
 #: копит рядом с файлами. Их расхождение не значит ничего.
 SKIP_SUFFIXES = (".pyc", ".pyo", ".bak", ".session-journal")
-SKIP_PREFIXES = (".env",)
+#: `.deploy.env` — секреты выкладки; он и не в git, и изданием быть не может.
+SKIP_PREFIXES = (".env", ".deploy.env")
 
 #: Машинные файлы: пишет их прогон, а не человек, и расходятся они ВСЕГДА — на каждой
 #: машине свои секунды. В отчёте это шум, который топит настоящее: 10.09 замеры дали 423
 #: строки расхождения на файле, о котором нечего решать.
-SKIP_NAMES = {".praxis_test_durations.json"}
+#: `SYNC-HEAD.txt` — наша метка «на чём сверялись»; она про процесс, не про код.
+SKIP_NAMES = {".praxis_test_durations.json", "SYNC-HEAD.txt"}
+
+#: Файлы, которые есть В ЗЕРКАЛЕ, но которых на её проде нет и не будет: лицензия,
+#: NOTICE, документы сборки и исходник реле. Они часть публикации, а не часть ядра.
+#:
+#: ⚠ Без этого списка `--from-core` затаскивал бы `relay/**` (двадцать файлов исходника
+#: реле) и документы зеркала прямо в дерево агента — поймано сверкой 10.09, когда
+#: наложение оказалось на 56 файлов шире рабочей копии. Тот же список ведёт рецепт
+#: зеркала, и разъезжаться им нельзя.
+MIRROR_ONLY = {
+    "LICENSE", "LICENSE-AGPL-3.0.txt", "NOTICE", "BUNDLE.md", "DEPLOY.md",
+    "docker-compose.bundle.yml", "env.bundle.example",
+    "soul/SOUL.example.md", "soul/VOICE.example.md",
+}
+MIRROR_ONLY_DIRS = ("relay/",)
 
 
 def _skip(rel: str) -> bool:
@@ -80,8 +96,18 @@ def _skip(rel: str) -> bool:
     return ".pre-" in name
 
 
+def mirror_only(rel: str) -> bool:
+    """Файл публикации, а не ядра: в дерево агента он не едет ни при каких условиях."""
+    return rel in MIRROR_ONLY or rel.startswith(MIRROR_ONLY_DIRS)
+
+
 def files(root: Path) -> dict[str, Path]:
-    """Файлы дерева относительным путём -> путь на диске."""
+    """Файлы дерева относительным путём -> путь на диске.
+
+    Зеркало-онли отбрасывается ЗДЕСЬ, а не у каждого потребителя: и сверка, и сборка
+    из ядра спрашивают одно и то же «что считается ядром», и второй ответ на этот
+    вопрос немедленно разъехался бы с первым.
+    """
     out: dict[str, Path] = {}
     if not root.is_dir():
         return out
@@ -89,7 +115,7 @@ def files(root: Path) -> dict[str, Path]:
         if not path.is_file():
             continue
         rel = path.relative_to(root).as_posix()
-        if not _skip(rel):
+        if not _skip(rel) and not mirror_only(rel):
             out[rel] = path
     return out
 
@@ -153,6 +179,10 @@ def compare(core: Path, layer: Path, tree: Path) -> dict:
         "only_ours": sorted(only_ours - declared),
         "declared_ok": sorted(declared & differ),
         "gone": sorted(r for r in declared if r not in tree_f),
+        # Файл ядра, которого у нас нет вовсе. Это НЕ ошибка: издание вправе чего-то
+        # не нести. Но и молчать нельзя — сборка из ядра принесёт его в поставку, и
+        # владелец должен узнать об этом здесь, а не из выросшего архива.
+        "not_carried": sorted(set(core_f) - set(tree_f)),
     }
 
 
@@ -196,6 +226,8 @@ def _report(res: dict) -> int:
     print(f"НЕ ОБЪЯВЛЕНО, но расходится    : {len(res['undeclared'])}")
     print(f"объявлено зря (совпадает)      : {len(res['stale'])}")
     print(f"только у нас (в ядре нет)      : {len(res['only_ours'])}")
+    print(f"в ядре есть, у нас нет         : {len(res['not_carried'])}   "
+          f"(сборка из ядра принесёт их)")
     if res["gone"]:
         print(f"слой помнит файл, которого в дереве нет: {len(res['gone'])}")
 
