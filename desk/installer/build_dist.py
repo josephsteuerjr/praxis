@@ -118,7 +118,12 @@ TREE_DEPS = [
 # расшифровка есть с 0.3.x, а на Windows голосовое до 0.5.2 превращалось в
 # молчание. Модель в поставку не входит и войти не может (480 МБ у маленькой,
 # 1,6 ГБ у рабочей) — её качает владелец из окна, `localharness/voice.py`.
-VOICE_DEPS = ["faster-whisper"]
+# ГОЛОС НАРУЖУ (11.09). `piper-tts` — 34 МБ колёсиком, и почти всё, что ему
+# нужно (onnxruntime, numpy), уже привезено ради расшифровки. Голос в поставку
+# не входит: 61 МБ на каждый, качает владелец из окна тем же помощником.
+# ⚠ Не Edge и не Silero: Edge — это голос Микрософта ПО СЕТИ, то есть текст
+# ответа агента уходил бы наружу на каждую фразу, а Silero тянет torch (~2 ГБ).
+VOICE_DEPS = ["faster-whisper", "piper-tts"]
 
 # Зависимости ПОСТАВКИ = дерево + пакет desk (канал просит aiohttp, раннер —
 # telethon). Свой список desk объявляет сам (deskpkg.DEPS_*), и сервер ставит
@@ -127,7 +132,7 @@ VOICE_DEPS = ["faster-whisper"]
 DEPS = TREE_DEPS + VOICE_DEPS + deskpkg.requirements(deskpkg.WINDOWS)
 
 # Дымовой тест рантайма: ровно то, что продукт импортирует на своём пути.
-SMOKE_IMPORTS = ("anthropic", "openai", "httpx", "dotenv", "PIL",
+SMOKE_IMPORTS = ("anthropic", "openai", "httpx", "dotenv", "PIL", "piper",
                  "aiohttp", "pypdf", "trafilatura", "telethon", "faster_whisper")
 
 APP_DIST = DESK / "app" / "dist"     # UI окна — сборка Vite (npm --prefix app run build)
@@ -1288,6 +1293,31 @@ def build_praxis_pult(args) -> None:
     print(f"sha256: {digest}")
 
 
+def run_stands(skip: bool) -> None:
+    """Прогнать ВСЕ стенды перед сборкой: питон, окно, Rust.
+
+    ⚠ Почему это делает сборка, а не человек по списку. Наборов три, и звались
+    они тремя разными командами; набор окна забыли — и `actions.test.mjs`
+    простоял красным от переделки ленты шагов до 09.09. Список в `RELEASE.md`
+    помнить человеку, а сборке помнить нечего: она зовёт один файл
+    (`tests/run_all.py`), а тот сам знает состав.
+
+    Отказ здесь — отказ собирать. Полусборка с красным стендом называется
+    выпуском ровно до первого запуска у владельца.
+    """
+    if skip:
+        print("стенды: ПРОПУЩЕНЫ (--skip-tests) — это отладка, не выпуск")
+        return
+    runner = DESK / "tests" / "run_all.py"
+    if not runner.is_file():
+        raise SystemExit(f"нет прогона стендов: {runner}")
+    print("стенды: питон, окно и Rust…")
+    done = subprocess.run([sys.executable, str(runner), "--rust"], cwd=str(DESK))
+    if done.returncode != 0:
+        raise SystemExit("стенды красные — сборка остановлена. "
+                         "Чинить, а не собирать: подробности выше.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default=str(DESK / "installer" / "build"))
@@ -1300,6 +1330,8 @@ def main() -> None:
     parser.add_argument("--variant", choices=("helene", "praxis"), default="helene",
                         help="helene — полная поставка Hélène (по умолчанию); praxis — Пульт "
                              "Praxis: то же окно в режиме remote, без ядра, рантайма и тела")
+    parser.add_argument("--skip-tests", action="store_true",
+                        help="не гонять стенды перед сборкой (отладка); в выпуске — никогда")
     parser.add_argument("--from-core", action="store_true",
                         help="собрать дерево как «ядро (../praxis) + слой (../helene/core)», "
                              "а не из рабочей копии. Откажется, пока слой не описывает "
@@ -1327,6 +1359,8 @@ def main() -> None:
         n = assemble_from_core(staged_tree, core_src.CORE_DEFAULT, core_src.LAYER_DEFAULT)
         print(f"дерево собрано из ядра и слоя: {n} файлов -> {staged_tree}")
         live = staged_tree
+
+    run_stands(args.skip_tests)
 
     print(f"Hélène {version}")
     print(f"дистрибутив -> {out}")
