@@ -23,10 +23,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { strict as assert } from "node:assert";
 
-import { keepBlock } from "../src/config.ts";
+import { keepBlock } from "../../ui-kit/window/config.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = join(here, "..", "src");
+const win = join(here, "..", "..", "ui-kit", "window");   // общее окно обоих изданий
+
 
 // --------------------------------------------------------------------------
 // 1. Само слияние: прогоном, а не чтением исходника.
@@ -106,7 +108,12 @@ assert.ok(
 // 3. В `agent_mode` едет только ограда рук, и никогда — служба.
 // --------------------------------------------------------------------------
 
-const modeTs = code(readFileSync(join(src, "mode.ts"), "utf8"));
+// Код режима с 10.09 лежит в ДВУХ файлах: общая часть (типы и чтение
+// `/api/mode`) — в ui-kit/window/mode.ts, карточка выбора — у Элен. Правила ниже
+// про режим как таковой, и держать их надо на обоих файлах сразу: иначе переезд
+// строки из одного в другой тихо снимал бы проверку.
+const modeTs = code(readFileSync(join(win, "mode.ts"), "utf8")
+                    + "\n" + readFileSync(join(src, "modecard.ts"), "utf8"));
 
 assert.ok(
   /out\[MODE_KEY\]\s*=\s*picked;/.test(settingsTs),

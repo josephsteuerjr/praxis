@@ -12,6 +12,8 @@ import { strict as assert } from "node:assert";
 const here = dirname(fileURLToPath(import.meta.url));
 const src = join(here, "..", "src");
 const kit = join(here, "..", "..", "ui-kit");
+const win = join(here, "..", "..", "ui-kit", "window");   // общее окно обоих изданий
+
 
 const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 const contract = JSON.parse(readFileSync(join(kit, "contract.json"), "utf8"));
@@ -28,7 +30,7 @@ assert.ok(!new RegExp(contract.rooms.pattern).test("window"), "комната п
 // --- окно читает константы из JSON, а не держит копии
 const relayTs = code(readFileSync(join(src, "relay.ts"), "utf8"));
 const computerTs = code(readFileSync(join(src, "computer.ts"), "utf8"));
-const stateTs = code(readFileSync(join(src, "state.ts"), "utf8"));
+const stateTs = code(readFileSync(join(win, "state.ts"), "utf8"));
 const phoneTs = code(readFileSync(join(kit, "phone.ts"), "utf8"));
 assert.ok(/RELAY_PORT: number = contract\.ports\.relay/.test(relayTs), "relay.ts: порт не из contract.json");
 assert.ok(/COMPUTER_SCOPES: readonly string\[\] = contract\.computer_scopes/.test(computerTs), "computer.ts: скоупы не из contract.json");
