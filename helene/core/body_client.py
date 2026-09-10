@@ -1217,6 +1217,85 @@ def format_element_act(result: dict) -> str:
     return " · ".join(bits)
 
 
+def desktop_element_find(*, hwnd: str | int | None = None,
+                         automation_id: str = "", role: str = "", name: str = "",
+                         name_contains: str = "", value_contains: str = "",
+                         limit: int | None = None, timeout_ms: int = 0,
+                         max_nodes: int | None = None, max_depth: int | None = None,
+                         execution: str = "interactive") -> dict:
+    """Найти в окне элементы по отбору — ничего не трогая.
+
+    Зачем отдельная рука, если есть чтение окна и есть действие. Затем, что между ними
+    был провал: чтобы узнать, как называется кнопка, приходилось читать ВСЁ окно (у
+    Electron это тысячи узлов) либо промахнуться отбором и прочитать кандидатов в тексте
+    ОТКАЗА. Единственным способом посмотреть прицельно была ошибка.
+
+    И второе — ожидание. `timeout_ms` здесь означает «сколько ждать ПОЯВЛЕНИЯ»: диалог,
+    который вот-вот нарисуется, дожидается этой рукой, а не паузой наугад. По умолчанию
+    ноль — «покажи, что есть сейчас».
+
+    Отбор — тот же, что у `desktop_element_act`, и это несущее свойство: нашла элемент
+    этой рукой — назови его теми же словами, когда будешь действовать.
+    """
+    select: dict[str, Any] = {}
+    for key, value in (("automation_id", automation_id), ("role", role), ("name", name),
+                       ("name_contains", name_contains), ("value_contains", value_contains)):
+        if str(value or "").strip():
+            select[key] = str(value).strip()
+    payload: dict[str, Any] = {"select": select, "timeout_ms": int(timeout_ms)}
+    if hwnd is not None:
+        payload["hwnd"] = hwnd
+    if limit is not None:
+        payload["limit"] = int(limit)
+    if max_nodes is not None:
+        payload["max_nodes"] = int(max_nodes)
+    if max_depth is not None:
+        payload["max_depth"] = int(max_depth)
+    # Тот же запас, что у действия: тело опрашивает окно до `timeout_ms`, и наш срок
+    # обязан это переживать — плюс сам обход, который у большого окна не мгновенен.
+    wait = _clamped_ms(timeout_ms, 0, 60_000) / 1000 + 20
+    return _with_server_frame(
+        call("desktop.element.find", payload, execution=execution, timeout=wait),
+        wait_s=wait, truth_field="ok",
+        truth_note=("ok:false с reason=not_found — это ответ, а не поломка; "
+                    "searched_whole_window говорит, дочитано ли окно"),
+    )
+
+
+def format_element_find(result: dict) -> str:
+    """Свернуть находки в строку. Молчаливых «нашлось 0» здесь нет."""
+    if not isinstance(result, dict):
+        return f"[windows-body] desktop.element.find не ответил: {result!r}"
+    if result.get("ok") is not True:
+        reason = str(result.get("reason") or result.get("error") or "?")
+        if reason in ("not_found", "max_nodes", "timeout"):
+            whole = result.get("searched_whole_window")
+            said = "окно дочитано" if whole else "⚠ окно ДОЧИТАНО НЕ БЫЛО"
+            return (f"не нашлось ({said}): просмотрено {result.get('nodes_scanned')} "
+                    f"элементов за {result.get('waited_ms')} мс. "
+                    f"{result.get('hint') or ''}").strip()
+        return f"[windows-body] отказ: {reason}"
+    rows = result.get("elements") or []
+    head = f"нашлось {result.get('matched')}"
+    if result.get("truncated"):
+        head += f", показаны первые {result.get('shown')}"
+    if result.get("searched_whole_window") is False:
+        head += " ⚠ окно дочитано не было — совпадений может быть больше"
+    lines = [head + ":"]
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        bits = [f"nth={i}", str(row.get("role") or "?")]
+        for key in ("name", "automation_id", "value", "class"):
+            if row.get(key):
+                bits.append(f"{key}={row[key]!r}")
+        rect = row.get("rect") or {}
+        if isinstance(rect, dict) and rect.get("center"):
+            bits.append(f"центр={rect['center'].get('x')},{rect['center'].get('y')}")
+        lines.append("  " + " · ".join(bits))
+    return "\n".join(lines)
+
+
 def desktop_screen_capture(*, target: str = "desktop", hwnd: str | int | None = None,
                            x: int | None = None, y: int | None = None,
                            width: int | None = None, height: int | None = None,

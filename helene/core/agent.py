@@ -4087,6 +4087,9 @@ _COMPUTER_ACTION_SCOPES = {
     # Здесь элемент называется тем, что переживает перерисовку (automation_id, роль,
     # надпись), и действие идёт паттерном UI Automation — координат в этом пути нет.
     "act_element": "computer.apps",
+    # Поиск ничего не меняет, но ходит по дереву чужого окна — то же право, что у
+    # чтения окна: смотреть на чужие приложения владелец разрешает отдельно.
+    "find_elements": "computer.read",
 }
 
 
@@ -4221,7 +4224,7 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
                   shape: str = "", text_contains: str = "", max_nodes: int = 0,
                   max_depth: int = 0,
                   automation_id: str = "", role: str = "", nth: int = -1,
-                  element_action: str = "") -> str:
+                  element_action: str = "", element_limit: int = 0) -> str:
     """Caller-authorized body actions; the Windows client still makes no decisions."""
     import computer_inventory
     action = str(action or "").strip().lower()
@@ -4232,7 +4235,7 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
     if not required:
         return ("action: status | inventory | list | stat | read | hash | write | replace | "
                 "send | run | poll | stop | "
-                "desktop_status | windows | read_window | act_element | activate | input | "
+                "desktop_status | windows | read_window | find_elements | act_element | activate | input | "
                 "type_text | hotkey | key | move | click | scroll | screenshot | observe | "
                 "clipboard_read | clipboard_write | processes")
     if not _computer_allowed(required):
@@ -4352,6 +4355,20 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
             execution=execution,
         )
         return body_client.format_window_read(result)
+    elif action == "find_elements":
+        # Смотреть, ничего не трогая. `timeout_ms` здесь — «сколько ждать ПОЯВЛЕНИЯ»:
+        # диалог, который вот-вот нарисуется, дожидаются этим, а не паузой наугад.
+        result = body_client.desktop_element_find(
+            hwnd=(hwnd or None),
+            automation_id=automation_id, role=role, name=name,
+            name_contains=name_contains, value_contains=text_contains,
+            limit=(int(element_limit) if element_limit else None),
+            timeout_ms=(timeout_ms if timeout_ms else 0),
+            max_nodes=(int(max_nodes) if max_nodes else None),
+            max_depth=(int(max_depth) if max_depth else None),
+            execution=execution,
+        )
+        return body_client.format_element_find(result)
     elif action == "act_element":
         # Отбор обязан быть НЕПУСТЫМ, и это проверяет тело: действовать над «любым
         # элементом окна» — промах по устройству. Двое подошедших — тоже ответ тела
@@ -7076,6 +7093,11 @@ COMPUTER_TOOL = {
         "status/inventory/list/stat are eyes; send exports an exact local path and sends the verified file to the "
         "CURRENT chat; run/poll/stop manage PowerShell processes. desktop_status/windows/read_window/activate/input/"
         "screenshot/observe/clipboard_read/clipboard_write/processes are native interactive-desktop hands (no Office COM). "
+        "find_elements looks for elements by the SAME selector without touching anything: automation_id, role, name, "
+        "name_contains or value_contains, and it answers with every match (element_limit caps how many are shown), "
+        "each named the way you would name it to act on it. timeout_ms here means HOW LONG TO WAIT FOR IT TO APPEAR — "
+        "that is how you wait for a dialog to be drawn instead of sleeping and hoping. It also says whether the whole "
+        "window was read: \"not found\" and \"I did not finish looking\" are different answers. "
         "act_element does something TO A NAMED ELEMENT instead of to a point on screen: name it with automation_id "
         "(exact), role, name or name_contains and say element_action=invoke|set_value|toggle|expand|collapse|select|"
         "scroll_into_view|focus. It goes through UI Automation patterns, so no pixels are involved: DPI, a window that "
@@ -7117,7 +7139,7 @@ COMPUTER_TOOL = {
         "action": {"type": "string", "enum": [
             "status", "inventory", "list", "stat", "read", "hash", "write", "replace",
             "send", "run", "poll", "stop",
-            "desktop_status", "windows", "read_window", "act_element", "activate", "input",
+            "desktop_status", "windows", "read_window", "find_elements", "act_element", "activate", "input",
             "type_text", "hotkey", "key", "move", "click", "scroll", "screenshot", "observe",
             "clipboard_read", "clipboard_write", "processes",
         ]},
@@ -7126,15 +7148,17 @@ COMPUTER_TOOL = {
         "text_contains": {"type": "string",
                           "description": "read_window: keep nodes whose name/value contains this text"},
         "max_nodes": {"type": "integer", "description": "read_window: cap on nodes read (body clamps)"},
-        "max_depth": {"type": "integer", "description": "read_window/act_element: cap on tree depth (body clamps)"},
+        "max_depth": {"type": "integer", "description": "read_window/act_element/find_elements: cap on tree depth (body clamps)"},
+        "element_limit": {"type": "integer",
+                          "description": "find_elements: how many matches to show (default 20, capped). Not `limit`: that one belongs to reading files, and two keys of the same name in one schema silently become one"},
         "element_action": {"type": "string",
                            "enum": ["invoke", "set_value", "toggle", "expand", "collapse",
                                     "select", "scroll_into_view", "focus"],
                            "description": "act_element: what to do to the named element"},
         "automation_id": {"type": "string",
-                          "description": "act_element: the element's AutomationId (exact, case-sensitive) — the most durable way to name it"},
+                          "description": "act_element/find_elements: the element's AutomationId (exact, case-sensitive) — the most durable way to name it"},
         "role": {"type": "string",
-                 "description": "act_element: control role as read_window reports it (button, edit, list_item...)"},
+                 "description": "act_element/find_elements: control role as read_window reports it (button, edit, list_item...)"},
         "nth": {"type": "integer",
                 "description": "act_element: which of several matches to take, from 0; omit and several matches are refused rather than guessed"},
         "path": {"type": "string"}, "caption": {"type": "string"},

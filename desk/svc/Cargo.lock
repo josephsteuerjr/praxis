@@ -64,7 +64,7 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "helene-svc"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "serde_json",
  "tauri-winres",

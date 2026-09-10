@@ -45,6 +45,15 @@ pub fn descriptors() -> Vec<CapabilityDescriptor> {
             mutating: true,
             durable: false,
         },
+        // Поиск ничего не меняет: смотрит и отвечает. Отдельным глаголом, а не режимом
+        // действия, — потому что «посмотреть» и «нажать» не должны стоять за одной
+        // ручкой: перепутанный аргумент там означал бы нажатую кнопку.
+        CapabilityDescriptor {
+            name: crate::element::FIND_CAPABILITY.into(),
+            version: crate::element::VERSION,
+            mutating: false,
+            durable: false,
+        },
     ]
 }
 
@@ -105,6 +114,13 @@ const FLOORS: Limits = Limits {
 /// Запас поверх `timeout_ms`, который ждёт вызывающая сторона: сам обход обязан уложиться
 /// в свой срок, эта разница — только на дорогу до потока и обратно.
 const WORKER_GRACE_MS: u64 = 750;
+/// Сколько даётся ОДНОМУ проходу обхода, когда ожидания не просили вовсе.
+///
+/// ⚠ Не то же, что `timeout_ms`. `timeout_ms` — «сколько ждать ПОЯВЛЕНИЯ элемента», и у
+/// поиска он по умолчанию ноль: «покажи, что есть сейчас». Обход с нулевым сроком не
+/// успел бы ни одного узла и всегда отвечал бы «не досмотрел» — то есть простой вопрос
+/// «что в окне» стал бы неотвечаемым.
+const SWEEP_MS: u64 = 2_000;
 
 /// Только для запасного пути: `WM_GETTEXT` в чужой процесс может повиснуть на зависшем
 /// окне, поэтому каждый текст спрашивается с таймаутом.
@@ -362,6 +378,10 @@ struct WindowInfo {
     rect: Option<Rect>,
     foreground: bool,
     resolved_from: &'static str,
+    /// Точек на дюйм у ЭТОГО окна (у 100 % — 96). Считать масштаб по числам
+    /// прямоугольника нельзя, а знать его нужно: два монитора с разным масштабом —
+    /// обычное дело, и «почему клик мимо» разбирается по этой строке за секунду.
+    dpi: u32,
 }
 
 impl WindowInfo {
@@ -374,6 +394,9 @@ impl WindowInfo {
             "rect": self.rect.map(|rect| rect.json()),
             "foreground": self.foreground,
             "resolved_from": self.resolved_from,
+            "dpi": self.dpi,
+            // Масштаб числом, а не отношением в уме: 1.5 читается сразу.
+            "scale": (self.dpi as f64) / 96.0,
         })
     }
 }
@@ -820,6 +843,10 @@ pub fn dispatch(capability: &str, args: Value) -> Result<Value> {
 }
 
 fn run(capability: &str, args: Value) -> Result<Value> {
+    if capability == crate::element::FIND_CAPABILITY {
+        let plan = crate::element::find_plan(args)?;
+        return platform::find(&plan);
+    }
     if crate::element::handles(capability) {
         let plan = crate::element::plan(args)?;
         return platform::act(&plan);
@@ -843,6 +870,10 @@ mod platform {
     pub fn act(_plan: &crate::element::Plan) -> Result<Value> {
         bail!("desktop.element.act requires an interactive Windows session")
     }
+
+    pub fn find(_plan: &crate::element::FindPlan) -> Result<Value> {
+        bail!("desktop.element.find requires an interactive Windows session")
+    }
 }
 
 #[cfg(windows)]
@@ -864,8 +895,8 @@ mod platform {
     use windows::Win32::UI::Accessibility::{
         AutomationElementMode_Full, CUIAutomation, ExpandCollapseState_Collapsed,
         ExpandCollapseState_Expanded, ExpandCollapseState_LeafNode,
-        ExpandCollapseState_PartiallyExpanded, IUIAutomation, IUIAutomationElement,
-        IUIAutomationExpandCollapsePattern,
+        ExpandCollapseState_PartiallyExpanded, IUIAutomation, IUIAutomationCacheRequest,
+        IUIAutomationElement, IUIAutomationExpandCollapsePattern, IUIAutomationTreeWalker,
         IUIAutomationSelectionItemPattern, IUIAutomationTextPattern, IUIAutomationTogglePattern,
         IUIAutomationValuePattern,
         ToggleState_Indeterminate, ToggleState_Off, ToggleState_On, TreeScope_Element,
@@ -882,6 +913,8 @@ mod platform {
         UIA_ScrollItemPatternId,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+    // Масштаб окна — из HiDpi: числа прямоугольника его не выдают, а знать его надо.
+    use windows::Win32::UI::HiDpi::GetDpiForWindow;
     use windows::Win32::UI::WindowsAndMessaging::{
         GW_CHILD, GW_HWNDNEXT, GetClassNameW, GetForegroundWindow, GetWindow, GetWindowRect,
         GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
@@ -1070,6 +1103,7 @@ mod platform {
             rect: window_rect(hwnd),
             foreground: unsafe { GetForegroundWindow() } == hwnd,
             resolved_from,
+            dpi: window_dpi(hwnd),
         })
     }
 
@@ -1080,21 +1114,27 @@ mod platform {
     /// масштабе; пиксель, верный секунду назад, указывает мимо. Здесь элемент не
     /// покидает COM: обход находит его, и паттерн вызывается на нём же, в том же
     /// апартаменте, за один заход. Координат в этом пути нет вовсе.
+    /// Какое окно берём: названное или переднее. Одно место на обе руки — иначе
+    /// «переднее окно» у поиска и у действия однажды разошлись бы в мелочи.
+    /// (Соседний `resolve_window` — про чтение окна и отвечает другим: там нужен
+    /// весь паспорт окна, здесь только его номер.)
+    fn target_window(said: Option<u64>) -> Result<u64> {
+        let hwnd = match said {
+            Some(value) => HWND(value as usize as *mut c_void),
+            None => unsafe { GetForegroundWindow() },
+        };
+        if hwnd.0.is_null() {
+            bail!("there is no foreground window in the interactive desktop")
+        }
+        if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+            bail!("window 0x{:X} no longer exists", hwnd.0 as usize)
+        }
+        Ok(hwnd.0 as usize as u64)
+    }
+
     pub fn act(plan: &crate::element::Plan) -> Result<Value> {
         let started = Instant::now();
-        let window = {
-            let (hwnd, _) = match plan.hwnd {
-                Some(value) => (HWND(value as usize as *mut c_void), "argument"),
-                None => (unsafe { GetForegroundWindow() }, "foreground"),
-            };
-            if hwnd.0.is_null() {
-                bail!("there is no foreground window in the interactive desktop")
-            }
-            if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
-                bail!("window 0x{:X} no longer exists", hwnd.0 as usize)
-            }
-            hwnd.0 as usize as u64
-        };
+        let window = target_window(plan.hwnd)?;
 
         let (sender, receiver) = mpsc::channel();
         let job = plan.clone();
@@ -1134,7 +1174,7 @@ mod platform {
     /// (окно рисуется), и пауза перед действием была бы гаданием. Опрос идёт до срока,
     /// и расписка говорит, сколько ждали и сколько раз смотрели.
     fn act_in_apartment(handle: u64, plan: &crate::element::Plan) -> Result<Value> {
-        use crate::element::{Choice, NodeView, choose};
+        use crate::element::{Choice, choose};
 
         let started = Instant::now();
         let deadline = started + Duration::from_millis(plan.timeout_ms);
@@ -1166,60 +1206,16 @@ mod platform {
         let mut polls = 0u64;
         loop {
             polls += 1;
-            let root = unsafe { automation.ElementFromHandleBuildCache(hwnd, &cache) }
-                .context("ElementFromHandle")?;
-            let mut found: Vec<(IUIAutomationElement, Value)> = Vec::new();
-            let mut queue: VecDeque<(IUIAutomationElement, u64)> = VecDeque::new();
-            queue.push_back((root, 0));
-            let mut scanned = 0usize;
-            let mut hit_limit: Option<&'static str> = None;
-            while let Some((element, depth)) = queue.pop_front() {
-                if scanned as u64 >= plan.max_nodes {
-                    hit_limit = Some("max_nodes");
-                    break;
-                }
-                // ⚠ Срок проверяется на КАЖДОМ проходе, включая первый. Здесь стояло
-                // `&& polls > 1` — задумано как «дай хотя бы раз посмотреть целиком», а
-                // вышло «на первом проходе таймаута нет вовсе», и самый дорогой обход
-                // оказался единственным неограниченным. Поймала живая проба 10.09.
-                if Instant::now() >= deadline {
-                    hit_limit = Some("timeout");
-                    break;
-                }
-                scanned += 1;
-                let role =
-                    role_name(unsafe { element.CachedControlType() }.unwrap_or_default().0);
-                let name = bstr(unsafe { element.CachedName() }.ok());
-                let automation_id = bstr(unsafe { element.CachedAutomationId() }.ok());
-                // Значение стоит отдельного паттерна, поэтому спрашиваем его ТОЛЬКО
-                // когда отбор про него спросил: на дереве в тысячи узлов лишний вызов на
-                // каждый — это и есть разница между «мгновенно» и «не ответило».
-                let value = if plan.select.value_contains.is_some() {
-                    cached_value(&element)
-                } else {
-                    None
-                };
-                let view = NodeView {
-                    role: &role,
-                    name: name.as_deref(),
-                    value: value.as_deref(),
-                    automation_id: automation_id.as_deref(),
-                };
-                if plan.select.matches(&view) {
-                    found.push((element.clone(), describe(&element, &role)));
-                }
-                if depth + 1 <= plan.max_depth {
-                    let mut child =
-                        unsafe { walker.GetFirstChildElementBuildCache(&element, &cache) }.ok();
-                    while let Some(current) = child {
-                        let next =
-                            unsafe { walker.GetNextSiblingElementBuildCache(&current, &cache) }
-                                .ok();
-                        queue.push_back((current, depth + 1));
-                        child = next;
-                    }
-                }
-            }
+            let (found, scanned, hit_limit) = sweep(
+                &automation,
+                &cache,
+                &walker,
+                hwnd,
+                &plan.select,
+                plan.max_nodes,
+                plan.max_depth,
+                deadline,
+            )?;
 
             let indexes: Vec<usize> = (0..found.len()).collect();
             match choose(&indexes, plan.select.nth) {
@@ -1273,6 +1269,190 @@ mod platform {
                     thread::sleep(Duration::from_millis(120));
                 }
             }
+        }
+    }
+
+    /// Обход окна ОДИН на обе руки: действие ищет, чтобы нажать, поиск — чтобы
+    /// показать. Пока их было две копии (а первая редакция поиска именно так и
+    /// начиналась), любая правка отбора чинилась бы в одном месте и оставалась
+    /// сломанной в другом — молча, потому что обе «работают».
+    ///
+    /// Возвращает: кто подошёл (элемент и его описание), сколько узлов осмотрено и во
+    /// что упёрся обход (`max_nodes`, `timeout`) или `None`, если дочитал окно.
+    #[allow(clippy::too_many_arguments)]
+    fn sweep(
+        automation: &IUIAutomation,
+        cache: &IUIAutomationCacheRequest,
+        walker: &IUIAutomationTreeWalker,
+        hwnd: HWND,
+        select: &crate::element::Selector,
+        max_nodes: u64,
+        max_depth: u64,
+        deadline: Instant,
+    ) -> Result<(Vec<(IUIAutomationElement, Value)>, usize, Option<&'static str>)> {
+        use crate::element::NodeView;
+
+        let root = unsafe { automation.ElementFromHandleBuildCache(hwnd, cache) }
+            .context("ElementFromHandle")?;
+        let mut found: Vec<(IUIAutomationElement, Value)> = Vec::new();
+        let mut queue: VecDeque<(IUIAutomationElement, u64)> = VecDeque::new();
+        queue.push_back((root, 0));
+        let mut scanned = 0usize;
+        let mut hit_limit: Option<&'static str> = None;
+        while let Some((element, depth)) = queue.pop_front() {
+            if scanned as u64 >= max_nodes {
+                hit_limit = Some("max_nodes");
+                break;
+            }
+            // ⚠ Срок проверяется на КАЖДОМ проходе, включая первый. Здесь стояло
+            // `&& polls > 1` — задумано как «дай хотя бы раз посмотреть целиком», а
+            // вышло «на первом проходе таймаута нет вовсе», и самый дорогой обход
+            // оказался единственным неограниченным. Поймала живая проба 10.09.
+            if Instant::now() >= deadline {
+                hit_limit = Some("timeout");
+                break;
+            }
+            scanned += 1;
+            let role = role_name(unsafe { element.CachedControlType() }.unwrap_or_default().0);
+            let name = bstr(unsafe { element.CachedName() }.ok());
+            let automation_id = bstr(unsafe { element.CachedAutomationId() }.ok());
+            // Значение стоит отдельного паттерна, поэтому спрашиваем его ТОЛЬКО
+            // когда отбор про него спросил: на дереве в тысячи узлов лишний вызов на
+            // каждый — это и есть разница между «мгновенно» и «не ответило».
+            let value = if select.value_contains.is_some() {
+                cached_value(&element)
+            } else {
+                None
+            };
+            let view = NodeView {
+                role: &role,
+                name: name.as_deref(),
+                value: value.as_deref(),
+                automation_id: automation_id.as_deref(),
+            };
+            if select.matches(&view) {
+                found.push((element.clone(), describe(&element, &role)));
+            }
+            if depth + 1 <= max_depth {
+                let mut child =
+                    unsafe { walker.GetFirstChildElementBuildCache(&element, cache) }.ok();
+                while let Some(current) = child {
+                    let next =
+                        unsafe { walker.GetNextSiblingElementBuildCache(&current, cache) }.ok();
+                    queue.push_back((current, depth + 1));
+                    child = next;
+                }
+            }
+        }
+        Ok((found, scanned, hit_limit))
+    }
+
+    /// Поиск по дереву окна: показать, кто подошёл, ничего не трогая.
+    pub fn find(plan: &crate::element::FindPlan) -> Result<Value> {
+        let window = target_window(plan.hwnd)?;
+        let (sender, receiver) = mpsc::channel();
+        let job = plan.clone();
+        UIA_WORKERS.fetch_add(1, Ordering::SeqCst);
+        let spawned = thread::Builder::new()
+            .name("praxis-uia-find".into())
+            .spawn(move || {
+                let _apartment = ComApartment::enter();
+                let outcome = find_in_apartment(window, &job);
+                let _ = sender.send(outcome);
+                UIA_WORKERS.fetch_sub(1, Ordering::SeqCst);
+            });
+        if let Err(error) = spawned {
+            UIA_WORKERS.fetch_sub(1, Ordering::SeqCst);
+            bail!("could not start the uia worker thread: {error}")
+        }
+        let grace = Duration::from_millis(plan.timeout_ms + WORKER_GRACE_MS * 2);
+        match receiver.recv_timeout(grace) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => bail!(
+                "UI Automation did not answer within timeout_ms={} plus grace; \
+                 the target window is probably busy and its worker thread is still running",
+                plan.timeout_ms
+            ),
+            Err(RecvTimeoutError::Disconnected) => {
+                bail!("the uia worker thread died without answering")
+            }
+        }
+    }
+
+    fn find_in_apartment(handle: u64, plan: &crate::element::FindPlan) -> Result<Value> {
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(plan.timeout_ms);
+        let hwnd = HWND(handle as usize as *mut c_void);
+        let automation: IUIAutomation =
+            unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
+                .context("CoCreateInstance(CUIAutomation)")?;
+        let cache = unsafe { automation.CreateCacheRequest() }.context("CreateCacheRequest")?;
+        let view = unsafe { automation.ControlViewCondition() }.context("ControlViewCondition")?;
+        unsafe {
+            cache.SetTreeScope(TreeScope_Element)?;
+            cache.SetTreeFilter(&view)?;
+            cache.SetAutomationElementMode(AutomationElementMode_Full)?;
+            for property in CACHED_PROPERTIES {
+                cache.AddProperty(*property)?;
+            }
+            for pattern in CACHED_PATTERNS {
+                cache.AddPattern(*pattern)?;
+            }
+        }
+        let walker = unsafe { automation.ControlViewWalker() }.context("ControlViewWalker")?;
+
+        let mut polls = 0u64;
+        loop {
+            polls += 1;
+            // ⚠ Обход всегда ограничен сроком ПРОСЬБЫ, но у поиска срок бывает нулевой
+            // («посмотри сейчас»), и обход с нулевым сроком не успел бы ничего. Поэтому
+            // одному проходу даётся собственный потолок: он не про ожидание элемента, а
+            // про «дочитать окно», и в расписке видно, дочитал ли.
+            let sweep_by = Instant::now() + Duration::from_millis(super::SWEEP_MS);
+            let by = if deadline > sweep_by { deadline } else { sweep_by };
+            let (found, scanned, hit_limit) = sweep(
+                &automation,
+                &cache,
+                &walker,
+                hwnd,
+                &plan.select,
+                plan.max_nodes,
+                plan.max_depth,
+                by,
+            )?;
+            if !found.is_empty() || Instant::now() >= deadline {
+                let matched = found.len();
+                let shown: Vec<Value> = found
+                    .into_iter()
+                    .take(plan.limit)
+                    .map(|(_, json)| json)
+                    .collect();
+                if matched == 0 {
+                    // Пусто — это тот же честный развилочный ответ, что у действия:
+                    // «такого нет» и «я не досмотрел» — разные вещи.
+                    let (reason, hint) = crate::element::not_found(hit_limit, false, false);
+                    return Ok(serde_json::json!({
+                        "ok": false,
+                        "reason": reason,
+                        "matched": 0,
+                        "nodes_scanned": scanned,
+                        "searched_whole_window": hit_limit.is_none(),
+                        "waited_ms": started.elapsed().as_millis() as u64,
+                        "polls": polls,
+                        "hint": hint,
+                    }));
+                }
+                return Ok(crate::element::find_receipt(
+                    plan,
+                    matched,
+                    shown,
+                    scanned,
+                    hit_limit.is_none(),
+                    started.elapsed().as_millis() as u64,
+                    polls,
+                ));
+            }
+            thread::sleep(Duration::from_millis(120));
         }
     }
 
@@ -1799,6 +1979,13 @@ mod platform {
         }
     }
 
+    /// Точек на дюйм у окна. Ноль от системы (старая Windows, окно уже закрыто)
+    /// заменяем на 96: соврать «масштаб ноль» хуже, чем сказать «обычный».
+    fn window_dpi(hwnd: HWND) -> u32 {
+        let got = unsafe { GetDpiForWindow(hwnd) };
+        if got == 0 { 96 } else { got }
+    }
+
     fn window_rect(hwnd: HWND) -> Option<Rect> {
         let mut rect = RECT::default();
         unsafe { GetWindowRect(hwnd, &mut rect) }
@@ -1905,6 +2092,7 @@ mod tests {
         render(Rendered {
             plan,
             window: &WindowInfo {
+                dpi: 96,
                 hwnd: 0x1234,
                 title: "Notepad".into(),
                 class: "Notepad".into(),
@@ -1928,14 +2116,30 @@ mod tests {
         })
     }
 
+    /// ⚠ Стенд назывался «ровно один глагол» и ждал одного descriptor — с 10.09,
+    /// когда рядом появилось действие над элементом, он был КРАСНЫМ и оставался
+    /// таким: прогон в её дереве шёл, а эту строку никто не читал. Теперь он
+    /// перечисляет глаголы поимённо: добавили новый — стенд скажет, какой именно,
+    /// а не «числа не сошлись».
     #[test]
-    fn the_module_declares_exactly_one_verb() {
+    fn the_module_declares_its_verbs_by_name() {
         assert!(handles(CAPABILITY));
+        assert!(handles(crate::element::CAPABILITY));
+        assert!(handles(crate::element::FIND_CAPABILITY));
         assert!(!handles("desktop.window.list"));
-        let descriptors = descriptors();
-        assert_eq!(descriptors.len(), 1);
-        assert_eq!(descriptors[0].name, CAPABILITY);
-        assert!(!descriptors[0].mutating);
+        let names: Vec<String> = descriptors().into_iter().map(|d| d.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                CAPABILITY.to_string(),
+                crate::element::CAPABILITY.to_string(),
+                crate::element::FIND_CAPABILITY.to_string(),
+            ]
+        );
+        // Чтение и поиск смотрят, действие меняет — и манифест обязан обещать по
+        // худшему: чем именно кончится `invoke`, до вызова не знает никто.
+        let mutating: Vec<bool> = descriptors().into_iter().map(|d| d.mutating).collect();
+        assert_eq!(mutating, vec![false, true, false]);
         let adapter = adapter_descriptor();
         assert_eq!(adapter.capabilities, vec![CAPABILITY.to_string()]);
         assert_eq!(adapter.available, cfg!(windows));
@@ -2192,6 +2396,7 @@ mod tests {
         let value = render(Rendered {
             plan: &plan,
             window: &WindowInfo {
+                dpi: 96,
                 hwnd: 0x1234,
                 title: "Быстрые настройки".into(),
                 class: "ControlCenterWindow".into(),

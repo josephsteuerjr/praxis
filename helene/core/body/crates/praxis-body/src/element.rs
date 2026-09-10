@@ -38,14 +38,26 @@ use anyhow::{Result, bail};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-/// Единственный глагол модуля.
+/// Глаголы модуля: сделать над элементом и найти элемент.
 pub const CAPABILITY: &str = "desktop.element.act";
+/// Поиск по дереву ОТДЕЛЬНОЙ рукой.
+///
+/// ⚠ Зачем он, если есть чтение окна и есть действие. Затем, что между ними снова был
+/// провал, и живая проба 10.09 показала его цену: чтобы узнать, как называется кнопка,
+/// приходилось читать ВСЁ окно (у Electron это тысячи узлов и обход, упирающийся в
+/// срок) — либо промахнуться отбором и прочитать кандидатов в тексте ОТКАЗА. То есть
+/// единственным способом посмотреть на дерево прицельно была ошибка.
+///
+/// И второе: ожидание. «Дождаться, пока появится диалог» раньше значило «поспать
+/// секунду и надеяться». Здесь ожидание — часть просьбы: ищем до `timeout_ms`, и
+/// расписка говорит, сколько ждали и сколько раз смотрели.
+pub const FIND_CAPABILITY: &str = "desktop.element.find";
 pub const VERSION: u32 = 1;
 
 /// Диспетчер спрашивает это ПЕРЕД общей веткой `starts_with("desktop.")`: имя начинается
 /// с того же префикса, и общая ветка увела бы его в `desktop::dispatch`, где его нет.
 pub fn handles(capability: &str) -> bool {
-    capability == CAPABILITY
+    capability == CAPABILITY || capability == FIND_CAPABILITY
 }
 
 /// Что можно сделать над элементом. Каждое — отдельный паттерн UI Automation, и ни одно
@@ -342,6 +354,108 @@ pub fn plan(args: Value) -> Result<Plan> {
     })
 }
 
+/// Аргументы поиска. Отбор тот же, что у действия, — одно правило именования на две
+/// руки; `nth` здесь бессмысленно (возвращаем всех, кто подошёл), а `limit` — нужен.
+#[derive(Debug, Deserialize)]
+struct FindArgs {
+    hwnd: Option<Value>,
+    #[serde(default)]
+    select: SelectArgs,
+    /// Сколько кандидатов вернуть. Ответ читает модель, и «все три тысячи» — не ответ.
+    limit: Option<u64>,
+    /// Сколько ждать ПЕРВОГО совпадения. 0 — посмотреть один раз и ответить как есть.
+    timeout_ms: Option<u64>,
+    max_nodes: Option<u64>,
+    max_depth: Option<u64>,
+}
+
+/// Разобранная просьба поиска.
+#[derive(Debug, Clone)]
+pub struct FindPlan {
+    pub hwnd: Option<u64>,
+    pub select: Selector,
+    pub limit: usize,
+    pub timeout_ms: u64,
+    pub max_nodes: u64,
+    pub max_depth: u64,
+}
+
+const LIMIT_DEFAULT: u64 = 20;
+const LIMIT_CAP: u64 = 200;
+
+pub fn find_plan(args: Value) -> Result<FindPlan> {
+    let args: FindArgs = serde_json::from_value(args)
+        .map_err(|e| anyhow::anyhow!("{FIND_CAPABILITY} arguments: {e}"))?;
+    let trim = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let select = Selector {
+        automation_id: trim(args.select.automation_id),
+        role: trim(args.select.role),
+        name: trim(args.select.name),
+        name_contains: trim(args.select.name_contains),
+        value_contains: trim(args.select.value_contains),
+        // ⚠ `nth` в поиске молча игнорировать нельзя: она сказала бы «третий», получила
+        // бы всех и решила, что отбор её не понял. Лучше сказать словами.
+        nth: None,
+    };
+    if args.select.nth.is_some() {
+        bail!(
+            "nth belongs to {CAPABILITY}: find returns every match, and picking one from \
+             them is what nth is for when you act"
+        );
+    }
+    if select.is_empty() {
+        bail!(
+            "select is empty: name what to look for by automation_id, role, name, \
+             name_contains or value_contains. To see the whole window there is \
+             desktop.window.read"
+        );
+    }
+    Ok(FindPlan {
+        hwnd: match args.hwnd {
+            Some(value) => Some(hwnd_of(&value)?),
+            None => None,
+        },
+        select,
+        limit: clamp(args.limit, LIMIT_DEFAULT, LIMIT_CAP) as usize,
+        // Умолчание ЗДЕСЬ ноль, а не три секунды: поиск чаще спрашивают «что там
+        // сейчас», и молчаливое ожидание превращало бы простой вопрос в паузу.
+        // Ждать просят явно.
+        timeout_ms: args.timeout_ms.unwrap_or(0).min(TIMEOUT_CAP_MS),
+        max_nodes: clamp(args.max_nodes, MAX_NODES_DEFAULT, MAX_NODES_CAP),
+        max_depth: clamp(args.max_depth, MAX_DEPTH_DEFAULT, MAX_DEPTH_CAP),
+    })
+}
+
+/// Расписка поиска. `matched` — сколько подошло всего, `elements` — сколько показано.
+///
+/// `searched_whole_window` здесь по той же причине, что и у действия: «не нашлось» и
+/// «не досмотрел» — разные ответы, и путать их нельзя.
+pub fn find_receipt(
+    plan: &FindPlan,
+    matched: usize,
+    elements: Vec<Value>,
+    scanned: usize,
+    whole: bool,
+    waited_ms: u64,
+    polls: u64,
+) -> Value {
+    let shown = elements.len();
+    json!({
+        "ok": true,
+        "select": plan.select.json(),
+        "matched": matched,
+        "shown": shown,
+        "truncated": matched > shown,
+        "elements": elements,
+        "nodes_scanned": scanned,
+        "searched_whole_window": whole,
+        "waited_ms": waited_ms,
+        "polls": polls,
+        "note": "ids are not part of this answer on purpose: name the element the same \
+                 way when you act on it (desktop.element.act)",
+    })
+}
+
 /// Тот же разбор, что у чтения окна: и `"0x1F4"`, и `"500"`, и `500`.
 fn hwnd_of(value: &Value) -> Result<u64> {
     let parsed = match value {
@@ -443,6 +557,46 @@ mod tests {
             automation_id: id,
             value: None,
         }
+    }
+
+    #[test]
+    fn find_refuses_an_empty_selector_and_points_at_reading_the_window() {
+        let error = find_plan(json!({})).unwrap_err().to_string();
+        assert!(error.contains("select is empty"), "{error}");
+        assert!(error.contains("desktop.window.read"), "куда идти за всем окном: {error}");
+    }
+
+    #[test]
+    fn find_says_that_nth_is_not_its_word() {
+        let error = find_plan(json!({"select": {"role": "button", "nth": 2}}))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("nth belongs to"), "{error}");
+    }
+
+    #[test]
+    fn find_waits_only_when_asked() {
+        // Умолчание — посмотреть один раз: «что там сейчас» не должно превращаться
+        // в паузу. Ждать просят явно, и потолок ожидания тот же, что у действия.
+        let quick = find_plan(json!({"select": {"role": "button"}})).unwrap();
+        assert_eq!(quick.timeout_ms, 0);
+        assert_eq!(quick.limit, LIMIT_DEFAULT as usize);
+        let waiting = find_plan(json!({"select": {"role": "button"}, "timeout_ms": 999_999}))
+            .unwrap();
+        assert_eq!(waiting.timeout_ms, TIMEOUT_CAP_MS);
+        let many = find_plan(json!({"select": {"role": "button"}, "limit": 9_999})).unwrap();
+        assert_eq!(many.limit, LIMIT_CAP as usize);
+    }
+
+    #[test]
+    fn find_receipt_says_when_it_showed_fewer_than_it_found() {
+        let plan = find_plan(json!({"select": {"role": "button"}, "limit": 2})).unwrap();
+        let shown = vec![json!({"role": "button"}), json!({"role": "button"})];
+        let receipt = find_receipt(&plan, 7, shown, 120, true, 0, 1);
+        assert_eq!(receipt["matched"], 7);
+        assert_eq!(receipt["shown"], 2);
+        assert_eq!(receipt["truncated"], true);
+        assert_eq!(receipt["searched_whole_window"], true);
     }
 
     #[test]
