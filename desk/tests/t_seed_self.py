@@ -16,7 +16,10 @@ import unittest
 from pathlib import Path
 
 DESK = Path(__file__).resolve().parents[1]
-LIVE = DESK.parent / "live"
+sys.path.insert(0, str(DESK))
+import layout  # noqa: E402 — где на диске лежит рабочая копия дерева
+
+LIVE = layout.tree()
 sys.path.insert(0, str(DESK / "localharness"))
 sys.path.insert(0, str(LIVE))          # self_model живёт в дереве агента
 

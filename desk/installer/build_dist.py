@@ -100,8 +100,10 @@ DESK = Path(__file__).resolve().parent.parent
 ROOT = DESK.parent
 sys.path.insert(0, str(DESK))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import layout  # noqa: E402 — где на диске лежат соседи раскладки
 import deskpkg  # noqa: E402 — объявление пакета desk живёт в репозитории, а не в сборке
 import relay_src  # noqa: E402 — происхождение исходника реле
+import core_src  # noqa: E402 — ядро, слой издания и расхождение между ними
 
 # Зависимости ДЕРЕВА: то, что импортирует ход (agent/llm/webtool).
 # Aiogram/paramiko/stt — другие тела, в продукт не едут; cryptography не нужна
@@ -124,18 +126,15 @@ SMOKE_IMPORTS = ("anthropic", "openai", "httpx", "dotenv", "PIL",
 APP_DIST = DESK / "app" / "dist"     # UI окна — сборка Vite (npm --prefix app run build)
 MOBILE_DIST = DESK / "mobile" / "dist"   # PWA телефона (npm --prefix mobile run build)
 
-# Дерево агента живёт в СОСЕДНЕМ репозитории. Раньше путь был единственной
-# константой: нет папки — rglob по несуществующему каталогу молча отдаёт
-# пустой список, и сборка выпускала архив без tree/ и без единого слова.
-LIVE_DEFAULT = ROOT / "live"
-# Куда собираются мост и тело (крейты tree/body): рядом с репозиториями, не в
-# `live/` — дерево Праксис при сборке остаётся чистым.
-BODY_TARGET = ROOT / "_body_target" / "release"
+# Дерево агента, зеркало реле и цель сборки тела лежат РЯДОМ с раскладкой, а не
+# в ней. Где именно — знает `layout.py`, и знает один он: до 10.09 этот путь был
+# жёсткой константой в четырёх местах сразу.
+LIVE_DEFAULT = layout.neighbour("live")
+BODY_TARGET = layout.body_target()
 
 
 def live_root(cli: str | None) -> Path:
-    src = cli or os.environ.get("HELENE_TREE_SRC") or ""
-    return Path(src).resolve() if src.strip() else LIVE_DEFAULT
+    return layout.tree(cli)
 
 
 # --- отбор файлов дерева ------------------------------------------------------
@@ -1033,6 +1032,79 @@ PRAXIS_JSON = """{
 """
 
 
+def core_provenance(live: Path) -> dict:
+    """Какого ядра эта поставка — и насколько объявленное издание сходится с делом.
+
+    Раскладка 10.09 объявила: ядро в `praxis/`, издание Элен СЛОЕМ в
+    `helene/core`. Пока это объявление никто не проверял, оно значило ровно
+    столько же, сколько до 09.09 значило происхождение реле, — то есть ничего.
+
+    Проверено 10.09 прибором `core_src.py --check`: выложенное ядро — её экспорт
+    от 13.08, а поставка везёт рабочую копию, которая отслеживает её прод. Итог:
+    47 файлов расходятся, не будучи объявленными (её же починки после 13.08), и
+    7 объявлены зря — числа `EDITION.md` мерились против её ЖИВОГО дерева, а не
+    против выложенного ядра. Значит наложение «ядро + слой» наше дерево сегодня
+    не воспроизводит, и собирать из него — это выпустить ядро месячной давности.
+
+    Поэтому здесь не отказ, а ЗАПИСЬ: поставка едет из рабочей копии (как и
+    ехала), а паспорт честно говорит, чем в этот момент были выложенные ядро и
+    слой и как далеко от них уехало то, что действительно поехало. Отказ стоит
+    там, где ему место, — на сборке ИЗ ядра (`--from-core`).
+    """
+    try:
+        note = core_src.passport(core_src.CORE_DEFAULT, core_src.LAYER_DEFAULT)
+    except OSError:
+        print("  ⚠ ядро и слой не прочитались — паспорт о них промолчит")
+        return {}
+    core, layer = note["core"], note["layer"]
+    print(f"  ядро {core['path']}: {core['files']} файлов, отпечаток {core['digest'][:12]}"
+          f"{' @ ' + core['head'] if core['head'] else ''}"
+          f"{' (грязное)' if core['dirty'] else ''}")
+    print(f"  слой {layer['files']} файлов, отпечаток {layer['digest'][:12]}")
+
+    drift = core_src.compare(core_src.CORE_DEFAULT, core_src.LAYER_DEFAULT, live)
+    note["drift"] = {"undeclared": len(drift["undeclared"]), "stale": len(drift["stale"]),
+                     "only_ours": len(drift["only_ours"]),
+                     "declared_ok": len(drift["declared_ok"]),
+                     "names_undeclared": drift["undeclared"], "names_stale": drift["stale"]}
+    if drift["undeclared"] or drift["stale"]:
+        print(f"  ⚠ слой и дело разъехались: не объявлено {len(drift['undeclared'])}, "
+              f"объявлено зря {len(drift['stale'])} — "
+              "python installer/core_src.py --check")
+        print("    (поставка едет из рабочей копии — это записано в паспорте)")
+    else:
+        print("  слой сходится с фактической разницей")
+    return note
+
+
+def assemble_from_core(dest: Path, core: Path, layer: Path) -> int:
+    """Собрать дерево как «ядро + слой»: сперва ядро, поверх — файлы издания.
+
+    ⚠ Отказывается собирать, пока слой не описывает издание целиком. Иначе это
+    не сборка из ядра, а сборка из ЧУЖОГО дерева под именем нашего: файл, который
+    расходится и не объявлен, приедет в поставку в редакции ядра — молча и без
+    следа. Ровно тот класс, из-за которого 09.09 в поставку уехало чужое реле.
+    """
+    drift = core_src.compare(core, layer, live_root(None))
+    if drift["undeclared"] or drift["stale"]:
+        raise SystemExit(
+            f"из ядра собрать нельзя: слой не описывает издание.\n"
+            f"  не объявлено, но расходится: {len(drift['undeclared'])}\n"
+            f"  объявлено зря (совпадает):   {len(drift['stale'])}\n"
+            "Подробно — python installer/core_src.py --check\n"
+            "Чаще всего это значит, что выложенное ядро отстало от живого: свежий "
+            "экспорт зеркала делает она сама.")
+    dest.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for src_root in (core, layer):
+        for rel, path in core_src.files(src_root).items():
+            target = dest / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+            n += 1
+    return n
+
+
 def relay_provenance(exe: Path, allow_partial: bool) -> dict:
     """Из чего собран `helene-relay.exe` в этой поставке.
 
@@ -1185,6 +1257,10 @@ def main() -> None:
     parser.add_argument("--variant", choices=("helene", "praxis"), default="helene",
                         help="helene — полная поставка Hélène (по умолчанию); praxis — Пульт "
                              "Praxis: то же окно в режиме remote, без ядра, рантайма и тела")
+    parser.add_argument("--from-core", action="store_true",
+                        help="собрать дерево как «ядро (../praxis) + слой (../helene/core)», "
+                             "а не из рабочей копии. Откажется, пока слой не описывает "
+                             "издание целиком — см. installer/core_src.py --check")
     args = parser.parse_args()
     if args.variant == "praxis":
         build_praxis_pult(args)
@@ -1198,6 +1274,16 @@ def main() -> None:
         raise SystemExit(
             f"нет дерева агента: {live}\n"
             "оно лежит в СОСЕДНЕМ репозитории. Укажи путь: --tree PATH или HELENE_TREE_SRC")
+
+    if args.from_core:
+        # Дерево собирается из объявленной раскладки, а не берётся с диска.
+        # Проверка перед копированием, а не после: собрать и потом сказать
+        # «кстати, оно не то» — это и есть тихий выпуск чужого дерева.
+        staged_tree = Path(args.out).resolve() / "core-tree"
+        shutil.rmtree(staged_tree, ignore_errors=True)
+        n = assemble_from_core(staged_tree, core_src.CORE_DEFAULT, core_src.LAYER_DEFAULT)
+        print(f"дерево собрано из ядра и слоя: {n} файлов -> {staged_tree}")
+        live = staged_tree
 
     print(f"Hélène {version}")
     print(f"дистрибутив -> {out}")
@@ -1385,6 +1471,7 @@ def main() -> None:
     print("паспорт сборки:")
     desk_head, desk_dirty = _git_field(DESK, "desk")
     tree_head, tree_dirty = _git_field(live, "дерево агента")
+    core = core_provenance(live)
     manifest = {
         "product": "Hélène",
         "version": version,
@@ -1407,6 +1494,11 @@ def main() -> None:
         # Реле: единственный бинарь, исходник которого лежит вне обоих
         # репозиториев. Отпечаток исходника и записка о происхождении — здесь.
         "relay": relay or None,
+        # Ядро и слой издания — ДВА отпечатка, а не один по собранному дереву:
+        # собранное дерево не отвечает на вопрос «какого ядра эта поставка», а
+        # он и есть главный. Плюс расхождение объявленного слоя с делом, чтобы
+        # его нельзя было не заметить (см. core_provenance).
+        "core": core or None,
         "desk": {"version": staged["desk"]["version"],
                  "flavor": staged["desk"]["flavor"],
                  "digest": staged["desk"]["digest"],

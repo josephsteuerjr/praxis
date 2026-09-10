@@ -34,7 +34,10 @@ from pathlib import Path
 
 DESK = Path(__file__).resolve().parent.parent
 ROOT = DESK.parent
-MIRROR = ROOT / "_relay_prod_src"
+sys.path.insert(0, str(DESK))
+import layout  # noqa: E402 — где на диске лежат соседи раскладки
+
+MIRROR = layout.relay_mirror()
 STAMP = "RELAY-SOURCE.json"
 BUILT = "RELAY-BUILD.json"
 REMOTE_DEFAULT = "/opt/relay/Code"

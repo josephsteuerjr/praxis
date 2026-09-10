@@ -280,9 +280,11 @@ class Launch(unittest.TestCase):
 
 
 def _built_pair() -> Path | None:
-    override = os.environ.get("HELENE_BODY_DIR")
-    candidates = [Path(override)] if override else []
-    candidates.append(HERE.parent.parent / "_body_target" / "release")
+    # Место сборки тела знает `layout` — и знает один он: до 10.09 этот путь
+    # был жёстко вписан здесь, в сборке и в приборе реле сразу.
+    sys.path.insert(0, str(HERE.parent))
+    import layout  # noqa: PLC0415
+    candidates = [layout.body_target()]
     for base in candidates:
         if (base / "praxis-body.exe").is_file() and (base / "praxis-bridge.exe").is_file():
             return base

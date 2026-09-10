@@ -15,7 +15,12 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 BOOT = tempfile.TemporaryDirectory(prefix="helene-core-import-")
 os.environ["PRAXIS_BASE"] = BOOT.name
-sys.path[:0] = [str(ROOT / "localharness"), str(ROOT), str(ROOT.parent / "live")]
+sys.path.insert(0, str(ROOT))
+import layout  # noqa: E402 — где на диске лежит рабочая копия дерева
+# ⚠ Не `ROOT.parent / "live"`: после переезда 10.09 `desk/` живёт внутри
+# репозитория `praxis`, а дерево — рядом с ним. Место знает `layout`, и знает
+# один он.
+sys.path[:0] = [str(ROOT / "localharness"), str(ROOT), str(layout.tree())]
 
 import agent
 import media
