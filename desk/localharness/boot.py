@@ -276,7 +276,8 @@ def seed_self(tree: Path, cfg: dict) -> bool:
 
 # Что НЕ снимок его работы: память и журналы ведёт код дерева на каждом ходе,
 # ключи (memory/llm.json, relay/local_auth) в историю не кладут никогда,
-# смонтированное (workspace/mnt) — чужие папки владельца.
+# смонтированное (workspace/mnt) — чужие папки владельца, модели голоса
+# (models/) — снаряжение машины весом в гигабайты.
 _GIT_IGNORE = """\
 # Личный репозиторий агента: снимки ЕГО правок — конституции, голоса, записи о
 # себе, навыков, рабочих файлов. Память, журналы, ключи и смонтированное —
@@ -285,6 +286,9 @@ memory/
 relay/
 telegram/
 body/
+# Модели голоса: полтора гигабайта снаряжения машины. В снимках правок агента им
+# не место — и попади они туда, личный репозиторий распух бы до неподъёмного.
+models/
 *.log
 *.sqlite3
 *.sqlite3-*
@@ -296,6 +300,42 @@ workspace/mnt/
 workspace/media/
 __pycache__/
 """
+
+
+#: Строки, без которых личный git агента набирает то, чему в снимках не место.
+#: Проверяются и в СУЩЕСТВУЮЩЕМ файле: он пишется один раз при заведении
+#: репозитория, а список с тех пор пополнялся — и у того, кто поставил продукт
+#: раньше, в снимки уехали бы гигабайты моделей голоса (снимок делает `add -A`).
+_IGNORE_MUST = ("memory/", "relay/", "telegram/", "body/", "models/",
+                "workspace/mnt/", "workspace/.fence/", "workspace/.tmp/")
+
+
+def _top_up_ignore(path: Path) -> list[str]:
+    """Дописать в существующий `.gitignore` то, чего в нём не хватает.
+
+    Файл не переписывается целиком намеренно: агент дописывает в него своё, и
+    затирать его правки ради нашей строки нельзя.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    have = {line.strip() for line in text.splitlines()}
+    missing = [item for item in _IGNORE_MUST if item not in have]
+    if not missing:
+        return []
+    head = ("\n# Дописано продуктом: этих строк не было, а без них в снимки правок\n"
+            "# агента попадает то, что снимком его работы не является.\n")
+    try:
+        with path.open("a", encoding="utf-8", newline="\n") as fh:
+            if not text.endswith("\n"):
+                fh.write("\n")
+            fh.write(head + "\n".join(missing) + "\n")
+    except OSError as exc:
+        log.warning("личный git: .gitignore не дополнен (%s): %s", path, exc)
+        return []
+    log.info("личный git: в .gitignore дописано %s", ", ".join(missing))
+    return missing
 
 
 def git_exe() -> Path | None:
@@ -363,6 +403,8 @@ def seed_git(tree: Path, cfg: dict) -> bool:
         ignore = tree / ".gitignore"
         if not ignore.exists():
             ignore.write_text(_GIT_IGNORE, encoding="utf-8", newline="\n")
+        else:
+            _top_up_ignore(ignore)
         steps = (
             ("init", "-q", "-b", "main"),
             ("config", "user.name", agent_name(cfg)),

@@ -82,5 +82,37 @@ class SeedGit(unittest.TestCase):
         self.assertIn("soul/skills/wanting.md", status)
 
 
+class IgnoreTopUp(unittest.TestCase):
+    """`.gitignore` пишется ОДИН раз, а список растёт — старый дом надо лечить.
+
+    Прямой повод: голос (0.5.2) кладёт модели в `data/models` — от 480 МБ до
+    1,6 ГБ. Снимок правок агента делает `git add -A`; у того, кто завёл дом
+    раньше, эти гигабайты уехали бы в его личную историю и остались бы там
+    навсегда. Поэтому существующий файл дополняется недостающим — и только им.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / ".gitignore"
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_дописывает_только_недостающее(self):
+        self.path.write_text("memory/\nrelay/\nсвоё-агента/\n", encoding="utf-8")
+        added = boot._top_up_ignore(self.path)
+        self.assertIn("models/", added)
+        self.assertNotIn("memory/", added)
+        text = self.path.read_text(encoding="utf-8")
+        self.assertIn("своё-агента/", text, "правки агента остаются на месте")
+        self.assertEqual(text.count("memory/"), 1, "уже бывшая строка не задваивается")
+
+    def test_второй_раз_молчит(self):
+        self.path.write_text("\n".join(boot._IGNORE_MUST) + "\n", encoding="utf-8")
+        self.assertEqual(boot._top_up_ignore(self.path), [])
+
+    def test_модели_голоса_в_обязательном_списке(self):
+        self.assertIn("models/", boot._IGNORE_MUST)
+        self.assertIn("models/", boot._GIT_IGNORE)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
