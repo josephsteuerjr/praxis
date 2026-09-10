@@ -55,6 +55,14 @@ const LESSON: Record<string, string> = {
   terminal: "Терминальная расписка прогона: статус, причина, RECAP. По ней ход можно разобрать и через месяц.",
 };
 
+/** Одна рука глазами ограды: что трогает, накрыта ли и почему. */
+interface HandFence {
+  name: string;
+  touches: string;
+  fence: "path" | "container" | "outside" | "unknown";
+  why: string;
+}
+
 interface Anatomy {
   written_at?: string;
   agent_name?: string;
@@ -65,7 +73,14 @@ interface Anatomy {
   // владельца стояла выдумка окна, и она пережила исправление в харнессе
   // именно потому, что была копией. Здесь копии нет — только то, что прислал
   // снимок.
-  sandbox?: { enabled?: boolean; container?: boolean; reason?: string; windows?: string };
+  // `hands` — поимённо, какая рука в ограде, а какая нет. Присылает харнесс
+  // (`fence.hands_report`), считая это из живого набора рук, а не из списка на
+  // экране: своя копия здесь означала бы, что окно рассказывает про ограду то,
+  // чего в ограде нет. Пусто = старый харнесс рядом с новым окном.
+  sandbox?: {
+    enabled?: boolean; container?: boolean; reason?: string; windows?: string;
+    hands?: HandFence[];
+  };
   // Тело руки `computer` (localharness/body.py): включено ли владельцем, есть
   // ли exe в поставке, подключилось ли на момент снимка, какие права выданы.
   computer?: { enabled?: boolean; available?: boolean; reason?: string; port?: number; scopes?: string[]; connected?: boolean | null };
@@ -123,6 +138,37 @@ function modeHTML(m: ModeState | null): string {
       <p class="muted">${esc(facts.join(" · "))}</p>
       ${warn.map((n) => `<p class="receipt err">${esc(n)}</p>`).join("")}
       <p class="muted">Сменить режим — «Настройки», карточка «Режим».</p>
+    </div>`;
+}
+
+/**
+ * Ограда поимённо: какая рука накрыта, какая нет и почему.
+ *
+ * ⚠ Зачем эта карточка вообще есть. До 10.09 экран говорил одну строку —
+ * «песочница: shell в контейнере» — и на этом умолкал. А рядом с `shell` стоят
+ * руки, которые тоже исполняют команды (`run`, `run_tests`, `pip_install`,
+ * `coding_*`), и они шли МИМО ограды: `workshop` держит свой `subprocess`, а
+ * `coding_*` исполняет отдельный процесс-надзиратель. Владелец читал молчание
+ * как «накрыто всё». Это единственное место, где продукт обещал больше, чем
+ * делает, и закрывается оно не молчанием в другую сторону, а списком.
+ *
+ * Своих слов здесь нет: и приговор, и причина приезжают из харнесса.
+ */
+function fenceHTML(hands: HandFence[] | undefined, sandboxOn: boolean): string {
+  if (!hands || !hands.length) return "";
+  const inside = hands.filter((h) => h.fence === "path" || h.fence === "container");
+  const outside = hands.filter((h) => h.fence === "outside");
+  const stale = hands.filter((h) => h.fence === "unknown");
+  const row = (h: HandFence) =>
+    `<tr><td><code>${esc(h.name)}</code></td><td class="muted">${esc(h.touches)}</td><td class="muted">${esc(h.why)}</td></tr>`;
+  const table = (rows: HandFence[]) =>
+    `<table class="grid"><tr><th>рука</th><th>трогает</th><th>почему</th></tr>${rows.map(row).join("")}</table>`;
+  return `<h3 class="section-title">Ограда поимённо <span class="muted">${inside.length} в ограде · ${outside.length} вне</span></h3>
+    <div class="card">
+      ${inside.length ? `<p><b>В ограде</b></p>${table(inside)}` : ""}
+      ${outside.length ? `<p style="margin-top:12px"><b>Вне ограды</b></p>${table(outside)}` : ""}
+      ${stale.length ? `<p class="receipt err" style="margin-top:12px">Ограда помнит руки, которых в наборе больше нет: ${stale.map((h) => `<code>${esc(h.name)}</code>`).join(", ")}. Это наша устаревшая запись, а не твоя поломка.</p>` : ""}
+      <p class="muted" style="margin-top:12px">Список считает сам харнесс по живому набору рук: накрыта рука или нет, видно по тому, что на ней стоит, а не по имени в таблице. Рука, о которой ограда не знает, считается вне её.${sandboxOn ? "" : " Сейчас ограда выключена — поэтому вне её всё."}</p>
     </div>`;
 }
 
@@ -216,6 +262,9 @@ export async function render(container: HTMLElement): Promise<void> {
   const cutsBox = cutsHTML(cR.status === "fulfilled" ? cR.value : null) + spendCutsHTML(sR.status === "fulfilled" ? sR.value : null);
   const modeName = mR.status === "fulfilled" && mR.value.name ? `режим: <b>${esc(mR.value.title)}</b> · ` : "";
   const tools = a.tools || [];
+  const handFence = new Map((a.sandbox?.hands || []).map((h) => [h.name, h]));
+  const fenceBox = fenceHTML(a.sandbox?.hands, !!a.sandbox?.enabled);
+  const outsideCount = (a.sandbox?.hands || []).filter((h) => h.fence === "outside").length;
   const intro = INTRO.map(
     ([h, t]) => `<details class="fold" open><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`,
   ).join("");
@@ -226,11 +275,11 @@ export async function render(container: HTMLElement): Promise<void> {
     ? ` · тело: ${esc(!a.computer.enabled ? "выключено владельцем" : !a.computer.available ? "нет в поставке" : a.computer.connected === true ? `подключено, мост 127.0.0.1:${a.computer.port}` : a.computer.connected === false ? "не отвечает" : "поднималось на старте")}${a.computer.enabled && a.computer.scopes ? ` (права: ${esc(a.computer.scopes.join(", ") || "нет")})` : ""}`
     : "";
   const meta = tools.length
-    ? `<p class="muted">Транспорты: ${esc((a.transports || []).join(" + "))} · ${modeName}песочница: ${esc(a.sandbox ? (a.sandbox.container ? "shell в контейнере" : a.sandbox.enabled ? "без контейнера" : "выключена") : "?")}${a.sandbox?.reason ? " · " + esc(a.sandbox.reason) : ""}${a.sandbox?.windows ? " · " + esc(a.sandbox.windows) : ""}${body} · мозг: <b>${esc(a.model?.model || "?")}</b> (${esc(a.model?.framework || "?")})
+    ? `<p class="muted">Транспорты: ${esc((a.transports || []).join(" + "))} · ${modeName}песочница: ${esc(a.sandbox ? (a.sandbox.container ? "shell в контейнере" : a.sandbox.enabled ? "без контейнера" : "выключена") : "?")}${a.sandbox?.reason ? " · " + esc(a.sandbox.reason) : ""}${outsideCount ? ` · <b>вне ограды рук: ${outsideCount}</b>` : ""}${a.sandbox?.windows ? " · " + esc(a.sandbox.windows) : ""}${body} · мозг: <b>${esc(a.model?.model || "?")}</b> (${esc(a.model?.framework || "?")})
        · рук предложено: <b>${tools.length}</b> · снято ${esc(fmtTime(a.written_at))}. Живой список сборщика, не пересказ.</p>`
     : '<p class="muted">Снимка ещё нет: руннер пишет его при старте.</p>';
   container.innerHTML = `<div class="center">
-    ${meta}${modeBox}${spend}${intro}
+    ${meta}${modeBox}${fenceBox}${spend}${intro}
     ${cutsBox}
     <h3 class="section-title">Разбор живого хода</h3>
     <p class="muted">Не пример из документации, а последний настоящий ход этого агента, шаг за шагом, с пояснением каждого шага.</p>
@@ -261,8 +310,16 @@ export async function render(container: HTMLElement): Promise<void> {
           .map((t) => {
             const first = (t.desc || "").split(/(?<=[.!?])\s/)[0] || "(без описания)";
             const params = (t.params || []).map((p) => `<span class="mono ${(t.required || []).includes(p) ? "" : "muted"}">${esc(p)}</span>`).join(", ");
-            return `<details class="fold"><summary><code>${esc(t.name)}</code> <span class="muted">${esc(first.slice(0, 110))}</span></summary>
-            <div class="fold-body" style="white-space:pre-wrap">${esc(t.desc || "")}${params ? `<div class="muted" style="margin-top:6px">аргументы: ${params}</div>` : ""}</div></details>`;
+            // Метка стоит у САМОЙ руки, а не только в карточке ограды: владелец
+            // читает этот список поиском («что умеет run?») и до карточки может
+            // не дойти. Руки, машину не трогающие, метки не получают — иначе
+            // шестьдесят «—» утопили бы те семь, ради которых всё это.
+            const f = handFence.get(t.name);
+            const mark = f
+              ? `<span class="${f.fence === "outside" ? "receipt err" : "muted"}" style="margin-left:6px">${esc(f.fence === "outside" ? "вне ограды" : f.fence === "unknown" ? "ограда её не нашла" : "в ограде")}</span>`
+              : "";
+            return `<details class="fold"><summary><code>${esc(t.name)}</code>${mark} <span class="muted">${esc(first.slice(0, 110))}</span></summary>
+            <div class="fold-body" style="white-space:pre-wrap">${esc(t.desc || "")}${f ? `<div class="${f.fence === "outside" ? "receipt err" : "muted"}" style="margin-top:6px">ограда: ${esc(f.why)}</div>` : ""}${params ? `<div class="muted" style="margin-top:6px">аргументы: ${params}</div>` : ""}</div></details>`;
           })
           .join("") || '<div class="empty">ничего не нашлось</div>';
     };

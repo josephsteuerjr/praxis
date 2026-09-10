@@ -18,9 +18,14 @@
     агенту сверх дома — на чтение или на чтение и запись, — и видна ему как
     обычная папка внутри дома (`workspace/mnt/<имя>`, стык junction'ом). Просьбу
     о папке агент подаёт рукой `mount_request`; решение принимает владелец.
-Чего не даёт: остальные руки (computer, host_ctl, run, coding_*) не огорожены —
-это записано в анатомии, чтобы владелец не думал иначе. Это ограда, не тюрьма
-для самого агента: его память и код внутри папки Hélène ему доступны.
+Чего не даёт: остальные руки (computer, host_ctl, run, coding_*) не огорожены.
+До 10.09 эта строка была ЕДИНСТВЕННЫМ местом, где о них говорилось, — то есть
+комментарием для того, кто читает исходник, а владельцу продукт показывал
+«песочница: shell в контейнере» и молчал. Теперь снимок устройства везёт отчёт
+поимённо (`hands_report`, карта `MACHINE_HANDS` ниже), и окно рисует его двумя
+списками: что накрыто и что нет. Умолчание отчёта — fail-closed: рука, о которой
+ограда не знает, считается вне её. Это ограда, не тюрьма для самого агента: его
+память и код внутри папки Hélène ему доступны.
 
 ⚠ ОКНА. Ограда НЕ накрывает руку окон — в контейнер уходит только `bash -lc`
 (шим `_SubprocessShim.run`), а обёртка пути стоит на пяти файловых руках.
@@ -53,6 +58,7 @@ import logging
 import os
 import stat as _stat
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -1256,46 +1262,100 @@ class Container:
 
 
 class _SubprocessShim:
-    """Подмена `subprocess` в модуле агента: `bash -lc …` уходит в контейнер, всё
-    остальное — в настоящий subprocess. Так её tool_shell (журнал, точки отката)
-    остаётся её, меняется только исполнение.
+    """Подмена `subprocess` в модуле руки: команда уходит в контейнер, остальное —
+    в настоящий subprocess. Так её tool_shell (журнал, точки отката) остаётся её,
+    меняется только исполнение.
 
     ⚠ Шим ставится ВСЕГДА, даже когда контейнер не поднялся и когда ограда
     выключена: он же единственное место, где вывод команды декодируется по-
     человечески. Без него неогороженный путь читал вывод как UTF-8, ронял
     UnicodeDecodeError внутри потока-читателя subprocess (то есть мимо
     `except Exception` в её tool_shell) и возвращал агенту «(пустой вывод)».
+
+    `route_all` — ЧТО именно уводится в контейнер, и это два разных модуля:
+
+      * `agent` (route_all=False) — только тройка `bash -lc …`, то есть рука
+        `shell`. Шире здесь нельзя: тем же `subprocess` модуль агента поднимает
+        своё хозяйство, и увести его в AppContainer значило бы чинить дыру,
+        ломая продукт;
+      * `workshop` (route_all=True) — ВСЁ, что она исполняет: `run` (строкой при
+        `shell=True`), `run_tests`, `pip_install`, git проектов. У этого модуля
+        других запусков нет (проверено поимённо: 314, 329, 646, 672, 676, 704,
+        714), и все они — руки агента.
+
+    До 10.09 шим стоял только в `agent`, и это была дыра не в замысле, а в
+    арифметике: `workshop` держит СВОЙ `import subprocess`, поэтому подмена в
+    чужом пространстве имён до него не доставала никогда.
     """
 
     def __init__(self, real, container: "Container | None", workspace: Path,
-                 install_root: Path):
+                 install_root: Path, route_all: bool = False):
         self._real = real
         self._container = container
         self._workspace = workspace
         self._root = Path(install_root)
+        self._route_all = bool(route_all)
 
     def __getattr__(self, name):
         return getattr(self._real, name)
 
-    def run(self, args, *pargs, **kwargs):
+    def _plan(self, args, kwargs) -> tuple[list[str], Path] | None:
+        """Что уводим в контейнер и с какой рабочей папкой; None — мимо ограды."""
         # ⚠ Было `str(args[0]).lower().rstrip(".exe")` — rstrip снимает НАБОР
         # символов, а не суффикс: "C:/…/bash.exe" превращалось в "C:/…/bash", в
         # список ("bash","sh") не попадало, и команда молча уходила мимо ограды,
         # пока анатомия продолжала рапортовать «shell в AppContainer».
-        is_shell = (isinstance(args, (list, tuple)) and len(args) == 3
-                    and args[1] == "-lc")
-        if is_shell and Path(str(args[0])).stem.lower() not in ("bash", "sh"):
-            log.warning("shell-вызов незнакомым интерпретатором %s — веду его тем же "
-                        "путём, что и bash (снимать ограду молча нельзя)", args[0])
-        if not is_shell:
+        if (isinstance(args, (list, tuple)) and len(args) == 3 and args[1] == "-lc"):
+            if Path(str(args[0])).stem.lower() not in ("bash", "sh"):
+                log.warning("shell-вызов незнакомым интерпретатором %s — веду его тем же "
+                            "путём, что и bash (снимать ограду молча нельзя)", args[0])
+            return self._bash(str(args[2])), self._workspace
+        if not self._route_all:
+            return None
+        # Рабочая папка вызывающего сохраняется: `run` работает в папке проекта
+        # мастерской, и увести её в workspace значило бы выполнить команду не там,
+        # где агент её задумал. Папка проекта контейнеру выдана на запись — она
+        # внутри workspace.
+        cwd = Path(kwargs["cwd"]) if kwargs.get("cwd") else self._workspace
+        if kwargs.get("shell"):
+            # `run` зовёт со строкой: `subprocess.run(cmd, shell=True, …)`.
+            return self._shell(args if isinstance(args, str) else " ".join(map(str, args))), cwd
+        if isinstance(args, str):
+            return [args], cwd
+        return [str(a) for a in args], cwd
+
+    def _bash(self, command: str) -> list[str]:
+        """Интерпретатор руки `shell` — busybox поставки, как было до ограды."""
+        bash = self._root / "runtime" / "bash.exe"
+        return [str(bash) if bash.exists() else "bash", "-lc", command]
+
+    def _shell(self, command: str) -> list[str]:
+        """Ровно тот интерпретатор, который взял бы сам `subprocess` при shell=True.
+
+        ⚠ Здесь стоял `self._bash(...)`, и это было тихой подменой смысла. На
+        Windows `subprocess.run(cmd, shell=True)` — это `cmd.exe /c`, а не bash;
+        завернув команду руки `run` в busybox, ограда чинила бы дыру и заодно
+        меняла язык, на котором агент эту команду написал. Дело ограды — где
+        команда исполняется, а не что она значит.
+
+        (Что `run` на Windows говорит на cmd, а `shell` — на bash, при том что всё
+        дерево написано под Linux, — вопрос настоящий. Но решать его молча, внутри
+        починки ограды, нельзя.)
+        """
+        if os.name == "nt":
+            return [os.environ.get("ComSpec") or "cmd.exe", "/c", command]
+        return ["/bin/sh", "-c", command]
+
+    def run(self, args, *pargs, **kwargs):
+        plan = self._plan(args, kwargs)
+        if plan is None:
             return self._real.run(args, *pargs, **kwargs)
         if self._container is None:
             return self._plain(args, *pargs, **kwargs)
-        bash = self._root / "runtime" / "bash.exe"
-        argv = [str(bash if bash.exists() else args[0]), "-lc", str(args[2])]
+        argv, cwd = plan
         timeout = float(kwargs.get("timeout") or 30)
         try:
-            out, code, timed_out = self._container.run(argv, self._workspace, timeout)
+            out, code, timed_out = self._container.run(argv, cwd, timeout)
         except OSError as exc:
             # Анатомия обязана сказать правду В ТОТ ЖЕ МОМЕНТ: раньше STATE
             # оставался «shell в AppContainer», хотя команда шла без ограды.
@@ -1305,7 +1365,14 @@ class _SubprocessShim:
             return self._plain(args, *pargs, **kwargs)
         if timed_out:
             raise self._real.TimeoutExpired(args, timeout, output=out)
-        return self._real.CompletedProcess(args, code, stdout=out, stderr=None)
+        done = self._real.CompletedProcess(args, code, stdout=out, stderr=None)
+        # `check=True` обязан вести себя как у настоящего subprocess: рука,
+        # которая ловит CalledProcessError, под оградой не должна получать вместо
+        # исключения тихий провал. `workshop` этим не пользуется, но шим стоит не
+        # только под ним.
+        if kwargs.get("check") and code != 0:
+            raise self._real.CalledProcessError(code, args, output=out)
+        return done
 
     def _plain(self, args, *pargs, **kwargs):
         """Без ограды — но через ОДИН декодер вывода, а не через text=True."""
@@ -1606,6 +1673,7 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
     if not isinstance(getattr(agent_mod, "subprocess", None), _SubprocessShim):
         agent_mod.subprocess = _SubprocessShim(agent_mod.subprocess, container,
                                                workspace, install_root)
+    _shim_workshop(container, workspace, install_root)
 
     # 2. Гард ДЕРЕВА (`workshop._resolve_read`) запирает файловые руки в доме
     # независимо от нашей ограды, поэтому дом расширяем здесь сами — по-разному
@@ -1729,6 +1797,206 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
 
 def state() -> dict:
     return dict(STATE)
+
+
+# ─── что ограда накрывает, а что нет ────────────────────────────────────────────
+#
+# До 10.09 это знание жило ТОЛЬКО в шапке этого файла («остальные руки не
+# огорожены»), то есть в комментарии для того, кто читает исходник. Владельцу
+# продукт говорил «песочница: shell в контейнере» и молчал о том, что рядом
+# стоят руки, исполняющие команды мимо неё. Обещать больше, чем делаешь, —
+# ровно то, чего продукт не имеет права.
+#
+# Карта НЕ решает, огорожена рука или нет: это вычисляется из реальности
+# (`_helene_fenced` на обёртке, шим на месте `subprocess` в модуле руки,
+# поднялся ли контейнер). Карта отвечает на другой вопрос — КАКИМ БОКОМ рука
+# трогает машину, потому что интроспекцией это не выводится: `recall` и
+# `run` для питона одинаковые функции.
+#
+# ⚠ Умолчание — fail-closed. Рука, которой здесь нет, попадает в отчёт как
+# «не разобрана» и считается вне ограды, а не «наверное, безопасная». Стенд
+# `t_fence_hands.py` держит карту от протухания с другой стороны: имя, которого
+# больше нет в живом наборе рук, — это наша ложь о несуществующем.
+#: рука → (что трогает, ВСЕ модули, через которые она исполняет).
+#: Пусто — рука команд не исполняет, и ограда для неё это проверка пути.
+#:
+#: ⚠ Модулей у одной руки бывает несколько, и накрытой она считается, только
+#: когда огорожены ВСЕ. Это не педантизм: `workshop.run` сперва пробует «пол»
+#: (`hands.execute` → бинарь `praxis-hands`), и лишь потом падает в собственный
+#: subprocess. В поставке бинаря нет, но у `hands` СВОЙ `import subprocess`, и
+#: положи его кто-нибудь в поставку завтра — ограда отказала бы молча, а отчёт
+#: продолжал писать «в контейнере».
+MACHINE_HANDS: dict[str, tuple[str, tuple[str, ...] | None]] = {
+    # Исполняют команды.
+    "shell": ("команды", ("agent",)),
+    "run": ("команды", ("workshop", "hands")),
+    "run_tests": ("команды", ("workshop", "hands")),
+    "pip_install": ("команды", ("workshop", "hands")),
+    # Forge — семейство из десяти рук, и машину трогают почти все. Исполняют они
+    # не сами: `forge.run` поднимает ОТДЕЛЬНЫЙ процесс-надзиратель, и тот уже
+    # делает Popen(shell=True). Подмена `subprocess` в этом процессе до него не
+    # достаёт — поэтому модуль назван, но ограда его не накрывает.
+    #
+    # ⚠ И дело даже не в шиме. Forge работает в worktree ЗАДАЧИ, а он лежит там,
+    # куда его завёл владелец, — это может быть любой репозиторий на диске, вне
+    # папки Hélène. Огородить это нельзя, не сломав сам смысл руки; поэтому она
+    # названа, а не спрятана.
+    "coding_run": ("команды", ("forge_process",)),
+    "coding_process": ("команды", ("forge_process",)),
+    "coding_agent": ("команды", ("forge_process",)),
+    "coding_verify": ("команды", ("forge_process",)),
+    "coding_swarm": ("команды", ("forge_process",)),
+    "coding_checkpoint": ("команды", ("forge_process",)),
+    "coding_session": ("файлы и команды", ("forge_process",)),
+    "coding_edit": ("файлы", None),
+    "coding_inspect": ("файлы", None),
+    "coding_learn": ("файлы", None),
+    # Трогают файлы. Здесь ограда — обёртка пути, и её наличие видно по флагу.
+    "fs_read": ("файлы", None),
+    "fs_ls": ("файлы", None),
+    "fs_search": ("файлы", None),
+    "fs_write": ("файлы", None),
+    "fs_edit": ("файлы", None),
+    # Водят окнами и процессами владельца. Тело живёт СНАРУЖИ контейнера по
+    # устройству (у AppContainer нет доступа к чужим окнам), и это не дыра, а
+    # граница: права здесь дают галочки владельца, а не ограда.
+    "computer": ("окна и файлы владельца", None),
+    "host_ctl": ("хост", None),
+}
+
+#: Причина, по которой рука вне ограды ПО УСТРОЙСТВУ, а не по недосмотру.
+#: Разница читателю важна: по общей строке «не огорожена» нельзя понять, чинится
+#: это правкой продукта или не чинится вовсе.
+OUTSIDE_BY_DESIGN: dict[str, str] = {
+    "computer": "тело живёт снаружи ограды: права дают галочки владельца",
+    "host_ctl": "рука хоста ходит к системе мимо контейнера",
+}
+OUTSIDE_BY_DESIGN.update({
+    name: "Forge работает в worktree задачи — он может лежать где угодно на диске"
+    for name in ("coding_run", "coding_process", "coding_agent", "coding_verify",
+                 "coding_swarm", "coding_checkpoint", "coding_session",
+                 "coding_edit", "coding_inspect", "coding_learn")
+})
+
+#: Оговорки: рука накрыта НЕ ЦЕЛИКОМ. Приписываются к причине, и молчать о них
+#: нельзя — «в ограде» над наполовину огороженной рукой это та же неправда,
+#: только мельче.
+HAND_CAVEATS: dict[str, str] = {
+    # `run_tests(project)` идёт через workshop и в контейнер попадает.
+    # `run_tests("self")` — другая дорога: `selfdev` гоняет её тесты в worktree
+    # предложения, а `.proposals` контейнеру на запись НЕ выдана (выданы memory,
+    # soul, workspace и .git — см. `Container._grant`). Огородить эту ветку
+    # значило бы сломать её саморазвитие, поэтому она честно названа.
+    "run_tests": ("аргумент \"self\" исполняет selfdev в worktree предложения — "
+                  "туда ограда не достаёт"),
+}
+
+
+def hands_report(agent_mod) -> list[dict]:
+    """Правда о каждой руке, которая трогает машину: в ограде она или нет.
+
+    Считается из того, что есть на самом деле, а не из списка:
+      * `path` — на реализации стоит наша обёртка (`_helene_fenced`);
+      * `container` — в модуле руки лежит наш шим И контейнер поднялся;
+      * `outside` — ни того, ни другого.
+    Имя из `MACHINE_HANDS`, которого в живом наборе нет, приезжает как
+    `unknown`: молчать о собственной устаревшей записи нельзя.
+
+    ⚠ Зовётся ТАМ, ГДЕ ЧИТАЮТ, а не на установке ограды, и копии в `STATE` нет.
+    Причина конкретная: `body.install` (рука `computer`) и `broker.install`
+    выдают свои руки ПОСЛЕ `fence.install` — снимок, снятый внутри установки,
+    объявил бы `computer` несуществующей рукой. Второй причины хватило бы и
+    одной: ограда меняется на ходу (контейнер может отвалиться на любом
+    вызове, см. шим), и отчёт полугодовой свежести — это та же неправда, только
+    аккуратно оформленная.
+    """
+    impl = getattr(agent_mod, "TOOL_IMPL", None)
+    if not isinstance(impl, dict):
+        return []
+    container_up = bool(STATE.get("container"))
+    rows: list[dict] = []
+    for name in sorted(impl):
+        fn = impl[name]
+        touches, modules = MACHINE_HANDS.get(name, ("", ()))
+        if not touches:
+            continue        # рука машину не трогает — ограде о ней сказать нечего
+        # Считаем только ЗАГРУЖЕННЫЕ модули: незагруженный ничего не исполняет,
+        # и записывать его в дыру значило бы пугать владельца тем, чего нет.
+        # Загрузись он позже — отчёт снимается заново на каждой записи снимка и
+        # скажет об этом тогда.
+        live = [m for m in (modules or ()) if m in sys.modules]
+        bare = [m for m in live if not _shim_in(m)]
+        if getattr(fn, "_helene_fenced", False):
+            fence_kind, why = "path", "проверка пути"
+        elif live and not bare:
+            if container_up:
+                fence_kind, why = "container", "команда уходит в AppContainer"
+            else:
+                fence_kind, why = "outside", STATE.get("reason") or "контейнер не поднялся"
+        elif name in OUTSIDE_BY_DESIGN:
+            fence_kind, why = "outside", OUTSIDE_BY_DESIGN[name]
+        elif bare:
+            # Называем ИМЕННО тот модуль, который остался снаружи: по общему
+            # «не огорожена» нельзя понять, чинится это ручкой в настройках или
+            # правкой продукта.
+            fence_kind = "outside"
+            why = f"команду исполняет {', '.join(bare)} — шима ограды там нет"
+        elif modules:
+            fence_kind = "outside"
+            why = f"модуль {', '.join(modules)} не загружен — исполнять команду нечем"
+        else:
+            fence_kind, why = "outside", "ограда до этой руки не достаёт"
+        caveat = HAND_CAVEATS.get(name)
+        if caveat:
+            why = f"{why}; {caveat}"
+        rows.append({"name": name, "touches": touches, "fence": fence_kind, "why": why})
+    unknown = sorted(set(MACHINE_HANDS) - set(impl))
+    for name in unknown:
+        # Имя, которого в живом наборе рук больше нет. Это наша ложь о
+        # несуществующем — говорим о ней вслух, а не вычёркиваем молча.
+        rows.append({"name": name, "touches": MACHINE_HANDS[name][0],
+                     "fence": "unknown", "why": "руки с таким именем в наборе нет"})
+    return rows
+
+
+def _shim_in(module_name: str) -> bool:
+    """Стоит ли наш шим на месте `subprocess` в этом модуле — сейчас, не на старте."""
+    mod = sys.modules.get(module_name)
+    return isinstance(getattr(mod, "subprocess", None), _SubprocessShim)
+
+
+#: Модули, всё исполнение которых — это руки агента, и потому уходит в контейнер
+#: целиком. `hands` здесь ради «пола»: `workshop.run` сперва пробует бинарь
+#: `praxis-hands` и только потом свой subprocess.
+EXECUTING_MODULES = ("workshop", "hands")
+
+
+def _shim_workshop(container: "Container | None", workspace: Path, install_root: Path) -> None:
+    """Увести исполняющие руки мастерской (`run`, `run_tests`, `pip_install`) в контейнер.
+
+    Отдельный шим, а не тот же объект: у этого `route_all=True` — в контейнер
+    уходит ВСЁ, что исполняет модуль, а не одна тройка `bash -lc`. Причина в
+    шапке `_SubprocessShim`.
+
+    Модули берём из `sys.modules`, а не импортом: дерево уже загружено (ограда
+    ставится после него), а свой импорт поднял бы ВТОРУЮ копию модуля со своим
+    `subprocess` — огорожена была бы она, а руки остались бы у первой.
+    """
+    for name in EXECUTING_MODULES:
+        mod = sys.modules.get(name)
+        if mod is None:
+            log.info("песочница: модуля %s нет — огораживать нечего", name)
+            continue
+        if isinstance(getattr(mod, "subprocess", None), _SubprocessShim):
+            continue
+        try:
+            mod.subprocess = _SubprocessShim(mod.subprocess, container, workspace,
+                                             install_root, route_all=True)
+        except Exception:
+            log.exception("исполнение модуля %s осталось без ограды", name)
+            continue
+        log.info("песочница: исполнение %s — %s", name,
+                 "в контейнере" if container is not None else "без контейнера (его нет)")
 
 
 def container_name(install_root: Path) -> str:
