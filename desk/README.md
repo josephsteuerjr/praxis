@@ -28,7 +28,7 @@ API харнесса, телефоном и драйвером компьюте�
 | Драйвер компьютера | мост и драйвер компьютера: UIA, экран, ввод, файлы, процессы | `tree/body/crates` (Rust) |
 | Служба Windows, брокер прав | LocalSystem, Session 0, именованный канал с журналом | `svc/`, `common/` (Rust) |
 | Установщик, сборка | сцены первого запуска, тихая установка, обновление поверх, снятие | `setup/`, `installer/` |
-| Сервер | тот же харнесс в Docker с STT-коробкой faster-whisper | `server/` |
+| Сервер | тот же харнесс в Docker: STT-коробка faster-whisper и реле подписки рядом с агентом | `server/` |
 
 ## Сто инструментов
 
@@ -77,8 +77,11 @@ durable outbox с стабильным MTProto random id и неизменяем
 операций (`telegram_confirmation.py`); owner inbox с typed outcome и dedupe
 (`owner_delivery.py`). Кто вправе запускать ход — решение владельца
 (`telegram.allow_from`: owner / listed / any); чужие сообщения ложатся в
-память, но хода не начинают. Голосовые: STT (faster-whisper) и TTS (Silero,
-Piper) на сервере; в Windows-поставке STT нет.
+память, но хода не начинают. Голосовые расшифровываются и на Windows (с 0.5.2):
+`faster-whisper` едет в рантайме, модель владелец выбирает и качает из окна
+(карточка «Голос», `data/models/whisper`) — расшифровка идёт на процессоре этой
+машины, запись никуда не отправляется. TTS (Silero, Piper) — по-прежнему только
+на сервере.
 
 ## Computer use
 

@@ -50,7 +50,6 @@
 from __future__ import annotations
 
 import ctypes
-import ctypes.wintypes as wt
 import hashlib
 import json
 import locale
@@ -64,6 +63,32 @@ import time
 from pathlib import Path
 
 log = logging.getLogger("helene.fence")
+
+# Типы Windows API. Модуль обязан ИМПОРТИРОВАТЬСЯ и на POSIX: его читают
+# стенды, снимок устройства и — с 0.5.3 — порт на Linux, где ограду ставит не
+# AppContainer, а bubblewrap. Структуры ниже описаны на уровне модуля, и
+# прятать каждую под `if os.name == "nt"` значило бы разнести один класс по
+# двум веткам; вместо этого на POSIX подставляются те же ctypes-типы. Собранные
+# структуры там никогда не используются: до них доходит только код, который сам
+# стоит под проверкой платформы.
+if os.name == "nt":
+    import ctypes.wintypes as wt  # noqa: E402 — только на Windows
+else:
+    class _WinTypesOnPosix:
+        """Имена wintypes теми же ctypes-типами — чтобы структуры описались."""
+
+        BYTE = ctypes.c_ubyte
+        WORD = ctypes.c_uint16
+        DWORD = ctypes.c_uint32
+        BOOL = ctypes.c_int
+        HANDLE = ctypes.c_void_p
+        LPVOID = ctypes.c_void_p
+        LPWSTR = ctypes.c_wchar_p
+        LPCWSTR = ctypes.c_wchar_p
+        ULONG = ctypes.c_ulong
+        LARGE_INTEGER = ctypes.c_longlong
+
+    wt = _WinTypesOnPosix()
 
 #: Строка про окна до того, как спросили тело. Живую даёт `body.windows_truth()`
 #: (см. шапку модуля): ограда руку окон не трогает, тело живёт снаружи неё.
@@ -605,6 +630,10 @@ def _read_config(path: Path) -> dict:
 
 
 def _is_junction(path: Path) -> bool:
+    if os.name != "nt":
+        # На POSIX роль стыка играет символическая ссылка: снимать и сверять
+        # надо её, иначе размонтированная папка осталась бы в доме навсегда.
+        return path.is_symlink()
     checker = getattr(os.path, "isjunction", None)
     if checker is not None:
         try:
@@ -772,6 +801,19 @@ class Mounts:
                 row["link_error"] = "имя в mnt/ занято не стыком"
                 log.warning("монтирование: %s занято не стыком — папка открыта "
                             "только по полному пути", link)
+                continue
+            if os.name != "nt":
+                # На POSIX стык — символическая ссылка: `mklink` здесь нет, а
+                # внутрь ограды папка попадает всё равно связыванием
+                # (`fence_posix.Container.argv`), не ссылкой.
+                try:
+                    os.symlink(target, str(link), target_is_directory=True)
+                    row["link"] = str(link)
+                    log.info("монтирование: %s -> %s", link, target)
+                except OSError as exc:
+                    row["link_error"] = str(exc)[:160]
+                    log.warning("монтирование: ссылка не создана (%s -> %s): %s",
+                                link, target, exc)
                 continue
             proc = subprocess.run(mount_link_args(link, Path(target)),
                                   capture_output=True, text=True, encoding="cp866",
@@ -1658,11 +1700,22 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
     container = None
     if enabled:
         try:
-            container = Container(install_root, workspace, network)
-            container.prepare()
+            if os.name == "nt":
+                container = Container(install_root, workspace, network)
+                container.prepare()
+                STATE["reason"] = (f"shell в AppContainer {container.sid_text}, "
+                                   f"сеть {'есть' if network else 'нет'}")
+            else:
+                # Ограда на POSIX — bubblewrap: тот же контракт, другой механизм
+                # (`fence_posix`). Импорт поздний, чтобы модуль не искали на
+                # Windows, где его роль исполняет AppContainer выше.
+                import fence_posix  # noqa: PLC0415 — только на этой платформе
+                container = fence_posix.Container(
+                    install_root, workspace, network, tree=tree,
+                    secrets=secret_paths(install_root, tree))
+                container.prepare()
+                STATE["reason"] = container.describe()
             STATE["container"] = True
-            STATE["reason"] = (f"shell в AppContainer {container.sid_text}, "
-                               f"сеть {'есть' if network else 'нет'}")
             log.info("песочница: %s", STATE["reason"])
         except Exception as exc:
             container = None
