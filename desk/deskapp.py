@@ -47,6 +47,14 @@ from deskd import readers
 from deskd import rooms
 from deskd import usage
 
+# Голос читается ТЕМ ЖЕ модулем, которым его поднимает раннер
+# (`localharness/voice.py`): вторая правда о том, скачана ли модель, разъехалась
+# бы с первой молча — как разъехались бы два списка моделей. Модуль на стдлибе,
+# канал от него не тяжелеет; раскладка `app/deskapp.py` + `app/localharness/`
+# одна и в репозитории, и в поставке.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "localharness"))
+import voice  # noqa: E402 — путь добавлен строкой выше
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("frame.desk")
 
@@ -908,6 +916,29 @@ async def _r_log(c: Call):
                                    _int_arg(c.query, "lines", 200, 1, control.MAX_LINES))
 
 
+
+def _voice_config() -> dict:
+    """Только блок `voice` из helene.json — и ничего больше.
+
+    Канал не отдаёт наружу ключи никогда; читать конфиг целиком ради одной
+    ручки значило бы завести вторую дорогу к `model.key`.
+    """
+    path = readers.config_path()
+    if path is None:
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    block = raw.get("voice") if isinstance(raw, dict) else None
+    return {"voice": block if isinstance(block, dict) else {}}
+
+
+async def _r_voice(c: Call):
+    """Слышит ли агент: библиотека, модель, ход скачивания и причина молчания."""
+    return await asyncio.to_thread(lambda: voice.state(readers.tree(), _voice_config()))
+
+
 ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/runs", _r_runs),
     Route("GET", "/api/run/{run_id}", _r_run),
@@ -944,6 +975,7 @@ ROUTES: tuple[Route, ...] = (
     # Управление харнессом, который живёт не здесь (deskd/control.py). В
     # _DEVICE_PATHS их нет намеренно: перезапуск и журналы — дело владельца, а
     # не спаренного телефона.
+    Route("GET", "/api/voice", _r_voice),
     Route("GET", "/api/supervisor", _r_supervisor),
     Route("POST", "/api/supervisor/restart", _r_supervisor_restart),
     Route("GET", "/api/logs", _r_logs),

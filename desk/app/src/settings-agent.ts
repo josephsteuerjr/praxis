@@ -22,6 +22,7 @@ import { computerCard, storedComputer } from "./computer";
 import { MODE_KEY, loadMode, type ModeState } from "../../ui-kit/window/mode";
 import { modeCard } from "./modecard";
 import { mountsCard, type LiveSandbox } from "./mounts";
+import { voiceCard } from "./voicecard";
 import { RELAY_PORT, relayBaseUrl, relayProbeUrl, newRelayKey } from "./relay";
 import type { Config, Edition, EditionContext } from "../../ui-kit/window/views/settings-frame";
 
@@ -577,6 +578,15 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
   const computer = computerCard(modeLive, storedComputer(draft.computer));
   cards.push(computer.el);
 
+  // --- голос: единственная часть продукта, которой не хватает гигабайта
+  //
+  // Библиотека едет в рантайме, модель — нет (480 МБ у маленькой, 1,6 ГБ у
+  // рабочей). Поэтому карточка не просто ставит галочку, а показывает, чего не
+  // хватает, и качает это; состояние она спрашивает у канала (`/api/voice`),
+  // тем же модулем, которым голос поднимает раннер.
+  const voice = voiceCard(draft);
+  cards.push(voice.el);
+
   // --- данные
   const data = el("div", "actions");
   data.append(
@@ -721,6 +731,14 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
         // Управление компьютером: два ключа от карточки, `port` и прочее — как
         // лежали. Права харнесс перечитывает на ходу, включение — перезапуском.
         out.computer = keepBlock(out.computer, { enabled: computer.enabled(), scopes: computer.scopes() });
+        // Голос: три ручки владельца, остальное (язык, потоки, тип счёта) — как
+        // лежало. Модель качается отдельно и в конфиг не пишется: в нём стоит
+        // ВЫБОР, а что скачано — знает дерево.
+        out.voice = keepBlock(out.voice, {
+          enabled: voice.enabled(),
+          model: voice.model(),
+          keep_loaded: voice.keepLoaded(),
+        });
       const needKey = provider === "api" || provider === "anthropic";
       noKeyNote = needKey && !String(out.model?.key || "").trim()
         ? " Ключ модели не задан — агент будет молчать."

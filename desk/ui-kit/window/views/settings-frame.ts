@@ -50,6 +50,11 @@ export interface Config {
   agent_mode?: string | { name?: string; [k: string]: unknown };
   service?: { session0?: boolean; firewall?: boolean; [k: string]: unknown };
   computer?: { enabled?: boolean; scopes?: unknown; port?: number; [k: string]: unknown };
+  // Голос: локальный whisper на процессоре (localharness/voice.py). Модель в
+  // поставку не входит — её выбирает и качает владелец, поэтому здесь только
+  // выбор и ручки, а «скачана или нет» спрашивается у канала (`/api/voice`).
+  voice?: { enabled?: boolean; model?: string; language?: string; threads?: number;
+            keep_loaded?: boolean; compute_type?: string; beam_size?: number; [k: string]: unknown };
   installed?: { service?: boolean; [k: string]: unknown };
   // Местожительство харнесса: `local` — дети окна; `remote` — окно ходит в
   // трубу на сервере по `base` и `key`. Это НЕ режим агента — тот в `agent_mode`.

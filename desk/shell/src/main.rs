@@ -3459,6 +3459,7 @@ fn main() {
             logs_bundle,
             reveal_path,
             telegram_account,
+            voice_fetch,
             carry_export
         ])
         .setup(move |app| {
@@ -4331,6 +4332,46 @@ async fn telegram_account(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Скачать модель голоса — `app/localharness/voice.py --get <модель>`.
+///
+/// Ждать здесь нечего: модель весит от 0,5 до 1,6 ГБ, и на медленной сети это
+/// минуты. Поэтому команда только ЗАПУСКАЕТ помощника и возвращается, а ход
+/// дела помощник пишет в дерево (`memory/.state/voice-download.json`), откуда
+/// его читает канал и показывает окно. Ребёнок усыновляется job-объектом, как
+/// остальные: закрыл окно — качать некому, и окно об этом скажет, увидев
+/// протухшую запись, вместо вечного «качаю…».
+#[tauri::command]
+fn voice_fetch(model: String) -> Result<String, String> {
+    let base = exe_dir();
+    let python = base.join("runtime").join("python.exe");
+    let script = base.join("app").join("localharness").join("voice.py");
+    if !python.exists() || !script.exists() {
+        return Err("в этой поставке нет помощника голоса (app/localharness/voice.py)".into());
+    }
+    let name = model.trim().to_string();
+    if name.is_empty() {
+        return Err("не сказано, какую модель качать".into());
+    }
+    let mut cmd = Command::new(python);
+    cmd.arg("-u")
+        .arg(script)
+        .arg("--tree")
+        .arg(tree_dir())
+        .arg("--get")
+        .arg(&name)
+        .current_dir(&base)
+        .env("PYTHONUTF8", "1");
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    match cmd.spawn() {
+        Ok(child) => {
+            adopt(&child);
+            Ok(format!("качаю модель {name}"))
+        }
+        Err(err) => Err(format!("помощник голоса не запустился: {err}")),
+    }
 }
 
 /// Экспорт агента одним архивом — `app/localharness/carry.py export`: данные

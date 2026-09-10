@@ -24,7 +24,9 @@ helene.json --archive путь.zip`: прежняя `data/` (если была) 
 Что из `data/` НЕ едет: `body/` (тело руки computer живёт на машине, не с
 агентом), журналы (`*.log`), замок дерева и ключ окна (`memory/.state/
 harness.lock`, `desk-token`, `body.json` — они принадлежат хосту), стыки
-`workspace/mnt/` (это чужие папки владельца, а не его), `__pycache__`.
+`workspace/mnt/` (это чужие папки владельца, а не его), `models/` (модели
+голоса: 0,5–1,6 ГБ снаряжения машины, качаются заново одной кнопкой),
+`__pycache__`.
 
 Правило слияния конфига при импорте: у АРХИВА берутся блоки про агента —
 `agent`, `owner`, `model`, `telegram`, `relay`, `env`, `update`; у МЕСТА
@@ -63,7 +65,11 @@ HOST_KEYS = ("mode", "python", "app", "runner", "tree", "code", "port", "agent_m
 #: и маски имён.
 SKIP_PATHS = ("body/", "workspace/mnt/", "workspace/.fence/", "workspace/.tmp/",
               "relay/logs/", "memory/.state/harness.lock", "memory/.state/desk-token",
-              "memory/.state/body.json")
+              "memory/.state/body.json",
+              # Модели голоса (`models/whisper`, 0,5–1,6 ГБ) — не агент, а
+              # снаряжение машины: они скачиваются заново одной кнопкой, а в
+              # архиве превратили бы перенос памяти в перенос гигабайтов.
+              "models/")
 SKIP_NAMES = ("__pycache__", ".pytest_cache")
 SKIP_SUFFIXES = (".log", ".log.1", ".pyc")
 

@@ -45,6 +45,7 @@ import broker
 import modes
 import transport
 import continuity
+import voice
 import alarm_clock
 import forge_events
 
@@ -1395,6 +1396,20 @@ def main() -> None:
         body.launch(config_path.parent, tree, cfg)
     except Exception:
         log.exception("тело не поднялось — рука окон откажет словами")
+    # Голос — ДО импорта дерева: `media_audio` читает `PRAXIS_STT_*` из среды,
+    # и переменные, проставленные позже, оно уже не увидит. Нет библиотеки или
+    # модели — переменных не ставим вовсе: пусть дерево скажет о голосовом само,
+    # а не притворяется глухим над полусобранной коробкой.
+    try:
+        heard = voice.apply(tree, cfg)
+        if heard["ready"]:
+            log.info("голос: модель %s (%s)%s", heard["model"],
+                     heard["installed"].get("path", "?"),
+                     " — " + heard["why"] if heard["why"] else "")
+        else:
+            log.info("голос: не слышу — %s", heard["why"])
+    except Exception:
+        log.exception("голос не поднялся — голосовые останутся нерасшифрованными")
     agent, memory_life = _load_tree(code_dir, tree, cfg)
     _name_the_owner(_speaker)
     _announce_git(tree)

@@ -113,15 +113,22 @@ TREE_DEPS = [
     "pypdf", "trafilatura", "charset-normalizer",
 ]
 
+# ГОЛОС. `faster-whisper` тянет за собой ctranslate2, onnxruntime, av и numpy —
+# рантайм тяжелеет примерно на 170 МБ, и это осознанная цена: на сервере
+# расшифровка есть с 0.3.x, а на Windows голосовое до 0.5.2 превращалось в
+# молчание. Модель в поставку не входит и войти не может (480 МБ у маленькой,
+# 1,6 ГБ у рабочей) — её качает владелец из окна, `localharness/voice.py`.
+VOICE_DEPS = ["faster-whisper"]
+
 # Зависимости ПОСТАВКИ = дерево + пакет desk (канал просит aiohttp, раннер —
 # telethon). Свой список desk объявляет сам (deskpkg.DEPS_*), и сервер ставит
 # ровно его: раньше про зависимости канала знала только эта строка, а на
 # сервере они держались тем, что кто-то однажды поставил их в образ руками.
-DEPS = TREE_DEPS + deskpkg.requirements(deskpkg.WINDOWS)
+DEPS = TREE_DEPS + VOICE_DEPS + deskpkg.requirements(deskpkg.WINDOWS)
 
 # Дымовой тест рантайма: ровно то, что продукт импортирует на своём пути.
 SMOKE_IMPORTS = ("anthropic", "openai", "httpx", "dotenv", "PIL",
-                 "aiohttp", "pypdf", "trafilatura", "telethon")
+                 "aiohttp", "pypdf", "trafilatura", "telethon", "faster_whisper")
 
 APP_DIST = DESK / "app" / "dist"     # UI окна — сборка Vite (npm --prefix app run build)
 MOBILE_DIST = DESK / "mobile" / "dist"   # PWA телефона (npm --prefix mobile run build)
