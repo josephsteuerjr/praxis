@@ -1,7 +1,7 @@
 // Чат: переписка комнаты в центре — слово агента текстом, как документ, слово
 // владельца пузырём справа; ошибки хода на месте, человеческим словом и с
 // действием. Ход агента — в панели справа (../panel).
-import { api } from "../api";
+import { api, mediaURL } from "../api";
 import { bindFail, esc, failHTML, fmtAge, fmtDay, fmtTime, humanError, md, q } from "../lib";
 import * as panel from "../panel";
 import { PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, type Run } from "../state";
@@ -21,6 +21,10 @@ interface Msg {
   topic_title?: string;
   reply_to_message_id?: number;
   media?: string;
+  /** Вложение из дерева агента: путь ОТ ДЕРЕВА и вид (transport.archive). Голос
+   *  агента приезжает так; строковый `media` остаётся подписью telegram-вложения. */
+  media_path?: string;
+  media_kind?: string;
   edited_at?: string;
 }
 
@@ -141,6 +145,30 @@ function pendingHTML(): string {
 }
 
 /** Перерисовать только пузыри отправляемого, не трогая ленту. */
+/**
+ * Вложение строки ленты — проигрывателем или картинкой.
+ *
+ * ⚠ Адрес собирается ТЕМ ЖЕ способом, что и остальные запросы окна (`mediaURL`
+ * из api.ts): ключ канала уезжает в запрос, иначе браузер получит 403 и покажет
+ * сломанный проигрыватель вместо звука.
+ *
+ * `preload="none"` — намеренно: в ленте бывают десятки голосовых, и грузить их
+ * все ради прокрутки незачем.
+ */
+function mediaBlock(m: { media_path?: string; media_kind?: string }): string {
+  const rel = String(m.media_path || "").trim();
+  if (!rel) return "";
+  const src = mediaURL(rel);
+  const name = rel.split("/").pop() || rel;
+  if (String(m.media_kind || "") === "audio") {
+    return `<div class="msg-media"><audio controls preload="none" src="${esc(src)}"></audio></div>`;
+  }
+  if (String(m.media_kind || "") === "image") {
+    return `<div class="msg-media"><img loading="lazy" alt="${esc(name)}" src="${esc(src)}"></div>`;
+  }
+  return `<div class="msg-media"><a href="${esc(src)}" target="_blank" rel="noreferrer">${esc(name)}</a></div>`;
+}
+
 export function paintPending() {
   if (!root || S.view !== "talk") return;
   const box = root.querySelector<HTMLElement>(".pending-box");
@@ -190,7 +218,10 @@ export async function render(container: HTMLElement): Promise<void> {
     const name = m.outgoing ? S.agent : system ? PRODUCT_NAME : m.sender_name || String(m.sender_id ?? "");
     // Ярлык темы — только в общем архиве чата; внутри самой темы он лишний.
     const topic = m.topic_title && !/__topic__/.test(peer) ? ` <span class="badge quiet">${esc(m.topic_title)}</span>` : "";
-    const media = m.media ? ` <span class="muted">[${esc(m.media)}]</span>` : "";
+    // Вложение из дерева агента: канал отдаёт его байтами (`/api/media`), и в
+    // ленте оно перестаёт быть строкой с путём. Голос агента приезжает так.
+    // Строковый `m.media` остаётся тем, чем был: подписью telegram-вложения.
+    const media = mediaBlock(m) || (m.media ? ` <span class="muted">[${esc(m.media)}]</span>` : "");
     const edited = m.edited_at ? " · ред." : "";
     // Имя в подписи — только у чужих людей в общих комнатах.
     const showName = !m.outgoing && !system && !windowish && name !== S.agentState?.owner;

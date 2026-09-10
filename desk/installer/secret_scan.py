@@ -2,6 +2,7 @@
 """Сверка зеркала со ЗНАЧЕНИЯМИ живых секретов, а не с паттернами.
 
     python installer/secret_scan.py <дерево> <json с живыми секретами>
+    python installer/secret_scan.py <дерево> installer/secret-strings.txt
 
 Первая из двух сверок перед публикацией; вторая — `personal_scan.py`, и пропускать её
 нельзя: она ловит другой класс.
@@ -20,6 +21,7 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 TREE = pathlib.Path(sys.argv[1])
@@ -43,6 +45,41 @@ NOT_SECRET = {
 #: Слишком короткое или слишком общее значение ищется по всему дереву как шум:
 #: «1», «true», «/app» и подобное. Порог — не «доверие», а способ не утонуть.
 MIN_LEN = 8
+
+
+#: Крупные файлы читать текстом бессмысленно и дорого: секрет живёт в исходниках
+#: и конфигах, а не в архиве на четверть гигабайта. Пропуск НАЗЫВАЕТСЯ числом —
+#: «не смотрел» и «чисто» обязаны отличаться.
+MAX_FILE_BYTES = 8 * 1024 * 1024
+
+
+def listing(tree: pathlib.Path) -> tuple[list[tuple[str, pathlib.Path]], str]:
+    """Что именно проверять — и сказать вслух, что именно.
+
+    ⚠ Если это репозиторий, берём ИНДЕКС git, а не папку: публикуется индекс, а
+    в рабочей копии рядом живут `installer/build/` (собранная поставка),
+    `node_modules/`, `target/` — сотни тысяч файлов, которых в зеркале нет и не
+    будет. Обход папки на них и падал.
+
+    ⚠ `-c core.quotepath=false`: без него git отдаёт русские имена в
+    восьмеричных экранах, и половина файлов просто не находится на диске.
+    """
+    listed = subprocess.run(
+        ["git", "-c", "core.quotepath=false", "ls-files", "-z"],
+        cwd=str(tree), capture_output=True)
+    if listed.returncode == 0 and listed.stdout.strip():
+        rows = [r for r in listed.stdout.decode("utf-8", "replace").split("\0") if r]
+        out = [(rel, tree / rel) for rel in rows]
+        return [(rel, path) for rel, path in out if path.is_file()], "индекс git"
+    out = []
+    for path in tree.rglob("*"):
+        posix = path.as_posix()
+        if "/.git/" in posix or posix.endswith("/.git"):
+            continue
+        if not path.is_file():
+            continue
+        out.append((path.relative_to(tree).as_posix(), path))
+    return out, "обход папки (это не репозиторий)"
 
 
 def values_of(text: str, source: str) -> dict[str, str]:
@@ -75,11 +112,22 @@ def values_of(text: str, source: str) -> dict[str, str]:
 
 
 def main() -> None:
-    secrets = json.loads(SECRETS.read_text(encoding="utf-8"))
     wanted: dict[str, str] = {}
-    for source, text in secrets.items():
-        if text:
-            wanted.update(values_of(text, source))
+    raw = SECRETS.read_text(encoding="utf-8")
+    if SECRETS.suffix.lower() == ".txt":
+        # ⚠ Второй законный вход: `installer/secret-strings.txt` — тот самый
+        # список буквальных значений владельца, который читает и сборка. Пока
+        # сверка умела только JSON со СНЯТЫМИ живыми `.env`, эти два списка
+        # жили порознь: один проверялся в поставке, другой — в зеркале, и
+        # дописать значение надо было в оба. Теперь достаточно одного файла.
+        for n, line in enumerate(raw.splitlines(), 1):
+            value = line.strip()
+            if value and not value.startswith("#"):
+                wanted[f"{SECRETS.name}:{n}"] = value
+    else:
+        for source, text in json.loads(raw).items():
+            if text:
+                wanted.update(values_of(text, source))
 
     checked = {
         name: value
@@ -89,23 +137,39 @@ def main() -> None:
     print(f"живых значений снято: {len(wanted)}, из них проверяется: {len(checked)}")
     print(f"(короткие, пути и его собственные — мимо: {len(wanted) - len(checked)})")
 
-    blob: list[tuple[str, str]] = []
-    for path in TREE.rglob("*"):
-        if not path.is_file() or ".git/" in path.as_posix():
-            continue
+    files, how = listing(TREE)
+    print(f"что проверяем: {how}, файлов {len(files)}")
+
+    # ⚠ Файлы читаются ПО ОДНОМУ и не копятся. Первая редакция складывала весь
+    # текст дерева в список пар и падала с MemoryError на рабочей копии: рядом с
+    # исходниками лежит `installer/build/` с собранной поставкой на 260 МБ, и
+    # обход уходил в неё. Память кончалась ровно перед выводом — то есть сверка,
+    # написанная ради «публиковать нельзя», не говорила НИЧЕГО.
+    found: dict[str, list[str]] = {}
+    looked = skipped_big = skipped_bad = 0
+    for rel, path in files:
         try:
-            blob.append((path.relative_to(TREE).as_posix(),
-                         path.read_text(encoding="utf-8", errors="replace")))
+            if path.stat().st_size > MAX_FILE_BYTES:
+                skipped_big += 1
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
+            skipped_bad += 1
             continue
-    print(f"файлов в дереве проверено: {len(blob)}")
+        looked += 1
+        for name, value in checked.items():
+            if value in text:
+                found.setdefault(name, []).append(rel)
+    print(f"прочитано текстом: {looked}"
+          + (f", пропущено крупных (> {MAX_FILE_BYTES // (1024 * 1024)} МБ): {skipped_big}"
+             if skipped_big else "")
+          + (f", не прочиталось: {skipped_bad}" if skipped_bad else ""))
 
     hits = 0
-    for name, value in sorted(checked.items()):
-        where = [rel for rel, text in blob if value in text]
-        if where:
-            hits += 1
-            print(f"  ⚠ НАЙДЕНО значение ручки {name} в: {', '.join(where[:6])}")
+    for name in sorted(found):
+        hits += 1
+        where = found[name]
+        print(f"  ⚠ НАЙДЕНО значение ручки {name} в: {', '.join(where[:6])}")
     print()
     if hits:
         raise SystemExit(f"СЕКРЕТЫ В ЗЕРКАЛЕ: {hits} — публиковать НЕЛЬЗЯ")

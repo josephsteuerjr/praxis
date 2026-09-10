@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import os
+import pathlib
 import re
 import shutil
 import sys
@@ -1250,6 +1251,55 @@ def chat_tail(peer_id: str, n: int = 200) -> list[dict]:
                 return []
             return tail_jsonl(tree() / rel, n)
     return []
+
+
+#: Что окно вправе проиграть и показать. Список закрытый — по РАСШИРЕНИЮ, а не
+#: по угадыванию содержимого: канал отдаёт байты, и «что это на самом деле»
+#: решает уже браузер.
+MEDIA_TYPES = {
+    ".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg",
+    ".opus": "audio/ogg", ".m4a": "audio/mp4",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp",
+}
+
+#: Откуда разрешено отдавать. Не «всё дерево»: в дереве лежат её память,
+#: конституция и `helene.json` соседей — там нечего проигрывать.
+MEDIA_ROOTS = ("media", "memory/.control/desk_inbox/attachments")
+
+
+def media_file(rel: str) -> tuple[pathlib.Path | None, str, str]:
+    """Путь к вложению по строке из ленты. -> (файл|None, тип, причина отказа).
+
+    ⚠ Три проверки, и ни одна не лишняя. Путь берётся из строки ленты, а ленту
+    пишет агент — то есть это ВХОДЯЩАЯ строка, а не наша константа:
+
+      1. никаких `..` и абсолютных путей — иначе `../../helene.json` уехал бы
+         владельцу вместе с ключом модели по первой же просьбе;
+      2. только из разрешённых корней дерева (`MEDIA_ROOTS`);
+      3. только известные расширения — канал не должен раздавать `.py` и `.jsonl`.
+
+    Сверх этого путь РАЗРЕШАЕТСЯ и сверяется с корнем ещё раз: символическая
+    ссылка внутри дерева обошла бы проверку строки, но не проверку результата.
+    """
+    said = str(rel or "").replace("\\", "/").strip().lstrip("/")
+    if not said or ".." in said.split("/"):
+        return None, "", "путь не годится"
+    root = tree().resolve()
+    if not any(said == top or said.startswith(top + "/") for top in MEDIA_ROOTS):
+        return None, "", "этот путь окно не отдаёт: вложения живут в " + ", ".join(MEDIA_ROOTS)
+    path = (root / said)
+    suffix = path.suffix.lower()
+    if suffix not in MEDIA_TYPES:
+        return None, "", f"расширение {suffix or '(нет)'} канал не отдаёт"
+    try:
+        real = path.resolve()
+        real.relative_to(root)
+    except (OSError, ValueError):
+        return None, "", "файл вне дерева"
+    if not real.is_file():
+        return None, "", "файла нет"
+    return real, MEDIA_TYPES[suffix], ""
 
 
 def chat_turns(peer_id: str, n: int = 120) -> list[dict]:

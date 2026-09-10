@@ -36,6 +36,18 @@ function url(path: string): string {
  * `conflict`) от любой другой неудачи записи и молча затирало правку агента —
  * серверная защита стояла, а читателя у неё не было.
  */
+/**
+ * Адрес вложения для тега `<audio>`/`<img>`: тот же канал и тот же ключ.
+ *
+ * Отдельная функция, а не `url()`: та частная и добавляет ключ к ЛЮБОМУ пути, а
+ * здесь важно, что путь вложения — не наш, он приехал строкой ленты, и его
+ * надо экранировать как параметр, а не приклеивать к адресу.
+ */
+export function mediaURL(rel: string): string {
+  const base = (cfg.base || "") + "/api/media?path=" + encodeURIComponent(rel);
+  return cfg.key ? base + "&key=" + encodeURIComponent(cfg.key) : base;
+}
+
 export class ApiError extends Error {
   status?: number;
   code?: string;

@@ -153,7 +153,7 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
 # «перезапустить» в том, чтобы она была под рукой, когда до компьютера не
 # дойти; закрытая от телефона, она бесполезна ровно в этом случае. Что можно
 # трогать — решает служба на сервере закрытым списком, а не эта строка.
-_DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health",
+_DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media",
                  "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
                  "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models"}
 _DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/", "/api/chat-turns/", "/api/run/",
@@ -878,6 +878,21 @@ async def _r_agent_config_save(c: Call):
     return result
 
 
+async def _r_media(c: Call):
+    """Вложение из ленты — байтами. Голос агента окно проигрывает этим.
+
+    Телефону сюда МОЖНО (ручка в `_DEVICE_PATHS`): он показывает ту же переписку,
+    и голос в ней — та же реплика, только звуком. Что именно отдаётся, решает
+    `readers.media_file`: закрытый список корней и расширений, никаких `..`, и
+    результат сверяется с деревом уже после разрешения ссылок.
+    """
+    path, ctype, why = await asyncio.to_thread(readers.media_file, c.query.get("path") or "")
+    if path is None:
+        return Fail(404, why or "нет такого вложения", "no_media")
+    return web.FileResponse(path, headers={"Content-Type": ctype,
+                                           "Cache-Control": "private, max-age=3600"})
+
+
 async def _r_home(c: Call):
     """Чьё это дерево. Оболочка спрашивает перед тем, как признать живой на
     порту харнесс своим: осиротевший процесс прежней установки держал порт, и
@@ -1050,6 +1065,7 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/chat-turns/{peer}", _r_chat_turns),
     Route("GET", "/api/md", _r_md),
     Route("POST", "/api/md", _r_md_write),
+    Route("GET", "/api/media", _r_media),
     Route("GET", "/api/agent-config", _r_agent_config),
     Route("POST", "/api/agent-config", _r_agent_config_save),
     Route("GET", "/api/md-tree", _reader(lambda: readers.md_tree())),
