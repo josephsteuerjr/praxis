@@ -42,6 +42,7 @@ from aiohttp.abc import AbstractAccessLogger
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from deskd import control
 from deskd import readers
 from deskd import rooms
 from deskd import usage
@@ -882,6 +883,31 @@ async def _r_revoke(c: Call):
     return _revoke_device(str((c.body or {}).get("id") or ""))
 
 
+
+async def _r_supervisor(c: Call):
+    """Кто держит харнесс, что поднято и можно ли им отсюда управлять."""
+    return await asyncio.to_thread(control.supervisor_state, readers.tree())
+
+
+async def _r_supervisor_restart(c: Call):
+    """Просьба владельца перезапустить агента, реле или весь харнесс.
+
+    Канал только КЛАДЁТ просьбу: детей поднимает надзор, и он же единственный,
+    кто вправе их трогать. Отказ «надзора нет» — обычный ответ с причиной.
+    """
+    return await asyncio.to_thread(control.ask, readers.tree(),
+                                   str((c.body or {}).get("target") or ""))
+
+
+async def _r_logs(c: Call):
+    return await asyncio.to_thread(control.log_names, readers.tree())
+
+
+async def _r_log(c: Call):
+    return await asyncio.to_thread(control.tail, readers.tree(), c.match["name"],
+                                   _int_arg(c.query, "lines", 200, 1, control.MAX_LINES))
+
+
 ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/runs", _r_runs),
     Route("GET", "/api/run/{run_id}", _r_run),
@@ -915,6 +941,13 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/home", _r_home),
     Route("GET", "/api/anatomy", _reader(lambda: readers.anatomy())),
     Route("POST", "/api/say", _r_say),
+    # Управление харнессом, который живёт не здесь (deskd/control.py). В
+    # _DEVICE_PATHS их нет намеренно: перезапуск и журналы — дело владельца, а
+    # не спаренного телефона.
+    Route("GET", "/api/supervisor", _r_supervisor),
+    Route("POST", "/api/supervisor/restart", _r_supervisor_restart),
+    Route("GET", "/api/logs", _r_logs),
+    Route("GET", "/api/log/{name}", _r_log),
     # Комнаты окна (задача A §3): создать, переименовать, убрать в архив.
     Route("POST", "/api/rooms", _r_rooms_create),
     Route("POST", "/api/rooms/{peer}", _r_rooms_rename),

@@ -25,6 +25,12 @@
   * упавший ребёнок поднимается с растущей паузой (1…60 с); код выхода 2/3
     раннера (нет дерева / кривой конфиг) перезапуском не лечится — надзор
     говорит это в лог и ждёт правки;
+  * говорит о себе окну (`deskd/control.py`): каждые три секунды пишет записку
+    «жив, вот дети» и разбирает просьбы владельца — перезапустить агента, реле
+    или весь харнесс. Просьбу КЛАДЁТ канал, исполняет надзор: трогать процессы
+    вправе только он. «Перезапустить всё» в контейнере — это выход надзора,
+    контейнер поднимет его сам; вне контейнера выходить некуда, и дети
+    перезапускаются на месте (расписка говорит, что именно вышло);
   * SIGTERM/SIGINT — гасит детей и выходит.
 
 Вывод детей — `data/deskapp.log`, `data/runner.log` и `data/relay.log`, как на
@@ -33,6 +39,7 @@ Windows.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import secrets
@@ -42,6 +49,10 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+
+def _utc() -> str:
+    return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _read_config(path: Path) -> dict:
@@ -105,12 +116,16 @@ def looks_like_local_relay(cfg: dict) -> bool:
 
 
 class Child:
-    def __init__(self, name: str, argv: list[str], env: dict, cwd: Path, log_path: Path):
-        self.name, self.argv, self.env, self.cwd, self.log_path = name, argv, env, cwd, log_path
+    def __init__(self, key: str, name: str, argv: list[str], env: dict, cwd: Path, log_path: Path):
+        # `key` — то имя, которым ребёнка зовут снаружи (просьба из окна,
+        # `deskd/control.py`): «раннер» переводится, `runner` — нет.
+        self.key, self.name = key, name
+        self.argv, self.env, self.cwd, self.log_path = argv, env, cwd, log_path
         self.proc: subprocess.Popen | None = None
         self.falls: list[float] = []
         self.retry_at = 0.0
         self.halted = ""
+        self.since_utc = ""
 
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -126,6 +141,7 @@ class Child:
         self.proc = subprocess.Popen(self.argv, env=self.env, cwd=str(self.cwd),
                                      stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
         out.close()
+        self.since_utc = _utc()
         print(f"[serverboot] {self.name} поднят, pid {self.proc.pid}", flush=True)
 
     def stop(self) -> None:
@@ -178,7 +194,7 @@ def relay_child(base: Path, cfg: dict, tree: Path, env: dict) -> "Child | None":
     if key:
         # Ключ мозга = ключ петли: реле требует его Bearer-ом на /chat/completions.
         relay_env["RELAY_API_KEY"] = key
-    return Child("реле", [str(exe), "serve"], relay_env, home, tree / "relay.log")
+    return Child("relay", "реле", [str(exe), "serve"], relay_env, home, tree / "relay.log")
 
 
 def main() -> int:
@@ -220,15 +236,78 @@ def main() -> int:
     if relay is not None:
         children.append(relay)
     children += [
-        Child("канал", [sys.executable, "-u", str(app), str(port)], env, app.parent, tree / "deskapp.log"),
-        Child("раннер", [sys.executable, "-u", str(runner), "--config", str(config)], env,
+        Child("channel", "канал", [sys.executable, "-u", str(app), str(port)], env, app.parent,
+              tree / "deskapp.log"),
+        Child("runner", "раннер", [sys.executable, "-u", str(runner), "--config", str(config)], env,
               runner.parent, tree / "runner.log"),
     ]
+    # Управление из окна: протокол и обе его стороны живут в `deskd/control.py`,
+    # рядом с каналом — иначе они разъезжаются молча. Импорт поздний, потому что
+    # путь к нему знает конфиг (`app`), а не эта папка.
+    sys.path.insert(0, str(app.parent))
+    try:
+        from deskd import control  # noqa: PLC0415 — путь известен только здесь
+    except ImportError as exc:
+        control = None
+        print(f"[serverboot] ⚠ управление из окна недоступно: {exc}", flush=True)
+
     public = os.environ.get("HELENE_PUBLIC_URL", "").strip()
     print("[serverboot] ключ окна для helene.json на ПК владельца:", flush=True)
     print(json.dumps({"mode": "remote", "base": public or f"http://<хост>:{port}", "key": token},
                      ensure_ascii=False), flush=True)
+    started_utc = _utc()
     stopping = False
+
+    def restart(child: Child) -> str:
+        """Поднять ребёнка заново по просьбе владельца, забыв прежние падения.
+
+        Счётчик падений обнуляется намеренно: пауза перед подъёмом растёт,
+        чтобы не молотить упавшего в петле, а нажатая кнопка — это новое
+        обстоятельство, и ждать минуту после неё было бы враньём про «сейчас».
+        """
+        child.stop()
+        child.proc = None
+        child.falls = []
+        child.halted = ""
+        child.retry_at = 0.0
+        try:
+            child.spawn()
+            return f"{child.name} перезапущен, pid {child.proc.pid}"
+        except OSError as exc:
+            child.retry_at = time.monotonic() + 10
+            return f"{child.name} не поднялся: {exc}"
+
+    def serve_request(request: dict) -> bool:
+        """Исполнить просьбу окна. True — надзору пора выйти (перезапуск всего)."""
+        target = str(request.get("target") or "")
+        action = str(request.get("action") or "")
+        if action != "restart":
+            control.receipt(tree, request, False, f"такого действия надзор не знает: {action}")
+            return False
+        if target == "all":
+            if Path("/.dockerenv").exists():
+                # Расписка пишется ДО выхода: канал сейчас умрёт вместе со всеми,
+                # и написать её будет некому и некуда.
+                control.receipt(tree, request, True,
+                                "гашу харнесс целиком — контейнер поднимет его заново")
+                print("[serverboot] просьба владельца: перезапустить всё — выхожу, "
+                      "контейнер поднимется сам", flush=True)
+                return True
+            notes = [restart(child) for child in children]
+            control.receipt(tree, request, True,
+                            "надзор запущен не в контейнере, выходить некуда — "
+                            "перезапустил детей на месте: " + "; ".join(notes))
+            return False
+        picked = next((child for child in children if child.key == target), None)
+        if picked is None:
+            control.receipt(tree, request, False,
+                            f"здесь нет такого ребёнка: {target} "
+                            f"(есть: {', '.join(child.key for child in children)})")
+            return False
+        note = restart(picked)
+        print(f"[serverboot] просьба владельца: {note}", flush=True)
+        control.receipt(tree, request, True, note)
+        return False
 
     def _stop(*_):
         nonlocal stopping
@@ -241,6 +320,21 @@ def main() -> int:
     while not stopping:
         time.sleep(3)
         now = time.monotonic()
+        if control is not None:
+            # Сначала просьба, потом записка о себе — и в записке уже виден
+            # новый pid перезапущенного ребёнка. В обратном порядке окно ещё
+            # три секунды показывало бы старого, сразу после своей же кнопки.
+            request = control.take_request(tree)
+            if request and serve_request(request):
+                stopping = True
+                continue
+            # Записка — единственный признак «надзор жив» для окна: ни pid, ни
+            # имя хоста в контейнере для этого не годятся.
+            control.beat(tree, "serverboot", started_utc,
+                         [{"id": child.key, "name": child.name, "alive": child.alive(),
+                           "pid": child.proc.pid if child.proc is not None else None,
+                           "since_utc": child.since_utc, "falls": len(child.falls),
+                           "halted": child.halted} for child in children])
         for child in children:
             if child.alive() or child.halted:
                 continue

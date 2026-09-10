@@ -5,6 +5,7 @@ import { esc, fmtK, fmtN, fmtTime, md, plural, q, safeRender } from "../lib";
 import { stepsHTML, type RunDetail } from "../panel";
 import { loadMode, type ModeState } from "../mode";
 import { S } from "../state";
+import { mountSupervisor } from "./supervisor";
 
 const INTRO: Array<[string, string]> = [
   [
@@ -279,7 +280,9 @@ export async function render(container: HTMLElement): Promise<void> {
        · рук предложено: <b>${tools.length}</b> · снято ${esc(fmtTime(a.written_at))}. Живой список сборщика, не пересказ.</p>`
     : '<p class="muted">Снимка ещё нет: руннер пишет его при старте.</p>';
   container.innerHTML = `<div class="center">
-    ${meta}${modeBox}${fenceBox}${spend}${intro}
+    ${meta}${modeBox}${fenceBox}
+    <div id="supervisor-box"></div>
+    ${spend}${intro}
     ${cutsBox}
     <h3 class="section-title">Разбор живого хода</h3>
     <p class="muted">Не пример из документации, а последний настоящий ход этого агента, шаг за шагом, с пояснением каждого шага.</p>
@@ -291,6 +294,10 @@ export async function render(container: HTMLElement): Promise<void> {
     ${a.skills_index ? `<h3 class="section-title">Навыки</h3><div class="card md">${md(a.skills_index)}</div>` : '<p class="muted" style="margin-top:18px">Навыков пока нет: агент напишет их сам, когда чему-то научится.</p>'}
     ${Object.keys(a.knobs || {}).length ? `<h3 class="section-title">Ручки среды</h3><table class="grid">${Object.entries(a.knobs!).map(([k, v]) => `<tr><td class="mono">${esc(k)}</td><td class="mono">${esc(String(v))}</td></tr>`).join("")}</table>` : ""}
   </div>`;
+  // Управление и журналы — отдельным читателем: он ходит в свои ручки и живёт
+  // на своих обработчиках, а этот экран без него рисуется как рисовался.
+  const supervisorBox = q<HTMLElement>("#supervisor-box", container);
+  safeRender(supervisorBox, () => mountSupervisor(supervisorBox));
   const lessonBox = q<HTMLDetailsElement>("#lesson-box", container);
   lessonBox.addEventListener("toggle", () => {
     // Голый `void` оставлял складку в «ищу последний завершённый ход…» навсегда.
