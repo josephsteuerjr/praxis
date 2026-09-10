@@ -53,7 +53,14 @@ from deskd import usage
 # канал от него не тяжелеет; раскладка `app/deskapp.py` + `app/localharness/`
 # одна и в репозитории, и в поставке.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "localharness"))
-import voice  # noqa: E402 — путь добавлен строкой выше
+try:
+    import voice  # noqa: E402 — путь добавлен строкой выше
+except ImportError:
+    # Пакет ПУЛЬТА раннера не несёт вовсе (`deskpkg.PARTS`: localharness только у
+    # Windows-издания) — и голоса у него нет по построению: агент живёт на
+    # сервере, расшифровывает там же. Падать на импорте здесь значило бы уронить
+    # весь канал Пульта ради ручки, которой у него не должно быть.
+    voice = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("frame.desk")
@@ -936,6 +943,13 @@ def _voice_config() -> dict:
 
 async def _r_voice(c: Call):
     """Слышит ли агент: библиотека, модель, ход скачивания и причина молчания."""
+    if voice is None:
+        return {"schema": "helene.voice.v1", "enabled": False, "ready": False,
+                "why": "этот канал стоит без раннера (Пульт) — голос живёт там, "
+                       "где живёт агент",
+                "model": "", "catalog": [], "installed": {}, "dir": "",
+                "library": {"present": False, "why": "в этой установке нет раннера"},
+                "download": None}
     return await asyncio.to_thread(lambda: voice.state(readers.tree(), _voice_config()))
 
 
