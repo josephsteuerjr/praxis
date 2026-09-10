@@ -162,7 +162,9 @@ class BothInstallsTakeItFromHere(unittest.TestCase):
         import deploy_desk  # noqa: PLC0415 — стенд смотрит именно на модуль выкладки
         self.assertIs(deploy_desk.deskpkg, deskpkg)
         # Собирается ровно то, что объявлено фронтами пакета для сервера.
-        self.assertEqual(deploy_desk.FRONTS, ["app", "miniapp", "mobile"])
+        # ⚠ На сервере окно — ПУЛЬТ, а не Элен: приложения разделены 10.09, и
+        # окно Элен знает про местного агента, которого на сервере нет.
+        self.assertEqual(deploy_desk.FRONTS, ["miniapp", "mobile", "pult"])
         src = (ROOT / "server" / "deploy_desk.py").read_text(encoding="utf-8")
         self.assertNotIn("MODULE", src, "список путей вернулся в выкладку")
 

@@ -25,7 +25,13 @@ const src = join(here, "..", "src");
 const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 
 const relayTs = code(readFileSync(join(src, "relay.ts"), "utf8"));
-const settingsTs = code(readFileSync(join(src, "views", "settings.ts"), "utf8"));
+// Экран настроек с 10.09 живёт в ДВУХ файлах: общий каркас (имена, телефон,
+// перенос, «Сохранить») — в ui-kit/window/views, карточки местного агента — у
+// Элен. Правила ниже про экран как целое, и держать их надо на обоих файлах
+// сразу: иначе переезд строки из одного в другой тихо снимал бы проверку.
+const settingsTs = code(
+  readFileSync(join(here, "..", "..", "ui-kit", "window", "views", "settings-frame.ts"), "utf8")
+  + "\n" + readFileSync(join(src, "settings-agent.ts"), "utf8"));
 
 // --- 1. значения самих констант: порт — из ui-kit/contract.json (его же
 // сверяют Python и Rust), окно обязано читать его оттуда, а не литералом

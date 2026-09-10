@@ -85,8 +85,15 @@ PARTS: tuple[Part, ...] = (
          why="канал: HTTP, вебсокет, ключи, комнаты"),
     Part("deskd", "deskd", FLAVORS, kind="py",
          why="читалки канала: состояние, комнаты, расход, разрезы кадра"),
-    Part("app/dist", "static", FLAVORS, dist=True,
-         why="окно: сборка Vite (npm --prefix app run build)"),
+    # Окно — ДВА разных фронта, а не один на оба места. Приложения разделены
+    # 10.09: у Элен агент рядом (настройки правят helene.json на этой машине), у
+    # Пульта агент на сервере (тех карточек нет вовсе). До разделения фронт был
+    # один, а разница держалась ветками `if (remote)` внутри него — то есть на
+    # сервер уезжало окно Элен, знающее про местного агента, которого там нет.
+    Part("app/dist", "static", (WINDOWS,), dist=True,
+         why="окно Элен: сборка Vite (npm --prefix app run build)"),
+    Part("pult/dist", "static", (SERVER,), dist=True,
+         why="окно Пульта: сборка Vite (npm --prefix pult run build)"),
     Part("mobile/dist", "mobile", FLAVORS, dist=True,
          why="телефон: PWA на /m/"),
     Part("miniapp/dist", "miniapp", (SERVER,), dist=True,
@@ -237,13 +244,28 @@ def static_manifest(root: Path) -> dict:
     return {"v": 1, "digest": digest, "files": files}
 
 
-def copy_static(dest: Path) -> str:
-    """Статика окна в ``dest`` + манифест рядом -> отпечаток.
+#: Какое приложение каким фронтом собрано. Ось здесь — ПРИЛОЖЕНИЕ, а не место
+#: установки: настольный Пульт и Пульт на сервере — одно и то же окно, просто
+#: одно живёт в exe, а другое отдаётся каналом по HTTP.
+HELENE, PULT = "helene", "pult"
+WINDOW_FRONT = {HELENE: "app/dist", PULT: "pult/dist"}
 
-    Отдельной ручкой, потому что вариант Praxis — это окно без канала: там
-    пакета desk нет вовсе, а статика та же самая и отпечаток нужен тот же.
+
+def copy_static(dest: Path, app: str = HELENE) -> str:
+    """Статика окна ``app`` в ``dest`` + манифест рядом -> отпечаток.
+
+    Отдельной ручкой, потому что настольный Пульт — это окно без канала: там
+    пакета desk нет вовсе, а статика нужна и отпечаток нужен тот же.
+
+    ⚠ Аргумент `app` появился 10.09 вместе с разделением приложений. До него
+    частей с именем `static` была одна, и брать «первую попавшуюся» было
+    безопасно. Теперь их две, и молчаливый `next(...)` уложил бы в Пульт окно
+    Элен — то самое, которое знает про местного агента, которого там нет.
     """
-    part = next(p for p in PARTS if p.dest == "static")
+    src = WINDOW_FRONT.get(app)
+    if src is None:
+        raise ValueError(f"нет такого приложения: «{app}»; знаю {', '.join(WINDOW_FRONT)}")
+    part = next(p for p in PARTS if p.src == src)
     why = _why_missing(part)
     if why:
         raise SystemExit(f"{part.src} — {why}")
@@ -298,7 +320,10 @@ def build(dest: Path, flavor: str, *, version: str | None = None,
             # Отпечаток статики пишем ВНУТРЬ статики: установщик читает его в
             # уже поставленной копии, где манифеста пакета может не быть
             # (поставки до 0.5.1).
-            static_digest = copy_static(dest / "static")
+            # Какое окно — решает не вид пакета, а сама часть: у сервера в
+            # составе фронт Пульта, у Windows — фронт Элен.
+            static_digest = copy_static(dest / "static",
+                                        PULT if part.src == WINDOW_FRONT[PULT] else HELENE)
             n = sum(1 for p in (dest / "static").rglob("*") if p.is_file())
         else:
             n = _copy_part(part, dest)

@@ -1,6 +1,6 @@
-@import "../../../ui-kit/fonts.css";
-@import "../../../ui-kit/tokens.css";
-@import "../../../ui-kit/actions.css";
+@import "../../fonts.css";
+@import "../../tokens.css";
+@import "../../actions.css";
 
 /* Hélène — окно. Тёплая бумага, воздух, один акцент. Три колонки: полка
    (разделы и чаты), центр (переписка как документ), ход агента справа.

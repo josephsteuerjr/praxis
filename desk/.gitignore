@@ -20,6 +20,9 @@ shell/target-praxis/
 svc/target/
 app/dist/
 app/node_modules/
+# Пульт — второе приложение на том же общем окне (разделение 10.09)
+pult/dist/
+pult/node_modules/
 
 # сборки и зависимости
 svc/target/

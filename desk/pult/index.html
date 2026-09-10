@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Praxis</title>
+    <link rel="icon" href="./favicon.svg" />
+    <!-- Веб-версия за каналом: config.js отдаёт канал (base/key/agent для
+         дерева без снимка харнесса); в оболочке файла нет — 404 безвреден,
+         имя и адрес даёт init-скрипт оболочки. -->
+    <script src="./config.js"></script>
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
+    <div id="app">
+      <header id="chrome" data-tauri-drag-region>
+        <div class="chrome-left">
+          <button class="chrome-btn" id="toggle-rail" type="button" title="Полка слева · Ctrl+B" aria-label="Показать или скрыть полку слева">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2" /><path d="M6 2.5v11" /></svg>
+          </button>
+        </div>
+        <div class="chrome-drag" data-tauri-drag-region></div>
+        <div class="chrome-right">
+          <button class="chrome-btn" id="toggle-panel" type="button" title="Действия справа · Ctrl+J" aria-label="Показать или скрыть действия">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2" /><path d="M10 2.5v11" /></svg>
+          </button>
+          <div class="controls">
+            <button class="win" data-win="minimize" type="button" aria-label="Свернуть">
+              <svg viewBox="0 0 12 12"><path d="M1 6h10" /></svg>
+            </button>
+            <button class="win" data-win="maximize" type="button" aria-label="Развернуть или восстановить">
+              <svg viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="1" /></svg>
+            </button>
+            <button class="win win-close" data-win="close" type="button" aria-label="Закрыть в трей">
+              <svg viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <aside id="rail">
+        <nav class="rail-nav" id="rail-nav" aria-label="Разделы"></nav>
+        <div class="rail-rooms">
+          <div class="rail-label">
+            <span>Чаты</span>
+            <button class="icon-btn" id="room-add" type="button" title="Новый чат · Ctrl+N" aria-label="Новый чат">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11" /></svg>
+            </button>
+          </div>
+          <div id="rooms" class="rooms scroll"></div>
+        </div>
+        <div class="rail-foot">
+          <nav class="rail-nav" id="rail-bottom" aria-label="Настройки"></nav>
+          <div class="rail-sign" id="rail-sign"></div>
+        </div>
+      </aside>
+
+      <main id="main">
+        <header id="head">
+          <div class="head-copy">
+            <div id="head-kicker" class="head-kicker"></div>
+            <h1 id="head-title" class="head-title"></h1>
+          </div>
+          <div class="head-side">
+            <div id="pulse" class="pulse" title="последний вызов модели"></div>
+            <div id="state" class="state-pill">
+              <span class="state-dot"></span>
+              <span id="state-text">Подключение…</span>
+              <button id="state-action" class="state-action" type="button" hidden></button>
+            </div>
+          </div>
+        </header>
+        <div id="alarm" class="alarm" hidden></div>
+        <!-- aria-live снят: сюда кладут ленту целиком на каждой перерисовке;
+             смена раздела объявляется отдельной строкой #live. -->
+        <section id="view" class="view scroll"></section>
+        <footer id="composer" class="composer">
+          <div id="composer-files" class="composer-files" hidden></div>
+          <div class="composer-box">
+            <div id="composer-target" class="composer-target"></div>
+            <button id="attach" class="attach" type="button" title="Приложить картинку · можно вставить из буфера или перетащить" aria-label="Приложить картинку">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.5 7.2 8.3 12.4a1.6 1.6 0 0 1-2.3-2.3l5.6-5.6a3 3 0 0 1 4.2 4.2l-6 6a4.4 4.4 0 0 1-6.2-6.2L9.2 3" /></svg>
+            </button>
+            <input id="attach-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+            <textarea id="say" rows="1" placeholder="Написать агенту…"></textarea>
+            <button id="send" class="send" type="button" title="Отправить · Enter" aria-label="Отправить">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 15.5v-11M5.8 8.7 10 4.5l4.2 4.2" /></svg>
+            </button>
+          </div>
+          <div class="composer-hint"><span id="composer-note"></span><span>Enter — отправить · Shift+Enter — новая строка</span></div>
+        </footer>
+      </main>
+
+      <aside id="panel" class="panel scroll" hidden></aside>
+    </div>
+    <div id="live" class="sr-only" aria-live="polite"></div>
+    <div id="toast" class="toast" hidden></div>
+    <div id="menu" class="menu" hidden></div>
+  </body>
+</html>

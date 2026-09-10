@@ -1191,8 +1191,10 @@ def build_praxis_pult(args) -> None:
     shutil.copy2(icon, out / "praxis-pult.ico")
 
     print("окно:")
-    static_digest = copy_static(out / "app" / "static")
-    print(f"  app/static: {static_digest[:12]}")
+    # Настольный Пульт везёт окно ПУЛЬТА: агент у него на сервере, и карточек
+    # местного агента в этой сборке нет вовсе (разделение приложений 10.09).
+    static_digest = copy_static(out / "app" / "static", deskpkg.PULT)
+    print(f"  app/static: окно Пульта, {static_digest[:12]}")
 
     print("документы:")
     (out / "helene.json").write_text(PRAXIS_JSON, encoding="utf-8", newline="\n")

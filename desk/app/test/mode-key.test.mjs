@@ -42,7 +42,13 @@ const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/
 // строки из одного в другой тихо снимал бы проверку.
 const modeTs = code(readFileSync(join(win, "mode.ts"), "utf8")
                     + "\n" + readFileSync(join(src, "modecard.ts"), "utf8"));
-const settingsTs = code(readFileSync(join(src, "views", "settings.ts"), "utf8"));
+// Экран настроек с 10.09 живёт в ДВУХ файлах: общий каркас (имена, телефон,
+// перенос, «Сохранить») — в ui-kit/window/views, карточки местного агента — у
+// Элен. Правила ниже про экран как целое, и держать их надо на обоих файлах
+// сразу: иначе переезд строки из одного в другой тихо снимал бы проверку.
+const settingsTs = code(
+  readFileSync(join(here, "..", "..", "ui-kit", "window", "views", "settings-frame.ts"), "utf8")
+  + "\n" + readFileSync(join(src, "settings-agent.ts"), "utf8"));
 
 // --- 1. ключ режима
 assert.ok(

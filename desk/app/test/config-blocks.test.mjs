@@ -76,7 +76,13 @@ assert.equal(sandboxWas.enabled, true, "keepBlock изменил исходны�
 
 /** Комментарии — не код: в них те же присваивания разбираются словами. */
 const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-const settingsTs = code(readFileSync(join(src, "views", "settings.ts"), "utf8"));
+// Экран настроек с 10.09 живёт в ДВУХ файлах: общий каркас (имена, телефон,
+// перенос, «Сохранить») — в ui-kit/window/views, карточки местного агента — у
+// Элен. Правила ниже про экран как целое, и держать их надо на обоих файлах
+// сразу: иначе переезд строки из одного в другой тихо снимал бы проверку.
+const settingsTs = code(
+  readFileSync(join(here, "..", "..", "ui-kit", "window", "views", "settings-frame.ts"), "utf8")
+  + "\n" + readFileSync(join(src, "settings-agent.ts"), "utf8"));
 
 const assignments = [...settingsTs.matchAll(/\bout\.(\w+)\s*=\s*([\s\S]{0,40})/g)];
 assert.ok(assignments.length >= 5, "присваиваний блоков в settings.ts не нашлось — тест устарел, а не код");
