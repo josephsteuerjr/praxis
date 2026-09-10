@@ -15,12 +15,20 @@
     Windows: ограды AppContainer здесь нет, границей служит сам контейнер
     (режим `interactive`), тела руки `computer` нет (`body.launch` на Linux
     говорит об этом сам);
+  * реле подписки ChatGPT (`helene-relay`, Linux-бинарь рядом с конфигом) —
+    третьим ребёнком, когда `relay.enabled`, ровно как оболочка на Windows:
+    дом реле `data/relay` (там же приезжает `local_auth` из архива переноса),
+    порт из `relay.port`, ключ петли из `model.key`. Реле живёт В ТОМ ЖЕ
+    контейнере, что и харнесс, потому что слушает только `127.0.0.1` — и
+    поэтому `model.base_url` вида `http://127.0.0.1:5011` из перенесённого
+    агента верен на сервере БЕЗ правки;
   * упавший ребёнок поднимается с растущей паузой (1…60 с); код выхода 2/3
     раннера (нет дерева / кривой конфиг) перезапуском не лечится — надзор
     говорит это в лог и ждёт правки;
   * SIGTERM/SIGINT — гасит детей и выходит.
 
-Вывод детей — `data/deskapp.log` и `data/runner.log`, как на Windows.
+Вывод детей — `data/deskapp.log`, `data/runner.log` и `data/relay.log`, как на
+Windows.
 """
 from __future__ import annotations
 
@@ -29,6 +37,7 @@ import json
 import os
 import secrets
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -65,6 +74,36 @@ def _desk_token(tree: Path) -> str:
     return token
 
 
+#: Имя Linux-бинаря реле в поставке (рядом с `helene-relay.exe` для Windows).
+RELAY_NAME = "helene-relay"
+RELAY_PORT_DEFAULT = 5011
+
+
+def _relay_block(cfg: dict) -> dict:
+    block = cfg.get("relay")
+    return block if isinstance(block, dict) else {}
+
+
+def _relay_port(cfg: dict) -> int:
+    try:
+        return int(_relay_block(cfg).get("port") or RELAY_PORT_DEFAULT)
+    except (TypeError, ValueError):
+        return RELAY_PORT_DEFAULT
+
+
+def _port_busy(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.5)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
+def looks_like_local_relay(cfg: dict) -> bool:
+    """Смотрит ли мозг агента в локальное реле (адрес на петле с портом реле)."""
+    url = str((cfg.get("model") or {}).get("base_url") or "")
+    port = _relay_port(cfg)
+    return any(f"//{host}:{port}" in url for host in ("127.0.0.1", "localhost"))
+
+
 class Child:
     def __init__(self, name: str, argv: list[str], env: dict, cwd: Path, log_path: Path):
         self.name, self.argv, self.env, self.cwd, self.log_path = name, argv, env, cwd, log_path
@@ -99,6 +138,49 @@ class Child:
             self.proc.kill()
 
 
+def relay_child(base: Path, cfg: dict, tree: Path, env: dict) -> "Child | None":
+    """Реле подписки ChatGPT третьим ребёнком — то же, что делает оболочка.
+
+    Молчания здесь быть не должно ни в одном исходе: агент с провайдером
+    `chatgpt` без живого реле НЕМ, и до 0.5.2 сервер именно так его и принимал —
+    архив переноса привозил `data/relay/local_auth` и `model.base_url` на
+    петлю, а поднимать реле на той стороне было нечем.
+    """
+    if not _relay_block(cfg).get("enabled"):
+        if looks_like_local_relay(cfg):
+            print("[serverboot] ⚠ мозг агента смотрит в локальное реле, но relay.enabled "
+                  "не стоит — реле не поднимаю, и модель отвечать не будет", flush=True)
+        return None
+    exe = Path((os.environ.get("HELENE_RELAY") or "").strip() or (base / RELAY_NAME))
+    if not exe.is_file():
+        print(f"[serverboot] ⚠ relay.enabled, но реле рядом нет ({exe}) — агент с подпиской "
+              "ChatGPT будет нем. Собери Linux-бинарь реле в поставку "
+              "(installer/build_dist.py) и пересобери образ", flush=True)
+        return None
+    port = _relay_port(cfg)
+    if _port_busy(port):
+        # Своё реле в петлю перезапусков, а весь мозг — в ЧУЖОЕ реле: ровно то,
+        # от чего оболочка отказывается на Windows.
+        print(f"[serverboot] ⚠ порт реле {port} уже занят — своё реле не поднимаю; "
+              f"освободи порт или смени relay.port", flush=True)
+        return None
+    home = tree / "relay"
+    home.mkdir(parents=True, exist_ok=True)
+    relay_env = dict(env)
+    relay_env["RELAY_PORT"] = str(port)
+    relay_env["RELAY_LOG_DIR"] = str(home / "logs")
+    # Инструкции: без этого реле кладёт перед конституцией агента 23 КБ чужого
+    # системного промпта («ты кодинг-агент Codex CLI») — то же значение, что
+    # ставит оболочка (shell/src/main.rs::spawn_relay).
+    instructions = str(_relay_block(cfg).get("instructions") or "").strip() or "minimal"
+    relay_env["RELAY_INSTRUCTIONS"] = instructions
+    key = str((cfg.get("model") or {}).get("key") or "").strip()
+    if key:
+        # Ключ мозга = ключ петли: реле требует его Bearer-ом на /chat/completions.
+        relay_env["RELAY_API_KEY"] = key
+    return Child("реле", [str(exe), "serve"], relay_env, home, tree / "relay.log")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -131,7 +213,13 @@ def main() -> int:
     env = dict(os.environ, HELENE_TREE=str(tree), HELENE_TOKEN=token, PYTHONUTF8="1",
                PYTHONUNBUFFERED="1", HELENE_HOST=os.environ.get("HELENE_HOST", "0.0.0.0"))
     env.pop("PRAXIS_DESK_TOKEN", None)
-    children = [
+    children = []
+    # Реле первым: пока оно не слушает, первый же ход агента с подпиской
+    # ChatGPT уходит в никуда. Порядок тот же, что в плане оболочки.
+    relay = relay_child(base, cfg, tree, env)
+    if relay is not None:
+        children.append(relay)
+    children += [
         Child("канал", [sys.executable, "-u", str(app), str(port)], env, app.parent, tree / "deskapp.log"),
         Child("раннер", [sys.executable, "-u", str(runner), "--config", str(config)], env,
               runner.parent, tree / "runner.log"),

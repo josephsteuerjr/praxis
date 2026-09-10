@@ -1153,6 +1153,38 @@ def relay_provenance(exe: Path, allow_partial: bool) -> dict:
     return info
 
 
+def relay_linux_provenance(binary: Path, allow_partial: bool) -> dict:
+    """Из чего собран Linux-бинарь реле, который едет в поставку для сервера.
+
+    Тот же вопрос и тот же ответ, что у `helene-relay.exe`, только цель другая.
+    Отдельная проверка нужна потому, что бинари собираются РАЗНЫМИ командами
+    (`--build` и `--build-linux`): пересобрать один и забыть другой — обычное
+    дело, а разъехавшийся Linux-бинарь виден только на сервере и только тем,
+    что агент молчит.
+    """
+    total, _files = relay_src.digest(relay_src.MIRROR)
+    made = relay_src.built_linux(relay_src.MIRROR)
+    if not made:
+        line = (f"чем собран Linux-бинарь реле — неизвестно ({relay_src.LINUX_BUILT} нет): "
+                "installer/relay_src.py --build-linux")
+        if not allow_partial:
+            raise SystemExit(line)
+        print(f"  ⚠ {line}")
+        return {}
+    same = (binary.is_file()
+            and hashlib.sha256(binary.read_bytes()).hexdigest() == made.get("exe_sha256"))
+    if made.get("digest") != total or not same:
+        line = ("Linux-бинарь реле собран не из этого исходника — пересобрать: "
+                f"installer/relay_src.py --build-linux (отпечаток бинаря "
+                f"{str(made.get('digest', ''))[:12]}, исходника {total[:12]})")
+        if not allow_partial:
+            raise SystemExit(line)
+        print(f"  ⚠ {line}")
+        return dict(made, stale=True)
+    print(f"  Linux-бинарь реле собран из него же ({made.get('built_utc')})")
+    return made
+
+
 def build_praxis_pult(args) -> None:
     """Поставка варианта Praxis: окно в режиме remote без ядра, рантайма и тела.
 
@@ -1358,6 +1390,12 @@ def main() -> None:
         (ROOT / "_relay_prod_src" / "target" / "release" / "codex-proxy-server.exe", "helene-relay.exe",
          "собери реле: cargo build --release в _relay_prod_src",
          None),
+        # То же реле под Linux — для сервера: `server/serverboot.py` поднимает
+        # его третьим ребёнком, и без него агент с подпиской ChatGPT, увезённый
+        # на сервер архивом переноса, нем (ключи приезжают, поднять нечем).
+        (relay_src.linux_binary(), "helene-relay",
+         "собери реле под Linux (нужен докер): installer/relay_src.py --build-linux",
+         None),
         # Тело руки `computer` — крейты дерева (tree/body), версия у них своя
         # (workspace 0.1.0), поэтому декларация — None, как у реле. Собираются
         # ВНЕ дерева (`--target-dir`), чтобы `live/` оставалось чистым.
@@ -1373,6 +1411,7 @@ def main() -> None:
     missing = []
     stale = []
     relay: dict = {}
+    relay_linux: dict = {}
     for src, name, how, decl in binaries:
         if not src.is_file():
             missing.append(f"{name} — {how}")
@@ -1404,6 +1443,8 @@ def main() -> None:
         print(f"  {name}: положен")
         if name == "helene-relay.exe":
             relay = relay_provenance(src, args.allow_partial)
+        if name == "helene-relay":
+            relay_linux = relay_linux_provenance(src, args.allow_partial)
     if stale:
         raise SystemExit(
             "версия внутри exe не совпадает с объявленной, поставка была бы смесью:\n  "
@@ -1497,7 +1538,8 @@ def main() -> None:
         # сервер: по отпечатку видно, одна ли там и здесь версия канала.
         # Реле: единственный бинарь, исходник которого лежит вне обоих
         # репозиториев. Отпечаток исходника и записка о происхождении — здесь.
-        "relay": relay or None,
+        "relay": (dict(relay, linux=relay_linux or None) if relay
+                  else ({"linux": relay_linux} if relay_linux else None)),
         # Ядро и слой издания — ДВА отпечатка, а не один по собранному дереву:
         # собранное дерево не отвечает на вопрос «какого ядра эта поставка», а
         # он и есть главный. Плюс расхождение объявленного слоя с делом, чтобы

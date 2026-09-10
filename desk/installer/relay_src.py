@@ -12,6 +12,8 @@
     python installer/relay_src.py --check --host <адрес>   # зеркало = живой?
     python installer/relay_src.py --pull  --host <адрес>   # обновить зеркало
     python installer/relay_src.py --digest                 # отпечаток зеркала
+    python installer/relay_src.py --build                  # собрать exe для Windows
+    python installer/relay_src.py --build-linux            # собрать бинарь для сервера
 
 Отпечаток считается по содержимому с одной нормой переводов строк (LF): копия
 на Windows иначе расходилась бы с сервером на каждом файле. Его же пишет в
@@ -40,6 +42,12 @@ import layout  # noqa: E402 — где на диске лежат соседи �
 MIRROR = layout.relay_mirror()
 STAMP = "RELAY-SOURCE.json"
 BUILT = "RELAY-BUILD.json"
+#: Linux-бинарь реле: тот же исходник, другая цель. Нужен серверу — на той
+#: стороне агент с подпиской ChatGPT без него нем (`server/serverboot.py`).
+LINUX_BUILT = "RELAY-BUILD-LINUX.json"
+LINUX_REL = ("target", "linux", "helene-relay")
+LINUX_IMAGE = "helene-relay-build:local"
+LINUX_IN_IMAGE = "/usr/src/codex/target/release/codex-proxy-server"
 REMOTE_DEFAULT = "/opt/relay/Code"
 
 # Что считается исходником реле: то, из чего собирается бинарь. Каталог target/
@@ -125,6 +133,62 @@ def build(root: Path = MIRROR) -> dict:
     return note
 
 
+def linux_binary(root: Path = MIRROR) -> Path:
+    """Где лежит собранный Linux-бинарь реле (внутри `target/` — не исходник)."""
+    return root.joinpath(*LINUX_REL)
+
+
+def built_linux(root: Path = MIRROR) -> dict:
+    """Чем собран Linux-бинарь; пусто — сборка о себе ничего не сказала."""
+    return _read(root / LINUX_BUILT)
+
+
+def build_linux(root: Path = MIRROR, image: str = LINUX_IMAGE) -> dict:
+    """Собрать реле под Linux в докере и записать, ИЗ ЧЕГО оно собрано.
+
+    Windows-бинарь собирается `cargo` на месте, Linux-бинарь — в контейнере по
+    `Dockerfile` самого реле (стадия `builder`). Кросс-компиляции здесь нет
+    намеренно: у реле `reqwest` с нативным TLS, и подбор линкера под музл
+    занял бы больше, чем один слой докера.
+
+    Бинарь достаётся из образа (`docker create` + `docker cp`), а не пишется
+    в бинд-маунт: маунт с диска Windows в контейнер медленнее раз в сорок, и
+    сборка в нём идёт минутами вместо секунд.
+    """
+    total, files = digest(root)
+    print(f"docker build (реле под Linux) в {root} ({len(files)} файлов исходника)…")
+    r = subprocess.run(["docker", "build", "--target", "builder", "-t", image, "."],
+                       cwd=root, text=True, encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        raise SystemExit("реле под Linux не собралось (docker build)")
+    made = subprocess.run(["docker", "create", image], cwd=root, capture_output=True,
+                          text=True, encoding="utf-8", errors="replace")
+    cid = made.stdout.strip()
+    if made.returncode != 0 or not cid:
+        raise SystemExit("не создался контейнер для выемки бинаря: " + made.stderr[-300:])
+    out = linux_binary(root)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        got = subprocess.run(["docker", "cp", f"{cid}:{LINUX_IN_IMAGE}", str(out)],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if got.returncode != 0 or not out.is_file():
+            raise SystemExit("бинарь не достался из образа: " + got.stderr[-300:])
+    finally:
+        subprocess.run(["docker", "rm", "-f", cid], capture_output=True, text=True)
+    note = {
+        "digest": total,
+        "target": "x86_64-unknown-linux-gnu",
+        "exe": out.name,
+        "exe_sha256": hashlib.sha256(out.read_bytes()).hexdigest(),
+        "built_utc": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    (root / LINUX_BUILT).write_text(json.dumps(note, ensure_ascii=False, indent=1) + "\n",
+                                    encoding="utf-8", newline="\n")
+    print(f"собрано: {out} ({out.stat().st_size / 1e6:.1f} МБ)")
+    print(f"записано: {root / LINUX_BUILT}")
+    return note
+
+
 # --- сервер -------------------------------------------------------------------
 
 _PROBE = r"""
@@ -193,11 +257,17 @@ def main() -> int:
     ap.add_argument("--digest", action="store_true", help="напечатать отпечаток зеркала")
     ap.add_argument("--build", action="store_true",
                     help="собрать реле и записать, из какого исходника")
+    ap.add_argument("--build-linux", action="store_true",
+                    help="собрать реле под Linux (докер) — оно едет в поставку для сервера")
     args = ap.parse_args()
 
     mirror = Path(args.mirror)
     if args.build:
         build(mirror)
+        if not (args.check or args.pull or args.build_linux):
+            return 0
+    if args.build_linux:
+        build_linux(mirror)
         if not (args.check or args.pull):
             return 0
     if args.digest or not (args.check or args.pull):
@@ -215,6 +285,14 @@ def main() -> int:
             print(f"бинарь: собран из этого же исходника ({made.get('built_utc')})")
         else:
             print(f"бинарь: собран ИЗ ДРУГОГО исходника ({made.get('digest', '')[:16]}) — пересобрать")
+        linux = built_linux(mirror)
+        if not linux_binary(mirror).is_file():
+            print("Linux-бинарь: НЕТ — собери installer/relay_src.py --build-linux "
+                  "(без него агент, увезённый на сервер, нем)")
+        elif linux.get("digest") == total:
+            print(f"Linux-бинарь: собран из этого же исходника ({linux.get('built_utc')})")
+        else:
+            print(f"Linux-бинарь: собран ИЗ ДРУГОГО исходника ({linux.get('digest', '')[:16]}) — пересобрать")
         return 0
 
     if not args.host:

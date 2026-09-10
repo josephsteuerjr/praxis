@@ -28,12 +28,18 @@
 
        python installer/relay_src.py --check --host <адрес>   # зеркало = живой?
        python installer/relay_src.py --pull  --host <адрес>   # если разошлось
-       python installer/relay_src.py --build                  # собрать и записать
+       python installer/relay_src.py --build                  # exe для Windows
+       python installer/relay_src.py --build-linux            # бинарь для сервера
 
    `--build` кладёт рядом `RELAY-BUILD.json` с отпечатком исходника, из
    которого собран бинарь, и `build_dist` падает, если в поставку едет реле от
    другого исходника. Ровно это и случилось 09.09: в архив уехало реле от
    03.09, а починка ссылок была от 09.09.
+
+   `--build-linux` собирает то же реле под Linux в докере (`RELAY-BUILD-LINUX.json`
+   рядом) — оно едет в поставку файлом `helene-relay` и поднимается на сервере
+   вместе с агентом. Бинари собираются РАЗНЫМИ командами: пересобрать один и
+   забыть другой легко, поэтому сборка сверяет отпечаток каждого отдельно.
 
    Ядро и слой издания — тем же приёмом:
 
