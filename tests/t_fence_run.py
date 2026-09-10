@@ -96,16 +96,31 @@ class AgentShim(Ground):
 class WorkshopShim(Ground):
     """Мастерская: в контейнер уходит ВСЁ, что она исполняет."""
 
-    def test_a_shell_string_becomes_a_bash_call_in_the_container(self):
-        """`run` зовёт строкой при shell=True — прежний шим такой вызов не узнавал."""
+    def test_a_shell_string_keeps_its_own_interpreter_in_the_container(self):
+        """`run` зовёт строкой при shell=True — прежний шим такой вызов не узнавал.
+
+        ⚠ И интерпретатор обязан остаться ТОТ ЖЕ. На Windows `shell=True` — это
+        `cmd.exe /c`; завернув команду в busybox bash, ограда починила бы дыру и
+        заодно поменяла язык, на котором агент эту команду написал. Дело ограды —
+        где команда исполняется, а не что она значит.
+        """
+        import os
         c = FakeContainer()
         shim(c, route_all=True).run("pytest -q", shell=True,
                                     cwd="C:/Helene/data/workspace/projects/сайт",
                                     capture_output=True, text=True, timeout=120)
         self.assertEqual(len(c.calls), 1)
         argv, cwd, timeout = c.calls[0]
-        self.assertEqual(argv[1:], ["-lc", "pytest -q"])
+        self.assertEqual(argv[1:], ["/c", "pytest -q"] if os.name == "nt"
+                         else ["-c", "pytest -q"])
+        self.assertNotIn("bash", Path(argv[0]).stem.lower())
         self.assertEqual(timeout, 120.0)
+
+    def test_the_shell_hand_still_speaks_bash(self):
+        """Рука `shell` как была: busybox поставки, тройка `-lc`."""
+        c = FakeContainer()
+        shim(c, route_all=False).run(["bash", "-lc", "ls -la /app"], timeout=30)
+        self.assertEqual(c.calls[0][0][1:], ["-lc", "ls -la /app"])
 
     def test_the_working_directory_of_the_caller_is_kept(self):
         """Папка проекта, а не workspace.

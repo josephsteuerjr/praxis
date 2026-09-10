@@ -1319,14 +1319,32 @@ class _SubprocessShim:
         cwd = Path(kwargs["cwd"]) if kwargs.get("cwd") else self._workspace
         if kwargs.get("shell"):
             # `run` зовёт со строкой: `subprocess.run(cmd, shell=True, …)`.
-            return self._bash(args if isinstance(args, str) else " ".join(map(str, args))), cwd
+            return self._shell(args if isinstance(args, str) else " ".join(map(str, args))), cwd
         if isinstance(args, str):
             return [args], cwd
         return [str(a) for a in args], cwd
 
     def _bash(self, command: str) -> list[str]:
+        """Интерпретатор руки `shell` — busybox поставки, как было до ограды."""
         bash = self._root / "runtime" / "bash.exe"
         return [str(bash) if bash.exists() else "bash", "-lc", command]
+
+    def _shell(self, command: str) -> list[str]:
+        """Ровно тот интерпретатор, который взял бы сам `subprocess` при shell=True.
+
+        ⚠ Здесь стоял `self._bash(...)`, и это было тихой подменой смысла. На
+        Windows `subprocess.run(cmd, shell=True)` — это `cmd.exe /c`, а не bash;
+        завернув команду руки `run` в busybox, ограда чинила бы дыру и заодно
+        меняла язык, на котором агент эту команду написал. Дело ограды — где
+        команда исполняется, а не что она значит.
+
+        (Что `run` на Windows говорит на cmd, а `shell` — на bash, при том что всё
+        дерево написано под Linux, — вопрос настоящий. Но решать его молча, внутри
+        починки ограды, нельзя.)
+        """
+        if os.name == "nt":
+            return [os.environ.get("ComSpec") or "cmd.exe", "/c", command]
+        return ["/bin/sh", "-c", command]
 
     def run(self, args, *pargs, **kwargs):
         plan = self._plan(args, kwargs)
