@@ -61,12 +61,19 @@ SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".vectors", ".proposals",
 SKIP_SUFFIXES = (".pyc", ".pyo", ".bak", ".session-journal")
 SKIP_PREFIXES = (".env",)
 
+#: Машинные файлы: пишет их прогон, а не человек, и расходятся они ВСЕГДА — на каждой
+#: машине свои секунды. В отчёте это шум, который топит настоящее: 10.09 замеры дали 423
+#: строки расхождения на файле, о котором нечего решать.
+SKIP_NAMES = {".praxis_test_durations.json"}
+
 
 def _skip(rel: str) -> bool:
     parts = rel.split("/")
     if any(p in SKIP_DIRS for p in parts):
         return True
     name = parts[-1]
+    if name in SKIP_NAMES:
+        return True
     if name.endswith(SKIP_SUFFIXES) or name.startswith(SKIP_PREFIXES):
         return True
     # `agent.py.pre-что-то-1784583545` — снимок дерева перед правкой, не файл кода.
