@@ -20,6 +20,7 @@ AppContainer здесь не поднимается: `Container` подменё�
 """
 from __future__ import annotations
 
+import os
 import subprocess as real_subprocess
 import sys
 import types
@@ -96,24 +97,28 @@ class AgentShim(Ground):
 class WorkshopShim(Ground):
     """Мастерская: в контейнер уходит ВСЁ, что она исполняет."""
 
-    def test_a_shell_string_keeps_its_own_interpreter_in_the_container(self):
+    def test_a_shell_string_goes_to_the_same_bash_as_the_shell_hand(self):
         """`run` зовёт строкой при shell=True — прежний шим такой вызов не узнавал.
 
-        ⚠ И интерпретатор обязан остаться ТОТ ЖЕ. На Windows `shell=True` — это
-        `cmd.exe /c`; завернув команду в busybox bash, ограда починила бы дыру и
-        заодно поменяла язык, на котором агент эту команду написал. Дело ограды —
-        где команда исполняется, а не что она значит.
+        ⚠ ИНТЕРПРЕТАТОР — РЕШЕНИЕ ВЛАДЕЛЬЦА, а не побочный эффект `shell=True`.
+        Здесь стояло обратное утверждение: на Windows `shell=True` — это
+        `cmd.exe /c`, и ограда его сохраняла, чтобы не менять язык команды под
+        видом починки безопасности. Разницу («`run` на cmd, `shell` на bash, при
+        том что дерево написано под Linux») вынесли владельцу, и 10.09 он ответил:
+        «на винде же у нас есть bash в комплекте». Теперь обе руки говорят на
+        busybox поставки, и стенд стережёт именно это.
         """
-        import os
         c = FakeContainer()
         shim(c, route_all=True).run("pytest -q", shell=True,
                                     cwd="C:/Helene/data/workspace/projects/сайт",
                                     capture_output=True, text=True, timeout=120)
         self.assertEqual(len(c.calls), 1)
         argv, cwd, timeout = c.calls[0]
-        self.assertEqual(argv[1:], ["/c", "pytest -q"] if os.name == "nt"
+        self.assertEqual(argv[1:], ["-lc", "pytest -q"] if os.name == "nt"
                          else ["-c", "pytest -q"])
-        self.assertNotIn("bash", Path(argv[0]).stem.lower())
+        if os.name == "nt":
+            self.assertIn("bash", Path(argv[0]).stem.lower(),
+                          "рука `run` обязана идти тем же bash, что и `shell`")
         self.assertEqual(timeout, 120.0)
 
     def test_the_shell_hand_still_speaks_bash(self):
