@@ -146,6 +146,100 @@ class WhatTreeGets(Ground):
             self.assertIn(name, text, f"{name} дерево не читает — переменная в пустоту")
 
 
+class Speaking(Ground):
+    """Голос агента наружу: свой выключатель, свой голос, свои переменные."""
+
+    def setUp(self):
+        super().setUp()
+        real = voice.speech_library
+        voice.speech_library = lambda: {"present": True, "why": ""}
+        self.addCleanup(lambda: setattr(voice, "speech_library", real))
+
+    def install_voice(self, name: str = "irina") -> Path:
+        """Сделать вид, что голос скачан: ОБА файла, как их кладёт `fetch_voice`."""
+        spec = voice.VOICES[name]
+        home = voice.voices_dir(self.tree)
+        home.mkdir(parents=True, exist_ok=True)
+        model = home / f"{spec['voice']}.onnx"
+        model.write_bytes(b"0" * 2_000_000)
+        (home / f"{spec['voice']}.onnx.json").write_text("{}", encoding="utf-8")
+        return model
+
+    def test_выключенная_речь_не_готова_и_сказано_почему(self):
+        self.install_voice()
+        said = voice.speech_state(self.tree, {"voice": {"speak": False}})
+        self.assertFalse(said["ready"])
+        self.assertIn("выключен", said["why"])
+
+    def test_включена_но_голоса_нет(self):
+        said = voice.speech_state(self.tree, {"voice": {"speak": True}})
+        self.assertFalse(said["ready"])
+        self.assertIn("не скачан", said["why"])
+        self.assertEqual(voice.speech_env_for(self.tree, {"voice": {"speak": True}}), {})
+
+    def test_голос_из_одного_файла_не_считается_скачанным(self):
+        """⚠ Голос — это ДВА файла. Один без другого piper не поднимет, и
+        «скачано наполовину» обязано отличаться от «скачано»."""
+        spec = voice.VOICES["irina"]
+        home = voice.voices_dir(self.tree)
+        home.mkdir(parents=True, exist_ok=True)
+        (home / f"{spec['voice']}.onnx").write_bytes(b"0" * 2_000_000)
+        said = voice.speech_state(self.tree, {"voice": {"speak": True}})
+        self.assertFalse(said["ready"], "описания голоса нет — говорить нечем")
+
+    def test_голос_на_месте(self):
+        model = self.install_voice()
+        said = voice.speech_state(self.tree, {"voice": {"speak": True}})
+        self.assertTrue(said["ready"])
+        self.assertEqual(said["why"], "")
+        self.assertEqual(said["model"], str(model))
+
+    def test_переменные_речи(self):
+        model = self.install_voice()
+        env = voice.speech_env_for(self.tree, {"voice": {"speak": True}})
+        self.assertEqual(env["PRAXIS_TTS_BACKEND"], "piper")
+        self.assertEqual(env["PRAXIS_PIPER_MODEL"], str(model))
+        self.assertEqual(env["PRAXIS_TTS_OUTPUT_DIR"], str(self.tree / "media" / "tts"),
+                         "синтезированное складывается В ДЕРЕВО: это слова агента, "
+                         "и переезд дерева обязан увозить их с собой")
+
+    def test_имена_переменных_речи_те_же_что_у_дерева(self):
+        """Их читает `live/media_audio.py`; опечатка здесь = молчание там."""
+        self.install_voice()
+        env = voice.speech_env_for(self.tree, {"voice": {"speak": True}})
+        media = HERE.parent.parent.parent / "live" / "media_audio.py"
+        if not media.is_file():
+            self.skipTest("дерева агента нет рядом — сверять не с чем")
+        text = media.read_text(encoding="utf-8")
+        for name in env:
+            self.assertIn(name, text, f"{name} дерево не читает — переменная в пустоту")
+
+    def test_речь_едет_тем_же_ответом_что_и_слух(self):
+        """Окно рисует обе половины одной карточкой: два ответа разъехались бы."""
+        self.install_voice()
+        said = voice.state(self.tree, {"voice": {"speak": True}})
+        self.assertIn("speech", said)
+        self.assertTrue(said["speech"]["ready"])
+
+    def test_нет_библиотеки_нет_речи(self):
+        voice.speech_library = lambda: {"present": False, "why": "в рантайме нет piper-tts"}
+        self.install_voice()
+        said = voice.speech_state(self.tree, {"voice": {"speak": True}})
+        self.assertFalse(said["ready"])
+        self.assertIn("piper-tts", said["why"])
+
+    def test_чужой_голос_не_качается(self):
+        with self.assertRaises(SystemExit):
+            voice.fetch_voice(self.tree, "морган-фримен")
+
+    def test_каталог_отмечает_скачанный_голос(self):
+        self.install_voice("irina")
+        said = voice.speech_state(self.tree, {"voice": {"speak": True}})
+        marks = {one["id"]: one["installed"] for one in said["catalog"]}
+        self.assertTrue(marks["irina"])
+        self.assertFalse(marks["dmitri"])
+
+
 class Choosing(Ground):
     def test_неизвестная_модель_падает_на_умолчание(self):
         self.assertEqual(voice.chosen_model({"voice": {"model": "гигантская"}}),

@@ -31,6 +31,7 @@ interface VoiceState {
   library: { present: boolean; why: string };
   installed: { model?: string; path?: string; bytes?: number };
   catalog: VoiceModel[];
+  speech?: SpeechState;
   download: {
     state: string;
     model: string;
@@ -41,11 +42,26 @@ interface VoiceState {
   } | null;
 }
 
+/** Голос агента наружу — вторая половина того же ответа канала. */
+interface SpeechState {
+  enabled: boolean;
+  voice: string;
+  ready: boolean;
+  why: string;
+  dir: string;
+  model: string;
+  library: { present: boolean; why: string };
+  catalog: Array<{ id: string; title: string; note: string; size_mb: number; installed: boolean }>;
+  download: { state: string; voice: string; done_mb?: number; size_mb?: number; at?: string; error?: string } | null;
+}
+
 export interface VoiceCard {
   el: HTMLElement;
   enabled(): boolean;
   model(): string;
   keepLoaded(): boolean;
+  speak(): boolean;
+  speakVoice(): string;
 }
 
 const MB = 1024 * 1024;
@@ -62,6 +78,10 @@ export function voiceCard(draft: Config): VoiceCard {
   let enabled = !!voice.enabled;
   let model = String(voice.model || "turbo");
   let keep = !!voice.keep_loaded;
+  // Речь — отдельный выключатель, а не часть слуха: слышать голосовые и
+  // отвечать голосом — разные желания, и одно без другого законно.
+  let speak = !!voice.speak;
+  let speakVoice = String(voice.voice || "irina");
 
   const box = el("div");
   const status = el("p", "field-hint", "спрашиваю канал…");
@@ -148,6 +168,21 @@ export function voiceCard(draft: Config): VoiceCard {
       const shown = { ...state, model, enabled };
       if (!picker.el.childElementCount) drawPicker(shown);
       say(shown);
+      // Речь приезжает тем же ответом канала — второй запрос разъезжался бы с
+      // первым ровно тогда, когда владелец нажимает обе кнопки подряд.
+      const speech = state.speech;
+      if (speech) {
+        const mine = { ...speech, voice: speakVoice, enabled: speak };
+        if (!speechPicker.el.childElementCount) drawVoices(mine);
+        sayVoice(mine);
+        const dv = speech.download;
+        if (dv && dv.state === "running" && fresh(dv.at || "")) {
+          timer = setTimeout(() => void refresh(), 2000);
+        }
+      } else {
+        speechStatus.textContent = "этот канал про голос агента ничего не знает";
+        speechBtn.disabled = true;
+      }
       const down = state.download;
       if (down && down.state === "running" && fresh(down.updated_utc)) {
         timer = setTimeout(() => void refresh(), 2000);
@@ -175,18 +210,96 @@ export function voiceCard(draft: Config): VoiceCard {
     }
   };
 
+  // ---- вторая половина: агент говорит сам -----------------------------------
+  const speechStatus = el("p", "field-hint", "спрашиваю канал…");
+  const speechPickBox = el("div");
+  const speechActions = el("div", "actions");
+  const speechNote = el("span", "receipt");
+  const speechBtn = button("Скачать голос", "quiet", () => void startVoice());
+  speechActions.append(speechBtn, speechNote);
+  const speakOff = toggle("Отвечать голосом, когда сочтёт нужным", speak, (v) => {
+    speak = v;
+    voice.speak = v;
+    void refresh();
+  });
+  let speechPicker = choice<string>([], speakVoice, () => {});
+
+  const drawVoices = (state: SpeechState) => {
+    const items = state.catalog.map((one) => ({
+      value: one.id,
+      title: one.title + (one.installed ? " · скачан" : ` · ${one.size_mb} МБ`),
+      text: one.note,
+    }));
+    speechPicker = choice<string>(items, speakVoice, (v) => {
+      speakVoice = v;
+      voice.voice = v;
+      void refresh();
+    }, { stack: true });
+    speechPickBox.replaceChildren(speechPicker.el);
+  };
+
+  const sayVoice = (state: SpeechState) => {
+    const down = state.download;
+    const busy = !!down && down.state === "running" && fresh(down.at || "");
+    speechBtn.disabled = busy;
+    if (busy) {
+      speechNote.className = "receipt";
+      speechNote.textContent = `качаю ${down!.voice}: ${down!.done_mb ?? 0} из ~${down!.size_mb ?? "?"} МБ`;
+    } else if (down && down.state === "failed") {
+      speechNote.className = "receipt err";
+      speechNote.textContent = String(down.error || "не скачалось");
+    } else if (down && down.state === "running") {
+      speechNote.className = "receipt err";
+      speechNote.textContent = "скачивание оборвалось — нажми ещё раз";
+    } else if (down && down.state === "done") {
+      speechNote.className = "receipt ok";
+      speechNote.textContent = "голос на месте";
+    }
+    if (!state.library.present) {
+      speechStatus.textContent = state.library.why + ". Говорить в этой поставке нечем.";
+      speechBtn.disabled = true;
+      return;
+    }
+    speechStatus.textContent = state.ready
+      ? `Агент может говорить: голос ${state.voice} на диске. Синтез идёт на процессоре — ` +
+        `первая фраза около трёх секунд (голос читается с диска), дальше доли секунды. Голоса лежат в ${state.dir}.`
+      : `Агент отвечает текстом: ${state.why}. Голоса лежат в ${state.dir}.`;
+  };
+
+  const startVoice = async () => {
+    speechNote.className = "receipt";
+    speechNote.textContent = "запускаю помощника…";
+    speechBtn.disabled = true;
+    try {
+      const said = await shell<string>("voice_fetch", { model: speakVoice, kind: "speak" });
+      speechNote.textContent = said;
+      setTimeout(() => void refresh(), 1500);
+    } catch (e) {
+      speechNote.className = "receipt err";
+      speechNote.textContent = humanError(e).text;
+      speechBtn.disabled = false;
+    }
+  };
+
   box.append(onOff, status, pickBox, actions, keepOff,
     el("p", "field-hint",
       "Модель держится в памяти около 1,5 ГБ. Дома это дорого за несколько голосовых в день, поэтому по умолчанию " +
-      "она загружается на время расшифровки и отпускается; на сервере наоборот. Применяется перезапуском."));
+      "она загружается на время расшифровки и отпускается; на сервере наоборот. Применяется перезапуском."),
+    el("hr", "card-split"),
+    speakOff, speechStatus, speechPickBox, speechActions,
+    el("p", "field-hint",
+      "⚠ Голосом агент отвечает в Telegram: в окне вложение пока приезжает строкой с путём к файлу, а не проигрывателем. " +
+      "Синтез местный — текст ответа никуда не уходит. Применяется перезапуском."));
 
   void refresh();
 
   return {
     el: card("Голос", box,
-      "Расшифровка идёт ЗДЕСЬ, на процессоре: запись никуда не отправляется. Библиотека едет в поставке, модель качается один раз."),
+      "Обе половины — ЗДЕСЬ, на процессоре: ни запись, ни текст ответа никуда не отправляются. Библиотеки едут в поставке, модель и голос качаются один раз."),
     enabled: () => enabled,
     model: () => model,
     keepLoaded: () => keep,
+    speak: () => speak,
+    speakVoice: () => speakVoice,
   };
 }

@@ -42,6 +42,7 @@ from aiohttp.abc import AbstractAccessLogger
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from deskd import agentcfg
 from deskd import control
 from deskd import readers
 from deskd import rooms
@@ -847,6 +848,36 @@ async def _r_md_write(c: Call):
     return result
 
 
+async def _r_agent_config(c: Call):
+    """Настройки агента, живущего рядом с этим каналом: что можно править.
+
+    ⚠ Только для ключа ВЛАДЕЛЬЦА (в `_DEVICE_PATHS` этой ручки нет): телефон
+    правит слово агенту, а не его мозг и бот-токен.
+
+    Ключи раскладки (где python, где код, порт, служба, реле) сюда не попадают
+    вовсе — см. `deskd/agentcfg.HIDDEN`: экран не должен показывать ручек,
+    которых он всё равно не сохранит.
+    """
+    return await asyncio.to_thread(agentcfg.state)
+
+
+async def _r_agent_config_save(c: Call):
+    """Записать разрешённые блоки в конфиг агента. Расписка называет отброшенное.
+
+    Сверка свежести — как у маркдаунов: агент правит свой конфиг и сам
+    (`switch_brain` пишет туда же), и выигрывать не должен тот, кто записал
+    последним. Разошлось — 409, а не тихая перезапись.
+    """
+    body = c.body or {}
+    result = await asyncio.to_thread(agentcfg.save, body.get("config"),
+                                     body.get("mtime_ns"))
+    if not result.get("ok"):
+        code = str(result.get("code") or "")
+        return Fail(409 if code == "conflict" else 400,
+                    str(result.get("error") or "не записалось"), code)
+    return result
+
+
 async def _r_home(c: Call):
     """Чьё это дерево. Оболочка спрашивает перед тем, как признать живой на
     порту харнесс своим: осиротевший процесс прежней установки держал порт, и
@@ -1019,6 +1050,8 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/chat-turns/{peer}", _r_chat_turns),
     Route("GET", "/api/md", _r_md),
     Route("POST", "/api/md", _r_md_write),
+    Route("GET", "/api/agent-config", _r_agent_config),
+    Route("POST", "/api/agent-config", _r_agent_config_save),
     Route("GET", "/api/md-tree", _reader(lambda: readers.md_tree())),
     # Обе ручки окно и телефон опрашивают каждые несколько секунд; рубеж от
     # 500-х стоит ВНУТРИ readers.state/readers.health — он общий на оба канала.

@@ -53,6 +53,7 @@ from pathlib import Path
 
 SCHEMA = "helene.voice.v1"
 PROGRESS = "voice-download.json"
+SPEECH_PROGRESS = "speech-download.json"
 INSTALLED = "installed.json"
 
 #: Модели, между которыми выбирает владелец. Размер — по факту скачивания на
@@ -77,6 +78,36 @@ CATALOG: dict[str, dict] = {
     },
 }
 DEFAULT_MODEL = "turbo"
+
+#: Голоса синтеза — те же правила, что у моделей слуха: библиотека едет в
+#: рантайме, голос качает владелец. Числа — живая проба 11.09 на машине
+#: владельца: первая фраза 3,1 с (загрузка голоса с диска), следующие 0,24 с на
+#: 3,7 с речи, то есть примерно в пятнадцать раз быстрее реального времени.
+#:
+#: ⚠ Почему piper, а не Edge и не Silero. Edge — это голос МИКРОСОФТА по сети:
+#: текст ответа агента уходил бы наружу на каждую фразу, а продукт обещает
+#: обратное. Silero тянет torch (около двух гигабайт) ради того же результата.
+#: Piper — 34 МБ библиотеки поверх уже привезённого onnxruntime и 60 МБ голоса,
+#: целиком на этой машине и без сети.
+VOICES: dict[str, dict] = {
+    "irina": {
+        "voice": "ru_RU-irina-medium",
+        "path": "ru/ru_RU/irina/medium",
+        "title": "Ирина — женский",
+        "size_mb": 61,
+        "note": "Ровный женский голос, 22 кГц. 3,7 секунды речи синтезирует за "
+                "четверть секунды (машина владельца).",
+    },
+    "dmitri": {
+        "voice": "ru_RU-dmitri-medium",
+        "path": "ru/ru_RU/dmitri/medium",
+        "title": "Дмитрий — мужской",
+        "size_mb": 61,
+        "note": "Мужской голос того же качества и веса.",
+    },
+}
+DEFAULT_VOICE = "irina"
+VOICES_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main/"
 
 
 def _utc() -> str:
@@ -142,6 +173,70 @@ def dir_size(path: Path) -> int:
     return total
 
 
+def chosen_voice(cfg: dict) -> str:
+    name = str(block(cfg).get("voice") or "").strip().lower()
+    return name if name in VOICES else DEFAULT_VOICE
+
+
+def voices_dir(tree: Path) -> Path:
+    """Куда кладутся голоса синтеза. Рядом с моделями слуха, но отдельно: это
+    разные вещи, и «удалить голос» не должно задевать слух."""
+    return Path(tree) / "models" / "piper"
+
+
+def speech_library() -> dict:
+    """Есть ли чем говорить. Импорта нет: он тянет onnxruntime на полсекунды."""
+    import importlib.util  # noqa: PLC0415 — нужен только здесь
+
+    found = importlib.util.find_spec("piper") is not None
+    return {"present": found,
+            "why": "" if found else "в рантайме нет piper-tts — "
+                                    "поставка собрана без голоса наружу"}
+
+
+def speech_state(tree: Path, cfg: dict) -> dict:
+    """Правда о голосе агента НАРУЖУ: чем говорить, каким голосом, что мешает.
+
+    Отдельно от слуха намеренно: слышать и говорить — разные умения, и владелец
+    вправе включить одно без другого (например, слышать голосовые, но отвечать
+    текстом). Общий выключатель `voice.enabled` — про слух; здесь свой.
+    """
+    tree = Path(tree)
+    want = chosen_voice(cfg)
+    lib = speech_library()
+    spec = VOICES[want]
+    model = voices_dir(tree) / f"{spec['voice']}.onnx"
+    config = voices_dir(tree) / f"{spec['voice']}.onnx.json"
+    # Голос — это ДВА файла, и один без другого piper не поднимет. Проверяем оба:
+    # «скачано наполовину» и «скачано» выглядели бы одинаково.
+    ready_voice = model.is_file() and config.is_file() and model.stat().st_size > 1_000_000
+    enabled = bool(block(cfg).get("speak"))
+    out = {
+        "enabled": enabled,
+        "voice": want,
+        "catalog": [dict(one, id=key,
+                         installed=(voices_dir(tree) / f"{one['voice']}.onnx").is_file())
+                    for key, one in VOICES.items()],
+        "library": lib,
+        "model": str(model) if ready_voice else "",
+        "dir": str(voices_dir(tree)),
+        "download": _read(Path(tree) / "memory" / ".state" / SPEECH_PROGRESS) or None,
+    }
+    if not enabled:
+        out["ready"] = False
+        out["why"] = "голос агента выключен владельцем"
+    elif not lib["present"]:
+        out["ready"] = False
+        out["why"] = lib["why"]
+    elif not ready_voice:
+        out["ready"] = False
+        out["why"] = "голос не скачан — агент отвечает текстом"
+    else:
+        out["ready"] = True
+        out["why"] = ""
+    return out
+
+
 def state(tree: Path, cfg: dict) -> dict:
     """Вся правда о голосе: чем расшифровывать, чем слушать, и что мешает."""
     tree = Path(tree)
@@ -177,6 +272,9 @@ def state(tree: Path, cfg: dict) -> dict:
     else:
         out["ready"] = True
         out["why"] = ""
+    # Голос наружу — в том же ответе: окно рисует обе половины одной карточкой,
+    # и две ручки за двумя запросами разъезжались бы у него в руках.
+    out["speech"] = speech_state(tree, cfg)
     return out
 
 
@@ -206,10 +304,32 @@ def env_for(tree: Path, cfg: dict) -> dict:
     }
 
 
+def speech_env_for(tree: Path, cfg: dict) -> dict:
+    """Переменные синтеза для дерева. Пусто — агент отвечает текстом, и почему,
+    говорит `speech_state()['why']`."""
+    said = speech_state(tree, cfg)
+    if not said["ready"]:
+        return {}
+    return {
+        "PRAXIS_TTS_BACKEND": "piper",
+        # Путь к файлу, а не имя голоса: имя разрешается внутри библиотеки и
+        # молча промахивается, когда раскладка папки не та, которую она ждёт.
+        "PRAXIS_PIPER_MODEL": said["model"],
+        # Синтезированное складывается В ДЕРЕВО агента, а не во временную папку
+        # системы: это его слова, и переезд дерева обязан увозить их с собой.
+        "PRAXIS_TTS_OUTPUT_DIR": str(Path(tree) / "media" / "tts"),
+    }
+
+
 def apply(tree: Path, cfg: dict) -> dict:
     """Проставить переменные процессу раннера и вернуть отчёт для журнала."""
     said = state(tree, cfg)
     for key, value in env_for(tree, cfg).items():
+        os.environ[key] = value
+    # Речь ставится теми же правилами и ТЕМ ЖЕ вызовом: две точки применения
+    # разъехались бы на первой же правке, и одна половина голоса поднималась бы
+    # без другой молча.
+    for key, value in speech_env_for(tree, cfg).items():
         os.environ[key] = value
     return said
 
@@ -287,15 +407,71 @@ def fetch(tree: Path, model: str, *, quiet: bool = False) -> dict:
     return result
 
 
+def fetch_voice(tree: Path, voice_id: str, *, quiet: bool = False) -> dict:
+    """Скачать голос синтеза: два файла, оба обязательны.
+
+    ⚠ Файла два — сам голос (`.onnx`) и его описание (`.onnx.json`), и piper без
+    второго не поднимется. Поэтому «скачано» здесь значит «оба на месте»: иначе
+    полускачанный голос выглядел бы готовым и молчал уже в бою.
+    """
+    import urllib.request  # noqa: PLC0415 — нужен только здесь
+
+    tree = Path(tree)
+    voice_id = str(voice_id or "").strip().lower() or DEFAULT_VOICE
+    if voice_id not in VOICES:
+        raise SystemExit(f"голос «{voice_id}»: знаю только {', '.join(VOICES)}")
+    spec = VOICES[voice_id]
+    home = voices_dir(tree)
+    home.mkdir(parents=True, exist_ok=True)
+    progress = Path(tree) / "memory" / ".state" / SPEECH_PROGRESS
+    started = time.time()
+
+    def note(**extra) -> dict:
+        got = {"schema": SCHEMA, "voice": voice_id, "at": _utc(),
+               "size_mb": spec["size_mb"], **extra}
+        _write(progress, got)
+        if not quiet:
+            print(json.dumps(got, ensure_ascii=False), flush=True)
+        return got
+
+    note(state="running", done_mb=0)
+    got_bytes = 0
+    try:
+        for name in (f"{spec['voice']}.onnx", f"{spec['voice']}.onnx.json"):
+            url = f"{VOICES_BASE}{spec['path']}/{name}?download=true"
+            # Кладём под временным именем и переименовываем: оборванная закачка
+            # не должна оставить файл, который выглядит скачанным.
+            final = home / name
+            partial = home / f".part-{name}"
+            with urllib.request.urlopen(url, timeout=300) as src, partial.open("wb") as sink:
+                while True:
+                    chunk = src.read(1 << 20)
+                    if not chunk:
+                        break
+                    sink.write(chunk)
+                    got_bytes += len(chunk)
+                    note(state="running", done_mb=round(got_bytes / 1024 / 1024, 1))
+            os.replace(partial, final)
+    except Exception as exc:                      # noqa: BLE001 — причина уезжает владельцу
+        return note(state="failed", error=f"{type(exc).__name__}: {exc}"[:300])
+    return note(state="done", done_mb=round(got_bytes / 1024 / 1024, 1),
+                seconds=round(time.time() - started, 1))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="голос: состояние и скачивание модели")
     ap.add_argument("--tree", required=True, help="папка данных агента")
-    ap.add_argument("--get", metavar="МОДЕЛЬ", help=f"скачать модель ({', '.join(CATALOG)})")
+    ap.add_argument("--get", metavar="МОДЕЛЬ", help=f"скачать модель слуха ({', '.join(CATALOG)})")
+    ap.add_argument("--get-voice", metavar="ГОЛОС",
+                    help=f"скачать голос синтеза ({', '.join(VOICES)})")
     ap.add_argument("--config", default="", help="helene.json — для состояния")
     args = ap.parse_args()
     tree = Path(args.tree).resolve()
     if args.get:
         fetch(tree, args.get)
+        return 0
+    if args.get_voice:
+        fetch_voice(tree, args.get_voice)
         return 0
     cfg = _read(Path(args.config)) if args.config else {}
     print(json.dumps(state(tree, cfg), ensure_ascii=False, indent=1))
