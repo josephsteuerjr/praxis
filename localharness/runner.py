@@ -1239,9 +1239,16 @@ def _sandbox_state() -> dict:
     try:
         import fence
         state = dict(fence.state())
+        # Поимённо: какая рука в ограде, какая нет и почему. До 10.09 снимок
+        # говорил «shell в AppContainer» и молчал о том, что рядом стоят руки,
+        # исполняющие команды мимо неё, — владелец читал молчание как «накрыто
+        # всё». Отчёт снимается ЗДЕСЬ, потому что руку `computer` выдаёт
+        # `body.install` уже после ограды.
+        state["hands"] = fence.hands_report(_agent)
     except Exception:
         state = {"enabled": False, "container": False, "reason": "модуль недоступен",
-                 "windows": "окна: спросить не у кого — модуль ограды не загрузился"}
+                 "windows": "окна: спросить не у кого — модуль ограды не загрузился",
+                 "hands": []}
     if _mode:
         state["mode"] = _mode.get("name")
         state["mode_title"] = _mode.get("title")
