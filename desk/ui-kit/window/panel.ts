@@ -4,8 +4,8 @@
 // цена каждого — рядом с разговором, а не в отдельной таблице.
 import { api } from "./api";
 import { bindFail, esc, failHTML, fmtDur, fmtTime, humanError, q } from "./lib";
-import { frameStripHTML, renderSteps, stepsHTML, type RunDetail } from "../../ui-kit/steps";
-export { stepsHTML, type RunDetail } from "../../ui-kit/steps";
+import { frameStripHTML, renderSteps, stepsHTML, type RunDetail } from "../steps";
+export { stepsHTML, type RunDetail } from "../steps";
 import { S, foreignHarness, isWindowRoom, runIsLive, runIsRecent, type Run } from "./state";
 
 interface Turn {

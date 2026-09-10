@@ -18,11 +18,11 @@
 // Живая правда о теле («подключено», «мост есть, тела нет», «выключено») —
 // снимок харнесса `memory/.state/body.json`, он же `computer_live` в ответе
 // трубы. Окно его только показывает и никогда не пишет.
-import { api } from "./api";
-import { el, fmtTimeSec, humanError } from "./lib";
+import { api } from "../../ui-kit/window/api";
+import { el, fmtTimeSec, humanError } from "../../ui-kit/window/lib";
 import contract from "../../ui-kit/contract.json";
 import { button, toggle as switchRow } from "../../ui-kit/dom";
-import type { ComputerLive, ComputerOption, ModeState } from "./mode";
+import type { ComputerLive, ComputerOption, ModeState } from "../../ui-kit/window/mode";
 
 /** Что ЛЕЖИТ в файле — по нему и пишем обратно. */
 export interface StoredComputer {

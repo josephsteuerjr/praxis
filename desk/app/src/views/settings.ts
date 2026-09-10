@@ -10,17 +10,18 @@
 // возвращались агенту), потом `sandbox.mounts` — вся работа по монтированию
 // обнулялась одним кликом. Поэтому объектные блоки пишутся только через
 // `keepBlock` (см. ниже), и на этом стоит тест app/test/config-blocks.test.mjs.
-import { api, cfg, inTauri, post, shell } from "../api";
+import { api, cfg, inTauri, post, shell } from "../../../ui-kit/window/api";
 import { ANTHROPIC_PRESETS, BILLING_LABEL, clampEffort, effortPlan } from "../../../ui-kit/providers";
-import { keepBlock } from "../config";
+import { keepBlock } from "../../../ui-kit/window/config";
 import QRCode from "qrcode";
-import { bindFail, el, esc, failHTML, humanError, toast } from "../lib";
+import { bindFail, el, esc, failHTML, humanError, toast } from "../../../ui-kit/window/lib";
 import { button, card, chips, field, setField, toggle } from "../../../ui-kit/dom";
 import { computerCard, storedComputer } from "../computer";
-import { MODE_KEY, loadMode, modeCard, type ModeState } from "../mode";
+import { MODE_KEY, loadMode, type ModeState } from "../../../ui-kit/window/mode";
+import { modeCard } from "../modecard";
 import { mountsCard, type LiveSandbox } from "../mounts";
 import { RELAY_PORT, relayBaseUrl, relayProbeUrl, newRelayKey } from "../relay";
-import { S } from "../state";
+import { S } from "../../../ui-kit/window/state";
 
 interface Config {
   agent?: { name?: string };

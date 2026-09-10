@@ -3,22 +3,22 @@
 // файлом. Большой надписи с именем продукта нет — только подпись внизу полки
 // (слово владельца 07.09).
 import "./styles/app.css";
-import { ApiError, api, cfg, connect, inTauri, onConnection, onEvent, post, shell } from "./api";
+import { ApiError, api, cfg, connect, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
 import { applyTheme } from "../../ui-kit/dom";
 import { watchShellVersion } from "../../ui-kit/version";
 import { setResultFetcher } from "../../ui-kit/steps";
-import { bindFail, esc, failHTML, fmtAge, fmtK, fmtTs, humanError, q, toast } from "./lib";
-import { PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "./state";
-import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "./rooms";
-import * as panel from "./panel";
-import * as now from "./views/now";
-import * as talk from "./views/talk";
-import * as wakes from "./views/wakes";
-import * as plans from "./views/plans";
-import * as frame from "./views/frame";
-import * as files from "./views/files";
-import * as journal from "./views/journal";
-import * as anatomy from "./views/anatomy";
+import { bindFail, esc, failHTML, fmtAge, fmtK, fmtTs, humanError, q, toast } from "../../ui-kit/window/lib";
+import { PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "../../ui-kit/window/state";
+import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "../../ui-kit/window/rooms";
+import * as panel from "../../ui-kit/window/panel";
+import * as now from "../../ui-kit/window/views/now";
+import * as talk from "../../ui-kit/window/views/talk";
+import * as wakes from "../../ui-kit/window/views/wakes";
+import * as plans from "../../ui-kit/window/views/plans";
+import * as frame from "../../ui-kit/window/views/frame";
+import * as files from "../../ui-kit/window/views/files";
+import * as journal from "../../ui-kit/window/views/journal";
+import * as anatomy from "../../ui-kit/window/views/anatomy";
 import * as settings from "./views/settings";
 
 // Длинный результат руки или её слово дочитываются файлом прогона по кнопке в ленте шагов.

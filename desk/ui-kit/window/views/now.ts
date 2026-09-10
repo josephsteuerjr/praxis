@@ -3,9 +3,9 @@
 // по всем комнатам с раскрывающимися шагами. Писать здесь нечего — это монитор.
 import { esc, fmtDur, fmtTime } from "../lib";
 import { api } from "../api";
-import { mountUsage, usageShell } from "../../../ui-kit/usage";
-import { frameStripHTML, type RunDetail } from "../../../ui-kit/steps";
-import { activityHTML, selectActivity, updateActivity } from "../../../ui-kit/activity";
+import { mountUsage, usageShell } from "../../usage";
+import { frameStripHTML, type RunDetail } from "../../steps";
+import { activityHTML, selectActivity, updateActivity } from "../../activity";
 import { S, foreignHarness, runIsRecent, type Run } from "../state";
 import { bindRuns, loadWords, runDetail, runRowHTML } from "../runlist";
 

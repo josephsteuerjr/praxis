@@ -1,5 +1,5 @@
 // Состояние окна. Один объект, без магии; экраны читают его и дёргают bus.
-import contract from "../../ui-kit/contract.json";
+import contract from "../contract.json";
 
 export interface AgentState {
   agent: string;

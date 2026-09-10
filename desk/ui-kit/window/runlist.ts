@@ -3,7 +3,7 @@
 // без него — первая строка цели прогона.
 import { api } from "./api";
 import { esc, fmtDay, fmtTime, humanError } from "./lib";
-import { stepsHTML, type RunDetail } from "../../ui-kit/steps";
+import { stepsHTML, type RunDetail } from "../steps";
 import { S, runIsLive, type Run } from "./state";
 
 export const RUN_KIND: Record<string, string> = {

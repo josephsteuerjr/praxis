@@ -15,7 +15,7 @@
 // Живую правду о том, что из списка ДЕЙСТВИТЕЛЬНО открылось (плохой путь,
 // системная папка, не заведённый стык в `mnt/`), знает только харнесс, и она
 // приезжает снимком в анатомии.
-import { el } from "./lib";
+import { el } from "../../ui-kit/window/lib";
 import { button as smallBtn } from "../../ui-kit/dom";
 import {
   ACCESS_WORDS,
