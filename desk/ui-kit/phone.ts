@@ -581,34 +581,13 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   let focusedRun: Run | undefined;
   let nowGeneration = 0;
 
-  async function renderNow(guard: () => boolean = () => tab === "now") {
-    const mine = ++nowGeneration;
-    const valid = () => mine === nowGeneration && guard() && tab === "now";
-    if (!runs.length) await loadRuns();
-    if (!valid()) return;
-    const live = liveRun();
-    const list = runs.filter((r) => r.kind !== "wake").slice(0, 30);
-    focusedRun = selectActivity(focusedRun, live, list);
-    const shown = focusedRun;
-    const liveDetail = shown ? await runDetail(shown.id, true) || evCache.get(shown.id) : undefined;
-    if (!valid()) return;
-    const existing = screen.querySelector<HTMLElement>("#turn-live");
-    if (shown && existing?.dataset.run === shown.id) {
-      if (liveDetail) updateActivity(existing, liveDetail, live?.created_at ? fmtDur((Date.now() - new Date(live.created_at).getTime()) / 1000) : "");
-      scheduleLive(!!live);
-      return;
-    }
-    await loadWords(list.slice(0, 12));
-    if (!valid()) return;
-    let strip = liveDetail;
-    if (!strip) {
-      const last = list.find((r) => r.id !== live?.id && r.kind === "chat_turn");
-      if (last) strip = await runDetail(last.id);
-      if (!valid()) return;
-    }
+  /** Нарисовать экран «Сейчас» из того, что УЖЕ в руках. Ничего не ждёт. */
+  function paintNow(list: Run[], live: Run | undefined, shown: Run | undefined,
+                    detail: RunDetail | undefined, strip: RunDetail | undefined,
+                    pending = false): void {
     const since = live?.created_at ? fmtDur((Date.now() - new Date(live.created_at).getTime()) / 1000) : "";
     const liveHTML = shown
-      ? activityHTML(shown, liveDetail, live ? since : fmtTime(shown.created_at))
+      ? activityHTML(shown, detail, live ? since : fmtTime(shown.created_at), { pending })
       : `<div class="now-idle"><span class="dot ${state && !foreign() && state.level === "error" ? "failed" : ""}"></span><span>${esc(state ? (foreign() ? "Нет текущих действий · " + foreignPhrase().phrase.replace(/^На связи · /, "") : state.phrase) : "Подключение…")}${state?.next_wake ? ` · пробуждение ${esc(fmtTime(state.next_wake) || state.next_wake)}` : ""}</span></div>`;
     const rest = list.filter((r) => r.id !== shown?.id);
     screen.innerHTML =
@@ -620,6 +599,56 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     bindRuns(screen, () => void renderNow());
     mountUsage(screen, api);
     scheduleLive(!!live);
+  }
+
+  async function renderNow(guard: () => boolean = () => tab === "now") {
+    const mine = ++nowGeneration;
+    const valid = () => mine === nowGeneration && guard() && tab === "now";
+    if (!runs.length) await loadRuns();
+    if (!valid()) return;
+    const live = liveRun();
+    const list = runs.filter((r) => r.kind !== "wake").slice(0, 30);
+    focusedRun = selectActivity(focusedRun, live, list);
+    const shown = focusedRun;
+    const existing = screen.querySelector<HTMLElement>("#turn-live");
+    const sameCard = !!(shown && existing?.dataset.run === shown.id);
+
+    // ⚠⚠ ПЕРВЫЙ ПОКАЗ НЕ ЖДЁТ ПОДРОБНОСТЕЙ ЖИВОГО ХОДА.
+    //
+    // Раньше `screen.innerHTML` присваивался ОДИН раз, в самом конце цепочки
+    // ожиданий: список ходов, потом подробности живого хода, потом слова. На
+    // сервере это 13 секунд БЕЛОГО ЭКРАНА — замерено 11.09 на живой Праксис:
+    // `/api/runs` 1.3 с, а `/api/run/<живой>` 5.7 с и 206 КБ, потому что в
+    // длинном ходу 23 шага и 59 рук. Владелец видит пустоту и читает её как
+    // «ходы не отображаются» — и он прав: показывать нечего, хотя список уже
+    // приехал три секунды назад.
+    //
+    // Теперь рисуем дважды: сразу — списком и шапкой живого хода из того, что
+    // уже есть в памяти (`evCache`), потом — тем же кодом, когда подробности
+    // доедут. Если карточка уже та же, работает прежний путь: обновление на
+    // месте, без перерисовки.
+    const known = shown ? evCache.get(shown.id) : undefined;
+    if (!sameCard) paintNow(list, live, shown, known, known, !known);
+
+    const liveDetail = shown ? await runDetail(shown.id, true) || known : undefined;
+    if (!valid()) return;
+    const card = screen.querySelector<HTMLElement>("#turn-live");
+    if (shown && card?.dataset.run === shown.id && liveDetail) {
+      updateActivity(card, liveDetail, live?.created_at ? fmtDur((Date.now() - new Date(live.created_at).getTime()) / 1000) : "");
+    }
+    if (sameCard) {
+      scheduleLive(!!live);
+      return;
+    }
+    await loadWords(list.slice(0, 12));
+    if (!valid()) return;
+    let strip = liveDetail;
+    if (!strip) {
+      const last = list.find((r) => r.id !== live?.id && r.kind === "chat_turn");
+      if (last) strip = await runDetail(last.id);
+      if (!valid()) return;
+    }
+    paintNow(list, live, shown, liveDetail, strip);
   }
 
   function scheduleLive(on: boolean) {
