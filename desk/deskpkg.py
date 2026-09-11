@@ -173,6 +173,12 @@ def product_version() -> tuple[str, dict]:
         "app/package.json": _json_version(DESK / "app" / "package.json"),
         "mobile/package.json": _json_version(DESK / "mobile" / "package.json"),
         "setup/ui/package.json": _json_version(DESK / "setup" / "ui" / "package.json"),
+        # ⚠ Этих двух здесь не было, и памятка выпуска всё это время называла ДЕСЯТЬ
+        # объявлений. Прибор читал восемь и сравнивал три: отставание `pult` или
+        # `miniapp` проходило и его, и стенд — молча. Проверено приёмкой 11.09 откатом
+        # версии в копии дерева: прибор не сказал ничего.
+        "pult/package.json": _json_version(DESK / "pult" / "package.json"),
+        "miniapp/package.json": _json_version(DESK / "miniapp" / "package.json"),
     }
     core = {k: v for k, v in declared.items() if k.endswith("Cargo.toml")}
     if not all(core.values()):
@@ -181,7 +187,20 @@ def product_version() -> tuple[str, dict]:
     if len(set(core.values())) != 1:
         raise SystemExit("версии разъехались, поставка была бы смесью:\n  " +
                          "\n  ".join(f"{k} = {v}" for k, v in core.items()))
-    return next(iter(core.values())), declared
+    version = next(iter(core.values()))
+    # ⚠ СРАВНИВАЮТСЯ ВСЕ ДЕСЯТЬ, А НЕ ТРИ. «Версия поднята во всех десяти объявлениях»
+    # было утверждением памятки, которое ничем не проверялось: три Cargo.toml сходились,
+    # остальные семь только читались. Поставка с разъехавшимся `package.json` — это окно
+    # и телефон, которые называют владельцу РАЗНЫЕ версии одного продукта.
+    # Нечитаемый файл (пусто) называется отдельно от разъехавшегося: это разные беды.
+    unread = [k for k, v in declared.items() if not v]
+    if unread:
+        raise SystemExit("версия не прочиталась: " + ", ".join(unread))
+    drifted = {k: v for k, v in declared.items() if v != version}
+    if drifted:
+        raise SystemExit(f"версия {version} поднята не везде — отстали:\n  " +
+                         "\n  ".join(f"{k} = {v}" for k, v in drifted.items()))
+    return version, declared
 
 
 # --- сборка пакета ------------------------------------------------------------

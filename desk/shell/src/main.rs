@@ -270,7 +270,15 @@ fn explorer_exe() -> PathBuf {
 /// им 403 в собственном доме. Секрет — свойство дерева, поэтому едет со спекой.
 #[derive(Clone)]
 enum ChildSpec {
-    Script { python: PathBuf, script: PathBuf, args: Vec<String>, tree: PathBuf, host: String, token: String },
+    /// `config` — ЧЕЙ это ребёнок по конфигу, а не по расположению кода.
+    ///
+    /// ⚠ Поймано приёмкой 11.09 пробой на поддельной установке с двумя агентами: канал
+    /// соседа читал и ПЕРЕПИСЫВАЛ корневой `helene.json`. Причина не в ручках канала, а
+    /// одна на всех: `readers.config_path()` ищет конфиг от `__file__`, а код у всех
+    /// агентов установки общий (`localharness/agents.py` намеренно пишет соседу
+    /// `app/runner/python/code` как `../../…`). Значит любой читатель конфига у второго
+    /// агента читал первого. Раннер об этом знал (`--config`), канал — нет.
+    Script { python: PathBuf, script: PathBuf, args: Vec<String>, tree: PathBuf, host: String, token: String, config: PathBuf },
     Relay { base: PathBuf, cfg: serde_json::Value, tree: PathBuf },
 }
 
@@ -314,8 +322,8 @@ impl ChildSpec {
 
     fn spawn(&self) -> Option<Child> {
         match self {
-            ChildSpec::Script { python, script, args, tree, host, token } => {
-                spawn_child(python, script, args, tree, host, token)
+            ChildSpec::Script { python, script, args, tree, host, token, config } => {
+                spawn_child(python, script, args, tree, host, token, config)
             }
             ChildSpec::Relay { base, cfg, tree } => spawn_relay(base, cfg, tree),
         }
@@ -861,7 +869,8 @@ fn ensure_desk_token(tree: &Path) -> Option<String> {
     }
 }
 
-fn spawn_child(python: &Path, script: &Path, args: &[String], tree: &Path, host: &str, token: &str) -> Option<Child> {
+fn spawn_child(python: &Path, script: &Path, args: &[String], tree: &Path, host: &str,
+               token: &str, config: &Path) -> Option<Child> {
     let mut cmd = Command::new(python);
     // -u: без него вывод питона в файл буферизован блоками, и аварийное
     // завершение теряло ровно те килобайты, где причина. Служба (svc) делает
@@ -878,6 +887,12 @@ fn spawn_child(python: &Path, script: &Path, args: &[String], tree: &Path, host:
         // которого окно не знает (deskapp.py принимает обе переменные).
         // Секрет — этого дерева, а не «текущего агента окна»: см. ChildSpec.
         .env("HELENE_TOKEN", token)
+        // Чей это агент — говорит оболочка, которая его и подняла, а не раскладка кода
+        // на диске. Шов для этого уже был (`HELENE_CONFIG` стоит первым в
+        // `readers.config_path()` и накрыт стендом `t_voice.py`), и его просто никто не
+        // ставил: в канал уходил один порт. Одна переменная закрывает весь класс —
+        // чтение чужого конфига и запись в него ручкой `agent-config`.
+        .env("HELENE_CONFIG", config)
         .env_remove("PRAXIS_DESK_TOKEN");
     if let Some(dir) = script.parent() {
         cmd.current_dir(dir);
@@ -1175,6 +1190,7 @@ fn build_plan(
         tree: tree.clone(),
         host: host.into(),
         token: token.clone(),
+        config: agent.config.clone(),
     });
     if let Some(runner_raw) = cfg.get("runner").and_then(|v| v.as_str()).filter(|_| with_runner) {
         let config = agent.config.to_string_lossy().into_owned();
@@ -1185,6 +1201,7 @@ fn build_plan(
             tree: tree.clone(),
             host: "127.0.0.1".into(),
             token: token.clone(),
+            config: agent.config.clone(),
         });
     }
     SpawnPlan {
@@ -5769,6 +5786,38 @@ mod tests {
         };
         assert!(runner_cfg(&plans[0]).ends_with(CONFIG_NAME));
         assert!(runner_cfg(&plans[1]).contains("mira"), "{}", runner_cfg(&plans[1]));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// КАЖДОМУ ребёнку сказано, чей конфиг читать — не только руннеру.
+    ///
+    /// ⚠ Приёмка 11.09, живая проба на поддельной установке: канал соседа читал и
+    /// ПЕРЕПИСЫВАЛ корневой `helene.json` (`agentcfg.save` вернул `ok: true`, ключ мозга
+    /// лёг в чужой файл). Причина не в ручках канала: `readers.config_path()` ищет файл
+    /// от `__file__`, а код у всех агентов установки общий — `localharness/agents.py`
+    /// намеренно пишет соседу `../../app`. Руннер об этом знал (`--config`), канал — нет:
+    /// в него уходил ОДИН порт. Стенд пинит именно то, чего не хватало.
+    #[test]
+    fn every_child_is_told_whose_config_to_read() {
+        let root = two_agents("configs");
+        let plans = build_plans(&root);
+        assert_eq!(plans.len(), 2);
+        // Конфиги двух агентов — разные файлы, иначе равенство ниже ничего не значит.
+        assert_ne!(plans[0].config, plans[1].config);
+        for plan in &plans {
+            let mut seen = 0;
+            for spec in &plan.specs {
+                if let ChildSpec::Script { config, script, .. } = spec {
+                    assert_eq!(
+                        config, &plan.config,
+                        "ребёнок {} агента {} читал бы чужой конфиг",
+                        script.display(), plan.agent
+                    );
+                    seen += 1;
+                }
+            }
+            assert!(seen >= 1, "у агента {} нет ни одного питоновского ребёнка", plan.agent);
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

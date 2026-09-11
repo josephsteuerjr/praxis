@@ -68,5 +68,7 @@ secret-strings.txt
 *.session
 *.session-journal
 *.log
+# журнал реле, если его подняли с cwd в этой папке (имя `relay.log.<дата>` под `*.log` не подпадает)
+logs/
 # локальные пробы
 local-demo/

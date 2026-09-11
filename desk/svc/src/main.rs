@@ -331,6 +331,7 @@ fn spawn_child(
     tree: &Path,
     host: &str,
     token: &str,
+    config: &Path,
 ) -> Result<Child, String> {
     #[cfg(windows)]
     use std::os::windows::process::CommandExt;
@@ -344,6 +345,7 @@ fn spawn_child(
         // Замок трубы; PRAXIS_DESK_TOKEN снимаем, чтобы секрет решал тот, кто
         // поднял харнесс, а не переменная окружения службы.
         .env("HELENE_TOKEN", token)
+        .env("HELENE_CONFIG", config)
         .env_remove("PRAXIS_DESK_TOKEN");
     if let Some(dir) = script.parent() {
         cmd.current_dir(dir);
@@ -731,6 +733,13 @@ struct Kid {
     token: String,
     port: u16,
     phone: bool,
+    /// Чей конфиг читать ребёнку. ⚠ Раньше канал не получал его вовсе, а
+    /// `readers.config_path()` ищет файл от `__file__` — код же у всех агентов
+    /// установки общий. Значит канал второго агента читал и правил конфиг ПЕРВОГО.
+    /// Шов (`HELENE_CONFIG`) был и стоял первым в `config_path()`; его просто никто
+    /// не ставил. Оболочка (`shell`) закрыта той же правкой — головы две, дефект был
+    /// один.
+    config: PathBuf,
 }
 
 impl Kid {
@@ -801,6 +810,7 @@ fn supervise(
         token: token.clone(),
         port: plan.port,
         phone: plan.phone,
+        config: plan.config.clone(),
     }];
     if let Some(runner) = &plan.runner {
         kids.push(Kid {
@@ -819,6 +829,7 @@ fn supervise(
             token: token.clone(),
             port: plan.port,
             phone: false,
+            config: plan.config.clone(),
         });
     }
     // Соседи по установке (`agents/<id>/helene.json`). Служба поднимает их так
@@ -858,6 +869,7 @@ fn supervise(
             token: their_token.clone(),
             port: a.port,
             phone,
+            config: a.config.clone(),
         });
         let ready = !cfg
             .get("model")
@@ -883,6 +895,7 @@ fn supervise(
                 token: their_token,
                 port: a.port,
                 phone: false,
+                config: a.config.clone(),
             }),
             _ => log.line(&format!(
                 "{}: мозг не настроен — поднимаю только канал, впиши ключ в окне этого агента",
@@ -1027,7 +1040,7 @@ fn supervise(
             let python = kid.python.clone();
             let tree = kid.tree.clone();
             let token = kid.token.clone();
-            match spawn_child(&python, &kid.script, &kid.args, &tree, host, &token) {
+            match spawn_child(&python, &kid.script, &kid.args, &tree, host, &token, &kid.config) {
                 Ok(child) => {
                     kid.child = Some(child);
                     kid.started = Some(now);

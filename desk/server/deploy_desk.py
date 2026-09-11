@@ -80,18 +80,35 @@ def pack(root: Path) -> bytes:
     return buf.getvalue()
 
 
-def _channel_port(run) -> int | None:
-    """Порт канала — из `desk.json` на сервере, а не из константы здесь.
+def _channel_port(run, target: str = "/opt/praxisdesk") -> int | None:
+    """Порт канала — из окружения выкладки на сервере, а не из константы здесь.
 
     Константа разъехалась бы молча ровно в тот день, когда порт поменяют.
+
+    ⚠ Читался `desk.json`, и это было неверно с первого дня: `desk.json` — это
+    МАНИФЕСТ ПАКЕТА (`deskpkg.MANIFEST`), он описывает состав поставки и поля `port`
+    не содержит НИКОГДА. Значит функция всегда возвращала None, вызывающий всегда брал
+    8094, и на установке с другим `PRAXIS_DESK_PORT` предвыпускная проверка стучалась
+    бы не в тот порт — то есть «канал не отвечает» и откат ЖИВОГО канала. Ровно того,
+    ради чего эта проверка и писалась.
+
+    Поймано приёмкой 11.09 пробой: собран настоящий серверный пакет, его манифест
+    скормлен этой же функции — ключа `port` в нём нет.
+
+    Порт публикует композ строкой `127.0.0.1:${PRAXIS_DESK_PORT:-8094}:8094`, а само
+    значение лежит в `desk.env` рядом с Пультом. Оттуда и читаем: там оно и живёт.
     """
-    code, out, _ = run("cat /opt/praxisdesk/desk.json 2>/dev/null")
+    code, out, _ = run(f"cat {target}/desk.env 2>/dev/null")
     if code != 0 or not out.strip():
         return None
-    try:
-        return int((json.loads(out) or {}).get("port") or 0) or None
-    except (ValueError, TypeError):
-        return None
+    for line in out.splitlines():
+        name, sep, value = line.partition("=")
+        if sep and name.strip() == "PRAXIS_DESK_PORT":
+            try:
+                return int(value.strip().strip('"').strip("'")) or None
+            except ValueError:
+                return None
+    return None
 
 
 def main() -> int:
@@ -157,7 +174,11 @@ def deploy(args, man: dict, blob: bytes) -> int:
     if not base:
         looks_like_ip = re.fullmatch(r"[0-9.]+|\[[0-9a-fA-F:]+\]", args.host or "")
         if looks_like_ip:
-            port = _channel_port(run) or 8094
+            named = _channel_port(run, args.target)
+            port = named or 8094
+            log(f"порт канала: {port} "
+                + (f"(назван в {args.target}/desk.env)" if named
+                   else "(в desk.env не назван — беру умолчание композа)"))
             base = f"http://127.0.0.1:{port}"
             log(f"проверять будем изнутри сервера: {base} "
                 "(в host голый IP — снаружи по https имени нет, и проверка "
