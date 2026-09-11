@@ -1240,3 +1240,9 @@ details.fold > summary .dot {
 
 /* Сообщение, к которому пришли с карточки хода: короткая подсветка, потом как было. */
 .msg.flash { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow 1.2s ease-out; }
+
+/* Вложение в ленте: звук и картинка занимают ширину пузыря, но не рвут её. */
+.msg-media { margin-top: 6px; }
+.msg-media audio { width: 100%; max-width: 320px; height: 34px; }
+.msg-media img { max-width: 100%; border-radius: 8px; display: block; }
+.msg-media a { word-break: break-all; }

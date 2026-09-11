@@ -40,6 +40,9 @@ export interface Msg {
   topic_id?: number | string;
   topic_title?: string;
   media?: string;
+  /** Путь ОТ ДЕРЕВА агента и вид вложения — по ним рисуется проигрыватель. */
+  media_path?: string;
+  media_kind?: string;
 }
 
 export interface Room {
@@ -311,6 +314,38 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     } catch {
       throw new Broke(path + ": не разобрал ответ");
     }
+  }
+
+  /** Адрес файла из дерева агента для `<audio>`/`<img>`.
+   *
+   * ⚠ За этим адресом браузер идёт САМ, мимо `call`, — значит ни повтора с
+   * ключом, ни куки-догадки тут не будет. Поэтому ключ кладём в адрес всегда,
+   * когда он есть: иначе тег молча покажет пустоту, и это читалось бы как
+   * «файла нет», а не как «не пустили». Так же устроен и адрес в окне.
+   */
+  function mediaURL(rel: string): string {
+    const full = base + "/api/media?path=" + encodeURIComponent(rel);
+    return key ? full + "&key=" + encodeURIComponent(key) : full;
+  }
+
+  /** Вложение реплики: звук — проигрывателем, картинка — картинкой, иначе ссылкой.
+   *
+   * Пусто, если пути от дерева нет: файл СНАРУЖИ дерева каналом не отдаётся, и
+   * подсовывать ему адрес значило бы обещать то, чего не будет. Для такого
+   * остаётся прежняя строка с именем.
+   */
+  function mediaBlock(m: Msg): string {
+    const rel = String(m.media_path || "").trim();
+    if (!rel) return "";
+    const src = mediaURL(rel);
+    const name = rel.split("/").pop() || rel;
+    if (String(m.media_kind || "") === "audio") {
+      return `<div class="msg-media"><audio controls preload="none" src="${esc(src)}"></audio></div>`;
+    }
+    if (String(m.media_kind || "") === "image") {
+      return `<div class="msg-media"><img loading="lazy" alt="${esc(name)}" src="${esc(src)}"></div>`;
+    }
+    return `<div class="msg-media"><a href="${esc(src)}" target="_blank" rel="noreferrer">${esc(name)}</a></div>`;
   }
 
   /** Ручка из области окна: 403 запоминаем и больше не спрашиваем. null — не отдаётся / не прочиталось. */
@@ -766,7 +801,8 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       const head = m.outgoing
         ? `<span class="who-hand">${esc(agent)}</span><span>${fmtTime(m.timestamp)}</span>`
         : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}</span>`;
-      const media = m.media ? ` <span class="muted">[${esc(m.media)}]</span>` : "";
+      const media = mediaBlock(m)
+        || (m.media ? ` <span class="muted">[${esc(m.media)}]</span>` : "");
       html.push(`<div class="msg ${cls}" data-at="${esc(m.timestamp || "")}"><div class="msg-head">${head}</div><div class="msg-body">${md(m.text || "")}${media}</div></div>`);
     }
     const next = html.join("");
