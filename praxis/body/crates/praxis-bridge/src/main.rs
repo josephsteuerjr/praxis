@@ -266,9 +266,16 @@ async fn controller_invoke(
         }
     };
     if let Err(error) = state.spool.store(TO_DEVICE, &envelope, &raw) {
+        let conflict = error.downcast_ref::<spool::IdConflict>().is_some();
         return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"ok": false, "error": error.to_string()})),
+            if conflict {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            },
+            Json(json!({"ok": false,
+                "code": if conflict { "id_conflict" } else { "spool_error" },
+                "error": error.to_string()})),
         )
             .into_response();
     }
@@ -679,6 +686,101 @@ mod tests {
         );
         assert!(remove_peer_if_current(&map, "pc", new_generation).await);
         assert!(!map.read().await.contains_key("pc"));
+    }
+
+    #[tokio::test]
+    async fn changed_intent_conflicts_before_cached_success_can_be_polled() {
+        let root = std::env::temp_dir().join(format!("praxis-bridge-intent-{}", Uuid::new_v4()));
+        let state = AppState {
+            bridge_instance_id: Uuid::new_v4(),
+            device_token: Arc::from("device-token"),
+            controller_token: Arc::from("controller-token"),
+            peers: Arc::new(Peers::default()),
+            dispatch: Arc::new(DispatchLocks::default()),
+            spool: Arc::new(Spool::open(&root.join("spool.db")).unwrap()),
+            artifacts: Arc::new(ArtifactStore::open(root.join("artifacts"), 64 * 1024).unwrap()),
+        };
+        for (index, text, expected) in [
+            (0, "A", StatusCode::ACCEPTED),
+            (1, "A", StatusCode::ACCEPTED),
+            (2, "B", StatusCode::CONFLICT),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                axum::http::header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer controller-token"),
+            );
+            let response = controller_invoke(State(state.clone()), Path("pc".into()), headers,
+                Json(ControllerInvoke {
+                    request_id: Some("stable-r".into()), operation_id: Some("stable-o".into()),
+                    execution: ExecutionKind::Interactive, capability: "desktop.element.act".into(),
+                    args: json!({"do": "set_value", "select": {"automation_id": "field"}, "text": text}),
+                    deadline: None,
+                })).await;
+            assert_eq!(response.status(), expected);
+            if index == 0 {
+                state
+                    .spool
+                    .record_response(
+                        "stable-r",
+                        "pc",
+                        Some("stable-o"),
+                        "result",
+                        true,
+                        r#"{"type":"result","ok":true,"result":{"value":"A"}}"#,
+                    )
+                    .unwrap();
+            }
+            if index == 2 {
+                let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap();
+                let body: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(body["code"], "id_conflict");
+                assert_eq!(body["ok"], false);
+            }
+        }
+        assert_eq!(state.spool.pending_count("pc", TO_DEVICE), 2);
+        assert!(
+            state
+                .spool
+                .response("stable-r", "pc")
+                .unwrap()
+                .unwrap()
+                .contains("A")
+        );
+        // Durable binding survives frame acknowledgement and bridge restart.
+        state
+            .spool
+            .acknowledge("pc", TO_DEVICE, u64::MAX / 2)
+            .unwrap();
+        drop(state);
+        let reopened = Spool::open(&root.join("spool.db")).unwrap();
+        let changed = Envelope::new(
+            "pc",
+            100,
+            Frame::Invoke {
+                request_id: "stable-r".into(),
+                operation_id: "stable-o".into(),
+                execution: ExecutionKind::Interactive,
+                capability: "desktop.element.act".into(),
+                args: json!({"text": "B"}),
+                deadline: None,
+            },
+        );
+        assert!(
+            reopened
+                .store(
+                    TO_DEVICE,
+                    &changed,
+                    &serde_json::to_string(&changed).unwrap()
+                )
+                .unwrap_err()
+                .downcast_ref::<spool::IdConflict>()
+                .is_some()
+        );
+        drop(reopened);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

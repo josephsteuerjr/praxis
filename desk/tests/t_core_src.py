@@ -109,6 +109,55 @@ class Verdict(Ground):
         self.assertEqual(self.compare()["gone"], ["снесён.py"])
 
 
+class LayerFellBehind(Ground):
+    """Объявлено верно — а в слое лежит вчерашнее.
+
+    Найдено 11.09 на живом дереве: пять файлов издания (`agent.py`, `uia.rs`,
+    `body_client.py`, `element.rs`, стенды поиска) были объявлены и правда
+    расходились с ядром, а слой держал их редакцию ДО правок дня. Прибор при
+    этом говорил «издание объявлено честно»: он спрашивал только ФАКТ
+    объявления и ни разу — содержимое. Поставка «ядро + слой» воспроизвела бы
+    не это дерево, и сказать об этом было некому.
+    """
+
+    def test_a_declared_file_whose_layer_copy_is_stale_is_named(self):
+        self.put(self.core, "agent.py", "ядро\n")
+        self.put(self.layer, "agent.py", "издание ВЧЕРАШНЕЕ\n")
+        self.put(self.tree, "agent.py", "издание сегодняшнее\n")
+        res = self.compare()
+        self.assertEqual(res["declared_ok"], ["agent.py"])
+        self.assertEqual(res["drifted"], ["agent.py"])
+
+    def test_our_own_file_is_checked_too(self):
+        """Файл, которого в ядре НЕТ вовсе, раньше выпадал из всех корзин.
+
+        `only_ours` из отчёта вычитает объявленные — и правильно, объявленный
+        наш файл не жалоба. Но тогда про него не спрашивали ничего, включая
+        «а в слое то же самое?». Именно так отстали `element.rs` и стенды.
+        """
+        self.put(self.core, "agent.py", "ядро\n")
+        self.put(self.tree, "agent.py", "ядро\n")
+        self.put(self.layer, "наш.rs", "вчерашний\n")
+        self.put(self.tree, "наш.rs", "сегодняшний\n")
+        res = self.compare()
+        self.assertEqual(res["only_ours"], [])
+        self.assertEqual(res["drifted"], ["наш.rs"])
+
+    def test_a_layer_that_matches_is_not_named(self):
+        """Обратная сторона: совпадающий слой молчит, иначе прибор кричал бы всегда."""
+        self.put(self.core, "agent.py", "ядро\n")
+        self.put(self.layer, "agent.py", "издание\n")
+        self.put(self.tree, "agent.py", "издание\n")
+        self.assertEqual(self.compare()["drifted"], [])
+
+    def test_crlf_alone_is_not_drift(self):
+        """Копия на Windows и оригинал с Linux иначе разошлись бы каждым файлом."""
+        self.put(self.core, "agent.py", "ядро\n")
+        (self.layer / "agent.py").write_bytes("издание\r\n".encode("utf-8"))
+        (self.tree / "agent.py").write_bytes("издание\n".encode("utf-8"))
+        self.assertEqual(self.compare()["drifted"], [])
+
+
 class WhatIsNotCompared(Ground):
 
     def test_her_own_writing_is_not_an_edition_difference(self):

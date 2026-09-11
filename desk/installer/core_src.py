@@ -178,6 +178,17 @@ def compare(core: Path, layer: Path, tree: Path) -> dict:
         # Наш файл, которого в ядре нет вовсе.
         "only_ours": sorted(only_ours - declared),
         "declared_ok": sorted(declared & differ),
+        # ⚠ Объявлено, расхождение есть — а В СЛОЕ ЛЕЖИТ НЕ ТО, что в дереве.
+        # Прежде прибор этого не спрашивал: он проверял только ФАКТ объявления.
+        # Значит слой мог отстать на любое число правок, а сверка говорила
+        # «издание объявлено честно» — то есть молчала ровно там, ради чего
+        # заведена. Поставка из ядра плюс такой слой воспроизводит не это дерево.
+        # ⚠ Считаем и по `only_ours`: объявленный файл, которого в ядре нет,
+        # из отчёта выпадал совсем — ни расхождения (сравнивать не с чем), ни
+        # жалобы (объявлен). Значит про НОВЫЕ файлы издания слой мог держать
+        # вчерашнее, и никто бы не сказал.
+        "drifted": sorted(rel for rel in (declared & (differ | only_ours))
+                          if rel in tree_f and sha(layer_f[rel]) != sha(tree_f[rel])),
         "gone": sorted(r for r in declared if r not in tree_f),
         # Файл ядра, которого у нас нет вовсе. Это НЕ ошибка: издание вправе чего-то
         # не нести. Но и молчать нельзя — сборка из ядра принесёт его в поставку, и
@@ -223,6 +234,7 @@ def _report(res: dict) -> int:
     print(f"дерево: {res['tree']} — {c['tree']} файлов")
     print()
     print(f"объявлено и вправду расходится : {len(res['declared_ok'])}")
+    print(f"   ⚠ из них слой ОТСТАЛ от дерева: {len(res['drifted'])}")
     print(f"НЕ ОБЪЯВЛЕНО, но расходится    : {len(res['undeclared'])}")
     print(f"объявлено зря (совпадает)      : {len(res['stale'])}")
     print(f"только у нас (в ядре нет)      : {len(res['only_ours'])}")
@@ -246,17 +258,46 @@ def _report(res: dict) -> int:
         for rel in res["gone"]:
             print("   ", rel)
 
-    if not res["undeclared"] and not res["stale"] and not res["gone"]:
+    if res["drifted"]:
+        print("\nСЛОЙ ОТСТАЛ ОТ ДЕРЕВА — объявлено верно, а лежит вчерашнее:")
+        for rel in res["drifted"]:
+            print("   ", rel)
+        print("    перенести: python installer/core_src.py --sync")
+
+    if (not res["undeclared"] and not res["stale"] and not res["gone"]
+            and not res["drifted"]):
         print("\nслой сходится с фактической разницей — издание объявлено честно")
         return 0
     print("\nслой и фактическая разница РАЗЪЕХАЛИСЬ")
     return 1
 
 
+def sync(res: dict) -> int:
+    """Перенести дерево в слой там, где слой отстал. Ничего не объявляет заново.
+
+    ⚠ Только уже ОБЪЯВЛЕННЫЕ файлы. Дописывать в слой необъявленное этот ключ не
+    будет: «расходится, а в слое нет» — это либо отставшее ядро, либо её
+    невыложенная починка, и решать такое прибором значит принимать чужую работу
+    за свою.
+    """
+    layer, tree = Path(res["layer"]), Path(res["tree"])
+    moved = 0
+    for rel in res["drifted"]:
+        dst = layer / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes((tree / rel).read_bytes())
+        print("  перенесено:", rel)
+        moved += 1
+    print(f"перенесено файлов: {moved}" if moved else "слой и так совпадает с деревом")
+    return 0
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="ядро и слой издания Элен: сверка и отпечатки")
     ap.add_argument("--check", action="store_true", help="слой против разницы ядра и дерева")
     ap.add_argument("--digest", action="store_true", help="отпечатки ядра и слоя")
+    ap.add_argument("--sync", action="store_true",
+                    help="перенести в слой содержимое дерева для объявленных файлов")
     ap.add_argument("--core", default=str(CORE_DEFAULT), help="ядро (по умолчанию ../praxis)")
     ap.add_argument("--layer", default=str(LAYER_DEFAULT), help="слой (по умолчанию ../helene/core)")
     ap.add_argument("--tree", default=os.environ.get("HELENE_TREE_SRC") or "",
@@ -281,6 +322,8 @@ def main() -> None:
             "не нашлась рабочая копия дерева агента.\n"
             "Скажи её путь: --tree <папка> или HELENE_TREE_SRC.")
     res = compare(core, layer, tree)
+    if args.sync:
+        raise SystemExit(sync(res))
     if args.json:
         print(json.dumps(res, ensure_ascii=False, indent=1))
         return

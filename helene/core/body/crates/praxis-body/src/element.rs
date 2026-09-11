@@ -152,15 +152,15 @@ impl Selector {
     /// регистра у `automation_id` (его пишет разработчик окна, и он точен), а `role` и
     /// `name` — без учёта регистра: их человек списывает с экрана.
     pub fn matches(&self, node: &NodeView<'_>) -> bool {
-        if let Some(want) = &self.automation_id {
-            if node.automation_id != Some(want.as_str()) {
-                return false;
-            }
+        if let Some(want) = &self.automation_id
+            && node.automation_id != Some(want.as_str())
+        {
+            return false;
         }
-        if let Some(want) = &self.role {
-            if !same_fold(node.role, want) {
-                return false;
-            }
+        if let Some(want) = &self.role
+            && !same_fold(node.role, want)
+        {
+            return false;
         }
         if let Some(want) = &self.name {
             match node.name {
@@ -261,6 +261,7 @@ pub fn choose(matched: &[usize], nth: Option<usize>) -> Choice {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ActArgs {
     hwnd: Option<Value>,
     #[serde(default)]
@@ -276,6 +277,7 @@ struct ActArgs {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SelectArgs {
     automation_id: Option<String>,
     role: Option<String>,
@@ -314,9 +316,34 @@ pub fn plan(args: Value) -> Result<Plan> {
     let args: ActArgs =
         serde_json::from_value(args).map_err(|e| anyhow::anyhow!("{CAPABILITY} arguments: {e}"))?;
     let act = Act::parse(args.act.as_deref().unwrap_or_default())?;
+    // ⚠ Пустое значение поля отбора — ОТКАЗ, а не «условия не было».
+    //
+    // Раньше строка из одних пробелов молча превращалась в `None`: условие
+    // исчезало, отбор становился шире, чем просила она, и «ровно одно
+    // совпадение» могло оказаться ложной уникальностью — то есть действие
+    // ушло бы в чужой элемент. Названо ревью 11.09; молчаливое исчезновение
+    // условия в этом модуле запрещено по устройству.
+    let blank: Vec<&str> = [
+        ("automation_id", &args.select.automation_id),
+        ("role", &args.select.role),
+        ("name", &args.select.name),
+        ("name_contains", &args.select.name_contains),
+        ("value_contains", &args.select.value_contains),
+    ]
+    .iter()
+    .filter(|(_, v)| v.as_deref().is_some_and(|s| s.trim().is_empty()))
+    .map(|(k, _)| *k)
+    .collect();
+    if !blank.is_empty() {
+        bail!(
+            "these selector fields are present but blank: {}. A blank field is not \
+             \"no condition\": dropping it silently would widen the selector and could \
+             make a different element look unique. Remove the key or give it a value",
+            blank.join(", ")
+        );
+    }
     let trim = |v: Option<String>| {
-        v.map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+        v.filter(|s| !s.trim().is_empty())
     };
     let select = Selector {
         automation_id: trim(args.select.automation_id),
@@ -386,6 +413,27 @@ const LIMIT_CAP: u64 = 200;
 pub fn find_plan(args: Value) -> Result<FindPlan> {
     let args: FindArgs = serde_json::from_value(args)
         .map_err(|e| anyhow::anyhow!("{FIND_CAPABILITY} arguments: {e}"))?;
+    // Та же проверка, что у действия: пустое поле — отказ, а не тихое расширение
+    // отбора. У поиска цена ошибки меньше (он ничего не нажимает), но ответ
+    // «нашлось одно» читается так же, и врать им нельзя.
+    let blank: Vec<&str> = [
+        ("automation_id", &args.select.automation_id),
+        ("role", &args.select.role),
+        ("name", &args.select.name),
+        ("name_contains", &args.select.name_contains),
+        ("value_contains", &args.select.value_contains),
+    ]
+    .iter()
+    .filter(|(_, v)| v.as_deref().is_some_and(|s| s.trim().is_empty()))
+    .map(|(k, _)| *k)
+    .collect();
+    if !blank.is_empty() {
+        bail!(
+            "these selector fields are present but blank: {}. Remove the key or give \
+             it a value: a blank field is not \"no condition\"",
+            blank.join(", ")
+        );
+    }
     let trim = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     let select = Selector {
         automation_id: trim(args.select.automation_id),
@@ -499,7 +547,8 @@ pub fn not_found(limit: Option<&str>, nth_given: bool, found_any: bool) -> (&'st
             "the walk ran out of timeout_ms before the window ended: raise timeout_ms - \
              big Electron/Chromium windows carry thousands of elements",
         ),
-        Some(_) => ("not_found", "the walk stopped early for an unnamed reason"),
+        Some("max_depth") => ("max_depth", "the walk stopped at max_depth; raise max_depth"),
+        Some(_) => ("incomplete", "the walk stopped early for an unnamed reason"),
         None if nth_given && found_any => (
             "nth_out_of_range",
             "the selector matched, but fewer elements than the nth you asked for",
@@ -557,6 +606,15 @@ mod tests {
             automation_id: id,
             value: None,
         }
+    }
+
+    #[test]
+    fn exact_fields_keep_whitespace_and_unknown_selectors_fail_closed() {
+        let p = plan(json!({"do": "invoke", "select": {"automation_id": " save ", "name": " OK "}})).unwrap();
+        assert_eq!(p.select.automation_id.as_deref(), Some(" save "));
+        assert_eq!(p.select.name.as_deref(), Some(" OK "));
+        assert!(plan(json!({"do": "invoke", "select": {"role": "button", "automationId": "save"}})).is_err());
+        assert!(plan(json!({"do": "invoke", "select": {"role": "button"}, "expected_pid": 123})).is_err());
     }
 
     #[test]
@@ -734,6 +792,9 @@ mod tests {
         let (reason, hint) = not_found(Some("max_nodes"), false, false);
         assert_eq!(reason, "max_nodes");
         assert!(hint.contains("raise max_nodes"), "{hint}");
+
+        assert_eq!(not_found(Some("max_depth"), false, false).0, "max_depth");
+        assert_eq!(not_found(Some("provider_error"), false, false).0, "incomplete");
 
         // Дочитали окно целиком и не нашли — вот теперь это «нет такого».
         let (reason, hint) = not_found(None, false, false);

@@ -1078,10 +1078,13 @@ def core_provenance(live: Path) -> dict:
     note["drift"] = {"undeclared": len(drift["undeclared"]), "stale": len(drift["stale"]),
                      "only_ours": len(drift["only_ours"]),
                      "declared_ok": len(drift["declared_ok"]),
-                     "names_undeclared": drift["undeclared"], "names_stale": drift["stale"]}
-    if drift["undeclared"] or drift["stale"]:
+                     "drifted": len(drift["drifted"]),
+                     "names_undeclared": drift["undeclared"], "names_stale": drift["stale"],
+                     "names_drifted": drift["drifted"]}
+    if drift["undeclared"] or drift["stale"] or drift["drifted"]:
         print(f"  ⚠ слой и дело разъехались: не объявлено {len(drift['undeclared'])}, "
-              f"объявлено зря {len(drift['stale'])} — "
+              f"объявлено зря {len(drift['stale'])}, "
+              f"слой отстал от дерева {len(drift['drifted'])} — "
               "python installer/core_src.py --check")
         print("    (поставка едет из рабочей копии — это записано в паспорте)")
     else:
@@ -1098,11 +1101,16 @@ def assemble_from_core(dest: Path, core: Path, layer: Path) -> int:
     следа. Ровно тот класс, из-за которого 09.09 в поставку уехало чужое реле.
     """
     drift = core_src.compare(core, layer, live_root(None))
-    if drift["undeclared"] or drift["stale"]:
+    # ⚠ Объявить файл и положить в слой вчерашнюю его редакцию — по
+    # последствиям то же, что не объявить вовсе: поставка соберётся не из
+    # этого дерева. Проверялось только объявление, содержимое — нет (11.09).
+    if drift["undeclared"] or drift["stale"] or drift["drifted"]:
         raise SystemExit(
             f"из ядра собрать нельзя: слой не описывает издание.\n"
             f"  не объявлено, но расходится: {len(drift['undeclared'])}\n"
             f"  объявлено зря (совпадает):   {len(drift['stale'])}\n"
+            f"  объявлено, но слой отстал:   {len(drift['drifted'])}"
+            f" ({', '.join(drift['drifted'][:6])})\n"
             "Подробно — python installer/core_src.py --check\n"
             "Расходиться могут обе стороны, и отказ не знает какая: либо выложенное "
             "ядро отстало от живого (свежий экспорт зеркала — её сторона), либо от "

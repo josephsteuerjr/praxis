@@ -4224,7 +4224,8 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
                   shape: str = "", text_contains: str = "", max_nodes: int = 0,
                   max_depth: int = 0,
                   automation_id: str = "", role: str = "", nth: int = -1,
-                  element_action: str = "", element_limit: int = 0) -> str:
+                  element_action: str = "", element_limit: int = 0,
+                  idempotency_key: str = "") -> str:
     """Caller-authorized body actions; the Windows client still makes no decisions."""
     import computer_inventory
     action = str(action or "").strip().lower()
@@ -4247,7 +4248,8 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
         # чтение/пересылка, запись на диск остаётся суверенной (владелец или сама Praxis).
         return "Запись файлов на компьютере — только владелец или сама Praxis; грант computer.files её не включает."
     if execution != "interactive" and action in {
-        "desktop_status", "windows", "read_window", "activate", "input", "type_text",
+        "desktop_status", "windows", "read_window", "find_elements", "act_element",
+        "activate", "input", "type_text",
         "hotkey", "key", "move", "click", "scroll", "screenshot", "observe",
         "clipboard_read", "clipboard_write",
     }:
@@ -4348,10 +4350,15 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
         # Дерево контролов текстом: роли, имена, значения, automation id, rect и центр
         # каждого узла — то, чем text-only модель видит окно. Умолчания за неё не
         # подставляются (у читалки тела deny_unknown_fields и свои пределы в расписке).
+        # ⚠ 11.09: `visible_only` и `timeout_ms` сюда не доезжали. Сказать
+        # «покажи и скрытые» или «подожди окно секунду» было можно — рука молча
+        # роняла оба поля и звала с умолчаниями. Названо её стендом.
         result = body_client.desktop_window_read(
             hwnd=(hwnd or None), shape=(shape or ""), text_contains=(text_contains or ""),
+            visible_only=visible_only,
             max_nodes=(int(max_nodes) if max_nodes else None),
             max_depth=(int(max_depth) if max_depth else None),
+            timeout_ms=(int(timeout_ms) if timeout_ms else None),
             execution=execution,
         )
         return body_client.format_window_read(result)
@@ -4376,6 +4383,23 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
         if not str(element_action or "").strip():
             return ("act_element: скажи element_action — invoke, set_value, toggle, expand, "
                     "collapse, select, scroll_into_view или focus")
+        # ⚠ Повтор обязан адресовать ТУ ЖЕ запись в журнале, а не выпустить второй
+        # щелчок. Ход рвётся сверху (EmptyResponseError, обрыв реле) — и модель
+        # переиздаёт тот же вызов; без общего ключа мост принимает его как новое
+        # намерение и нажимает кнопку дважды. Ключ клиентский, потому что решает
+        # «это тот же самый удар» именно она, а не транспорт.
+        client_key = str(idempotency_key or "").strip()
+        if not client_key or len(client_key) > 200:
+            return ("act_element: нужен собственный idempotency_key (1..200 символов); "
+                    "повтор того же намерения — тот же ключ")
+        actor = _computer_actor()
+        if not actor:
+            return "act_element: не опознан principal для ключа действия"
+        # Ключ привязан к тому, КТО действует: одинаковый ключ у двух людей — два
+        # разных действия, а не общая запись.
+        digest = hashlib.sha256(
+            f"computer-element-v1\0{actor}\0{client_key}".encode("utf-8")
+        ).hexdigest()
         result = body_client.desktop_element_act(
             str(element_action).strip(), hwnd=(hwnd or None),
             automation_id=automation_id, role=role, name=name,
@@ -4385,7 +4409,8 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
             timeout_ms=(timeout_ms if timeout_ms else 3000),
             max_nodes=(int(max_nodes) if max_nodes else None),
             max_depth=(int(max_depth) if max_depth else None),
-            execution=execution,
+            execution=execution, request_id=f"element-req-{digest}",
+            operation_id=f"element-op-{digest}",
         )
         return body_client.format_element_act(result)
     elif action == "activate":
@@ -7103,7 +7128,10 @@ COMPUTER_TOOL = {
         "scroll_into_view|focus. It goes through UI Automation patterns, so no pixels are involved: DPI, a window that "
         "moved and a list that scrolled stop being your problem, and set_value types INTO THE FIELD rather than into "
         "whatever has focus. It WAITS for the element up to timeout_ms, so no sleep before it. Several matches are "
-        "REFUSED with the candidates listed — narrow the selector or say nth; an element without the needed pattern is "
+        "REFUSED with the candidates listed — narrow the selector or say nth; a selector field that is present but "
+        "blank is refused too, because dropping it would quietly widen the search. Every act_element needs your own "
+        "idempotency_key: reuse the SAME key when you are retrying the SAME intent (a torn turn must not press the "
+        "button twice) and mint a new one for a new intent. An element without the needed pattern is "
         "refused with the patterns it does have, never silently clicked at coordinates. ok:true means the pattern was "
         "invoked and the element re-read (element_after) — whether that achieved your goal is yours to judge. "
         "read_window returns the UI Automation control tree of a window as text (role, name, value, automation id, "
@@ -7149,6 +7177,8 @@ COMPUTER_TOOL = {
                           "description": "read_window: keep nodes whose name/value contains this text"},
         "max_nodes": {"type": "integer", "description": "read_window: cap on nodes read (body clamps)"},
         "max_depth": {"type": "integer", "description": "read_window/act_element/find_elements: cap on tree depth (body clamps)"},
+        "idempotency_key": {"type": "string",
+            "description": "act_element: your own stable key; a retry of the SAME intent MUST reuse it, a new intent needs a new key"},
         "element_limit": {"type": "integer",
                           "description": "find_elements: how many matches to show (default 20, capped). Not `limit`: that one belongs to reading files, and two keys of the same name in one schema silently become one"},
         "element_action": {"type": "string",
@@ -9732,6 +9762,12 @@ def _tool_has_side_effect(name: str, call_input: dict) -> bool:
         # (side effect без idempotency-ключа = консервативный recovery-маршрут).
         return str(call_input.get("action") or "").lower() not in {
             "status", "inventory", "list", "stat", "desktop_status", "windows",
+            # read_window и find_elements НИЧЕГО не меняют: они обходят дерево
+            # окна и возвращают узлы. В побочных они означали консервативный
+            # recovery-маршрут для чистого чтения — то есть после обрыва хода
+            # взгляд на окно не повторялся бы сам. 11.09: её правка (read_window)
+            # плюс наша (find_elements — у неё всё ещё в побочных).
+            "read_window", "find_elements",
             "clipboard_read", "processes", "observe", "poll", "read", "hash",
         }
     return name not in _READ_ONLY_TOOLS

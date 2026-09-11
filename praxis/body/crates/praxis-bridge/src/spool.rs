@@ -3,12 +3,100 @@ use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use praxis_body_protocol::Envelope;
+use praxis_body_protocol::{Envelope, Frame};
 use rusqlite::{Connection, params};
+use sha2::{Digest, Sha256};
 
 pub const TO_DEVICE: &str = "to_device";
 pub const TO_CONTROLLER: &str = "to_controller";
 const MAX_PENDING_PAGE: usize = 256;
+
+#[derive(Debug)]
+pub struct IdConflict;
+
+impl std::fmt::Display for IdConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("request/operation identity already bound or legacy intent unavailable")
+    }
+}
+
+impl std::error::Error for IdConflict {}
+
+// Deadline is a transport budget, not action intent. Bind both identities durably,
+// in the same transaction as the outbound frame, for HTTP and websocket producers.
+fn bind_invoke(conn: &Connection, envelope: &Envelope) -> Result<()> {
+    let Frame::Invoke {
+        request_id,
+        operation_id,
+        execution,
+        capability,
+        args,
+        ..
+    } = &envelope.frame
+    else {
+        return Ok(());
+    };
+    let intent = hex::encode(Sha256::digest(serde_json::to_vec(&serde_json::json!([
+        execution, capability, args
+    ]))?));
+    let mut statement = conn.prepare(
+        "SELECT request_id, operation_id, intent FROM invoke_intents
+         WHERE device_id=?1 AND (request_id=?2 OR operation_id=?3)",
+    )?;
+    let existing = statement
+        .query_map(
+            params![envelope.device_id, request_id, operation_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if !existing.is_empty() {
+        if existing
+            .iter()
+            .any(|(r, o, i)| r != request_id || o != operation_id || i != &intent)
+        {
+            return Err(IdConflict.into());
+        }
+        return Ok(());
+    }
+    // Old caches have no intent proof. Never relabel an old terminal receipt as
+    // this new invocation's result, even when the body would later reject it.
+    let legacy: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM responses WHERE device_id=?1
+         AND (request_id=?2 OR operation_id=?3))",
+        params![envelope.device_id, request_id, operation_id],
+        |row| row.get(0),
+    )?;
+    if legacy {
+        return Err(IdConflict.into());
+    }
+    let mut pending =
+        conn.prepare("SELECT payload FROM frames WHERE device_id=?1 AND direction=?2")?;
+    for raw in pending.query_map(params![envelope.device_id, TO_DEVICE], |row| {
+        row.get::<_, String>(0)
+    })? {
+        let old: Envelope = serde_json::from_str(&raw?)?;
+        if let Frame::Invoke {
+            request_id: r,
+            operation_id: o,
+            ..
+        } = old.frame
+            && (&r == request_id || &o == operation_id)
+        {
+            return Err(IdConflict.into());
+        }
+    }
+    conn.execute(
+        "INSERT INTO invoke_intents(device_id, request_id, operation_id, intent) VALUES (?1, ?2, ?3, ?4)",
+        params![envelope.device_id, request_id, operation_id, intent],
+    )?;
+    Ok(())
+}
 
 pub struct Spool {
     connection: Mutex<Connection>,
@@ -25,6 +113,14 @@ impl Spool {
         connection.execute_batch(
             "PRAGMA journal_mode=DELETE;
              PRAGMA synchronous=FULL;
+             CREATE TABLE IF NOT EXISTS invoke_intents (
+                 device_id TEXT NOT NULL,
+                 request_id TEXT NOT NULL,
+                 operation_id TEXT NOT NULL,
+                 intent TEXT NOT NULL,
+                 PRIMARY KEY(device_id, request_id),
+                 UNIQUE(device_id, operation_id)
+             );
              CREATE TABLE IF NOT EXISTS frames (
                  message_id TEXT PRIMARY KEY,
                  device_id TEXT NOT NULL,
@@ -106,8 +202,12 @@ impl Spool {
     }
 
     pub fn store(&self, direction: &str, envelope: &Envelope, payload: &str) -> Result<()> {
-        let conn = self.connection.lock().expect("spool mutex poisoned");
-        conn.execute(
+        let mut conn = self.connection.lock().expect("spool mutex poisoned");
+        let transaction = conn.transaction()?;
+        if direction == TO_DEVICE {
+            bind_invoke(&transaction, envelope)?;
+        }
+        transaction.execute(
             "INSERT INTO frames
              (message_id, device_id, direction, seq, payload, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -121,6 +221,7 @@ impl Spool {
                 Utc::now().to_rfc3339(),
             ],
         )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -345,6 +446,54 @@ mod tests {
     use chrono::{Duration, Utc};
     use praxis_body_protocol::Frame;
     use uuid::Uuid;
+
+    #[test]
+    fn invoke_binding_covers_both_ids_deadline_and_legacy_cache() {
+        let path = std::env::temp_dir().join(format!("praxis-intent-{}.db", Uuid::new_v4()));
+        let spool = Spool::open(&path).unwrap();
+        let make = |r: &str, o: &str, value: &str, seq: u64| {
+            Envelope::new(
+                "pc",
+                seq,
+                Frame::Invoke {
+                    request_id: r.into(),
+                    operation_id: o.into(),
+                    execution: praxis_body_protocol::ExecutionKind::Interactive,
+                    capability: "desktop.element.act".into(),
+                    args: serde_json::json!({"text": value}),
+                    deadline: Some(Utc::now() + Duration::seconds(seq as i64)),
+                },
+            )
+        };
+        let store = |e: &Envelope| spool.store(TO_DEVICE, e, &serde_json::to_string(e).unwrap());
+        store(&make("r", "o", "A", 1)).unwrap();
+        // A renewed deadline is not changed intent.
+        store(&make("r", "o", "A", 2)).unwrap();
+        for (r, o, value) in [("r", "o", "B"), ("new-r", "o", "A"), ("r", "new-o", "A")] {
+            assert!(
+                store(&make(r, o, value, 3))
+                    .unwrap_err()
+                    .downcast_ref::<IdConflict>()
+                    .is_some()
+            );
+        }
+        spool
+            .record_response("legacy", "pc", Some("legacy-o"), "result", true, "old")
+            .unwrap();
+        assert!(
+            store(&make("legacy", "legacy-o", "A", 4))
+                .unwrap_err()
+                .downcast_ref::<IdConflict>()
+                .is_some()
+        );
+        assert_eq!(
+            spool.response("legacy", "pc").unwrap().as_deref(),
+            Some("old")
+        );
+        assert_eq!(spool.pending_count("pc", TO_DEVICE), 2);
+        drop(spool);
+        let _ = std::fs::remove_file(path);
+    }
 
     #[test]
     fn ack_is_cumulative_per_device_and_direction() {

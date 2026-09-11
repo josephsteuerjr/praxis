@@ -15,7 +15,7 @@ use praxis_body_protocol::{AdapterDescriptor, CapabilityDescriptor};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-/// Единственный глагол модуля.
+/// Глагол чтения; действие над элементом объявлено в `element`.
 pub const CAPABILITY: &str = "desktop.window.read";
 pub const VERSION: u32 = 1;
 
@@ -64,8 +64,27 @@ pub fn adapter_descriptor() -> AdapterDescriptor {
     AdapterDescriptor {
         name: "uia-window-reader".into(),
         version: "1".into(),
-        capabilities: vec![CAPABILITY.to_string()],
+        capabilities: vec![CAPABILITY.to_string(), crate::element::CAPABILITY.to_string()],
         available: cfg!(windows),
+    }
+}
+
+// Keep provider status distinct from a successful nullable COM output. In particular,
+// E_POINTER from a provider is NOT the same as a successful null end-of-tree.
+#[cfg(any(windows, test))]
+fn act_provider_output<T, E>(status: std::result::Result<(), E>, output: Option<T>) -> std::result::Result<Option<T>, E> {
+    status?;
+    Ok(output)
+}
+
+// Only display-only fields may degrade to absence; a selector read is evidence
+// needed to establish uniqueness across the ENTIRE tree, including with nth.
+#[cfg(any(windows, test))]
+fn act_property<T, E>(required: bool, read: std::result::Result<T, E>) -> std::result::Result<Option<T>, E> {
+    match read {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if required => Err(error),
+        Err(_) => Ok(None),
     }
 }
 
@@ -495,10 +514,10 @@ impl Node {
         if let Some(reason) = self.children_unread {
             object.insert("children_unread".into(), json!(reason));
         }
-        if let Some(children) = children {
-            if !children.is_empty() {
-                object.insert("children".into(), Value::Array(children));
-            }
+        if let Some(children) = children
+            && !children.is_empty()
+        {
+            object.insert("children".into(), Value::Array(children));
         }
         Value::Object(object)
     }
@@ -676,9 +695,11 @@ fn render(rendered: Rendered<'_>) -> Value {
 
     match plan.shape {
         Shape::Tree => {
-            let root = (!walk.nodes.is_empty() && keep[0])
-                .then(|| tree_json(0, &walk.nodes, &children_of, &keep))
-                .unwrap_or(Value::Null);
+            let root = if !walk.nodes.is_empty() && keep[0] {
+                tree_json(0, &walk.nodes, &children_of, &keep)
+            } else {
+                Value::Null
+            };
             object.insert("root".into(), root);
         }
         Shape::Flat => {
@@ -782,10 +803,10 @@ fn render(rendered: Rendered<'_>) -> Value {
 fn children_of(nodes: &[Node]) -> Vec<Vec<usize>> {
     let mut children = vec![Vec::new(); nodes.len()];
     for (index, node) in nodes.iter().enumerate() {
-        if let Some(parent) = node.parent {
-            if parent < children.len() {
-                children[parent].push(index);
-            }
+        if let Some(parent) = node.parent
+            && parent < children.len()
+        {
+            children[parent].push(index);
         }
     }
     children
@@ -904,11 +925,9 @@ mod platform {
         UIA_ControlTypePropertyId, UIA_ExpandCollapsePatternId, UIA_HasKeyboardFocusPropertyId,
         UIA_IsEnabledPropertyId, UIA_IsOffscreenPropertyId, UIA_LocalizedControlTypePropertyId,
         UIA_NamePropertyId, UIA_NativeWindowHandlePropertyId, UIA_PATTERN_ID, UIA_PROPERTY_ID,
-        UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_ProcessIdPropertyId,
-        UIA_SelectionItemPatternId, UIA_TextPatternId, UIA_TogglePatternId, UIA_ValuePatternId,
-        // Паттерны ДЕЙСТВИЯ (desktop.element.act): нажать, прокрутить к элементу.
-        // Остальные (Value, Toggle, ExpandCollapse, SelectionItem) чтение уже спрашивает
-        // — им хватает того, что импортировано выше.
+        UIA_DocumentControlTypeId, UIA_EditControlTypeId,
+        UIA_ProcessIdPropertyId, UIA_SelectionItemPatternId, UIA_TextPatternId,
+        UIA_TogglePatternId, UIA_ValuePatternId,
         IUIAutomationInvokePattern, IUIAutomationScrollItemPattern, UIA_InvokePatternId,
         UIA_ScrollItemPatternId,
     };
@@ -1143,7 +1162,7 @@ mod platform {
             .name("praxis-uia-act".into())
             .spawn(move || {
                 let _apartment = ComApartment::enter();
-                let outcome = act_in_apartment(window, &job);
+                let outcome = act_in_apartment(window, &job, started);
                 let _ = sender.send(outcome);
                 UIA_WORKERS.fetch_sub(1, Ordering::SeqCst);
             });
@@ -1158,7 +1177,7 @@ mod platform {
             Ok(result) => result,
             Err(RecvTimeoutError::Timeout) => bail!(
                 "UI Automation did not answer within timeout_ms={} plus grace; \
-                 the target window is probably busy and its worker thread is still running",
+                 the worker may still be running; an in-flight pattern may have acted. Do not retry with a new idempotency key",
                 plan.timeout_ms
             ),
             Err(RecvTimeoutError::Disconnected) => {
@@ -1173,11 +1192,13 @@ mod platform {
     /// Ожидание встроено сюда, а не наверх: элемент, которого ещё нет, — обычное дело
     /// (окно рисуется), и пауза перед действием была бы гаданием. Опрос идёт до срока,
     /// и расписка говорит, сколько ждали и сколько раз смотрели.
-    fn act_in_apartment(handle: u64, plan: &crate::element::Plan) -> Result<Value> {
-        use crate::element::{Choice, choose};
+    fn act_in_apartment(handle: u64, plan: &crate::element::Plan, started: Instant) -> Result<Value> {
+        use crate::element::{Choice, NodeView, choose};
 
-        let started = Instant::now();
-        let deadline = started + Duration::from_millis(plan.timeout_ms);
+        // Zero means one bounded scan, not an infinite scan or no scan.
+        let deadline = started + Duration::from_millis(plan.timeout_ms.max(WORKER_GRACE_MS));
+        let mut target_pid = 0;
+        unsafe { GetWindowThreadProcessId(HWND(handle as usize as *mut c_void), Some(&mut target_pid)) };
         let hwnd = HWND(handle as usize as *mut c_void);
         let automation: IUIAutomation =
             unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
@@ -1216,12 +1237,42 @@ mod platform {
                 plan.max_depth,
                 deadline,
             )?;
+            // A partial traversal never proves uniqueness (even with nth).
+            if let Some(limit) = hit_limit {
+                let (reason, hint) = crate::element::not_found(Some(limit), false, false);
+                return Ok(serde_json::json!({
+                    "ok": false, "reason": reason, "hint": hint,
+                    "matched": found.len(), "nodes_scanned": scanned,
+                    "searched_whole_window": false,
+                    "waited_ms": started.elapsed().as_millis() as u64, "polls": polls,
+                }));
+            }
 
             let indexes: Vec<usize> = (0..found.len()).collect();
             match choose(&indexes, plan.select.nth) {
                 Choice::One { index, .. } => {
                     let (element, before) = &found[index];
-                    perform(element, plan)?;
+                    let live_role = role_name(unsafe { element.CurrentControlType() }?.0);
+                    let live_name = act_bstr(super::act_property(plan.select.name.is_some() || plan.select.name_contains.is_some(), unsafe { element.CurrentName() })?);
+                    let live_id = act_bstr(super::act_property(plan.select.automation_id.is_some(), unsafe { element.CurrentAutomationId() })?);
+                    let live_value = if plan.select.value_contains.is_some() { act_value(element, false)? } else { None };
+                    if !plan.select.matches(&NodeView {
+                        role: &live_role, name: live_name.as_deref(),
+                        automation_id: live_id.as_deref(), value: live_value.as_deref(),
+                    }) { bail!("selected element changed before action") }
+                    let guard = || -> Result<()> {
+                        if Instant::now() >= deadline { bail!("element action deadline expired before mutation") }
+                        let mut pid = 0;
+                        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+                        if target_pid == 0 || pid != target_pid || !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+                            bail!("target window changed before element action")
+                        }
+                        if plan.hwnd.is_none() && unsafe { GetForegroundWindow() } != hwnd {
+                            bail!("foreground changed before element action")
+                        }
+                        Ok(())
+                    };
+                    perform(element, plan, guard)?;
                     // Перечитываем ТОТ ЖЕ элемент, уже некэшированно: кэш снят ДО
                     // действия, и показывать его как «стало» значило бы показать «было»
                     // дважды.
@@ -1242,7 +1293,7 @@ mod platform {
                     return Ok(crate::element::ambiguous_error(total, candidates));
                 }
                 Choice::None => {
-                    if Instant::now() >= deadline {
+                    if plan.timeout_ms == 0 || Instant::now() >= deadline {
                         // Обход, упёршийся в потолок, — это НЕ «элемента нет»: часть окна
                         // осталась непрочитанной, и сказать «не нашлось» значило бы
                         // соврать о том, чего мы не смотрели.
@@ -1272,6 +1323,53 @@ mod platform {
         }
     }
 
+    // Selector identity must not silently lose leading/trailing whitespace.
+    fn act_bstr(value: Option<windows::core::BSTR>) -> Option<String> {
+        value.map(|text| text.to_string())
+    }
+
+    // The generated Result<Element> wrapper collapses successful null to E_POINTER.
+    // Call the verified windows 0.62.2 vtable ABI to retain BOTH pieces of evidence.
+    fn act_walk(
+        walker: &windows::Win32::UI::Accessibility::IUIAutomationTreeWalker,
+        element: &IUIAutomationElement,
+        cache: &windows::Win32::UI::Accessibility::IUIAutomationCacheRequest,
+        sibling: bool,
+    ) -> Result<Option<IUIAutomationElement>> {
+        use windows::core::Interface;
+        let mut raw = std::ptr::null_mut();
+        let status = unsafe {
+            let method = if sibling { walker.vtable().GetNextSiblingElementBuildCache }
+                else { walker.vtable().GetFirstChildElementBuildCache };
+            method(walker.as_raw(), element.as_raw(), cache.as_raw(), &mut raw)
+        };
+        // Take ownership of any returned interface, also dropping it on failure.
+        let output = if raw.is_null() { None } else {
+            Some(unsafe { IUIAutomationElement::from_raw(raw) })
+        };
+        super::act_provider_output(status.ok(), output)
+            .context("UIA action traversal incomplete")
+    }
+
+    // Successful null means this element has no ValuePattern. Provider errors and
+    // failed value reads are not evidence of a non-match and must abort the search.
+    fn act_value(element: &IUIAutomationElement, cached: bool) -> Result<Option<String>> {
+        use windows::core::{Interface, IUnknown};
+        let mut raw = std::ptr::null_mut();
+        let status = unsafe {
+            let method = if cached { element.vtable().GetCachedPattern }
+                else { element.vtable().GetCurrentPattern };
+            method(element.as_raw(), UIA_ValuePatternId, &mut raw)
+        };
+        let output = if raw.is_null() { None } else { Some(unsafe { IUnknown::from_raw(raw) }) };
+        let Some(unknown) = super::act_provider_output(status.ok(), output)
+            .context("selector ValuePattern: search incomplete")? else { return Ok(None) };
+        let pattern: IUIAutomationValuePattern = unknown.cast().context("selector ValuePattern cast")?;
+        let value = if cached { unsafe { pattern.CachedValue() } }
+            else { unsafe { pattern.CurrentValue() } };
+        Ok(Some(value.context("selector Value: search incomplete")?.to_string()))
+    }
+
     /// Обход окна ОДИН на обе руки: действие ищет, чтобы нажать, поиск — чтобы
     /// показать. Пока их было две копии (а первая редакция поиска именно так и
     /// начиналась), любая правка отбора чинилась бы в одном месте и оставалась
@@ -1292,6 +1390,10 @@ mod platform {
     ) -> Result<(Vec<(IUIAutomationElement, Value)>, usize, Option<&'static str>)> {
         use crate::element::NodeView;
 
+        // ⚠ `cache` здесь УЖЕ ссылка (см. подпись): лишний & давал `&&`, и Windows-
+        // сборка не проходила вовсе. У неё это не поймалось: код под `cfg(windows)`
+        // на Linux не компилируется, а виндовый линкер в её контейнере отсутствует
+        // (её же ревью: «linker `cc` missing, BLOCKED before project compilation»).
         let root = unsafe { automation.ElementFromHandleBuildCache(hwnd, cache) }
             .context("ElementFromHandle")?;
         let mut found: Vec<(IUIAutomationElement, Value)> = Vec::new();
@@ -1313,17 +1415,19 @@ mod platform {
                 break;
             }
             scanned += 1;
-            let role = role_name(unsafe { element.CachedControlType() }.unwrap_or_default().0);
-            let name = bstr(unsafe { element.CachedName() }.ok());
-            let automation_id = bstr(unsafe { element.CachedAutomationId() }.ok());
-            // Значение стоит отдельного паттерна, поэтому спрашиваем его ТОЛЬКО
-            // когда отбор про него спросил: на дереве в тысячи узлов лишний вызов на
-            // каждый — это и есть разница между «мгновенно» и «не ответило».
+            let role = role_name(super::act_property(
+                select.role.is_some(), unsafe { element.CachedControlType() },
+            ).context("selector CachedControlType: search incomplete")?.unwrap_or_default().0);
+            let name = act_bstr(super::act_property(
+                select.name.is_some() || select.name_contains.is_some(),
+                unsafe { element.CachedName() },
+            ).context("selector CachedName: search incomplete")?);
+            let automation_id = act_bstr(super::act_property(
+                select.automation_id.is_some(), unsafe { element.CachedAutomationId() },
+            ).context("selector CachedAutomationId: search incomplete")?);
             let value = if select.value_contains.is_some() {
-                cached_value(&element)
-            } else {
-                None
-            };
+                act_value(&element, true)?
+            } else { None };
             let view = NodeView {
                 role: &role,
                 name: name.as_deref(),
@@ -1333,19 +1437,29 @@ mod platform {
             if select.matches(&view) {
                 found.push((element.clone(), describe(&element, &role)));
             }
-            if depth + 1 <= max_depth {
-                let mut child =
-                    unsafe { walker.GetFirstChildElementBuildCache(&element, cache) }.ok();
-                while let Some(current) = child {
-                    let next =
-                        unsafe { walker.GetNextSiblingElementBuildCache(&current, cache) }.ok();
-                    queue.push_back((current, depth + 1));
-                    child = next;
-                }
+            let mut child = act_walk(&walker, &element, &cache, false)?;
+            if depth >= max_depth && child.is_some() {
+                hit_limit = Some("max_depth");
+                break;
             }
+            while let Some(current) = child {
+                if Instant::now() >= deadline {
+                    hit_limit = Some("timeout");
+                    break;
+                }
+                if scanned + queue.len() >= max_nodes as usize {
+                    hit_limit = Some("max_nodes");
+                    break;
+                }
+                child = act_walk(&walker, &current, &cache, true)?;
+                queue.push_back((current, depth + 1));
+            }
+            if hit_limit.is_some() { break; }
         }
         Ok((found, scanned, hit_limit))
     }
+
+    /// Поиск по дереву окна: показать, кто подошёл, ничего не трогая.
 
     /// Поиск по дереву окна: показать, кто подошёл, ничего не трогая.
     pub fn find(plan: &crate::element::FindPlan) -> Result<Value> {
@@ -1462,12 +1576,43 @@ mod platform {
             element.GetCachedPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
         }
         .ok()?;
-        bstr(unsafe { pattern.CurrentValue() }.ok())
+        act_bstr(unsafe { pattern.CachedValue() }.ok())
+    }
+
+    /// Паттерн для ДЕЙСТВИЯ, с разведёнными исходами.
+    ///
+    /// ⚠ Найдено ревью 11.09. Здесь стояло
+    /// `GetCurrentPatternAs::<T>(id).map_err(|_| missing(...))`, то есть ЛЮБОЙ отказ —
+    /// ошибка провайдера, отвалившийся элемент, `E_POINTER` — объявлялся как «у этого
+    /// элемента такого паттерна нет». Это то же самое, что чинила её правка обхода,
+    /// только в другом месте: отказ прибора выдавался за факт о мире, и владелец читал
+    /// «кнопка не умеет нажиматься» там, где на самом деле не удался запрос.
+    ///
+    /// Теперь: статус и указатель разведены. Успешный ноль — действительно нет паттерна
+    /// (и отказ называет те, что есть). Неуспешный статус — отказ запроса, и он назван
+    /// отказом запроса.
+    fn act_pattern<T: windows::core::Interface>(
+        element: &IUIAutomationElement,
+        id: UIA_PATTERN_ID,
+        want: &str,
+    ) -> Result<Option<T>> {
+        use windows::core::{IUnknown, Interface};
+        let mut raw = std::ptr::null_mut();
+        let status = unsafe { (element.vtable().GetCurrentPattern)(element.as_raw(), id, &mut raw) };
+        let output = if raw.is_null() { None } else { Some(unsafe { IUnknown::from_raw(raw) }) };
+        let Some(unknown) = super::act_provider_output(status.ok(), output).with_context(|| {
+            format!("{want}: the pattern query itself failed — this is a provider error, \
+                     not proof that the element lacks {want}")
+        })?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(unknown.cast::<T>().with_context(|| format!("{want}: cast"))?))
     }
 
     /// Вызвать паттерн. Никаких откатов к координатам: нет паттерна — отказ называет те,
     /// что у элемента есть.
-    fn perform(element: &IUIAutomationElement, plan: &crate::element::Plan) -> Result<()> {
+    fn perform(element: &IUIAutomationElement, plan: &crate::element::Plan, guard: impl Fn() -> Result<()>) -> Result<()> {
         use crate::element::Act;
 
         let missing = |want: &str| -> anyhow::Error {
@@ -1480,64 +1625,57 @@ mod platform {
         };
         match plan.act {
             Act::Invoke => unsafe {
-                element
-                    .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
-                    .map_err(|_| missing("InvokePattern"))?
-                    .Invoke()
+                let pattern = act_pattern::<IUIAutomationInvokePattern>(element, UIA_InvokePatternId, "InvokePattern")?
+                    .ok_or_else(|| missing("InvokePattern"))?;
+                guard()?;
+                pattern.Invoke()
                     .context("Invoke")?;
             },
             Act::SetValue => unsafe {
                 let text = plan.text.clone().unwrap_or_default();
-                element
-                    .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
-                    .map_err(|_| missing("ValuePattern"))?
-                    .SetValue(&windows::core::BSTR::from(text))
+                let pattern = act_pattern::<IUIAutomationValuePattern>(element, UIA_ValuePatternId, "ValuePattern")?
+                    .ok_or_else(|| missing("ValuePattern"))?;
+                guard()?;
+                pattern.SetValue(&windows::core::BSTR::from(text))
                     .context("SetValue")?;
             },
             Act::Toggle => unsafe {
-                element
-                    .GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
-                    .map_err(|_| missing("TogglePattern"))?
-                    .Toggle()
+                let pattern = act_pattern::<IUIAutomationTogglePattern>(element, UIA_TogglePatternId, "TogglePattern")?
+                    .ok_or_else(|| missing("TogglePattern"))?;
+                guard()?;
+                pattern.Toggle()
                     .context("Toggle")?;
             },
             Act::Expand => unsafe {
-                element
-                    .GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(
-                        UIA_ExpandCollapsePatternId,
-                    )
-                    .map_err(|_| missing("ExpandCollapsePattern"))?
-                    .Expand()
+                let pattern = act_pattern::<IUIAutomationExpandCollapsePattern>(element, UIA_ExpandCollapsePatternId, "ExpandCollapsePattern")?
+                    .ok_or_else(|| missing("ExpandCollapsePattern"))?;
+                guard()?;
+                pattern.Expand()
                     .context("Expand")?;
             },
             Act::Collapse => unsafe {
-                element
-                    .GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(
-                        UIA_ExpandCollapsePatternId,
-                    )
-                    .map_err(|_| missing("ExpandCollapsePattern"))?
-                    .Collapse()
+                let pattern = act_pattern::<IUIAutomationExpandCollapsePattern>(element, UIA_ExpandCollapsePatternId, "ExpandCollapsePattern")?
+                    .ok_or_else(|| missing("ExpandCollapsePattern"))?;
+                guard()?;
+                pattern.Collapse()
                     .context("Collapse")?;
             },
             Act::Select => unsafe {
-                element
-                    .GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(
-                        UIA_SelectionItemPatternId,
-                    )
-                    .map_err(|_| missing("SelectionItemPattern"))?
-                    .Select()
+                let pattern = act_pattern::<IUIAutomationSelectionItemPattern>(element, UIA_SelectionItemPatternId, "SelectionItemPattern")?
+                    .ok_or_else(|| missing("SelectionItemPattern"))?;
+                guard()?;
+                pattern.Select()
                     .context("Select")?;
             },
             Act::ScrollIntoView => unsafe {
-                element
-                    .GetCurrentPatternAs::<IUIAutomationScrollItemPattern>(
-                        UIA_ScrollItemPatternId,
-                    )
-                    .map_err(|_| missing("ScrollItemPattern"))?
-                    .ScrollIntoView()
+                let pattern = act_pattern::<IUIAutomationScrollItemPattern>(element, UIA_ScrollItemPatternId, "ScrollItemPattern")?
+                    .ok_or_else(|| missing("ScrollItemPattern"))?;
+                guard()?;
+                pattern.ScrollIntoView()
                     .context("ScrollIntoView")?;
             },
             Act::Focus => unsafe {
+                guard()?;
                 element.SetFocus().context("SetFocus")?;
             },
         }
@@ -1783,12 +1921,20 @@ mod platform {
                 .and_then(|pattern| unsafe { pattern.CachedValue() }.ok())
                 .map(|v| v.to_string()),
         );
-        // Кэшированный ValuePattern у прокси-контролов (WinForms/Win32 EDIT через MSAA-мост)
-        // пуст, хотя живой запрос значение отдаёт: проба 08.09 — .NET UIA-клиент видит у того же
-        // многострочного WinForms-поля и ValuePattern, и TextPattern, а наш кэш-запрос нет.
-        // Поэтому для полей ввода и документов делается один живой вызов к провайдеру:
-        // сначала Value, затем TextPattern.DocumentRange. Только для этих ролей — иначе каждый
-        // узел стоил бы межпроцессного вызова; предел текста тот же, что у остальных полей.
+        // ⚠⚠ ВОЗВРАЩЕНО 11.09 ПОСЛЕ РЕВЬЮ. Этот фолбэк был здесь с 08.09 и уехал
+        // вместе с починкой строгости: строгость правильная, а потеря — нет.
+        //
+        // Кэшированный ValuePattern у прокси-контролов (WinForms/Win32 EDIT через
+        // MSAA-мост) ПУСТ, хотя живой запрос значение отдаёт — замерено живой пробой
+        // 08.09: .NET UIA-клиент видит у того же многострочного WinForms-поля и
+        // ValuePattern, и TextPattern, а наш кэш-запрос не видит ничего. Без этих
+        // строк чтение классического поля ввода возвращает пустоту, и это выглядит
+        // как «в поле ничего нет» — то есть прибор врёт о мире.
+        //
+        // Только для полей ввода и документов: иначе каждый узел стоил бы
+        // межпроцессного вызова. Это ПОКАЗ, а не отбор: отбор по `value_contains`
+        // идёт строгим путём (`act_value`), где отказ провайдера — отказ, а не
+        // «не подошёл».
         let value = value.or_else(|| {
             let kind = unsafe { element.CachedControlType() }.ok()?;
             if kind != UIA_EditControlTypeId && kind != UIA_DocumentControlTypeId {
@@ -2053,6 +2199,40 @@ const WINDOW_READ_WIN32_DETAIL: &str =
 mod tests {
     use super::*;
 
+    #[test]
+    fn action_provider_failure_is_not_successful_null() {
+        const E_POINTER: i32 = 0x80004003u32 as i32;
+        assert_eq!(act_provider_output::<u8, i32>(Ok(()), None), Ok(None));
+        assert_eq!(act_provider_output(Ok::<(), i32>(()), Some(7)), Ok(Some(7)));
+        assert_eq!(act_provider_output::<u8, _>(Err(E_POINTER), None), Err(E_POINTER));
+        assert_eq!(act_provider_output(Err(E_POINTER), Some(7)), Err(E_POINTER));
+    }
+
+    #[test]
+    fn action_unreadable_competing_name_aborts_before_exact_or_nth_choice() {
+        // A duplicate exists, but its provider fails the required name read.
+        // Gathering all evidence must fail BEFORE choosing the first match.
+        for nth in [None, Some(0), Some(1)] {
+            let names = [Ok("Save"), Err("provider failed")];
+            let gathered: std::result::Result<Vec<_>, _> = names.into_iter()
+                .map(|name| act_property(true, name)).collect();
+            let outcome = gathered.map(|names| {
+                let matches: Vec<_> = names.iter().enumerate()
+                    .filter(|(_, name)| **name == Some("Save"))
+                    .map(|(index, _)| index).collect();
+                crate::element::choose(&matches, nth)
+            });
+            assert!(outcome.is_err(), "must not choose with nth={nth:?}");
+        }
+    }
+
+    #[test]
+    fn action_only_display_properties_may_be_unavailable() {
+        assert_eq!(act_property::<&str, _>(false, Err("provider failed")), Ok(None));
+        assert_eq!(act_property::<&str, _>(true, Err("provider failed")), Err("provider failed"));
+        assert_eq!(act_property::<_, &str>(true, Ok("")), Ok(Some("")));
+    }
+
     fn test_plan(shape: Shape, needle: &str) -> Plan {
         Plan {
             hwnd: None,
@@ -2141,7 +2321,7 @@ mod tests {
         let mutating: Vec<bool> = descriptors().into_iter().map(|d| d.mutating).collect();
         assert_eq!(mutating, vec![false, true, false]);
         let adapter = adapter_descriptor();
-        assert_eq!(adapter.capabilities, vec![CAPABILITY.to_string()]);
+        assert_eq!(adapter.capabilities, vec![CAPABILITY.to_string(), crate::element::CAPABILITY.to_string()]);
         assert_eq!(adapter.available, cfg!(windows));
     }
 

@@ -1130,7 +1130,8 @@ def desktop_element_act(action: str, *, hwnd: str | int | None = None,
                         nth: int | None = None, text: str | None = None,
                         timeout_ms: int = 3000, max_nodes: int | None = None,
                         max_depth: int | None = None,
-                        execution: str = "interactive") -> dict:
+                        execution: str = "interactive", request_id: str = "",
+                        operation_id: str = "") -> dict:
     """Сделать что-то НАД НАЗВАННЫМ ЭЛЕМЕНТОМ, а не над точкой экрана.
 
     Между чтением окна и ударом по координатам был провал: пиксель, верный секунду назад,
@@ -1149,14 +1150,15 @@ def desktop_element_act(action: str, *, hwnd: str | int | None = None,
       удару по координатам нет: он вернул бы ровно ту ненадёжность, ради ухода от
       которой глагол написан.
 
-    `ok:true` значит «паттерн вызван и элемент перечитан после» — в `element_after` видно,
-    каким он стал. Достигнута ли цель, решает она: это вывод, а не факт расписки.
+    `ok:true` значит «паттерн вызван»; `element_after`, если доступен, показывает
+    состояние после. Достигнута ли цель — вывод, а не факт расписки.
+    Для повторов передай те же request_id и operation_id; рука требует client key.
     """
     select: dict[str, Any] = {}
     for key, value in (("automation_id", automation_id), ("role", role), ("name", name),
                        ("name_contains", name_contains), ("value_contains", value_contains)):
-        if str(value or "").strip():
-            select[key] = str(value).strip()
+        if value is not None and str(value) != "":
+            select[key] = str(value)
     if nth is not None:
         select["nth"] = int(nth)
     payload: dict[str, Any] = {"do": str(action), "select": select,
@@ -1173,9 +1175,10 @@ def desktop_element_act(action: str, *, hwnd: str | int | None = None,
     # переживать — иначе мы бросим трубку ровно тогда, когда оно вот-вот ответит.
     wait = _clamped_ms(timeout_ms, 3000, 60_000) / 1000 + 20
     return _with_server_frame(
-        call("desktop.element.act", payload, execution=execution, timeout=wait),
+        call("desktop.element.act", payload, execution=execution, timeout=wait,
+             request_id=request_id, operation_id=operation_id),
         wait_s=wait, truth_field="ok",
-        truth_note=("ok значит «паттерн вызван и элемент перечитан после»; "
+        truth_note=("ok значит «паттерн вызван»; element_after может быть недоступен; "
                     "ok:false с reason=ambiguous|not_found — это ответ, а не поломка"),
     )
 
@@ -1200,12 +1203,17 @@ def format_element_act(result: dict) -> str:
             if len(rows) > 12:
                 lines.append(f"  … и ещё {len(rows) - 12}")
             return "\n".join(lines)
+        if reason in ("timeout", "max_nodes", "max_depth"):
+            return (f"[windows-body] отказ: {reason}; searched_whole_window="
+                    f"{result.get('searched_whole_window')}; просмотрено "
+                    f"{result.get('nodes_scanned')}, ждали {result.get('waited_ms')} мс. "
+                    f"{result.get('hint') or ''}").strip()
         if reason in ("not_found", "nth_out_of_range"):
             return (f"элемент не нашёлся за {result.get('waited_ms')} мс "
                     f"({result.get('polls')} проб, просмотрено {result.get('nodes_scanned')} "
                     f"элементов). {result.get('hint') or ''}").strip()
         return f"[windows-body] отказ: {reason}"
-    element = result.get("element_after") or result.get("element") or {}
+    element = result.get("element_after") or {}
     bits = [f"{result.get('did')}: {element.get('role') or '?'}"]
     for key in ("name", "automation_id", "value"):
         if element.get(key):
@@ -1213,6 +1221,8 @@ def format_element_act(result: dict) -> str:
     state = element.get("state") or {}
     if state:
         bits.append("состояние после: " + ", ".join(f"{k}={v}" for k, v in state.items()))
+    if result.get("element_after") is None:
+        bits.append("состояние после недоступно")
     bits.append(f"ждали {result.get('waited_ms')} мс")
     return " · ".join(bits)
 

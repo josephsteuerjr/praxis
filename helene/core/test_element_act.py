@@ -56,8 +56,15 @@ class Payload(unittest.TestCase):
 
         Тело отличает отсутствие ключа от пустого значения, и слать `name: ""` значило
         бы просить элемент БЕЗ имени."""
-        seen = self.call(action="focus", role="edit", name="", automation_id="   ")
+        seen = self.call(action="focus", role="edit", name="", automation_id="")
         self.assertEqual(seen["payload"]["select"], {"role": "edit"})
+
+    def test_whitespace_exact_selectors_are_never_dropped(self):
+        for field in ("automation_id", "name"):
+            with self.subTest(field=field):
+                seen = self.call(action="focus", role="edit", **{field: " \t "})
+                self.assertEqual(seen["payload"]["select"],
+                                 {"role": "edit", field: " \t "})
 
     def test_text_goes_only_with_set_value(self):
         """`text` при других действиях тело отвергает — не молча роняет."""
@@ -182,5 +189,158 @@ class Hand(unittest.TestCase):
         self.assertIn("act_element", said)
 
 
+
+class Integration(unittest.TestCase):
+    def test_schema_and_grants_include_both_verbs(self):
+        import agent
+        actions = agent.COMPUTER_TOOL['input_schema']['properties']['action']['enum']
+        for action in ('read_window', 'act_element'):
+            self.assertIn(action, actions)
+            self.assertEqual(agent._COMPUTER_ACTION_SCOPES[action], 'computer.apps')
+
+    def test_both_verbs_refuse_before_transport_without_grant(self):
+        import agent
+        with mock.patch.object(agent, '_computer_allowed', return_value=False), \
+                mock.patch.object(body_client, 'call') as transport:
+            for action in ('read_window', 'act_element'):
+                self.assertIn('computer.apps', agent.tool_computer(action))
+            transport.assert_not_called()
+
+    def test_system_desktop_is_rejected_even_for_sovereign(self):
+        import agent
+        with mock.patch.object(agent, '_computer_allowed', return_value=True), \
+                mock.patch.object(agent, '_is_sovereign_actor', return_value=True), \
+                mock.patch.object(body_client, 'call') as transport:
+            for action in ('read_window', 'act_element'):
+                self.assertIn('interactive', agent.tool_computer(action, execution='system'))
+            transport.assert_not_called()
+
+    def test_read_window_prerequisite_passes_limits_and_filters(self):
+        import agent
+        with mock.patch.object(agent, '_computer_allowed', return_value=True), \
+                mock.patch.object(body_client, 'desktop_window_read', return_value={}) as read, \
+                mock.patch.object(body_client, 'format_window_read', return_value='tree'):
+            self.assertEqual(agent.tool_computer('read_window', hwnd='0x42', shape='flat',
+                text_contains='привет', max_nodes=50, max_depth=4, timeout_ms=1000,
+                visible_only=False), 'tree')
+        read.assert_called_once_with(hwnd='0x42', shape='flat', text_contains='привет',
+            visible_only=False, max_nodes=50, max_depth=4, timeout_ms=1000,
+            execution='interactive')
+
+    def test_hand_transmits_exact_selector_and_empty_set_value(self):
+        import agent
+        with mock.patch.object(agent, '_computer_allowed', return_value=True), \
+                mock.patch.object(agent, '_computer_actor', return_value='praxis:self'), \
+                mock.patch.object(body_client, 'desktop_element_act', return_value={}) as act:
+            agent.tool_computer('act_element', element_action='set_value', hwnd='0x42',
+                automation_id='Field', role='edit', nth=0, text='', text_contains='old',
+                idempotency_key='test-set-value')
+        self.assertEqual(act.call_args.args, ('set_value',))
+        self.assertEqual(act.call_args.kwargs['nth'], 0)
+        self.assertEqual(act.call_args.kwargs['text'], '')
+        self.assertEqual(act.call_args.kwargs['value_contains'], 'old')
+        self.assertEqual(act.call_args.kwargs['automation_id'], 'Field')
+
+    def test_partial_search_is_not_reported_as_absence(self):
+        for reason in ('timeout', 'max_nodes', 'max_depth'):
+            said = body_client.format_element_act(dict(ok=False, reason=reason,
+                searched_whole_window=False, nodes_scanned=12, waited_ms=23))
+            self.assertIn(reason, said)
+            self.assertIn('False', said)
+            self.assertIn('12', said)
+            self.assertNotIn('не нашёлся', said)
+
+    def test_missing_after_is_not_disguised_as_before(self):
+        said = body_client.format_element_act(dict(ok=True, did='invoke',
+            element={'value': 'before'}, element_after=None))
+        self.assertNotIn('before', said)
+        self.assertIn('недоступно', said)
+
+
+class ExactSelector(unittest.TestCase):
+    def test_exact_values_are_not_silently_trimmed(self):
+        with mock.patch.object(body_client, 'call', return_value={'ok': False}) as call:
+            body_client.desktop_element_act('invoke', automation_id=' save ', name=' OK ')
+        self.assertEqual(call.call_args.args[1]['select'],
+                         {'automation_id': ' save ', 'name': ' OK '})
+
+
+
+class RetryIdentity(unittest.TestCase):
+    def test_unkeyed_action_never_calls_body(self):
+        import agent
+        with mock.patch.object(agent, '_computer_allowed', return_value=True), \
+                mock.patch.object(body_client, 'call') as call:
+            said = agent.tool_computer('act_element', element_action='toggle', role='checkbox')
+        self.assertIn('idempotency_key', said)
+        call.assert_not_called()
+
+    def test_retry_and_changed_intent_address_same_journal_entry(self):
+        import agent
+        with mock.patch.object(agent, '_computer_allowed', return_value=True), \
+                mock.patch.object(agent, '_computer_actor', return_value='praxis:self'), \
+                mock.patch.object(body_client, 'call', return_value={'ok': False}) as call:
+            for text in ('a', 'a', 'different'):
+                agent.tool_computer('act_element', element_action='set_value', role='edit',
+                                    text=text, idempotency_key='stable-test')
+        ids = [(c.kwargs['request_id'], c.kwargs['operation_id']) for c in call.call_args_list]
+        self.assertEqual(ids, [ids[0]] * 3)
+        self.assertTrue(all(ids[0]))
+        self.assertNotEqual(call.call_args_list[0].args[1], call.call_args_list[2].args[1])
+        # Same IDs/different payload => journal Admission::Conflict, not a new action.
+
+    def test_keys_are_principal_scoped_and_not_marked_auto_replay_safe(self):
+        import agent
+        with mock.patch.object(agent, '_computer_allowed', return_value=True), \
+                mock.patch.object(agent, '_computer_actor', side_effect=['telegram:1', 'telegram:2']), \
+                mock.patch.object(body_client, 'call', return_value={'ok': False}) as call:
+            for _ in range(2):
+                agent.tool_computer('act_element', element_action='toggle', role='checkbox',
+                                    idempotency_key='same-client-key')
+        self.assertNotEqual(call.call_args_list[0].kwargs['request_id'],
+                            call.call_args_list[1].kwargs['request_id'])
+        self.assertEqual(agent._tool_idempotency_key(None, 'call', 'computer',
+            {'action': 'act_element', 'idempotency_key': 'same-client-key'}), '')
+
+    def test_read_only_classification(self):
+        import agent
+        self.assertFalse(agent._tool_has_side_effect('computer', {'action': 'read_window'}))
+        self.assertTrue(agent._tool_has_side_effect('computer', {'action': 'act_element'}))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class AdmissionConflict(unittest.TestCase):
+    def test_success_retry_then_changed_intent_never_polls_stale_success(self):
+        # Model the bridge HTTP contract, including its immutable terminal cache.
+        # The real Rust handler/spool regression verifies the admission implementation.
+        bound = None
+        polls = []
+
+        def bridge(method, path, payload=None, **kwargs):
+            nonlocal bound
+            if method == "POST":
+                intent = (payload["operation_id"], payload["execution"],
+                          payload["capability"], payload["args"])
+                if bound is not None and bound != intent:
+                    return {"ok": False, "code": "id_conflict", "error": "changed intent"}
+                bound = intent
+                return {"ok": True, "request_id": payload["request_id"]}
+            polls.append(path)
+            return {"ok": True, "response": {"type": "result", "ok": True,
+                    "result": {"value": "A"}}}
+
+        with mock.patch.object(body_client, "_request", side_effect=bridge):
+            def invoke(text):
+                return body_client.call("desktop.element.act",
+                    {"do": "set_value", "select": {"automation_id": "field"}, "text": text},
+                    request_id="stable-r", operation_id="stable-o")
+            self.assertEqual(invoke("A")["value"], "A")
+            self.assertEqual(invoke("A")["value"], "A")
+            changed = invoke("B")
+        self.assertFalse(changed["ok"])
+        self.assertEqual(changed["code"], "id_conflict")
+        self.assertNotIn("value", changed)
+        self.assertEqual(len(polls), 2)
