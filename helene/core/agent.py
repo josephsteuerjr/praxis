@@ -2012,6 +2012,35 @@ def _shell_workdir() -> Path:
     return BASE
 
 
+def _decode_shell_output(raw: "bytes | str | None") -> str:
+    """Вывод руки shell — в текст СТРОКА ЗА СТРОКОЙ: строгий UTF-8, иначе кодировка локали.
+
+    ⚠ Померено 12.09 на обеих оболочках, которые достаются руке на Windows, и одного
+    правильного `encoding=` здесь НЕТ. git-bash отдаёт свой текст (echo, ошибки) в
+    UTF-8; busybox из поставки (`runtime/bash.exe`) — в ANSI, то есть cp1251; а
+    питон-ребёнок с трубой вместо консоли пишет в кодировке локали ПОД ЛЮБОЙ из них.
+    В одном потоке лежат байты двух кодировок: `text=True` без encoding портил git,
+    `encoding="utf-8"` (первая редакция 12.09) портил busybox и питон — то есть чинил
+    машину разработчика и ломал поставку. Построчно строгий UTF-8 с откатом на локаль
+    разобрал оба замера целиком; `errors="replace"` только на откате — чужой байт
+    стоит знака, а не всей руки. Универсальные переносы (\\r\\n → \\n) сохранены.
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    import locale
+    fallback = locale.getpreferredencoding(False) or "utf-8"
+    lines = []
+    for line in raw.split(b"\n"):
+        line = line.rstrip(b"\r")
+        try:
+            lines.append(line.decode("utf-8"))
+        except UnicodeDecodeError:
+            lines.append(line.decode(fallback, "replace"))
+    return "\n".join(lines)
+
+
 def tool_shell(command: str) -> str:
     """Полный shell самой Praxis/владельца. Логируем; её правки авто-коммитятся."""
     # Единственное на сервере, что не её дом, — хардбот Егора. Читать его она может
@@ -2048,15 +2077,14 @@ def tool_shell(command: str) -> str:
             cwd=_shell_workdir(),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
             timeout=SHELL_TIMEOUT,
         )
-        out = proc.stdout or ""
+        out = _decode_shell_output(proc.stdout)
     except subprocess.TimeoutExpired as exc:
-        partial = exc.stdout or ""
-        if isinstance(partial, bytes):
-            partial = partial.decode("utf-8", "replace")
-        out = str(partial) + f"\n[прервано по таймауту {SHELL_TIMEOUT}s]\n"
+        partial = exc.stdout or b""
+        if isinstance(partial, str):
+            partial = partial.encode("utf-8", "replace")
+        out = _decode_shell_output(partial) + f"\n[прервано по таймауту {SHELL_TIMEOUT}s]\n"
     except Exception as e:
         out = f"[ошибка shell] {e}"
     # PASS 24: never destroy command output here.  The run spine stores the exact result and

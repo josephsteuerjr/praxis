@@ -41,6 +41,15 @@ import re
 import subprocess
 import sys
 import tarfile
+
+# ⚠ Вывод — в UTF-8: в голой консоли владельца (cp1251) журнал выкладки падал бы
+# `UnicodeEncodeError` на знаке ⚠ — посреди выкладки, между сценой и переключением.
+# Тот же класс, что у приборов выпуска (поймано 12.09).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
 import tempfile
 import time
 from pathlib import Path

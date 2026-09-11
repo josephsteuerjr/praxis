@@ -1370,6 +1370,37 @@ mod platform {
         Ok(Some(value.context("selector Value: search incomplete")?.to_string()))
     }
 
+    /// Значение для ОТБОРА: кэш, а при пустом кэше — живой запрос у полей ввода.
+    ///
+    /// ⚠ Найдено приёмкой 11.09, и это была дыра в обещании руки. Отбор читал ТОЛЬКО
+    /// кэш — а комментарий в этом же файле пятьюстами строками ниже сам говорит, что у
+    /// прокси-контролов (WinForms, классический Win32 EDIT через MSAA-мост)
+    /// кэшированный `ValuePattern` ПУСТ, хотя живой запрос значение отдаёт (замер живой
+    /// пробой 08.09). То есть `find_elements(value_contains=…)` по обычному полю ввода
+    /// отвечал «не нашлось» там, где поле есть и значение в нём есть. «Не нашлось» —
+    /// самый дорогой из ложных ответов: он выглядит как факт о мире.
+    ///
+    /// Строгость сохранена там, где она и была: отказ провайдера остаётся отказом
+    /// (`act_value` его не глотает), а живой вызов платится только тогда, когда отбор
+    /// спрашивал про значение И кэш отдал пустоту. Тип контрола читается из кэша; если
+    /// и он не прочитался, живой запрос делается всё равно — на этом пути правда стоит
+    /// дороже одного межпроцессного вызова.
+    fn act_value_for_select(element: &IUIAutomationElement) -> Result<Option<String>> {
+        let cached = act_value(element, true)?;
+        if cached.as_deref().is_some_and(|text| !text.is_empty()) {
+            return Ok(cached);
+        }
+        let proxy_control = match unsafe { element.CachedControlType() } {
+            Ok(kind) => kind == UIA_EditControlTypeId || kind == UIA_DocumentControlTypeId,
+            Err(_) => true,
+        };
+        if !proxy_control {
+            return Ok(cached);
+        }
+        let live = act_value(element, false)?;
+        Ok(if live.as_deref().is_some_and(|text| !text.is_empty()) { live } else { cached })
+    }
+
     /// Обход окна ОДИН на обе руки: действие ищет, чтобы нажать, поиск — чтобы
     /// показать. Пока их было две копии (а первая редакция поиска именно так и
     /// начиналась), любая правка отбора чинилась бы в одном месте и оставалась
@@ -1426,7 +1457,7 @@ mod platform {
                 select.automation_id.is_some(), unsafe { element.CachedAutomationId() },
             ).context("selector CachedAutomationId: search incomplete")?);
             let value = if select.value_contains.is_some() {
-                act_value(&element, true)?
+                act_value_for_select(&element)?
             } else { None };
             let view = NodeView {
                 role: &role,
@@ -1570,13 +1601,37 @@ mod platform {
         }
     }
 
-    /// Значение элемента ИЗ КЭША: паттерн уже привезён вместе с узлом.
+    /// Значение элемента ИЗ КЭША, а у полей ввода — живым запросом, если кэш пуст.
+    ///
+    /// ⚠ Это описание СОВПАДЕНИЯ: сюда приходят только те элементы, которые уже
+    /// подошли под отбор, плюс `element` расписки действия. Их единицы, поэтому живой
+    /// вызов здесь не стоит ничего заметного — а без него расписка показывала пустое
+    /// `value` у настоящего поля ввода (тот же пустой кэш прокси-контролов, что и в
+    /// `act_value_for_select`). Владелец читал «в поле ничего нет» там, где текст есть.
     fn cached_value(element: &IUIAutomationElement) -> Option<String> {
-        let pattern = unsafe {
+        let cached = unsafe {
             element.GetCachedPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
         }
-        .ok()?;
-        act_bstr(unsafe { pattern.CachedValue() }.ok())
+        .ok()
+        .and_then(|pattern| act_bstr(unsafe { pattern.CachedValue() }.ok()));
+        if cached.as_deref().is_some_and(|text| !text.is_empty()) {
+            return cached;
+        }
+        let proxy_control = match unsafe { element.CachedControlType() } {
+            Ok(kind) => kind == UIA_EditControlTypeId || kind == UIA_DocumentControlTypeId,
+            Err(_) => false,
+        };
+        if !proxy_control {
+            return cached;
+        }
+        let live = unsafe {
+            element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+        }
+        .ok()
+        .and_then(|pattern| unsafe { pattern.CurrentValue() }.ok())
+        .map(|text| text.to_string())
+        .filter(|text| !text.is_empty());
+        live.or(cached)
     }
 
     /// Паттерн для ДЕЙСТВИЯ, с разведёнными исходами.
@@ -1855,8 +1910,22 @@ mod platform {
                 walk.subtrees_unread += 1;
                 walk.mark("max_depth");
             } else {
-                let mut child = unsafe { walker.GetFirstChildElementBuildCache(&element, &cache) }
-                    .ok();
+                // ⚠ Отказ провайдера — не «детей нет». Здесь стоял `.ok()`, который
+                // схлопывал оба ответа в `None`: цикл не входил ни разу, расписка
+                // объявляла окно дочитанным, и поддерево исчезало МОЛЧА. Ровно тот
+                // класс, что она нашла и закрыла в обходе действия (`act_walk`), —
+                // в обходе чтения он оставался. А рука обещает владельцу, что
+                // расписка называет каждый предел и всё, что осталось непрочитанным:
+                // отказ обхода — такой же предел, как `max_depth` и `timeout`.
+                let mut child = match act_walk(&walker, &element, &cache, false) {
+                    Ok(next) => next,
+                    Err(_) => {
+                        node.children_unread = Some("provider_refused");
+                        walk.subtrees_unread += 1;
+                        walk.mark("provider_refused");
+                        None
+                    }
+                };
                 let mut seen = 0u64;
                 while let Some(current) = child {
                     if seen >= plan.limits.max_children_per_node {
@@ -1871,8 +1940,18 @@ mod platform {
                         walk.mark("timeout");
                         break;
                     }
-                    let next =
-                        unsafe { walker.GetNextSiblingElementBuildCache(&current, &cache) }.ok();
+                    // Тот же отказ на соседе обрывает список детей ЭТОГО узла — и это
+                    // тоже предел, а не конец списка. Уже полученный `current` в
+                    // очередь кладём: он прочитан честно.
+                    let next = match act_walk(&walker, &current, &cache, true) {
+                        Ok(next) => next,
+                        Err(_) => {
+                            node.children_unread = Some("provider_refused");
+                            walk.subtrees_unread += 1;
+                            walk.mark("provider_refused");
+                            None
+                        }
+                    };
                     queue.push_back((current, depth + 1, Some(index)));
                     child = next;
                     seen += 1;

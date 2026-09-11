@@ -1591,7 +1591,7 @@ def _ls_remote_head(url: str) -> tuple[str, str]:
     })
     try:
         r = subprocess.run(["git", "ls-remote", "--quiet", str(url), "HEAD"],
-                           capture_output=True, text=True, errors="replace",
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=(UPSTREAM_PROBE_SEC or None), env=env)
     except subprocess.TimeoutExpired:
         return "", f"remote не ответил за {UPSTREAM_PROBE_SEC:.0f}с"
@@ -2500,7 +2500,7 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600) -> str:
     seconds = max(0, int(timeout or 0))
     t0 = time.monotonic()
     try:
-        proc = subprocess.run(command, shell=True, cwd=str(place), capture_output=True, text=True,
+        proc = subprocess.run(command, shell=True, cwd=str(place), capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=(seconds or None))
         out = (proc.stdout or "") + (proc.stderr or "")
         code, status = proc.returncode, "ok" if proc.returncode == 0 else "failed"
@@ -2730,7 +2730,7 @@ def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
     try:
         if os.name == "nt":
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
-                           text=True, timeout=15)
+                           text=True, encoding="utf-8", errors="replace", timeout=15)
         else:
             os.killpg(pid, signal.SIGTERM)
             deadline = time.monotonic() + 1.0

@@ -41,6 +41,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+# ⚠ Вывод — в UTF-8: в голой консоли владельца (cp1251) отчёт падал `UnicodeEncodeError`
+# на знаке ⚠ — то есть ровно на строке «слой ОТСТАЛ от дерева», ради которой прибор и
+# зовут перед выпуском (поймано 12.09). Тот же класс, что у `secret_scan` и `personal_scan`.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 DESK = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(DESK))
 import layout  # noqa: E402 — где на диске лежат соседи раскладки

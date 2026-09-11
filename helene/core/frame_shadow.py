@@ -462,7 +462,7 @@ def _git_sha_of_tree() -> str:
     """Раз за процесс: git на каждый захват — это не прибор, а налог."""
     try:
         done = subprocess.run(["git", "-C", str(BASE), "rev-parse", "--short", "HEAD"],
-                              capture_output=True, text=True, timeout=10)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         return done.stdout.strip() or "?"
     except Exception:
         log.debug("frame_shadow: HEAD не прочитался", exc_info=True)
