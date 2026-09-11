@@ -7639,8 +7639,16 @@ def _git_root(repo: str) -> tuple[Path | None, str]:
 
 
 def _git_run(root: Path, argv: list[str], timeout: int = 120) -> tuple[int, str]:
+    # ⚠ Кодировку называем ВСЛУХ. `text=True` без неё берёт кодировку локали, а на
+    # Windows это cp1251 — git же отдаёт UTF-8 всегда. Русское сообщение коммита
+    # возвращалось кракозябрами («РІС‚РѕСЂРѕР№ С„Р°Р№Р»»), то есть её собственная
+    # история читалась ею как мусор, а `log` в поиске своей же правки не находил
+    # ничего. Названо гейтом на Windows 11.09; на Linux локаль совпадала и потому
+    # молчала. `replace` — чтобы чужой репозиторий в другой кодировке отдал текст
+    # с потерей знаков, а не отказ руки целиком.
     proc = subprocess.run(["git", "-C", str(root)] + argv, capture_output=True,
-                          text=True, timeout=timeout)
+                          text=True, encoding="utf-8", errors="replace",
+                          timeout=timeout)
     out = (proc.stdout or "") + (("\n" + proc.stderr) if proc.stderr.strip() else "")
     return proc.returncode, out.strip()
 
