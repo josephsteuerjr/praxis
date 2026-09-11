@@ -172,12 +172,19 @@ class AgentComputerAccessTests(unittest.TestCase):
                 self.assertIn("native", agent.tool_computer("windows"))
                 # 08.09: чтение окна через UI Automation дошло до руки; умолчания за неё
                 # не подставляются (у читалки тела deny_unknown_fields).
+                #
+                # ⚠ 11.09: `visible_only` и `timeout_ms` сюда НЕ ДОЕЗЖАЛИ — рука
+                # роняла их молча, а этот стенд пинил вызов без них и потому
+                # потерю сторожил вместо того, чтобы её поймать. Теперь оба поля
+                # названы здесь: сказать «покажи и скрытые» или «подожди окно»
+                # можно, и проверяется, что сказанное доедет.
                 self.assertIn("native tree", agent.tool_computer(
                     "read_window", hwnd="0x2a", shape="flat", text_contains="Сохранить",
-                    max_nodes=200))
+                    max_nodes=200, visible_only=False, timeout_ms=2500))
                 window_read.assert_called_once_with(
                     hwnd="0x2a", shape="flat", text_contains="Сохранить",
-                    max_nodes=200, max_depth=None, execution="interactive",
+                    visible_only=False, max_nodes=200, max_depth=None,
+                    timeout_ms=2500, execution="interactive",
                 )
                 fmt_read.assert_called_once_with(ok)
                 self.assertIn("native", agent.tool_computer("activate", hwnd="0x2a"))

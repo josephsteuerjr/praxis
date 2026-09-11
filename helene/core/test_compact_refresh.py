@@ -29,15 +29,47 @@ import telegram_routes as tr
 
 ROOM = "-1001240718803"
 
+#: ⚠⚠ ЭТОТ ФАЙЛ ПРОВЕРЯЕТ ПРЕЖНЕЕ ПОКОЛЕНИЕ ОБНОВЛЕНИЯ КОМПАКТОВ.
+#:
+#: Он приехал сюда портом (`6f69aac3`) и был красным КАЖДЫЙ день с тех пор —
+#: шестнадцать случаев, ни один из которых ни разу ничего не проверил. Сперва
+#: падал setUp (в модуле нет `REFRESH_QUIET_SEC`), а под ним обнаружилось
+#: главное: тесты зовут `refresh_compacts(..., dry_run=...)`, а в этом издании
+#: подпись другая — `refresh_compacts(chat_id, compact_id=None, *, max_chunks=1)`,
+#: схема `praxis.life.compact_refresh.v2`. Ни `dry_run`, ни плана с ценой, ни
+#: паузы там нет. У самой Праксис этого файла нет вовсе.
+#:
+#: Почему не удалён: шестнадцать случаев написаны про настоящие вещи — что долг
+#: считается честно, что план называет цену до оплаты, что удаление ограничено
+#: так же, как замена, что вытесненное тело не доезжает до модели. Это стоит
+#: перенести на v2, а не выбросить. Решение — владельца, и до него файл стоит
+#: тут с названной причиной, а не красным пятном, которое все пролистывают.
+_SKIP = ("проверяет прежнее поколение refresh_compacts (dry_run, план с ценой, "
+         "REFRESH_QUIET_SEC); в этом издании схема v2 и другая подпись — "
+         "случаи надо переносить, а не чинить по одному")
 
+
+@unittest.skip(_SKIP)
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="praxis_refresh_"))
-        self._orig = {name: getattr(ml, name) for name in
-                      ("BASE", "MEM_DIR", "LIFE_DIR", "EVENTS_DIR", "COMPACTS_DIR",
-                       "EPISODES_DIR", "CLAIMS_DIR", "PATCHES_DIR", "REFLECTIONS_DIR",
-                       "STATE_DIR", "LEGACY_SUMMARIES_DIR", "DIALOGUES_DIR",
-                       "REFRESH_QUIET_SEC", "_model_compact")}
+        # ⚠ `REFRESH_QUIET_SEC` в этом издании модуля НЕТ: пауза перед повторным
+        # обновлением ушла вместе со схемой v1, а стенд её только ГЛУШИЛ (ставил
+        # 0.0) и ничего о ней не утверждал. Но `getattr` без запаса роняет весь
+        # setUp — и все шестнадцать случаев этого файла были красными С САМОГО
+        # ПОРТА, ни разу ничего не проверив. Красный стенд, который не проверяет
+        # ничего, хуже отсутствующего: он занимает место проверки.
+        #
+        # Поэтому имена берём ПО ФАКТУ наличия, а исчезнувшие называем вслух.
+        wanted = ("BASE", "MEM_DIR", "LIFE_DIR", "EVENTS_DIR", "COMPACTS_DIR",
+                  "EPISODES_DIR", "CLAIMS_DIR", "PATCHES_DIR", "REFLECTIONS_DIR",
+                  "STATE_DIR", "LEGACY_SUMMARIES_DIR", "DIALOGUES_DIR",
+                  "REFRESH_QUIET_SEC", "_model_compact")
+        self._gone = [name for name in wanted if not hasattr(ml, name)]
+        self.assertEqual(self._gone, ["REFRESH_QUIET_SEC"],
+                         "состав ручек memory_life изменился — стенд надо читать заново, "
+                         "а не расширять этот список молча")
+        self._orig = {name: getattr(ml, name) for name in wanted if hasattr(ml, name)}
         ml.BASE = self.tmp
         ml.MEM_DIR = self.tmp / "memory"
         ml.LIFE_DIR = ml.MEM_DIR / "life"
@@ -50,7 +82,8 @@ class Base(unittest.TestCase):
         ml.STATE_DIR = ml.MEM_DIR / ".state" / "life"
         ml.LEGACY_SUMMARIES_DIR = ml.MEM_DIR / ".summaries"
         ml.DIALOGUES_DIR = ml.MEM_DIR / "dialogues"
-        ml.REFRESH_QUIET_SEC = 0.0
+        if hasattr(ml, "REFRESH_QUIET_SEC"):
+            ml.REFRESH_QUIET_SEC = 0.0
         self.calls = []
         ml._model_compact = self._model
         self._routes = tr.DIR
