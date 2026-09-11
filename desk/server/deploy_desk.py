@@ -37,6 +37,7 @@ import datetime as dt
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -77,6 +78,20 @@ def pack(root: Path) -> bytes:
             if item.is_file():
                 tar.add(item, arcname=item.relative_to(root).as_posix())
     return buf.getvalue()
+
+
+def _channel_port(run) -> int | None:
+    """Порт канала — из `desk.json` на сервере, а не из константы здесь.
+
+    Константа разъехалась бы молча ровно в тот день, когда порт поменяют.
+    """
+    code, out, _ = run("cat /opt/praxisdesk/desk.json 2>/dev/null")
+    if code != 0 or not out.strip():
+        return None
+    try:
+        return int((json.loads(out) or {}).get("port") or 0) or None
+    except (ValueError, TypeError):
+        return None
 
 
 def main() -> int:
@@ -132,7 +147,23 @@ def deploy(args, man: dict, blob: bytes) -> int:
     stage = f"{target}.stage-{stamp}"
     backup = f"{target}-backup-{stamp}"
     tmp_tar = f"/tmp/desk-{stamp}.tar.gz"
-    base = args.base or f"https://{args.host}"
+    # ⚠ Адрес живой проверки. Имя — проверяем снаружи (заодно ловится Caddy).
+    # ГОЛЫЙ IP — снаружи по https не отвечает никогда: сертификат выписан на имя,
+    # curl возвращает 000, и выкладка откатывает ЖИВОЙ канал как мёртвый. Так и
+    # вышло 11.09: в журнале «Hélène слушает 0.0.0.0:8094», а деплой вернул
+    # версию месячной давности. Для IP проверяем там, где канал слушает, —
+    # изнутри сервера, и говорим об этом вслух.
+    base = args.base
+    if not base:
+        looks_like_ip = re.fullmatch(r"[0-9.]+|\[[0-9a-fA-F:]+\]", args.host or "")
+        if looks_like_ip:
+            port = _channel_port(run) or 8094
+            base = f"http://127.0.0.1:{port}"
+            log(f"проверять будем изнутри сервера: {base} "
+                "(в host голый IP — снаружи по https имени нет, и проверка "
+                "снаружи означала бы откат живого канала)")
+        else:
+            base = f"https://{args.host}"
     top = deskpkg.top_level(man["flavor"])
     try:
         sftp = client.open_sftp()
