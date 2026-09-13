@@ -155,8 +155,7 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
 # трогать — решает служба на сервере закрытым списком, а не эта строка.
 _DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media",
                  "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
-                 "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models",
-                 "/api/interrupt"}
+                 "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models"}
 _DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/", "/api/chat-turns/", "/api/run/",
                     "/api/container-log/")
 
@@ -1042,15 +1041,6 @@ async def _r_brain_set(c: Call):
                                    fields if isinstance(fields, dict) else {})
 
 
-async def _r_interrupt(c: Call):
-    """Прервать живой ход агента (12.09): просьба в memory/.control, раннер читает на тике.
-    Телефону открыто наравне с перезапуском — это пульт владельца."""
-    body = c.body or {}
-    return await asyncio.to_thread(control.interrupt, readers.tree(),
-                                   str(c.role or "owner"), str(body.get("scope") or "all"),
-                                   str(body.get("reason") or ""))
-
-
 ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/runs", _r_runs),
     Route("GET", "/api/run/{run_id}", _r_run),
@@ -1099,7 +1089,6 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/brain", _r_brain),
     Route("GET", "/api/brain-models", _r_brain_models),
     Route("POST", "/api/brain", _r_brain_set),
-    Route("POST", "/api/interrupt", _r_interrupt),
     Route("GET", "/api/voice", _r_voice),
     Route("GET", "/api/supervisor", _r_supervisor),
     Route("POST", "/api/supervisor/restart", _r_supervisor_restart),
@@ -1173,23 +1162,15 @@ _CHAT_KEY_RE = re.compile(r"^-?\d+(?:__topic__\d+)?$")
 _ATTACH_MAX_FILES = 4
 _ATTACH_MAX_BYTES = 8 * 1024 * 1024
 _ATTACH_MIME = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
-                "image/gif": ".gif",
-                # Голосовое из окна (0.6.0): запись микрофона едет тем же подвалом
-                # `[вложения]`, а руннер расшифровывает её тем же whisper, что и
-                # голосовые из Telegram (`localharness/voice.py`). Типы — те, что
-                # даёт MediaRecorder в WebView2/Chromium и что декодирует PyAV.
-                "audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".m4a",
-                "audio/mpeg": ".mp3", "audio/wav": ".wav", "audio/x-wav": ".wav"}
-_ATTACH_AUDIO = frozenset(m for m in _ATTACH_MIME if m.startswith("audio/"))
+                "image/gif": ".gif"}
 
 
 def _attachments_in(raw) -> list[dict]:
     """Вложения из тела запроса: `[{name, mime, data(base64)}]` -> проверенные байты.
 
-    Картинки (те, что читает модель — см. `_MODEL_IMAGE_MIME` в дереве) и
-    голосовые (расшифровывает руннер), до четырёх, до 8 МБ каждое. Всё остальное —
-    отказ словами: окно показало бы «отправлено», а руннер молча выбросил бы файл,
-    который модель не прочтёт.
+    Только картинки (те, что читает модель — см. `_MODEL_IMAGE_MIME` в дереве), до
+    четырёх, до 8 МБ каждая. Всё остальное — отказ словами: окно показало бы
+    «отправлено», а руннер молча выбросил бы файл, который модель не прочтёт.
     """
     if raw in (None, "", []):
         return []
@@ -1201,13 +1182,11 @@ def _attachments_in(raw) -> list[dict]:
     for i, item in enumerate(raw, 1):
         if not isinstance(item, dict):
             raise web.HTTPBadRequest(text=f"вложение #{i}: не объект")
-        # `audio/webm;codecs=opus` — так называет запись MediaRecorder; параметры
-        # после «;» типу не принадлежат.
-        mime = str(item.get("mime") or "").strip().lower().split(";", 1)[0].strip()
+        mime = str(item.get("mime") or "").strip().lower()
         if mime not in _ATTACH_MIME:
             raise web.HTTPBadRequest(
                 text=f"вложение #{i}: тип {mime or '?'} не читается моделью — "
-                     "можно PNG, JPEG, WebP, GIF или голосовое (webm/ogg/m4a/mp3/wav)")
+                     "можно PNG, JPEG, WebP, GIF")
         try:
             data = base64.b64decode(str(item.get("data") or ""), validate=True)
         except (ValueError, TypeError):
@@ -1217,7 +1196,7 @@ def _attachments_in(raw) -> list[dict]:
         if len(data) > _ATTACH_MAX_BYTES:
             raise web.HTTPBadRequest(text=f"вложение #{i}: больше 8 МБ")
         name = re.sub(r"[^\w.\-]+", "_", str(item.get("name") or "").strip(), flags=re.UNICODE)
-        name = name.strip("._") or (f"voice{i}" if mime in _ATTACH_AUDIO else f"image{i}")
+        name = name.strip("._") or f"image{i}"
         if not name.lower().endswith(_ATTACH_MIME[mime]) and not (
                 mime == "image/jpeg" and name.lower().endswith(".jpeg")):
             name += _ATTACH_MIME[mime]

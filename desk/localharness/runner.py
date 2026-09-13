@@ -73,9 +73,6 @@ _speaker = "владелец"
 _title = "Hélène"
 _agent_name = "Агент"
 _tree: Path | None = None
-#: Слышит ли этот процесс (`voice.apply` на старте): голосовое из окна расшифровывается
-#: только когда слух поднят, иначе — строка с причиной, а не тихая потеря.
-_voice_state: dict = {"ready": False, "why": "голос ещё не поднимался"}
 _continuity = None
 _alarms = None
 _forge_events = None
@@ -229,47 +226,6 @@ def _split_attachments(message: str) -> tuple[str, list[str]]:
         if rel.startswith("attachments/") and ".." not in rel.split("/"):
             paths.append(rel)
     return head.strip(), paths
-
-
-_AUDIO_EXT = frozenset({".webm", ".ogg", ".oga", ".opus", ".m4a", ".mp3", ".wav"})
-
-
-def _hear_attachments(paths: list[str]) -> tuple[list[str], list[str]]:
-    """Голосовые из окна (0.6.0) -> строки расшифровки; остальные пути — обратно.
-
-    Голосовое — не картинка: модели нечего показывать, ей нужен текст. Поэтому
-    запись не едет в медиа-спул, а расшифровывается здесь тем же `media_audio`
-    дерева, которым слушаются голосовые из Telegram (переменные ему ставит
-    `voice.apply` на старте). Слух не поднят — в реплике остаётся строка с
-    причиной: владелец должен видеть, что его не услышали, и почему.
-    """
-    heard: list[str] = []
-    rest: list[str] = []
-    for rel in paths:
-        if Path(rel).suffix.lower() in _AUDIO_EXT:
-            heard.append(_transcribe_note(rel))
-        else:
-            rest.append(rel)
-    return heard, rest
-
-
-def _transcribe_note(rel: str) -> str:
-    name = Path(rel).name
-    if _tree is None:
-        return f"[голосовое не расшифровано: {name} — дерево ещё не загружено]"
-    inbox = (Path(_tree) / "memory" / ".control" / "desk_inbox").resolve()
-    src = (inbox / rel).resolve()
-    if inbox not in src.parents or not src.is_file():
-        return f"[голосовое не найдено: {name}]"
-    if not _voice_state.get("ready"):
-        return f"[голосовое не расшифровано: {_voice_state.get('why') or 'слух не поднят'} — Настройки → Голос]"
-    try:
-        import importlib
-        text = str(importlib.import_module("media_audio").transcribe(src) or "").strip()
-    except Exception as exc:  # noqa: BLE001 — любая причина называется словами
-        log.warning("голосовое из окна не расшифровалось [%s]", rel, exc_info=True)
-        return f"[голосовое не расшифровано: {type(exc).__name__}: {str(exc)[:160]}]"
-    return f"[голосовое]: {text}" if text else "[голосовое: расшифровка пустая — тишина или не разобрать]"
 
 
 def _ingest_attachments(paths: list[str], *, chat_id: str, message_id: str) -> tuple[list, list[str]]:
@@ -439,9 +395,8 @@ def handle_desk(message: str, room: str = STREAM, attachments: list[str] | tuple
     now = _now()
     source_id = f"{room}-{int(now.timestamp() * 1000)}"
     desk = _room(room)
-    heard, pictures = _hear_attachments(list(attachments or ()))
-    refs, notes = _ingest_attachments(pictures, chat_id=room, message_id=source_id)
-    labels = heard + [f"[изображение: {Path(r.path).name}]" for r in refs] + notes
+    refs, notes = _ingest_attachments(list(attachments or ()), chat_id=room, message_id=source_id)
+    labels = [f"[изображение: {Path(r.path).name}]" for r in refs] + notes
     if labels:
         message = (message + "\n" + "\n".join(labels)).strip()
     # Восприятие пишет память ДО кадра — как в живом раннере: кадр читает горячий
@@ -1445,10 +1400,8 @@ def main() -> None:
     # и переменные, проставленные позже, оно уже не увидит. Нет библиотеки или
     # модели — переменных не ставим вовсе: пусть дерево скажет о голосовом само,
     # а не притворяется глухим над полусобранной коробкой.
-    global _voice_state
     try:
         heard = voice.apply(tree, cfg)
-        _voice_state = {"ready": bool(heard.get("ready")), "why": str(heard.get("why") or "")}
         if heard["ready"]:
             log.info("голос: модель %s (%s)%s", heard["model"],
                      heard["installed"].get("path", "?"),

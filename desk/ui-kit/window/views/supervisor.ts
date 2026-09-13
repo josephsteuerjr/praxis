@@ -204,32 +204,15 @@ export function brainHTML(state: Brain | null, models: BrainModels | null): stri
       .map((m) => `<option value="${esc(m)}"${m === current ? " selected" : ""}>${esc(m)}</option>`)
       .join("");
   };
-  // 12.09: у роли четыре свои ручки (модель, фреймворк, запасная и её фреймворк) плюс
-  // усилие; раньше отсюда менялась только основная модель. Уезжает только изменённое.
-  void options;
-  const frameworks = Object.keys(state.frameworks || {});
-  const efforts = ["", "low", "medium", "high", "xhigh"];
-  const choice = (values: string[], current: string) =>
-    [...new Set([current, ...values])]
-      .map((v) => `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(v || "—")}</option>`)
-      .join("");
-  const datalist = `<datalist id="brain-models">${[...new Set(live)].map((m) => `<option value="${esc(m)}"></option>`).join("")}</datalist>`;
   const rows = Object.entries(state.roles || {})
     .map(([role, spec]) => {
-      const f = (k: string) => String(spec[k] ?? "");
-      const input = (k: string, placeholder = "") =>
-        `<input class="field-input" list="brain-models" data-f="${k}" data-was="${esc(f(k))}" value="${esc(f(k))}" placeholder="${esc(placeholder)}" spellcheck="false">`;
-      const select = (k: string, values: string[]) =>
-        `<select class="field-input" data-f="${k}" data-was="${esc(f(k))}">${choice(values, f(k))}</select>`;
-      return `<tr data-brain-form="${esc(role)}"><td><b>${esc(role)}</b><div class="muted">${esc(f("framework"))} · ${esc(f("model"))}</div></td>
-      <td>
-        <label class="field"><span class="muted">Модель</span>${input("model")}</label>
-        <label class="field"><span class="muted">Фреймворк</span>${select("framework", frameworks)}</label>
-        <label class="field"><span class="muted">Запасная модель</span>${input("fallback_model", "пусто — без запасной")}</label>
-        <label class="field"><span class="muted">Фреймворк запасной</span>${select("fallback_framework", ["", ...frameworks])}</label>
-        <label class="field"><span class="muted">Усилие</span>${select("reasoning_effort", efforts)}</label>
-      </td>
-      <td class="actions"><button class="btn quiet" data-brain-apply="${esc(role)}">Применить</button></td></tr>`;
+      const model = String(spec.model ?? "");
+      const fallback = String(spec.fallback_model ?? "");
+      return `<tr><td><b>${esc(role)}</b><div class="muted">${esc(String(spec.framework ?? ""))}${
+        fallback ? " · запасная " + esc(fallback) : ""
+      }</div></td>
+      <td><select class="field-input" data-brain-role="${esc(role)}">${options(model)}</select></td>
+      <td class="actions"><button class="btn quiet" data-brain-apply="${esc(role)}">Сменить</button></td></tr>`;
     })
     .join("");
   const liveNote = live.length
@@ -238,18 +221,8 @@ export function brainHTML(state: Brain | null, models: BrainModels | null): stri
   return `<h3 class="section-title">Мозг</h3>
     <p class="muted">${esc(liveNote)} Смена пишется в его конфиг и применяется, когда агент перечитает мозг —
       перезапусти его выше, если нужно сейчас. Ключи провайдеров сюда не отдаются вовсе.</p>
-    ${datalist}<table class="grid">${rows}</table>
+    <table class="grid">${rows}</table>
     <p class="receipt" id="brain-note"></p>`;
-}
-
-
-/** Прерывание живого хода (12.09): просьба в memory/.control, раннер снимает ход на тике. */
-export function interruptHTML(): string {
-  return `<h3 class="section-title">Живой ход</h3>
-    <p class="muted">Останавливает ход агента: руки дальше не зовутся, ответ не уходит. Идущий вызов модели
-      дорабатывает до границы, обычно до 10 секунд.</p>
-    <div class="actions"><button class="btn" data-interrupt="all">Прервать ход</button></div>
-    <p class="receipt" id="interrupt-note"></p>`;
 }
 
 /** Журналы: что есть, насколько свежо, и место под хвост выбранного. */
@@ -286,7 +259,7 @@ async function draw(box: HTMLElement): Promise<void> {
   // Контейнеры и мозг рисуются, только когда служба рядом объявлена: у окна
   // Элен её нет, и пустой раздел там был бы обещанием без исполнителя.
   const extra = boxes?.available ? containersHTML(boxes) + brainHTML(brain, models) : "";
-  box.innerHTML = `<h3 class="section-title">Управление</h3>${interruptHTML()}${supervisorHTML(state)}${extra}${logsHTML(logs)}`;
+  box.innerHTML = `<h3 class="section-title">Управление</h3>${supervisorHTML(state)}${extra}${logsHTML(logs)}`;
 }
 
 /**
@@ -342,34 +315,13 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
 
   box.addEventListener("click", async (ev) => {
     const spot = (ev.target as HTMLElement).closest<HTMLElement>(
-      "[data-clog],[data-restart-container],[data-brain-apply],[data-interrupt]");
+      "[data-clog],[data-restart-container],[data-brain-apply]");
     if (spot) {
       const note = box.querySelector<HTMLElement>(
         spot.hasAttribute("data-brain-apply") ? "#brain-note" : "#cnt-note");
       const clog = spot.getAttribute("data-clog");
       if (clog) {
         await showContainerLog(clog, spot.hasAttribute("data-errors"));
-        return;
-      }
-      if (spot.hasAttribute("data-interrupt")) {
-        const inote = box.querySelector<HTMLElement>("#interrupt-note");
-        if (inote) {
-          inote.className = "receipt";
-          inote.textContent = "прошу остановить ход…";
-        }
-        try {
-          const answer = await post<{ ok: boolean; note: string }>("/api/interrupt", {
-            scope: spot.getAttribute("data-interrupt") || "all" });
-          if (inote) {
-            inote.className = answer.ok ? "receipt ok" : "receipt err";
-            inote.textContent = answer.note;
-          }
-        } catch (e) {
-          if (inote) {
-            inote.className = "receipt err";
-            inote.textContent = "не дошло: " + String(e);
-          }
-        }
         return;
       }
       const restartName = spot.getAttribute("data-restart-container");
@@ -398,35 +350,20 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
       }
       const role = spot.getAttribute("data-brain-apply");
       if (role) {
-        const form = box.querySelector<HTMLElement>(`[data-brain-form="${role}"]`);
-        const fields: Record<string, string> = {};
-        form?.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-f]").forEach((el) => {
-          const key = el.getAttribute("data-f") || "";
-          if (key && el.value.trim() !== (el.getAttribute("data-was") ?? "")) fields[key] = el.value.trim();
-        });
-        if (!Object.keys(fields).length) {
-          if (note) {
-            note.className = "receipt";
-            note.textContent = "ничего не изменено";
-          }
-          return;
-        }
+        const picker = box.querySelector<HTMLSelectElement>(`[data-brain-role="${role}"]`);
+        const model = picker?.value || "";
         if (note) {
           note.className = "receipt";
-          note.textContent = `меняю роль ${role}: ${Object.keys(fields).join(", ")}…`;
+          note.textContent = `меняю модель роли ${role}…`;
         }
         try {
           const answer = await post<{ ok: boolean; note?: string; now?: Record<string, string> }>(
-            "/api/brain", { role, fields });
+            "/api/brain", { role, fields: { model } });
           if (note) {
             note.className = answer.ok ? "receipt ok" : "receipt err";
             note.textContent = answer.ok
-              ? `роль ${role}: ${Object.entries(fields).map(([k, v]) => `${k}=${v || "—"}`).join(", ")}. ${answer.note || ""}`
+              ? `роль ${role}: ${model}. ${answer.note || ""}`
               : answer.note || "не вышло";
-          }
-          if (answer.ok) {
-            await new Promise((done) => setTimeout(done, 1500));
-            await draw(box);
           }
         } catch (e) {
           if (note) {
