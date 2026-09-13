@@ -17,7 +17,6 @@ import ntpath
 import os
 import re
 from pathlib import Path
-import threading
 import time
 import unicodedata
 import urllib.error
@@ -1631,89 +1630,6 @@ def status_probe(*, timeout: float = 5.0) -> dict:
     }
 
 
-# ── Кэш пробы тела (12.09) ────────────────────────────────────────────────────────
-#
-# `status_probe(timeout=5)` звался из блока состояния на КАЖДОМ ходе: два запроса к
-# мосту, у каждого свой пятисекундный срок. Когда тело на ПК Егора не подключено, мост
-# принимает запрос в спул («peer outbound queue is closed; frame remains spooled»,
-# 276 раз за сутки по журналу моста) и проба честно ждёт оба срока целиком — 10 секунд
-# сборки кадра ради строки STATE, которая за минуту не меняется.
-#
-# Теперь: значение живёт TTL секунд (PRAXIS_BODY_PROBE_TTL, по умолчанию 60); по
-# истечении ход получает прежнее значение сразу, а новая проба идёт в фоновом потоке.
-# Ждёт только самая первая проба после старта — и та с коротким сроком
-# (PRAXIS_BODY_PROBE_TIMEOUT, по умолчанию 2 с). Отказ удлиняет TTL вдвое (до 300 с):
-# отключённое тело не опрашивается каждую минуту впустую. TTL=0 возвращает старое
-# поведение байт-в-байт.
-_PROBE_TTL_CEILING = 300.0
-_PROBE_LOCK = threading.Lock()
-_PROBE_CACHE: dict = {"at": 0.0, "probe": None, "ttl": 0.0, "refreshing": False}
-
-
-def _probe_ttl() -> float:
-    try:
-        return max(0.0, float(os.getenv("PRAXIS_BODY_PROBE_TTL", "60") or 60))
-    except ValueError:
-        return 60.0
-
-
-def _probe_timeout() -> float:
-    try:
-        return max(0.2, float(os.getenv("PRAXIS_BODY_PROBE_TIMEOUT", "2") or 2))
-    except ValueError:
-        return 2.0
-
-
-def probe_cache_reset() -> None:
-    """Сброс кэша (тесты; после смены настроек моста)."""
-    with _PROBE_LOCK:
-        _PROBE_CACHE.update(at=0.0, probe=None, ttl=0.0, refreshing=False)
-
-
-def _probe_store(probe: dict, ttl: float) -> None:
-    with _PROBE_LOCK:
-        previous = float(_PROBE_CACHE.get("ttl") or 0.0)
-        fresh = ttl if probe.get("ok") else min(_PROBE_TTL_CEILING, max(ttl, previous * 2))
-        _PROBE_CACHE.update(at=time.monotonic(), probe=dict(probe), ttl=fresh)
-
-
-def _probe_refresh(timeout: float, ttl: float) -> None:
-    try:
-        _probe_store(status_probe(timeout=timeout), ttl)
-    except Exception:
-        pass
-    finally:
-        with _PROBE_LOCK:
-            _PROBE_CACHE["refreshing"] = False
-
-
-def status_probe_cached(*, ttl: float | None = None, timeout: float | None = None) -> dict:
-    """Проба тела для кадра: свежее значение без ожидания на пути ответа.
-
-    Первая проба после старта — синхронная, но с коротким сроком; дальше ход получает
-    кэш, а обновление идёт в фоне. Возвращается копия: строка STATE не должна
-    менять кэш, а кэш — строку.
-    """
-    ttl = _probe_ttl() if ttl is None else max(0.0, float(ttl))
-    timeout = _probe_timeout() if timeout is None else max(0.2, float(timeout))
-    if ttl <= 0:
-        return status_probe(timeout=timeout)
-    with _PROBE_LOCK:
-        cached = _PROBE_CACHE.get("probe")
-        age = time.monotonic() - float(_PROBE_CACHE.get("at") or 0.0)
-        if cached is not None:
-            if age < float(_PROBE_CACHE.get("ttl") or 0.0):
-                return dict(cached)
-            if not _PROBE_CACHE.get("refreshing"):
-                _PROBE_CACHE["refreshing"] = True
-                threading.Thread(target=_probe_refresh, args=(timeout, ttl),
-                                 name="body-probe-refresh", daemon=True).start()
-            return dict(cached)
-    probe = status_probe(timeout=timeout)
-    _probe_store(probe, ttl)
-    return dict(probe)
-
-
 def _context_available(probe: dict, kind: str) -> bool | None:
     contexts = ((probe.get("manifest") or {}).get("execution_contexts")
                 if isinstance(probe.get("manifest"), dict) else None)
@@ -1726,7 +1642,7 @@ def _context_available(probe: dict, kind: str) -> bool | None:
 def state_line() -> str:
     if not available():
         return "Windows body: controller token не настроен"
-    probe = status_probe_cached()
+    probe = status_probe(timeout=5)
     if not probe.get("ok"):
         detail = probe.get("system_error") or probe.get("error") or probe.get("code")
         return f"Windows body: offline ({detail})"

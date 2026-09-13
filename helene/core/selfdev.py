@@ -48,11 +48,6 @@ LEDGER = MEM_DIR / "proposals.json"
 POLICY_FILE = MEM_DIR / "selfdev_policy.json"
 CONTROL_DIR = MEM_DIR / ".control"
 RESTART_REQ = CONTROL_DIR / "restart_request.txt"
-# 12.09: просьба Пульта прервать живой ход. Пишет канал (praxis-desk монтирует
-# `memory/.control` на запись), читает раннер на тике `_control_once` (≤ 5–10 с) и
-# кооперативно отменяет живые прогоны через run_manager — тул-цикл останавливается на
-# ближайшей безопасной границе, черновик ответа не уходит.
-INTERRUPT_REQ = CONTROL_DIR / "interrupt.json"
 JOURNAL_DIR = MEM_DIR / "journal"
 
 WT_SUBDIR = ".proposals"           # worktree-копии внутри репо (gitignored)
@@ -752,22 +747,3 @@ def clear_restart_request() -> None:
         RESTART_REQ.unlink(missing_ok=True)
     except Exception:
         log.debug("clear_restart_request не удался", exc_info=True)
-
-
-def interrupt_requested() -> dict:
-    """Просьба Пульта прервать ход: {"by", "scope": "all"|run_id, "reason", "at"} или {}."""
-    try:
-        if not INTERRUPT_REQ.exists():
-            return {}
-        data = json.loads(INTERRUPT_REQ.read_text(encoding="utf-8") or "{}")
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        log.debug("interrupt_requested не прочитался", exc_info=True)
-        return {}
-
-
-def clear_interrupt_request() -> None:
-    try:
-        INTERRUPT_REQ.unlink(missing_ok=True)
-    except Exception:
-        log.debug("clear_interrupt_request не удался", exc_info=True)

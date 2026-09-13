@@ -294,11 +294,6 @@ _dm_rearm: set[str] = set()  # PASS 21: ЛС-триггеры, сгоревши�
 _supersede_gen: dict[str, int] = {}  # PASS 29: бамп поколения == создан новый пасс-преемник (см. _arm)
 _buf_dirty: set[str] = set()              # §1: чаты с несохранённым буфером
 _compacting: set[str] = set()             # §6: чтобы не свернуть один чат дважды разом
-# 12.09: свёртки идут в общем пуле потоков `asyncio.to_thread` (8 рабочих на 4 ядрах).
-# Разовая свёртка всех 239 мест под новый потолок ленты забила пул целиком: 135 мест
-# за полчаса, а часы, пробуждения и ходы голоса стояли 40 минут (ни одного прогона).
-# Свёртка — фон, ей хватит двух потоков; остальное — живому ходу.
-_COMPACT_SLOTS = asyncio.Semaphore(max(1, int(os.getenv("PRAXIS_COMPACT_PARALLEL", "2") or 2)))
 _MEDIA_SPOOL: media_core.MediaSpool | None = None
 _MEDIA_SENDING: set[str] = set()
 _MEDIA_ACCEPTED: dict[str, dict] = {}
@@ -741,60 +736,13 @@ def _format_messages(msgs) -> list[str]:
     return lines
 
 
-def _hot_window() -> int:
-    """Bound the legacy text view equally for local tape and cold Telegram fetch.
-
-    This is a read window, not a retention or compaction threshold. 12.09: то же окно
-    стоит и на ролевой ленте (`_dm_dialogue`) — прежде она резала по HOT_HARD_HI, и
-    PRAXIS_LAST_N до модели не доезжал. Room-policy snapshots keep their own caps.
-    """
-    return min(memory_life.HOT_HARD_HI, memory_life.HOT_HI,
-               max(memory_life.HOT_LO, LAST_N))
-
-
-def _tape_cut_lines(lines: list[str]) -> list[str]:
-    """Свежие строки сплошной ленты под потолок memory_life.TAPE_CHARS (последняя — всегда)."""
-    limit = memory_life.TAPE_CHARS
-    if limit <= 0 or not lines:
-        return list(lines)
-    kept: list[str] = []
-    used = 0
-    for line in reversed(lines):
-        cost = len(line) + 1
-        if kept and used + cost > limit:
-            break
-        kept.append(line)
-        used += cost
-    kept.reverse()
-    return kept
-
-
-def _tape_cut_turns(turns):
-    """То же для групповой ленты с авторством: (is_self, line, role_line) — по role_line."""
-    limit = memory_life.TAPE_CHARS
-    turns = list(turns or ())
-    if limit <= 0 or not turns:
-        return turns
-    kept = []
-    used = 0
-    for item in reversed(turns):
-        cost = len(str(item[2] if len(item) > 2 else item[1])) + 1
-        if kept and used + cost > limit:
-            break
-        kept.append(item)
-        used += cost
-    kept.reverse()
-    return kept
-
-
 async def _last_n_text(chat_id: str) -> str:
     """PASS 19 hot-layer: persisted local buffer breathes 50↔100 after provenance compaction.
 
     The incoming handler has already observed and appended the current message before this call,
     so the buffer is the exact live slice. Telegram remains the cold-start fallback.
     """
-    limit = _hot_window()
-    local = _tape_cut_lines(list(_buf[chat_id])[-limit:])
+    local = list(_buf[chat_id])[-memory_life.HOT_HARD_HI:]
     if local:
         return "\n".join(local)
     meta = _meta.get(chat_id, {})
@@ -807,7 +755,7 @@ async def _last_n_text(chat_id: str) -> str:
             msgs = await client.get_messages(entity, limit=limit, **kwargs)
             lines = _format_messages(reversed(list(msgs)))  # get_messages отдаёт новые сверху
             if lines:
-                return "\n".join(_tape_cut_lines(lines[-limit:]))
+                return "\n".join(lines[-limit:])
         except Exception:
             log.warning("live-fetch контекста упал [%s] — фолбэк на буфер", chat_id, exc_info=True)
     return ""
@@ -874,7 +822,7 @@ def _group_dialogue(turns) -> tuple[list[dict], str]:
         return [], ""
     try:
         return _turns_to_dialogue([(is_self, role_line)
-                                   for is_self, _line, role_line in _tape_cut_turns(turns)])
+                                   for is_self, _line, role_line in turns])
     except Exception:
         log.warning("роли группового разговора не собрались — иду сплошным текстом",
                     exc_info=True)
@@ -894,9 +842,7 @@ def _dm_dialogue(chat_id: str) -> tuple[list[dict], str]:
     if not _dialogue_roles_on():
         return [], ""
     try:
-        # 12.09: окно то же, что у сплошной ленты (PRAXIS_LAST_N), и потолок в знаках
-        # (PRAXIS_TAPE_CHARS) — то, что не влезло, лежит в сводке и достаётся recall.
-        rows = memory_life.tape_window(memory_life.hot_records(chat_id, _hot_window()))
+        rows = memory_life.hot_records(chat_id, memory_life.HOT_HARD_HI)
     except Exception:
         log.warning("роли разговора не собрались [%s] — иду сплошным текстом", chat_id,
                     exc_info=True)
@@ -954,70 +900,6 @@ async def _chat_descriptor(event, chat_id: str) -> dict:
         except Exception:
             log.debug("имя места [%s] не записалось", chat_id, exc_info=True)
     return d
-
-
-def _dm_policy() -> str:
-    """`open` (как было) или `whitelist`. Неизвестное значение — как `open`.
-
-    Неизвестное значение НЕ закрывает личку: опечатка в переменной среды не должна
-    молча обрывать её разговоры с людьми. Отказ дороже ошибки настройки.
-    """
-    raw = str(os.getenv("PRAXIS_DM_POLICY", "open") or "open").strip().lower()
-    return "whitelist" if raw in {"whitelist", "closed", "allowlist"} else "open"
-
-
-def _dm_allow_ids() -> set[str]:
-    """Кому открыта личка: переменная среды плюс файл состояния.
-
-    Файл — чтобы список правился без передеплоя (и из Пульта позже); переменная —
-    чтобы он был виден в паспорте среды. Оба читаются, ни один не главнее.
-    """
-    ids: set[str] = set()
-    raw = str(os.getenv("PRAXIS_DM_ALLOW", "") or "")
-    ids |= {p.strip() for p in re.split(r"[\s,;]+", raw) if p.strip()}
-    try:
-        path = memory_life.BASE / "memory" / ".state" / "dm-allow.json"
-        if path.is_file():
-            got = json.loads(path.read_text(encoding="utf-8"))
-            rows = got.get("allow") if isinstance(got, dict) else got
-            ids |= {str(x).strip() for x in (rows or []) if str(x).strip()}
-    except Exception:
-        log.warning("список допуска личек не прочитался — считаю его пустым", exc_info=True)
-    return ids
-
-
-def _dm_allowed(sender_id, *, family: bool) -> bool:
-    """Пускать ли этого человека в личку. Владелец сюда не доходит (проверен выше).
-
-    ⚠ ЗНАКОМЫЕ НЕ ПРОХОДЯТ, и это названо, а не подразумевается: под `whitelist`
-    отвечает она владельцу, семье и тем, кто назван по id. Человек из её досье, но
-    не из семьи и не из списка, ответа не получит — его сообщение будет записано, а
-    ход не родится. Решение Егора 12.09: рычаг есть, умолчание — open.
-    """
-    if _dm_policy() == "open":
-        return True
-    if family:
-        return True
-    return str(sender_id) in _dm_allow_ids()
-
-
-def _note_dm_refused(chat_id, sender_id, name: str, *, already_noted: bool) -> None:
-    """Отказ НАЗВАН: и в журнале, и в её памяти о первом контакте.
-
-    Гейт, который молчит, превращает закрытую личку в «её никто не пишет». Она
-    должна знать, что к ней приходили и кого не пустили — иначе решение открыть
-    человеку принимать не на чем.
-
-    `already_noted` — когда первый контакт уже отмечен веткой `admission` выше:
-    второй вызов `social.note_unknown` посчитал бы одно сообщение дважды.
-    """
-    log.info("личка закрыта: %s (%s) — политика whitelist", name, sender_id)
-    if already_noted:
-        return
-    try:
-        social.note_unknown(sender_id, praxis_time.day_key())
-    except Exception:
-        log.warning("отметка первого контакта не записалась [%s]", sender_id, exc_info=True)
 
 
 def _wants_inbox(is_private: bool, is_owner: bool, msg, addressed: bool = False) -> bool:
@@ -3217,21 +3099,6 @@ async def on_new(event) -> None:
     _buf_push(chat_id, f"{name}{reply_mark}: {body}", author=name, is_dm=is_private,
               name=buffer_name,
               source_id=mid, ts=message_ts)
-    # ⚠ ГЕЙТ ЛИЧЕК СТОИТ ЗДЕСЬ, А НЕ ВЫШЕ — И ЭТО СУТЬ, А НЕ ОФОРМЛЕНИЕ.
-    # Сообщение записано строкой выше: горячий слой и `memory/life` его держат.
-    # Гейт, поставленный рядом с `social.category`, возвращался бы раньше записи —
-    # то есть стирал бы событие из её памяти вовсе. «Не отвечать незнакомым» и
-    # «молча терять людей» — разные вещи. Умолчание `PRAXIS_DM_POLICY=open`
-    # оставляет прежнее поведение байт-в-байт: `_dm_allowed` отвечает True первой
-    # строкой. `whitelist` пускает владельца, семью и названных явно
-    # (`PRAXIS_DM_ALLOW`, id через запятую, плюс `memory/.state/dm-allow.json`).
-    if is_private and not is_owner and not _dm_allowed(sender_id, family=fam):
-        _note_dm_refused(chat_id, sender_id, name, already_noted=admission is not None)
-        try:
-            perception.note_skip("dm-gate", "личка закрыта белым списком", chat_id=chat_id)
-        except Exception:
-            log.debug("perception.note_skip dm-gate не записался", exc_info=True)
-        return
     # The archive sees every admitted group update, not only messages that wake the
     # model.  It is exact-topic and append-only; projection/search failures are loud
     # but must never make the live Telegram update disappear.
@@ -4739,8 +4606,7 @@ async def _maybe_compact(chat_id: str) -> None:
         return
     _compacting.add(place)
     try:
-        async with _COMPACT_SLOTS:
-            result = await asyncio.to_thread(memory_life.compact_if_due, place)
+        result = await asyncio.to_thread(memory_life.compact_if_due, place)
         fold = int(result.get("folded") or 0)
         if not fold:
             if (result.get("plan") or {}).get("reason") == "open_episode":
@@ -6887,10 +6753,6 @@ def _durable_outbox_projection(execution: dict, live: dict) -> dict:
 def _sync_send_message(to, text) -> str:
     """Durable direct Telegram text send owned by the current tool call."""
 
-    # 12.09: маркеры цитат поиска (citeturn0search1 …) снимаются и с ПРЯМЫХ отправок —
-    # реплика проходит через _guard_outbound и чистится, а send_message/narrate нет:
-    # 10.09 маркеры уехали в личку и в группу как есть.
-    text = agent._strip_citation_tokens(str(text or ""))
     # Тот же пол, что и на туле: этот путь durable и вызывается не только из него, а
     # кред не должен уходить наружу ни одной дверью. Fail-closed по построению: пустая
     # строка от пола означает «чисто», любое падение пола видно как исключение выше.
@@ -7813,95 +7675,9 @@ async def _formation_once() -> None:
         log.info("formation request: %s", out.get("summary") or out)
 
 
-#: Сколько ждём вежливого прощания с Telegram при перезапуске по заявке контура.
-_DISCONNECT_TIMEOUT = 10.0
-#: Через сколько выход происходит в любом случае, даже если поток застрял в
-#: библиотеке и не отвечает вовсе.
-_EXIT_FUSE_SECONDS = 20.0
-
-
-def _arm_restart_exit() -> "threading.Timer":
-    """Пообещать выход таймером — на случай, если штатный путь не вернётся.
-
-    Таймер демонский и ОТМЕНЯЕМЫЙ. Отменяемость здесь не украшение: в стендах
-    `agent._exit_process` подменён и возвращается, и неотменяемый запал позвал бы
-    настоящий `os._exit(42)` через двадцать секунд — посреди чужого прогона.
-    Штатный путь гасит его сам (см. `_control_once`).
-
-    Если же запал сработал — значит штатный путь не вернулся вовсе, и разница
-    между этими двумя исходами есть разница между «перезапустилась» и «молчала
-    два с половиной часа».
-    """
-    def _fuse() -> None:
-        log.error("выход по запалу: штатный путь перезапуска не завершился за %s с",
-                  _EXIT_FUSE_SECONDS)
-        agent._exit_process()
-
-    timer = threading.Timer(_EXIT_FUSE_SECONDS, _fuse)
-    timer.name = "restart-exit-fuse"
-    timer.daemon = True
-    timer.start()
-    return timer
-
-
-def _apply_desk_interrupt(request: dict) -> dict:
-    """Прервать живые прогоны по просьбе Пульта — кооперативно, через run_manager.
-
-    `request_cancel` терминализует прогон, если у него нет незакрытых вызовов рук, иначе
-    записывает просьбу и ставит паузу; `_run_status_gate` в тул-цикле видит статус
-    ≠ running на ближайшей границе (перед рукой, после ответа модели) и поднимает
-    RunStopped — черновик ответа брошен, руки дальше не зовутся. Идущий вызов модели
-    дорабатывает до конца: рвать поток посреди генерации значило бы врать провайдеру
-    о расходе. scope — «all» или id одного прогона.
-    """
-    scope = str(request.get("scope") or "all").strip() or "all"
-    by = str(request.get("by") or "desk").strip()[:40] or "desk"
-    reason = str(request.get("reason") or "прервано с Пульта").strip()[:200]
-    manager = agent._runs()
-    rows = manager.list_runs(statuses=tuple(agent.run_manager.NONTERMINAL_STATUSES))
-    cancelled: list[str] = []
-    skipped: list[str] = []
-    for row in rows:
-        rid = str(row.get("run_id") or row.get("id") or "")
-        if not rid or (scope != "all" and rid != scope):
-            continue
-        try:
-            manager.request_cancel(rid, actor=f"desk:{by}", reason=reason)
-            cancelled.append(rid)
-        except Exception as exc:
-            skipped.append(f"{rid}: {type(exc).__name__}")
-    return {"cancelled": cancelled, "skipped": skipped, "scope": scope, "by": by}
-
-
-async def _desk_interrupt_once() -> None:
-    """Тик часов: просьба Пульта прервать ход (memory/.control/interrupt.json)."""
-    request = selfdev.interrupt_requested()
-    if not request:
-        if selfdev.INTERRUPT_REQ.exists():
-            selfdev.clear_interrupt_request()   # битый файл не перечитываем каждый тик
-        return
-    selfdev.clear_interrupt_request()
-    try:
-        result = await asyncio.to_thread(_apply_desk_interrupt, request)
-    except Exception:
-        log.warning("прерывание с Пульта не исполнилось", exc_info=True)
-        return
-    log.warning("прерывание с Пульта (%s, scope=%s): отменено %d, пропущено %s",
-                result["by"], result["scope"], len(result["cancelled"]),
-                result["skipped"] or "0")
-    try:
-        agent.tool_journal(
-            f"[прервано] живой ход остановлен с Пульта ({result['by']}): прогонов "
-            f"{len(result['cancelled'])}", salience=2)
-    except Exception:
-        log.debug("журнал о прерывании не записался", exc_info=True)
-
-
 async def _control_once() -> None:
     """Забота часов: смёрженное предложение просит перезапуск — уходим мягко (exit 42),
-    когда нет активного прохода; bootguard поднимет на новом коде (preflight + откат).
-    12.09: та же забота читает просьбу Пульта прервать живой ход."""
-    await _desk_interrupt_once()
+    когда нет активного прохода; bootguard поднимет на новом коде (preflight + откат)."""
     reason = selfdev.restart_requested()
     if not reason:
         return
