@@ -20,68 +20,106 @@ design. The working copy caught up first — taking her fixes where they apply, 
 edition where the machine underneath is genuinely different — and only then was the layer
 regenerated from what actually differs.
 
-## What is here — 55 files, checked rather than remembered
+## What is here — 59 files, checked rather than remembered
 
-`desk/installer/core_src.py --check` compares this layer against the ACTUAL difference
-between `praxis/` and the working copy. On 2026-09-10, after the core was re-exported from
-production (`64f1588c`) and the working copy took her fixes that apply, it reports:
+`desk/installer/core_src.py --check --tree ../live` compares this layer against the ACTUAL
+difference between `praxis/` and the working copy. On 2026-09-14, after the core was
+re-exported from production (her `8cb65f14`) and the working copy took her five fixes of
+13–14.09 that apply to the edition (partitioned search and inbox-relative paths, the
+outbox acceptance grace and the outbox tick on its own clock, the K1 cache-ledger fields
+with an explicit zero, `PRAXIS_AUTO_RECALL_K=0` honoured by the heartbeat, and the
+interrupt request from the desk), it reports:
 
 | | files |
 |---|---:|
-| declared here and genuinely differing | **50** |
-| differing but NOT declared | **0** |
+| declared here and genuinely differing | **56** |
+| declared here and existing only in the edition | **3** |
 | declared in vain (identical) | **0** |
-| ours alone and not declared | **0** |
+| differing but NOT declared | **27** — see below |
+| in the core, not carried here | **68** — see below |
 
-Overlaying `praxis/` with `core/` reproduces the working copy **byte for byte**: 478 of 478
-files, nothing diverging, nothing missing. That is what makes
-`build_dist.py --from-core` possible at all; before this it refused, and rightly.
-
-### Carried differently (50)
+### Carried differently (56)
 
 | `ARCHITECTURE.md` | `agent.py` | `body/crates/praxis-body/src/desktop.rs` |
-| `body/crates/praxis-body/src/main.rs` | `body/crates/praxis-body/src/runtime.rs` | `body/crates/praxis-body/src/uia.rs` |
-| `body_client.py` | `canary.py` | `forge.py` |
-| `frame_shadow.py` | `frame_stats.py` | `llm.py` |
-| `moderation_shadow.py` | `mtproto_runner.py` | `panel.py` |
-| `perception.py` | `run_manager.py` | `test_agent_resume_runtime.py` |
-| `test_cache_prefix_stability.py` | `test_canary.py` | `test_claim_conflicts.py` |
-| `test_computer_access_agent.py` | `test_coverage_vs_current.py` | `test_fast_hand.py` |
-| `test_forge_lean.py` | `test_gate_hermetic.py` | `test_group_wake_snapshot.py` |
-| `test_history_scan.py` | `test_invariants.py` | `test_llm.py` |
+| `body/crates/praxis-body/src/dpi.rs` | `body/crates/praxis-body/src/element.rs` | `body/crates/praxis-body/src/runtime.rs` |
+| `body/crates/praxis-body/src/uia.rs` | `body_client.py` | `bootguard.py` |
+| `canary.py` | `forge.py` | `forge_intelligence.py` |
+| `forge_process.py` | `frame_shadow.py` | `frame_stats.py` |
+| `llm.py` | `moderation_shadow.py` | `mtproto_runner.py` |
+| `panel.py` | `perception.py` | `run_manager.py` |
+| `selfdev.py` | `selfgit.py` | `test_agent_resume_runtime.py` |
+| `test_canary.py` | `test_claim_conflicts.py` | `test_computer_access_agent.py` |
+| `test_coverage_vs_current.py` | `test_fast_hand.py` | `test_forge_lean.py` |
+| `test_gate_hermetic.py` | `test_group_wake_snapshot.py` | `test_history_scan.py` |
+| `test_invariants.py` | `test_llm.py` | `test_memory_v2.py` |
 | `test_moderation_shadow.py` | `test_panel.py` | `test_pass21.py` |
 | `test_pass23.py` | `test_pass23_2.py` | `test_pass23_complete.py` |
 | `test_pass30.py` | `test_pass9.py` | `test_run_integration.py` |
 | `test_shell_selfdev.py` | `test_silero_tts_client.py` | `test_silero_tts_worker.py` |
 | `test_truncation_owner.py` | `test_truth_runner.py` | `test_turns.py` |
 | `test_vision_switch.py` | `test_webtool.py` | `turns.py` |
-| `unanswered.py` | `webtool.py` | |
+| `unanswered.py` | `webtool.py` |  |
 
-### Existing only here (5)
+### Existing only here (3)
 
-| `body/crates/praxis-body/src/element.rs` | `sitecustomize.py` | `test_atomic_replace_retry.py` |
-| `test_compact_refresh.py` | `test_element_act.py` | |
+| `sitecustomize.py` | `test_atomic_replace_retry.py` | `test_compact_refresh.py` |
 
-## What the edition does NOT carry (26)
+## Differing and NOT declared (27) — the core moved ahead, the edition has not caught up
+
+These are not edition differences and are deliberately not copied into `core/`: they are
+her own work of 13–14.09 that the edition has not taken yet — the recall index rework
+(bounded foreground validation, durable background refresh), the memory-life and
+provenance changes behind it, `people.py`, `sleep.py`, `tasks.py`, `run_resume.py`,
+`frame_trace.py`, and the tests that moved with them. Copying them into a file called
+"the Windows edition" would declare a lag as a design (the lesson of 2026-09-10, above).
+The edition ships the 0.5.5 versions of these files. To close the gap: reconcile the
+working copy with `praxis/` file by file, then re-run the check.
+
+| `frame_trace.py` | `memory_fts.py` | `memory_index.py` |
+| `memory_life.py` | `people.py` | `run_resume.py` |
+| `sleep.py` | `tasks.py` | `test_authority_context.py` |
+| `test_cache_prefix_stability.py` | `test_call_trace_k1_1309.py` | `test_direct_telegram_outbox.py` |
+| `test_dossier_contract.py` | `test_heartbeat.py` | `test_layer7.py` |
+| `test_memory_fts.py` | `test_memory_index_adversarial.py` | `test_pass19.py` |
+| `test_perceive.py` | `test_places_adversarial.py` | `test_resume_spin.py` |
+| `test_rooms_and_admission.py` | `test_run_manager.py` | `test_runner_reconnect.py` |
+| `test_transport_not_memory.py` | `test_whole_documents.py` | `test_work_wait_survives.py` |
+
+## What the edition does NOT carry (68)
 
 The third category, and the one a layer cannot express by itself: files that exist in the
-core and not in this edition. Most are her newest modules, written after the last time the
-working copy was reconciled, and nothing here imports them — `keat_*`, `frame_measure`,
-`frame_serve`, `pre_model_timing`, `telegram_text` and their docs.
+core and not in this edition. Most are her modules of the KEAT frame and the runs
+retention — `keat_*`, `frame_measure`, `frame_serve`, `pre_model_timing`, `telegram_text`,
+`run_retention`, `runs_prune`, `logical_send`, their docs and tests — plus the 1009
+review notes. Nothing in the edition imports them.
 
 They are named rather than filtered: assembling from the core brings them along, and the
 distribution grows by exactly this list. Silently dropping them would be a second, hidden
 declaration; silently shipping them without saying so would be worse.
 
-| `docs/frame-v6-canary.md` | `docs/keat-candidate-contract.md` | `docs/keat-durable-epoch.md` |
-| `docs/keat-input-boundaries.md` | `docs/keat-source-adapter.md` | `frame_measure.py` |
-| `frame_serve.py` | `keat_candidate.py` | `keat_epoch.py` |
-| `keat_source.py` | `pre_model_timing.py` | `telegram_text.py` |
-| `test_boundary_turn_delivery.py` | `test_call_attribution.py` | `test_frame_measure.py` |
-| `test_frame_measure_boundary.py` | `test_frame_serve.py` | `test_frame_stats.py` |
-| `test_glm_effort.py` | `test_keat_candidate.py` | `test_keat_epoch.py` |
-| `test_keat_source.py` | `test_llm_inbox_audit.py` | `test_pre_model_timing.py` |
-| `test_telegram_text.py` | `test_truncated_tool_use.py` | |
+| `docs/frame-v6-canary.md` | `docs/keat-candidate-contract.md` | `docs/keat-dm-staged-widening.md` |
+| `docs/keat-durable-epoch.md` | `docs/keat-ingress-history-gaps.md` | `docs/keat-input-boundaries.md` |
+| `docs/keat-runtime-staging.md` | `docs/keat-source-adapter.md` | `docs/reviews/1009-client-bridge-repair.md` |
+| `docs/reviews/1009-descriptor-test-repair.md` | `docs/reviews/1009-element-act.md` | `docs/reviews/1009-rust-validation.md` |
+| `docs/reviews/1009-uia-repair.md` | `docs/run_retention.md` | `frame_measure.py` |
+| `frame_serve.py` | `keat_candidate.py` | `keat_capture.py` |
+| `keat_control.py` | `keat_economy.py` | `keat_epoch.py` |
+| `keat_live.py` | `keat_readiness.py` | `keat_runtime.py` |
+| `keat_source.py` | `logical_send.py` | `pre_model_timing.py` |
+| `run_retention.py` | `runs_prune.py` | `telegram_text.py` |
+| `test_boundary_turn_delivery.py` | `test_call_attribution.py` | `test_element_find.py` |
+| `test_frame_levers_1309.py` | `test_frame_measure.py` | `test_frame_measure_boundary.py` |
+| `test_frame_serve.py` | `test_frame_stats.py` | `test_glm_effort.py` |
+| `test_keat_agent_ingress.py` | `test_keat_candidate.py` | `test_keat_capture.py` |
+| `test_keat_control.py` | `test_keat_dm_ingress.py` | `test_keat_economy.py` |
+| `test_keat_economy_coverage.py` | `test_keat_epoch.py` | `test_keat_group_root.py` |
+| `test_keat_group_runner_rollback.py` | `test_keat_live.py` | `test_keat_native_ingress.py` |
+| `test_keat_provider_rollback.py` | `test_keat_readiness.py` | `test_keat_runtime.py` |
+| `test_keat_source.py` | `test_keat_wake_adapter.py` | `test_llm_inbox_audit.py` |
+| `test_mtproto_hot_window.py` | `test_outbox_settled_1309.py` | `test_pre_model_timing.py` |
+| `test_run_archive_read.py` | `test_run_events_missing_1309.py` | `test_run_resume_model_input_fallback.py` |
+| `test_run_retention.py` | `test_runs_prune.py` | `test_telegram_text.py` |
+| `test_tool_pointers.py` | `test_truncated_tool_use.py` |  |
 
 ## The honest part
 
@@ -96,9 +134,10 @@ durable Forge call attribution" — carries the effort step (`output_config.effo
 `forge_worker.py`); the vision routing and `read_window` are in there too. All four are now
 the core's, not an edition of it, and the tables above no longer count them.
 
-One patch is still offered and not yet taken: `desktop.element.act` — acting on a named
-element through UI Automation patterns instead of a point on screen. It is not in `core/`
-either, because it was written on 2026-09-10 and its letter went out the same day.
+The `desktop.element.act` patch offered on 2026-09-10 — acting on a named element through
+UI Automation patterns instead of a point on screen — has been taken too: on 2026-09-14
+`test_element_act.py` and the body crate are identical on both sides, and they left this
+layer.
 
 The numbers on this page drift the moment either side moves, and a drifting number that
 nobody re-measures is the same lie the phantom "one core" was. There is now an instrument;

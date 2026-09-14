@@ -514,7 +514,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   // целиком, и вешать слушателей на каждую кнопку значило бы копить их пачками.
   screen.addEventListener("click", async (ev) => {
     const spot = (ev.target as HTMLElement).closest<HTMLElement>(
-      "[data-restart-box],[data-box-log],[data-brain-apply]");
+      "[data-restart-box],[data-box-log],[data-brain-apply],[data-interrupt]");
     if (!spot) return;
     const note = screen.querySelector<HTMLElement>("#sys-note");
     const view = screen.querySelector<HTMLPreElement>("#sys-log");
@@ -523,6 +523,17 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       note.className = bad ? "err" : "muted";
       note.textContent = text;
     };
+    if (spot.hasAttribute("data-interrupt")) {
+      say("прошу остановить ход…");
+      try {
+        const answer = await post<{ ok: boolean; note: string }>("/api/interrupt", {
+          scope: spot.getAttribute("data-interrupt") || "all" });
+        say(answer.note, !answer.ok);
+      } catch (e) {
+        say(e instanceof Denied ? "прерывание этому телефону не разрешено" : "не дошло", true);
+      }
+      return;
+    }
     const logName = spot.getAttribute("data-box-log");
     if (logName && view) {
       const errors = spot.hasAttribute("data-errors");
@@ -553,12 +564,23 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     }
     const role = spot.getAttribute("data-brain-apply");
     if (role) {
-      const picker = screen.querySelector<HTMLSelectElement>(`[data-brain-role="${role}"]`);
-      const model = picker?.value || "";
-      say(`меняю модель роли ${role}…`);
+      const form = screen.querySelector<HTMLElement>(`[data-brain-form="${role}"]`);
+      const fields: Record<string, string> = {};
+      form?.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-f]").forEach((el) => {
+        const key = el.getAttribute("data-f") || "";
+        if (key && el.value.trim() !== (el.getAttribute("data-was") ?? "")) fields[key] = el.value.trim();
+      });
+      if (!Object.keys(fields).length) {
+        say("ничего не изменено");
+        return;
+      }
+      say(`меняю роль ${role}: ${Object.keys(fields).join(", ")}…`);
       try {
-        const answer = await post<{ ok: boolean; note?: string }>("/api/brain", { role, fields: { model } });
-        say(answer.ok ? `${role}: ${model}. ${answer.note || ""}` : answer.note || "не вышло", !answer.ok);
+        const answer = await post<{ ok: boolean; note?: string }>("/api/brain", { role, fields });
+        say(answer.ok
+          ? `${role}: ${Object.entries(fields).map(([k, v]) => `${k}=${v || "—"}`).join(", ")}. ${answer.note || ""}`
+          : answer.note || "не вышло", !answer.ok);
+        if (answer.ok) setTimeout(() => void renderSystem(), 1500);
       } catch (e) {
         say(e instanceof Denied ? "смена модели этому телефону не разрешена" : "не дошло", true);
       }
@@ -985,12 +1007,19 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     screen.innerHTML = '<div class="empty">читаю…</div>';
     const [boxes, brain, models] = await Promise.all([
       scoped<{ available: boolean; why: string; containers: Array<{ name: string; up: boolean; status: string; image: string }> }>("/api/containers", "containers"),
-      scoped<{ ok: boolean; note?: string; roles?: Record<string, Record<string, string>> }>("/api/brain", "brain"),
+      scoped<{ ok: boolean; note?: string; roles?: Record<string, Record<string, string>>; frameworks?: Record<string, unknown> }>("/api/brain", "brain"),
       scoped<{ ok: boolean; by_framework?: Record<string, { ok: boolean; models?: string[] }> }>("/api/brain-models", "brain"),
     ]);
     if (!guard()) return;
+    // 12.09: прерывание живого хода — просьба в memory/.control, раннер снимает ход на тике.
+    const interruptHTML = `<div class="screen-title">Агент</div>
+      <div class="task-row">
+        <div class="actions"><button type="button" class="chip" data-interrupt="all">Прервать ход</button></div>
+        <div class="muted">Останавливает живой ход: руки дальше не зовутся, ответ не уходит. Идущий вызов модели дорабатывает до границы, обычно до 10 секунд.</div>
+      </div>`;
     if (!boxes || !boxes.available) {
-      screen.innerHTML = `<div class="screen-title">Система</div>` +
+      screen.innerHTML = interruptHTML + `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
+        `<div class="screen-title">Система</div>` +
         (closed.has("containers")
           ? notGiven("Система")
           : `<div class="empty">${esc(boxes?.why || "управление контейнерами рядом с этим каналом не объявлено")}</div>`);
@@ -1011,22 +1040,39 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       .join("");
     const live: string[] = [];
     for (const spec of Object.values(models?.by_framework || {})) if (spec.ok && spec.models) live.push(...spec.models);
+    // 12.09: у роли четыре свои ручки (модель, фреймворк, запасная модель и её фреймворк)
+    // плюс усилие — раньше отсюда менялась только основная модель, и запасная жила
+    // лишь в llm.json руками. Шлём только то, что изменили.
+    const frameworks = Object.keys(brain?.frameworks || {});
+    const efforts = ["", "low", "medium", "high", "xhigh"];
+    const opt = (values: string[], current: string) =>
+      [...new Set([current, ...values])]
+        .map((v) => `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(v || "—")}</option>`)
+        .join("");
+    const field = (label: string, control: string) =>
+      `<label style="display:flex;flex-direction:column;gap:2px;padding:4px 0"><span class="muted">${label}</span>${control}</label>`;
+    const datalist = `<datalist id="brain-models">${[...new Set(live)].map((m) => `<option value="${esc(m)}"></option>`).join("")}</datalist>`;
     const brainRows = brain?.ok
-      ? Object.entries(brain.roles || {})
+      ? datalist + Object.entries(brain.roles || {})
           .map(([role, spec]) => {
-            const current = String(spec.model ?? "");
-            const options = [...new Set([current, ...live].filter(Boolean))]
-              .map((m) => `<option value="${esc(m)}"${m === current ? " selected" : ""}>${esc(m)}</option>`)
-              .join("");
-            return `<div class="task-row">
-              <div class="task-head"><b>${esc(role)}</b> <span class="muted">${esc(String(spec.framework ?? ""))}</span></div>
-              <div class="actions"><select data-brain-role="${esc(role)}">${options}</select>
-                <button type="button" class="chip" data-brain-apply="${esc(role)}">Сменить</button></div>
+            const f = (k: string) => String(spec[k] ?? "");
+            const input = (k: string, placeholder = "") =>
+              `<input list="brain-models" data-f="${k}" data-was="${esc(f(k))}" value="${esc(f(k))}" placeholder="${esc(placeholder)}" autocapitalize="off" autocorrect="off" spellcheck="false">`;
+            const select = (k: string, values: string[]) =>
+              `<select data-f="${k}" data-was="${esc(f(k))}">${opt(values, f(k))}</select>`;
+            return `<div class="task-row" data-brain-form="${esc(role)}">
+              <div class="task-head"><b>${esc(role)}</b> <span class="muted">${esc(f("framework"))} · ${esc(f("model"))}</span></div>
+              ${field("Модель", input("model"))}
+              ${field("Фреймворк", select("framework", frameworks))}
+              ${field("Запасная модель", input("fallback_model", "пусто — без запасной"))}
+              ${field("Фреймворк запасной", select("fallback_framework", ["", ...frameworks]))}
+              ${field("Усилие", select("reasoning_effort", efforts))}
+              <div class="actions"><button type="button" class="chip" data-brain-apply="${esc(role)}">Применить</button></div>
             </div>`;
           })
           .join("")
       : `<div class="empty">${esc(brain?.note || "мозг отсюда не читается")}</div>`;
-    screen.innerHTML =
+    screen.innerHTML = interruptHTML +
       `<div class="screen-title">Контейнеры <span class="n">${boxes.containers.length}</span></div>${rows}` +
       `<p class="muted" style="padding:0 14px">Идёт мимо агента: перезапуск нужен тогда, когда он не отвечает.</p>` +
       `<div class="screen-title">Мозг</div>${brainRows}` +

@@ -13,7 +13,7 @@ import { api, cfg, connect, inTauri, onConnection, onEvent, post, shell } from "
 import { applyTheme } from "../../ui-kit/dom";
 import { watchShellVersion } from "../../ui-kit/version";
 import { setResultFetcher } from "../../ui-kit/steps";
-import { bindFail, esc, failHTML, fmtAge, fmtK, fmtTs, humanError, q, toast } from "../../ui-kit/window/lib";
+import { bindFail, esc, failHTML, fmtAge, fmtDur, fmtK, fmtTs, humanError, q, toast } from "../../ui-kit/window/lib";
 import { PRODUCT_NAME, S, setProductName, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "../../ui-kit/window/state";
 import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "../../ui-kit/window/rooms";
 import { mountSwitch } from "../../ui-kit/window/agents";
@@ -87,11 +87,15 @@ export function start(opts: WindowOptions): void {
   // /api/say как base64 рядом с текстом; канал кладёт его в desk_inbox, руннер — в
   // медиа-спул, дерево — в кадр, а модель переключается на зрячую до вызова.
   // Только то, что модель читает (PNG/JPEG/WebP/GIF), до четырёх и до 8 МБ.
-  interface Attachment { name: string; mime: string; data: string; url: string; size: number }
+  // Голосовое (0.6.0) — запись микрофона тем же путём: руннер расшифровывает её
+  // whisper-ом, как голосовые из Telegram, и кладёт текст в реплику.
+  interface Attachment { name: string; mime: string; data: string; url: string; size: number; kind: "image" | "audio"; seconds?: number }
   const ATTACH_MIME = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+  const AUDIO_MIME = new Set(["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "audio/x-wav"]);
   const ATTACH_MAX = 4;
   const ATTACH_BYTES = 8 * 1024 * 1024;
   let attachments: Attachment[] = [];
+  const baseMime = (t: string) => String(t || "").split(";", 1)[0].trim().toLowerCase();
 
   function fileToBase64(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -102,14 +106,16 @@ export function start(opts: WindowOptions): void {
     });
   }
 
-  async function addFiles(files: Iterable<File>) {
+  async function addFiles(files: Iterable<File>, seconds?: number) {
     for (const f of files) {
-      if (!ATTACH_MIME.has(f.type)) { toast(`${f.name || "файл"}: модель читает только PNG, JPEG, WebP и GIF`); continue; }
+      const mime = baseMime(f.type);
+      const kind: Attachment["kind"] = AUDIO_MIME.has(mime) ? "audio" : "image";
+      if (kind === "image" && !ATTACH_MIME.has(mime)) { toast(`${f.name || "файл"}: модель читает только PNG, JPEG, WebP и GIF; голосовое — кнопкой микрофона`); continue; }
       if (f.size > ATTACH_BYTES) { toast(`${f.name || "файл"}: больше 8 МБ`); continue; }
-      if (attachments.length >= ATTACH_MAX) { toast(`Не больше ${ATTACH_MAX} картинок за раз`); break; }
+      if (attachments.length >= ATTACH_MAX) { toast(`Не больше ${ATTACH_MAX} вложений за раз`); break; }
       try {
         const data = await fileToBase64(f);
-        attachments.push({ name: f.name || "image", mime: f.type, data, url: URL.createObjectURL(f), size: f.size });
+        attachments.push({ name: f.name || (kind === "audio" ? "voice" : "image"), mime, data, url: URL.createObjectURL(f), size: f.size, kind, seconds });
       } catch (e) {
         toast("Не прочиталось: " + humanError(e).text);
       }
@@ -132,7 +138,9 @@ export function start(opts: WindowOptions): void {
   function paintFiles() {
     composerFiles.hidden = attachments.length === 0;
     composerFiles.innerHTML = attachments
-      .map((a, i) => `<span class="chip"><img src="${a.url}" alt=""><span>${esc(a.name)}</span> <span class="muted">${fmtK(a.size)}</span><button type="button" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></span>`)
+      .map((a, i) => a.kind === "audio"
+        ? `<span class="chip chip-voice"><span class="chip-ico" aria-hidden="true">🎤</span><span>голосовое${a.seconds ? " · " + fmtDur(a.seconds) : ""}</span> <span class="muted">${fmtK(a.size)}</span><button type="button" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></span>`
+        : `<span class="chip"><img src="${a.url}" alt=""><span>${esc(a.name)}</span> <span class="muted">${fmtK(a.size)}</span><button type="button" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></span>`)
       .join("");
     composerFiles.querySelectorAll<HTMLButtonElement>("button[data-i]").forEach((b) => {
       b.addEventListener("click", () => dropFile(Number(b.dataset.i)));
@@ -144,6 +152,84 @@ export function start(opts: WindowOptions): void {
     void addFiles(attachInput.files ? Array.from(attachInput.files) : []);
     attachInput.value = "";
   });
+
+  // ---------------------------------------------------------------- голосовое (0.6.0)
+  // Кнопка микрофона есть только в окне Элен (app/index.html): у Пульта за каналом
+  // нет раннера, расшифровывать некому. Запись — MediaRecorder в webm/opus, до
+  // пяти минут; вторая кнопка — стоп; результат ложится вложением рядом с текстом.
+  // Готовность слуха спрашивается у канала (`/api/voice`) ДО записи: записывать то,
+  // что некому расшифровать, — обещание без исполнения, и владелец узнал бы об
+  // этом уже из ответа агента.
+  const micBtn = document.querySelector<HTMLButtonElement>("#mic");
+  const MIC_MAX_SEC = 300;
+  let rec: MediaRecorder | null = null;
+  let recStream: MediaStream | null = null;
+  let recChunks: Blob[] = [];
+  let recStart = 0;
+  let recTick = 0;
+  const micIdle = () => {
+    if (!micBtn) return;
+    micBtn.classList.remove("recording");
+    micBtn.title = "Записать голосовое";
+    micBtn.setAttribute("aria-label", "Записать голосовое");
+    if (recTick) { clearInterval(recTick); recTick = 0; }
+    if (recStream) { for (const t of recStream.getTracks()) t.stop(); recStream = null; }
+    rec = null;
+  };
+  async function micToggle() {
+    if (!micBtn) return;
+    if (rec) {
+      if (rec.state !== "inactive") rec.stop();
+      return;
+    }
+    try {
+      const v = await api<{ ready?: boolean; why?: string }>("/api/voice");
+      if (!v.ready) { toast(`Голосовое некому расшифровать: ${v.why || "слух не поднят"}. Настройки → Голос.`); return; }
+    } catch {
+      // Канал не ответил — не запрещаем: причину, если что, назовёт руннер в реплике.
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      toast("В этом окне нет доступа к микрофону");
+      return;
+    }
+    try {
+      recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      toast("Микрофон не дали: " + humanError(e).text);
+      return;
+    }
+    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
+    try {
+      rec = new MediaRecorder(recStream, mime ? { mimeType: mime } : undefined);
+    } catch (e) {
+      toast("Запись не началась: " + humanError(e).text);
+      micIdle();
+      return;
+    }
+    recChunks = [];
+    recStart = Date.now();
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
+    rec.onerror = () => { toast("Запись оборвалась"); micIdle(); };
+    rec.onstop = () => {
+      const seconds = Math.max(1, Math.round((Date.now() - recStart) / 1000));
+      const type = baseMime(rec?.mimeType || mime || "audio/webm") || "audio/webm";
+      const blob = new Blob(recChunks, { type });
+      micIdle();
+      if (blob.size < 1024 || seconds < 1) { toast("Запись слишком короткая"); return; }
+      const ext = type === "audio/ogg" ? "ogg" : type === "audio/mp4" ? "m4a" : "webm";
+      const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
+      void addFiles([new File([blob], `voice-${stamp}.${ext}`, { type })], seconds);
+    };
+    rec.start(250);
+    micBtn.classList.add("recording");
+    recTick = window.setInterval(() => {
+      const s = Math.round((Date.now() - recStart) / 1000);
+      micBtn.title = `Идёт запись · ${fmtDur(s)} · нажми, чтобы закончить`;
+      micBtn.setAttribute("aria-label", micBtn.title);
+      if (s >= MIC_MAX_SEC && rec && rec.state !== "inactive") { toast("Пять минут — предел одного голосового"); rec.stop(); }
+    }, 500);
+  }
+  micBtn?.addEventListener("click", () => void micToggle());
   say.addEventListener("paste", (e) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -794,7 +880,10 @@ export function start(opts: WindowOptions): void {
     const files = attachments.slice();
     if (!typedText && !files.length) return;
     // Пустая реплика с картинкой — тоже реплика: в ленте и в памяти она названа словами.
-    const text = typedText || (files.length === 1 ? "[картинка]" : `[картинки: ${files.length}]`);
+    const voices = files.filter((f) => f.kind === "audio").length;
+    const text = typedText || (files.length === 1
+      ? (voices ? "[голосовое]" : "[картинка]")
+      : voices === files.length ? `[голосовые: ${files.length}]` : voices ? `[вложения: ${files.length}]` : `[картинки: ${files.length}]`);
     const room = S.room;
     const current = S.rooms.find((r) => r.key === room);
     if (current?.stub) {

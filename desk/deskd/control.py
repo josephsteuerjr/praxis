@@ -87,6 +87,31 @@ def _utc() -> str:
     return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+INTERRUPT = "interrupt.json"
+
+
+def interrupt(tree: Path, by: str = "owner", scope: str = "all", reason: str = "") -> dict:
+    """Попросить раннер прервать живой ход агента (12.09).
+
+    Пишется файл `memory/.control/interrupt.json`; раннер читает его на тике часов
+    (≤ 5–10 с) и кооперативно отменяет живые прогоны через run_manager: руки дальше
+    не зовутся, черновик ответа не уходит, а идущий вызов модели дорабатывает до
+    границы. На сервере канал держит `memory/.control` на запись ровно для таких
+    просьб; на Windows дерево своё. scope — «all» или id одного прогона.
+    """
+    scope = str(scope or "all").strip() or "all"
+    path = Path(tree) / "memory" / ".control" / INTERRUPT
+    request = {"by": str(by or "owner")[:40], "scope": scope,
+               "reason": str(reason or "").strip()[:200] or "прервано с Пульта", "at": _utc()}
+    try:
+        _write(path, request)
+    except OSError as exc:
+        return {"ok": False, "note": f"просьба не записалась: {exc}"}
+    return {"ok": True, "request": request,
+            "note": "просьба записана; раннер остановит ход на ближайшем тике (до 10 с), "
+                    "идущий ответ модели дорабатывает до границы и не отправляется"}
+
+
 def supervisor_state(tree: Path) -> dict:
     """Что известно о надзоре: жив ли, кого держит, можно ли им управлять.
 

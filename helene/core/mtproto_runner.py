@@ -6750,6 +6750,48 @@ def _durable_outbox_projection(execution: dict, live: dict) -> dict:
     return kept
 
 
+#: Сколько секунд приёмке Telegram можно догонять таймаут ожидания отправки (см. ниже).
+_ACCEPT_GRACE_SEC = 8.0
+
+
+def _accepted_after_timeout(key: str, exc: BaseException, *, grace: float | None = None,
+                            poll: float = 0.5) -> dict | None:
+    """Приёмка, пришедшая сразу после таймаута ожидания, — успех отправки, а не пауза прогона.
+
+    13.09: рука `reply` ждала приёмку 30 с (`_threadsafe_result`), отправка на лагающей петле
+    Telethon заняла 33 с, и рука объявила `DurableSideEffectPending` через 13 мс ПОСЛЕ того,
+    как Telegram уже принял сообщение (#104546 в абстракте, в логе «TimeoutError
+    (state=accepted)»). Прогон встал в паузу «awaits Telegram acceptance», проекция принятого
+    ждала общий проход часов 23 минуты, её же ответа не было ни в архиве, ни в кадре — и
+    следующий ход ответил человеку второй раз (#104554; «тыж уже отвечала»). Тот же рисунок
+    в личке 16:44→16:53.
+
+    Здесь даём приёмке несколько секунд догнать таймаут и перечитываем запись ящика: стала
+    `accepted` — возвращаем её, и вызывающий идёт путём успеха с той же записью, что вернула
+    бы сама отправка. Любая другая ошибка и приёмка, не пришедшая за грейс, — как раньше:
+    None, и вызывающий поднимает `DurableSideEffectPending`. Дубля на стороне Telegram грейс
+    не создаёт: повтор идёт под тем же `random_id`.
+    """
+    if not isinstance(exc, TimeoutError):
+        return None
+    limit = _ACCEPT_GRACE_SEC if grace is None else max(0.0, float(grace))
+    deadline = time.monotonic() + limit
+    while True:
+        try:
+            row = _direct_outbox().get(key, verify_file=False)
+        except Exception:
+            log.debug("грейс приёмки: запись ящика не прочиталась [%s]", key, exc_info=True)
+            row = None
+        if isinstance(row, dict) and row.get("state") == "accepted":
+            log.info("приёмка догнала таймаут ожидания [%s]: message_id=%s",
+                     key, (row.get("receipt") or {}).get("message_id"))
+            return row
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        time.sleep(min(remaining, max(0.05, float(poll))))
+
+
 def _sync_send_message(to, text) -> str:
     """Durable direct Telegram text send owned by the current tool call."""
 
@@ -6837,12 +6879,20 @@ def _sync_send_message(to, text) -> str:
 
     t1 = time.time()
     try:
-        if entry.get("state") != "accepted":
-            entry = _threadsafe_result(
-                lambda: _send_direct_outbox_entry(entry, entity=ent), 30,
-            )
+        try:
+            if entry.get("state") != "accepted":
+                entry = _threadsafe_result(
+                    lambda: _send_direct_outbox_entry(entry, entity=ent), 30,
+                )
+        except Exception as exc:
+            # 13.09: приёмка, догнавшая таймаут, — успех (см. _accepted_after_timeout).
+            settled = _accepted_after_timeout(key, exc)
+            if settled is None:
+                raise
+            entry = settled
     except Exception as exc:
         permanent = False
+        state = {}
         try:
             permanent, state = _record_direct_outbox_failure(key, exc)
             reason = f"{type(exc).__name__}: {str(exc)[:300]} (state={state.get('state')})"
@@ -6872,7 +6922,12 @@ def _sync_send_message(to, text) -> str:
                 f"Похоже, у меня нет права писать в «{to}» (частая причина: это канал, а "
                 f"не чат обсуждения, либо меня там нет). Проверь адрес и попробуй другой; "
                 f"повторять этот я не буду.")
-        raise agent.DurableSideEffectPending(key, reason) from exc
+        # Acceptance may land after the grace's last read, while retry is journalled.
+        # record_retry preserves accepted rows; that receipt is still success.
+        if isinstance(exc, TimeoutError) and state.get("state") == "accepted":
+            entry = state
+        else:
+            raise agent.DurableSideEffectPending(key, reason) from exc
     if took_resolve > 5:
         log.info("send_message %r: резолв занял %.1fс (кэш был %s)",
                  to, took_resolve, "холодный" if cold else "тёплый")
@@ -6965,12 +7020,20 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
         "followup_request": "",
     }))
     try:
-        if entry.get("state") != "accepted":
-            entry = _threadsafe_result(
-                lambda: _send_direct_outbox_entry(entry, entity=ent), 30,
-            )
+        try:
+            if entry.get("state") != "accepted":
+                entry = _threadsafe_result(
+                    lambda: _send_direct_outbox_entry(entry, entity=ent), 30,
+                )
+        except Exception as exc:
+            # 13.09: приёмка, догнавшая таймаут, — успех (см. _accepted_after_timeout).
+            settled = _accepted_after_timeout(key, exc)
+            if settled is None:
+                raise
+            entry = settled
     except Exception as exc:
         permanent = False
+        state = {}
         try:
             permanent, state = _record_direct_outbox_failure(key, exc)
             reason = f"{type(exc).__name__}: {str(exc)[:300]} (state={state.get('state')})"
@@ -6986,7 +7049,12 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
             return agent.DirectSendRefusal(
                 f"не отправила: Telegram отказал навсегда — {type(exc).__name__}. "
                 f"Проверь, могу ли я писать в «{chat_id}»; повторять этот я не буду.")
-        raise agent.DurableSideEffectPending(key, reason) from exc
+        # Acceptance may land after the grace's last read, while retry is journalled.
+        # record_retry preserves accepted rows; that receipt is still success.
+        if isinstance(exc, TimeoutError) and state.get("state") == "accepted":
+            entry = state
+        else:
+            raise agent.DurableSideEffectPending(key, reason) from exc
     agent.project_direct_outbox_acceptance(entry)
     log.info("REPLY → %s chat_id=%s message_id=%s: %s", who, peer_id,
              (entry.get("receipt") or {}).get("message_id"), str(text)[:60])
@@ -7130,10 +7198,17 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
         "followup_request": "",
     }))
     try:
-        if entry.get("state") != "accepted":
-            entry = _threadsafe_result(
-                lambda: _send_direct_outbox_entry(entry, entity=target), 120,
-            )
+        try:
+            if entry.get("state") != "accepted":
+                entry = _threadsafe_result(
+                    lambda: _send_direct_outbox_entry(entry, entity=target), 120,
+                )
+        except Exception as exc:
+            # 13.09: приёмка, догнавшая таймаут, — успех (см. _accepted_after_timeout).
+            settled = _accepted_after_timeout(key, exc)
+            if settled is None:
+                raise
+            entry = settled
     except Exception as exc:
         # ⚠ Этот путь я забыл, чиня текстовый. Аудит нашёл: для ФАЙЛА постоянный отказ
         # по-прежнему улетал исключением, уносил её ход и оставлял запись в `retry` —
@@ -7141,6 +7216,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
         # только с документом вместо текста. Один и тот же класс беды на двух дверях,
         # и вторую я оставил открытой.
         permanent = False
+        state = {}
         try:
             permanent, state = _record_direct_outbox_failure(key, exc)
             reason = f"{type(exc).__name__}: {str(exc)[:300]} (state={state.get('state')})"
@@ -7161,7 +7237,12 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
                 f"не отправила файл: Telegram отказал навсегда — {type(exc).__name__}. "
                 f"Похоже, у меня нет права слать в «{label}». Проверь адрес и попробуй "
                 f"другой; повторять этот я не буду.")
-        raise agent.DurableSideEffectPending(key, reason) from exc
+        # Acceptance may land after the grace's last read, while retry is journalled.
+        # record_retry preserves accepted rows; that receipt is still success.
+        if isinstance(exc, TimeoutError) and state.get("state") == "accepted":
+            entry = state
+        else:
+            raise agent.DurableSideEffectPending(key, reason) from exc
     agent.project_direct_outbox_acceptance(entry)
     return _direct_outbox_result(entry, label=label)
 
@@ -7675,9 +7756,64 @@ async def _formation_once() -> None:
         log.info("formation request: %s", out.get("summary") or out)
 
 
+def _apply_desk_interrupt(request: dict) -> dict:
+    """Прервать живые прогоны по просьбе Пульта — кооперативно, через run_manager.
+
+    `request_cancel` терминализует прогон, если у него нет незакрытых вызовов рук, иначе
+    записывает просьбу и ставит паузу; `_run_status_gate` в тул-цикле видит статус
+    ≠ running на ближайшей границе (перед рукой, после ответа модели) и поднимает
+    RunStopped — черновик ответа брошен, руки дальше не зовутся. Идущий вызов модели
+    дорабатывает до конца: рвать поток посреди генерации значило бы врать провайдеру
+    о расходе. scope — «all» или id одного прогона.
+    """
+    scope = str(request.get("scope") or "all").strip() or "all"
+    by = str(request.get("by") or "desk").strip()[:40] or "desk"
+    reason = str(request.get("reason") or "прервано с Пульта").strip()[:200]
+    manager = agent._runs()
+    rows = manager.list_runs(statuses=tuple(agent.run_manager.NONTERMINAL_STATUSES))
+    cancelled: list[str] = []
+    skipped: list[str] = []
+    for row in rows:
+        rid = str(row.get("run_id") or row.get("id") or "")
+        if not rid or (scope != "all" and rid != scope):
+            continue
+        try:
+            manager.request_cancel(rid, actor=f"desk:{by}", reason=reason)
+            cancelled.append(rid)
+        except Exception as exc:
+            skipped.append(f"{rid}: {type(exc).__name__}")
+    return {"cancelled": cancelled, "skipped": skipped, "scope": scope, "by": by}
+
+
+async def _desk_interrupt_once() -> None:
+    """Тик часов: просьба Пульта прервать ход (memory/.control/interrupt.json)."""
+    request = selfdev.interrupt_requested()
+    if not request:
+        if selfdev.INTERRUPT_REQ.exists():
+            selfdev.clear_interrupt_request()   # битый файл не перечитываем каждый тик
+        return
+    selfdev.clear_interrupt_request()
+    try:
+        result = await asyncio.to_thread(_apply_desk_interrupt, request)
+    except Exception:
+        log.warning("прерывание с Пульта не исполнилось", exc_info=True)
+        return
+    log.warning("прерывание с Пульта (%s, scope=%s): отменено %d, пропущено %s",
+                result["by"], result["scope"], len(result["cancelled"]),
+                result["skipped"] or "0")
+    try:
+        agent.tool_journal(
+            f"[прервано] живой ход остановлен с Пульта ({result['by']}): прогонов "
+            f"{len(result['cancelled'])}", salience=2)
+    except Exception:
+        log.debug("журнал о прерывании не записался", exc_info=True)
+
+
 async def _control_once() -> None:
     """Забота часов: смёрженное предложение просит перезапуск — уходим мягко (exit 42),
-    когда нет активного прохода; bootguard поднимет на новом коде (preflight + откат)."""
+    когда нет активного прохода; bootguard поднимет на новом коде (preflight + откат).
+    12.09: та же забота читает просьбу Пульта прервать живой ход."""
+    await _desk_interrupt_once()
     reason = selfdev.restart_requested()
     if not reason:
         return
@@ -9019,6 +9155,36 @@ def _clock_initial_deadlines(now: float, jobs: dict) -> dict[str, float]:
     return deadlines
 
 
+# ⚑ ЗАБОТЫ ТРАНСПОРТА НА СВОЁМ ТИКЕ (13.09). `_clock_pass` выполняет заботы ПОСЛЕДОВАТЕЛЬНО:
+# пока одна тяжёлая держит проход (в 18:06 потоки стояли в `claim_evidence_index` — glob по
+# тысячам файлов внутри `_rebuild_state_locked` и внутри `read_summary`, и в
+# `forge.reconcile_subagent_events`), проекция принятых отправок в прогон и архив не доезжала
+# 9–23 минуты (#4052 в личке, #104546 в абстракте). Её же ответа не было в кадре, и следующий
+# ход отвечал человеку второй раз. Тик ящика дёшев (замер 13.09: `pending()` 0,9 с,
+# `accepted()` 0,9 с при 2 701 записи), модель не зовёт и держит свой межпроцессный замок —
+# ему нечего ждать в общей очереди. Таблица `_clock_jobs()` не меняется: разрез делает `_clock`.
+_CLOCK_SIDE_CARES = frozenset({"direct_outbox"})
+
+
+def _split_clock_jobs(jobs: dict) -> tuple[dict, dict]:
+    """-> (заботы общего прохода, заботы на своём тике)."""
+    side = {name: jobs[name] for name in jobs if name in _CLOCK_SIDE_CARES}
+    main = {name: care for name, care in jobs.items() if name not in side}
+    return main, side
+
+
+async def _clock_side(name: str, period: float, care) -> None:
+    """Одна забота на своём тике: та же дисциплина, что у `_clock_pass` — упала → лог, не смерть."""
+    if name not in _CLOCK_STARTUP_DUE:
+        await asyncio.sleep(period)
+    while True:
+        try:
+            await care()
+        except Exception:
+            log.exception("часы: забота «%s» упала", name)
+        await asyncio.sleep(period)
+
+
 async def _clock_pass(now: float, next_at: dict, jobs: dict) -> list[str]:
     """Один удар часов: выполнить созревшие заботы, перевзвести их сроки. -> имена сработавших.
 
@@ -9055,13 +9221,22 @@ async def _clock() -> None:
     На старте сразу проверяются только durable resume, social-pulse due-state и
     computer-inventory due-state. Остальные заботы получают полный период;
     «сон» не наступает из-за самого рестарта; social pulse сверяется с durable due-state."""
-    jobs = _clock_jobs()
-    now = time.time()
-    next_at = _clock_initial_deadlines(now, jobs)
-    await _clock_pass(now, next_at, jobs)
-    while True:
-        await asyncio.sleep(CLOCK_TICK)
-        await _clock_pass(time.time(), next_at, jobs)
+    jobs, side = _split_clock_jobs(_clock_jobs())
+    # Keep strong references and stop side ticks with their owning clock. Otherwise
+    # recreating/cancelling the clock can leave two independent outbox tickers.
+    side_tasks = [asyncio.create_task(_clock_side(name, period, care))
+                  for name, (period, care) in side.items() if period > 0]
+    try:
+        now = time.time()
+        next_at = _clock_initial_deadlines(now, jobs)
+        await _clock_pass(now, next_at, jobs)
+        while True:
+            await asyncio.sleep(CLOCK_TICK)
+            await _clock_pass(time.time(), next_at, jobs)
+    finally:
+        for task in side_tasks:
+            task.cancel()
+        await asyncio.gather(*side_tasks, return_exceptions=True)
 
 
 async def _wait_reconnected(timeout: float | None = None) -> bool:
