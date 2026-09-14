@@ -980,9 +980,13 @@ fn home_probe(port: u16, key: &str) -> Holder {
     // 1500 мс не хватало холодному aiohttp: медленный ответ читался как «чужой».
     // redirects(0): держатель порта — не обязательно наш; переадресация увела
     // бы наш запрос (а с ним и ключ) на любой адрес, который назовёт он сам.
+    // try_proxy_from_env(false): спрашиваем СВОЙ порт на 127.0.0.1, и прокси из
+    // среды здесь не дорога, а стена — с ним оболочка решила бы, что канал
+    // держит кто-то чужой, и не нашла бы собственного харнесса.
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_millis(2500))
         .redirects(0)
+        .try_proxy_from_env(false)
         .build();
     let query = if key.is_empty() { String::new() } else { format!("?key={key}") };
     match agent.get(&format!("http://127.0.0.1:{port}/api/home{query}")).call() {

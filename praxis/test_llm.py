@@ -487,7 +487,7 @@ class TestTranslation(Base):
         self.assertEqual(fo.calls[0]["tools"][1], {
             "type": "web_search", "search_context_size": "medium",
             "external_web_access": True, "max_uses": 5})
-        self.assertEqual(resp.usage, {"in": 7, "out": 2})
+        self.assertEqual(resp.usage, {"schema": llm.USAGE_SCHEMA, "in": 7, "out": 2})
 
     def test_openai_thinking_maps_to_reasoning_effort_tiers(self):
         # relay по умолчанию гасит reasoning (effort=none); явный thinking-бюджет
@@ -1028,7 +1028,7 @@ class TestOpenAIStreaming(Base):
         resp = llm.chat("voice", messages=[{"role": "user", "content": "hi"}])
         self.assertEqual(resp.text, "ping")
         self.assertEqual(resp.stop_reason, "end_turn")
-        self.assertEqual(resp.usage, {"in": 5, "out": 1})
+        self.assertEqual(resp.usage, {"schema": llm.USAGE_SCHEMA, "in": 5, "out": 1})
         self.assertTrue(fo.calls[0].get("stream"), "openai-путь должен просить stream")
 
     def test_stream_tool_calls_aggregated(self):

@@ -53,6 +53,19 @@ class CachedPrefixIsVisible(unittest.TestCase):
         """Ноль кэша и отсутствие кэша одинаково не должны попадать в учёт как попадание."""
         self.assertEqual(llm._openai_cached_tokens(_Usage(10, 1, _Details(0))), 0)
 
+    def test_completion_usage_attests_normalized_schema_without_inventing_creation(self):
+        resp = type("Response", (), {
+            "choices": [type("Choice", (), {
+                "message": type("Message", (), {"content": "ok", "tool_calls": None})(),
+                "finish_reason": "stop",
+            })()],
+            "usage": _Usage(100, 3, _Details(80)),
+        })()
+        out = llm._openai_from_completion(resp, "gpt-test")
+        self.assertEqual(out.usage,
+                         {"schema": 2, "in": 20, "out": 3, "cache_read": 80})
+        self.assertNotIn("cache_creation", out.usage)
+
 
 class UsageAccountingCarriesIt(unittest.TestCase):
     def test_usage_add_accumulates_cache_read(self):

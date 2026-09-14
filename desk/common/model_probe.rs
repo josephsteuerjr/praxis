@@ -22,21 +22,33 @@ fn outbound_url_ok(url: &str) -> Result<(), String> {
     if lower.starts_with("https://") {
         return Ok(());
     }
-    let Some(rest) = lower.strip_prefix("http://") else {
+    if !lower.starts_with("http://") {
         return Err("адрес должен начинаться с https:// или http://".into());
-    };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let authority = authority.rsplit('@').next().unwrap_or(authority);
-    let host = match authority.strip_prefix('[') {
-        Some(v6) => v6.split(']').next().unwrap_or(""),
-        None => authority.split(':').next().unwrap_or(""),
-    };
-    if host_is_local(host) {
+    }
+    let host = url_host(u);
+    if host_is_local(&host) {
         Ok(())
     } else {
         Err(format!(
             "по http ключ уходит только на свою машину или в локальную сеть, а тут {host}; снаружи нужен https://"
         ))
+    }
+}
+
+/// Имя хоста из адреса — без схемы, входа с паролем, порта и скобок IPv6.
+/// Не адрес вовсе — пустая строка: она никогда не «своя», и решения по ней
+/// принимаются в сторону осторожности (гард откажет, прокси останется).
+fn url_host(url: &str) -> String {
+    let lower = url.trim().to_lowercase();
+    let rest = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .unwrap_or("");
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or("").to_string(),
+        None => authority.split(':').next().unwrap_or("").to_string(),
     }
 }
 
@@ -94,9 +106,15 @@ fn probe_model_blocking(base_url: &str, key: &str, framework: &str) -> (bool, St
     // снимает на чужом хосте только Authorization, а НЕ кастомный x-api-key,
     // которым ходит ветка anthropic/z.ai. Разрешённый гардом адрес отвечал бы
     // 302 куда угодно — и ключ уезжал бы туда одним хопом.
+    // Свой адрес — мимо прокси. `ureq` собран с `proxy-from-env`, и при
+    // `HTTP_PROXY` в среде проба реле на 127.0.0.1:5011 или Ollama в соседней
+    // комнате уезжала бы наружу и возвращалась «не отвечает». Та же мерка, что
+    // у гарда выше: «свой» — петля, RFC1918, Tailscale, .local. Облачной модели
+    // прокси по-прежнему достаётся: для неё среда и настроена.
     let agent = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(12))
         .redirects(0)
+        .try_proxy_from_env(!host_is_local(&url_host(&url)))
         .build();
     let mut req = agent.get(&url);
     if !key.trim().is_empty() {

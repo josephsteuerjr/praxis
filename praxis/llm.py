@@ -980,7 +980,8 @@ def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thi
     else:
         resp = cli.messages.create(**kw)
     usage = getattr(resp, "usage", None)
-    _usage = {"in": int(getattr(usage, "input_tokens", 0) or 0),
+    _usage = {"schema": USAGE_SCHEMA,
+              "in": int(getattr(usage, "input_tokens", 0) or 0),
               "out": int(getattr(usage, "output_tokens", 0) or 0)}
     # Anthropic cache metrics — видимость hit-rate и реальной экономии
     _cr = getattr(usage, "cache_read_input_tokens", None)
@@ -1457,7 +1458,8 @@ def _openai_from_completion(resp, model: str) -> LLMResponse:
     return LLMResponse(
         text="\n".join(b["text"] for b in blocks if b["type"] == "text").strip(),
         blocks=blocks, stop_reason=_OPENAI_STOP.get(finish, finish),
-        usage={"in": _openai_fresh_in(usage, cached),
+        usage={"schema": USAGE_SCHEMA,
+               "in": _openai_fresh_in(usage, cached),
                "out": int(getattr(usage, "completion_tokens", 0) or 0),
                **({"cache_read": cached} if cached else {})},
         framework="openai", model=model)
@@ -1617,7 +1619,8 @@ def _openai_stream_result(parts: list[str], tools_acc: dict[int, dict], finish: 
     stop = (mapped if mapped in {"error", "max_tokens"}
             else "tool_use" if any(b["type"] == "tool_use" for b in blocks) else mapped)
     return LLMResponse(text=text, blocks=blocks, stop_reason=stop,
-                       usage={"in": max(0, u_in - u_cached), "out": u_out,
+                       usage={"schema": USAGE_SCHEMA,
+                              "in": max(0, u_in - u_cached), "out": u_out,
                               **({"cache_read": u_cached} if u_cached else {})},
                        framework="openai", model=model)
 

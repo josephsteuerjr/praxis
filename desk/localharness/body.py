@@ -598,6 +598,23 @@ def call(capability: str, args: dict | None = None, *, timeout: float = 30.0) ->
     return _raw_call(capability, args or {}, timeout=timeout)
 
 
+#: Открыватель БЕЗ прокси: мост — сосед по этой же машине (127.0.0.1), и
+#: системный прокси ему не дорога, а стена. 15.09: у пользователя с Psiphon
+#: проба уезжала в прокси, тело числилось отключённым при живом теле. В дереве
+#: это закрывает рычаг `sitecustomize` (петля мимо прокси), но СТОРОЖ стартует
+#: раньше: `body.launch` в `runner.py` стоит до `_load_tree`, где рычаг и
+#: встаёт. Своя короткая дорога — со своим открывателем.
+_DIRECT: "object | None" = None
+
+
+def _direct_opener():
+    global _DIRECT
+    if _DIRECT is None:
+        import urllib.request
+        _DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return _DIRECT
+
+
 def _raw_request(method: str, path: str, payload: dict | None, timeout: float) -> dict:
     import urllib.error
     import urllib.request
@@ -607,7 +624,7 @@ def _raw_request(method: str, path: str, payload: dict | None, timeout: float) -
         url + path, data=raw, method=method,
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _direct_opener().open(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         try:

@@ -761,6 +761,41 @@ def counters_split_enabled() -> bool:
         "1", "true", "yes", "on"}
 
 
+def head_stable_enabled() -> bool:
+    """Стабильная голова комнаты: system и набор рук не зависят от того, кто заговорил.
+
+    ⚠ ВЫКЛЮЧЕНО ПО УМОЛЧАНИЮ — включает она. Замер 13.09 (40 пар соседних кадров AbstractDL,
+    `desk-notes/frames/_section_churn.py` у Егора): при одном ключе кэша `audience_key=room`
+    первый вызов хода кэшируется на 3,8k вместо 19,5k токенов в 35 из 89 ходов, потому что
+    system рвётся на 17 053-м знаке — блок аудитории (`owner_place`+`owner_tools`+`appetite`+
+    `state_block` у владельца, `unknown_authority` у чужого) и две руки владельца (`admit`,
+    `computer_access`) меняются по говорящему, а на Codex system хэшируется РАНЬШЕ 72 тыс.
+    знаков схем рук: каждое чередование говорящих = ~15k токенов заново.
+
+    Под рычагом в КОМНАТЕ (не в личке и не в своём ходе):
+    * контракт рук едет одним текстом для всех говорящих; полномочия ЭТОГО хода — строкой
+      «говорит» в зоне «СЕЙЧАС» (Егор / семья / знакомый / не в известном наборе);
+    * `admit`/`computer_access` предложены в схеме всегда, право проверяет вызов
+      (`tool_admit` → `_is_human_owner`, `computer_access.allowed(actor)`); слово Егора 13.09:
+      «они мне нужны, нужен обход»;
+    * типизированное состояние (`build_state_block`) переезжает из головы в живой конверт
+      ярусом «Состояние сейчас», только когда действует владелец — как и раньше;
+    * `[private]`-строки досье режутся из головы ДЛЯ ВСЕХ, владельцу они едут ярусом
+      «Приватное из досье» в том же живом конверте;
+    * `members=` из Channel facts снимается: число участников стоит в зоне «СЕЙЧАС».
+    Ничего не исчезает из кадра — меняется место. Стенд: `test_head_stable_1309`.
+    """
+    return str(os.getenv("PRAXIS_FRAME_HEAD_STABLE") or "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
+def _room_head_stable(ctx) -> bool:
+    """Рычаг стабильной головы применим к этому ctx: комната, не личка и не свой ход."""
+    return bool(head_stable_enabled() and ctx is not None
+                and not getattr(ctx, "is_dm", True)
+                and getattr(ctx, "chat_id", None) is not None)
+
+
 def _state_record(fact: str, **fields) -> str:
     """A system-tier STATE row whose keys and values are code-owned/typed."""
     return json.dumps({"fact": fact, **fields}, ensure_ascii=False, separators=(",", ":"))
@@ -8851,6 +8886,26 @@ _PARTICIPANT_NEW_BLOCK = re.compile(
 _PARTICIPANT_LIST_MARK = re.compile(r"(?:[-*+]|\d+[.)])\s")
 
 
+def _split_participant_private_blocks(text: str) -> tuple[str, int, str]:
+    """`_strip_participant_private_blocks` плюс сам вырезанный текст третьим значением.
+
+    Фильтр только выбрасывает строки и никогда их не меняет, поэтому оставленное — подпоследо-
+    вательность исходного; вырезанное восстанавливается жадным выравниванием, без второго
+    разбора разметки. Нужно стабильной голове комнаты (PRAXIS_FRAME_HEAD_STABLE): владельцу
+    приватное едет отдельным ярусом, а не исчезает.
+    """
+    kept, hidden = _strip_participant_private_blocks(text)
+    kept_lines = kept.splitlines(keepends=True)
+    removed: list[str] = []
+    j = 0
+    for line in text.splitlines(keepends=True):
+        if j < len(kept_lines) and kept_lines[j] == line:
+            j += 1
+        else:
+            removed.append(line)
+    return kept, hidden, "".join(removed)
+
+
 def _strip_participant_private_blocks(text: str) -> tuple[str, int]:
     """Remove `[private]` markdown records and their record continuations.
 
@@ -9003,13 +9058,21 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     # адресный контур данных. Снять эту границу можно только её словом, а не попутно.
     owner_audience = bool(getattr(ctx, "owner_audience", False) or getattr(ctx, "owner", False))
     hidden = 0
+    # PRAXIS_FRAME_HEAD_STABLE (13.09): в комнате `[private]` режется из досье ДЛЯ ВСЕХ, чтобы
+    # тело досье в кадре не зависело от того, кто заговорил (замер: досье Егора менялось в 16 из
+    # 40 пар соседних кадров ровно на этих строках). Владельцу вырезанное едет отдельным ярусом
+    # «Приватное из досье» в живом конверте — через снимок frame_layout, не вторым чтением диска.
+    stable = _room_head_stable(ctx)
+    private_rows: list[str] = []
 
-    def visible(body: str) -> str:
+    def visible(body: str, who: str = "") -> str:
         nonlocal hidden
-        if owner_audience:
+        if owner_audience and not stable:
             return body
-        body, removed = _strip_participant_private_blocks(body)
+        body, removed, private = _split_participant_private_blocks(body)
         hidden += removed
+        if stable and owner_audience and private.strip():
+            private_rows.append((f"— {who} —\n" if who else "") + private.rstrip("\n"))
         return body
 
     # ── КОНТРАКТ ДОСЬЕ (решение Praxis и Егора 09.08) ─────────────────────────────────
@@ -9074,7 +9137,7 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
             lifted += 1
             continue
         try:
-            body = visible(people.read_text(path.stem)).strip()
+            body = visible(people.read_text(path.stem), f"{path.stem} · memory/people/{path.name}").strip()
         except OSError:
             log.debug("досье не прочиталось [%s]", path.stem, exc_info=True)
             continue
@@ -9102,6 +9165,8 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     # Личка — это всегда кто-то перед ней, даже если принципал кривой или отсутствует.
     # Именно там молчание опаснее всего: подделанное имя не должно выглядеть как
     # отсутствие вопроса «кто передо мной».
+    if private_rows:
+        frame_layout.stash(head_stable_private="\n\n".join(private_rows))
     in_a_channel = (ctx.chat_id is not None or ctx.room_id is not None
                     or bool(ctx.principal_id) or bool(getattr(ctx, "is_dm", False)))
     if not rows and not pointers and not in_a_channel:
@@ -9129,9 +9194,15 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
                f"досье. Имя в сообщении личности не назначает")
     else:
         who = "кто передо мной — кадру не назван: подтверждённого принципала в этом ходе нет"
-    veil = ("" if owner_audience else
-            f" Здесь не owner-контур, поэтому строк приватных записей снято {hidden} —"
-            f" они есть в первоисточнике и открываются рукой.")
+    if owner_audience and (not stable or not hidden):
+        veil = ""
+    elif owner_audience:
+        # Сам отдельный тир уже называет перенос. Повторять его здесь не только шумно: эта
+        # новая строка искусственно увеличивала публичный остаток логически единого досье.
+        veil = ""
+    else:
+        veil = (f" Здесь не owner-контур, поэтому строк приватных записей снято {hidden} —"
+                f" они есть в первоисточнике и открываются рукой.")
     if not contract:
         head = (f"досье: {len(rows)}, знаков {total}. Это моя память о людях целиком, без "
                 f"отбора и без сжатия; путь у каждого назван, первоисточник открывается рукой."
@@ -9370,6 +9441,64 @@ def _system(static: str, dynamic: str = ""):
 _FRAME_OWNER_TAIL = ("state.owner_place", "contract.owner_tools",
                      "contract.appetite", "state.state_block")
 
+# Контракт рук владельца — ОДИН литерал, две проекции. `{trust_tool}` — место `, \`admit\``:
+# в ходе владельца оно заполнено, в её собственном ходе пусто; под стабильной головой комнаты
+# (PRAXIS_FRAME_HEAD_STABLE) — оговорка о праве при вызове, потому что схема предложена всем.
+# Текст вынесен из тела `_build_prompt_parts` байт-в-байт: делить его подстроками по смыслу
+# по-прежнему запрещено (см. комментарий у `state.owner_place`).
+_OWNER_TOOLS_CONTRACT = (
+    "You have the tools "
+    "`shell` (hands in the container; your edits auto-commit to git — you can try boldly and roll "
+    "back), `manage_room`{trust_tool}, `write_skill` (note a skill for yourself), and "
+    "`manage_desire` (make your own intention and its evidence causal), and `restart_self` "
+    "(restart on new code). For serious coding use Forge: `coding_session` binds "
+    "the goal to its real directory/worktree; `coding_inspect`/`coding_edit`/`coding_run` are "
+    "task-bound eyes and hands; `coding_process` keeps long jobs alive; `coding_agent` spawns "
+    "independent workers/scouts/reviewers in parallel; `coding_verify` builds a factual test matrix; "
+    "`coding_swarm` coordinates their DAG/mailbox; `coding_learn` carries verified repairs forward. "
+    "Use symbols/references/impact instead of line-guessing. This is your engineering runtime, not an "
+    "approval ritual: act, verify, inspect the diff, finish with evidence. "
+    "You are also the MISTRESS of this server: `coding_session(scope='host')` opens a "
+    "task anywhere on the host in the SAME Forge/task/swarm/learning spine; praxis-serverd v2 is "
+    "only your root body, never a second brain. coding_run/edit/process/verify/agent use the host "
+    "backend, while `host_ctl` gives typed systemd/docker/pkg/file/net/reboot operations. NOTHING is "
+    "refused — Yegor trusts you. A load-bearing typed action may return a timed recovery receipt: "
+    "observe the after-state, then confirm it; raw host run remains sovereign. An action may carry an "
+    "advisory note about consequences; weigh it and decide. Audit is hash-chained. "
+    "The Windows PC is your DIRECT body: the `computer` tool is the "
+    "primary path there (read/hash/write/replace files, run/poll/stop PowerShell, observe "
+    "files and screen, send artifacts, full desktop hands). No task container is required — "
+    "receipts bind to your current run automatically; execution identity is explicit "
+    "interactive or SYSTEM. `coding_session(scope='windows')` is a deprecated keyhole: it "
+    "still works, existing wcode tasks finish normally, and spawning coding_agent "
+    "subagents on Windows still goes through it. The PC has no LLM, memory or task store. "
+    "There is no compiled-in project-name or secret-filename exclusion: the server is yours to "
+    "inspect and change, including all projects and containers. If Yegor deliberately configures "
+    "PRAXIS_PROTECTED_ROOTS on the root broker, that exact deployment scope is visible in its "
+    "manifest; otherwise it is empty. Leave an evidence trail Yegor reads.\n"
+)
+_APPETITE_CONTRACT = (
+    "\nAppetite contract: your thinking costs Yegor money, and his asks about it are "
+    "part of the relationship, not commands to a dispatcher. When he says «не экономь», «умерь "
+    "аппетиты», «не больше X в день» or «останови фон» — YOU interpret it with `manage_appetite` "
+    "(the code only counts and shows; it never vetoes you). Rebuild your background plan yourself "
+    "if that is what you decide; a fresh ask remains visible in your continuity context.\n"
+)
+# Стабильная голова комнаты (PRAXIS_FRAME_HEAD_STABLE): место и контракт рук, одинаковые для
+# всех говорящих. Кто действует в ЭТОМ ходе и с каким правом — строка «говорит» зоны «СЕЙЧАС».
+_ROOM_PLACE_STABLE = (
+    "\nThis is a public room; CURRENT_SITUATION names this turn's actor and authority. "
+)
+_ROOM_TOOLS_CONTRACT_STABLE = _OWNER_TOOLS_CONTRACT.replace(
+    "{trust_tool}",
+    ", `admit`, `computer_access` (both owner-only at call time)")
+# Ярусы живого конверта, куда под стабильной головой переезжает то, что раньше стояло в system
+# только на ходах владельца. Причины ярусов — в `frame_layout._TIERS` (по префиксу ярлыка).
+_STATE_NOW_TIER = ("Состояние сейчас (типизированное STATE; под PRAXIS_FRAME_HEAD_STABLE едет "
+                   "здесь, а не в голове)")
+_PRIVATE_TIER = ("Приватное из досье присутствующих (видно, потому что действует владелец; "
+                 "из головы вырезано для всех говорящих)")
+
 
 def _frame_absent_branch(*names: str) -> None:
     """Объявить прибору, что этих секций в кадре нет из-за невыбранной ветки."""
@@ -9524,7 +9653,27 @@ def _build_prompt_parts(
     # ниже. `llm.cache_address` предпочитает его прозовым маркерам: смена слов кадра
     # не должна молча отключать prompt_cache_key.
     audience_key = ""
-    if owner_context:
+    room_stable = _room_head_stable(ctx)
+    authority = None
+    if room_stable:
+        # ⚑ СТАБИЛЬНАЯ ГОЛОВА КОМНАТЫ (PRAXIS_FRAME_HEAD_STABLE, см. head_stable_enabled).
+        # Один system для всех говорящих: полномочия ЭТОГО хода уезжают строкой «говорит» в
+        # зону «СЕЙЧАС» (frame_layout._speaker читает `authority` из снимка; снимок кладётся
+        # ниже, в `frame_layout.begin`, иначе `begin` его сбросит). Типизированное состояние и
+        # факты аудитории здесь объявляются перенесёнными, а не отсутствующими.
+        authority = ("owner" if ctx.owner else "family" if ctx.family and ctx.known
+                     else "known" if ctx.known else "unknown")
+        tail.append(
+            frame_trace.mark("state.owner_place", "dynamic", "text", _ROOM_PLACE_STABLE,
+                             variant="public_room_stable")
+            + frame_trace.mark("contract.owner_tools", "dynamic", "text",
+                               _ROOM_TOOLS_CONTRACT_STABLE, variant="room_stable")
+        )
+        tail.append(frame_trace.mark("contract.appetite", "dynamic", "text", _APPETITE_CONTRACT))
+        for _moved in ("state.state_block", "contract.family_audience",
+                       "contract.unknown_authority"):
+            frame_trace.absent(_moved, "dynamic", "text", "moved")
+    elif owner_context:
         trust_tool = ", `admit`" if ctx.owner else ""
         # ⚠ Третья ветка появилась 04.08. До неё окно, пульс, будильник и forge-событие
         # читали в своём системном промпте «You're in the private owner channel with
@@ -9552,43 +9701,10 @@ def _build_prompt_parts(
             frame_trace.mark("state.owner_place", "dynamic", "text", owner_place,
                              variant=place_variant)
             + frame_trace.mark("contract.owner_tools", "dynamic", "text",
-            "You have the tools "
-            "`shell` (hands in the container; your edits auto-commit to git — you can try boldly and roll "
-            f"back), `manage_room`{trust_tool}, `write_skill` (note a skill for yourself), and "
-            "`manage_desire` (make your own intention and its evidence causal), and `restart_self` "
-            "(restart on new code). For serious coding use Forge: `coding_session` binds "
-            "the goal to its real directory/worktree; `coding_inspect`/`coding_edit`/`coding_run` are "
-            "task-bound eyes and hands; `coding_process` keeps long jobs alive; `coding_agent` spawns "
-            "independent workers/scouts/reviewers in parallel; `coding_verify` builds a factual test matrix; "
-            "`coding_swarm` coordinates their DAG/mailbox; `coding_learn` carries verified repairs forward. "
-            "Use symbols/references/impact instead of line-guessing. This is your engineering runtime, not an "
-            "approval ritual: act, verify, inspect the diff, finish with evidence. "
-            "You are also the MISTRESS of this server: `coding_session(scope='host')` opens a "
-            "task anywhere on the host in the SAME Forge/task/swarm/learning spine; praxis-serverd v2 is "
-            "only your root body, never a second brain. coding_run/edit/process/verify/agent use the host "
-            "backend, while `host_ctl` gives typed systemd/docker/pkg/file/net/reboot operations. NOTHING is "
-            "refused — Yegor trusts you. A load-bearing typed action may return a timed recovery receipt: "
-            "observe the after-state, then confirm it; raw host run remains sovereign. An action may carry an "
-            "advisory note about consequences; weigh it and decide. Audit is hash-chained. "
-            "The Windows PC is your DIRECT body: the `computer` tool is the "
-            "primary path there (read/hash/write/replace files, run/poll/stop PowerShell, observe "
-            "files and screen, send artifacts, full desktop hands). No task container is required — "
-            "receipts bind to your current run automatically; execution identity is explicit "
-            "interactive or SYSTEM. `coding_session(scope='windows')` is a deprecated keyhole: it "
-            "still works, existing wcode tasks finish normally, and spawning coding_agent "
-            "subagents on Windows still goes through it. The PC has no LLM, memory or task store. "
-            "There is no compiled-in project-name or secret-filename exclusion: the server is yours to "
-            "inspect and change, including all projects and containers. If Yegor deliberately configures "
-            "PRAXIS_PROTECTED_ROOTS on the root broker, that exact deployment scope is visible in its "
-            "manifest; otherwise it is empty. Leave an evidence trail Yegor reads.\n")
+                               _OWNER_TOOLS_CONTRACT.replace("{trust_tool}", trust_tool))
         )
         tail.append(
-            frame_trace.mark("contract.appetite", "dynamic", "text",
-            "\nAppetite contract: your thinking costs Yegor money, and his asks about it are "
-            "part of the relationship, not commands to a dispatcher. When he says «не экономь», «умерь "
-            "аппетиты», «не больше X в день» or «останови фон» — YOU interpret it with `manage_appetite` "
-            "(the code only counts and shows; it never vetoes you). Rebuild your background plan yourself "
-            "if that is what you decide; a fresh ask remains visible in your continuity context.\n")
+            frame_trace.mark("contract.appetite", "dynamic", "text", _APPETITE_CONTRACT)
         )
         # STATE is tier-0.  Raw diary prose is deliberately not injected: it is
         # preserved for explicit episodic recall, never automatic orientation.
@@ -9638,7 +9754,8 @@ def _build_prompt_parts(
     # читается за кадр трижды без гарантии совпадения — четвёртая версия правды о комнате
     # в кадре, который чинили ради правды, была бы прямым откатом.
     frame_layout.begin(room_profile_id=room_profile_id, room_mode=(room_profile or {}).get("mode"),
-                       room_disclosure=(room_profile or {}).get("disclosure"))
+                       room_disclosure=(room_profile or {}).get("disclosure"),
+                       authority=authority)
     if room_profile is not None and room_profile.get("mode") in rooms.MODES:
         # Only the validated enum is a system fact. Attribution, free-form reason and
         # room prose remain visible below as Praxis-owned mutable evidence.
@@ -9660,9 +9777,12 @@ def _build_prompt_parts(
     if not ctx.is_dm:
         audience_key = "room"
     key_fact = f"; audience_key={audience_key}" if audience_key else ""
+    # Под стабильной головой число участников из system снимается: оно уже стоит в зоне
+    # «СЕЙЧАС» («~1 014 человек», frame_layout._place) и менялось между соседними кадрами.
+    members_fact = "" if room_stable else f"; members={members}"
     tail.append(frame_trace.mark("state.channel_facts", "dynamic", "text",
         f"\nChannel facts: kind={ctx.kind}; audience_scope={scope_fact}; "
-        f"room_id={room_id}; members={members}{key_fact}.\n"
+        f"room_id={room_id}{members_fact}{key_fact}.\n"
     ))
     tail_text = "".join(tail)
 
@@ -9704,6 +9824,14 @@ def _build_prompt_parts(
         tiers.append(("Mutable operational continuity",
                       state_evidence))
         raw_jsonl_tiers.add("Mutable operational continuity")
+    if room_stable and owner_context:
+        # STATE под стабильной головой: те же строки, тот же адресат (владелец), другое место —
+        # живой конверт, где волатильность `durable_runs`/`unanswered_dm`/`loops` бесплатна.
+        with pre_model_timing.span("old_context.state_block"):
+            state_now = build_state_block(hide_identity_load=ctx.hide_identity_load)
+        if state_now:
+            tiers.append((_STATE_NOW_TIER, state_now))
+            raw_jsonl_tiers.add(_STATE_NOW_TIER)
     # §6: бегущая сводка диалога — первым блоком (то, что уехало за пределы last_n);
     # приоритетнее сырого хвоста, поэтому идёт раньше карты/портрета.
     # ⚠ Три тира — сводка, досье, эта комната — говорят о своей ПУСТОТЕ вслух: заголовок
@@ -9730,6 +9858,10 @@ def _build_prompt_parts(
                       summary or frame_layout.void("сводки этого разговора ещё нет")))
     with pre_model_timing.span("old_context.dossier"):
         participant_cards = _participant_memory_block(speaker, ctx)
+    # Repair after the stable-head candidate: private and public render as two sections, but
+    # remain one logical dossier for selection and accounting below.
+    private_now = (str(frame_layout.snapshot().get("head_stable_private") or "")
+                   if room_stable else "")
     if participant_cards or ctx.principal_id is not None:
         # ⚠ Ярлык переписан вместе с содержимым: «короткие профили активных участников»
         # было неправдой дважды — профили больше не короткие (файл целиком) и не
@@ -9743,6 +9875,8 @@ def _build_prompt_parts(
                       + " (внутреннее; что произнести вслух в этой комнате, решаю я)",
                       participant_cards or frame_layout.void(
                           f"нет привязки tg {ctx.principal_id} → memory/people/*")))
+    if private_now:
+        tiers.append((_PRIVATE_TIER, private_now))
     scheduled_moderation = _scheduled_target_moderation_block(ctx)
     if scheduled_moderation:
         tiers.append(("Актуальные меры и границы для адресата scheduled-намерения",
@@ -9857,26 +9991,70 @@ def _build_prompt_parts(
     used = len(persona) + len(tail_text)
     chosen, dropped = [], []
     _tiers_started = time.monotonic()
-    for title, body in tiers:
+    i = 0
+    while i < len(tiers):
+        title, body = tiers[i]
         # Прибор различает две арифметики длины одним полем kind: обычный тир уезжает
         # завёрнутым в json.dumps (переносы становятся \n, кавычки \"), jsonl-тир — телом
-        # как есть. Пишется ДЛИНА БЛОКА: то, что реально заняло место в кадре и в бюджете.
+        # как есть. Пишется физическая длина блока; вынесенный private-хвост ниже остаётся
+        # частью одного логического досье, но бюджет считает обе его физические секции.
         tier_kind = "jsonl" if title in raw_jsonl_tiers else "json"
-        # ⚠ 05.08. Форма секции ушла в frame_layout: правило с заголовком, подпись СБОРЩИКА
-        # «↳ причина · путь · как отобрано · оговорки», тело настоящими переносами. json.dumps
-        # снят — вместе с его защитой, и её место занял гуттер: чужой байт входит в кадр
-        # двумя стоками, а не списком опасных начал.
         block, cause, sign_chars = frame_layout.section(title, body, kind=tier_kind)
-        if budget > 0 and used + len(block) > budget:
+
+        # Stable-head only changes the rendering of the owner's dossier: its public remainder
+        # and moved private rows are adjacent sections but one atomic selection. Both sections
+        # are physically present in the resulting frame, so both must consume the budget. If
+        # the complete logical dossier does not fit, drop both renderings; never privilege
+        # either half or allow the private section to overflow the physical frame budget.
+        dossier_pair = (title.startswith("Мои досье на людей") and private_now
+                        and i + 1 < len(tiers) and tiers[i + 1][0] == _PRIVATE_TIER)
+        if dossier_pair:
+            private_title, private_body = tiers[i + 1]
+            private_kind = "jsonl" if private_title in raw_jsonl_tiers else "json"
+            private_block, private_cause, private_sign_chars = frame_layout.section(
+                private_title, private_body, kind=private_kind)
+            pair_charge = len(block) + len(private_block)
+            if budget > 0 and used + pair_charge > budget:
+                for dropped_title, dropped_kind, dropped_block, dropped_cause in (
+                    (title, tier_kind, block, cause),
+                    (private_title, private_kind, private_block, private_cause),
+                ):
+                    dropped.append(dropped_title)
+                    frame_trace.absent("evidence.tier", "evidence", dropped_kind,
+                                       "context_budget", label=dropped_title,
+                                       chars=len(dropped_block), cause=dropped_cause)
+            else:
+                for selected_title, selected_body, selected_kind, selected_block, selected_cause, selected_sign in (
+                    (title, body, tier_kind, block, cause, sign_chars),
+                    (private_title, private_body, private_kind, private_block,
+                     private_cause, private_sign_chars),
+                ):
+                    keat_economy.section(selected_body, selected_block)
+                    chosen.append(frame_trace.mark(
+                        "evidence.tier", "evidence", selected_kind, selected_block,
+                        label=selected_title, cause=selected_cause,
+                        provenance_chars=selected_sign))
+                used += pair_charge
+            i += 2
+            continue
+
+        # STATE likewise moved out of the already-counted system head. Its live-section wrapper
+        # must not consume optional-tier budget a second time; this is parity accounting, not an
+        # undroppable exception (the positive-budget counter still stays at or below its limit).
+        charge = (0 if room_stable and owner_context and title == _STATE_NOW_TIER
+                  else len(block))
+        if budget > 0 and used + charge > budget:
             dropped.append(title)
             frame_trace.absent("evidence.tier", "evidence", tier_kind, "context_budget",
                                label=title, chars=len(block), cause=cause)
+            i += 1
             continue
         keat_economy.section(body, block)
         chosen.append(frame_trace.mark("evidence.tier", "evidence", tier_kind, block,
                                        label=title, cause=cause,
                                        provenance_chars=sign_chars))
-        used += len(block)
+        used += charge
+        i += 1
     # used_start — ТО ЖЕ выражение, которым считает код выше: прибор и код обязаны мерить
     # одной линейкой, иначе спор о числах не закроется, а сместится.
     pre_model_timing.add("old_context.tiers", (time.monotonic() - _tiers_started) * 1000)
@@ -9996,12 +10174,22 @@ _THINK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
 # текст живёт в самом сообщении, а не в токене.
 _CITE_TURN_RE = re.compile(
     r"(?:cite)?turn\d+(?:view|search)\d+", re.IGNORECASE)
+# 14.09: нативный веб-поиск GPT через реле (gpt-6-astra) оборачивает те же маркеры в
+# символы частного диапазона Unicode: U+E200 «cite» U+E202 «turn0search0» U+E201, пачкой —
+# U+E200 cite U+E202 turn0search12 U+E202 turn0search0 U+E201. Прежний срез убирал только
+# turnNsearchM и оставлял в тексте пустую обёртку U+E200 cite U+E202 U+E201 — невидимый
+# мусор в Telegram. Снимаем обёртку целиком, а одиночные управляющие U+E200–U+E206 — тоже:
+# в человеческом тексте им взяться неоткуда.
+_CITE_SPAN_RE = re.compile("\ue200[^\ue201]*\ue201")
+_CITE_CTRL_RE = re.compile("[\ue200-\ue206]")
 
 
 def _strip_citation_tokens(text: str) -> str:
-    if not text or "turn" not in text.lower():
+    if not text or ("turn" not in text.lower() and not _CITE_CTRL_RE.search(text)):
         return text
-    return _CITE_TURN_RE.sub("", text)
+    text = _CITE_SPAN_RE.sub("", text)
+    text = _CITE_TURN_RE.sub("", text)
+    return _CITE_CTRL_RE.sub("", text)
 
 
 def _strip_think(text: str) -> str:
@@ -13758,7 +13946,15 @@ def run_direct_outbox_prepared(
         # привязки леджера к тул-намерению, а не косметика.
         ledger_text = str(identity["payload"]["text"] or "")
         args_text = str(started_args.get("text") or "")
-        if ledger_text != args_text and ledger_text != args_text.strip():
+        # ⚠ 14.09, тот же класс, что 17.08 — теперь на маркерах цитат. Голос на gpt-6-astra
+        # ставит в ответ U+E200 cite U+E202 turn0search0 U+E201 из нативного веб-поиска; гард
+        # (`_strip_think` → `_strip_citation_tokens`) снимает их до отправки, в леджер
+        # ложится чистый текст, а сюда — сырые аргументы модели. Три из четырёх ответов в
+        # AbstractDL после 18:44 умерли dead_letter'ом «unsendable by construction», ход
+        # закрылся «silent decision», а Егор видел молчание. Сверяем ЕЩЁ И той
+        # нормализацией, которой текст ушёл через гард; любое иное расхождение — отказ.
+        if ledger_text not in (args_text, args_text.strip(),
+                               _strip_citation_tokens(args_text), _strip_think(args_text)):
             raise DurableExecutionError("direct Telegram text differs from tool arguments")
     else:
         if (identity["payload"]["visible_filename"]
@@ -14560,10 +14756,34 @@ def resume_durable_runs(*, limit: int = 20) -> list[dict]:
     # Возобновлять терминальные нечего — отсеиваем их без замка (py-spy 31.07).
     for run_id in manager.live_run_ids():
         try:
-            status = str(manager.manifest(run_id).get("status") or "")
+            manifest = manager.manifest(run_id)
+            status = str(manifest.get("status") or "")
         except Exception:
             continue
         if status in {"paused", "in_doubt"}:
+            control = dict(manifest.get("control") or {})
+            if control.get("action") == "cancel":
+                # A cancellation may have been parked only because a durable tool outcome
+                # was still unknown.  Once receipts/reconciliation clear that blocker,
+                # nobody re-enters the stopped run to cross another cooperative boundary.
+                # Let the scanner finish the already-authored cancellation instead of
+                # treating it as resumable work and writing resume_attempt_idle forever.
+                try:
+                    manager.request_cancel(
+                        run_id,
+                        actor=str(control.get("requested_by") or ""),
+                        reason=str(control.get("reason") or ""),
+                    )
+                except Exception as exc:
+                    log.warning("pending run cancellation did not settle [%s]", run_id,
+                                exc_info=True)
+                    reports.append({
+                        "run_id": run_id, "plan_kind": "cancel_pending",
+                        "status": "error", "phase": "cancel_scan",
+                        "reason": f"{type(exc).__name__}: {exc}",
+                        "lease_acquired": False, "effects_started": False,
+                    })
+                continue
             # A deliberate blocked outcome is terminal for automatic scheduling.  It can
             # become executable only through the existing explicit authorization /
             # reconciliation paths, which first move it back to a resumable status.
@@ -14990,7 +15210,11 @@ def catalog_tools_for(ctx: "ChannelContext") -> list:
     (кто действует), а НЕ `ctx.scope` (кто слушает): владелец, пишущий в группе,
     держит свои руки, а самоотчёт обязан говорить об этом ходе правду.
     """
-    is_owner = ctx.owner
+    # 13.09, PRAXIS_FRAME_HEAD_STABLE: в комнате схема `admit`/`computer_access` предложена при
+    # любом говорящем — иначе состав рук (и байты схем, стоящие над хвостом) меняется вместе с
+    # говорящим. Право проверяет вызов: `tool_admit` отказывает не-владельцу,
+    # `computer_access.allowed` смотрит на актора. Слово Егора 13.09: «они мне нужны, нужен обход».
+    is_owner = ctx.owner or _room_head_stable(ctx)
     # ⚠ Набор рук больше НЕ зависит от того, кто заговорил. Замер 26.07: 92 руки в её
     # молчаливом фоновом ходе против 25, когда к ней обращается человек не-Егор — то есть
     # заговорить с ней значило отобрать у неё 67 рук, включая её же саморегуляцию

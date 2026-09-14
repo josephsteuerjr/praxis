@@ -83,7 +83,10 @@ SITUATION_ROSTER = (
 # «сколько стоит зона» становится неотвечаемым.
 ZONES = ("persona", "dynamic", "evidence", "situation", "messages", "tools")
 KINDS = ("md", "text", "json", "jsonl", "frame", "marker")
-REASONS = ("context_budget", "empty", "branch", "cap")
+# `moved` (13.09, PRAXIS_FRAME_HEAD_STABLE): секции нет в ЭТОЙ зоне, потому что её содержимое
+# уехало в другую (полномочия — в строку «говорит» зоны «СЕЙЧАС», STATE — ярусом конверта).
+# Это пятый ноль, отличный от «ветка не выбрана»: ветка выбрана, место другое.
+REASONS = ("context_budget", "empty", "branch", "cap", "moved")
 
 # Тексты этих секций ПЕРЕЖИВАЮТ seal и едут в `sections()` полем `text`: их читает
 # теневой сборщик (её решение №8 от 21.08 — contract.*/state.* и машинные тиры едут

@@ -20,7 +20,7 @@ design. The working copy caught up first — taking her fixes where they apply, 
 edition where the machine underneath is genuinely different — and only then was the layer
 regenerated from what actually differs.
 
-## What is here — 59 files, checked rather than remembered
+## What is here — 61 files, checked rather than remembered
 
 `desk/installer/core_src.py --check --tree ../live` compares this layer against the ACTUAL
 difference between `praxis/` and the working copy. On 2026-09-14, after the core was
@@ -28,21 +28,23 @@ re-exported from production (her `8cb65f14`) and the working copy took her five 
 13–14.09 that apply to the edition (partitioned search and inbox-relative paths, the
 outbox acceptance grace and the outbox tick on its own clock, the K1 cache-ledger fields
 with an explicit zero, `PRAXIS_AUTO_RECALL_K=0` honoured by the heartbeat, and the
-interrupt request from the desk), it reports:
+interrupt request from the desk), and on 2026-09-15 two files of the body and the bridge
+joined the layer (below), it reports:
 
 | | files |
 |---|---:|
-| declared here and genuinely differing | **56** |
+| declared here and genuinely differing | **58** |
 | declared here and existing only in the edition | **3** |
 | declared in vain (identical) | **0** |
-| differing but NOT declared | **27** — see below |
-| in the core, not carried here | **68** — see below |
+| differing but NOT declared | **29** — see below |
+| in the core, not carried here | **70** — see below |
 
-### Carried differently (56)
+### Carried differently (58)
 
-| `ARCHITECTURE.md` | `agent.py` | `body/crates/praxis-body/src/desktop.rs` |
-| `body/crates/praxis-body/src/dpi.rs` | `body/crates/praxis-body/src/element.rs` | `body/crates/praxis-body/src/runtime.rs` |
-| `body/crates/praxis-body/src/uia.rs` | `body_client.py` | `bootguard.py` |
+| `ARCHITECTURE.md` | `agent.py` | `body/crates/praxis-body/src/artifact.rs` |
+| `body/crates/praxis-body/src/desktop.rs` | `body/crates/praxis-body/src/dpi.rs` | `body/crates/praxis-body/src/element.rs` |
+| `body/crates/praxis-body/src/runtime.rs` | `body/crates/praxis-body/src/uia.rs` | `body/crates/praxis-bridge/src/main.rs` |
+| `body_client.py` | `bootguard.py` |  |
 | `canary.py` | `forge.py` | `forge_intelligence.py` |
 | `forge_process.py` | `frame_shadow.py` | `frame_stats.py` |
 | `llm.py` | `moderation_shadow.py` | `mtproto_runner.py` |
@@ -60,32 +62,52 @@ interrupt request from the desk), it reports:
 | `test_vision_switch.py` | `test_webtool.py` | `turns.py` |
 | `unanswered.py` | `webtool.py` |  |
 
+**2026-09-15 — the bridge and the body joined the layer.** Two fixes to a proxy incident
+on a user's machine (`desk-notes/ПРОКСИ-И-МЕНЮ-ЧАТА-15.09.md`): the bridge stops warning
+`peer outbound queue is closed` when simply nobody of the other role is attached — for a
+desk whose controller is an HTTP poller that is every frame, 276 a day, and read as a
+broken link it cost a day of hunting; and the body's artifact client goes past an
+`HTTP_PROXY` in the environment when the bridge is on loopback, which on this machine it
+always is. Both are edition code by the owner's decision of 2026-09-15: Praxis and Hélène
+keep their own cores, and a fix made here is not carried across by default. The
+consequence is stated rather than hidden — the core's bridge keeps the old log line until
+someone changes it there.
+
 ### Existing only here (3)
 
 | `sitecustomize.py` | `test_atomic_replace_retry.py` | `test_compact_refresh.py` |
 
-## Differing and NOT declared (27) — the core moved ahead, the edition has not caught up
+## Differing and NOT declared (29) — the core moved ahead, the edition has not caught up
 
 These are not edition differences and are deliberately not copied into `core/`: they are
 her own work of 13–14.09 that the edition has not taken yet — the recall index rework
 (bounded foreground validation, durable background refresh), the memory-life and
 provenance changes behind it, `people.py`, `sleep.py`, `tasks.py`, `run_resume.py`,
-`frame_trace.py`, and the tests that moved with them. Copying them into a file called
-"the Windows edition" would declare a lag as a design (the lesson of 2026-09-10, above).
-The edition ships the 0.5.5 versions of these files. To close the gap: reconcile the
-working copy with `praxis/` file by file, then re-run the check.
+`frame_trace.py`, `frame_layout.py`, and the tests that moved with them. Copying them into
+a file called "the Windows edition" would declare a lag as a design (the lesson of
+2026-09-10, above). The edition ships the 0.5.5 versions of these files. To close the gap:
+reconcile the working copy with `praxis/` file by file, then re-run the check.
 
-| `frame_trace.py` | `memory_fts.py` | `memory_index.py` |
-| `memory_life.py` | `people.py` | `run_resume.py` |
-| `sleep.py` | `tasks.py` | `test_authority_context.py` |
-| `test_cache_prefix_stability.py` | `test_call_trace_k1_1309.py` | `test_direct_telegram_outbox.py` |
-| `test_dossier_contract.py` | `test_heartbeat.py` | `test_layer7.py` |
-| `test_memory_fts.py` | `test_memory_index_adversarial.py` | `test_pass19.py` |
-| `test_perceive.py` | `test_places_adversarial.py` | `test_resume_spin.py` |
-| `test_rooms_and_admission.py` | `test_run_manager.py` | `test_runner_reconnect.py` |
-| `test_transport_not_memory.py` | `test_whole_documents.py` | `test_work_wait_survives.py` |
+⚠ On 2026-09-15 this number grew from 27 to 29, and the growth is the
+mirror telling the truth rather than a regression. Until that day `praxis/` was refreshed
+by hand, which meant it was not refreshed: part of the difference was hidden behind the
+mirror's own age. `installer/core_src.py --export-core` now moves her tree into the mirror
+in one command — with a secret scan before the write and a `CORE-SOURCE.json` beside it
+saying which of her commits this is. The mirror stands at her `e39af273`, and every file
+below is the working copy lagging her, nothing else.
 
-## What the edition does NOT carry (68)
+| `frame_layout.py` | `frame_trace.py` | `memory_fts.py` |
+| `memory_index.py` | `memory_life.py` | `people.py` |
+| `run_resume.py` | `sleep.py` | `tasks.py` |
+| `test_authority_context.py` | `test_cache_prefix_stability.py` | `test_call_trace_k1_1309.py` |
+| `test_direct_telegram_outbox.py` | `test_dossier_contract.py` | `test_heartbeat.py` |
+| `test_layer7.py` | `test_memory_fts.py` | `test_memory_index_adversarial.py` |
+| `test_openai_cache_usage.py` | `test_pass19.py` | `test_perceive.py` |
+| `test_places_adversarial.py` | `test_resume_spin.py` | `test_rooms_and_admission.py` |
+| `test_run_manager.py` | `test_runner_reconnect.py` | `test_transport_not_memory.py` |
+| `test_whole_documents.py` | `test_work_wait_survives.py` |  |
+
+## What the edition does NOT carry (70)
 
 The third category, and the one a layer cannot express by itself: files that exist in the
 core and not in this edition. Most are her modules of the KEAT frame and the runs
@@ -110,16 +132,17 @@ declaration; silently shipping them without saying so would be worse.
 | `test_boundary_turn_delivery.py` | `test_call_attribution.py` | `test_element_find.py` |
 | `test_frame_levers_1309.py` | `test_frame_measure.py` | `test_frame_measure_boundary.py` |
 | `test_frame_serve.py` | `test_frame_stats.py` | `test_glm_effort.py` |
-| `test_keat_agent_ingress.py` | `test_keat_candidate.py` | `test_keat_capture.py` |
-| `test_keat_control.py` | `test_keat_dm_ingress.py` | `test_keat_economy.py` |
-| `test_keat_economy_coverage.py` | `test_keat_epoch.py` | `test_keat_group_root.py` |
-| `test_keat_group_runner_rollback.py` | `test_keat_live.py` | `test_keat_native_ingress.py` |
-| `test_keat_provider_rollback.py` | `test_keat_readiness.py` | `test_keat_runtime.py` |
-| `test_keat_source.py` | `test_keat_wake_adapter.py` | `test_llm_inbox_audit.py` |
-| `test_mtproto_hot_window.py` | `test_outbox_settled_1309.py` | `test_pre_model_timing.py` |
-| `test_run_archive_read.py` | `test_run_events_missing_1309.py` | `test_run_resume_model_input_fallback.py` |
-| `test_run_retention.py` | `test_runs_prune.py` | `test_telegram_text.py` |
-| `test_tool_pointers.py` | `test_truncated_tool_use.py` |  |
+| `test_head_stable_1309.py` | `test_keat_agent_ingress.py` | `test_keat_candidate.py` |
+| `test_keat_capture.py` | `test_keat_control.py` | `test_keat_dm_ingress.py` |
+| `test_keat_economy.py` | `test_keat_economy_coverage.py` | `test_keat_epoch.py` |
+| `test_keat_group_root.py` | `test_keat_group_runner_rollback.py` | `test_keat_live.py` |
+| `test_keat_native_ingress.py` | `test_keat_provider_rollback.py` | `test_keat_readiness.py` |
+| `test_keat_runtime.py` | `test_keat_source.py` | `test_keat_wake_adapter.py` |
+| `test_llm_inbox_audit.py` | `test_mtproto_hot_window.py` | `test_outbox_citation_1409.py` |
+| `test_outbox_settled_1309.py` | `test_pre_model_timing.py` | `test_run_archive_read.py` |
+| `test_run_events_missing_1309.py` | `test_run_resume_model_input_fallback.py` | `test_run_retention.py` |
+| `test_runs_prune.py` | `test_telegram_text.py` | `test_tool_pointers.py` |
+| `test_truncated_tool_use.py` |  |  |
 
 ## The honest part
 

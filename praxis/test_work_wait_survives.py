@@ -282,6 +282,56 @@ class HerWaitIsNotAGrave(WorkWaitBase):
         self.assertFalse([row for row in after
                           if row.get("kind") == "resume_attempt_idle"])
 
+    def test_cancelled_pause_terminalizes_on_scan_after_blocker_clears(self):
+        context = self._work_run("cancel-cleared")
+        self.manager.start_tool(
+            context.run_id, "call-active", "send", {}, side_effect=True)
+        waiting = self.manager.request_cancel(
+            context.run_id, actor="telegram:100", reason="stop this work")
+        self.assertEqual(waiting["status"], "paused")
+        self.assertEqual(waiting["control"]["action"], "cancel")
+
+        self.manager.append_event(
+            context.run_id, "tool_failed", call_id="call-active", tool="send",
+            error="durable failure receipt")
+        with mock.patch.object(agent, "resume_durable_run") as resume_one:
+            reports = agent.resume_durable_runs(limit=20)
+
+        self.assertEqual(reports, [])
+        resume_one.assert_not_called()
+        manifest = self.manager.manifest(context.run_id)
+        self.assertEqual(manifest["status"], "cancelled")
+        self.assertEqual(manifest["control"], {})
+        self.assertEqual(self.manager.events(context.run_id)[-1]["requested_by"],
+                         "telegram:100")
+        self.assertEqual(self.manager.events(context.run_id)[-1]["reason"],
+                         "stop this work")
+
+    def test_cancelled_pause_with_blocker_is_skipped_without_idle_churn(self):
+        context = self._work_run("cancel-still-blocked")
+        self.manager.start_tool(
+            context.run_id, "call-active", "send", {}, side_effect=True)
+        waiting = self.manager.request_cancel(
+            context.run_id, actor="telegram:100", reason="stop while sending")
+        self.assertEqual(waiting["status"], "paused")
+        before = list(self.manager.events(context.run_id))
+
+        with mock.patch.object(agent, "resume_durable_run") as resume_one:
+            first = agent.resume_durable_runs(limit=20)
+            second = agent.resume_durable_runs(limit=20)
+
+        self.assertEqual(first, [])
+        self.assertEqual(second, [])
+        resume_one.assert_not_called()
+        self.assertEqual(self.manager.events(context.run_id), before)
+        manifest = self.manager.manifest(context.run_id)
+        self.assertEqual(manifest["status"], "paused")
+        self.assertEqual(manifest["control"]["action"], "cancel")
+        self.assertFalse([
+            row for row in self.manager.events(context.run_id)
+            if row.get("kind") == agent._RESUME_IDLE_EVENT
+        ])
+
     def test_the_owner_pause_over_her_word_stays_the_owners(self):
         """Пульт сильнее её прошлого «жду»: иначе «остановись» снималось бы автоматом."""
         context = self._work_run("owner-pause")

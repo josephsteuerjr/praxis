@@ -449,6 +449,12 @@ export function start(opts: WindowOptions): void {
   // ---------------------------------------------------------------- комнаты
 
   let roomPicked = false;
+  //: Ключ комнаты, чьё имя правят прямо сейчас. Пока он занят, список не
+  //: перерисовывается: `replaceChildren` вынес бы поле правки вместе со строкой,
+  //: а удалённый из DOM input НЕ шлёт blur — правка пропадала бы молча. Список
+  //: перерисовывают события хода (`loadRooms` на каждый run), так что попасть под
+  //: это можно было просто медленно печатая.
+  let renaming = "";
   function selectRoom(room: Room) {
     roomPicked = true;
     S.room = room.key;
@@ -490,6 +496,7 @@ export function start(opts: WindowOptions): void {
   }
 
   function renderRooms() {
+    if (renaming) return;
     const nodes: HTMLElement[] = [];
     let group = "";
     for (const room of S.rooms) {
@@ -553,6 +560,7 @@ export function start(opts: WindowOptions): void {
     const b = roomsBox.querySelector<HTMLElement>(`.room[data-key="${CSS.escape(room.key)}"]`);
     const name = b?.querySelector<HTMLElement>(".room-name");
     if (!b || !name) return;
+    renaming = room.key;
     const input = document.createElement("input");
     input.className = "field-input";
     input.value = room.name;
@@ -572,6 +580,11 @@ export function start(opts: WindowOptions): void {
       if (save && value && value !== room.name) {
         try {
           await renameRoom(room, value);
+          // Пока правили, список мог перечитаться: в S.rooms уже ДРУГОЙ объект с
+          // тем же ключом, и без этой строки новое имя показалось бы только после
+          // следующего чтения канала.
+          const live = S.rooms.find((r) => r.key === room.key);
+          if (live) live.name = room.name;
           if (S.room === room.key) S.roomName = room.name;
           // Заголовок и панель хода носят имя комнаты — перерисовать тихо.
           if (S.view === "talk" && S.room === room.key) void show("talk", { quiet: true });
@@ -579,6 +592,7 @@ export function start(opts: WindowOptions): void {
           toast(humanError(e).text);
         }
       }
+      renaming = "";
       renderRooms();
     };
     input.addEventListener("keydown", (e) => {
@@ -615,13 +629,25 @@ export function start(opts: WindowOptions): void {
     const y = Math.min(at.bottom + 4, innerHeight - menu.offsetHeight - 8);
     menu.style.left = x + "px";
     menu.style.top = y + "px";
-    setTimeout(() => document.addEventListener("pointerdown", closeMenu, { once: true }), 0);
+    // ⚠ Закрывать меню НА ЛЮБОМ pointerdown нельзя, и это стоило самих пунктов.
+    // Нажатие на «Переименовать» — тоже pointerdown: он всплывал до document,
+    // меню пряталось (display:none), и к моменту отпускания кнопки под курсором
+    // был уже другой элемент. Браузер шлёт click общему предку — то есть мимо
+    // пункта, и его обработчик не звался НИКОГДА. Снаружи это выглядело как
+    // «переименовать и удалить чат нельзя» (жалоба 15.09). Своё нажатие меню
+    // пропускает; закрывает его пункт сам, отработав.
+    setTimeout(() => document.addEventListener("pointerdown", closeMenuOnAway), 0);
     document.addEventListener("keydown", closeMenuOnEsc);
   }
 
   function closeMenu() {
     menu.hidden = true;
+    document.removeEventListener("pointerdown", closeMenuOnAway);
     document.removeEventListener("keydown", closeMenuOnEsc);
+  }
+  function closeMenuOnAway(e: PointerEvent) {
+    if (e.target instanceof Node && menu.contains(e.target)) return;
+    closeMenu();
   }
   function closeMenuOnEsc(e: KeyboardEvent) {
     if (e.key === "Escape") closeMenu();

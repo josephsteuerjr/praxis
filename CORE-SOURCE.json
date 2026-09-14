@@ -1,0 +1,10 @@
+{
+ "mirror": "praxis",
+ "source": "C:\\Users\\yegor\\Downloads\\Praxis\\_her\\tree",
+ "head": "e39af273",
+ "dirty": false,
+ "taken_at": "2026-09-14T23:45:07+00:00",
+ "files": 550,
+ "digest": "fc6979d18d80d8daddb705c241e9655186b74688a9f81506f783ee29d126d237",
+ "by": "installer/core_src.py --export-core"
+}

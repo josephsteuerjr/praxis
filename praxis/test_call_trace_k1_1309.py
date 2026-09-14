@@ -101,6 +101,7 @@ class ZeroCacheCreationFromAnthropicSurvives(unittest.TestCase):
 
     def test_zero_from_provider_reaches_the_ledger_as_zero(self):
         out = self._chat(cache_read_input_tokens=5, cache_creation_input_tokens=0)
+        self.assertEqual(out.usage.get("schema"), 2)
         self.assertEqual(out.usage.get("cache_creation"), 0)
         self.assertEqual(out.usage.get("cache_read"), 5)
         self.assertEqual(self.seen.get("cc"), 0)
