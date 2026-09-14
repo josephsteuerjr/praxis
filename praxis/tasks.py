@@ -4,7 +4,7 @@ Praxis — её запланированные к сроку НАМЕРЕНИЯ.
 жизни. Четыре честных вида:
   kind=window  — уйти в фокус/к себе (её сознательный ретрит; Telethon закроется на окно);
   kind=wake    — её собственный будильник: живой ход, Telegram ОТКРЫТ (см. ниже);
-  kind=message — отложенная ДОСТАВКА человеку (транспорт, не «задача»);
+  kind=message — намерение что-то сказать человеку; к сроку сначала живой пересмотр;
   kind=note    — напоминание себе/владельцу к сроку.
 (email — совместимость, обычно выключен.)
 
@@ -48,6 +48,31 @@ BASE = Path(os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent)
 TASKS = BASE / "memory" / "tasks.json"
 KINDS = ("window", "wake", "email", "message", "note")
 AUTHORS = ("praxis", "owner", "app")
+
+
+def message_reassessment_prompt(task: dict) -> str:
+    """Lossless, non-diagnostic due-time frame for a person-addressed intention.
+
+    The scheduler does not diagnose whether a relationship or boundary changed. It brings
+    the old evidence into a normal cognitive turn, where current context and tools are
+    available, and requires a new decision before any delivery.
+    """
+    target = str(task.get("target") or task.get("target_id") or "")
+    body = str(task.get("goal") or "")
+    created = str(task.get("created") or "unknown")
+    author = str(task.get("author") or "praxis")
+    return (
+        "A scheduled person-addressed intention is due for fresh reassessment.\n"
+        f"Original target: {target}\n"
+        f"Original body:\n{body}\n"
+        f"Created at: {created}\n"
+        f"Author/provenance: {author}\n\n"
+        "Old intention is evidence, not a command. Before any person-addressed delivery, "
+        "use the current live frame and, where useful, current conversation/tools to check "
+        "for relationship, moderation, or boundary changes. Make a fresh decision now: "
+        "send (using an ordinary send tool), revise, defer, or let it go. Nothing is sent "
+        "merely because the old due time arrived."
+    )
 
 
 def _now() -> _dt.datetime:
@@ -206,6 +231,16 @@ def add(kind: str, goal: str, when: str | None = None, target: str | None = None
         # [wake] author=praxis неотличима от выбранной ею. Поле держит эту разницу на
         # диске, чтобы объяснение жило не только в одном тул-ответе.
         task["swapped_from"] = str(swapped_from)
+    if task["kind"] in ("wake", "note", "message") and (not task.get("recur") or task.get("when")):
+        # Optional authority sidecar: its failure never changes task creation.
+        try:
+            import keat_live
+            occurrence = str(task.get("when") or task.get("created") or "one-shot")
+            source = keat_live.issue_scheduled_wake(task, occurrence)
+            if source is not None:
+                task["_keat_wake_source"] = source
+        except Exception:
+            pass
     items = _load()
     items.append(task)
     _save(items)
@@ -239,6 +274,15 @@ def due(now: _dt.datetime | None = None) -> list:
             continue  # уже поднимается прямо сейчас; снимет mark_fired или release_open_claims
         if t.get("recur") and not t.get("when"):
             t["when"], changed = _next_recur(t["recur"], now), True
+            # The first recurring occurrence comes into existence here.
+            if t.get("kind") in ("wake", "note", "message") and t.get("when"):
+                try:
+                    import keat_live
+                    source = keat_live.issue_scheduled_wake(t, str(t["when"]))
+                    if source is not None:
+                        t["_keat_wake_source"] = source
+                except Exception:
+                    pass
         if not t.get("when"):
             out.append(t)                      # срока нет — созрело
         else:
@@ -357,6 +401,17 @@ def mark_fired(task_id: str) -> None:
             t.pop("claim", None)      # владение передано рану — держать больше нечего
             if t.get("recur"):
                 t["when"], changed = _next_recur(t["recur"], _now()), True
+                # This is creation of the next occurrence, not its firing.  Keep
+                # scheduling behavior unchanged when optional capture is unavailable.
+                t.pop("_keat_wake_source", None)
+                if t.get("kind") in ("wake", "note", "message") and t.get("when"):
+                    try:
+                        import keat_live
+                        source = keat_live.issue_scheduled_wake(t, str(t["when"]))
+                        if source is not None:
+                            t["_keat_wake_source"] = source
+                    except Exception:
+                        pass
             else:
                 t["status"], changed = "done", True
             changed = True

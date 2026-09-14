@@ -166,12 +166,18 @@ class TestFrameStats(unittest.TestCase):
         report = fs.report(self.rows(), {})
         for summary in [report['summary'], *report['groups']]:
             self.assertEqual(summary['diagnostics']['overflowed_sums'], list(fs.METRICS))
-            for metric in summary['metrics'].values():
+            for name, metric in summary['metrics'].items():
                 self.assertIsNone(metric['sum'])
-                self.assertEqual(metric['known'], 2)
-                self.assertEqual(metric['missing'], 0)
-                self.assertEqual(metric['p50'], 1e308)
-                self.assertEqual(metric['p90'], 1e308)
+                if name in fs.METRICS:
+                    self.assertEqual(metric['known'], 2)
+                    self.assertEqual(metric['missing'], 0)
+                    self.assertEqual(metric['p50'], 1e308)
+                    self.assertEqual(metric['p90'], 1e308)
+                else:
+                    self.assertEqual(metric['known'], 0)
+                    self.assertEqual(metric['missing'], 2)
+                    self.assertIsNone(metric['p50'])
+                    self.assertIsNone(metric['p90'])
             self.assertEqual(summary['cache_read_over_fresh_plus_read'],
                              dict(value=.5, known=2, missing=0, coverage=1))
         json.dumps(report, allow_nan=False)
@@ -241,6 +247,42 @@ class TestFrameStats(unittest.TestCase):
             self.assertEqual(fs.main(['--tree', str(self.tree), '--since', '2026-09-08']), 0)
         self.assertNotIn('SECRET', output.getvalue())
         self.assertEqual(json.loads(output.getvalue())['privacy'], 'aggregate')
+
+    def test_join_keat_input_cost_cache_usage_and_timing_by_exact_call(self):
+        self.write([
+            dict(kind='model_input', call_id='a', metadata={
+                'keat': {'status': 'served'}, 'sections': [{}, {}],
+                'frame_measure': {'actual': {'estimated_tokens': 321}}}),
+            dict(kind='model_preparation_timing', call_id='other', measured_total_ms=999),
+            dict(kind='model_preparation_timing', call_id='a', measured_total_ms=12.5),
+            self.completed(call_id='a', usage={'schema': 2, 'in': 90,
+                           'cache_read': 10}, duration_ms=100),
+        ])
+        row = self.rows()[0]
+        self.assertEqual(row['keat_status'], 'served')
+        self.assertEqual(row['input_estimated_tokens'], 321)
+        self.assertEqual(row['frame_sections_recorded'], 2)
+        self.assertEqual(row['preparation_ms'], 12.5)
+        self.assertEqual(row['in'], 90)
+        self.assertEqual(row['cache_read'], 10)
+        summary = fs.summarize([row])
+        self.assertEqual(summary['metrics']['input_estimated_tokens']['sum'], 321)
+        self.assertEqual(summary['metrics']['frame_sections_recorded']['sum'], 2)
+        self.assertNotIn('input_sections', row)
+        self.assertNotIn('input_sections', summary['metrics'])
+
+    def test_ambiguous_timing_and_non_measure_input_remain_unknown(self):
+        self.write([dict(kind='model_input', call_id='a', metadata={
+                        'keat': {'status': 'fallback'}}),
+                    dict(kind='model_preparation_timing', call_id='a', measured_total_ms=1),
+                    dict(kind='model_preparation_timing', call_id='a', measured_total_ms=2),
+                    self.completed(call_id='a')])
+        rows, diagnostics = fs.collect(self.tree)
+        self.assertEqual(rows[0]['keat_status'], 'fallback')
+        self.assertIsNone(rows[0]['preparation_ms'])
+        self.assertIsNone(rows[0]['input_estimated_tokens'])
+        self.assertIsNone(rows[0]['frame_sections_recorded'])
+        self.assertEqual(diagnostics['ambiguous_preparation_timing'], 1)
 
     def test_read_errors_are_counted(self):
         d = Counter()

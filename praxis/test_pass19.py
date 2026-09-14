@@ -13,6 +13,7 @@ import appetite
 import formation
 import graph
 import memory_index as mi
+import memory_fts
 import memory_life as life
 import panel
 import people
@@ -456,6 +457,7 @@ class TestFormation(Pass19Base):
         out = formation.run("light")
         self.assertTrue(out["ok"])
         self.assertFalse(graph.GRAPH_MD.exists())
+        memory_fts.rebuild(base=mi.BASE, memory_dir=mi.MEM_DIR, skills_dir=mi.SKILLS_DIR)
         owner_hits = mi.search("доверяет", k=4, scope="owner")
         self.assertTrue(any("доверяет" in hit["text"] for hit in owner_hits))
         self.assertEqual(mi.search("доверяет", k=4, scope="group"), [])
@@ -488,6 +490,8 @@ class TestHybridRecallAndPanel(Pass19Base):
             "7", {"summary": "Егор занимается альпинизмом.", "open_threads": [], "claims": [], "episodes": []},
             tier=1, depth=1, source_events=[event["id"]], source_compacts=[], event_count=1,
             continued=False)
+        # The foreground explicit path must not discover/rebuild the corpus.
+        memory_fts.rebuild(base=mi.BASE, memory_dir=mi.MEM_DIR, skills_dir=mi.SKILLS_DIR)
         self._orig.append((mi, "_semantic_rerank", mi._semantic_rerank))
         mi._semantic_rerank = lambda q, cs: [1.0 if "альпинизм" in c["text"] else 0.0 for c in cs]
         # Цена договора: фона в кандидатах больше нет.

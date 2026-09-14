@@ -15,6 +15,11 @@ import memory_provenance
 
 class MemoryIndexAdversarialTests(unittest.TestCase):
     def setUp(self) -> None:
+        # 12.09: прогоны по умолчанию не индексируются (PRAXIS_INDEX_RUNS); этот стенд
+        # мерит корпус С прогонами — включаем явно.
+        self._runs_env = mock.patch.dict(os.environ, {"PRAXIS_INDEX_RUNS": "1"})
+        self._runs_env.start()
+        self.addCleanup(self._runs_env.stop)
         self.tmp = tempfile.TemporaryDirectory(prefix="praxis_memory_adversarial_")
         self.base = Path(self.tmp.name)
         self.memory = self.base / "memory"
@@ -412,6 +417,9 @@ class MemoryIndexAdversarialTests(unittest.TestCase):
             }, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+
+        # Background maintenance materializes the explicit recall accelerator.
+        memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
 
         explicit_run = self._search("recursive social pulse wake prompt", purpose="explicit")
         self.assertEqual(len(explicit_run), 1)

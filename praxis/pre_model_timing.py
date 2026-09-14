@@ -2,12 +2,19 @@
 
 Durations are non-overlapping. Preparation is bound only around the tool loop;
 continuations get call-local durations, not stale turn preparation or tool time.
+
+12.09: ``span(name)`` — подстадии внутри `old_context`. Стадия `old_context` = один
+вызов `_build_prompt_parts`, и по прибору она держала медиану 18–22 с без единой метки
+внутри. Подстадии пишутся в отдельный словарь `substages_ms` и НЕ входят в
+`measured_total_ms`: стадии остаются неперекрывающимися, а подстадии — вложенными
+(внешняя включает внутреннюю). Вне таймера хода `span` ничего не пишет.
 """
 import contextlib
 import contextvars
 import time
 
 _PREPARATION = contextvars.ContextVar('pre_model_preparation', default=None)
+_SUBSTAGES = contextvars.ContextVar('pre_model_substages', default=None)
 STAGES = frozenset(('old_context', 'message_tools', 'shadow', 'call_setup',
                     'measure', 'canary', 'model_input_artifact'))
 
@@ -38,17 +45,31 @@ def payload(timer):
     prep = _PREPARATION.get()
     _PREPARATION.set(None)
     stages = dict(prep or {}, **timer.stages)
-    return {'schema': 'praxis.pre-model-timing.v1',
-            'preparation_observed': prep is not None,
-            'stages_ms': stages, 'measured_total_ms': round(sum(stages.values()), 3)}
+    out = {'schema': 'praxis.pre-model-timing.v1',
+           'preparation_observed': prep is not None,
+           'stages_ms': stages, 'measured_total_ms': round(sum(stages.values()), 3)}
+    sub = _SUBSTAGES.get()
+    if sub:
+        out['substages_ms'] = dict(sub)
+    _SUBSTAGES.set(None)
+    return out
 
 
 def start():
     """Instrumentation construction is optional, including clock failures."""
     try:
-        return Timer()
+        timer = Timer()
     except Exception:
         return None
+    try:
+        # Второй таймер в том же ходе (фазы вызова модели стартуют свой) не смеет
+        # стирать подстадии сборки: словарь заводится только когда его ещё нет,
+        # а сбрасывает его payload(). Иначе old_context.* пропадали из расписки.
+        if not isinstance(_SUBSTAGES.get(), dict):
+            _SUBSTAGES.set({})
+    except Exception:
+        pass
+    return timer
 
 
 def mark(timer, stage):
@@ -56,6 +77,45 @@ def mark(timer, stage):
         timer.mark(stage)
     except Exception:
         pass
+
+
+@contextlib.contextmanager
+def span(name):
+    """Подстадия сборки: сколько миллисекунд занял обёрнутый блок.
+
+    Повторное имя суммируется (один тир может собираться в несколько заходов).
+    Вне хода (нет `start()`) — пустая операция; ошибка прибора не смеет стоить хода,
+    а исключение тела проходит наружу нетронутым.
+    """
+    sub = _SUBSTAGES.get()
+    if not isinstance(sub, dict) or not isinstance(name, str) or not name:
+        yield
+        return
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        try:
+            sub[name] = round(sub.get(name, 0.0) + max(0.0, time.monotonic() - t0) * 1000, 3)
+        except Exception:
+            pass
+
+
+def add(name, ms):
+    """Прибавить уже измеренные миллисекунды к подстадии (для циклов, где `with` неудобен)."""
+    sub = _SUBSTAGES.get()
+    if not isinstance(sub, dict) or not isinstance(name, str) or not name:
+        return
+    try:
+        sub[name] = round(sub.get(name, 0.0) + max(0.0, float(ms)), 3)
+    except Exception:
+        pass
+
+
+def substages():
+    """Снимок подстадий текущего хода (только для тестов и приборов)."""
+    sub = _SUBSTAGES.get()
+    return dict(sub) if isinstance(sub, dict) else {}
 
 
 @contextlib.contextmanager

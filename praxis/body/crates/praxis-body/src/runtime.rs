@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use crate::artifact::ArtifactClient;
 use crate::config::BodyConfig;
 use crate::journal::{Admission, Journal, RequestRecord};
-use crate::{compose, desktop, fsops, identity, interactive_router, process, system_router, uia};
+use crate::{compose, desktop, element, fsops, identity, interactive_router, process, system_router, uia};
 
 pub struct Runtime {
     pub config: BodyConfig,
@@ -56,6 +56,7 @@ enum Route {
     ProcessCancel,
     ProcessList,
     WindowRead,
+    ElementAct,
     Composed,
     Desktop,
     Unknown,
@@ -75,6 +76,7 @@ fn route(capability: &str) -> Route {
         // и общая ветка ниже увела бы их в `desktop::dispatch`, где их нет: она ответила
         // бы «unknown native desktop capability», то есть глагол, который существует и
         // объявлен, выглядел бы несуществующим.
+        value if element::handles(value) => Route::ElementAct,
         value if uia::handles(value) => Route::WindowRead,
         value if compose::handles(value) => Route::Composed,
         value if value.starts_with("desktop.") || value == "os.process.list" => Route::Desktop,
@@ -398,7 +400,8 @@ impl Runtime {
             Route::ProcessStart => {
                 anyhow::bail!("process.start is admitted before dispatch and must not reach it")
             }
-            Route::WindowRead => uia::dispatch(capability, args),
+            // Обе ветки уходят в `uia`: там апартамент COM и свой поток под него.
+            Route::WindowRead | Route::ElementAct => uia::dispatch(capability, args),
             Route::Composed => compose::dispatch(capability, args, &self.config.state_dir).await,
             Route::Desktop => {
                 let mut result = desktop::dispatch(capability, args, &self.config.state_dir)?;
@@ -583,6 +586,7 @@ mod tests {
     #[test]
     fn window_read_and_composed_steps_are_routed_before_the_desktop_prefix() {
         assert_eq!(route(uia::CAPABILITY), Route::WindowRead);
+        assert_eq!(route(element::CAPABILITY), Route::ElementAct);
         assert_eq!(route(compose::ACT_AND_READ), Route::Composed);
         assert_eq!(route(compose::WAIT), Route::Composed);
         // Соседи по префиксу не сдвинулись.

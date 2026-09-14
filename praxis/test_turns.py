@@ -260,6 +260,8 @@ class TestTurnsCore(TurnsBase):
         for i in range(6):
             self._mk(out=f"дальше {i}")
 
+        # Archived canon becomes searchable after background maintenance.
+        memory_fts.rebuild(base=self.tmp, memory_dir=self.tmp / "memory")
         hits = memory_fts.search("praxis-paper-trading", base=self.tmp,
                                  memory_dir=self.tmp / "memory", limit=10)
         found = " ".join(str(h.get("text") or "") for h in hits)

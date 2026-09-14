@@ -17,6 +17,7 @@ import ntpath
 import os
 import re
 from pathlib import Path
+import threading
 import time
 import unicodedata
 import urllib.error
@@ -1124,6 +1125,191 @@ def desktop_window_wait(condition: str, *, title_contains: str = "",
     )
 
 
+def desktop_element_act(action: str, *, hwnd: str | int | None = None,
+                        automation_id: str = "", role: str = "", name: str = "",
+                        name_contains: str = "", value_contains: str = "",
+                        nth: int | None = None, text: str | None = None,
+                        timeout_ms: int = 3000, max_nodes: int | None = None,
+                        max_depth: int | None = None,
+                        execution: str = "interactive", request_id: str = "",
+                        operation_id: str = "") -> dict:
+    """Сделать что-то НАД НАЗВАННЫМ ЭЛЕМЕНТОМ, а не над точкой экрана.
+
+    Между чтением окна и ударом по координатам был провал: пиксель, верный секунду назад,
+    указывает мимо, если окно проехало, список прокрутился или система стоит на другом
+    масштабе. Здесь элемент называется тем, что переживает перерисовку (`automation_id`,
+    роль, надпись), и действие идёт паттерном UI Automation — координат в этом пути нет.
+
+    ⚠ Три отказа, которые здесь считаются нормальным ответом, а не поломкой, и приезжают
+    в `ok:false` со своим `reason`:
+
+    * `ambiguous` — под отбор подошли несколько. Это не «берём первый»: приезжает список
+      кандидатов, чтобы было чем уточнить (или скажи `nth`);
+    * `not_found` / `nth_out_of_range` — в срок не нашлось. Тело ЖДЁТ до `timeout_ms`,
+      опрашивая окно, поэтому пауза перед вызовом не нужна;
+    * отсутствие паттерна — отказ называет те, что у элемента есть. Тихого отката к
+      удару по координатам нет: он вернул бы ровно ту ненадёжность, ради ухода от
+      которой глагол написан.
+
+    `ok:true` значит «паттерн вызван»; `element_after`, если доступен, показывает
+    состояние после. Достигнута ли цель — вывод, а не факт расписки.
+    Для повторов передай те же request_id и operation_id; рука требует client key.
+    """
+    select: dict[str, Any] = {}
+    for key, value in (("automation_id", automation_id), ("role", role), ("name", name),
+                       ("name_contains", name_contains), ("value_contains", value_contains)):
+        if value is not None and str(value) != "":
+            select[key] = str(value)
+    if nth is not None:
+        select["nth"] = int(nth)
+    payload: dict[str, Any] = {"do": str(action), "select": select,
+                               "timeout_ms": int(timeout_ms)}
+    if hwnd is not None:
+        payload["hwnd"] = hwnd
+    if text is not None:
+        payload["text"] = str(text)
+    if max_nodes is not None:
+        payload["max_nodes"] = int(max_nodes)
+    if max_depth is not None:
+        payload["max_depth"] = int(max_depth)
+    # Ждём дольше тела: оно опрашивает окно до `timeout_ms`, и наш срок обязан это
+    # переживать — иначе мы бросим трубку ровно тогда, когда оно вот-вот ответит.
+    wait = _clamped_ms(timeout_ms, 3000, 60_000) / 1000 + 20
+    return _with_server_frame(
+        call("desktop.element.act", payload, execution=execution, timeout=wait,
+             request_id=request_id, operation_id=operation_id),
+        wait_s=wait, truth_field="ok",
+        truth_note=("ok значит «паттерн вызван»; element_after может быть недоступен; "
+                    "ok:false с reason=ambiguous|not_found — это ответ, а не поломка"),
+    )
+
+
+def format_element_act(result: dict) -> str:
+    """Свернуть расписку действия в строку, ничего не потеряв молча."""
+    if not isinstance(result, dict):
+        return f"[windows-body] desktop.element.act не ответил: {result!r}"
+    if result.get("ok") is not True:
+        reason = str(result.get("reason") or result.get("error") or "?")
+        if reason == "ambiguous":
+            rows = result.get("candidates") or []
+            lines = [f"под отбор подошли {result.get('matched')} элементов — уточни отбор "
+                     f"или скажи nth:"]
+            for i, row in enumerate(rows[:12]):
+                if isinstance(row, dict):
+                    bits = [f"nth={i}", str(row.get("role") or "?")]
+                    for key in ("name", "automation_id", "class"):
+                        if row.get(key):
+                            bits.append(f"{key}={row[key]!r}")
+                    lines.append("  " + " · ".join(bits))
+            if len(rows) > 12:
+                lines.append(f"  … и ещё {len(rows) - 12}")
+            return "\n".join(lines)
+        if reason in ("timeout", "max_nodes", "max_depth"):
+            return (f"[windows-body] отказ: {reason}; searched_whole_window="
+                    f"{result.get('searched_whole_window')}; просмотрено "
+                    f"{result.get('nodes_scanned')}, ждали {result.get('waited_ms')} мс. "
+                    f"{result.get('hint') or ''}").strip()
+        if reason in ("not_found", "nth_out_of_range"):
+            return (f"элемент не нашёлся за {result.get('waited_ms')} мс "
+                    f"({result.get('polls')} проб, просмотрено {result.get('nodes_scanned')} "
+                    f"элементов). {result.get('hint') or ''}").strip()
+        return f"[windows-body] отказ: {reason}"
+    element = result.get("element_after") or {}
+    bits = [f"{result.get('did')}: {element.get('role') or '?'}"]
+    for key in ("name", "automation_id", "value"):
+        if element.get(key):
+            bits.append(f"{key}={element[key]!r}")
+    state = element.get("state") or {}
+    if state:
+        bits.append("состояние после: " + ", ".join(f"{k}={v}" for k, v in state.items()))
+    if result.get("element_after") is None:
+        bits.append("состояние после недоступно")
+    bits.append(f"ждали {result.get('waited_ms')} мс")
+    return " · ".join(bits)
+
+
+def desktop_element_find(*, hwnd: str | int | None = None,
+                         automation_id: str = "", role: str = "", name: str = "",
+                         name_contains: str = "", value_contains: str = "",
+                         limit: int | None = None, timeout_ms: int = 0,
+                         max_nodes: int | None = None, max_depth: int | None = None,
+                         execution: str = "interactive") -> dict:
+    """Найти в окне элементы по отбору — ничего не трогая.
+
+    Зачем отдельная рука, если есть чтение окна и есть действие. Затем, что между ними
+    был провал: чтобы узнать, как называется кнопка, приходилось читать ВСЁ окно (у
+    Electron это тысячи узлов) либо промахнуться отбором и прочитать кандидатов в тексте
+    ОТКАЗА. Единственным способом посмотреть прицельно была ошибка.
+
+    И второе — ожидание. `timeout_ms` здесь означает «сколько ждать ПОЯВЛЕНИЯ»: диалог,
+    который вот-вот нарисуется, дожидается этой рукой, а не паузой наугад. По умолчанию
+    ноль — «покажи, что есть сейчас».
+
+    Отбор — тот же, что у `desktop_element_act`, и это несущее свойство: нашла элемент
+    этой рукой — назови его теми же словами, когда будешь действовать.
+    """
+    select: dict[str, Any] = {}
+    for key, value in (("automation_id", automation_id), ("role", role), ("name", name),
+                       ("name_contains", name_contains), ("value_contains", value_contains)):
+        if str(value or "").strip():
+            select[key] = str(value)
+    payload: dict[str, Any] = {"select": select, "timeout_ms": int(timeout_ms)}
+    if hwnd is not None:
+        payload["hwnd"] = hwnd
+    if limit is not None:
+        payload["limit"] = int(limit)
+    if max_nodes is not None:
+        payload["max_nodes"] = int(max_nodes)
+    if max_depth is not None:
+        payload["max_depth"] = int(max_depth)
+    # Тот же запас, что у действия: тело опрашивает окно до `timeout_ms`, и наш срок
+    # обязан это переживать — плюс сам обход, который у большого окна не мгновенен.
+    wait = _clamped_ms(timeout_ms, 0, 60_000) / 1000 + 20
+    return _with_server_frame(
+        call("desktop.element.find", payload, execution=execution, timeout=wait),
+        wait_s=wait, truth_field="ok",
+        truth_note=("ok:false с reason=not_found — это ответ, а не поломка; "
+                    "searched_whole_window говорит, дочитано ли окно"),
+    )
+
+
+def format_element_find(result: dict) -> str:
+    """Свернуть находки в строку. Молчаливых «нашлось 0» здесь нет."""
+    if not isinstance(result, dict):
+        return f"[windows-body] desktop.element.find не ответил: {result!r}"
+    if result.get("ok") is not True:
+        reason = str(result.get("reason") or result.get("error") or "?")
+        # Read-only отказ с распиской обхода — полноценный ответ, а не общий сбой.
+        # Сохраняем различие «нет» / «не досмотрел» и подсказку тела для всех
+        # известных пределов, включая новые причины, которые могут появиться позже.
+        if any(key in result for key in ("searched_whole_window", "nodes_scanned", "hint")):
+            whole = result.get("searched_whole_window")
+            said = "окно дочитано" if whole else "⚠ окно ДОЧИТАНО НЕ БЫЛО"
+            return (f"{reason} ({said}): просмотрено {result.get('nodes_scanned')} "
+                    f"элементов за {result.get('waited_ms')} мс. "
+                    f"{result.get('hint') or ''}").strip()
+        return f"[windows-body] отказ: {reason}"
+    rows = result.get("elements") or []
+    head = f"нашлось {result.get('matched')}"
+    if result.get("truncated"):
+        head += f", показаны первые {result.get('shown')}"
+    if result.get("searched_whole_window") is False:
+        head += " ⚠ окно дочитано не было — совпадений может быть больше"
+    lines = [head + ":"]
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        bits = [f"nth={i}", str(row.get("role") or "?")]
+        for key in ("name", "automation_id", "value", "class"):
+            if row.get(key):
+                bits.append(f"{key}={row[key]!r}")
+        rect = row.get("rect") or {}
+        if isinstance(rect, dict) and rect.get("center"):
+            bits.append(f"центр={rect['center'].get('x')},{rect['center'].get('y')}")
+        lines.append("  " + " · ".join(bits))
+    return "\n".join(lines)
+
+
 def desktop_screen_capture(*, target: str = "desktop", hwnd: str | int | None = None,
                            x: int | None = None, y: int | None = None,
                            width: int | None = None, height: int | None = None,
@@ -1448,6 +1634,89 @@ def status_probe(*, timeout: float = 5.0) -> dict:
     }
 
 
+# ── Кэш пробы тела (12.09) ────────────────────────────────────────────────────────
+#
+# `status_probe(timeout=5)` звался из блока состояния на КАЖДОМ ходе: два запроса к
+# мосту, у каждого свой пятисекундный срок. Когда тело на ПК Егора не подключено, мост
+# принимает запрос в спул («peer outbound queue is closed; frame remains spooled»,
+# 276 раз за сутки по журналу моста) и проба честно ждёт оба срока целиком — 10 секунд
+# сборки кадра ради строки STATE, которая за минуту не меняется.
+#
+# Теперь: значение живёт TTL секунд (PRAXIS_BODY_PROBE_TTL, по умолчанию 60); по
+# истечении ход получает прежнее значение сразу, а новая проба идёт в фоновом потоке.
+# Ждёт только самая первая проба после старта — и та с коротким сроком
+# (PRAXIS_BODY_PROBE_TIMEOUT, по умолчанию 2 с). Отказ удлиняет TTL вдвое (до 300 с):
+# отключённое тело не опрашивается каждую минуту впустую. TTL=0 возвращает старое
+# поведение байт-в-байт.
+_PROBE_TTL_CEILING = 300.0
+_PROBE_LOCK = threading.Lock()
+_PROBE_CACHE: dict = {"at": 0.0, "probe": None, "ttl": 0.0, "refreshing": False}
+
+
+def _probe_ttl() -> float:
+    try:
+        return max(0.0, float(os.getenv("PRAXIS_BODY_PROBE_TTL", "60") or 60))
+    except ValueError:
+        return 60.0
+
+
+def _probe_timeout() -> float:
+    try:
+        return max(0.2, float(os.getenv("PRAXIS_BODY_PROBE_TIMEOUT", "2") or 2))
+    except ValueError:
+        return 2.0
+
+
+def probe_cache_reset() -> None:
+    """Сброс кэша (тесты; после смены настроек моста)."""
+    with _PROBE_LOCK:
+        _PROBE_CACHE.update(at=0.0, probe=None, ttl=0.0, refreshing=False)
+
+
+def _probe_store(probe: dict, ttl: float) -> None:
+    with _PROBE_LOCK:
+        previous = float(_PROBE_CACHE.get("ttl") or 0.0)
+        fresh = ttl if probe.get("ok") else min(_PROBE_TTL_CEILING, max(ttl, previous * 2))
+        _PROBE_CACHE.update(at=time.monotonic(), probe=dict(probe), ttl=fresh)
+
+
+def _probe_refresh(timeout: float, ttl: float) -> None:
+    try:
+        _probe_store(status_probe(timeout=timeout), ttl)
+    except Exception:
+        pass
+    finally:
+        with _PROBE_LOCK:
+            _PROBE_CACHE["refreshing"] = False
+
+
+def status_probe_cached(*, ttl: float | None = None, timeout: float | None = None) -> dict:
+    """Проба тела для кадра: свежее значение без ожидания на пути ответа.
+
+    Первая проба после старта — синхронная, но с коротким сроком; дальше ход получает
+    кэш, а обновление идёт в фоне. Возвращается копия: строка STATE не должна
+    менять кэш, а кэш — строку.
+    """
+    ttl = _probe_ttl() if ttl is None else max(0.0, float(ttl))
+    timeout = _probe_timeout() if timeout is None else max(0.2, float(timeout))
+    if ttl <= 0:
+        return status_probe(timeout=timeout)
+    with _PROBE_LOCK:
+        cached = _PROBE_CACHE.get("probe")
+        age = time.monotonic() - float(_PROBE_CACHE.get("at") or 0.0)
+        if cached is not None:
+            if age < float(_PROBE_CACHE.get("ttl") or 0.0):
+                return dict(cached)
+            if not _PROBE_CACHE.get("refreshing"):
+                _PROBE_CACHE["refreshing"] = True
+                threading.Thread(target=_probe_refresh, args=(timeout, ttl),
+                                 name="body-probe-refresh", daemon=True).start()
+            return dict(cached)
+    probe = status_probe(timeout=timeout)
+    _probe_store(probe, ttl)
+    return dict(probe)
+
+
 def _context_available(probe: dict, kind: str) -> bool | None:
     contexts = ((probe.get("manifest") or {}).get("execution_contexts")
                 if isinstance(probe.get("manifest"), dict) else None)
@@ -1460,7 +1729,7 @@ def _context_available(probe: dict, kind: str) -> bool | None:
 def state_line() -> str:
     if not available():
         return "Windows body: controller token не настроен"
-    probe = status_probe(timeout=5)
+    probe = status_probe_cached()
     if not probe.get("ok"):
         detail = probe.get("system_error") or probe.get("error") or probe.get("code")
         return f"Windows body: offline ({detail})"

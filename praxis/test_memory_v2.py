@@ -20,6 +20,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+# 12.09: руки указателями — этот стенд меряет ПОЛНЫЙ манифест как список `tools`; семантика указателей — test_tool_pointers. Рычаг снимается в tearDownModule.
+def setUpModule():
+    os.environ["PRAXIS_TOOLS_POINTERS"] = "off"
+
+
+def tearDownModule():
+    os.environ.pop("PRAXIS_TOOLS_POINTERS", None)
+
+
 
 def _bash_works() -> bool:
     """`bash` есть в PATH И реально запускается (на Windows нередко лежит WSL-заглушка)."""

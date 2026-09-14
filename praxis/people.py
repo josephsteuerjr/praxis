@@ -259,6 +259,68 @@ def read_text(slug: str) -> str:
     return _read(path_for(slug))
 
 
+def _tail_lines(text: str, limit: int) -> str:
+    """Хвост текста по строкам под лимит знаков: свежее важнее давнего.
+
+    Первая (самая старая) из оставленных строк, если она одна и длиннее лимита,
+    режется с головы с явным многоточием — пустой раздел хуже усечённого."""
+    if limit <= 0 or not text:
+        return ""
+    lines = text.splitlines()
+    kept: list[str] = []
+    used = 0
+    for line in reversed(lines):
+        cost = len(line) + 1
+        if kept and used + cost > limit:
+            break
+        kept.append(line)
+        used += cost
+        if used > limit:
+            break
+    kept.reverse()
+    out = "\n".join(kept)
+    if len(out) > limit:
+        out = "…" + out[-(max(0, limit - 1)):]
+    return out
+
+
+def frame_view(text: str, *, limit: int, speaker: bool = False,
+               path_name: str = "") -> tuple[str, dict]:
+    """Досье под потолок кадра — КЕАТ 17.08: «тело по требованию, в кадре указатель».
+
+    Голова («Кто», «Характер», «Сейчас») едет целиком; «Факты» — ХВОСТОМ, потому что
+    `remember` дописывает в конец и свежее важнее давнего; «Открытые нити» — только
+    говорящему; «Связи» не едут никогда — это ответ на вопрос «кто кому кто», а не груз
+    каждого хода. Обрыв назван вслух: сколько показано, где целиком, какой рукой.
+    `limit <= 0` или досье короче потолка — текст как есть.
+    Возвращает (текст, {"shown", "total", "cut"}).
+    """
+    total = len(text)
+    if limit <= 0 or total <= limit:
+        return text, {"shown": total, "total": total, "cut": False}
+    name, body = parse(text)
+    head = {k: v for k, v in body.items()
+            if k.startswith("_") or k in (WHO, CHARACTER, NOW)}
+    rendered_head = render(name, head)
+    budget = max(0, limit - len(rendered_head))
+    facts = (body.get(FACTS) or "").strip()
+    loops = (body.get(LOOPS) or "").strip() if speaker else ""
+    loops_share = min(len(loops) + 1, budget // 4) if loops else 0
+    facts_share = max(0, budget - loops_share)
+    view = dict(head)
+    if facts and facts_share > 0:
+        view[FACTS] = _tail_lines(facts, facts_share)
+    if loops and loops_share > 0:
+        view[LOOPS] = _tail_lines(loops, loops_share)
+    rendered = render(name, view).rstrip()
+    where = f"memory/people/{path_name}" if path_name else "memory/people/"
+    note = (f"\n\n[досье обрезано под потолок кадра: показано {len(rendered)} из {total} "
+            f"знаков; «Факты» — хвост (свежее); «Открытые нити» "
+            f"{'хвостом' if speaker else 'не показаны'}; «Связи» не показаны; "
+            f"целиком: {where} — рукой чтения файла или recall]")
+    return rendered + note, {"shown": len(rendered), "total": total, "cut": True}
+
+
 def write(slug: str, name: str, body: dict[str, str]) -> None:
     p = path_for(slug)
     p.parent.mkdir(parents=True, exist_ok=True)

@@ -851,6 +851,22 @@ class TheKnockingThinsOutButNeverStops(unittest.TestCase):
         self._tick(progress=True)
         self.assertEqual(self._idle_marks(), [], "сдвинувшийся ран не холостой")
 
+    def test_blocked_listing_does_not_claim_an_automatic_retry(self):
+        """Historical idle evidence must not advertise a retry for blocked work."""
+        for _ in range(agent.RESUME_FREE_ATTEMPTS + 4):
+            self._tick(elapsed=agent.RESUME_BACKOFF_CAP_SECONDS + 1.0)
+        manifest = self.manager.manifest(self.run_id)
+        self.manager.transition(
+            self.run_id, "blocked", expected="paused",
+            reason="task_control(blocked): needs an external patch",
+            details={"task_control": {"action": "blocked",
+                                      "blocker": "needs an external patch"}},
+        )
+        with mock.patch.object(agent, "_seconds_since", return_value=1.0):
+            listing = agent.tool_list_active_runs()
+        self.assertIn("[blocked]", listing)
+        self.assertNotIn("следующая попытка", listing)
+
     def test_she_can_see_the_delay_in_her_own_listing(self):
         """Отсроченный ран обязан отличаться от того, который дожимают каждые 45 секунд."""
         for _ in range(agent.RESUME_FREE_ATTEMPTS + 4):

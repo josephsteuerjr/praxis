@@ -926,17 +926,18 @@ class TestOverdueWhenWarning(TaskTargetBase):
         self._orig.append((social, "category", social.category))
         social.category = lambda sid: "known"
 
-    def test_overdue_message_warns_and_reminds_about_raw_body(self):
+    def test_overdue_message_warns_and_requires_fresh_decision(self):
         self._ok()
         past = (_dt.datetime.now() - _dt.timedelta(hours=6)).isoformat(timespec="minutes")
         out = agent.tool_remind_self("message", "поздравь с релизом", past, "@vasya")
         self.assertIn("Наметила #", out)
         self.assertIn("уже прошёл", out, "прошедший срок обязан быть назван громко")
-        self.assertIn("как есть", out, "kind=message: тело письма = текст цели, напомнить")
+        self.assertIn("не уйдёт автоматически", out)
+        self.assertIn("решу заново", out)
         t = tasks_mod.list_open()[-1]
         self.assertEqual(t["when"], past, "срок не переписывается за её спиной")
 
-        # Контроль: будущее — без предупреждения, и без служебной подсказки про письмо.
+        # Контроль: будущее — без предупреждения о просроченном сроке.
         future = (_dt.datetime.now() + _dt.timedelta(hours=6)).isoformat(timespec="minutes")
         out2 = agent.tool_remind_self("message", "поздравь с релизом", future, "@vasya")
         self.assertNotIn("уже прошёл", out2)

@@ -19,6 +19,7 @@ from __future__ import annotations
 import praxis_time
 import contextlib
 import copy
+import difflib
 import contextvars
 import functools
 import concurrent.futures as _futures
@@ -52,8 +53,10 @@ import desires
 import frame_layout
 import frame_shadow
 import frame_measure
+import keat_economy
 import pre_model_timing
 import frame_serve
+import keat_live
 import frame_trace
 import graph
 import group_context
@@ -310,6 +313,9 @@ _TELETHON: dict = {}
 # Медиа-выход живого хода собирается локально и уходит в Telegram только ПОСЛЕ общего
 # read-before-write guard. ContextVar не смешивает параллельные asyncio.to_thread ходы.
 _TURN_CHANNEL: ContextVar["ChannelContext | None"] = ContextVar("praxis_turn_channel", default=None)
+_KEAT_ORIGINAL_INGRESS: ContextVar[bool] = ContextVar("praxis_keat_original_ingress", default=False)
+_KEAT_PROJECTION: ContextVar[dict | None] = ContextVar("praxis_keat_projection", default=None)
+_KEAT_HISTORY_SINK: ContextVar[dict | None] = ContextVar("praxis_keat_history_sink", default=None)
 _TURN_HISTORY: ContextVar[list | None] = ContextVar("praxis_turn_history", default=None)
 # Может ли мутация `_TURN_HISTORY` изменить источник следующего хода. В живом Telegram
 # сюда приезжает очищенный снимок ролей, а не хранилище ленты; direct `respond` передаёт
@@ -760,6 +766,55 @@ def _state_record(fact: str, **fields) -> str:
     return json.dumps({"fact": fact, **fields}, ensure_ascii=False, separators=(",", ":"))
 
 
+_DURABLE_RUNS_CACHE: dict = {"at": 0.0, "counts": {}}
+
+
+def _durable_runs_counts() -> dict[str, int]:
+    """Сколько прогонов живёт сейчас — по манифестам СВЕЖИХ прогонов, с кэшем.
+
+    12.09, подстадии сборки кадра: `list_runs(NONTERMINAL)` на каждом ходе перечислял
+    ВСЕ прогоны (`root.glob("*/*/manifest.json")` — тысячи каталогов в 29 ГБ, каждый под
+    замком со свёрткой WAL) и держал блок состояния 30–435 с на ходе. Пассивной
+    осознанности «сколько прогонов живёт» хватает свежих (PRAXIS_STATE_RUNS_HOURS, 48 ч)
+    и статуса из манифеста без свёртки; ответ живёт PRAXIS_STATE_RUNS_TTL секунд (30).
+    Полный точный список — рукой `list_active_runs`, как и раньше.
+    """
+    try:
+        ttl = max(0.0, float(os.getenv("PRAXIS_STATE_RUNS_TTL", "30") or 30))
+        hours = max(1.0, float(os.getenv("PRAXIS_STATE_RUNS_HOURS", "48") or 48))
+    except ValueError:
+        ttl, hours = 30.0, 48.0
+    now = time.monotonic()
+    if ttl > 0 and _DURABLE_RUNS_CACHE["counts"] and now - float(_DURABLE_RUNS_CACHE["at"]) < ttl:
+        return dict(_DURABLE_RUNS_CACHE["counts"])
+    counts: dict[str, int] = {}
+    root = _runs().root
+    cutoff = (_dt.datetime.now(_dt.timezone.utc)
+              - _dt.timedelta(hours=hours)).strftime("%Y%m%dT%H%M%S")
+    months = {(_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=d)).strftime("%Y-%m")
+              for d in (0, int(hours // 24) + 1)}
+    for month in sorted(months):
+        month_dir = root / month
+        if not month_dir.is_dir():
+            continue
+        try:
+            names = os.listdir(month_dir)
+        except OSError:
+            continue
+        for name in names:
+            if not name.startswith("run-") or name[4:19] < cutoff:
+                continue
+            try:
+                with open(month_dir / name / "manifest.json", "r", encoding="utf-8") as fh:
+                    status = str((json.load(fh) or {}).get("status") or "")
+            except (OSError, ValueError):
+                continue
+            if status in run_manager.NONTERMINAL_STATUSES:
+                counts[status] = counts.get(status, 0) + 1
+    _DURABLE_RUNS_CACHE.update(at=now, counts=dict(counts))
+    return counts
+
+
 def build_state_block(*, hide_identity_load: bool = False,
                       split_counters: bool | None = None,
                       split_tail: bool | None = None) -> str:
@@ -800,7 +855,8 @@ def build_state_block(*, hide_identity_load: bool = False,
     except Exception:
         pass
     try:
-        snap = llm.snapshot()
+        with pre_model_timing.span("state.llm"):
+            snap = llm.snapshot()
         roles = []
         for role in ("voice", "evaluator"):
             state = snap.get(role) if isinstance(snap, dict) else None
@@ -877,7 +933,8 @@ def build_state_block(*, hide_identity_load: bool = False,
     except Exception:
         pass
     try:
-        snap = capabilities.snapshot()
+        with pre_model_timing.span("state.capabilities"):
+            snap = capabilities.snapshot()
         tools = snap.get("tools") if isinstance(snap, dict) else {}
         tools = tools if isinstance(tools, dict) else {}
         gates = tools.get("gates") if isinstance(tools.get("gates"), dict) else {}
@@ -901,12 +958,9 @@ def build_state_block(*, hide_identity_load: bool = False,
     try:
         # Её durable-run слой — то, чего НЕ видит my_agenda. Пассивная осознанность: сколько
         # прогонов сейчас живёт и в каком состоянии, чтобы «всё тихо» не расходилось с реальностью.
-        live = _runs().list_runs(statuses=tuple(run_manager.NONTERMINAL_STATUSES), limit=None)
-        counts: dict[str, int] = {}
-        for item in live:
-            key = str(item.get("status") or "")
-            counts[key] = counts.get(key, 0) + 1
-        if live:
+        with pre_model_timing.span("state.durable_runs"):
+            counts = _durable_runs_counts()
+        if counts:
             rows.append(_state_record(
                 "durable_runs",
                 running=counts.get("running", 0),
@@ -918,7 +972,8 @@ def build_state_block(*, hide_identity_load: bool = False,
         pass
     try:
         mounted = bool(serverd_client.available())
-        status = serverd_client.status() if mounted else {}
+        with pre_model_timing.span("state.server_body"):
+            status = serverd_client.status() if mounted else {}
         operations = status.get("operations") if isinstance(status, dict) else []
         operations = operations if isinstance(operations, list) else []
         running = sum(
@@ -934,7 +989,10 @@ def build_state_block(*, hide_identity_load: bool = False,
         pass
     try:
         configured = bool(body_client.available())
-        probe = body_client.status_probe(timeout=5) if configured else {}
+        # 12.09: проба через кэш (см. body_client.status_probe_cached) — прежняя
+        # `status_probe(timeout=5)` стоила до 10 с КАЖДОМУ ходу при отключённом теле.
+        with pre_model_timing.span("state.body_probe"):
+            probe = body_client.status_probe_cached() if configured else {}
         rows.append(_state_record(
             "windows_body", configured=configured,
             online=bool(probe.get("ok")) if isinstance(probe, dict) else False,
@@ -1038,7 +1096,9 @@ def build_state_block(*, hide_identity_load: bool = False,
     except Exception:
         pass
     try:
-        rows.append(_state_record("self_git", recent_commit_count=len(selfgit.recent(3))))
+        with pre_model_timing.span("state.self_git"):
+            recent_commits = len(selfgit.recent(3))
+        rows.append(_state_record("self_git", recent_commit_count=recent_commits))
     except Exception:
         pass
     if not rows:
@@ -1282,11 +1342,13 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
     ]
     for label, reader in continuity_readers:
         try:
-            add(label, reader())
+            with pre_model_timing.span("state_evidence." + label):
+                add(label, reader())
         except Exception:
             pass
     try:
-        pending = selfdev.pending_review()
+        with pre_model_timing.span("state_evidence.selfdev"):
+            pending = selfdev.pending_review()
         add("selfdev_pending_proposals", [
             {"id": item.get("id"), "title": item.get("title")}
             for item in pending[-3:] if isinstance(item, dict)
@@ -1294,7 +1356,8 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
     except Exception:
         pass
     try:
-        add("self_git_recent_commits", selfgit.recent(3))
+        with pre_model_timing.span("state_evidence.self_git"):
+            add("self_git_recent_commits", selfgit.recent(3))
     except Exception:
         pass
     return "".join(
@@ -2874,7 +2937,7 @@ def tool_my_capabilities() -> str:
         offered = None
         if ctx is not None:
             try:
-                offered = [str(t.get("name") or "") for t in offered_tools_for(ctx)]
+                offered = [str(t.get("name") or "") for t in catalog_tools_for(ctx)]
             except Exception:
                 offered = None   # лучше промолчать о руках, чем соврать про них
         return capabilities.describe(_active_scope(), offered=offered)
@@ -2965,7 +3028,8 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
                      after_run: str = "") -> str:
     """Наметить себе намерение к сроку — твой сознательный выбор вернуться к чему-то, не тикет.
     kind: wake (разбудить себя СО СВЯЗЬЮ) | window (уйти в фокус; Telethon закрыт) |
-    message (отложенная доставка человеку) | note (напоминание себе/владельцу) | email.
+    message (намерение сказать человеку к сроку; перед отправкой проснуться и решить заново) |
+    note (напоминание себе/владельцу) | email.
     when: 'in 2h', 'today 18:00', 'daily 09:00'…
 
     PASS 9.4 (kind=message): адресат резолвится через мост В МОМЕНТ ПОСТАНОВКИ — честная ошибка
@@ -3124,12 +3188,11 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
                  f"а не когда, возможно, имелось в виду. Если это про другое утро — "
                  f"скажи 'tomorrow HH:MM' или явную дату, перепоставлю.")
         if t["kind"] == "message":
-            # Той же ночи вторая половина беды: goal kind=message ушёл адресатам сырым
-            # текстом задачи — с «Написать <имя> (<имя>, @<handle>…)» и «ПРИОРИТЕТ».
-            # Тело письма = текст цели, дословно; напоминание об этом — здесь, где оно
-            # ещё можно успеть прочитать.
-            note += (" И помни: текст цели уйдёт адресату как есть — держи в нём только "
-                     "само письмо, без служебных пометок.")
+            # С 12.09 текст старого намерения больше не уходит человеку по тиканью часов.
+            # Срок поднимает живой ход: я вижу исходный текст и адресата, проверяю свежие
+            # отношения/границы и сама решаю — отправить, переписать, отложить или отпустить.
+            note += (" Сообщение не уйдёт автоматически: к сроку я проснусь со связью, "
+                     "перепроверю актуальность и решу заново.")
     if nothing_to_wait_for:
         note += f" Ждать нечего: {nothing_to_wait_for} — созреет на ближайшем тике."
     if crowded:
@@ -4073,6 +4136,10 @@ _COMPUTER_ACTION_SCOPES = {
     "read": "computer.files", "hash": "computer.files",
     "write": "computer.files", "replace": "computer.files",
     "desktop_status": "computer.apps", "windows": "computer.apps",
+    "read_window": "computer.apps", "act_element": "computer.apps",
+    # Поиск ничего не меняет, но ходит по дереву чужого окна — то же право, что у
+    # чтения окна: смотреть на чужие приложения владелец разрешает отдельно.
+    "find_elements": "computer.apps",
     "activate": "computer.apps", "input": "computer.apps",
     "type_text": "computer.apps", "hotkey": "computer.apps",
     "key": "computer.apps", "move": "computer.apps",
@@ -4210,7 +4277,11 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
                   width: int | None = None, height: int | None = None,
                   name: str = "", limit_chars: int = 1_000_000,
                   start: int = 1, end: int = 0, content: str = "", old: str = "",
-                  new: str = "", expected_sha256: str = "", backup: bool = False) -> str:
+                  new: str = "", expected_sha256: str = "", backup: bool = False,
+                  shape: str = "", text_contains: str = "", max_nodes: int = 0,
+                  max_depth: int = 0, automation_id: str = "", role: str = "",
+                  nth: int = -1, element_action: str = "", element_limit: int = 0,
+                  idempotency_key: str = "") -> str:
     """Caller-authorized body actions; the Windows client still makes no decisions."""
     import computer_inventory
     action = str(action or "").strip().lower()
@@ -4221,7 +4292,7 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
     if not required:
         return ("action: status | inventory | list | stat | read | hash | write | replace | "
                 "send | run | poll | stop | "
-                "desktop_status | windows | activate | input | type_text | hotkey | key | "
+                "desktop_status | windows | read_window | find_elements | act_element | activate | input | type_text | hotkey | key | "
                 "move | click | scroll | screenshot | observe | "
                 "clipboard_read | clipboard_write | processes")
     if not _computer_allowed(required):
@@ -4233,7 +4304,7 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
         # чтение/пересылка, запись на диск остаётся суверенной (владелец или сама Praxis).
         return "Запись файлов на компьютере — только владелец или сама Praxis; грант computer.files её не включает."
     if execution != "interactive" and action in {
-        "desktop_status", "windows", "activate", "input", "type_text", "hotkey", "key",
+        "desktop_status", "windows", "read_window", "find_elements", "act_element", "activate", "input", "type_text", "hotkey", "key",
         "move", "click", "scroll", "screenshot", "observe",
         "clipboard_read", "clipboard_write",
     }:
@@ -4323,6 +4394,58 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
             offset=offset, limit=limit, visible_only=visible_only,
             pid=(pid or None), title_contains=title_contains, execution=execution,
         )
+    elif action == "read_window":
+        result = body_client.desktop_window_read(
+            hwnd=(hwnd or None), shape=shape, text_contains=text_contains,
+            visible_only=visible_only, max_nodes=(max_nodes or None),
+            max_depth=(max_depth or None), timeout_ms=(timeout_ms or None),
+            execution=execution,
+        )
+        return body_client.format_window_read(result)
+    elif action == "find_elements":
+        # Смотреть, ничего не трогая. `timeout_ms` здесь — «сколько ждать ПОЯВЛЕНИЯ»:
+        # диалог, который вот-вот нарисуется, дожидаются этим, а не паузой наугад.
+        result = body_client.desktop_element_find(
+            hwnd=(hwnd or None),
+            automation_id=automation_id, role=role, name=name,
+            name_contains=name_contains, value_contains=text_contains,
+            limit=(int(element_limit) if element_limit else None),
+            timeout_ms=(timeout_ms if timeout_ms else 0),
+            max_nodes=(int(max_nodes) if max_nodes else None),
+            max_depth=(int(max_depth) if max_depth else None),
+            execution=execution,
+        )
+        return body_client.format_element_find(result)
+    elif action == "act_element":
+        # Отбор обязан быть НЕПУСТЫМ, и это проверяет тело: действовать над «любым
+        # элементом окна» — промах по устройству. Двое подошедших — тоже ответ тела
+        # («ambiguous» со списком кандидатов), а не наш выбор первого попавшегося.
+        if not str(element_action or "").strip():
+            return ("act_element: скажи element_action — invoke, set_value, toggle, expand, "
+                    "collapse, select, scroll_into_view или focus")
+        # A retry must address the SAME journal entry, not mint another toggle/invoke.
+        client_key = str(idempotency_key or "").strip()
+        if not client_key or len(client_key) > 200:
+            return "act_element: нужен стабильный idempotency_key (1..200 символов); повтор того же намерения — тот же ключ"
+        actor = _computer_actor()
+        if not actor:
+            return "act_element: не определён principal для ключа действия"
+        digest = hashlib.sha256(
+            f"computer-element-v1\0{actor}\0{client_key}".encode("utf-8")
+        ).hexdigest()
+        result = body_client.desktop_element_act(
+            str(element_action).strip(), hwnd=(hwnd or None),
+            automation_id=automation_id, role=role, name=name,
+            name_contains=name_contains, value_contains=text_contains,
+            nth=(int(nth) if nth is not None and int(nth) >= 0 else None),
+            text=(text if str(element_action).strip() == "set_value" else None),
+            timeout_ms=(timeout_ms if timeout_ms else 3000),
+            max_nodes=(int(max_nodes) if max_nodes else None),
+            max_depth=(int(max_depth) if max_depth else None),
+            execution=execution, request_id=f"element-req-{digest}",
+            operation_id=f"element-op-{digest}",
+        )
+        return body_client.format_element_act(result)
     elif action == "activate":
         if not hwnd:
             return "activate: нужен hwnd из action=windows"
@@ -5264,10 +5387,14 @@ def tool_list_active_runs(limit: int = 20) -> str:
         # неразличимы для неё БАЙТ В БАЙТ — а это разные решения с её стороны.
         pause = ""
         try:
-            wait = resume_wait_seconds(_runs(), run_id)
-            if wait > 0:
-                pause = (f" · следующая попытка через ~{int(wait // 60)}м"
-                         if wait >= 60 else " · следующая попытка вот-вот")
+            # `blocked` remains visible as unfinished work, but it is not scheduled.
+            # Showing a backoff countdown here would contradict the scanner and her
+            # explicit task_control contract even if historical idle rows remain.
+            if str(r.get("status") or "") != "blocked":
+                wait = resume_wait_seconds(_runs(), run_id)
+                if wait > 0:
+                    pause = (f" · следующая попытка через ~{int(wait // 60)}м"
+                             if wait >= 60 else " · следующая попытка вот-вот")
         except Exception:
             pass
         out.append(f"{run_id[:28]} [{r.get('status') or '?'}] "
@@ -6529,7 +6656,8 @@ REMIND_SELF_TOOL = {
         "Наметить себе намерение к сроку — твой сознательный выбор вернуться к чему-то, не тикет "
         "и не обязательство. kind: wake (разбудить себя СО СВЯЗЬЮ: живой ход, Telegram открыт) | "
         "window (уйти в фокус к сроку; на время окна Telethon закрыт — тебя не прерывают, но и "
-        "живых диалогов нет) | message (отложенная доставка человеку в Telegram) | note "
+        "живых диалогов нет) | message (намерение сказать человеку к сроку; часы сначала "
+        "поднимут живой ход для проверки актуальных отношений и границ, а не отправят текст) | note "
         "(напоминание себе/владельцу) | email. when: ISO datetime, or "
         "'in 2h'/'in 30m'/'in 2m', 'today 14:00'/'tomorrow 10:00', 'daily 02:00' (recurring), "
         "'every 4h'. target: recipient for email/message. "
@@ -7025,8 +7153,26 @@ COMPUTER_TOOL = {
     "name": "computer",
     "description": (
         "Use the connected Windows computer from any Telegram chat where this caller has an owner-issued grant. "
+        "read_window reads the UI Automation control tree as text; hwnd defaults to foreground. "
+        "shape=tree|flat, text_contains, visible_only, max_nodes and max_depth bound the read. "
+        "Node ids index this answer only, not stable action targets; truncation is reported. "
+        "act_element requires a stable idempotency_key: reuse it only for retries of the same intent; "
+        "changed intent with the same key is refused by the body journal. "
+        "find_elements looks for elements by the SAME selector without touching anything: automation_id, role, name, "
+        "name_contains or value_contains, and it answers with every match (element_limit caps how many are shown), "
+        "each named the way you would name it to act on it. timeout_ms here means HOW LONG TO WAIT FOR IT TO APPEAR — "
+        "that is how you wait for a dialog to be drawn instead of sleeping and hoping. It also says whether the whole "
+        "window was read: \"not found\" and \"I did not finish looking\" are different answers. "
+        "act_element does something TO A NAMED ELEMENT instead of to a point on screen: name it with automation_id "
+        "(exact), role, name or name_contains and say element_action=invoke|set_value|toggle|expand|collapse|select|"
+        "scroll_into_view|focus. It goes through UI Automation patterns, so no pixels are involved: DPI, a window that "
+        "moved and a list that scrolled stop being your problem, and set_value types INTO THE FIELD rather than into "
+        "whatever has focus. It WAITS for the element up to timeout_ms, so no sleep before it. Several matches are "
+        "REFUSED with the candidates listed — narrow the selector or say nth; an element without the needed pattern is "
+        "refused with the patterns it does have, never silently clicked at coordinates. ok:true means the pattern was "
+        "invoked; inspect element_after when available — whether that achieved your goal is yours to judge. "
         "status/inventory/list/stat are eyes; send exports an exact local path and sends the verified file to the "
-        "CURRENT chat; run/poll/stop manage PowerShell processes. desktop_status/windows/activate/input/screenshot/observe/"
+        "CURRENT chat; run/poll/stop manage PowerShell processes. desktop_status/windows/read_window/act_element/activate/input/screenshot/observe/"
         "clipboard_read/clipboard_write/processes are native interactive-desktop hands (no Office COM). Prefer the "
         "typed type_text/hotkey/key/move/click/scroll actions; input accepts one ordered mixed events batch. For scroll, "
         "use signed steps or direction=up/down/left/right; the server converts one step to one Win32 notch. Wheel "
@@ -7051,10 +7197,27 @@ COMPUTER_TOOL = {
         "action": {"type": "string", "enum": [
             "status", "inventory", "list", "stat", "read", "hash", "write", "replace",
             "send", "run", "poll", "stop",
-            "desktop_status", "windows", "activate", "input", "type_text", "hotkey", "key",
+            "desktop_status", "windows", "read_window", "find_elements", "act_element", "activate", "input", "type_text", "hotkey", "key",
             "move", "click", "scroll", "screenshot", "observe",
             "clipboard_read", "clipboard_write", "processes",
         ]},
+        "shape": {"type": "string", "enum": ["tree", "flat"]},
+        "text_contains": {"type": "string", "description": "read_window: name/value filter; act_element: value substring selector"},
+        "max_nodes": {"type": "integer", "description": "read_window/act_element/find_elements: node limit (body clamps)"},
+        "max_depth": {"type": "integer", "description": "read_window/act_element/find_elements: cap on tree depth (body clamps)"},
+        "element_limit": {"type": "integer",
+                          "description": "find_elements: how many matches to show (default 20, capped). Not `limit`: that one belongs to reading files, and two keys of the same name in one schema silently become one"},
+        "idempotency_key": {"type": "string", "description": "act_element: stable client key; same intent retry MUST reuse this key; new intent needs a new key"},
+        "element_action": {"type": "string",
+                           "enum": ["invoke", "set_value", "toggle", "expand", "collapse",
+                                    "select", "scroll_into_view", "focus"],
+                           "description": "act_element: what to do to the named element"},
+        "automation_id": {"type": "string",
+                          "description": "act_element/find_elements: the element's AutomationId (exact, case-sensitive) — the most durable way to name it"},
+        "role": {"type": "string",
+                 "description": "act_element/find_elements: control role as read_window reports it (button, edit, list_item...)"},
+        "nth": {"type": "integer",
+                "description": "act_element: which of several matches to take, from 0; omit and several matches are refused rather than guessed"},
         "path": {"type": "string"}, "caption": {"type": "string"},
         "command": {"type": "string"}, "cwd": {"type": "string"},
         "operation_id": {"type": "string"},
@@ -7787,6 +7950,415 @@ PRAXIS_SELF_TOOLS = [
     if str(tool.get("name") or "") not in _HUMAN_OWNER_ONLY_TOOL_NAMES
 ]
 
+
+# ── Руки → указатели (12.09, КЕАТ 17.08, правка Егора: «диспетчер по умолчанию») ────────
+#
+# Замер 12.09: манифест 101 руки = 73 451 знак ≈ 22 тыс. токенов в КАЖДОМ кадре, 44 %
+# хода в личке Егора и 78 % кадра Миры. По контракту 17.08 родных рук 3–4, остальное —
+# указатель «имя + строка», схема грузится ПО ТРЕБОВАНИЮ и падает в НАКОПИТЕЛЬ как
+# результат руки (префикс цел, эпоха не переворачивается).
+#
+# Как устроено:
+#   * `catalog_tools_for(ctx)` — прежний полный список (то, что модель МОЖЕТ позвать);
+#   * `offered_tools_for(ctx)` — то, что уезжает в `tools`: родные (NATIVE_HAND_NAMES) +
+#     `describe` + `call` (+ провайдерский web_search, у него схемы нет по построению);
+#   * указатель «имя — назначение» едет секцией `contract.hands_pointer` системного
+#     префикса (стабилен для комнаты — кэш цел); строки — HAND_PURPOSE, а не обрезки
+#     описаний: при указателях модель выбирает по имени и одной строке (слово Егора 12.09);
+#   * `describe(name)` → JSON схемы результатом руки; `call(name, args_json)` →
+#     в тул-цикле блок ПЕРЕПИСЫВАЕТСЯ во внутреннюю руку ДО durable-записи, побочных
+#     эффектов, потолка времени и расписок — то есть внутренняя рука проходит ровно ту же
+#     воронку, что и родная; в ленте модели остаётся её собственный вызов `call`.
+#   * рычаг: PRAXIS_TOOLS_POINTERS=off — прежние 101 схема байт-в-байт.
+_NATIVE_CORE = frozenset({
+    "reply", "end_turn", "stay_silent", "remember", "recall", "describe", "call",
+    "task_control",
+})
+# 13.09: родные не только «без чего нет хода», но и те, которыми она живёт. Замер по
+# events.jsonl всех прогонов за 14 дней (30.08–13.09, 1 875 прогонов, 20 672 вызова):
+# coding_inspect 2306, coding_agent 2179, shell 2045, coding_verify 1093, coding_run 1039,
+# fs_read 820, coding_session 566, telegram_account 384, task_control 342, fs_search 336,
+# coding_edit 302, remind_self 297, read_run_result 295, web_find 282, manage_desire 249,
+# group_context 246, web_read 241, git 230, fs_edit 210, manage_notes 177,
+# list_active_runs 168, computer 160, recent_turns 158, my_agenda 152, read_chat 148,
+# read_log 146, manage_loop 144 — дальше реже десяти раз в день (remember 133, fs_ls 89,
+# journal 56, send_message 67, my_capabilities 45, react — единицы). Порог: ≥ 10 вызовов в
+# день. Вечер 12.09 в AbstractDL показал, что бывает иначе: coding_* исчезли из обихода,
+# describe стал 14 % вызовов, вместо рук — shell. Руку, которой не видно, она не зовёт.
+# Исключение — `computer` (160 вызовов, но схема 9 278 знаков, треть всего набора): едет
+# указателем с сигнатурой. Итог: ~24 тыс. знаков схем + ~6 тыс. указатель против 70 тыс.
+# полного манифеста. Свой состав — рычагом PRAXIS_NATIVE_HANDS=имя,имя (ядро остаётся всегда).
+_NATIVE_BY_USE = frozenset({
+    "coding_inspect", "coding_agent", "shell", "coding_verify", "coding_run", "fs_read",
+    "coding_session", "telegram_account", "fs_search", "coding_edit", "remind_self",
+    "read_run_result", "web_find", "manage_desire", "group_context", "web_read", "git",
+    "fs_edit", "manage_notes", "list_active_runs", "recent_turns", "my_agenda",
+    "read_chat", "read_log", "manage_loop",
+})
+
+
+def _native_hands() -> frozenset:
+    raw = os.getenv("PRAXIS_NATIVE_HANDS")
+    if raw is None:
+        return _NATIVE_CORE | _NATIVE_BY_USE
+    extra = {x.strip() for x in raw.split(",") if x.strip()}
+    return _NATIVE_CORE | frozenset(extra)
+
+
+NATIVE_HAND_NAMES = _native_hands()
+
+DESCRIBE_TOOL = {
+    "name": "describe",
+    "description": (
+        "Показать схему руки из моего указателя (имя, назначение, аргументы), чтобы позвать "
+        "её через `call`. Несколько имён — через запятую. Результат падает в накопитель "
+        "хода; второй раз ту же схему просить не нужно."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string",
+                     "description": "имя руки из указателя; несколько — через запятую"},
+        },
+        "required": ["name"],
+    },
+}
+
+CALL_TOOL = {
+    "name": "call",
+    "description": (
+        "Позвать руку из моего указателя по имени — СРАЗУ, по сигнатуре из указателя, без "
+        "describe: например name=\"fs_read\", args_json='{\"path\": \"soul/SOUL.md\"}' или "
+        "name=\"coding_agent\", args_json='{\"task_id\": \"…\", \"action\": \"spawn\", …}'. "
+        "args_json — JSON-объект по её аргументам (пустой = без аргументов). Рука исполняется "
+        "как родная: те же права, расписки, пределы и тот же результат. `describe` — только "
+        "если сигнатуры мало (перечисления, вложенные объекты), один раз на ход."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "имя руки из указателя"},
+            "args_json": {"type": "string",
+                          "description": "аргументы руки JSON-объектом, например {\"path\": \"soul/SOUL.md\"}"},
+        },
+        "required": ["name"],
+    },
+}
+
+# Группы указателя — порядок чтения; имя, которого нет в группах, уходит в «прочее».
+HAND_GROUPS = (
+    ("разговор и жесты", ("reply", "end_turn", "stay_silent", "say", "task_control", "react",
+                          "narrate", "speak", "send_message", "send_file", "send_media",
+                          "set_avatar", "update_profile")),
+    ("память и я", ("recall", "remember", "journal", "update_self", "manage_identity",
+                    "manage_notes", "manage_loop", "connections", "add_alias",
+                    "forget_connection", "consolidate_context", "home_note", "write_skill",
+                    "manage_desire", "remind_self", "my_agenda", "unschedule", "recent_turns",
+                    "my_capabilities")),
+    ("Telegram и люди", ("search_chats", "search_private_messages", "read_chat",
+                         "read_context", "group_context", "inbox_list", "inbox_read", "admit",
+                         "get_id", "freeze_contact", "freeze_chat", "manage_room",
+                         "telegram_account", "computer_access")),
+    ("файлы и код дома", ("shell", "fs_read", "fs_write", "fs_edit", "fs_ls", "fs_search",
+                          "code_outline", "code_map", "git", "run", "run_tests", "pip_install",
+                          "project_create", "project_list", "project_status",
+                          "start_proposal", "submit_proposal", "proposal_diff",
+                          "list_proposals", "restart_self", "restart_mailbot", "panic")),
+    ("Forge — большая работа", ("coding_session", "coding_inspect", "coding_edit",
+                                "coding_run", "coding_process", "coding_agent",
+                                "coding_checkpoint", "coding_verify", "coding_swarm",
+                                "coding_learn")),
+    ("сервер и компьютер", ("server_status", "server_logs", "manage_service", "host_ctl",
+                            "propose_host_change", "list_host_changes", "computer",
+                            "read_log", "second_look")),
+    ("веб и почта", ("web_read", "web_find", "send_email", "mail_read", "mail_draft_reply")),
+    ("мозг, восприятие, аппетит", ("switch_brain", "manage_perception", "manage_appetite",
+                                   "manage_autonomy", "focus", "rest")),
+    ("прогоны", ("read_run_result", "list_active_runs", "reconcile_run")),
+)
+
+# Назначение одной строкой, от первого лица. Нет в словаре — первая фраза описания.
+HAND_PURPOSE = {
+    "reply": "ответить собеседнику; только так реплика уходит человеку",
+    "end_turn": "закрыть ход явным исходом: done / wait / blocked",
+    "stay_silent": "осознанно промолчать, записав себе причину",
+    "say": "посмотреть свою реплику до отправки и какие руки были в ходе",
+    "task_control": "закрыть рабочий ход своим словом",
+    "react": "поставить эмодзи-реакцию на сообщение",
+    "narrate": "короткая строка о ходе работы в тред, между командами",
+    "speak": "озвучить ответ голосом и приложить аудио в чат",
+    "send_message": "написать в Telegram по своей инициативе: id / @username / имя",
+    "send_file": "отправить файл в текущий чат или адресату",
+    "send_media": "отправить фото, аудио или документ из дома",
+    "set_avatar": "поставить себе аватарку в Telegram",
+    "update_profile": "обновить своё «о себе» и имя в Telegram",
+    "recall": "поиск по своей памяти: люди, дневник, размышления, навыки",
+    "remember": "записать факт о человеке в его досье",
+    "journal": "запись в дневник: что было, что почувствовала",
+    "update_self": "наблюдение о себе с провенансом, не переписывая CURRENT",
+    "manage_identity": "слои и версии души: status / revise SOUL, VOICE, CURRENT",
+    "manage_notes": "мой блокнот: write / list / read заметок и вопросов",
+    "manage_loop": "мои нити внимания: close / park / reopen / list",
+    "connections": "как узел памяти (человек, тема) связан с другими",
+    "add_alias": "привязать имя-алиас к существующему досье",
+    "forget_connection": "убрать связь из графа памяти",
+    "consolidate_context": "свести старую историю в дневник, не потеряв суть",
+    "home_note": "строка в общий домашний слой (Егор и родные)",
+    "write_skill": "записать себе новый навык в soul/skills",
+    "manage_desire": "мои намерения: notice → want → choose → act, с доказательствами",
+    "remind_self": "наметить себе возврат к сроку: пробуждение или окно",
+    "my_agenda": "что я себе наметила к сроку",
+    "unschedule": "снять намеченное по id",
+    "recent_turns": "мои последние прожитые ходы, записанные кодом",
+    "my_capabilities": "честный снимок: что могу и не могу прямо сейчас",
+    "search_chats": "найти свой диалог или чат по имени",
+    "search_private_messages": "поиск текста по своим личкам (только явно)",
+    "read_chat": "подсмотреть последние сообщения соседнего диалога",
+    "read_context": "подтянуть живой контекст текущего чата из Telegram",
+    "group_context": "карта тем и участников этой группы, поиск по ней",
+    "inbox_list": "папки и файлы Telegram-inbox",
+    "inbox_read": "прочитать текстовый файл из inbox с номерами строк",
+    "admit": "впустить человека в «свои» по слову владельца (только Егору)",
+    "get_id": "узнать telegram id по имени или @username",
+    "freeze_contact": "заморозить текущий чужой чат за спам или давление",
+    "freeze_chat": "заморозить или разморозить чат (не бан)",
+    "manage_room": "admission-политика групп: join / leave / режимы комнаты",
+    "telegram_account": "мой аккаунт: join / leave / запросы / подтверждения",
+    "computer_access": "выдать или отозвать доступ к компьютеру (только Егору)",
+    "shell": "полный shell в моём доме /app; правки автокоммитятся в git",
+    "fs_read": "прочитать файл дома с номерами строк",
+    "fs_write": "создать файл (существующий — только с overwrite)",
+    "fs_edit": "точная замена уникального фрагмента в файле",
+    "fs_ls": "содержимое папки: имя, размер, когда менялся",
+    "fs_search": "regex-поиск по дому",
+    "code_outline": "скелет одного python-файла: классы и функции со строками",
+    "code_map": "AST-карта кода: модуль → классы и функции",
+    "git": "мой git: дерево дома (self) или публичное зеркало (public)",
+    "run": "команда в проекте мастерской workspace/projects",
+    "run_tests": "тесты проекта или полный гейт «self»",
+    "pip_install": "пакеты в venv проекта",
+    "project_create": "новый проект мастерской со своим git",
+    "project_list": "проекты мастерской и их размер",
+    "project_status": "git status и размер проекта",
+    "start_proposal": "открыть предложение на правку своего кода: ветка и копия",
+    "submit_proposal": "подать предложение: коммит, полный гейт, запись",
+    "proposal_diff": "полный дифф открытого предложения",
+    "list_proposals": "мои предложения и их судьба",
+    "restart_self": "перезапустить себя на новом коде",
+    "restart_mailbot": "попросить mailbot перезапуститься",
+    "panic": "стоп-кран: встать и не перезапускаться до слова Егора",
+    "coding_session": "durable coding-задача: start / status / finish в своём worktree",
+    "coding_inspect": "глаза задачи: ориентация, символы, ссылки, диагностика",
+    "coding_edit": "правка в задаче: replace / write / patch",
+    "coding_run": "команда в задаче с полным выводом",
+    "coding_process": "долгий процесс в задаче: start / poll / stop",
+    "coding_agent": "независимые субагенты в задаче: spawn / status / result",
+    "coding_checkpoint": "коммит-чекпоинт рабочего дерева задачи",
+    "coding_verify": "план и матрица проверок задачи",
+    "coding_swarm": "координация субагентов: план, запуск, почта",
+    "coding_learn": "уроки инженерии по задаче: recall / record",
+    "server_status": "сервер, где я живу: здоровье и сервисы (только чтение)",
+    "server_logs": "журнал одного из моих сервисов",
+    "manage_service": "перезапуск моих сервисов",
+    "host_ctl": "типизированные root-операции: systemd, docker, pkg, file, net, reboot",
+    "propose_host_change": "старая заявка на правку хоста (legacy)",
+    "list_host_changes": "мои заявки на правку хоста и их судьба",
+    "computer": "Windows-компьютер Егора: файлы, PowerShell, экран, окна, руки",
+    "read_log": "мой журнал раннера: хвост или поиск по подстроке",
+    "second_look": "свежий read-only взгляд на дом без моей персоны",
+    "web_read": "открыть веб-страницу: главный текст и ссылки",
+    "web_find": "поиск в вебе без ключа: DuckDuckGo, Bing",
+    "send_email": "отправить письмо от моего имени",
+    "mail_read": "прочитать письмо из ящика по его хэшу",
+    "mail_draft_reply": "черновик ответа на письмо (отправляет Егор)",
+    "switch_brain": "мой мозг: модели по ролям и переключение",
+    "manage_perception": "рычаги восприятия: дебаунс, кулдауны, порог шума",
+    "manage_appetite": "договор об аппетитах: режим, окна, сон",
+    "manage_autonomy": "glob-паттерны low-risk для своих предложений",
+    "focus": "уйти в себя: окно на своё дело",
+    "rest": "уйти отдохнуть: приватное время, Telegram закрыт",
+    "read_run_result": "прочитать полный результат руки по ResultRef",
+    "list_active_runs": "мои живые durable-прогоны",
+    "reconcile_run": "закрыть застрявший прогон in_doubt",
+    "describe": "показать схему руки из указателя",
+    "call": "позвать руку из указателя по имени",
+}
+
+_TOOL_CATALOG: ContextVar["dict | None"] = ContextVar("praxis_tool_catalog", default=None)
+
+
+def tool_pointers_enabled() -> bool:
+    """Руки указателями (по умолчанию ВКЛЮЧЕНО, КЕАТ 17.08). PRAXIS_TOOLS_POINTERS=off — как было."""
+    return str(os.getenv("PRAXIS_TOOLS_POINTERS", "on") or "on").strip().lower() not in {
+        "0", "off", "false", "no"}
+
+
+def _hand_purpose(tool: dict) -> str:
+    name = str(tool.get("name") or "")
+    known = HAND_PURPOSE.get(name)
+    if known:
+        return known
+    text = " ".join(str(tool.get("description") or "").split())
+    first = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0] if text else ""
+    return (first[:88] + "…") if len(first) > 90 else (first or "без описания")
+
+
+def _hand_signature(tool: dict) -> str:
+    """`fs_read(path, start?, end?)` — по схеме руки: обязательные без знака, остальные с «?».
+
+    13.09: строка «имя — назначение» без аргументов заставляла звать `describe` перед каждой
+    новой рукой (27 из 193 вызовов за вечер). Сигнатура в одну строку снимает почти все
+    эти вызовы: по ней `call` зовётся сразу, а `describe` остаётся для перечислений и
+    вложенных объектов.
+    """
+    name = str(tool.get("name") or "")
+    schema = tool.get("input_schema") if isinstance(tool.get("input_schema"), dict) else {}
+    props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    required = [str(x) for x in (schema.get("required") or []) if str(x) in props]
+    ordered = required + [p for p in props if p not in required]
+    parts = [p if p in required else f"{p}?" for p in ordered[:6]]
+    if len(ordered) > 6:
+        parts.append("…")
+    return f"{name}({', '.join(parts)})"
+
+
+def hands_pointer_text(catalog: list) -> str:
+    """Секция кадра «Мои руки — указатель»: стабильна для комнаты, читается за один взгляд."""
+    by_name = {str(t.get("name") or ""): t for t in catalog
+               if isinstance(t, dict) and t.get("name")}
+    natives = [n for n in by_name if n in NATIVE_HAND_NAMES]
+    provider = [str(t.get("type") or "web_search") for t in catalog
+                if isinstance(t, dict) and not t.get("name") and t.get("type")]
+    lines = ["\n\n## Мои руки — указатель (схемы по требованию)",
+             "Со схемой в кадре — родные, которыми хожу чаще всего: " + ", ".join(sorted(natives))
+             + (" и провайдерский web_search" if provider else "") + ".",
+             "Остальные — те же мои руки, только их схема не едет в каждый кадр. Зову их через "
+             "`call` СРАЗУ, по сигнатуре ниже: `call(name=\"fs_write\", args_json='{\"path\": "
+             "\"workspace/x.md\", \"content\": \"…\"}')` — исполняется как родная, результат "
+             "приходит обычным результатом руки, расписки те же. `describe(name)` — только если "
+             "сигнатуры мало (перечисление, вложенный объект); один раз на ход, схема остаётся в "
+             "накопителе. Сигнатура: обязательные аргументы без знака, необязательные с «?».",
+             "Имя(аргументы) — назначение:"]
+    placed: set[str] = set()
+    for group, names in HAND_GROUPS:
+        rows = [f"{_hand_signature(by_name[n])} — {_hand_purpose(by_name[n])}" for n in names
+                if n in by_name and n not in NATIVE_HAND_NAMES]
+        placed.update(n for n in names if n in by_name)
+        if rows:
+            lines.append(f"— {group}: " + "; ".join(rows) + ".")
+    rest = [n for n in sorted(by_name) if n not in placed and n not in NATIVE_HAND_NAMES]
+    if rest:
+        lines.append("— прочее: " + "; ".join(
+            f"{_hand_signature(by_name[n])} — {_hand_purpose(by_name[n])}" for n in rest) + ".")
+    return "\n".join(lines) + "\n"
+
+
+def _catalog_for_turn() -> dict:
+    """Каталог рук текущего хода: связанный в `_voice_impl`, иначе по каналу хода."""
+    bound = _TOOL_CATALOG.get()
+    if isinstance(bound, dict):
+        return bound
+    ctx = _TURN_CHANNEL.get()
+    if ctx is None:
+        return {}
+    try:
+        return {str(t.get("name") or ""): t for t in catalog_tools_for(ctx)
+                if isinstance(t, dict) and t.get("name")}
+    except Exception:
+        return {}
+
+
+@contextlib.contextmanager
+def _bind_tool_catalog(ctx: "ChannelContext"):
+    catalog = None
+    try:
+        catalog = {str(t.get("name") or ""): t for t in catalog_tools_for(ctx)
+                   if isinstance(t, dict) and t.get("name")}
+    except Exception:
+        catalog = None
+    token = _TOOL_CATALOG.set(catalog)
+    try:
+        yield
+    finally:
+        _TOOL_CATALOG.reset(token)
+
+
+def tool_describe(name: str = "") -> str:
+    """Схема руки из указателя — результатом руки, в накопитель хода."""
+    catalog = _catalog_for_turn()
+    names = [n.strip() for n in re.split(r"[\s,;]+", str(name or "")) if n.strip()]
+    if not names:
+        return "назови руку: describe(name); имена — в указателе рук"
+    out = []
+    for n in names[:8]:
+        tool = catalog.get(n)
+        if tool is None:
+            close = difflib.get_close_matches(n, list(catalog), n=4, cutoff=0.5)
+            out.append(f"руки «{n}» в этом ходе нет"
+                       + (f"; похожие: {', '.join(close)}" if close else ""))
+            continue
+        out.append(json.dumps({"name": tool.get("name"),
+                               "description": tool.get("description", ""),
+                               "input_schema": tool.get("input_schema")},
+                              ensure_ascii=False, indent=1))
+    return "\n\n".join(out)
+
+
+def _parse_call_args(args_json) -> dict:
+    if args_json in (None, ""):
+        return {}
+    if isinstance(args_json, dict):
+        return dict(args_json)
+    parsed = json.loads(str(args_json))
+    if not isinstance(parsed, dict):
+        raise ValueError("args_json должен быть JSON-объектом {…}")
+    return parsed
+
+
+def _unwrap_dispatch(block: dict) -> tuple[dict, bool, str | None]:
+    """`call(name, args_json)` → блок внутренней руки, ДО durable-записи и воронки.
+
+    Возвращает (блок, переписан_ли, текст_отказа). Отказ — результат руки, а не
+    исключение: модель видит, что не так, и ход жив. Власть не расширяется: имя
+    сверяется с каталогом ЭТОГО хода (`catalog_tools_for(ctx)`), а не с TOOL_IMPL.
+    """
+    if not isinstance(block, dict) or block.get("name") != "call" or not tool_pointers_enabled():
+        return block, False, None
+    raw = block.get("input") if isinstance(block.get("input"), dict) else {}
+    inner = str(raw.get("name") or "").strip()
+    catalog = _catalog_for_turn()
+    if not inner:
+        return block, False, "call: не названа рука — call(name, args_json); имена в указателе"
+    tool = catalog.get(inner)
+    if tool is None or inner in ("call",):
+        close = difflib.get_close_matches(inner, list(catalog), n=4, cutoff=0.5)
+        return block, False, (f"call: руки «{inner}» в этом ходе нет"
+                              + (f"; похожие: {', '.join(close)}" if close else ""))
+    if not callable(TOOL_IMPL.get(inner)):
+        return block, False, f"call: у руки «{inner}» нет исполнителя в этом ходе"
+    try:
+        args = _parse_call_args(raw.get("args_json"))
+    except Exception as exc:
+        return block, False, (f"call({inner}): аргументы не разобрались как JSON-объект — "
+                              f"{type(exc).__name__}: {str(exc)[:120]}. Схема: describe({inner})")
+    return dict(block, name=inner, input=args), True, None
+
+
+def tool_call(name: str = "", args_json: str = "") -> str:
+    """Прямой путь (вне тул-цикла: scout, resume без переписи). Тул-цикл сюда не заходит:
+    там `call` переписывается во внутреннюю руку ещё до durable-записи."""
+    block, dispatched, note = _unwrap_dispatch({"name": "call", "input": {
+        "name": name, "args_json": args_json}})
+    if note is not None:
+        return note
+    impl = TOOL_IMPL.get(block["name"])
+    log.warning("call(%s) исполняется прямым путём, минуя durable-слой", block["name"])
+    return _call_tool_with_ceiling(block["name"], impl, dict(block.get("input") or {}))
+
+
+TOOL_IMPL["describe"] = tool_describe
+TOOL_IMPL["call"] = tool_call
+
 # PASS 10.10: family-DM — возможности как у owner-DM по теплу и делу (задачи/напоминания,
 # общий «дом»), но БЕЗ owner-эксклюзива: никакого shell/rooms/admit/restart/предложений.
 # 10.10 → 26.07: набор родных был подмножеством её собственных рук, а руки теперь не
@@ -8033,6 +8605,13 @@ class ChannelContext:
     # честно значит «не измеряли»: конверт по умолчанию не фабрикуется, иначе
     # сконструированный по дефолту канал был бы неотличим от измеренного.
     envelope: object | None = None
+    # Positive ingress proof for the deliberately narrow flat-root Telegram adapter.
+    telegram_root_group: bool = False
+    # A causally bound recipient whose dossier is needed for an internal scheduled
+    # reassessment. This is deliberately NOT ``principal_id``: the recipient did not
+    # speak, summon the turn, or delegate authority. Setting it grants no private
+    # visibility; that still derives only from the actual Praxis/owner audience.
+    scheduled_target_id: str | int | None = None
 
     @property
     def scope(self) -> str:
@@ -8138,7 +8717,47 @@ def _scope_of(is_dm: bool, owner: bool, known: bool) -> str:
 # последних 100 сообщений; после выхода из него карточка не остаётся фоновым грузом».
 MENTION_WINDOW_MESSAGES = 100
 # Потолок сводки в кадре. Замер 08.08: 17 819 знаков, 12,8% разговорного хода.
-SUMMARY_FRAME_CHARS = 4000
+# 13.09, слово Егора: показывать меньше сырых сообщений, но видеть НОРМАЛЬНУЮ свёртку того,
+# что было. При 4 000 знаках в кадр влезали три последних компакта из 23 тыс. знаков сводки,
+# и остальное для неё не существовало. Рычаг PRAXIS_SUMMARY_FRAME_CHARS; 0 — без потолка
+# (тогда режет только бюджет комнаты `context_summary_chars`).
+SUMMARY_FRAME_CHARS = max(0, int(os.getenv("PRAXIS_SUMMARY_FRAME_CHARS", "12000") or 0))
+# 12.09, КЕАТ: досье присутствующего едет не целиком, а под потолок — голова + хвост
+# «Фактов» (+ нити говорящему) + указатель на файл. Замер 11.09 (frame_trace, 22 следа):
+# тир досье — 33 543 знака в тяжёлом кадре, 44 % системного кадра, единственный тир без
+# потолка; на диске дмитрий-к.md 43 056, егор-косырев.md 24 908. Рычаг:
+# PRAXIS_DOSSIER_FRAME_CHARS (0 — целиком, как было). Не-говорящий получает половину.
+DOSSIER_FRAME_CHARS = 6000
+
+
+def dossier_frame_chars() -> int:
+    try:
+        return max(0, int(os.getenv("PRAXIS_DOSSIER_FRAME_CHARS", str(DOSSIER_FRAME_CHARS))
+                          or 0))
+    except ValueError:
+        return DOSSIER_FRAME_CHARS
+
+
+def _epoch_lifted_dossier(ctx: "ChannelContext"):
+    """Путь досье, которое ЭТОТ кадр поднимает в эпоху E (frame_serve), либо None.
+
+    Под её KEAT (PRAXIS_FRAME_V6=serve) система хода = K + E, и E уже несёт досье
+    собеседника потока целиком (frame_shadow._lifted_source, потолок E_LIFT_MAX).
+    Легаси-конверт evidence вёз то же досье второй раз — ~25 тыс. знаков на ход в
+    личке Егора (замер 12.09). Здесь спрашиваем те же правила, что и подача, и в
+    evidence оставляем указатель вместо тела.
+    """
+    try:
+        import frame_serve
+        import frame_shadow
+        if not frame_serve.enabled(ctx):
+            return None
+        chat_id = str(getattr(ctx, "chat_id", "") or "")
+        if not (getattr(ctx, "is_dm", False) and chat_id and not chat_id.startswith("-")):
+            return None
+        return frame_shadow._dossier_for(chat_id)
+    except Exception:
+        return None
 
 
 def dossier_contract_enabled() -> bool:
@@ -8299,6 +8918,52 @@ def _strip_participant_private_blocks(text: str) -> tuple[str, int]:
     return "".join(kept), hidden
 
 
+def _scheduled_target_moderation_block(ctx: "ChannelContext") -> str:
+    """Canonical action receipts relevant to a due addressed intention.
+
+    This reports observed moderation/boundary changes without inferring motives,
+    relationship health, or what Praxis should do.  It is available only in the
+    internal owner-scoped scheduled wake that supplied the authenticated target id.
+    """
+    target = (_stable_numeric_principal(getattr(ctx, "scheduled_target_id", None))
+              if ctx.praxis_self and ctx.owner_audience else None)
+    if not target:
+        return ""
+    try:
+        import telegram_moderation
+        moderation = telegram_moderation.history_for_sender(
+            telegram_moderation.TARGET_PEER_ID, int(target))
+        moderation_state: object = moderation
+    except Exception as exc:
+        moderation_state = {"unavailable": type(exc).__name__}
+    try:
+        import telegram_admin
+        member_changes = []
+        for row in telegram_admin.history(limit=0):
+            subject = row.get("subject") if isinstance(row, dict) else None
+            if (row.get("status") == "completed"
+                    and row.get("action") in {"restrict", "unrestrict"}
+                    and isinstance(subject, dict)
+                    and str(subject.get("user_id") or "") == str(target)):
+                member_changes.append({
+                    "ts": row.get("ts"), "action": row.get("action"),
+                    "subject": subject, "after": row.get("after"),
+                })
+        boundary_state: object = member_changes
+    except Exception as exc:
+        boundary_state = {"unavailable": type(exc).__name__}
+    facts = {
+        "scheduled_target_id": int(target),
+        "moderation_measures": moderation_state,
+        "member_boundary_changes": boundary_state,
+    }
+    return (
+        "Текущая каноническая история мер/границ для адресата (проверенные журналы; "
+        "это факты действий, не диагноз отношений и не команда отправлять или не отправлять):\n"
+        + json.dumps(facts, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+
+
 def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str:
     """ВСЕ её досье на людей, целиком. Отбора нет — и это решение, а не упрощение.
 
@@ -8358,13 +9023,17 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     # второй утонул в шуме 0,606. Он стоит на том, что постоянный груз не оправдан ничем
     # ИЗМЕРЕННЫМ, и обратим одной переменной `PRAXIS_DOSSIER_ALL=1`.
     principal_now = _stable_numeric_principal(ctx.principal_id)
+    scheduled_target = (_stable_numeric_principal(
+        getattr(ctx, "scheduled_target_id", None))
+        if ctx.praxis_self and owner_audience else None)
+    dossier_principal = scheduled_target or principal_now
     chosen: list[str] = []
     pointers: list[str] = []
     contract = dossier_contract_enabled()
     if contract:
         here = _present_by_transport(ctx)
-        if principal_now:
-            here.add(str(principal_now))
+        if dossier_principal:
+            here.add(str(dossier_principal))
         for path in sorted(directory.glob("*.md")):
             if path.stem.startswith("_"):
                 continue
@@ -8375,20 +9044,34 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
         # открываю цельный документ рукой».
         pointers = [s for s in _mentioned_slugs(ctx, here) if s not in chosen]
         # ⚑ Шестой пункт: в автономном окне (комнаты нет вовсе) не едет ничего, кроме
-        # причинно привязанного человека. Привязка здесь одна наблюдаемая — транспортный
-        # принципал хода; «намерение, сообщение или активная нить» отдельного источника
-        # в кадре пока не имеют, и додумывать его я не стану.
-        if ctx.chat_id is None and ctx.room_id is None and not principal_now:
+        # причинно привязанного человека. Это либо транспортный принципал хода, либо
+        # отдельная аутентифицированная адресная привязка scheduled-намерения. Последняя
+        # не превращает адресата в говорящего/актора и не даёт аудитории новых прав.
+        if ctx.chat_id is None and ctx.room_id is None and not dossier_principal:
             chosen, pointers = [], []
 
     rows: list[str] = []
     total = 0
+    capped = 0
+    lifted = 0
+    cap = dossier_frame_chars() if contract else 0
+    principal_id = dossier_principal
+    bound = people.slug_for_principal(principal_id) if principal_id else ""
+    lifted_path = _epoch_lifted_dossier(ctx) if contract else None
     for path in sorted(directory.glob("*.md")):
         # `_`-префикс — служебное (шаблон `_пример.md`); та же конвенция, что у
         # `people.slug_for_principal`.
         if path.stem.startswith("_"):
             continue
         if contract and path.stem not in chosen:
+            continue
+        if lifted_path is not None and path.resolve() == lifted_path.resolve():
+            # Тело уже в эпохе E этого же кадра — второй раз не везём (КЕАТ: одно тело,
+            # один адрес). Указатель называет и место, и руку.
+            rows.append(f"— {path.stem} · memory/people/{path.name} — тело поднято в "
+                        f"эпоху E этого кадра («поднято в эпоху»), здесь не повторяется; "
+                        f"целиком — рукой чтения файла")
+            lifted += 1
             continue
         try:
             body = visible(people.read_text(path.stem)).strip()
@@ -8400,9 +9083,17 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
             # человеке (я его завела и ничего не записала), а не отсутствие человека.
             rows.append(f"— {path.stem} · memory/people/{path.name} — пусто")
             continue
+        if cap > 0:
+            is_speaker = bool(bound) and path.stem == bound
+            body, info = people.frame_view(
+                body, limit=cap if is_speaker else max(1, cap // 2),
+                speaker=is_speaker, path_name=path.name)
+            if info.get("cut"):
+                capped += 1
         title = str(people.read(path.stem)[0] or path.stem).strip()
         rows.append(f"— {title} · memory/people/{path.name} —\n{body}")
         total += len(body)
+        keat_economy.source("dossier", body, f"memory/people/{path.name}")
     # ⚠ МОЛЧАНИЕ ВМЕСТО НАЗВАННОЙ НЕИЗВЕСТНОСТИ — ЭТО ШАГ НАЗАД, И ТЕСТ ЭТО ПОЙМАЛ.
     # Первая редакция контракта возвращала пустоту, когда ни одно досье не выбрано, — и
     # вместе с телами исчезала строка «кто передо мной кадру НЕ НАЗВАН». Она нужна ровно
@@ -8422,9 +9113,16 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     # строка, которая связывает досье с человеком перед ней, стоит здесь и берётся из
     # привязки, а не из имени. Сегодня привязок ноль, и кадр говорит об этом прямо, а не
     # оставляет её догадываться, к кому из тридцати пяти относится разговор.
-    principal_id = _stable_numeric_principal(ctx.principal_id)
+    principal_id = dossier_principal
     bound = people.slug_for_principal(principal_id) if principal_id else ""
-    if bound:
+    if scheduled_target and bound:
+        who = (f"цель scheduled-намерения: {bound} (адресная привязка по tg "
+               f"{principal_id}, не по имени). Это адресат намерения, НЕ текущий "
+               f"говорящий и НЕ принципал этого хода")
+    elif scheduled_target and principal_id:
+        who = (f"цель scheduled-намерения: tg {principal_id}; привязки к досье нет. "
+               f"Это адресат намерения, НЕ текущий говорящий и НЕ принципал этого хода")
+    elif bound:
         who = f"передо мной: {bound} (привязка по tg {principal_id}, не по имени)"
     elif principal_id:
         who = (f"кто передо мной — кадру НЕ НАЗВАН: у tg {principal_id} нет привязки к "
@@ -8449,10 +9147,17 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
         tail = ("\n\nУПОМЯНУТЫ В ОКНЕ ПОСЛЕДНИХ 100 СООБЩЕНИЙ — досье НЕ загружено, "
                 f"открывается рукой: {named}."
                 + (f" И ещё {len(pointers) - 12}." if len(pointers) > 12 else ""))
+    frame_note = ""
+    if capped:
+        frame_note = (f" Досье под потолок кадра ({cap} знаков говорящему, {max(1, cap // 2)} "
+                      f"остальным): обрезано {capped}, у каждого назван файл целиком.")
+    if lifted:
+        frame_note += (f" {lifted} тело(а) уже подняты в эпоху E этого кадра и здесь не "
+                       f"повторяются.")
     head = (f"досье здесь: {len(rows)} из {total_all}, знаков {total}. Едут целиком те, "
             f"кого транспорт назвал присутствующими; остальные доступны рукой по "
             f"memory/people/ и карте памяти — они не удалены, они не в кадре."
-            f"{veil}\n{who}.")
+            f"{frame_note}{veil}\n{who}.")
     body = ("\n\n" + "\n\n".join(rows)) if rows else ""
     return head + body + tail
 
@@ -8507,6 +9212,7 @@ def _memory_navigation_hint() -> str:
     if len(body) > cap:
         return (locator + " ⚠ Тело индекса (%d знаков) переросло потолок кадра (%d) и "
                 "поэтому здесь не показано целиком." % (len(body), cap))
+    keat_economy.source("index", body, "memory/INDEX.md")
     return body
 
 
@@ -8695,7 +9401,10 @@ def _build_prompt_parts(
     chat_id, is_dm, known, scope = ctx.chat_id, ctx.is_dm, ctx.known, ctx.scope
     owner_audience = ctx.owner_audience
     owner_context = bool(ctx.owner or owner_audience)
-    persona = _persona_text()
+    # 12.09: подстадии сборки (pre_model_timing.span) — стадия `old_context` держала
+    # медиану 18–22 с без единой метки внутри; теперь каждый тир называет свою цену.
+    with pre_model_timing.span("old_context.persona"):
+        persona = _persona_text()
 
     # One authored contract in every room.  No channel-specific morality or style
     # controller is smuggled into the system tail.
@@ -8803,7 +9512,14 @@ def _build_prompt_parts(
          "Для болтовни, шутки и мнения ничего этого не нужно: там твой ответ и есть "
          "результат.\n")),
     ]
-    desire_context = _active_desires_block()
+    if tool_pointers_enabled():
+        with pre_model_timing.span("old_context.hands_pointer"):
+            tail.append(frame_trace.mark("contract.hands_pointer", "dynamic", "text",
+                                         hands_pointer_text(catalog_tools_for(ctx))))
+    else:
+        frame_trace.absent("contract.hands_pointer", "dynamic", "text", "lever_off")
+    with pre_model_timing.span("old_context.desires"):
+        desire_context = _active_desires_block()
     # Структурный тег — вторая проекция той же развилки, что описывает аудиторию
     # ниже. `llm.cache_address` предпочитает его прозовым маркерам: смена слов кадра
     # не должна молча отключать prompt_cache_key.
@@ -8876,7 +9592,8 @@ def _build_prompt_parts(
         )
         # STATE is tier-0.  Raw diary prose is deliberately not injected: it is
         # preserved for explicit episodic recall, never automatic orientation.
-        state = build_state_block(hide_identity_load=ctx.hide_identity_load)
+        with pre_model_timing.span("old_context.state_block"):
+            state = build_state_block(hide_identity_load=ctx.hide_identity_load)
         if state:
             tail.append(frame_trace.mark("state.state_block", "dynamic", "text", f"\n{state}\n"))
         else:
@@ -8978,10 +9695,11 @@ def _build_prompt_parts(
         tiers.append(("Canonical desire continuity",
                       desire_context))
     # Знание о себе — в любой комнате; о ДРУГИХ людях молчит (см. NOT_HERS_LABELS).
-    state_evidence = build_state_evidence_block(
-        hide_identity_load=ctx.hide_identity_load,
-        self_only=not owner_context,
-    )
+    with pre_model_timing.span("old_context.state_evidence"):
+        state_evidence = build_state_evidence_block(
+            hide_identity_load=ctx.hide_identity_load,
+            self_only=not owner_context,
+        )
     if state_evidence:
         tiers.append(("Mutable operational continuity",
                       state_evidence))
@@ -8991,7 +9709,8 @@ def _build_prompt_parts(
     # ⚠ Три тира — сводка, досье, эта комната — говорят о своей ПУСТОТЕ вслух: заголовок
     # остаётся, тело не печатается, подпись называет причину. Список закрыт намеренно, и
     # пустота печатается только там, где решение о тире вообще принималось.
-    summary = read_summary(chat_id) if chat_id is not None else ""
+    with pre_model_timing.span("old_context.summary"):
+        summary = read_summary(chat_id) if chat_id is not None else ""
     if chat_id is not None:
         # ⚑ ЕЁ ПЯТЫЙ ПУНКТ 09.08: «compact-recap не должен постоянно ехать всем архивом.
         # Живая лента остаётся каноном текущего разговора; старые recap доступны
@@ -9006,9 +9725,11 @@ def _build_prompt_parts(
             summary = (f"[сводка обрезана: показано {len(kept)} знаков из {len(summary)}, "
                        f"давнее осталось за кадром и достаётся рукой `recall` или "
                        f"чтением compact-документов по карте памяти]" + chr(10) + kept)
+        keat_economy.source("recap", summary, "conversation:current:recap")
         tiers.append(("Ранее в этом диалоге (сводка)",
                       summary or frame_layout.void("сводки этого разговора ещё нет")))
-    participant_cards = _participant_memory_block(speaker, ctx)
+    with pre_model_timing.span("old_context.dossier"):
+        participant_cards = _participant_memory_block(speaker, ctx)
     if participant_cards or ctx.principal_id is not None:
         # ⚠ Ярлык переписан вместе с содержимым: «короткие профили активных участников»
         # было неправдой дважды — профили больше не короткие (файл целиком) и не
@@ -9022,9 +9743,14 @@ def _build_prompt_parts(
                       + " (внутреннее; что произнести вслух в этой комнате, решаю я)",
                       participant_cards or frame_layout.void(
                           f"нет привязки tg {ctx.principal_id} → memory/people/*")))
+    scheduled_moderation = _scheduled_target_moderation_block(ctx)
+    if scheduled_moderation:
+        tiers.append(("Актуальные меры и границы для адресата scheduled-намерения",
+                      scheduled_moderation))
     # Personal memory belongs to Praxis, not to the current speaker.  This map is an
     # internal orientation layer in every channel; it is not ready-made public copy.
-    index_map = _memory_navigation_hint()
+    with pre_model_timing.span("old_context.index"):
+        index_map = _memory_navigation_hint()
     if index_map:
         tiers.append(("Карта памяти — ВНУТРЕННЯЯ, не разрешение на раскрытие", index_map))
     if scope in ("owner", "family"):
@@ -9040,8 +9766,9 @@ def _build_prompt_parts(
     # ⚠ Следствие названо вслух: темы и отправители теперь лежат в её кадре и в
     # публичных комнатах тоже. Исходящий контур судит то, что она ГОВОРИТ, а не то,
     # что она держит в контексте. Сузить обратно = вернуть сюда условие.
-    mbox = (_mailbox_index() if ctx.mailbox_index_override is None
-            else ctx.mailbox_index_override)
+    with pre_model_timing.span("old_context.mailbox"):
+        mbox = (_mailbox_index() if ctx.mailbox_index_override is None
+                else ctx.mailbox_index_override)
     if mbox:
         # ⚑ ЕЁ ЧЕТВЁРТЫЙ ПУНКТ 09.08: «почтовый индекс убрать из постоянного кадра.
         # Подгружать при почтовом событии, адресном намерении или моём явном обращении
@@ -9066,11 +9793,13 @@ def _build_prompt_parts(
     # 06.08.2026: оба социальных тира сняты с АВТОМАТИЧЕСКОЙ подачи по её решению —
     # обоснование и её дословные слова в `_social_tiers_in_frame`. Руки целы.
     if owner_audience and _social_tiers_in_frame():
-        digest = other_rooms_digest(exclude_chat_id=chat_id)
+        with pre_model_timing.span("old_context.digests"):
+            digest = other_rooms_digest(exclude_chat_id=chat_id)
         if digest:
             tiers.append(("Мои другие комнаты сейчас (живое — что где происходит; "
                           "спросит «как там…» — смотри сюда, не выдумывай)", digest))
-        mine = my_sends_today_digest()
+        with pre_model_timing.span("old_context.digests"):
+            mine = my_sends_today_digest()
         if mine:
             tiers.append(("Кому я уже писала сегодня (моё время, мои слова — прежде чем "
                           "написать снова, посмотри сюда)", mine))
@@ -9111,7 +9840,8 @@ def _build_prompt_parts(
                     log.debug("disclosure extras не собрались", exc_info=True)
             tiers.append(("Визитка (о себе рассказывай отсюда и из проверяемого: STATE/receipts/git)",
                            card))
-    recalled = _recall_block(query, scope)
+    with pre_model_timing.span("old_context.recall"):
+        recalled = _recall_block(query, scope)
     if recalled:
         tiers.append(("ВНУТРЕННЯЯ память, всплывшая по теме (проверь аудиторию перед раскрытием)",
                       recalled))
@@ -9126,6 +9856,7 @@ def _build_prompt_parts(
         budget = 0
     used = len(persona) + len(tail_text)
     chosen, dropped = [], []
+    _tiers_started = time.monotonic()
     for title, body in tiers:
         # Прибор различает две арифметики длины одним полем kind: обычный тир уезжает
         # завёрнутым в json.dumps (переносы становятся \n, кавычки \"), jsonl-тир — телом
@@ -9141,12 +9872,14 @@ def _build_prompt_parts(
             frame_trace.absent("evidence.tier", "evidence", tier_kind, "context_budget",
                                label=title, chars=len(block), cause=cause)
             continue
+        keat_economy.section(body, block)
         chosen.append(frame_trace.mark("evidence.tier", "evidence", tier_kind, block,
                                        label=title, cause=cause,
                                        provenance_chars=sign_chars))
         used += len(block)
     # used_start — ТО ЖЕ выражение, которым считает код выше: прибор и код обязаны мерить
     # одной линейкой, иначе спор о числах не закроется, а сместится.
+    pre_model_timing.add("old_context.tiers", (time.monotonic() - _tiers_started) * 1000)
     frame_trace.note_budget(limit=budget, used_start=len(persona) + len(tail_text),
                             used_final=used, offered=len(tiers), included=len(chosen),
                             dropped=len(dropped))
@@ -9253,6 +9986,23 @@ def _text_of(resp) -> str:
 
 _THINK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
 
+# ⚠ z.ai citation-токены (10.09, группа Ouroboros: Аше дважды указала на артефакты).
+# Эмуляция web_search_20250305 отдаёт сырой JSON результатов с невидимыми маркерами
+# вида citeturn0view0 / turn1search3; реальный Anthropic превращает их в сноски, z.ai —
+# нет, и они проступают в моём тексте как мусор. Чистка сырого JSON-каркаса в llm.py
+# снимает серверную порцию, но не мои собственные копии токенов. Здесь — последний рубеж
+# перед отправкой: любой citeturnN… / turnNsearchM / turnNviewM вырезается из исходящего,
+# включая слитные пачки citeturn0view0turn0search19. Ссылки при этом не теряются: их
+# текст живёт в самом сообщении, а не в токене.
+_CITE_TURN_RE = re.compile(
+    r"(?:cite)?turn\d+(?:view|search)\d+", re.IGNORECASE)
+
+
+def _strip_citation_tokens(text: str) -> str:
+    if not text or "turn" not in text.lower():
+        return text
+    return _CITE_TURN_RE.sub("", text)
+
 
 def _strip_think(text: str) -> str:
     """Снять утёкшую reasoning-разметку GLM из исходящего текста.
@@ -9267,6 +10017,7 @@ def _strip_think(text: str) -> str:
     text = _THINK_RE.sub("", text)
     if "</think>" in text:  # висячий закрывающий тег — до него было размышление
         text = text.split("</think>")[-1]
+    text = _strip_citation_tokens(text)
     return text.replace("<think>", "").strip()
 
 
@@ -9606,6 +10357,7 @@ class ToolObservation:
 
 
 _READ_ONLY_TOOLS = frozenset({
+    "describe",
     "recall", "my_capabilities", "connections", "recent_turns", "my_agenda",
     "list_proposals", "proposal_diff", "read_log", "second_look", "server_status",
     "server_logs", "list_host_changes", "search_chats", "search_private_messages",
@@ -9625,7 +10377,7 @@ def _tool_has_side_effect(name: str, call_input: dict) -> bool:
         # PASS 30 Этап 3: read/hash — чтения; write/replace НАМЕРЕННО отсутствуют
         # (side effect без idempotency-ключа = консервативный recovery-маршрут).
         return str(call_input.get("action") or "").lower() not in {
-            "status", "inventory", "list", "stat", "desktop_status", "windows",
+            "status", "inventory", "list", "stat", "desktop_status", "windows", "read_window",
             "clipboard_read", "processes", "observe", "poll", "read", "hash",
         }
     return name not in _READ_ONLY_TOOLS
@@ -9967,10 +10719,26 @@ def _durable_model_messages(messages: list[dict]) -> list[dict]:
 
 
 def _model_call(system: str, messages: list[dict], tools: list | None = None):
+    """One isolated provider candidate, including exceptional persistence exits."""
+    # Keep these source-level receipt invariants visible to the frame-trace gate;
+    # _model_call_impl owns both expressions after isolation split:
+    #     "system": _scrub_critical_value(...)
+    #     metadata=frame_meta
+    try:
+        return _model_call_impl(system, messages, tools)
+    finally:
+        keat_live.discard_provider()
+
+
+def _model_call_impl(system: str, messages: list[dict], tools: list | None = None):
     """Call the voice model while journaling the full model phase into the bound run."""
     started = time.monotonic()
     phase_timer = pre_model_timing.start()
-    current = run_context.current_run()
+    try:
+        current = run_context.current_run()
+    except Exception:
+        keat_live.fallback_bound(messages)
+        raise  # Preserve run/durability failure semantics; never call the provider.
     call_id = f"model-{uuid.uuid4().hex}"
     prior_secrets = _critical_secret_values_from_messages(messages)
     # След кадра считается СНАРУЖИ того try, что уходит в `_stop_for_durability`: любая
@@ -9999,9 +10767,57 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
     if served is not None:
         # Trace geometry describes LIVE input, not the replacement system.
         frame_meta = {"variant": "serve", "frame_serve": served}
+    # KEAT binds an independently captured ordered tape to this exact call. It
+    # never substitutes request objects; absent ingress (including pending-tool
+    # recovery), stale authority and unissued history retain the live fallback.
+    # For an enabled ordinary DM, frame and tape are one transaction. A frame
+    # assembly failure must restore/mask the bound suffix before KEAT selection.
+    ordinary_frame_failed = bool(
+        served is not None and served.get("keat_required") is True
+        and served.get("status") != "served"
+    )
+    if ordinary_frame_failed:
+        keat_live.fallback_bound(messages)
+    provider_messages = messages
+    keat_receipt = None
+    if current is not None and not prior_secrets and not ordinary_frame_failed:
+        try:
+            provider_messages = keat_live.prepare_provider_messages(system, messages, tools)
+            keat_receipt = keat_live.select_provider(
+                system=system, messages=provider_messages, tools=tools,
+                run_id=current.run_id, call_id=call_id,
+            )
+        except Exception:
+            pass  # private evidence must not leak through exception diagnostics
+    keat_receipt = _keat_exact_or_fallback(
+        keat_receipt, provider_messages, system=system, tools=tools,
+        run_id=current.run_id if current is not None else None, call_id=call_id)
+    if keat_receipt is None:
+        provider_messages = messages
+    # Ordinary-DM frame-v6 is one transaction with KEAT. frame_serve runs first
+    # so KEAT can attest the exact candidate request; if that receipt is absent,
+    # stale, wrapped or otherwise not accepted at this boundary, restore the
+    # original live system object before persistence and before llm.chat.
+    if (served is not None and served.get("keat_required") is True
+            and keat_receipt is None):
+        system = live_system
+        served = dict(served, status="fallback", served_variant="live")
+        frame_meta = {"variant": "serve", "frame_serve": served}
+    if keat_receipt is None and os.getenv("PRAXIS_KEAT") == "serve":
+        keat_receipt = {
+            "schema": "keat.live.v1", "status": "fallback", "eligible": False,
+            "served": False, "fallback": True,
+            "reason": "critical_material" if prior_secrets else keat_live.activation_reason(),
+        }
+    if keat_receipt is not None:
+        frame_meta = dict(frame_meta or {}, keat=keat_receipt)
+        if keat_receipt.get("served") and keat_live.economy_measurement() is not None:
+            frame_meta["keat_economy"] = keat_live.economy_measurement()
     pre_model_timing.mark(phase_timer, "canary")
     rollback_input = ({"frame_v6_live_system": _scrub_critical_value(live_system, prior_secrets)}
                       if served is not None and served["status"] == "served" else {})
+    if provider_messages is not messages:
+        rollback_input["keat_economy_legacy_messages"] = _durable_model_messages(messages)
     if current is not None:
         _run_status_gate(phase="before model input")
         try:
@@ -10017,8 +10833,9 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
                 # приезжала к ней дампом объекта. Заодно ломались кэш-маркеры: блоки
                 # переставали быть блоками, а repr выбирает кавычки по содержимому, поэтому
                 # один и тот же текст давал разные байты и убивал префиксный кэш.
-                json.dumps({**rollback_input, "system": _scrub_critical_value(system, prior_secrets),
-                            "messages": _durable_model_messages(messages),
+                json.dumps({**rollback_input, **({"keat": keat_receipt} if keat_receipt is not None else {}),
+                            "system": _scrub_critical_value(system, prior_secrets),
+                            "messages": _durable_model_messages(provider_messages),
                             "tools": _scrub_critical_value(tools or [], prior_secrets)},
                            ensure_ascii=False, indent=2, default=str),
                 call_id=call_id, name="model-input", inline_chars=512,
@@ -10045,7 +10862,42 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
     except Exception:
         pass
     try:
-        kwargs = {"system": system, "messages": messages}
+        # Final KEAT authority linearization: no await or application I/O occurs
+        # between this revalidation and entering llm.chat below. Policy mutation,
+        # projection change or revocation since selection restores exact legacy.
+        if (isinstance(keat_receipt, dict) and keat_receipt.get("served") and
+                not keat_live.finalize_provider_receipt(
+                    keat_receipt, system=system, messages=provider_messages, tools=tools,
+                    run_id=current.run_id if current is not None else None,
+                    call_id=call_id)):
+            keat_receipt = None
+            provider_messages = messages
+            if served is not None and served.get("keat_required") is True:
+                system = live_system
+            # The already persisted model-input is the selected intent, not
+            # authority to send it after revocation. Persist the actual legacy
+            # dispatch separately before transport (no selected authority is
+            # being held across this I/O). Recovery still uses canonical tape.
+            if current is not None:
+                try:
+                    _runs().store_result(
+                        current.run_id,
+                        json.dumps({
+                            "system": _scrub_critical_value(system, prior_secrets),
+                            "messages": _durable_model_messages(messages),
+                            "tools": _scrub_critical_value(tools or [], prior_secrets),
+                            "reason": "keat_final_revocation",
+                        }, ensure_ascii=False, indent=2, default=str),
+                        call_id=call_id, name="model-input-fallback", inline_chars=512,
+                        media_type="application/json; charset=utf-8",
+                        event_kind="model_input_fallback", idempotent=True,
+                    )
+                except Exception as exc:
+                    _stop_for_durability(
+                        current.run_id, phase="model fallback persistence",
+                        uncertain_effect=False, error=exc,
+                    )
+        kwargs = {"system": system, "messages": provider_messages}
         if tools is not None:
             kwargs["tools"] = tools
         # 17.08: после реплики рукой мы НЕ ЖДЁМ от модели следующего слова. Пустой
@@ -10067,6 +10919,8 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
             except Exception:
                 log.exception("model failure receipt did not persist [%s]", current.run_id)
         raise
+    finally:
+        keat_live.discard_provider()
     if current is not None:
         try:
             response_blocks = list(getattr(response, "blocks", None) or ())
@@ -12704,16 +13558,30 @@ class _AgentResumeRuntime:
                 or "system" not in model_input
                 or model_output.get("stop_reason") != "tool_use"):
             raise DurableExecutionError("tool response continuation lacks exact model state")
-        messages = copy.deepcopy(model_input["messages"])
+        messages = copy.deepcopy(model_input.get("keat_economy_legacy_messages", model_input["messages"]))
         assistant_blocks = copy.deepcopy(model_output.get("blocks") or [])
         tool_results: list[dict] = []
         for resolution in request.resolutions:
             tool_results.extend(self._resolution_blocks(resolution))
-        messages.append({"role": "assistant", "content": assistant_blocks})
-        messages.append({"role": "user", "content": tool_results})
         previous_iteration = int((request.checkpoint or {}).get("iteration") or 0)
         completed_iteration = previous_iteration + 1
-        with self.bind():
+        # Reopen only the independently issued original call, before appending
+        # newly resolved tool roles. The existing live system is still the exact
+        # resume fallback; a frame-v6 rollback cannot be disguised as same bytes.
+        saved_keat = model_input.get("keat")
+        saved_binding = (saved_keat.get("binding", {})
+                         if isinstance(saved_keat, dict) else {})
+        saved_call = saved_binding.get("call_id", "") if isinstance(saved_binding, dict) else ""
+        resume_input = dict(model_input, messages=messages)
+        resume_scope = (keat_live.bind_resume(
+            resume_input, run_id=self.plan.run_id, call_id=saved_call)
+            if isinstance(saved_keat, dict) and "keat_economy_legacy_messages" not in model_input
+            else keat_live.bind_turn(None, messages))
+        with self.bind(), resume_scope:
+            _append_captured_messages(messages, [
+                {"role": "assistant", "content": assistant_blocks},
+                {"role": "user", "content": tool_results},
+            ])
             # Кадр здесь взят из расписки через deepcopy, `_build_prompt_parts` не звался
             # вовсе. Явное «этот кадр собран не здесь»: молча не иметь следа законно,
             # подсунуть ему чужой — катастрофа.
@@ -13695,12 +14563,15 @@ def resume_durable_runs(*, limit: int = 20) -> list[dict]:
             status = str(manager.manifest(run_id).get("status") or "")
         except Exception:
             continue
-        if status in {"paused", "blocked", "in_doubt"}:
-            # Lifetime evidence is checked independently of the process-local backoff epoch,
-            # otherwise precisely the old 495–982-attempt patients would restart at zero and
-            # never enter phase one after a deployment.
+        if status in {"paused", "in_doubt"}:
+            # A deliberate blocked outcome is terminal for automatic scheduling.  It can
+            # become executable only through the existing explicit authorization /
+            # reconciliation paths, which first move it back to a resumable status.
+            # Planning a blocked run is a non-executable observation; repeatedly doing so
+            # merely writes resume_attempt_idle churn and advertises a retry that must not
+            # happen.
             guard_result = (_resume_stale_guard(manager, run_id)
-                            if status in {"paused", "blocked"} else "")
+                            if status == "paused" else "")
             if guard_result in {"closed", "attention"}:
                 continue
             idle, last = _resume_idle_streak(manager, run_id)
@@ -14091,7 +14962,26 @@ def _persist_tool_loop_checkpoint(*, current: run_context.RunContext | None,
 
 
 def offered_tools_for(ctx: "ChannelContext") -> list:
-    """Руки, фактически предлагаемые модели в ходе с этим ctx.
+    """Руки, фактически уезжающие в `tools` в ходе с этим ctx.
+
+    12.09: при указателях (tool_pointers_enabled) — родные + describe + call (+
+    провайдерский web_search); полный список того, что модель МОЖЕТ позвать, —
+    `catalog_tools_for(ctx)`; он же едет в кадр строками «имя — назначение».
+    Рычаг PRAXIS_TOOLS_POINTERS=off возвращает прежний полный манифест байт-в-байт.
+    """
+    full = catalog_tools_for(ctx)
+    if not tool_pointers_enabled():
+        return full
+    natives = [t for t in full
+               if str(t.get("name") or "") in NATIVE_HAND_NAMES
+               or (t.get("type") and not t.get("input_schema"))]   # провайдерский web_search
+    closer = [t for t in natives if t.get("name") == "end_turn"]
+    body = [t for t in natives if t.get("name") != "end_turn"]
+    return body + [DESCRIBE_TOOL, CALL_TOOL] + closer
+
+
+def catalog_tools_for(ctx: "ChannelContext") -> list:
+    """Полный список рук хода — то, что модель может позвать (напрямую или через `call`).
 
     Единственный сборщик списка (контракт A1, CONTRACTS.md). Раньше он жил внутри
     `_voice_impl`, а `my_capabilities` собирал свой ответ из СТАТИЧЕСКИХ списков
@@ -14210,6 +15100,23 @@ def _current_run_kind() -> str:
     return str(getattr(current, "kind", "") or "")
 
 
+def _append_captured_messages(messages: list[dict], additions: list[dict]) -> None:
+    """Capture newly created loop roles, never reconstruct them at selection."""
+    try:
+        critical = any(
+            isinstance(block, dict) and block.get("type") == "tool_use"
+            and block.get("name") == "telegram_account"
+            and _critical_telegram_tool_input(block.get("input") or {})
+            for row in additions if isinstance(row.get("content"), list)
+            for block in row["content"]
+        )
+        if not critical and not _critical_secret_values_from_messages(messages + additions):
+            keat_live.capture_appended(messages, additions)
+    except Exception:
+        pass
+    messages.extend(additions)
+
+
 def _work_loop_continue(reply: str, resp, messages: list[dict],
                         tool_trace: list[str] | None, *, hands: int = 0) -> bool:
     """Продолжать ли ход после текста без инструмента.
@@ -14245,9 +15152,10 @@ def _work_loop_continue(reply: str, resp, messages: list[dict],
         log.warning("заметка в карточку работы не легла", exc_info=True)
     blocks = [b for b in (list(getattr(resp, "blocks", None) or ()))
               if isinstance(b, dict) and b.get("type") == "text"]
-    messages.append({"role": "assistant",
-                     "content": blocks or [{"type": "text", "text": reply}]})
-    messages.append({"role": "user", "content": [{"type": "text", "text": note}]})
+    _append_captured_messages(messages, [
+        {"role": "assistant", "content": blocks or [{"type": "text", "text": reply}]},
+        {"role": "user", "content": [{"type": "text", "text": note}]},
+    ])
     if tool_trace is not None:
         # ⚠ Печаталось `work_loop.budget()` (8) и в ЧАТ-ходе тоже, где бюджет 2. Её
         # трасса говорила «продолжение 1 из 8», а кончалось на втором. Мелкая ложь в
@@ -14343,14 +15251,28 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             if b["type"] != "tool_use":
                 continue
             assistant_blocks.append(b)
+            # 12.09: `call(name, args_json)` переписывается во внутреннюю руку ЗДЕСЬ —
+            # до durable-записи, побочных эффектов и потолка: воронка одна на всех.
+            b, dispatched, dispatch_note = _unwrap_dispatch(b)
+            if dispatch_note is not None:
+                tool_results.append({"type": "tool_result", "tool_use_id": b["id"],
+                                     "content": dispatch_note})
+                if tool_trace is not None:
+                    tool_trace.append(f"call → {dispatch_note[:100]}")
+                continue
             hands += 1
             # Имя руки — в слот прогона: `say` исполняется в отдельном потоке и должна
             # честно ответить ей, чем подкреплён черновик. Локальный счётчик оттуда не
             # виден, слот виден (разбор границы потока — в шапке work_loop).
             work_loop.note_hand(b.get("name"))
-            if b.get("name") not in offered_names:
-                raise DurableExecutionError(
-                    f"model requested unoffered tool {b.get('name')!r}")
+            if b.get("name") not in offered_names and not dispatched:
+                # Имя из каталога хода, позванное напрямую (модель запомнила его из
+                # указателя): власть та же, что у `call`, — каталог ЭТОГО хода.
+                if tool_pointers_enabled() and b.get("name") in _catalog_for_turn():
+                    dispatched = True
+                else:
+                    raise DurableExecutionError(
+                        f"model requested unoffered tool {b.get('name')!r}")
             impl = TOOL_IMPL.get(b["name"])
             if not callable(impl):
                 raise DurableExecutionError(
@@ -14512,8 +15434,10 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 )
         if loop_notes:
             tool_results.append({"type": "text", "text": "\n".join(loop_notes)})
-        messages.append({"role": "assistant", "content": assistant_blocks})
-        messages.append({"role": "user", "content": tool_results})
+        _append_captured_messages(messages, [
+            {"role": "assistant", "content": assistant_blocks},
+            {"role": "user", "content": tool_results},
+        ])
         _prune_stale_screenshots(messages)
         _persist_tool_loop_checkpoint(
             current=run_context.current_run(), iteration=iteration,
@@ -14641,6 +15565,35 @@ def _voice_impl(
     elif ctx.chat_id is None and chat_id is not None:
         ctx = replace(ctx, chat_id=chat_id)
     chat_id, is_dm, is_owner, known, scope = ctx.chat_id, ctx.is_dm, ctx.owner, ctx.known, ctx.scope
+    # Issue only the delivered original; history has opaque references, not lookup.
+    capture_state = _KEAT_CAPTURE_STATE.get()
+    if capture_state is _KEAT_CAPTURE_UNSET and _KEAT_ORIGINAL_INGRESS.get():
+        try:
+            capture_state = keat_live.capture_turn(
+                ctx=ctx, user_msg=user_msg, history=history[-HISTORY_TURNS:],
+            )
+        except Exception:
+            pass
+    elif capture_state is _KEAT_CAPTURE_UNSET and _KEAT_PROJECTION.get() is not None:
+        try:
+            sidecar = _KEAT_PROJECTION.get()
+            projection = dict(
+                history=sidecar['history'][-HISTORY_TURNS:],
+                current=sidecar['current'],
+            )
+            if 'projection_history' in sidecar:
+                projection.update(
+                    projection_history=sidecar['projection_history'][-HISTORY_TURNS:],
+                    projection_current=sidecar['projection_current'],
+                )
+            capture_state = keat_live.adopt_projection(
+                ctx, history[-HISTORY_TURNS:], user_msg, projection)
+        except Exception:
+            pass
+    if capture_state is _KEAT_CAPTURE_UNSET: capture_state = None
+    history_sink = _KEAT_HISTORY_SINK.get()
+    if history_sink is not None:
+        history_sink["state"] = capture_state
     query_text = user_msg if isinstance(user_msg, str) else "\n".join(
         str(b.get("text", "")) for b in user_msg
         if isinstance(b, dict) and b.get("type") == "text")
@@ -14650,9 +15603,10 @@ def _voice_impl(
     # тема). Поиск по всему подряд возвращает не «похожее на вопрос», а «похожее на всё».
     # Настоящая реплика лежит в `ctx.origin_text`; полный текст остаётся запасным путём.
     recall_query = str(getattr(ctx, "origin_text", "") or "").strip() or query_text
-    persona, dynamic, memory_evidence = _build_prompt_parts(
-        speaker, query=recall_query, ctx=ctx,
-    )
+    with keat_economy.collect() as economy_sources:
+        persona, dynamic, memory_evidence = _build_prompt_parts(
+            speaker, query=recall_query, ctx=ctx,
+        )
     pre_model_timing.mark(preparation_timer, "old_context")
     evidence_parts = [memory_evidence.strip()] if memory_evidence.strip() else []
     # ⚠ СОСЕД ПО КОНВЕРТУ — ТОЖЕ ЧУЖОЙ ТЕКСТ. `extra_evidence` приходит из ориентации хода
@@ -14689,12 +15643,15 @@ def _voice_impl(
     # evidence) и предложены ли руки — от второго зависит, вправе ли прибор сказать «последней».
     situation = frame_layout.situation(ctx, speaker=speaker, home=bool(evidence_parts),
                                        tooled=not (no_tools or tools_override == []))
-    current_user = _with_context_evidence(user_msg, "\n\n".join(evidence_parts), situation)
+    current_user = _with_context_evidence(user_msg, "\n\n".join(evidence_parts), situation); legacy_seed = getattr(capture_state, 'legacy_seed', None); legacy_current = (_with_context_evidence(legacy_seed, "\n\n".join(evidence_parts), situation) if legacy_seed is not None else None)
     # ⚠ ГУТТЕР НА ВСЮ ЛЕНТУ, И РОВНО ОДИН РАЗ — ПРИ РЕНДЕРЕ. До этого позиционная гарантия
     # действовала один ход: история клалась сюда как есть, и подделка, приехавшая ходом
     # раньше, стояла в колонке 0 следующие сто ролевых блоков. Хранилище не трогается —
     # `memory_life`, кольцо ходов и расписки держат дословный текст без единого «>».
-    messages = frame_layout.tape(history[-HISTORY_TURNS:]) + [{
+    role_history = [{key: value for key, value in row.items()
+                     if key != "_keat_occurrence"}
+                    for row in history[-HISTORY_TURNS:]]
+    messages = frame_layout.tape(role_history) + [{
         "role": "user", "content": current_user,
     }]
     # ⚠ ПРИБОР НАД ВСЕЙ ЛЕНТОЙ, А НЕ НАД ПОСЛЕДНИМ СООБЩЕНИЕМ. `assay` судит `messages[-1]`;
@@ -14746,9 +15703,28 @@ def _voice_impl(
         except Exception:
             log.exception("теневой сборщик упал; ход не тронут")
     pre_model_timing.mark(preparation_timer, "shadow")
+    candidate_messages = None
+    provider_history = getattr(capture_state, 'provider_history', None)
+    if provider_history is not None:
+        candidate_messages = frame_layout.tape(provider_history) + [{
+            "role": "user", "content": _with_context_evidence(
+                getattr(capture_state, 'provider_current', user_msg),
+                "\n\n".join(evidence_parts), situation),
+        }]
+    if legacy_current is None:
+        binding = (keat_live.bind_turn(
+            capture_state, messages=messages, candidate_messages=candidate_messages)
+            if candidate_messages is not None else
+            keat_live.bind_turn(capture_state, messages=messages))
+    else:
+        binding = keat_live.bind_turn(
+            capture_state, messages=messages,
+            fallback_current={'role': 'user', 'content': legacy_current})
     with pre_model_timing.safe_bind(preparation_timer), \
+         _bind_tool_catalog(ctx), \
          frame_measure.bind(system=system, ctx=ctx, live_sections=frame_trace.sections), \
-         frame_serve.bind(system=system, ctx=ctx, dynamic=dynamic):
+         frame_serve.bind(system=system, ctx=ctx, dynamic=dynamic), \
+         keat_economy.bind(ctx, current_user, "\n\n".join(evidence_parts), economy_sources), binding:
         return _terminal_tool_loop(
             system=system, messages=messages, tools=tools,
             max_iters=max_iters, tool_trace=tool_trace,
@@ -14858,12 +15834,24 @@ def respond(
     ctx = ChannelContext.from_legacy(
         chat_id, is_dm=True, owner=is_owner, known=known, principal_id=principal_id,
     )
-    reply = _voice(
-        user_msg, history, speaker, chat_id=chat_id, is_owner=is_owner, known=known, ctx=ctx,
-        history_persistent=True,
-    )
-    history.append({"role": "user", "content": user_msg})
-    history.append({"role": "assistant", "content": reply})
+    capture_sink = {}
+    capture_token = _KEAT_HISTORY_SINK.set(capture_sink)
+    ingress_token = _KEAT_ORIGINAL_INGRESS.set(True)
+    try:
+        reply = _voice(
+            user_msg, history, speaker, chat_id=chat_id, is_owner=is_owner, known=known, ctx=ctx,
+            history_persistent=True,
+        )
+    finally:
+        _KEAT_HISTORY_SINK.reset(capture_token)
+        _KEAT_ORIGINAL_INGRESS.reset(ingress_token)
+    for role, content in (("user", user_msg), ("assistant", reply)):
+        entry = {"role": role, "content": content}
+        try:
+            entry = keat_live.history_entry(capture_sink.get("state"), role=role, content=content)
+        except Exception:
+            pass
+        history.append(entry)
     del history[:-HISTORY_TURNS]
     return reply
 
@@ -15497,6 +16485,21 @@ def _guard_outbound(reply: str, convo_text: str = "", *, sink: dict | None = Non
     return reply
 
 
+_KEAT_CAPTURE_UNSET = object()
+_KEAT_CAPTURE_STATE: ContextVar[object | None] = ContextVar(
+    "praxis_keat_capture_state", default=_KEAT_CAPTURE_UNSET)
+
+
+def _keat_exact_or_fallback(receipt, messages=None, *, system=None, tools=None,
+                            run_id=None, call_id=None):
+    """Keep a selected receipt; otherwise restore any bound legacy provider tape."""
+    if keat_live.accept_provider_receipt(
+            receipt, system=system, messages=messages, tools=tools,
+            run_id=run_id, call_id=call_id):
+        return receipt
+    return None
+
+
 _MODEL_IMAGE_MIME = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 
@@ -15902,7 +16905,8 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
                         ctx: "ChannelContext | None" = None,
                         media_refs: tuple[media.MediaRef, ...] = (),
                         history: list[dict] | None = None,
-                        current_text: str = "") -> media.TurnEnvelope:
+                        current_text: str = "",
+                        occurrence_sidecar: dict | None = None) -> media.TurnEnvelope:
     """Живой ход: текст/фото/расшифрованное аудио -> guard -> текст + разрешённое медиа.
 
     `history` — разговор НАСТОЯЩИМИ ролями: её реплики приезжают как `assistant`, чужие
@@ -15991,6 +16995,11 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
     convo_token = _TURN_CONVO.set(grounded_text)
     orient_token = _TURN_ORIENT.set(orient)
     run_token = run_context.set_run(durable) if durable is not None else None
+    # Selected/aggregated Telegram text is not an original capture event.
+    # Native ingress must supply its independently issued projection separately.
+    ingress_token = _KEAT_ORIGINAL_INGRESS.set(False)
+    projection_token = _KEAT_PROJECTION.set(
+        occurrence_sidecar if dialogue and current_text.strip() and not media_refs else None)
     try:
         reply = _voice(user_content, dialogue, speaker, extra_system=extra,
                        extra_evidence=context_evidence, ctx=ctx,
@@ -16042,6 +17051,8 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
             run_id=durable_id,
         )
     finally:
+        _KEAT_ORIGINAL_INGRESS.reset(ingress_token)
+        _KEAT_PROJECTION.reset(projection_token)
         if run_token is not None:
             run_context.reset_run(run_token)
         _TURN_MEDIA_GUARD.reset(media_guard_token)
@@ -16707,7 +17718,8 @@ def _wake_frame(status: str) -> str:
             + _WAKE_FRAME_TAIL)
 
 
-def wake_turn(goal: str = "", *, on_run=None) -> str:
+def wake_turn(goal: str = "", *, on_run=None, source_id=None,
+              scheduled_target_id=None) -> str:
     """kind=wake: её собственный будильник — живой ход с ОТКРЫТЫМ Telegram. -> '' обычно.
 
     Слепок с ``forge_event_turn``: под _ONE_MIND раннера, Telethon не закрываем.
@@ -16732,17 +17744,30 @@ def wake_turn(goal: str = "", *, on_run=None) -> str:
     frame = _wake_frame(status)
     live = "Telegram открыт — связь живая" if status == "connected" else \
            f"связи сейчас нет ({status}) — читать и слать живое не выйдет"
-    seed = ((f"Ты просила разбудить себя вот с чем: {goal}\n\n" if goal else
-             "Ты просила разбудить себя в этот момент.\n\n")
-            + f"[твой будильник; {live}]")
+    source_is_message = (type(source_id) is dict and source_id.get("kind") == "message")
+    capture_state, authorized_seed = (keat_live.adopt_scheduled_wake(source_id)
+                                      if source_id is not None and type(source_id) is dict and
+                                      (source_is_message or
+                                       goal == str(source_id.get('goal') or '').strip())
+                                      else (None, None))
+    legacy_seed = ((f"Ты просила разбудить себя вот с чем: {goal}\n\n" if goal else
+                    "Ты просила разбудить себя в этот момент.\n\n")
+                   + f"[твой будильник; {live}]")
+    # Exact selection happens only at the final model boundary. Until then the
+    # stable seed is merely a verification candidate; every non-served path is
+    # restored to this pre-rendered legacy seed before persistence/provider I/O.
+    seed = authorized_seed or legacy_seed
+    if capture_state is not None and authorized_seed is not None:
+        capture_state.legacy_seed = legacy_seed
     turn = turns.begin(kind="wake", scope="owner", gist_in=goal or "своё пробуждение")
     # Состояние связи кладём В ЗАПИСЬ: журнал читается спустя часы, когда спросить сенсор
     # уже не у кого, и «Telegram открыт» задним числом было бы догадкой, а не фактом.
     turn["telegram"] = status
     trace: list[str] = []
     ctx = ChannelContext(
-        chat_id=None, principal_id=PRAXIS_SELF_PRINCIPAL, is_dm=True,
-        owner=False, known=True, _scope_override="owner",
+        chat_id=None, principal_id=PRAXIS_SELF_PRINCIPAL,
+        scheduled_target_id=scheduled_target_id,
+        is_dm=True, owner=False, known=True, _scope_override="owner",
     )
     durable = None
     try:
@@ -16763,12 +17788,16 @@ def wake_turn(goal: str = "", *, on_run=None) -> str:
                 log.exception("подтверждение намерения упало [%s]", durable.run_id)
         binding = (run_context.bind_run(durable) if durable is not None
                    else contextlib.nullcontext())
-        with binding:
-            out = _voice(seed, [], speaker=None, chat_id=None, is_owner=False, known=True,
-                         extra_system=frame, ctx=ctx, tool_trace=trace).strip()
-            if durable is not None:
-                _finish_durable_run(durable.run_id, "done", final_text=out,
-                                    reason="scheduled wake completed")
+        capture_binding = _KEAT_CAPTURE_STATE.set(capture_state)
+        try:
+            with binding:
+                out = _voice(seed, [], speaker=None, chat_id=None, is_owner=False, known=True,
+                             extra_system=frame, ctx=ctx, tool_trace=trace).strip()
+                if durable is not None:
+                    _finish_durable_run(durable.run_id, "done", final_text=out,
+                                        reason="scheduled wake completed")
+        finally:
+            _KEAT_CAPTURE_STATE.reset(capture_binding)
     except Exception as exc:
         log.warning("wake_turn упал", exc_info=True)
         if durable is not None:

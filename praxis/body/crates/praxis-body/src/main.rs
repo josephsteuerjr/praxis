@@ -1,7 +1,9 @@
+mod dpi;
 mod artifact;
 mod compose;
 mod config;
 mod desktop;
+mod element;
 mod fsops;
 mod identity;
 mod interactive_host;
@@ -105,6 +107,14 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .with_writer(std::io::stderr)
         .init();
+    // ⚠ ПЕРЕД первым обращением к экрану, окнам и вводу. Windows отвечает
+    // неосведомлённому о масштабе процессу ВЫДУМАННЫМИ числами: `GetWindowRect`,
+    // метрики экрана и координаты `SendInput` пересчитываются к вымыслу «96 точек на
+    // дюйм», а UI Automation отдаёт настоящие пиксели — и прочитанный прямоугольник
+    // кнопки перестаёт совпадать с точкой, куда уходит клик. На одном мониторе со
+    // 100 % это незаметно; на 150 % и на втором мониторе с другим масштабом — это
+    // промах мимо кнопки, который выглядит как «оно иногда не срабатывает».
+    dpi::announce();
     let cli = Cli::parse();
     match cli.command {
         Commands::Identity => {

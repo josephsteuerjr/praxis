@@ -133,6 +133,8 @@ class TheCorpusIsWalkedOncePerSearch(unittest.TestCase):
         (self.memory / "people" / "egor.md").write_text(
             "- Егор просил ускорить руку памяти\n", encoding="utf-8")
         memory_fts.clear_path_cache()
+        # Explicit recall must not build its disposable index in the request.
+        memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -142,7 +144,7 @@ class TheCorpusIsWalkedOncePerSearch(unittest.TestCase):
                                  skills_dir=self.skills, purpose="explicit")
 
     def test_one_walk(self) -> None:
-        self._search("ускорить")  # первый вызов строит индекс — меряем установившийся
+        # setUp already performed the scheduled/background rebuild.
         real = memory_fts.iter_sources
         calls = []
 
@@ -153,49 +155,25 @@ class TheCorpusIsWalkedOncePerSearch(unittest.TestCase):
         with mock.patch.object(memory_fts, "iter_sources", side_effect=spy):
             hits = self._search("ускорить")
         self.assertTrue(hits, "поиск обязан находить — иначе тест вакуумный")
-        self.assertEqual(len(calls), 1, f"корпус обойдён {len(calls)} раз(а), а надо один")
+        self.assertEqual(len(calls), 0,
+                         f"явный поиск обошёл корпус {len(calls)} раз(а)")
 
     def test_answer_is_unchanged_by_the_shared_roster(self) -> None:
-        """Разделяемая перепись не смеет менять ВЫДАЧУ — только её цену."""
-        with mock.patch.object(memory_fts, "_canonical_candidates",
-                               side_effect=memory_fts._canonical_candidates) as spy:
-            shared = self._search("Егор")
-        self.assertTrue(shared)
-        self.assertIsNotNone(spy.call_args.kwargs.get("sources"),
-                             "перепись не передана — правка не работает")
-        ids_shared = [row["id"] for row in shared]
-
-        original = memory_fts._canonical_candidates
-
-        def without_roster(**kw):
-            kw["sources"] = None  # старое поведение: свой обход
-            return original(**kw)
-
-        with mock.patch.object(memory_fts, "_canonical_candidates",
-                               side_effect=without_roster):
-            separate = self._search("Егор")
-        self.assertEqual(ids_shared, [row["id"] for row in separate])
+        """Ready background index preserves the canonically validated answer."""
+        first = self._search("Егор")
+        second = self._search("Егор")
+        self.assertTrue(first)
+        self.assertEqual([row["id"] for row in first], [row["id"] for row in second])
 
     def test_second_attempt_walks_afresh(self) -> None:
-        """После пересборки перепись обязана делаться ЗАНОВО: та, что уже соврала,
-        второй попытке не годится. Иначе фейл-клоуз оказался бы фиктивным."""
-        source = (self.memory / "people" / "egor.md")
-        self._search("ускорить")
-        seen_sources = []
-        original = memory_fts._canonical_candidates
-
-        def watch(**kw):
-            seen_sources.append(kw.get("sources"))
-            if len(seen_sources) == 1:
-                return [], True  # первая попытка объявляет расхождение
-            return original(**kw)
-
-        with mock.patch.object(memory_fts, "_canonical_candidates", side_effect=watch):
-            self._search("ускорить")
-        self.assertEqual(len(seen_sources), 2, "второй попытки не было")
-        self.assertIsNotNone(seen_sources[0], "первая попытка обязана получить перепись")
-        self.assertIsNone(seen_sources[1],
-                          "вторая попытка получила ПРЕЖНЮЮ перепись — фейл-клоуз фиктивен")
+        """Stale row fails closed and asks the night job; no sync retry is allowed."""
+        source = self.memory / "people" / "egor.md"
+        source.write_text("- канон уже изменился\n", encoding="utf-8")
+        with mock.patch.object(memory_fts, "rebuild",
+                               side_effect=AssertionError("не в интерактивной руке")):
+            self.assertEqual(self._search("ускорить"), [])
+        self.assertTrue(memory_fts.refresh_requested(memory_dir=self.memory),
+                        "расхождение обязано оставить durable запрос фоновой починки")
         self.assertTrue(source.exists())
 
 
@@ -228,6 +206,7 @@ class TheLazyCanonPathAnswersIdentically(unittest.TestCase):
         (self.skills / "recall.md").write_text(
             "- навык про память и провенанс\n", encoding="utf-8")
         memory_fts.clear_path_cache()
+        memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -266,8 +245,11 @@ class TheLazyCanonPathAnswersIdentically(unittest.TestCase):
                                                           original(s))[1]):
                 self._ids("память", lazy=lazy, limit=1)
             counts[lazy] = len(touched)
-        self.assertLess(counts[True], counts[False],
-                        f"ленивый путь прочитал не меньше: {counts}")
+        # Both modes validate only the final selected row; lazy mode must never
+        # expand that bounded canonical validation work.
+        self.assertGreater(counts[False], 0, f"проверка канона не состоялась: {counts}")
+        self.assertLessEqual(counts[True], counts[False],
+                             f"ленивый путь прочитал больше канона: {counts}")
 
     def test_no_unverified_row_reaches_the_prompt(self) -> None:
         """Главное свойство: подделанная в базе строка не проходит НИ ОДНИМ путём."""

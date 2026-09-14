@@ -116,6 +116,8 @@ class TestEmbeddingsOff(Base):
         self._orig.append((mi, "embed", mi.embed))
         mi.embed = lambda t: called.append(1) or [0.0]
         pe.append_fact("егор", "Егор", "любит горы и кофе")
+        # Explicit recall only reads an already materialized accelerator.
+        memory_fts.rebuild(base=mi.BASE, memory_dir=mi.MEM_DIR, skills_dir=mi.SKILLS_DIR)
         res = mi.search("горы", k=5)  # PRAXIS_EMBEDDINGS не задан → off
         self.assertEqual(called, [], "embed не должен вызываться при выключенных эмбеддингах")
         self.assertTrue(any("горы" in r["text"].lower() for r in res), "keyword не нашёл")

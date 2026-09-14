@@ -34,7 +34,9 @@ uuid.workspace = true
 # живёт чтение окна текстом. Ветки набора возможностей `windows` складываются, поэтому
 # общий список в корневом Cargo.toml трогать не пришлось: COM входит в тело здесь и
 # только здесь, и это видно прямо в манифесте зависимостей крейта.
-windows = { workspace = true, features = ["Win32_System_Com", "Win32_UI_Accessibility"] }
+# Win32_UI_HiDpi — одна строка в src/dpi.rs: объявить себя осведомлённым о масштабе
+# на каждый монитор. Без этого система отвечает телу выдуманными координатами (см. там).
+windows = { workspace = true, features = ["Win32_System_Com", "Win32_UI_Accessibility", "Win32_UI_HiDpi"] }
 
 [target.'cfg(not(windows))'.dependencies]
 libc.workspace = true

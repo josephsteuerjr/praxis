@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import signal
 import stat
 import tempfile
 import threading
@@ -33,6 +34,47 @@ class RunManagerBase(unittest.TestCase):
             model_profile="voice/test", forge_task_id="wcode-test",
         )
         return mgr.create(ctx, f"# Context {suffix}\n\nExact source snapshot.\n")
+
+
+class TestRunManagerConfiguredRoots(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+
+    def _directory_alias(self, name: str) -> tuple[Path, Path]:
+        real = self.root / f"{name}-real"
+        real.mkdir()
+        alias = self.root / f"{name}-alias"
+        try:
+            alias.symlink_to(real, target_is_directory=True)
+        except (NotImplementedError, OSError) as exc:
+            self.skipTest(f"symlinks unavailable: {exc}")
+        return real, alias
+
+    def test_run_manager_rejects_base_with_ancestor_alias(self):
+        _, alias = self._directory_alias("base")
+        for configured in (alias, alias / "ordinary-relative-suffix"):
+            with self.subTest(configured=configured), self.assertRaisesRegex(
+                    RunError, "configured base contains symlink component"):
+                RunManager(configured)
+
+    def test_run_manager_rejects_archive_root_with_ancestor_alias(self):
+        base = self.root / "base"
+        _, alias = self._directory_alias("archive")
+        for configured in (alias, alias / "objects"):
+            with self.subTest(configured=configured), self.assertRaisesRegex(
+                    RunError, "configured archive root contains symlink component"):
+                RunManager(base, archive_root=configured)
+
+    def test_ordinary_absolute_and_relative_roots_remain_compatible(self):
+        base = self.root / "ordinary-base"
+        archive = self.root / "ordinary-archive"
+        relative_base = Path(os.path.relpath(base, Path.cwd()))
+        relative_archive = Path(os.path.relpath(archive, Path.cwd()))
+        manager = RunManager(relative_base, archive_root=relative_archive)
+        self.assertEqual(manager.base, base)
+        self.assertEqual(manager.archive_root, archive)
 
 
 class TestRunLayoutAndEvents(RunManagerBase):
@@ -508,6 +550,45 @@ class TestFullResultsAndArtifacts(RunManagerBase):
                 deadline_monotonic=0.0,
             )
 
+    @unittest.skipUnless(os.name == "posix", "requires POSIX no-follow opens")
+    def test_hot_result_rejects_symlinked_results_ancestor_and_fifo_swap(self):
+        ctx = self.create("hostile-hot")
+        ref = self.manager.store_result(ctx.run_id, b"trusted", name="payload")
+        run_dir = self.manager.path(ctx.run_id)
+        results = run_dir / "results"
+        outside = self.base / "outside-results"
+        results.rename(outside)
+        results.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(RunConflict, "unsafe result body"):
+            self.manager.read_result(ctx.run_id, ref["result_id"])
+
+        results.unlink()
+        outside.rename(results)
+        fifo = self.base / "attacker-fifo"
+        os.mkfifo(fifo)
+        real_open = os.open
+        hits = []
+
+        def swapped_open(path, flags, *args, **kwargs):
+            if str(path) == Path(ref["path"]).name and kwargs.get("dir_fd") is not None:
+                hits.append(path)
+                return real_open(fifo, flags)
+            return real_open(path, flags, *args, **kwargs)
+
+        def timeout(*_args):
+            raise AssertionError("hot FIFO read blocked")
+
+        previous = signal.signal(signal.SIGALRM, timeout)
+        signal.alarm(2)
+        try:
+            with mock.patch("run_retention.os.open", side_effect=swapped_open):
+                with self.assertRaisesRegex(RunConflict, "unsafe result body"):
+                    self.manager.read_result(ctx.run_id, ref["result_id"])
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous)
+        self.assertTrue(hits)
+
     def test_binary_artifact_is_hash_addressed(self):
         ctx = self.create("artifact")
         payload = bytes(range(256)) * 4
@@ -636,6 +717,41 @@ class TestRecapPromotion(RunManagerBase):
         self.manager.transition(ctx.run_id, "cancelled", reason="owner cancelled")
         manifest = self.manager.write_recap(ctx.run_id, "# Cancelled\n\nNothing delivered.")
         self.assertEqual(manifest["recap"]["promotion"]["status"], "not_configured")
+
+
+class TestPrunedTerminalEventStreams(RunManagerBase):
+    def _terminal(self, suffix: str = "pruned") -> RunContext:
+        context = self.create(suffix)
+        self.manager.transition(context.run_id, "running", expected="pending")
+        self.manager.transition(context.run_id, "done", expected="running")
+        return context
+
+    def test_terminal_manifest_survives_retained_event_stream_removal(self):
+        context = self._terminal()
+        run_dir = self.manager.path(context.run_id)
+        (run_dir / "events.jsonl").unlink()
+
+        manifest = self.manager.manifest(context.run_id)
+
+        self.assertEqual(manifest["status"], "done")
+        self.assertGreater(manifest["event_seq"], 0)
+
+    def test_active_listing_ignores_pruned_terminal_history(self):
+        terminal = self._terminal("old-terminal")
+        (self.manager.path(terminal.run_id) / "events.jsonl").unlink()
+        active = self.create("still-active")
+
+        listing = self.manager.run_listing(statuses={"pending", "running", "paused"})
+
+        self.assertEqual([row["run_id"] for row in listing["items"]], [active.run_id])
+        self.assertEqual(listing["counts"]["done"], 1)
+
+    def test_nonterminal_manifest_without_event_stream_still_fails_closed(self):
+        context = self.create("live-without-wal")
+        (self.manager.path(context.run_id) / "events.jsonl").unlink()
+
+        with self.assertRaisesRegex(RunError, "cannot read event stream"):
+            self.manager.manifest(context.run_id)
 
 
 if __name__ == "__main__":

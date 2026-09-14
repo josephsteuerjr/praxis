@@ -626,7 +626,7 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(not kw for _entity, _text, kw in client.sent[1:]))
         buf_push.assert_called_once_with(
             chat_id, f"Praxis: {reply}", author="Praxis", is_dm=False,
-            source_id="1001,1002", ts=ANY)
+            record_life=True, source_id="1001,1002", ts=ANY)
         self.assertNotIn(chat_id, wakes)
         arm.assert_not_called()
 
@@ -734,7 +734,8 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.attempts[1][2], {})
         self.assertEqual(client.sent, [(-707, chunks[0], {"reply_to": 70})])
         buf_push.assert_called_once_with(
-            chat_id, f"Praxis: {chunks[0]}", author="Praxis", is_dm=False)
+            chat_id, f"Praxis: {chunks[0]}", author="Praxis", is_dm=False,
+            record_life=True)
         self.assertNotIn(chat_id, wakes)
         self.assertNotIn(chat_id, pending)
         arm.assert_not_called()

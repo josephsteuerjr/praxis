@@ -17,12 +17,22 @@
 """
 from __future__ import annotations
 
+import os
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
 import memory_fts
+
+# 12.09: прогоны по умолчанию не индексируются (решение Егора 12.09); этот стенд меряет корпус С прогонами и её рычаг событий прогона.
+def setUpModule():
+    os.environ["PRAXIS_INDEX_RUNS"] = "1"
+
+
+def tearDownModule():
+    os.environ.pop("PRAXIS_INDEX_RUNS", None)
+
 
 
 class TransportIsReachableOnlyOnPurposeAudit(unittest.TestCase):

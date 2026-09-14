@@ -281,13 +281,35 @@ def build() -> dict:
     Транзакционно: если Ollama недоступна, embed() бросит исключение и индекс
     на диске не будет испорчен частичной/пустой записью.
     """
+    import memory_fts
+    owner = memory_fts.acquire_builder_lock(memory_dir=MEM_DIR)
+    if owner is None:
+        return {"model": _index_model(), "files": {}, "records": [], "fts": {}}
+    try:
+        return _build_owned()
+    finally:
+        memory_fts.release_builder_lock(owner)
+
+
+def _build_owned() -> dict:
+    """Entire maintenance pass runs under the stable cross-process lock."""
     fts = {}
     try:
         import memory_fts
-        fts = memory_fts.rebuild(base=BASE, memory_dir=MEM_DIR, skills_dir=SKILLS_DIR)
+        pending = memory_fts.refresh_requested(memory_dir=MEM_DIR)
+        claim = memory_fts._claim_refresh_request_locked(memory_dir=MEM_DIR) if pending else None
+        # A private claim means another maintenance worker owns this requested
+        # rebuild.  Do not turn a coalesced handoff into concurrent full walks.
+        if not pending or claim is not None:
+            try:
+                fts = memory_fts.rebuild(base=BASE, memory_dir=MEM_DIR, skills_dir=SKILLS_DIR)
+            except Exception:
+                if claim is not None:
+                    memory_fts.restore_refresh_request(memory_dir=MEM_DIR, claim=claim)
+                raise
+            if claim is not None:
+                memory_fts.complete_refresh_request(memory_dir=MEM_DIR, claim=claim)
     except Exception as exc:
-        # Markdown remains canonical and the legacy in-process scanner below is a complete
-        # fallback.  A broken disposable DB must never break memory continuity.
         log.warning("memory FTS rebuild не удался: %s", exc)
     if not _embeddings_on():
         return {"model": _index_model(), "files": {}, "records": [], "fts": fts}
@@ -526,38 +548,17 @@ def _fulltext_candidates(query: str, limit: int, scope: str,
     except Exception:
         if purpose == "automatic":
             return []
-        # Compatibility/failsafe for Python builds without FTS5, corrupt disposable DBs,
-        # and tests deliberately exercising the old scanner.
-        log.warning("memory FTS search не удался — сканирую canonical Markdown", exc_info=True)
-    docs = _all_chunks(scope, purpose)
-    qterms = _terms(query)
-    if not docs or not qterms:
+        # An interactive explicit recall is never allowed to turn a broken
+        # disposable accelerator into a synchronous corpus scan. Ask the durable
+        # night maintenance path to repair it and answer only from bounded data.
+        try:
+            import memory_fts
+            memory_fts.request_refresh(memory_dir=MEM_DIR, reason="fts-search-failed")
+        except Exception:
+            pass
+        log.warning("memory FTS search unavailable — explicit recall returns no lexical rows",
+                    exc_info=True)
         return []
-    counters = [Counter(_terms(d["text"])) for d in docs]
-    df = Counter()
-    for c in counters:
-        df.update(c.keys())
-    avg_len = sum(sum(c.values()) for c in counters) / max(1, len(counters))
-    qtri = _trigrams(query)
-    scored = []
-    for doc, counts in zip(docs, counters):
-        length = max(1, sum(counts.values()))
-        bm25 = 0.0
-        for term in set(qterms):
-            tf = counts.get(term, 0)
-            if not tf:
-                continue
-            idf = math.log(1.0 + (len(docs) - df[term] + 0.5) / (df[term] + 0.5))
-            bm25 += idf * (tf * 2.2) / (tf + 1.2 * (0.25 + 0.75 * length / max(1.0, avg_len)))
-        dtri = _trigrams(doc["text"])
-        tri = len(qtri & dtri) / max(1, len(qtri)) if qtri else 0.0
-        raw = bm25 + 0.35 * tri
-        if raw > 0:
-            scored.append((raw, doc))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    top = scored[:limit]
-    hi = top[0][0] if top else 1.0
-    return [dict(doc, lexical=min(1.0, raw / max(hi, 1e-9))) for raw, doc in top]
 
 
 _BROAD_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
@@ -1022,7 +1023,11 @@ def search(query: str, k: int = 6, scope: str = "owner", semantic: bool = False,
     # остаётся явно доступным для аудита» — пустым словом.
     purpose = (purpose if purpose in ("automatic", "audit") else "explicit")
     lexical = _fulltext_candidates(query, max(24, k * 5), scope, purpose)
-    vectors = _vector_candidates(query, max(24, k * 5), scope, purpose)
+    # The legacy vector file has no canonical chunk locator/revision proof. It is
+    # useful to rebuild offline, but an explicit live recall must not surface stale
+    # vector text (nor call `_ensure_index`, which can synchronously corpus-scan).
+    vectors: list[dict] = [] if purpose == "explicit" else _vector_candidates(
+        query, max(24, k * 5), scope, purpose)
     pool: dict[tuple[str, str], dict] = {}
     for item in lexical + vectors:
         key = (str(item.get("path") or ""), str(item.get("text") or ""))

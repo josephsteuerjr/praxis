@@ -97,7 +97,7 @@ TEXT_CARRIED = ("contract.", "state.", "frame.extra_system", "evidence.tier")
 # записи сегодня не получают — это названная граница этапа 1, а не умолчание.
 SYSTEM_ROSTER = (
     "persona.soul", "persona.voice", "persona.self_current",
-    "contract.base", "state.owner_place", "contract.owner_tools",
+    "contract.base", "contract.hands_pointer", "state.owner_place", "contract.owner_tools",
     "contract.appetite", "state.state_block",
     "contract.family_audience", "contract.unknown_authority",
     "state.room_mode_enum", "state.channel_facts",

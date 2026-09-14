@@ -11,6 +11,7 @@ online» этот файл больше не закрепляет — она с�
 from __future__ import annotations
 
 import asyncio
+import threading
 import os
 import tempfile
 import unittest
@@ -306,6 +307,77 @@ class TestControlOnceSetsShutdown(Base):
         self.assertFalse(mtproto_runner._EXPECT_DISCONNECT.is_set())
         self.assertTrue(self.fake.disconnect_calls >= 1)
         self.assertTrue(exited, "_exit_process должен был вызваться")
+
+
+class TestControlOnceExitsEvenIfDisconnectHangs(Base):
+    """Живой случай 10.09: заявка контура исполнилась наполовину.
+
+    `disconnect()` не вернулся, а `try/except` ловит исключение, но не зависание —
+    до выхода дело не дошло. Заявка при этом УЖЕ погашена, поэтому следующий тик
+    не повторит попытку никогда: процесс жив, Telegram отключён, надзор ждёт
+    мёртвого. Итог — 2 ч 26 мин молчания и перезапуск руками.
+    """
+
+    def test_hanging_disconnect_still_ends_the_process(self):
+        import selfdev
+
+        orig_restart_requested = selfdev.restart_requested
+        orig_clear = selfdev.clear_restart_request
+        orig_exit = mtproto_runner.agent._exit_process
+        orig_timeout = mtproto_runner._DISCONNECT_TIMEOUT
+        orig_fuse = mtproto_runner._EXIT_FUSE_SECONDS
+        exited = []
+
+        async def _never_returns():
+            await asyncio.sleep(3600)
+
+        self.fake.disconnect = _never_returns
+        selfdev.restart_requested = lambda: "тест: зависший disconnect"
+        selfdev.clear_restart_request = lambda: None
+        mtproto_runner.agent._exit_process = lambda: exited.append(True)
+        mtproto_runner._DISCONNECT_TIMEOUT = 0.2
+        mtproto_runner._EXIT_FUSE_SECONDS = 30.0     # запал не нужен: срок сработает раньше
+        try:
+            asyncio.run(mtproto_runner._control_once())
+        finally:
+            selfdev.restart_requested = orig_restart_requested
+            selfdev.clear_restart_request = orig_clear
+            mtproto_runner.agent._exit_process = orig_exit
+            mtproto_runner._DISCONNECT_TIMEOUT = orig_timeout
+            mtproto_runner._EXIT_FUSE_SECONDS = orig_fuse
+
+        self.assertTrue(exited, "зависший disconnect не имеет права оставить процесс живым")
+        self.assertTrue(mtproto_runner._SHUTDOWN.is_set())
+
+    def test_fuse_ends_the_process_when_nothing_returns(self):
+        """Вторая половина обещания: если не вернулся и сам путь, выходит запал."""
+        orig_exit = mtproto_runner.agent._exit_process
+        orig_fuse = mtproto_runner._EXIT_FUSE_SECONDS
+        fired = threading.Event()
+        mtproto_runner.agent._exit_process = fired.set
+        mtproto_runner._EXIT_FUSE_SECONDS = 0.1
+        try:
+            timer = mtproto_runner._arm_restart_exit()
+            self.assertTrue(fired.wait(5), "запал обязан сработать сам")
+            timer.cancel()
+        finally:
+            mtproto_runner.agent._exit_process = orig_exit
+            mtproto_runner._EXIT_FUSE_SECONDS = orig_fuse
+
+    def test_fuse_is_cancellable_and_does_not_fire_afterwards(self):
+        """⚠ Отменяемость — не украшение: неотменяемый запал звал бы настоящий
+        `os._exit(42)` посреди чужого прогона, когда подмена стенда уже снята."""
+        orig_exit = mtproto_runner.agent._exit_process
+        orig_fuse = mtproto_runner._EXIT_FUSE_SECONDS
+        fired = threading.Event()
+        mtproto_runner.agent._exit_process = fired.set
+        mtproto_runner._EXIT_FUSE_SECONDS = 0.3
+        try:
+            mtproto_runner._arm_restart_exit().cancel()
+            self.assertFalse(fired.wait(1.0), "погашенный запал не стреляет")
+        finally:
+            mtproto_runner.agent._exit_process = orig_exit
+            mtproto_runner._EXIT_FUSE_SECONDS = orig_fuse
 
 
 class TestWaitReconnected(Base):

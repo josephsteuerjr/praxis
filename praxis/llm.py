@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import datetime as _dt
+import hashlib
 import praxis_time
 import json
 import logging
@@ -986,7 +987,10 @@ def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thi
     _cc = getattr(usage, "cache_creation_input_tokens", None)
     if _cr:
         _usage["cache_read"] = int(_cr)
-    if _cc:
+    # 13.09 (её reviewer на K1): ноль от провайдера — это «записи в кэш не было», и он
+    # обязан доехать до леджера как 0, а не пропасть как «не сообщил» (-1). `if _cc:`
+    # терял ровно это различие; проверяем на None, а не на истинность.
+    if _cc is not None:
         _usage["cache_creation"] = int(_cc)
     # Сторож общий с openai-путём: до 15.08 здесь его не было вовсе, и пустой ответ glm
     # уезжал наверх успешным 'end_turn' — то есть неотличимо от её решения промолчать.
@@ -1920,6 +1924,13 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     # этого хода — упавший вызов обязан быть сравним с удавшимся по тому же
     # признаку.
     _tools = tool_offerings.fingerprint(tools)[:16]
+    # 13.09 (K1). Отпечаток system и адрес кэша — ОДИН раз на вызов, во все следы этого
+    # хода. system здесь уже тот, что уйдёт на провод (`frame_serve.select` — в agent).
+    _sys_text = system_text(system)
+    _sys_len = len(_sys_text)
+    _sys_sha = (hashlib.sha1(_sys_text.encode("utf-8", "replace")).hexdigest()[:8]
+                if _sys_text else "")
+    _key = cache_address(model, _sys_text) if fw == "openai" else ""
     try:
         resp, empty_retries = _call_retrying_empty(
             fw, model, retries=(1 if end_after_spoken else None), _resolved=True,
@@ -1948,7 +1959,9 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         _call_trace(role, resp.model or model, ok=True,
                     cached=_u.get("cache_read", 0), prompt=_u.get("in", 0),
                     out_tokens=_u.get("out", 0), latency_ms=_lat,
-                    retries=empty_retries, gap_sec=_gap, tools_digest=_tools, vision=vision_used)
+                    retries=empty_retries, gap_sec=_gap, tools_digest=_tools, vision=vision_used,
+                    key=_key, sys_sha8=_sys_sha, sys_len=_sys_len,
+                    cc=(int(_u["cache_creation"]) if "cache_creation" in _u else -1))
         return resp
     except Exception as e:
         if end_after_spoken and isinstance(e, BrokenChannelError):
@@ -1957,7 +1970,8 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             # нулями: вызов состоялся, продолжения не будет, мы это услышали.
             _call_trace(role, model, ok=True, cached=0, prompt=0, out_tokens=0,
                         latency_ms=(_time.time() - t0) * 1000, error="end_after_spoken",
-                        gap_sec=_gap, tools_digest=_tools, vision=vision_used)
+                        gap_sec=_gap, tools_digest=_tools, vision=vision_used,
+                        key=_key, sys_sha8=_sys_sha, sys_len=_sys_len)
             return LLMResponse(text="", blocks=[], stop_reason="end_turn",
                                usage={}, framework=fw, model=model, vision=vision_used)
         err = f"{type(e).__name__}: {str(e)[:120]}"
@@ -1972,7 +1986,8 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         # и это честный ноль «не знаем», а не «кэша не было».
         _call_trace(role, model, ok=False, cached=0, prompt=0, out_tokens=0,
                     latency_ms=(_time.time() - t0) * 1000, error=err, gap_sec=_gap,
-                    tools_digest=_tools, vision=vision_used)
+                    tools_digest=_tools, vision=vision_used,
+                    key=_key, sys_sha8=_sys_sha, sys_len=_sys_len)
         if isinstance(e, TornStreamError):
             # Потеря названа вслух. Оборванный стрим — единственный случай, где мы выбрасываем
             # уже сказанное: снаружи это неотличимо от «модель ответила иначе», и без записи
@@ -2026,7 +2041,9 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             _call_trace(role, resolved_fb_model, ok=False, cached=0, prompt=0,
                         out_tokens=0, latency_ms=(_time.time() - t1) * 1000,
                         error=f"{type(e2).__name__}: {str(e2)[:120]}",
-                        fallback=True, tools_digest=_tools, vision=fallback_vision_used)
+                        fallback=True, tools_digest=_tools, vision=fallback_vision_used,
+                        key=(cache_address(resolved_fb_model, _sys_text) if other == "openai" else ""),
+                        sys_sha8=_sys_sha, sys_len=_sys_len)
             raise
         _note_truncation(resp, role)   # фолбэк-модель обрывается ровно так же
         if not st["on_fallback"]:  # событие — один раз на уход, не на каждый вызов
@@ -2048,7 +2065,10 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
                     out_tokens=_fu.get("out", 0),
                     latency_ms=(_time.time() - t1) * 1000,
                     fallback=True, tools_digest=_tools,
-                    vision=fallback_vision_used)
+                    vision=fallback_vision_used,
+                    key=(cache_address(resolved_fb_model, _sys_text) if other == "openai" else ""),
+                    sys_sha8=_sys_sha, sys_len=_sys_len,
+                    cc=(int(_fu["cache_creation"]) if "cache_creation" in _fu else -1))
         return resp
 
 
@@ -2078,7 +2098,8 @@ def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
                 out_tokens: int, latency_ms: float, error: str = "",
                 retries: int = 0, gap_sec: float = -1.0,
                 tools_digest: str = "", vision: bool = False,
-                fallback: bool = False) -> None:
+                fallback: bool = False, key: str = "", sys_sha8: str = "",
+                sys_len: int = 0, cc: int = -1) -> None:
     """Одна строка на вызов: доля кэша рядом с исходом. Никогда не роняет вызов.
 
     `tools` рядом с `cached` — отпечаток набора рук этого вызова. Схемы едут ВЫШЕ
@@ -2095,6 +2116,18 @@ def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
             row["fallback"] = True
         if tools_digest:
             row["tools"] = str(tools_digest)[:16]
+        # 13.09 (K1). Адрес кэша и отпечаток system РЯДОМ с cached: без них промах первого
+        # вызова нечем атрибутировать — байты головы (`sys`/`slen`), ключ маршрутизации
+        # (`key`) или простой (`gap`). Замер 13.09: 35 из 89 ходов группы падали на 3,8k при
+        # одном ключе — провал байтовый, и доказать это по леджеру было нечем. `cc` —
+        # cache_creation провайдера (anthropic-путь), -1 = провайдер не сообщил.
+        if key:
+            row["key"] = str(key)[:96]
+        if sys_sha8:
+            row["sys"] = str(sys_sha8)[:8]
+            row["slen"] = int(sys_len or 0)
+        if cc is not None and int(cc) >= 0:
+            row["cc"] = int(cc)
         if vision:
             # 09.09: вызов ушёл зрячей замене из-за картинки в кадре — разрез расхода
             # «сколько стоит зрение» и честный ответ на «почему модель не та, что в конфиге».

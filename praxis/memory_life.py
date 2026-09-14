@@ -54,6 +54,30 @@ HOT_LO = max(2, int(os.getenv("PRAXIS_HOT_LO", "50") or 50))
 HOT_HI = max(HOT_LO + 1, int(os.getenv("PRAXIS_HOT_HI", "100") or 100))
 HOT_HARD_HI = max(HOT_HI + 1, int(os.getenv("PRAXIS_HOT_HARD_HI", "125") or 125))
 HOT_TOKEN_CAP = max(1000, int(os.getenv("PRAXIS_HOT_TOKEN_CAP", "24000") or 24000))
+# 12.09, КЕАТ 17.08: лента разговора в кадре — ≤ TAPE_CHARS знаков; вытесненное уходит в
+# компакт (сводку) тем же сворачиванием, что и раньше, только порог — в знаках ленты, а
+# не только в числе сообщений и токенах. Замер 12.09: лента в личке Егора — 43,5 тыс.
+# знаков при договорённых 5 500. 0 — выключено (прежние пороги). TAPE_KEEP — какую долю
+# потолка оставлять горячей после свёртки, чтобы не сворачивать на каждом сообщении.
+TAPE_CHARS = max(0, int(os.getenv("PRAXIS_TAPE_CHARS", "5500") or 0))
+# 13.09: потолок ленты ГРУППЫ — отдельный рычаг. Ночь 12→13.09 в AbstractDL: общий
+# TAPE_CHARS=5500 в комнате на тысячу человек дал 10 сообщений за 19 минут вместо 181 за
+# 20 часов, и она час искала по дому собственную работу. Контракт T писался под личку с
+# одним говорящим; лента комнаты — это и есть разговор. 0 (умолчание) — потолок комнаты
+# (`context_summary_chars`), без давления свёртки по знакам.
+GROUP_TAPE_CHARS = max(0, int(os.getenv("PRAXIS_GROUP_TAPE_CHARS", "0") or 0))
+COMPACT_MAX_TOKENS = max(800, int(os.getenv("PRAXIS_COMPACT_MAX_TOKENS", "4000") or 4000))
+TAPE_KEEP = min(0.95, max(0.2, float(os.getenv("PRAXIS_TAPE_KEEP", "0.6") or 0.6)))
+
+
+def is_group_place(place: str | int) -> bool:
+    """Место группы — отрицательный telegram id (супергруппы -100…, чаты -…)."""
+    return str(place or "").strip().startswith("-")
+
+
+def tape_chars_for(place: str | int) -> int:
+    """Потолок ленты в знаках для места: группе — свой рычаг, личке — TAPE_CHARS."""
+    return GROUP_TAPE_CHARS if is_group_place(place) else TAPE_CHARS
 EPISODE_GAP_SEC = max(60.0, float(os.getenv("PRAXIS_EPISODE_GAP_MIN", "45") or 45) * 60.0)
 TIER_LO = max(1, int(os.getenv("PRAXIS_COMPACT_TIER_LO", "4") or 4))
 TIER_HI = max(TIER_LO + 1, int(os.getenv("PRAXIS_COMPACT_TIER_HI", "8") or 8))
@@ -406,7 +430,7 @@ def _conversation_hot_rows(rows: Iterable[dict]) -> list[dict]:
         "salience": row.get("salience", 2),
         "tokens": estimate_tokens(row.get("text", "")),
         "source": row.get("source"), "source_id": row.get("source_id"),
-        "chat": row.get("chat_id"),
+        "chat": row.get("chat_id"), "meta": dict(row.get("meta") or {}),
     } for row in memory_provenance.current_conversation_events(rows)]
 
 
@@ -520,7 +544,16 @@ def record_message(chat_id: str | int, line: str, *, actor: str = "", direction:
                    source: str = "telegram", source_id: str | int | None = None,
                    is_dm: bool | None = None, salience: int = 2, ts: float | None = None,
                    time_quality: str = "observed", dedupe_key: str = "",
-                   revision_order: int | None = None) -> dict:
+                   revision_order: int | None = None,
+                   keat_occurrence: dict | None = None,
+                   logical_send: dict | None = None) -> dict:
+    # Write-ahead invalidation also covers direct canonical revision writers and
+    # duplicate replay, before JSONL/hot-state revision effects.
+    if source == "telegram" and source_id is not None:
+        native, sep, revision = str(source_id).partition(":")
+        if native.isdecimal() and sep and (revision == "delete" or revision.startswith("edit:")):
+            import keat_live
+            keat_live.invalidate_native(chat_id, int(native))
     place = adopt_place(chat_id)
     with _state_write_guard(place), _WRITE_LOCK:
         # Место закреплено ДО замка: один и тот же точный ключ используется для всего
@@ -536,6 +569,8 @@ def record_message(chat_id: str | int, line: str, *, actor: str = "", direction:
             meta={
                 "is_dm": is_dm, "time_quality": time_quality,
                 "observed_at": _utc_iso(),
+                **({"keat_occurrence": dict(keat_occurrence)} if keat_occurrence else {}),
+                **({"logical_send": dict(logical_send)} if logical_send else {}),
                 **({"revision_order": int(revision_order)}
                    if revision_order is not None else {}),
             },
@@ -556,7 +591,7 @@ def record_message(chat_id: str | int, line: str, *, actor: str = "", direction:
                 "actor": rec["actor"], "direction": rec["direction"],
                 "salience": rec["salience"], "tokens": estimate_tokens(rec["text"]),
                 "source_id": rec.get("source_id"), "source": rec.get("source"),
-                "chat": rec.get("chat_id"),
+                "chat": rec.get("chat_id"), "meta": dict(rec.get("meta") or {}),
             })
         if dedupe_key:
             state["dedupe"] = (state.get("dedupe") or [])[-399:] + [
@@ -575,6 +610,12 @@ def note_message_revision(chat_id: str | int, message_id: int, line: str, *,
     fallback remains for legacy/test callers that predate append-only revision events.
     """
 
+    # Revoke capture authority independently of the derived hot projection.
+    # Missing enrollment does not affect legacy edits; enrolled I/O failures are
+    # surfaced rather than silently leaving an old checkpoint authorized.
+    import keat_live
+    if os.getenv("PRAXIS_KEAT_CAPTURE") == "on":
+        keat_live.invalidate_native(chat_id, message_id)
     place = adopt_place(chat_id)
     with _state_write_guard(place), _WRITE_LOCK:
         chat_id = place
@@ -594,6 +635,8 @@ def note_message_revision(chat_id: str | int, message_id: int, line: str, *,
                         "matched": False}
             keep = indexes[-1]
             item = state["hot"][keep]
+            item["meta"] = dict(item.get("meta") or {})
+            item["meta"].pop("keat_occurrence", None)  # revision needs fresh capture
             item["line"] = str(line)
             item["actor"] = str(actor or item.get("actor") or "Telegram")
             item["direction"] = "in"
@@ -649,6 +692,7 @@ def hot_records(chat_id: str | int, limit: int | None = None) -> list[dict]:
         rows.append({
             "actor": actor, "direction": direction, "line": line,
             "ts": _epoch(item.get("ts")), "source_id": item.get("source_id"),
+            "id": item.get("id"), "meta": dict(item.get("meta") or {}),
         })
     if limit is not None and limit > 0:
         return rows[-limit:]
@@ -746,16 +790,47 @@ def _json_obj(raw: str) -> dict:
         return {}
 
 
+# 13.09, слово Егора после ночи в абстракте: «показывать меньше сообщений, НО научить модель
+# нормально компактировать: оставлять искромётные реплики, колоритно пересказывать, чтобы это
+# была не постная какашка, а то, что позволяет понимать смысл сказанного бог знает когда».
+# Прежний промпт просил «4–10 concise lines» — и получал протокол заседания: кто о чём
+# «обсуждал», без единой живой фразы. В кадр из компакта попадает ТОЛЬКО поле summary
+# (`_compact_recap` читает «## Суть»), поэтому вся хроника, включая дословные реплики,
+# обязана лежать в нём, а не в open_threads/claims.
 _COMPACT_SYSTEM = (
-    "You are the quiet compression organ of Praxis, never her public voice. Return STRICT JSON: "
-    '{"summary":"coherent first-person continuity in Russian, 4-10 concise lines",'
-    '"open_threads":["..."],"claims":[{"subject":"...","text":"...",'
+    "Ты — память Praxis: её хроникёр, не её публичный голос и не протоколист. Твоя запись — "
+    "единственное, что она будет помнить об этих сообщениях, когда сами сообщения уйдут из кадра. "
+    "Пиши так, чтобы через неделю по одной твоей записи можно было понять не только О ЧЁМ "
+    "говорили, но и КАК: кто с кем спорил, кто шутил, кто давил, кто уступил, что было сказано "
+    "остро, смешно, некрасиво или точно.\n\n"
+    "Верни СТРОГИЙ JSON: "
+    '{"summary":"хроника","open_threads":["..."],"claims":[{"subject":"...","text":"...",'
     '"confidence":"observed|inferred|uncertain","evidence_ids":["evt/cmp id"]}],'
     '"episodes":[{"title":"...","status":"closed|continued","start_id":"...",'
-    '"end_id":"...","summary":"..."}]}. '
-    "Preserve decisions, promises, changes, disagreements and uncertainty. Source IDs are evidence: cite only "
-    "IDs present in input. A deeper/older compact has higher PRESERVATION priority, not higher truth. "
-    "Never invent. If the last episode is still moving, mark it continued. Write values in Russian."
+    '"end_id":"...","summary":"..."}]}\n\n'
+    "Как писать summary (это единственное поле, которое она увидит в кадре):\n"
+    "1. От первого лица Praxis («я»), в прошедшем времени, по-русски, хронологически. Абзацы — "
+    "по эпизодам, не по людям. Дай масштаб: за сколько часов и сколько сообщений было.\n"
+    "2. Людей называй так, как они подписаны во входе (имя и @username), с их позициями и "
+    "манерой: не «обсуждали архитектуру», а «torvn77 настаивал, что …, Barmagloth отмахнулся: …».\n"
+    "3. ЦИТИРУЙ ДОСЛОВНО самые характерные реплики — острые, смешные, обидные, точные, "
+    "переломные — в кавычках «…», с автором и номером сообщения, если он есть во входе. "
+    "Ориентир: одна-две цитаты на эпизод, до восьми на запись; цитата — до 200 знаков; "
+    "чужую грубость не смягчай и не пересказывай эвфемизмами, это часть смысла.\n"
+    "4. Мои собственные реплики — особенно: что именно я утверждала, от чего отказалась, где "
+    "ошиблась и признала это, что пообещала. Мои формулировки цитируй, а не пересказывай.\n"
+    "5. Решения, обещания, договорённости, изменившиеся факты и открытые вопросы — явно, с "
+    "тем, кто их произнёс. Неуверенное так и помечай («похоже», «не проверено»).\n"
+    "6. Если во входе были пути, имена файлов, номера, ссылки, команды, id прогонов — "
+    "перенеси их дословно: без них моя же работа для меня потом не находится.\n"
+    "7. Объём: примерно одна строка на два-три входящих сообщения; для tier 1 обычно "
+    "1 500–3 000 знаков, для более глубоких tier — до 2 000, но лучшие цитаты сохраняй и там. "
+    "Пустой пересказ короче, чем нужно, хуже длинной живой хроники.\n\n"
+    "Запреты: ничего не выдумывать и не додумывать; цитировать только то, что есть во входе; "
+    "ссылаться только на id из входа; не ставить оценок людям от себя, кроме того, что сказано "
+    "ими или мной; не превращать спор в «стороны обменялись мнениями». Более глубокий/старый "
+    "компакт имеет приоритет СОХРАНЕНИЯ, не истины. Если последний эпизод ещё идёт, пометь его "
+    "continued. Значения всех полей — по-русски."
 )
 
 
@@ -849,8 +924,12 @@ def _model_compact(inputs: list[dict], *, tier: int, depth: int, continued: bool
         body, manifest = _pack_compact_prompt(inputs)
         user = (f"Target tier={tier}, depth={depth}, forced_continuation={str(continued).lower()}.\n"
                 + body)
+        # 12.09: 1600 токенов резали сводку JSON на середине фразы (186 обрывов за час
+        # свёртки под новый потолок ленты против 2 до неё): оборванный JSON не
+        # разбирается, и место сворачивалось запасной сводкой без модели.
         resp = llm.chat("evaluator", system=_COMPACT_SYSTEM,
-                        messages=[{"role": "user", "content": user}], max_tokens=1600)
+                        messages=[{"role": "user", "content": user}],
+                        max_tokens=COMPACT_MAX_TOKENS)
         data = _json_obj(resp.text)
         if isinstance(data.get("summary"), str) and data["summary"].strip():
             data["_manifest"] = manifest
@@ -1169,15 +1248,43 @@ def _write_episodes(chat_id, compact_id: str, inputs: list[dict], proposed: list
     return made
 
 
-def plan_hot_fold(hot: list[dict], *, force: bool = False) -> dict:
+def tape_window(rows: list[dict], max_chars: int | None = None) -> list[dict]:
+    """Самые свежие записи ленты, умещающиеся в max_chars знаков (по полю `line`).
+
+    Последняя запись едет всегда, даже если она одна длиннее потолка: то, на что
+    она отвечает, из кадра не выпадает. 0 — без потолка (как было).
+    """
+    limit = TAPE_CHARS if max_chars is None else int(max_chars)
+    if limit <= 0 or not rows:
+        return list(rows)
+    kept: list[dict] = []
+    used = 0
+    for row in reversed(rows):
+        cost = len(str(row.get("line") or "")) + 1
+        if kept and used + cost > limit:
+            break
+        kept.append(row)
+        used += cost
+    kept.reverse()
+    return kept
+
+
+def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | None = None) -> dict:
+    """`tape_chars` — потолок ленты в знаках для ЭТОГО места (13.09: группе свой рычаг);
+    None — общий TAPE_CHARS, 0 — давления по знакам нет."""
+    tape_limit = TAPE_CHARS if tape_chars is None else max(0, int(tape_chars))
     count = len(hot)
     token_rows = [int(x.get("tokens") or estimate_tokens(x.get("line", ""))) for x in hot]
     tokens = sum(token_rows)
+    chars = sum(len(str(x.get("line") or "")) for x in hot)
     if count < 2:
-        return {"due": False, "reason": "too_short", "count": count, "tokens": tokens}
-    pressure = count >= HOT_HI or tokens > HOT_TOKEN_CAP or force
+        return {"due": False, "reason": "too_short", "count": count, "tokens": tokens,
+                "chars": chars}
+    char_pressure = tape_limit > 0 and chars > tape_limit
+    pressure = count >= HOT_HI or tokens > HOT_TOKEN_CAP or char_pressure or force
     if not pressure:
-        return {"due": False, "reason": "within_window", "count": count, "tokens": tokens}
+        return {"due": False, "reason": "within_window", "count": count, "tokens": tokens,
+                "chars": chars}
     token_pressure = tokens > HOT_TOKEN_CAP
     token_target = 1
     if token_pressure:
@@ -1187,6 +1294,20 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False) -> dict:
             token_target = i
             if suffix_tokens <= HOT_TOKEN_CAP:
                 break
+    if char_pressure:
+        # Лента переросла потолок в знаках: сворачиваем старое так, чтобы горячим
+        # осталось ~TAPE_KEEP потолка. Давление жёсткое, как у токенов: ждать границу
+        # эпизода нельзя — кадр уже превышен.
+        keep = int(tape_limit * TAPE_KEEP)
+        suffix_chars = chars
+        char_target = 1
+        for i in range(1, count):
+            suffix_chars -= len(str(hot[i - 1].get("line") or ""))
+            char_target = i
+            if suffix_chars <= keep:
+                break
+        token_pressure = True
+        token_target = max(token_target, char_target)
     count_target = max(1, count - HOT_LO) if count >= HOT_HI or force else 1
     # ПОТОЛОК ПЛАНА — сколько влезает в один промпт. Замер 21.08 по AbstractDL:
     # кольцо 3802 при потолке 125, план просил свернуть 3752 события разом, модель
@@ -1223,8 +1344,9 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False) -> dict:
     # влезающего — бессмысленно. Между этими двумя границами план всегда исполним.
     fold = max(1, min(fold, budget_fit))
     return {"due": True, "fold": fold, "continued": True,
-            "reason": "token_cap" if tokens > HOT_TOKEN_CAP else "hard_window",
-            "count": count, "tokens": tokens, "budget_fit": budget_fit}
+            "reason": ("token_cap" if tokens > HOT_TOKEN_CAP else
+                       "tape_chars" if char_pressure else "hard_window"),
+            "count": count, "tokens": tokens, "chars": chars, "budget_fit": budget_fit}
 
 
 def _frontier_input(meta: dict, chat_id: str | int) -> dict:
@@ -1369,7 +1491,8 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
     chat_id = adopt_place(chat_id)
     with _state_write_guard(chat_id), _WRITE_LOCK:
         state = _load_state(chat_id, rebuild=True)
-        plan = plan_hot_fold(state.get("hot") or [], force=force)
+        plan = plan_hot_fold(state.get("hot") or [], force=force,
+                             tape_chars=tape_chars_for(chat_id))
         if not plan.get("due"):
             return {"ok": True, "folded": 0, "plan": plan,
                     "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}

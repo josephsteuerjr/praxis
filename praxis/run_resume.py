@@ -689,7 +689,9 @@ def _validate_events(run_id: str, events: list[dict], manifest: dict, *,
                 raise ResumeEvidenceError("status event ordering is inconsistent")
             reduced_status = after
         call_id = str(row.get("call_id") or "")
-        if kind in {"model_input", "model_started", "model_output", "model_completed"}:
+        if kind in {
+                "model_input", "model_started", "model_input_fallback",
+                "model_output", "model_completed"}:
             if not call_id:
                 raise ResumeEvidenceError(f"{kind} has no call_id")
             state = model_state.setdefault(call_id, {})
@@ -697,6 +699,15 @@ def _validate_events(run_id: str, events: list[dict], manifest: dict, *,
                 raise ResumeEvidenceError(f"duplicate {kind} for {call_id}")
             if kind == "model_started" and "model_input" not in state:
                 raise ResumeEvidenceError("model_started precedes model_input")
+            if kind == "model_input_fallback":
+                if "model_input" not in state or "model_started" not in state:
+                    raise ResumeEvidenceError(
+                        "model_input_fallback precedes model_input/model_started"
+                    )
+                if "model_output" in state:
+                    raise ResumeEvidenceError(
+                        "model_input_fallback follows model_output"
+                    )
             if kind == "model_output" and "model_started" not in state:
                 raise ResumeEvidenceError("model_output precedes model_started")
             if kind == "model_completed" and "model_output" not in state:
@@ -1200,7 +1211,9 @@ def _transport_intent(run_id: str, context: RunContext, events: list[dict]) -> d
     if context.delivery_chat_id is not None and str(args["chat_id"]) != context.delivery_chat_id:
         raise ResumeEvidenceError("Telegram delivery route differs from RunContext")
     for later in events[int(row["seq"]):]:
-        if later.get("kind") in {"model_input", "model_started", "model_output", "run_checkpoint"}:
+        if later.get("kind") in {
+                "model_input", "model_started", "model_input_fallback",
+                "model_output", "run_checkpoint"}:
             raise ResumeEvidenceError("model authoring continued after Telegram delivery intent")
     return copy.deepcopy(row)
 
@@ -1213,10 +1226,28 @@ def _model_pair(manager: RunManagerReader, run_id: str, output_row: dict,
               if row.get("kind") == "model_input" and row.get("call_id") == call_id]
     if len(inputs) != 1 or int(inputs[0]["seq"]) >= int(output_row["seq"]):
         raise ResumeEvidenceError("model output has no unique earlier model input")
+    fallbacks = [row for row in events
+                 if (row.get("kind") == "model_input_fallback"
+                     and row.get("call_id") == call_id)]
+    if len(fallbacks) > 1:
+        raise ResumeEvidenceError("model output has multiple model input fallbacks")
+    selected_input = inputs[0]
+    expected_name = "model-input"
+    if fallbacks:
+        fallback = fallbacks[0]
+        if not (int(selected_input["seq"]) < int(fallback["seq"])
+                < int(output_row["seq"])):
+            raise ResumeEvidenceError(
+                "model input fallback is not between intent and output"
+            )
+        selected_input = fallback
+        expected_name = "model-input-fallback"
     model_input = _validate_model_input(_event_result_json(
-        manager, run_id, inputs[0], expected_name="model-input",
+        manager, run_id, selected_input, expected_name=expected_name,
         max_result_bytes=max_result_bytes, budget=budget,
     ))
+    if fallbacks and model_input.get("reason") != "keat_final_revocation":
+        raise ResumeEvidenceError("model input fallback has an invalid reason")
     model_output = _validate_model_output(_event_result_json(
         manager, run_id, output_row, expected_name="model-output",
         max_result_bytes=max_result_bytes, budget=budget,
@@ -1593,11 +1624,13 @@ def plan_resume(manager: RunManagerReader, run_id: str, *,
                 outbound=outbound,
             )
 
-        # A model_input/model_started newer than the latest durable output is a
-        # crashed model request, not permission to fall back to an older answer.
-        # A preceding checkpoint is the only supported exact restart boundary.
-        model_frontier = [row for row in events
-                          if row.get("kind") in {"model_input", "model_started", "model_output"}]
+        # A model_input/model_started/model_input_fallback newer than the latest
+        # durable output is a crashed model request, not permission to fall back
+        # to an older answer. A preceding checkpoint is the only supported exact
+        # restart boundary.
+        model_frontier = [row for row in events if row.get("kind") in {
+            "model_input", "model_started", "model_input_fallback", "model_output",
+        }]
         newest_model_event = model_frontier[-1] if model_frontier else None
         if (newest_model_event is not None
                 and newest_model_event.get("kind") != "model_output"

@@ -84,7 +84,7 @@ LAST_N = int(os.getenv("PRAXIS_LAST_N", "50"))
 # строк, и все из общего чата — живое обсуждение под постом канала не попадало вовсе.
 # Связывает именно бюджет символов, а не потолок сообщений (тот был 200 при 45 строках).
 WHOLE_ROOM_CONTEXT_CHARS = int(os.getenv("PRAXIS_WHOLE_ROOM_CONTEXT_CHARS", "32000"))
-# PASS 19: LAST_N остаётся legacy/ручкой fetch_context; живой hot-layer дышит 50↔100.
+# LAST_N bounds the legacy text view; storage/compaction and dialogue roles keep their own caps.
 COMPACT_MARGIN = int(os.getenv("PRAXIS_COMPACT_MARGIN", "20"))
 # Deep-room profiles may ask for a 500-message hot view.  Ordinary rooms still slice
 # at memory_life.HOT_HARD_HI; the extra retention is inert until their root profile opts in.
@@ -285,6 +285,8 @@ class GroupWake:
     # Замораживается ВМЕСТЕ с текстом, одним чтением архива. Пустой кортеж —
     # честное «авторства не знаю» (запасной путь по строковому буферу).
     turns_snapshot: tuple = ()
+    # Native refs are frozen with the wake; later room traffic cannot enter KEAT.
+    occurrence_sidecar: dict | None = None
 
 
 _group_wakes: dict[str, GroupWake] = {}
@@ -310,6 +312,11 @@ _dm_rearm: set[str] = set()  # PASS 21: ЛС-триггеры, сгоревши�
 _supersede_gen: dict[str, int] = {}  # PASS 29: бамп поколения == создан новый пасс-преемник (см. _arm)
 _buf_dirty: set[str] = set()              # §1: чаты с несохранённым буфером
 _compacting: set[str] = set()             # §6: чтобы не свернуть один чат дважды разом
+# 12.09: свёртки идут в общем пуле потоков `asyncio.to_thread` (8 рабочих на 4 ядрах).
+# Разовая свёртка всех 239 мест под новый потолок ленты забила пул целиком: 135 мест
+# за полчаса, а часы, пробуждения и ходы голоса стояли 40 минут (ни одного прогона).
+# Свёртка — фон, ей хватит двух потоков; остальное — живому ходу.
+_COMPACT_SLOTS = asyncio.Semaphore(max(1, int(os.getenv("PRAXIS_COMPACT_PARALLEL", "2") or 2)))
 _MEDIA_SPOOL: media_core.MediaSpool | None = None
 _MEDIA_SENDING: set[str] = set()
 _MEDIA_ACCEPTED: dict[str, dict] = {}
@@ -317,6 +324,8 @@ _TEXT_SENDING: set[str] = set()
 _MEMBERSHIP_LEDGER: telegram_membership.MembershipLedger | None = None
 _DIRECT_OUTBOX: telegram_outbox.TelegramOutbox | None = None
 _DIRECT_OUTBOX_RECONCILED: set[str] = set()
+#: Тумбстоны спула медиа, чьи прогоны уже закрыты: раз опознали — манифест больше не читаем.
+_MEDIA_TOMBSTONES_SETTLED: set[str] = set()
 _SOCIAL_PULSE_TASK: asyncio.Task | None = None
 _FORGE_EVENTS_TASK: asyncio.Task | None = None   # PASS 30 Этап 1: single-flight насоса событий
 _MODERATION_EVENTS_TASK: asyncio.Task | None = None  # shadow moderation -> её live wake
@@ -515,17 +524,34 @@ def _life_source_persisted(chat_id: str, source_id: str | int | None) -> bool:
 def _record_life_message(chat_id: str, line: str, *, actor: str, direction: str,
                          source_id: str | int | None, is_dm: bool | None,
                          ts: float | None, dedupe_key: str,
-                         revision_order: int | None = None) -> bool:
+                         revision_order: int | None = None,
+                         capture_live: bool = False,
+                         logical_send: dict | None = None,
+                         root_chat_id=None, principal_id=None,
+                         ordinary_root: bool = False) -> bool:
     """Persist one Telegram life event, retrying only until one append/dedupe succeeds."""
 
     key = _life_source_key(chat_id, source_id)
     if source_id is not None and key in _persisted_life_sources:
         return True
+    occurrence = None
+    if capture_live and source_id is not None:
+        try:
+            from keat_live import capture_ingress
+            occurrence = capture_ingress(
+                chat_id, is_dm=is_dm, source_id=str(source_id), direction=direction,
+                payload={"role": "assistant" if direction == "out" else "user", "content": line, "actor": actor,
+                         **({"logical_send": logical_send} if logical_send else {})},
+                **({} if is_dm is True else dict(root_chat_id=root_chat_id,
+                    principal_id=principal_id, ordinary_root=ordinary_root)))
+        except Exception:
+            log.debug("KEAT ingress unavailable")
     try:
         memory_life.record_message(
             chat_id, line, actor=actor, direction=direction, source="telegram",
             source_id=source_id, is_dm=is_dm, ts=ts, dedupe_key=dedupe_key,
-            revision_order=revision_order,
+            revision_order=revision_order, keat_occurrence=occurrence,
+            logical_send=logical_send,
         )
     except Exception:
         log.exception("life event не записался [%s]", chat_id)
@@ -538,7 +564,8 @@ def _record_life_message(chat_id: str, line: str, *, actor: str, direction: str,
 def _buf_push(chat_id: str, line: str, *, author: str = "",
               is_dm: bool | None = None, name: str | None = None,
               source_id: str | int | None = None, ts: float | None = None,
-              record_life: bool = True) -> None:
+              record_life: bool = True, capture_live: bool = False,
+              root_chat_id=None, principal_id=None, ordinary_root: bool = False) -> None:
     """Добавить строку в буфер и пометить чат к персисту (§1).
 
     PASS 9.0: заодно фиксируем время/автора последней строки в buf_meta.json —
@@ -562,12 +589,69 @@ def _buf_push(chat_id: str, line: str, *, author: str = "",
         _record_life_message(
             chat_id, line, actor=actor, direction=direction,
             source_id=source_id, is_dm=is_dm, ts=ts, dedupe_key=dedupe,
+            capture_live=capture_live, root_chat_id=root_chat_id,
+            principal_id=principal_id, ordinary_root=ordinary_root,
         )
     try:
         bufstore.meta_update(chat_id, author=author or line.split(":", 1)[0],
                              is_dm=is_dm, name=name)
     except Exception:
         log.debug("buf_meta не записалась [%s]", chat_id, exc_info=True)
+
+
+def _group_native_persistence_enabled(chat_id: str) -> bool:
+    """Select split native persistence only for the fully ready exact canary pair."""
+    if str(chat_id) != '-1001240718803':
+        return False
+    try:
+        import keat_readiness
+        import keat_runtime
+        return bool(
+            keat_runtime.staged('group', '-1001240718803') and
+            keat_readiness.receipt()['serve_ready'])
+    except Exception:
+        return False
+
+
+def _keat_group_user_principal(sender, sender_id):
+    """Return an exact Telegram User principal; reject channel/anonymous authorship."""
+    try:
+        from telethon.tl.types import User
+        if not isinstance(sender, User) or isinstance(sender_id, bool):
+            return None
+        principal = int(sender_id)
+        if principal <= 0 or int(getattr(sender, 'id', 0)) != principal:
+            return None
+        return principal
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _persist_sent_reply(chat_id, chunks, message_ids, *, is_dm):
+    """Keep the legacy buffer entry, but persist each native receipt separately.
+
+    The accepted prefix is the logical send (including on partial failure). A
+    different send gets a different batch even if its text happens to be equal.
+    """
+    sent_reply = "".join(chunks)
+    meta = ({"source_id": ",".join(message_ids), "ts": time.time()}
+            if message_ids else {})
+    native = (len(message_ids) == len(chunks) and
+              (is_dm or _group_native_persistence_enabled(str(chat_id))))
+    _buf_push(chat_id, f"Praxis: {sent_reply}", author="Praxis", is_dm=is_dm,
+              record_life=not native, **meta)
+    if native and not _under_tests():
+        import uuid
+        batch_id = uuid.uuid4().hex
+        for index, (chunk, mid) in enumerate(zip(chunks, message_ids)):
+            _record_life_message(
+                chat_id, f"Praxis: {chunk}", actor="Praxis", direction="out",
+                source_id=mid, is_dm=is_dm, ts=time.time(),
+                dedupe_key=f"telegram:{chat_id}:{mid}:out", capture_live=True,
+                logical_send=dict(id=batch_id, index=index, count=len(chunks)),
+                root_chat_id=(chat_id if not is_dm else None),
+                principal_id=(_self_id if not is_dm else None),
+                ordinary_root=(not is_dm and str(chat_id) == '-1001240718803'))
 
 
 def _telegram_handle(entity) -> str | None:
@@ -752,26 +836,72 @@ def _format_messages(msgs) -> list[str]:
     return lines
 
 
+def _hot_window() -> int:
+    """Bound the legacy text view equally for local tape and cold Telegram fetch.
+
+    This is a read window, not a retention or compaction threshold. 12.09: то же окно
+    стоит и на ролевой ленте (`_dm_dialogue`) — прежде она резала по HOT_HARD_HI, и
+    PRAXIS_LAST_N до модели не доезжал. Room-policy snapshots keep their own caps.
+    """
+    return min(memory_life.HOT_HARD_HI, memory_life.HOT_HI,
+               max(memory_life.HOT_LO, LAST_N))
+
+
+def _tape_cut_lines(lines: list[str]) -> list[str]:
+    """Свежие строки сплошной ленты под потолок memory_life.TAPE_CHARS (последняя — всегда)."""
+    limit = memory_life.TAPE_CHARS
+    if limit <= 0 or not lines:
+        return list(lines)
+    kept: list[str] = []
+    used = 0
+    for line in reversed(lines):
+        cost = len(line) + 1
+        if kept and used + cost > limit:
+            break
+        kept.append(line)
+        used += cost
+    kept.reverse()
+    return kept
+
+
+def _tape_cut_turns(turns):
+    """То же для групповой ленты с авторством: (is_self, line, role_line) — по role_line."""
+    limit = memory_life.TAPE_CHARS
+    turns = list(turns or ())
+    if limit <= 0 or not turns:
+        return turns
+    kept = []
+    used = 0
+    for item in reversed(turns):
+        cost = len(str(item[2] if len(item) > 2 else item[1])) + 1
+        if kept and used + cost > limit:
+            break
+        kept.append(item)
+        used += cost
+    kept.reverse()
+    return kept
+
+
 async def _last_n_text(chat_id: str) -> str:
-    """PASS 19 hot-layer: persisted local buffer breathes 50↔100 after provenance compaction.
+    """Read the bounded legacy hot-text view without mutating persisted tape.
 
     The incoming handler has already observed and appended the current message before this call,
     so the buffer is the exact live slice. Telegram remains the cold-start fallback.
     """
-    local = list(_buf[chat_id])[-memory_life.HOT_HARD_HI:]
+    limit = _hot_window()
+    local = _tape_cut_lines(list(_buf[chat_id])[-limit:])
     if local:
         return "\n".join(local)
     meta = _meta.get(chat_id, {})
     entity = meta.get("entity", None)
     if entity is not None:
         try:
-            limit = min(memory_life.HOT_HI, max(memory_life.HOT_LO, LAST_N))
             topic_id = meta.get("topic_id")
             kwargs = {"reply_to": int(topic_id)} if topic_id is not None else {}
             msgs = await client.get_messages(entity, limit=limit, **kwargs)
             lines = _format_messages(reversed(list(msgs)))  # get_messages отдаёт новые сверху
             if lines:
-                return "\n".join(lines[-limit:])
+                return "\n".join(_tape_cut_lines(lines[-limit:]))
         except Exception:
             log.warning("live-fetch контекста упал [%s] — фолбэк на буфер", chat_id, exc_info=True)
     return ""
@@ -838,14 +968,14 @@ def _group_dialogue(turns) -> tuple[list[dict], str]:
         return [], ""
     try:
         return _turns_to_dialogue([(is_self, role_line)
-                                   for is_self, _line, role_line in turns])
+                                   for is_self, _line, role_line in _tape_cut_turns(turns)])
     except Exception:
         log.warning("роли группового разговора не собрались — иду сплошным текстом",
                     exc_info=True)
         return [], ""
 
 
-def _dm_dialogue(chat_id: str) -> tuple[list[dict], str]:
+def _dm_dialogue(chat_id: str, *, occurrence_sidecar: dict | None = None) -> tuple[list[dict], str]:
     """Разговор в личке ролями: (история, то-на-что-она-отвечает-сейчас).
 
     Граница проведена там, где она и лежит по смыслу: всё до её последней реплики
@@ -855,10 +985,14 @@ def _dm_dialogue(chat_id: str) -> tuple[list[dict], str]:
 
     Возвращает ([], "") если ролей не собрать: вызывающий тогда работает по-старому.
     """
+    if occurrence_sidecar is not None:
+        occurrence_sidecar.clear()
     if not _dialogue_roles_on():
         return [], ""
     try:
-        rows = memory_life.hot_records(chat_id, memory_life.HOT_HARD_HI)
+        # 12.09: окно то же, что у сплошной ленты (PRAXIS_LAST_N), и потолок в знаках
+        # (PRAXIS_TAPE_CHARS) — то, что не влезло, лежит в сводке и достаётся recall.
+        rows = memory_life.tape_window(memory_life.hot_records(chat_id, _hot_window()))
     except Exception:
         log.warning("роли разговора не собрались [%s] — иду сплошным текстом", chat_id,
                     exc_info=True)
@@ -876,11 +1010,53 @@ def _dm_dialogue(chat_id: str) -> tuple[list[dict], str]:
     # В личке собеседник ровно один, и кто он — уже сказано ролью, `speaker` и рамкой
     # присутствия. В ГРУППЕ подпись остаётся: там говорящих много, и без имени реплика
     # безадресна.
-    return _turns_to_dialogue([
-        (row["direction"] == "out",
-         _strip_author_prefix(row["line"], row["actor"]))
-        for row in rows
-    ])
+    turns = [(row["direction"] == "out",
+              _strip_author_prefix(row["line"], row["actor"])) for row in rows]
+    from logical_send import batch_groups
+    batches = batch_groups([(r.get("meta") or {}).get("logical_send")
+                            if r["direction"] == "out" else None for r in rows])
+    logical_turns = [(turns[g[0]][0], "".join(turns[i][1] for i in g)) for g in batches]
+    history, current = _turns_to_dialogue(logical_turns)
+    if occurrence_sidecar is not None:
+        occurrence_sidecar.clear()
+        # Positions, never matching text: repeated equal messages remain distinct.
+        admitted = [(rows[i], turns[i]) for g, turn in zip(batches, logical_turns)
+                    if turn[1].strip() for i in g]
+        if history and current and admitted:
+            captured = [bool((r.get("meta") or {}).get("keat_occurrence"))
+                        for r, _ in admitted]
+            first = 0 if all(captured) else max(
+                (i for i, present in enumerate(captured) if not present), default=-1) + 1
+            suffix = admitted[first:]
+            # A captured native suffix is a valid narrowing even while older hot
+            # history predates capture.  Keep the full dialogue as the legacy
+            # fallback; these extra fields address only the provider candidate.
+            if suffix and all((r.get("meta") or {}).get("keat_occurrence")
+                              for r, _ in suffix):
+                suffix_turns = [turn for _, turn in suffix]
+                self_positions = [i for i, turn in enumerate(suffix_turns) if turn[0]]
+                if self_positions:
+                    last_self = self_positions[-1]
+                    candidate_history, candidate_current = _turns_to_dialogue(suffix_turns)
+                else:
+                    last_self = -1
+                    candidate_history = []
+                    candidate_current = "\n".join(turn[1] for turn in suffix_turns)
+                if candidate_current.strip():
+                    groups, role = [], None
+                    for row, turn in suffix[:last_self + 1]:
+                        if turn[0] != role:
+                            groups.append([])
+                            role = turn[0]
+                        groups[-1].append(row["meta"]["keat_occurrence"])
+                    occurrence_sidecar.update(history=groups, current=[
+                        row["meta"]["keat_occurrence"] for row, _ in suffix[last_self + 1:]])
+                    if first:
+                        occurrence_sidecar.update(
+                            projection_history=candidate_history,
+                            projection_current=candidate_current,
+                        )
+    return history, current
 
 
 async def _chat_descriptor(event, chat_id: str) -> dict:
@@ -916,6 +1092,70 @@ async def _chat_descriptor(event, chat_id: str) -> dict:
         except Exception:
             log.debug("имя места [%s] не записалось", chat_id, exc_info=True)
     return d
+
+
+def _dm_policy() -> str:
+    """`open` (как было) или `whitelist`. Неизвестное значение — как `open`.
+
+    Неизвестное значение НЕ закрывает личку: опечатка в переменной среды не должна
+    молча обрывать её разговоры с людьми. Отказ дороже ошибки настройки.
+    """
+    raw = str(os.getenv("PRAXIS_DM_POLICY", "open") or "open").strip().lower()
+    return "whitelist" if raw in {"whitelist", "closed", "allowlist"} else "open"
+
+
+def _dm_allow_ids() -> set[str]:
+    """Кому открыта личка: переменная среды плюс файл состояния.
+
+    Файл — чтобы список правился без передеплоя (и из Пульта позже); переменная —
+    чтобы он был виден в паспорте среды. Оба читаются, ни один не главнее.
+    """
+    ids: set[str] = set()
+    raw = str(os.getenv("PRAXIS_DM_ALLOW", "") or "")
+    ids |= {p.strip() for p in re.split(r"[\s,;]+", raw) if p.strip()}
+    try:
+        path = memory_life.BASE / "memory" / ".state" / "dm-allow.json"
+        if path.is_file():
+            got = json.loads(path.read_text(encoding="utf-8"))
+            rows = got.get("allow") if isinstance(got, dict) else got
+            ids |= {str(x).strip() for x in (rows or []) if str(x).strip()}
+    except Exception:
+        log.warning("список допуска личек не прочитался — считаю его пустым", exc_info=True)
+    return ids
+
+
+def _dm_allowed(sender_id, *, family: bool) -> bool:
+    """Пускать ли этого человека в личку. Владелец сюда не доходит (проверен выше).
+
+    ⚠ ЗНАКОМЫЕ НЕ ПРОХОДЯТ, и это названо, а не подразумевается: под `whitelist`
+    отвечает она владельцу, семье и тем, кто назван по id. Человек из её досье, но
+    не из семьи и не из списка, ответа не получит — его сообщение будет записано, а
+    ход не родится. Решение Егора 12.09: рычаг есть, умолчание — open.
+    """
+    if _dm_policy() == "open":
+        return True
+    if family:
+        return True
+    return str(sender_id) in _dm_allow_ids()
+
+
+def _note_dm_refused(chat_id, sender_id, name: str, *, already_noted: bool) -> None:
+    """Отказ НАЗВАН: и в журнале, и в её памяти о первом контакте.
+
+    Гейт, который молчит, превращает закрытую личку в «её никто не пишет». Она
+    должна знать, что к ней приходили и кого не пустили — иначе решение открыть
+    человеку принимать не на чем.
+
+    `already_noted` — когда первый контакт уже отмечен веткой `admission` выше:
+    второй вызов `social.note_unknown` посчитал бы одно сообщение дважды.
+    """
+    log.info("личка закрыта: %s (%s) — политика whitelist", name, sender_id)
+    if already_noted:
+        return
+    try:
+        social.note_unknown(sender_id, praxis_time.day_key())
+    except Exception:
+        log.warning("отметка первого контакта не записалась [%s]", sender_id, exc_info=True)
 
 
 def _wants_inbox(is_private: bool, is_owner: bool, msg, addressed: bool = False) -> bool:
@@ -1483,6 +1723,12 @@ def _group_context_frozen(chat_id: str, policy: dict) -> tuple[str, tuple]:
         max_chars = max(8_000, summary_chars * 2)
         if scope.whole_room:
             max_chars = max(WHOLE_ROOM_CONTEXT_CHARS, summary_chars * 3)
+        # 13.09: лента группы — под СВОЙ рычаг PRAXIS_GROUP_TAPE_CHARS (умолчание 0 = потолок
+        # комнаты). Общий TAPE_CHARS=5500 12.09 дал в AbstractDL 10 сообщений за 19 минут
+        # вместо 181 за 20 часов: контракт T писался под личку, а лента комнаты — это и есть
+        # разговор. Замер до того: архивный снимок 70+ тыс. знаков, ход 46 тыс. токенов.
+        if memory_life.GROUP_TAPE_CHARS > 0:
+            max_chars = min(max_chars, memory_life.GROUP_TAPE_CHARS)
         try:
             rows = group_context.context_rows(
                 route.peer_id, topic_id=route.topic_id, limit=limit,
@@ -1495,7 +1741,33 @@ def _group_context_frozen(chat_id: str, policy: dict) -> tuple[str, tuple]:
                 return archived, _fold_service_rows(rows)
         except Exception:
             log.exception("group archive context не собрался [%s]", chat_id)
-    return "\n".join(list(_buf[chat_id])[-(limit or memory_life.HOT_HARD_HI):]), ()
+    return "\n".join(_tape_cut_lines(list(_buf[chat_id])[-(limit or memory_life.HOT_HARD_HI):])), ()
+
+
+def _group_native_projection(chat_id: str, trigger_mid) -> tuple[list[dict], str, dict]:
+    """Freeze a fully captured role projection ending at the trigger message."""
+    try:
+        rows = memory_life.hot_records(chat_id, memory_life.HOT_HARD_HI)
+        if not rows or str(rows[-1].get('source_id') or
+                           (rows[-1].get('meta') or {}).get('source_id') or '') != str(trigger_mid):
+            return [], '', {}
+        if not all((row.get('meta') or {}).get('keat_occurrence') for row in rows):
+            return [], '', {}
+        turns = [(row['direction'] == 'out', row['line']) for row in rows]
+        history, current = _turns_to_dialogue(turns)
+        if not history or not current.strip():
+            return [], '', {}
+        last_self = max(i for i, turn in enumerate(turns) if turn[0])
+        groups, role = [], None
+        for row, turn in zip(rows[:last_self + 1], turns[:last_self + 1]):
+            if turn[0] != role:
+                groups.append([]); role = turn[0]
+            groups[-1].append(row['meta']['keat_occurrence'])
+        sidecar = dict(history=groups,
+                       current=[row['meta']['keat_occurrence'] for row in rows[last_self + 1:]])
+        return history, current, sidecar
+    except Exception:
+        return [], '', {}
 
 
 def _group_trigger_snapshot(chat_id: str, *, mid, message_ts: float,
@@ -1506,6 +1778,7 @@ def _group_trigger_snapshot(chat_id: str, *, mid, message_ts: float,
     # Авторство замораживается ВМЕСТЕ с лентой, одним чтением архива: пробуждение может
     # ждать в кулдауне минуты, и второй проход показал бы модели уже другой разговор.
     frozen_text, frozen_turns = _group_context_frozen(chat_id, policy)
+    native_history, native_current, native_sidecar = _group_native_projection(chat_id, mid)
     return GroupWake(
         message_id=int(mid) if mid is not None else None,
         message_ts=float(message_ts),
@@ -1519,6 +1792,9 @@ def _group_trigger_snapshot(chat_id: str, *, mid, message_ts: float,
         family=bool(family),
         context_snapshot=frozen_text,
         turns_snapshot=frozen_turns,
+        occurrence_sidecar=(dict(native_sidecar, projection_history=native_history,
+                                 projection_current=native_current)
+                            if native_sidecar else None),
         media_snapshot=tuple(_pending_media.get(chat_id, ())),
         reply_targets_snapshot=tuple(_recent_msgs[chat_id]),
     )
@@ -1878,7 +2154,7 @@ def _revision_reception_order(peer_id: str, message_id: int, source_id: str) -> 
     return _revision_reception_counter
 
 
-@client.on(getattr(events, "MessageEdited", events.NewMessage)(incoming=True))
+@client.on(getattr(events, "MessageEdited", events.NewMessage)())
 async def on_edited(event) -> None:
     """Archive an admitted group edit without turning it into a new voice turn.
 
@@ -1890,16 +2166,41 @@ async def on_edited(event) -> None:
     """
 
     is_private = bool(getattr(event, "is_private", False))
-    msg = event.message
+    msg = getattr(event, "message", None)
     mid = getattr(msg, "id", None)
+    peer_id = str(getattr(event, "chat_id", None))
+    try:
+        # Telethon message ids are exact positive ``int`` values.  Do not
+        # normalize any other shape (including bools or numeric strings) into
+        # authority for one occurrence: at the enrolled root it instead means
+        # the entire coordinate space must fail closed.
+        if type(mid) is not int or mid <= 0:
+            if peer_id == '-1001240718803':
+                import keat_live
+                await asyncio.to_thread(keat_live.invalidate_native, peer_id, None)
+            return
+        message_id = mid
+    except (TypeError, ValueError, OverflowError):
+        if peer_id == '-1001240718803':
+            import keat_live
+            await asyncio.to_thread(keat_live.invalidate_native, peer_id, None)
+        return
+
+    # The root peer and Telegram message id are already sufficient to revoke the
+    # immutable native occurrence. In particular, edit_date is not authority to
+    # keep old bytes alive: some edit update shapes omit it, and such an update
+    # must fail closed for KEAT while retaining the legacy handler's old no-op.
+    if peer_id == '-1001240718803':
+        import keat_live
+        await asyncio.to_thread(keat_live.invalidate_native, peer_id, message_id)
+
     edited_at = getattr(msg, "edit_date", None)
-    if mid is None or edited_at is None:
+    if edited_at is None:
         return
 
     # Корневая комната известна без маршрута; сам маршрут фиксируется НИЖЕ — после
     # допуска и той же single-flight добычи каталога, что и в on_new (её регрессия 11:
     # правка и оригинал не смеют разъехаться по ключам вокруг первой добычи).
-    peer_id = str(event.chat_id)
     room_nature = (None if is_private else
                    _known_forum(event.chat_id, msg, getattr(event, "chat", None)))
     # Capture reception order before the first await.  Telegram edit_date is only
@@ -1911,6 +2212,13 @@ async def on_edited(event) -> None:
         int(mid), edited_at, text=text, media=media,
     )
     reception_order = _revision_reception_order(peer_id, int(mid), base_source_id)
+    # Persist/revoke before ANY revision effects or duplicate/self short circuit.
+    # Failure propagates: an update must not be acknowledged as safely projected.
+    # Exact peer evidence exists on edits for both DMs and the one canonical root
+    # group; invalidate_native itself remains default-off and enrollment-scoped.
+    if is_private:
+        import keat_live
+        await asyncio.to_thread(keat_live.invalidate_native, peer_id, int(mid))
     sender = await event.get_sender()
     if sender is not None and getattr(sender, "is_self", False):
         return
@@ -2187,13 +2495,24 @@ async def on_deleted(event) -> None:
     """Archive channel/supergroup deletions as terminal, append-only tombstones.
 
     Telegram supplies the peer only for channels and supergroups.  A deletion without
-    ``chat_id`` is therefore left unnamed rather than guessed into a neighbouring chat.
+    ``chat_id`` stays unnamed; KEAT denies enrolled candidate source coordinates
+    rather than guessing a chat or retiring unrelated native evidence. No readable DM tombstone is manufactured.
     Like edits, this updates the readable conversation but never wakes the model or
     triggers follow-up/authority handlers.
     """
 
     peer_raw = getattr(event, "chat_id", None)
-    if peer_raw is None or not _group_archive_enabled():
+    if peer_raw is None:
+        if getattr(event, "deleted_ids", None):
+            import keat_live
+            await asyncio.to_thread(keat_live.invalidate_peerless_deletion, event.deleted_ids)
+        return
+    # Revocation is independent of group archive admission/room mode. Known
+    # peers (including a DM supplied by an adapter) must not bypass this seam.
+    import keat_live
+    for mid in (getattr(event, "deleted_ids", None) or ()):
+        await asyncio.to_thread(keat_live.invalidate_native, peer_raw, mid)
+    if not _group_archive_enabled():
         return
     peer_id = str(peer_raw)
     if not rooms.is_allowed(peer_id, False):
@@ -2837,6 +3156,7 @@ async def on_new(event) -> None:
                      peer_id)
             return
     sender_id = getattr(event, "sender_id", None) or getattr(sender, "id", None)
+    keat_group_principal = _keat_group_user_principal(sender, sender_id)
     # Shadow-only moderation seam: exact Telegram ids in, no route/room mutation and no
     # actuator.  The detector persists only ids/timestamps/a text digest locally; durable
     # review events contain no text, name, username or digest.
@@ -3114,7 +3434,29 @@ async def on_new(event) -> None:
 
     _buf_push(chat_id, f"{name}{reply_mark}: {body}", author=name, is_dm=is_private,
               name=buffer_name,
-              source_id=mid, ts=message_ts)
+              source_id=mid, ts=message_ts,
+              capture_live=(not bool(media or ref) and
+                            (is_private or (peer_id == '-1001240718803' and
+                             chat_id == peer_id and room_nature is False and
+                             keat_group_principal is not None))),
+              root_chat_id=(peer_id if not is_private else None),
+              principal_id=(keat_group_principal if not is_private else None),
+              ordinary_root=(not is_private and room_nature is False and chat_id == peer_id))
+    # ⚠ ГЕЙТ ЛИЧЕК СТОИТ ЗДЕСЬ, А НЕ ВЫШЕ — И ЭТО СУТЬ, А НЕ ОФОРМЛЕНИЕ.
+    # Сообщение записано строкой выше: горячий слой и `memory/life` его держат.
+    # Гейт, поставленный рядом с `social.category`, возвращался бы раньше записи —
+    # то есть стирал бы событие из её памяти вовсе. «Не отвечать незнакомым» и
+    # «молча терять людей» — разные вещи. Умолчание `PRAXIS_DM_POLICY=open`
+    # оставляет прежнее поведение байт-в-байт: `_dm_allowed` отвечает True первой
+    # строкой. `whitelist` пускает владельца, семью и названных явно
+    # (`PRAXIS_DM_ALLOW`, id через запятую, плюс `memory/.state/dm-allow.json`).
+    if is_private and not is_owner and not _dm_allowed(sender_id, family=fam):
+        _note_dm_refused(chat_id, sender_id, name, already_noted=admission is not None)
+        try:
+            perception.note_skip("dm-gate", "личка закрыта белым списком", chat_id=chat_id)
+        except Exception:
+            log.debug("perception.note_skip dm-gate не записался", exc_info=True)
+        return
     # The archive sees every admitted group update, not only messages that wake the
     # model.  It is exact-topic and append-only; projection/search failures are loud
     # but must never make the live Telegram update disappear.
@@ -3174,6 +3516,7 @@ async def on_new(event) -> None:
                       "topic_id": route.topic_id, "sender_id": sender_id,
                       "origin_message_id": (int(mid) if mid is not None else None),
                       "origin_text": str(text or ""),
+                      "room_nature": room_nature,
                       "is_dm": is_private, "is_owner": is_owner,
                       "known": known, "family": fam, "name": name,
                       "title": topic_title, "size": desc.get("size"),
@@ -3498,6 +3841,17 @@ async def _send_direct_outbox_entry(entry: dict, *, entity=None) -> dict:
 
     if entry.get("state") == "accepted":
         return entry
+    # Upgrade fence: old releases persisted kind=message as a directly executable
+    # outbox row. It carries no proof of a due-time model decision, so retire it
+    # before entity resolution (the first network-capable operation). Fresh ordinary
+    # send-tool rows remain replayable below with their stable random_id.
+    if str(entry.get("purpose") or "") == "task:message":
+        return await asyncio.to_thread(
+            _direct_outbox().dead_letter,
+            str(entry["key"]),
+            "legacy scheduled message lacks a fresh due-time model decision; "
+            "old intent retained as evidence and must be reassessed",
+        )
     if str(entry.get("purpose") or "").startswith("tool:"):
         prepared = await asyncio.to_thread(agent.direct_outbox_prepared, dict(entry))
         if not prepared:
@@ -3661,6 +4015,20 @@ async def _retry_direct_outbox_entry(entry: dict, error: BaseException) -> dict:
     return state
 
 
+def _run_is_settled(run_id: str) -> bool:
+    """Прогон терминален по манифесту (без замка: терминальность поглощающая, файл пишется
+    атомарно — см. run_manager.live_run_ids). Любая осечка — «не знаю» → False."""
+    if not run_id:
+        return False
+    import json as _json
+    import run_manager as _rm
+    try:
+        raw = _json.loads((agent._runs().path(run_id) / "manifest.json").read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return str((raw or {}).get("status") or "") in _rm.TERMINAL_STATUSES
+
+
 async def _reconcile_direct_outbox_entry(entry: dict) -> bool:
     """Project a transport receipt into its run ledger; never invoke the model."""
 
@@ -3669,6 +4037,14 @@ async def _reconcile_direct_outbox_entry(entry: dict) -> bool:
         return True
     purpose = str(entry.get("purpose") or "")
     if not purpose.startswith("tool:"):
+        _DIRECT_OUTBOX_RECONCILED.add(key)
+        return True
+    # 13.09: прогон уже закрыт — проецировать расписку некуда, его доставка сведена своим
+    # ходом (терминальная причина «Telegram delivery reconciled from durable receipts»).
+    # Раньше ~30 принятых записей августа сверялись заново КАЖДЫЙ тик и каждый старт
+    # (набор выше — в памяти процесса); когда ретенция сняла results/ у тех прогонов,
+    # каждая сверка стала трейсбеком: 1 609 за 25 минут.
+    if _run_is_settled(str(entry.get("run_id") or "")):
         _DIRECT_OUTBOX_RECONCILED.add(key)
         return True
     reconcile = getattr(agent, "run_direct_outbox_accepted", None)
@@ -3714,13 +4090,27 @@ async def _reconcile_direct_outbox_entry(entry: dict) -> bool:
 
 
 async def _direct_outbox_once() -> None:
-    """Replay due direct/scheduled sends with their original random ids, no LLM."""
+    """Replay authorized sends; retire pre-freshness scheduled messages fail-closed."""
 
     outbox = _direct_outbox()
     pending = await asyncio.to_thread(
         outbox.pending, due_only=True, verify_files=True,
     )
     for entry in pending[:100]:
+        if str(entry.get("purpose") or "") == "task:message":
+            retired = await asyncio.to_thread(
+                outbox.dead_letter,
+                str(entry["key"]),
+                "legacy scheduled message lacks a fresh due-time model decision; "
+                "old intent retained as evidence and must be reassessed",
+            )
+            log.warning("legacy scheduled Telegram outbox intent retired without transport [%s]",
+                        entry.get("key"))
+            await asyncio.to_thread(
+                _announce_direct_outbox_dead_letter, retired,
+                "upgrade freshness quarantine",
+            )
+            continue
         try:
             accepted = await _send_direct_outbox_entry(entry)
         except Exception as exc:
@@ -4095,9 +4485,11 @@ async def _run_pass(chat_id: str) -> None:
         # и прожитый ход.
         turn_history: list[dict] = []
         turn_current = ""
+        turn_occurrences = {}
         if is_dm:
             last_n = await _last_n_text(chat_id)
-            turn_history, turn_current = await asyncio.to_thread(_dm_dialogue, chat_id)
+            turn_history, turn_current = await asyncio.to_thread(
+                _dm_dialogue, chat_id, occurrence_sidecar=turn_occurrences)
             turn_media = tuple(_pending_media.get(chat_id, ()))
             speaker = meta.get("name")
             owner = meta.get("is_owner", False)
@@ -4140,6 +4532,11 @@ async def _run_pass(chat_id: str) -> None:
                     if group_turns and extra:
                         group_turns = group_turns + ((False, note.strip(), note.strip()),) + extra
             turn_history, turn_current = _group_dialogue(group_turns)
+            turn_occurrences = (dict(wake.occurrence_sidecar)
+                                if isinstance(wake.occurrence_sidecar, dict) else {})
+            # Preserve the complete legacy dialogue, including traffic after the
+            # wake. The frozen projection is only a sidecar: agent adoption and
+            # exact provider selection must both succeed before it can be served.
             turn_media = wake.media_snapshot
             speaker = wake.speaker if wake.addressed else None
             owner = wake.owner
@@ -4198,6 +4595,10 @@ async def _run_pass(chat_id: str) -> None:
             missed_hours=_missed.pop(chat_id, None),  # 9.0: честная метка «я была офлайн»
             reply_targets=reply_targets,  # 15: карта адресных ответов на момент триггера
             envelope=_envelope,           # пункт 4: теневой замер, никем не читается
+            telegram_root_group=bool(not is_dm and route.topic_id is None and
+                                     route.peer_id == '-1001240718803' and
+                                     chat_id == route.peer_id and
+                                     meta.get('room_nature') is False),
         )
         topic_orient = ""
         if route.topic_id is not None:
@@ -4241,6 +4642,7 @@ async def _run_pass(chat_id: str) -> None:
                         entity, chat_id, last_n, speaker,
                         ctx=ctx, orient=topic_orient, media_refs=turn_media,
                         history=turn_history, current_text=turn_current,
+                        occurrence_sidecar=turn_occurrences or None,
                     )
                 )
             else:
@@ -4250,6 +4652,7 @@ async def _run_pass(chat_id: str) -> None:
                         chat_id, last_n, speaker,
                         ctx=ctx, orient=topic_orient, media_refs=turn_media,
                         history=turn_history, current_text=turn_current,
+                        occurrence_sidecar=turn_occurrences or None,
                     )
                 )
         finally:
@@ -4465,12 +4868,12 @@ async def _run_pass(chat_id: str) -> None:
         sent_reply = "".join(sent_chunks)
         if sent_reply:
             # A visible prefix is already accepted.  Re-running the model would
-            # duplicate it even when a later chunk fails.
+            # duplicate it even when a later chunk fails.  Each accepted Telegram
+            # message is its own native occurrence: never turn several IDs into a
+            # comma-delimited pseudo-ID, because an edit of either real message
+            # must revoke the whole rendered reply's projection.
             terminal = True
-            sent_meta = ({"source_id": ",".join(sent_ids), "ts": time.time()}
-                         if sent_ids else {})
-            _buf_push(chat_id, f"Praxis: {sent_reply}", author="Praxis", is_dm=is_dm,
-                      **sent_meta)
+            _persist_sent_reply(chat_id, sent_chunks, sent_ids, is_dm=is_dm)
             log.info("ГОЛОС(%s) [%s]%s chunks=%d/%d -> %r",
                      "DM" if is_dm else "GRP", chat_id,
                      f" reply_to=#{reply_to}" if reply_to else "",
@@ -4584,7 +4987,8 @@ async def _maybe_compact(chat_id: str) -> None:
         return
     _compacting.add(place)
     try:
-        result = await asyncio.to_thread(memory_life.compact_if_due, place)
+        async with _COMPACT_SLOTS:
+            result = await asyncio.to_thread(memory_life.compact_if_due, place)
         fold = int(result.get("folded") or 0)
         if not fold:
             if (result.get("plan") or {}).get("reason") == "open_episode":
@@ -4791,7 +5195,8 @@ async def _task_window(goal: str, *, mailbox_index: str | None = None,
     return ok
 
 
-async def _wake_pass(goal: str, *, on_open=None, on_run=None) -> bool | None:
+async def _wake_pass(goal: str, *, on_open=None, on_run=None, source_id=None,
+                     scheduled_target_id=None) -> bool | None:
     """kind=wake: её будильник поднимает ОБЫЧНЫЙ ход — Telethon НЕ закрываем.
 
     Отличие от ``_task_window`` ровно одно и оно всё: здесь нет disconnect. Поэтому пока
@@ -4820,7 +5225,9 @@ async def _wake_pass(goal: str, *, on_open=None, on_run=None) -> bool | None:
             except Exception:
                 log.exception("mark-on-open пробуждения упал")
         try:
-            await asyncio.to_thread(agent.wake_turn, goal, on_run=on_run)
+            await asyncio.to_thread(agent.wake_turn, goal, on_run=on_run,
+                                    source_id=source_id,
+                                    scheduled_target_id=scheduled_target_id)
             return True
         except Exception:
             log.exception("пробуждение упало")
@@ -6731,9 +7138,55 @@ def _durable_outbox_projection(execution: dict, live: dict) -> dict:
     return kept
 
 
+#: Сколько секунд приёмке Telegram можно догонять таймаут ожидания отправки (см. ниже).
+_ACCEPT_GRACE_SEC = 8.0
+
+
+def _accepted_after_timeout(key: str, exc: BaseException, *, grace: float | None = None,
+                            poll: float = 0.5) -> dict | None:
+    """Приёмка, пришедшая сразу после таймаута ожидания, — успех отправки, а не пауза прогона.
+
+    13.09: рука `reply` ждала приёмку 30 с (`_threadsafe_result`), отправка на лагающей петле
+    Telethon заняла 33 с, и рука объявила `DurableSideEffectPending` через 13 мс ПОСЛЕ того,
+    как Telegram уже принял сообщение (#104546 в абстракте, в логе «TimeoutError
+    (state=accepted)»). Прогон встал в паузу «awaits Telegram acceptance», проекция принятого
+    ждала общий проход часов 23 минуты, её же ответа не было ни в архиве, ни в кадре — и
+    следующий ход ответил человеку второй раз (#104554; «тыж уже отвечала»). Тот же рисунок
+    в личке 16:44→16:53.
+
+    Здесь даём приёмке несколько секунд догнать таймаут и перечитываем запись ящика: стала
+    `accepted` — возвращаем её, и вызывающий идёт путём успеха с той же записью, что вернула
+    бы сама отправка. Любая другая ошибка и приёмка, не пришедшая за грейс, — как раньше:
+    None, и вызывающий поднимает `DurableSideEffectPending`. Дубля на стороне Telegram грейс
+    не создаёт: повтор идёт под тем же `random_id`.
+    """
+    if not isinstance(exc, TimeoutError):
+        return None
+    limit = _ACCEPT_GRACE_SEC if grace is None else max(0.0, float(grace))
+    deadline = time.monotonic() + limit
+    while True:
+        try:
+            row = _direct_outbox().get(key, verify_file=False)
+        except Exception:
+            log.debug("грейс приёмки: запись ящика не прочиталась [%s]", key, exc_info=True)
+            row = None
+        if isinstance(row, dict) and row.get("state") == "accepted":
+            log.info("приёмка догнала таймаут ожидания [%s]: message_id=%s",
+                     key, (row.get("receipt") or {}).get("message_id"))
+            return row
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        time.sleep(min(remaining, max(0.05, float(poll))))
+
+
 def _sync_send_message(to, text) -> str:
     """Durable direct Telegram text send owned by the current tool call."""
 
+    # 12.09: маркеры цитат поиска (citeturn0search1 …) снимаются и с ПРЯМЫХ отправок —
+    # реплика проходит через _guard_outbound и чистится, а send_message/narrate нет:
+    # 10.09 маркеры уехали в личку и в группу как есть.
+    text = agent._strip_citation_tokens(str(text or ""))
     # Тот же пол, что и на туле: этот путь durable и вызывается не только из него, а
     # кред не должен уходить наружу ни одной дверью. Fail-closed по построению: пустая
     # строка от пола означает «чисто», любое падение пола видно как исключение выше.
@@ -6818,12 +7271,20 @@ def _sync_send_message(to, text) -> str:
 
     t1 = time.time()
     try:
-        if entry.get("state") != "accepted":
-            entry = _threadsafe_result(
-                lambda: _send_direct_outbox_entry(entry, entity=ent), 30,
-            )
+        try:
+            if entry.get("state") != "accepted":
+                entry = _threadsafe_result(
+                    lambda: _send_direct_outbox_entry(entry, entity=ent), 30,
+                )
+        except Exception as exc:
+            # 13.09: приёмка, догнавшая таймаут, — успех (см. _accepted_after_timeout).
+            settled = _accepted_after_timeout(key, exc)
+            if settled is None:
+                raise
+            entry = settled
     except Exception as exc:
         permanent = False
+        state = {}
         try:
             permanent, state = _record_direct_outbox_failure(key, exc)
             reason = f"{type(exc).__name__}: {str(exc)[:300]} (state={state.get('state')})"
@@ -6853,7 +7314,12 @@ def _sync_send_message(to, text) -> str:
                 f"Похоже, у меня нет права писать в «{to}» (частая причина: это канал, а "
                 f"не чат обсуждения, либо меня там нет). Проверь адрес и попробуй другой; "
                 f"повторять этот я не буду.")
-        raise agent.DurableSideEffectPending(key, reason) from exc
+        # Acceptance may land after the grace's last read, while retry is journalled.
+        # record_retry preserves accepted rows; that receipt is still success.
+        if isinstance(exc, TimeoutError) and state.get("state") == "accepted":
+            entry = state
+        else:
+            raise agent.DurableSideEffectPending(key, reason) from exc
     if took_resolve > 5:
         log.info("send_message %r: резолв занял %.1fс (кэш был %s)",
                  to, took_resolve, "холодный" if cold else "тёплый")
@@ -6946,12 +7412,20 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
         "followup_request": "",
     }))
     try:
-        if entry.get("state") != "accepted":
-            entry = _threadsafe_result(
-                lambda: _send_direct_outbox_entry(entry, entity=ent), 30,
-            )
+        try:
+            if entry.get("state") != "accepted":
+                entry = _threadsafe_result(
+                    lambda: _send_direct_outbox_entry(entry, entity=ent), 30,
+                )
+        except Exception as exc:
+            # 13.09: приёмка, догнавшая таймаут, — успех (см. _accepted_after_timeout).
+            settled = _accepted_after_timeout(key, exc)
+            if settled is None:
+                raise
+            entry = settled
     except Exception as exc:
         permanent = False
+        state = {}
         try:
             permanent, state = _record_direct_outbox_failure(key, exc)
             reason = f"{type(exc).__name__}: {str(exc)[:300]} (state={state.get('state')})"
@@ -6967,7 +7441,12 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
             return agent.DirectSendRefusal(
                 f"не отправила: Telegram отказал навсегда — {type(exc).__name__}. "
                 f"Проверь, могу ли я писать в «{chat_id}»; повторять этот я не буду.")
-        raise agent.DurableSideEffectPending(key, reason) from exc
+        # Acceptance may land after the grace's last read, while retry is journalled.
+        # record_retry preserves accepted rows; that receipt is still success.
+        if isinstance(exc, TimeoutError) and state.get("state") == "accepted":
+            entry = state
+        else:
+            raise agent.DurableSideEffectPending(key, reason) from exc
     agent.project_direct_outbox_acceptance(entry)
     log.info("REPLY → %s chat_id=%s message_id=%s: %s", who, peer_id,
              (entry.get("receipt") or {}).get("message_id"), str(text)[:60])
@@ -7111,10 +7590,17 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
         "followup_request": "",
     }))
     try:
-        if entry.get("state") != "accepted":
-            entry = _threadsafe_result(
-                lambda: _send_direct_outbox_entry(entry, entity=target), 120,
-            )
+        try:
+            if entry.get("state") != "accepted":
+                entry = _threadsafe_result(
+                    lambda: _send_direct_outbox_entry(entry, entity=target), 120,
+                )
+        except Exception as exc:
+            # 13.09: приёмка, догнавшая таймаут, — успех (см. _accepted_after_timeout).
+            settled = _accepted_after_timeout(key, exc)
+            if settled is None:
+                raise
+            entry = settled
     except Exception as exc:
         # ⚠ Этот путь я забыл, чиня текстовый. Аудит нашёл: для ФАЙЛА постоянный отказ
         # по-прежнему улетал исключением, уносил её ход и оставлял запись в `retry` —
@@ -7122,6 +7608,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
         # только с документом вместо текста. Один и тот же класс беды на двух дверях,
         # и вторую я оставил открытой.
         permanent = False
+        state = {}
         try:
             permanent, state = _record_direct_outbox_failure(key, exc)
             reason = f"{type(exc).__name__}: {str(exc)[:300]} (state={state.get('state')})"
@@ -7142,7 +7629,12 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
                 f"не отправила файл: Telegram отказал навсегда — {type(exc).__name__}. "
                 f"Похоже, у меня нет права слать в «{label}». Проверь адрес и попробуй "
                 f"другой; повторять этот я не буду.")
-        raise agent.DurableSideEffectPending(key, reason) from exc
+        # Acceptance may land after the grace's last read, while retry is journalled.
+        # record_retry preserves accepted rows; that receipt is still success.
+        if isinstance(exc, TimeoutError) and state.get("state") == "accepted":
+            entry = state
+        else:
+            raise agent.DurableSideEffectPending(key, reason) from exc
     agent.project_direct_outbox_acceptance(entry)
     return _direct_outbox_result(entry, label=label)
 
@@ -7212,7 +7704,7 @@ async def _fire_task(t: dict) -> bool | None:
     """Исполнить сработавшую задачу. Модель зовётся только здесь, не на каждом тике."""
     kind, goal, target = t.get("kind"), t.get("goal", ""), t.get("target", "")
     log.info("НАМЕРЕНИЕ #%s [%s] -> %s", t.get("id"), kind, (goal or target)[:60])
-    if kind in ("window", "wake", "note"):
+    if kind in ("window", "wake", "note", "message"):
         # 18.4: ПОВТОРЯЮЩЕЕСЯ расписание при паузе фона не поднимается (слово Егора /
         # её состояние); разовые (focus, повод с пульта) — текущее дело, идут как шли.
         # Дыра «__auto__ мимо гейтов» закрыта ровно для recur-пути.
@@ -7256,7 +7748,11 @@ async def _fire_task(t: dict) -> bool | None:
                 # следующее), как раньше делал mark-до-исполнения в _fire_due_tasks.
                 await _consume()
                 return
-        if kind in ("wake", "note"):
+        if kind == "message":
+            # The stored body is past evidence, not direct transport authority. Preserve
+            # target/body/time/author in a lossless prompt and require a fresh live turn.
+            goal = _tasks.message_reassessment_prompt(t)
+        if kind in ("wake", "note", "message"):
             # ⚠ 13.08.2026. `note` вела СЮДА НЕ ВСЕГДА: ниже стояла ветка, которая слала
             # «[напоминание] {goal}» прямо Егору в личку. Живой случай в 17:19 — её
             # инженерная заметка себе («вернуться к починке медиа только при новом
@@ -7268,7 +7764,10 @@ async def _fire_task(t: dict) -> bool | None:
             # себе/владельцу», то есть с двумя адресатами сразу, — и раннер разрешал эту
             # двусмысленность в пользу владельца ВСЕГДА. А сказать что-то человеку к сроку
             # уже умеет `message`, у которого есть `target`. Значит `note` — про неё.
-            await _wake_pass(goal, on_open=_claim, on_run=_confirm)
+            await _wake_pass(
+                goal, on_open=_claim, on_run=_confirm, source_id=t,
+                scheduled_target_id=(t.get("target_id") if kind == "message" else None),
+            )
         else:
             await _task_window(goal, on_open=_claim, on_run=_confirm)
     elif kind == "email":
@@ -7292,49 +7791,6 @@ async def _fire_task(t: dict) -> bool | None:
             return True
         else:
             return False
-    elif kind == "message":
-        # 9.4: id отрезолвлен при постановке (target_id) — шлём по нему; target — фолбэк
-        route = _route_from_reference(target or t.get("target_id"))
-        try:
-            ent = await _resolve_entity(t.get("target_id") or route.peer_id)
-        except ResolveDenied as e:
-            ent = None
-            if OWNER_ID:
-                await _claim_scheduled_text(
-                    t,
-                    peer_id=OWNER_ID,
-                    text=(f"Не смогла отправить то, что наметила: {e}\n"
-                          f"Текст был такой: {goal}"),
-                    purpose="message-resolution-failure",
-                    entity=OWNER_ID,
-                )
-                return True
-        if ent is not None:
-            entry = await _claim_scheduled_text(
-                t,
-                peer_id=_marked_peer_id(ent),
-                text=goal,
-                purpose="message",
-                topic_id=route.topic_id,
-                entity=ent,
-            )
-            log.info(
-                "ЗАДАЧА #%s Telegram state=%s chat_id=%s message_id=%s",
-                t.get("id"), entry.get("state"), _marked_peer_id(ent),
-                (entry.get("receipt") or {}).get("message_id"),
-            )
-            return True
-        elif OWNER_ID:
-            await _claim_scheduled_text(
-                t,
-                peer_id=OWNER_ID,
-                text=(f"Не нашла, кому писать — «{target}» не опознаётся.\n"
-                      f"Я собиралась сказать: {goal}"),
-                purpose="message-target-missing",
-                entity=OWNER_ID,
-            )
-            return True
-        return False
     return None
 
 
@@ -7409,7 +7865,7 @@ async def _fire_due_tasks() -> None:
     ready = await asyncio.to_thread(_tasks.due)
     for t in ready:
         durable_telegram = (
-            t.get("kind") in {"message", "note"}
+            t.get("kind") in {"note"}
             or (t.get("kind") == "email" and not _email_autonomous_enabled())
         )
         if durable_telegram:
@@ -7436,7 +7892,7 @@ async def _fire_due_tasks() -> None:
         # и due() его больше не вернёт. Открытое окно метится до disconnect, поэтому рестарт
         # посреди окна не даёт повторного срабатывания (граница at-most-once сохранена, сдвинута
         # на момент открытия — руминация-петля 06.07 не возвращается).
-        if t.get("kind") in ("window", "wake"):
+        if t.get("kind") in ("window", "wake", "message"):
             # Оба помечаются сработавшими при РЕАЛЬНОМ подъёме (внутри _task_window /
             # _wake_pass, под _ONE_MIND), а не здесь: отложенное занятым замком намерение
             # обязано остаться due, иначе оно теряется молча.
@@ -7656,9 +8112,95 @@ async def _formation_once() -> None:
         log.info("formation request: %s", out.get("summary") or out)
 
 
+#: Сколько ждём вежливого прощания с Telegram при перезапуске по заявке контура.
+_DISCONNECT_TIMEOUT = 10.0
+#: Через сколько выход происходит в любом случае, даже если поток застрял в
+#: библиотеке и не отвечает вовсе.
+_EXIT_FUSE_SECONDS = 20.0
+
+
+def _arm_restart_exit() -> "threading.Timer":
+    """Пообещать выход таймером — на случай, если штатный путь не вернётся.
+
+    Таймер демонский и ОТМЕНЯЕМЫЙ. Отменяемость здесь не украшение: в стендах
+    `agent._exit_process` подменён и возвращается, и неотменяемый запал позвал бы
+    настоящий `os._exit(42)` через двадцать секунд — посреди чужого прогона.
+    Штатный путь гасит его сам (см. `_control_once`).
+
+    Если же запал сработал — значит штатный путь не вернулся вовсе, и разница
+    между этими двумя исходами есть разница между «перезапустилась» и «молчала
+    два с половиной часа».
+    """
+    def _fuse() -> None:
+        log.error("выход по запалу: штатный путь перезапуска не завершился за %s с",
+                  _EXIT_FUSE_SECONDS)
+        agent._exit_process()
+
+    timer = threading.Timer(_EXIT_FUSE_SECONDS, _fuse)
+    timer.name = "restart-exit-fuse"
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
+def _apply_desk_interrupt(request: dict) -> dict:
+    """Прервать живые прогоны по просьбе Пульта — кооперативно, через run_manager.
+
+    `request_cancel` терминализует прогон, если у него нет незакрытых вызовов рук, иначе
+    записывает просьбу и ставит паузу; `_run_status_gate` в тул-цикле видит статус
+    ≠ running на ближайшей границе (перед рукой, после ответа модели) и поднимает
+    RunStopped — черновик ответа брошен, руки дальше не зовутся. Идущий вызов модели
+    дорабатывает до конца: рвать поток посреди генерации значило бы врать провайдеру
+    о расходе. scope — «all» или id одного прогона.
+    """
+    scope = str(request.get("scope") or "all").strip() or "all"
+    by = str(request.get("by") or "desk").strip()[:40] or "desk"
+    reason = str(request.get("reason") or "прервано с Пульта").strip()[:200]
+    manager = agent._runs()
+    rows = manager.list_runs(statuses=tuple(agent.run_manager.NONTERMINAL_STATUSES))
+    cancelled: list[str] = []
+    skipped: list[str] = []
+    for row in rows:
+        rid = str(row.get("run_id") or row.get("id") or "")
+        if not rid or (scope != "all" and rid != scope):
+            continue
+        try:
+            manager.request_cancel(rid, actor=f"desk:{by}", reason=reason)
+            cancelled.append(rid)
+        except Exception as exc:
+            skipped.append(f"{rid}: {type(exc).__name__}")
+    return {"cancelled": cancelled, "skipped": skipped, "scope": scope, "by": by}
+
+
+async def _desk_interrupt_once() -> None:
+    """Тик часов: просьба Пульта прервать ход (memory/.control/interrupt.json)."""
+    request = selfdev.interrupt_requested()
+    if not request:
+        if selfdev.INTERRUPT_REQ.exists():
+            selfdev.clear_interrupt_request()   # битый файл не перечитываем каждый тик
+        return
+    selfdev.clear_interrupt_request()
+    try:
+        result = await asyncio.to_thread(_apply_desk_interrupt, request)
+    except Exception:
+        log.warning("прерывание с Пульта не исполнилось", exc_info=True)
+        return
+    log.warning("прерывание с Пульта (%s, scope=%s): отменено %d, пропущено %s",
+                result["by"], result["scope"], len(result["cancelled"]),
+                result["skipped"] or "0")
+    try:
+        agent.tool_journal(
+            f"[прервано] живой ход остановлен с Пульта ({result['by']}): прогонов "
+            f"{len(result['cancelled'])}", salience=2)
+    except Exception:
+        log.debug("журнал о прерывании не записался", exc_info=True)
+
+
 async def _control_once() -> None:
     """Забота часов: смёрженное предложение просит перезапуск — уходим мягко (exit 42),
-    когда нет активного прохода; bootguard поднимет на новом коде (preflight + откат)."""
+    когда нет активного прохода; bootguard поднимет на новом коде (preflight + откат).
+    12.09: та же забота читает просьбу Пульта прервать живой ход."""
+    await _desk_interrupt_once()
     reason = selfdev.restart_requested()
     if not reason:
         return
@@ -7667,11 +8209,28 @@ async def _control_once() -> None:
     log.warning("перезапуск по запросу контура: %s", reason)
     selfdev.clear_restart_request()
     _SHUTDOWN.set()  # 13.1: этот disconnect — конец процесса, не «поработать и вернуться»
+    # ⚠⚠ ВЫХОД ВООРУЖАЕТСЯ ДО DISCONNECT, и это несущее свойство, а не осторожность.
+    #
+    # 10.09 в 12:37 смёрженное предложение попросило перезапуск — и дальше 2 ч 26 мин
+    # без связи и без ходов. Процесс остался ЖИВ: Telegram отключён, `bootguard` ждёт
+    # мёртвого, сердцебиение (раз в час) молчит, заявка контура УЖЕ погашена строкой
+    # выше — то есть следующий тик не повторит попытку никогда. Подняли руками.
+    #
+    # `try/except` здесь ловил исключение, но не ЗАВИСАНИЕ: если `disconnect()` не
+    # возвращается, до `_exit_process()` дело просто не доходит. Поэтому выход теперь
+    # обещан таймером ещё до того, как мы попросим Telegram попрощаться, а сам
+    # disconnect получил срок: он вежливость, а не условие выхода.
+    fuse = _arm_restart_exit()
     try:
-        await client.disconnect()
+        await asyncio.wait_for(client.disconnect(), timeout=_DISCONNECT_TIMEOUT)
+    except asyncio.TimeoutError:
+        log.warning("disconnect не вернулся за %s с — выхожу без него", _DISCONNECT_TIMEOUT)
     except Exception:
         log.debug("disconnect перед перезапуском не удался", exc_info=True)
     agent._exit_process()
+    # Сюда попадает только стенд: настоящий `_exit_process` не возвращается.
+    # Запал гасим, иначе он позовёт выход позже, когда подмена уже снята.
+    fuse.cancel()
 
 
 async def _text_outbox_once() -> None:
@@ -7766,6 +8325,21 @@ async def _media_cleanup_once() -> None:
         run_id = str(payload.get("run_id") or "")
         queue_id = str(record.get("queue_id") or "")
         if not run_id or not queue_id:
+            continue
+        # 13.09: закрытый прогон — расписку перепроецировать некуда, его доставка уже
+        # сведена своим ходом (та же логика, что в _reconcile_direct_outbox_entry).
+        # Раньше 21 тумбстон августа, чьи results/ сняла ретенция, каждую минуту бил
+        # трейсбеком «ResultRef integrity» (275 в час), а staged-копия жила вечно,
+        # потому что unlink стоял только ПОСЛЕ успешной финализации.
+        if queue_id in _MEDIA_TOMBSTONES_SETTLED or _run_is_settled(run_id):
+            _MEDIA_TOMBSTONES_SETTLED.add(queue_id)
+            source_rel = str(payload.get("path") or "").strip()
+            if source_rel:
+                try:
+                    media_core.contained_path(spool.root, source_rel).unlink(missing_ok=True)
+                except Exception:
+                    log.debug("settled media tombstone: staged copy not removed [%s]",
+                              queue_id, exc_info=True)
             continue
         result = record.get("result") or {}
         try:
@@ -9018,6 +9592,36 @@ def _clock_initial_deadlines(now: float, jobs: dict) -> dict[str, float]:
     return deadlines
 
 
+# ⚑ ЗАБОТЫ ТРАНСПОРТА НА СВОЁМ ТИКЕ (13.09). `_clock_pass` выполняет заботы ПОСЛЕДОВАТЕЛЬНО:
+# пока одна тяжёлая держит проход (в 18:06 потоки стояли в `claim_evidence_index` — glob по
+# тысячам файлов внутри `_rebuild_state_locked` и внутри `read_summary`, и в
+# `forge.reconcile_subagent_events`), проекция принятых отправок в прогон и архив не доезжала
+# 9–23 минуты (#4052 в личке, #104546 в абстракте). Её же ответа не было в кадре, и следующий
+# ход отвечал человеку второй раз. Тик ящика дёшев (замер 13.09: `pending()` 0,9 с,
+# `accepted()` 0,9 с при 2 701 записи), модель не зовёт и держит свой межпроцессный замок —
+# ему нечего ждать в общей очереди. Таблица `_clock_jobs()` не меняется: разрез делает `_clock`.
+_CLOCK_SIDE_CARES = frozenset({"direct_outbox"})
+
+
+def _split_clock_jobs(jobs: dict) -> tuple[dict, dict]:
+    """-> (заботы общего прохода, заботы на своём тике)."""
+    side = {name: jobs[name] for name in jobs if name in _CLOCK_SIDE_CARES}
+    main = {name: care for name, care in jobs.items() if name not in side}
+    return main, side
+
+
+async def _clock_side(name: str, period: float, care) -> None:
+    """Одна забота на своём тике: та же дисциплина, что у `_clock_pass` — упала → лог, не смерть."""
+    if name not in _CLOCK_STARTUP_DUE:
+        await asyncio.sleep(period)
+    while True:
+        try:
+            await care()
+        except Exception:
+            log.exception("часы: забота «%s» упала", name)
+        await asyncio.sleep(period)
+
+
 async def _clock_pass(now: float, next_at: dict, jobs: dict) -> list[str]:
     """Один удар часов: выполнить созревшие заботы, перевзвести их сроки. -> имена сработавших.
 
@@ -9054,13 +9658,22 @@ async def _clock() -> None:
     На старте сразу проверяются только durable resume, social-pulse due-state и
     computer-inventory due-state. Остальные заботы получают полный период;
     «сон» не наступает из-за самого рестарта; social pulse сверяется с durable due-state."""
-    jobs = _clock_jobs()
-    now = time.time()
-    next_at = _clock_initial_deadlines(now, jobs)
-    await _clock_pass(now, next_at, jobs)
-    while True:
-        await asyncio.sleep(CLOCK_TICK)
-        await _clock_pass(time.time(), next_at, jobs)
+    jobs, side = _split_clock_jobs(_clock_jobs())
+    # Keep strong references and stop side ticks with their owning clock. Otherwise
+    # recreating/cancelling the clock can leave two independent outbox tickers.
+    side_tasks = [asyncio.create_task(_clock_side(name, period, care))
+                  for name, (period, care) in side.items() if period > 0]
+    try:
+        now = time.time()
+        next_at = _clock_initial_deadlines(now, jobs)
+        await _clock_pass(now, next_at, jobs)
+        while True:
+            await asyncio.sleep(CLOCK_TICK)
+            await _clock_pass(time.time(), next_at, jobs)
+    finally:
+        for task in side_tasks:
+            task.cancel()
+        await asyncio.gather(*side_tasks, return_exceptions=True)
 
 
 async def _wait_reconnected(timeout: float | None = None) -> bool:
@@ -9356,6 +9969,16 @@ async def main() -> None:
     _start_dialog_warmup()  # HOTFIX 07.07: кэш имён диалогов греется фоном с самого коннекта
     asyncio.create_task(asyncio.to_thread(_bridge_canary))
     asyncio.create_task(asyncio.to_thread(_warm_media))  # whisper+piper резидентно С БУТА, не лениво
+    # Общий STT поднимается ЗДЕСЬ — до `_install_telegram_dispatcher()` ниже.
+    # Это единственное окно, когда цикл событий заведомо свободен: как только
+    # включён диспетчер, обработчики апдейтов делают тяжёлую синхронную работу
+    # прямо в цикле (record_message → rebuild_state → _resolve_compact), и в
+    # живом чате оставшийся bootstrap может не получить управления часами.
+    # Раньше сокет стартовал последним шагом bootstrap и в такие часы молчал —
+    # вместе с ним пропадал голосовой ввод «Харда», который живёт на нём.
+    # Сам сервис ни от переписки, ни от прогрева не зависит: это UDS поверх
+    # резидентного Whisper, который догрузится сам.
+    shared_stt = await _start_shared_stt()
     global _self_id
     me = await client.get_me()
     _self_id = me.id
@@ -9444,7 +10067,6 @@ async def main() -> None:
         resumed_runs = await asyncio.to_thread(agent.resume_durable_runs, limit=20)
     if resumed_runs:
         log.warning("обработано executable durable resumes: %d", len(resumed_runs))
-    shared_stt = await _start_shared_stt()
     loop_probe: _LoopLivenessProbe | None = None
     try:
         log.info("Praxis на связи как @%s (id %s). мозг: %s; owner=%s комнат=%d "

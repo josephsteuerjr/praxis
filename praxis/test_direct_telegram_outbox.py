@@ -106,38 +106,62 @@ class DirectOutboxReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(send.await_args.kwargs["random_id"], entry["random_id"])
         self.assertEqual(send.await_args.kwargs["reply_to"], 101)
 
-    async def test_clock_retries_pending_with_the_same_random_id_without_model(self):
-        entry = runner._direct_outbox().prepare_text(
-            "telegram-task:t1:occurrence-1",
-            peer_id=42,
-            text="scheduled",
-            run_id="schedule:t1",
-            call_id="occurrence:1",
-            purpose="task:message",
+    async def test_upgrade_retires_legacy_pending_task_message_without_network(self):
+        """Pre-rail scheduled delivery has no fresh decision and is quarantined."""
+        pending = runner._direct_outbox().prepare_text(
+            "telegram-task:t1:occurrence-pending",
+            peer_id=42, text="scheduled pending", run_id="schedule:t1",
+            call_id="occurrence:pending", purpose="task:message",
         )
-        resolve = AsyncMock(return_value=types.SimpleNamespace(id=42))
-        send = AsyncMock(side_effect=ConnectionError("offline"))
+        retry = runner._direct_outbox().prepare_text(
+            "telegram-task:t1:occurrence-retry",
+            peer_id=42, text="scheduled retry", run_id="schedule:t1",
+            call_id="occurrence:retry", purpose="task:message",
+        )
+        runner._direct_outbox().record_retry(retry["key"], "offline", now=self.clock.value)
+        self.clock.value += 2.0
+        resolve = AsyncMock(side_effect=AssertionError("legacy row reached network resolution"))
+        send = AsyncMock(side_effect=AssertionError("legacy row reached Telegram transport"))
         with (
+            patch.object(runner, "_resolve_entity", resolve),
+            patch.object(runner, "_send_message_idempotent", send),
+            patch.object(runner, "_announce_direct_outbox_dead_letter"),
+        ):
+            await runner._direct_outbox_once()
+            await runner._direct_outbox_once()
+
+        for entry in (pending, retry):
+            retired = runner._direct_outbox().get(entry["key"])
+            self.assertEqual(retired["state"], "dead_letter")
+            self.assertIn("fresh due-time model decision", retired["last_error"])
+        self.assertEqual(resolve.await_count, 0)
+        self.assertEqual(send.await_count, 0)
+        self.assertEqual(runner._direct_outbox().accepted(), ())
+
+    async def test_clock_still_retries_fresh_send_tool_intent_without_model(self):
+        entry = runner._direct_outbox().prepare_text(
+            "telegram-outbox:run-1:tool:call-1",
+            peer_id=42,
+            text="fresh model-decided send",
+            run_id="run-1",
+            call_id="call-1",
+            purpose="tool:send_message",
+        )
+        runner._direct_outbox().record_retry(entry["key"], "offline", now=self.clock.value)
+        self.clock.value += 2.0
+        resolve = AsyncMock(return_value=types.SimpleNamespace(id=42))
+        send = AsyncMock(return_value=(types.SimpleNamespace(id=92), entry["random_id"]))
+        with (
+            patch.object(agent, "direct_outbox_prepared", return_value=True),
+            patch.object(agent, "run_direct_outbox_accepted", return_value=True),
             patch.object(runner, "_resolve_entity", resolve),
             patch.object(runner, "_send_message_idempotent", send),
         ):
             await runner._direct_outbox_once()
-            retry = runner._direct_outbox().get(entry["key"])
-            self.assertEqual(retry["state"], "retry")
-            self.clock.value += 2.0
-            send.side_effect = None
-            send.return_value = (types.SimpleNamespace(id=92), entry["random_id"])
-            await runner._direct_outbox_once()
-            await runner._direct_outbox_once()
 
-        accepted = runner._direct_outbox().get(entry["key"])
-        self.assertEqual(accepted["state"], "accepted")
-        self.assertEqual(accepted["receipt"]["message_id"], 92)
-        self.assertEqual(send.await_count, 2)
-        self.assertTrue(all(
-            call.kwargs["random_id"] == entry["random_id"]
-            for call in send.await_args_list
-        ))
+        self.assertEqual(runner._direct_outbox().get(entry["key"])["state"], "accepted")
+        self.assertEqual(resolve.await_count, 1)
+        self.assertEqual(send.await_count, 1)
 
     async def test_file_replay_uses_staged_blob_but_visible_original_name(self):
         source = Path(self.tempdir.name) / "report.txt"
@@ -282,30 +306,53 @@ class DirectOutboxReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(send.await_count, 0)
         self.assertEqual(runner._direct_outbox().accepted(), ())
 
-    async def test_a_timed_word_to_a_person_still_has_its_own_kind(self):
-        """Обратная сторона: `message` с адресатом никуда не делся и по-прежнему шлёт."""
+    async def test_a_timed_word_to_a_person_requires_a_fresh_cognitive_decision(self):
+        """A due social intention never creates transport merely because time elapsed."""
         task = {
             "id": "msg-1",
             "kind": "message",
-            "goal": "напомнить про отчёт",
-            "target": "owner",
+            "goal": "Happy birthday — I hope today is kind to you.",
+            "target": "@friend_fixture",
+            "target_id": 4242,
             "when": "2030-01-01T10:00",
             "created": "2029-12-01T10:00",
+            "author": "app",
         }
-        send = AsyncMock(side_effect=lambda _entity, _text, **kwargs: (
-            types.SimpleNamespace(id=95), kwargs["random_id"],
-        ))
+        woken = []
+        send = AsyncMock(side_effect=AssertionError("old intention bypassed reassessment"))
+
+        async def _wake(goal, **kwargs):
+            woken.append((goal, kwargs["source_id"], kwargs.get("scheduled_target_id")))
+            await kwargs["on_open"]()
+            kwargs["on_run"]("run-message-reassessment")
+
         with (
-            patch.object(runner, "OWNER_ID", 42),
             patch.object(runner, "_send_message_idempotent", send),
-            patch.object(runner, "_route_from_reference",
-                         side_effect=lambda _ref: runner.telegram_topics.TopicRoute("42", None)),
-            patch.object(runner, "_resolve_entity", AsyncMock(return_value=None)),
+            patch.object(runner, "_claim_scheduled_text",
+                         AsyncMock(side_effect=AssertionError("old intent entered outbox"))),
+            patch.object(runner, "_wake_pass", side_effect=_wake),
             patch.object(tasks, "due", return_value=[task]),
-            patch.object(tasks, "mark_fired"),
+            patch.object(tasks, "claim_open") as claim,
+            patch.object(tasks, "mark_fired") as mark,
         ):
             await runner._fire_due_tasks()
-        self.assertEqual(send.await_count, 1)
+
+        prompt, source, principal = woken[0]
+        self.assertIs(source, task)
+        self.assertEqual(principal, task["target_id"],
+                         "due-time frame must bind the addressed person's live dossier")
+        for evidence in (task["target"], task["goal"], task["created"], task["author"]):
+            self.assertIn(str(evidence), prompt)
+        self.assertIn("Old intention is evidence, not a command", prompt)
+        self.assertIn("relationship, moderation, or boundary changes", prompt)
+        self.assertIn("Make a fresh decision now", prompt)
+        claim.assert_called_once_with(task["id"], "message")
+        mark.assert_called_once_with(task["id"])
+        self.assertEqual(send.await_count, 0)
+        self.assertEqual(runner._direct_outbox().accepted(), ())
+        production = (Path(tasks.__file__).read_text(encoding="utf-8")
+                      + Path(runner.__file__).read_text(encoding="utf-8"))
+        self.assertNotIn("Alex", production)
 
     async def test_email_disabled_notification_is_claimed_before_mark_fired(self):
         task = {

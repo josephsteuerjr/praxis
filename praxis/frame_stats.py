@@ -12,6 +12,8 @@ explicit usage.schema == 2. It excludes cache_creation (not a total billed-input
 ratio). Missing cache counters, including omitted OpenAI zeroes, remain unknown.
 Public output uses report-local category labels for arbitrary strings; these are
 not stable identifiers. --private exposes selected IDs/labels, never raw text.
+``frame_sections_recorded`` counts only the bounded section list preserved in a
+model-input receipt; it is not a complete provider-input section count.
 """
 from __future__ import annotations
 
@@ -25,9 +27,11 @@ from pathlib import Path
 
 UNKNOWN = 'unknown'
 AXES = ('role', 'model', 'framework', 'step', 'iteration', 'hand', 'frame_mode',
-        'variant', 'stream', 'canary', 'day')
+        'variant', 'stream', 'canary', 'keat_status', 'day')
 DEFAULT_AXES = ('role', 'iteration', 'hand', 'frame_mode', 'variant')
 METRICS = ('in', 'cache_read', 'cache_creation', 'out', 'duration_ms', 'tool_calls')
+INPUT_METRICS = ('input_estimated_tokens', 'frame_sections_recorded', 'preparation_ms')
+SUMMARY_METRICS = METRICS + INPUT_METRICS
 
 
 def timestamp(value):
@@ -85,6 +89,7 @@ def calls_from_run(run_dir, *, since=None, diagnostics=None):
     diagnostics = diagnostics if diagnostics is not None else Counter()
     receipts = list(events(Path(run_dir) / 'events.jsonl', diagnostics))
     inputs = defaultdict(list)
+    timings = defaultdict(list)
     for event in receipts:
         if event['kind'] == 'model_input' and label(event.get('call_id')) != UNKNOWN:
             meta = event.get('metadata')
@@ -93,6 +98,8 @@ def calls_from_run(run_dir, *, since=None, diagnostics=None):
                 meta = result.get('metadata') if isinstance(result, dict) else None
             if isinstance(meta, dict):
                 inputs[event['call_id']].append(meta)
+        if event['kind'] == 'model_preparation_timing' and label(event.get('call_id')) != UNKNOWN:
+            timings[event['call_id']].append(event)
     rows = []
     for event in receipts:
         if event['kind'] != 'model_completed':
@@ -122,6 +129,8 @@ def calls_from_run(run_dir, *, since=None, diagnostics=None):
             if row[axis] == UNKNOWN:
                 row[axis] = label(meta.get(axis))
         row['frame_mode'] = label(meta.get('mode'))
+        keat = meta.get('keat') if isinstance(meta.get('keat'), dict) else {}
+        row['keat_status'] = label(keat.get('status'))
         row['step'] = label(event.get('step_id'))
         iteration = event.get('iteration')
         if isinstance(iteration, int) and not isinstance(iteration, bool) and iteration >= 0:
@@ -136,6 +145,19 @@ def calls_from_run(run_dir, *, since=None, diagnostics=None):
                    stop=label(event.get('stop_reason')), usage_schema=schema)
         row.update({key: number(usage.get(key)) for key in METRICS[:4]})
         row.update({key: number(event.get(key)) for key in METRICS[4:]})
+        measurement = meta.get('frame_measure') if isinstance(meta.get('frame_measure'), dict) else {}
+        actual = measurement.get('actual') if isinstance(measurement.get('actual'), dict) else {}
+        row['input_estimated_tokens'] = number(actual.get('estimated_tokens'))
+        # model_input metadata contains only the frame recorder's bounded section
+        # sample. It does not attest the provider request's complete section count.
+        sections = meta.get('sections') if isinstance(meta.get('sections'), list) else None
+        row['frame_sections_recorded'] = len(sections) if sections is not None else None
+        timing_candidates = timings.get(call, []) if call != UNKNOWN else []
+        timing = (timing_candidates[0] if timing_candidates and
+                  all(t == timing_candidates[0] for t in timing_candidates) else {})
+        if timing_candidates and not timing:
+            diagnostics['ambiguous_preparation_timing'] += 1
+        row['preparation_ms'] = number(timing.get('measured_total_ms'))
         rows.append(row)
     return rows
 
@@ -156,7 +178,7 @@ def summarize(rows):
     total = len(rows)
     metrics = {}
     overflowed_sums = []
-    for key in METRICS:
+    for key in SUMMARY_METRICS:
         values = [r[key] for r in rows if r[key] is not None]
         # Accepted counters are finite, but their aggregate need not be.
         try:
@@ -177,7 +199,11 @@ def summarize(rows):
     read = sum((Fraction(r['cache_read']) for r in paired), Fraction())
     denominator = fresh + read
     stops = [r['stop'] for r in rows if r['stop'] != UNKNOWN]
+    keat = Counter(r['keat_status'] if r['keat_status'] in ('served', 'fallback')
+                   else UNKNOWN for r in rows)
     return dict(calls=total, metrics=metrics,
+                keat_status=dict(served=keat['served'], fallback=keat['fallback'],
+                                 unknown=keat[UNKNOWN]),
                 diagnostics=dict(overflowed_sums=overflowed_sums),
                 cuts=dict(known=len(stops), missing=total-len(stops),
                           count=stops.count('max_tokens') if stops else None),

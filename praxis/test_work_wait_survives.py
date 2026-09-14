@@ -235,6 +235,25 @@ class HerWaitIsNotAGrave(WorkWaitBase):
         self.assertEqual(plan.kind, "blocked")
         self.assertIn(plan.kind, agent.run_executor.NON_EXECUTABLE_KINDS)
 
+    def test_deliberate_blocked_outcome_is_not_an_automatic_candidate(self):
+        """Her explicit blocker is not process recovery and must stay quiet."""
+        context = self._work_run("deliberate-blocked")
+        self._checkpoint(context, work_state=work_loop.snapshot())
+        control = self._say(
+            context, "blocked", blocker="exact source patch is unavailable")
+        self._park(context, control)
+
+        before = list(self.manager.events(context.run_id))
+        with mock.patch.object(agent, "resume_durable_run") as resume_one:
+            reports = agent.resume_durable_runs(limit=20)
+        self.assertEqual(reports, [])
+        resume_one.assert_not_called()
+        self.assertEqual(self.manager.events(context.run_id), before)
+        self.assertFalse([
+            row for row in self.manager.events(context.run_id)
+            if row.get("kind") == agent._RESUME_IDLE_EVENT
+        ])
+
     def test_the_floor_holds_and_says_when_it_lifts(self):
         context = self._work_run("floor")
         self._checkpoint(context, work_state=work_loop.snapshot())

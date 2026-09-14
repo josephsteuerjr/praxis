@@ -18,6 +18,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,12 @@ import memory_provenance
 
 SCHEMA_VERSION = "praxis.memory.fts.v8"
 _LOCK = threading.RLock()
+# A claim is a lease, not merely a marker.  The flock is held for the whole
+# rebuild, so an old wall-clock timestamp can never make another worker steal
+# a still-running builder.  PID is informational only (it can be reused).
+_REFRESH_CLAIM_LEASE_SECONDS = 6 * 60 * 60
+_CLAIM_FDS: dict[str, int] = {}
+_CLAIM_BUILDER_FDS: dict[str, int] = {}
 _WORD_RE = re.compile(r"[\wа-яё]+", re.I)
 _JOURNAL_DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}\.md\Z")
 _RU_ENDINGS = (
@@ -59,6 +66,207 @@ class Source:
 
 def _db_path(memory_dir: Path) -> Path:
     return memory_dir / ".state" / "recall.sqlite3"
+
+
+def _refresh_request_path(memory_dir: Path) -> Path:
+    return memory_dir / ".state" / "recall_refresh.json"
+
+
+def _claim_lock(fd: int, *, nonblocking: bool = False) -> bool:
+    """Take the POSIX lifetime lock, returning false only when it is held."""
+    try:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0))
+        return True
+    except BlockingIOError:
+        return False
+
+
+def acquire_builder_lock(*, memory_dir: Path) -> int | None:
+    """Nonblocking maintenance ownership on a stable inode (never unlink it)."""
+    path = Path(memory_dir) / ".state" / "recall_builder.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if _claim_lock(fd, nonblocking=True):
+            return fd
+    except BaseException:
+        os.close(fd)
+        raise
+    os.close(fd)
+    return None
+
+
+def release_builder_lock(fd: int) -> None:
+    # Closing our independent open file description releases flock, including
+    # exception paths; the pathname must remain stable for the next process.
+    os.close(fd)
+
+
+def _release_claim_lock(claim: Path) -> None:
+    builder_fd = _CLAIM_BUILDER_FDS.pop(str(claim), None)
+    if builder_fd is not None:
+        release_builder_lock(builder_fd)
+    fd = _CLAIM_FDS.pop(str(claim), None)
+    if fd is None:
+        return
+    with contextlib.suppress(OSError):
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    with contextlib.suppress(OSError):
+        os.close(fd)
+
+
+def _claim_is_stale(path: Path) -> bool:
+    """Malformed legacy claims age from mtime; new claims use their lease."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        deadline = float(data.get("lease_expires_at", 0))
+    except (OSError, ValueError, TypeError):
+        deadline = 0
+    if deadline <= 0:
+        with contextlib.suppress(OSError):
+            deadline = path.stat().st_mtime + _REFRESH_CLAIM_LEASE_SECONDS
+    return deadline > 0 and time.time() >= deadline
+
+
+def _recover_stale_refresh_claims(*, memory_dir: Path) -> None:
+    """Turn an expired *unlocked* private claim back into the pending marker.
+
+    flock is the liveness authority rather than PID.  Acquiring it proves no
+    contemporary builder owns the claim; link() is the atomic no-overwrite
+    handoff to a later request.  A live claim is never stolen after lease age.
+    """
+    request = _refresh_request_path(Path(memory_dir))
+    for claim in request.parent.glob("recall_refresh.claim.*.json"):
+        if str(claim) in _CLAIM_FDS or not _claim_is_stale(claim):
+            continue
+        try:
+            fd = os.open(claim, os.O_RDWR)
+        except OSError:
+            continue
+        try:
+            if not _claim_lock(fd, nonblocking=True):
+                continue
+            try:
+                os.link(claim, request)
+            except FileExistsError:
+                pass
+            except OSError:
+                continue
+            with contextlib.suppress(OSError):
+                claim.unlink()
+        finally:
+            with contextlib.suppress(OSError):
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+def request_refresh(*, memory_dir: Path, reason: str = "explicit-recall") -> bool:
+    path = _refresh_request_path(Path(memory_dir))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try: fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError: return False
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as out:
+                json.dump({"schema":"praxis.recall-refresh.v1", "token":uuid.uuid4().hex,
+                           "reason":str(reason)[:80], "requested_at":_dt.datetime.now(_dt.timezone.utc).isoformat()}, out)
+                out.flush(); os.fsync(out.fileno())
+        except Exception:
+            with contextlib.suppress(OSError): path.unlink()
+            raise
+        return True
+    except OSError: return False
+
+def refresh_requested(*, memory_dir: Path) -> bool:
+    request = _refresh_request_path(Path(memory_dir))
+    for path in [request, *request.parent.glob("recall_refresh.claim.*.json")]:
+        try: data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError): continue
+        if isinstance(data, dict) and data.get("schema") == "praxis.recall-refresh.v1": return True
+    return False
+
+def claim_refresh_request(*, memory_dir: Path) -> Path | None:
+    """Claim a request and retain shared builder ownership until ack/restore."""
+    fd = acquire_builder_lock(memory_dir=memory_dir)
+    if fd is None:
+        return None
+    try:
+        claim = _claim_refresh_request_locked(memory_dir=memory_dir)
+        if claim is not None:
+            _CLAIM_BUILDER_FDS[str(claim)] = fd
+            fd = None
+        return claim
+    finally:
+        if fd is not None:
+            release_builder_lock(fd)
+
+
+def _claim_refresh_request_locked(*, memory_dir: Path) -> Path | None:
+    """Atomically move only the pending marker into this builder's private claim.
+
+    Existing claims belong to a builder already in flight.  They remain evidence of
+    pending maintenance, but are never candidates for a second builder to steal.
+    """
+    request = _refresh_request_path(Path(memory_dir))
+    _recover_stale_refresh_claims(memory_dir=Path(memory_dir))
+    claim = request.with_name(f"recall_refresh.claim.{os.getpid()}.{uuid.uuid4().hex}.json")
+    fd = None
+    try:
+        # Lock before rename: advisory locks follow the inode, closing the
+        # rename-to-lock race against a stale-claim recovery worker.
+        fd = os.open(request, os.O_RDWR)
+        if not _claim_lock(fd, nonblocking=True):
+            os.close(fd)
+            return None
+        os.rename(request, claim)
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            data = json.loads(os.read(fd, 1 << 20).decode("utf-8"))
+        except (OSError, ValueError, TypeError):
+            data = {"schema": "praxis.recall-refresh.v1", "token": uuid.uuid4().hex}
+        now = time.time()
+        data.update({"claimed_at": now, "lease_expires_at": now + _REFRESH_CLAIM_LEASE_SECONDS,
+                     "owner": {"pid": os.getpid()}})
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        os.write(fd, json.dumps(data, ensure_ascii=False).encode("utf-8"))
+        os.fsync(fd)
+        _CLAIM_FDS[str(claim)] = fd
+        return claim
+    except (FileNotFoundError, OSError):
+        if fd is not None:
+            with contextlib.suppress(OSError): os.close(fd)
+        return None
+
+def complete_refresh_request(*, memory_dir: Path, claim: Path | None = None) -> None:
+    target = Path(claim) if claim is not None else _refresh_request_path(Path(memory_dir))
+    with contextlib.suppress(OSError): target.unlink()
+    _release_claim_lock(target)
+
+
+def restore_refresh_request(*, memory_dir: Path, claim: Path) -> None:
+    """Release a failed private claim without overwriting a later request.
+
+    A successful hard-link is an atomic ``request does not exist`` test on the
+    same filesystem.  If a hand requested another refresh while this builder
+    was running, that marker wins and only the old claim is discarded.
+    """
+    request = _refresh_request_path(Path(memory_dir))
+    try:
+        try:
+            os.link(claim, request)
+        except FileExistsError:
+            pass
+        except OSError:
+            # Keep durable evidence, but relinquish ownership for lease recovery.
+            return
+        with contextlib.suppress(OSError):
+            Path(claim).unlink()
+    finally:
+        _release_claim_lock(Path(claim))
 
 
 # ⚠ РАЗРЕШЕНИЕ ПУТИ — САМАЯ ДОРОГАЯ СТРОКА ЭТОГО МОДУЛЯ. `Path.resolve()` ходит в
@@ -474,9 +682,29 @@ def _memory_files(memory_dir: Path, pattern: str, *, include_runs: bool) -> Iter
             yield from child.rglob(pattern)
 
 
+def index_runs_enabled() -> bool:
+    """Индексировать ли `memory/runs` (транспортные снимки прогонов) в recall.
+
+    12.09, решение Егора: корпус поиска — только канон (life, people, self, journal,
+    комнаты); прогоны — не память, а протокол, и в индекс не идут. Замер 12.09:
+    13 317 из 19 557 источников и 16 408 из 50 862 кусков были из `runs`, индекс —
+    651 МБ и рос на ~90 МБ за 4,5 часа; рука `recall` отвечала 4 минуты (9 вызовов за
+    три дня). Аудит прогонов — отдельная рука по `run_id`, не поиск.
+    Рычаг: PRAXIS_INDEX_RUNS=1 возвращает прежний корпус.
+    """
+    return str(os.getenv("PRAXIS_INDEX_RUNS") or "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
 def iter_sources(*, base: Path, memory_dir: Path, skills_dir: Path | None = None,
-                 include_runs: bool = True) -> list[Source]:
-    """Return a stable, explicit list of canonical sources eligible for recall."""
+                 include_runs: bool | None = None) -> list[Source]:
+    """Return a stable, explicit list of canonical sources eligible for recall.
+
+    `include_runs=None` — спросить рычаг `index_runs_enabled()`; явное значение —
+    как раньше (автоматический путь передаёт False сам).
+    """
+    if include_runs is None:
+        include_runs = index_runs_enabled()
     base, memory_dir = Path(base), Path(memory_dir)
     skills_dir = Path(skills_dir) if skills_dir is not None else None
     whole = whole_docs_enabled()
@@ -1241,6 +1469,13 @@ def rebuild(*, base: Path, memory_dir: Path, skills_dir: Path | None = None,
                 if not check or check[0] != "ok":
                     raise sqlite3.DatabaseError(f"integrity_check: {check}")
             os.replace(tmp, path)
+            # A full rebuild establishes a new canonical generation. Automatic
+            # recall's in-process projection must not be reused across a changed
+            # temporary base (or after this replacement).
+            global _CANON_GEN
+            _CANON_CACHE.clear()
+            _INDEX_CACHE.clear()
+            _CANON_GEN += 1
             for suffix in ("-wal", "-shm"):
                 with contextlib.suppress(FileNotFoundError):
                     Path(str(path) + suffix).unlink()
@@ -1462,6 +1697,128 @@ def _select_lazily(*, base: Path, memory_dir: Path, skills_dir: Path | None,
     return selected, mismatch
 
 
+def _explicit_source(rel: str, *, base: Path, memory_dir: Path,
+                     skills_dir: Path | None) -> Source | None:
+    """Resolve one cached locator without walking the complete source registry.
+
+    A SQLite path is never authority to read a file.  This recognises only locally
+    decidable canonical sources; provenance-dependent rows fail closed until a
+    background refresh has made the cache current.
+    """
+    rel = str(rel or "")
+    candidate = Path(rel)
+    if (not rel or candidate.is_absolute()
+            or any(part in {"", ".", ".."} for part in candidate.parts)):
+        return None
+    try:
+        path, resolved_memory = (base / candidate).resolve(), memory_dir.resolve()
+    except OSError:
+        return None
+    if not path.is_file():
+        return None
+    if skills_dir is not None:
+        try:
+            resolved_skills = skills_dir.resolve()
+        except OSError:
+            resolved_skills = None
+        if (resolved_skills is not None and _inside(path, resolved_skills)
+                and path.parent == resolved_skills and path.suffix == ".md"
+                and not path.name.startswith("_") and path.name.casefold() != "index.md"):
+            return Source(path, rel, "skill", "public")
+    history = (base / "soul" / "self" / "history").resolve()
+    if _inside(path, history) and path.parent == history and path.suffix == ".md":
+        return Source(path, rel, "self_history", "owner")
+    if not _inside(path, resolved_memory):
+        return None
+    try:
+        under = _rel_under(path, resolved_memory)
+    except ValueError:
+        return None
+    if (under.startswith("bench/") or any(part.startswith(".") for part in under.split("/"))
+            or (under.startswith("runs/") and not index_runs_enabled())):
+        return None
+    if path.suffix == ".md":
+        if path.name.startswith("_") or _generated_markdown(path, resolved_memory, under):
+            return None
+        if re.fullmatch(r"life/claims/[^/]+\.md", under):
+            # Resolve trust from canonical evidence only for a final candidate,
+            # exactly as the maintenance registry does; never from the SQL label.
+            kind, meta = memory_provenance.claim_source(
+                path, evidence_index=memory_provenance.claim_evidence_index(resolved_memory))
+            return Source(path, rel, kind,
+                          _markdown_visibility(path, resolved_memory, skills_dir, under), meta)
+        return Source(path, rel, memory_provenance.episodic_kind(rel) or "markdown",
+                      _markdown_visibility(path, resolved_memory, skills_dir, under))
+    if path.suffix == ".json":
+        # Inventory has a locally decidable canonicality rule: only the newest
+        # timestamped snapshot in this one device directory is current.
+        if under.startswith("computer/inventory/") and path.parent.name:
+            try:
+                snapshots = sorted((p.resolve() for p in path.parent.glob("*.json")
+                                    if p.is_file() and p.name != "CURRENT.json"),
+                                   key=_inventory_snapshot_key)
+            except OSError:
+                snapshots = []
+            if snapshots and snapshots[-1] == path:
+                return Source(path, rel, "inventory_snapshot", "owner")
+    if path.suffix == ".jsonl":
+        if drop_run_events_enabled() and re.match(r"^runs/.+/events\.jsonl$", under):
+            return None
+        selected = _selected_jsonl(path, resolved_memory, under)
+        if selected is not None:
+            # Life-event currentness is a cross-file revision invariant. Resolve
+            # that narrow evidence registry only for a candidate which reached
+            # final validation (never by walking the general recall corpus).
+            kind, visibility = selected
+            meta = None
+            if kind == "life_event":
+                evidence = memory_provenance.claim_evidence_index(resolved_memory)
+                meta = {"current_event_ids": frozenset(
+                    evidence.get("current_event_ids") or ())}
+            return Source(path, rel, kind, visibility, meta)
+    return None
+
+
+def _select_explicit_lazily(*, base: Path, memory_dir: Path, skills_dir: Path | None,
+                            rows: list[dict], cap: int, scope: str) -> tuple[list[dict], bool]:
+    """Canonical final-row check for the interactive path, without a corpus walk."""
+    selected: list[dict] = []
+    rejected = False
+    parsed: dict[str, dict[str, tuple[Source, dict]]] = {}
+    seen_desires: set[str] = set()
+    for row in rows:
+        rel = str(row.get("path") or "")
+        if _is_transport_snapshot(rel):
+            continue
+        desire_id = str(row.get("desire_id") or "")
+        if row.get("source_type") == "desire_event" and desire_id in seen_desires:
+            continue
+        known = parsed.get(rel)
+        if known is None:
+            source = _explicit_source(rel, base=base, memory_dir=memory_dir,
+                                      skills_dir=skills_dir)
+            known = {} if source is None else {
+                str(chunk.get("chunk_key") or ""): (source, chunk)
+                for chunk in _source_chunks(source)[0]
+            }
+            parsed[rel] = known
+        canonical = known.get(str(row.get("chunk_key") or ""))
+        if canonical is None or not _canonical_row_ok(
+                row, canonical[0], canonical[1], memory_dir,
+                ignore_automatic_eligibility=canonical[0].kind == "life_event"):
+            rejected = True
+            continue
+        if scope != "owner" and canonical[1].get("visibility") != "public":
+            rejected = True
+            continue
+        if row.get("source_type") == "desire_event" and desire_id:
+            seen_desires.add(desire_id)
+        selected.append(row)
+        if len(selected) >= cap:
+            break
+    return selected, rejected
+
+
 def _match_query(query: str) -> str:
     stems = []
     for token in _WORD_RE.findall(str(query or "")):
@@ -1513,7 +1870,8 @@ def _canonical_candidates(*, base: Path, memory_dir: Path, skills_dir: Path | No
     return valid, mismatch
 
 
-def _canonical_row_ok(row: dict, source: Source, chunk: dict, memory_dir: Path) -> bool:
+def _canonical_row_ok(row: dict, source: Source, chunk: dict, memory_dir: Path,
+                      *, ignore_automatic_eligibility: bool = False) -> bool:
     """Совпадает ли строка одноразовой базы с куском, перечитанным из канона.
 
     Вынесено из тела `_canonical_candidates` ради ленивого пути: два способа сверки в
@@ -1524,11 +1882,12 @@ def _canonical_row_ok(row: dict, source: Source, chunk: dict, memory_dir: Path) 
         "source": chunk.get("source") or source.path.stem,
         "source_type": chunk.get("source_type") or source.kind,
         "visibility": chunk.get("visibility") or source.visibility,
-        "automatic_eligible": int(bool(chunk.get("automatic_eligible"))
-            and memory_provenance.automatic_recall_allowed(
-                source_type=chunk.get("source_type") or source.kind,
-                path=source.rel, text=chunk.get("text") or "", memory_dir=memory_dir,
-            )),
+        # Explicit recall does not consume automatic eligibility.  For life events
+        # that flag is derived from a corpus-wide revision registry at build time;
+        # comparing it here would make a fresh background generation unreadable
+        # merely because the bounded final validator intentionally did not rescan
+        # that registry. All emitted text and provenance fields remain exact-byte
+        # checked below.
         "at": chunk.get("at") or "", "event_id": chunk.get("event_id") or "",
         "desire_id": chunk.get("desire_id") or "", "run_id": chunk.get("run_id") or "",
         "refs_json": json.dumps(chunk.get("refs") or [], ensure_ascii=False,
@@ -1539,6 +1898,12 @@ def _canonical_row_ok(row: dict, source: Source, chunk: dict, memory_dir: Path) 
         "terms": _terms(chunk.get("text") or ""),
         "text": chunk.get("text") or "",
     }
+    if not ignore_automatic_eligibility:
+        expected["automatic_eligible"] = int(bool(chunk.get("automatic_eligible"))
+            and memory_provenance.automatic_recall_allowed(
+                source_type=chunk.get("source_type") or source.kind,
+                path=source.rel, text=chunk.get("text") or "", memory_dir=memory_dir,
+            ))
     return not any(str(row.get(field) if row.get(field) is not None else "") != str(value)
                    for field, value in expected.items())
 
@@ -1873,18 +2238,14 @@ def search(query: str, *, base: Path, memory_dir: Path, skills_dir: Path | None 
             query, base=base, memory_dir=memory_dir, skills_dir=skills_dir,
             limit=limit, scope=scope, db_path=db_path,
         )
-    # ⚠ ОДИН ОБХОД КОРПУСА НА ПОИСК, А НЕ ДВА. Профиль 07.08 на живом проде: `iter_sources`
-    # 24.0 с из 31.4, при ДВУХ вызовах — сначала из `ensure`, потом из
-    # `_canonical_candidates`. Перечисление между ними одно и то же.
-    sources = iter_sources(base=base, memory_dir=memory_dir, skills_dir=skills_dir)
-    state = ensure(base=base, memory_dir=memory_dir, skills_dir=skills_dir,
-                   db_path=db_path, sources=sources)
     path = Path(db_path) if db_path is not None else _db_path(Path(memory_dir))
     match = _match_query(query)
     if not match:
         return []
     cap = max(1, min(int(limit or 30), 500))
-    visibility_sql = "" if scope == "owner" else " AND c.visibility = 'public'"
+    # Explicit SQLite metadata is untrusted; canonical final-row validation applies
+    # visibility after retrieval rather than letting a stale cache hide public rows.
+    visibility_sql = ""
     automatic_sql = " AND c.automatic_eligible = 1" if purpose == "automatic" else ""
     sql = f"""
         SELECT c.*, bm25(chunks_fts, 1.0, 0.45, 0.7) AS rank
@@ -1894,38 +2255,27 @@ def search(query: str, *, base: Path, memory_dir: Path, skills_dir: Path | None 
         ORDER BY rank ASC, c.path ASC, c.chunk_key ASC
         LIMIT ?
     """
-    candidates: list[dict] = []
     selected: list[dict] = []
-    for attempt in range(2):
-        with contextlib.closing(sqlite3.connect(path, timeout=15)) as db:
+    try:
+        with contextlib.closing(sqlite3.connect(path, timeout=0)) as db:
             db.row_factory = sqlite3.Row
             cached = [dict(row) for row in db.execute(
                 sql, (match, min(2000, max(80, cap * 8))),
             ).fetchall()]
-        if lazy_canon_enabled():
-            selected, mismatch = _select_lazily(
-                base=Path(base), memory_dir=Path(memory_dir), skills_dir=skills_dir,
-                rows=cached, sources=sources, cap=cap, purpose=purpose,
-            )
-        else:
-            candidates, mismatch = _canonical_candidates(
-                base=Path(base), memory_dir=Path(memory_dir), skills_dir=skills_dir,
-                rows=cached, sources=sources,
-            )
-            selected = _select(candidates, cap=cap, purpose=purpose)
-        if not mismatch:
-            break
-        if attempt == 0:
-            state = rebuild(base=Path(base), memory_dir=Path(memory_dir),
-                            skills_dir=skills_dir, db_path=path)
-            # Расхождение означает, что мир поехал под нами. Вторая попытка обязана
-            # смотреть ЗАНОВО — переиспользовать перепись, которая уже соврала, нельзя.
-            sources = None
-            continue
-        # Canon changed twice during one read or the cache cannot be reconciled.
-        # Fail closed instead of letting a disposable row become prompt authority.
-        selected = []
-    if purpose == "audit" and whole_docs_enabled():
+    except (OSError, sqlite3.Error):
+        # A missing, incompatible, or busy disposable accelerator is not permission to
+        # synchronously rebuild it on an interactive recall. Leave a durable request
+        # for the coalesced night job instead.
+        request_refresh(memory_dir=memory_dir, reason="fts-unavailable")
+        cached = []
+    if cached:
+        selected, stale_rows = _select_explicit_lazily(
+            base=base, memory_dir=memory_dir, skills_dir=skills_dir, rows=cached, cap=cap,
+            scope=scope,
+        )
+        if stale_rows:
+            request_refresh(memory_dir=memory_dir, reason="stale-cached-row")
+    if purpose == "audit":
         # Транспорт больше не в индексе — аудит добирает его прямым чтением канона.
         # Дописывается В КОНЕЦ: индексные попадания ранжированы, эти нет, и смешивать
         # два порядка молча нельзя.
@@ -1954,7 +2304,7 @@ def search(query: str, *, base: Path, memory_dir: Path, skills_dir: Path | None 
             "event_id": row["event_id"], "run_id": row["run_id"],
             "desire_id": row.get("desire_id") or "",
             "refs": refs, "supersedes": supersedes, "provenance": provenance,
-            "index": state.get("schema"),
+            "index": SCHEMA_VERSION,
         })
     return out
 

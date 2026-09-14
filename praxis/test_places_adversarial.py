@@ -1013,16 +1013,75 @@ class TestPeerScopedCanary(Base):
                          "намерение не есть доказанное авторство")
 
     _CHILD_BIND = (
-        "import os, sys, pathlib\n"
+        "import os, sys, pathlib, hashlib, json, importlib\n"
         "base, key, place, out = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]\n"
         "os.environ['PRAXIS_BASE'] = base\n"
         "os.environ.setdefault('PRAXIS_TEST', '1')\n"
-        "sys.path.insert(0, '/app')\n"
+        "root, expected = pathlib.Path(sys.argv[5]).resolve(), json.loads(sys.argv[6])\n"
+        "sys.path.insert(0, str(root))\n"
+        "actual = {}\n"
+        "for name in expected:\n"
+        "    module = importlib.import_module(name)\n"
+        "    path = pathlib.Path(module.__file__).resolve()\n"
+        "    actual[name] = {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}\n"
+        "if actual != expected:\n"
+        "    raise RuntimeError(f'child source identity mismatch: {actual!r} != {expected!r}')\n"
         "import memory_life\n"
-        "pathlib.Path(out + '.ready').write_text('r', encoding='utf-8')\n"
+        "ready = pathlib.Path(out + '.ready')\n"
+        "staged = pathlib.Path(out + '.ready.tmp')\n"
+        "staged.write_text(json.dumps(actual), encoding='utf-8')\n"
+        "staged.replace(ready)\n"
         "added = memory_life.bind_place(place, [key])\n"
         "pathlib.Path(out).write_text(str(added), encoding='utf-8')\n"
     )
+
+    def _child_source_identity(self):
+        # Source root is independent of PRAXIS_BASE (disposable runtime data).
+        root = Path(__file__).resolve().parent
+        identity = {}
+        for name in ("memory_life", "self_model", "memory_provenance"):
+            module = __import__(name)
+            path = Path(module.__file__).resolve()
+            self.assertEqual(path, root / f"{name}.py",
+                             "parent imported a different checkout")
+            identity[name] = {"path": str(path),
+                              "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        return root, identity
+
+    def _child_bind_command(self, key, out_path):
+        root, identity = self._child_source_identity()
+        return [sys.executable, "-c", self._CHILD_BIND, str(self.tmp),
+                key, self.A, str(out_path), str(root), json.dumps(identity)]
+
+    def _stop_child(self, proc):
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=10)
+
+    def test_child_imports_parent_source_from_unrelated_cwd(self):
+        out_path = self.tmp / "source-probe.txt"
+        command = self._child_bind_command(f"{self.A}__topic__999", out_path)
+        result = subprocess.run(command, cwd=self.tmp, capture_output=True,
+                                text=True, timeout=40)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(Path(str(out_path) + ".ready").read_text()),
+                         self._child_source_identity()[1])
+        self.assertEqual(out_path.read_text(), "1")
+        self.assertEqual(ml.bindings().get(f"{self.A}__topic__999"), self.A)
+
+    def test_child_rejects_source_hash_mismatch_before_writing(self):
+        out_path = self.tmp / "source-mismatch.txt"
+        command = self._child_bind_command(f"{self.A}__topic__999", out_path)
+        identity = json.loads(command[-1])
+        identity["memory_life"]["sha256"] = "0" * 64
+        command[-1] = json.dumps(identity)
+        result = subprocess.run(command, cwd=self.tmp, capture_output=True,
+                                text=True, timeout=40)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("child source identity mismatch", result.stderr)
+        self.assertFalse(Path(str(out_path) + ".ready").exists())
+        self.assertFalse(out_path.exists())
+        self.assertNotIn(f"{self.A}__topic__999", ml.bindings())
 
     def _replace_hook_with_child(self, migrate_places, key, out_path, procs):
         """Обёртка _journal_replace: в окне writing→replace запускает НАСТОЯЩИЙ
@@ -1034,13 +1093,18 @@ class TestPeerScopedCanary(Base):
         def hooked(memory_life_mod, payload):
             if not fired["done"]:
                 fired["done"] = True
-                procs.append(subprocess.Popen(
-                    [sys.executable, "-c", self._CHILD_BIND, str(self.tmp),
-                     key, self.A, str(out_path)]))
+                proc = subprocess.Popen(self._child_bind_command(key, out_path),
+                                        cwd=self.tmp)
+                procs.append(proc)
+                self.addCleanup(self._stop_child, proc)
                 ready = Path(str(out_path) + ".ready")
                 deadline = time.time() + 30
                 while not ready.exists() and time.time() < deadline:
+                    self.assertIsNone(proc.poll(), "child exited before source handshake")
                     time.sleep(0.05)
+                self.assertTrue(ready.exists(), "child source handshake timed out")
+                self.assertEqual(json.loads(ready.read_text(encoding="utf-8")),
+                                 self._child_source_identity()[1])
                 time.sleep(0.7)
             return real_replace(memory_life_mod, payload)
 
@@ -1062,7 +1126,7 @@ class TestPeerScopedCanary(Base):
             code, out = self._main("--base", str(self.tmp), "--peer", self.A)
         self.assertEqual(code, 0, out)
         for proc in procs:
-            proc.wait(timeout=40)
+            self.assertEqual(proc.wait(timeout=40), 0, "child writer failed")
         self.assertEqual(out_path.read_text(encoding="utf-8").strip(), "1",
                          "внешний процесс реально записал свой ключ")
         self.assertEqual(ml.bindings().get(f"{self.A}__topic__999"), self.A,
@@ -1084,7 +1148,7 @@ class TestPeerScopedCanary(Base):
                 code, out = self._main("--base", str(self.tmp), "--peer", self.A)
         self.assertEqual(code, 1, out)
         for proc in procs:
-            proc.wait(timeout=40)
+            self.assertEqual(proc.wait(timeout=40), 0, "child writer failed")
         child_added = out_path.read_text(encoding="utf-8").strip()
         pair_alive = ml.bindings().get(f"{self.A}__topic__100") == self.A
         self.assertFalse(child_added == "1" and not pair_alive,

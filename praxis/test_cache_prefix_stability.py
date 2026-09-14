@@ -46,8 +46,10 @@ class CachePrefixStability(unittest.TestCase):
         )
 
     def test_owner_only_tools_are_after_the_shared_schema_prefix(self):
-        owner = agent.offered_tools_for(room_ctx(owner=True))
-        other = agent.offered_tools_for(room_ctx(owner=False))
+        # 12.09: при указателях в `tools` едут родные + describe/call; порядок и шов
+        # полного набора живут в `catalog_tools_for` — его и меряем.
+        owner = agent.catalog_tools_for(room_ctx(owner=True))
+        other = agent.catalog_tools_for(room_ctx(owner=False))
         owner_names = list(tool_offerings.offered_names(owner))
         other_names = list(tool_offerings.offered_names(other))
         shared = [name for name in owner_names if name in set(other_names)]

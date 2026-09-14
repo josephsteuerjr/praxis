@@ -214,13 +214,33 @@ def _resolve_inbox(path: str) -> Path | None:
     if not raw:
         return INBOX.resolve()
     p = Path(raw)
-    cand = p if p.is_absolute() else BASE / p
+    # 13.09: описание руки говорит «папка внутри workspace/inbox», и она так и зовёт —
+    # `inbox_list("from-helene")`, `inbox_list("groups/AbstractDL_Chat_-1001240718803")`.
+    # Резолвер клеил такое имя к дому (`/app/from-helene`), не находил его внутри ящика и
+    # отвечал «Нет такой папки», хотя папка есть. Сегодня она так не нашла ни папку группы,
+    # ни мою записку. Относительное имя сначала пробуем от самого ящика; полный путь
+    # `workspace/inbox/…` и абсолютный — как раньше. Граница ящика не ослаблена: любой
+    # результат всё так же обязан лежать внутри INBOX.
     try:
-        cand = cand.resolve()
-        cand.relative_to(INBOX.resolve())
-    except (OSError, ValueError):
+        inbox_root = INBOX.resolve()
+    except OSError:
         return None
-    return cand
+
+    def _inside(cand: Path) -> Path | None:
+        try:
+            cand = cand.resolve()
+            cand.relative_to(inbox_root)
+        except (OSError, ValueError):
+            return None
+        return cand
+
+    if not p.is_absolute() and p.parts:
+        from_inbox = _inside(INBOX / p)
+        # имя от ящика берём, если оно там есть или хотя бы его первая папка есть
+        # («from-helene/опечатка.md» → честное «Нет файла», а не «вне ящика»)
+        if from_inbox is not None and (from_inbox.exists() or (INBOX / p.parts[0]).exists()):
+            return from_inbox
+    return _inside(p if p.is_absolute() else BASE / p)
 
 
 def when(path: Path) -> str:
@@ -537,6 +557,77 @@ def code_outline(path: str) -> str:
     return f"{path} — скелет ({len(rows)}):\n" + "\n".join(rows[:400])
 
 
+#: Бюджет файлов компилируемого пола на один вызов `search` (hands/src/main.rs: `budget = 5000`).
+#: Пол собирает не больше стольких файлов под маску и ищет только в них; поле `capped` у него
+#: про совпадения, а не про файлы. Питон обязан назвать это усечение сам.
+FLOOR_FILE_BUDGET = 5000
+#: Прогоны в общий обход дома не входят: 100 тыс. файлов, ищутся только явным `root=memory/runs`.
+_SEARCH_RUNS_REL = "memory/runs"
+_SEARCH_FIRST = ("workspace", "soul", "docs", "skills")
+
+
+def _search_roots(base: Path) -> list[str]:
+    """Порядок обхода дома для `fs_search` без `root`: сначала её документы, потом память по
+    папкам (без прогонов), потом остальные верхние папки. Каждая часть — отдельный вызов пола
+    со своим бюджетом файлов, поэтому усечение одной части не прячет другую."""
+    order: list[str] = [name for name in _SEARCH_FIRST if (base / name).is_dir()]
+    memory = base / "memory"
+    if memory.is_dir():
+        order += sorted(f"memory/{c.name}" for c in memory.iterdir()
+                        if c.is_dir() and not c.name.startswith(".") and c.name != "runs")
+    for c in sorted(base.iterdir(), key=lambda x: x.name):
+        if (c.is_dir() and c.name not in _SEARCH_FIRST and c.name != "memory"
+                and not c.name.startswith(".") and c.name not in _SKIP_DIRS):
+            order.append(c.name)
+    return list(dict.fromkeys(order))
+
+
+def _floor_search_home(pattern: str, glob: str) -> str | None:
+    """Поиск по дому целиком через пол, по частям. None — пол не отвечает, идём питоном."""
+    found: list[str] = []
+    truncated: list[str] = []
+    files_seen = 0
+    mask = glob.replace("**/", "", 1)
+    skipped: list[str] = []
+    recursive = glob.startswith("**/")
+    parts = [(rel, glob) for rel in _search_roots(BASE)] if recursive else []
+    if recursive and (BASE / "memory").is_dir():
+        # Direct memory files need their own budget, without descending into runs.
+        parts.append(("memory", mask))
+    # A plain name glob searches BASE only; recursive globs also include its files.
+    parts.append((".", mask))
+    for rel, part_glob in parts:
+        r = hands.search(pattern, glob=part_glob, root=rel, cap=max(1, SEARCH_CAP - len(found)),
+                         base=BASE)
+        if r is None:
+            return None
+        if not r.get("ok"):
+            # отказ пола по одной части (симлинк наружу, права) не роняет весь обход в питон
+            skipped.append(f"{rel}: {r.get('msg') or 'пол отказал'}")
+            continue
+        seen = int(r.get("files_seen") or 0)
+        files_seen += seen
+        if seen >= FLOOR_FILE_BUDGET:
+            truncated.append(rel)
+        found.extend(hit if rel == "." else f"{rel}/{hit}" for hit in (r.get("hits") or []))
+        if len(found) >= SEARCH_CAP:
+            break
+    notes: list[str] = []
+    if truncated:
+        notes.append(f"в {', '.join(truncated)} пол обошёл только первые {FLOOR_FILE_BUDGET} "
+                     f"файлов — там сузь маску или дай root")
+    if skipped:
+        notes.append("пропустила " + "; ".join(skipped))
+    if recursive and (BASE / _SEARCH_RUNS_REL).is_dir():
+        notes.append(f"{_SEARCH_RUNS_REL} не искала — укажи root={_SEARCH_RUNS_REL}")
+    if len(found) >= SEARCH_CAP:
+        notes.insert(0, f"потолок {SEARCH_CAP} совпадений — сузь паттерн")
+    tail = f"\n… ({'; '.join(notes)})" if notes else ""
+    if not found:
+        return f"Ничего не нашла ({files_seen} файлов по {glob}).{tail}"
+    return "\n".join(found[:SEARCH_CAP]) + tail
+
+
 def fs_search(pattern: str, glob: str = "**/*.py", root: str = "") -> str:
     try:
         rx = re.compile(pattern)
@@ -547,13 +638,24 @@ def fs_search(pattern: str, glob: str = "**/*.py", root: str = "") -> str:
     mask = glob.replace("**/", "", 1)
     if (pattern and not _REGEX_META.search(pattern) and not pattern.startswith("-")
             and "/" not in mask and "\\" not in mask):
-        r = hands.search(pattern, glob=glob, root=root or "", cap=SEARCH_CAP, base=BASE)
-        if r is not None and r.get("ok"):
-            hits = r.get("hits") or []
-            if not hits:
-                return f"Ничего не нашла ({r.get('files_seen', '?')} файлов по {glob})."
-            return "\n".join(hits) + (f"\n… (потолок {SEARCH_CAP} — сузь паттерн)"
-                                      if r.get("capped") else "")
+        if not root:
+            # 13.09: дом = 17 ГБ, 233 тыс. файлов, из них .md — 29 928, а пол за вызов смотрит
+            # 5 000 и молчал об этом: «Ничего не нашла (5000 файлов по **/*.md)» за 0,3 с при
+            # лежащей в workspace/inbox записке. Без root ищем по частям и называем усечения.
+            out = _floor_search_home(pattern, glob)
+            if out is not None:
+                return out
+        else:
+            r = hands.search(pattern, glob=glob, root=root, cap=SEARCH_CAP, base=BASE)
+            if r is not None and r.get("ok"):
+                hits = r.get("hits") or []
+                seen = int(r.get("files_seen") or 0)
+                cut = (f"\n… (пол обошёл только первые {FLOOR_FILE_BUDGET} файлов под {root} — "
+                       f"сузь маску или root)" if seen >= FLOOR_FILE_BUDGET else "")
+                if not hits:
+                    return f"Ничего не нашла ({seen} файлов по {glob}).{cut}"
+                return "\n".join(hits) + (f"\n… (потолок {SEARCH_CAP} — сузь паттерн)"
+                                          if r.get("capped") else "") + cut
     base = _resolve_read(root) if root else BASE
     if base is None or not base.is_dir():
         return "Не ищу: плохой корень поиска."
@@ -578,6 +680,9 @@ def fs_search(pattern: str, glob: str = "**/*.py", root: str = "") -> str:
             continue
         if any(part in _SKIP_DIRS for part in p.parts):
             continue
+        # без root прогоны не читаем (100 тыс. файлов): они ищутся явным root=memory/runs
+        if not root and p.relative_to(base).parts[:2] == ("memory", "runs"):
+            continue
         files_seen += 1
         try:
             for i, line in enumerate(p.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
@@ -590,6 +695,8 @@ def fs_search(pattern: str, glob: str = "**/*.py", root: str = "") -> str:
             break
     found.sort(key=lambda row: (row[0], row[1]))
     hits = [f"{rel}:{i}: {text}" for rel, i, text in found[:SEARCH_CAP]]
+    if not root and (base / _SEARCH_RUNS_REL).is_dir():
+        stop = (stop + "; " if stop else "") + f"{_SEARCH_RUNS_REL} не искала — укажи root={_SEARCH_RUNS_REL}"
     if not hits:
         tail = f" — {stop}" if stop else ""
         return f"Ничего не нашла ({files_seen} файлов по {glob}, путей обошла {scanned}{tail})."

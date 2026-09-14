@@ -28,6 +28,15 @@ from unittest import mock
 
 import memory_fts
 
+# 12.09: прогоны по умолчанию не индексируются (решение Егора 12.09); этот стенд меряет корпус С прогонами и её рычаг событий прогона.
+def setUpModule():
+    os.environ["PRAXIS_INDEX_RUNS"] = "1"
+
+
+def tearDownModule():
+    os.environ.pop("PRAXIS_INDEX_RUNS", None)
+
+
 
 class TheUnitBecomesADocument(unittest.TestCase):
     def setUp(self) -> None:
@@ -55,6 +64,9 @@ class TheUnitBecomesADocument(unittest.TestCase):
                              {"PRAXIS_MEMORY_WHOLE_DOCS": "1" if whole else "0"}):
             self.assertEqual(memory_fts.whole_docs_enabled(), whole)
             memory_fts.clear_path_cache()
+            # Scheduled/background work prepares the disposable FTS database;
+            # explicit recall is deliberately read-only and fail-closed.
+            memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
             return [h["id"] for h in memory_fts.search(
                 query, base=self.base, memory_dir=self.memory,
                 skills_dir=self.skills, purpose=purpose)]
@@ -75,6 +87,7 @@ class TheUnitBecomesADocument(unittest.TestCase):
         """Смысл всей правки: к ней приезжает документ, а не пятнадцать слов."""
         with mock.patch.dict(os.environ, {"PRAXIS_MEMORY_WHOLE_DOCS": "1"}):
             memory_fts.clear_path_cache()
+            memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
             hits = memory_fts.search("Егор", base=self.base, memory_dir=self.memory,
                                      skills_dir=self.skills, purpose="explicit")
         self.assertEqual(len(hits), 1)
@@ -100,6 +113,7 @@ class TheUnitBecomesADocument(unittest.TestCase):
         """Провенанс выдачи аудита обязан говорить, что он пришёл не из индекса."""
         with mock.patch.dict(os.environ, {"PRAXIS_MEMORY_WHOLE_DOCS": "1"}):
             memory_fts.clear_path_cache()
+            memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
             hits = memory_fts.search("единорогмаркер", base=self.base,
                                      memory_dir=self.memory, skills_dir=self.skills,
                                      purpose="audit")
@@ -175,6 +189,7 @@ class TheUnitBecomesADocument(unittest.TestCase):
                 }, ensure_ascii=False) + "\n")
         with mock.patch.dict(os.environ, {"PRAXIS_MEMORY_WHOLE_DOCS": "1"}):
             memory_fts.clear_path_cache()
+            memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
             hits = memory_fts.search("окномаркер", base=self.base, memory_dir=self.memory,
                                      skills_dir=self.skills, limit=50, purpose="explicit")
         self.assertTrue(hits, "окна не нашлись вовсе")
@@ -197,6 +212,7 @@ class TheUnitBecomesADocument(unittest.TestCase):
             "открытая строка\n\n[private] закрытая строка\n", encoding="utf-8")
         with mock.patch.dict(os.environ, {"PRAXIS_MEMORY_WHOLE_DOCS": "1"}):
             memory_fts.clear_path_cache()
+            memory_fts.rebuild(base=self.base, memory_dir=self.memory, skills_dir=self.skills)
             hits = memory_fts.search("закрытая", base=self.base, memory_dir=self.memory,
                                      skills_dir=self.skills, purpose="explicit",
                                      scope="public")

@@ -44,6 +44,116 @@ class CanaryBoundary(unittest.TestCase):
                             PRAXIS_FRAME_V6_STREAMS=streams, PRAXIS_OWNER_ID=owner):
                 self.assertFalse(serve.enabled(ctx()))
 
+    def test_ordinary_dm_requires_exact_sparse_keat_stage(self):
+        ordinary = agent.ChannelContext(chat_id=202, owner=False)
+        staged_env = {
+            'PRAXIS_FRAME_V6': 'serve', 'PRAXIS_OWNER_ID': '101',
+            'PRAXIS_FRAME_V6_STREAMS': '', 'PRAXIS_KEAT': 'serve',
+            'PRAXIS_KEAT_MODES': 'dm', 'PRAXIS_KEAT_STREAMS': '202',
+        }
+        with patch.dict(os.environ, staged_env), \
+             patch.object(serve.keat_runtime, 'staged', side_effect=lambda mode, stream: mode == 'dm' and stream == '202'):
+            self.assertTrue(serve.enabled(ordinary))
+            for bad in (
+                    agent.ChannelContext(chat_id=202, owner=True),
+                    agent.ChannelContext(chat_id=202, owner=False, is_dm=False),
+                    agent.ChannelContext(chat_id=202, owner=False, room_id=303),
+                    agent.ChannelContext(chat_id=202, owner=False, hide_identity_load=True),
+                    agent.ChannelContext(chat_id=202, owner=False,
+                                         principal_id=agent.PRAXIS_SELF_PRINCIPAL)):
+                self.assertFalse(serve.enabled(bad))
+        with patch.object(serve.keat_runtime, 'staged', return_value=False):
+            self.assertFalse(serve.enabled(ordinary))
+
+    def test_ordinary_dm_frame_rolls_back_at_provider_without_accepted_keat(self):
+        live = [{'type': 'text', 'text': 'LIVE BYTE EXACT'}]
+        candidate = 'economical candidate'
+        messages = [{'role': 'user', 'content': 'ordinary dm'}]
+        legacy_messages = copy.deepcopy(messages)
+        candidate_messages = [{'role': 'user', 'content': 'captured suffix'}]
+        frame_receipt = {'schema': 1, 'variant': 'serve', 'status': 'served',
+                         'served_variant': 'v6', 'keat_required': True}
+        results = []
+        store = SimpleNamespace(store_result=lambda *args, **kw: results.append((args, kw)))
+        response = SimpleNamespace(blocks=[], text='ok', stop_reason='end_turn')
+
+        def unaccepted_selection(**kw):
+            # Simulate a selector which adopted the suffix and returned something
+            # superficially served; final request-bound acceptance must reject it.
+            kw['messages'][:] = copy.deepcopy(candidate_messages)
+            return {'status': 'served'}
+
+        with patch.object(agent.run_context, 'current_run', return_value=SimpleNamespace(run_id='r')), \
+             patch.object(agent, '_runs', return_value=store), \
+             patch.object(agent, '_run_status_gate'), patch.object(agent, '_run_event_strict'), \
+             patch.object(agent.frame_serve, 'select', return_value=(candidate, frame_receipt)), \
+             patch.object(agent.keat_live, 'select_provider', side_effect=unaccepted_selection), \
+             patch.object(agent.llm, 'chat', return_value=response) as chat, \
+             agent.keat_live.bind_turn(None, messages, candidate_messages=candidate_messages):
+            agent._model_call(live, messages, [])
+        self.assertIs(chat.call_args.kwargs['system'], live)
+        self.assertEqual(chat.call_args.kwargs['messages'], legacy_messages)
+        payload, metadata = next((json.loads(a[1]), k['metadata']) for a, k in results
+                                 if k.get('event_kind') == 'model_input')
+        self.assertEqual(payload['system'], live)
+        self.assertNotIn('frame_v6_live_system', payload)
+        self.assertEqual(metadata['frame_serve']['status'], 'fallback')
+        self.assertEqual(metadata['frame_serve']['served_variant'], 'live')
+
+    def test_ordinary_dm_assembly_failure_forbids_captured_suffix_at_provider(self):
+        """A broken frame restores the complete legacy tape before KEAT selection."""
+        live_system = [{'type': 'text', 'text': 'LIVE BYTE EXACT'}]
+        legacy = [
+            {'role': 'user', 'content': 'uncaptured legacy prefix'},
+            {'role': 'assistant', 'content': 'legacy reply'},
+            {'role': 'user', 'content': 'captured current'},
+        ]
+        candidate_suffix = [{'role': 'user', 'content': 'captured current'}]
+        messages = copy.deepcopy(legacy)
+        response = SimpleNamespace(blocks=[], text='ok', stop_reason='end_turn')
+        store = SimpleNamespace(store_result=lambda *args, **kw: None)
+        ordinary = agent.ChannelContext(chat_id=202, owner=False)
+        staged_env = {
+            'PRAXIS_FRAME_V6': 'serve', 'PRAXIS_OWNER_ID': '101',
+            'PRAXIS_FRAME_V6_STREAMS': '', 'PRAXIS_KEAT': 'serve',
+            'PRAXIS_KEAT_MODES': 'dm', 'PRAXIS_KEAT_STREAMS': '202',
+        }
+        with patch.dict(os.environ, staged_env), \
+             patch.object(serve.keat_runtime, 'staged', return_value=True), \
+             patch.object(frame_measure, 'assemble', side_effect=RuntimeError('assembly failed')), \
+             patch.object(agent.run_context, 'current_run', return_value=SimpleNamespace(run_id='r')), \
+             patch.object(agent, '_runs', return_value=store), \
+             patch.object(agent, '_run_status_gate'), patch.object(agent, '_run_event_strict'), \
+             patch.object(agent.keat_live, 'select_provider', wraps=agent.keat_live.select_provider) as select, \
+             patch.object(agent.llm, 'chat', return_value=response) as chat, \
+             serve.bind(system=live_system, ctx=ordinary, dynamic='dynamic'), \
+             agent.keat_live.bind_turn(None, messages, candidate_messages=candidate_suffix):
+            agent._model_call(live_system, messages, [])
+        select.assert_not_called()
+        self.assertIs(chat.call_args.kwargs['system'], live_system)
+        self.assertEqual(chat.call_args.kwargs['messages'], legacy)
+        self.assertEqual(messages, legacy)
+
+    def test_ordinary_dm_frame_reaches_provider_only_with_accepted_keat(self):
+        live = [{'type': 'text', 'text': 'LIVE'}]
+        candidate = 'economical candidate'
+        messages = [{'role': 'user', 'content': 'ordinary dm'}]
+        frame_receipt = {'schema': 1, 'variant': 'serve', 'status': 'served',
+                         'served_variant': 'v6', 'keat_required': True}
+        accepted = {'schema': 'keat.live.v1', 'status': 'served'}
+        response = SimpleNamespace(blocks=[], text='ok', stop_reason='end_turn')
+        store = SimpleNamespace(store_result=lambda *args, **kw: None)
+        with patch.object(agent.run_context, 'current_run', return_value=SimpleNamespace(run_id='r')), \
+             patch.object(agent, '_runs', return_value=store), \
+             patch.object(agent, '_run_status_gate'), patch.object(agent, '_run_event_strict'), \
+             patch.object(agent.frame_serve, 'select', return_value=(candidate, frame_receipt)), \
+             patch.object(agent.keat_live, 'select_provider', return_value=accepted) as select, \
+             patch.object(agent, '_keat_exact_or_fallback', return_value=accepted), \
+             patch.object(agent.llm, 'chat', return_value=response) as chat:
+            agent._model_call(live, messages, [])
+        self.assertIs(chat.call_args.kwargs['system'], candidate)
+        self.assertIs(select.call_args.kwargs['system'], candidate)
+
     def test_iterations_keep_role_tape_tools_and_transport_and_record_actual(self):
         seen, receipts = [], []
         def assemble(**kw):

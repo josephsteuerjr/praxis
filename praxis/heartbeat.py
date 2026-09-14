@@ -263,6 +263,12 @@ def _automatic_memory_context(cap: int | None = None) -> str:
             cap = int(os.getenv("PRAXIS_AUTO_RECALL_K", "12"))
         except ValueError:
             cap = 12
+    if int(cap) <= 0:
+        # 13.09: ноль значит «выключено» — как в кадре голоса с 06.08 (решение Егора:
+        # выключить, а не сузить). Прежний max(1, …) ниже превращал выключенный
+        # авто-recall в поиск по всему корпусу на каждом часовом окне: py-spy показал
+        # memory_fts._automatic_index под GIL внутри window_context при K=0.
+        return ""
     try:
         hits = memory_index.search(
             _AUTOMATIC_GOAL_QUERY,

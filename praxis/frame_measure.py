@@ -112,7 +112,7 @@ def bind(*, system, ctx, live_sections):
         _BOUND.reset(token)
 
 
-def assemble(*, ctx, live_sections, messages, tools) -> dict:
+def assemble(*, ctx, live_sections, messages, tools, coverage=None) -> dict:
     """Build a complete, private in-memory measurement envelope from fresh sources.
 
     No prepare/capture: those write frozen epochs and shadow bodies to disk. This
@@ -124,7 +124,7 @@ def assemble(*, ctx, live_sections, messages, tools) -> dict:
     payload = frame_shadow._live_payload(live_sections)
     audience = frame_shadow._audience(ctx)
     e = frame_shadow._zone_e_current(tools, ctx=ctx, now=now,
-                                     audience=audience, payload=payload)
+                                     audience=audience, payload=payload, coverage=coverage)
     machine = '\n\n'.join(f'--- {name} ---\n{text}'
                             for name, text in payload['machine'])
     # Compacted history may exist only in the live system, not the role tape.

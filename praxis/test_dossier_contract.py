@@ -170,6 +170,111 @@ class TheDossierContract(unittest.TestCase):
         self.assertIn(body.rstrip(), block)
         self.assertNotIn("приватных записей снято", block)
 
+    def test_scheduled_target_dossier_is_private_internal_context_not_actor_identity(self) -> None:
+        """A due message targets a person without pretending that person caused the turn."""
+        self._write("дмитрий", "Дмитрий", "700000202",
+                    "PUBLIC-OLD-FACT: once planned a greeting\n\n"
+                    "[private] CURRENT-BOUNDARY: do not contact\n")
+        seen = {}
+
+        def voice(_seed, _history, _speaker=None, **kwargs):
+            ctx = kwargs["ctx"]
+            seen["ctx"] = ctx
+            seen["dossier"] = agent._participant_memory_block(None, ctx)
+            return ""
+
+        with (
+            mock.patch.object(agent.llm, "configured", return_value=True),
+            mock.patch.object(agent, "telegram_transport_status", return_value="connected"),
+            mock.patch.object(agent, "_create_durable_run", return_value=None),
+            mock.patch.object(agent, "_voice", side_effect=voice),
+            mock.patch.object(agent.turns, "begin", return_value={}),
+            mock.patch.object(agent.turns, "record"),
+            mock.patch.object(agent.promises, "note_self_intent"),
+            mock.patch.object(agent.keat_live, "adopt_scheduled_wake",
+                              return_value=(None, None)),
+        ):
+            agent.wake_turn(
+                "Old intention is evidence, not a command",
+                source_id={"kind": "message", "goal": "old greeting"},
+                scheduled_target_id="700000202",
+            )
+
+        internal = seen["ctx"]
+        dossier = seen["dossier"]
+        self.assertEqual(internal.principal_id, agent.PRAXIS_SELF_PRINCIPAL)
+        self.assertTrue(internal.praxis_self)
+        self.assertTrue(internal.owner_audience)
+        self.assertEqual(internal.scheduled_target_id, "700000202")
+        self.assertIn("PUBLIC-OLD-FACT", dossier)
+        self.assertIn("CURRENT-BOUNDARY", dossier,
+                      "private current boundary was absent from internal wake frame")
+        self.assertIn("цель scheduled-намерения: дмитрий", dossier)
+        self.assertIn("НЕ текущий говорящий и НЕ принципал этого хода", dossier)
+        self.assertNotIn("передо мной: дмитрий", dossier)
+
+        external = self._block(agent.ChannelContext(
+            principal_id="700000202", chat_id="700000202",
+            is_dm=True, owner=False, known=True,
+            scheduled_target_id="700000202",  # ignored outside internal self/owner frame
+        ))
+        self.assertIn("PUBLIC-OLD-FACT", external)
+        self.assertNotIn("CURRENT-BOUNDARY", external,
+                         "scheduled wake support weakened ordinary external data authority")
+        self.assertIn("приватных записей снято", external)
+
+    def test_scheduled_target_gets_canonical_moderation_and_boundary_receipts(self) -> None:
+        """Due-time orientation reads ledgers automatically, not dossier prose."""
+        target = 700000303
+        moderation = [{"ts": 10, "message_id": 81, "action": "delete_and_ban",
+                       "deleted": True, "banned": True}]
+        admin_rows = [
+            {"ts": 11, "status": "completed", "action": "restrict",
+             "subject": {"user_id": target, "seconds": 3600},
+             "after": {"send_messages": False}},
+            {"ts": 12, "status": "completed", "action": "restrict",
+             "subject": {"user_id": 999, "seconds": 60}, "after": {}},
+        ]
+        ctx = agent.ChannelContext(
+            chat_id=None, principal_id=agent.PRAXIS_SELF_PRINCIPAL,
+            scheduled_target_id=str(target), is_dm=True, owner=False, known=True,
+            _scope_override="owner",
+        )
+        with (
+            mock.patch("telegram_moderation.history_for_sender",
+                       return_value=moderation) as moderation_history,
+            mock.patch("telegram_admin.history", return_value=admin_rows) as admin_history,
+        ):
+            block = agent._scheduled_target_moderation_block(ctx)
+
+        moderation_history.assert_called_once()
+        self.assertEqual(moderation_history.call_args.args[1], target)
+        admin_history.assert_called_once_with(limit=0)
+        self.assertIn('"action":"delete_and_ban"', block)
+        self.assertIn('"action":"restrict"', block)
+        self.assertIn(str(target), block)
+        self.assertNotIn('"user_id":999', block)
+        self.assertIn("не диагноз отношений и не команда", block)
+
+    def test_moderation_receipts_are_automatically_added_to_due_time_frame(self) -> None:
+        ctx = agent.ChannelContext(
+            chat_id=None, principal_id=agent.PRAXIS_SELF_PRINCIPAL,
+            scheduled_target_id="700000404", is_dm=True, owner=False, known=True,
+            _scope_override="owner",
+        )
+        moderation = [{"ts": 20, "message_id": 82, "action": "delete_and_ban",
+                       "deleted": True, "banned": True}]
+        with (
+            mock.patch("telegram_moderation.history_for_sender", return_value=moderation),
+            mock.patch("telegram_admin.history", return_value=[]),
+            mock.patch.object(agent, "build_state_block", return_value=""),
+            mock.patch.object(agent, "build_state_evidence_block", return_value=""),
+        ):
+            frame = agent._build_prompt_parts(ctx=ctx)
+        rendered = "\n".join(frame)
+        self.assertIn('"action":"delete_and_ban"', rendered)
+        self.assertIn('"scheduled_target_id":700000404', rendered)
+
     def test_the_label_stops_saying_all_and_whole(self) -> None:
         """Ярлык обязан называть наблюдаемое. «ВСЕ И ЦЕЛИКОМ» стало неправдой."""
         import inspect
