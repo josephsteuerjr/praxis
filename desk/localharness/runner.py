@@ -400,6 +400,28 @@ def _close_run(envelope, chat_id: str, *, delivered_text: str = "",
         log.exception("прогон не закрылся расписками [%s]", run_id)
 
 
+def deliver_one_media(item, chat_id: str) -> str:
+    """Один спуленный файл на свою поверхность. -> расписка приёма.
+
+    Выделено из `_deliver_outbound` 17.09, чтобы тем же путём мог ходить и ВОЗОБНОВЛЁННЫЙ
+    ход: у него конверта нет, есть предмет очереди. Тело одно на оба пути — иначе живая и
+    восстановленная доставка разъехались бы, а это ровно тот класс расхождений, из-за
+    которого файл однажды пропал молча. Исключения наружу: решает вызывающий, повторять
+    ему или гасить долг.
+    """
+    target = str(getattr(item, "target_chat_id", "") or chat_id)
+    if (_bot is not None and target != STREAM
+            and botapi.is_telegram_key(target)):
+        return str(_bot.deliver_file(
+            Path(item.path), chat_id=target,
+            caption=str(getattr(item, "caption", "") or ""),
+            media_kind=str(getattr(item, "kind", "document") or "document"),
+            voice_note=bool(getattr(item, "voice_note", False))))
+    note = f"[файл] {Path(item.path).name} — {item.path}"
+    caption = str(getattr(item, "caption", "") or "").strip()
+    return str(_room(target).deliver(note + ("\n" + caption if caption else "")))
+
+
 def _deliver_outbound(envelope, chat_id: str) -> int:
     """Медиа, спуленное ходом (`send_media`): документы/фото/аудио этого чата.
 
@@ -410,17 +432,7 @@ def _deliver_outbound(envelope, chat_id: str) -> int:
     for item in getattr(envelope, "outbound", ()) or ():
         target = str(getattr(item, "target_chat_id", "") or chat_id)
         try:
-            if (_bot is not None and target != STREAM
-                    and botapi.is_telegram_key(target)):
-                receipt = _bot.deliver_file(
-                    Path(item.path), chat_id=target,
-                    caption=str(getattr(item, "caption", "") or ""),
-                    media_kind=str(getattr(item, "kind", "document") or "document"),
-                    voice_note=bool(getattr(item, "voice_note", False)))
-            else:
-                note = f"[файл] {Path(item.path).name} — {item.path}"
-                caption = str(getattr(item, "caption", "") or "").strip()
-                receipt = _room(target).deliver(note + ("\n" + caption if caption else ""))
+            receipt = deliver_one_media(item, chat_id)
             delivered += 1
             log.info("медиа хода доставлено: %s", str(receipt)[:120])
         except Exception:
@@ -645,6 +657,22 @@ def handle_bot(chat_id: str) -> None:
                 _bot.deliver_text(chat_id, f"⚠ ход {state} (прогон {run_id}).")
             except Exception:
                 log.exception("не доложила владельцу о сбое хода")
+    if not spoken and not text:
+        # ⚑ 17.09. ТО ЖЕ ВОССТАНОВЛЕНИЕ, ЧТО У ОКНА (см. `_turn_in_window`), которого у
+        # бота не было — и из-за этого «бот молчит» выглядело её решением.
+        #
+        # Как это происходило. Под поднятым контрактом руки ядро возвращает конверт БЕЗ
+        # текста: последний текст хода — заметка себе, наружу он не идёт. Окно на этом
+        # месте читает запись хода и, если слово там всё-таки есть, доставляет его
+        # границей. Бот же падал прямиком в строку «она промолчала (это её решение, не
+        # сбой)» и писал в расписку `silent_reason="agent chose silence"` — то есть
+        # называл её решением ровно то, чего она не решала: слово было написано, просто
+        # не рукой. На слабых моделях так терялось каждое третье слово.
+        ending, word = boundary_word(_turn_record(chat_id))
+        if ending == WORD and _deliver_unspoken:
+            text = word
+            log.info("ход %s [бот %s]: слово пришло заметкой хода — доставляю на границе",
+                     run_id or "—", chat_id)
     delivered_boundary = ""
     if not spoken and text:
         try:
@@ -1466,7 +1494,8 @@ def main() -> None:
     transport.install(agent, _desks)
     _continuity = continuity.Continuity(
         agent, _desks, config_path,
-        lambda run, chat: _set_busy(True, run, chat_id=chat))
+        lambda run, chat: _set_busy(True, run, chat_id=chat),
+        media_sender=deliver_one_media)
     _continuity.install()
     import tasks
     import forge

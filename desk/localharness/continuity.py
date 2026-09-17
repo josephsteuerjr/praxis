@@ -20,10 +20,14 @@ log = logging.getLogger("helene.continuity")
 
 
 class Continuity:
-    def __init__(self, agent, desks, config_path: Path, activity):
+    def __init__(self, agent, desks, config_path: Path, activity, media_sender=None):
         self.agent, self.desks = agent, desks
         self.config_path = Path(config_path)
         self.activity = activity
+        # Чем доставлять спуленный файл. Передаёт раннер (`runner.deliver_one_media`):
+        # тело доставки одно на живой и на возобновлённый ход. None — доставщика нет,
+        # и тогда очередь честно не разбирается, а не разбирается наполовину.
+        self.media_sender = media_sender
         self._activation = None
 
     def owner_stamp(self) -> str:
@@ -155,10 +159,76 @@ class Continuity:
                 log.exception("локальная доставка ждёт подтверждения [%s]", run_id)
         return accepted
 
+    def deliver_pending_media(self) -> int:
+        """Файлы, которые ход поднял, а доставить не успел. -> сколько ушло.
+
+        ⚑ ЗАЧЕМ ЭТО ЕСТЬ. В ядре очередь медиа разбирает исходящая граница mtproto. В
+        издании её нет: харнесс поднимает свой транспорт, и спул не разбирает НИКТО.
+        Пока ход шёл живьём, файл уезжал конвертом (`_deliver_outbound`); ход, поднятый
+        заново, кладёт файл в спул — и до этой функции он оставался там навсегда, а прогон
+        не мог терминализоваться и поднимался каждые 45 секунд.
+
+        Порядок на каждый файл ровно такой и не иначе: доставить → записать durable-расписку
+        → погасить предмет в спуле → досведение прогона. Расписка ДО гашения: если упадём
+        между ними, предмет вернётся в очередь, а расписка не даст отправить второй раз.
+        Обратный порядок терял бы доказательство доставки.
+        """
+        if self.media_sender is None:
+            return 0
+        sent = 0
+        for plan in self.agent.run_pending_media_deliveries(limit=20):
+            run_id = plan["run_id"]
+            room = str(plan.get("conversation_id") or "")
+            try:
+                manager = self.agent._runs()
+                context = manager.context(run_id)
+                self.verify_local_owner(run_id, context)
+                if context.delivery_chat_id != room:
+                    raise ValueError("delivery room differs from run authority")
+                spool = self.agent._media_spool()
+                self.activity(run_id, room)
+                for item in plan.get("items") or ():
+                    control = manager.manifest(run_id).get("control") or {}
+                    if control.get("action") in {"pause", "cancel"}:
+                        break
+                    # Политику спрашиваем ДО попытки: прогон мог уже получить расписку в
+                    # прошлый заход, и повтор был бы вторым файлом человеку.
+                    policy = self.agent.run_delivery_media_retry_policy(run_id, item.queue_id)
+                    if policy in {"ack", "drop"}:
+                        spool.discard(item.queue_id, receipt={"policy": policy})
+                        continue
+                    try:
+                        receipt = self.media_sender(item, room)
+                    except Exception as exc:
+                        # Долг остаётся: предмет в очереди, расписки нет. Следующий заход
+                        # попробует снова — и это правильнее, чем погасить долг по ошибке
+                        # канала и оставить человека без обещанного файла.
+                        self.agent.run_delivery_media_result(
+                            run_id, item.queue_id, ok=False,
+                            error=f"{type(exc).__name__}: {exc}",
+                            chat_id=room, path=str(item.path),
+                            caption=str(getattr(item, "caption", "") or ""))
+                        log.exception("файл прогона не ушёл [%s / %s]", run_id, item.queue_id)
+                        continue
+                    self.agent.run_delivery_media_result(
+                        run_id, item.queue_id, ok=True, message_id=str(receipt),
+                        chat_id=room, path=str(item.path),
+                        caption=str(getattr(item, "caption", "") or ""))
+                    spool.discard(item.queue_id, receipt={"message_id": str(receipt)})
+                    sent += 1
+                    log.info("файл прогона доставлен [%s]: %s", run_id, str(receipt)[:120])
+                self.agent.run_delivery_finalize_recovered(run_id)
+            except Exception:
+                log.exception("медиа прогона ждёт подтверждения [%s]", run_id)
+        return sent
+
     def resume_due(self) -> list[dict]:
         self.deliver_pending_text()
         reports = self.agent.resume_durable_runs(limit=1)
         self.deliver_pending_text()
+        # Медиа — ПОСЛЕ подъёма ходов: именно возобновлённый ход и кладёт файл в спул,
+        # а до него разбирать нечего.
+        self.deliver_pending_media()
         for report in reports:
             if report.get("status") not in {"noop", "not_resumable"}:
                 log.info("продолжение [%s]: %s / %s / %s", report.get("run_id"),
