@@ -93,10 +93,46 @@ export interface EditionContext {
   loaded: Loaded;
 }
 
+/**
+ * Группа настроек — вкладка над карточками.
+ *
+ * ⚠ Порог группировки решает ИЗДАНИЕ, а не догадка по узлам. Считать группы
+ * самим было бы соблазнительно (заголовки карточек все на виду), но заголовок
+ * приходит из трубы и может прийти другим, а у Пульта карточек этого
+ * компьютера нет вовсе: он получил бы четыре вкладки, чужие карточки в «Мозге и
+ * связи» и ПУСТУЮ вкладку «Права на этом ПК».
+ */
+export interface SettingsGroup {
+  id: string;
+  label: string;
+}
+
+/**
+ * Имена групп одной строкой на всех: каркас метит свои карточки, издание —
+ * свои, и разойтись опечаткой им негде.
+ */
+export const GROUP = {
+  agent: "agent",
+  brain: "brain",
+  rights: "rights",
+  app: "app",
+} as const;
+
+/** Пометить карточку группой. Непомеченная не теряется — см. `mountSettings`. */
+export function inGroup(el: HTMLElement, group: string): HTMLElement {
+  el.dataset.group = group;
+  return el;
+}
+
 /** Что издание даёт каркасу. */
 export interface Edition {
   /** Карточки издания. Встают между «Именами» и «Телефоном». */
   cards: HTMLElement[];
+  /**
+   * Группы и их порядок. Пусто — карточки идут одним списком, как раньше:
+   * это и есть ответ Пульта, у которого группировать нечего.
+   */
+  groups?: SettingsGroup[];
   /**
    * Дописать в конфиг то, что знает издание.
    *
@@ -182,14 +218,14 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // Настройки пишут только helene.json. Конституцию (data/soul/SOUL.md) не
   // переписывает никто, кроме установщика, — а в ней старые имена остаются
   // навсегда, и агент в своём K-слое читает именно их. Обещать обратное нельзя.
-  center.append(card("Имена", names, built.namesHint));
+  center.append(inGroup(card("Имена", names, built.namesHint), GROUP.agent));
 
   for (const box of built.cards) center.append(box);
 
-  center.append(phoneCard(draft, !!c.phone?.enabled, built.phoneBase, built.qrSvg));
+  center.append(inGroup(phoneCard(draft, !!c.phone?.enabled, built.phoneBase, built.qrSvg), GROUP.brain));
 
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
-  center.append(transferCard(draft));
+  center.append(inGroup(transferCard(draft), GROUP.app));
 
   // --- автозапуск
   const auto = el("div");
@@ -203,7 +239,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   });
   shell<boolean>("autostart_get").then((v) => autoToggle.setAttribute("aria-checked", String(v))).catch(() => {});
   auto.append(autoToggle);
-  center.append(card("Автозапуск", auto));
+  center.append(inGroup(card("Автозапуск", auto), GROUP.app));
 
   // Тема — только как в системе (слово владельца 07.09): переключателя нет.
 
@@ -322,7 +358,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     }),
     logsRow,
   );
-  center.append(card("О программе", about));
+  center.append(inGroup(card("О программе", about), GROUP.app));
 
   // --- сохранить
   const save = el("div", "actions");
@@ -440,14 +476,14 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   saveCard.append(save, conflictBox, el("p", "field-hint", `Файл настроек: ${loaded.path}`));
   center.append(saveCard);
 
-  mountSettings(container, center);
+  mountSettings(container, center, built.groups || []);
 }
 
 /**
  * Экран настроек — карточки и оглавление слева. Оглавление собирается из
  * заголовков карточек: ни одной второй копии списка.
  */
-function mountSettings(container: HTMLElement, center: HTMLElement) {
+function mountSettings(container: HTMLElement, center: HTMLElement, groups: SettingsGroup[] = []) {
   const wrap = el("div", "settings");
   const nav = el("nav", "settings-nav");
   nav.setAttribute("aria-label", "Разделы настроек");
@@ -455,20 +491,104 @@ function mountSettings(container: HTMLElement, center: HTMLElement) {
   center.className = "";
   body.append(center);
   const cards = [...center.querySelectorAll<HTMLElement>("section.card")].filter((c) => c.querySelector(":scope > h3"));
+
+  // ---- раскладка по группам
+  //
+  // Порядок вкладок — тот, что объявило издание. Пустых вкладок не рисуем:
+  // вкладка «Права на этом ПК» без единой карточки прав — обещание экрана,
+  // которого за ним нет. Карточка без группы не пропадает молча, а встаёт в
+  // хвост первой живой группы: молча потерять настройку хуже, чем показать её
+  // не там.
+  const buckets = new Map<string, HTMLElement[]>();
+  for (const g of groups) buckets.set(g.id, []);
+  const orphans: HTMLElement[] = [];
+  for (const c of cards) {
+    const bucket = buckets.get(c.dataset.group || "");
+    if (bucket) bucket.push(c);
+    else orphans.push(c);
+  }
+  const live = groups.filter((g) => (buckets.get(g.id) || []).length);
+  if (orphans.length && live.length) buckets.get(live[0].id)!.push(...orphans);
+  const grouped = live.length >= 2;
+
+  let visible = cards;
+  if (grouped) {
+    const host = el("div", "settings-groups");
+    cards[0].before(host);
+    const tabs = el("div", "settings-tabs");
+    tabs.setAttribute("role", "tablist");
+    const boxes = new Map<string, HTMLElement>();
+    for (const g of live) {
+      const box = el("div", "settings-group");
+      box.hidden = true;
+      for (const c of buckets.get(g.id)!) box.append(c);
+      host.append(box);
+      boxes.set(g.id, box);
+    }
+    host.before(tabs);
+    let saved = "";
+    try {
+      saved = localStorage.getItem("settings.group") || "";
+    } catch {
+      // без хранилища вкладка просто не запомнится
+    }
+    const start = live.some((g) => g.id === saved) ? saved : live[0].id;
+    const pick = (id: string) => {
+      for (const g of live) {
+        const box = boxes.get(g.id)!;
+        const on = g.id === id;
+        box.hidden = !on;
+        // Карточки не пересобираются — меняется только видимость; 140 мс
+        // проявления хватает, чтобы переход не выглядел рывком.
+        if (on) {
+          box.classList.remove("group-in");
+          void box.offsetWidth;
+          box.classList.add("group-in");
+        }
+      }
+      for (const t of tabs.querySelectorAll<HTMLElement>("[role=tab]")) {
+        t.setAttribute("aria-selected", String(t.dataset.group === id));
+      }
+      visible = buckets.get(id) || [];
+      buildNav();
+      try {
+        localStorage.setItem("settings.group", id);
+      } catch {
+        // см. выше
+      }
+    };
+    for (const g of live) {
+      const t = el("button", "settings-tab", g.label) as HTMLButtonElement;
+      t.type = "button";
+      t.dataset.group = g.id;
+      t.setAttribute("role", "tab");
+      t.addEventListener("click", () => pick(g.id));
+      tabs.append(t);
+    }
+    // Первый показ — после сборки навигации ниже: `pick` её и построит.
+    queueMicrotask(() => pick(start));
+  }
+
   const links: HTMLAnchorElement[] = [];
-  cards.forEach((c, i) => {
-    const title = c.querySelector(":scope > h3")!.textContent || "";
-    c.id = "s-" + i;
-    const a = el("a", "", title);
-    a.href = "#" + c.id;
-    a.addEventListener("click", (e) => {
-      e.preventDefault();
-      c.scrollIntoView({ block: "start", behavior: "smooth" });
-      for (const l of links) l.setAttribute("aria-current", String(l === a));
+  function buildNav() {
+    links.length = 0;
+    nav.replaceChildren();
+    visible.forEach((c, i) => {
+      const title = c.querySelector(":scope > h3")!.textContent || "";
+      c.id = "s-" + i + "-" + (c.dataset.group || "x");
+      const a = el("a", "", title);
+      a.href = "#" + c.id;
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        c.scrollIntoView({ block: "start", behavior: "smooth" });
+        for (const l of links) l.setAttribute("aria-current", String(l === a));
+      });
+      links.push(a);
+      nav.append(a);
     });
-    links.push(a);
-    nav.append(a);
-  });
+  }
+  buildNav();
+
   wrap.append(nav, body);
   container.replaceChildren(wrap);
   if ("IntersectionObserver" in window && cards.length) {
@@ -476,7 +596,7 @@ function mountSettings(container: HTMLElement, center: HTMLElement) {
     const io = new IntersectionObserver(
       (entries) => {
         for (const e of entries) seen.set(e.target, e.isIntersecting);
-        const first = cards.find((c) => seen.get(c));
+        const first = visible.find((c) => seen.get(c));
         if (!first) return;
         for (const l of links) l.setAttribute("aria-current", String(l.getAttribute("href") === "#" + first.id));
       },

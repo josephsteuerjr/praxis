@@ -26,6 +26,7 @@ import { voiceCard } from "./voicecard";
 import { agentsCard } from "./agentscard";
 import { RELAY_PORT, relayBaseUrl, relayProbeUrl, newRelayKey } from "./relay";
 import type { Config, Edition, EditionContext } from "../../ui-kit/window/views/settings-frame";
+import { GROUP, inGroup } from "../../ui-kit/window/views/settings-frame";
 
 type Provider = "api" | "anthropic" | "chatgpt" | "local";
 
@@ -379,7 +380,7 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
   model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint, spareGrid, spareHint);
   syncPick();
   syncEffort();
-  cards.push(card("Модель", model));
+  cards.push(inGroup(card("Модель", model), GROUP.brain));
 
   // --- Telegram: бот или свой аккаунт агента
   const tgBox = el("div");
@@ -493,7 +494,7 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
   tgBox.append(tgPick, tgPanes.bot, tgPanes.account, ownerField);
   syncTg();
   if (tgMode === "account" && draft.telegram.api_id) void accCall("status");
-  cards.push(card("Telegram", tgBox));
+  cards.push(inGroup(card("Telegram", tgBox), GROUP.brain));
 
   // --- ограда рук (песочница | интерактивный) и ОТДЕЛЬНО от неё служба
   //
@@ -523,7 +524,7 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
     // показывать; список в конфиге живёт и оживает вместе с песочницей.
     mounts.el.hidden = !sandbox;
   });
-  cards.push(mode.el);
+  cards.push(inGroup(mode.el, GROUP.rights));
 
   // --- песочница: сеть контейнера остаётся выбором владельца, ограду ставит режим
   const sb = el("div");
@@ -552,7 +553,7 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
   }
   syncSandboxState(mode.name() ? mode.sandbox() : draft.sandbox.enabled !== false, mode.title());
   sb.append(sandboxState, sbNet);
-  cards.push(card("Песочница", sb, "Что вышло на самом деле — видно на экране «Система». Применяется перезапуском."));
+  cards.push(inGroup(card("Песочница", sb, "Что вышло на самом деле — видно на экране «Система». Применяется перезапуском."), GROUP.rights));
 
   // --- монтирование: папки владельца, открытые агенту сверх его дома
   //
@@ -568,7 +569,7 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
     mode.title() || modeLive?.title || "",
   );
   mounts.el.hidden = !(mode.name() ? mode.sandbox() : draft.sandbox.enabled !== false);
-  cards.push(mounts.el);
+  cards.push(inGroup(mounts.el, GROUP.rights));
 
   // --- управление компьютером: опция ПОВЕРХ любого режима (06.09)
   //
@@ -577,7 +578,7 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
   // живое состояние тела — из снимка харнесса (`computer_live`); окно
   // пишет ровно два ключа блока и сливает остальное.
   const computer = computerCard(modeLive, storedComputer(draft.computer));
-  cards.push(computer.el);
+  cards.push(inGroup(computer.el, GROUP.rights));
 
   // --- голос: единственная часть продукта, которой не хватает гигабайта
   //
@@ -586,13 +587,13 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
   // хватает, и качает это; состояние она спрашивает у канала (`/api/voice`),
   // тем же модулем, которым голос поднимает раннер.
   const voice = voiceCard(draft);
-  cards.push(voice.el);
+  cards.push(inGroup(voice.el, GROUP.brain));
 
   // --- агенты этой установки (11.09)
   //
   // Карточка стоит перед «Данными агента» намеренно: сразу за ней идёт папка
   // ЭТОГО агента, и владелец видит, чей дом ему показывают.
-  cards.push(agentsCard().el);
+  cards.push(inGroup(agentsCard().el, GROUP.agent));
 
   // --- данные
   const data = el("div", "actions");
@@ -600,10 +601,20 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
     el("span", "mono", loaded.tree),
     button("Открыть папку", "quiet", () => void shell("open_path", { path: loaded.tree }).catch((e) => toast(humanError(e).text))),
   );
-  cards.push(card("Данные агента", data, "Память, дневник, конституция и настройки лежат здесь. Перенос агента на другую машину — перенос этой папки вместе с программой."));
+  cards.push(inGroup(card("Данные агента", data, "Память, дневник, конституция и настройки лежат здесь. Перенос агента на другую машину — перенос этой папки вместе с программой."), GROUP.agent));
 
   return {
     cards,
+    // Четыре карточки, которые вместе решают, что агенту разрешено на этом
+    // компьютере, впервые оказываются рядом: режим ограды, песочница,
+    // смонтированные папки и управление компьютером. До этого они лежали в
+    // общем списке из четырнадцати, вперемешку с моделью и телефоном.
+    groups: [
+      { id: GROUP.agent, label: "Агент" },
+      { id: GROUP.brain, label: "Мозг и связь" },
+      { id: GROUP.rights, label: "Права на этом ПК" },
+      { id: GROUP.app, label: "Программа" },
+    ],
     // Подпись у изданий разная: здесь имя агента правит того, кто живёт рядом.
     namesHint:
       "Имя агента войдёт в подписи и в снимок состояния; имя владельца нужно агенту, чтобы знать, чьё слово решает. " +

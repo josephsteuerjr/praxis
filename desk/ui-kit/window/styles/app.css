@@ -2393,6 +2393,65 @@ select.field-input {
   scroll-margin-top: 8px;
 }
 
+/* ---------- настройки: группы вкладками ----------
+   Вкладки появляются, только если издание объявило группы И живых групп больше
+   одной (settings-frame.ts::mountSettings). У Пульта их нет — он получает
+   прежний плоский список, а не четыре вкладки, одна из которых пустая. */
+
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 16px;
+}
+
+.settings-tab {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.2;
+  padding: 7px 13px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.settings-tab:hover {
+  background: var(--ctrl-hover);
+  color: var(--ink);
+}
+
+.settings-tab[aria-selected="true"] {
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.settings-group[hidden] {
+  display: none;
+}
+
+/* Проявление группы — 140 мс и четыре пикселя: карточки при этом НЕ
+   пересобираются, меняется только видимость. Системную настройку «меньше
+   движения» гасит общее правило внизу файла. */
+.settings-group.group-in {
+  animation: group-in var(--dur-2) var(--ease-out) both;
+}
+
+@keyframes group-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .save-bar {
   position: sticky;
   bottom: 0;
@@ -2406,7 +2465,11 @@ select.field-input {
   box-shadow: var(--shadow-pop);
 }
 
-@media (max-width: 1100px) {
+/* ⚠ Мерим КОНТЕЙНЕР, а не окно. Колонка настроек — это окно минус полка 272px,
+   которая ещё и схлопывается по Ctrl+B: порог по вьюпорту срабатывал на 1100,
+   когда места на самом деле было 828, и оглавление ложилось в ряд на широком
+   окне. `#main` объявлен container-type: inline-size выше. */
+@container (max-width: 840px) {
   .settings {
     grid-template-columns: minmax(0, 1fr);
   }
