@@ -853,6 +853,41 @@ def _heartbeat_forever(inbox: Path) -> None:
         time.sleep(_HEARTBEAT_SEC)
 
 
+def _retention_forever() -> None:
+    """Ретенция прогонов — суточным тиком, потому что вешать её больше некуда.
+
+    ⚠ В ЯДРЕ ЭТОГО МЕСТА НЕТ. Там ретенцию зовёт `sleep.run_scheduled`, а в издании
+    `run_scheduled` не зовёт никто из работающего кода: он есть только в
+    `mtproto_runner.py`, которого продуктовый харнесс не запускает. То есть перенос
+    модуля без своей точки запуска дал бы «ретенция есть», а на диске — ничего.
+    Замер прода 12.09: 29,5 ГБ в прогонах, из них 28,7 ГБ — снимки `results/`,
+    +1 ГБ в сутки.
+
+    Тик — сутки, и первый проход через минуту после старта: окно чаще всего
+    открывают и закрывают, и ретенция, назначенная «ночью», не случилась бы никогда.
+    """
+    first = True
+    while True:
+        time.sleep(60.0 if first else 24 * 3600.0)
+        first = False
+        try:
+            if str(os.getenv("PRAXIS_RUNS_RETENTION", "on") or "on").strip().lower() in {
+                    "0", "off", "false", "no"}:
+                continue
+            import runs_prune
+            budget = float(os.getenv("PRAXIS_RUNS_RETENTION_BUDGET", "600") or 600)
+            report = runs_prune.prune(Path(_tree) if _tree else None, budget_seconds=budget)
+            line = runs_prune.report_line(report)
+            # Молчать нельзя в обе стороны: и когда сняли, и когда не тронули
+            # ничего. Именно молчание держало незамеченным то, что на Windows
+            # ретенция не работала вовсе.
+            log.info("ретенция прогонов: %s", line)
+            for err in (report.get("errors") or [])[:3]:
+                log.warning("ретенция прогонов: %s", err)
+        except Exception:
+            log.warning("ретенция прогонов не прошла", exc_info=True)
+
+
 def _set_busy(on: bool, run: str = "", *, chat_id: str = "") -> None:
     _busy["busy"], _busy["run"] = bool(on), str(run or "")
     _busy["since"] = time.time() if on else 0.0
@@ -1572,6 +1607,7 @@ def main() -> None:
     import threading
     threading.Thread(target=_heartbeat_forever, args=(inbox,), name="heartbeat",
                      daemon=True).start()
+    threading.Thread(target=_retention_forever, name="retention", daemon=True).start()
     # Рождение — после того, как всё поднято и квитанция читателя уже пишется:
     # окно видит «думает», а не мёртвый руннер, пока идёт первый ход.
     _maybe_birth(tree)

@@ -3726,7 +3726,24 @@ mod broker_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_config;
+    use super::{console_text, decode_codepage, decode_config};
+
+    /// Вывод schtasks, icacls и netsh читается в кодовой странице СИСТЕМЫ.
+    ///
+    /// У службы единственный читатель — `service.log`, который владелец
+    /// открывает, когда что-то не встало. До 17.09 здесь стояла вшитая таблица
+    /// cp866: на нерусской Windows причина отказа приезжала абракадаброй, то
+    /// есть журнал, написанный ради этого случая, в этом случае и не работал.
+    /// Страницы спрашиваются поимённо — иначе стенд зеленел бы только у того,
+    /// у кого система русская.
+    #[test]
+    fn console_text_reads_the_page_the_system_speaks() {
+        assert_eq!(decode_codepage(&[0x8E, 0xAA], 866), "Ок");
+        assert_ne!(decode_codepage(&[0x8E, 0xAA], 437), "Ок");
+        assert_eq!(console_text(b"SUCCESS: task created
+"), "SUCCESS: task created");
+        assert_eq!(console_text("уже UTF-8".as_bytes()), "уже UTF-8");
+    }
 
     /// Три способа, которыми владелец сохранит helene.json руками, — и все три
     /// служба обязана читать так же, как оболочка.

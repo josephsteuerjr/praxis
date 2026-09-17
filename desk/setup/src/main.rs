@@ -195,10 +195,20 @@ fn export_agent() -> Result<String, String> {
     }
     let out = cmd.output().map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
+    // ⚠ Путь к архиву берём из МАШИННОЙ строки `carry-export {json}`, а не из
+    // человеческой фразы: та переводится вместе с интерфейсом, и разбор по
+    // префиксу «архив: » объявил бы удачный экспорт провалом. Разбор фразы
+    // остаётся запасным — на случай, когда рядом лежит app/ прошлой поставки.
     let archive = text
         .lines()
-        .find_map(|l| l.trim().strip_prefix("архив: "))
-        .map(|s| s.rsplit_once(" (").map(|(p, _)| p).unwrap_or(s).trim().to_string())
+        .find_map(|l| l.trim().strip_prefix("carry-export "))
+        .and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok())
+        .and_then(|v| v.get("archive").and_then(|a| a.as_str()).map(|s| s.to_string()))
+        .or_else(|| {
+            text.lines()
+                .find_map(|l| l.trim().strip_prefix("архив: "))
+                .map(|s| s.rsplit_once(" (").map(|(p, _)| p).unwrap_or(s).trim().to_string())
+        })
         .filter(|p| !p.is_empty());
     match archive {
         Some(path) if out.status.success() => Ok(path),

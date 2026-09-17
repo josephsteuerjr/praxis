@@ -334,7 +334,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.cmd == "export":
         passport = export(Path(args.config), Path(args.out) if args.out else None)
+        # Человеку — фраза, машине — строка. ⚠ Раньше окно и установщик доставали
+        # путь к архиву, отрезая от этой фразы префикс «архив: »: один перевод
+        # интерфейса — и успешный экспорт показывался бы человеку провалом,
+        # хотя архив лежит на диске готовый. Хуже исхода нет: агента экспортируют
+        # перед переустановкой.
         print(f"архив: {passport['archive']} ({passport['archive_bytes'] / 1e6:.1f} МБ)")
+        print("carry-export " + json.dumps(
+            {"archive": str(passport["archive"]), "bytes": int(passport["archive_bytes"])},
+            ensure_ascii=False))
         _print_passport(passport)
         return 0
     if args.cmd == "show":

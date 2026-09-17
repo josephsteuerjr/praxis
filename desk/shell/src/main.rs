@@ -1642,14 +1642,32 @@ fn service_state_blocking() -> String {
     cmd.args(["query", product_fs()]);
     match run_hidden_for(&mut cmd, Duration::from_secs(15)) {
         Ok(out) if out.status.success() => {
-            let text = String::from_utf8_lossy(&out.stdout).to_uppercase();
+            // Состояние службы — ASCII (`RUNNING`, `START_PENDING`), sc.exe его не
+            // переводит; но ВЕСЬ остальной ответ идёт в кодировке консоли, и
+            // `from_utf8_lossy` превращал его в «□» — включая строку ошибки, по
+            // которой только и можно понять, чем именно кончился запрос.
+            let text = console_text(&out.stdout).to_uppercase();
             if text.contains("RUNNING") || text.contains("START_PENDING") {
                 "running".to_string()
             } else {
                 "stopped".to_string()
             }
         }
-        _ => "absent".to_string(),
+        // ⚠ Здесь сходятся ДВА разных случая: службы нет — и sc.exe не ответил за
+        // пятнадцать секунд. Для окна оба значат «нечего показывать», но молчать
+        // о втором нельзя: именно такое молчание и держало дефект кодировки
+        // незамеченным месяц.
+        Err(why) => {
+            log_line(&format!("состояние службы не спрошено: {why}"));
+            "absent".to_string()
+        }
+        Ok(out) => {
+            let said = console_text(&out.stderr);
+            if !said.is_empty() {
+                log_line(&format!("sc query ответил отказом: {said}"));
+            }
+            "absent".to_string()
+        }
     }
 }
 
@@ -2250,7 +2268,10 @@ fn runas_refusal(code: u32) -> String {
     match code {
         // ERROR_CANCELLED. Сюда же Windows кладёт политику, которая отклоняет
         // запросы повышения молча, — поэтому названы обе причины.
-        1223 => "нужны права администратора: в окне Windows выбрано «Нет» либо повышение \
+        // ⚠ Кнопку в окне UAC подписывает Windows на языке СВОЕГО языкового пакета, а не
+        // мы: называть её здесь значит обещать человеку слово, которого он на экране не
+        // видел. На английской системе под нашей фразой стоит Yes/No уже сегодня.
+        1223 => "нужны права администратора: повышение не подтверждено либо \
                  запрещено политикой этого компьютера"
             .into(),
         // ERROR_ACCESS_DISABLED_BY_POLICY.
@@ -2887,7 +2908,7 @@ fn broker_confirm_text(wish: &BrokerWish) -> String {
         "Агент просит выполнить команду {door}.\n\n\
          Зачем — его слова, не проверенный факт:\n{}\n\n\
          Что запустится ровно в этом виде:\n{shown}\n\n\
-         Выполнить? «Нет» — отказ, он тоже будет записан в журнал.",
+         Выполнить? Отказ тоже будет записан в журнал.",
         wish.why
     )
 }
@@ -4993,10 +5014,20 @@ async fn carry_export() -> Result<String, String> {
         // Память агента бывает на сотни мегабайт; десять минут — не бесконечность.
         let out = run_hidden_for(&mut cmd, Duration::from_secs(600))?;
         let text = String::from_utf8_lossy(&out.stdout).to_string();
+        // ⚠ Путь к архиву берём из МАШИННОЙ строки `carry-export {json}`, а не из
+        // человеческой фразы: та переводится вместе с интерфейсом, и разбор по
+        // префиксу «архив: » объявил бы удачный экспорт провалом. Разбор фразы
+        // остаётся запасным — на случай, когда рядом лежит app/ прошлой поставки.
         let archive = text
             .lines()
-            .find_map(|l| l.trim().strip_prefix("архив: "))
-            .map(|s| s.rsplit_once(" (").map(|(p, _)| p).unwrap_or(s).trim().to_string())
+            .find_map(|l| l.trim().strip_prefix("carry-export "))
+            .and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok())
+            .and_then(|v| v.get("archive").and_then(|a| a.as_str()).map(|s| s.to_string()))
+            .or_else(|| {
+                text.lines()
+                    .find_map(|l| l.trim().strip_prefix("архив: "))
+                    .map(|s| s.rsplit_once(" (").map(|(p, _)| p).unwrap_or(s).trim().to_string())
+            })
             .filter(|p| !p.is_empty());
         match archive {
             Some(path) if out.status.success() => Ok(path),
@@ -5718,10 +5749,15 @@ mod tests {
 
     /// netsh отвечает в кодировке консоли. Без разбора OEM причина отказа
     /// приезжала владельцу сплошными «□».
+    ///
+    /// ⚠ Страницы спрашиваются ПОИМЁННО. Проверять `console_text` на байтах
+    /// cp866 нельзя с тех пор, как он спрашивает страницу у системы: те же два
+    /// байта — «Ок» только на русской Windows, а на английской это «Ä¬», и
+    /// такой стенд краснел бы ровно там, где код как раз прав.
     #[test]
     fn what_netsh_said_is_readable() {
-        // «Ок» в cp866.
-        assert_eq!(console_text(&[0x8E, 0xAA]), "Ок");
+        assert_eq!(decode_codepage(&[0x8E, 0xAA], 866), "Ок");
+        assert_ne!(decode_codepage(&[0x8E, 0xAA], 437), "Ок");
         assert_eq!(console_text("Ok\r\n".as_bytes()), "Ok");
         assert_eq!(console_text("уже UTF-8".as_bytes()), "уже UTF-8");
     }
