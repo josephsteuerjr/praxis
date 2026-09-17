@@ -129,6 +129,12 @@ def _dialogue(chat_id: str) -> tuple[list[dict], str]:
     """
     try:
         records = _life.hot_records(chat_id, _life.HOT_HARD_HI)
+        # ⚠ ПОТОЛОК ЛЕНТЫ В ЗНАКАХ (КЕАТ, 12.09). Сто двадцать пять записей — это
+        # потолок ПАМЯТИ, а не кадра: замер ядра дал 43,5 тыс. знаков ленты при
+        # договорённых 5 500. Свёртка подтянется следом сама (`compact_if_due`), но
+        # кадр этого хода обязан уместиться СЕЙЧАС. Для группы потолок свой: там
+        # лента — это и есть разговор, и общий порог оставлял от неё десять реплик.
+        records = _life.tape_window(records, _life.tape_chars_for(chat_id))
     except Exception:
         log.warning("горячий слой не прочитался [%s] — иду сплошным текстом",
                     chat_id, exc_info=True)

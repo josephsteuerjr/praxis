@@ -1,1 +1,807 @@
-{}
+{
+  "setup.typewriter.next_finish": {
+    "en": "e349914f",
+    "fr": "e349914f",
+    "zh": "e349914f"
+  },
+  "setup.typewriter.next": {
+    "en": "dc9450d2",
+    "fr": "dc9450d2",
+    "zh": "dc9450d2"
+  },
+  "setup.name.title": {
+    "en": "5b7ce8ea",
+    "fr": "5b7ce8ea",
+    "zh": "5b7ce8ea"
+  },
+  "setup.name.agent.label": {
+    "en": "ba527ef1",
+    "fr": "ba527ef1",
+    "zh": "ba527ef1"
+  },
+  "setup.name.agent.placeholder": {
+    "en": "14b2af10",
+    "fr": "14b2af10",
+    "zh": "14b2af10"
+  },
+  "setup.name.owner.label": {
+    "en": "1a399e1b",
+    "fr": "1a399e1b",
+    "zh": "1a399e1b"
+  },
+  "setup.name.owner.placeholder": {
+    "en": "320ddc73",
+    "fr": "320ddc73",
+    "zh": "320ddc73"
+  },
+  "setup.name.explain.constitution.title": {
+    "en": "38125fad",
+    "fr": "38125fad",
+    "zh": "38125fad"
+  },
+  "setup.name.explain.constitution.text": {
+    "en": "aeefef8a",
+    "fr": "aeefef8a",
+    "zh": "aeefef8a"
+  },
+  "setup.name.explain.owner.title": {
+    "en": "78572ef3",
+    "fr": "78572ef3",
+    "zh": "78572ef3"
+  },
+  "setup.name.explain.owner.text": {
+    "en": "061c3ecd",
+    "fr": "061c3ecd",
+    "zh": "061c3ecd"
+  },
+  "setup.name.error.agent_empty": {
+    "en": "5413f959",
+    "fr": "5413f959",
+    "zh": "5413f959"
+  },
+  "setup.name.error.owner_empty": {
+    "en": "299ac3dc",
+    "fr": "299ac3dc",
+    "zh": "299ac3dc"
+  },
+  "setup.constitution.title": {
+    "en": "8a9346b6",
+    "fr": "8a9346b6",
+    "zh": "8a9346b6"
+  },
+  "setup.constitution.explain.root.title": {
+    "en": "1b250082",
+    "fr": "1b250082",
+    "zh": "1b250082"
+  },
+  "setup.constitution.explain.root.text": {
+    "en": "103b78f8",
+    "fr": "103b78f8",
+    "zh": "103b78f8"
+  },
+  "setup.constitution.explain.edit.title": {
+    "en": "1f28e45f",
+    "fr": "1f28e45f",
+    "zh": "1f28e45f"
+  },
+  "setup.constitution.explain.edit.text": {
+    "en": "e397d709",
+    "fr": "e397d709",
+    "zh": "e397d709"
+  },
+  "setup.constitution.accept.label": {
+    "en": "527e5509",
+    "fr": "527e5509",
+    "zh": "527e5509"
+  },
+  "setup.constitution.error.empty": {
+    "en": "943ccbda",
+    "fr": "943ccbda",
+    "zh": "943ccbda"
+  },
+  "setup.constitution.error.not_accepted": {
+    "en": "060a5b16",
+    "fr": "060a5b16",
+    "zh": "060a5b16"
+  },
+  "setup.keys.title": {
+    "en": "dcab2054",
+    "fr": "dcab2054",
+    "zh": "dcab2054"
+  },
+  "setup.keys.lead": {
+    "en": "10668e9f",
+    "fr": "10668e9f",
+    "zh": "10668e9f"
+  },
+  "setup.keys.money": {
+    "en": "2f6fcb7e",
+    "fr": "2f6fcb7e",
+    "zh": "2f6fcb7e"
+  },
+  "setup.keys.provider.api.title": {
+    "en": "7a63ad80",
+    "fr": "7a63ad80",
+    "zh": "7a63ad80"
+  },
+  "setup.keys.provider.api.text": {
+    "en": "56f4cbc5",
+    "fr": "56f4cbc5",
+    "zh": "56f4cbc5"
+  },
+  "setup.keys.provider.anthropic.text": {
+    "en": "5c06578d",
+    "fr": "5c06578d",
+    "zh": "5c06578d"
+  },
+  "setup.keys.provider.chatgpt.title": {
+    "en": "f4a43f89",
+    "fr": "f4a43f89",
+    "zh": "f4a43f89"
+  },
+  "setup.keys.provider.chatgpt.text": {
+    "en": "1b16e85b",
+    "fr": "1b16e85b",
+    "zh": "1b16e85b"
+  },
+  "setup.keys.provider.local.title": {
+    "en": "1ad4d696",
+    "fr": "1ad4d696",
+    "zh": "1ad4d696"
+  },
+  "setup.keys.provider.local.text": {
+    "en": "bc2889d0",
+    "fr": "bc2889d0",
+    "zh": "bc2889d0"
+  },
+  "setup.keys.field.model": {
+    "en": "f3bdf7cc",
+    "fr": "f3bdf7cc",
+    "zh": "f3bdf7cc"
+  },
+  "setup.keys.field.base_url": {
+    "en": "da82e805",
+    "fr": "da82e805",
+    "zh": "da82e805"
+  },
+  "setup.keys.field.key": {
+    "en": "248f99a1",
+    "fr": "248f99a1",
+    "zh": "248f99a1"
+  },
+  "setup.keys.probe.button": {
+    "en": "2babf9e4",
+    "fr": "2babf9e4",
+    "zh": "2babf9e4"
+  },
+  "setup.keys.probe.progress": {
+    "en": "1bdd492f",
+    "fr": "1bdd492f",
+    "zh": "1bdd492f"
+  },
+  "setup.keys.explain.api.title": {
+    "en": "77e5917e",
+    "fr": "77e5917e",
+    "zh": "77e5917e"
+  },
+  "setup.keys.explain.api.text": {
+    "en": "9d778cd5",
+    "fr": "9d778cd5",
+    "zh": "9d778cd5"
+  },
+  "setup.keys.explain.anthropic.title": {
+    "en": "04ce954c",
+    "fr": "04ce954c",
+    "zh": "04ce954c"
+  },
+  "setup.keys.explain.anthropic.text": {
+    "en": "2c97eece",
+    "fr": "2c97eece",
+    "zh": "2c97eece"
+  },
+  "setup.keys.relay.status.authorized": {
+    "en": "891a59bf",
+    "fr": "891a59bf",
+    "zh": "891a59bf"
+  },
+  "setup.keys.relay.status.pending": {
+    "en": "b93fe3ff",
+    "fr": "b93fe3ff",
+    "zh": "b93fe3ff"
+  },
+  "setup.keys.relay.status.none": {
+    "en": "5382269d",
+    "fr": "5382269d",
+    "zh": "5382269d"
+  },
+  "setup.keys.relay.login.button": {
+    "en": "59624437",
+    "fr": "59624437",
+    "zh": "59624437"
+  },
+  "setup.keys.relay.login.restart": {
+    "en": "e3539b10",
+    "fr": "e3539b10",
+    "zh": "e3539b10"
+  },
+  "setup.keys.relay.models.button": {
+    "en": "80b838e2",
+    "fr": "80b838e2",
+    "zh": "80b838e2"
+  },
+  "setup.keys.relay.models.progress": {
+    "en": "85fd6f5c",
+    "fr": "85fd6f5c",
+    "zh": "85fd6f5c"
+  },
+  "setup.keys.relay.models.count": {
+    "en": "de81533c",
+    "fr": "de81533c",
+    "zh": "de81533c"
+  },
+  "setup.keys.explain.chatgpt.title": {
+    "en": "b9f1fffe",
+    "fr": "b9f1fffe",
+    "zh": "b9f1fffe"
+  },
+  "setup.keys.explain.chatgpt.text": {
+    "en": "d71f679a",
+    "fr": "d71f679a",
+    "zh": "d71f679a"
+  },
+  "setup.keys.local.model.placeholder": {
+    "en": "ae5036bd",
+    "fr": "ae5036bd",
+    "zh": "ae5036bd"
+  },
+  "setup.keys.local.models.button": {
+    "en": "b46e8564",
+    "fr": "b46e8564",
+    "zh": "b46e8564"
+  },
+  "setup.keys.local.models.progress": {
+    "en": "25cd3cf4",
+    "fr": "25cd3cf4",
+    "zh": "25cd3cf4"
+  },
+  "setup.keys.explain.local.title": {
+    "en": "97c8d82d",
+    "fr": "97c8d82d",
+    "zh": "97c8d82d"
+  },
+  "setup.keys.explain.local.text": {
+    "en": "c8726872",
+    "fr": "c8726872",
+    "zh": "c8726872"
+  },
+  "setup.keys.effort.title": {
+    "en": "0cd85567",
+    "fr": "0cd85567",
+    "zh": "0cd85567"
+  },
+  "setup.keys.effort.unsupported": {
+    "en": "f0c92f3e",
+    "fr": "f0c92f3e",
+    "zh": "f0c92f3e"
+  },
+  "setup.keys.effort.text": {
+    "en": "f538bb04",
+    "fr": "f538bb04",
+    "zh": "f538bb04"
+  },
+  "setup.keys.telegram.title": {
+    "en": "445d9289",
+    "fr": "445d9289",
+    "zh": "445d9289"
+  },
+  "setup.keys.telegram.token.label": {
+    "en": "81ff0c13",
+    "fr": "81ff0c13",
+    "zh": "81ff0c13"
+  },
+  "setup.keys.telegram.token.placeholder": {
+    "en": "978a4520",
+    "fr": "978a4520",
+    "zh": "978a4520"
+  },
+  "setup.keys.telegram.owner_id.label": {
+    "en": "add56e0e",
+    "fr": "add56e0e",
+    "zh": "add56e0e"
+  },
+  "setup.keys.telegram.owner_id.placeholder": {
+    "en": "cc5a073f",
+    "fr": "cc5a073f",
+    "zh": "cc5a073f"
+  },
+  "setup.keys.telegram.text": {
+    "en": "b5bdd207",
+    "fr": "b5bdd207",
+    "zh": "b5bdd207"
+  },
+  "setup.keys.error.base_url": {
+    "en": "39d77b0e",
+    "fr": "39d77b0e",
+    "zh": "39d77b0e"
+  },
+  "setup.keys.error.model": {
+    "en": "8947f324",
+    "fr": "8947f324",
+    "zh": "8947f324"
+  },
+  "setup.keys.error.key": {
+    "en": "7a36ac25",
+    "fr": "7a36ac25",
+    "zh": "7a36ac25"
+  },
+  "setup.keys.error.local_base_url": {
+    "en": "b091448e",
+    "fr": "b091448e",
+    "zh": "b091448e"
+  },
+  "setup.keys.error.local_model": {
+    "en": "9537a18c",
+    "fr": "9537a18c",
+    "zh": "9537a18c"
+  },
+  "setup.keys.error.chatgpt_model": {
+    "en": "12b9ad00",
+    "fr": "12b9ad00",
+    "zh": "12b9ad00"
+  },
+  "setup.keys.error.relay_not_signed_in": {
+    "en": "dfd38810",
+    "fr": "dfd38810",
+    "zh": "dfd38810"
+  },
+  "setup.keys.error.telegram_id": {
+    "en": "f49c8207",
+    "fr": "f49c8207",
+    "zh": "f49c8207"
+  },
+  "setup.keys.models.available": {
+    "en": "6b5b2dcd",
+    "fr": "6b5b2dcd",
+    "zh": "6b5b2dcd"
+  },
+  "setup.keys.models.missing": {
+    "en": "84cc9772",
+    "fr": "84cc9772",
+    "zh": "84cc9772"
+  },
+  "setup.keys.models.more": {
+    "en": "16d18dde",
+    "fr": "16d18dde",
+    "zh": "16d18dde"
+  },
+  "setup.mode.title": {
+    "en": "21566c9a",
+    "fr": "21566c9a",
+    "zh": "21566c9a"
+  },
+  "setup.mode.lead": {
+    "en": "af13be18",
+    "fr": "af13be18",
+    "zh": "af13be18"
+  },
+  "setup.mode.fence.aria_label": {
+    "en": "c7e795e8",
+    "fr": "c7e795e8",
+    "zh": "c7e795e8"
+  },
+  "setup.mode.install_note.sandbox": {
+    "en": "5dc5e897",
+    "fr": "5dc5e897",
+    "zh": "5dc5e897"
+  },
+  "setup.mode.install_note.interactive": {
+    "en": "95b2a493",
+    "fr": "95b2a493",
+    "zh": "95b2a493"
+  },
+  "setup.mode.service.note": {
+    "en": "87ee72f8",
+    "fr": "87ee72f8",
+    "zh": "87ee72f8"
+  },
+  "setup.mode.service.no_admin": {
+    "en": "ff75208e",
+    "fr": "ff75208e",
+    "zh": "ff75208e"
+  },
+  "setup.mode.session0.off": {
+    "en": "14edb527",
+    "fr": "14edb527",
+    "zh": "14edb527"
+  },
+  "setup.mode.computer.note": {
+    "en": "5bd581ad",
+    "fr": "5bd581ad",
+    "zh": "5bd581ad"
+  },
+  "setup.mode.computer.off": {
+    "en": "8623cfd3",
+    "fr": "8623cfd3",
+    "zh": "8623cfd3"
+  },
+  "setup.mode.foot": {
+    "en": "31143779",
+    "fr": "31143779",
+    "zh": "31143779"
+  },
+  "setup.install.head": {
+    "en": "35926051",
+    "fr": "35926051",
+    "zh": "35926051"
+  },
+  "setup.install.btn_install": {
+    "en": "b7cd6fae",
+    "fr": "b7cd6fae",
+    "zh": "b7cd6fae"
+  },
+  "setup.install.model_chatgpt": {
+    "en": "b92aaa7c",
+    "fr": "b92aaa7c",
+    "zh": "b92aaa7c"
+  },
+  "setup.install.row_installed": {
+    "en": "7ca15e3d",
+    "fr": "7ca15e3d",
+    "zh": "7ca15e3d"
+  },
+  "setup.install.installed_version": {
+    "en": "95c8580c",
+    "fr": "95c8580c",
+    "zh": "95c8580c"
+  },
+  "setup.install.installed_unknown_version": {
+    "en": "a7a8fe88",
+    "fr": "a7a8fe88",
+    "zh": "a7a8fe88"
+  },
+  "setup.install.installed_agent": {
+    "en": "1c011045",
+    "fr": "1c011045",
+    "zh": "1c011045"
+  },
+  "setup.install.installed_tail": {
+    "en": "a1c1ef33",
+    "fr": "a1c1ef33",
+    "zh": "a1c1ef33"
+  },
+  "setup.install.row_agent": {
+    "en": "d5fd08be",
+    "fr": "d5fd08be",
+    "zh": "d5fd08be"
+  },
+  "setup.install.row_owner": {
+    "en": "e26fad28",
+    "fr": "e26fad28",
+    "zh": "e26fad28"
+  },
+  "setup.install.row_model": {
+    "en": "f3bdf7cc",
+    "fr": "f3bdf7cc",
+    "zh": "f3bdf7cc"
+  },
+  "setup.install.row_telegram": {
+    "en": "acdd1e73",
+    "fr": "acdd1e73",
+    "zh": "acdd1e73"
+  },
+  "setup.install.telegram_on": {
+    "en": "c2454770",
+    "fr": "c2454770",
+    "zh": "c2454770"
+  },
+  "setup.install.telegram_off": {
+    "en": "b0b81b16",
+    "fr": "b0b81b16",
+    "zh": "b0b81b16"
+  },
+  "setup.install.row_fence": {
+    "en": "3c4a44ad",
+    "fr": "3c4a44ad",
+    "zh": "3c4a44ad"
+  },
+  "setup.install.row_service": {
+    "en": "36a571f3",
+    "fr": "36a571f3",
+    "zh": "36a571f3"
+  },
+  "setup.install.service_yes": {
+    "en": "a04d20ea",
+    "fr": "a04d20ea",
+    "zh": "a04d20ea"
+  },
+  "setup.install.service_session0": {
+    "en": "fc6895e5",
+    "fr": "fc6895e5",
+    "zh": "fc6895e5"
+  },
+  "setup.install.service_no": {
+    "en": "e76d45a6",
+    "fr": "e76d45a6",
+    "zh": "e76d45a6"
+  },
+  "setup.install.row_computer": {
+    "en": "d58fe7fd",
+    "fr": "d58fe7fd",
+    "zh": "d58fe7fd"
+  },
+  "setup.install.computer_on": {
+    "en": "1eac8d36",
+    "fr": "1eac8d36",
+    "zh": "1eac8d36"
+  },
+  "setup.install.computer_off": {
+    "en": "e8a880c4",
+    "fr": "e8a880c4",
+    "zh": "e8a880c4"
+  },
+  "setup.install.row_dir": {
+    "en": "73a0f69d",
+    "fr": "73a0f69d",
+    "zh": "73a0f69d"
+  },
+  "setup.install.btn_copy_report": {
+    "en": "8ec2c584",
+    "fr": "8ec2c584",
+    "zh": "8ec2c584"
+  },
+  "setup.install.btn_retry": {
+    "en": "5189135a",
+    "fr": "5189135a",
+    "zh": "5189135a"
+  },
+  "setup.install.log_hint": {
+    "en": "406e06c0",
+    "fr": "406e06c0",
+    "zh": "406e06c0"
+  },
+  "setup.install.done_head": {
+    "en": "0b29a364",
+    "fr": "0b29a364",
+    "zh": "0b29a364"
+  },
+  "setup.install.service_running": {
+    "en": "4c4129d4",
+    "fr": "4c4129d4",
+    "zh": "4c4129d4"
+  },
+  "setup.install.service_stopped": {
+    "en": "8804e1db",
+    "fr": "8804e1db",
+    "zh": "8804e1db"
+  },
+  "setup.install.service_absent": {
+    "en": "5e294efe",
+    "fr": "5e294efe",
+    "zh": "5e294efe"
+  },
+  "setup.install.service_missing": {
+    "en": "b6cb2f8b",
+    "fr": "b6cb2f8b",
+    "zh": "b6cb2f8b"
+  },
+  "setup.install.service_failed": {
+    "en": "6404b85f",
+    "fr": "6404b85f",
+    "zh": "6404b85f"
+  },
+  "setup.install.done_where": {
+    "en": "f87098fb",
+    "fr": "f87098fb",
+    "zh": "f87098fb"
+  },
+  "setup.install.btn_open": {
+    "en": "ea1f4082",
+    "fr": "ea1f4082",
+    "zh": "ea1f4082"
+  },
+  "setup.install.open_failed": {
+    "en": "f73cd661",
+    "fr": "f73cd661",
+    "zh": "f73cd661"
+  },
+  "setup.legacy.state_running": {
+    "en": "f33145d5",
+    "fr": "f33145d5",
+    "zh": "f33145d5"
+  },
+  "setup.legacy.state_stopped": {
+    "en": "aa408684",
+    "fr": "aa408684",
+    "zh": "aa408684"
+  },
+  "setup.legacy.state_paused": {
+    "en": "4a92a586",
+    "fr": "4a92a586",
+    "zh": "4a92a586"
+  },
+  "setup.legacy.state_start_pending": {
+    "en": "4c911841",
+    "fr": "4c911841",
+    "zh": "4c911841"
+  },
+  "setup.legacy.state_stop_pending": {
+    "en": "e3d98624",
+    "fr": "e3d98624",
+    "zh": "e3d98624"
+  },
+  "setup.legacy.start_auto": {
+    "en": "5c837072",
+    "fr": "5c837072",
+    "zh": "5c837072"
+  },
+  "setup.legacy.start_manual": {
+    "en": "40d9db27",
+    "fr": "40d9db27",
+    "zh": "40d9db27"
+  },
+  "setup.legacy.start_disabled": {
+    "en": "e3ad050f",
+    "fr": "e3ad050f",
+    "zh": "e3ad050f"
+  },
+  "setup.legacy.account_system": {
+    "en": "09d2e388",
+    "fr": "09d2e388",
+    "zh": "09d2e388"
+  },
+  "setup.legacy.account_other": {
+    "en": "dfb54b7e",
+    "fr": "dfb54b7e",
+    "zh": "dfb54b7e"
+  },
+  "setup.legacy.account_unknown": {
+    "en": "b40a5aea",
+    "fr": "b40a5aea",
+    "zh": "b40a5aea"
+  },
+  "setup.legacy.head": {
+    "en": "1f25097a",
+    "fr": "1f25097a",
+    "zh": "1f25097a"
+  },
+  "setup.legacy.lead_one": {
+    "en": "0b72dded",
+    "fr": "0b72dded",
+    "zh": "0b72dded"
+  },
+  "setup.legacy.lead_many": {
+    "en": "d84a35e0",
+    "fr": "d84a35e0",
+    "zh": "d84a35e0"
+  },
+  "setup.legacy.why_bad_title": {
+    "en": "c8e994b3",
+    "fr": "c8e994b3",
+    "zh": "c8e994b3"
+  },
+  "setup.legacy.why_bad_body": {
+    "en": "76750c16",
+    "fr": "76750c16",
+    "zh": "76750c16"
+  },
+  "setup.legacy.optional_title": {
+    "en": "2a86ae00",
+    "fr": "2a86ae00",
+    "zh": "2a86ae00"
+  },
+  "setup.legacy.optional_body": {
+    "en": "332077c7",
+    "fr": "332077c7",
+    "zh": "332077c7"
+  },
+  "setup.legacy.card_title": {
+    "en": "96415449",
+    "fr": "96415449",
+    "zh": "96415449"
+  },
+  "setup.legacy.btn_remove": {
+    "en": "d67e80cc",
+    "fr": "d67e80cc",
+    "zh": "d67e80cc"
+  },
+  "setup.legacy.btn_removing": {
+    "en": "a97c3726",
+    "fr": "a97c3726",
+    "zh": "a97c3726"
+  },
+  "setup.legacy.uac_notice": {
+    "en": "7b42651e",
+    "fr": "7b42651e",
+    "zh": "7b42651e"
+  },
+  "setup.legacy.remove_failed": {
+    "en": "a32760d6",
+    "fr": "a32760d6",
+    "zh": "a32760d6"
+  },
+  "setup.uninstall.head": {
+    "en": "2a0b544d",
+    "fr": "2a0b544d",
+    "zh": "2a0b544d"
+  },
+  "setup.uninstall.lead": {
+    "en": "43bd2de8",
+    "fr": "43bd2de8",
+    "zh": "43bd2de8"
+  },
+  "setup.uninstall.btn_remove": {
+    "en": "d4b51f7a",
+    "fr": "d4b51f7a",
+    "zh": "d4b51f7a"
+  },
+  "setup.uninstall.btn_remove_purge": {
+    "en": "74a93b2d",
+    "fr": "74a93b2d",
+    "zh": "74a93b2d"
+  },
+  "setup.uninstall.keep_body": {
+    "en": "26e302f4",
+    "fr": "26e302f4",
+    "zh": "26e302f4"
+  },
+  "setup.uninstall.purge_body": {
+    "en": "27378f5f",
+    "fr": "27378f5f",
+    "zh": "27378f5f"
+  },
+  "setup.uninstall.explain_title": {
+    "en": "39db928b",
+    "fr": "39db928b",
+    "zh": "39db928b"
+  },
+  "setup.uninstall.keep_title": {
+    "en": "54b158df",
+    "fr": "54b158df",
+    "zh": "54b158df"
+  },
+  "setup.uninstall.keep_text": {
+    "en": "b624c77b",
+    "fr": "b624c77b",
+    "zh": "b624c77b"
+  },
+  "setup.uninstall.purge_title": {
+    "en": "d760b4ba",
+    "fr": "d760b4ba",
+    "zh": "d760b4ba"
+  },
+  "setup.uninstall.purge_text": {
+    "en": "204ee08b",
+    "fr": "204ee08b",
+    "zh": "204ee08b"
+  },
+  "setup.uninstall.running": {
+    "en": "a97c3726",
+    "fr": "a97c3726",
+    "zh": "a97c3726"
+  },
+  "setup.uninstall.failed_prefix": {
+    "en": "7709559c",
+    "fr": "7709559c",
+    "zh": "7709559c"
+  },
+  "setup.uninstall.result_failed": {
+    "en": "2f7d0e93",
+    "fr": "2f7d0e93",
+    "zh": "2f7d0e93"
+  },
+  "setup.uninstall.result_partial": {
+    "en": "573bfebf",
+    "fr": "573bfebf",
+    "zh": "573bfebf"
+  },
+  "setup.uninstall.result_ok": {
+    "en": "23fd8855",
+    "fr": "23fd8855",
+    "zh": "23fd8855"
+  },
+  "setup.uninstall.btn_close": {
+    "en": "a7a40336",
+    "fr": "a7a40336",
+    "zh": "a7a40336"
+  }
+}
