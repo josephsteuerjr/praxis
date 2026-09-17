@@ -1046,8 +1046,11 @@ async def _initialize_joined_room(chat_id: str, entity, *, title: str | None = N
             log.info("новичок-протокол [%s]: профиль уже есть — не сбрасываю (re-add)", chat_id)
         return
     rooms.set_mode(chat_id, "normal", reason="", set_by=set_by)
-    rooms.profile_update(chat_id, engagement="reflective")
-    log.info("новичок-протокол [%s]: вошла в «%s», режим normal/reflective", chat_id, title or "?")
+    # Участие НЕ штампуем: явная строка в профиле сильнее любого умолчания и
+    # остаётся там навсегда — отличить наш штамп от её выбора нечем. Умолчание
+    # живёт в одном месте (rooms.default_policy), и новая комната получает его.
+    log.info("новичок-протокол [%s]: вошла в «%s», режим normal/%s",
+             chat_id, title or "?", rooms.default_policy()["engagement"])
     lines: list[str] = []
     try:
         msgs = await client.get_messages(entity, limit=BACKFILL_N)
@@ -4916,14 +4919,22 @@ def _sync_resolve_id(ref):
 
 
 def _sync_search_chats(query: str) -> str:
+    """Диалоги Telegram по ИМЕНИ. Пустая строка — совпадений нет (словами скажет вызывающий).
+
+    15.09: сверка идёт через общий латинский скелет (`rooms.latin_fold`), а не по сырым
+    строкам. Прежняя подстрочная сверка не могла совпасть между алфавитами: запрос
+    «уробор» против имени «Ouroboros AI» давал «нет» при живой комнате в её же памяти.
+    """
     async def _coro():
-        q, out = query.lower(), []
+        q, out = rooms.latin_fold(query).strip(), []
+        if not q:
+            return ""
         async for d in client.iter_dialogs():
-            if q in (d.name or "").lower():
+            if q in rooms.latin_fold(d.name or ""):
                 out.append(f"{d.name}: {d.id}")
                 if len(out) >= 10:
                     break
-        return "\n".join(out) or "(ничего не нашла)"
+        return "\n".join(out)
     return _threadsafe_result(_coro, 30)
 
 

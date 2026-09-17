@@ -73,14 +73,28 @@ keep their own cores, and a fix made here is not carried across by default. The
 consequence is stated rather than hidden — the core's bridge keeps the old log line until
 someone changes it there.
 
-### Existing only here (3)
+### Existing only here (8)
 
 | `sitecustomize.py` | `test_atomic_replace_retry.py` | `test_compact_refresh.py` |
+| `tool_text_en.py` | `test_tools_en_1509.py` | `test_tape_hands_1609.py` |
+| `test_addressed_by_default_1609.py` | `test_role_envelope_1509.py` | `test_search_chats_1509.py` |
+| `test_media_survives_note_1609.py` | `test_brain_fallback_pin_1509.py` | |
 
-## Differing and NOT declared (29) — the core moved ahead, the edition has not caught up
+⚠ The last eight arrived on 17.09 with the 14→16.09 port. `tool_text_en.py` is a *copy* of
+the core file, not an edition invention — it counts as "only here" because the mirror in
+`praxis/` is still the snapshot of 14.09 and does not have it yet. The same holds for six of
+the seven test modules. They stop being "only here" the moment the mirror is re-exported;
+until then this line is the honest statement of where they came from.
+
+## Differing and NOT declared (35) — the core moved ahead, the edition has not caught up
 
 These are not edition differences and are deliberately not copied into `core/`: they are
-her own work of 13–14.09 that the edition has not taken yet — the recall index rework
+her own work of 13–14.09 that the edition has not taken yet, plus — since 17.09 —
+six files the port changed *ahead* of the mirror (`rooms.py`, `frame_layout.py`,
+`group_context.py`, `brain.py` and the two above them): the mirror in `praxis/` is the
+snapshot of 14.09 (`e39af273`), and these carry 16.09 work. They will fall back into the
+declared set when the mirror is re-exported, and that re-export is bookkeeping, not product —
+see the note at the end. The rest is — the recall index rework
 (bounded foreground validation, durable background refresh), the memory-life and
 provenance changes behind it, `people.py`, `sleep.py`, `tasks.py`, `run_resume.py`,
 `frame_trace.py`, `frame_layout.py`, and the tests that moved with them. Copying them into

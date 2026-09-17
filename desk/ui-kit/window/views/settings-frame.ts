@@ -480,7 +480,12 @@ function mountSettings(container: HTMLElement, center: HTMLElement) {
         if (!first) return;
         for (const l of links) l.setAttribute("aria-current", String(l.getAttribute("href") === "#" + first.id));
       },
-      { root: container, rootMargin: "-10% 0px -70% 0px" },
+      // ⚠ Корень — тот, кто ВПРАВДУ прокручивается. До 17.09 контейнером был сам #view
+      // (он же `.scroll`), и `root: container` случайно совпадал со скроллером. Теперь
+      // раздел лежит в своём узле `.page` без собственного overflow — без этой строки
+      // наблюдатель смотрел бы в неподвижный бокс, и оглавление настроек перестало бы
+      // ехать за карточками МОЛЧА, без единой ошибки в консоли.
+      { root: container.closest(".scroll") ?? container, rootMargin: "-10% 0px -70% 0px" },
     );
     for (const c of cards) io.observe(c);
   }

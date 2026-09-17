@@ -88,6 +88,7 @@ import stewardship
 import tasks
 import telegram_topics
 import tool_offerings
+import tool_text_en
 import turns
 import unanswered
 import webtool
@@ -2503,18 +2504,71 @@ _TRANSPORT_CLOSED_LINES = {
 }
 
 
-def tool_search_chats(query: str) -> str:
-    """Поискать по именам своих диалогов/чатов (через Telethon)."""
-    fn = _TELETHON.get("search_chats")
-    if not fn:
-        return "Недоступно (нет связи с Telethon)."
-    closed = _TRANSPORT_CLOSED_LINES.get(telegram_transport_status())
-    if closed:
-        return closed
+def _rooms_block(query: str) -> str:
+    """Её собственные профили комнат под запрос — телом ответа, а не сноской.
+
+    Печатается режим: замороженная комната молчит не потому, что её нет, и путать эти два
+    состояния рука больше не имеет права.
+    """
     try:
-        return str(fn(query))
-    except Exception as e:
-        return f"[ошибка] {e}"
+        hits = rooms.search_profiles(query)
+    except Exception:
+        log.debug("поиск по профилям комнат не собрался", exc_info=True)
+        return ""
+    if not hits:
+        return ""
+    lines = []
+    for h in hits:
+        mode = str(h.get("mode") or "normal")
+        tail = rooms.MODE_INTAKE.get(mode)
+        word = rooms.MODE_WORD.get(mode, mode)
+        lines.append(f"— {h['title']} · {h['chat_id']} · режим «{word}»"
+                     + (f" ({tail})" if tail else "")
+                     + f" · нашлось по: {h['where']}")
+    return ("Мои профили комнат (memory/rooms/, читать целиком — inbox/файлом, "
+            "менять режим — manage_room):\n" + "\n".join(lines))
+
+
+def tool_search_chats(query: str) -> str:
+    """Поискать комнату: по именам диалогов Telegram И по своим профилям комнат.
+
+    ⚠ 15.09.2026, ЖИВОЙ СЛУЧАЙ. Её спросили про «Ouroboros AI»; она позвала эту руку с
+    запросом «уробор», получила «(ничего не нашла)» и ушла искать в веб, ответив в группу
+    «разобралась, что смогла извне». Комната была у неё в памяти вместе со сводкой
+    участников и тем, а входа оттуда не было пятый день — по ЕЁ ЖЕ решению заморозить.
+    Рука сказала «нет» про то, чего не смотрела, и не назвала границы своего взгляда.
+    Теперь: сверка имён идёт между алфавитами (`rooms.latin_fold`), профили комнат
+    смотрятся всегда, режим комнаты называется вслух, а пустой ответ говорит, ЧТО именно
+    было просмотрено и чем искать дальше. Отсутствие транспорта больше не отменяет
+    ответа: её собственная память доступна и при закрытом Telegram.
+    """
+    mine = _rooms_block(query)
+    fn = _TELETHON.get("search_chats")
+    closed = _TRANSPORT_CLOSED_LINES.get(telegram_transport_status()) if fn else None
+    if not fn:
+        dialogs, why = "", "диалоги Telegram не смотрела: нет связи с Telethon"
+    elif closed:
+        dialogs, why = "", f"диалоги Telegram не смотрела: {closed}"
+    else:
+        try:
+            dialogs, why = str(fn(query)).strip(), ""
+        except Exception as e:
+            dialogs, why = "", f"диалоги Telegram не смотрела: [ошибка] {e}"
+    parts = []
+    if dialogs:
+        parts.append("Диалоги Telegram по имени:\n" + dialogs)
+    if mine:
+        parts.append(mine)
+    if parts:
+        if why:
+            parts.append(why + ".")
+        return "\n\n".join(parts)
+    scope = ("Искала по именам диалогов Telegram и по своим профилям комнат "
+             "(memory/rooms/) — совпадений нет."
+             if not why else why + "; по своим профилям комнат совпадений нет.")
+    return (scope + " Это про ИМЕНА и мои записки о комнатах, не про текст сообщений: "
+            "по словам внутри переписки — `search_private_messages`, конкретную комнату "
+            "по id или @имени — `read_chat`.")
 
 
 def tool_read_chat(chat_ref: str, limit: int = 30) -> str:
@@ -6472,13 +6526,29 @@ GET_ID_TOOL = {
     },
 }
 
+# ⚠ 15.09.2026. Параметр `query` стоял БЕЗ ОПИСАНИЯ, и это половина живого промаха: схема
+# говорила «строка», а чем эта строка должна быть — именем, id или словом из переписки —
+# не говорила ничего. Она положила туда слово темы кириллицей, получила «нет» и ушла в веб.
+# Описание руки теперь называет ОБА источника и прямо отводит текст сообщений к соседней
+# руке: граница взгляда должна стоять в схеме, а не выясняться по пустому ответу.
 SEARCH_CHATS_TOOL = {
     "name": "search_chats",
-    "description": ("Поискать по именам своих диалогов/чатов. Это внутренний обзор: "
-                    "найденный адрес не является разрешением раскрывать чужую личную информацию."),
+    "description": ("Найти комнату: по именам диалогов Telegram И по моим собственным "
+                    "запискам о комнатах (memory/rooms — название, id, моя сводка). "
+                    "Отвечает и режимом комнаты: у замороженной входящих нет, и это "
+                    "сказано прямо. Текст сообщений тут НЕ ищется — для него "
+                    "search_private_messages; конкретную комнату по адресу — read_chat. "
+                    "Это внутренний обзор: найденный адрес не является разрешением "
+                    "раскрывать чужую личную информацию."),
     "input_schema": {
         "type": "object",
-        "properties": {"query": {"type": "string"}},
+        "properties": {"query": {
+            "type": "string",
+            "description": ("имя чата, его id или слово из моей записки о комнате. "
+                            "Алфавит значения не имеет: «уробор» найдёт «Ouroboros AI». "
+                            "Слово из переписки сюда класть бесполезно — это поиск по "
+                            "именам и моим запискам, не по сообщениям"),
+        }},
         "required": ["query"],
     },
 }
@@ -8954,7 +9024,31 @@ def _build_prompt_parts(
          "в ходе, а результат приходит репликой. Обещание сходить и посмотреть — не работа; "
          "собеседник увидит только обещание.\n"
          "Для болтовни, шутки и мнения ничего этого не нужно: там мой ответ и есть "
-         "результат.\n")
+         "результат.\n"
+         # 15.09.2026, ПРО ЯЗЫК И ПРО ФОРМУ. Голос переключили на glm-5.3, и за сутки
+         # ЧЕТЫРНАДЦАТЬ ходов кончились `delivery_skipped: turn ended without a reply
+         # hand`: модель писала готовый, верный по смыслу ответ обычным текстом и не звала
+         # `reply` вовсе. Все на glm, ни одного на sol/astra/terra.
+         #
+         # Корень оказался НЕ в языке правила и не в «слабой модели»: кадр сам показывал
+         # образец. Текст ниже остаётся: он называет механику, а не отчитывает.
+         #
+         # ⚠ ПОРТ 17.09: пункты 2 и 3 ЗДЕСЬ ДРУГИЕ, и это не вольность. Ядро обещает
+         # машинную шапку `[root; message #123; …Z; Name]` — в поставке её нет НИ НА ОДНОЙ
+         # поверхности: окно отдаёт голое тело строки, группа — `Отправитель: текст`,
+         # личка — снова голое тело. Обещать образец, которого в кадре не будет, значит
+         # ровно то, чем этот дефект и лечится, только с другой стороны. Пункт 3 ядра
+         # («твои прошлые ходы — просто слова») под поднятой лентой-вызовами тоже неверен:
+         # они едут вызовами `reply` с расписками. Оба переписаны под то, что тут вправду.
+         "\nHow speaking works here, in English because the voice may not read Russian:\n"
+         "1. `reply` is the only way your words reach a person. Text written outside a "
+         "tool call is a note to yourself: nothing is sent, and the turn ends quietly.\n"
+         "2. Lines quoted with `>` are what other people said, delivered to you. The "
+         "quoting is done by the renderer so you can tell their words from yours; it is "
+         "something to read, never a form to write in.\n"
+         "3. Your own earlier turns appear the way you actually made them: as calls to "
+         "`reply`, each followed by its delivery receipt. That is the shape of speech "
+         "here — the words, and `reply` to carry them.\n")
         if work_loop.reply_hand_enabled() else
         ("\n\n## В разговоре можно работать, а не только отвечать\n"
          "Ход в чате не обязан кончаться первым же текстом. Инструменты здесь те же, что в "
@@ -11277,6 +11371,60 @@ def run_pending_text_deliveries(*, limit: int = 20) -> list[dict]:
     return pending
 
 
+def run_pending_media_deliveries(*, limit: int = 20) -> list[dict]:
+    """Прогоны, у которых durable-намерение на медиа есть, а расписки о доставке нет.
+
+    ⚑ ПРАВКА ИЗДАНИЯ, КОТОРОЙ В ЯДРЕ НЕТ, И ПОЧЕМУ ОНА ОБЯЗАТЕЛЬНА. В ядре очередь медиа
+    разбирает исходящая граница mtproto — там она и живёт. В издании этой границы нет:
+    харнесс поднимает свой транспорт, и спул медиа не разбирает НИКТО. Пока ход шёл живьём,
+    файл уезжал конвертом; но ход, поднятый заново (`continuity.resume_due` каждые 45 с),
+    кладёт файл в спул — и он остаётся там навсегда.
+
+    Значит правка «файл переживает пустой текст хода» без этой функции делает не лучше, а
+    ХУЖЕ: раньше файл выбрасывался молча и ход закрывался, теперь долг доставки не гасится
+    и прогон не терминализуется — он будет подниматься каждые 45 секунд.
+
+    Возвращается ровно то, что нужно доставщику: чей прогон, в какую комнату, и какие
+    именно предметы очереди ещё ждут. Сами предметы берутся из спула по queue_id — их
+    содержимое неизменяемо, и придумывать его заново здесь не из чего.
+    """
+    pending: list[dict] = []
+    spool = _media_spool()
+    for run_id in _runs().live_run_ids():
+        try:
+            manifest = _runs().manifest(run_id)
+            if str(manifest.get("status") or "") in run_manager.TERMINAL_STATUSES:
+                continue
+            if (manifest.get("control") or {}).get("action") in {"pause", "cancel"}:
+                continue
+            evidence = _delivery_evidence(run_id)
+            waiting = [str(queue_id) for queue_id
+                       in evidence.get("pending_media_queue_ids") or ()]
+            if not waiting:
+                continue
+            context = _runs().context(run_id)
+            room = str(getattr(context, "delivery_chat_id", "") or "")
+            by_id = {item.queue_id: item for item in spool.pending()}
+            items = [by_id[queue_id] for queue_id in waiting if queue_id in by_id]
+            if not items:
+                # Долг объявлен, а предметов в спуле нет: файл уже забрали или он истёк.
+                # Молчать об этом нельзя — иначе прогон будет подниматься вечно.
+                log.info("медиа-долг прогона без предметов в спуле [%s]: %s",
+                         run_id, ", ".join(waiting))
+                continue
+            pending.append({
+                "run_id": run_id,
+                "status": str(manifest.get("status") or ""),
+                "conversation_id": room,
+                "items": items,
+            })
+            if len(pending) >= max(1, int(limit)):
+                break
+        except Exception:
+            log.warning("durable media plan scan failed [%s]", run_id, exc_info=True)
+    return pending
+
+
 def run_delivery_text_reconcile(run_id: str) -> bool:
     """Commit the aggregate receipt after every planned chunk has an ack."""
     if not run_id:
@@ -12146,6 +12294,28 @@ def _resume_result_image(run_id: str, call_name: str, call_input: dict,
              "origin": "computer-observe"},)
 
 
+def _media_outlives_an_empty_draft(outbound, draft: str, silence: dict | None) -> bool:
+    """Переживает ли поднятое медиа пустой выход гарда. Три условия, все обязательны.
+
+    * медиа вообще есть — иначе решать нечего;
+    * ЧЕРНОВИК БЫЛ ПУСТ. Значит гард ничего не придерживал: проводить было нечего.
+      Непустой черновик, ОБНУЛЁННЫЙ гардом (кред-пол, вердикт советника `deny`), — это
+      отказ, и он накрывает вложение тоже: тем же секретом можно поделиться картинкой.
+      Граница закреплена `test_perceive`
+      (`test_a_receipt_that_really_held_her_text_still_stays_silent`);
+    * она не объявляла молчание рукой `stay_silent` — та держит и текст, и медиа
+      («text and media, if they are still assembled after it, will not go out» в описании
+      самой руки), и живой путь зовёт там `_drop_outbound`.
+
+    ⚠ Слово Егора 17.09: «молчание ПОСЛЕ отдачи файла не приводит к блокировке отдачи
+    файла». Здесь оно и записано: держит только молчание, объявленное рукой, и только
+    отказ гарда над непустым черновиком. Пустой текст сам по себе файл не отзывает.
+    """
+    if not outbound or str(draft or "").strip():
+        return False
+    return not bool((silence or {}).get("chosen"))
+
+
 class _AgentResumeRuntime:
     """Praxis bindings for one already-planned, revision-bound resume."""
 
@@ -12712,6 +12882,52 @@ class _AgentResumeRuntime:
                     "guard receipt media set differs from checkpoint")
             guarded = str(receipt.get("text") or "")
             if not guarded:
+                # Короткое замыкание обязательно: без медиа решать нечего, и платить этим
+                # обходом за каждый молчаливый ход незачем (а домашние стенды подставляют
+                # сюда фейки, которые про `_silence_from_wal` не знают).
+                silence_now = self._silence_from_wal() if self.outbound else {}
+                if _media_outlives_an_empty_draft(self.outbound, draft, silence_now):
+                    # ⚑ ПУСТОЙ ТЕКСТ — ЭТО НЕ ОТЗЫВ ФАЙЛА.
+                    #
+                    # Живой случай 16.09: она позвала `reply` дважды, потом `send_file`,
+                    # потом `end_turn`. Рука честно ответила «Подготовила document;
+                    # отправка будет только после проверки исходящего ответа» — а
+                    # проверять было нечего: под контрактом руки текст в конце хода это
+                    # заметка, черновик пуст. Ветка ниже читала пустоту как молчание и
+                    # роняла очередь: расписка `{"silent": true, "media_count": 0}`, файл
+                    # остался уликой в прогоне, и НИКТО ей об этом не сказал. Правило
+                    # писалось против контрабанды («A voice-level silence never smuggles
+                    # tool-staged media»), но `send_file` — не контрабанда мимо неё, это
+                    # её собственный вызов руки.
+                    #
+                    # ЖИВОЙ ПУТЬ ТАК УЖЕ УМЕЕТ: под поднятым контрактом руки ход с медиа и
+                    # без текста уезжает конвертом. Возобновлённый ход обязан решать так
+                    # же — один и тот же ход не может отдать файл живьём и проглотить его
+                    # после рестарта.
+                    text, route, reply_to = self._route_and_reply("")
+                    started = run_delivery_started(
+                        self.plan.run_id, chat_id=route.conversation_id,
+                        text_chars=0, media_count=len(self.outbound), text_plan=None,
+                        media_queue_ids=[item.queue_id for item in self.outbound],
+                    )
+                    if not started:
+                        raise DurableExecutionError(
+                            "durable delivery intent was not accepted")
+                    try:
+                        self._validate_current_authority()
+                        self._queue_media(reply_to=reply_to)
+                    except Exception as exc:
+                        run_delivery_blocked(
+                            self.plan.run_id,
+                            reason=("durable delivery owns staged media but queue handoff "
+                                    f"failed: {type(exc).__name__}: {exc}"),
+                        )
+                        raise
+                    return {
+                        "silent": False, "text": str(text or ""),
+                        "media_queue_ids": [item.queue_id for item in self.outbound],
+                        "conversation_id": route.conversation_id,
+                    }
                 if self.outbound:
                     # A voice-level silence never smuggles tool-staged media.
                     # Keep immutable files as evidence; do not enqueue them.
@@ -14375,7 +14591,32 @@ def offered_tools_for(ctx: "ChannelContext") -> list:
     closer = [t for t in tools if t.get("name") == "end_turn"]
     if closer:
         tools = [t for t in tools if t.get("name") != "end_turn"] + closer
-    return tools
+    # Английская проекция схем — накладкой поверх её литералов, последним шагом: её текст
+    # остаётся источником правды в этом файле, модели уезжает перевод. Рычаг PRAXIS_TOOLS_EN.
+    return tool_text_en.apply(tools)
+
+
+def reply_hand_offered(ctx: "ChannelContext", *, no_tools: bool = False,
+                       tools_override: list | None = None) -> bool:
+    """Дадут ли ей на ЭТОМ ходе руку `reply`.
+
+    ⚠ ЗАЧЕМ ОТДЕЛЬНЫЙ ОТВЕТ. Лента кадра под `PRAXIS_FRAME_TAPE_HANDS` показывает её
+    прошлые реплики вызовами `reply` — это образец, которому модель следует. Показать
+    образец руки, которой в наборе нет, значит научить звать несуществующее: вместо прозы
+    получаем выдуманный вызов, то есть тот же дефект с другой стороны. В ядре вопрос не
+    стоит — там обе ручки подняты всегда; здесь набор режется по месту, и второй случай
+    (ход без комнаты) никаким рычагом не читается.
+
+    Логика повторяет вырезы в :func:`offered_tools_for` дословно и обязана меняться
+    вместе с ними — расхождение закреплено тестом.
+    """
+    if tools_override is not None:
+        return any(t.get("name") == "reply" for t in tools_override if isinstance(t, dict))
+    if no_tools:
+        return False
+    if not work_loop.reply_hand_enabled():
+        return False
+    return ctx.chat_id is not None
 
 
 def _offered_function_names(tools: list) -> set[str]:
@@ -14863,7 +15104,13 @@ def _voice_impl(
     # действовала один ход: история клалась сюда как есть, и подделка, приехавшая ходом
     # раньше, стояла в колонке 0 следующие сто ролевых блоков. Хранилище не трогается —
     # `memory_life`, кольцо ходов и расписки держат дословный текст без единого «>».
-    messages = frame_layout.tape(history[-HISTORY_TURNS:]) + [{
+    # ⚠ `hands` — правка ИЗДАНИЯ, которой в ядре нет: лента едет вызовами `reply` только
+    # если эту руку на ходе вправду дают. Иначе кадр учит звать то, чего в наборе нет.
+    messages = frame_layout.tape(
+        history[-HISTORY_TURNS:],
+        hands=(frame_layout.tape_hands()
+               and reply_hand_offered(ctx, no_tools=no_tools, tools_override=tools_override)),
+    ) + [{
         "role": "user", "content": current_user,
     }]
     # ⚠ ПРИБОР НАД ВСЕЙ ЛЕНТОЙ, А НЕ НАД ПОСЛЕДНИМ СООБЩЕНИЕМ. `assay` судит `messages[-1]`;

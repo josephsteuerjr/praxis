@@ -315,6 +315,11 @@ export function start(opts: WindowOptions): void {
     { id: "journal", label: "Журнал", kicker: "Ошибки и пропуски", key: "7" },
     { id: "anatomy", label: "Система", kicker: "Как это устроено", key: "8" },
   ];
+  // ⚠ Отдельной константой, а НЕ девятой записью в SECTIONS: по этому же массиву строятся
+  // кнопки полки и раскладка Ctrl+1…8 — «Настройки» появились бы в полке дважды. Без
+  // подзаголовка строка кикера схлопывается (`.head-kicker:empty { display: none }`), и
+  // заголовок подпрыгивает на каждый Ctrl+`,`.
+  const SETTINGS_KICKER = "Как настроена программа";
 
   function railButton(id: View, label: string, key: string): HTMLButtonElement {
     const b = document.createElement("button");
@@ -435,12 +440,56 @@ export function start(opts: WindowOptions): void {
    * @param quiet — «обнови содержимое», а не «покажи другой раздел»: без
    *   промежуточного «читаю…» и с сохранением прокрутки.
    */
+  // ⚠ 17.09. РАЗДЕЛ — ЖИВОЙ УЗЕЛ, А НЕ ПЕРЕРИСОВАННАЯ СТРОКА.
+  //
+  // Раньше `show()` синхронно выжигал #view словом «читаю…» ДО всякой сети, а `.empty`
+  // схлопывает страницу в одно центрированное слово и разворачивает обратно. Это и был
+  // «рывок»: на каждый щелчок по вкладке окно схлопывалось и распрямлялось, даже когда
+  // содержимое уже было прочитано секунду назад.
+  //
+  // Теперь у каждого раздела свой узел: он отсоединяется и возвращается целым, вместе со
+  // своей прокруткой. Картинка встаёт в том же кадре, что и щелчок; перечитывание идёт
+  // фоном и подменяет содержимое молча.
+  const pages = new Map<View, HTMLElement>();
+  const scrolls = new Map<View, number>();
+
+  function pageFor(id: View): HTMLElement {
+    let page = pages.get(id);
+    if (!page) {
+      page = document.createElement("div");
+      page.className = "page";
+      page.dataset.page = id;
+      pages.set(id, page);
+    }
+    return page;
+  }
+
+  /** Держит ли страница несохранённый ввод владельца. */
+  function isDirty(page: HTMLElement): boolean {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && page.contains(active)
+        && (active.isContentEditable || active.matches("input, textarea, select"))) {
+      return true;
+    }
+    return [...page.querySelectorAll<HTMLTextAreaElement>("textarea")]
+      .some((t) => t.value !== t.defaultValue);
+  }
+
+  function dropPage(id: View) {
+    pages.delete(id);
+    scrolls.delete(id);
+  }
+
   async function show(id: View, opts: { quiet?: boolean } = {}) {
     const gen = ++showSeq;
+    const from = S.view;
+    // Прокрутку помним, только если в #view правда лежит узел ТОГО раздела: в него умеет
+    // писать напрямую ветка отказа загрузки комнат, и чужая прокрутка уехала бы в память.
+    if (from !== id && pages.get(from)?.parentNode === view) scrolls.set(from, view.scrollTop);
     S.view = id;
     syncRail();
     const section = SECTIONS.find((s) => s.id === id);
-    headKicker.textContent = section ? section.kicker : "";
+    headKicker.textContent = section ? section.kicker : SETTINGS_KICKER;
     if (id !== "talk") {
       headTitle.textContent = section?.label ?? "Настройки";
       headTitle.classList.remove("hand");
@@ -450,18 +499,32 @@ export function start(opts: WindowOptions): void {
     panelBox.hidden = !talking;
     app.classList.toggle("with-panel", talking);
     panelBtn.hidden = !talking;
-    const keepScroll = opts.quiet ? view.scrollTop : 0;
-    if (!opts.quiet) view.innerHTML = '<div class="empty">читаю…</div>';
+    const page = pageFor(id);
+    const blank = !page.firstChild;
+    // Смена вкладки — мгновенная: движение владелец просил у панелей, а не здесь.
+    app.classList.add("no-anim");
+    if (view.firstChild !== page) view.replaceChildren(page);
+    if (blank) page.classList.add("page-in");
+    view.scrollTop = opts.quiet ? view.scrollTop : (scrolls.get(id) ?? 0);
+    // Начатую правку фоновое перечитывание не сносит: у «Файлов» это открытый редактор,
+    // у «Настроек» — заполненная форма. Раньше их стирало молча, через полсекунды после
+    // того, как владелец увидел свой текст на месте.
+    if (!blank && isDirty(page)) {
+      announce(section?.label ?? "Настройки");
+      return;
+    }
     try {
-      await views[id].render(view);
+      await views[id].render(page);
       if (gen !== showSeq) return;
-      if (opts.quiet) view.scrollTop = keepScroll;
+      if (!opts.quiet) view.scrollTop = scrolls.get(id) ?? 0;
       announce(section?.label ?? "Настройки");
     } catch (e) {
       if (gen !== showSeq) return;
-      view.innerHTML = failHTML(e);
-      bindFail(view, () => void show(id));
+      page.innerHTML = failHTML(e);
+      bindFail(page, () => void show(id));
       announce(humanError(e).text);
+    } finally {
+      page.classList.remove("page-in");
     }
   }
 
@@ -479,6 +542,9 @@ export function start(opts: WindowOptions): void {
     S.room = room.key;
     S.roomName = room.name;
     renderRooms();
+    // ⚠ Единственное место, где сохранённый узел соврал бы: комната сменилась, а в «Чате»
+    // на кадр осталась бы чужая переписка. Узел и прокрутку выбрасываем.
+    dropPage("talk");
     void show("talk");
   }
 
