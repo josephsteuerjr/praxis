@@ -1125,3 +1125,22 @@ button:focus-visible {
     animation: none;
   }
 }
+
+/* ⚠ Единственная необратимая кнопка продукта. Красное под курсором остаётся красным в
+   ОБЕИХ темах: подмешиваем --ink, а не чёрное — в тёмной теме --ink светлый, и кнопка
+   светлеет, а не темнеет. Тот же приём, что у .btn-primary:hover, без его дефекта. */
+.btn-danger {
+  background: var(--err);
+  color: var(--accent-ink);
+}
+
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--err) 86%, var(--ink));
+}
+
+/* Пояснение, которое перестало быть утешительным: при выбранном «Удалить всё» оно
+   говорит про безвозвратность, и выглядеть должно соответственно. */
+.explain-danger {
+  border-left: 2px solid var(--err);
+  padding-left: 12px;
+}

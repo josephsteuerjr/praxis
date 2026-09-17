@@ -11448,12 +11448,35 @@ def run_delivery_text_reconcile(run_id: str) -> bool:
 _SILENT_DEFAULT_REASON = "Praxis chose silence"
 
 
-def _silent_terminal_reason(evidence: dict) -> str:
-    """Причина терминала молчаливого прогона: её решение — «silent decision»; всё, что
-    расписка delivery_skipped назвала иначе (без реплики, оборвано потолком, end_turn
-    без слова), едет дословно — иначе обрыв читался как её выбор (08.09)."""
+def _silent_terminal_reason(evidence: dict, run_id: str = "") -> str:
+    """Чем кончился прогон — ОДНОЙ лестницей, а не двумя.
+
+    Её решение молчать называется «silent decision»; всё, что расписка delivery_skipped
+    назвала иначе (без реплики, оборвано потолком, end_turn без слова), едет дословно —
+    иначе обрыв читался как её выбор (08.09).
+
+    ⚠ ПОРЯДОК ВЕТОК ЗДЕСЬ НЕСУЩИЙ, И ОН НЕ ТАКОЙ, КАК В ЯДРЕ. Издание печатает ТРИ
+    причины, и две из них содержат подстроку «without a reply hand»:
+
+        turn ended by her explicit end_turn (no speech)
+        turn ended without a reply hand: model response cut by max_tokens (N chars, …)
+        turn ended without a reply hand (not a declared silence)
+
+    Лестница ядра ветвится по этой подстроке — и молча съела бы диагностику обрыва
+    потолком, то есть самый важный из трёх случаев. Поэтому `max_tokens` проверяется
+    ПЕРВЫМ и дословно.
+
+    Рука старше любой причины: ход, где `reply` доказано унесла сообщения, молчаливым не
+    является, чем бы ни кончился текстовый путь.
+    """
+    if run_id and reply_hand_message_ids(run_id):
+        return "delivered by the reply hand"
     why = str(evidence.get("silent_reason") or "").strip()
-    return why if why and why != _SILENT_DEFAULT_REASON else "silent decision"
+    if not why or why == _SILENT_DEFAULT_REASON:
+        return "silent decision"
+    if "max_tokens" in why:
+        return why
+    return why
 
 
 def run_delivery_finalize_recovered(run_id: str, *, media_count: int = 0) -> bool:
@@ -11599,10 +11622,14 @@ def run_delivery_finalize_recovered(run_id: str, *, media_count: int = 0) -> boo
             # «silent decision» — только для её объявленного молчания (умолчание
             # расписки «Praxis chose silence», старый путь байт-в-байт). Обрыв потолком
             # и ход без реплики едут в terminal.reason своими словами.
-            reason=(_silent_terminal_reason(evidence) if evidence.get("silent")
+            reason=(_silent_terminal_reason(evidence, run_id) if evidence.get("silent")
                     else "Telegram delivery reconciled from durable receipts"),
             details={
-                "message_ids": list(evidence.get("message_ids") or ()),
+                # Номера, которые унесла рука, — когда текстового пути не было вовсе.
+                # Без них запись «доставлено» ничем не отличается от обещания.
+                "message_ids": (list(evidence.get("message_ids") or ())
+                                or (reply_hand_message_ids(run_id)
+                                    if evidence.get("silent") else [])),
                 "media_count": int(evidence.get("observed_media_count") or 0),
             },
             strict=True,
@@ -12801,7 +12828,24 @@ class _AgentResumeRuntime:
         if (run_resume.text_is_a_note(getattr(self.plan, "context", None), offered or ())
                 and not self.outbound):
             with self.bind():
-                run_delivery_completed(self.plan.run_id, silent=True)
+                # ⚠ 15.09. Здесь стояло безусловное `silent=True` с умолчанием причины
+                # «Praxis chose silence» — то есть КАЖДЫЙ ход под контрактом руки
+                # записывался её решением молчать, включая ходы, где рука уже унесла два
+                # сообщения. Егор читал это в Пульте как «опять молчит», а она — в своём
+                # же кольце ходов: писала «кусок ленты пропустила молчанием», хотя не
+                # пропускала.
+                #
+                # Пропуск ТЕКСТОВОЙ доставки здесь по-прежнему факт: последний текст под
+                # рычагом — заметка, и наружу он не идёт. Меняется только ПРИЧИНА, и
+                # только когда рука доказано говорила. Ход, где рука молчала, пишет
+                # прежнюю строку байт-в-байт.
+                run_delivery_completed(
+                    self.plan.run_id, silent=True,
+                    silent_reason=(
+                        "turn-final text is a note; the reply hand already spoke"
+                        if replies_delivered(self.plan.run_id) > 0
+                        else _SILENT_DEFAULT_REASON),
+                )
             # Форма ответа — та же, что у соседней silent-ветки этого же метода
             # (`{"silent": True, "text": "", "media_queue_ids": []}`): два разных словаря
             # из одного метода разъехались бы у читателя молча.
@@ -13509,6 +13553,54 @@ def replies_delivered(run_id: str) -> int:
     return sum(1 for row in rows
                if row.get("kind") == "direct_outbox_projection"
                and str(row.get("call_id") or "") in replies)
+
+
+def reply_hand_message_ids(run_id: str) -> list[str]:
+    """Номера сообщений, которые в ЭТОМ прогоне унесла рука `reply`, по порядку.
+
+    ⚑ ЗАЧЕМ. `replies_delivered` отвечает «сколько», а исход прогона обязан сказать
+    «какие»: без номеров запись «доставлено» ничем не отличается от обещания. Считается
+    по тем же durable-распискам — проекция приёмки прямой отправки, — так что номера
+    переживают рестарт и не зависят от живого счётчика в памяти процесса.
+
+    Расписка, которую не удалось прочитать, ПРОПУСКАЕТСЯ, а не роняет вызов: это
+    читатель ярлыка, и уронить из-за него доводку прогона значило бы чинить надпись
+    ценой самого хода. Пустой список — «номеров не нашлось», а не «рука молчала»;
+    про «молчала или нет» отвечает `replies_delivered`.
+
+    ⚠ ИЗДАНИЕ: сегодня список пуст ВСЕГДА. Проекции приёмки пишет
+    `project_direct_outbox_acceptance`, а её колбэк объявляет транспорт mtproto — в списке
+    хуков окна (`localharness/transport.py`) его нет. Функция перенесена паритетом, чтобы
+    ярлык прогона считался одной лестницей с ядром; строить на ней проверку в стенде
+    нельзя, пока хук не появится.
+    """
+    if not run_id:
+        return []
+    try:
+        rows = list(_runs().iter_events(run_id, strict=True))
+    except Exception:
+        log.debug("расписки прогона не прочитались [%s]", run_id, exc_info=True)
+        return []
+    replies = {str(row.get("call_id") or "") for row in rows
+               if row.get("kind") == "tool_started"
+               and str(row.get("tool") or row.get("name") or "") == "reply"}
+    if not replies:
+        return []
+    out: list[str] = []
+    for row in rows:
+        if (row.get("kind") != "direct_outbox_projection"
+                or str(row.get("call_id") or "") not in replies):
+            continue
+        try:
+            value = _run_result_json(run_id, row)
+        except Exception:
+            log.debug("проекция прямой отправки не прочиталась [%s]", run_id, exc_info=True)
+            continue
+        message_id = (value or {}).get("message_id")
+        if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id <= 0:
+            continue
+        out.append(str(message_id))
+    return out
 
 
 def run_direct_outbox_accepted(entry: dict) -> bool:

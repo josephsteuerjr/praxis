@@ -826,7 +826,8 @@ html:not(.native) #chrome .controls {
   font: 500 12.5px/1 var(--sans);
   color: var(--ink);
   white-space: nowrap;
-  max-width: min(46ch, 38vw);
+  /* 38cqi, а не 38vw: мерить надо свой контейнер, а не окно. */
+  max-width: min(46ch, 38cqi);
   flex: 0 0 auto;
 }
 
@@ -2411,8 +2412,18 @@ select.field-input {
   }
 
   .settings-nav {
-    display: none;
+    /* ⚠ Было `display: none` — навигации по четырнадцати карточкам не оставалось вовсе,
+       при минимуме окна 900×600. Прокрутка вбок тут не годится (у мыши нет колеса вбок,
+       а скроллбар скрыт): кладём тем же списком в два-три ряда. */
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 0 0 6px;
   }
+
+  .settings-nav a {
+    padding: 5px 9px;}
 }
 
 /* карточка «Режим» */
@@ -2679,4 +2690,27 @@ body.first-run #state {
     opacity: 1;
     transform: none;
   }
+}
+
+/* Действия читалки кадра не уезжают из вида. `.split > .reading` — скролл-контейнер, а
+   строка лежит в нём первым узлом: при кадре на сотни строк контролы уходили навсегда.
+   Градиент, а не backdrop-filter: под прилипшей полосой контент едет каждый кадр, и
+   размытие там пересчитывалось бы постоянно. `overflow` не задавать — он склипует ::after. */
+#frame-main > .tools-row {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin-bottom: 12px;
+  background: var(--ground);
+}
+
+#frame-main > .tools-row::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 12px;
+  background: linear-gradient(var(--ground), transparent);
+  pointer-events: none;
 }
