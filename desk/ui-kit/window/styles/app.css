@@ -2777,3 +2777,118 @@ body.first-run #state {
   background: linear-gradient(var(--ground), transparent);
   pointer-events: none;
 }
+
+/* ---------- раздел «Что поручить» ---------- */
+
+.learn-lead {
+  max-width: var(--col-read);
+  color: var(--ink-2);
+  margin: 0 0 22px;
+}
+
+/* ⚠ Схема не сжимается: ниже 640px подписи налезают друг на друга и читаются
+   как каша. Узкому окну даём прокрутку вбок ВНУТРИ обёртки — это лучше, чем
+   нечитаемая схема во всю ширину. */
+.dia-wrap {
+  overflow-x: auto;
+  margin: 0 0 26px;
+  padding-bottom: 4px;
+}
+
+.dia {
+  display: block;
+  width: 100%;
+  max-width: 700px;
+  min-width: 640px;
+  height: auto;
+}
+
+.dia rect {
+  stroke-width: 1;
+}
+
+.learn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  margin: 0 0 30px;
+}
+
+.learn-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  text-align: left;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+
+.learn-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-pop);
+}
+
+.learn-card b {
+  font-size: 14px;
+}
+
+.learn-what {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+/* Рамка с пропусками — тем же шрифтом, что и ввод: видно, что это заготовка
+   текста, а не подпись к нему. */
+.learn-tpl {
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.learn-how {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
+}
+
+.learn-how .card p {
+  margin: 6px 0 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+/* Полоска подсказок в пустой переписке. Уходит навсегда с первым сообщением:
+   человек, который уже написал агенту, в подсказках «с чего начать» не
+   нуждается — а место они занимают ровно там, где идёт разговор. */
+.starters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 14px 0 0;
+  justify-content: center;
+}
+
+.starter {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+
+.starter:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}

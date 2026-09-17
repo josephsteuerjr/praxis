@@ -2,6 +2,7 @@
 // владельца пузырём справа; ошибки хода на месте, человеческим словом и с
 // действием. Ход агента — в панели справа (../panel).
 import { api, mediaURL } from "../api";
+import { STARTERS } from "./learn";
 import { bindFail, esc, failHTML, fmtAge, fmtDay, fmtTime, humanError, md, q } from "../lib";
 import * as panel from "../panel";
 import { PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, type Run } from "../state";
@@ -246,8 +247,16 @@ export async function render(container: HTMLElement): Promise<void> {
   const notices = stubNotice() + brainNotice() + turnNotice() + failedNotices();
   const pend = pendingHTML();
   const emptyText = windowish ? "Напиши первое сообщение внизу." : "Архива этой комнаты ещё нет.";
+  // Четыре начала — только в пустой переписке с агентом этого окна, и только
+  // пока она пуста: с первым же сообщением полоска уходит навсегда. Тому, кто
+  // уже написал, подсказки «с чего начать» не нужны, а место они занимают ровно
+  // там, где идёт разговор.
+  const starters = windowish
+    ? `<div class="starters">${STARTERS.map((st, i) =>
+        `<button class="starter" type="button" data-starter="${i}">${esc(st.label)}</button>`).join("")}</div>`
+    : "";
   container.innerHTML = `<div class="center">${notices}<div class="feed">${
-    feedHTML || (pend ? "" : `<div class="empty"><b>Здесь пока тихо</b>${emptyText}</div>`)
+    feedHTML || (pend ? "" : `<div class="empty"><b>Здесь пока тихо</b>${emptyText}${starters}</div>`)
   }<div class="pending-box">${pend}</div></div></div>`;
   for (const b of container.querySelectorAll<HTMLButtonElement>("[data-go]")) {
     b.addEventListener("click", () => dispatchEvent(new CustomEvent("frame-go", { detail: b.dataset.go })));
@@ -257,6 +266,12 @@ export async function render(container: HTMLElement): Promise<void> {
   // в переписке открывало раздел «restart», которого нет: вместо перезапуска агента —
   // пустой экран с «Не получилось» и `reading 'render'` в подробностях. Кнопка состояния
   // в шапке разбирала те же цели правильно — расходились ровно здесь.
+  for (const b of container.querySelectorAll<HTMLButtonElement>("[data-starter]")) {
+    b.addEventListener("click", () => {
+      const st = STARTERS[Number(b.dataset.starter)];
+      if (st) dispatchEvent(new CustomEvent("frame-template", { detail: st.template }));
+    });
+  }
   for (const b of container.querySelectorAll<HTMLButtonElement>("[data-act]")) {
     b.addEventListener("click", () => {
       if (b.dataset.act === "restart") dispatchEvent(new Event("frame-restart"));

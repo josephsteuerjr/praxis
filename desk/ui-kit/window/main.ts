@@ -26,6 +26,7 @@ import * as frame from "../../ui-kit/window/views/frame";
 import * as files from "../../ui-kit/window/views/files";
 import * as journal from "../../ui-kit/window/views/journal";
 import * as anatomy from "../../ui-kit/window/views/anatomy";
+import * as learn from "../../ui-kit/window/views/learn";
 import * as settings from "../../ui-kit/window/views/settings-frame";
 
 /** Чем издание отличается от голого окна. */
@@ -302,6 +303,7 @@ export function start(opts: WindowOptions): void {
     files: '<path d="M5 3.5h7l3 3V16a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"/><path d="M11.8 3.8v3h3M6.7 10h6.6M6.7 13h4.5"/>',
     journal: '<path d="M10 3.2 17 16H3L10 3.2Z"/><path d="M10 7.5v4M10 14.1v.1"/>',
     anatomy: '<circle cx="10" cy="10" r="6.7"/><path d="M10 9v4M10 6.7v.1"/>',
+    learn: '<path d="M4 4.5h5a2 2 0 0 1 2 2V16a1.6 1.6 0 0 0-1.6-1.6H4Z"/><path d="M16 4.5h-3.4a2 2 0 0 0-1.6.8V16a1.6 1.6 0 0 1 1.6-1.6H16Z"/>',
     settings: '<circle cx="10" cy="10" r="2.6"/><path d="M10 2.8v2M10 15.2v2M2.8 10h2M15.2 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M4.9 15.1l1.4-1.4M13.7 6.3l1.4-1.4"/>',
   };
 
@@ -315,11 +317,16 @@ export function start(opts: WindowOptions): void {
     { id: "journal", label: "Журнал", kicker: "Ошибки и пропуски", key: "7" },
     { id: "anatomy", label: "Система", kicker: "Как это устроено", key: "8" },
   ];
-  // ⚠ Отдельной константой, а НЕ девятой записью в SECTIONS: по этому же массиву строятся
-  // кнопки полки и раскладка Ctrl+1…8 — «Настройки» появились бы в полке дважды. Без
-  // подзаголовка строка кикера схлопывается (`.head-kicker:empty { display: none }`), и
-  // заголовок подпрыгивает на каждый Ctrl+`,`.
-  const SETTINGS_KICKER = "Как настроена программа";
+  // ⚠ Подвал полки — ОТДЕЛЬНЫЙ массив, а не хвост SECTIONS: по SECTIONS строятся кнопки
+  // полки и раскладка Ctrl+1…8, и «Настройки» появились бы в полке дважды. Но и одинокой
+  // константой кикера он быть перестал: разделов внизу теперь два, и каждый, кто не нашёл
+  // себя в SECTIONS, получал ЧУЖОЕ имя в шапке и диктору — «Что поручить» звалось бы
+  // «Настройками». Без подзаголовка строка кикера схлопывается
+  // (`.head-kicker:empty { display: none }`), и заголовок подпрыгивает на каждый Ctrl+`,`.
+  const FOOT: Array<{ id: View; label: string; kicker: string; key: string }> = [
+    { id: "learn", label: "Что поручить", kicker: "С чего начать и как идёт ход", key: "9" },
+    { id: "settings", label: "Настройки", kicker: "Как настроена программа", key: "," },
+  ];
 
   function railButton(id: View, label: string, key: string): HTMLButtonElement {
     const b = document.createElement("button");
@@ -332,7 +339,7 @@ export function start(opts: WindowOptions): void {
   }
 
   for (const s of SECTIONS) railNav.append(railButton(s.id, s.label, s.key));
-  railBottom.append(railButton("settings", "Настройки", ","));
+  for (const f of FOOT) railBottom.append(railButton(f.id, f.label, f.key));
   // Кого показывает окно — первой строкой полки, и только когда агентов в
   // установке больше одного (см. agents.ts).
   mountSwitch(q<HTMLElement>("#rail"));
@@ -395,6 +402,11 @@ export function start(opts: WindowOptions): void {
     } else if (e.code === "Comma") {
       e.preventDefault();
       void show("settings");
+    } else if (e.code === "Digit9") {
+      // Подвал полки: раздел «Что поручить». Ctrl+1…8 остаются за SECTIONS —
+      // это мышечная память, её не двигают.
+      e.preventDefault();
+      void show("learn");
     } else if (/^Digit[1-8]$/.test(e.code)) {
       const s = SECTIONS[Number(e.code.slice(5)) - 1];
       if (s) {
@@ -419,6 +431,7 @@ export function start(opts: WindowOptions): void {
     files,
     journal,
     anatomy,
+    learn,
     // Экран настроек — общий каркас плюс ИЗДАНИЕ. Карточки местного агента
     // приносит `agentEdition`: они читают и пишут helene.json рядом с окном и
     // спрашивают харнесс на этой же машине. У Пульта здесь стоит своё издание.
@@ -511,10 +524,10 @@ export function start(opts: WindowOptions): void {
     if (from !== id && pages.get(from)?.parentNode === view) scrolls.set(from, view.scrollTop);
     S.view = id;
     syncRail();
-    const section = SECTIONS.find((s) => s.id === id);
-    headKicker.textContent = section ? section.kicker : SETTINGS_KICKER;
+    const section = SECTIONS.find((s) => s.id === id) ?? FOOT.find((s) => s.id === id);
+    headKicker.textContent = section ? section.kicker : "";
     if (id !== "talk") {
-      headTitle.textContent = section?.label ?? "Настройки";
+      headTitle.textContent = section?.label ?? "";
       headTitle.classList.remove("hand");
     }
     const talking = id === "talk";
@@ -536,7 +549,7 @@ export function start(opts: WindowOptions): void {
     // у «Настроек» — заполненная форма. Раньше их стирало молча, через полсекунды после
     // того, как владелец увидел свой текст на месте.
     if (!blank && isDirty(page)) {
-      announce(section?.label ?? "Настройки");
+      announce(section?.label ?? "");
       return;
     }
     try {
@@ -544,7 +557,7 @@ export function start(opts: WindowOptions): void {
       if (gen !== showSeq) return;
       if (!opts.quiet) view.scrollTop = homeScroll(id);
       else if (wasAtEnd) view.scrollTop = view.scrollHeight;
-      announce(section?.label ?? "Настройки");
+      announce(section?.label ?? "");
     } catch (e) {
       if (gen !== showSeq) return;
       page.innerHTML = failHTML(e);
@@ -1184,6 +1197,28 @@ export function start(opts: WindowOptions): void {
     const d = (e as CustomEvent<{ room: string; text: string }>).detail;
     selectRoom(roomFor(d.room));
     window.setTimeout(() => { say.value = d.text; say.dispatchEvent(new Event("input")); say.focus(); }, 250);
+  });
+  /**
+   * Рамка задачи из раздела «Что поручить» — в поле ввода.
+   *
+   * ⚠ Комната — ВСЕГДА окно этого агента, а не `S.room`: последним выбранным
+   * мог остаться чат живого человека, и рамка с пропусками («Познакомься:
+   * <имя> — <кто это мне>») приземлилась бы прямо ему, вместе с курсором.
+   *
+   * ⚠ Черновик не затирается: человек мог уже что-то писать. Рамка встаёт
+   * следом за написанным, а не вместо него.
+   */
+  addEventListener("frame-template", (e) => {
+    const text = String((e as CustomEvent<string>).detail || "");
+    if (!text) return;
+    selectRoom(roomFor(WINDOW_ROOM));
+    window.setTimeout(() => {
+      const had = say.value.replace(/\s+$/, "");
+      say.value = had ? had + "\n\n" + text : text;
+      say.dispatchEvent(new Event("input"));
+      say.focus();
+      say.setSelectionRange(say.value.length, say.value.length);
+    }, 250);
   });
   /**
    * Первый запуск Пульта к своему серверу: адрес и ключ спрашиваются в окне.

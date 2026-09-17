@@ -75,7 +75,10 @@ export interface Room {
   stub?: boolean;
 }
 
-export type View = "now" | "talk" | "plans" | "wakes" | "frame" | "files" | "journal" | "anatomy" | "settings";
+export type View = "now" | "talk" | "plans" | "wakes" | "frame" | "files" | "journal" | "anatomy"
+  // Подвал полки: раздел «Что поручить» и «Настройки». В `SECTIONS` их нет —
+  // по тому массиву строятся кнопки полки и раскладка Ctrl+1…8.
+  | "learn" | "settings";
 
 /** Реплика владельца, которую он уже отправил, а лента ещё не подтвердила. */
 export interface Pending {
