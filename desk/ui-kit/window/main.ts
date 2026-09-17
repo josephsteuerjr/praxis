@@ -480,7 +480,30 @@ export function start(opts: WindowOptions): void {
     scrolls.delete(id);
   }
 
+  /**
+   * Где раздел открывается, если владелец в нём ещё не листал.
+   *
+   * ⚠ ЖИВОЙ СЛУЧАЙ 17.09. Переписка открывалась НАЧАЛОМ архива — сообщением
+   * девятидневной давности, — и до сегодняшней реплики надо было крутить колесо
+   * полминуты. `talk` в конце своего рендера честно просил конец, но просил у
+   * своего узла, а прокручивается общий `#view`, и каркас следом ставил 0.
+   * Лента живёт последней репликой: у неё дом — низ, у остальных — верх.
+   */
+  function homeScroll(id: View): number {
+    const saved = scrolls.get(id);
+    if (saved !== undefined) return saved;
+    return id === "talk" ? view.scrollHeight : 0;
+  }
+
   async function show(id: View, opts: { quiet?: boolean } = {}) {
+    // Раздела с таким именем может не быть: сюда ведут и строки из состояния харнесса, и
+    // разметка. Раньше это кончалось пустым экраном с «Не получилось» и `reading 'render'`
+    // в подробностях — сообщением, по которому владельцу нечего понять. Лучше показать
+    // «Сейчас» и назвать промах вслух.
+    if (!views[id]) {
+      toast(`Раздела «${id}» нет — открываю «Сейчас».`);
+      id = "now";
+    }
     const gen = ++showSeq;
     const from = S.view;
     // Прокрутку помним, только если в #view правда лежит узел ТОГО раздела: в него умеет
@@ -501,11 +524,14 @@ export function start(opts: WindowOptions): void {
     panelBtn.hidden = !talking;
     const page = pageFor(id);
     const blank = !page.firstChild;
+    // Читающий конец ленты не должен уезжать от новой реплики. Меряем ДО подмены
+    // содержимого: после неё высота уже другая, и «был ли внизу» не спросить.
+    const wasAtEnd = view.scrollHeight - view.scrollTop - view.clientHeight < 80;
     // Смена вкладки — мгновенная: движение владелец просил у панелей, а не здесь.
     app.classList.add("no-anim");
     if (view.firstChild !== page) view.replaceChildren(page);
     if (blank) page.classList.add("page-in");
-    view.scrollTop = opts.quiet ? view.scrollTop : (scrolls.get(id) ?? 0);
+    view.scrollTop = opts.quiet ? view.scrollTop : homeScroll(id);
     // Начатую правку фоновое перечитывание не сносит: у «Файлов» это открытый редактор,
     // у «Настроек» — заполненная форма. Раньше их стирало молча, через полсекунды после
     // того, как владелец увидел свой текст на месте.
@@ -516,7 +542,8 @@ export function start(opts: WindowOptions): void {
     try {
       await views[id].render(page);
       if (gen !== showSeq) return;
-      if (!opts.quiet) view.scrollTop = scrolls.get(id) ?? 0;
+      if (!opts.quiet) view.scrollTop = homeScroll(id);
+      else if (wasAtEnd) view.scrollTop = view.scrollHeight;
       announce(section?.label ?? "Настройки");
     } catch (e) {
       if (gen !== showSeq) return;

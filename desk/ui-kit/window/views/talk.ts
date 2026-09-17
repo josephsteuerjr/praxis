@@ -98,7 +98,7 @@ function brainNotice(): string {
     return `<div class="notice ${s.level === "error" ? "err" : ""}">
       <span class="dot ${s.level === "error" ? "failed" : ""}"></span>
       <span>${esc(s.phrase)}</span>
-      ${s.action ? `<button class="notice-action" data-go="${esc(s.action.target)}" type="button">${esc(s.action.label)}</button>` : ""}
+      ${s.action ? `<button class="notice-action" data-act="${esc(s.action.target)}" type="button">${esc(s.action.label)}</button>` : ""}
       ${raw ? `<details class="fail-detail notice-detail"><summary>Подробности</summary><pre class="mono">${esc(raw)}</pre></details>` : ""}
     </div>`;
   }
@@ -252,8 +252,20 @@ export async function render(container: HTMLElement): Promise<void> {
   for (const b of container.querySelectorAll<HTMLButtonElement>("[data-go]")) {
     b.addEventListener("click", () => dispatchEvent(new CustomEvent("frame-go", { detail: b.dataset.go })));
   }
+  // ⚠ ЖИВОЙ СЛУЧАЙ 17.09. Кнопка плашки состояния несёт ЦЕЛЬ ДЕЙСТВИЯ, а не имя раздела:
+  // харнесс присылает `settings` или `restart`. Она стояла среди `[data-go]`, и «Перезапустить»
+  // в переписке открывало раздел «restart», которого нет: вместо перезапуска агента —
+  // пустой экран с «Не получилось» и `reading 'render'` в подробностях. Кнопка состояния
+  // в шапке разбирала те же цели правильно — расходились ровно здесь.
+  for (const b of container.querySelectorAll<HTMLButtonElement>("[data-act]")) {
+    b.addEventListener("click", () => {
+      if (b.dataset.act === "restart") dispatchEvent(new Event("frame-restart"));
+      else dispatchEvent(new CustomEvent("frame-go", { detail: b.dataset.act }));
+    });
+  }
   bindStopTurn(container);
-  container.scrollTop = container.scrollHeight;
+  // Прокрутку ведёт каркас (`homeScroll`): прокручивается общий `#view`, а не наш узел,
+  // и просьба «в конец» отсюда была бы записью в поле, которое никто не читает.
   await panel.render();
 }
 
