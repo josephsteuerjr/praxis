@@ -342,7 +342,22 @@ export function start(opts: WindowOptions): void {
       return false;
     }
   }
-  function setCollapsed(which: "rail" | "panel", on: boolean) {
+  // Движение — ТОЛЬКО когда рычаг дёрнул человек. Восстановление из памяти при запуске
+  // и смена вкладки обязаны быть мгновенными: владелец просил панели плавные, а вкладки
+  // быстрые, и это разные требования.
+  function setCollapsed(which: "rail" | "panel", on: boolean, animate = false) {
+    app.classList.toggle("no-anim", !animate);
+    if (animate) {
+      // Класс вернётся сам, когда ход закончится; таймер — страховка на случай, когда
+      // transitionend не придёт (панель уже была в этом положении).
+      const done = () => app.classList.add("no-anim");
+      app.addEventListener("transitionend", function once(e: TransitionEvent) {
+        if (e.propertyName !== "--rail-track" && e.propertyName !== "--panel-track") return;
+        app.removeEventListener("transitionend", once);
+        done();
+      });
+      window.setTimeout(done, 600);
+    }
     app.classList.toggle(which + "-collapsed", on);
     try {
       localStorage.setItem("frame." + which, on ? "1" : "0");
@@ -353,8 +368,8 @@ export function start(opts: WindowOptions): void {
   }
   setCollapsed("rail", readFlag("frame.rail"));
   setCollapsed("panel", readFlag("frame.panel"));
-  railBtn.addEventListener("click", () => setCollapsed("rail", !app.classList.contains("rail-collapsed")));
-  panelBtn.addEventListener("click", () => setCollapsed("panel", !app.classList.contains("panel-collapsed")));
+  railBtn.addEventListener("click", () => setCollapsed("rail", !app.classList.contains("rail-collapsed"), true));
+  panelBtn.addEventListener("click", () => setCollapsed("panel", !app.classList.contains("panel-collapsed"), true));
 
   document.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
@@ -364,6 +379,10 @@ export function start(opts: WindowOptions): void {
       railBtn.click();
     } else if (e.code === "KeyJ") {
       e.preventDefault();
+      // Панель живёт только на «Чате». `click()` на скрытой кнопке срабатывает, и без
+      // этой строки Ctrl+J на любой другой вкладке молча переворачивал состояние,
+      // которого не видно, и запоминал его.
+      if (S.view !== "talk") return;
       panelBtn.click();
     } else if (e.code === "KeyN") {
       e.preventDefault();

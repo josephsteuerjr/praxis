@@ -360,7 +360,7 @@ button:focus-visible {
 
 .win-close:hover {
   background: var(--close-hover);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .win[disabled] {
@@ -649,11 +649,13 @@ button:focus-visible {
 
 .btn-primary {
   background: var(--accent);
-  color: #fff;
+  /* ⚠ Было `#fff`: на ТЁМНОМ акценте #e2a25e это 2,19:1 — на главной кнопке продукта,
+     которая на сцене снятия подписана «Снять». --accent-ink даёт 8,07 в обеих темах. */
+  color: var(--accent-ink);
 }
 
 .btn-primary:hover {
-  background: color-mix(in srgb, var(--accent) 88%, #000);
+  background: color-mix(in srgb, var(--accent) 88%, var(--ink));
 }
 
 .btn-quiet {
@@ -978,11 +980,14 @@ button:focus-visible {
 }
 
 .step.failed {
-  color: var(--close-hover);
+  /* ⚠ Было `--close-hover` — заливка кнопки закрытия окна, а не цвет ошибки. В тёмной
+     теме токен не был объявлен вовсе и протекал из светлой: #c8412f на угле = 3,59:1,
+     и это цвет ПРОВАЛА УСТАНОВКИ. --err переопределён в обеих темах: 5,28 / 6,08. */
+  color: var(--err);
 }
 
 .step.failed::before {
-  background: var(--close-hover);
+  background: var(--err);
   animation: none;
 }
 
@@ -1078,4 +1083,45 @@ button:focus-visible {
 
 .signature.empty {
   color: var(--muted);
+}
+
+/* ⚠ 17.09. Эти три класса сцены просили восемь раз (install.ts, uninstall.ts, keys.ts), а
+   объявлен в файле был только `.receipt.err`. Значит «Установлено», «Служба не
+   запустилась» и «Не вышло снять» печатались ОДНИМ цветом `.install-result p`, и человек
+   различал исход только по заголовку. Парный селектор обязателен: `.install-result p`
+   весит (0,1,1) и перебивает голый класс (0,1,0). */
+.muted,
+.install-result p.muted,
+.form-lead.muted {
+  color: var(--ink-3);
+}
+
+.warn,
+.install-result p.warn {
+  color: var(--warn);
+}
+
+.err,
+.install-result p.err {
+  color: var(--err);
+}
+
+/* Расписку снятия и текст провала человек уносит в поддержку — значит их надо уметь
+   выделить. `body { user-select: none }` на строке 22 запрещал и это, а лог лежит
+   в %TEMP%, куда владельцу идти незачем. */
+.install-result,
+.receipt {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* ⚠ Гаситель движения. В этом файле его не было вовсе, а JS-гаситель (wind.ts:21,
+   `T = reduced ? 0.4 : 1`) движение не выключает, а УСКОРЯЕТ: 216-пиксельные буквы
+   по-прежнему летят со скосом и размытием, просто в 2,5 раза быстрее. Два мигания ниже
+   идут мимо T совсем. */
+@media (prefers-reduced-motion: reduce) {
+  .tw-cursor,
+  .step::before {
+    animation: none;
+  }
 }

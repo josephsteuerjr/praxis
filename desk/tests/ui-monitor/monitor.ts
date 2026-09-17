@@ -1,11 +1,11 @@
 // Offline browser regression checks. Build with Vite from this directory.
-import { buildRooms } from "../../app/src/rooms";
-import { S, type Run } from "../../app/src/state";
-import { bindRuns, runRowHTML } from "../../app/src/runlist";
+import { buildRooms } from "../../ui-kit/window/rooms";
+import { S, type Run } from "../../ui-kit/window/state";
+import { bindRuns, runRowHTML } from "../../ui-kit/window/runlist";
 import { mountUsage, usageShell } from "../../ui-kit/usage";
 import "../../ui-kit/fonts.css";
 import "../../ui-kit/tokens.css";
-import "../../app/src/styles/app.css";
+import "../../ui-kit/window/styles/app.css";
 
 const style = document.createElement("style");
 style.textContent = "body{overflow:auto}main{max-width:800px;margin:28px auto;padding:0 18px}pre{white-space:pre-wrap;font:12px var(--mono)}h1{font:28px var(--serif)}";

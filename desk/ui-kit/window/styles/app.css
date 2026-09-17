@@ -90,41 +90,69 @@ select:focus-visible,
   --chrome-h: 36px;
 }
 
+/* ⚠ 17.09. ДО ЭТОЙ ПРАВКИ ПАНЕЛИ НЕ СВОРАЧИВАЛИСЬ — они ИСЧЕЗАЛИ. Три причины разом, и
+   каждой хватало: список треков менялся с двух на три (анимировать нечего — это разные
+   значения свойства, а не разные числа), `display: none` на #rail и #panel (погашенный
+   элемент не едет), и на каркасе не было ни одного transition. Ctrl+B был буквально один
+   кадр «было/стало».
+
+   Лечение: треков ВСЕГДА три, ширина каждого живёт в зарегистрированном свойстве
+   (@property с syntax "<length>" — без регистрации браузер не умеет интерполировать
+   переменную), и едет именно оно. Сами панели держат СВОЮ ширину и прижаты к дальнему
+   краю трека: когда трек схлопывается, полка уезжает влево за край окна, панель — вправо,
+   и внутри у них не меняется ни один пиксель. Ни одной calc-арифметики, ни вычитания
+   скроллбара, ни переносов текста на ходу. */
+@property --rail-track {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --panel-track {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
 #app {
   display: grid;
-  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  --rail-track: var(--rail-w);
+  --panel-track: 0px;
+  grid-template-columns: var(--rail-track) minmax(0, 1fr) var(--panel-track);
   grid-template-rows: var(--chrome-h) minmax(0, 1fr);
   height: 100vh;
   position: relative;
+  /* Уехавшая за край панель обрезается окном. `overflow: clip` (не `hidden`) не делает
+     бокс скролл-контейнером — три position: sticky внутри остаются на своих якорях. */
+  overflow: clip;
+}
+
+/* Анимация ТОЛЬКО по явному рычагу владельца: восстановление из памяти при запуске и
+   смена вкладки должны быть мгновенными. Класс снимает main.ts после первого кадра. */
+#app:not(.no-anim) {
+  transition: --rail-track var(--dur-panel) var(--ease-panel),
+              --panel-track var(--dur-panel) var(--ease-panel);
 }
 
 /* Полка на всю высоту, включая заголовок окна: линия — псевдоэлемент в первой
    колонке на обе строки. Фон ровный, одна бумага на всё окно (слово владельца
-   02.09: без пятен и подкрашенных зон), полку и панель отделяют только линии. */
+   02.09: без пятен и подкрашенных зон), полку и панель отделяют только линии.
+   Линия — inset-тенью, а не border: у псевдоэлемента нет padding, и на нулевой
+   ширине тень честно не рисует ничего, тогда как border оставил бы шов у края окна. */
 #app::before {
   content: "";
   grid-column: 1;
   grid-row: 1 / -1;
   background: var(--ground);
-  border-right: 1px solid var(--line);
+  box-shadow: inset -1px 0 0 var(--line);
 }
 
 #app.with-panel:not(.panel-collapsed) {
-  grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--panel-w);
+  --panel-track: var(--panel-w);
 }
 
 #app.rail-collapsed {
-  grid-template-columns: 0 minmax(0, 1fr);
-}
-
-#app.with-panel.rail-collapsed:not(.panel-collapsed) {
-  grid-template-columns: 0 minmax(0, 1fr) var(--panel-w);
-}
-
-#app.rail-collapsed #rail,
-#app.rail-collapsed::before,
-#app.panel-collapsed #panel {
-  display: none;
+  --rail-track: 0px;
 }
 
 #chrome {
@@ -141,6 +169,9 @@ select:focus-visible,
 #rail {
   grid-column: 1;
   grid-row: 2;
+  /* Ширина своя, не по треку: схлопывается трек, а полка уезжает целиком. */
+  width: var(--rail-w);
+  justify-self: end;
 }
 
 #main {
@@ -151,6 +182,9 @@ select:focus-visible,
 #panel {
   grid-column: 3;
   grid-row: 2;
+  /* Как и полка: ширина своя, прижата к началу трека — уезжает вправо за край окна. */
+  width: var(--panel-w);
+  justify-self: start;
 }
 
 .chrome-left,
@@ -244,7 +278,7 @@ html:not(.native) #chrome .controls {
 
 .win-close:hover {
   background: var(--close-hover);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 /* ---------- полка слева ---------- */
@@ -288,7 +322,7 @@ html:not(.native) #chrome .controls {
 }
 
 .agent-current:hover {
-  background: var(--hover);
+  background: var(--ctrl-hover);
 }
 
 .agent-current .agent-name {
@@ -329,8 +363,12 @@ html:not(.native) #chrome .controls {
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--panel, var(--bg));
-  box-shadow: 0 10px 30px rgb(0 0 0 / 22%);
+  /* Второе всплывающее над статикой — тот же язык, что у .menu. Заодно уходит
+     последняя чёрная тень, не знавшая про тему. */
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  box-shadow: var(--shadow-pop);
 }
 
 .agent-row {
@@ -347,7 +385,7 @@ html:not(.native) #chrome .controls {
 }
 
 .agent-row:hover:not(:disabled) {
-  background: var(--hover);
+  background: var(--ctrl-hover);
 }
 
 .agent-row:disabled {
@@ -356,7 +394,9 @@ html:not(.native) #chrome .controls {
 }
 
 .agent-row.is-current {
-  background: var(--hover);
+  /* Текущий агент — акцентом, а не тем же цветом, что под курсором:
+     иначе «где я» и «на что навёл» неразличимы. */
+  background: var(--accent-soft);
 }
 
 .agent-row .agent-name {
@@ -425,7 +465,6 @@ html:not(.native) #chrome .controls {
   background: var(--surface);
   border-color: var(--line);
   color: var(--ink);
-  box-shadow: var(--shadow);
 }
 
 .rail-item svg {
@@ -542,7 +581,6 @@ html:not(.native) #chrome .controls {
   background: var(--surface);
   border-color: var(--line);
   color: var(--ink);
-  box-shadow: var(--shadow);
 }
 
 .room-name {
@@ -634,8 +672,11 @@ html:not(.native) #chrome .controls {
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
+  /* Парит над неподвижной подложкой — здесь стекло дёшево и читается как «над». */
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  box-shadow: var(--shadow-pop);
 }
 
 .menu[hidden] {
@@ -1163,7 +1204,7 @@ html:not(.native) #chrome .controls {
 .attach:hover,
 .attach:focus-visible {
   color: var(--ink);
-  background: var(--hover, rgba(0, 0, 0, 0.05));
+  background: var(--ctrl-hover);
 }
 
 .attach svg {
@@ -1191,7 +1232,7 @@ html:not(.native) #chrome .controls {
   padding: 3px 8px 3px 4px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--paper-2, var(--paper));
+  background: var(--surface-2);
   font-size: 12px;
   color: var(--ink-2, var(--ink));
 }
@@ -1224,19 +1265,19 @@ html:not(.native) #chrome .controls {
   display: grid;
   place-items: center;
   border-radius: 5px;
-  background: var(--hover, rgba(0, 0, 0, 0.05));
+  background: var(--ctrl-hover);
   font-size: 14px;
 }
 
 .mic.recording {
-  color: #d23b3b;
-  background: rgba(210, 59, 59, 0.12);
+  color: var(--err);
+  background: var(--err-soft);
   animation: mic-pulse 1.2s ease-in-out infinite;
 }
 
 @keyframes mic-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(210, 59, 59, 0.35); }
-  50% { box-shadow: 0 0 0 6px rgba(210, 59, 59, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--err) 32%, transparent); }
+  50% { box-shadow: 0 0 0 6px transparent; }
 }
 
 .composer-box.dropping {
@@ -1797,7 +1838,7 @@ table.grid th {
 }
 
 .btn-primary:hover {
-  background: color-mix(in srgb, var(--accent) 88%, #000);
+  background: color-mix(in srgb, var(--accent) 88%, var(--ink));
 }
 
 .btn-quiet {
@@ -1988,7 +2029,7 @@ select.field-input {
   height: 18px;
   border-radius: 50%;
   background: var(--surface);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--shadow-knob);
   transition: transform 0.2s ease;
 }
 
@@ -2183,7 +2224,7 @@ select.field-input {
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: #fff;
+  background: var(--qr-paper);
 }
 
 .qr svg {
@@ -2359,7 +2400,9 @@ select.field-input {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--ground) 92%, transparent);
+  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-pop);
 }
 
 @media (max-width: 1100px) {
@@ -2482,13 +2525,14 @@ select.field-input {
 }
 
 @media (max-width: 760px) {
+  /* ⚠ Форма селектора повторена дословно НАМЕРЕННО. `#app.with-panel` весит (1,1,0), а
+     базовое `#app.with-panel:not(.panel-collapsed)` — (1,2,0): :not() несёт вес своего
+     аргумента, а медиазапрос специфичности не добавляет. Короткая запись проиграла бы, и
+     панель на узком окне осталась бы раскрытой. */
   #app.with-panel:not(.panel-collapsed),
   #app.with-panel.rail-collapsed:not(.panel-collapsed) {
-    grid-template-columns: 0 minmax(0, 1fr);
-  }
-
-  #app.with-panel:not(.panel-collapsed) #panel {
-    display: none;
+    --rail-track: 0px;
+    --panel-track: 0px;
   }
 
   .split {
@@ -2501,7 +2545,11 @@ select.field-input {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * {
+  /* ⚠ `*` НЕ матчит псевдоэлементы: без ::before/::after анимации на них переживали
+     системную настройку. */
+  *,
+  *::before,
+  *::after {
     animation: none !important;
     transition: none !important;
   }
@@ -2586,7 +2634,7 @@ body.first-run #state {
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--paper-2, var(--paper));
+  background: var(--surface-2);
   color: var(--ink);
   font: 14px/1.4 var(--sans, system-ui);
 }

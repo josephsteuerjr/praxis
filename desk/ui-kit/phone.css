@@ -498,10 +498,15 @@ a {
 
 /* ---------- листы снизу: комнаты, ход, ещё ---------- */
 
+.veil:not(.show) {
+  /* Пока лист уезжает, вуаль ещё лежит поверх всего и невидимо съедает нажатия. */
+  pointer-events: none;
+}
+
 .veil {
   position: fixed;
   inset: 0;
-  background: rgba(20, 16, 12, 0.35);
+  background: var(--veil);
   z-index: 20;
   opacity: 0;
   transition: opacity 0.2s ease;
@@ -525,7 +530,7 @@ a {
   flex-direction: column;
   border-radius: 18px 18px 0 0;
   background: var(--ground);
-  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--shadow-sheet);
   z-index: 21;
   transform: translateY(100%);
   transition: transform 0.22s ease;
@@ -1019,7 +1024,10 @@ a {
 
 .tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* ⚠ Вкладок пять, а колонок стояло четыре: панель ложилась в ДВА ряда у всех.
+     Автоколонки держат один ряд при любом их числе. */
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   border-top: 1px solid var(--line);
   background: var(--ground);
   padding: 4px 6px calc(6px + env(safe-area-inset-bottom));
@@ -1246,3 +1254,16 @@ details.fold > summary .dot {
 .msg-media audio { width: 100%; max-width: 320px; height: 34px; }
 .msg-media img { max-width: 100%; border-radius: 8px; display: block; }
 .msg-media a { word-break: break-all; }
+
+/* ⚠ 17.09. Гасителя движения на телефоне не было вовсе — при четырёх вечных
+   `animation: pulse … infinite` (точка живого состояния в шапке, метка на кнопке, точка
+   комнаты, метка на вкладке). Системная настройка их не касалась. Форма та же, что в окне,
+   вместе с псевдоэлементами: голый `*` их не матчит. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
