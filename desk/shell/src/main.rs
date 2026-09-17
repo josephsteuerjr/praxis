@@ -3631,6 +3631,18 @@ fn main() {
                 if let Some(p) = &mine {
                     set_desk_token(&p.token);
                 }
+                // ⚠ 17.09. Окно предъявляет каналу ключ из этого места. Пустой ключ = окно
+                // получает 403 на КАЖДЫЙ запрос и вечно показывает «не на связи», при
+                // живом и здоровом харнессе. Молчать об этом нельзя: снаружи это выглядит
+                // как «агент не поднялся», и искать начинают не там.
+                if desk_token().is_empty() {
+                    log_line(&format!(
+                        "ключ канала для окна ПУСТ (агент «{here}», планов {}) — окно получит                          403 на каждый запрос; это не сбой агента, а потерянный секрет",
+                        plans.len()
+                    ));
+                } else {
+                    log_line(&format!("ключ канала для окна задан (агент «{here}»)"));
+                }
                 let port = mine.as_ref().map(|p| p.port)
                     .or_else(|| current.as_ref().map(|a| a.port))
                     .unwrap_or(DESK_PORT);
@@ -4023,9 +4035,24 @@ fn open_window<M: tauri::Manager<tauri::Wry>>(
         // Свой протокол вместо вшитого `tauri://`: файлы берутся из
         // app/static на диске (serve_static). На Windows WebView2
         // видит зарегистрированную схему как http://<схема>.localhost.
-        tauri::WebviewUrl::CustomProtocol(
-            tauri::Url::parse("http://helene.localhost/index.html").expect("адрес окна"),
-        ),
+        tauri::WebviewUrl::CustomProtocol({
+            // ⚠ Ключ канала едет и в адресе. Скрипт инициализации остаётся главным
+            // источником, но одного его мало: на чистой установке окно получало 403 на
+            // каждый запрос при живом харнессе — `PULT_CONFIG_OVERRIDE` до страницы не
+            // доезжал. Адресной строки у окна нет, в журнал канала ключ не попадает
+            // (маскируется), а тем же `?key=` уже ходят проба порта и телефон.
+            let key = desk_token();
+            log_line(&format!(
+                "окно открывается: ключ {} ({} знаков), скрипт инициализации {} знаков",
+                if key.is_empty() { "ПУСТ" } else { "есть" }, key.len(), init_script.len()
+            ));
+            let raw = if key.is_empty() {
+                "http://helene.localhost/index.html".to_string()
+            } else {
+                format!("http://helene.localhost/index.html?key={key}")
+            };
+            tauri::Url::parse(&raw).expect("адрес окна")
+        }),
     )
     .title(product_ui())
     .inner_size(1360.0, 860.0)
