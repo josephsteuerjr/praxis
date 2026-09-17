@@ -368,33 +368,10 @@ fn inside_or_same(a: &str, b: &str) -> bool {
 
 // ---------------------------------------------------------------- PowerShell
 
-/// Текст, который печатают консольные программы. Windows PowerShell 5.1 на
-/// системе с OEMCP=866 отдаёт кириллицу в CP866; читать её как UTF-8 значит
-/// показать владельцу вместо причины строку из «?????». Сначала пробуем UTF-8
-/// (английские системы и большинство утилит), при неудаче — CP866.
-fn console_text(bytes: &[u8]) -> String {
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s.to_string(),
-        Err(_) => bytes.iter().map(|b| decode_cp866(*b)).collect(),
-    }
-}
-
-fn decode_cp866(b: u8) -> char {
-    if b < 0x80 {
-        return b as char;
-    }
-    const HIGH: &str = concat!(
-        "АБВГДЕЖЗИЙКЛМНОП",
-        "РСТУФХЦЧШЩЪЫЬЭЮЯ",
-        "абвгдежзийклмноп",
-        "░▒▓│┤╡╢╖╕╣║╗╝╜╛┐",
-        "└┴┬├─┼╞╟╚╔╩╦╠═╬╧",
-        "╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀",
-        "рстуфхцчшщъыьэюя",
-        "ЁёЄєЇїЎў°∙·√№¤■\u{00A0}",
-    );
-    HIGH.chars().nth((b - 0x80) as usize).unwrap_or('\u{fffd}')
-}
+// Текст, который печатают консольные программы: Windows PowerShell 5.1, sc.exe
+// и netsh отвечают в кодовой странице консоли системы, а не в UTF-8. Читать её
+// как UTF-8 — показать владельцу вместо причины строку из «?????».
+include!("../../common/console_text.rs");
 
 fn run_hidden(cmd: &mut Command) -> Result<std::process::Output, String> {
     #[cfg(windows)]
@@ -2707,12 +2684,29 @@ mod tests {
         assert!(KNOWN_SERVICE_NAMES.contains(&PRODUCT));
     }
 
-    /// Текст ошибок PowerShell на русской системе приходит в CP866.
+    /// Вывод консоли читается в кодовой странице СИСТЕМЫ, а не в вшитой cp866.
+    ///
+    /// ⚠ ЖИВОЙ СЛУЧАЙ 17.09. Таблица cp866 была вшита в код всех трёх программ.
+    /// На русской Windows она права; на английской, немецкой и китайской — нет,
+    /// и человек видел кириллическую абракадабру вместо причины, по которой не
+    /// встала служба. Стенд спрашивает страницы ПОИМЁННО: иначе он зеленел бы
+    /// на машине собирающего и краснел у того, для кого всё это чинилось.
     #[test]
-    fn console_text_decodes_cp866() {
-        let bytes = [0xe0, 0xef, 0xa4, 0xae, 0xac, 0x20, 0xad, 0xa5, 0xe2];
-        assert_eq!(console_text(&bytes), "рядом нет");
+    fn console_text_reads_the_page_the_system_speaks() {
+        // cp866, русская Windows: «рядом нет».
+        let ru = [0xe0, 0xef, 0xa4, 0xae, 0xac, 0x20, 0xad, 0xa5, 0xe2];
+        assert_eq!(decode_codepage(&ru, 866), "рядом нет");
+        // cp437, английская Windows: те же байты — совсем другой текст, и
+        // именно его человек с такой системой обязан увидеть.
+        assert_ne!(decode_codepage(&ru, 437), "рядом нет");
+        // cp1252, немецкая: «Dienst gestört» — кириллицы здесь нет вовсе.
+        let de = [0x44, 0x69, 0x65, 0x6e, 0x73, 0x74, 0x20, 0x67, 0x65, 0x73, 0x74, 0xf6, 0x72, 0x74];
+        assert_eq!(decode_codepage(&de, 1252), "Dienst gestört");
+        // UTF-8 и ASCII проходят до всякой кодовой страницы.
         assert_eq!(console_text("plain ascii".as_bytes()), "plain ascii");
+        assert_eq!(console_text("ошибка службы".as_bytes()), "ошибка службы");
+        // Хвост перевода строки от sc.exe в подпись человеку не едет.
+        assert_eq!(console_text(b"FAILED 1053\r\n"), "FAILED 1053");
     }
 
     #[test]

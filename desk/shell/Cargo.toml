@@ -27,7 +27,7 @@ tauri-winrt-notification = "0.7"
 # Win32_System_SystemInformation — только ради GetLocalTime: журнал брокера
 # (broker.log) пишут ДВЕ стороны, служба и окно, и время в нём обязано быть
 # одним. У службы это тоже местное время (svc::now_stamp), а std умеет только UTC.
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 opt-level = "z"
