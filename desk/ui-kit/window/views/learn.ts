@@ -187,7 +187,7 @@ export async function render(container: HTMLElement): Promise<void> {
   const local = LOCAL_AGENT;
   const tasks = TASKS.filter((t) => local || !t.local);
   container.innerHTML = `<div class="center learn">
-    <p class="learn-lead">Агент работает руками: ищет, читает, пишет, помнит, просыпается по расписанию.
+    <p class="learn-lead">Агент работает тулами: ищет, читает, пишет, помнит, просыпается по расписанию.
       Ниже — рамки задач с пропусками: нажми, и она уедет в поле ввода, а пропуски заполнишь ты.</p>
     <h3 class="section-title">Как идёт один ход</h3>
     ${diagram()}
