@@ -12,6 +12,11 @@
 name: macOS (Apple Silicon)
 
 on:
+  # Пока workflow не влит в main, GitHub не даёт запустить его кнопкой с другой
+  # ветки («not found on the default branch»); push в ветку порта запускает
+  # его сам — с тегом по умолчанию и без выкладки.
+  push:
+    branches: [port/macos]
   workflow_dispatch:
     inputs:
       tag:
@@ -35,7 +40,7 @@ jobs:
     timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}
-      TAG: ${{ inputs.tag }}
+      TAG: ${{ inputs.tag || 'v0.7.1' }}
       BUILD: ${{ runner.temp }}/build
       LOGS: ${{ runner.temp }}/logs
       HOME_DIR: /Users/runner/Applications/Helene
