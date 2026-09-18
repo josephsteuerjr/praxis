@@ -60,7 +60,7 @@ export function buildRooms(runs: Run[], chats?: ChatRow[]): Room[] {
     if (!byKey.has(key)) {
       byKey.set(key, {
         key,
-        name: c.title || (kind === "window" ? "Новый чат" : "чат " + key),
+        name: c.title || (kind === "window" ? "Новый чат" : "Без названия"),
         kind,
         live: false,
         count: c.messages || 0,
@@ -80,7 +80,7 @@ export function buildRooms(runs: Run[], chats?: ChatRow[]): Room[] {
     if (chats !== undefined && isWindowRoom(key) && !byKey.has(key)) continue;
     const room = byKey.get(key) ?? {
       key,
-      name: r.chat_title || (isWindowRoom(key) ? "Новый чат" : "чат " + key),
+      name: r.chat_title || (isWindowRoom(key) ? "Новый чат" : "Без названия"),
       kind: isWindowRoom(key) ? "window" : "telegram",
       live: false,
       count: 0,

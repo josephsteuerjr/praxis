@@ -719,7 +719,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       const k = String(c.peer_id);
       if (k === WINDOW_ROOM || k === LEGACY_WINDOW_KEY) continue;
       const kind: Room["kind"] = c.kind === "window" || (c.kind !== "telegram" && isWindowRoom(k)) ? "window" : "telegram";
-      next.push({ key: k, name: c.title || (kind === "window" ? "Новый чат" : "чат " + k), kind, live: false, count: c.messages || 0, at: Number(c.mtime_ns) / 1e6 || 0 });
+      next.push({ key: k, name: c.title || (kind === "window" ? "Новый чат" : "Без названия"), kind, live: false, count: c.messages || 0, at: Number(c.mtime_ns) / 1e6 || 0 });
     }
     for (const r of runs) {
       if (r.kind !== "chat_turn" || r.chat_id == null) continue;
@@ -727,7 +727,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       let found = next.find((x) => x.key === k);
       if (!found && isWindowRoom(k)) continue;
       if (!found) {
-        found = { key: k, name: r.chat_title || (isWindowRoom(k) ? "Новый чат" : "чат " + k), kind: isWindowRoom(k) ? "window" : "telegram", live: false, count: 0, at: 0 };
+        found = { key: k, name: r.chat_title || (isWindowRoom(k) ? "Новый чат" : "Без названия"), kind: isWindowRoom(k) ? "window" : "telegram", live: false, count: 0, at: 0 };
         next.push(found);
       }
       const at = new Date(r.created_at ?? "").getTime();
