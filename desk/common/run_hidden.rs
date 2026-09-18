@@ -52,13 +52,14 @@ fn run_hidden_for(cmd: &mut std::process::Command, limit: std::time::Duration) -
     }
 }
 
-#[cfg(test)]
+// Оба стенда гоняют cmd.exe — модуль целиком Windows, иначе на macOS от него
+// оставался бы один неиспользуемый `use`.
+#[cfg(all(test, windows))]
 mod run_hidden_tests {
     use super::*;
 
     /// Дедлайн действительно срабатывает, а не ждёт конца процесса.
     #[test]
-    #[cfg(windows)]
     fn deadline_kills_a_sleeper() {
         let mut cmd = std::process::Command::new("cmd.exe");
         cmd.args(["/C", "ping 127.0.0.1 -n 6 >nul"]);
@@ -69,7 +70,6 @@ mod run_hidden_tests {
     }
 
     #[test]
-    #[cfg(windows)]
     fn output_is_collected() {
         let mut cmd = std::process::Command::new("cmd.exe");
         cmd.args(["/C", "echo hi"]);

@@ -21,6 +21,19 @@ ureq = { version = "2", features = ["tls", "native-certs", "proxy-from-env", "so
 # поставки нет, сумма из релиза — единственная проверка, что файл тот.
 sha2 = "0.10"
 
+[target.'cfg(unix)'.dependencies]
+# libc — ради двух вещей, которых нет в std: `localtime_r` (штамп времени в
+# helene.log и broker.log обязан быть местным, как у Windows-ветки с
+# GetLocalTime; std умеет только UTC) и `killpg` (job-объекта на POSIX нет,
+# детей останавливаем группой процессов, см. `stop_child`).
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Уведомления macOS (Центр уведомлений) — то, что на Windows делает
+# tauri-winrt-notification. Плагин зовётся только из Rust (`toast`), в
+# capabilities окна его нет: веб-части он не нужен.
+tauri-plugin-notification = "2"
+
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 tauri-winrt-notification = "0.7"

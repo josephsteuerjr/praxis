@@ -18,6 +18,16 @@
 //   * закрыть окно = в трей, и в первый раз об этом говорит уведомление;
 //   * слово агента, когда окно не перед глазами, приходит уведомлением Windows;
 //   * имя агента — из конфига; продукт зовётся Hélène.
+//
+// macOS (порт 0.7.1): та же оболочка, но бинарь живёт ВНУТРИ бандла
+// (`Helene.app/Contents/MacOS/helene`), а установка — папкой выше
+// (`~/Applications/Helene`, там `helene.json`, `runtime/`, `app/`, `data/`).
+// Поэтому «рядом с exe» здесь означает не папку exe, а корень установки —
+// `install_root()`, который ищет паспорт сборки `helene-build.json` вверх по
+// родителям (на Windows паспорт лежит рядом с exe, и корень — та же папка).
+// Службы, тела и брандмауэра на Mac нет: их ручки честно отвечают «нет», а окно
+// прячет карточки по `app_info.platform`. Дети без job-объекта живут в своей
+// группе процессов и получают `HELENE_PARENT_PID`, чтобы уйти вместе с окном.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 // Тот же гард, что у установщика (setup/src/main.rs), и по той же причине —
@@ -43,6 +53,10 @@ use tauri::Manager;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+// POSIX: `process_group(0)` — каждый ребёнок в своей группе процессов, чтобы
+// остановить его вместе с внуками одним `killpg` (замена job-объекту Windows).
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -56,6 +70,9 @@ const PRODUCT_UI: &str = "Hélène";
 /// порты соседей, и служба берёт оттуда же — двух умолчаний быть не должно.
 const RELAY_PORT: u16 = 5011;
 const CONFIG_NAME: &str = "helene.json";
+/// Паспорт сборки (`installer/build_dist.py`): лежит в корне установки, и по
+/// нему корень и находится — см. `install_root`.
+const BUILD_PASSPORT: &str = "helene-build.json";
 /// Комната окна в памяти агента: memory/groups/<WINDOW_ROOM>.jsonl.
 const WINDOW_ROOM: &str = "window";
 /// AppUserModelID уведомлений = identifier из tauri.conf.json (см. register_toast_identity).
@@ -120,7 +137,7 @@ fn log_line(text: &str) {
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(exe_dir().join("helene.log"))
+        .open(install_root().join("helene.log"))
     {
         let _ = writeln!(f, "{} {text}", now_stamp());
     }
@@ -140,8 +157,90 @@ fn toast(title: &str, body: &str) {
     }
 }
 
-#[cfg(not(windows))]
+/// Хэндл приложения для уведомлений macOS: плагину нужен именно он, а `toast`
+/// зовут отовсюду — из надзора, из сторожей, из `start_children` ещё ДО того,
+/// как приложение построено. Пока хэндла нет, уведомление идёт через osascript.
+#[cfg(target_os = "macos")]
+static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+/// Уведомление macOS — Центр уведомлений через tauri-plugin-notification.
+/// Плагин требует, чтобы bundle с нашим идентификатором был известен
+/// LaunchServices; не сработал (сборка не в бандле, первый запуск из staging) —
+/// тот же текст уходит через `osascript`, а причина в helene.log. Молчать
+/// нельзя ни в одной ветке: уведомление — это слово агента человеку.
+#[cfg(target_os = "macos")]
+fn toast(title: &str, body: &str) {
+    use tauri_plugin_notification::NotificationExt;
+    let via_plugin = match APP_HANDLE.get() {
+        Some(app) => app
+            .notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show()
+            .map_err(|e| e.to_string()),
+        None => Err("приложение ещё не построено".to_string()),
+    };
+    if let Err(why) = via_plugin {
+        let script = format!(
+            "display notification {} with title {}",
+            applescript_quote(body),
+            applescript_quote(title)
+        );
+        if let Err(err) = osascript(&script) {
+            log_line(&format!("уведомление не показалось: {why}; и через osascript тоже: {err}"));
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn toast(_title: &str, _body: &str) {}
+
+/// Строковый литерал AppleScript: обратный слэш и кавычка экранируются,
+/// переводы строк — `\n`. Текст диалогов и уведомлений приходит и из ответов
+/// сервера обновлений, и из слов агента — кавычка в нём не должна рвать скрипт.
+/// Без cfg намеренно: зовётся только на macOS, а стенд на неё гоняется и на
+/// Windows — чистая функция обязана собираться везде.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn applescript_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Выполнить AppleScript и вернуть его stdout. Без дедлайна намеренно: диалог
+/// ждёт человека столько, сколько нужно, — как MessageBoxW на Windows.
+/// Полный путь, а не голое имя: правило то же, что у `sys_exe`.
+#[cfg(target_os = "macos")]
+fn osascript(script: &str) -> Result<String, String> {
+    let out = Command::new("/usr/bin/osascript")
+        .arg("-e")
+        .arg(script)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("osascript не запустился: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        Err(if said.is_empty() {
+            format!("osascript вернул код {}", out.status.code().unwrap_or(-1))
+        } else {
+            said
+        })
+    }
+}
 
 /// Окно с ошибкой — последний канал, когда журнала мало и окна ещё/уже нет.
 /// Оболочка собрана как windows_subsystem="windows": консоли у неё нет, и без
@@ -177,11 +276,41 @@ fn message_box_info(title: &str, text: &str) {
     message_box_with(title, text, MB_ICONINFORMATION);
 }
 
-#[cfg(not(windows))]
-fn message_box(_title: &str, _text: &str) {}
+/// macOS: родной диалог через `display dialog` (osascript). Не открылся —
+/// текст целиком уходит в helene.log: раньше not(windows)-ветка молчала, и это
+/// было «окно не открылось, и никто не сказал почему».
+#[cfg(target_os = "macos")]
+fn message_box_with(title: &str, text: &str, icon: &str) {
+    let script = format!(
+        "display dialog {} with title {} buttons {{\"OK\"}} default button 1 with icon {icon}",
+        applescript_quote(text),
+        applescript_quote(title)
+    );
+    if let Err(err) = osascript(&script) {
+        log_line(&format!("окно с сообщением не открылось ({err}); текст был: {title} — {text}"));
+    }
+}
 
-#[cfg(not(windows))]
-fn message_box_info(_title: &str, _text: &str) {}
+#[cfg(target_os = "macos")]
+fn message_box(title: &str, text: &str) {
+    message_box_with(title, text, "stop");
+}
+
+#[cfg(target_os = "macos")]
+fn message_box_info(title: &str, text: &str) {
+    message_box_with(title, text, "note");
+}
+
+/// Прочие POSIX: окна нет, но текст не пропадает — он в журнале.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn message_box(title: &str, text: &str) {
+    log_line(&format!("окно с сообщением показать нечем; текст был: {title} — {text}"));
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn message_box_info(title: &str, text: &str) {
+    log_line(&format!("окно с сообщением показать нечем; текст был: {title} — {text}"));
+}
 
 /// То же окно, но не задерживая запуск: окно программы должно открыться, даже
 /// если человек не подошёл нажать «ОК».
@@ -224,12 +353,17 @@ fn install_panic_hook() {
 /// powershell.exe, положенный рядом с helene.exe (а туда пишет и сам агент —
 /// fence.py разрешает ему папку установки), исполнялся бы вместо системного,
 /// в том числе под UAC в install_service.
+///
+/// Вся четвёрка — только Windows: на macOS ни один путь не должен до них
+/// дойти, и cfg делает такой вызов ошибкой сборки, а не сюрпризом в журнале.
+#[cfg(windows)]
 fn system_root() -> PathBuf {
     std::env::var_os("SystemRoot")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("C:\\Windows"))
 }
 
+#[cfg(windows)]
 fn sys_exe(name: &str) -> PathBuf {
     let full = system_root().join("System32").join(name);
     if full.exists() {
@@ -239,6 +373,7 @@ fn sys_exe(name: &str) -> PathBuf {
     }
 }
 
+#[cfg(windows)]
 fn powershell_exe() -> PathBuf {
     let full = system_root()
         .join("System32")
@@ -252,6 +387,7 @@ fn powershell_exe() -> PathBuf {
     }
 }
 
+#[cfg(windows)]
 fn explorer_exe() -> PathBuf {
     let full = system_root().join("explorer.exe");
     if full.exists() {
@@ -259,6 +395,21 @@ fn explorer_exe() -> PathBuf {
     } else {
         PathBuf::from("explorer.exe")
     }
+}
+
+/// Системная утилита POSIX — полным путём (`/usr/bin`, `/bin`), голое имя
+/// только когда её там нет. Та же причина, что у `sys_exe`: текущая папка в
+/// поиск программ на POSIX не входит, но PATH владельца — его, и подменять
+/// `open` или `zip` через него незачем.
+#[cfg(not(windows))]
+fn posix_tool(name: &str) -> PathBuf {
+    for dir in ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] {
+        let full = Path::new(dir).join(name);
+        if full.is_file() {
+            return full;
+        }
+    }
+    PathBuf::from(name)
 }
 
 /// Как поднять ребёнка заново, если он упал: оболочка — надзиратель, а не
@@ -289,7 +440,7 @@ impl ChildSpec {
                 .file_name()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            ChildSpec::Relay { .. } => "helene-relay.exe".into(),
+            ChildSpec::Relay { .. } => exe_name("helene-relay"),
         }
     }
 
@@ -389,11 +540,78 @@ struct LocalHarness {
     plans: Mutex<Vec<SpawnPlan>>,
 }
 
+/// Папка САМОГО exe. Это не корень установки: на macOS бинарь лежит в
+/// `Helene.app/Contents/MacOS`. Зовётся только там, где нужен именно exe
+/// (перезапуск себя, поиск в PATH); всё остальное — `install_root()`.
 fn exe_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Корень установки: от папки exe вверх по родителям (не больше пяти уровней)
+/// до первой папки с паспортом сборки `helene-build.json`; не нашли — папка
+/// exe. На Windows паспорт лежит рядом с exe, и ответ тот же, что раньше;
+/// на macOS это `~/Applications/Helene` тремя уровнями выше бинаря в бандле.
+/// Правило одно на оболочку и мастер установки (`setup/`).
+fn install_root() -> PathBuf {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| install_root_from(&exe_dir())).clone()
+}
+
+/// Чистая половина `install_root`: правило подъёма отдельно, чтобы его можно
+/// было проверить на любой раскладке папок, а не только на живой установке.
+fn install_root_from(exe_dir: &Path) -> PathBuf {
+    let mut here = Some(exe_dir);
+    for _ in 0..=5 {
+        let Some(dir) = here else { break };
+        if dir.join(BUILD_PASSPORT).is_file() {
+            return dir.to_path_buf();
+        }
+        here = dir.parent();
+    }
+    exe_dir.to_path_buf()
+}
+
+/// Имя исполняемого файла по платформе: суффикс `.exe` только на Windows.
+fn exe_name(stem: &str) -> String {
+    if cfg!(windows) {
+        format!("{stem}.exe")
+    } else {
+        stem.to_string()
+    }
+}
+
+/// Питон из коробки: `runtime/python.exe` (embedded CPython) на Windows,
+/// `runtime/bin/python3` (python-build-standalone) на остальных.
+fn bundled_python(base: &Path) -> PathBuf {
+    if cfg!(windows) {
+        base.join("runtime").join("python.exe")
+    } else {
+        base.join("runtime").join("bin").join("python3")
+    }
+}
+
+/// Мастер установки по платформе: `helene-setup.exe` рядом на Windows, бандл
+/// `Helene Setup.app` в корне установки на macOS.
+fn setup_binary(base: &Path) -> PathBuf {
+    if cfg!(windows) {
+        base.join("helene-setup.exe")
+    } else if cfg!(target_os = "macos") {
+        base.join("Helene Setup.app").join("Contents").join("MacOS").join("helene-setup")
+    } else {
+        base.join("helene-setup")
+    }
+}
+
+/// Как назвать мастер установки в журнале и в окне.
+fn setup_label() -> &'static str {
+    if cfg!(windows) {
+        "helene-setup.exe"
+    } else {
+        "Helene Setup.app"
+    }
 }
 
 // --- статика окна: с диска, из exe только как запасной выход ------------------
@@ -406,7 +624,7 @@ fn exe_dir() -> PathBuf {
 /// пересобранный интерфейс не менял окно, пока не пересоберёшь оболочку.
 /// Вшитая копия остаётся запасным выходом на случай снесённой папки.
 fn static_root() -> PathBuf {
-    exe_dir().join("app").join("static")
+    install_root().join("app").join("static")
 }
 
 /// `%XX` в байты, байты в UTF-8; ломаные последовательности остаются как есть.
@@ -585,7 +803,7 @@ fn read_config(path: &Path) -> ConfigRead {
 
 /// Конфиг для команд оболочки; None — нет или не разобрался.
 fn config_value() -> Option<serde_json::Value> {
-    match read_config(&exe_dir().join(CONFIG_NAME)) {
+    match read_config(&install_root().join(CONFIG_NAME)) {
         ConfigRead::Ok(v) => Some(v),
         _ => None,
     }
@@ -595,7 +813,7 @@ fn config_value() -> Option<serde_json::Value> {
 /// процесса. Относительный "data" при запуске helene.exe из другой папки
 /// уводил сессию Telegram и сбор логов в чужое место.
 fn base_tree() -> PathBuf {
-    let base = exe_dir();
+    let base = install_root();
     let raw = config_value()
         .and_then(|c| c.get("tree").and_then(|v| v.as_str()).map(str::to_string))
         .unwrap_or_else(|| "data".into());
@@ -634,15 +852,20 @@ fn agent_name(cfg: Option<&serde_json::Value>) -> String {
 /// в CreateProcess берётся сначала оттуда, и подложенный туда python.exe
 /// исполнился бы вместо настоящего.
 fn find_in_path(name: &str) -> Option<PathBuf> {
-    let here = exe_dir().canonicalize().ok();
+    // Папка exe и корень установки: на Windows это одна папка, на macOS —
+    // две, и пишет агент во вторую.
+    let here: Vec<PathBuf> = [exe_dir(), install_root()]
+        .iter()
+        .filter_map(|p| p.canonicalize().ok())
+        .collect();
     let raw_ext = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".into());
     let exts: Vec<&str> = raw_ext.split(';').filter(|e| !e.is_empty()).collect();
     for dir in std::env::split_paths(&std::env::var_os("PATH")?) {
         if dir.as_os_str().is_empty() {
             continue;
         }
-        if let (Some(here), Ok(d)) = (here.as_ref(), dir.canonicalize()) {
-            if &d == here {
+        if let Ok(d) = dir.canonicalize() {
+            if here.contains(&d) {
                 continue;
             }
         }
@@ -666,12 +889,32 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
 /// встроенному, и запуск честно падает с «нет такого файла» в helene.log,
 /// а не запускает первое, что лежит рядом.
 fn python_path(base: &Path, cfg: &serde_json::Value) -> PathBuf {
+    let embedded = bundled_python(base);
     if let Some(raw) = cfg.get("python").and_then(|v| v.as_str()) {
         if raw != "python" {
-            return resolve(base, raw);
+            let explicit = resolve(base, raw);
+            // На Windows — как было: явный путь берётся даже несуществующим,
+            // и запуск честно падает с «нет такого файла».
+            #[cfg(windows)]
+            return explicit;
+            // Вне Windows конфиг мог приехать с Windows (перенос агента
+            // `carry.py` увозит helene.json целиком, а там `runtime/python.exe`).
+            // Такой путь здесь не файл, а встроенный питон — есть; идём к нему
+            // и говорим об этом в журнал, а не молчим мёртвыми детьми.
+            #[cfg(not(windows))]
+            {
+                if explicit.is_file() || !embedded.is_file() {
+                    return explicit;
+                }
+                log_line(&format!(
+                    "python в конфиге ({}) здесь не существует — беру встроенный {}",
+                    explicit.display(),
+                    embedded.display()
+                ));
+                return embedded;
+            }
         }
     }
-    let embedded = base.join("runtime").join("python.exe");
     if embedded.exists() {
         return embedded;
     }
@@ -847,7 +1090,7 @@ fn current_id() -> String {
 /// Файл настроек текущего агента. У корневого это `helene.json` рядом с
 /// программой — то же место, что и до 11.09.
 fn current_config_path() -> PathBuf {
-    with_current(exe_dir().join(CONFIG_NAME), |c| c.config.clone())
+    with_current(install_root().join(CONFIG_NAME), |c| c.config.clone())
 }
 
 fn desk_token_path(tree: &Path) -> PathBuf {
@@ -910,6 +1153,10 @@ fn spawn_child(python: &Path, script: &Path, args: &[String], tree: &Path, host:
         // ставил: в канал уходил один порт. Одна переменная закрывает весь класс —
         // чтение чужого конфига и запись в него ручкой `agent-config`.
         .env("HELENE_CONFIG", config)
+        // Кто родитель: на POSIX job-объекта нет, и движок с каналом сами
+        // следят за этим pid и выходят, когда окно умерло (`localharness`).
+        // Ставится на всех платформах — на Windows переменная просто лишняя.
+        .env("HELENE_PARENT_PID", std::process::id().to_string())
         .env_remove("PRAXIS_DESK_TOKEN");
     if let Some(dir) = script.parent() {
         cmd.current_dir(dir);
@@ -923,6 +1170,8 @@ fn spawn_child(python: &Path, script: &Path, args: &[String], tree: &Path, host:
     }
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(unix)]
+    cmd.process_group(0);
     match cmd.spawn() {
         Ok(child) => {
             adopt(&child);
@@ -1103,9 +1352,10 @@ fn relay_port(cfg: &serde_json::Value) -> u16 {
 /// Спека реле попадает в план только при relay.enabled — «сознательно не
 /// поднимаю» и «не смог» больше не сходятся в одном молчаливом None.
 fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> Option<Child> {
-    let exe = base.join("helene-relay.exe");
+    let relay = exe_name("helene-relay");
+    let exe = base.join(&relay);
     if !exe.exists() {
-        log_line("relay.enabled, но helene-relay.exe рядом нет — реле не поднимаю");
+        log_line(&format!("relay.enabled, но {relay} рядом нет — реле не поднимаю"));
         return None;
     }
     let port = relay_port(cfg);
@@ -1120,7 +1370,7 @@ fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> Option<Chil
     }
     let home = tree.join("relay");
     let _ = std::fs::create_dir_all(&home);
-    let python = base.join("runtime").join("python.exe");
+    let python = bundled_python(base);
     let mut cmd = Command::new(&exe);
     // Инструкции реле: без этой переменной реле кладёт ПЕРЕД конституцией
     // агента 23 КБ чужого системного промпта («ты кодинг-агент Codex CLI») —
@@ -1140,7 +1390,8 @@ fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> Option<Chil
         .env("RELAY_PORT", port.to_string())
         .env("RELAY_LOCAL", "1")
         .env("RELAY_INSTRUCTIONS", instructions)
-        .env("RELAY_LOG_DIR", home.join("logs"));
+        .env("RELAY_LOG_DIR", home.join("logs"))
+        .env("HELENE_PARENT_PID", std::process::id().to_string());
     // Ключ мозга = ключ реле: сгенерированный при установке ключ обязателен
     // Bearer-ом на /chat/completions — открытый локальный порт позволял бы
     // любому процессу на машине жечь подписку владельца.
@@ -1157,6 +1408,8 @@ fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> Option<Chil
     }
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(unix)]
+    cmd.process_group(0);
     match cmd.spawn() {
         Ok(child) => {
             adopt(&child);
@@ -1199,7 +1452,7 @@ fn build_plan(
     let mut specs = Vec::new();
     if relay_here && relay_enabled(cfg) {
         specs.push(ChildSpec::Relay {
-            base: exe_dir(),
+            base: install_root(),
             cfg: cfg.clone(),
             tree: tree.clone(),
         });
@@ -1407,7 +1660,7 @@ fn config_save_at(target: &Path, config: &str, mtime_ns: Option<&str>) -> Result
             }));
         }
     }
-    let dir = target.parent().map(Path::to_path_buf).unwrap_or_else(exe_dir);
+    let dir = target.parent().map(Path::to_path_buf).unwrap_or_else(install_root);
     let tmp = dir.join(format!(".tmp-{}", target.file_name().and_then(|n| n.to_str()).unwrap_or(CONFIG_NAME)));
     std::fs::write(&tmp, pretty).map_err(|e| format!("не записалось: {e}"))?;
     std::fs::rename(&tmp, target).map_err(|e| format!("не подменилось: {e}"))?;
@@ -1453,9 +1706,48 @@ fn restart_self(app: tauri::AppHandle) {
     }
     #[cfg(not(windows))]
     {
-        let _ = Command::new(&exe).current_dir(&dir).spawn();
+        // Та же пауза, что и на Windows, — иначе новый процесс застаёт живого
+        // (single-instance) и выходит сам. Хвост отсоединён в свою группу:
+        // выход старого процесса не должен утянуть его за собой.
+        // macOS: бандл через `open -n` (три уровня выше бинаря), а не голый
+        // exe — иначе Dock, меню и активация окна ведут себя как у скрипта.
+        let target: PathBuf = match app_bundle_of(&exe) {
+            Some(bundle) => bundle,
+            None => exe.clone(),
+        };
+        let relaunch = if cfg!(target_os = "macos") && target.extension().is_some_and(|e| e == "app") {
+            "sleep 2; exec /usr/bin/open -n \"$0\""
+        } else {
+            "sleep 2; exec \"$0\""
+        };
+        let mut cmd = Command::new(posix_tool("sh"));
+        cmd.arg("-c")
+            .arg(relaunch)
+            .arg(&target)
+            .current_dir(&dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0);
+        if let Err(err) = cmd.spawn() {
+            log_line(&format!("перезапуск не запустился: {err}"));
+            toast(product_ui(), "Перезапуск не запустился — закрой и открой программу сам.");
+            return;
+        }
     }
     app.exit(0);
+}
+
+/// Бандл `.app`, внутри которого лежит этот бинарь: `X.app/Contents/MacOS/x`
+/// → `X.app`. Не в бандле (сборка из cargo) — None.
+#[cfg(not(windows))]
+fn app_bundle_of(exe: &Path) -> Option<PathBuf> {
+    let bundle = exe.parent()?.parent()?.parent()?;
+    if bundle.extension().is_some_and(|e| e == "app") {
+        Some(bundle.to_path_buf())
+    } else {
+        None
+    }
 }
 
 /// Незавершённый вход в ChatGPT: один за раз. Повторное нажатие отменяет
@@ -1473,11 +1765,57 @@ fn login_lock() -> std::sync::MutexGuard<'static, Option<Child>> {
 fn abort_login_child(slot: &mut Option<Child>) {
     if let Some(mut child) = slot.take() {
         if child.try_wait().ok().flatten().is_none() {
-            let mut kill = Command::new(sys_exe("taskkill.exe"));
-            kill.args(["/PID", &child.id().to_string(), "/T", "/F"]);
-            let _ = run_hidden_for(&mut kill, Duration::from_secs(15));
-            let _ = child.wait();
+            // Всё дерево (`/T`): помощник входа поднимает питон с колбэк-сервером,
+            // и живым должен не остаться именно он.
+            #[cfg(windows)]
+            {
+                let mut kill = Command::new(sys_exe("taskkill.exe"));
+                kill.args(["/PID", &child.id().to_string(), "/T", "/F"]);
+                let _ = run_hidden_for(&mut kill, Duration::from_secs(15));
+                let _ = child.wait();
+            }
+            #[cfg(not(windows))]
+            stop_child(&mut child);
         }
+    }
+}
+
+/// Остановить ребёнка. Windows: kill + wait, как было (дерево добивает
+/// job-объект). POSIX: SIGTERM всей группе процессов ребёнка (он её лидер —
+/// см. `process_group(0)` при спавне), три секунды на выход, потом SIGKILL
+/// группе — чтобы внуки (питон под реле, колбэк-сервер входа) не пережили окно.
+#[cfg(windows)]
+fn stop_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn stop_child(child: &mut Child) {
+    let group = child.id() as libc::pid_t;
+    unsafe {
+        libc::killpg(group, libc::SIGTERM);
+    }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {}
+            Err(_) => break,
+        }
+        if Instant::now() >= deadline {
+            unsafe {
+                libc::killpg(group, libc::SIGKILL);
+            }
+            let _ = child.wait();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // Лидер вышел, а группа жива, пока жив последний её процесс: добиваем
+    // внуков, которые SIGTERM проигнорировали.
+    unsafe {
+        libc::killpg(group, libc::SIGKILL);
     }
 }
 
@@ -1511,10 +1849,11 @@ fn relay_login_blocking() -> Result<String, String> {
     // сиротой на порту 1455.
     let mut guard = login_lock();
     abort_login_child(&mut guard);
-    let base = exe_dir();
-    let exe = base.join("helene-relay.exe");
+    let base = install_root();
+    let relay = exe_name("helene-relay");
+    let exe = base.join(&relay);
     if !exe.exists() {
-        return Err("в этой сборке нет helene-relay.exe".into());
+        return Err(format!("в этой сборке нет {relay}"));
     }
     let home = relay_home();
     let _ = std::fs::create_dir_all(&home);
@@ -1522,13 +1861,16 @@ fn relay_login_blocking() -> Result<String, String> {
     cmd.arg("login")
         .current_dir(&home)
         .env("RELAY_LOCAL", "1")
-        .env("RELAY_LOG_DIR", home.join("logs"));
-    let python = base.join("runtime").join("python.exe");
+        .env("RELAY_LOG_DIR", home.join("logs"))
+        .env("HELENE_PARENT_PID", std::process::id().to_string());
+    let python = bundled_python(&base);
     if python.exists() {
         cmd.env("RELAY_PYTHON", &python);
     }
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(unix)]
+    cmd.process_group(0);
     let child = cmd.spawn().map_err(|e| format!("логин не запустился: {e}"))?;
     // В job-объект окна: выход из трея с незавершённым входом оставлял
     // helene-relay.exe login жить и держать порт колбэка.
@@ -1554,6 +1896,7 @@ fn relay_status() -> String {
     "no-auth".into()
 }
 
+#[cfg(windows)]
 #[tauri::command]
 async fn install_service() -> Result<String, String> {
     // Опциональная служба: один UAC. Само окно прав не требует и не получает;
@@ -1565,10 +1908,19 @@ async fn install_service() -> Result<String, String> {
         .unwrap_or_else(|_| Err("вызов службы прерван".into()))
 }
 
+/// Службы на этой платформе нет; окно её карточку прячет (`app_info.platform`),
+/// а до этих ручек из интерфейса не дойти — ответ словами на всякий случай.
+#[cfg(not(windows))]
+#[tauri::command]
+async fn install_service() -> Result<String, String> {
+    Err("службы на этой платформе нет".into())
+}
+
 /// Поднятая операция со службой из окна: расписка — по SCM, не по «запустил».
+#[cfg(windows)]
 fn service_op_from_window(op: &str) -> Result<String, String> {
     let script_name = if op == "install" { "install-service.ps1" } else { "uninstall-service.ps1" };
-    let script = exe_dir().join(script_name);
+    let script = install_root().join(script_name);
     if !script.exists() {
         return Err(format!("в этой сборке нет {script_name}"));
     }
@@ -1602,14 +1954,14 @@ fn notify(title: String, body: String) {
 /// Конфиг целиком для экрана настроек плюс где он лежит и где данные.
 #[tauri::command]
 fn config_load() -> Result<serde_json::Value, String> {
-    let base = exe_dir();
+    let base = install_root();
     let path = current_config_path();
     let cfg = match read_config(&path) {
         ConfigRead::Ok(v) => v,
         ConfigRead::Missing => serde_json::json!({}),
         ConfigRead::Broken(why) => return Err(format!("{} не разобрался: {why}", path.display())),
     };
-    let home = path.parent().map(Path::to_path_buf).unwrap_or_else(exe_dir);
+    let home = path.parent().map(Path::to_path_buf).unwrap_or_else(install_root);
     let tree = resolve(&home, cfg.get("tree").and_then(|v| v.as_str()).unwrap_or("data"));
     Ok(serde_json::json!({
         "config": cfg,
@@ -1628,6 +1980,7 @@ fn config_load() -> Result<serde_json::Value, String> {
 /// Состояние службы по SCM: running / stopped / absent. Прав не требует.
 /// async: синхронная команда Tauri исполняется на главном потоке, и висящий
 /// sc.exe вешал бы окно целиком (а опрашивают его каждые 2,5 с).
+#[cfg(windows)]
 #[tauri::command]
 async fn service_state() -> String {
     tauri::async_runtime::spawn_blocking(service_state_blocking)
@@ -1635,8 +1988,17 @@ async fn service_state() -> String {
         .unwrap_or_else(|_| "absent".to_string())
 }
 
+/// Вне Windows службы нет как механизма — `missing`, а не `absent`: второе
+/// значит «можно поставить», и окно рисовало бы под него кнопку.
+#[cfg(not(windows))]
+#[tauri::command]
+async fn service_state() -> String {
+    "missing".to_string()
+}
+
 /// Ответ SCM о службе продукта: running | stopped | absent. С дедлайном —
 /// повисший sc.exe не должен вешать окно.
+#[cfg(windows)]
 fn service_state_blocking() -> String {
     let mut cmd = Command::new(sys_exe("sc.exe"));
     cmd.args(["query", product_fs()]);
@@ -1671,11 +2033,18 @@ fn service_state_blocking() -> String {
     }
 }
 
+#[cfg(windows)]
 #[tauri::command]
 async fn remove_service() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| service_op_from_window("uninstall"))
         .await
         .unwrap_or_else(|_| Err("вызов службы прерван".into()))
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+async fn remove_service() -> Result<String, String> {
+    Err("службы на этой платформе нет".into())
 }
 
 /// Что вообще можно отдать Проводнику. Проводник не «показывает», а ЗАПУСКАЕТ
@@ -1698,7 +2067,7 @@ fn open_target(path: &str) -> Result<std::ffi::OsString, String> {
     let target = PathBuf::from(raw)
         .canonicalize()
         .map_err(|_| format!("нет такого пути: {raw}"))?;
-    for root in [exe_dir(), tree_dir(), std::env::temp_dir()] {
+    for root in [install_root(), tree_dir(), std::env::temp_dir()] {
         if let Ok(root) = root.canonicalize() {
             if target.starts_with(&root) {
                 return Ok(plain_path(&target).into_os_string());
@@ -1722,6 +2091,7 @@ fn plain_path(path: &Path) -> PathBuf {
 }
 
 /// Открыть папку в Проводнике (или ссылку в браузере).
+#[cfg(windows)]
 #[tauri::command]
 fn open_path(path: String) -> Result<(), String> {
     let target = open_target(&path)?;
@@ -1732,7 +2102,24 @@ fn open_path(path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// macOS: `open` — папку в Finder, ссылку в браузере. Прочие POSIX: `xdg-open`.
+#[cfg(not(windows))]
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let target = open_target(&path)?;
+    let tool = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    Command::new(posix_tool(tool))
+        .arg(target)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Показать файл в Проводнике с выделением — для собранных логов.
+#[cfg(windows)]
 #[tauri::command]
 fn reveal_path(path: String) -> Result<(), String> {
     let target = open_target(&path)?;
@@ -1740,11 +2127,30 @@ fn reveal_path(path: String) -> Result<(), String> {
     // Проводнику нужна форма /select,"<путь>" — кавычки ВОКРУГ ПУТИ.
     // Обычный .arg закавычивал бы весь аргумент целиком, и путь с пробелом
     // (профиль «Иван Петров») открывал папку по умолчанию вместо выделения.
-    #[cfg(windows)]
     cmd.raw_arg(format!("/select,\"{}\"", target.to_string_lossy()));
-    #[cfg(not(windows))]
-    cmd.arg(format!("/select,{}", target.to_string_lossy()));
     cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// macOS: `open -R` — Finder с выделенным файлом. Прочие POSIX: открыть папку.
+#[cfg(not(windows))]
+#[tauri::command]
+fn reveal_path(path: String) -> Result<(), String> {
+    let target = open_target(&path)?;
+    let mut cmd = if cfg!(target_os = "macos") {
+        let mut c = Command::new(posix_tool("open"));
+        c.arg("-R").arg(&target);
+        c
+    } else {
+        let mut c = Command::new(posix_tool("xdg-open"));
+        c.arg(Path::new(&target).parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(&target)));
+        c
+    };
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Известная папка пользователя из реестра, а не склейка из %APPDATA%.
@@ -1772,12 +2178,8 @@ fn shell_folder(name: &str, fallback: &str) -> Option<PathBuf> {
     }
 }
 
-#[cfg(not(windows))]
-fn shell_folder(_name: &str, fallback: &str) -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join(fallback))
-}
-
 /// %VAR% в значении реестра (REG_EXPAND_SZ приходит как есть).
+#[cfg(windows)]
 fn expand_env(raw: &str) -> String {
     let mut out = String::new();
     let mut rest = raw;
@@ -1808,19 +2210,32 @@ fn expand_env(raw: &str) -> String {
     out
 }
 
+#[cfg(windows)]
 fn programs_dir() -> Option<PathBuf> {
     shell_folder("Programs", "Microsoft\\Windows\\Start Menu\\Programs")
 }
 
+#[cfg(windows)]
 fn startup_lnk() -> Option<PathBuf> {
     shell_folder("Startup", "Microsoft\\Windows\\Start Menu\\Programs\\Startup")
         .map(|d| d.join(format!("{}.lnk", product_fs())))
 }
 
 /// Автозапуск — ярлык в папке автозагрузки пользователя, без реестра и прав.
+#[cfg(windows)]
 #[tauri::command]
 fn autostart_get() -> bool {
     startup_lnk().map(|p| p.exists()).unwrap_or(false)
+}
+
+/// macOS: автозапуск — LaunchAgent пользователя, `~/Library/LaunchAgents/
+/// <идентификатор>.plist`; есть файл — есть автозапуск, ровно как ярлык
+/// в автозагрузке Windows. Идентификатор — сборки (`app.helene.desk`), а не
+/// продукт латиницей: у варианта Праксис свой, и агенты не спорят за имя.
+#[cfg(not(windows))]
+#[tauri::command]
+fn autostart_get() -> bool {
+    launch_agent_plist().map(|p| p.is_file()).unwrap_or(false)
 }
 
 #[tauri::command]
@@ -1830,6 +2245,86 @@ async fn autostart_set(on: bool) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
+#[cfg(not(windows))]
+fn launch_agent_plist() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(
+        PathBuf::from(home)
+            .join("Library")
+            .join("LaunchAgents")
+            .join(format!("{}.plist", toast_id())),
+    )
+}
+
+/// Текст LaunchAgent: метка, путь бинаря внутри бандла, подъём при входе.
+/// Чистая функция — путь с `&` или `<` в имени папки обязан остаться XML.
+/// Без cfg по той же причине, что `applescript_quote`: стенд на неё общий.
+#[cfg_attr(windows, allow(dead_code))]
+fn launch_agent_text(label: &str, program: &str) -> String {
+    fn xml(s: &str) -> String {
+        s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    }
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n\
+         <dict>\n\
+         \t<key>Label</key>\n\
+         \t<string>{}</string>\n\
+         \t<key>ProgramArguments</key>\n\
+         \t<array>\n\
+         \t\t<string>{}</string>\n\
+         \t</array>\n\
+         \t<key>RunAtLoad</key>\n\
+         \t<true/>\n\
+         </dict>\n\
+         </plist>\n",
+        xml(label),
+        xml(program)
+    )
+}
+
+/// macOS: записать plist и зарегистрировать его в launchd (`bootstrap`) —
+/// или снять (`bootout`) и удалить файл. Ошибки launchctl — словами: тумблер
+/// не имеет права рапортовать «включено», когда launchd отказал.
+#[cfg(not(windows))]
+fn autostart_set_blocking(on: bool) -> Result<(), String> {
+    let plist = launch_agent_plist().ok_or("не нашёл домашнюю папку (HOME)")?;
+    let uid = unsafe { libc::getuid() };
+    let label = toast_id();
+    let launchctl = posix_tool("launchctl");
+    let run = |args: &[&str]| -> Result<std::process::Output, String> {
+        let mut cmd = Command::new(&launchctl);
+        cmd.args(args);
+        run_hidden_for(&mut cmd, Duration::from_secs(30))
+    };
+    if !on {
+        // Снять из launchd: «не загружен» — не ошибка, файла могло и не быть.
+        let _ = run(&["bootout", &format!("gui/{uid}/{label}")]);
+        return match std::fs::remove_file(&plist) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(format!("файл автозапуска не удалился: {err}")),
+        };
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    if let Some(dir) = plist.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("нет папки LaunchAgents: {e}"))?;
+    }
+    std::fs::write(&plist, launch_agent_text(label, &exe.to_string_lossy()))
+        .map_err(|e| format!("файл автозапуска не записался: {e}"))?;
+    // Регистрировать в launchd прямо сейчас (`bootstrap`) НЕ надо: `RunAtLoad`
+    // тут же поднял бы второй экземпляр, single-instance его погасил бы, и
+    // значок в Dock мигнул бы на ровном месте. Тумблер обещает «поднимется при
+    // входе в систему» — launchd читает `~/Library/LaunchAgents` сам при входе,
+    // ровно как Windows читает папку автозагрузки. Прежняя регистрация (если
+    // тумблер уже включали в этой сессии) снимается, чтобы не остался старый
+    // путь бинаря после обновления.
+    let _ = run(&["bootout", &format!("gui/{uid}/{label}")]);
+    Ok(())
+}
+
+#[cfg(windows)]
 fn autostart_set_blocking(on: bool) -> Result<(), String> {
     let lnk = startup_lnk().ok_or("не нашёл папку автозагрузки")?;
     if !on {
@@ -1881,10 +2376,21 @@ async fn tailscale_ip() -> Option<String> {
         // Голого "tailscale.exe" в списке больше нет: по голому имени Windows
         // взяла бы файл из папки программы, а туда пишет и сам агент.
         let mut candidates: Vec<PathBuf> = Vec::new();
+        #[cfg(windows)]
         for var in ["ProgramFiles", "ProgramFiles(x86)"] {
             if let Ok(pf) = std::env::var(var) {
                 candidates.push(PathBuf::from(pf).join("Tailscale").join("tailscale.exe"));
             }
+        }
+        // macOS: приложение из App Store / с сайта, потом Homebrew (Apple
+        // Silicon и Intel).
+        #[cfg(target_os = "macos")]
+        for known in [
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+            "/opt/homebrew/bin/tailscale",
+            "/usr/local/bin/tailscale",
+        ] {
+            candidates.push(PathBuf::from(known));
         }
         if let Some(found) = find_in_path("tailscale") {
             candidates.push(found);
@@ -1913,15 +2419,20 @@ async fn tailscale_ip() -> Option<String> {
 // Само правило (имя, сужение, слова расписки) — общее со службой, см.
 // common/firewall_rule.rs: имена у нас совпадают до буквы, и кто ставит
 // вторым, тот переписывает правило первого.
+// Брандмауэр, PowerShell и служба — только Windows: на macOS этих файлов в
+// сборке нет вовсе, чтобы ни одна их функция не могла быть позвана случайно.
+#[cfg(windows)]
 include!("../../common/firewall_rule.rs");
 // Общее с установщиком и службой (ревью 06.09, §4): проба модели и гард
 // исходящего адреса, экранирование PowerShell, поднятая операция со службой,
 // штамп времени журналов, случайные байты из CSPRNG.
 include!("../../common/model_probe.rs");
+#[cfg(windows)]
 include!("../../common/ps.rs");
 // Список агентов установки — общий со службой: кого поднимать, что показывать
 // в трее и на каком порту чей канал (`common/agents.rs`, правило — там же).
 include!("../../common/agents.rs");
+#[cfg(windows)]
 include!("../../common/service_op.rs");
 include!("../../common/stamp.rs");
 include!("../../common/random_hex.rs");
@@ -1936,6 +2447,7 @@ include!("../../common/run_hidden.rs");
 // строка Win32 в общем файле сломала бы ей сборку.
 include!("../../common/broker.rs");
 
+#[cfg(windows)]
 fn firewall_rule_name(port: u16) -> String {
     format!("name={}", firewall_rule_title(product_fs(), port))
 }
@@ -1943,6 +2455,7 @@ fn firewall_rule_name(port: u16) -> String {
 // Текст, который сказала родная утилита Windows. Один код на оболочку, службу
 // и установщик: у всех трёх была своя копия ВШИТОЙ таблицы cp866, и все три
 // врали на нерусской Windows.
+#[cfg(windows)]
 include!("../../common/console_text.rs");
 
 // ─────────────────────────────────────────────── что именно просим у netsh
@@ -1960,6 +2473,7 @@ include!("../../common/console_text.rs");
 // каждое нажатие «Показать QR» добавляло ЕЩЁ ОДНО правило с тем же именем
 // (netsh уникальности имени при добавлении не требует).
 
+#[cfg(windows)]
 fn firewall_delete_args(port: u16) -> Vec<String> {
     vec![
         "advfirewall".into(),
@@ -1971,6 +2485,7 @@ fn firewall_delete_args(port: u16) -> Vec<String> {
 }
 
 /// Поставить правило заново. Добавление — последним: его код и есть итог.
+#[cfg(windows)]
 fn firewall_set_runs(port: u16, program: Option<&str>) -> Vec<Vec<String>> {
     vec![
         firewall_delete_args(port),
@@ -1982,6 +2497,7 @@ fn firewall_set_runs(port: u16, program: Option<&str>) -> Vec<Vec<String>> {
 }
 
 /// Снять правило. Одна команда, она же последняя.
+#[cfg(windows)]
 fn firewall_clear_runs(port: u16) -> Vec<Vec<String>> {
     vec![firewall_delete_args(port)]
 }
@@ -1989,6 +2505,7 @@ fn firewall_clear_runs(port: u16) -> Vec<Vec<String>> {
 /// «Зачем» для журнала владельца. Идёт в `broker.log` и читается человеком,
 /// поэтому одной строкой и словами: пустое или многострочное объяснение брокер
 /// отвергает на границе (common/broker.rs).
+#[cfg(windows)]
 fn firewall_why(port: u16, adding: bool) -> String {
     if adding {
         format!("правило брандмауэра для телефона, порт {port}")
@@ -2001,6 +2518,7 @@ fn firewall_why(port: u16, adding: bool) -> String {
 
 /// Каким путём выполняется netsh.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[cfg(windows)]
 enum FirewallPath {
     /// Своими правами: процесс уже повышен, просить некого.
     Direct,
@@ -2021,6 +2539,7 @@ enum FirewallPath {
 /// здесь те же, что в localharness/modes.py::stated, до буквы: строка, объект с
 /// `name` и — как поломка, которую всё равно надо понять, — режим, записанный
 /// в `mode`.
+#[cfg(windows)]
 fn agent_mode(cfg: Option<&serde_json::Value>) -> String {
     fn known(raw: Option<&serde_json::Value>) -> Option<String> {
         let name = raw?.as_str()?.trim().to_lowercase();
@@ -2056,6 +2575,7 @@ fn agent_mode(cfg: Option<&serde_json::Value>) -> String {
 /// `mode` остаётся вторым, ХВОСТОВЫМ вопросом: старый конфиг со словом
 /// `service` мы всё ещё понимаем, и отказ брокера в этом случае объясняется
 /// владельцу словами про службу, а не молчанием.
+#[cfg(windows)]
 fn firewall_path(elevated: bool, mode: &str, broker: bool) -> FirewallPath {
     if elevated {
         // Повышаться некуда: netsh отработает прямо здесь. Так живёт машина
@@ -2076,6 +2596,7 @@ fn firewall_path(elevated: bool, mode: &str, broker: bool) -> FirewallPath {
 /// владельцу обязана совпадать до буквы. Разойдись эти строки — и два пути к
 /// одному действию начали бы обещать разное; в этом продукте так уже было,
 /// когда правило брандмауэра ставили и служба, и окно, по-разному.
+#[cfg(windows)]
 fn firewall_door_words(path: FirewallPath) -> &'static str {
     match path {
         FirewallPath::Direct => "",
@@ -2084,6 +2605,7 @@ fn firewall_door_words(path: FirewallPath) -> &'static str {
     }
 }
 
+#[cfg(windows)]
 fn firewall_added(port: u16, path: FirewallPath) -> String {
     format!(
         "правило брандмауэра для порта {port} добавлено{} ({FIREWALL_SCOPE_HUMAN})",
@@ -2091,6 +2613,7 @@ fn firewall_added(port: u16, path: FirewallPath) -> String {
     )
 }
 
+#[cfg(windows)]
 fn firewall_removed(port: u16, path: FirewallPath) -> String {
     format!("правило брандмауэра для порта {port} снято{}", firewall_door_words(path))
 }
@@ -2211,6 +2734,7 @@ fn admin_verdict(admin: bool, kind: i32) -> serde_json::Value {
 /// Чем кончилась пачка: код ПОСЛЕДНЕЙ команды и то, что netsh о ней сказал.
 /// Пустой `said` — текста нет: под UAC netsh отвечает в своё скрытое окно, и до
 /// нас доезжает только код.
+#[cfg(windows)]
 struct NetshDone {
     code: i32,
     said: String,
@@ -2219,6 +2743,7 @@ struct NetshDone {
 /// Пачка netsh СВОИМИ правами. Зовётся только когда процесс уже повышен: без
 /// прав netsh отвечает «требуется повышение», и гонять его впустую значит
 /// показать владельцу пустой отказ вместо дела.
+#[cfg(windows)]
 fn netsh_direct(runs: &[Vec<String>]) -> Result<NetshDone, String> {
     let netsh = sys_exe("netsh.exe");
     let mut done = NetshDone { code: -1, said: String::new() };
@@ -2237,10 +2762,12 @@ fn netsh_direct(runs: &[Vec<String>]) -> Result<NetshDone, String> {
 
 /// Метка в выводе повышающего скрипта. Только ASCII: вывод powershell приезжает
 /// в кодировке консоли, и по-русски метка читалась бы через раз.
+#[cfg(windows)]
 const RUNAS_MARK: &str = "HELENE-RUNAS";
 
 /// Что сказал скрипт повышения.
 #[derive(PartialEq, Eq, Debug)]
+#[cfg(windows)]
 enum RunAs {
     /// Повышение состоялось, вот код пачки.
     Code(i32),
@@ -2251,6 +2778,7 @@ enum RunAs {
     Unknown,
 }
 
+#[cfg(windows)]
 fn parse_runas(text: &str) -> Option<RunAs> {
     let line = text.lines().rev().map(str::trim).find(|l| l.starts_with(RUNAS_MARK))?;
     let mut parts = line.split_whitespace().skip(1);
@@ -2264,6 +2792,7 @@ fn parse_runas(text: &str) -> Option<RunAs> {
 
 /// Отказ Windows — человеческими словами. Числа владельцу ничего не говорят, а
 /// «не удалось» без причины не говорит вообще ничего.
+#[cfg(windows)]
 fn runas_refusal(code: u32) -> String {
     match code {
         // ERROR_CANCELLED. Сюда же Windows кладёт политику, которая отклоняет
@@ -2291,6 +2820,7 @@ fn runas_refusal(code: u32) -> String {
 /// вовсе, переменная осталась бы пустой, и `exit [int]$null` отрапортовал бы
 /// НУЛЁМ, то есть успехом. 9009 — то, чем Windows отвечает на «команду не
 /// нашли».
+#[cfg(windows)]
 fn netsh_batch_script(netsh: &str, runs: &[Vec<String>]) -> String {
     let mut script = String::from("$ErrorActionPreference='Continue'; $LASTEXITCODE = 9009; ");
     for args in runs {
@@ -2313,6 +2843,7 @@ fn netsh_batch_script(netsh: &str, runs: &[Vec<String>]) -> String {
 /// путь к питону, и имя правила «Helene (8094)» — приехал бы в дочерний
 /// powershell разрезанным на куски. Base64 — один токен без пробелов и кавычек,
 /// склейке его не испортить; заодно снимается вопрос о вложенных кавычках.
+#[cfg(windows)]
 fn utf16le_base64(text: &str) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut bytes: Vec<u8> = Vec::with_capacity(text.len() * 2);
@@ -2348,6 +2879,7 @@ fn utf16le_base64(text: &str) -> String {
 /// Строка аргументов здесь одна и без пробелов внутри частей — это второе, за
 /// что взят -EncodedCommand: `ProcessStartInfo.Arguments` пришлось бы иначе
 /// кавычить руками.
+#[cfg(windows)]
 fn runas_script(target: &str, encoded: &str, workdir: &str) -> String {
     format!(
         "$ErrorActionPreference='Stop'; \
@@ -2384,6 +2916,7 @@ fn runas_script(target: &str, encoded: &str, workdir: &str) -> String {
 /// имени, а голое имя Windows ищет и в папке процесса — то есть в папке
 /// установки, куда пишет и сам агент. Подложенный туда файл исполнился бы
 /// ПОВЫШЕННЫМ.
+#[cfg(windows)]
 fn netsh_via_uac(runs: &[Vec<String>]) -> Result<NetshDone, String> {
     let netsh = sys_exe("netsh.exe");
     if !netsh.is_absolute() {
@@ -2460,6 +2993,7 @@ fn broker_call_deadline(
 /// разъехаться между двумя дверями. Права нулевой сессии для этого не нужны:
 /// у службы они и так есть, а `service.firewall` решает, можно ли ей их тратить
 /// на брандмауэр.
+#[cfg(windows)]
 fn firewall_via_broker(port: u16, why: &str) -> Result<NetshDone, String> {
     let tree = tree_dir();
     let Some(token) = broker_token_read(&tree) else {
@@ -2491,6 +3025,7 @@ fn firewall_via_broker(port: u16, why: &str) -> Result<NetshDone, String> {
     Ok(NetshDone { code: 0, said: receipt.note.clone() })
 }
 
+#[cfg(windows)]
 fn netsh_via_broker(runs: &[Vec<String>], why: &str) -> Result<NetshDone, String> {
     let netsh = sys_exe("netsh.exe");
     if !netsh.is_absolute() {
@@ -2548,6 +3083,7 @@ fn netsh_via_broker(runs: &[Vec<String>], why: &str) -> Result<NetshDone, String
 /// Итог пачки словами. Число само по себе владельцу ничего не говорит, а 9009
 /// — это вообще не ответ netsh: так наш скрипт сообщает, что netsh не запустился
 /// вовсе (ноль на этом месте означал бы «получилось»).
+#[cfg(windows)]
 fn netsh_code_words(done: &NetshDone) -> String {
     let mut said = format!("netsh вернул код {}", done.code);
     if done.code == 9009 {
@@ -2563,6 +3099,7 @@ fn netsh_code_words(done: &NetshDone) -> String {
 /// Выполнить пачку той дверью, которую выбрал режим, и ЗАПИСАТЬ всё, что вышло.
 /// Молчаливого проглатывания здесь нет ни в одной ветке: журнал получает и
 /// команду, и дверь, и итог.
+#[cfg(windows)]
 fn netsh_batch(
     runs: &[Vec<String>],
     why: &str,
@@ -2600,6 +3137,7 @@ fn netsh_batch(
 
 /// Разрешить входящие к трубе в брандмауэре Windows. Нужны права
 /// администратора; без них — честная ошибка, а не тишина.
+#[cfg(windows)]
 #[tauri::command]
 async fn firewall_allow(port: u16) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || firewall_allow_blocking(port))
@@ -2607,6 +3145,19 @@ async fn firewall_allow(port: u16) -> Result<String, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Вне Windows правил не ставим: брандмауэр macOS, если он включён, сам
+/// спрашивает владельца про входящие к питону при первом подключении. Не
+/// ошибка — телефон от этого не ломается, — но строка в журнале остаётся.
+#[cfg(not(windows))]
+#[tauri::command]
+async fn firewall_allow(port: u16) -> Result<String, String> {
+    log_line(&format!(
+        "брандмауэр: правило для порта {port} на этой платформе не ставится — система спросит сама"
+    ));
+    Ok(format!("порт {port}: правило брандмауэра здесь не требуется"))
+}
+
+#[cfg(windows)]
 fn firewall_allow_blocking(port: u16) -> Result<String, String> {
     let base = exe_dir();
     let cfg = config_value();
@@ -2651,6 +3202,7 @@ fn firewall_allow_blocking(port: u16) -> Result<String, String> {
 /// Убрать разрешение брандмауэра (телефон выключили, программу снимают).
 /// Во всём продукте до этого был только `add rule` и ни одного `delete`:
 /// дыра переживала и выключение телефона, и удаление программы.
+#[cfg(windows)]
 #[tauri::command]
 async fn firewall_clear(port: u16) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || firewall_clear_blocking(port))
@@ -2658,6 +3210,14 @@ async fn firewall_clear(port: u16) -> Result<String, String> {
         .map_err(|e| e.to_string())?
 }
 
+#[cfg(not(windows))]
+#[tauri::command]
+async fn firewall_clear(port: u16) -> Result<String, String> {
+    log_line(&format!("брандмауэр: правила для порта {port} на этой платформе нет — снимать нечего"));
+    Ok(format!("порт {port}: правила брандмауэра здесь нет — снимать нечего"))
+}
+
+#[cfg(windows)]
 fn firewall_clear_blocking(port: u16) -> Result<String, String> {
     let elevated = process_is_elevated();
     let path = firewall_path(
@@ -2749,9 +3309,11 @@ fn local_stamp() -> String {
     )
 }
 
+/// Вне Windows — тот же штамп, что и у `helene.log` (`common/stamp.rs`,
+/// местное время через `localtime_r`); секунд эпохи здесь больше нет.
 #[cfg(not(windows))]
 fn local_stamp() -> String {
-    format!("[{}]", now_unix())
+    now_stamp()
 }
 
 fn now_unix() -> u64 {
@@ -2932,9 +3494,32 @@ fn ask_owner_yes(title: &str, text: &str) -> bool {
     answer == IDYES
 }
 
-/// Не-Windows: спросить некого, а «некого спросить» — это отказ, не согласие.
-#[cfg(not(windows))]
-fn ask_owner_yes(_title: &str, _text: &str) -> bool {
+/// macOS: тот же вопрос родным диалогом (`display dialog`). Кнопка по умолчанию
+/// и кнопка отмены — «Нет»: Enter и Esc отказывают; «Да» приходит строкой
+/// `button returned:Да`. Диалог не открылся — отказ, и причина в журнале.
+#[cfg(target_os = "macos")]
+fn ask_owner_yes(title: &str, text: &str) -> bool {
+    let script = format!(
+        "display dialog {} with title {} buttons {{\"Нет\", \"Да\"}} default button 1 cancel button 1 with icon caution",
+        applescript_quote(text),
+        applescript_quote(title)
+    );
+    match osascript(&script) {
+        Ok(out) => out.contains("button returned:Да"),
+        Err(err) => {
+            // «User canceled» — это «Нет», а не поломка; остальное — в журнал.
+            if !err.contains("-128") {
+                log_line(&format!("окно подтверждения не открылось ({err}) — считаю отказом"));
+            }
+            false
+        }
+    }
+}
+
+/// Прочие POSIX: спросить некого, а «некого спросить» — это отказ, не согласие.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn ask_owner_yes(title: &str, _text: &str) -> bool {
+    log_line(&format!("окно подтверждения показать нечем ({title}) — считаю отказом"));
     false
 }
 
@@ -2944,6 +3529,7 @@ fn ask_owner_yes(_title: &str, _text: &str) -> bool {
 ///
 /// `ping` ничего не выполняет и в журнал действий не пишется, поэтому спросить
 /// им дёшево. Срок короткий: если трубы нет вовсе, открытие падает сразу.
+#[cfg(windows)]
 fn broker_alive(tree: &Path) -> bool {
     let Some(token) = broker_token_read(tree) else {
         return false;
@@ -3112,11 +3698,15 @@ fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
         } else {
             match broker_token_read(tree) {
                 None => {
-                    refusal = Some(
+                    // Слова — по платформе: на macOS службы нет как механизма, и
+                    // звать агента «поставить её на экране „Система“» было бы ложью.
+                    refusal = Some(if cfg!(windows) {
                         "брокера нет: служба не установлена, и повышать права некому. \
                          Служба ставится один раз под администратором на экране «Система»"
-                            .to_string(),
-                    )
+                            .to_string()
+                    } else {
+                        "брокера на этой платформе нет: повышать права некому".to_string()
+                    })
                 }
                 // Слова отказа — службины, слово в слово: пересказ разъехался бы
                 // с оригиналом, а владельцу и агенту нужен один текст.
@@ -3434,15 +4024,16 @@ fn watch_outbound(app: tauri::AppHandle, tree: PathBuf, agent: String, show_text
 /// двести миллисекунд установщик (нет WebView2, паника) выглядел как успех, и
 /// владелец, кликнув по значку, не видел ничего вообще.
 fn hand_over_to_setup(base: &Path) -> bool {
-    let setup = base.join("helene-setup.exe");
+    let setup = setup_binary(base);
+    let label = setup_label();
     if !setup.exists() {
-        log_line("продукт не настроен, а helene-setup.exe рядом нет — открываю окно как есть");
+        log_line(&format!("продукт не настроен, а {label} рядом нет — открываю окно как есть"));
         return false;
     }
     let mut child = match Command::new(&setup).current_dir(base).spawn() {
         Ok(c) => c,
         Err(err) => {
-            log_line(&format!("helene-setup.exe не запустился: {err} — открываю окно"));
+            log_line(&format!("{label} не запустился: {err} — открываю окно"));
             return false;
         }
     };
@@ -3451,10 +4042,16 @@ fn hand_over_to_setup(base: &Path) -> bool {
     while Instant::now() < deadline {
         match child.try_wait() {
             Ok(Some(status)) => {
-                log_line(&format!("helene-setup.exe вышел сразу ({status}) — открываю окно"));
+                log_line(&format!("{label} вышел сразу ({status}) — открываю окно"));
+                // Про WebView2 — только на Windows: на macOS вебвью системный.
+                let why = if cfg!(windows) {
+                    "\n\nЧастая причина — нет Microsoft Edge WebView2 Runtime."
+                } else {
+                    ""
+                };
                 message_box_async(
                     format!("{}: установка не открылась", product_ui()),
-                    "Помощник установки закрылся сразу после запуска.\n\nЧастая причина — нет Microsoft Edge WebView2 Runtime.\nПодробности — в helene.log рядом с программой.".to_string(),
+                    format!("Помощник установки закрылся сразу после запуска.{why}\nПодробности — в helene.log рядом с программой."),
                 );
                 return false;
             }
@@ -3559,7 +4156,7 @@ fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
 }
 
 fn main() {
-    let base = exe_dir();
+    let base = install_root();
     install_panic_hook();
     // Контекст сборки — один раз и до первого слова в журнале: из него имя продукта.
     let context = tauri::generate_context!();
@@ -3720,15 +4317,20 @@ fn main() {
         config: current
             .as_ref()
             .map(|a| a.config.clone())
-            .unwrap_or_else(|| exe_dir().join(CONFIG_NAME)),
+            .unwrap_or_else(|| install_root().join(CONFIG_NAME)),
     });
 
-    let built = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // Один экземпляр — ПЕРВЫМ плагином: повторный запуск не доходит до
         // окна, а поднимает и фокусирует уже живое.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main(app);
-        }))
+        }));
+    // Уведомления macOS — плагином (Центр уведомлений); на Windows их показывает
+    // tauri-winrt-notification напрямую, см. `toast`.
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_plugin_notification::init());
+    let built = builder
         // Память окна: размер, положение и «развёрнуто/нет» переживают перезапуск.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(LocalHarness {
@@ -3771,6 +4373,9 @@ fn main() {
             agent_add
         ])
         .setup(move |app| {
+            // Хэндл для уведомлений macOS — до первого `toast` из сторожей ниже.
+            #[cfg(target_os = "macos")]
+            let _ = APP_HANDLE.set(app.handle().clone());
             // Продукт зовётся своим именем: заголовок, ярлык, значок, уведомления —
             // Hélène; имя агента — только там, где говорит агент (слово владельца).
             register_toast_identity(toast_id(), product_ui(), None);
@@ -3781,8 +4386,16 @@ fn main() {
             let window_icon = tauri::image::Image::from_bytes(include_bytes!(concat!(
                 "../", env!("HELENE_ICON_DIR"), "/icon.png"
             )))?;
+            #[cfg(not(target_os = "macos"))]
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!(concat!(
                 "../", env!("HELENE_ICON_DIR"), "/32x32.png"
+            )))?;
+            // macOS: строка меню рисует значок сама (template — чёрный силуэт с
+            // альфой, система красит его под светлую/тёмную тему). 44×44 —
+            // retina-вариант, до 18 pt его ужимает NSImage.
+            #[cfg(target_os = "macos")]
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!(concat!(
+                "../", env!("HELENE_ICON_DIR"), "/tray-template@2x.png"
             )))?;
             debug_assert_eq!(app.config().identifier, toast_id());
             open_window(app, &init_script, Some(window_icon))?;
@@ -3844,12 +4457,14 @@ fn main() {
             } else {
                 Menu::with_items(app, &[&open, &quit])?
             };
-            TrayIconBuilder::with_id("frame")
+            let tray = TrayIconBuilder::with_id("frame")
                 .icon(tray_icon)
                 .tooltip(product_ui())
                 .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
+                .show_menu_on_left_click(false);
+            #[cfg(target_os = "macos")]
+            let tray = tray.icon_as_template(true);
+            tray.on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => show_main(app),
                     "quit" => {
                         let state = app.state::<LocalHarness>();
@@ -3926,7 +4541,15 @@ fn main() {
     // осталось» не значит «владелец закончил».
     let run = match built {
         Ok(app) => {
-            app.run(|_app, event| {
+            app.run(|app, event| {
+                // macOS: клик по значку в Dock, когда окно спрятано в строку меню,
+                // — это «открыть», как левый клик по значку трея.
+                #[cfg(target_os = "macos")]
+                if let tauri::RunEvent::Reopen { .. } = &event {
+                    show_main(app);
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = app;
                 if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
                     // ⚠⚠ Выход — только по слову владельца («Выход» у значка
                     // часов, `app.exit(0)`, и тогда код назван). Исчезнувшее
@@ -3996,13 +4619,15 @@ fn webview2_present() -> bool {
 /// Первое закрытие окна: сказать, что агент жив и где его найти. Один раз —
 /// отметка рядом с exe, чтобы не повторять очевидное.
 fn close_hint() {
-    let flag = exe_dir().join(".close-hint-shown");
+    let flag = install_root().join(".close-hint-shown");
     if flag.exists() {
         return;
     }
     let _ = std::fs::write(&flag, "1");
+    // Где значок: у часов на Windows, в строке меню (и в Dock) на macOS.
+    let place = if cfg!(target_os = "macos") { "значок в строке меню" } else { "значок у часов" };
     let body = format!(
-        "Окно закрыто, {} продолжает работать. Открыть снова — значок у часов.",
+        "Окно закрыто, {} продолжает работать. Открыть снова — {place}.",
         with_current("агент".to_string(), |c| c.name.clone())
     );
     toast(product_ui(), &body);
@@ -4056,10 +4681,14 @@ fn open_window<M: tauri::Manager<tauri::Wry>>(
                 "окно открывается: ключ {} ({} знаков), скрипт инициализации {} знаков",
                 if key.is_empty() { "ПУСТ" } else { "есть" }, key.len(), init_script.len()
             ));
+            // Адрес своего протокола — по платформе: WebView2 (Windows) видит
+            // зарегистрированную схему как `http://helene.localhost`, WKWebView
+            // (macOS) и WebKitGTK — как `helene://localhost` (см. tauri::webview).
+            let origin = if cfg!(windows) { "http://helene.localhost" } else { "helene://localhost" };
             let raw = if key.is_empty() {
-                "http://helene.localhost/index.html".to_string()
+                format!("{origin}/index.html")
             } else {
-                format!("http://helene.localhost/index.html?key={key}")
+                format!("{origin}/index.html?key={key}")
             };
             tauri::Url::parse(&raw).expect("адрес окна")
         }),
@@ -4109,8 +4738,7 @@ fn kill_children(state: &tauri::State<LocalHarness>) {
     if let Ok(mut guard) = state.children.lock() {
         for m in guard.iter_mut() {
             if let Some(child) = m.child.as_mut() {
-                let _ = child.kill();
-                let _ = child.wait();
+                stop_child(child);
             }
         }
         guard.clear();
@@ -4328,8 +4956,7 @@ fn watch_children(app: tauri::AppHandle) {
                         // раньше: сирот не оставляем.
                         for m in lifted.iter_mut() {
                             if let Some(child) = m.child.as_mut() {
-                                let _ = child.kill();
-                                let _ = child.wait();
+                                stop_child(child);
                             }
                         }
                     }
@@ -4346,7 +4973,7 @@ fn watch_children(app: tauri::AppHandle) {
 /// «работает» была бы враньём.
 #[tauri::command]
 fn agents_list(state: tauri::State<LocalHarness>) -> serde_json::Value {
-    let base = exe_dir();
+    let base = install_root();
     let raised: Vec<String> = state
         .children
         .lock()
@@ -4372,7 +4999,7 @@ fn agents_list(state: tauri::State<LocalHarness>) -> serde_json::Value {
 /// идёт своим чередом — окно просто смотрит в другую сторону.
 #[tauri::command]
 fn switch_agent(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, String> {
-    let base = exe_dir();
+    let base = install_root();
     let Some(agent) = find_agent(&base, &id) else {
         return Err(format!("агента «{id}» в этой установке нет"));
     };
@@ -4433,7 +5060,7 @@ fn switch_agent(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, 
 /// настроил их один раз), бот и тело — нет: они у каждого свои.
 #[tauri::command]
 async fn agent_add(app: tauri::AppHandle, name: String) -> Result<serde_json::Value, String> {
-    let base = exe_dir();
+    let base = install_root();
     let named = name.trim().to_string();
     if named.is_empty() {
         return Err("у агента должно быть имя — им он подписывает свои слова".into());
@@ -4456,8 +5083,10 @@ async fn agent_add(app: tauri::AppHandle, name: String) -> Result<serde_json::Va
         cmd.arg("-u").arg(&script).arg("add").arg("--name").arg(&named_for_cmd)
             .arg("--base").arg(&base)
             .env("PYTHONUTF8", "1")
+            .env("HELENE_PARENT_PID", std::process::id().to_string())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
         let out = cmd.output().map_err(|e| format!("не запустился: {e}"))?;
         let text = String::from_utf8_lossy(&out.stdout).to_string();
@@ -4479,14 +5108,20 @@ async fn agent_add(app: tauri::AppHandle, name: String) -> Result<serde_json::Va
     Ok(made)
 }
 
-/// Версия, папка, журнал — для экрана «О программе».
+/// Версия, папка, журнал — для экрана «О программе». `platform`/`arch` — по
+/// ним окно прячет карточки того, чего на этой системе нет (служба, тело,
+/// брандмауэр); `root` — корень установки, `exe_dir` оставлен под старым
+/// именем с тем же значением: окно показывает его как «папку программы».
 #[tauri::command]
 fn app_info() -> serde_json::Value {
-    let base = exe_dir();
+    let base = install_root();
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "exe_dir": base.display().to_string(),
+        "root": base.display().to_string(),
         "log": base.join("helene.log").display().to_string(),
+        "platform": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
     })
 }
 
@@ -4541,10 +5176,17 @@ fn version_newer(candidate: &str, current: &str) -> bool {
 /// (без учёта регистра); `allow_any` (только у Hélène: старые релизы звались
 /// просто `Helene.zip`) разрешает откат на любой .zip, у варианта отката нет —
 /// без своего архива кнопка ведёт на страницу релиза, как и раньше без вложений.
+///
+/// `macos` — искать сборку для Mac: `<productName>-<v>-macos-arm64.zip`, и только
+/// её (отката на «любой .zip» у Mac нет — старых релизов для него не было).
+/// Windows-ветка при этом ОБЯЗАНА Mac-архив пропускать: он тоже начинается с
+/// `helene-` и тоже `.zip`, и без этого фильтра Windows скачала бы себе
+/// поставку для Mac с первого же релиза, где она лежит выше по списку.
 fn pick_update_zip(
     assets: &[serde_json::Value],
     product: &str,
     allow_any: bool,
+    macos: bool,
 ) -> Option<serde_json::Value> {
     let url_of = |x: &serde_json::Value| {
         x.get("browser_download_url")
@@ -4560,13 +5202,24 @@ fn pick_update_zip(
             .unwrap_or_else(|| url_of(x).rsplit('/').next().unwrap_or("").to_string())
     };
     let is_zip = |x: &serde_json::Value| url_of(x).ends_with(".zip");
+    let for_mac = |x: &serde_json::Value| name_of(x).ends_with(UPDATE_MAC_SUFFIX);
     let prefix = format!("{}-", product.trim().to_lowercase());
+    if macos {
+        return assets
+            .iter()
+            .find(|x| is_zip(x) && for_mac(x) && name_of(x).starts_with(&prefix))
+            .cloned();
+    }
     assets
         .iter()
-        .find(|x| is_zip(x) && name_of(x).starts_with(&prefix))
-        .or_else(|| allow_any.then(|| assets.iter().find(|x| is_zip(x))).flatten())
+        .find(|x| is_zip(x) && !for_mac(x) && name_of(x).starts_with(&prefix))
+        .or_else(|| allow_any.then(|| assets.iter().find(|x| is_zip(x) && !for_mac(x))).flatten())
         .cloned()
 }
+
+/// Хвост имени архива для macOS (Apple Silicon): `Helene-<v>-macos-arm64.zip`.
+/// Рядом лежит `.sha256`; внутри архива в корне — `install.sh`.
+const UPDATE_MAC_SUFFIX: &str = "-macos-arm64.zip";
 
 #[tauri::command]
 async fn update_check(url: String) -> Result<serde_json::Value, String> {
@@ -4608,10 +5261,21 @@ fn update_check_blocking(url: &str) -> Result<serde_json::Value, String> {
         if parse_version(&raw_latest).is_none() {
             return Err(format!("не понял ответ сервера обновлений: версия «{raw_latest}»"));
         }
+        let macos = cfg!(target_os = "macos");
         let asset = v
             .get("assets")
             .and_then(|a| a.as_array())
-            .and_then(|a| pick_update_zip(a, product_fs(), product_fs() == PRODUCT));
+            .and_then(|a| pick_update_zip(a, product_fs(), product_fs() == PRODUCT, macos));
+        let current = env!("CARGO_PKG_VERSION");
+        // macOS: версия новее есть, а сборки для Mac в ней нет — сказать это
+        // словами, а не подсовывать страницу релиза с Windows-архивом. Когда
+        // новее ничего нет, отсутствие Mac-архива — не ошибка: ставить нечего.
+        if macos && asset.is_none() && version_newer(&raw_latest, current) {
+            return Err(format!(
+                "есть версия {}, но для macOS сборки этой версии нет",
+                raw_latest.trim()
+            ));
+        }
         let asset_zip = asset
             .as_ref()
             .and_then(|a| a.get("browser_download_url").and_then(|u| u.as_str()).map(str::to_string));
@@ -4640,7 +5304,6 @@ fn update_check_blocking(url: &str) -> Result<serde_json::Value, String> {
             .chars()
             .take(200)
             .collect();
-        let current = env!("CARGO_PKG_VERSION");
         let latest = raw_latest.trim().trim_start_matches(['v', 'V']).to_string();
         let digest = digest.trim().trim_start_matches("sha256:").to_lowercase();
         Ok(serde_json::json!({
@@ -4719,6 +5382,7 @@ fn update_autocheck() {
 
 /// Папка «Загрузки» владельца: известная папка из реестра, а не склейка.
 /// Реестр не ответил или папки нет — %USERPROFILE%\Downloads, затем %TEMP%.
+#[cfg(windows)]
 fn downloads_dir() -> PathBuf {
     let known = shell_folder("{374DE290-123F-4565-9164-39C4925E467B}", "Downloads")
         .filter(|p| p.is_dir() && !p.ends_with("Roaming\\Downloads"));
@@ -4727,6 +5391,18 @@ fn downloads_dir() -> PathBuf {
     }
     if let Some(profile) = std::env::var_os("USERPROFILE") {
         let p = PathBuf::from(profile).join("Downloads");
+        if p.is_dir() {
+            return p;
+        }
+    }
+    std::env::temp_dir()
+}
+
+/// POSIX: `~/Downloads`, иначе временная папка.
+#[cfg(not(windows))]
+fn downloads_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        let p = PathBuf::from(home).join("Downloads");
         if p.is_dir() {
             return p;
         }
@@ -4825,8 +5501,16 @@ async fn update_download(url: String, sha256: Option<String>) -> Result<serde_js
 /// `helene-setup.exe`. Установщик сам гасит работающую программу — включая
 /// это окно — и ставит поверх по правилам resources/ОБНОВЛЕНИЕ.md.
 /// Путь принимается только из «Загрузок» или %TEMP% и только .zip.
+///
+/// macOS: тот же смысл, другие руки. Архив распаковывает `ditto -x -k`
+/// (права и симлинки внутри `runtime/` свой zip-читатель потерял бы), дальше
+/// дело отдаётся `install.sh --from <zip> --relaunch` из архива — отсоединённо,
+/// в своей группе процессов, — а оболочка гасит детей и выходит сама через
+/// полторы секунды (ответ окну успевает дойти). Скрипту передаётся
+/// `HELENE_OLD_PID`, чтобы он мог дождаться нашей смерти, прежде чем менять
+/// файлы под ногами.
 #[tauri::command]
-async fn update_install(path: String) -> Result<serde_json::Value, String> {
+async fn update_install(app: tauri::AppHandle, path: String) -> Result<serde_json::Value, String> {
     let archive = PathBuf::from(path.trim())
         .canonicalize()
         .map_err(|_| "архива нет по этому пути".to_string())?;
@@ -4840,51 +5524,133 @@ async fn update_install(path: String) -> Result<serde_json::Value, String> {
     if !allowed {
         return Err("устанавливаю только архивы из «Загрузок» или временной папки".into());
     }
+    // Хэндл нужен только POSIX-ветке (выход после запуска install.sh); на
+    // Windows программу гасит сам установщик.
+    #[cfg(windows)]
+    let _ = app;
     tauri::async_runtime::spawn_blocking(move || {
         let stem = archive.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Helene".into());
         let dest = archive.parent().map(Path::to_path_buf).unwrap_or_else(downloads_dir).join(&stem);
         if dest.exists() {
             std::fs::remove_dir_all(&dest).map_err(|e| format!("не очистилась папка распаковки: {e}"))?;
         }
-        let script = format!(
-            "$ProgressPreference='SilentlyContinue'; Expand-Archive -LiteralPath {} -DestinationPath {} -Force; exit $LASTEXITCODE",
-            ps_quote(&plain_path(&archive).to_string_lossy()),
-            ps_quote(&plain_path(&dest).to_string_lossy()),
-        );
-        let mut cmd = Command::new(powershell_exe());
-        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
-        let out = run_hidden_for(&mut cmd, Duration::from_secs(600))?;
-        if !out.status.success() {
-            return Err(format!(
-                "архив не распаковался: {}",
-                String::from_utf8_lossy(&out.stderr).trim().chars().take(200).collect::<String>()
-            ));
+        #[cfg(windows)]
+        {
+            update_install_windows(&archive, &dest)
         }
-        // helene-setup.exe — в корне архива или в его единственной подпапке.
-        let mut setup = dest.join("helene-setup.exe");
-        if !setup.exists() {
-            let subdirs: Vec<PathBuf> = std::fs::read_dir(&dest)
-                .map_err(|e| e.to_string())?
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.is_dir())
-                .collect();
-            if let [one] = subdirs.as_slice() {
-                setup = one.join("helene-setup.exe");
-            }
+        #[cfg(not(windows))]
+        {
+            update_install_posix(app, &archive, &dest)
         }
-        if !setup.exists() {
-            return Err(format!("в архиве нет helene-setup.exe (распаковано в {})", dest.display()));
-        }
-        let workdir = setup.parent().map(Path::to_path_buf).unwrap_or_else(|| dest.clone());
-        Command::new(&setup)
-            .current_dir(&workdir)
-            .spawn()
-            .map_err(|e| format!("установщик не запустился: {e}"))?;
-        log_line(&format!("обновление: запущен установщик {}", setup.display()));
-        Ok(serde_json::json!({ "setup": setup.display().to_string(), "dir": workdir.display().to_string() }))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Windows-половина `update_install`: Expand-Archive и `helene-setup.exe`
+/// из распакованного. Текст тот же, что был в теле команды до порта.
+#[cfg(windows)]
+fn update_install_windows(archive: &Path, dest: &Path) -> Result<serde_json::Value, String> {
+    let script = format!(
+        "$ProgressPreference='SilentlyContinue'; Expand-Archive -LiteralPath {} -DestinationPath {} -Force; exit $LASTEXITCODE",
+        ps_quote(&plain_path(archive).to_string_lossy()),
+        ps_quote(&plain_path(dest).to_string_lossy()),
+    );
+    let mut cmd = Command::new(powershell_exe());
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    let out = run_hidden_for(&mut cmd, Duration::from_secs(600))?;
+    if !out.status.success() {
+        return Err(format!(
+            "архив не распаковался: {}",
+            String::from_utf8_lossy(&out.stderr).trim().chars().take(200).collect::<String>()
+        ));
+    }
+    // helene-setup.exe — в корне архива или в его единственной подпапке.
+    let mut setup = dest.join("helene-setup.exe");
+    if !setup.exists() {
+        let subdirs: Vec<PathBuf> = std::fs::read_dir(dest)
+            .map_err(|e| e.to_string())?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_dir())
+            .collect();
+        if let [one] = subdirs.as_slice() {
+            setup = one.join("helene-setup.exe");
+        }
+    }
+    if !setup.exists() {
+        return Err(format!("в архиве нет helene-setup.exe (распаковано в {})", dest.display()));
+    }
+    let workdir = setup.parent().map(Path::to_path_buf).unwrap_or_else(|| dest.to_path_buf());
+    Command::new(&setup)
+        .current_dir(&workdir)
+        .spawn()
+        .map_err(|e| format!("установщик не запустился: {e}"))?;
+    log_line(&format!("обновление: запущен установщик {}", setup.display()));
+    Ok(serde_json::json!({ "setup": setup.display().to_string(), "dir": workdir.display().to_string() }))
+}
+
+/// Обновление на POSIX (macOS): распаковка `ditto`, запуск `install.sh` из
+/// архива отсоединённо, выход оболочки. Смысл Windows-ветки повторён целиком:
+/// архив рядом с собой → своя папка распаковки → установщик из неё.
+#[cfg(not(windows))]
+fn update_install_posix(app: tauri::AppHandle, archive: &Path, dest: &Path) -> Result<serde_json::Value, String> {
+    std::fs::create_dir_all(dest).map_err(|e| format!("не создалась папка распаковки: {e}"))?;
+    let mut unpack = if cfg!(target_os = "macos") {
+        let mut c = Command::new(posix_tool("ditto"));
+        c.arg("-x").arg("-k").arg(archive).arg(dest);
+        c
+    } else {
+        let mut c = Command::new(posix_tool("unzip"));
+        c.arg("-q").arg("-o").arg(archive).arg("-d").arg(dest);
+        c
+    };
+    let out = run_hidden_for(&mut unpack, Duration::from_secs(600))?;
+    if !out.status.success() {
+        return Err(format!(
+            "архив не распаковался: {}",
+            String::from_utf8_lossy(&out.stderr).trim().chars().take(200).collect::<String>()
+        ));
+    }
+    // install.sh — в корне архива или в его единственной подпапке.
+    let mut script = dest.join("install.sh");
+    if !script.exists() {
+        let subdirs: Vec<PathBuf> = std::fs::read_dir(dest)
+            .map_err(|e| e.to_string())?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_dir())
+            .collect();
+        if let [one] = subdirs.as_slice() {
+            script = one.join("install.sh");
+        }
+    }
+    if !script.exists() {
+        return Err(format!("в архиве нет install.sh (распаковано в {})", dest.display()));
+    }
+    let workdir = script.parent().map(Path::to_path_buf).unwrap_or_else(|| dest.to_path_buf());
+    let mut cmd = Command::new(posix_tool("sh"));
+    cmd.arg(&script)
+        .arg("--from")
+        .arg(archive)
+        .arg("--relaunch")
+        .env("HELENE_OLD_PID", std::process::id().to_string())
+        .env("HELENE_ROOT", install_root())
+        .current_dir(&workdir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    cmd.spawn().map_err(|e| format!("install.sh не запустился: {e}"))?;
+    log_line(&format!("обновление: запущен {} --from {} --relaunch; выхожу через 1,5 с", script.display(), archive.display()));
+    // Выход — отдельным потоком и с паузой: ответ этой команды должен доехать
+    // до окна, а дети — умереть до того, как install.sh начнёт менять файлы.
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1500));
+        let state = app.state::<LocalHarness>();
+        kill_children(&state);
+        relay_abort();
+        app.exit(0);
+    });
+    Ok(serde_json::json!({ "setup": script.display().to_string(), "dir": workdir.display().to_string() }))
 }
 
 /// Вход агента в Telegram своим аккаунтом: шаги status / send / code / logout
@@ -4898,13 +5664,13 @@ async fn telegram_account(
     code: String,
     password: String,
 ) -> Result<serde_json::Value, String> {
-    let base = exe_dir();
+    let base = install_root();
     // Дерево — то же, с которым живёт окно, а не «data» от текущей папки
     // процесса: запущенный не ярлыком helene.exe клал сессию Telethon в чужое
     // место, и руннер не находил её никогда.
     let tree = current_tree();
     tauri::async_runtime::spawn_blocking(move || {
-        let python = base.join("runtime").join("python.exe");
+        let python = bundled_python(&base);
         let script = base.join("app").join("localharness").join("mtproto_login.py");
         if !python.exists() || !script.exists() {
             return Err("в этой сборке нет помощника входа".to_string());
@@ -4927,7 +5693,8 @@ async fn telegram_account(
             .env("HELENE_TG_PASSWORD", password)
             .arg(step.trim())
             .current_dir(&base)
-            .env("PYTHONUTF8", "1");
+            .env("PYTHONUTF8", "1")
+            .env("HELENE_PARENT_PID", std::process::id().to_string());
         // Вход в Telegram ждёт сеть и код: минута, но не бесконечность.
         let out = run_hidden_for(&mut cmd, Duration::from_secs(90))?;
         let text = String::from_utf8_lossy(&out.stdout);
@@ -4950,8 +5717,8 @@ async fn telegram_account(
 /// протухшую запись, вместо вечного «качаю…».
 #[tauri::command]
 fn voice_fetch(model: String, kind: Option<String>) -> Result<String, String> {
-    let base = exe_dir();
-    let python = base.join("runtime").join("python.exe");
+    let base = install_root();
+    let python = bundled_python(&base);
     let script = base.join("app").join("localharness").join("voice.py");
     if !python.exists() || !script.exists() {
         return Err("в этой сборке нет помощника голоса (app/localharness/voice.py)".into());
@@ -4971,9 +5738,12 @@ fn voice_fetch(model: String, kind: Option<String>) -> Result<String, String> {
         .arg(if speaking { "--get-voice" } else { "--get" })
         .arg(&name)
         .current_dir(&base)
-        .env("PYTHONUTF8", "1");
+        .env("PYTHONUTF8", "1")
+        .env("HELENE_PARENT_PID", std::process::id().to_string());
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(unix)]
+    cmd.process_group(0);
     match cmd.spawn() {
         Ok(child) => {
             adopt(&child);
@@ -4994,9 +5764,9 @@ fn voice_fetch(model: String, kind: Option<String>) -> Result<String, String> {
 /// и команды на это у окна намеренно нет.
 #[tauri::command]
 async fn carry_export() -> Result<String, String> {
-    let base = exe_dir();
+    let base = install_root();
     tauri::async_runtime::spawn_blocking(move || {
-        let python = base.join("runtime").join("python.exe");
+        let python = bundled_python(&base);
         let script = base.join("app").join("localharness").join("carry.py");
         if !python.exists() || !script.exists() {
             return Err("в этой сборке нет помощника переноса (app/localharness/carry.py)".to_string());
@@ -5010,7 +5780,8 @@ async fn carry_export() -> Result<String, String> {
             // всегда первого. Раньше это было одно и то же — с 11.09 нет.
             .arg(current_config_path())
             .current_dir(&base)
-            .env("PYTHONUTF8", "1");
+            .env("PYTHONUTF8", "1")
+            .env("HELENE_PARENT_PID", std::process::id().to_string());
         // Память агента бывает на сотни мегабайт; десять минут — не бесконечность.
         let out = run_hidden_for(&mut cmd, Duration::from_secs(600))?;
         let text = String::from_utf8_lossy(&out.stdout).to_string();
@@ -5138,7 +5909,7 @@ fn read_tail(path: &Path) -> Option<String> {
 }
 
 fn logs_bundle_blocking(tree: PathBuf) -> Result<String, String> {
-    let base = exe_dir();
+    let base = install_root();
     // Конфиг здесь не обязателен: логи нужнее всего именно тогда, когда
     // helene.json испорчен, а config_load()? отказывал ровно в этом случае.
     let stamp = std::time::SystemTime::now()
@@ -5196,13 +5967,24 @@ fn logs_bundle_blocking(tree: PathBuf) -> Result<String, String> {
         return Err("логов пока нет".into());
     }
     let out = std::env::temp_dir().join(format!("helene-logs-{stamp}.zip"));
-    let script = format!(
-        "Compress-Archive -Force -Path '{}\\*' -DestinationPath '{}'",
-        stage.display(),
-        out.display()
-    );
-    let mut cmd = Command::new(powershell_exe());
-    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    #[cfg(windows)]
+    let mut cmd = {
+        let script = format!(
+            "Compress-Archive -Force -Path '{}\\*' -DestinationPath '{}'",
+            stage.display(),
+            out.display()
+        );
+        let mut cmd = Command::new(powershell_exe());
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+        cmd
+    };
+    // POSIX: `zip -j` — файлы в корень архива, без пути папки сборки.
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut cmd = Command::new(posix_tool("zip"));
+        cmd.arg("-q").arg("-j").arg("-r").arg(&out).arg(&stage);
+        cmd
+    };
     let o = run_hidden_for(&mut cmd, Duration::from_secs(120))?;
     let _ = std::fs::remove_dir_all(&stage);
     if !o.status.success() || !out.is_file() {
@@ -5308,15 +6090,20 @@ mod tests {
     }
 
     use super::{
-        admin_verdict, agent_mode, agent_name, blocked_script, broker_answer_row, broker_confirm_text,
-        broker_wish_ask, broker_wish_id, broker_wishes, console_text, decode_config,
-        ensure_desk_token, expand_env, firewall_add_args, firewall_added, firewall_clear_runs,
-        firewall_path, firewall_removed, firewall_rule_name, firewall_rule_title,
-        firewall_set_runs, firewall_why, mask_secrets, netsh_batch_script,
-        netsh_code_words, parse_runas, parse_version, ps_quote, read_desk_token,
-        runas_refusal, runas_script, unconfigured, utf16le_base64, version_newer, BrokerAsk,
-        BrokerOp, BrokerReceipt, BrokerWish, FirewallPath, NetshDone, RunAs, FIREWALL_SCOPE_HUMAN,
-        PRODUCT, RUNAS_MARK,
+        admin_verdict, agent_name, blocked_script, broker_answer_row, broker_confirm_text,
+        broker_wish_ask, broker_wish_id, broker_wishes, decode_config, ensure_desk_token,
+        mask_secrets, parse_version, read_desk_token, unconfigured, version_newer, BrokerOp,
+        BrokerReceipt, BrokerWish,
+    };
+    // Брандмауэр, UAC, PowerShell и кодировка консоли — только Windows: этих
+    // функций в сборке для macOS нет, и стенды на них помечены так же.
+    #[cfg(windows)]
+    use super::{
+        agent_mode, console_text, expand_env, firewall_add_args, firewall_added,
+        firewall_clear_runs, firewall_path, firewall_removed, firewall_rule_name,
+        firewall_rule_title, firewall_set_runs, firewall_why, netsh_batch_script,
+        netsh_code_words, parse_runas, ps_quote, runas_refusal, runas_script, utf16le_base64,
+        BrokerAsk, FirewallPath, NetshDone, RunAs, FIREWALL_SCOPE_HUMAN, PRODUCT, RUNAS_MARK,
     };
     use serde_json::json;
 
@@ -5331,6 +6118,7 @@ mod tests {
     /// местожительство харнесса (local|remote), и режим оттуда читается только
     /// как поломка, которую всё равно надо понять, — ровно как в
     /// localharness/modes.py::stated.
+    #[cfg(windows)]
     #[test]
     fn agent_mode_is_read_from_its_own_key() {
         assert_eq!(agent_mode(Some(&json!({ "agent_mode": "service" }))), "service");
@@ -5357,6 +6145,7 @@ mod tests {
     /// ⚠ Ради чего тест переписан: служба стала опцией ПОВЕРХ режима, режим
     /// бывает только sandbox|interactive, и старое условие `mode == "service"`
     /// не выполнялось бы никогда — дверь брокера умерла бы молча.
+    #[cfg(windows)]
     #[test]
     fn the_door_is_chosen_by_the_mode() {
         // Брокер жив — идём брокером в ЛЮБОМ режиме: служба ставится ровно ради
@@ -5381,6 +6170,7 @@ mod tests {
 
     /// Два пути к одному действию обязаны обещать владельцу ОДНО И ТО ЖЕ. Так
     /// уже расходилось: правило ставили и служба, и окно, по-разному.
+    #[cfg(windows)]
     #[test]
     fn both_doors_promise_the_same_thing() {
         let uac = firewall_added(8094, FirewallPath::Uac);
@@ -5401,6 +6191,7 @@ mod tests {
     /// Пачка: снос старого, потом добавление своего. Порядок важен — кодом
     /// пачки считается код ПОСЛЕДНЕЙ команды, а снос несуществующего правила
     /// netsh честно считает ошибкой.
+    #[cfg(windows)]
     #[test]
     fn a_rule_is_replaced_not_piled_up() {
         let runs = firewall_set_runs(8094, Some(r"C:\Helene\runtime\python.exe"));
@@ -5416,6 +6207,7 @@ mod tests {
 
     /// Скрипт для повышенного powershell: аргументы целы, а пустой
     /// `$LASTEXITCODE` не превращается в «успех».
+    #[cfg(windows)]
     #[test]
     fn the_elevated_script_keeps_arguments_whole() {
         let runs = firewall_set_runs(8094, Some(r"C:\Program Files\Hélène\python.exe"));
@@ -5438,6 +6230,7 @@ mod tests {
     /// -EncodedCommand — единственный способ передать пачку целиком:
     /// `Start-Process -ArgumentList` склеивает элементы пробелом и не берёт их в
     /// кавычки, так что аргумент с пробелом приехал бы разрезанным.
+    #[cfg(windows)]
     #[test]
     fn encoded_command_is_utf16le_base64() {
         // Известный вектор: "hi" в UTF-16LE — 68 00 69 00.
@@ -5454,6 +6247,7 @@ mod tests {
     }
 
     /// Внешний скрипт печатает ОДНУ строку об исходе — и она разбирается.
+    #[cfg(windows)]
     #[test]
     fn the_outcome_of_the_uac_window_is_read_not_guessed() {
         let script = runas_script(
@@ -5482,10 +6276,13 @@ mod tests {
 
     /// Отказ называется словами. «Нет» в окне UAC — не поломка, и говорить о
     /// нём надо так, чтобы человек понял, что произошло.
+    #[cfg(windows)]
     #[test]
     fn a_refusal_is_said_in_words() {
+        // Кнопку UAC подписывает Windows на своём языке — текст обязан назвать
+        // исход («не подтверждено»), а не обещать слово «Нет» с чужого экрана.
         let cancelled = runas_refusal(1223);
-        assert!(cancelled.contains("«Нет»"), "{cancelled}");
+        assert!(cancelled.contains("не подтверждено"), "{cancelled}");
         assert!(cancelled.contains("политик"), "{cancelled}");
         assert!(runas_refusal(1260).contains("политик"));
         assert!(runas_refusal(0).contains("не назвала причины"));
@@ -5495,6 +6292,7 @@ mod tests {
 
     /// 9009 — не ответ netsh, а наш признак «программа не запустилась вовсе».
     /// Ноль на этом месте означал бы «получилось».
+    #[cfg(windows)]
     #[test]
     fn a_code_is_explained_not_just_printed() {
         let missing = NetshDone { code: 9009, said: String::new() };
@@ -5507,6 +6305,7 @@ mod tests {
     /// Просьба к брокеру собирается такой, какой служба её ПРИМЕТ. Проверка
     /// идёт разбором той же стороны, что стоит в службе (common/broker.rs):
     /// разъедься эти половины, и отказ вылез бы только живьём, у владельца.
+    #[cfg(windows)]
     #[test]
     fn the_broker_is_asked_the_way_the_service_expects() {
         for (adding, runs) in [
@@ -5681,7 +6480,9 @@ mod tests {
             text.contains(r#"C:\Windows\System32\netsh.exe advfirewall "name=Helene (8094)""#),
             "{text}"
         );
-        assert!(text.contains("отказ"), "{text}");
+        // «Отказ тоже будет записан» — с заглавной, в начале предложения; стенду
+        // важно слово, а не регистр.
+        assert!(text.to_lowercase().contains("отказ"), "{text}");
         // Вторая дверь называется своими правами, а не системными: путать их
         // нельзя, разница между ними и есть весь вопрос.
         let side = BrokerWish { op: BrokerOp::SpawnInteractive, ..wish.clone() };
@@ -5754,6 +6555,7 @@ mod tests {
     /// cp866 нельзя с тех пор, как он спрашивает страницу у системы: те же два
     /// байта — «Ок» только на русской Windows, а на английской это «Ä¬», и
     /// такой стенд краснел бы ровно там, где код как раз прав.
+    #[cfg(windows)]
     #[test]
     fn what_netsh_said_is_readable() {
         assert_eq!(decode_codepage(&[0x8E, 0xAA], 866), "Ок");
@@ -5764,6 +6566,7 @@ mod tests {
 
     /// Сужение правила не зависит от двери: аргументы одни и те же, из
     /// common/firewall_rule.rs.
+    #[cfg(windows)]
     #[test]
     fn the_rule_itself_does_not_depend_on_the_door() {
         let runs = firewall_set_runs(8094, Some(r"C:\Helene\runtime\python.exe"));
@@ -6018,23 +6821,126 @@ mod tests {
             {"name": "Helene-0.5.0.zip", "browser_download_url": "https://x/Helene-0.5.0.zip"}
         ]);
         let both = both.as_array().unwrap();
-        assert_eq!(pick_update_zip(both, "Helene", true).unwrap()["name"], "Helene-0.5.0.zip");
-        assert_eq!(pick_update_zip(both, "Praxis", false).unwrap()["name"], "Praxis-0.5.0.zip");
+        assert_eq!(pick_update_zip(both, "Helene", true, false).unwrap()["name"], "Helene-0.5.0.zip");
+        assert_eq!(pick_update_zip(both, "Praxis", false, false).unwrap()["name"], "Praxis-0.5.0.zip");
         // Старый релиз: только Helene.zip без версии в имени — Hélène берёт его как раньше,
         // Praxis не берёт ничего.
         let legacy = serde_json::json!([
             {"name": "Helene.zip", "browser_download_url": "https://x/Helene.zip"}
         ]);
         let legacy = legacy.as_array().unwrap();
-        assert_eq!(pick_update_zip(legacy, "Helene", true).unwrap()["name"], "Helene.zip");
-        assert!(pick_update_zip(legacy, "Praxis", false).is_none());
+        assert_eq!(pick_update_zip(legacy, "Helene", true, false).unwrap()["name"], "Helene.zip");
+        assert!(pick_update_zip(legacy, "Praxis", false, false).is_none());
         // Имя вложения может отсутствовать — тогда оно из ссылки.
         let nameless = serde_json::json!([
             {"browser_download_url": "https://x/y/praxis-0.5.1.ZIP"}
         ]);
         let nameless = nameless.as_array().unwrap();
-        assert!(pick_update_zip(nameless, "Praxis", false).is_some());
-        assert!(pick_update_zip(nameless, "Helene", false).is_none());
+        assert!(pick_update_zip(nameless, "Praxis", false, false).is_some());
+        assert!(pick_update_zip(nameless, "Helene", false, false).is_none());
+    }
+
+    /// С 0.7.1 в релизе лежит и сборка для Mac. Windows её не берёт, даже когда
+    /// она первая в списке и начинается с того же `Helene-`; Mac берёт только её
+    /// и не откатывается на Windows-архив, когда своего нет.
+    #[test]
+    fn update_zip_keeps_windows_and_mac_archives_apart() {
+        use super::pick_update_zip;
+        let release = serde_json::json!([
+            {"name": "Helene-0.7.1-macos-arm64.zip", "browser_download_url": "https://x/Helene-0.7.1-macos-arm64.zip"},
+            {"name": "Helene-0.7.1-macos-arm64.zip.sha256", "browser_download_url": "https://x/Helene-0.7.1-macos-arm64.zip.sha256"},
+            {"name": "Praxis-0.7.1.zip", "browser_download_url": "https://x/Praxis-0.7.1.zip"},
+            {"name": "Helene-0.7.1.zip", "browser_download_url": "https://x/Helene-0.7.1.zip"}
+        ]);
+        let release = release.as_array().unwrap();
+        assert_eq!(pick_update_zip(release, "Helene", true, false).unwrap()["name"], "Helene-0.7.1.zip");
+        assert_eq!(pick_update_zip(release, "Helene", true, true).unwrap()["name"], "Helene-0.7.1-macos-arm64.zip");
+        assert_eq!(pick_update_zip(release, "Praxis", false, false).unwrap()["name"], "Praxis-0.7.1.zip");
+        // Релиз без Mac-сборки: Mac не получает ничего — ни Windows-архива по
+        // префиксу, ни «любого .zip» по откату.
+        let windows_only = serde_json::json!([
+            {"name": "Helene-0.7.1.zip", "browser_download_url": "https://x/Helene-0.7.1.zip"},
+            {"name": "Helene.zip", "browser_download_url": "https://x/Helene.zip"}
+        ]);
+        let windows_only = windows_only.as_array().unwrap();
+        assert!(pick_update_zip(windows_only, "Helene", true, true).is_none());
+        // И наоборот: релиз только с Mac-архивом Windows не подхватывает даже
+        // через откат на любой .zip.
+        let mac_only = serde_json::json!([
+            {"name": "Helene-0.7.1-macos-arm64.zip", "browser_download_url": "https://x/Helene-0.7.1-macos-arm64.zip"}
+        ]);
+        let mac_only = mac_only.as_array().unwrap();
+        assert!(pick_update_zip(mac_only, "Helene", true, false).is_none());
+    }
+
+    /// Корень установки — первая папка вверх от exe с паспортом сборки; без
+    /// паспорта в пяти уровнях — сама папка exe (так было на Windows всегда).
+    #[test]
+    fn install_root_is_the_first_folder_up_with_the_passport() {
+        use super::{install_root_from, BUILD_PASSPORT};
+        let root = std::env::temp_dir().join(format!("helene-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // Раскладка macOS: <корень>/Helene.app/Contents/MacOS/helene.
+        let exe_dir = root.join("Helene.app").join("Contents").join("MacOS");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        // Паспорта нет нигде — папка exe, как раньше.
+        assert_eq!(install_root_from(&exe_dir), exe_dir);
+        std::fs::write(root.join(BUILD_PASSPORT), "{}").unwrap();
+        assert_eq!(install_root_from(&exe_dir), root);
+        // Раскладка Windows: паспорт рядом с exe — корень и есть папка exe.
+        std::fs::write(exe_dir.join(BUILD_PASSPORT), "{}").unwrap();
+        assert_eq!(install_root_from(&exe_dir), exe_dir);
+        // Глубже пяти уровней паспорт не ищется: шесть папок вниз — уже нет.
+        let deep = root.join("a").join("b").join("c").join("d").join("e").join("f");
+        std::fs::create_dir_all(&deep).unwrap();
+        assert_eq!(install_root_from(&deep), deep);
+        let five = root.join("a").join("b").join("c").join("d").join("e");
+        assert_eq!(install_root_from(&five), root);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Имена по платформе: суффикс `.exe` только на Windows, питон из коробки —
+    /// `runtime/python.exe` там и `runtime/bin/python3` на остальных, мастер —
+    /// `helene-setup.exe` рядом или бандл `Helene Setup.app`.
+    #[test]
+    fn platform_names_follow_the_target() {
+        use super::{bundled_python, exe_name, setup_binary};
+        let base = std::path::Path::new("base");
+        if cfg!(windows) {
+            assert_eq!(exe_name("helene-relay"), "helene-relay.exe");
+            assert_eq!(bundled_python(base), base.join("runtime").join("python.exe"));
+            assert_eq!(setup_binary(base), base.join("helene-setup.exe"));
+        } else {
+            assert_eq!(exe_name("helene-relay"), "helene-relay");
+            assert_eq!(bundled_python(base), base.join("runtime").join("bin").join("python3"));
+            if cfg!(target_os = "macos") {
+                assert!(setup_binary(base).ends_with("Helene Setup.app/Contents/MacOS/helene-setup"));
+            }
+        }
+    }
+
+    /// Текст диалога и уведомления приходит и от агента, и от сервера обновлений:
+    /// кавычка, слэш и перевод строки не имеют права рвать AppleScript.
+    #[test]
+    fn applescript_literal_escapes_quotes_slashes_and_newlines() {
+        use super::applescript_quote;
+        assert_eq!(applescript_quote("просто"), "\"просто\"");
+        assert_eq!(applescript_quote("он сказал \"нет\""), "\"он сказал \\\"нет\\\"\"");
+        assert_eq!(applescript_quote("C:\\путь"), "\"C:\\\\путь\"");
+        assert_eq!(applescript_quote("раз\nдва\tтри"), "\"раз\\nдва\\tтри\"");
+    }
+
+    /// LaunchAgent: метка, путь бинаря и подъём при входе; `&` в имени папки
+    /// остаётся XML, а не ломает plist.
+    #[test]
+    fn launch_agent_plist_names_label_program_and_run_at_load() {
+        use super::launch_agent_text;
+        let text = launch_agent_text("app.helene.desk", "/Users/me/Apps & Tools/Helene/Helene.app/Contents/MacOS/helene");
+        assert!(text.contains("<key>Label</key>\n\t<string>app.helene.desk</string>"), "{text}");
+        assert!(text.contains("<string>/Users/me/Apps &amp; Tools/Helene/Helene.app/Contents/MacOS/helene</string>"), "{text}");
+        assert!(text.contains("<key>RunAtLoad</key>\n\t<true/>"), "{text}");
+        assert!(text.starts_with("<?xml"), "{text}");
+        assert!(text.trim_end().ends_with("</plist>"), "{text}");
     }
 
     #[test]
@@ -6077,6 +6983,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn env_vars_in_registry_paths_expand() {
         std::env::set_var("HELENE_TEST_DIR", "C:\\Users\\test");

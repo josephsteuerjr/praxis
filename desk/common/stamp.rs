@@ -19,33 +19,47 @@ fn now_stamp() -> String {
     )
 }
 
-/// Вне Windows местного времени без внешних крейтов не взять — секунды эпохи,
-/// но в тех же скобках.
+/// Вне Windows — то же местное время через `localtime_r` (крейт `libc` у
+/// включающего крейта под `cfg(unix)`). До порта на macOS здесь были секунды
+/// эпохи «в тех же скобках», и журнал Mac снова шёл бы в другой системе
+/// счисления, чем у Windows. `localtime_r` не ответил — секунды эпохи, чтобы
+/// строка не пропала вовсе.
 #[cfg(not(windows))]
 fn now_stamp() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    format!("[{secs}]")
+    let clock = secs as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let got = unsafe { libc::localtime_r(&clock, &mut tm) };
+    if got.is_null() {
+        return format!("[{secs}]");
+    }
+    format!(
+        "[{:02}.{:02}.{} {:02}:{:02}:{:02}]",
+        tm.tm_mday,
+        tm.tm_mon + 1,
+        tm.tm_year + 1900,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec
+    )
 }
 
 #[cfg(test)]
 mod stamp_tests {
     use super::*;
 
+    /// Формат один на всех платформах: [07.09.2026 01:26:55].
     #[test]
     fn stamp_is_bracketed_and_has_seconds() {
         let s = now_stamp();
         assert!(s.starts_with('[') && s.ends_with(']'), "{s}");
-        #[cfg(windows)]
-        {
-            // [07.09.2026 01:26:55]
-            assert_eq!(s.len(), 21, "{s}");
-            assert_eq!(&s[3..4], ".");
-            assert_eq!(&s[11..12], " ");
-            assert_eq!(&s[14..15], ":");
-            assert_eq!(&s[17..18], ":");
-        }
+        assert_eq!(s.len(), 21, "{s}");
+        assert_eq!(&s[3..4], ".");
+        assert_eq!(&s[11..12], " ");
+        assert_eq!(&s[14..15], ":");
+        assert_eq!(&s[17..18], ":");
     }
 }
