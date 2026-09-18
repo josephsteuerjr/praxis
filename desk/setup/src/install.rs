@@ -1098,7 +1098,7 @@ pub fn relay_models() -> Result<Vec<String>, String> {
     let payload = payload_dir().ok_or("рядом с установщиком нет поставки")?;
     let exe = payload.join("helene-relay.exe");
     if !exe.exists() {
-        return Err("в этой поставке нет helene-relay.exe".into());
+        return Err("в этой сборке нет helene-relay.exe".into());
     }
     let home = relay_home();
     std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
@@ -1150,7 +1150,7 @@ pub fn relay_login() -> Result<String, String> {
     let payload = payload_dir().ok_or("рядом с установщиком нет поставки")?;
     let exe = payload.join("helene-relay.exe");
     if !exe.exists() {
-        return Err("в этой поставке нет helene-relay.exe".into());
+        return Err("в этой сборке нет helene-relay.exe".into());
     }
     let home = relay_home();
     std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
@@ -1749,8 +1749,8 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
         tick("Ставлю службу Windows (появится окно прав администратора)", &mut progress);
         let state = install_service(&dir);
         let note = match state.as_str() {
-            "missing" => "в этой поставке нет службы (helene-svc.exe)".to_string(),
-            "absent" => "служба не поставлена: права администратора не были даны".to_string(),
+            "missing" => "в этой сборке нет службы (helene-svc.exe)".to_string(),
+            "absent" => "служба не установлена: права администратора не были даны".to_string(),
             other => other.to_string(),
         };
         // Служба зарегистрирована — значит её предупреждение (СИСТЕМА запускает
@@ -2484,7 +2484,7 @@ mod tests {
             s.agent_mode = picked.into();
             let cfg = config_json(&s, None, RELAY_PORT);
             assert_eq!(cfg["agent_mode"], picked);
-            assert_eq!(cfg["mode"], "local", "местожительство харнесса трогать нельзя");
+            assert_eq!(cfg["mode"], "local", "местожительство программы агента трогать нельзя");
             assert_eq!(cfg["sandbox"]["enabled"], sandbox);
         }
     }

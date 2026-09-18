@@ -140,7 +140,7 @@ export function voiceCard(draft: Config): VoiceCard {
       note.textContent = `модель на месте, ${mb(state.installed.bytes)}`;
     }
     if (!state.library.present) {
-      status.textContent = state.library.why + ". Голос в этой поставке не поднимется.";
+      status.textContent = state.library.why + ". Голос в этой сборке не поднимется.";
       fetchBtn.disabled = true;
       return;
     }
@@ -256,7 +256,7 @@ export function voiceCard(draft: Config): VoiceCard {
       speechNote.textContent = "голос на месте";
     }
     if (!state.library.present) {
-      speechStatus.textContent = state.library.why + ". Говорить в этой поставке нечем.";
+      speechStatus.textContent = state.library.why + ". Говорить в этой сборке нечем.";
       speechBtn.disabled = true;
       return;
     }
@@ -295,7 +295,7 @@ export function voiceCard(draft: Config): VoiceCard {
 
   return {
     el: card("Голос", box,
-      "Обе половины — ЗДЕСЬ, на процессоре: ни запись, ни текст ответа никуда не отправляются. Библиотеки едут в поставке, модель и голос качаются один раз."),
+      "Обе половины — ЗДЕСЬ, на процессоре: ни запись, ни текст ответа никуда не отправляются. Библиотеки едут в сборке, модель и голос качаются один раз."),
     enabled: () => enabled,
     model: () => model,
     keepLoaded: () => keep,

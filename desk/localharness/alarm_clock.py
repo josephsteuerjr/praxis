@@ -93,7 +93,7 @@ class AlarmClock:
                 if manager.manifest(run_id)["status"] not in {"done", "failed", "cancelled"}:
                     continue
                 self.tasks.mark_fired(task["id"])
-                log.info("будильник #%s передан существующему прогону %s", task["id"], run_id)
+                log.info("будильник #%s передан существующему запуску %s", task["id"], run_id)
             except Exception:
                 log.exception("будильник #%s: захват сохранён для разбора", task["id"])
 

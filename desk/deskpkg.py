@@ -106,7 +106,7 @@ PARTS: tuple[Part, ...] = (
     Part("server/deskctl.py", "deskctl.py", (SERVER,), kind="file",
          why="пультовой надзор: контейнеры, их журналы и мозг — мимо агента"),
     Part("localharness", "localharness", (WINDOWS,), kind="py",
-         why="раннер Windows: первый запуск, ходы, доставка слова, Telegram"),
+         why="исполнитель ходов Windows: первый запуск, ходы, доставка слова, Telegram"),
     Part("resources", "resources", (WINDOWS,),
          why="ресурсы продукта: каноническая конституция и всё, что читает boot.py"),
 )

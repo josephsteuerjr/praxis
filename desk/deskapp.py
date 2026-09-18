@@ -771,7 +771,7 @@ async def _r_runs(c: Call):
 async def _r_run(c: Call):
     detail = await asyncio.to_thread(readers.run_detail, c.match["run_id"])
     if not detail:
-        raise web.HTTPNotFound(text="нет такого прогона")
+        raise web.HTTPNotFound(text="нет такого запуска")
     return detail
 
 
@@ -999,10 +999,10 @@ async def _r_voice(c: Call):
     """Слышит ли агент: библиотека, модель, ход скачивания и причина молчания."""
     if voice is None:
         return {"schema": "helene.voice.v1", "enabled": False, "ready": False,
-                "why": "этот канал стоит без раннера (Пульт) — голос живёт там, "
+                "why": "этот канал стоит без исполнителя ходов (Пульт) — голос живёт там, "
                        "где живёт агент",
                 "model": "", "catalog": [], "installed": {}, "dir": "",
-                "library": {"present": False, "why": "в этой установке нет раннера"},
+                "library": {"present": False, "why": "в этой установке нет исполнителя ходов"},
                 "download": None}
     return await asyncio.to_thread(lambda: voice.state(readers.tree(), _voice_config()))
 
@@ -1327,8 +1327,8 @@ async def _say(text: str, chat: str = "", attachments=None) -> dict:
 
         if targeted and not reader_alive:
             raise web.HTTPConflict(
-                text="руннер не поднят — сообщение в комнату не уедет; "
-                     "запусти локальный харнесс и повтори")
+                text="исполнитель ходов не поднят — сообщение в комнату не уедет; "
+                     "запусти локальную программу агента и повтори")
         try:
             control.mkdir(parents=True, exist_ok=True)
             name = f"{stamp}__to__{chat}.md" if targeted else f"{stamp}.md"

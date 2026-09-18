@@ -63,7 +63,7 @@ const SESSION0_OFF =
  *  здесь, а не покажет владельцу пустое место. */
 const SESSION0 = (() => {
   const found = SERVICE_OPTION.toggles.find((t) => t.key === "service.session0");
-  if (!found) throw new Error("modes.py: в опции службы нет галочки service.session0");
+  if (!found) throw new Error("modes.py: в опции службы нет тумблеры service.session0");
   return found;
 })();
 
@@ -73,7 +73,7 @@ const COMPUTER_NOTE =
   "Прав администратора не нужно. Все четыре права выдаются сразу, сузить можно в настройках.";
 
 /** Слово к выключенной опции: чтобы выключенная не выглядела запретом. */
-const COMPUTER_OFF = "Пока выключено: рука `computer` есть, а тела под ней нет — она отказывает словами.";
+const COMPUTER_OFF = "Пока выключено: тул `computer` есть, а тела под ним нет — он отказывает словами.";
 
 export class ModeScene extends FormScene {
   private cards = new Map<AgentMode, HTMLElement>();
@@ -99,7 +99,7 @@ export class ModeScene extends FormScene {
 
     const row = el("div", "modes");
     row.setAttribute("role", "radiogroup");
-    row.setAttribute("aria-label", "Ограда рук");
+    row.setAttribute("aria-label", "Ограда тулов");
     for (const card of MODE_CARDS) row.append(this.card(card));
 
     // Одна строка вместо двух врезок: с третьей опцией врезки не умещались в
@@ -121,7 +121,7 @@ export class ModeScene extends FormScene {
     // Вторая галочка опции (`service.firewall`) на экран не выведена, но её
     // умолчание берём отсюда же, а не заводим второй правдой в setup.ts.
     const firewall = SERVICE_OPTION.toggles.find((t) => t.key === "service.firewall");
-    if (!firewall) throw new Error("modes.py: в опции службы нет галочки service.firewall");
+    if (!firewall) throw new Error("modes.py: в опции службы нет тумблеры service.firewall");
     setup.firewall = firewall.default;
     this.select(setup.agent_mode);
     this.syncService();

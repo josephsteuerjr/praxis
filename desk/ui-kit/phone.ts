@@ -149,7 +149,7 @@ const TABS: Array<[Tab, string]> = [
   ["now", "Сейчас"],
   ["chats", "Чаты"],
   ["tasks", "Задачи"],
-  ["wakes", "Вейки"],
+  ["wakes", "Пробуждения"],
   // Пятая вкладка — пульт в кармане: перезапустить упавшее, посмотреть ошибки,
   // сменить модель. Она появляется, только если рядом с каналом объявлена
   // служба управления; у телефона к домашней Элен её нет, и вкладка молчит об
@@ -181,7 +181,7 @@ const clean = (s: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
-/** Цель прогона годится в подпись, только если это не обрезок кадра. */
+/** Цель запуска годится в подпись, только если это не обрезок кадра. */
 const goalLabel = (goal: string) => {
   if (/ЛЕНТА ОБРЕЗАНА|^\s*…|^\s*\[/.test(goal || "")) return "";
   const t = clean(goal || "");
@@ -364,7 +364,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   const notGiven = (what: string) =>
     `<div class="empty"><b>${esc(what)} телефону пока не отдаются</b>Канал откроет их телефону по контракту 0.3.3; в окне на компьютере они есть.</div>`;
 
-  // ---------------------------------------------------------------- прогоны и живой ход
+  // ---------------------------------------------------------------- запуски и живой ход
   const recent = (r: Run, minutes = 30) => {
     const at = new Date(r.updated_at || r.created_at || "").getTime();
     return !isNaN(at) && Date.now() - at < minutes * 60_000;
@@ -603,7 +603,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   let focusedRun: Run | undefined;
   let nowGeneration = 0;
 
-  /** Нарисовать экран «Сейчас» из того, что УЖЕ в руках. Ничего не ждёт. */
+  /** Нарисовать экран «Сейчас» из того, что УЖЕ в тулах. Ничего не ждёт. */
   function paintNow(list: Run[], live: Run | undefined, shown: Run | undefined,
                     detail: RunDetail | undefined, strip: RunDetail | undefined,
                     pending = false): void {
@@ -641,7 +641,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     // ожиданий: список ходов, потом подробности живого хода, потом слова. На
     // сервере это 13 секунд БЕЛОГО ЭКРАНА — замерено 11.09 на живой Праксис:
     // `/api/runs` 1.3 с, а `/api/run/<живой>` 5.7 с и 206 КБ, потому что в
-    // длинном ходу 23 шага и 59 рук. Владелец видит пустоту и читает её как
+    // длинном ходу 23 шага и 59 тулов. Владелец видит пустоту и читает её как
     // «ходы не отображаются» — и он прав: показывать нечего, хотя список уже
     // приехал три секунды назад.
     //
@@ -1011,7 +1011,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       scoped<{ ok: boolean; by_framework?: Record<string, { ok: boolean; models?: string[] }> }>("/api/brain-models", "brain"),
     ]);
     if (!guard()) return;
-    // 12.09: прерывание живого хода — просьба в memory/.control, раннер снимает ход на тике.
+    // 12.09: прерывание живого хода — просьба в memory/.control, исполнитель ходов снимает ход на тике.
     const interruptHTML = `<div class="screen-title">Агент</div>
       <div class="task-row">
         <div class="actions"><button type="button" class="chip" data-interrupt="all">Прервать ход</button></div>
@@ -1121,7 +1121,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     screen.innerHTML = agendaHTML + forgeHTML + boardHTML;
   }
 
-  // ---------------------------------------------------------------- «Вейки»
+  // ---------------------------------------------------------------- «Пробуждения»
   async function renderWakes(guard: () => boolean = () => tab === "wakes") {
     screen.innerHTML = '<div class="empty">читаю…</div>';
     const got = await scoped<Run[]>("/api/runs?kind=wake&limit=40", "runs");
@@ -1282,7 +1282,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     scheduleState();
   }
   async function tickRuns() {
-    // Без живых событий (канал их телефону не отдаёт) прогоны перечитываются
+    // Без живых событий (канал их телефону не отдаёт) запуски перечитываются
     // сами — иначе «Сейчас» узнал бы о ходе только после перезагрузки.
     await loadRuns();
     paintTop();

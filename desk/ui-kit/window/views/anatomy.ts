@@ -12,7 +12,7 @@ const INTRO: Array<[string, string]> = [
     "Что происходит, когда ты пишешь",
     "Сообщение сначала ложится в память (событие жизни и архив комнаты): восприятие пишет раньше, чем думается. " +
       "Потом собирается кадр — всё, что модель увидит этим ходом. Потом модель думает и действует руками, по очереди, " +
-      "сколько нужно. Каждый шаг оставляет расписку; ход закрывается решением агента (рука end_turn), а не тем, что ему нечего сказать.",
+      "сколько нужно. Каждый шаг оставляет расписку; ход закрывается решением агента (тул end_turn), а не тем, что ему нечего сказать.",
   ],
   [
     "Кадр — K, E, A, T",
@@ -22,38 +22,38 @@ const INTRO: Array<[string, string]> = [
       "в разы дешевле. Живые слепки — в разделе «Кадр».",
   ],
   [
-    "Руки",
-    "Рука — функция с именем, описанием и схемой аргументов. Список ниже — те же байты, что видит модель: описание руки " +
+    "Тулы",
+    "Тул — функция с именем, описанием и схемой аргументов. Список ниже — те же байты, что видит модель: описание тулы " +
       "и есть условие её вызова, другого правила нет. Расписка каждого вызова видна в ходах справа от разговора.",
   ],
   [
     "Память",
-    "Файлы, не база: события жизни, архивы комнат, дневник, досье людей, леджер желаний. Рука recall ищет по всему " +
+    "Файлы, не база: события жизни, архивы комнат, дневник, досье людей, реестр воли желаний. Тул recall ищет по всему " +
       "этому; что она находит, видно в шагах хода.",
   ],
   [
     "Навыки",
-    "Навыки — собственные заметки-инструкции агента (soul/skills/*.md): он пишет их сам рукой write_skill, когда чему-то " +
+    "Навыки — собственные заметки-инструкции агента (soul/skills/*.md): он пишет их сам тулом write_skill, когда чему-то " +
       "научился. Это память о том, как делать, в отличие от памяти о том, что было.",
   ],
 ];
 
 const LAYERS: Array<[string, string]> = [
   ["helene.exe — оболочка (Rust, Tauri)", "Окно, значок у часов, уведомления. Сама не думает и не переписывается: собрана один раз и поднимает всё остальное тихими дочерними процессами по helene.json."],
-  ["канал frame.desk.v1 → deskapp.py", "Всё, что окно показывает, приезжает по одному каналу (запросы и живые события). deskapp — читатель дерева: только файлы, никаких замков раннера. Тот же протокол работает с удалённым харнессом."],
-  ["runner.py — локальный харнесс", "Слушает записки окна и Telegram и запускает ход агента (voice_turn_envelope из дерева). Своей логики хода у руннера нет: только транспорт и конфиг."],
-  ["helene-body.exe и helene-bridge.exe — тело", "Окна, экран, клавиатура и мышь, файлы и процессы для руки computer. Харнесс поднимает обоих рядом с собой в сессии владельца, снаружи ограды; включает и выдаёт права владелец в Настройках («Управление компьютером»). Мозга внутри нет: тело исполняет то, что прислала рука, и возвращает расписку."],
+  ["канал frame.desk.v1 → deskapp.py", "Всё, что окно показывает, приезжает по одному каналу (запросы и живые события). deskapp — читатель дерева: только файлы, никаких замков исполнителя ходов. Тот же протокол работает с удалённой программой агента."],
+  ["runner.py — локальная программа агента", "Слушает записки окна и Telegram и запускает ход агента (voice_turn_envelope из дерева). Своей логики хода у исполнителя ходов нет: только транспорт и конфиг."],
+  ["helene-body.exe и helene-bridge.exe — тело", "Окна, экран, клавиатура и мышь, файлы и процессы для тулы computer. Харнесс поднимает обоих рядом с собой в сессии владельца, снаружи ограды; включает и выдаёт права владелец в Настройках («Управление компьютером»). Мозга внутри нет: тело исполняет то, что прислала тул, и возвращает расписку."],
   ["transport.py и botapi.py — двери", "Оба наполняют один словарь крючков, тот же, которым агент держит Telegram. Окно — одна дверь, бот — вторая. Организм один: общая память, общий кадр."],
-  ["дерево агента", "agent.py — ход и руки; frame_shadow.py — кадр; memory_life.py — события жизни; desires.py — желания; llm.py — мозг, любой OpenAI- или Anthropic-совместимый адрес."],
+  ["дерево агента", "agent.py — ход и тулы; frame_shadow.py — кадр; memory_life.py — события жизни; desires.py — желания; llm.py — мозг, любой OpenAI- или Anthropic-совместимый адрес."],
 ];
 
 const LESSON: Record<string, string> = {
   think_first: "Модель получила кадр. Вход почти целиком из кэша: это стабильный префикс K, E, A; платим по-настоящему только за хвост T.",
-  think: "Ещё один поворот цикла: модель увидела результат руки и решает, что дальше.",
-  hand: "Рука. Модель выбрала её сама, прочитав описание. Результат вернётся ей строкой на следующем повороте.",
-  reply: "Слово наружу. Реплика уходит рукой, а не «последним текстом»: расписка называет канал и id, это защита от «сказала, но не отправилось».",
+  think: "Ещё один поворот цикла: модель увидела результат тулы и решает, что дальше.",
+  hand: "Тул. Модель выбрала её сама, прочитав описание. Результат вернётся ей строкой на следующем повороте.",
+  reply: "Слово наружу. Реплика уходит тулом, а не «последним текстом»: расписка называет канал и id, это защита от «сказала, но не отправилось».",
   end_turn: "Конец хода — поступок с названным исходом, а не отсутствие действия.",
-  terminal: "Терминальная расписка прогона: статус, причина, RECAP. По ней ход можно разобрать и через месяц.",
+  terminal: "Терминальная расписка запуска: статус, причина, RECAP. По ней ход можно разобрать и через месяц.",
 };
 
 /** Одна рука глазами ограды: что трогает, накрыта ли и почему. */
@@ -163,13 +163,13 @@ function fenceHTML(hands: HandFence[] | undefined, sandboxOn: boolean): string {
   const row = (h: HandFence) =>
     `<tr><td><code>${esc(h.name)}</code></td><td class="muted">${esc(h.touches)}</td><td class="muted">${esc(h.why)}</td></tr>`;
   const table = (rows: HandFence[]) =>
-    `<table class="grid"><tr><th>рука</th><th>трогает</th><th>почему</th></tr>${rows.map(row).join("")}</table>`;
+    `<table class="grid"><tr><th>тул</th><th>трогает</th><th>почему</th></tr>${rows.map(row).join("")}</table>`;
   return `<h3 class="section-title">Ограда поимённо <span class="muted">${inside.length} в ограде · ${outside.length} вне</span></h3>
     <div class="card">
       ${inside.length ? `<p><b>В ограде</b></p>${table(inside)}` : ""}
       ${outside.length ? `<p style="margin-top:12px"><b>Вне ограды</b></p>${table(outside)}` : ""}
       ${stale.length ? `<p class="receipt err" style="margin-top:12px">Ограда помнит руки, которых в наборе больше нет: ${stale.map((h) => `<code>${esc(h.name)}</code>`).join(", ")}. Это наша устаревшая запись, а не твоя поломка.</p>` : ""}
-      <p class="muted" style="margin-top:12px">Список считает сам харнесс по живому набору рук: накрыта рука или нет, видно по тому, что на ней стоит, а не по имени в таблице. Рука, о которой ограда не знает, считается вне её.${sandboxOn ? "" : " Сейчас ограда выключена — поэтому вне её всё."}</p>
+      <p class="muted" style="margin-top:12px">Список считает сама программа агента по живому набору тулов: накрыт тул оградой или нет, видно по тому, что на нём стоит, а не по имени в таблице. Тул, о котором ограда не знает, считается вне её.${sandboxOn ? "" : " Сейчас ограда выключена — поэтому вне её всё."}</p>
     </div>`;
 }
 
@@ -180,8 +180,8 @@ interface FrameCuts { days: number; summary: { calls: number; runs: number; cach
 // считались и были видны только через `python frame_stats.py --by …` в дереве.
 const CUT_AXES: Array<[string, string]> = [
   ["iteration", "первая итерация против продолжений"],
-  ["hand", "какой рукой ответила итерация"],
-  ["kind", "род прогона"],
+  ["hand", "какой тулом ответила итерация"],
+  ["kind", "род запуска"],
   ["role", "роль вызова"],
   ["model", "модель"],
   ["frame_mode", "режим кадра"],
@@ -199,7 +199,7 @@ function cutsHTML(c: FrameCuts | null): string {
     .join("")}</table>`;
   const s = c.summary;
   return `<h3 class="section-title">Кэш по группам действий <span class="muted">${c.days} дней</span></h3>
-    <p class="muted">${s.calls} вызовов в ${s.runs} прогонах, из кэша ${pct(s.cache_ratio)} входа (${fmtK(s.cached_tokens)} из ${fmtK(s.input_tokens)}), ответ ${fmtK(s.output_tokens)}${s.cuts ? `, обрывов потолком ${s.cuts}` : ""}. Доля кэша считается по сумме токенов группы, а не как среднее процентов: первый кадр хода тяжёлый, продолжения лёгкие.</p>
+    <p class="muted">${s.calls} вызовов в ${s.runs} запусках, из кэша ${pct(s.cache_ratio)} входа (${fmtK(s.cached_tokens)} из ${fmtK(s.input_tokens)}), ответ ${fmtK(s.output_tokens)}${s.cuts ? `, обрывов потолком ${s.cuts}` : ""}. Доля кэша считается по сумме токенов группы, а не как среднее процентов: первый кадр хода тяжёлый, продолжения лёгкие.</p>
     ${CUT_AXES.map(([axis, title]) => (c.by[axis]?.length ? `<details class="fold" ${axis === "iteration" ? "open" : ""}><summary><b>${esc(title)}</b></summary><div class="fold-body">${table(c.by[axis])}</div></details>` : "")).join("")}`;
 }
 
@@ -242,10 +242,10 @@ function spendCutsHTML(s: Spend | null): string {
     .map((r) => `<tr><td><b>${esc(KIND_RU[r.kind] || r.kind || "ход")}</b> · ${esc(when(r))}${r.chat_title ? ` · ${esc(r.chat_title)}` : ""}${r.who_name && r.who !== "praxis:self" ? ` · ${esc(r.who_name)}` : ""}${r.goal_head ? `<div class="muted">${esc(r.goal_head)}</div>` : ""}</td><td>${r.calls}</td><td>${fmtK(r.total_tokens)}</td><td>${pct(r.cache_ratio)}</td><td>${fmtK(r.output_tokens)}</td></tr>`)
     .join("")}</table>`;
   const unbound = s.unbound.length
-    ? `<p class="muted">Вне прогонов (не приписать ни чату, ни человеку): ${s.unbound.map((u) => `${esc(u.role)} — ${u.calls} ${plural(u.calls, "вызов", "вызова", "вызовов")}, ${fmtK(u.total_tokens)}`).join("; ")}.</p>`
+    ? `<p class="muted">Вне запусков (не приписать ни чату, ни человеку): ${s.unbound.map((u) => `${esc(u.role)} — ${u.calls} ${plural(u.calls, "вызов", "вызова", "вызовов")}, ${fmtK(u.total_tokens)}`).join("; ")}.</p>`
     : "";
   const sum = s.summary;
-  const source = sum.fields_in_log.chat ? "чат и человек записаны в самом журнале вызовов" : "чат и человек восстановлены через манифесты прогонов (ядро ещё не пишет их в журнал вызовов)";
+  const source = sum.fields_in_log.chat ? "чат и человек записаны в самом журнале вызовов" : "чат и человек восстановлены через манифесты запусков (ядро ещё не пишет их в журнал вызовов)";
   return `<h3 class="section-title">Расход по чатам, людям и задачам <span class="muted">${s.days} дней</span></h3>
     <p class="muted">${sum.calls} вызовов модели, ${fmtK(sum.total_tokens)} токенов (из кэша ${pct(sum.cache_ratio)} входа, ответ ${fmtK(sum.output_tokens)}); ${sum.bound_calls} вызовов внутри ходов, ${sum.unbound_calls} вне. Считаются токены, не деньги: прайс-листа по живым моделям в дереве нет. Источник: ${source}.</p>
     <details class="fold" open><summary><b>по чатам</b></summary><div class="fold-body">${chats}</div></details>
@@ -273,12 +273,12 @@ export async function render(container: HTMLElement): Promise<void> {
     ([h, t]) => `<details class="fold"><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`,
   ).join("");
   const body = a.computer
-    ? ` · тело: ${esc(!a.computer.enabled ? "выключено владельцем" : !a.computer.available ? "нет в поставке" : a.computer.connected === true ? `подключено, мост 127.0.0.1:${a.computer.port}` : a.computer.connected === false ? "не отвечает" : "поднималось на старте")}${a.computer.enabled && a.computer.scopes ? ` (права: ${esc(a.computer.scopes.join(", ") || "нет")})` : ""}`
+    ? ` · тело: ${esc(!a.computer.enabled ? "выключено владельцем" : !a.computer.available ? "нет в сборке" : a.computer.connected === true ? `подключено, мост 127.0.0.1:${a.computer.port}` : a.computer.connected === false ? "не отвечает" : "поднималось на старте")}${a.computer.enabled && a.computer.scopes ? ` (права: ${esc(a.computer.scopes.join(", ") || "нет")})` : ""}`
     : "";
   const meta = tools.length
     ? `<p class="muted">Транспорты: ${esc((a.transports || []).join(" + "))} · ${modeName}песочница: ${esc(a.sandbox ? (a.sandbox.container ? "shell в контейнере" : a.sandbox.enabled ? "без контейнера" : "выключена") : "?")}${a.sandbox?.reason ? " · " + esc(a.sandbox.reason) : ""}${outsideCount ? ` · <b>вне ограды рук: ${outsideCount}</b>` : ""}${a.sandbox?.windows ? " · " + esc(a.sandbox.windows) : ""}${body} · мозг: <b>${esc(a.model?.model || "?")}</b> (${esc(a.model?.framework || "?")})
-       · рук предложено: <b>${tools.length}</b> · снято ${esc(fmtTime(a.written_at))}. Живой список сборщика, не пересказ.</p>`
-    : '<p class="muted">Снимка ещё нет: руннер пишет его при старте.</p>';
+       · тулов предложено: <b>${tools.length}</b> · снято ${esc(fmtTime(a.written_at))}. Живой список сборщика, не пересказ.</p>`
+    : '<p class="muted">Снимка ещё нет: исполнитель ходов пишет его при старте.</p>';
   container.innerHTML = `<div class="center">
     ${meta}${modeBox}${fenceBox}
     <div id="supervisor-box"></div>
@@ -289,7 +289,7 @@ export async function render(container: HTMLElement): Promise<void> {
     <details class="fold" id="lesson-box"><summary><b>Разобрать последний ход</b></summary><div class="fold-body ev-steps" id="lesson-steps"></div></details>
     <h3 class="section-title">Из чего это собрано</h3>${layers}
     ${tools.length ? `<h3 class="section-title">Руки <span class="muted">${tools.length}</span></h3>
-      <input id="tool-filter" class="field-input" placeholder="поиск по рукам…" style="width:100%;margin-bottom:10px">
+      <input id="tool-filter" class="field-input" placeholder="поиск по тулам…" style="width:100%;margin-bottom:10px">
       <div id="tool-list"></div>` : ""}
     ${a.skills_index ? `<h3 class="section-title">Навыки</h3><div class="card md">${md(a.skills_index)}</div>` : '<p class="muted" style="margin-top:18px">Навыков пока нет: агент напишет их сам, когда чему-то научится.</p>'}
     ${Object.keys(a.knobs || {}).length ? `<h3 class="section-title">Ручки среды</h3><table class="grid">${Object.entries(a.knobs!).map(([k, v]) => `<tr><td class="mono">${esc(k)}</td><td class="mono">${esc(String(v))}</td></tr>`).join("")}</table>` : ""}

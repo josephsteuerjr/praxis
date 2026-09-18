@@ -140,7 +140,7 @@ export class InstallScene extends FormScene {
           : r.service === "absent"
             ? "Служба не поставилась: права администратора не были даны."
             : r.service === "missing"
-              ? "Служба не поставлена: в этой поставке нет helene-svc.exe."
+              ? "Служба не установлена: в этой сборке нет helene-svc.exe."
               : r.service.startsWith("failed: ")
                 ? `Служба не поставилась: ${r.service.slice(8)}`
                 : "";

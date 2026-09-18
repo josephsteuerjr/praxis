@@ -97,7 +97,7 @@ export function supervisorHTML(s: Supervisor | null): string {
             `<button class="btn quiet" data-restart="${esc(t.id)}">Перезапустить ${esc(t.title)}</button>`,
         )
         .join("")}<span class="receipt" id="sv-note"></span></div>
-       <p class="muted">«Перезапустить весь харнесс» ${
+       <p class="muted">«Перезапустить весь программа агента» ${
          s.in_container
            ? "гасит надзор — контейнер поднимает его заново; окно на несколько секунд потеряет связь"
            : "перезапускает детей на месте: надзор запущен не в контейнере, выходить ему некуда"
@@ -246,7 +246,7 @@ export function brainHTML(state: Brain | null, models: BrainModels | null): stri
 /** Прерывание живого хода (12.09): просьба в memory/.control, раннер снимает ход на тике. */
 export function interruptHTML(): string {
   return `<h3 class="section-title">Живой ход</h3>
-    <p class="muted">Останавливает ход агента: руки дальше не зовутся, ответ не уходит. Идущий вызов модели
+    <p class="muted">Останавливает ход агента: тулы дальше не зовутся, ответ не уходит. Идущий вызов модели
       дорабатывает до границы, обычно до 10 секунд.</p>
     <div class="actions"><button class="btn" data-interrupt="all">Прервать ход</button></div>
     <p class="receipt" id="interrupt-note"></p>`;

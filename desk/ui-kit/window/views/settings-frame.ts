@@ -180,7 +180,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     // Тумблер телефона в вебе был пустышкой: черновик выбрасывался в мусор,
     // кнопки «Сохранить» в этой ветке нет вовсе — человек щёлкал, и ничего не
     // происходило, и никто не говорил, что не происходит.
-    center.append(el("div", "card muted", `Настройки доступны в приложении ${PRODUCT_NAME} на том компьютере, где живёт агент: здесь окно смотрит на удалённый харнесс. Тема — как в системе.`));
+    center.append(el("div", "card muted", `Настройки доступны в приложении ${PRODUCT_NAME} на том компьютере, где живёт агент: здесь окно смотрит на удалённую программу агента. Тема — как в системе.`));
     mountSettings(container, center);
     return;
   }
@@ -450,7 +450,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   const conflictBox = el("div");
   conflictBox.hidden = true;
   conflictBox.innerHTML = `<div class="notice err" style="margin-top:12px"><span class="dot failed"></span>
-    <span>Пока настройки были открыты, helene.json изменил кто-то ещё — установщик, харнесс или ты в Блокноте. Если сохранить как есть, его правка пропадёт.</span></div>`;
+    <span>Пока настройки были открыты, helene.json изменил кто-то ещё — установщик, программа агента или ты в Блокноте. Если сохранить как есть, его правка пропадёт.</span></div>`;
   const conflictRow = el("div", "actions");
   conflictRow.style.marginTop = "10px";
   conflictRow.append(
@@ -650,8 +650,8 @@ function transferCard(draft: Config): HTMLElement {
       "field-hint",
       "Архив — вся папка данных агента (память, конституция, навыки, личный git, вход ChatGPT, сессия Telegram) и helene.json. " +
         "Внутри ключ модели и токены — не для пересылки посторонним; паспорт helene-carry.json в архиве перечисляет их поимённо. " +
-        "Не едут: тело руки computer, журналы, ключ окна, стыки смонтированных папок. " +
-        "На сервере подписка ChatGPT продолжает работать сама: реле едет в поставке и Linux-бинарём, и контейнер поднимает его рядом с агентом — адрес мозга из архива на той стороне верен. " +
+        "Не едут: тело тулы computer, журналы, ключ окна, стыки смонтированных папок. " +
+        "На сервере подписка ChatGPT продолжает работать сама: реле едет в сборке и Linux-бинарём, и контейнер поднимает его рядом с агентом — адрес мозга из архива на той стороне верен. " +
         "Обратный импорт на этом ПК — из консоли при закрытой программе: runtime\\python.exe app\\localharness\\carry.py import --config helene.json --archive <архив>; прежняя data/ останется рядом как data.before-<штамп>.",
     ),
   );
@@ -659,7 +659,7 @@ function transferCard(draft: Config): HTMLElement {
   // --- окно к харнессу на сервере
   const remote = el("div");
   remote.style.marginTop = "12px";
-  const remoteToggle = toggle("Окно ходит к харнессу на сервере", draft.mode === "remote", (v) => {
+  const remoteToggle = toggle("Окно ходит к программе агента на сервере", draft.mode === "remote", (v) => {
     draft.mode = v ? "remote" : "local";
     syncRemote();
   });
@@ -680,7 +680,7 @@ function transferCard(draft: Config): HTMLElement {
     keyField.hidden = !on;
     remoteNote.textContent = on
       ? "После сохранения и перезапуска оболочка своих детей не поднимает: агент живёт на сервере, окно и телефон ходят туда. Пустой адрес — это снова local."
-      : "Сейчас агент живёт на этой машине: канал и харнесс поднимает окно. Перенос на сервер — экспорт выше, затем server/README-СЕРВЕР.md в поставке.";
+      : "Сейчас агент живёт на этой машине: канал и программа агента поднимает окно. Перенос на сервер — экспорт выше, затем server/README-СЕРВЕР.md в сборке.";
   };
   remote.append(remoteToggle, baseField, keyField, remoteNote);
   syncRemote();

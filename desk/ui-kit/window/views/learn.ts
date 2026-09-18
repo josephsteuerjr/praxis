@@ -128,7 +128,7 @@ function diagram(): string {
     <path d="M${x1} ${y1} L${x2} ${y2}" stroke="var(--ink-3)" stroke-width="1.5" marker-end="url(#a-head)"/>`;
 
   return `<div class="dia-wrap"><svg class="dia" viewBox="0 0 700 340" role="img"
-       aria-label="Схема одного хода: слово превращается в кадр, модель думает, зовёт руки и отвечает рукой reply">
+       aria-label="Схема одного хода: слово превращается в кадр, модель думает, зовёт тулы и отвечает тулом reply">
     <defs>
       <marker id="a-head" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
         <path d="M0 0 L8 4 L0 8 z" fill="var(--ink-3)"/>
@@ -150,12 +150,12 @@ function diagram(): string {
     <text x="360" y="18" font-size="12" fill="var(--ink-2)">ЧТО ДЕЛАЕТ АГЕНТ</text>
     ${box(360, 48, 300, 52, "Думает", "решает, чего не хватает")}
     ${arrow(510, 104, 510, 126)}
-    ${box(360, 130, 300, 52, "Зовёт руку", "поиск, файл, память, компьютер")}
+    ${box(360, 130, 300, 52, "Зовёт тул", "поиск, файл, память, компьютер")}
     <path d="M660 156 C690 156 690 74 668 74 L664 74" stroke="var(--accent)" stroke-width="1.5"
           fill="none" stroke-dasharray="4 4" marker-end="url(#a-head)"/>
     <text x="596" y="116" font-size="12" fill="var(--accent)">и снова, пока нужно</text>
     ${arrow(510, 186, 510, 208)}
-    ${box(360, 212, 300, 52, "Отвечает рукой reply", "именно она уносит слова наружу", true)}
+    ${box(360, 212, 300, 52, "Отвечает тулом reply", "именно она уносит слова наружу", true)}
     ${arrow(510, 268, 510, 290)}
     ${box(360, 294, 300, 40, "Закрывает ход сам", "молчание — тоже его решение")}
   </svg></div>`;

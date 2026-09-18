@@ -403,7 +403,7 @@ def _close_run(envelope, chat_id: str, *, delivered_text: str = "",
             _agent.run_delivery_completed(run_id, silent=True,
                                           silent_reason=reason)
     except Exception:
-        log.exception("прогон не закрылся расписками [%s]", run_id)
+        log.exception("запуск не закрылся расписками [%s]", run_id)
 
 
 def deliver_one_media(item, chat_id: str) -> str:
@@ -509,7 +509,7 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
     finally:
         _set_busy(False, str(getattr(envelope, "run_id", "") or ""))
     if envelope is None:
-        desk.deliver("⚠ ход не дошёл до конца — подробности в логе руннера.",
+        desk.deliver("⚠ ход не дошёл до конца — подробности в логе исполнителя ходов.",
                      source_id=source_id, system=True)
         return "failed"
     spoken = list(desk.sent)
@@ -537,9 +537,9 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
         # Durable-чекпойнт придержал ход до подтверждения побочного эффекта. Молчать
         # об этом нельзя: окно выглядело бы зависшим, а ход на самом деле жив.
         desk.deliver("⏸ ход приостановлен на чекпойнте и ждёт подтверждения "
-                     f"(прогон {run_id}).", source_id=source_id, system=True)
+                     f"(запуск {run_id}).", source_id=source_id, system=True)
     elif getattr(envelope, "failed", False):
-        desk.deliver(f"⚠ ход не состоялся (прогон {run_id or 'без id'}) — "
+        desk.deliver(f"⚠ ход не состоялся (запуск {run_id or 'без id'}) — "
                      "подробности в карточке хода.", source_id=source_id, system=True)
     elif not spoken and text:
         # Рычаг речи опущен (или ход закрылся текстом): реплика — возврат хода,
@@ -645,7 +645,7 @@ def handle_bot(chat_id: str) -> None:
         if is_dm and owner:
             try:
                 _bot.deliver_text(chat_id, "⚠ ход не дошёл до конца — "
-                                           "подробности в логе руннера.")
+                                           "подробности в логе исполнителя ходов.")
             except Exception:
                 log.exception("не доложила владельцу о падении хода")
         return
@@ -660,7 +660,7 @@ def handle_bot(chat_id: str) -> None:
         log.warning("ход %s [бот %s]: %s", run_id or "—", chat_id, state)
         if is_dm and owner:
             try:
-                _bot.deliver_text(chat_id, f"⚠ ход {state} (прогон {run_id}).")
+                _bot.deliver_text(chat_id, f"⚠ ход {state} (запуск {run_id}).")
             except Exception:
                 log.exception("не доложила владельцу о сбое хода")
     if not spoken and not text:
@@ -810,7 +810,7 @@ def _say_tree_is_busy(tree: Path, cfg: dict, holder: dict) -> None:
     бы повторами быстрее, чем он успел бы прочесть первую.
     """
     pid = holder.get("pid")
-    log.error("дерево %s занято другой копией харнесса (pid %s, %s) — не поднимаюсь",
+    log.error("дерево %s занято другой копией программы агента (pid %s, %s) — не поднимаюсь",
               tree, pid, holder.get("host") or "этот компьютер")
     said = tree / "memory" / ".state" / "harness_busy.json"
     try:
@@ -887,11 +887,11 @@ def _retention_forever() -> None:
             # Молчать нельзя в обе стороны: и когда сняли, и когда не тронули
             # ничего. Именно молчание держало незамеченным то, что на Windows
             # ретенция не работала вовсе.
-            log.info("ретенция прогонов: %s", line)
+            log.info("ретенция запусков: %s", line)
             for err in (report.get("errors") or [])[:3]:
-                log.warning("ретенция прогонов: %s", err)
+                log.warning("ретенция запусков: %s", err)
         except Exception:
-            log.warning("ретенция прогонов не прошла", exc_info=True)
+            log.warning("ретенция запусков не прошла", exc_info=True)
 
 
 def _set_busy(on: bool, run: str = "", *, chat_id: str = "") -> None:
@@ -1487,7 +1487,7 @@ def main() -> None:
     if not (code_dir / "agent.py").is_file():
         # Дерево — это и есть харнесс. Без него нечего запускать, и подменять её ход
         # своим («кадр-лайт») значило бы держать вторую реализацию продукта.
-        log.error("дерева агента нет: %s — руннер не поднимется", code_dir)
+        log.error("дерева агента нет: %s — исполнитель ходов не поднимется", code_dir)
         raise SystemExit(2)
 
     owner = cfg.get("owner") or {}
@@ -1608,7 +1608,7 @@ def main() -> None:
     processed.mkdir(parents=True, exist_ok=True)
     _sweep_processed(processed)
     swept_at = time.time()
-    log.info("локальный харнесс: дерево данных %s · код %s · транспорты: окно%s",
+    log.info("локальная программа агента: дерево данных %s · код %s · транспорты: окно%s",
              tree, code_dir, "" if _bot is None else " + бот @" + _bot.username)
     import threading
     threading.Thread(target=_heartbeat_forever, args=(inbox,), name="heartbeat",

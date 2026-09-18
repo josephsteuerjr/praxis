@@ -311,7 +311,7 @@ export function start(opts: WindowOptions): void {
     { id: "now", label: "Сейчас", kicker: "Что агент делает", key: "1" },
     { id: "talk", label: "Чат", kicker: "", key: "2" },
     { id: "plans", label: "Задачи", kicker: "Агенда, доска, субагенты", key: "3" },
-    { id: "wakes", label: "Вейки", kicker: "Пробуждения по расписанию", key: "4" },
+    { id: "wakes", label: "Пробуждения", kicker: "Пробуждения по расписанию", key: "4" },
     { id: "frame", label: "Контекст", kicker: "Что видит модель", key: "5" },
     { id: "files", label: "Файлы", kicker: "Память агента в файлах", key: "6" },
     { id: "journal", label: "Журнал", kicker: "Ошибки и пропуски", key: "7" },
@@ -671,7 +671,7 @@ export function start(opts: WindowOptions): void {
       S.rooms.splice(1, 0, room);
       selectRoom(room);
       if (room.stub) {
-        toast("Этот харнесс ещё не умеет несколько чатов: чат создан как заглушка, писать в него нельзя. Появится в 0.3.3.");
+        toast("Эта программа агента ещё не умеет несколько чатов: чат создан как заглушка, писать в него нельзя. Появится в 0.3.3.");
       }
       startRename(room);
     } catch (e) {
@@ -840,7 +840,7 @@ export function start(opts: WindowOptions): void {
     paintPulse(connected);
     if (!connected) {
       statePill.dataset.level = "off";
-      stateText.textContent = "Нет связи с харнессом";
+      stateText.textContent = "Нет связи с программой агента";
       stateAction.hidden = true;
       return;
     }
@@ -849,7 +849,7 @@ export function start(opts: WindowOptions): void {
       const f = foreignState(s);
       statePill.dataset.level = f.level;
       stateText.textContent = f.phrase;
-      statePill.title = "Дерево ведёт чужой харнесс: снимка Hélène нет, состояние — по вызовам модели и прогонам.";
+      statePill.title = "Дерево ведёт чужая программа агента: снимка Hélène нет, состояние — по вызовам модели и запускам.";
       stateAction.hidden = true;
       alarmBox.hidden = true;
       return;
@@ -1038,7 +1038,7 @@ export function start(opts: WindowOptions): void {
     const room = S.room;
     const current = S.rooms.find((r) => r.key === room);
     if (current?.stub) {
-      toast("Этот чат — заглушка: харнесс ещё не умеет несколько чатов. Пиши в основной.");
+      toast("Этот чат — заглушка: программа агента ещё не умеет несколько чатов. Пиши в основной.");
       return;
     }
     const chat = room === WINDOW_ROOM ? "" : room;

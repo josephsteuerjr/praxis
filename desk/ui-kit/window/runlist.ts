@@ -25,7 +25,7 @@ export const cleanLabel = (s: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
-/** Цель прогона годится в подпись, только если это не обрезок кадра. */
+/** Цель запуска годится в подпись, только если это не обрезок кадра. */
 function goalLabel(goal: string): string {
   const g = String(goal || "");
   if (/ЛЕНТА ОБРЕЗАНА|^\s*…|^\s*\[/.test(g)) return "";
@@ -47,7 +47,7 @@ export function roomKeyOf(r: Run): string {
   return k === "pult" ? "window" : k;
 }
 
-/** Слова агента для подписей: chat-turns комнат последних прогонов (не чаще раза в 20 с на комнату). */
+/** Слова агента для подписей: chat-turns комнат последних запусков (не чаще раза в 20 с на комнату). */
 export async function loadWords(list: Run[], maxRooms = 6): Promise<void> {
   const keys = [...new Set(list.filter((r) => r.chat_id != null).map(roomKeyOf))].slice(0, maxRooms);
   const now = Date.now();
@@ -60,7 +60,7 @@ export async function loadWords(list: Run[], maxRooms = 6): Promise<void> {
           const turns = await api<Array<{ run_id: string; out?: string; note?: string; who?: string }>>("/api/chat-turns/" + encodeURIComponent(k) + "?n=60");
           for (const t of turns || []) if (t.run_id) words.set(t.run_id, { out: t.out || "", note: t.note || "", who: t.who || "" });
         } catch {
-          // подписи останутся по цели прогона
+          // подписи останутся по цели запуска
         }
       }),
   );

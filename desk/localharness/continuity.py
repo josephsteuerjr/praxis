@@ -208,7 +208,7 @@ class Continuity:
                             error=f"{type(exc).__name__}: {exc}",
                             chat_id=room, path=str(item.path),
                             caption=str(getattr(item, "caption", "") or ""))
-                        log.exception("файл прогона не ушёл [%s / %s]", run_id, item.queue_id)
+                        log.exception("файл запуска не ушёл [%s / %s]", run_id, item.queue_id)
                         continue
                     self.agent.run_delivery_media_result(
                         run_id, item.queue_id, ok=True, message_id=str(receipt),
@@ -216,10 +216,10 @@ class Continuity:
                         caption=str(getattr(item, "caption", "") or ""))
                     spool.discard(item.queue_id, receipt={"message_id": str(receipt)})
                     sent += 1
-                    log.info("файл прогона доставлен [%s]: %s", run_id, str(receipt)[:120])
+                    log.info("файл запуска доставлен [%s]: %s", run_id, str(receipt)[:120])
                 self.agent.run_delivery_finalize_recovered(run_id)
             except Exception:
-                log.exception("медиа прогона ждёт подтверждения [%s]", run_id)
+                log.exception("медиа запуска ждёт подтверждения [%s]", run_id)
         return sent
 
     def resume_due(self) -> list[dict]:

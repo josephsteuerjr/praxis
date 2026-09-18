@@ -535,7 +535,7 @@ fn load_plan(config_path: &Path) -> Result<Plan, String> {
 fn plan_usable(plan: &Plan) -> Result<(), String> {
     if plan.mode != "local" {
         return Err(format!(
-            "helene.json просит mode=\"{}\" — харнесс живёт не здесь, служба не нужна",
+            "helene.json просит mode=\"{}\" — программа агента живёт не здесь, служба не нужна",
             plan.mode
         ));
     }
@@ -547,7 +547,7 @@ fn plan_usable(plan: &Plan) -> Result<(), String> {
     }
     if let Some(runner) = &plan.runner {
         if !runner.exists() {
-            return Err(format!("нет руннера: {} (ключ \"runner\")", runner.display()));
+            return Err(format!("нет исполнителя ходов: {} (ключ \"runner\")", runner.display()));
         }
     }
     Ok(())
@@ -815,7 +815,7 @@ fn supervise(
     if let Some(runner) = &plan.runner {
         kids.push(Kid {
             role: Role::Runner,
-            label: "руннер",
+            label: "исполнитель ходов",
             script: runner.clone(),
             args: vec!["--config".into(), plan.config.to_string_lossy().into_owned()],
             child: None,
@@ -881,7 +881,7 @@ fn supervise(
         match cfg.get("runner").and_then(|v| v.as_str()) {
             Some(runner) if ready => kids.push(Kid {
                 role: Role::Runner,
-                label: "руннер",
+                label: "исполнитель ходов",
                 script: resolve(&a.dir, runner),
                 args: vec!["--config".into(), a.config.to_string_lossy().into_owned()],
                 child: None,
@@ -1001,10 +1001,10 @@ fn supervise(
                         // нет. Раньше это писалось как «это не харнесс» —
                         // ложное обвинение своей же трубе под замком.
                         Holder::Guarded => {
-                            "харнесс под ключом, которого у меня нет — детей не поднимаю"
+                            "программа агента под ключом, которого у меня нет — детей не поднимаю"
                                 .to_string()
                         }
-                        Holder::Silent => "это не харнесс — детей не поднимаю".to_string(),
+                        Holder::Silent => "это не программа агента — детей не поднимаю".to_string(),
                     };
                     log.line(&format!("{}: порт {} занят: {whose}", any.said(), any.port));
                     said_now = true;
@@ -1028,7 +1028,7 @@ fn supervise(
                 kid.child = None;
                 kid.started = None;
                 let (said, port) = (kid.said(), kid.port);
-                log.line(&format!("{said}: остановлен — порт {port} держит другой харнесс"));
+                log.line(&format!("{said}: остановлен — порт {port} держит другой программа агента"));
             }
         }
 
@@ -1124,7 +1124,7 @@ fn spawn_relay(plan: &Plan) -> Result<Child, String> {
         .to_path_buf();
     let exe = base.join("helene-relay.exe");
     if !exe.exists() {
-        return Err(format!("в этой поставке нет {}", exe.display()));
+        return Err(format!("в этой сборке нет {}", exe.display()));
     }
     let home = plan.tree.join("relay");
     let _ = std::fs::create_dir_all(&home);
@@ -2755,7 +2755,7 @@ enum Said {
 /// не живёт.
 fn supervise_session(plan: &Plan, stop: Arc<AtomicBool>, log: &mut Log, stopping: &mut dyn FnMut()) {
     log.line(&format!(
-        "служба: харнесс живёт в сессии владельца (задача {SESSION_TASK}) · дерево={} · порт={} · телефон={}",
+        "служба: программа агента живёт в сессии владельца (задача {SESSION_TASK}) · дерево={} · порт={} · телефон={}",
         plan.tree.display(),
         plan.port,
         if plan.phone { "да" } else { "нет" }
@@ -2789,7 +2789,7 @@ fn supervise_session(plan: &Plan, stop: Arc<AtomicBool>, log: &mut Log, stopping
             // своим окном. В обоих случаях делать нечего: второй харнесс на
             // одном дереве — это два агента (см. «замок порта» в supervise).
             if said != Said::Alive {
-                log.line("харнесс отвечает на порту — не вмешиваюсь");
+                log.line("программа агента отвечает на порту — не вмешиваюсь");
                 said = Said::Alive;
             }
             backoff = 0;
@@ -2817,7 +2817,7 @@ fn supervise_session(plan: &Plan, stop: Arc<AtomicBool>, log: &mut Log, stopping
                     if now >= next_try {
                         match schtasks(&session_task_run_args()) {
                             Ok((true, _)) => {
-                                log.line(&format!("прошу планировщик поднять харнесс в сессии {user}"));
+                                log.line(&format!("прошу планировщик поднять программа агента в сессии {user}"));
                                 said = Said::Trying;
                             }
                             Ok((false, why)) => log.line(&format!(
@@ -3256,7 +3256,7 @@ fn main() {
                 // Планировщик запускает консольное приложение с новым окном, и
                 // оно висело бы на рабочем столе всю жизнь харнесса.
                 drop_console();
-                log.line("харнесс поднят в сессии владельца (задача планировщика, без повышения)");
+                log.line("программа агента поднята в сессии владельца (задача планировщика, без повышения)");
             }
             let stop = Arc::new(AtomicBool::new(false));
             let stop_ctrlc = stop.clone();

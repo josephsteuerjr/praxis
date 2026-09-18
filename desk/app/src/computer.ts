@@ -61,15 +61,15 @@ export function storedComputer(block: unknown): StoredComputer {
 /** Строка о теле по снимку харнесса. Только то, что он прислал. */
 export function liveLine(live: ComputerLive | undefined, enabledNow: boolean): { text: string; ok: boolean | null } {
   if (!live || typeof live !== "object" || live.enabled === undefined) {
-    return { text: "Снимка тела ещё нет: харнесс пишет его при старте.", ok: null };
+    return { text: "Снимка тела ещё нет: программа агента пишет его при старте.", ok: null };
   }
   const at = live.checked_at ? ` Проверено ${fmtTimeSec(live.checked_at)}.` : "";
   if (!live.enabled) {
-    const have = live.available === false ? " Тела в поставке нет: helene-body.exe и helene-bridge.exe рядом с программой не найдены." : "";
+    const have = live.available === false ? " Тела в сборке нет: helene-body.exe и helene-bridge.exe рядом с программой не найдены." : "";
     const pending = enabledNow ? " Включено в черновике — поднимется после сохранения и перезапуска." : "";
     return { text: `Выключено.${have}${pending}`, ok: null };
   }
-  if (live.available === false) return { text: `Опция включена, но тела в поставке нет: ${live.reason || "helene-body.exe / helene-bridge.exe не найдены"}.`, ok: false };
+  if (live.available === false) return { text: `Опция включена, но тела в сборке нет: ${live.reason || "helene-body.exe / helene-bridge.exe не найдены"}.`, ok: false };
   if (live.connected === true) {
     const id = live.identity || {};
     const who = [id.kind, id.session_id !== undefined && id.session_id !== null ? `сессия ${id.session_id}` : "", id.integrity].filter(Boolean).join(", ");
@@ -99,7 +99,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer): Co
       el(
         "p",
         "receipt err",
-        "Про управление компьютером харнесс ничего не рассказал — похоже, он старее окна (тело руки `computer` появилось в 0.3.1). " +
+        "Про управление компьютером программа агента ничего не рассказал — похоже, он старее окна (тело тулы `computer` появилось в 0.3.1). " +
           "Галочки окно оставит в файле такими, какие они есть.",
       ),
     );
@@ -127,7 +127,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer): Co
     const known = (COMPUTER_SCOPES as readonly string[]).includes(s.key);
     if (!known) {
       rights.append(
-        el("p", "receipt err", `${s.title || s.key}: это право окно писать не умеет — харнесс новее окна.`),
+        el("p", "receipt err", `${s.title || s.key}: это право окно писать не умеет — программа агента новее окна.`),
         el("p", "field-hint", `Правь его руками в helene.json, список computer.scopes. Что делает: ${s.text || "—"}`),
       );
       continue;
@@ -149,14 +149,14 @@ export function computerCard(live: ModeState | null, stored: StoredComputer): Co
     for (const r of scopeRows) r.setAttribute("aria-disabled", String(!enabled));
     if (!enabled) {
       rightsNote.className = "field-hint";
-      rightsNote.textContent = "Опция выключена: права лежат в файле, но тела нет и рука отказывает словами. Включение применяется перезапуском.";
+      rightsNote.textContent = "Опция выключена: права лежат в файле, но тела нет и тул отказывает словами. Включение применяется перезапуском.";
     } else if (!scopes.size) {
       rightsNote.className = "receipt err";
-      rightsNote.textContent = "Ни одного права не выдано — тело поднимется, а рука откажет на любое действие. Так тоже можно, но зачем.";
+      rightsNote.textContent = "Ни одного права не выдано — тело поднимется, а тул откажет на любое действие. Так тоже можно, но зачем.";
     } else {
       rightsNote.className = "field-hint";
       rightsNote.textContent =
-        "Права харнесс перечитывает из файла на каждый вызов руки: после «Сохранить» они действуют сразу, перезапуск нужен только для включения самого тела.";
+        "Права программа агента перечитывает из файла на каждый вызов тулы: после «Сохранить» они действуют сразу, перезапуск нужен только для включения самого тела.";
     }
   };
 
@@ -184,7 +184,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer): Co
     el(
       "p",
       "field-hint",
-      "Тело живёт в твоей сессии, снаружи ограды, и умирает вместе с харнессом. Токены — только в памяти процесса, на диске их нет." +
+      "Тело живёт в твоей сессии, снаружи ограды, и умирает вместе с программой агента. Токены — только в памяти процесса, на диске их нет." +
         (logs && logs.length ? ` Логи тела: ${logs.join(", ")}.` : ""),
     ),
   );

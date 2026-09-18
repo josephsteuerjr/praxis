@@ -1283,7 +1283,7 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
             Verdict::Ours => {
                 if announce {
                     log_line(&format!(
-                        "харнесс{} уже жив на 127.0.0.1:{port} — подключаюсь без своих детей",
+                        "программа агента{} уже жив на 127.0.0.1:{port} — подключаюсь без своих детей",
                         plan.whose()
                     ));
                 }
@@ -1291,7 +1291,7 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
             Verdict::Guarded => {
                 if announce {
                     log_line(&format!(
-                        "порт {port} держит харнесс под ключом, которого у меня нет — подключаюсь без своих детей{}",
+                        "порт {port} держит программа агента под ключом, которого у меня нет — подключаюсь без своих детей{}",
                         plan.whose()
                     ));
                 }
@@ -1304,7 +1304,7 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
                     };
                     let file = plan.config.display();
                     log_line(&format!(
-                        "порт {port} занят ДРУГОЙ программой{whose} — свой харнесс{} не поднимаю и в её дерево не хожу; закрой её или смени порт в {file}",
+                        "порт {port} занят ДРУГОЙ программой{whose} — свой программа агента{} не поднимаю и в её дерево не хожу; закрой её или смени порт в {file}",
                         plan.whose()
                     ));
                     toast(product_ui(), &format!(
@@ -1514,7 +1514,7 @@ fn relay_login_blocking() -> Result<String, String> {
     let base = exe_dir();
     let exe = base.join("helene-relay.exe");
     if !exe.exists() {
-        return Err("в этой поставке нет helene-relay.exe".into());
+        return Err("в этой сборке нет helene-relay.exe".into());
     }
     let home = relay_home();
     let _ = std::fs::create_dir_all(&home);
@@ -1570,7 +1570,7 @@ fn service_op_from_window(op: &str) -> Result<String, String> {
     let script_name = if op == "install" { "install-service.ps1" } else { "uninstall-service.ps1" };
     let script = exe_dir().join(script_name);
     if !script.exists() {
-        return Err(format!("в этой поставке нет {script_name}"));
+        return Err(format!("в этой сборке нет {script_name}"));
     }
     let wrapper = std::env::temp_dir().join("helene-service-op.ps1");
     std::fs::write(&wrapper, SERVICE_OP_PS1).map_err(|e| format!("обёртка службы не записалась: {e}"))?;
@@ -1584,7 +1584,7 @@ fn service_op_from_window(op: &str) -> Result<String, String> {
     match (op, verdict, state.as_str()) {
         ("install", Ok(()), "running") => Ok("Служба поставлена и запущена.".into()),
         ("install", Ok(()), "stopped") => Ok("Служба поставлена, но ещё не запущена — SCM поднимет её сам или запусти из оснастки.".into()),
-        ("install", Err(e), "absent") => Err(format!("Служба не поставлена: {e}.")),
+        ("install", Err(e), "absent") => Err(format!("Служба не установлена: {e}.")),
         ("install", Err(e), st) => Ok(format!("Скрипт вернул ошибку ({e}), но по SCM служба есть: {st}.")),
         (_, Ok(()), "absent") => Ok("Служба снята.".into()),
         (_, Ok(()), st) => Err(format!("Скрипт отработал, а служба по SCM осталась: {st}.")),
@@ -4312,7 +4312,7 @@ fn watch_children(app: tauri::AppHandle) {
                         }
                     }
                     if installed {
-                        log_line(&format!("порт освободился — харнесс{} поднят окном", plan.whose()));
+                        log_line(&format!("порт освободился — программа агента{} поднят окном", plan.whose()));
                         // Окно открывалось с экраном «здесь чужая установка»:
                         // адреса харнесса в нём нет, и само оно к своему уже
                         // поднятому агенту не подключится.
@@ -4444,7 +4444,7 @@ async fn agent_add(app: tauri::AppHandle, name: String) -> Result<serde_json::Va
     let python = python_path(&base, &config_value().unwrap_or(serde_json::json!({})));
     let script = base.join("app").join("localharness").join("agents_cli.py");
     if !script.exists() {
-        return Err(format!("в этой поставке нет {}", script.display()));
+        return Err(format!("в этой сборке нет {}", script.display()));
     }
     let named_for_cmd = named.clone();
     let made: serde_json::Value = tauri::async_runtime::spawn_blocking(move || {
@@ -4907,7 +4907,7 @@ async fn telegram_account(
         let python = base.join("runtime").join("python.exe");
         let script = base.join("app").join("localharness").join("mtproto_login.py");
         if !python.exists() || !script.exists() {
-            return Err("в этой поставке нет помощника входа".to_string());
+            return Err("в этой сборке нет помощника входа".to_string());
         }
         let session = tree.join("telegram").join("account");
         let mut cmd = Command::new(python);
@@ -4954,7 +4954,7 @@ fn voice_fetch(model: String, kind: Option<String>) -> Result<String, String> {
     let python = base.join("runtime").join("python.exe");
     let script = base.join("app").join("localharness").join("voice.py");
     if !python.exists() || !script.exists() {
-        return Err("в этой поставке нет помощника голоса (app/localharness/voice.py)".into());
+        return Err("в этой сборке нет помощника голоса (app/localharness/voice.py)".into());
     }
     let name = model.trim().to_string();
     if name.is_empty() {
@@ -4999,7 +4999,7 @@ async fn carry_export() -> Result<String, String> {
         let python = base.join("runtime").join("python.exe");
         let script = base.join("app").join("localharness").join("carry.py");
         if !python.exists() || !script.exists() {
-            return Err("в этой поставке нет помощника переноса (app/localharness/carry.py)".to_string());
+            return Err("в этой сборке нет помощника переноса (app/localharness/carry.py)".to_string());
         }
         let mut cmd = Command::new(python);
         cmd.arg("-u")
