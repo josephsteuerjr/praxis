@@ -14,7 +14,12 @@
     "skipLibCheck": true,
     "noEmit": true,
     "types": [],
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "paths": {
+      "@tauri-apps/api/*": [
+        "./node_modules/@tauri-apps/api/*"
+      ]
+    }
   },
   "include": [
     "src"

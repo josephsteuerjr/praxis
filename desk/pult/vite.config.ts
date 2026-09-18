@@ -22,5 +22,10 @@ export default defineConfig({
       "/tunnel": { target: "ws://127.0.0.1:8094", ws: true },
     },
   },
+  // ui-kit лежит ВЫШЕ корня пакета, и `@tauri-apps/api` из его файлов Node
+  // ищет вверх по дереву, мимо node_modules этого пакета: на машине сборки
+  // его спасал случайный node_modules в домашней папке, на раннере — ничем.
+  // dedupe заставляет брать пакет из корня проекта; tsconfig — paths для tsc.
+  resolve: { dedupe: ["@tauri-apps/api"] },
   build: { outDir: "dist", emptyOutDir: true, target: "chrome120", assetsInlineLimit: 0 },
 });
