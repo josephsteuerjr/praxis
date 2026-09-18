@@ -1334,9 +1334,15 @@ def _read_message(path: Path) -> str:
     return "\n".join(lines).strip()
 
 
-def _computer_state() -> dict:
-    """Тело руки `computer` как оно есть (body.STATE), без второй правды."""
+def _computer_state() -> dict | None:
+    """Тело руки `computer` как оно есть (body.STATE), без второй правды.
+
+    None — тела в этой сборке нет по замыслу порта (macOS): секции тела в
+    снимке нет вовсе, и окно её не рисует — а не рисует «нет» словами.
+    """
     try:
+        if not body.HAS_BODY:
+            return None
         return body.state()
     except Exception:
         return {"enabled": False, "available": False,
@@ -1392,9 +1398,11 @@ def _git_state(tree: Path) -> dict:
     правдой. Проверка осталась: сборка без git (чужой запуск, снесённая
     папка) обязана сказать это в анатомию и в ориентир кадра (`_orient`).
     """
-    import shutil as _shutil
+    # `boot.git_ready`, а не голый `which`: на macOS без Command Line Tools
+    # `/usr/bin/git` находится, но это заглушка Apple, и «git есть» над ней —
+    # неправда в анатомии и в ориентире кадра.
     return {"repo": (Path(tree) / ".git").exists(),
-            "exe": bool(_shutil.which("git"))}
+            "exe": boot.git_ready() is not None}
 
 
 # Ровно одна копия атомарной записи на весь харнесс: три разошедшиеся копии одной
@@ -1435,6 +1443,11 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
     config_path = Path(args.config).resolve()
+    # POSIX: SIGTERM — мягкий выход (atexit, замок дерева), и сторож родителя:
+    # умерла оболочка — уходим вслед, а не живём сиротой с замком на дереве.
+    # На Windows обе строки — no-op: там детей держит job-объект оболочки.
+    boot.arm_soft_exit("движок")
+    boot.watch_parent("движок")
     # ⚠ ПЕРВЫЙ-ЗАПУСК.md зовёт владельца править helene.json руками, и любая
     # опечатка роняла руннер голым трейсом: оболочка перезапускала его с растущей
     # паузой и говорила «падает раз за разом», не имея чем назвать причину.

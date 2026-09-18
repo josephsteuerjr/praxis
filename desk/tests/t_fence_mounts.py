@@ -98,8 +98,10 @@ class MountParsing(unittest.TestCase):
         self.assertEqual(rows[0]["access"], "read")
 
     def test_duplicate_row_ignored(self):
+        # Хвостовой разделитель — свой у платформы: на POSIX обратный слэш это
+        # обычная буква в имени, и «та же папка» стала бы другой.
         rows = fence.parse_mounts(
-            _cfg([str(self.g.outside), {"path": str(self.g.outside) + "\\",
+            _cfg([str(self.g.outside), {"path": str(self.g.outside) + os.sep,
                                         "access": "write"}]),
             self.g.root, self.g.tree)
         self.assertEqual(len(rows), 1)
@@ -136,12 +138,23 @@ class MountRefusal(unittest.TestCase):
         self.assertEqual(self.refuse(str(self.g.outside)), "")
 
     def test_drive_root_refused(self):
-        self.assertIn("корень диска", self.refuse("C:\\"))
+        # Корень — свой у платформы: `C:\` на Windows, `/` на POSIX.
+        self.assertIn("корень диска", self.refuse("C:\\" if os.name == "nt" else "/"))
 
     def test_system_folder_refused(self):
-        windir = os.environ.get("windir") or "C:\\Windows"
-        self.assertIn("системная папка", self.refuse(windir))
-        self.assertIn("системная папка", self.refuse(str(Path(windir) / "System32")))
+        if os.name == "nt":
+            windir = os.environ.get("windir") or "C:\\Windows"
+            self.assertIn("системная папка", self.refuse(windir))
+            self.assertIn("системная папка", self.refuse(str(Path(windir) / "System32")))
+        else:
+            # На macOS и Linux — системные корни списком (`fence.POSIX_SYSTEM_ROOTS`):
+            # windir здесь нет, а отдать `/System` или `/usr/bin` значит то же самое.
+            for path in ("/System", "/usr/bin", "/private/etc", "/Library"):
+                self.assertIn("системная папка", self.refuse(path), path)
+            self.assertNotIn("Windows", self.refuse("/System"))
+            # Дом пользователя системной папкой не считается: это и есть то,
+            # что монтируют.
+            self.assertNotIn("системная папка", self.refuse(str(self.g.outside)))
 
     def test_folder_holding_helene_refused(self):
         # Папка ВЫШЕ установки: смонтировать её значит отдать helene.json.
@@ -243,7 +256,7 @@ class Asking(unittest.TestCase):
 
     def test_impossible_folder_is_not_recorded(self):
         m = self.g.mounts(_cfg([]))
-        said = m.ask("C:\\", "хочу всё", "write")
+        said = m.ask("C:\\" if os.name == "nt" else "/", "хочу всё", "write")
         self.assertIn("корень диска", said)
         self.assertEqual(m.load_requests(), [])
 
@@ -310,9 +323,12 @@ class Arguments(unittest.TestCase):
 
     def test_link_names_do_not_collide(self):
         taken: set[str] = set()
-        first = fence.mount_link_name(Path("C:\\a\\Документы"), taken)
-        taken.add(first.lower())
-        second = fence.mount_link_name(Path("D:\\b\\Документы"), taken)
+        # Пути — в записи своей платформы: на POSIX `C:\a` это одно имя файла.
+        one, two = (("C:\\a\\Документы", "D:\\b\\Документы") if os.name == "nt"
+                    else ("/a/Документы", "/b/Документы"))
+        first = fence.mount_link_name(Path(one), taken)
+        taken.add(os.path.normcase(first))     # как `_settle_links`: регистр — по платформе
+        second = fence.mount_link_name(Path(two), taken)
         self.assertEqual(first, "Документы")
         self.assertNotEqual(first, second)
         self.assertTrue(second.startswith("Документы-"))
@@ -458,6 +474,11 @@ class Windows(unittest.TestCase):
 
     def test_state_line_comes_from_the_body_module(self):
         import body
+        # Проверяется ШОВ, а не платформа: в сборке без тела (macOS) строка
+        # пуста с обеих сторон шва, и это отдельный факт (`t_body.Absent`).
+        saved = body.HAS_BODY
+        body.HAS_BODY = True
+        self.addCleanup(setattr, body, "HAS_BODY", saved)
         body.STATE.update({"enabled": False, "available": False})
         self.assertEqual(fence.windows_truth(), body.windows_truth())
         self.assertIn("окна:", fence.windows_truth())
@@ -467,6 +488,9 @@ class Windows(unittest.TestCase):
         self.assertIn("computer.apps", fence.windows_truth())
         body.STATE.update({"enabled": False, "available": False, "port": 0,
                            "scopes": [], "reason": "не поднималось"})
+        body.HAS_BODY = False
+        self.assertEqual(fence.windows_truth(), body.windows_truth())
+        self.assertEqual(fence.windows_truth(), "")
 
 
 class Hand(unittest.TestCase):

@@ -68,6 +68,43 @@ class Table(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)))
 
 
+class Origin(unittest.TestCase):
+    """Замок Origin: окно оболочки пускается на обеих платформах, веб — нет.
+
+    На Windows окно приходит с `http(s)://helene.localhost` (свой протокол
+    оболочки) или `http(s)://tauri.localhost`; на macOS Tauri отдаёт своим
+    протоколом `helene://localhost` (и `tauri://localhost` без него). Неверная
+    строка здесь — это 403 на всё и окно с «Нет связи с кодом агента».
+    """
+
+    def ok(self, origin: str, host: str = "127.0.0.1:8094") -> bool:
+        request = type("R", (), {"headers": {"Origin": origin, "Host": host}})()
+        allowed, echoed = deskapp._origin_ok(request)
+        if allowed:
+            self.assertEqual(echoed, origin.rstrip("/"))
+        return allowed
+
+    def test_windows_shell_origins(self):
+        for origin in ("http://helene.localhost", "https://helene.localhost",
+                       "http://tauri.localhost", "https://tauri.localhost",
+                       "https://tauri.localhost:1234/"):
+            self.assertTrue(self.ok(origin), origin)
+
+    def test_macos_shell_origins(self):
+        for origin in ("helene://localhost", "tauri://localhost", "helene://localhost/"):
+            self.assertTrue(self.ok(origin), origin)
+
+    def test_web_origins_are_refused(self):
+        for origin in ("https://evil.example", "http://helene.localhost.evil.example",
+                       "helene://evil.example", "tauri://evil.example",
+                       "null", "https://127.0.0.1:9999"):
+            self.assertFalse(self.ok(origin), origin)
+
+    def test_no_origin_and_same_origin_pass(self):
+        self.assertTrue(self.ok(""))
+        self.assertTrue(self.ok("http://127.0.0.1:8094", host="127.0.0.1:8094"))
+
+
 class Dispatch(unittest.TestCase):
     """Переводчики: один и тот же обработчик даёт согласованные ответы."""
 

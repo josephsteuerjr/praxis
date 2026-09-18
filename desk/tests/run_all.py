@@ -107,6 +107,14 @@ def main() -> int:
             failed.append("rust · cargo не найден")
         else:
             for crate in CRATES:
+                if crate == "svc" and os.name != "nt":
+                    # Служба — крейт только для Windows (SCM, ACL, session-host):
+                    # на macOS и Linux он не собирается, и это не падение, а
+                    # состав платформы. Строка обязательна: молчаливый пропуск
+                    # неотличим от «прогнали и всё зелёное».
+                    print(f"пропуск  rust · {crate}  (крейт только для Windows — служба)",
+                          flush=True)
+                    continue
                 ok, name = run([cargo, "test", "--offline"], DESK / crate,
                                f"rust · {crate}", args.quiet)
                 if not ok:

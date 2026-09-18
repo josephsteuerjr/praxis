@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -45,6 +46,12 @@ BODY_PORT = 9480                    # порт моста тела — там ж
 CONFIG_NAME = "helene.json"         # имя файла настроек — там же
 COMPUTER_SCOPES: tuple[str, ...] = ("computer.read", "computer.files",
                                     "computer.process", "computer.apps")
+#: Питон поставки, когда в корневом конфиге ключа `python` нет. Правило одно на
+#: две головы (вторая — оболочка, `shell/src/main.rs`): Windows —
+#: `runtime/python.exe` (embedded CPython), иначе — `runtime/bin/python3`
+#: (python-build-standalone). Явный `python` в конфиге сильнее умолчания;
+#: относительный путь считается от папки конфига.
+DEFAULT_PYTHON = "runtime/python.exe" if os.name == "nt" else "runtime/bin/python3"
 
 
 @dataclass
@@ -248,7 +255,7 @@ def create(base_dir: Path, name: str, *, brain_from_base: bool = True) -> Agent:
     root = read_config(base_dir / CONFIG_NAME) if brain_from_base else {}
     cfg: dict = {k: v for k, v in root.items() if k not in _NOT_INHERITED}
     # Пути установки — от папки агента: два уровня вверх (`agents/<id>/`).
-    for key, default in (("python", "runtime/python.exe"), ("app", "app/deskapp.py"),
+    for key, default in (("python", DEFAULT_PYTHON), ("app", "app/deskapp.py"),
                          ("runner", "app/localharness/runner.py"), ("code", "tree")):
         raw = str(root.get(key) or default)
         cfg[key] = raw if Path(raw).is_absolute() else f"../../{raw}"

@@ -76,6 +76,11 @@ PORT_SPAN = 20
 SCOPES = ("computer.read", "computer.files", "computer.process", "computer.apps")
 BRIDGE_EXE = "helene-bridge.exe"
 BODY_EXE = "helene-body.exe"
+#: Тело есть только на Windows (UIA через COM). Порт на macOS — основа без
+#: тела: здесь ничего не поднимается, секции тела в снимке нет
+#: (`runner._computer_state` → None), тул `computer` отвечает словами.
+#: Та же правда со стороны каталога — `modes.HAS_COMPUTER`.
+HAS_BODY = os.name == "nt"
 #: Снимок для окна и телефона (сторож пишет его раз в несколько секунд).
 STATE_FILE = ("memory", ".state", "body.json")
 
@@ -674,9 +679,13 @@ def launch(install_root: Path, tree: Path, cfg: dict) -> "Body | None":
     global _BODY
     STATE["enabled"] = enabled(cfg)
     STATE["scopes"] = scopes(cfg)
-    if os.name != "nt":
-        STATE.update({"available": False,
-                      "reason": "тело есть только для Windows — здесь его не поднимаю"})
+    if not HAS_BODY:
+        # Тела в этой сборке нет по замыслу порта: ничего не поднимаем и не
+        # тревожим — это состав платформы, а не сбой. Снимок не пишем: секции
+        # тела для окна нет вовсе, и слова о платформе на экран не едут.
+        STATE.update({"available": False, "reason": "тела в этой сборке нет",
+                      "connected": None, "bridge_pid": 0, "body_pid": 0})
+        log.info("тело: в этой сборке его нет — тул computer откажет словами")
         return None
     pair = _exe_pair(Path(install_root))
     STATE["available"] = pair is not None
@@ -720,6 +729,10 @@ def state() -> dict:
 
 def windows_truth() -> str:
     """Одна честная строка про окна — в анатомию и на экран «Система»."""
+    if not HAS_BODY:
+        # Секции тела в картине нет — и строки про окна тоже: пустую строку
+        # окно не рисует, а «нет на этой платформе» на экран не едет.
+        return ""
     if not STATE.get("enabled"):
         if STATE.get("available"):
             return ("окна: рука `computer` выключена владельцем — тело в поставке есть, "
@@ -789,6 +802,37 @@ def _owner_turn(agent_mod) -> bool:
     return bool(ctx is not None and getattr(ctx, "owner", False))
 
 
+#: Ответ тула `computer` в сборке без тела. Без слов о платформе: это ответ
+#: агенту, и «чего нет» здесь важнее, чем «почему».
+ABSENT_ANSWER = ("Тула окон в этой сборке нет: тело для него не входит в основу, и "
+                 "поднять его нечем. Ограда здесь ни при чём — это отдельная опция, "
+                 "а не режим.")
+
+
+def _install_absent(agent_mod) -> None:
+    """Сборка без тела: тул `computer` отвечает словами, а не отказом клиента.
+
+    Сам тул у дерева остаётся, но за ним стоит клиент моста (`body_client`) с
+    чужими умолчаниями: без обёртки агент получал бы отказ клиента с адресом,
+    которого здесь нет. Права — всегда «нет»: давать их некому.
+    """
+    if callable(getattr(agent_mod, "_computer_allowed", None)):
+        agent_mod._computer_allowed = lambda scope: False
+    impl = getattr(agent_mod, "TOOL_IMPL", None)
+    original = impl.get("computer") if isinstance(impl, dict) else None
+    if not callable(original) or getattr(original, "_helene_body", False):
+        return
+
+    def computer(*args, **kwargs):
+        return ABSENT_ANSWER
+
+    computer._helene_body = True
+    computer.__name__ = getattr(original, "__name__", "computer")
+    computer.__doc__ = getattr(original, "__doc__", "")
+    impl["computer"] = computer
+    log.info("тело: тул computer в этой сборке без тела — отвечает словами")
+
+
 def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -> None:
     """Подключить руку `computer` к телу и к разрешению владельца.
 
@@ -799,6 +843,9 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
     `replace` и `execution=system` отказывали бы хозяину из его же окна).
     Сама рука остаётся рукой дерева; обёртка только называет отказ словами.
     """
+    if not HAS_BODY:
+        _install_absent(agent_mod)
+        return
     live = _LiveScopes(config_path, cfg)
     try:
         import body_client

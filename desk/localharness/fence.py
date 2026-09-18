@@ -464,7 +464,20 @@ def _holds(parent: Path, child: Path) -> bool:
     return Path(parent) != Path(child) and _within(child, parent)
 
 
+#: Системные корни macOS и Linux — то же, что windir и Program Files на
+#: Windows: смонтировать их значит отдать агенту машину. Дома пользователей
+#: сюда не входят: папка внутри `/Users/<имя>` — обычный случай монтирования.
+#: ⚠ Не шире: `/private`, `/var` и `/tmp` целиком сюда нельзя — там лежат
+#: временные папки пользователя (`/private/var/folders`, `/tmp`), которые
+#: монтируют по делу, и стенды кладут туда свои песочницы.
+POSIX_SYSTEM_ROOTS = ("/System", "/Library", "/Applications", "/usr", "/bin", "/sbin",
+                      "/lib", "/lib64", "/etc", "/private/etc", "/private/var/db",
+                      "/dev", "/proc", "/sys", "/boot")
+
+
 def _system_roots() -> list[Path]:
+    if os.name != "nt":
+        return [Path(p) for p in POSIX_SYSTEM_ROOTS]
     out = []
     for key in ("windir", "SystemRoot", "ProgramFiles", "ProgramFiles(x86)",
                 "ProgramW6432"):
@@ -482,15 +495,17 @@ def mount_refusal(path: Path, install_root: Path, tree: Path) -> str:
     сможет смонтировать.
     """
     if path is None:
-        return "нужен полный путь к папке, например C:\\Users\\Имя\\Документы"
+        return ("нужен полный путь к папке, например "
+                + ("C:\\Users\\Имя\\Документы" if os.name == "nt" else "/Users/имя/Documents"))
     real = _real(path)
     if real.parent == real:
         return ("корень диска — это снятая ограда, а не монтирование. Выбери "
                 "папку внутри него")
     for sysroot in _system_roots():
         if real == sysroot or _within(real, sysroot):
-            return ("системная папка Windows: смонтировать её значит отдать "
-                    "агенту машину. Для такой работы есть интерактивный режим")
+            return ("системная папка" + (" Windows" if os.name == "nt" else "")
+                    + ": смонтировать её значит отдать агенту машину. Для такой "
+                    "работы есть интерактивный режим")
     root, data = _real(install_root), _real(tree)
     # Порядок: сначала «папка ДЕРЖИТ Hélène» (и сама папка установки), потом
     # «папка ВНУТРИ Hélène». Равенство считается только в свою сторону, иначе
@@ -1708,11 +1723,15 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
                 STATE["reason"] = (f"shell в AppContainer {container.sid_text}, "
                                    f"сеть {'есть' if network else 'нет'}")
             else:
-                # Ограда на POSIX — bubblewrap: тот же контракт, другой механизм
-                # (`fence_posix`). Импорт поздний, чтобы модуль не искали на
-                # Windows, где его роль исполняет AppContainer выше.
-                import fence_posix  # noqa: PLC0415 — только на этой платформе
-                container = fence_posix.Container(
+                # Ограда на POSIX — тот же контракт, другой механизм: на macOS
+                # seatbelt (`fence_macos`), на Linux bubblewrap (`fence_posix`).
+                # Импорт поздний, чтобы модуль не искали на Windows, где его
+                # роль исполняет AppContainer выше.
+                if sys.platform == "darwin":
+                    import fence_macos as posix_fence  # noqa: PLC0415 — только здесь
+                else:
+                    import fence_posix as posix_fence  # noqa: PLC0415 — только здесь
+                container = posix_fence.Container(
                     install_root, workspace, network, tree=tree,
                     secrets=secret_paths(install_root, tree))
                 container.prepare()
@@ -1985,7 +2004,7 @@ def hands_report(agent_mod) -> list[dict]:
             fence_kind, why = "path", "проверка пути"
         elif live and not bare:
             if container_up:
-                fence_kind, why = "container", "команда уходит в AppContainer"
+                fence_kind, why = "container", f"команда уходит в {container_word()}"
             else:
                 fence_kind, why = "outside", STATE.get("reason") or "контейнер не поднялся"
         elif name in OUTSIDE_BY_DESIGN:
@@ -2012,6 +2031,19 @@ def hands_report(agent_mod) -> list[dict]:
         rows.append({"name": name, "touches": MACHINE_HANDS[name][0],
                      "fence": "unknown", "why": "руки с таким именем в наборе нет"})
     return rows
+
+
+def container_word() -> str:
+    """Чем огорожен `shell` на этой платформе — одно слово для отчётов.
+
+    На Windows — AppContainer, как и было; на macOS — seatbelt
+    (`fence_macos`), на Linux — bubblewrap (`fence_posix`). Слово в отчёте
+    обязано совпадать с механизмом: «AppContainer» над seatbelt — та же
+    неправда, что «в контейнере» над голой командой, только про другое.
+    """
+    if os.name == "nt":
+        return "AppContainer"
+    return "seatbelt" if sys.platform == "darwin" else "bubblewrap"
 
 
 def _shim_in(module_name: str) -> bool:

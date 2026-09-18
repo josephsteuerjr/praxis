@@ -30,10 +30,8 @@ user namespace — так бывает в старых Debian и в контей
 снимок устройства: «ограда не поднялась, shell без ограды». Молча притворяться
 защитой нельзя — это то же правило, что и на Windows.
 
-macOS: здесь его нет. `sandbox-exec` объявлен Apple устаревшим, а App Sandbox
-раздаётся подписью приложения, а не запуском процесса; честный ответ для macOS —
-контейнер или отдельная реализация, и до неё ограда там не поднимается, о чём
-`prepare()` говорит теми же словами.
+macOS: не здесь. Там ограду ставит seatbelt (`fence_macos`, тот же контракт),
+и `fence.install` выбирает модуль по платформе — этот на darwin не зовётся.
 """
 from __future__ import annotations
 
@@ -41,7 +39,6 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 log = logging.getLogger("helene.fence.posix")
@@ -77,10 +74,6 @@ class Container:
     # --- подготовка ----------------------------------------------------------
 
     def prepare(self) -> None:
-        if sys.platform == "darwin":
-            raise FenceUnavailable(
-                "на macOS ограды пока нет: App Sandbox раздаётся подписью приложения, "
-                "а не запуском процесса, и `sandbox-exec` объявлен Apple устаревшим")
         found = shutil.which(BWRAP)
         if not found:
             raise FenceUnavailable(

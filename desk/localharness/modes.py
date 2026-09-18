@@ -78,6 +78,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -103,6 +104,16 @@ DEFAULT_MODE = "interactive"
 
 #: Ключ режима в helene.json. См. докстринг: `mode` занят под local|remote.
 KEY = "agent_mode"
+
+#: Служба (SCM) и тело тула `computer` (UIA, `body.py`) есть только на Windows.
+#: На macOS их нет по замыслу порта — основа без тела, службы и брокера:
+#: секции службы и тела в картину НЕ отдаются (`service_here`, `mode_state`),
+#: окно карточек не рисует (прячет по `app_info.platform`), а журнал говорит
+#: одной строкой. Две константы, а не одна: механизмы разные, и у порта на
+#: Linux они могут разойтись. Стенды подменяют их, чтобы разобрать обе картины
+#: на любой машине.
+HAS_SERVICE = os.name == "nt"
+HAS_COMPUTER = os.name == "nt"
 
 #: Имя службы в SCM (svc/src/main.rs::SERVICE_NAME). Латиницей.
 SERVICE_NAME = "Helene"
@@ -141,6 +152,36 @@ TEXTS = {
                     "учётка ограничена, агент ограничен так же. Права "
                     "администратора он просит отдельно, окном Windows."),
 }
+
+#: Те же две ограды словами для macOS. Общие тексты обещают то, чего в порте
+#: нет по замыслу: опцию «Управление компьютером» (тела нет) и окно прав
+#: Windows (брокера нет). Ограда здесь — seatbelt (`fence_macos`). Форма — та
+#: же, что у TEXTS: ключи из MODES, значение — строковые литералы; сборка
+#: установщика (setup/ui/vite.config.ts) разбирает словарь по этой форме.
+#: Отдаёт его `texts()` при `sys.platform == "darwin"`; на Windows — TEXTS.
+TEXTS_MACOS: dict[str, str] = {
+    "sandbox": ("Агент заперт в своей папке: файлы и команды дальше дома не "
+                "идут, наружу — только те папки, что ты смонтировал. Команды "
+                "идут под оградой seatbelt самой системы, ключи и файл настроек "
+                "закрыты от них. Снаружи ограды — Forge: он работает в worktree "
+                "задачи, а тот лежит там, куда ты его завёл. Поимённо, какой тул "
+                "накрыт, а какой нет, — на экране «Система»."),
+    "interactive": ("Агент работает с твоими правами: файлы и процессы — те же, "
+                    "что доступны тебе самому, не больше. Файловые тулы видят "
+                    "то же, что и shell, монтировать ничего не нужно. Если "
+                    "учётка ограничена, агент ограничен так же. Прав "
+                    "администратора он не получает: всё, что требует пароля, "
+                    "остаётся за тобой."),
+}
+
+
+def texts() -> dict[str, str]:
+    """Тексты оград для ЭТОЙ платформы: macOS — TEXTS_MACOS, иначе TEXTS.
+
+    Одна точка выбора на `resolve`, `describe` и `catalogue`: то, что уезжает в
+    `/api/mode`, в анатомию и в карточки, обязано быть одним и тем же текстом.
+    """
+    return TEXTS_MACOS if sys.platform == "darwin" else TEXTS
 
 # --------------------------------------------------------------------------- #
 #  Служба: тексты опции, а не режима
@@ -387,6 +428,10 @@ def service_installed(cfg: dict | None = None, *, probe: bool = True) -> bool | 
     опросе состояния — это и задержка, и лишнее окно консоли. Прав здесь не
     нужно: SC_MANAGER_CONNECT + SERVICE_QUERY_STATUS даются любому вошедшему.
     """
+    if not HAS_SERVICE:
+        # Службы на этой платформе нет вовсе: след установщика, приехавший с
+        # чужого конфига, здесь ничего не значит.
+        return None
     hint = None
     if isinstance(cfg, dict):
         installed = _block(cfg, "installed")
@@ -490,6 +535,10 @@ def resolve(cfg: dict, *, installed: bool | None = None) -> dict:
     """
     if installed is None:
         installed = service_installed(cfg)
+    # Службы на этой платформе может не быть вовсе (HAS_SERVICE): тогда её
+    # секции в картине нет — ни текстов, ни действующих галочек, ни тревог о
+    # них. Явный `installed` — шов SCM (Windows и стенды): ему верим как есть.
+    service_here = HAS_SERVICE or installed is not None
     raw_name, where = _stated_raw(cfg)
     legacy = raw_name == LEGACY_SERVICE
     name = "" if legacy else raw_name
@@ -508,8 +557,8 @@ def resolve(cfg: dict, *, installed: bool | None = None) -> dict:
     # Без службы обе галочки — слова в файле: некому их исполнить. `None`
     # (SCM не ответил) считаем «может стоять»: промолчать про права системы
     # хуже, чем сказать лишнее.
-    effective_session0 = stored_session0 and installed is not False
-    effective_firewall = stored_firewall and installed is not False
+    effective_session0 = service_here and stored_session0 and installed is not False
+    effective_firewall = service_here and stored_firewall and installed is not False
 
     # Совпадает ли ручка с режимом ПРЯМО В ФАЙЛЕ. Мало выставить её в памяти:
     # экран настроек и владелец с блокнотом читают файл, и вечно расходящаяся
@@ -536,28 +585,29 @@ def resolve(cfg: dict, *, installed: bool | None = None) -> dict:
             f"sandbox.enabled = {str(bool(sandbox_block.get('enabled'))).lower()}, "
             f"а режим «{TITLES[name]}» требует "
             f"{str(want_sandbox).lower()} — побеждает режим")
-    if stored_session0 and installed is False:
+    if service_here and stored_session0 and installed is False:
         notes.append("service.session0 = true, но служба не установлена — "
                      "нулевую сессию некому дать, галочка не действует. "
                      "Служба ставится в Настройках, карточка «Режим»")
     # Про выключенную привилегию говорим, только когда служба ЕСТЬ: без службы
     # правило и так ставит окно, и строка об этом была бы не расхождением, а
     # шумом на каждом старте у каждого, кто службу не ставил.
-    if not stored_firewall and installed is not False:
+    if service_here and not stored_firewall and installed is not False:
         notes.append("service.firewall = false — правило брандмауэра служба не "
                      "ставит: кнопка «Телефон» спросит права окном Windows")
 
     return {
         "name": name,
         "title": TITLES[name],
-        "text": TEXTS[name],
+        "text": texts()[name],
         "sandbox": want_sandbox,
         "explicit": explicit,
         "source": source,
         "needs_write": (not explicit) or where == "mode" or not sandbox_agrees,
+        "service_here": service_here,
         "service_installed": installed,
-        "service_title": SERVICE_TITLE,
-        "service_text": SERVICE_TEXT,
+        "service_title": SERVICE_TITLE if service_here else "",
+        "service_text": SERVICE_TEXT if service_here else "",
         "session0": effective_session0,
         "session0_set": stored_session0,
         "session0_warning": SESSION0_WARNING if effective_session0 else "",
@@ -611,10 +661,13 @@ def journal(picture: dict, *, where: str = "") -> None:
     log.info("режим: %s%s — источник: %s", picture["title"], tail,
              picture["source"])
     installed = picture.get("service_installed")
-    log.info("служба: %s · нулевая сессия: %s · правило брандмауэра: %s",
-             {True: "установлена", False: "не установлена"}.get(installed, "не спросили"),
-             "разрешена" if picture.get("session0") else "запрещена",
-             "ставит служба" if picture.get("firewall") else "ставит окно")
+    if not picture.get("service_here", HAS_SERVICE):
+        log.info("служба: на этой платформе её нет — галочки service.* не действуют")
+    else:
+        log.info("служба: %s · нулевая сессия: %s · правило брандмауэра: %s",
+                 {True: "установлена", False: "не установлена"}.get(installed, "не спросили"),
+                 "разрешена" if picture.get("session0") else "запрещена",
+                 "ставит служба" if picture.get("firewall") else "ставит окно")
     if picture.get("session0"):
         log.warning("режим: %s", SESSION0_WARNING)
     for note in picture["notes"]:
@@ -695,16 +748,19 @@ def describe(picture: dict) -> dict:
     `service_installed`/`session0`/`firewall` — что со службой. Склеивать их
     обратно на экране нельзя: из этой склейки и вырос P0.
     """
+    # Есть ли служба в картине вообще: старая картина без ключа — с Windows.
+    here = bool(picture.get("service_here", HAS_SERVICE))
     return {
         "name": picture.get("name") or DEFAULT_MODE,
         "title": picture.get("title") or TITLES[DEFAULT_MODE],
-        "text": picture.get("text") or TEXTS[DEFAULT_MODE],
+        "text": picture.get("text") or texts()[DEFAULT_MODE],
         "sandbox": bool(picture.get("sandbox")),
         "explicit": bool(picture.get("explicit")),
         "source": picture.get("source") or "",
+        "service_here": here,
         "service_installed": picture.get("service_installed"),
-        "service_title": picture.get("service_title") or SERVICE_TITLE,
-        "service_text": picture.get("service_text") or SERVICE_TEXT,
+        "service_title": (picture.get("service_title") or SERVICE_TITLE) if here else "",
+        "service_text": (picture.get("service_text") or SERVICE_TEXT) if here else "",
         "session0": bool(picture.get("session0")),
         "session0_set": bool(picture.get("session0_set")),
         "session0_warning": picture.get("session0_warning") or "",
@@ -726,7 +782,7 @@ def catalogue() -> list[dict]:
     return [{
         "name": name,
         "title": TITLES[name],
-        "text": TEXTS[name],
+        "text": texts()[name],
         # Ни одна ограда прав администратора не требует: и per-user установка, и
         # профиль AppContainer, и icacls на свои папки обходятся без него.
         "needs_admin": False,

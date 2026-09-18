@@ -33,11 +33,11 @@ Desk ставится в двух местах, и до 10.09 каждое ме�
   ``aiohttp``, раннер Windows — ещё и ``telethon``. Сервер ставит этот файл,
   поставка вливает его в общий ``requirements.txt``.
 
-Виды пакета (``flavor``) — не два разных состава, а один список с пометкой, где
+Виды пакета (``flavor``) — не разные составы, а один список с пометкой, где
 часть нужна: мини-апп Telegram живёт только на сервере (страницу открывает
-Telegram по HTTPS, до localhost он не дойдёт), а раннер и ресурсы — только на
-Windows (на сервере ходы ведёт её собственный харнесс). Разница видна здесь
-строкой, а не расхождением двух скриптов.
+Telegram по HTTPS, до localhost он не дойдёт), а движок и ресурсы — только у
+настольных изданий, Windows и macOS (на сервере ходы ведёт её собственный код
+агента). Разница видна здесь строкой, а не расхождением двух скриптов.
 """
 from __future__ import annotations
 
@@ -56,8 +56,14 @@ MANIFEST = "desk.json"
 STATIC_MANIFEST = ".helene-static.json"
 REQUIREMENTS = "requirements-desk.txt"
 
-SERVER, WINDOWS = "server", "windows"
-FLAVORS = (SERVER, WINDOWS)
+SERVER, WINDOWS, MACOS = "server", "windows", "macos"
+FLAVORS = (SERVER, WINDOWS, MACOS)
+#: Настольные издания: окно Элен рядом с движком. Состав у них ОДИН — канал,
+#: читалки, окно Элен, телефон, движок, ресурсы; различается только то, что
+#: сборка кладёт вокруг пакета (exe и embedded CPython у Windows, .app и
+#: python-build-standalone у macOS). Вид в манифесте всё равно свой: по нему
+#: окно и выкладка отличают одну поставку от другой.
+DESKTOP = (WINDOWS, MACOS)
 
 # Что не едет никогда: байт-код машины сборщика (его никто не проверял и он
 # чужой для целевой версии Python) и мусор файловых менеджеров.
@@ -90,7 +96,7 @@ PARTS: tuple[Part, ...] = (
     # Пульта агент на сервере (тех карточек нет вовсе). До разделения фронт был
     # один, а разница держалась ветками `if (remote)` внутри него — то есть на
     # сервер уезжало окно Элен, знающее про местного агента, которого там нет.
-    Part("app/dist", "static", (WINDOWS,), dist=True,
+    Part("app/dist", "static", DESKTOP, dist=True,
          why="окно Элен: сборка Vite (npm --prefix app run build)"),
     Part("pult/dist", "static", (SERVER,), dist=True,
          why="окно Пульта: сборка Vite (npm --prefix pult run build)"),
@@ -105,9 +111,9 @@ PARTS: tuple[Part, ...] = (
     # и докера рядом нет вовсе.
     Part("server/deskctl.py", "deskctl.py", (SERVER,), kind="file",
          why="пультовой надзор: контейнеры, их журналы и мозг — мимо агента"),
-    Part("localharness", "localharness", (WINDOWS,), kind="py",
-         why="исполнитель ходов Windows: первый запуск, ходы, доставка слова, Telegram"),
-    Part("resources", "resources", (WINDOWS,),
+    Part("localharness", "localharness", DESKTOP, kind="py",
+         why="движок настольных изданий: первый запуск, ходы, доставка слова, Telegram"),
+    Part("resources", "resources", DESKTOP,
          why="ресурсы продукта: каноническая конституция и всё, что читает boot.py"),
 )
 

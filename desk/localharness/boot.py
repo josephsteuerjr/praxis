@@ -27,6 +27,8 @@ import os
 import sys
 import platform
 import re
+import signal
+import threading
 import time
 from pathlib import Path
 
@@ -365,27 +367,66 @@ def _top_up_ignore(path: Path) -> list[str]:
 
 
 def git_exe() -> Path | None:
-    """git из поставки — `runtime/git/cmd/git.exe` (MinGit, см. build_dist.stage_git)."""
-    bundled = _RESOURCES.parent.parent / "runtime" / "git" / "cmd" / "git.exe"
+    """git из поставки: Windows — `runtime/git/cmd/git.exe` (MinGit, см.
+    build_dist.stage_git), macOS — `runtime/git/bin/git` (git, собранный с
+    RUNTIME_PREFIX; кладёт сборка Mac)."""
+    runtime = _RESOURCES.parent.parent / "runtime"
+    bundled = (runtime / "git" / "cmd" / "git.exe" if os.name == "nt"
+               else runtime / "git" / "bin" / "git")
     return bundled if bundled.is_file() else None
+
+
+def _developer_tools_present() -> bool:
+    """macOS: стоят ли Command Line Tools (`xcode-select -p` отвечает нулём)."""
+    import subprocess
+    try:
+        done = subprocess.run(["/usr/bin/xcode-select", "-p"], capture_output=True,
+                              text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def git_ready() -> Path | None:
+    """Каким git пользоваться: поставки, иначе системный — если он настоящий.
+
+    ⚠ macOS без Command Line Tools: `/usr/bin/git` есть всегда, но это заглушка
+    Apple — `which` её находит, а ЗАПУСК открывает диалог «установить
+    инструменты разработчика» посреди первого запуска и возвращает ошибку.
+    Такой git не считается найденным: снимки правок агента выключены, о чём
+    говорит журнал, а окно не трогаем. Настоящий git не из поставки (Homebrew)
+    остаётся годным — заглушка узнаётся по пути, а не по платформе.
+    """
+    import shutil
+    exe = git_exe()
+    if exe is not None:
+        return exe
+    found = shutil.which("git")
+    if not found:
+        return None
+    if (sys.platform == "darwin" and os.path.realpath(found) == "/usr/bin/git"
+            and not _developer_tools_present()):
+        log.warning("git: в поставке нет (runtime/git/bin/git), а системный без "
+                    "Command Line Tools — заглушка; снимков правок агента не будет")
+        return None
+    return Path(found)
 
 
 def arm_git() -> str:
     """Вставить git поставки в PATH этого процесса — ПЕРВЫМ.
 
     `selfgit` дерева зовёт голое `git`, а `runner._git_state` спрашивает
-    `shutil.which("git")`; без этой строки поставка с git в runtime/git всё
-    равно считала бы, что git нет. Первым — чтобы снимки делал наш git, а не
-    что нашлось на машине. -> откуда git: «поставка» | «система» | «».
+    `git_ready`; без этой строки поставка с git в runtime/git всё равно
+    считала бы, что git нет. Первым — чтобы снимки делал наш git, а не что
+    нашлось на машине. -> откуда git: «поставка» | «система» | «».
     """
-    import shutil
     exe = git_exe()
     if exe is not None:
         here = str(exe.parent)
         if here not in os.environ.get("PATH", "").split(os.pathsep):
             os.environ["PATH"] = here + os.pathsep + os.environ.get("PATH", "")
         return "поставка"
-    return "система" if shutil.which("git") else ""
+    return "система" if git_ready() is not None else ""
 
 
 def _agent_email(cfg: dict) -> str:
@@ -414,7 +455,9 @@ def seed_git(tree: Path, cfg: dict) -> bool:
     import subprocess
     if (tree / ".git").exists():
         return False
-    if not shutil.which("git"):
+    # Тот же ответ, что у `arm_git`: заглушка Apple без Command Line Tools —
+    # это не git, и звать её отсюда значило бы открыть диалог посреди раскладки.
+    if git_ready() is None:
         log.warning("личный git агента не заведён: git не найден ни в поставке "
                     "(runtime/git), ни в системе")
         return False
@@ -668,6 +711,102 @@ def release_tree() -> None:
             path.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+# --------------------------------------------------------------------------- #
+#  Сторож родителя: оболочка умерла — уходим сами (POSIX)
+# --------------------------------------------------------------------------- #
+#
+# На Windows детей держит job-объект оболочки: умерла она — умерли движок и
+# канал. На macOS и Linux такого механизма нет: осиротевший движок жил бы дальше
+# с замком на дереве и открытой сессией Telegram, а следующее окно увидело бы
+# «этой памятью уже занят другой». Оболочка (shell/src/main.rs) ставит детям
+# HELENE_PARENT_PID на всех платформах; здесь его читают только POSIX-ветки.
+
+PARENT_PID_ENV = "HELENE_PARENT_PID"
+_WATCH: dict = {"parent": 0}
+
+
+def parent_pid() -> int:
+    """pid оболочки из HELENE_PARENT_PID; 0 — не задан или не число."""
+    raw = (os.environ.get(PARENT_PID_ENV) or "").strip()
+    try:
+        return max(0, int(raw)) if raw else 0
+    except ValueError:
+        log.warning("%s = %r — не число, сторож родителя не ставится", PARENT_PID_ENV, raw)
+        return 0
+
+
+def arm_soft_exit(name: str) -> bool:
+    """POSIX: SIGTERM → SystemExit в главном потоке, а не мгновенная смерть.
+
+    Умолчание Python на SIGTERM — умереть сразу, без atexit: замок дерева
+    остался бы лежать, а квитанции — недописанными. Обработчик поднимает
+    SystemExit там, где главный поток сейчас (в ожидании записки, внутри хода),
+    и дальше отрабатывают `finally` и atexit (`release_tree`). Тот же путь,
+    которым процесс уходит по `kill` от оболочки, — и сторож родителя ниже
+    дёргает именно его. На Windows не ставится: там SIGTERM никто не шлёт, а
+    останавливает детей job-объект.
+    """
+    if os.name == "nt":
+        return False
+
+    def _on_term(signum, _frame):
+        log.info("%s: получен SIGTERM — завершаюсь", name)
+        raise SystemExit(128 + int(signum))
+
+    try:
+        signal.signal(signal.SIGTERM, _on_term)
+    except (ValueError, OSError) as exc:       # не главный поток
+        log.warning("%s: обработчик SIGTERM не поставлен: %s", name, exc)
+        return False
+    return True
+
+
+def watch_parent(name: str, *, every: float = 2.0, grace: float = 8.0) -> int:
+    """Сторож родителя (POSIX): оболочка умерла — уходим вслед. -> pid или 0.
+
+    Поток-демон раз в `every` секунд сверяет `os.getppid()` с HELENE_PARENT_PID.
+    Расхождение (родитель умер — ppid стал 1, launchd, или другим) → SIGTERM
+    самим себе, то есть мягкий выход (`arm_soft_exit`; у канала SIGTERM
+    штатно ловит aiohttp). Не ушли за `grace` секунд (ход застрял в чужом
+    коде, кто-то проглотил SystemExit) — `os._exit`: лучше грубо, чем сирота
+    навсегда. На Windows и без переменной сторож не ставится (0).
+    """
+    if os.name == "nt":
+        return 0
+    parent = parent_pid()
+    if parent <= 0:
+        return 0
+    if os.getppid() != parent:
+        # Нас поднял не тот, кто назван, — судить о его жизни по ppid нельзя.
+        # Не сторожим и говорим об этом: молчаливый сторож не той цели убил бы
+        # живой процесс.
+        log.warning("%s: %s = %d, а родитель — pid %d; сторож родителя не ставлю",
+                    name, PARENT_PID_ENV, parent, os.getppid())
+        return 0
+
+    def _loop() -> None:
+        while True:
+            time.sleep(every)
+            if os.getppid() == parent:
+                continue
+            log.warning("%s: оболочка (pid %d) умерла — завершаюсь вслед за ней", name, parent)
+            try:
+                os.kill(os.getpid(), signal.SIGTERM)
+            except OSError as exc:
+                log.warning("%s: SIGTERM себе не ушёл: %s", name, exc)
+            time.sleep(grace)
+            log.error("%s: не завершился за %.0f с после SIGTERM — выхожу жёстко", name, grace)
+            try:
+                logging.shutdown()
+            finally:
+                os._exit(143)
+
+    threading.Thread(target=_loop, name="parent-watch", daemon=True).start()
+    _WATCH["parent"] = parent
+    log.info("%s: сторож родителя поставлен — оболочка pid %d", name, parent)
+    return parent
 
 
 # Имена ручек, значение которых нельзя показывать: экран «Система», телефон и

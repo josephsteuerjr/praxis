@@ -35,6 +35,11 @@ sys.path.insert(0, str(HERE.parent / "localharness"))
 import body  # noqa: E402
 import modes  # noqa: E402
 
+# Стенд разбирает САМО тело; есть ли оно на этой платформе, решает
+# `body.HAS_BODY` (только Windows). Поднимаем флаг, чтобы разбор шёл и на
+# раннере macOS; сборка без тела проверяется отдельно (`Absent`).
+body.HAS_BODY = True
+
 
 def _cfg(enabled=True, scopes=None, port=None) -> dict:
     block: dict = {"enabled": enabled}
@@ -279,6 +284,64 @@ class Launch(unittest.TestCase):
         self.assertGreater(chosen, held)
 
 
+class Absent(unittest.TestCase):
+    """Сборка без тела (macOS): ничего не поднимается, тревог нет, секции нет.
+
+    Что уезжает на экран — снимок `computer` и строка про окна — пусто, а не
+    «нет на этой платформе»: окно секцию просто не рисует. Тулу `computer`
+    агент получает ответ словами, без слов о платформе.
+    """
+
+    def setUp(self):
+        self.saved_state = dict(body.STATE)
+        body.HAS_BODY = False
+
+    def tearDown(self):
+        body.HAS_BODY = True
+        body.STATE.clear()
+        body.STATE.update(self.saved_state)
+
+    def test_flag_follows_the_platform(self):
+        import importlib
+        fresh = importlib.reload(body)
+        try:
+            self.assertEqual(fresh.HAS_BODY, os.name == "nt")
+            self.assertEqual(fresh.HAS_BODY, modes.HAS_COMPUTER)
+        finally:
+            fresh.HAS_BODY = True
+
+    def test_launch_spawns_nothing_writes_nothing_and_alarms_nobody(self):
+        g = Ground(_cfg(enabled=True))
+        self.addCleanup(g.close)
+        with self.assertNoLogs("helene.body", level="WARNING"):
+            self.assertIsNone(body.launch(g.root, g.tree, _cfg(enabled=True)))
+        self.assertFalse((g.tree / "memory" / ".state" / "body.json").exists(),
+                         "снимок тела в сборке без тела не пишется — секции нет")
+        self.assertFalse(body.STATE["available"])
+        self.assertEqual(body.STATE["bridge_pid"], 0)
+        said = json.dumps(body.state(), ensure_ascii=False).lower()
+        for word in ("macos", "windows", "платформ"):
+            self.assertNotIn(word, said, "слово о платформе в том, что может уехать на экран")
+        self.assertEqual(body.windows_truth(), "", "строки про окна нет — окно её не рисует")
+
+    def test_hand_answers_in_words_and_grants_nothing(self):
+        g = Ground(_cfg())
+        self.addCleanup(g.close)
+        called: list = []
+        agent = _fake_agent(called)
+        agent._computer_allowed = lambda scope: True
+        body.install(agent, g.tree, _cfg(), config_path=g.config)
+        said = agent.TOOL_IMPL["computer"](action="windows")
+        self.assertEqual(said, body.ABSENT_ANSWER)
+        self.assertIn("в этой сборке нет", said)
+        self.assertNotIn("macOS", said)
+        self.assertEqual(called, [], "тело дерева не должно вызываться")
+        self.assertFalse(agent._computer_allowed("computer.read"))
+        # Повторная установка не заворачивает обёртку в обёртку.
+        body.install(agent, g.tree, _cfg(), config_path=g.config)
+        self.assertEqual(agent.TOOL_IMPL["computer"](action="status"), body.ABSENT_ANSWER)
+
+
 def _built_pair() -> Path | None:
     # Место сборки тела знает `layout` — и знает один он: до 10.09 этот путь
     # был жёстко вписан здесь, в сборке и в приборе реле сразу.
@@ -338,6 +401,7 @@ class Spool(unittest.TestCase):
         self.assertEqual(body.prune_spool(Path(tmp) / "нет.db"), {"frames": 0, "responses": 0})
 
 
+@unittest.skipUnless(os.name == "nt", "живое тело (UIA) — только Windows; в порте тела нет")
 class Live(unittest.TestCase):
     """Живьём: поднять, дождаться, спросить рабочий стол, погасить."""
 

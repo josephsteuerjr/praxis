@@ -28,6 +28,11 @@ sys.path.insert(0, str(HERE.parent / "localharness"))
 
 import broker  # noqa: E402
 
+# Стенд разбирает САМ тул; есть ли брокер на этой платформе, решает
+# `broker.HAS_BROKER` (только Windows). Поднимаем флаг, чтобы разбор шёл и на
+# раннере macOS; отсутствие брокера проверяется отдельно (`Absent`).
+broker.HAS_BROKER = True
+
 
 def _tree(root: Path) -> Path:
     (root / "memory" / ".state").mkdir(parents=True, exist_ok=True)
@@ -223,6 +228,41 @@ class TheHand(unittest.TestCase):
             hand = fake.TOOL_IMPL["broker_request"]
             self.assertIn("action бывает", hand(action="что-то своё"))
             self.assertIn("МАССИВ", hand(cmd=r"C:\x.exe", args="a b", why="зачем-то"))
+
+
+class Absent(unittest.TestCase):
+    """Порт без брокера (macOS): тул не выдаётся, а снимок говорит почему.
+
+    Обещать модели тул, который откажет всегда, хуже, чем не иметь его: она
+    тратила бы ходы на просьбы, которые некому подписать.
+    """
+
+    def test_no_broker_means_no_tool_and_a_named_reason(self):
+        class FakeTree:
+            TOOL_IMPL: dict = {}
+            BASE_TOOLS: list = []
+
+        saved = broker.HAS_BROKER
+        broker.HAS_BROKER = False
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                fake = FakeTree()
+                broker.install(fake, _tree(Path(tmp)), {})
+                self.assertNotIn("broker_request", fake.TOOL_IMPL)
+                self.assertEqual(fake.BASE_TOOLS, [])
+                self.assertFalse(broker.state()["hand"])
+                self.assertIn("брокера в этой сборке нет", broker.state()["note"])
+        finally:
+            broker.HAS_BROKER = saved
+
+    def test_flag_follows_the_platform(self):
+        # Сам флаг — про Windows: только там есть служба, которая исполняет просьбы.
+        import importlib
+        fresh = importlib.reload(broker)
+        try:
+            self.assertEqual(fresh.HAS_BROKER, os.name == "nt")
+        finally:
+            fresh.HAS_BROKER = True
 
 
 if __name__ == "__main__":

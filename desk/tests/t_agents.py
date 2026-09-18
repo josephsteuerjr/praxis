@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -149,6 +150,18 @@ class Create(unittest.TestCase):
         cfg = agents.read_config(agents.create(self.root, "Мира").config)
         self.assertNotEqual(cfg["computer"]["port"], 9480)
         self.assertFalse(cfg["computer"]["enabled"])
+
+    def test_default_python_follows_the_platform(self):
+        # Корневой конфиг без `python`: умолчание — питон поставки этой платформы
+        # (Windows — embedded CPython, иначе python-build-standalone). Правило то
+        # же, что у оболочки; явное значение в конфиге сильнее (тест выше).
+        root = agents.read_config(self.root / "helene.json")
+        root.pop("python")
+        lay_out(self.root, {"helene.json": root})
+        cfg = agents.read_config(agents.create(self.root, "Зоя").config)
+        want = "runtime/python.exe" if os.name == "nt" else "runtime/bin/python3"
+        self.assertEqual(agents.DEFAULT_PYTHON, want)
+        self.assertEqual(cfg["python"], "../../" + want)
 
     def test_second_of_the_same_name_does_not_overwrite_the_first(self):
         first = agents.create(self.root, "Мира")

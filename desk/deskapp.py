@@ -58,10 +58,17 @@ try:
     import voice  # noqa: E402 — путь добавлен строкой выше
 except ImportError:
     # Пакет ПУЛЬТА раннера не несёт вовсе (`deskpkg.PARTS`: localharness только у
-    # Windows-издания) — и голоса у него нет по построению: агент живёт на
+    # настольных изданий) — и голоса у него нет по построению: агент живёт на
     # сервере, расшифровывает там же. Падать на импорте здесь значило бы уронить
     # весь канал Пульта ради ручки, которой у него не должно быть.
     voice = None
+try:
+    # Сторож родителя (POSIX): умерла оболочка — канал уходит вслед, а не держит
+    # порт сиротой. Тот же модуль, что у движка, и по той же причине: две копии
+    # одного сторожа разошлись бы. У Пульта модуля нет — и сторож ему не нужен.
+    import boot as _boot  # noqa: E402 — путь добавлен выше
+except ImportError:
+    _boot = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("frame.desk")
@@ -117,6 +124,11 @@ _SHELL_ORIGINS = {
 }
 # Хосты оболочки: origin с таким именем пускается при любой схеме и порте.
 _SHELL_HOSTNAMES = {"tauri.localhost", "helene.localhost"}
+# Схемы оболочки. На macOS окно приходит не по http, а своим протоколом:
+# `helene://localhost` (страница окна) и `tauri://localhost` (Tauri 2 без
+# своего протокола). Origin с такой схемой и хостом без точки — внутренний
+# хост оболочки: из веба на него не попасть, браузер такого Origin не соберёт.
+_SHELL_SCHEMES = {"helene", "tauri"}
 _ALLOWED_ORIGINS = _SHELL_ORIGINS | {
     o.strip().rstrip("/") for o in
     (os.environ.get("HELENE_ORIGINS") or "").split(",") if o.strip()
@@ -196,6 +208,11 @@ def _origin_ok(request: web.Request) -> tuple[bool, str]:
     # По имени, а не по точной строке: Tauri может отдавать окно и по http, и
     # по https (useHttpsScheme), а неверная строка означала бы пустое окно.
     if _hostname(origin.split("//", 1)[-1]).lower() in _SHELL_HOSTNAMES:
+        return True, origin
+    # Своя схема оболочки (macOS: `helene://localhost`, `tauri://localhost`) с
+    # хостом без точки — окно, не веб: чужой странице такую схему не собрать.
+    scheme, sep, rest = origin.partition("://")
+    if sep and scheme.lower() in _SHELL_SCHEMES and "." not in _hostname(rest):
         return True, origin
     # свой же origin: страница /m/ телефона стучится туда, откуда загрузилась.
     # Сравниваем host:port, а не схему: за Caddy наружу https, внутрь http.
@@ -1753,6 +1770,10 @@ def main() -> None:
     # быть видно даже соседям по локальной сети. Сервер (за Caddy) — как раньше.
     host = (os.environ.get("HELENE_HOST") or os.environ.get("PRAXIS_DESK_HOST") or "0.0.0.0").strip()
     _ensure_local_tree()
+    if _boot is not None:
+        # SIGTERM канал ловит сам aiohttp (GracefulExit в run_app) — сторожу
+        # достаточно его послать. На Windows и без HELENE_PARENT_PID — no-op.
+        _boot.watch_parent("канал")
     app = build_app()
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

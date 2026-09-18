@@ -31,14 +31,23 @@ class Composition(unittest.TestCase):
     def test_flavors_differ_only_where_declared(self):
         server = {p.dest for p in deskpkg.parts(deskpkg.SERVER)}
         windows = {p.dest for p in deskpkg.parts(deskpkg.WINDOWS)}
+        macos = {p.dest for p in deskpkg.parts(deskpkg.MACOS)}
         # Общее ядро — канал, читалки и оба фронта: в этом и смысл одного пакета.
         self.assertLessEqual({"deskapp.py", "deskd", "static", "mobile"}, server & windows)
-        # Мини-апп открывает Telegram по публичному адресу — на Windows его нет.
+        # Мини-апп открывает Telegram по публичному адресу — у настольных его нет.
         self.assertIn("miniapp", server)
         self.assertNotIn("miniapp", windows)
-        # Раннер и ресурсы — Windows: на сервере ходы ведёт её собственный харнесс.
+        self.assertNotIn("miniapp", macos)
+        # Движок и ресурсы — настольные: на сервере ходы ведёт её собственный код.
         self.assertLessEqual({"localharness", "resources"}, windows)
         self.assertFalse({"localharness", "resources"} & server)
+        # macOS — тот же состав, что Windows: разница в том, что сборка кладёт
+        # ВОКРУГ пакета (рантайм, exe/app), а не в самом пакете.
+        self.assertEqual(macos, windows)
+        self.assertEqual([p.src for p in deskpkg.parts(deskpkg.MACOS)],
+                         [p.src for p in deskpkg.parts(deskpkg.WINDOWS)])
+        self.assertEqual(deskpkg.FLAVORS, (deskpkg.SERVER, deskpkg.WINDOWS, deskpkg.MACOS))
+        self.assertEqual(deskpkg.MACOS, "macos")
 
     def test_unknown_flavor_is_refused(self):
         with self.assertRaises(ValueError):
@@ -48,6 +57,8 @@ class Composition(unittest.TestCase):
         self.assertEqual(deskpkg.requirements(deskpkg.SERVER), deskpkg.DEPS_CHANNEL)
         self.assertEqual(deskpkg.requirements(deskpkg.WINDOWS),
                          deskpkg.DEPS_CHANNEL + deskpkg.DEPS_RUNNER)
+        self.assertEqual(deskpkg.requirements(deskpkg.MACOS),
+                         deskpkg.requirements(deskpkg.WINDOWS))
 
     def test_version_is_the_product_version(self):
         version, declared = deskpkg.product_version()
@@ -82,6 +93,12 @@ class Build(unittest.TestCase):
         # Разный вид — разный отпечаток: иначе выкладка сверила бы не то.
         win = deskpkg.build(self.tmp / "c", deskpkg.WINDOWS, clean=True, log=lambda *_: None)
         self.assertNotEqual(one["digest"], win["digest"])
+        # macOS кладёт те же файлы, но манифест и requirements называют свой
+        # вид — отпечаток свой, и по нему поставки различимы.
+        mac = deskpkg.build(self.tmp / "d", deskpkg.MACOS, clean=True, log=lambda *_: None)
+        self.assertEqual(mac["flavor"], deskpkg.MACOS)
+        self.assertEqual([p["name"] for p in mac["parts"]], [p["name"] for p in win["parts"]])
+        self.assertNotEqual(mac["digest"], win["digest"])
 
     def test_top_level_covers_everything_installed(self):
         for flavor in deskpkg.FLAVORS:

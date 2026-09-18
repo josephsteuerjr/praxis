@@ -18,10 +18,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "localharness"))
@@ -292,6 +294,215 @@ class Describe(unittest.TestCase):
         out = modes.describe({})
         self.assertEqual(out["name"], modes.DEFAULT_MODE)
         self.assertTrue(out["text"])
+
+
+class Platform(unittest.TestCase):
+    """Порт без службы и тела (macOS): секций нет в картине, а не «нет» словами.
+
+    Флаги `HAS_SERVICE`/`HAS_COMPUTER` подменяются, чтобы разобрать обе
+    картины на любой машине; на Windows картина обязана остаться прежней.
+    """
+
+    def setUp(self):
+        self.saved = (modes.HAS_SERVICE, modes.HAS_COMPUTER)
+
+    def tearDown(self):
+        modes.HAS_SERVICE, modes.HAS_COMPUTER = self.saved
+
+    def test_flags_follow_the_platform(self):
+        import importlib
+        fresh = importlib.reload(modes)
+        self.assertEqual(fresh.HAS_SERVICE, os.name == "nt")
+        self.assertEqual(fresh.HAS_COMPUTER, os.name == "nt")
+
+    def test_without_a_service_the_section_is_empty_but_the_fence_is_whole(self):
+        modes.HAS_SERVICE = False
+        # Конфиг, приехавший с Windows: и след установщика, и обе галочки.
+        cfg = {"agent_mode": "sandbox", "installed": {"service": True},
+               "service": {"session0": True, "firewall": False}}
+        picture = modes.resolve(cfg)
+        self.assertEqual(picture["name"], "sandbox")
+        self.assertTrue(picture["sandbox"], "ограда от службы не зависит")
+        self.assertFalse(picture["service_here"])
+        self.assertIsNone(picture["service_installed"], "след установщика ничего не значит")
+        self.assertEqual(picture["service_title"], "")
+        self.assertEqual(picture["service_text"], "")
+        self.assertFalse(picture["session0"], "нулевую сессию некому дать")
+        self.assertFalse(picture["firewall"])
+        self.assertTrue(picture["session0_set"], "что записано в файле — факт файла")
+        self.assertEqual(picture["notes"], [], "тревог о службе быть не должно")
+        self.assertEqual(picture["session0_warning"], "")
+        described = modes.describe(picture)
+        self.assertFalse(described["service_here"])
+        self.assertEqual(described["service_title"], "")
+        self.assertEqual(described["service_text"], "")
+        self.assertIsNone(modes.service_installed(cfg))
+
+    def test_explicit_scm_answer_is_still_the_seam(self):
+        # Стенды и Windows приносят ответ SCM явно — ему верим как есть.
+        modes.HAS_SERVICE = False
+        picture = modes.resolve({"agent_mode": "sandbox", "service": {"session0": True}},
+                                installed=True)
+        self.assertTrue(picture["service_here"])
+        self.assertTrue(picture["session0"])
+        self.assertEqual(picture["service_title"], modes.SERVICE_TITLE)
+
+    def test_windows_picture_is_untouched(self):
+        modes.HAS_SERVICE = True
+        cfg = {"agent_mode": "sandbox", "service": {"session0": True}}
+        picture = modes.resolve(cfg, installed=False)
+        self.assertTrue(picture["service_here"])
+        self.assertEqual(picture["service_title"], modes.SERVICE_TITLE)
+        self.assertTrue(any("служба не установлена" in n for n in picture["notes"]))
+        self.assertEqual(modes.describe(picture)["service_text"], modes.SERVICE_TEXT)
+
+    def test_pipe_drops_both_sections_where_there_is_no_platform_for_them(self):
+        sys.path.insert(0, str(HERE.parent))
+        import deskd.readers as readers          # noqa: PLC0415
+        modes.HAS_SERVICE = False
+        modes.HAS_COMPUTER = False
+        with tempfile.TemporaryDirectory(prefix="helene-modes-") as tmp:
+            cfg_path = Path(tmp) / "helene.json"
+            cfg_path.write_text(json.dumps({"agent_mode": "sandbox", "tree": "data",
+                                            "computer": {"enabled": True}}),
+                                encoding="utf-8")
+            with patch.dict(os.environ, {"HELENE_CONFIG": str(cfg_path),
+                                         "HELENE_TREE": str(Path(tmp) / "data")}):
+                picture = readers.mode_state()
+        self.assertEqual(picture["name"], "sandbox")
+        self.assertEqual(picture["choices"], modes.catalogue(), "ограды есть на любой платформе")
+        self.assertIsNone(picture["service"])
+        self.assertIsNone(picture["computer"])
+        self.assertIsNone(picture["computer_option"])
+        self.assertEqual(picture["computer_live"], {})
+        self.assertFalse(picture["service_here"])
+        # И ни одного слова про платформу на экран.
+        text = json.dumps(picture, ensure_ascii=False).lower()
+        self.assertNotIn("macos", text)
+        self.assertNotIn("платформ", text)
+
+    def test_pipe_keeps_both_sections_on_windows(self):
+        sys.path.insert(0, str(HERE.parent))
+        import deskd.readers as readers          # noqa: PLC0415
+        modes.HAS_SERVICE = True
+        modes.HAS_COMPUTER = True
+        with tempfile.TemporaryDirectory(prefix="helene-modes-") as tmp:
+            cfg_path = Path(tmp) / "helene.json"
+            cfg_path.write_text(json.dumps({"agent_mode": "sandbox", "tree": "data"}),
+                                encoding="utf-8")
+            with patch.dict(os.environ, {"HELENE_CONFIG": str(cfg_path),
+                                         "HELENE_TREE": str(Path(tmp) / "data")}):
+                picture = readers.mode_state()
+        self.assertEqual(picture["service"], modes.service_option())
+        self.assertEqual(picture["computer_option"], modes.computer_option())
+        self.assertEqual(picture["computer"]["enabled"], False)
+
+    def test_journal_says_one_line_without_a_service(self):
+        modes.HAS_SERVICE = False
+        picture = modes.resolve({"agent_mode": "interactive"})
+        with self.assertLogs("helene.modes", level="INFO") as caught:
+            modes.journal(picture, where="helene.json")
+        said = "\n".join(caught.output)
+        self.assertIn("на этой платформе её нет", said)
+        self.assertNotIn("нулевая сессия", said)
+
+
+def _plugin_dict(src: str, name: str, keys: list[str]) -> dict[str, str]:
+    """Разбор словаря так, как его читает сборка установщика.
+
+    Зеркало `dictValues` + `joinLiterals` из `setup/ui/vite.config.ts`: словарь
+    верхнего уровня от `{` до `}` в первой колонке, запись — от `"ключ":` до
+    следующего ключа, значение — все строковые литералы куска подряд. Если
+    Python и это зеркало прочитают разное, плагин соберёт установщик не с тем
+    текстом, что отдаёт канал.
+    """
+    import re
+    at = re.search(rf"^{name}\s*(?::[^=\n]*)?=\s*\{{", src, re.M)
+    if not at:
+        raise AssertionError(f"modes.py: не нашёл словарь {name}")
+    open_ = src.index("{", at.start())
+    close = src.index("\n}", open_)
+    body = src[open_ + 1:close]
+    out: dict[str, str] = {}
+    for key in keys:
+        head = f'"{key}":'
+        start = body.index(head)
+        end = len(body)
+        for other in keys:
+            if other == key:
+                continue
+            pos = body.find(f'"{other}":')
+            if start < pos < end:
+                end = pos
+        chunk = body[start + len(head):end]
+        parts = []
+        for literal in re.findall(r'"((?:[^"\\]|\\.)*)"', chunk):
+            try:
+                parts.append(json.loads(f'"{literal}"'))
+            except ValueError:
+                parts.append(literal)
+        if not parts:
+            raise AssertionError(f"modes.py: нет текста в {name}[{key!r}]")
+        out[key] = "".join(parts)
+    return out
+
+
+class MacTexts(unittest.TestCase):
+    """Тексты оград для macOS: та же форма, что у TEXTS, без обещаний Windows.
+
+    Общие тексты обещают опцию «Управление компьютером» и окно прав Windows —
+    в порте их нет. Словарь-двойник обязан совпадать по ключам, читаться
+    сборкой установщика по той же форме и уезжать в картину на darwin.
+    """
+
+    FORBIDDEN = ("windows", "appcontainer", "управление компьютером", "uac", "macos")
+
+    def test_keys_and_shape_match_texts(self):
+        self.assertEqual(set(modes.TEXTS_MACOS), set(modes.TEXTS))
+        self.assertEqual(set(modes.TEXTS_MACOS), set(modes.MODES))
+        for name in modes.MODES:
+            self.assertIsInstance(modes.TEXTS_MACOS[name], str)
+            self.assertTrue(modes.TEXTS_MACOS[name].strip(), name)
+            self.assertNotEqual(modes.TEXTS_MACOS[name], modes.TEXTS[name],
+                                "двойник без разницы — не двойник")
+
+    def test_no_windows_promises_and_no_platform_words(self):
+        for name, text in modes.TEXTS_MACOS.items():
+            low = text.lower()
+            for word in self.FORBIDDEN:
+                self.assertNotIn(word, low, f"{name}: «{word}» в тексте для macOS")
+            self.assertNotIn("этого нет", low, name)
+        # Ограда названа по механизму, а не по чужому.
+        self.assertIn("seatbelt", modes.TEXTS_MACOS["sandbox"])
+        self.assertIn("Forge", modes.TEXTS_MACOS["sandbox"])
+        self.assertIn("монтировать", modes.TEXTS_MACOS["interactive"])
+
+    def test_installer_plugin_reads_the_same_strings(self):
+        src = (HERE.parent / "localharness" / "modes.py").read_text(encoding="utf-8")
+        self.assertEqual(_plugin_dict(src, "TEXTS_MACOS", list(modes.MODES)), modes.TEXTS_MACOS)
+        # Зеркало верно и на общем словаре, который плагин читает с самого начала.
+        self.assertEqual(_plugin_dict(src, "TEXTS", list(modes.MODES)), modes.TEXTS)
+        self.assertEqual(_plugin_dict(src, "TITLES", list(modes.MODES)), modes.TITLES)
+
+    def test_darwin_picture_takes_the_mac_texts(self):
+        with patch.object(sys, "platform", "darwin"):
+            self.assertIs(modes.texts(), modes.TEXTS_MACOS)
+            picture = modes.resolve({"agent_mode": "sandbox"}, installed=None)
+            self.assertEqual(picture["text"], modes.TEXTS_MACOS["sandbox"])
+            self.assertEqual(modes.describe(picture)["text"], modes.TEXTS_MACOS["sandbox"])
+            self.assertEqual(modes.describe({})["text"], modes.TEXTS_MACOS[modes.DEFAULT_MODE])
+            self.assertEqual([c["text"] for c in modes.catalogue()],
+                             [modes.TEXTS_MACOS[n] for n in modes.MODES])
+            self.assertEqual([c["title"] for c in modes.catalogue()],
+                             [modes.TITLES[n] for n in modes.MODES])
+
+    def test_windows_picture_is_untouched(self):
+        with patch.object(sys, "platform", "win32"):
+            self.assertIs(modes.texts(), modes.TEXTS)
+            picture = modes.resolve({"agent_mode": "interactive"}, installed=False)
+            self.assertEqual(picture["text"], modes.TEXTS["interactive"])
+            self.assertEqual([c["text"] for c in modes.catalogue()],
+                             [modes.TEXTS[n] for n in modes.MODES])
 
 
 class PipeShape(unittest.TestCase):

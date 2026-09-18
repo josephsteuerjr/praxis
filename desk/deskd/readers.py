@@ -50,9 +50,26 @@ def tree() -> Path:
         data = Path("/data")
         if data.is_dir():
             return _said(data, "/data (сервер)")
+        # Установка macOS без переменной (канал запущен руками из папки
+        # программы): дерево — там, куда указывает helene.json рядом, тем же
+        # правилом, что у движка (`tree` относительно папки конфига). Только на
+        # POSIX: цепочка Windows остаётся прежней по правилу порта.
+        stated = _tree_from_config()
+        if stated is not None:
+            return _said(stated, "helene.json рядом (HELENE_TREE не задан)")
     # локальная разработка: клон прода лежит рядом с desk/
     return _said(Path(__file__).resolve().parent.parent.parent / "live",
                  "фолбэк рядом с desk/ (HELENE_TREE не задан!)")
+
+
+def _tree_from_config() -> Path | None:
+    """Дерево по `tree` из helene.json рядом с каналом; None — конфига нет."""
+    path = config_path()
+    if path is None:
+        return None
+    raw = str(_load_json(path).get("tree") or "data")
+    tree_path = Path(raw)
+    return tree_path if tree_path.is_absolute() else (path.parent / tree_path).resolve()
 
 
 def _said(path: Path, why: str) -> Path:
@@ -186,6 +203,7 @@ def product_config() -> dict:
 _MODE_UNKNOWN: dict = {
     "name": "", "title": "Режим не прочитан", "text": "",
     "sandbox": False, "explicit": False, "source": "",
+    "service_here": False,
     "service_installed": None, "service_title": "", "service_text": "",
     "session0": False, "session0_set": False, "session0_warning": "",
     "firewall": False, "firewall_set": False, "legacy_service": False,
@@ -250,18 +268,23 @@ def mode_state() -> dict:
         log.exception("режим не разобрался")
         return mode_unknown("режим не разобрался — смотри helene.log")
     picture["choices"] = mod.catalogue()
-    picture["service"] = mod.service_option()
+    # Секции службы и тела — только там, где они есть (Windows). На macOS их нет
+    # по замыслу порта: вместо текстов — None, и окно карточек не рисует (прячет
+    # по `app_info.platform`; `service_here` — та же правда со стороны канала).
+    picture["service"] = mod.service_option() if picture.get("service_here", True) else None
     # Управление компьютером — опция поверх любого режима, не режим (06.09).
     # Что записал владелец — из конфига; что с телом на самом деле — снимок
     # раннера (`body.py` пишет его сторожем раз в несколько секунд). Старый
     # harness без опции отдаёт пустоту, и окно говорит об этом словами.
+    has_body = bool(getattr(mod, "HAS_COMPUTER", True))
     try:
-        picture["computer"] = mod.computer_state(cfg)
-        picture["computer_option"] = mod.computer_option()
+        picture["computer"] = mod.computer_state(cfg) if has_body else None
+        picture["computer_option"] = mod.computer_option() if has_body else None
     except AttributeError:
         picture["computer"] = None
         picture["computer_option"] = None
-    picture["computer_live"] = _load_json(tree() / "memory" / ".state" / "body.json")
+    picture["computer_live"] = (_load_json(tree() / "memory" / ".state" / "body.json")
+                                if has_body else {})
     # Просьбы агента о папках — живьём, а не через анатомию (ревью 06.09, §5:
     # анатомия пишется один раз на старте, и просьба `mount_request` доходила до
     # карточки только после перезапуска). Файл пишет ограда (`fence.Mounts.
