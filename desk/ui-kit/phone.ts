@@ -1011,7 +1011,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       scoped<{ ok: boolean; by_framework?: Record<string, { ok: boolean; models?: string[] }> }>("/api/brain-models", "brain"),
     ]);
     if (!guard()) return;
-    // 12.09: прерывание живого хода — просьба в memory/.control, исполнитель ходов снимает ход на тике.
+    // 12.09: прерывание живого хода — просьба в memory/.control, движок снимает ход на тике.
     const interruptHTML = `<div class="screen-title">Агент</div>
       <div class="task-row">
         <div class="actions"><button type="button" class="chip" data-interrupt="all">Прервать ход</button></div>

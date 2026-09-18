@@ -671,7 +671,7 @@ export function start(opts: WindowOptions): void {
       S.rooms.splice(1, 0, room);
       selectRoom(room);
       if (room.stub) {
-        toast("Эта программа агента ещё не умеет несколько чатов: чат создан как заглушка, писать в него нельзя. Появится в 0.3.3.");
+        toast("Этот код агента ещё не умеет несколько чатов: чат создан как заглушка, писать в него нельзя. Появится в 0.3.3.");
       }
       startRename(room);
     } catch (e) {
@@ -840,7 +840,7 @@ export function start(opts: WindowOptions): void {
     paintPulse(connected);
     if (!connected) {
       statePill.dataset.level = "off";
-      stateText.textContent = "Нет связи с программой агента";
+      stateText.textContent = "Нет связи с кодом агента";
       stateAction.hidden = true;
       return;
     }
@@ -849,7 +849,7 @@ export function start(opts: WindowOptions): void {
       const f = foreignState(s);
       statePill.dataset.level = f.level;
       stateText.textContent = f.phrase;
-      statePill.title = "Дерево ведёт чужая программа агента: снимка Hélène нет, состояние — по вызовам модели и запускам.";
+      statePill.title = "Дерево ведёт чужой код агента: снимка Hélène нет, состояние — по вызовам модели и запускам.";
       stateAction.hidden = true;
       alarmBox.hidden = true;
       return;
@@ -1038,7 +1038,7 @@ export function start(opts: WindowOptions): void {
     const room = S.room;
     const current = S.rooms.find((r) => r.key === room);
     if (current?.stub) {
-      toast("Этот чат — заглушка: программа агента ещё не умеет несколько чатов. Пиши в основной.");
+      toast("Этот чат — заглушка: код агента ещё не умеет несколько чатов. Пиши в основной.");
       return;
     }
     const chat = room === WINDOW_ROOM ? "" : room;

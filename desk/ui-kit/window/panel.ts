@@ -72,10 +72,10 @@ async function runDetail(runId: string, fresh = false): Promise<RunDetail | unde
   }
 }
 
-/** Идёт ли сейчас ход в текущей комнате (по состоянию исполнителя ходов и манифесту). */
+/** Идёт ли сейчас ход в текущей комнате (по состоянию движка и манифесту). */
 function liveRunId(): string {
   if (foreignHarness()) {
-    // Чужая программа агента: сердцебиения нет — свежий запуск в статусе running этой
+    // Чужой код агента: сердцебиения нет — свежий запуск в статусе running этой
     // комнаты и есть идущий ход.
     const run = S.runs.find((x) => {
       if (x.status !== "running" || !runIsRecent(x)) return false;
@@ -95,7 +95,7 @@ function liveRunId(): string {
   return key === S.room || (isWindowRoom(key) && isWindowRoom(S.room) && key === S.room) ? r.run : "";
 }
 
-/** Сколько идёт ход: сердцебиение исполнителя ходов, а без него — время создания запуска. */
+/** Сколько идёт ход: сердцебиение движка, а без него — время создания запуска. */
 function liveSince(runId: string): string {
   const r = S.agentState?.runner;
   if (r?.since && r.busy) return fmtDur(Date.now() / 1000 - r.since);

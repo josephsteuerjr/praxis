@@ -267,7 +267,7 @@ def _adopt(job, proc: subprocess.Popen) -> None:
         handle = int(proc._handle)  # type: ignore[attr-defined]
         if not k.AssignProcessToJobObject(job, handle):
             log.warning("тело: %s не приписан к заданию (код %d) — после аварии "
-                        "исполнителя ходов может остаться сиротой", proc.args[0],
+                        "движка может остаться сиротой", proc.args[0],
                         ctypes.get_last_error())
     except Exception:
         log.warning("тело: не приписал ребёнка к заданию", exc_info=True)
@@ -512,7 +512,7 @@ class Body:
             except Exception:
                 pass
         STATE.update({"connected": None, "bridge_pid": 0, "body_pid": 0,
-                      "reason": "остановлено вместе с исполнителем ходов"})
+                      "reason": "остановлено вместе с движком"})
         try:
             self._write_state()
         except Exception:
@@ -728,7 +728,7 @@ def windows_truth() -> str:
     if not STATE.get("available"):
         return f"окна: опция включена, но тела в поставке нет ({BRIDGE_EXE}, {BODY_EXE})"
     rights = ", ".join(STATE.get("scopes") or []) or "ни одного права"
-    return (f"окна: тело поднято программой агента снаружи ограды (мост 127.0.0.1:{STATE.get('port')}, "
+    return (f"окна: тело поднято кодом агента снаружи ограды (мост 127.0.0.1:{STATE.get('port')}, "
             f"{STATE.get('reason')}); права владельца: {rights}")
 
 

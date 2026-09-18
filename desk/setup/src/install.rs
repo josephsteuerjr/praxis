@@ -2484,7 +2484,7 @@ mod tests {
             s.agent_mode = picked.into();
             let cfg = config_json(&s, None, RELAY_PORT);
             assert_eq!(cfg["agent_mode"], picked);
-            assert_eq!(cfg["mode"], "local", "местожительство программы агента трогать нельзя");
+            assert_eq!(cfg["mode"], "local", "местожительство кода агента трогать нельзя");
             assert_eq!(cfg["sandbox"]["enabled"], sandbox);
         }
     }

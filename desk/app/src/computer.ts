@@ -61,7 +61,7 @@ export function storedComputer(block: unknown): StoredComputer {
 /** Строка о теле по снимку харнесса. Только то, что он прислал. */
 export function liveLine(live: ComputerLive | undefined, enabledNow: boolean): { text: string; ok: boolean | null } {
   if (!live || typeof live !== "object" || live.enabled === undefined) {
-    return { text: "Снимка тела ещё нет: программа агента пишет его при старте.", ok: null };
+    return { text: "Снимка тела ещё нет: код агента пишет его при старте.", ok: null };
   }
   const at = live.checked_at ? ` Проверено ${fmtTimeSec(live.checked_at)}.` : "";
   if (!live.enabled) {
@@ -99,7 +99,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer): Co
       el(
         "p",
         "receipt err",
-        "Про управление компьютером программа агента ничего не рассказал — похоже, он старее окна (тело тулы `computer` появилось в 0.3.1). " +
+        "Про управление компьютером код агента ничего не рассказал — похоже, он старее окна (тело тулы `computer` появилось в 0.3.1). " +
           "Галочки окно оставит в файле такими, какие они есть.",
       ),
     );
@@ -127,7 +127,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer): Co
     const known = (COMPUTER_SCOPES as readonly string[]).includes(s.key);
     if (!known) {
       rights.append(
-        el("p", "receipt err", `${s.title || s.key}: это право окно писать не умеет — программа агента новее окна.`),
+        el("p", "receipt err", `${s.title || s.key}: это право окно писать не умеет — код агента новее окна.`),
         el("p", "field-hint", `Правь его руками в helene.json, список computer.scopes. Что делает: ${s.text || "—"}`),
       );
       continue;
@@ -156,7 +156,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer): Co
     } else {
       rightsNote.className = "field-hint";
       rightsNote.textContent =
-        "Права программа агента перечитывает из файла на каждый вызов тулы: после «Сохранить» они действуют сразу, перезапуск нужен только для включения самого тела.";
+        "Права код агента перечитывает из файла на каждый вызов тулы: после «Сохранить» они действуют сразу, перезапуск нужен только для включения самого тела.";
     }
   };
 
@@ -184,7 +184,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer): Co
     el(
       "p",
       "field-hint",
-      "Тело живёт в твоей сессии, снаружи ограды, и умирает вместе с программой агента. Токены — только в памяти процесса, на диске их нет." +
+      "Тело живёт в твоей сессии, снаружи ограды, и умирает вместе с кодом агента. Токены — только в памяти процесса, на диске их нет." +
         (logs && logs.length ? ` Логи тела: ${logs.join(", ")}.` : ""),
     ),
   );

@@ -124,7 +124,7 @@ export async function renameRoom(room: Room, title: string): Promise<void> {
   } catch (e) {
     if (!unsupported(e)) throw e;
     S.roomsUnsupported = true;
-    throw new Error("Эта программа агента ещё не умеет переименовывать чаты: нужна версия с контрактом комнат (0.3.3).");
+    throw new Error("Этот код агента ещё не умеет переименовывать чаты: нужна версия с контрактом комнат (0.3.3).");
   }
 }
 
@@ -139,7 +139,7 @@ export async function deleteRoom(room: Room): Promise<void> {
   } catch (e) {
     if (!unsupported(e)) throw e;
     S.roomsUnsupported = true;
-    throw new Error("Эта программа агента ещё не умеет убирать чаты: нужна версия с контрактом комнат (0.3.3).");
+    throw new Error("Этот код агента ещё не умеет убирать чаты: нужна версия с контрактом комнат (0.3.3).");
   }
 }
 

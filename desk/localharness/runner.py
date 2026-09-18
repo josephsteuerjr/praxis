@@ -509,7 +509,7 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
     finally:
         _set_busy(False, str(getattr(envelope, "run_id", "") or ""))
     if envelope is None:
-        desk.deliver("⚠ ход не дошёл до конца — подробности в логе исполнителя ходов.",
+        desk.deliver("⚠ ход не дошёл до конца — подробности в логе движка.",
                      source_id=source_id, system=True)
         return "failed"
     spoken = list(desk.sent)
@@ -645,7 +645,7 @@ def handle_bot(chat_id: str) -> None:
         if is_dm and owner:
             try:
                 _bot.deliver_text(chat_id, "⚠ ход не дошёл до конца — "
-                                           "подробности в логе исполнителя ходов.")
+                                           "подробности в логе движка.")
             except Exception:
                 log.exception("не доложила владельцу о падении хода")
         return
@@ -810,7 +810,7 @@ def _say_tree_is_busy(tree: Path, cfg: dict, holder: dict) -> None:
     бы повторами быстрее, чем он успел бы прочесть первую.
     """
     pid = holder.get("pid")
-    log.error("дерево %s занято другой копией программы агента (pid %s, %s) — не поднимаюсь",
+    log.error("дерево %s занято другой копией кода агента (pid %s, %s) — не поднимаюсь",
               tree, pid, holder.get("host") or "этот компьютер")
     said = tree / "memory" / ".state" / "harness_busy.json"
     try:
@@ -1487,7 +1487,7 @@ def main() -> None:
     if not (code_dir / "agent.py").is_file():
         # Дерево — это и есть харнесс. Без него нечего запускать, и подменять её ход
         # своим («кадр-лайт») значило бы держать вторую реализацию продукта.
-        log.error("дерева агента нет: %s — исполнитель ходов не поднимется", code_dir)
+        log.error("дерева агента нет: %s — движок не поднимется", code_dir)
         raise SystemExit(2)
 
     owner = cfg.get("owner") or {}
@@ -1608,7 +1608,7 @@ def main() -> None:
     processed.mkdir(parents=True, exist_ok=True)
     _sweep_processed(processed)
     swept_at = time.time()
-    log.info("локальная программа агента: дерево данных %s · код %s · транспорты: окно%s",
+    log.info("локальный код агента: дерево данных %s · код %s · транспорты: окно%s",
              tree, code_dir, "" if _bot is None else " + бот @" + _bot.username)
     import threading
     threading.Thread(target=_heartbeat_forever, args=(inbox,), name="heartbeat",

@@ -97,7 +97,7 @@ export function supervisorHTML(s: Supervisor | null): string {
             `<button class="btn quiet" data-restart="${esc(t.id)}">Перезапустить ${esc(t.title)}</button>`,
         )
         .join("")}<span class="receipt" id="sv-note"></span></div>
-       <p class="muted">«Перезапустить весь программа агента» ${
+       <p class="muted">«Перезапустить весь код агента» ${
          s.in_container
            ? "гасит надзор — контейнер поднимает его заново; окно на несколько секунд потеряет связь"
            : "перезапускает детей на месте: надзор запущен не в контейнере, выходить ему некуда"

@@ -1283,7 +1283,7 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
             Verdict::Ours => {
                 if announce {
                     log_line(&format!(
-                        "программа агента{} уже жив на 127.0.0.1:{port} — подключаюсь без своих детей",
+                        "код агента{} уже жив на 127.0.0.1:{port} — подключаюсь без своих детей",
                         plan.whose()
                     ));
                 }
@@ -1291,7 +1291,7 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
             Verdict::Guarded => {
                 if announce {
                     log_line(&format!(
-                        "порт {port} держит программа агента под ключом, которого у меня нет — подключаюсь без своих детей{}",
+                        "порт {port} держит код агента под ключом, которого у меня нет — подключаюсь без своих детей{}",
                         plan.whose()
                     ));
                 }
@@ -1304,7 +1304,7 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
                     };
                     let file = plan.config.display();
                     log_line(&format!(
-                        "порт {port} занят ДРУГОЙ программой{whose} — свой программа агента{} не поднимаю и в её дерево не хожу; закрой её или смени порт в {file}",
+                        "порт {port} занят ДРУГОЙ программой{whose} — свой код агента{} не поднимаю и в её дерево не хожу; закрой её или смени порт в {file}",
                         plan.whose()
                     ));
                     toast(product_ui(), &format!(
@@ -4312,7 +4312,7 @@ fn watch_children(app: tauri::AppHandle) {
                         }
                     }
                     if installed {
-                        log_line(&format!("порт освободился — программа агента{} поднят окном", plan.whose()));
+                        log_line(&format!("порт освободился — код агента{} поднят окном", plan.whose()));
                         // Окно открывалось с экраном «здесь чужая установка»:
                         // адреса харнесса в нём нет, и само оно к своему уже
                         // поднятому агенту не подключится.

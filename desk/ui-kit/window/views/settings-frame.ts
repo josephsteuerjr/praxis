@@ -180,7 +180,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     // Тумблер телефона в вебе был пустышкой: черновик выбрасывался в мусор,
     // кнопки «Сохранить» в этой ветке нет вовсе — человек щёлкал, и ничего не
     // происходило, и никто не говорил, что не происходит.
-    center.append(el("div", "card muted", `Настройки доступны в приложении ${PRODUCT_NAME} на том компьютере, где живёт агент: здесь окно смотрит на удалённую программу агента. Тема — как в системе.`));
+    center.append(el("div", "card muted", `Настройки доступны в приложении ${PRODUCT_NAME} на том компьютере, где живёт агент: здесь окно смотрит на удалённый код агента. Тема — как в системе.`));
     mountSettings(container, center);
     return;
   }
@@ -450,7 +450,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   const conflictBox = el("div");
   conflictBox.hidden = true;
   conflictBox.innerHTML = `<div class="notice err" style="margin-top:12px"><span class="dot failed"></span>
-    <span>Пока настройки были открыты, helene.json изменил кто-то ещё — установщик, программа агента или ты в Блокноте. Если сохранить как есть, его правка пропадёт.</span></div>`;
+    <span>Пока настройки были открыты, helene.json изменил кто-то ещё — установщик, код агента или ты в Блокноте. Если сохранить как есть, его правка пропадёт.</span></div>`;
   const conflictRow = el("div", "actions");
   conflictRow.style.marginTop = "10px";
   conflictRow.append(
@@ -659,7 +659,7 @@ function transferCard(draft: Config): HTMLElement {
   // --- окно к харнессу на сервере
   const remote = el("div");
   remote.style.marginTop = "12px";
-  const remoteToggle = toggle("Окно ходит к программе агента на сервере", draft.mode === "remote", (v) => {
+  const remoteToggle = toggle("Окно ходит к коде агента на сервере", draft.mode === "remote", (v) => {
     draft.mode = v ? "remote" : "local";
     syncRemote();
   });
@@ -680,7 +680,7 @@ function transferCard(draft: Config): HTMLElement {
     keyField.hidden = !on;
     remoteNote.textContent = on
       ? "После сохранения и перезапуска оболочка своих детей не поднимает: агент живёт на сервере, окно и телефон ходят туда. Пустой адрес — это снова local."
-      : "Сейчас агент живёт на этой машине: канал и программа агента поднимает окно. Перенос на сервер — экспорт выше, затем server/README-СЕРВЕР.md в сборке.";
+      : "Сейчас агент живёт на этой машине: канал и код агента поднимает окно. Перенос на сервер — экспорт выше, затем server/README-СЕРВЕР.md в сборке.";
   };
   remote.append(remoteToggle, baseField, keyField, remoteNote);
   syncRemote();
