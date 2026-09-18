@@ -13,7 +13,8 @@
 // стоят только рамки с пропусками, которые человек заполняет сам. Это условие
 // приёмки раздела, а не пожелание.
 import { esc } from "../lib";
-import { PRODUCT_NAME } from "../state";
+import { PRODUCT_NAME, S } from "../state";
+import { isMacPlatform } from "../../platform";
 
 /** Задачка: рамка с пропусками, которые заполняет владелец. */
 interface Task {
@@ -25,6 +26,9 @@ interface Task {
   template: string;
   /** Только у издания с агентом на этой машине (у Пульта такого нет). */
   local?: boolean;
+  /** Нужно тело тула `computer` — оно есть только на Windows; на macOS
+   *  карточка не рисуется, а не обещает то, чего агент не сделает. */
+  computer?: boolean;
 }
 
 const TASKS: Task[] = [
@@ -85,6 +89,7 @@ const TASKS: Task[] = [
     what: "Откроет программу и сделает шаги, показывая, что видит на экране.",
     template: "Открой <программа> и <что сделать>. Покажи, что получилось.",
     local: true,
+    computer: true,
   },
   {
     title: "Спросить, что ему мешает",
@@ -185,7 +190,8 @@ const HOW: Array<[string, string]> = [
 
 export async function render(container: HTMLElement): Promise<void> {
   const local = PRODUCT_NAME !== "Пульт Praxis";
-  const tasks = TASKS.filter((t) => local || !t.local);
+  const mac = isMacPlatform(S.platform);
+  const tasks = TASKS.filter((t) => (local || !t.local) && !(mac && t.computer));
   container.innerHTML = `<div class="center learn">
     <p class="learn-lead">Агент работает руками: ищет, читает, пишет, помнит, просыпается по расписанию.
       Ниже — рамки задач с пропусками: нажми, и она уедет в поле ввода, а пропуски заполнишь ты.</p>

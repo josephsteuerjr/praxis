@@ -16,6 +16,7 @@
 // системная папка, не заведённый стык в `mnt/`), знает только харнесс, и она
 // приезжает снимком в анатомии.
 import { el } from "../../ui-kit/window/lib";
+import { S } from "../../ui-kit/window/state";
 import { button as smallBtn } from "../../ui-kit/dom";
 import {
   ACCESS_WORDS,
@@ -162,7 +163,8 @@ export function mountsCard(
   };
 
   const add = (path: string, access: "read" | "write", why: string): boolean => {
-    const problem = pathProblem(path);
+    // Форма полного пути — системы агента: на macOS `/Users/…`, а не `C:\…`.
+    const problem = pathProblem(path, S.platform);
     if (problem) {
       say(problem, true);
       return false;

@@ -15,6 +15,8 @@ import { watchShellVersion } from "../../ui-kit/version";
 import { setResultFetcher } from "../../ui-kit/steps";
 import { bindFail, esc, failHTML, fmtAge, fmtDur, fmtK, fmtTs, humanError, q, toast } from "../../ui-kit/window/lib";
 import { PRODUCT_NAME, S, setProductName, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "../../ui-kit/window/state";
+import { hostInfo } from "../../ui-kit/window/host";
+import { clientIsMac, isMacPlatform, kbdLabel, platformOf } from "../../ui-kit/platform";
 import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "../../ui-kit/window/rooms";
 import { mountSwitch } from "../../ui-kit/window/agents";
 import * as panel from "../../ui-kit/window/panel";
@@ -328,12 +330,17 @@ export function start(opts: WindowOptions): void {
     { id: "settings", label: "Настройки", kicker: "Как настроена программа", key: "," },
   ];
 
+  // Подписи клавиш — по КЛАВИАТУРЕ, на которой открыто окно (⌘ на Mac): это
+  // знает браузер, и ответа оболочки ждать не надо. Обработчик ниже слушает и
+  // metaKey, и ctrlKey, так что подпись и жест совпадают на обеих.
+  const clientMac = clientIsMac(navigator);
+
   function railButton(id: View, label: string, key: string): HTMLButtonElement {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "rail-item";
     b.dataset.view = id;
-    b.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true">${ICONS[id]}</svg><span>${esc(label)}</span><kbd>Ctrl+${esc(key)}</kbd>`;
+    b.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true">${ICONS[id]}</svg><span>${esc(label)}</span><kbd>${esc(kbdLabel("Ctrl+" + key, clientMac))}</kbd>`;
     b.addEventListener("click", () => void show(id));
     return b;
   }
@@ -347,6 +354,8 @@ export function start(opts: WindowOptions): void {
   // Панели сворачиваются как в IDE и помнят состояние.
   const railBtn = q<HTMLButtonElement>("#toggle-rail");
   const panelBtn = q<HTMLButtonElement>("#toggle-panel");
+  // Подсказки кнопок из index.html написаны с Ctrl+ — на Mac переписываем на ⌘.
+  for (const b of [railBtn, panelBtn, roomAdd]) b.title = kbdLabel(b.title, clientMac);
   function readFlag(key: string): boolean {
     try {
       return localStorage.getItem(key) === "1";
@@ -802,10 +811,13 @@ export function start(opts: WindowOptions): void {
    */
   async function restartHarness() {
     let svc = "";
-    try {
-      svc = await shell<string>("service_state");
-    } catch {
-      // вне приложения (веб) — служба не при делах
+    // На macOS службы нет по построению — и спрашивать про неё нечего.
+    if (!isMacPlatform(S.platform)) {
+      try {
+        svc = await shell<string>("service_state");
+      } catch {
+        // вне приложения (веб) — служба не при делах
+      }
     }
     if (svc === "running") {
       toast("Агента держит служба Windows: перезапуск окна её не тронет. Настройки → Режим: сними и поставь службу заново.");
@@ -1159,12 +1171,14 @@ export function start(opts: WindowOptions): void {
     const v = shellVersion || S.agentState?.desk?.version || "";
     railSign.textContent = v ? `${product} ${v}` : product;
   }
-  shell<{ version: string }>("app_info")
-    .then((i) => {
-      shellVersion = i.version;
-      paintRailSign();
-    })
-    .catch(() => {});
+  // Тот же ответ несёт систему агента (`platform`): по ней экраны прячут то,
+  // чего на ней нет. Один вызов на окно — host.ts кэширует.
+  void hostInfo().then((i) => {
+    if (!i) return;
+    shellVersion = i.version || "";
+    S.platform = platformOf(i);
+    paintRailSign();
+  });
   syncComposer();
   addEventListener("frame-room", syncComposer);
   addEventListener("frame-go", (e) => void show((e as CustomEvent<View>).detail));

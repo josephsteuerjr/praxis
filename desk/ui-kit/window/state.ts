@@ -108,6 +108,12 @@ export const S = {
   pending: [] as Pending[],
   /** Канал ответил 404 на ручки комнат: несколько чатов этот харнесс не умеет. */
   roomsUnsupported: false,
+  /**
+   * Система, на которой живёт агент: `windows` | `macos` | `linux` по слову
+   * оболочки (`app_info.platform`, см. host.ts и ../platform.ts). "" — окно
+   * открыто браузером или оболочка старая: тогда не прячется ничего.
+   */
+  platform: "" as string,
 };
 
 /** Ключ комнаты окна по умолчанию и префикс новых — из ui-kit/contract.json

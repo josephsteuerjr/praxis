@@ -5,6 +5,7 @@ import { esc, fmtK, fmtN, fmtTime, md, plural, q, safeRender } from "../lib";
 import { stepsHTML, type RunDetail } from "../panel";
 import { loadMode, type ModeState } from "../mode";
 import { S } from "../state";
+import { isMacPlatform } from "../../platform";
 import { mountSupervisor } from "./supervisor";
 
 const INTRO: Array<[string, string]> = [
@@ -119,16 +120,18 @@ function spendHTML(p: { calls_day?: number | null; cache_day?: number | null; ca
 function modeHTML(m: ModeState | null): string {
   if (!m || !m.name) return "";
   const svc = m.service_installed === null ? "спросить не удалось" : m.service_installed ? "установлена" : "не установлена";
+  // На macOS службы, нулевой сессии и брандмауэра нет: строк про них нет тоже.
+  const mac = isMacPlatform(S.platform);
   const facts = [
     `ограда песочницы: ${m.sandbox ? "включена" : "выключена"}`,
-    `служба Windows: ${svc}`,
+    mac ? "" : `служба Windows: ${svc}`,
     // Две галочки службы — разные вопросы, и на экране они стоят порознь.
     // `session0` — права системы агенту; `firewall` — правило брандмауэра для
     // кнопки «Телефон». Про брандмауэр говорим только когда он ВЫКЛЮЧЕН: это
     // выбор владельца против умолчания, и по нему кнопка «Телефон» под службой
     // ведёт себя иначе.
-    m.session0 ? "нулевая сессия разрешена" : "",
-    m.firewall_set === false ? "правило брандмауэра служба не ставит" : "",
+    !mac && m.session0 ? "нулевая сессия разрешена" : "",
+    !mac && m.firewall_set === false ? "правило брандмауэра служба не ставит" : "",
     m.legacy_service ? "в файле режимом записана служба — старая запись, ограда выведена отдельно" : "",
     m.source ? `источник: ${m.source}` : "",
   ].filter(Boolean);
@@ -269,10 +272,15 @@ export async function render(container: HTMLElement): Promise<void> {
   const intro = INTRO.map(
     ([h, t]) => `<details class="fold" open><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`,
   ).join("");
-  const layers = LAYERS.map(
-    ([h, t]) => `<details class="fold"><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`,
-  ).join("");
-  const body = a.computer
+  // На macOS оболочка — бандл, а тела (helene-body/helene-bridge) нет вовсе:
+  // слой про него не показываем, слой оболочки называем её именем там.
+  const mac = isMacPlatform(S.platform);
+  const layers = LAYERS
+    .filter(([h]) => !(mac && h.startsWith("helene-body.exe")))
+    .map(([h, t]) => [mac && h.startsWith("helene.exe") ? h.replace("helene.exe", "Helene.app") : h, t] as [string, string])
+    .map(([h, t]) => `<details class="fold"><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`)
+    .join("");
+  const body = a.computer && !mac
     ? ` · тело: ${esc(!a.computer.enabled ? "выключено владельцем" : !a.computer.available ? "нет в сборке" : a.computer.connected === true ? `подключено, мост 127.0.0.1:${a.computer.port}` : a.computer.connected === false ? "не отвечает" : "поднималось на старте")}${a.computer.enabled && a.computer.scopes ? ` (права: ${esc(a.computer.scopes.join(", ") || "нет")})` : ""}`
     : "";
   const meta = tools.length

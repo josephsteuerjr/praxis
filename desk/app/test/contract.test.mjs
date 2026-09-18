@@ -50,4 +50,13 @@ for (const cfg of ["app", "mobile", "miniapp"]) {
 const prefix = contract.rooms.pattern.replace(/^\^/, "").split("[")[0];
 assert.equal(prefix, "window-");
 
+// --- системы продукта (порт на macOS, 19.09): слово std::env::consts::OS, которым
+// оболочка (`app_info.platform`) и установщик (`defaults.platform`) называют
+// хост. ui-kit/platform.ts держит КОПИЮ списка — единственную разрешённую:
+// node не читает JSON без атрибутов импорта, а файл проверяется прогоном.
+// Копия обязана совпадать с контрактом буква в букву.
+assert.ok(contract.platforms.includes("windows") && contract.platforms.includes("macos"), "в contract.json нет систем продукта");
+const { PLATFORMS } = await import("../../ui-kit/platform.ts");
+assert.deepEqual([...PLATFORMS], contract.platforms, "ui-kit/platform.ts разошёлся с contract.json: platforms");
+
 console.log("контракт: порты, скоупы и комнаты — из ui-kit/contract.json");

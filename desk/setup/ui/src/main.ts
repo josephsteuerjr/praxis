@@ -17,19 +17,22 @@ import { NameScene } from "./scenes/name";
 import { ModeScene } from "./scenes/mode";
 import { TypewriterScene } from "./scenes/typewriter";
 import { WordmarkScene } from "./scenes/wordmark";
-import { loadDefaults, machine, setup } from "./setup";
+import { isMac, loadDefaults, machine, setup } from "./setup";
 import { T, sleep, type Dir } from "./wind";
 
 // Сорвался модуль — окно не должно остаться пустым: оно рождается невидимым и
 // показывается отсюда, поэтому исключение до show() давало живой процесс вообще
 // без окна. В Rust есть вторая страховка (показ через 4 с), здесь — текст причины.
+// Как зовётся установщик, тут узнаём у браузера (`navigator.platform`): ответ
+// `defaults` до сорвавшегося модуля мог и не доехать.
 function crashed(what: unknown) {
   const box = document.createElement("pre");
   box.style.cssText = "position:fixed;inset:0;z-index:9999;margin:0;padding:32px;white-space:pre-wrap;font:14px/1.5 monospace;background:#faf8f5;color:#2a2622;overflow:auto";
+  const setupName = /Mac/.test(navigator.platform || "") ? "Helene Setup" : "helene-setup.exe";
   box.textContent =
     "Установщик не смог показать сцену.\n\n" +
     String(what) +
-    "\n\nЗакрой окно и запусти helene-setup.exe ещё раз. Если повторяется — покажи этот текст автору.";
+    `\n\nЗакрой окно и запусти ${setupName} ещё раз. Если повторяется — покажи этот текст автору.`;
   document.body.append(box);
   void import("@tauri-apps/api/window")
     .then((m) => m.getCurrentWindow().show())
@@ -326,6 +329,8 @@ async function start() {
     // Если что-то уже стоит — это обновление, и сводка перед кнопкой скажет об этом.
     machine.installed = d.installed ?? null;
     if (d.installed?.dir) setup.dir = d.installed.dir;
+    // Система — по слову оболочки: по нему сцены прячут службу, тело и брандмауэр.
+    machine.platform = String(d.platform || "").trim().toLowerCase();
   } catch {
     // без оболочки папка останется примером
   }
@@ -333,9 +338,11 @@ async function start() {
   // живёт служба Vera/Frame (снятие прошлой версии сносило файлы, а службу
   // оставляло), владелец узнаёт об этом здесь, а не после установки — её реле
   // держит тот же порт, и новый агент ушёл бы разговаривать с ним.
+  // На macOS служб прежних поколений не бывало: оболочка отвечает пустым
+  // списком, а сюда — вторая страховка, чтобы сцену не вставить и по ошибке.
   try {
     const home = machine.installed?.dir || setup.dir;
-    if (await legacy.look(home)) insertScene(legacy, uninstallMode ? uninstall : mode_, "legacy");
+    if (!isMac() && (await legacy.look(home))) insertScene(legacy, uninstallMode ? uninstall : mode_, "legacy");
   } catch {
     // SCM не ответила — маршрут остаётся прежним, молча ничего не снимаем
   }

@@ -1,9 +1,10 @@
 // Сцена «Установить»: сводка решений, кнопка, ход установки с расписками и
 // кнопка «Открыть Frame». Установка начинается только нажатием кнопки.
 import { MODE_CARDS } from "virtual:helene-modes";
+import { copyText } from "../../../../ui-kit/dom";
 import { FormScene } from "./base";
 import { button, el } from "./form";
-import { machine, openFrame, runInstall, setup, type Receipt } from "../setup";
+import { isMac, machine, openFrame, runInstall, setup, type Receipt } from "../setup";
 
 export class InstallScene extends FormScene {
   private summary: HTMLElement;
@@ -75,20 +76,24 @@ export class InstallScene extends FormScene {
     // (см. шапку scenes/mode.ts).
     const picked = MODE_CARDS.find((m) => m.name === setup.agent_mode);
     this.row("Ограда", picked?.title ?? setup.agent_mode);
-    this.row(
-      "Служба Windows",
-      setup.service
-        ? "поставить — Windows спросит права администратора" +
-          (setup.session0 ? "; нулевая сессия РАЗРЕШЕНА" : "")
-        : "не ставить — программа живёт из окна",
-    );
-    // Третий ответ — тоже своей строкой: опция поверх режима, не режим.
-    this.row(
-      "Управление компьютером",
-      setup.computer
-        ? "включить — агент получит окна, экран, клавиатуру и мышь; сузить права можно в настройках"
-        : "не включать — включается потом, в настройках",
-    );
+    // На macOS ни службы, ни тела нет — и строк про них в сводке нет (не
+    // «не ставить», а ничего: сцена режима их не спрашивала).
+    if (!isMac()) {
+      this.row(
+        "Служба Windows",
+        setup.service
+          ? "поставить — Windows спросит права администратора" +
+            (setup.session0 ? "; нулевая сессия РАЗРЕШЕНА" : "")
+          : "не ставить — программа живёт из окна",
+      );
+      // Третий ответ — тоже своей строкой: опция поверх режима, не режим.
+      this.row(
+        "Управление компьютером",
+        setup.computer
+          ? "включить — агент получит окна, экран, клавиатуру и мышь; сузить права можно в настройках"
+          : "не включать — включается потом, в настройках",
+      );
+    }
     this.row("Папка", setup.dir);
   }
 
@@ -116,8 +121,13 @@ export class InstallScene extends FormScene {
       this.actions.hidden = false;
       // Отчёт живёт не только на экране: окно закроют — текст исчезнет навсегда.
       // Тот же текст пишется в install.log рядом с установщиком.
+      // `copyText`, а не голый `navigator.clipboard`: на macOS страница живёт на
+      // helene://localhost без secure context, и clipboard там undefined —
+      // клик падал бы TypeError-ом молча (ui-kit/dom.ts).
       const copy = button("Скопировать отчёт", "quiet", () => {
-        void navigator.clipboard.writeText(text).catch(() => {});
+        void copyText(text).then((ok) => {
+          copy.textContent = ok ? "Скопировано" : "Не скопировалось — выдели текст мышью";
+        });
       });
       this.actions.replaceChildren(button("Повторить", "primary", () => void this.run()), copy);
       const where = el("p", "muted", "Отчёт также записан в install.log рядом с установщиком.");
@@ -149,8 +159,10 @@ export class InstallScene extends FormScene {
     // молча не делала ничего — ни окна, ни сообщения.
     const open = button("Открыть", "primary", () => {
       openFrame(r.exe).catch((err) => {
+        // Ярлыка на рабочем столе на Mac нет — там открывают сам бандл.
+        const how = isMac() ? "открой Helene.app оттуда" : "открой ярлык на рабочем столе";
         this.result.append(
-          el("p", "err", `Не удалось открыть ${"Hélène"}: ${err}. Она установлена в ${r.dir} — открой ярлык на рабочем столе.`),
+          el("p", "err", `Не удалось открыть ${"Hélène"}: ${err}. Она установлена в ${r.dir} — ${how}.`),
         );
       });
     });

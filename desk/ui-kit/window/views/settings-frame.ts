@@ -25,6 +25,8 @@ import { keepBlock } from "../config";
 import { bindFail, el, esc, failHTML, humanError, toast } from "../lib";
 import { button, card, field, toggle } from "../../dom";
 import { PRODUCT_NAME, S } from "../state";
+import { hostInfo, type HostInfo } from "../host";
+import { isMacPlatform, platformOf } from "../../platform";
 
 export interface Config {
   agent?: { name?: string };
@@ -91,6 +93,11 @@ export interface EditionContext {
   /** Конфиг, как он лежит на диске сейчас. */
   saved: Config;
   loaded: Loaded;
+  /** Ответ `app_info` оболочки; null — оболочки нет или она не ответила. */
+  host: HostInfo | null;
+  /** Система агента по контракту (`windows` | `macos` | `linux`); "" — неизвестно.
+   *  По ней издание прячет карточки того, чего на системе нет. */
+  platform: string;
 }
 
 /**
@@ -203,10 +210,17 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   draft.telegram = draft.telegram || {};
   const center = el("div", "center");
 
+  // Система агента — от оболочки, один раз (host.ts): на macOS автозапуск
+  // зовётся иначе, службы и брандмауэра нет, и издание прячет свои карточки
+  // по тому же слову.
+  const host = await hostInfo();
+  const platform = platformOf(host);
+  const mac = isMacPlatform(platform);
+
   // Издание приносит свои карточки и свою часть записи в конфиг. Всё, что
   // ему нужно спросить у трубы (режим, снимок устройства), оно спрашивает
   // само: каркасу это знать незачем, а Пульту — и подавно.
-  const built = await edition({ draft, saved: c, loaded });
+  const built = await edition({ draft, saved: c, loaded, host, platform });
 
 
   // --- имена
@@ -222,14 +236,15 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
 
   for (const box of built.cards) center.append(box);
 
-  center.append(inGroup(phoneCard(draft, !!c.phone?.enabled, built.phoneBase, built.qrSvg), GROUP.brain));
+  center.append(inGroup(phoneCard(draft, !!c.phone?.enabled, built.phoneBase, built.qrSvg, mac), GROUP.brain));
 
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
-  center.append(inGroup(transferCard(draft), GROUP.app));
+  center.append(inGroup(transferCard(draft, mac), GROUP.app));
 
   // --- автозапуск
   const auto = el("div");
-  const autoToggle = toggle("Запускать при входе в Windows", false, async (v) => {
+  // На macOS это LaunchAgent при входе в систему — «Windows» в подписи был бы чужим словом.
+  const autoToggle = toggle(mac ? "Запускать при входе в систему" : "Запускать при входе в Windows", false, async (v) => {
     try {
       await shell("autostart_set", { on: v });
       toast(v ? "Автозапуск включён" : "Автозапуск выключен");
@@ -287,7 +302,9 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e ?? "");
       if (/not found|неизвестн|unknown|command/i.test(text)) {
-        updOut.textContent = "Эта версия оболочки ещё не умеет ставить обновление сама — открыл страницу выпуска, скачай и запусти helene-setup.exe.";
+        updOut.textContent = mac
+          ? "Эта версия оболочки ещё не умеет ставить обновление сама — открыл страницу выпуска, скачай архив для macOS и запусти из него Helene Setup."
+          : "Эта версия оболочки ещё не умеет ставить обновление сама — открыл страницу выпуска, скачай и запусти helene-setup.exe.";
         void shell("open_path", { path: updUrl }).catch((e2) => toast(humanError(e2).text));
       } else {
         updOut.className = "receipt err";
@@ -392,11 +409,14 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         saveOut.className = "receipt ok";
         // Под службой перезапуск ОКНА настройки не применит: службу конфиг
         // читает один раз при своём старте. Раньше расписка обещала обратное.
+        // На macOS службы нет — и спрашивать нечего.
         let svc = "";
-        try {
-          svc = await shell<string>("service_state");
-        } catch {
-          // не смогли спросить — говорим общее
+        if (!mac) {
+          try {
+            svc = await shell<string>("service_state");
+          } catch {
+            // не смогли спросить — говорим общее
+          }
         }
         // Хвост расписки — от ИЗДАНИЯ: у Элен это карточка режима (она знает,
         // что осталось сделать — поставить или снять службу), у Пульта его нет
@@ -450,7 +470,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   const conflictBox = el("div");
   conflictBox.hidden = true;
   conflictBox.innerHTML = `<div class="notice err" style="margin-top:12px"><span class="dot failed"></span>
-    <span>Пока настройки были открыты, helene.json изменил кто-то ещё — установщик, код агента или ты в Блокноте. Если сохранить как есть, его правка пропадёт.</span></div>`;
+    <span>Пока настройки были открыты, helene.json изменил кто-то ещё — установщик, код агента или ты ${mac ? "в редакторе" : "в Блокноте"}. Если сохранить как есть, его правка пропадёт.</span></div>`;
   const conflictRow = el("div", "actions");
   conflictRow.style.marginTop = "10px";
   conflictRow.append(
@@ -624,8 +644,14 @@ function mountSettings(container: HTMLElement, center: HTMLElement, groups: Sett
  * `key`. Пишутся общей кнопкой «Сохранить», применяются перезапуском: с
  * `remote` оболочка своих детей не поднимает и ходит в чужую трубу.
  */
-function transferCard(draft: Config): HTMLElement {
+function transferCard(draft: Config, mac = false): HTMLElement {
   const box = el("div");
+  // Команда обратного импорта — путём питона ЭТОЙ системы (runtime/python.exe
+  // против runtime/bin/python3): подсказка, которую копируют в консоль, обязана
+  // работать как есть.
+  const importCmd = mac
+    ? "runtime/bin/python3 app/localharness/carry.py import --config helene.json --archive <архив>"
+    : "runtime\\python.exe app\\localharness\\carry.py import --config helene.json --archive <архив>";
   const exportOut = el("span", "receipt");
   const exportBtn = button("Экспорт агента", "quiet", async () => {
     exportOut.className = "receipt";
@@ -652,7 +678,7 @@ function transferCard(draft: Config): HTMLElement {
         "Внутри ключ модели и токены — не для пересылки посторонним; паспорт helene-carry.json в архиве перечисляет их поимённо. " +
         "Не едут: тело тулы computer, журналы, ключ окна, стыки смонтированных папок. " +
         "На сервере подписка ChatGPT продолжает работать сама: реле едет в сборке и Linux-бинарём, и контейнер поднимает его рядом с агентом — адрес мозга из архива на той стороне верен. " +
-        "Обратный импорт на этом ПК — из консоли при закрытой программе: runtime\\python.exe app\\localharness\\carry.py import --config helene.json --archive <архив>; прежняя data/ останется рядом как data.before-<штамп>.",
+        `Обратный импорт на этом ПК — из консоли при закрытой программе: ${importCmd}; прежняя data/ останется рядом как data.before-<штамп>.`,
     ),
   );
 
@@ -699,7 +725,7 @@ function transferCard(draft: Config): HTMLElement {
  * локальный адрес, куда телефону идти незачем.
  */
 function phoneCard(draft: Config, savedEnabled: boolean, remoteBase: string,
-                   qrSvg: (text: string) => Promise<string>): HTMLElement {
+                   qrSvg: (text: string) => Promise<string>, mac = false): HTMLElement {
   draft.phone = draft.phone || {};
   const remote = !!remoteBase;
   const phone = el("div");
@@ -790,7 +816,9 @@ function phoneCard(draft: Config, savedEnabled: boolean, remoteBase: string,
           <p>Открой камеру телефона и наведи на код. Ссылка живёт десять минут и годится дважды.</p>
           <p><b>iPhone:</b> страница откроется в Safari; нажми «Поделиться» → «На экран „Домой“». Второе открытие из значка допишет ключ, поэтому код и двухразовый.</p>
         </div>`;
-      if (inTauri) {
+      // Правило брандмауэра — Windows: на macOS входящие на порт пользователя
+      // и так открыты, правила нет, и QR работает без него.
+      if (inTauri && !mac) {
         const fw = await shell<string>("firewall_allow", { port: Number(port) }).catch((e) => humanError(e).text);
         toast(fw);
       }

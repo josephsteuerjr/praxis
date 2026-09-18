@@ -70,6 +70,14 @@ assert.equal(pathProblem("C:\\Users\\Егор\\Документы"), "");
 assert.equal(pathProblem("\\\\сервер\\общая"), "", "сетевая папка — полный путь");
 assert.equal(pathProblem("%USERPROFILE%\\Documents"), "", "переменную среды харнесс разворачивает сам");
 assert.equal(pathProblem("~/Документы"), "", "тильду харнесс разворачивает сам");
+// Агент на macOS (порт 0.7.1): полный путь — от корня или от дома, буквы диска
+// там не бывает; без слова системы правила остаются виндовыми, как были.
+assert.equal(pathProblem("/Users/yegor/Documents", "macos"), "");
+assert.equal(pathProblem("~/Documents", "macos"), "");
+assert.ok(pathProblem("C:\\Users\\Егор", "macos"), "буква диска на Mac — не полный путь");
+assert.ok(pathProblem("Documents", "macos"), "относительный путь на Mac обязан отбиваться");
+assert.ok(/\/Users\//.test(pathProblem("", "macos")), "подсказка на Mac показывает путь Mac, а не C:\\");
+assert.ok(pathProblem("/Users/yegor/Documents"), "без слова системы правила виндовые: `/` — не полный путь");
 
 // --- 7. дата в том же виде, что пишет харнесс ------------------------------- #
 assert.equal(

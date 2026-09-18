@@ -68,12 +68,17 @@ export interface ModeCard {
  *        значило бы молча стирать выбор владельца
  * @param onPick  зовётся при смене ограды: соседним карточкам (песочница,
  *        монтирование) надо обновить свои строки состояния
+ * @param mac     агент живёт на macOS: службы Windows там нет по построению —
+ *        секция службы, её кнопки, галочки и слова про UAC не рисуются, а
+ *        строка «Сейчас» — без хвоста про службу. Галочки службы в файле при
+ *        этом не трогаем: они уедут обратно такими, какие лежали.
  */
 export function modeCard(
   live: ModeState | null,
   failure: unknown,
   stored: StoredService,
   onPick: (name: string, sandbox: boolean, title: string) => void,
+  mac = false,
 ): ModeCard {
   const box = el("section", "card");
   box.append(el("h3", "", "Режим"));
@@ -137,7 +142,8 @@ export function modeCard(
   let firewall = stored.firewall;
   // Стоит ли служба. Пришло от трубы (SCM), но живой ответ оболочки свежее:
   // после «Поставить»/«Снять» он меняется, а ответ трубы остаётся с загрузки.
-  let installed: boolean | null = live.service_installed;
+  // На macOS службы нет — «не установлена» без вопросов к кому бы то ни было.
+  let installed: boolean | null = mac ? false : live.service_installed;
   let admin = { known: false, canElevate: false };
 
   const now = el("p", "receipt");
@@ -152,14 +158,16 @@ export function modeCard(
 
   const syncNow = () => {
     const svc = installed === null ? "спросить не удалось" : installed ? "установлена" : "не установлена";
+    // Хвост про службу — только там, где служба бывает.
+    const svcTail = mac ? "" : ` Служба Windows: ${svc}.`;
     if (legacyPipe) {
       // Врать «Сейчас: Служба» нельзя: службы-режима не существует, а какая
       // ограда стоит на самом деле, этот харнесс не сказал.
-      now.textContent = `Сейчас: ограда не названа — код агента отвечает старой картиной, где режимом считалась служба. Служба Windows: ${svc}.`;
+      now.textContent = `Сейчас: ограда не названа — код агента отвечает старой картиной, где режимом считалась служба.${svcTail}`;
       return;
     }
     const src = live.explicit ? live.source : `записи в файле ещё нет, ограда выведена — ${live.source}`;
-    now.textContent = `Сейчас: ${live.title}. Служба Windows: ${svc}. Источник: ${src}.`;
+    now.textContent = `Сейчас: ${live.title}.${svcTail} Источник: ${src}.`;
   };
 
   const syncPick = () => {
@@ -379,30 +387,35 @@ export function modeCard(
 
   svcBox.append(svcRow, svcAdmin, togglesBox);
 
+  box.append(now, pickRow, planBox);
+  // Секция службы — только там, где служба бывает. На macOS её нет в карточке
+  // вовсе: ни кнопок, ни галочек, ни строки про права администратора.
+  if (!mac) box.append(svcBox);
   box.append(
-    now,
-    pickRow,
-    planBox,
-    svcBox,
     el(
       "p",
       "field-hint",
-      "Ограда и служба — два разных вопроса. Ограду выбираешь здесь, и она раскладывается в ручки сама " +
-        "(отдельного тумблера песочницы больше нет). Служба ставится поверх любой ограды и ни одну из них не снимает. " +
-        "Применяется перезапуском программы.",
+      mac
+        ? "Ограду выбираешь здесь, и она раскладывается в ручки сама (отдельного тумблера песочницы нет). " +
+          "Применяется перезапуском программы."
+        : "Ограда и служба — два разных вопроса. Ограду выбираешь здесь, и она раскладывается в ручки сама " +
+          "(отдельного тумблера песочницы больше нет). Служба ставится поверх любой ограды и ни одну из них не снимает. " +
+          "Применяется перезапуском программы.",
     ),
   );
   syncNow();
   syncPick();
   syncAdmin();
   syncToggles();
-  void svcRefresh();
-  // Права спрашиваем после отрисовки: ответа может не быть вовсе, и ждать его
-  // экрану незачем — как придёт, секция службы перерисуется сама.
-  void adminProbe().then((r) => {
-    admin = r;
-    syncAdmin();
-  });
+  if (!mac) {
+    void svcRefresh();
+    // Права спрашиваем после отрисовки: ответа может не быть вовсе, и ждать его
+    // экрану незачем — как придёт, секция службы перерисуется сама.
+    void adminProbe().then((r) => {
+      admin = r;
+      syncAdmin();
+    });
+  }
 
   return {
     el: box,
@@ -419,7 +432,8 @@ export function modeCard(
             "саму службу это не тронуло.",
         );
       }
-      if (session0 && installed === false) {
+      // На macOS нулевой сессии нет — как и службы, которой её давать.
+      if (!mac && session0 && installed === false) {
         bits.push("Нулевая сессия включена, но служба не установлена — дать её некому.");
       }
       if (legacyPipe) {

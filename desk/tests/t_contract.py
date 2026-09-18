@@ -37,6 +37,14 @@ class Contract(unittest.TestCase):
         self.assertEqual(len(CONTRACT["computer_scopes"]), 4)
         re.compile(CONTRACT["rooms"]["pattern"])
         re.compile(CONTRACT["agents"]["id_pattern"])
+        # Системы продукта (порт 0.7.1 на macOS): слово std::env::consts::OS,
+        # которым оболочка и установщик отвечают в `platform`. Читают Rust
+        # (setup: contract_json_matches_constants) и окно (ui-kit/platform.ts).
+        self.assertIsInstance(CONTRACT["platforms"], list)
+        for name in ("windows", "macos"):
+            self.assertIn(name, CONTRACT["platforms"])
+        for name in CONTRACT["platforms"]:
+            self.assertRegex(name, r"^[a-z]+$")
 
     def test_agents_match(self):
         """Список агентов читают трое: питон здесь, Rust в common/agents.rs,

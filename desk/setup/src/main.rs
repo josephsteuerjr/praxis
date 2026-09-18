@@ -126,6 +126,7 @@ async fn install(app: tauri::AppHandle, setup: install::Setup) -> Result<install
 }
 
 /// Открыть установленный Hélène и закрыть установщик.
+#[cfg(windows)]
 #[tauri::command]
 fn open_frame(app: tauri::AppHandle, exe: String) -> Result<(), String> {
     let path = std::path::PathBuf::from(&exe);
@@ -143,6 +144,22 @@ fn open_frame(app: tauri::AppHandle, exe: String) -> Result<(), String> {
     }
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(10));
+        install::relay_abort();
+        app.exit(0);
+    });
+    Ok(())
+}
+
+/// macOS: `exe` из расписки — это бандл `Helene.app`; его открывает `open`, он
+/// же выводит окно на передний план, держать установщик живым незачем.
+#[cfg(not(windows))]
+#[tauri::command]
+fn open_frame(app: tauri::AppHandle, exe: String) -> Result<(), String> {
+    install::launch_installed(std::path::Path::new(&exe)).map_err(|e| format!("Hélène не запустилась: {e}"))?;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    std::thread::spawn(move || {
         install::relay_abort();
         app.exit(0);
     });
@@ -168,17 +185,19 @@ async fn uninstall_run(purge: bool) -> Result<String, String> {
 /// по записи установки. -> путь к архиву переноса.
 fn export_agent() -> Result<String, String> {
     let here = install::exe_dir();
-    let dir = if here.join("helene.json").is_file() && here.join("runtime").join("python.exe").is_file() {
+    // Питон рантайма — по системе (`install::PYTHON_REL`): `runtime/python.exe`
+    // на Windows, `runtime/bin/python3` на macOS.
+    let dir = if here.join("helene.json").is_file() && install::python_exe(&here).is_file() {
         here
     } else {
         std::path::PathBuf::from(
             install::installed_info().ok_or("Hélène не установлена — экспортировать нечего")?.dir,
         )
     };
-    let python = dir.join("runtime").join("python.exe");
+    let python = install::python_exe(&dir);
     let script = dir.join("app").join("localharness").join("carry.py");
     if !python.is_file() || !script.is_file() {
-        return Err(format!("в {} нет помощника переноса (runtime/python.exe, app/localharness/carry.py)", dir.display()));
+        return Err(format!("в {} нет помощника переноса ({}, app/localharness/carry.py)", dir.display(), install::PYTHON_REL));
     }
     let mut cmd = std::process::Command::new(python);
     cmd.arg("-u")
@@ -216,6 +235,7 @@ fn export_agent() -> Result<String, String> {
     }
 }
 
+#[cfg(windows)]
 fn message_box(text: &str) {
     let script = format!(
         "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show('{}', '{}') | Out-Null",
@@ -225,6 +245,12 @@ fn message_box(text: &str) {
     let _ = Command::new(install::powershell_exe())
         .args(["-NoProfile", "-Command", &script])
         .status();
+}
+
+/// macOS: тот же диалог через osascript (`install::message_box`).
+#[cfg(not(windows))]
+fn message_box(text: &str) {
+    install::message_box(text);
 }
 
 fn main() {

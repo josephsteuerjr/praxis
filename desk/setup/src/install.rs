@@ -8,6 +8,18 @@
 //! Служба лежит В ТОЙ ЖЕ папке (svc/src/main.rs берёт current_exe), а права
 //! администратора нужны не ради Program Files, а ради SCM: регистрация,
 //! остановка и снятие службы — отдельный поднятый вызов.
+//!
+//! macOS (порт 0.7.1, ветка port/macos). Та же поставка, но без службы, тела
+//! (`computer`), брандмауэра, ярлыков и реестра — всего, чего на Mac нет по
+//! построению. Раскладка: `~/Applications/Helene/` — корень; в нём
+//! `Helene.app` (оболочка), `Helene Setup.app` (этот установщик),
+//! `helene-relay`, `runtime/bin/python3`, `app/`, `tree/`, `data/`,
+//! `helene.json`, `helene-build.json`. Установщик лежит ВНУТРИ бандла, поэтому
+//! корень поставки ищется вверх по родителям до первой папки с паспортом
+//! сборки (`exe_dir`), а не «рядом с exe». Всё платформенное — под
+//! `#[cfg(windows)]` / `#[cfg(not(windows))]`; вторая ветка и есть macOS
+//! (другие Unix продукт не собирает — решение владельца: только Apple Silicon).
+//! Ветки Windows не менялись ни строкой.
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,8 +64,12 @@ pub const UPDATE_URL_WAS: &str = "https://api.github.com/repos/josephsteuerjr/he
 // Общее с оболочкой и службой (ревью 06.09, §4): проба модели и гард
 // исходящего адреса, экранирование PowerShell, поднятая операция со службой,
 // случайные байты из CSPRNG, внешняя программа с дедлайном.
+// PowerShell, служба и кодовые страницы консоли — только Windows: на macOS
+// их не зовёт никто, и включать их значило бы тащить мёртвый код в бинарь.
 include!("../../common/model_probe.rs");
+#[cfg(windows)]
 include!("../../common/ps.rs");
+#[cfg(windows)]
 include!("../../common/service_op.rs");
 include!("../../common/random_hex.rs");
 include!("../../common/run_hidden.rs");
@@ -62,6 +78,7 @@ include!("../../common/run_hidden.rs");
 /// (`common/firewall_rule.rs`): установщик снимает правило при удалении, и
 /// до 07.09 собирал имя руками мимо `firewall_rule_title` (ревью 06.09, §4
 /// п. 15). Остальное из файла установщику не нужно — отсюда модуль.
+#[cfg(windows)]
 mod firewall_rule {
     #![allow(dead_code)]
     include!("../../common/firewall_rule.rs");
@@ -72,7 +89,77 @@ mod firewall_rule {
 }
 
 /// Файлы поставки, по которым мы узнаём её папку.
+#[cfg(windows)]
 const PAYLOAD_MARKERS: [&str; 3] = ["helene.exe", "app", "runtime"];
+/// На macOS оболочка — бандл `Helene.app`, а не exe рядом.
+#[cfg(not(windows))]
+const PAYLOAD_MARKERS: [&str; 3] = [SHELL_APP, "app", "runtime"];
+
+/// Имена бандлов на macOS. Оболочку запускают через `open`, установщик лежит
+/// внутри своего бандла — отсюда и поиск корня вверх (`exe_dir`).
+#[cfg(not(windows))]
+pub const SHELL_APP: &str = "Helene.app";
+#[cfg(not(windows))]
+pub const SETUP_APP: &str = "Helene Setup.app";
+
+/// Что в корне установки — сам установщик: при снятии его пропускает цикл
+/// удаления (он занят/работает), доудаляет хвост `uninstall_finish`.
+#[cfg(windows)]
+const SETUP_ENTRY: &str = "helene-setup.exe";
+#[cfg(not(windows))]
+const SETUP_ENTRY: &str = SETUP_APP;
+
+/// Как позвать установщик из командной строки — для записок владельцу.
+#[cfg(windows)]
+const SETUP_CMD: &str = "helene-setup.exe";
+#[cfg(not(windows))]
+const SETUP_CMD: &str = "\"Helene Setup.app/Contents/MacOS/helene-setup\"";
+
+/// Питон рантайма относительно корня — тот же путь уезжает в helene.json
+/// ключом `python`, по нему оболочка поднимает канал и движок.
+#[cfg(windows)]
+pub const PYTHON_REL: &str = "runtime/python.exe";
+#[cfg(not(windows))]
+pub const PYTHON_REL: &str = "runtime/bin/python3";
+
+/// Реле подписки ChatGPT: бинарь в корне, на Unix без расширения.
+#[cfg(windows)]
+pub const RELAY_NAME: &str = "helene-relay.exe";
+#[cfg(not(windows))]
+pub const RELAY_NAME: &str = "helene-relay";
+
+/// Папка статики окна в подписях расписки — разделителем этой системы.
+#[cfg(windows)]
+const STATIC_REL: &str = "app\\static";
+#[cfg(not(windows))]
+const STATIC_REL: &str = "app/static";
+
+/// Оболочка установленной программы: `helene.exe` рядом с остальным или бандл
+/// `Helene.app`. Путь уезжает в расписку (`Receipt.exe`) и дальше в `open_frame`.
+pub fn shell_exe(dir: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        dir.join("helene.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        dir.join(SHELL_APP)
+    }
+}
+
+/// Питон рантайма по корню — см. `PYTHON_REL`.
+pub fn python_exe(dir: &Path) -> PathBuf {
+    let mut p = dir.to_path_buf();
+    for part in PYTHON_REL.split('/') {
+        p.push(part);
+    }
+    p
+}
+
+/// Реле по корню поставки или установки — см. `RELAY_NAME`.
+pub fn relay_exe(dir: &Path) -> PathBuf {
+    dir.join(RELAY_NAME)
+}
 
 /// Что не переносим из поставки в установку: конфиг пишем свой, данные
 /// рождаются на месте, журналы прошлых прогонов установленной программе не нужны.
@@ -172,8 +259,18 @@ impl Setup {
 
     /// Ставить ли службу. Собственное поле владельца плюс след старого визарда:
     /// там служба приезжала третьим значением `agent_mode`, и терять её нельзя.
+    /// На macOS службы нет по построению: что бы ни приехало в JSON (тихое
+    /// обновление везёт решения с прежней установки), ответ — «нет», и в
+    /// helene.json уезжает `installed.service: false`, а не обещание.
     pub fn wants_service(&self) -> bool {
-        self.service || self.agent_mode.trim() == "service"
+        cfg!(windows) && (self.service || self.agent_mode.trim() == "service")
+    }
+
+    /// Поднимать ли тело тула `computer`. На macOS тела нет (основа порта — без
+    /// UIA), и `true` из JSON в конфиг не проходит: движок отказал бы словами,
+    /// а конфиг обещал бы окна и мышь.
+    pub fn wants_computer(&self) -> bool {
+        cfg!(windows) && self.computer
     }
 
     /// Нулевая сессия действует только вместе со службой: без неё исполнять
@@ -261,13 +358,48 @@ pub struct Defaults {
     pub payload: Option<String>,
     pub version: String,
     pub installed: Option<Installed>,
+    /// `windows` | `macos` | `linux` — по нему визард прячет то, чего на этой
+    /// системе нет (служба, тело, брандмауэр), не спрашивая оболочку.
+    pub platform: String,
+    pub arch: String,
 }
 
+/// Корень поставки или установки: папка, где лежат helene.json, app/, runtime/.
+/// На Windows это папка самого exe — паспорт сборки лежит рядом с ним.
+#[cfg(windows)]
 pub fn exe_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// На macOS установщик лежит внутри бандла (`Helene Setup.app/Contents/MacOS/`),
+/// и «рядом с exe» — это не корень. Правило одно на оболочку и установщик: от
+/// исполняемого файла вверх по родителям, не больше пяти уровней, до первой
+/// папки с паспортом сборки `helene-build.json`; не нашли — папка exe, как
+/// на Windows.
+#[cfg(not(windows))]
+pub fn exe_dir() -> PathBuf {
+    let here = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."));
+    root_above(&here).unwrap_or(here)
+}
+
+/// Первая папка с `helene-build.json`, начиная с `from` и до пяти родителей выше.
+#[cfg(not(windows))]
+fn root_above(from: &Path) -> Option<PathBuf> {
+    let mut cur = Some(from.to_path_buf());
+    for _ in 0..=5 {
+        let dir = cur?;
+        if dir.join("helene-build.json").is_file() {
+            return Some(dir);
+        }
+        cur = dir.parent().map(Path::to_path_buf);
+    }
+    None
 }
 
 /// Системные программы — только полным путём из %SystemRoot%.
@@ -276,12 +408,14 @@ pub fn exe_dir() -> PathBuf {
 /// `powershell.exe`, положенный рядом с `helene-setup.exe`, исполнялся бы вместо
 /// системного — и дальше эти же вызовы уходят под UAC. Те же строки, что у
 /// оболочки (`shell/src/main.rs::sys_exe`).
+#[cfg(windows)]
 fn system_root() -> PathBuf {
     std::env::var_os("SystemRoot")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("C:\\Windows"))
 }
 
+#[cfg(windows)]
 pub fn sys_exe(name: &str) -> PathBuf {
     let full = system_root().join("System32").join(name);
     if full.exists() {
@@ -291,6 +425,7 @@ pub fn sys_exe(name: &str) -> PathBuf {
     }
 }
 
+#[cfg(windows)]
 pub fn powershell_exe() -> PathBuf {
     let full = system_root()
         .join("System32")
@@ -307,12 +442,35 @@ pub fn powershell_exe() -> PathBuf {
 /// Папка установки по умолчанию. None, если Windows не сказала LOCALAPPDATA:
 /// подставлять "." нельзя — cwd установщика это папка поставки, и установка
 /// пошла бы копировать поставку в саму себя.
+#[cfg(windows)]
 pub fn default_dir() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
         .map(|base| base.join("Programs").join(PRODUCT))
 }
+
+/// macOS: `~/Applications/Helene` — программы пользователя, без прав
+/// администратора, как `%LocalAppData%\Programs` на Windows. None без $HOME —
+/// по той же причине, что и выше: "." здесь была бы папка поставки.
+#[cfg(not(windows))]
+pub fn default_dir() -> Option<PathBuf> {
+    home_dir().map(|home| home.join("Applications").join(PRODUCT))
+}
+
+/// Домашняя папка пользователя — `$HOME`; на macOS всё своё лежит под ней.
+#[cfg(not(windows))]
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+}
+
+/// Чем объяснить, что папку по умолчанию вывести не удалось.
+#[cfg(windows)]
+const NO_DEFAULT_DIR: &str = "Windows не сказала, где %LOCALAPPDATA%: укажи папку установки явно";
+#[cfg(not(windows))]
+const NO_DEFAULT_DIR: &str = "система не сказала, где домашняя папка ($HOME): укажи папку установки явно";
 
 /// Папка поставки: рядом с установщиком лежат helene.exe, app/ и runtime/.
 pub fn payload_dir() -> Option<PathBuf> {
@@ -330,6 +488,8 @@ pub fn defaults() -> Defaults {
         payload: payload_dir().map(|p| p.to_string_lossy().into_owned()),
         version: VERSION.to_string(),
         installed: installed_info(),
+        platform: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
     }
 }
 
@@ -348,7 +508,7 @@ fn norm_path(p: &Path) -> String {
             for part in rest.iter().rev() {
                 out.push(part);
             }
-            return out.to_string_lossy().to_lowercase().trim_end_matches('\\').to_string();
+            return out.to_string_lossy().to_lowercase().trim_end_matches(SEP).to_string();
         }
         match cur.file_name() {
             Some(n) => rest.push(n.to_os_string()),
@@ -358,12 +518,16 @@ fn norm_path(p: &Path) -> String {
             break;
         }
     }
-    p.to_string_lossy().to_lowercase().trim_end_matches('\\').to_string()
+    p.to_string_lossy().to_lowercase().trim_end_matches(SEP).to_string()
 }
+
+/// Разделитель путей этой системы: `\` на Windows, `/` на macOS. Одна буква,
+/// чтобы сравнение путей ниже не знало, на какой системе оно работает.
+const SEP: char = std::path::MAIN_SEPARATOR;
 
 /// `a` — это `b` или лежит внутри `b`.
 fn inside_or_same(a: &str, b: &str) -> bool {
-    a == b || a.starts_with(&format!("{b}\\"))
+    a == b || a.starts_with(&format!("{b}{SEP}"))
 }
 
 // ---------------------------------------------------------------- PowerShell
@@ -371,6 +535,7 @@ fn inside_or_same(a: &str, b: &str) -> bool {
 // Текст, который печатают консольные программы: Windows PowerShell 5.1, sc.exe
 // и netsh отвечают в кодовой странице консоли системы, а не в UTF-8. Читать её
 // как UTF-8 — показать владельцу вместо причины строку из «?????».
+#[cfg(windows)]
 include!("../../common/console_text.rs");
 
 fn run_hidden(cmd: &mut Command) -> Result<std::process::Output, String> {
@@ -379,16 +544,26 @@ fn run_hidden(cmd: &mut Command) -> Result<std::process::Output, String> {
     cmd.output().map_err(|e| e.to_string())
 }
 
+#[cfg(windows)]
 fn powershell(script: &str) -> Result<std::process::Output, String> {
     let mut cmd = Command::new(powershell_exe());
     cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
     run_hidden(&mut cmd)
 }
 
+/// Вывод Unix-утилиты (pgrep, lsof, launchctl) строкой: они говорят UTF-8, и
+/// кодовые страницы Windows здесь ни при чём. Хвост и перевод строки снимаем —
+/// это подпись человеку или число, а не значение с пробелами.
+#[cfg(not(windows))]
+fn console_text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).trim().to_string()
+}
+
 // ---------------------------------------------------------------- копирование
 
 /// Текст ошибки файловой операции человеческими словами: «os error 32» владельцу
 /// ничего не говорит, а закрыть занявшую файл программу он может.
+#[cfg(windows)]
 fn io_note(path: &Path, e: &std::io::Error) -> String {
     match e.raw_os_error() {
         Some(32) | Some(33) => format!(
@@ -397,6 +572,17 @@ fn io_note(path: &Path, e: &std::io::Error) -> String {
         ),
         Some(5) => format!("нет доступа к {}", path.display()),
         Some(112) => format!("на диске нет места: {}", path.display()),
+        _ => format!("{}: {e}", path.display()),
+    }
+}
+
+/// То же на macOS — своими номерами errno: EACCES/EPERM, ENOSPC, ETXTBSY.
+#[cfg(not(windows))]
+fn io_note(path: &Path, e: &std::io::Error) -> String {
+    match e.raw_os_error() {
+        Some(26) => format!("файл занят работающей программой: {} — закрой {PRODUCT_UI}", path.display()),
+        Some(13) | Some(1) => format!("нет доступа к {}", path.display()),
+        Some(28) => format!("на диске нет места: {}", path.display()),
         _ => format!("{}: {e}", path.display()),
     }
 }
@@ -437,6 +623,26 @@ fn copy_tree(src: &Path, dst: &Path, skip_root: &[&str], skip_rel: &[&str], rel:
         }
         let from = entry.path();
         let to = dst.join(&name);
+        // Символические ссылки — как есть, а не содержимым. В рантайме macOS
+        // (python-build-standalone) `bin/python3 -> python3.14`, `lib/…dylib`
+        // ссылаются друг на друга; скопировать цель вместо ссылки значило бы
+        // раздуть рантайм и разорвать эти связи. Биты исполнения `fs::copy`
+        // на Unix переносит сам. На Windows ссылок в поставке нет по построению.
+        #[cfg(unix)]
+        {
+            let meta = std::fs::symlink_metadata(&from).map_err(|e| io_note(&from, &e))?;
+            if meta.file_type().is_symlink() {
+                let target = std::fs::read_link(&from).map_err(|e| io_note(&from, &e))?;
+                // Прежняя ссылка или файл на этом месте — прочь: `symlink` поверх
+                // существующего имени отказывает, а писать в цель старой ссылки нельзя.
+                if std::fs::symlink_metadata(&to).is_ok() {
+                    std::fs::remove_file(&to).map_err(|e| io_note(&to, &e))?;
+                }
+                std::os::unix::fs::symlink(&target, &to).map_err(|e| io_note(&to, &e))?;
+                count += 1;
+                continue;
+            }
+        }
         if from.is_dir() {
             count += copy_tree(&from, &to, &[], skip_rel, &here)?;
         } else {
@@ -486,9 +692,9 @@ fn static_plan(payload: &Path, dir: &Path) -> StaticPlan {
 
 /// Рантайм одинаков по паспорту сборки (`helene-build.json`): версия Python,
 /// суммы скачанного, список пакетов. Одинаковый — не копировать 200 МБ впустую.
-/// Установка без живого `runtime/python.exe` — не одинаковый ни при чём.
+/// Установка без живого питона рантайма (`PYTHON_REL`) — не одинаковый ни при чём.
 fn runtime_same(payload: &Path, dir: &Path) -> bool {
-    if !dir.join("runtime").join("python.exe").exists() {
+    if !python_exe(dir).exists() {
         return false;
     }
     let (Some(new), Some(old)) = (read_json(&payload.join("helene-build.json")), read_json(&dir.join("helene-build.json"))) else {
@@ -563,9 +769,10 @@ fn config_json(s: &Setup, prev_relay_key: Option<String>, relay_port: u16) -> se
         "sandbox": { "enabled": agent_mode == "sandbox", "network": true },
         "service": { "session0": s.wants_session0(), "firewall": s.firewall },
         // Третий ответ, тоже независимый: тело руки `computer`. Все четыре
-        // права сразу — сузить владелец может в Настройках.
-        "computer": computer_block(s.computer),
-        "python": "runtime/python.exe",
+        // права сразу — сузить владелец может в Настройках. На macOS тела нет —
+        // блок есть, выключатель всегда false (`wants_computer`).
+        "computer": computer_block(s.wants_computer()),
+        "python": PYTHON_REL,
         "app": "app/deskapp.py",
         "runner": "app/localharness/runner.py",
         "tree": "data",
@@ -678,7 +885,7 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
         // Тело руки `computer`: выключатель — визарда, права и порт — владельца
         // (права он сужает в Настройках, порт правит руками). Блок прошлой
         // установки мог родиться без них — тогда доставляем умолчания.
-        ("computer", "enabled", serde_json::Value::Bool(s.computer)),
+        ("computer", "enabled", serde_json::Value::Bool(s.wants_computer())),
     ] {
         let mut b = match out.get(block) {
             Some(serde_json::Value::Object(m)) => m.clone(),
@@ -775,6 +982,7 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
 /// Сколько процессов запущено из этой папки (кроме нас самих). None — спросить
 /// не вышло. Путь сравниваем через StartsWith, а не -like: у -like `[` и `]`
 /// подстановочные, и путь со скобками не совпадает сам с собой.
+#[cfg(windows)]
 fn procs_under(dir: &Path) -> Option<usize> {
     let script = format!(
         "$d='{}'; @(Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -and $_.ExecutablePath.StartsWith($d,'OrdinalIgnoreCase') -and $_.ProcessId -ne {} }}).Count",
@@ -791,6 +999,7 @@ fn procs_under(dir: &Path) -> Option<usize> {
 /// Остановить всё, что запущено из папки установки: окно, детей харнесса, реле.
 /// Возвращает true, когда после этого из папки не работает НИЧЕГО: раньше здесь
 /// стояли глухие 600 мс, и копирование начиналось поверх ещё живых файлов.
+#[cfg(windows)]
 pub fn stop_running(dir: &Path) -> bool {
     let script = format!(
         "$d='{}'; Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -and $_.ExecutablePath.StartsWith($d,'OrdinalIgnoreCase') -and $_.ProcessId -ne {} }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
@@ -814,6 +1023,7 @@ pub fn stop_running(dir: &Path) -> bool {
 /// Файлы, которые нельзя заменить прямо сейчас. Пустой список — путь свободен.
 /// Дешевле споткнуться здесь, чем посреди копирования: после падения на середине
 /// установка остаётся смесью двух версий, и отката у неё нет.
+#[cfg(windows)]
 fn locked_files(dir: &Path) -> Vec<String> {
     let mut busy = Vec::new();
     for name in ["helene.exe", "helene-svc.exe", "helene-relay.exe", "helene-setup.exe",
@@ -836,6 +1046,112 @@ fn locked_files(dir: &Path) -> Vec<String> {
     busy
 }
 
+// --- то же на macOS: pgrep/kill вместо CIM и Stop-Process ---------------------
+//
+// Процессы установки узнаём по КОМАНДНОЙ СТРОКЕ (`pgrep -f`): оболочка запущена
+// через `open` полным путём бандла, детей (канал, движок, реле, питон) она
+// поднимает тоже полными путями из своего корня. Свой pid исключаем сами: pgrep
+// не видит только себя, а установщик, запущенный из установленной копии
+// (снятие), лежит в той же папке и совпал бы с образцом.
+
+/// Путь как образец для `pgrep -f`: это расширенное регулярное выражение, и
+/// скобка или точка в имени папки без экранирования означали бы другое.
+#[cfg(not(windows))]
+fn regex_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        if "\\.^$|?*+()[]{}".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// pid всех процессов, запущенных из этой папки (кроме нас). None — pgrep не
+/// нашёлся или не ответил; пустой список — из папки не работает ничего.
+#[cfg(not(windows))]
+fn pids_under(dir: &Path) -> Option<Vec<u32>> {
+    let pattern = regex_escape(&format!("{}/", dir.display()));
+    let mut cmd = Command::new("pgrep");
+    cmd.arg("-f").arg("--").arg(&pattern);
+    let out = run_hidden_for(&mut cmd, std::time::Duration::from_secs(10)).ok()?;
+    // Код 1 у pgrep — «ничего не нашёл», это ответ; остальные коды — отказ.
+    match out.status.code() {
+        Some(0) | Some(1) => {}
+        _ => return None,
+    }
+    let me = std::process::id();
+    Some(
+        console_text(&out.stdout)
+            .lines()
+            .filter_map(|l| l.trim().parse::<u32>().ok())
+            .filter(|pid| *pid != me)
+            .collect(),
+    )
+}
+
+/// Послать сигнал каждому процессу списка. Через `kill(1)`, а не libc: лишняя
+/// зависимость ради одного вызова не нужна, а `kill` есть на любой macOS.
+#[cfg(not(windows))]
+fn signal_all(pids: &[u32], signal: &str) {
+    if pids.is_empty() {
+        return;
+    }
+    let mut cmd = Command::new("kill");
+    cmd.arg(signal);
+    for pid in pids {
+        cmd.arg(pid.to_string());
+    }
+    let _ = run_hidden_for(&mut cmd, std::time::Duration::from_secs(5));
+}
+
+/// Остановить всё, что запущено из папки установки. Сначала мягко (TERM):
+/// оболочка успевает погасить детей и убрать значок из строки меню; кто через
+/// секунду-другую жив — KILL, как `Stop-Process -Force`. Дальше тот же опрос до
+/// пустого списка, что и на Windows.
+#[cfg(not(windows))]
+pub fn stop_running(dir: &Path) -> bool {
+    let Some(pids) = pids_under(dir) else { return false };
+    if pids.is_empty() {
+        return true;
+    }
+    signal_all(&pids, "-TERM");
+    for i in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        match pids_under(dir) {
+            Some(left) if left.is_empty() => return true,
+            None => return false,
+            Some(left) => {
+                if i == 4 {
+                    signal_all(&left, "-KILL");
+                }
+            }
+        }
+    }
+    false
+}
+
+/// На macOS «занятых файлов» нет: работающий бинарь можно перезаписать, и
+/// система не скажет об этом. Препятствие здесь — сами живые процессы; их
+/// имена и называем, чтобы отказ звучал так же: «часть программы ещё работает».
+#[cfg(not(windows))]
+fn locked_files(dir: &Path) -> Vec<String> {
+    let Some(pids) = pids_under(dir) else { return Vec::new() };
+    let mut names: Vec<String> = Vec::new();
+    for pid in pids {
+        let mut cmd = Command::new("ps");
+        cmd.args(["-o", "comm=", "-p", &pid.to_string()]);
+        let Ok(out) = run_hidden_for(&mut cmd, std::time::Duration::from_secs(5)) else { continue };
+        let comm = console_text(&out.stdout);
+        let name = comm.rsplit('/').next().unwrap_or(&comm).to_string();
+        if !name.is_empty() && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
 // ---------------------------------------------------------------- порты
 
 /// Слушает ли кто-то 127.0.0.1:port прямо сейчас.
@@ -847,6 +1163,7 @@ fn port_busy(port: u16) -> bool {
 
 /// Кто держит порт — человеческим именем процесса. Нужно не для механики, а
 /// чтобы владелец видел причину: «5011 занят vera-relay.exe» вместо молчания.
+#[cfg(windows)]
 fn port_holder(port: u16) -> String {
     let script = format!(
         "$c = Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; \
@@ -855,6 +1172,22 @@ fn port_holder(port: u16) -> String {
     powershell(&script)
         .map(|o| console_text(&o.stdout).trim().to_string())
         .unwrap_or_default()
+}
+
+/// macOS: `lsof` по слушающему TCP-порту; чужие процессы без прав он не
+/// покажет — тогда имени нет, и владелец видит «занят другой программой» без него.
+#[cfg(not(windows))]
+fn port_holder(port: u16) -> String {
+    let mut cmd = Command::new("lsof");
+    cmd.args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-Fc"]);
+    let Ok(out) = run_hidden_for(&mut cmd, std::time::Duration::from_secs(5)) else { return String::new() };
+    // Формат -F: по строке на поле, имя команды — строка с префиксом `c`.
+    console_text(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix('c'))
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 /// Свободный порт для встроенного реле. Сначала желанный (прошлый выбор или
@@ -869,6 +1202,7 @@ fn free_relay_port(desired: u16) -> Option<u16> {
 }
 
 /// Имя агента из установленного helene.json — для снятия ярлыков с его именем.
+#[cfg(windows)]
 fn installed_agent_name(dir: &Path) -> Option<String> {
     let cfg = read_json(&dir.join("helene.json"))?;
     let name = cfg.get("agent")?.get("name")?.as_str()?.trim().to_string();
@@ -918,10 +1252,15 @@ pub fn installed_info() -> Option<Installed> {
 
 // ---------------------------------------------------------------- ярлыки
 
+// Ярлыки, запись в «Приложениях», размер и дата установки — всё это Windows:
+// на macOS программа живёт бандлом в ~/Applications, «Приложений» с записью об
+// удалении нет, и в расписке этих шагов просто нет (см. `install`).
+
 /// Путь к настоящей папке рабочего стола: на Windows 11 с резервным копированием
 /// папок OneDrive это %USERPROFILE%\OneDrive\Рабочий стол, а не %USERPROFILE%\Desktop.
 /// Ярлык создавался по известной папке, а удалялся склейкой из USERPROFILE — и
 /// переживал удаление программы.
+#[cfg(windows)]
 fn desktop_dir() -> Option<PathBuf> {
     let out = powershell("[Environment]::GetFolderPath('Desktop')").ok()?;
     let path = console_text(&out.stdout).trim().to_string();
@@ -931,6 +1270,7 @@ fn desktop_dir() -> Option<PathBuf> {
     Some(PathBuf::from(path))
 }
 
+#[cfg(windows)]
 fn shortcuts(exe: &Path, name: &str, icon: Option<&Path>) -> Result<String, String> {
     let script = std::env::temp_dir().join("helene-start-menu-shortcut.ps1");
     std::fs::write(&script, include_str!("../../shell/resources/start-menu-shortcut.ps1"))
@@ -1011,11 +1351,7 @@ fn register_uninstall(dir: &Path, size_kb: u32, icon: Option<&Path>) -> Result<(
     Ok(())
 }
 
-#[cfg(not(windows))]
-fn register_uninstall(_dir: &Path, _size_kb: u32, _icon: Option<&Path>) -> Result<(), String> {
-    Ok(())
-}
-
+#[cfg(windows)]
 fn install_date() -> String {
     powershell("(Get-Date).ToString('yyyyMMdd')")
         .ok()
@@ -1024,6 +1360,37 @@ fn install_date() -> String {
         .unwrap_or_default()
 }
 
+/// Дата установки на macOS — из системных часов, без внешней программы. Записи
+/// в «Приложениях» здесь нет, так что строка нужна только расписке и журналу.
+#[cfg(not(windows))]
+#[allow(dead_code)]
+fn install_date() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    civil_yyyymmdd(secs)
+}
+
+/// Секунды от эпохи Unix → `yyyyMMdd` по UTC (алгоритм Хиннанта). Без crate
+/// chrono: одна дата в году не стоит зависимости.
+#[cfg_attr(windows, allow(dead_code))]
+fn civil_yyyymmdd(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}{m:02}{d:02}")
+}
+
+#[cfg(windows)]
 fn dir_size_kb(dir: &Path) -> u32 {
     fn walk(p: &Path, acc: &mut u64) {
         let Ok(rd) = std::fs::read_dir(p) else { return };
@@ -1080,6 +1447,7 @@ static LOGIN: Mutex<Option<Child>> = Mutex::new(None);
 
 /// Отменить незавершённый вход: дерево процессов целиком (реле + помощник).
 /// Учётные данные НЕ трогаем: отмена бывает и между двумя попытками входа.
+#[cfg(windows)]
 pub fn relay_abort() {
     let Ok(mut guard) = LOGIN.lock() else { return };
     if let Some(mut child) = guard.take() {
@@ -1092,13 +1460,30 @@ pub fn relay_abort() {
     }
 }
 
+/// macOS: дерево процессов — это группа процессов. Вход запускается своей
+/// группой (`process_group(0)` в `relay_login`), и `kill -9 -<pid>` снимает и
+/// реле, и помощника, державшего порт 1455, — как `taskkill /T` на Windows.
+#[cfg(not(windows))]
+pub fn relay_abort() {
+    let Ok(mut guard) = LOGIN.lock() else { return };
+    if let Some(mut child) = guard.take() {
+        if child.try_wait().ok().flatten().is_none() {
+            let mut kill = Command::new("kill");
+            kill.args(["-KILL", &format!("-{}", child.id())]);
+            let _ = run_hidden(&mut kill);
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 /// Список моделей самого реле: поднять реле из поставки на временном порту, спросить
 /// /v1/models, погасить. Без захардкоженного списка — что реле отдаёт, то и выбор.
 pub fn relay_models() -> Result<Vec<String>, String> {
     let payload = payload_dir().ok_or("рядом с установщиком нет поставки")?;
-    let exe = payload.join("helene-relay.exe");
+    let exe = relay_exe(&payload);
     if !exe.exists() {
-        return Err("в этой сборке нет helene-relay.exe".into());
+        return Err(format!("в этой сборке нет {RELAY_NAME}"));
     }
     let home = relay_home();
     std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
@@ -1109,7 +1494,7 @@ pub fn relay_models() -> Result<Vec<String>, String> {
         .env("RELAY_PORT", port.to_string())
         .env("RELAY_LOCAL", "1")
         .env("RELAY_LOG_DIR", home.join("logs"));
-    let python = payload.join("runtime").join("python.exe");
+    let python = python_exe(&payload);
     if python.exists() {
         cmd.env("RELAY_PYTHON", &python);
     }
@@ -1148,9 +1533,9 @@ pub fn relay_models() -> Result<Vec<String>, String> {
 pub fn relay_login() -> Result<String, String> {
     relay_abort();
     let payload = payload_dir().ok_or("рядом с установщиком нет поставки")?;
-    let exe = payload.join("helene-relay.exe");
+    let exe = relay_exe(&payload);
     if !exe.exists() {
-        return Err("в этой сборке нет helene-relay.exe".into());
+        return Err(format!("в этой сборке нет {RELAY_NAME}"));
     }
     let home = relay_home();
     std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
@@ -1159,12 +1544,19 @@ pub fn relay_login() -> Result<String, String> {
         .current_dir(&home)
         .env("RELAY_LOCAL", "1")
         .env("RELAY_LOG_DIR", home.join("logs"));
-    let python = payload.join("runtime").join("python.exe");
+    let python = python_exe(&payload);
     if python.exists() {
         cmd.env("RELAY_PYTHON", &python);
     }
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
+    // Своя группа процессов: отмена входа (`relay_abort`) снимает её целиком —
+    // и помощника, которого реле поднимает под браузерный обратный вызов.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     let mut child = cmd.spawn().map_err(|e| format!("логин не запустился: {e}"))?;
     // Обещать браузер по факту создания процесса нельзя: реле падало на старте
     // (занятый порт 1455, нет сети), а владелец видел «сейчас откроется».
@@ -1234,11 +1626,21 @@ pub fn probe_model(base_url: &str, key: &str, framework: &str) -> (bool, String,
 /// прав больше не выглядит успехом. `name` — имя службы в SCM: не только своё,
 /// но и прежних поколений продукта (Vera, Frame), которые прошлое снятие
 /// оставило живыми под LocalSystem.
+#[cfg(windows)]
 fn service_op(op: &str, name: &str, script: Option<&Path>) -> Result<(), String> {
     let wrapper = std::env::temp_dir().join("helene-service-op.ps1");
     std::fs::write(&wrapper, SERVICE_OP_PS1).map_err(|e| io_note(&wrapper, &e))?;
     let out = powershell(&service_op_command(&wrapper, op, name, script))?;
     service_op_verdict(out.status.code())
+}
+
+/// На macOS службы нет по построению. Дойти сюда из интерфейса нельзя: опция
+/// службы там не рисуется, а `service_state` отвечает «absent», и все ветки
+/// «снять прежнюю» обходятся стороной. Строка — на случай `--install <json>`
+/// с чужими решениями.
+#[cfg(not(windows))]
+fn service_op(_op: &str, _name: &str, _script: Option<&Path>) -> Result<(), String> {
+    Err("службы Windows на этой системе нет".into())
 }
 
 /// Служба: один UAC на машинную часть. Ждём завершения скрипта, потом
@@ -1297,6 +1699,7 @@ pub struct AdminRights {
 /// deny-only), поэтому смотрим сами группы токена. Состав локальной группы
 /// спрашиваем только вторым заходом: на доменной машине запрос бывает
 /// медленным и может отказать — тогда это «не знаю», а не «нет».
+#[cfg(windows)]
 const ADMIN_PROBE_PS1: &str = r#"$id=[Security.Principal.WindowsIdentity]::GetCurrent()
 $member=$false
 try { $member = @($id.Groups | ForEach-Object { $_.Value }) -contains 'S-1-5-32-544' } catch {}
@@ -1312,6 +1715,15 @@ $elev=$false
 try { $elev=(New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) } catch {}
 "$member|$listed|$elev""#;
 
+/// macOS: повышение прав не требуется ничему в установке — ставим в
+/// ~/Applications, службы нет. Ответ «можно, но не спрашивали» — тот, при
+/// котором визард ничего не запирает и ничего не рисует.
+#[cfg(not(windows))]
+pub fn admin_rights() -> AdminRights {
+    AdminRights { can: true, certain: false, elevated: false }
+}
+
+#[cfg(windows)]
 pub fn admin_rights() -> AdminRights {
     // Windows молчит — не запрещаем ничего: заставой остаётся UAC при
     // установке, и его отказ визард уже показывает словами.
@@ -1335,8 +1747,16 @@ pub fn service_state() -> String {
     service_state_of(PRODUCT)
 }
 
+/// macOS: SCM нет, службы нет — «absent» всегда. По этому ответу все ветки
+/// про прежнюю службу в `install` и `uninstall` обходятся сами.
+#[cfg(not(windows))]
+pub fn service_state_of(_name: &str) -> String {
+    "absent".into()
+}
+
 /// С дедлайном, как в окне: повисший sc.exe не должен вешать визард
 /// (ревью 06.09, §4 п. 13).
+#[cfg(windows)]
 pub fn service_state_of(name: &str) -> String {
     let mut cmd = Command::new(sys_exe("sc.exe"));
     cmd.args(["query", name]);
@@ -1382,6 +1802,7 @@ pub struct LegacyService {
 /// («…\vera-svc.exe run --config \\?\…\vera.json» — живой пример со стола
 /// автора). Резать по первому пробелу или по « -» нельзя: и то и другое даёт
 /// несуществующий путь и ломает проверку «это наша папка или чужая».
+#[cfg(windows)]
 fn image_exe(cmdline: &str) -> String {
     let t = cmdline.trim();
     if let Some(rest) = t.strip_prefix('"') {
@@ -1394,8 +1815,16 @@ fn image_exe(cmdline: &str) -> String {
     }
 }
 
+/// macOS: прежних поколений со службой здесь не бывало — список пуст, и сцена
+/// «прежняя версия» в маршрут визарда не встаёт.
+#[cfg(not(windows))]
+pub fn legacy_services(_home: Option<&Path>) -> Vec<LegacyService> {
+    Vec::new()
+}
+
 /// Опрос SCM по известным именам. `home` — папка, которую сейчас ставят или
 /// снимают: служба, чей exe лежит в ней, помечается «своей».
+#[cfg(windows)]
 pub fn legacy_services(home: Option<&Path>) -> Vec<LegacyService> {
     let filter = KNOWN_SERVICE_NAMES
         .iter()
@@ -1413,6 +1842,7 @@ pub fn legacy_services(home: Option<&Path>) -> Vec<LegacyService> {
 /// мина: PowerShell 5.1 отдаёт ОБЪЕКТ, а не массив, когда служба нашлась одна
 /// (а именно так на машине, где живёт одна `Vera`), и парсер, ждущий массив,
 /// нашёл бы ноль служб ровно в том случае, ради которого всё и делается.
+#[cfg(windows)]
 fn parse_services(body: &str, home: Option<&Path>) -> Vec<LegacyService> {
     if body.is_empty() {
         return Vec::new();
@@ -1526,7 +1956,7 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
         "рядом с установщиком нет поставки (helene.exe, app/, runtime/) — запусти его из папки Hélène".to_string()
     })?;
     let dir = if s.dir.trim().is_empty() {
-        default_dir().ok_or("Windows не сказала, где %LOCALAPPDATA%: укажи папку установки явно")?
+        default_dir().ok_or(NO_DEFAULT_DIR)?
     } else {
         PathBuf::from(s.dir.trim())
     };
@@ -1624,7 +2054,10 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
 
     // Шагов пять; служба добавляет шестой — поставить её или, если галку сняли,
     // снять прежнюю. Снятие перед копированием шага не занимает: оно уже позади.
-    let total = if s.wants_service() || service_before != "absent" { 6 } else { 5 };
+    // На macOS шагов три: ярлыков и записи в «Приложениях» там нет — и в
+    // расписке их нет тоже, а не «пропущено».
+    let base_steps = if cfg!(windows) { 5 } else { 3 };
+    let total = if s.wants_service() || service_before != "absent" { base_steps + 1 } else { base_steps };
     let mut steps = pre_steps;
     let mut n = 0;
     let mut tick = |label: &str, progress: &mut dyn FnMut(Progress)| {
@@ -1663,8 +2096,8 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
         ok: true,
         note: Some(match plan {
             StaticPlan::Fresh => "положен из поставки".to_string(),
-            StaticPlan::Keep => "выпуск его не менял — оставлен твой (app\\static не тронута)".to_string(),
-            StaticPlan::Replace => "обновлён; прежняя версия лежит рядом — app\\static.prev".to_string(),
+            StaticPlan::Keep => format!("выпуск его не менял — оставлен твой ({STATIC_REL} не тронута)"),
+            StaticPlan::Replace => format!("обновлён; прежняя версия лежит рядом — {STATIC_REL}.prev"),
         }),
     });
     if runtime_kept {
@@ -1728,20 +2161,25 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
         }
     }
 
-    let exe = dir.join("helene.exe");
-    tick("Создаю ярлыки", &mut progress);
-    // Ярлыки и значок — продукта, не агента (слово владельца).
-    let name = PRODUCT.to_string();
-    let icon: Option<PathBuf> = None;
-    match shortcuts(&exe, &name, icon.as_deref()) {
-        Ok(note) => steps.push(Step { label: "Ярлыки".into(), ok: true, note: Some(note) }),
-        Err(err) => steps.push(Step { label: "Ярлыки".into(), ok: false, note: Some(err) }),
-    }
+    let exe = shell_exe(&dir);
+    // Ярлыки и запись в «Приложениях» — Windows. На macOS программа — бандл в
+    // ~/Applications, Finder и Launchpad видят его сами; шагов нет вовсе.
+    #[cfg(windows)]
+    {
+        tick("Создаю ярлыки", &mut progress);
+        // Ярлыки и значок — продукта, не агента (слово владельца).
+        let name = PRODUCT.to_string();
+        let icon: Option<PathBuf> = None;
+        match shortcuts(&exe, &name, icon.as_deref()) {
+            Ok(note) => steps.push(Step { label: "Ярлыки".into(), ok: true, note: Some(note) }),
+            Err(err) => steps.push(Step { label: "Ярлыки".into(), ok: false, note: Some(err) }),
+        }
 
-    tick("Регистрирую удаление в «Приложениях»", &mut progress);
-    match register_uninstall(&dir, dir_size_kb(&dir), icon.as_deref()) {
-        Ok(()) => steps.push(Step { label: "Запись об удалении".into(), ok: true, note: None }),
-        Err(err) => steps.push(Step { label: "Запись об удалении".into(), ok: false, note: Some(err) }),
+        tick("Регистрирую удаление в «Приложениях»", &mut progress);
+        match register_uninstall(&dir, dir_size_kb(&dir), icon.as_deref()) {
+            Ok(()) => steps.push(Step { label: "Запись об удалении".into(), ok: true, note: None }),
+            Err(err) => steps.push(Step { label: "Запись об удалении".into(), ok: false, note: Some(err) }),
+        }
     }
 
     let mut warning: Option<String> = None;
@@ -1803,6 +2241,7 @@ static KEEP_SETUP_EXE: AtomicBool = AtomicBool::new(false);
 /// открыто, exe занят, и `del` из-под него не срабатывал.
 /// Командную строку cmd отдаём как есть (raw_arg): std::process::Command
 /// иначе экранирует кавычки как \", чего cmd не понимает.
+#[cfg(windows)]
 pub fn uninstall_finish() {
     let dir = exe_dir();
     let mut parts = vec!["ping 127.0.0.1 -n 3 >nul".to_string()];
@@ -1832,6 +2271,44 @@ pub fn uninstall_finish() {
     let _ = cmd.spawn();
 }
 
+/// Слово в одинарных кавычках для /bin/sh: апостроф внутри — `'\''`. Пути
+/// в ~/Applications пробелы содержат («Helene Setup.app»), и склеивать команду
+/// без кавычек нельзя.
+#[cfg(not(windows))]
+fn sh_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+/// То же на macOS. Бандл установщика Unix позволяет удалить и из-под него
+/// самого, но окно ещё открыто и WebKit держит свой кэш — поэтому тот же
+/// отложенный хвост: `/bin/sh -c 'sleep; rm -rf …'`, отвязанный от нас.
+/// Кэши WebKit и Caches обоих бандлов — аналог профилей WebView2 на Windows.
+#[cfg(not(windows))]
+pub fn uninstall_finish() {
+    let dir = exe_dir();
+    let mut parts = vec!["sleep 2".to_string()];
+    if let Some(home) = home_dir() {
+        for id in [AUMID, SETUP_AUMID] {
+            for sub in ["Library/WebKit", "Library/Caches"] {
+                parts.push(format!("rm -rf {}", sh_quote(&home.join(sub).join(id))));
+            }
+        }
+    }
+    if !KEEP_SETUP_EXE.load(Ordering::Relaxed) {
+        parts.push(format!("rm -rf {}", sh_quote(&dir.join(SETUP_APP))));
+        // Только пустую: если что-то не удалилось, папка остаётся с уликами.
+        parts.push(format!("rmdir {} 2>/dev/null", sh_quote(&dir)));
+    }
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg("-c")
+        .arg(parts.join("; "))
+        .current_dir(std::env::temp_dir())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let _ = cmd.spawn();
+}
+
 /// Порт трубы установленной программы — чтобы снять правило брандмауэра тем же
 /// именем, каким его завела оболочка.
 fn installed_port(dir: &Path) -> u16 {
@@ -1854,11 +2331,16 @@ fn looks_like_payload(dir: &Path) -> bool {
 
 // ------------------------------------------------- песочница (AppContainer)
 
+// AppContainer — ограда Windows. На macOS ограда — seatbelt (профиль на
+// процесс, без следов в системе): снимать при удалении нечего, и весь блок
+// ниже остаётся за `cfg(windows)`.
+
 /// Префиксы профилей AppContainer, которые заводит этот продукт: имя считается
 /// из пути установки (`fence.container_name`), поэтому каждая новая папка и
 /// каждое переименование продукта добавляли ещё один профиль — и ни один не
 /// удалялся. На машине автора их накопилось двенадцать, включая `vera.shell.*`
 /// от версии 0.1.0: профили пережили и снятие продукта, и его переименование.
+#[cfg(windows)]
 const FENCE_PREFIXES: [&str; 3] = ["helene.shell.", "vera.shell.", "frame.shell."];
 
 /// Имена профилей продукта, живущие у этого пользователя. Реестр — единственный
@@ -1889,11 +2371,6 @@ fn fence_profiles() -> Vec<String> {
     out
 }
 
-#[cfg(not(windows))]
-fn fence_profiles() -> Vec<String> {
-    Vec::new()
-}
-
 /// Снять права песочницы и удалить её профили — ДО удаления файлов, пока рядом
 /// ещё лежат `runtime/python.exe` и `app/localharness/fence.py`.
 ///
@@ -1903,6 +2380,7 @@ fn fence_profiles() -> Vec<String> {
 /// профилей прежних поколений (`vera.shell.*`) — они уже накоплены.
 /// Папку `data` обходит сам `fence.revoke` (root и root/data), поэтому
 /// отдельного прохода для `--purge` не нужно.
+#[cfg(windows)]
 fn fence_revoke(dir: &Path) -> Option<Result<String, String>> {
     let python = dir.join("runtime").join("python.exe");
     let script = dir.join("app").join("localharness").join("fence.py");
@@ -1946,6 +2424,7 @@ fn fence_revoke(dir: &Path) -> Option<Result<String, String>> {
 }
 
 /// Один вызов `fence.py --revoke <root> [--also …]`. -> сколько профилей снято.
+#[cfg(windows)]
 fn fence_call(python: &Path, script: &Path, root: &Path, also: &[String]) -> Result<usize, String> {
     let mut cmd = Command::new(python);
     cmd.arg(script).arg("--revoke").arg(root);
@@ -2024,16 +2503,20 @@ pub fn uninstall(purge: bool) -> Result<String, String> {
     }
 
     // Песочница — ДО удаления файлов: fence.py и рантайм, которым его звать,
-    // лежат в этой же папке и через минуту их не станет.
-    let fence = fence_revoke(&dir);
-    match &fence {
-        Some(Err(e)) => problems.push(e.clone()),
-        None => problems.push(
-            "песочница: рантайма рядом нет — профили AppContainer не сняты (сними их вручную: \
-             runtime\\python.exe app\\localharness\\fence.py --revoke <папка>)"
-                .into(),
-        ),
-        Some(Ok(_)) => {}
+    // лежат в этой же папке и через минуту их не станет. Только Windows: у
+    // seatbelt на macOS профилей в системе нет, снимать нечего.
+    #[cfg(windows)]
+    {
+        let fence = fence_revoke(&dir);
+        match &fence {
+            Some(Err(e)) => problems.push(e.clone()),
+            None => problems.push(
+                "песочница: рантайма рядом нет — профили AppContainer не сняты (сними их вручную: \
+                 runtime\\python.exe app\\localharness\\fence.py --revoke <папка>)"
+                    .into(),
+            ),
+            Some(Ok(_)) => {}
+        }
     }
 
     #[cfg(windows)]
@@ -2046,38 +2529,53 @@ pub fn uninstall(purge: bool) -> Result<String, String> {
         ));
         let _ = hkcu.delete_subkey_all(format!("Software\\Classes\\AppUserModelId\\{AUMID}"));
     }
-    // Ярлыки: с именем продукта и с именем агента (после установки они его).
-    let mut names = vec![PRODUCT.to_string()];
-    if let Some(agent) = installed_agent_name(&dir) {
-        names.push(agent);
+    #[cfg(windows)]
+    {
+        // Ярлыки: с именем продукта и с именем агента (после установки они его).
+        let mut names = vec![PRODUCT.to_string()];
+        if let Some(agent) = installed_agent_name(&dir) {
+            names.push(agent);
+        }
+        let desktop = desktop_dir();
+        for name in &names {
+            if let Some(appdata) = std::env::var_os("APPDATA") {
+                let programs = PathBuf::from(&appdata).join("Microsoft\\Windows\\Start Menu\\Programs");
+                let _ = std::fs::remove_file(programs.join(format!("{name}.lnk")));
+                // Автозапуск ставит сама программа (shell: Startup\Helene.lnk) —
+                // без этого Windows при каждом входе пыталась бы запустить удалённый exe.
+                let _ = std::fs::remove_file(programs.join("Startup").join(format!("{name}.lnk")));
+            }
+            // Ярлык рабочего стола удаляем по ТОЙ ЖЕ известной папке, по которой
+            // создавали: при переносе папок в OneDrive %USERPROFILE%\Desktop — не она.
+            if let Some(d) = &desktop {
+                let _ = std::fs::remove_file(d.join(format!("{name}.lnk")));
+            }
+            if let Some(profile) = std::env::var_os("USERPROFILE") {
+                let _ = std::fs::remove_file(PathBuf::from(profile).join("Desktop").join(format!("{name}.lnk")));
+            }
+        }
+        // Правило брандмауэра заводит сама программа («Открыть порт телефону») и
+        // никогда не убирала: разрешающее входящее правило на путь внутри удалённой
+        // папки оставалось навсегда.
+        let mut fw = Command::new(sys_exe("netsh.exe"));
+        fw.args([
+            "advfirewall", "firewall", "delete", "rule",
+            &format!("name={}", firewall_rule::title(PRODUCT, port)),
+        ]);
+        let _ = run_hidden(&mut fw);
     }
-    let desktop = desktop_dir();
-    for name in &names {
-        if let Some(appdata) = std::env::var_os("APPDATA") {
-            let programs = PathBuf::from(&appdata).join("Microsoft\\Windows\\Start Menu\\Programs");
-            let _ = std::fs::remove_file(programs.join(format!("{name}.lnk")));
-            // Автозапуск ставит сама программа (shell: Startup\Helene.lnk) —
-            // без этого Windows при каждом входе пыталась бы запустить удалённый exe.
-            let _ = std::fs::remove_file(programs.join("Startup").join(format!("{name}.lnk")));
-        }
-        // Ярлык рабочего стола удаляем по ТОЙ ЖЕ известной папке, по которой
-        // создавали: при переносе папок в OneDrive %USERPROFILE%\Desktop — не она.
-        if let Some(d) = &desktop {
-            let _ = std::fs::remove_file(d.join(format!("{name}.lnk")));
-        }
-        if let Some(profile) = std::env::var_os("USERPROFILE") {
-            let _ = std::fs::remove_file(PathBuf::from(profile).join("Desktop").join(format!("{name}.lnk")));
+    // macOS: автозапуск — LaunchAgent, который заводит оболочка
+    // (`~/Library/LaunchAgents/app.helene.desk.plist`, «Запускать при входе»).
+    // Без снятия launchd при каждом входе пытался бы поднять удалённый бандл.
+    // Плюс staging install.sh — распакованный архив в кэше, он больше не нужен.
+    #[cfg(not(windows))]
+    {
+        let _ = port; // имя правила брандмауэра здесь не нужно
+        macos_remove_autostart();
+        if let Some(home) = home_dir() {
+            let _ = std::fs::remove_dir_all(home.join("Library").join("Caches").join(AUMID));
         }
     }
-    // Правило брандмауэра заводит сама программа («Открыть порт телефону») и
-    // никогда не убирала: разрешающее входящее правило на путь внутри удалённой
-    // папки оставалось навсегда.
-    let mut fw = Command::new(sys_exe("netsh.exe"));
-    fw.args([
-        "advfirewall", "firewall", "delete", "rule",
-        &format!("name={}", firewall_rule::title(PRODUCT, port)),
-    ]);
-    let _ = run_hidden(&mut fw);
 
     // Учётные данные ChatGPT во временной папке установщика — тоже наши.
     relay_cleanup();
@@ -2092,7 +2590,7 @@ pub fn uninstall(purge: bool) -> Result<String, String> {
         if name == "data" && !purge {
             continue;
         }
-        if name == "helene-setup.exe" {
+        if name == SETUP_ENTRY {
             continue;
         }
         // Служба осталась жива — её exe и скрипт снятия единственное, чем её
@@ -2154,12 +2652,68 @@ pub fn uninstall(purge: bool) -> Result<String, String> {
                  знает вовсе: сессия в `telegram/` цела, а войти по ней будет нечем, пока эти поля не введёшь \
                  заново в окне, в «Настройки → Telegram». Там же вернутся телефон-компаньон, песочница и \
                  адрес обновлений.\n\n\
-                 ## Доснять\n\nЗапусти рядом `helene-setup.exe --uninstall --purge --quiet` или просто удали эту папку.\n",
+                 ## Доснять\n\nЗапусти рядом `{SETUP_CMD} --uninstall --purge --quiet` или просто удали эту папку.\n",
                 dir.display()
             ),
         );
     }
     Ok(text)
+}
+
+/// Снять LaunchAgent автозапуска: `launchctl bootout gui/<uid>/<метка>` и сам
+/// plist. Отказы глотаем: агента могло не быть вовсе — это не препятствие.
+#[cfg(not(windows))]
+fn macos_remove_autostart() {
+    let mut who = Command::new("id");
+    who.arg("-u");
+    if let Ok(out) = run_hidden_for(&mut who, std::time::Duration::from_secs(5)) {
+        let uid = console_text(&out.stdout);
+        if !uid.is_empty() {
+            let mut cmd = Command::new("launchctl");
+            cmd.args(["bootout", &format!("gui/{uid}/{AUMID}")]);
+            let _ = run_hidden_for(&mut cmd, std::time::Duration::from_secs(15));
+        }
+    }
+    if let Some(home) = home_dir() {
+        let _ = std::fs::remove_file(
+            home.join("Library").join("LaunchAgents").join(format!("{AUMID}.plist")),
+        );
+    }
+}
+
+/// Окно с сообщением без Tauri — для безоконных путей (`--install`, `--export`).
+/// На macOS это `osascript` с `display dialog`: кавычки и обратные косые в
+/// тексте экранируются по правилам AppleScript, иначе путь с кавычкой рвал бы
+/// скрипт. Отказ osascript глотаем: сообщать о нём уже некому.
+#[cfg(not(windows))]
+pub fn message_box(text: &str) {
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        "display dialog \"{}\" with title \"{}\" buttons {{\"OK\"}} default button 1",
+        esc(text),
+        esc(PRODUCT_UI)
+    );
+    let mut cmd = Command::new("osascript");
+    cmd.args(["-e", &script]);
+    let _ = run_hidden_for(&mut cmd, std::time::Duration::from_secs(600));
+}
+
+/// Открыть установленную программу: бандл — через `open`, он же поднимает её
+/// на передний план сам, держать процесс ради этого не нужно (Windows держит
+/// установщик десять секунд — там передний план отдают только живому родителю).
+#[cfg(not(windows))]
+pub fn launch_installed(app: &Path) -> Result<(), String> {
+    if !app.exists() {
+        return Err(format!("нет {}", app.display()));
+    }
+    let mut cmd = Command::new("open");
+    cmd.arg(app);
+    let out = run_hidden_for(&mut cmd, std::time::Duration::from_secs(30))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(console_text(&out.stderr))
+    }
 }
 
 #[cfg(test)]
@@ -2310,13 +2864,16 @@ mod tests {
         std::fs::write(path, text).unwrap();
     }
 
+    /// Оболочка в поставке — как её узнаёт эта система: exe рядом или бандл.
+    const SHELL_FILE: &str = if cfg!(windows) { "helene.exe" } else { "Helene.app/Contents/MacOS/helene" };
+
     fn payload_with(root: &Path, digest: &str, build: &str) {
-        put(root, "helene.exe", "exe");
+        put(root, SHELL_FILE, "exe");
         put(root, "app/static/index.html", "<html>new</html>");
         put(root, "app/static/assets/a.js", "new js");
         put(root, &format!("app/static/{STATIC_MANIFEST}"), &format!("{{\"v\":1,\"digest\":\"{digest}\",\"files\":{{}}}}"));
         put(root, "app/deskapp.py", "py");
-        put(root, "runtime/python.exe", "py-exe");
+        put(root, PYTHON_REL, "py-exe");
         put(root, "helene-build.json", build);
     }
 
@@ -2373,10 +2930,10 @@ mod tests {
         copy_dir_skip(&payload, &dir, &SKIP_FROM_PAYLOAD, &[]).unwrap();
         assert!(runtime_same(&payload, &dir));
         // Тот же паспорт: runtime пропускается, остальное едет.
-        put(&payload, "runtime/python.exe", "py-exe-2");
+        put(&payload, PYTHON_REL, "py-exe-2");
         put(&payload, "app/deskapp.py", "py-2");
         copy_dir_skip(&payload, &dir, &SKIP_FROM_PAYLOAD, &["runtime"]).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.join("runtime/python.exe")).unwrap(), "py-exe");
+        assert_eq!(std::fs::read_to_string(python_exe(&dir)).unwrap(), "py-exe");
         assert_eq!(std::fs::read_to_string(dir.join("app/deskapp.py")).unwrap(), "py-2");
         // Другой состав пакетов — копировать.
         put(&payload, "helene-build.json", BUILD_B);
@@ -2395,6 +2952,97 @@ mod tests {
         assert_eq!(c["ports"]["body"], COMPUTER_PORT);
         assert_eq!(c["computer_scopes"], serde_json::json!(COMPUTER_SCOPES));
         assert_eq!(config_json(&setup_for("api"), None, RELAY_PORT)["port"], c["ports"]["desk"]);
+        // Система, под которую собран установщик, объявлена в контракте: по ней
+        // окно и визард прячут то, чего здесь нет. `defaults()` отдаёт её тем же словом.
+        let platforms = c["platforms"].as_array().expect("contract.json: platforms");
+        assert!(platforms.iter().any(|p| p == std::env::consts::OS), "{platforms:?} без {}", std::env::consts::OS);
+        assert_eq!(defaults().platform, std::env::consts::OS);
+    }
+
+    /// Порт на macOS: пути к оболочке, питону и реле — свои на каждой системе,
+    /// и конфиг зовёт питон тем же путём, каким его ищет установщик.
+    #[test]
+    fn platform_paths_agree_with_config() {
+        let root = Path::new("R");
+        assert_eq!(config_json(&setup_for("api"), None, RELAY_PORT)["python"], PYTHON_REL);
+        assert!(python_exe(root).ends_with(PYTHON_REL.split('/').collect::<PathBuf>()));
+        assert_eq!(relay_exe(root), root.join(RELAY_NAME));
+        assert_eq!(shell_exe(root), root.join(PAYLOAD_MARKERS[0]));
+        assert_eq!(PAYLOAD_MARKERS[0].ends_with(".exe"), cfg!(windows));
+        assert_eq!(RELAY_NAME.ends_with(".exe"), cfg!(windows));
+    }
+
+    /// Служба и тело — Windows. На macOS решение из JSON (тихое обновление везёт
+    /// прежние) в конфиг не проходит: `installed.service` и `computer.enabled`
+    /// остаются false, а не обещают то, чего нет.
+    #[test]
+    fn service_and_body_exist_only_on_windows() {
+        let mut s = setup_for("api");
+        s.service = true;
+        s.session0 = true;
+        s.computer = true;
+        assert_eq!(s.wants_service(), cfg!(windows));
+        assert_eq!(s.wants_session0(), cfg!(windows));
+        assert_eq!(s.wants_computer(), cfg!(windows));
+        let cfg = config_json(&s, None, RELAY_PORT);
+        assert_eq!(cfg["installed"]["service"], cfg!(windows));
+        assert_eq!(cfg["computer"]["enabled"], cfg!(windows));
+        assert_eq!(cfg["sandbox"]["enabled"], true, "ограда от системы не зависит");
+        let out = merge_config(Some(serde_json::json!({ "computer": { "enabled": true } })), config_json(&s, None, RELAY_PORT), &s);
+        assert_eq!(out["computer"]["enabled"], cfg!(windows));
+    }
+
+    /// Дата установки без внешней программы: границы года и високосный день.
+    #[test]
+    fn civil_date_from_epoch() {
+        assert_eq!(civil_yyyymmdd(0), "19700101");
+        assert_eq!(civil_yyyymmdd(951_782_400), "20000229");
+        assert_eq!(civil_yyyymmdd(1_758_240_000), "20250919");
+        assert_eq!(civil_yyyymmdd(1_767_225_599), "20251231");
+        assert_eq!(civil_yyyymmdd(1_767_225_600), "20260101");
+    }
+
+    /// Образец для `pgrep -f`: путь со скобками и точкой — как буквы, а не как
+    /// регулярное выражение; `/` не трогаем, он не метасимвол.
+    #[test]
+    #[cfg(not(windows))]
+    fn pgrep_pattern_is_literal() {
+        assert_eq!(regex_escape("/Users/o.b/My (stuff)/Helene/"), "/Users/o\\.b/My \\(stuff\\)/Helene/");
+        assert_eq!(sh_quote(Path::new("/Users/x/Helene Setup.app")), "'/Users/x/Helene Setup.app'");
+        assert_eq!(sh_quote(Path::new("/a'b")), "'/a'\\''b'");
+    }
+
+    /// Корень на macOS — вверх до паспорта сборки, не дальше пяти уровней.
+    #[test]
+    #[cfg(not(windows))]
+    fn root_is_found_above_the_bundle() {
+        let root = temp_dir("root");
+        put(&root, "helene-build.json", "{}");
+        let exe_dir = root.join("Helene Setup.app").join("Contents").join("MacOS");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        assert_eq!(root_above(&exe_dir).unwrap(), root);
+        let deep = root.join("a").join("b").join("c").join("d").join("e").join("f");
+        std::fs::create_dir_all(&deep).unwrap();
+        assert_eq!(root_above(&deep), None, "шесть уровней — слишком глубоко");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Символические ссылки рантайма переезжают ссылками, а не копиями цели.
+    #[test]
+    #[cfg(unix)]
+    fn copy_keeps_symlinks() {
+        let src = temp_dir("ln-src");
+        let dst = temp_dir("ln-dst");
+        put(&src, "runtime/bin/python3.14", "bin");
+        std::os::unix::fs::symlink("python3.14", src.join("runtime/bin/python3")).unwrap();
+        copy_dir_skip(&src, &dst, &[], &[]).unwrap();
+        let link = dst.join("runtime/bin/python3");
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_link(&link).unwrap(), PathBuf::from("python3.14"));
+        // Повторная копия поверх живой ссылки — не отказ.
+        copy_dir_skip(&src, &dst, &[], &[]).unwrap();
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
     }
 
     /// `model` сливается по полям: ключи всех провайдеров и модель свёрток,
@@ -2637,6 +3285,7 @@ mod tests {
     /// ImagePath со стола автора и наш собственный: exe надо выделить точно,
     /// иначе «своя это служба или прежнего поколения» решается наугад.
     #[test]
+    #[cfg(windows)]
     fn image_exe_survives_arguments_and_spaces() {
         assert_eq!(
             image_exe(r"C:\Users\yegor\AppData\Local\Programs\Vera\vera-svc.exe run --config \\?\C:\x\vera.json"),
@@ -2653,6 +3302,7 @@ mod tests {
     /// а не массив. Парсер, ждущий массив, промолчал бы именно там, где надо
     /// говорить. Плюс отделение своей службы от чужой по папке.
     #[test]
+    #[cfg(windows)]
     fn parses_single_object_and_array() {
         let one = r#"{"Name":"Vera","State":"Running","StartMode":"Auto","StartName":"LocalSystem","PathName":"C:\\Users\\yegor\\AppData\\Local\\Programs\\Vera\\vera-svc.exe run --config \\\\?\\C:\\x\\vera.json"}"#;
         let got = parse_services(one, None);
@@ -2692,6 +3342,7 @@ mod tests {
     /// встала служба. Стенд спрашивает страницы ПОИМЁННО: иначе он зеленел бы
     /// на машине собирающего и краснел у того, для кого всё это чинилось.
     #[test]
+    #[cfg(windows)]
     fn console_text_reads_the_page_the_system_speaks() {
         // cp866, русская Windows: «рядом нет».
         let ru = [0xe0, 0xef, 0xa4, 0xae, 0xac, 0x20, 0xad, 0xa5, 0xe2];
@@ -2711,10 +3362,12 @@ mod tests {
 
     #[test]
     fn inside_or_same_catches_nesting() {
-        assert!(inside_or_same(r"c:\a\b", r"c:\a"));
-        assert!(inside_or_same(r"c:\a", r"c:\a"));
-        assert!(!inside_or_same(r"c:\ab", r"c:\a"));
-        assert!(!inside_or_same(r"c:\a", r"c:\a\b"));
+        // Разделитель — этой системы: `\` на Windows, `/` на macOS.
+        let p = |s: &str| s.replace('/', &SEP.to_string());
+        assert!(inside_or_same(&p("c:/a/b"), &p("c:/a")));
+        assert!(inside_or_same(&p("c:/a"), &p("c:/a")));
+        assert!(!inside_or_same(&p("c:/ab"), &p("c:/a")));
+        assert!(!inside_or_same(&p("c:/a"), &p("c:/a/b")));
     }
 
     #[test]

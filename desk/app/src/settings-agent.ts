@@ -57,7 +57,12 @@ function renderModels(box: HTMLElement, models: string[], current: string, pick:
 }
 
 /** Карточки местного агента и его часть записи в конфиг. */
-export async function agentEdition({ draft, loaded }: EditionContext): Promise<Edition> {
+export async function agentEdition({ draft, loaded, platform }: EditionContext): Promise<Edition> {
+  // Агент живёт на macOS: службы Windows и тела тула `computer` там нет по
+  // построению. Карточки про них не рисуются — не «недоступно», а нет
+  // (решение владельца). Двойная страховка: движок на не-Windows и сам не
+  // присылает ни опции службы, ни опции тела.
+  const mac = platform === "macos";
   // Режим спрашиваем у трубы, а не разбираем конфиг сами: правила режима живут
   // в одном месте (localharness/modes.py), и второй разбор здесь разошёлся бы с
   // первым. Отказ трубы — не повод не открыть настройки: карточка скажет о нём
@@ -523,7 +528,7 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
     // всё, что доступно учётке (слово владельца 06.09), и карточке здесь нечего
     // показывать; список в конфиге живёт и оживает вместе с песочницей.
     mounts.el.hidden = !sandbox;
-  });
+  }, mac);
   cards.push(inGroup(mode.el, GROUP.rights));
 
   // --- песочница: сеть контейнера остаётся выбором владельца, ограду ставит режим
@@ -577,8 +582,10 @@ export async function agentEdition({ draft, loaded }: EditionContext): Promise<E
   // ни в одном режиме. Тексты и четыре права — из трубы (`computer_option`),
   // живое состояние тела — из снимка харнесса (`computer_live`); окно
   // пишет ровно два ключа блока и сливает остальное.
+  // На macOS тела нет — карточки нет; блок `computer` в файле при этом
+  // сохраняется как лежал (`collect` пишет его теми же значениями).
   const computer = computerCard(modeLive, storedComputer(draft.computer));
-  cards.push(inGroup(computer.el, GROUP.rights));
+  if (!mac) cards.push(inGroup(computer.el, GROUP.rights));
 
   // --- голос: единственная часть продукта, которой не хватает гигабайта
   //

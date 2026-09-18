@@ -9,6 +9,8 @@
   "computer_scopes": ["computer.read", "computer.files", "computer.process", "computer.apps"],
   "protocol": "frame.desk.v1",
   "config_name": "helene.json",
+  "platforms": ["windows", "macos", "linux"],
+  "platforms_": "Системы, под которые собирается продукт: это же слово отдают `app_info` оболочки и `defaults` установщика полем `platform` (std::env::consts::OS), по нему окно и визард прячут то, чего на системе нет (служба, тело, брандмауэр). Порт 0.7.1 на macOS — 19.09.",
   "agents": {
     "_": "Несколько агентов в одной установке (11.09). Корневой helene.json — агент `main`; каждая папка agents/<id>/ со своим helene.json — ещё один. Порт по умолчанию: ports.desk + место в списке. Читают: localharness/agents.py, common/agents.rs, окно.",
     "dir": "agents",

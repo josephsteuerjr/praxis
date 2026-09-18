@@ -118,7 +118,9 @@ assert.match(chrome, /setProductName\(opts\.productName\);/,
 
 assert.match(frame, /card\("Имена", names, built\.namesHint\)/,
   "подпись под именами снова выбирается в каркасе, а у изданий она разная");
-assert.match(frame, /phoneCard\(draft, !!c\.phone\?\.enabled, built\.phoneBase, built\.qrSvg\)/,
+// Пятый аргумент — система хоста (macOS без правила брандмауэра): это разница
+// СИСТЕМЫ, а не изданий, и каркас берёт её у оболочки, не у издания.
+assert.match(frame, /phoneCard\(draft, !!c\.phone\?\.enabled, built\.phoneBase, built\.qrSvg(, mac)?\)/,
   "адрес для телефона снова решает каркас, а не издание");
 assert.match(frame, /const modeNote = built\.note\(\);/,
   "хвост расписки снова берётся из карточки режима, которой у Пульта нет");

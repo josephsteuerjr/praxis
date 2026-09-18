@@ -156,13 +156,22 @@ export function stamp(now = new Date()): string {
 /**
  * Заведомо негодный ввод. "" — путь можно записать (годен ли он на самом деле,
  * решает харнесс: системная папка, корень диска, папка самой Hélène).
+ *
+ * `platform` — система агента (`windows` | `macos`; пусто = Windows, как было):
+ * на macOS полный путь начинается с `/` или `~`, а буквы диска и `%…%` там не
+ * значат ничего — примеры в подсказке тоже её.
  */
-export function pathProblem(raw: string): string {
+export function pathProblem(raw: string, platform = ""): string {
   const text = String(raw || "").trim().replace(/^"+|"+$/g, "");
-  if (!text) return "Впиши путь к папке — например C:\\Users\\Имя\\Документы.";
-  const looksAbsolute = /^[a-zA-Z]:[\\/]/.test(text) || /^\\\\/.test(text) || /^%[^%]+%/.test(text) || text.startsWith("~");
+  const mac = platform === "macos";
+  if (!text) return mac ? "Впиши путь к папке — например /Users/имя/Documents." : "Впиши путь к папке — например C:\\Users\\Имя\\Документы.";
+  const looksAbsolute = mac
+    ? text.startsWith("/") || text.startsWith("~")
+    : /^[a-zA-Z]:[\\/]/.test(text) || /^\\\\/.test(text) || /^%[^%]+%/.test(text) || text.startsWith("~");
   if (!looksAbsolute) {
-    return "Нужен полный путь: с буквой диска (C:\\Users\\Имя\\Документы), сетевой (\\\\сервер\\папка) или через %USERPROFILE%.";
+    return mac
+      ? "Нужен полный путь: от корня (/Users/имя/Documents) или от домашней папки (~/Documents)."
+      : "Нужен полный путь: с буквой диска (C:\\Users\\Имя\\Документы), сетевой (\\\\сервер\\папка) или через %USERPROFILE%.";
   }
   return "";
 }

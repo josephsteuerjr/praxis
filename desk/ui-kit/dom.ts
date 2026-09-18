@@ -240,11 +240,45 @@ export function bindFail(root: ParentNode, retry?: () => void) {
     b.addEventListener("click", () => {
       const pre = b.parentElement?.querySelector("pre");
       const text = pre?.textContent || "";
-      navigator.clipboard?.writeText(text).then(
-        () => toast("Скопировано"),
-        () => toast("Скопировать не вышло — выдели текст мышью"),
-      );
+      void copyText(text).then((ok) => toast(ok ? "Скопировано" : "Скопировать не вышло — выдели текст мышью"));
     });
+  }
+}
+
+/**
+ * Скопировать текст в буфер — и там, где `navigator.clipboard` нет.
+ *
+ * ⚠ `navigator.clipboard` живёт только в secure context. На Windows страница
+ * окна и установщика открыта с `http://helene.localhost`, и WebView2 считает
+ * его своим; на macOS та же страница живёт на `helene://localhost` — кастомная
+ * схема Tauri, которую wry 0.55 secure не объявляет, и `navigator.clipboard`
+ * там undefined. Голый вызов на Mac — TypeError по клику, молча. Поэтому
+ * сначала пробуем clipboard, а без него — выделение невидимого поля и
+ * `execCommand("copy")`: устаревший путь, но работает в любом контексте.
+ * -> удалось ли скопировать.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // clipboard есть, но отказал (нет фокуса, нет разрешения) — пробуем запасной путь
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+    document.body.append(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
   }
 }
 

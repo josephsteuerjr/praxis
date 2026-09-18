@@ -24,10 +24,10 @@
 // Куда уезжает выбор: ограда — ключом `agent_mode` (НЕ `mode`: тот занят под
 // местожительство харнесса, local|remote), служба — полем `service` установки,
 // галочка — в `service.session0`, туда, где её читает служба.
-import { COMPUTER_OPTION, MODE_CARDS, SERVICE_OPTION, SESSION0_WARNING, type ModeCard } from "virtual:helene-modes";
+import { COMPUTER_OPTION, MODE_CARDS, MODE_CARDS_MACOS, SERVICE_OPTION, SESSION0_WARNING, type ModeCard } from "virtual:helene-modes";
 import { FormScene } from "./base";
 import { el, toggle } from "./form";
-import { adminRights, setup, type AdminRights, type AgentMode } from "../setup";
+import { adminRights, isMac, setup, type AdminRights, type AgentMode } from "../setup";
 
 /** Что произойдёт при установке с этой оградой — про сам установщик, а не про
  *  ограду: её описание приезжает из modes.py. */
@@ -35,6 +35,19 @@ const INSTALL_NOTE: Record<string, string> = {
   sandbox: "Прав администратора не нужно: программа ставится в твою папку. Папки, которые агент увидит снаружи, подключаются потом — в настройках.",
   interactive: "Прав администратора не нужно для самой ограды. Агент попросит их отдельно, окном Windows, когда они понадобятся конкретному действию.",
 };
+
+/** То же на macOS: «окна Windows» там нет, и права он ни у кого не просит —
+ *  работает с правами владельца. Песочница словами не отличается. */
+const INSTALL_NOTE_MACOS: Record<string, string> = {
+  interactive: "Прав администратора не нужно: агент работает с твоими правами — не больше и не меньше.",
+};
+
+/** Лид сцены: на Windows вопроса три, на macOS — один (службы и тела там нет,
+ *  и опций под ними не рисуется). */
+const LEAD =
+  "Три вопроса, и они не связаны: насколько далеко агент дотягивается, ставить ли службу Windows " +
+  "и давать ли ему окна и мышь. Поменять можно потом, в настройках.";
+const LEAD_MACOS = "Один вопрос: насколько далеко агент дотягивается. Поменять можно потом, в настройках.";
 
 /** Что произойдёт при установке со службой. Только про установку: про саму
  *  службу уже сказано выше словами харнесса, и повторять их здесь незачем. */
@@ -77,6 +90,11 @@ const COMPUTER_OFF = "Пока выключено: тул `computer` есть, �
 
 export class ModeScene extends FormScene {
   private cards = new Map<AgentMode, HTMLElement>();
+  /** Описание и примечание каждой ограды — чтобы на Mac подменить слова, не пересобирая карточку. */
+  private cardTexts = new Map<AgentMode, HTMLElement>();
+  private cardNotes = new Map<AgentMode, HTMLElement>();
+  private lead: HTMLElement;
+  private options: HTMLElement;
   private serviceSwitch!: HTMLButtonElement;
   private serviceWhy!: HTMLElement;
   private extra!: HTMLElement;
@@ -90,12 +108,8 @@ export class ModeScene extends FormScene {
     super(root);
     const head = el("h2", "form-head");
     head.append(el("span", "line", "Что агенту можно?"));
-    const lead = el(
-      "p",
-      "form-lead",
-      "Три вопроса, и они не связаны: насколько далеко агент дотягивается, ставить ли службу Windows " +
-        "и давать ли ему окна и мышь. Поменять можно потом, в настройках.",
-    );
+    const lead = el("p", "form-lead", LEAD);
+    this.lead = lead;
 
     const row = el("div", "modes");
     row.setAttribute("role", "radiogroup");
@@ -114,9 +128,11 @@ export class ModeScene extends FormScene {
     );
 
     // Две опции — в один ряд: столбиком они не умещаются в кадр 1080. Внутри
-    // каждой карточки колонки складываются.
+    // каждой карточки колонки складываются. На macOS ряда нет вовсе: ни
+    // службы, ни тела там не бывает (`syncPlatform`).
     const options = el("div", "options-row");
     options.append(this.serviceBox(), this.computerBox());
+    this.options = options;
     this.mount(head, lead, row, options, notes);
     // Вторая галочка опции (`service.firewall`) на экран не выведена, но её
     // умолчание берём отсюда же, а не заводим второй правдой в setup.ts.
@@ -143,9 +159,15 @@ export class ModeScene extends FormScene {
     box.setAttribute("data-control", "");
     box.dataset.value = name;
     box.tabIndex = -1;
-    box.append(el("span", "mode-title", item.title), el("p", "mode-text", item.text));
+    const text = el("p", "mode-text", item.text);
+    box.append(el("span", "mode-title", item.title), text);
+    this.cardTexts.set(name, text);
     const note = INSTALL_NOTE[name];
-    if (note) box.append(el("p", "mode-note", note));
+    if (note) {
+      const noteEl = el("p", "mode-note", note);
+      box.append(noteEl);
+      this.cardNotes.set(name, noteEl);
+    }
 
     box.addEventListener("click", () => this.select(name));
     box.addEventListener("keydown", (e) => {
@@ -284,7 +306,32 @@ export class ModeScene extends FormScene {
     }
   }
 
+  /** Что рисовать на этой системе. Зовётся из `beforeEnter`, а не из
+   *  конструктора: сцены строятся до ответа `defaults`, где живёт `platform`.
+   *  На macOS ряд опций (служба, тело) не показывается вовсе, а решения по
+   *  ним выключены — в JSON установки не должно уехать то, чего нет. */
+  private syncPlatform() {
+    const mac = isMac();
+    this.lead.textContent = mac ? LEAD_MACOS : LEAD;
+    this.options.hidden = mac;
+    if (mac) {
+      setup.service = false;
+      setup.session0 = false;
+      setup.computer = false;
+    }
+    for (const [name, note] of this.cardNotes) {
+      note.textContent = (mac && INSTALL_NOTE_MACOS[name]) || INSTALL_NOTE[name] || "";
+    }
+    // Слова оград для Mac — из modes.py (`TEXTS_MACOS`), если движок их завёл.
+    const cards = mac && MODE_CARDS_MACOS ? MODE_CARDS_MACOS : MODE_CARDS;
+    for (const card of cards) {
+      const text = this.cardTexts.get(card.name as AgentMode);
+      if (text) text.textContent = card.text;
+    }
+  }
+
   protected beforeEnter() {
+    this.syncPlatform();
     this.select(setup.agent_mode);
     this.syncService();
     this.syncComputer();

@@ -49,6 +49,10 @@ declare module "virtual:helene-modes" {
     default: boolean;
   }
   export const MODE_CARDS: ModeCard[];
+  /** Те же ограды словами для macOS — из `TEXTS_MACOS` в modes.py, если движок
+   *  их завёл (там нет ни службы, ни тела, ни «окна Windows»). null — в
+   *  modes.py такого словаря нет, и на Mac показываются общие тексты. */
+  export const MODE_CARDS_MACOS: ModeCard[] | null;
   export const SERVICE_OPTION: ServiceOption;
   export const SESSION0_WARNING: string;
   export const COMPUTER_OPTION: ComputerOption;

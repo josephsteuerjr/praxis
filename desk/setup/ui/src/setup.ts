@@ -73,6 +73,11 @@ export interface Defaults {
   payload: string | null; // папка поставки рядом с установщиком, если она есть
   version: string;
   installed: Installed | null; // что уже стоит на машине: это обновление, а не первая установка
+  /** `windows` | `macos` | `linux` (std::env::consts::OS оболочки). По этому
+   *  слову визард прячет то, чего на системе нет: службу, тело, брандмауэр.
+   *  Старая оболочка поля не шлёт — тогда пусто, и не прячется ничего. */
+  platform?: string;
+  arch?: string;
 }
 
 export interface Receipt {
@@ -125,8 +130,17 @@ export const setup: Setup = {
 
 /** Что уже установлено на машине: заполняется на старте ответом `defaults`.
  *  Установщик не читал существующую установку вовсе, и обновление выглядело
- *  как первое учреждение продукта. */
-export const machine: { installed: Installed | null } = { installed: null };
+ *  как первое учреждение продукта. `platform` — оттуда же (см. `Defaults`). */
+export const machine: { installed: Installed | null; platform: string } = { installed: null, platform: "" };
+
+/** Визард открыт на macOS. Службы Windows, тела тула `computer` и правила
+ *  брандмауэра там нет по построению — их опции, строки сводки и слова про
+ *  UAC не рисуются вовсе (решение владельца: не писать «на macOS этого нет»,
+ *  а просто не показывать). Сцены строятся до ответа `defaults`, поэтому
+ *  спрашивают это в `beforeEnter`, а не в конструкторе. */
+export function isMac(): boolean {
+  return machine.platform === "macos";
+}
 
 /** Каноническая конституция с подставленными именами (тот же текст, что читает boot.py).
  *  Замена — функцией, а не строкой: в строке замены `$&`, `$\``, `$'` и `$$` —
@@ -146,7 +160,11 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 
 export async function loadDefaults(): Promise<Defaults> {
   if (!inTauri) {
-    return { dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Hélène", payload: null, version: "превью", installed: null };
+    // Превью: `?platform=macos` показывает сцены глазами Mac — без службы и тела.
+    if (new URLSearchParams(location.search).get("platform") === "macos") {
+      return { dir: "/Users/…/Applications/Helene", payload: null, version: "превью", installed: null, platform: "macos", arch: "aarch64" };
+    }
+    return { dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Hélène", payload: null, version: "превью", installed: null, platform: "windows" };
   }
   return invoke<Defaults>("defaults");
 }
@@ -154,20 +172,23 @@ export async function loadDefaults(): Promise<Defaults> {
 /** Установка: оболочка копирует поставку, пишет конфиг и конституцию, ставит ярлыки. */
 export async function runInstall(onProgress: (p: Progress) => void): Promise<Receipt> {
   if (!inTauri) {
-    const labels = [
-      "Копирую файлы программы",
-      "Записываю настройки и конституцию",
-      "Создаю ярлыки",
-      "Регистрирую удаление",
-      "Готово",
-    ];
+    // На Mac ярлыков и записи в «Приложениях» нет — как и шагов про них (install.rs).
+    const labels = isMac()
+      ? ["Копирую файлы программы", "Записываю настройки и конституцию", "Готово"]
+      : [
+        "Копирую файлы программы",
+        "Записываю настройки и конституцию",
+        "Создаю ярлыки",
+        "Регистрирую удаление",
+        "Готово",
+      ];
     for (const [i, label] of labels.entries()) {
       onProgress({ step: i + 1, total: labels.length, label });
       await new Promise((r) => setTimeout(r, 650));
     }
     return {
       dir: setup.dir,
-      exe: setup.dir + "\\helene.exe",
+      exe: isMac() ? setup.dir + "/Helene.app" : setup.dir + "\\helene.exe",
       service: setup.service ? "running" : "skipped",
       steps: labels.map((label) => ({ label, ok: true })),
     };

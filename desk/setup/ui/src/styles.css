@@ -842,6 +842,13 @@ button:focus-visible {
   align-items: start;
 }
 
+/* Ряд опций на macOS не рисуется вовсе (службы и тела там нет). `display: grid`
+   выше перебивает атрибут hidden — как и у остальных блоков этого файла, правило
+   нужно явное, иначе спрятанное осталось бы на экране. */
+.options-row[hidden] {
+  display: none;
+}
+
 .options-row .service-card {
   grid-template-columns: minmax(0, 1fr);
   gap: 10px;

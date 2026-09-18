@@ -134,6 +134,14 @@ function modesFromPython(): Plugin {
         // Админ нужен опции службы — она ниже и отдельно.
         sandbox: name === "sandbox",
       }));
+      // Те же ограды словами для macOS: словарь `TEXTS_MACOS` в modes.py, если
+      // движок его завёл (общие тексты поминают «окно Windows» и опцию
+      // «Управление компьютером», которых на Mac нет). Словаря нет — null, и
+      // сцена показывает общие тексты; есть, но не разбирается — сборка падает,
+      // как и на общих: молча подставить своё хуже, чем не собраться.
+      const cardsMac = /^TEXTS_MACOS\s*(?::[^=\n]*)?=/m.test(py)
+        ? order.map((name) => ({ ...cards.find((c) => c.name === name)!, text: dictValues(py, "TEXTS_MACOS", order)[name] }))
+        : null;
 
       // Опция службы: зеркало modes.service_option(). Ключи галочек — те же,
       // что читают служба (`service.session0`) и харнесс (`service.firewall`).
@@ -169,6 +177,7 @@ function modesFromPython(): Plugin {
       return (
         "// собрано из localharness/modes.py плагином helene-modes-from-python\n" +
         `export const MODE_CARDS = ${JSON.stringify(cards, null, 2)};\n` +
+        `export const MODE_CARDS_MACOS = ${JSON.stringify(cardsMac, null, 2)};\n` +
         `export const SERVICE_OPTION = ${JSON.stringify(option, null, 2)};\n` +
         `export const SESSION0_WARNING = ${JSON.stringify(session0Warning)};\n` +
         `export const COMPUTER_OPTION = ${JSON.stringify(computer, null, 2)};\n`
