@@ -41,11 +41,16 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ inputs.tag || 'v0.7.1' }}
-      BUILD: ${{ runner.temp }}/build
-      LOGS: ${{ runner.temp }}/logs
       HOME_DIR: /Users/runner/Applications/Helene
     steps:
       - uses: actions/checkout@v4
+
+      # Контекст `runner` в env на уровне job недоступен (GitHub отвергает файл
+      # ещё до запуска), поэтому временные пути объявляются первым шагом.
+      - name: Пути сборки
+        run: |
+          echo "BUILD=$RUNNER_TEMP/build" >> "$GITHUB_ENV"
+          echo "LOGS=$RUNNER_TEMP/logs" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -142,7 +147,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: Helene-${{ inputs.tag }}-macos-arm64
+          name: Helene-${{ env.TAG }}-macos-arm64
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/build/Helene-*-macos-arm64.zip
