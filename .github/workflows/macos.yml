@@ -1,0 +1,159 @@
+# Сборка Hélène для macOS (Apple Silicon) — по кнопке, не по push.
+#
+#   gh workflow run macos.yml -f tag=v0.7.1 -f upload=true --ref port/macos
+#
+# Что происходит: раннер macos-15 (arm64) собирает архив Helene-<v>-macos-arm64.zip
+# скриптом desk/installer/build_mac.py (дерево агента — из Windows-архива того же
+# выпуска; рантайм, git, фронты, Rust, реле, бандлы, ad-hoc подпись, паспорт,
+# секрет-гард), гоняет стенды Rust и живые проверки ограды рантаймом сборки,
+# ставит программу тихо в ~/Applications/Helene, открывает её, снимает экран и
+# дёргает канал. Архив, сумма, install.sh, паспорт, снимок и журналы — в
+# артефактах прогона; с upload=true архив, сумма и install.sh кладутся в выпуск.
+name: macOS (Apple Silicon)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Выпуск: чьё дерево агента берём и куда выкладываем"
+        type: string
+        default: v0.7.1
+        required: true
+      upload:
+        description: "Выложить архив, .sha256 и install.sh в этот выпуск (--clobber)"
+        type: boolean
+        default: false
+
+# contents: write нужен только шагу выкладки; чтение выпуска идёт и без него.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Сборка, стенды, дымовой запуск
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      BUILD: ${{ runner.temp }}/build
+      LOGS: ${{ runner.temp }}/logs
+      HOME_DIR: /Users/runner/Applications/Helene
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # cache-on-failure: красный прогон тоже сохраняет кэш cargo — иначе каждый
+      # следующий круг после падения начинал бы компиляцию с нуля.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            desk/shell
+            desk/setup
+          cache-on-failure: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            desk/app/package-lock.json
+            desk/mobile/package-lock.json
+            desk/setup/ui/package-lock.json
+
+      - name: Сборка (build_mac.py)
+        run: python3 desk/installer/build_mac.py --from-release "$TAG" --out "$BUILD"
+
+      # Стенды питона и окна сборка уже прогнала рантаймом, который собрала
+      # (build_mac.run_stands). Здесь — то, чего она не зовёт: Rust обоих
+      # крейтов (`run_all.py --rust` знает и про svc, а его на Mac нет).
+      - name: Стенды Rust (shell, setup)
+        run: |
+          (cd desk/shell && cargo test --features custom-protocol)
+          (cd desk/setup && cargo test --features custom-protocol)
+
+      - name: Ограда seatbelt — живые проверки рантаймом сборки
+        run: |
+          cd desk
+          "$BUILD/Helene/runtime/bin/python3" tests/t_fence_macos.py
+
+      # Тихая установка из собранной папки — тем же мастером и тем же JSON, что
+      # у человека. Провайдер «локальная модель»: ключа у неё нет по построению,
+      # а адрес никуда не ведёт — окно и канал должны подняться и без модели.
+      - name: Тихая установка в ~/Applications/Helene
+        run: |
+          cat > "$RUNNER_TEMP/decisions.json" <<EOF
+          {
+            "agent": "Проба",
+            "owner": "GitHub Actions",
+            "constitution": "Проверочный запуск сборки на раннере. Настоящей конституции здесь нет.",
+            "accepted": true,
+            "provider": "local",
+            "api": {"base_url": "", "model": "", "key": ""},
+            "local": {"base_url": "http://127.0.0.1:11434/v1", "model": "smoke"},
+            "telegram": {"bot_token": "", "owner_id": ""},
+            "agent_mode": "sandbox",
+            "service": false,
+            "computer": false,
+            "dir": "$HOME_DIR"
+          }
+          EOF
+          "$BUILD/Helene/Helene Setup.app/Contents/MacOS/helene-setup" --install "$RUNNER_TEMP/decisions.json" --quiet
+          test -f "$HOME_DIR/helene.json" || { echo "после установки нет $HOME_DIR/helene.json"; exit 1; }
+          test -f "$HOME_DIR/helene-build.json" || { echo "после установки нет паспорта в корне"; exit 1; }
+
+      - name: Дымовой запуск — окно, снимок экрана, канал
+        run: |
+          open "$HOME_DIR/Helene.app"
+          sleep 20
+          screencapture -x "$RUNNER_TEMP/window.png" || echo "снимок экрана не снялся"
+          PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("port", 8094))' "$HOME_DIR/helene.json")"
+          TOKEN_FILE="$HOME_DIR/data/memory/.state/desk-token"
+          test -f "$TOKEN_FILE" || { echo "оболочка не завела секрет канала: $TOKEN_FILE"; ls -la "$HOME_DIR/data" || true; exit 1; }
+          TOKEN="$(cat "$TOKEN_FILE")"
+          echo "канал на порту $PORT"
+          curl -fsS --max-time 10 "http://127.0.0.1:$PORT/api/health?key=$TOKEN"
+          echo
+          curl -fsS --max-time 10 "http://127.0.0.1:$PORT/api/state?key=$TOKEN" | head -c 2000
+          echo
+
+      - name: Журналы
+        if: always()
+        run: |
+          mkdir -p "$LOGS"
+          # install.log мастер кладёт в корень поставки (папку с helene-build.json).
+          for f in "$HOME_DIR/helene.log" "$HOME_DIR/data/deskapp.log" "$HOME_DIR/data/runner.log" \
+                   "$BUILD/Helene/install.log"; do
+            if [ -f "$f" ]; then
+              echo "=== $f (хвост)"; tail -n 80 "$f"
+              cp "$f" "$LOGS/$(basename "$f")"
+            else
+              echo "=== $f: нет"
+            fi
+          done
+          pkill -f "$HOME_DIR/" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Helene-${{ inputs.tag }}-macos-arm64
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/build/Helene-*-macos-arm64.zip
+            ${{ runner.temp }}/build/Helene-*-macos-arm64.zip.sha256
+            ${{ runner.temp }}/build/install.sh
+            ${{ runner.temp }}/build/Helene/helene-build.json
+            ${{ runner.temp }}/window.png
+            ${{ runner.temp }}/logs/
+
+      # В тот же выпуск, Windows-архив не трогается. --clobber: повторный прогон
+      # заменяет прежнюю Mac-сборку, а не падает на «asset already exists».
+      - name: Выложить в выпуск
+        if: ${{ inputs.upload }}
+        run: |
+          gh release upload "$TAG" \
+            "$BUILD"/Helene-*-macos-arm64.zip \
+            "$BUILD"/Helene-*-macos-arm64.zip.sha256 \
+            "$BUILD"/install.sh \
+            --clobber --repo josephsteuerjr/praxis

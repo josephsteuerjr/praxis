@@ -1,0 +1,1250 @@
+# -*- coding: utf-8 -*-
+"""Сборка Hélène для macOS (Apple Silicon).
+
+Идёт НА macOS — раннер GitHub `macos-15` (`.github/workflows/macos.yml`). Чистые
+части — разбор тега, имена активов, Info.plist, шаблон конфига, паспорт, отбор
+записей архива, распознавание Mach-O, минимум macOS по тегам колёс — импортируются
+и на Windows; их держит стенд `tests/t_build_mac.py`.
+
+Раскладка архива `Helene-<версия>-macos-arm64.zip` (в корне — папка Helene/, как у
+Windows-архива `Helene-<версия>.zip`):
+
+  Helene/
+    Helene.app/               оболочка (крейт shell → бинарь `helene`), app.helene.desk
+    Helene Setup.app/         мастер (крейт setup → бинарь `helene-setup`), app.helene.setup
+    helene-relay              реле подписки ChatGPT (praxis-relay @ 64fc946 = 0.8.1)
+    runtime/                  CPython 3.14.7 (python-build-standalone) + все пакеты, голос включая
+    runtime/git/              git 2.55.0, собранный из исходника с RUNTIME_PREFIX (как MinGit на Windows)
+    app/                      пакет desk вида macos (deskpkg.build) — собирается ЗАНОВО из этой ветки
+    tree/                     код агента — байт в байт из Windows-архива выпуска
+    data/                     пусто; рождается при первом запуске
+    server/ licenses/         как у Windows
+    helene.json               шаблон конфига поставки (python → runtime/bin/python3)
+    helene-build.json         паспорт сборки; по нему оболочка и мастер находят корень установки
+    install.sh                установка, обновление и снятие — тот же файл, что curl-однострочник
+    ПЕРВЫЙ-ЗАПУСК.md ОБНОВЛЕНИЕ.md КАК-УСТРОЕН-HELENE.md ЛИЦЕНЗИЯ.md
+    ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md NOTICE requirements.txt
+
+Чего в этой сборке нет по решению владельца: тела (тул `computer`), службы и
+брокера прав, Intel-маков, подписи Developer ID и нотаризации, dmg. Об этом
+говорят документы поставки — не экран.
+
+Запуск (на macOS):
+    python3 installer/build_mac.py [--out DIR] [--from-release TAG | --tree PATH]
+                                   [--skip-runtime] [--skip-rust] [--skip-tests] [--allow-partial]
+
+Правило то же, что у `build_dist.py`: сборка либо выпускает ПОЛНЫЙ архив, либо
+падает с понятной строкой. Windows-сборка не трогается: общее импортируется из
+`build_dist`, а не переписывается.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import hashlib
+import json
+import os
+import plistlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+
+# Тот же поток, что у Windows-сборки: русские строки под перенаправлением
+# вывода иначе роняют сборку на первом print.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
+
+DESK = Path(__file__).resolve().parent.parent
+ROOT = DESK.parent
+sys.path.insert(0, str(DESK))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import deskpkg  # noqa: E402 — состав пакета desk объявлен в репозитории
+import relay_src  # noqa: E402 — отпечаток исходника реле, тот же приём, что у Windows
+import build_dist as bd  # noqa: E402 — общие куски: отбор дерева, сеть, гард, лицензии, шаблоны
+
+PLATFORM = "macos"
+ARCH = "arm64"
+PRODUCT = "Hélène"
+FOLDER = "Helene"                       # папка в архиве и корень установки — латиницей, как у Windows
+INSTALL_HOME = "~/Applications/Helene"  # куда ставит мастер; тот же смысл, что Programs\\Helene
+
+# --- что скачивается ------------------------------------------------------------
+#
+# Python — python-build-standalone (astral-sh): самодостаточный CPython, pip внутри,
+# ничего в системе не трогает. Та же линия 3.14, что у Windows-сборки (там 3.14.5
+# из embeddable с python.org — у него нет сборки под macOS).
+PY_VERSION = "3.14.7"
+PBS_TAG = "20260901"
+PBS_NAME = f"cpython-{PY_VERSION}+{PBS_TAG}-aarch64-apple-darwin-install_only.tar.gz"
+PBS_URL = ("https://github.com/astral-sh/python-build-standalone/releases/download/"
+           f"{PBS_TAG}/{PBS_NAME}")
+# git — из исходника, с RUNTIME_PREFIX: бинарь ищет свои libexec/ и templates/ от
+# собственного положения, а не от вшитого при сборке пути. Так же переносим, как
+# MinGit на Windows (build_dist.stage_git), и та же линия 2.55.
+GIT_VERSION = "2.55.0"
+GIT_NAME = f"git-{GIT_VERSION}.tar.xz"
+GIT_URL = f"https://mirrors.edge.kernel.org/pub/software/scm/git/{GIT_NAME}"
+
+# Контрольные суммы. Сняты 19.09.2026 локально (`curl -L … | sha256sum`) и
+# СВЕРЕНЫ с суммами издателей: python-build-standalone — файл `SHA256SUMS` того
+# же выпуска 20260901; git — `sha256sums.asc` на kernel.org. Меняешь версию —
+# снимаешь заново и пишешь дату, как в build_dist.SHA256.
+SHA256 = {
+    PBS_URL: "30daa970c7d223530120f1693cd3c6fa4c0c0d31ef158710b0dd77f286a5b23e",
+    GIT_URL: "457fdb04dc8728e007d4688695e6912e6f680727920f2a40bf11eacc17505357",
+}
+
+# Реле: публичный репозиторий, коммит 0.8.1. На Windows реле собирается из
+# зеркала живого исходника (`_relay_prod_src`, там ещё трей под cfg(windows));
+# на Mac собирается публичный коммит как есть.
+RELAY_REPO = "https://github.com/josephsteuerjr/praxis-relay"
+RELAY_COMMIT = "64fc946981f28639bdfe0234dda0dca234d7e530"
+RELAY_BIN = "codex-proxy-server"
+
+# Откуда берётся дерево агента: из Windows-архива того же выпуска. Дерево там —
+# проверенный прод; собирать его на Mac заново значило бы выпустить под одним
+# тегом два разных дерева.
+RELEASE_REPO = "josephsteuerjr/praxis"
+RELEASE_TAG_DEFAULT = "v0.7.1"
+
+# Минимум macOS. Задуман 12.0, но колёса голоса под cp314/arm64 (numpy,
+# onnxruntime, av — проверено `pip download` 19.09.2026) собраны с тегом
+# macosx_14_0: на 12 и 13 dyld их не загрузит, а голос по решению владельца
+# обязателен. Объявлять меньше — значит обещать то, что не заработает.
+# Сборка сверяет это число с тегами реально установленных колёс (см.
+# `runtime_macos_floor`) и падает, если они требуют больше.
+MACOS_MIN = "14.0"
+
+# Пакеты, у которых на PyPI нет колеса и не будет: чистый Python исходником.
+# `pyaes` (зависимость telethon) — единственный такой во всём составе. Всё
+# остальное ставится строго колёсами (`--only-binary=:all:`): собирать
+# расширения на раннере — значит зависеть от его SDK, а не от PyPI.
+SDIST_OK = ("pyaes",)
+
+# Что кладёт мастер в бандлы. Оболочка Hélène и мастер — два разных .app с
+# разными идентификаторами: single-instance и уведомления macOS различают
+# программы именно по CFBundleIdentifier.
+BUNDLES = {
+    "shell": {
+        "app": "Helene.app", "exe": "helene", "name": "Hélène",
+        "identifier": "app.helene.desk", "crate": "shell",
+        "icon": DESK / "shell" / "icons" / "icon.png",
+    },
+    "setup": {
+        "app": "Helene Setup.app", "exe": "helene-setup", "name": "Hélène Setup",
+        "identifier": "app.helene.setup", "crate": "setup",
+        "icon": DESK / "setup" / "icons" / "icon.png",
+    },
+}
+
+# Набор iconset для `iconutil`: имя → сторона в пикселях. Исходник значка —
+# 256×256, поэтому 512 и 1024 получаются растяжением: размыто лучше, чем дыра
+# в Finder при крупном виде. Значок 1024 в репозитории сделал бы это честнее.
+ICONSET = (
+    ("icon_16x16", 16), ("icon_16x16@2x", 32), ("icon_32x32", 32), ("icon_32x32@2x", 64),
+    ("icon_128x128", 128), ("icon_128x128@2x", 256), ("icon_256x256", 256),
+    ("icon_256x256@2x", 512), ("icon_512x512", 512), ("icon_512x512@2x", 1024),
+)
+
+# Переменные make для git: без perl/tcl/gettext/python/gitweb (на Mac из коробки
+# их нет, агенту они не нужны), TLS и SHA-1 — системные (CommonCrypto), без
+# hardlink'ов в libexec (в zip они всё равно не переживут), без дублей
+# `git-add` и прочих dashed-форм.
+GIT_MAKE_VARS = (
+    "prefix=/", "RUNTIME_PREFIX=YesPlease", "NO_GETTEXT=1", "NO_TCLTK=1", "NO_PERL=1",
+    "NO_PYTHON=1", "NO_GITWEB=1", "NO_EXPAT=1", "NO_OPENSSL=1", "APPLE_COMMON_CRYPTO=1",
+    "NO_INSTALL_HARDLINKS=YesPlease", "SKIP_DASHED_BUILT_INS=YesPlease",
+)
+
+# Записи Windows-архива, которые едут в Mac-сборку как есть. `app/` НЕ берём:
+# пакет desk собирается заново из этой ветки — движок на Mac другой.
+# `data/` в архиве пуста, её сборка создаёт сама. Лицензии влинкованного
+# собираются заново — у Mac другие бинари. Документы пишутся заново — у Mac
+# другой текст.
+FROM_RELEASE_DIRS = ("tree/", "server/")
+# Что Windows-сборка дописывает в tree/ ПОСЛЕ отбора (Apache §4): в счёте
+# `tree_files` её паспорта этих двух нет.
+TREE_ADDED = ("tree/LICENSE", "tree/NOTICE")
+
+# Без чего архив — не архив. Проверяется по собранной папке перед zip: раньше
+# половина Windows-сборок узнавала о неполноте у владельца.
+REQUIRED_ROOT = (
+    "Helene.app/Contents/MacOS/helene", "Helene.app/Contents/Info.plist",
+    "Helene.app/Contents/Resources/icon.icns",
+    "Helene Setup.app/Contents/MacOS/helene-setup", "Helene Setup.app/Contents/Info.plist",
+    "helene-relay",
+    "runtime/bin/python3", "runtime/git/bin/git", "runtime/git/libexec/git-core",
+    "runtime/git/share/git-core/templates",
+    "app/deskapp.py", "app/desk.json", "app/static/index.html", "app/mobile/index.html",
+    "app/localharness/runner.py", "app/resources/SOUL.md",
+    "tree", "data", "server", "licenses/rust/README.md",
+    "helene.json", "helene-build.json", "install.sh", "requirements.txt",
+    "ПЕРВЫЙ-ЗАПУСК.md", "ОБНОВЛЕНИЕ.md", "КАК-УСТРОЕН-HELENE.md", "ЛИЦЕНЗИЯ.md",
+    "ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md", "NOTICE",
+)
+
+
+# --- чистые функции (идут и на Windows, их держит tests/t_build_mac.py) --------------
+
+def version_from_tag(tag: str) -> str:
+    """'v0.7.1' → '0.7.1'. Непонятный тег — отказ, а не нули (как parse_version в оболочке)."""
+    m = re.fullmatch(r"[vV]?(\d+\.\d+\.\d+)", (tag or "").strip())
+    if not m:
+        raise SystemExit(f"тег выпуска не похож на версию: {tag!r} (ждём вида v0.7.1)")
+    return m.group(1)
+
+
+def asset_names(version: str) -> dict[str, str]:
+    """Имена активов выпуска. Windows-архив — `Helene-<v>.zip`, наш — с суффиксом
+    платформы: оболочка выбирает вложение по префиксу `Helene-`, и суффикс — то,
+    по чему Mac и Windows отличат свой архив от чужого."""
+    stem = f"{FOLDER}-{version}-{PLATFORM}-{ARCH}"
+    return {
+        "zip": stem + ".zip",
+        "sha256": stem + ".zip.sha256",
+        "install": "install.sh",
+        "windows_zip": f"{FOLDER}-{version}.zip",
+    }
+
+
+def info_plist(kind: str, version: str) -> dict:
+    """Info.plist бандла: имя по-французски, идентификатор — контракт четырёх."""
+    b = BUNDLES[kind]
+    return {
+        "CFBundleName": b["name"],
+        "CFBundleDisplayName": b["name"],
+        "CFBundleIdentifier": b["identifier"],
+        "CFBundleExecutable": b["exe"],
+        "CFBundleIconFile": "icon",
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": version,
+        "CFBundleVersion": version,
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "LSMinimumSystemVersion": MACOS_MIN,
+        "LSApplicationCategoryType": "public.app-category.productivity",
+        "NSHighResolutionCapable": True,
+        # Окно и мастер ходят на 127.0.0.1 (канал, реле, локальные модели):
+        # без этого ключа ATS режет незашифрованную петлю.
+        "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},
+    }
+
+
+def helene_json_mac() -> str:
+    """Шаблон конфига поставки — тот же, что у Windows, с одним отличием:
+    интерпретатор лежит в `runtime/bin/python3`. Правится поле, а не копия текста."""
+    cfg = json.loads(bd.HELENE_JSON)
+    cfg["python"] = "runtime/bin/python3"
+    return json.dumps(cfg, ensure_ascii=False, indent=2) + "\n"
+
+
+def stamp_install_sh(text: str, tag: str, macos_min: str = MACOS_MIN) -> str:
+    """Вписать в install.sh тег выпуска и минимум macOS. Строки обязаны быть:
+    скрипт с чужой версией в шапке — это установка не той сборки."""
+    out, n_tag = re.subn(r'^(HELENE_TAG_DEFAULT=)"[^"\n]*"', rf'\1"{tag}"', text,
+                         count=1, flags=re.M)
+    out, n_min = re.subn(r'^(HELENE_MACOS_MIN=)"[^"\n]*"', rf'\1"{macos_min.split(".")[0]}"',
+                         out, count=1, flags=re.M)
+    if n_tag != 1 or n_min != 1:
+        raise SystemExit("в install.sh нет строк HELENE_TAG_DEFAULT=\"…\" и HELENE_MACOS_MIN=\"…\" — "
+                         "сборке некуда вписать тег и минимум macOS")
+    return out
+
+
+def zip_members_for(names, top: str = FOLDER + "/",
+                    dirs: tuple[str, ...] = FROM_RELEASE_DIRS) -> dict[str, str]:
+    """Какие записи Windows-архива едут в сборку → относительный путь назначения.
+
+    Только файлы под перечисленными папками, только внутрь: запись с `..` или
+    абсолютным путём — отказ, а не «пропустить молча».
+    """
+    take: dict[str, str] = {}
+    for name in names:
+        if not name.startswith(top) or name.endswith("/"):
+            continue
+        rel = name[len(top):]
+        if not rel.startswith(dirs):
+            continue
+        parts = rel.split("/")
+        if rel.startswith("/") or any(p in ("", ".", "..") for p in parts):
+            raise SystemExit(f"подозрительная запись в архиве выпуска: {name!r}")
+        take[name] = rel
+    return take
+
+
+def core_summary(passport: dict) -> dict | None:
+    """Ядро и слой из паспорта Windows-архива — без локальных путей владельца."""
+    core = passport.get("core") if isinstance(passport, dict) else None
+    if not isinstance(core, dict):
+        return None
+    out: dict = {}
+    for key in ("core", "layer"):
+        block = core.get(key)
+        if isinstance(block, dict):
+            out[key] = {k: block[k] for k in ("files", "digest", "head", "dirty") if k in block}
+    drift = core.get("drift")
+    if isinstance(drift, dict):
+        out["drift"] = {k: v for k, v in drift.items() if not str(k).startswith("names_")}
+    return out or None
+
+
+def macos_floor_of_tags(tags) -> str:
+    """Наибольший минимум macOS среди тегов колёс: 'cp314-cp314-macosx_14_0_arm64' → '14.0'.
+    Пусто — ни одного macOS-тега (только py3-none-any)."""
+    floor = (0, 0)
+    for tag in tags:
+        for m in re.finditer(r"macosx_(\d+)_(\d+)_", str(tag)):
+            floor = max(floor, (int(m.group(1)), int(m.group(2))))
+    return f"{floor[0]}.{floor[1]}" if floor != (0, 0) else ""
+
+
+def version_tuple(text: str) -> tuple[int, ...]:
+    return tuple(int(p) for p in re.findall(r"\d+", text)) or (0,)
+
+
+# Mach-O: 64-битный, 32-битный и «толстый» (universal) заголовок, оба порядка
+# байт. Толстый заголовок совпадает с магией class-файлов Java — отсекаем по
+# числу архитектур: больше 32 их не бывает.
+_MACH_O_THIN = (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce")
+_MACH_O_FAT = (b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca")
+
+
+def is_mach_o(path: Path) -> bool:
+    try:
+        with Path(path).open("rb") as f:
+            head = f.read(8)
+    except OSError:
+        return False
+    if len(head) < 8:
+        return False
+    if head[:4] in _MACH_O_THIN:
+        return True
+    if head[:4] in _MACH_O_FAT:
+        return int.from_bytes(head[4:8], "big") <= 32
+    return False
+
+
+def sign_targets(root: Path) -> list[Path]:
+    """Что подписывать ad-hoc: оба бандла, реле и всё Mach-O в runtime/ (сам
+    python, libpython, расширения из колёс, git и его libexec). Неподписанный
+    arm64-бинарь macOS убивает при запуске, а подписи из чужих колёс бывают и
+    валидными, и никакими — поэтому список, а решение по каждому — `codesign
+    --verify` (см. codesign_all)."""
+    root = Path(root)
+    found: list[Path] = []
+    for b in BUNDLES.values():
+        app = root / b["app"]
+        if app.is_dir():
+            found.append(app)
+    relay = root / "helene-relay"
+    if relay.is_file():
+        found.append(relay)
+    runtime = root / "runtime"
+    if runtime.is_dir():
+        for p in sorted(runtime.rglob("*")):
+            if p.is_file() and not p.is_symlink() and is_mach_o(p):
+                found.append(p)
+    return found
+
+
+def missing_in_root(root: Path) -> list[str]:
+    """Чего нет в собранной папке из обязательного состава."""
+    root = Path(root)
+    return [rel for rel in REQUIRED_ROOT if not (root / rel).exists()]
+
+
+def sha256_line(digest: str, name: str) -> str:
+    """Формат `.sha256` — как у Windows-архива: `<digest> *<имя>`."""
+    return f"{digest} *{name}\n"
+
+
+def build_passport(*, version: str, declared: dict, desk_head: str, desk_dirty: bool,
+                   tree_head: str, tree_dirty: bool, source_release: dict | None,
+                   staged: dict, relay: dict | None, freeze: str, downloads: dict,
+                   complete: bool, partial_reason: list[str], signed: int,
+                   git_bundle: dict | None, macos_floor: str) -> dict:
+    """Паспорт той же формы, что у Windows (`build_dist.main`), плюс платформа."""
+    return {
+        "product": PRODUCT,
+        "platform": PLATFORM,
+        "arch": ARCH,
+        "version": version,
+        "built_utc": _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "complete": complete,
+        "partial_reason": partial_reason,
+        "git": {"desk": desk_head, "desk_dirty": desk_dirty,
+                "tree": tree_head, "tree_dirty": tree_dirty,
+                "dirty": desk_dirty or tree_dirty},
+        # Откуда дерево: тег, актив и его сумма, паспорт того архива (коротко).
+        "source_release": source_release,
+        "declared_versions": declared,
+        "python": PY_VERSION,
+        "python_build": f"python-build-standalone {PBS_TAG}",
+        "git_bundle": git_bundle,
+        # Что объявлено бандлам и что требуют колёса на деле — оба числа рядом.
+        "macos_min": MACOS_MIN,
+        "macos_floor_wheels": macos_floor,
+        "tree_files": staged["tree_files"],
+        "static": staged["static_digest"],
+        "relay": relay,
+        "core": (source_release or {}).get("core") if source_release else None,
+        "desk": {"version": staged["desk"]["version"],
+                 "flavor": staged["desk"]["flavor"],
+                 "digest": staged["desk"]["digest"],
+                 "files": len(staged["desk"]["files"]),
+                 "skipped": [s["name"] for s in staged["desk"]["skipped"]]},
+        "bundles": {b["app"]: b["identifier"] for b in BUNDLES.values()},
+        "signed_adhoc": signed,
+        "downloads": downloads,
+        "packages": freeze.splitlines(),
+    }
+
+
+# --- тексты поставки --------------------------------------------------------------
+
+FIRST_RUN_MAC = """# Hélène · первый запуск на macOS
+
+Программа поставлена скриптом `install.sh` (или им же — из архива, скачанного
+руками) в папку `~/Applications/Helene`. Открыть её: Finder → «Программы» в
+твоей домашней папке → `Helene.app`, или из терминала —
+`open ~/Applications/Helene/Helene.app`. Ярлык в Dock перетаскивается оттуда же.
+
+Подписи Developer ID у программы нет. Файлы, скачанные `curl`, карантина не
+получают, и Gatekeeper молчит; если архив скачан браузером и распакован руками,
+macOS скажет «не удаётся проверить разработчика» — тогда правая кнопка по
+`Helene.app` → «Открыть», один раз.
+
+1. При первой установке открывается мастер `Helene Setup.app`: имя агента и
+   своё, **конституция** (текст, по которому агент будет жить, — его можно
+   править прямо там), откуда приходит модель, режим, установка. Конституцию
+   стоит прочитать: это единственное решение установки, которое потом меняет
+   только сам агент.
+2. Мастер копирует программу в `~/Applications/Helene`; на последней сцене
+   нажми «Открыть». Агент представится первым — первое слово за ним.
+3. Дальше всё меняется в самой программе: значок шестерёнки внизу слева —
+   экран «Настройки» (модель и ключ, Telegram, телефон, автозапуск, адрес
+   обновлений). `helene.json` руками править не нужно.
+
+Все данные агента живут в `~/Applications/Helene/data`: память, дневник,
+конституция, вход в ChatGPT. Перенос на другую машину — «Экспорт агента» в
+Настройках, или скопировать `data/` и `helene.json` поверх свежей установки при
+закрытой программе.
+
+Чего в сборке для macOS нет (это не поломка, а состав):
+
+- тела и тула `computer` — окна, экран, клавиатура и мышь этой машины агенту не
+  видны; на Windows это делает `helene-body.exe`, на Mac аналога пока нет;
+- службы и брокера прав — агент живёт, пока открыта программа (окно можно
+  закрыть, значок остаётся в строке меню); автозапуск — «Настройки»;
+- Intel-маков — только Apple Silicon (M1 и новее), macOS 14 и новее;
+- подписи Developer ID, нотаризации и dmg — отсюда и `install.sh`;
+- правил брандмауэра — macOS сам спросит, разрешить ли программе входящие
+  соединения, когда включишь «Телефон».
+
+Ограда тула `shell` здесь — seatbelt (`sandbox-exec`) macOS: команды агента
+видят рантайм и код, пишут только в его дом. Права администратора не нужны.
+
+Когда выйдет новая версия — «Настройки» → «Проверить обновления», или тот же
+однострочник установки: он увидит, что программа уже стоит, остановит её и
+обновит поверх, не трогая `data/` и `helene.json`. Подробно — `ОБНОВЛЕНИЕ.md`.
+"""
+
+THIRD_PARTY_MAC = """# Лицензии третьих сторон (сборка для macOS)
+
+Hélène собрана из открытых компонентов. Ниже — что именно едет в этой поставке
+и на каких условиях. Полные тексты лежат внутри самой поставки:
+
+- Rust-крейты, статически влинкованные в `Helene.app` и `Helene Setup.app` — в
+  `licenses/rust/` (список и ссылки на тексты — `licenses/rust/README.md`;
+  собирается при сборке из `Cargo.lock` обоих крейтов);
+- крейты реле подписки ChatGPT (`helene-relay`) — в `licenses/relay/`;
+- пакеты Python — в `runtime/lib/python3.14/site-packages/<пакет>.dist-info/`;
+- CPython — `runtime/lib/python3.14/LICENSE.txt`.
+
+## Программа и мастер (Rust)
+
+Основное, что видно в исходниках; полный список зависимостей вместе с их
+транзитивными — в `licenses/rust/README.md`.
+
+- Tauri 2 и его плагины (single-instance, window-state) — MIT или Apache-2.0
+- serde, serde_json — MIT или Apache-2.0
+- ureq — MIT или Apache-2.0
+
+## Интерфейс (TypeScript)
+
+- motion — MIT
+- qrcode — MIT
+- Vite и TypeScript используются только при сборке и в поставку не входят
+
+## Шрифты
+
+- Source Serif 4 — SIL Open Font License 1.1
+- Golos Text — SIL Open Font License 1.1
+- PT Mono — SIL Open Font License 1.1
+- Shantell Sans — SIL Open Font License 1.1
+
+## Встроенный Python и пакеты
+
+- CPython — Python Software Foundation License (`runtime/lib/python3.14/LICENSE.txt`).
+  Сборка — python-build-standalone (Astral, лицензия сборочных скриптов — MIT
+  или Apache-2.0; сами файлы интерпретатора — PSF)
+- aiohttp, anthropic, openai, httpx, python-dotenv, pillow, pypdf, trafilatura,
+  charset-normalizer, telethon, faster-whisper (ctranslate2, onnxruntime, av,
+  numpy), piper-tts и их зависимости — по их `dist-info/`
+- pip остаётся в `runtime/` сознательно: без него рантайм нельзя починить на
+  машине пользователя, не пересобирая всю поставку
+
+## Git (`runtime/git`)
+
+`runtime/git` — Git __GIT_VERSION__, собранный из официального исходника
+(kernel.org) без изменений, **GPL-2.0**. Отдельная программа: Hélène и агент её
+вызывают (личный репозиторий агента в папке данных, снимки его правок), но не
+линкуют, и на лицензию Hélène это не влияет. Текст лицензии — `runtime/git/COPYING`.
+
+**Письменное предложение по GPL-2.0 §3(b).** Владелец Hélène обязуется в
+течение трёх лет с момента получения вами этой поставки передать любому
+обратившемуся полную машиночитаемую копию исходного кода этой сборки Git по
+цене не выше стоимости передачи. Запрос — через issues репозитория
+https://github.com/josephsteuerjr/praxis/issues с указанием версии поставки
+(`helene-build.json`). Тот же исходник опубликован авторами:
+https://mirrors.edge.kernel.org/pub/software/scm/git/ (`git-__GIT_VERSION__.tar.xz`,
+сумма записана в паспорте сборки).
+
+## Реле подписки ChatGPT
+
+- `helene-relay` — MIT, исходники: https://github.com/josephsteuerjr/praxis-relay
+  (коммит записан в паспорте сборки); тексты — `licenses/relay/`
+
+## Стороннее внутри дерева агента
+
+- `tree/panel_static/3d-force-graph.min.js` — 3d-force-graph версии 1.80.0,
+  https://github.com/vasturiano/3d-force-graph (MIT). В сборку упакованы
+  three.js (MIT) и модули d3 (ISC). Сам минифицированный файл несёт только
+  строку версии, без текстов лицензий: их условия — в перечисленных
+  репозиториях. В продукте этот файл не используется: его читают серверные
+  панели дерева агента, которых в Hélène нет
+
+## Код агента
+
+Дерево агента (`tree/`) — Apache-2.0. Полный текст лицензии — `tree/LICENSE`,
+уведомление об авторстве — `tree/NOTICE` (и `NOTICE` в корне поставки).
+
+Чего в этой поставке нет из Windows-состава: BusyBox (`runtime/bash.exe` — на
+Mac свой `/bin/sh`), MinGit, службы и тела (`helene-svc.exe`, `helene-body.exe`,
+`helene-bridge.exe`).
+""".replace("__GIT_VERSION__", GIT_VERSION)
+
+
+# --- команды ----------------------------------------------------------------------
+
+def run(args, *, cwd: Path | None = None, timeout: int = 3600, env: dict | None = None,
+        check: bool = True) -> subprocess.CompletedProcess:
+    """Внешняя команда с дедлайном; вывод — в консоль. Падение — понятной строкой."""
+    cmd = [str(a) for a in args]
+    print("  $ " + " ".join(cmd if len(cmd) < 12 else cmd[:11] + ["…"]), flush=True)
+    try:
+        r = subprocess.run(cmd, cwd=str(cwd) if cwd else None, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired:
+        raise SystemExit(f"команда не ответила за {timeout // 60} мин: {cmd[0]} …") from None
+    except FileNotFoundError:
+        raise SystemExit(f"нет команды {cmd[0]!r} — на этой машине сборка не пойдёт") from None
+    if check and r.returncode != 0:
+        raise SystemExit(f"команда завершилась с кодом {r.returncode}: {' '.join(cmd[:6])} …")
+    return r
+
+
+def capture(args, *, cwd: Path | None = None, timeout: int = 600, env: dict | None = None,
+            check: bool = True) -> str:
+    cmd = [str(a) for a in args]
+    try:
+        r = subprocess.run(cmd, cwd=str(cwd) if cwd else None, timeout=timeout, env=env,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        raise SystemExit(f"команда не ответила за {timeout // 60} мин: {cmd[0]} …") from None
+    except FileNotFoundError:
+        raise SystemExit(f"нет команды {cmd[0]!r} — на этой машине сборка не пойдёт") from None
+    if check and r.returncode != 0:
+        raise SystemExit(f"команда завершилась с кодом {r.returncode}: {' '.join(cmd[:6])} …\n"
+                         + (r.stderr or "").strip()[-800:])
+    return r.stdout or ""
+
+
+def _check_sum(url: str, path: Path) -> None:
+    want = SHA256.get(url)
+    if not want:
+        return
+    got = bd.sha256(path)
+    if got != want:
+        path.unlink(missing_ok=True)   # испорченный кэш не должен пережить прогон
+        raise SystemExit(
+            f"НЕ СОШЛАСЬ КОНТРОЛЬНАЯ СУММА: {path.name}\n"
+            f"  адрес:  {url}\n"
+            f"  ждали:  {want}\n"
+            f"  скачали:{got}\n"
+            "Файл подменён, повреждён или издатель выложил новую сборку.\n"
+            "Разберись, ПОТОМ обнови SHA256 в build_mac.py — не наоборот.")
+
+
+def fetch(url: str, dst: Path) -> None:
+    """Скачать в кэш через `build_dist.fetch` (кэш, .part, таймаут) и сверить с
+    НАШЕЙ суммой: суммы этого файла Windows-сборка не знает, и её проверка для
+    наших адресов — пустая."""
+    bd.fetch(url, dst)
+    _check_sum(url, dst)
+
+
+# --- дерево агента ------------------------------------------------------------------
+
+def release_asset_digest(tag: str, name: str) -> str:
+    """sha256 актива по данным GitHub (`assets[].digest`); '' — GitHub не сказал."""
+    try:
+        text = capture(["gh", "api", f"repos/{RELEASE_REPO}/releases/tags/{tag}",
+                        "--jq", f'.assets[] | select(.name == "{name}") | .digest // ""'],
+                       timeout=120, check=False)
+    except SystemExit:
+        return ""
+    digest = text.strip().split("\n")[0].strip()
+    return digest[len("sha256:"):] if digest.startswith("sha256:") else ""
+
+
+def stage_from_release(out: Path, cache: Path, tag: str) -> dict:
+    """Дерево (и server/) из Windows-архива выпуска — байт в байт то, что в проде."""
+    version = version_from_tag(tag)
+    names = asset_names(version)
+    zip_path = cache / names["windows_zip"]
+    if not zip_path.is_file():
+        print(f"  качаю {names['windows_zip']} из выпуска {tag}…")
+        cache.mkdir(parents=True, exist_ok=True)
+        run(["gh", "release", "download", tag, "--repo", RELEASE_REPO,
+             "--pattern", names["windows_zip"], "-D", cache, "--clobber"], timeout=1800)
+    if not zip_path.is_file():
+        raise SystemExit(f"в выпуске {tag} нет актива {names['windows_zip']}")
+    digest = bd.sha256(zip_path)
+    want = release_asset_digest(tag, names["windows_zip"])
+    if want and want != digest:
+        zip_path.unlink(missing_ok=True)
+        raise SystemExit(f"{names['windows_zip']} в кэше не сходится с суммой актива на GitHub "
+                         f"(ждали {want[:12]}…, лежит {digest[:12]}…) — кэш снесён, повтори")
+    print(f"  {names['windows_zip']}: {zip_path.stat().st_size / 1e6:.1f} МБ, sha256 {digest[:12]}"
+          + ("" if want else " (GitHub суммы актива не дал — сверить не с чем)"))
+
+    with zipfile.ZipFile(zip_path) as zf:
+        members = zf.namelist()
+        try:
+            passport = json.loads(zf.read(f"{FOLDER}/helene-build.json"))
+        except KeyError:
+            raise SystemExit(f"в {names['windows_zip']} нет {FOLDER}/helene-build.json — "
+                             "это не архив поставки Hélène") from None
+        if str(passport.get("version")) != version:
+            raise SystemExit(f"паспорт архива говорит версия {passport.get('version')!r}, "
+                             f"а тег — {tag}: не тот архив")
+        plan = zip_members_for(members)
+        for rel in ("tree", "server"):
+            shutil.rmtree(out / rel, ignore_errors=True)
+        counts = {"tree": 0, "server": 0}
+        for member, rel in plan.items():
+            target = out / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(member) as src, target.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+            counts[rel.split("/")[0]] += 1
+    (out / "data").mkdir(exist_ok=True)
+    # Паспорт Windows считает файлы ОТБОРА (copy_tree); LICENSE и NOTICE в tree/
+    # сборка дописывает после счёта. Считаем так же, чтобы числа сходились.
+    tree_files = counts["tree"] - sum(1 for rel in TREE_ADDED if (out / rel).is_file())
+    print(f"  tree/: {counts['tree']} файлов (отбор: {tree_files}), server/: {counts['server']}")
+    if tree_files != int(passport.get("tree_files") or -1):
+        raise SystemExit(f"в архиве {tree_files} файлов дерева, а его паспорт обещает "
+                         f"{passport.get('tree_files')} — архив разошёлся сам с собой")
+    if not (out / "tree" / "core" / "secrets.py").is_file():
+        raise SystemExit("в дереве из архива нет core/secrets.py — секрет-гарду нечем сканировать")
+    git = passport.get("git") or {}
+    return {
+        "tag": tag,
+        "asset": names["windows_zip"],
+        "sha256": digest,
+        "tree_files": tree_files,
+        "tree_head": str(git.get("tree") or ""),
+        "tree_dirty": bool(git.get("tree_dirty")),
+        "passport": {k: passport.get(k) for k in ("built_utc", "git", "python", "static", "desk")},
+        "core": core_summary(passport),
+    }
+
+
+def stage_server_from_repo(src: Path, dst: Path) -> int:
+    """server/ из этой ветки — тот же отбор, что у `build_dist.main` (там функция
+    вложенная и снаружи недоступна): тексты с LF, остальное как есть."""
+    count = 0
+    dst.mkdir(parents=True, exist_ok=True)
+    for item in sorted(src.iterdir()):
+        if item.name.startswith(".") or item.name == "__pycache__":
+            continue
+        if item.is_dir():
+            count += stage_server_from_repo(item, dst / item.name)
+        elif item.suffix in (".md", ".py", ".yml", ".yaml", ".txt", ".json") or item.name == "Dockerfile":
+            bd.copy_text_lf(item, dst / item.name)
+            count += 1
+        else:
+            shutil.copy2(item, dst / item.name)
+            count += 1
+    return count
+
+
+def stage_from_tree(out: Path, live: Path) -> dict:
+    """Дерево из рабочей копии — тем же отбором, что Windows-сборка (`copy_tree`)."""
+    if not live.is_dir():
+        raise SystemExit(f"нет дерева агента: {live}")
+    shutil.rmtree(out / "tree", ignore_errors=True)
+    copied, secrets = bd.copy_tree(live, out / "tree")
+    print(f"  файлов дерева: {copied}")
+    for rel in secrets:
+        print(f"  ⨯ не поехало (форма секрета): {rel}")
+    if copied < 100:
+        raise SystemExit(f"дерево агента почти пустое: {copied} файлов из {live}")
+    # Apache-2.0 §4(a) и §4(d): копия лицензии и NOTICE рядом с кодом — как у Windows.
+    apache = (DESK / "installer" / "ЛИЦЕНЗИЯ.md").read_text(encoding="utf-8")
+    body = apache.split("\n---\n", 1)[1].strip() if "\n---\n" in apache else apache
+    (out / "tree" / "LICENSE").write_text(body + "\n", encoding="utf-8", newline="\n")
+    bd.copy_text_lf(DESK / "installer" / "NOTICE", out / "tree" / "NOTICE")
+    shutil.rmtree(out / "server", ignore_errors=True)
+    n = stage_server_from_repo(DESK / "server", out / "server")
+    print(f"  server/: {n} файлов")
+    (out / "data").mkdir(exist_ok=True)
+    tree_head, tree_dirty = bd._git_field(live, "дерево агента")
+    return {"tree_files": copied, "tree_head": tree_head, "tree_dirty": tree_dirty}
+
+
+# --- рантайм ------------------------------------------------------------------------
+
+def deps() -> list[str]:
+    """Зависимости поставки: дерево + голос + пакет desk вида macos. Вид объявляет
+    C в `deskpkg.MACOS`; пока его нет — отказ словами, а не AttributeError."""
+    flavor = getattr(deskpkg, "MACOS", None)
+    if flavor is None:
+        raise SystemExit("deskpkg не знает вида «macos» (deskpkg.MACOS) — состав пакета desk "
+                         "для Mac ещё не объявлен, собирать нечего")
+    return list(bd.TREE_DEPS) + list(bd.VOICE_DEPS) + deskpkg.requirements(flavor)
+
+
+def runtime_python(out: Path) -> Path:
+    return out / "runtime" / "bin" / "python3"
+
+
+def stage_runtime(out: Path, cache: Path) -> None:
+    """CPython из python-build-standalone + зависимости колёсами."""
+    runtime = out / "runtime"
+    if runtime.exists():
+        shutil.rmtree(runtime)
+    tgz = cache / PBS_NAME
+    fetch(PBS_URL, tgz)
+    work = cache / "pbs-unpack"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    # Системный tar, а не tarfile: архив несёт симлинки (bin/python3 → python3.14)
+    # и права на исполнение, и bsdtar кладёт их как есть.
+    run(["tar", "-xzf", tgz, "-C", work], timeout=600)
+    src = work / "python"
+    if not (src / "bin" / "python3.14").is_file():
+        raise SystemExit(f"в {PBS_NAME} нет python/bin/python3.14 — astral изменил раскладку")
+    out.mkdir(parents=True, exist_ok=True)
+    os.rename(src, runtime)
+    shutil.rmtree(work, ignore_errors=True)
+    py = runtime_python(out)
+    said = capture([py, "--version"], timeout=120).strip()
+    if PY_VERSION not in said:
+        raise SystemExit(f"рантайм назвался {said!r}, а ждали {PY_VERSION}")
+    print(f"  runtime/: {said}")
+    req = out / "requirements.txt"
+    req.write_text("\n".join(deps()) + "\n", encoding="utf-8", newline="\n")
+    print("  ставлю зависимости…")
+    pip = [py, "-m", "pip", "install", "-q", "--no-warn-script-location"]
+    # setuptools/wheel — на время: исходник pyaes без них не собирается; после —
+    # снимаем, пользователю они не нужны (тот же приём, что у Windows-сборки).
+    run([*pip, "setuptools", "wheel"], timeout=1800)
+    only = ["--only-binary=:all:"] + [f"--no-binary={name}" for name in SDIST_OK]
+    run([*pip, *only, "-r", req], timeout=3600)
+    run([py, "-m", "pip", "uninstall", "-y", "-q", "setuptools", "wheel"], check=False, timeout=600)
+    run([py, "-m", "pip", "cache", "purge", "-q"], check=False, timeout=600)
+
+
+def smoke_runtime(out: Path) -> str:
+    """Рантайм обязан импортировать то, ради чего собран (тот же список, что у
+    Windows — `build_dist.SMOKE_IMPORTS`). -> pip freeze для паспорта."""
+    py = runtime_python(out)
+    if not py.is_file():
+        raise SystemExit(f"нет рантайма: {py}\n"
+                         "с --skip-runtime рантайм должен уже лежать в папке сборки")
+    code = "import " + ", ".join(bd.SMOKE_IMPORTS)
+    r = subprocess.run([str(py), "-c", code], capture_output=True, text=True, timeout=300,
+                       encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        raise SystemExit("рантайм не импортирует свои зависимости:\n" + (r.stderr or "").strip())
+    return capture([py, "-m", "pip", "freeze"], timeout=300).strip()
+
+
+def runtime_wheel_tags(out: Path):
+    """Теги всех поставленных колёс — из `*.dist-info/WHEEL`."""
+    site = out / "runtime" / "lib" / f"python{PY_VERSION.rsplit('.', 1)[0]}" / "site-packages"
+    for wheel in sorted(site.glob("*.dist-info/WHEEL")):
+        for line in wheel.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("Tag:"):
+                yield line[4:].strip()
+
+
+def runtime_macos_floor(out: Path) -> str:
+    """Минимум macOS, который на деле требуют колёса; больше объявленного — отказ."""
+    floor = macos_floor_of_tags(runtime_wheel_tags(out))
+    if floor and version_tuple(floor) > version_tuple(MACOS_MIN):
+        raise SystemExit(f"колёса рантайма требуют macOS {floor}, а бандл объявляет "
+                         f"LSMinimumSystemVersion {MACOS_MIN}: подними MACOS_MIN или подбери "
+                         "версии пакетов — обещать то, что не загрузится, нельзя")
+    print(f"  минимум macOS по колёсам: {floor or 'не задан (только чистый Python)'}; "
+          f"объявлено {MACOS_MIN}")
+    return floor
+
+
+def stage_git_bundle(out: Path, cache: Path) -> dict:
+    """git из исходника → runtime/git (bin/, libexec/git-core/, share/git-core/templates)."""
+    txz = cache / GIT_NAME
+    fetch(GIT_URL, txz)
+    src_root = cache / "git-src"
+    shutil.rmtree(src_root, ignore_errors=True)
+    src_root.mkdir(parents=True)
+    run(["tar", "-xJf", txz, "-C", src_root], timeout=600)
+    src = src_root / f"git-{GIT_VERSION}"
+    if not (src / "Makefile").is_file():
+        raise SystemExit(f"в {GIT_NAME} нет git-{GIT_VERSION}/Makefile — раскладка исходника изменилась")
+    ncpu = capture(["sysctl", "-n", "hw.ncpu"], timeout=60, check=False).strip() or "4"
+    print(f"  собираю git {GIT_VERSION} ({ncpu} потоков)…")
+    run(["make", f"-j{ncpu}", *GIT_MAKE_VARS], cwd=src, timeout=3600)
+    dest = out / "runtime" / "git"
+    shutil.rmtree(dest, ignore_errors=True)
+    run(["make", "install", f"DESTDIR={dest}", *GIT_MAKE_VARS], cwd=src, timeout=1800)
+    git = dest / "bin" / "git"
+    if not git.is_file():
+        raise SystemExit(f"после make install нет {git}")
+    said = capture([git, "--version"], timeout=120).strip()
+    if "git version" not in said:
+        raise SystemExit(f"runtime/git не отвечает на --version: {said!r}")
+    # Переносимость: exec-path обязан лежать ВНУТРИ runtime/git (RUNTIME_PREFIX),
+    # и `git init` обязан находить шаблоны — без PATH и без чужого git.
+    env = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "HOME": str(cache), "PATH": "/usr/bin:/bin"}
+    exec_path = capture([git, "--exec-path"], timeout=120, env=env).strip()
+    if not Path(exec_path).resolve().is_relative_to(dest.resolve()):
+        raise SystemExit(f"runtime/git смотрит за свой exec-path наружу: {exec_path} — "
+                         "RUNTIME_PREFIX не сработал")
+    with tempfile.TemporaryDirectory(dir=cache) as tmp:
+        capture([git, "init", "-q", tmp], timeout=120, env=env)
+        if not (Path(tmp) / ".git" / "HEAD").is_file():
+            raise SystemExit("runtime/git init не создал репозиторий")
+    files = [p for p in dest.rglob("*") if p.is_file()]
+    size = sum(p.stat().st_size for p in files if not p.is_symlink())
+    shutil.rmtree(src_root, ignore_errors=True)
+    print(f"  runtime/git ({said}) положен: {len(files)} файлов, {size / 1e6:.1f} МБ")
+    return {"version": GIT_VERSION, "files": len(files), "bytes": size, "exec_path": "libexec/git-core"}
+
+
+# --- фронты, Rust, реле -------------------------------------------------------------
+
+def build_fronts() -> None:
+    for rel in ("app", "mobile", "setup/ui"):
+        print(f"  {rel}:")
+        run(["npm", "ci", "--no-audit", "--no-fund"], cwd=DESK / rel, timeout=1800)
+        run(["npm", "run", "build"], cwd=DESK / rel, timeout=1800)
+
+
+def rust_binary(kind: str) -> Path:
+    b = BUNDLES[kind]
+    return DESK / b["crate"] / "target" / "release" / b["exe"]
+
+
+def build_rust() -> None:
+    for kind, b in BUNDLES.items():
+        print(f"  {b['crate']}:")
+        run(["cargo", "build", "--release", "--features", "custom-protocol"],
+            cwd=DESK / b["crate"], timeout=5400)
+        if not rust_binary(kind).is_file():
+            raise SystemExit(f"после cargo build нет {rust_binary(kind)}")
+
+
+def relay_source(cache: Path) -> Path:
+    """Клон реле на нужном коммите — в кэше, чтобы повторный прогон не качал заново."""
+    src = cache / "praxis-relay"
+    if not (src / ".git").is_dir():
+        shutil.rmtree(src, ignore_errors=True)
+        run(["git", "clone", "--quiet", RELAY_REPO, src], timeout=1800)
+    head = capture(["git", "-C", src, "rev-parse", "HEAD"], timeout=120).strip()
+    if head != RELAY_COMMIT:
+        run(["git", "-C", src, "fetch", "--quiet", "origin", RELAY_COMMIT], timeout=1800)
+        run(["git", "-C", src, "checkout", "--quiet", "--detach", RELAY_COMMIT], timeout=300)
+        head = capture(["git", "-C", src, "rev-parse", "HEAD"], timeout=120).strip()
+    if head != RELAY_COMMIT:
+        raise SystemExit(f"реле стоит на {head[:12]}, а нужен {RELAY_COMMIT[:12]}")
+    return src
+
+
+def build_relay(cache: Path, skip_rust: bool) -> tuple[Path, dict]:
+    src = relay_source(cache)
+    exe = src / "target" / "release" / RELAY_BIN
+    if not skip_rust:
+        run(["cargo", "build", "--release"], cwd=src, timeout=5400)
+    if not exe.is_file():
+        raise SystemExit(f"нет собранного реле: {exe}")
+    total, files = relay_src.digest(src)
+    version = deskpkg._cargo_version(src / "Cargo.toml")
+    print(f"  реле {version} @ {RELAY_COMMIT[:7]}: {len(files)} файлов исходника, отпечаток {total[:12]}")
+    return exe, {
+        "repo": RELAY_REPO, "commit": RELAY_COMMIT, "version": version,
+        "digest": total, "files": len(files),
+        "exe_sha256": bd.sha256(exe),
+        "built_utc": _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+# --- бандлы и подпись ---------------------------------------------------------------
+
+def make_icns(png: Path, dest: Path, work: Path) -> None:
+    if not png.is_file():
+        raise SystemExit(f"нет значка: {png}")
+    iconset = work / (dest.stem + ".iconset")
+    shutil.rmtree(iconset, ignore_errors=True)
+    iconset.mkdir(parents=True)
+    for name, side in ICONSET:
+        capture(["sips", "-z", str(side), str(side), png, "--out", iconset / f"{name}.png"],
+                timeout=120)
+    capture(["iconutil", "-c", "icns", iconset, "-o", dest], timeout=120)
+    shutil.rmtree(iconset, ignore_errors=True)
+    if not dest.is_file():
+        raise SystemExit(f"iconutil не сделал {dest}")
+
+
+def make_bundle(out: Path, kind: str, version: str, exe_src: Path, work: Path) -> Path:
+    b = BUNDLES[kind]
+    app = out / b["app"]
+    shutil.rmtree(app, ignore_errors=True)
+    contents = app / "Contents"
+    (contents / "MacOS").mkdir(parents=True)
+    (contents / "Resources").mkdir()
+    exe = contents / "MacOS" / b["exe"]
+    shutil.copy2(exe_src, exe)
+    exe.chmod(0o755)
+    with (contents / "Info.plist").open("wb") as f:
+        plistlib.dump(info_plist(kind, version), f, sort_keys=False)
+    (contents / "PkgInfo").write_bytes(b"APPL????")
+    make_icns(b["icon"], contents / "Resources" / "icon.icns", work)
+    print(f"  {b['app']}: {b['identifier']}, {exe.stat().st_size / 1e6:.1f} МБ")
+    return app
+
+
+def codesign_all(out: Path) -> int:
+    """Ad-hoc подпись всего, что не проходит `codesign --verify`. Валидные подписи
+    (из колёс, из python-build-standalone) не переписываются."""
+    signed = 0
+    for target in sign_targets(out):
+        ok = subprocess.run(["codesign", "--verify", "--strict", str(target)],
+                            capture_output=True, text=True, timeout=300).returncode == 0
+        if ok:
+            continue
+        args = ["codesign", "--force", "--sign", "-"]
+        if target.suffix == ".app":
+            args.append("--deep")
+        r = subprocess.run([*args, str(target)], capture_output=True, text=True, timeout=600,
+                           encoding="utf-8", errors="replace")
+        if r.returncode != 0:
+            raise SystemExit(f"codesign отказал на {target.relative_to(out)}:\n{(r.stderr or '').strip()}")
+        signed += 1
+    for b in BUNDLES.values():
+        r = subprocess.run(["codesign", "--verify", "--deep", "--strict", str(out / b["app"])],
+                           capture_output=True, text=True, timeout=300)
+        if r.returncode != 0:
+            raise SystemExit(f"{b['app']} после подписи не проходит проверку: {(r.stderr or '').strip()}")
+    print(f"  подписано ad-hoc: {signed}")
+    return signed
+
+
+# --- лицензии реле ------------------------------------------------------------------
+
+def collect_relay_licenses(out: Path, src: Path, allow_partial: bool) -> int:
+    """Тексты лицензий крейтов реле — тем же приёмом, что `collect_rust_licenses`,
+    только по чужому Cargo.lock; плюс LICENSE и NOTICE самого реле."""
+    dest = out / "licenses" / "relay"
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in ("LICENSE", "NOTICE"):
+        if (src / name).is_file():
+            bd.copy_text_lf(src / name, dest / name)
+    crates = bd._lock_crates(src / "Cargo.lock")
+    if not crates:
+        raise SystemExit(f"не прочитался Cargo.lock реле ({src}) — лицензии его крейтов собрать не из чего")
+    registry = bd._cargo_registry_src()
+    if registry is None:
+        if not allow_partial:
+            raise SystemExit("нет локального реестра cargo — тексты лицензий крейтов реле собрать не из чего")
+        print("  ⚠ нет реестра cargo: лицензии крейтов реле не собраны")
+        return 0
+    texts = dest / "texts"
+    texts.mkdir(exist_ok=True)
+    index: list[str] = []
+    missing: list[str] = []
+    for name, ver in sorted(set(crates)):
+        crate_dir = registry / f"{name}-{ver}"
+        files = []
+        if crate_dir.is_dir():
+            for glob in bd.LICENSE_FILE_GLOBS:
+                files += [f for f in crate_dir.glob(glob) if f.is_file()]
+        if not files:
+            missing.append(f"{name} {ver}")
+            continue
+        refs = []
+        for f in sorted(set(files)):
+            raw = f.read_bytes()
+            digest = hashlib.sha256(raw).hexdigest()[:16]
+            target = texts / f"{digest}.txt"
+            if not target.exists():
+                target.write_bytes(raw)
+            refs.append(f"[{f.name}](texts/{digest}.txt)")
+        index.append(f"- **{name} {ver}** — " + ", ".join(refs))
+    head = [
+        "# Лицензии Rust-крейтов, влинкованных в helene-relay",
+        "",
+        f"Реле — praxis-relay ({RELAY_REPO}, коммит {RELAY_COMMIT[:7]}), MIT: `LICENSE` и `NOTICE` рядом.",
+        f"Собрано автоматически при сборке из его Cargo.lock ({len(set(crates))} крейтов).",
+        "Одинаковые тексты лежат в `texts/` по одному разу; ссылки ниже ведут на них.",
+        "",
+    ]
+    if missing:
+        head += ["Без файла лицензии в исходниках крейта (лицензия объявлена полем "
+                 "`license` в его Cargo.toml): " + ", ".join(missing) + ".", ""]
+    (dest / "README.md").write_text("\n".join(head + sorted(index)) + "\n",
+                                    encoding="utf-8", newline="\n")
+    return len(index)
+
+
+# --- стенды -------------------------------------------------------------------------
+
+def run_stands(out: Path, skip: bool) -> None:
+    """Стенды питона и окна — рантаймом ЭТОЙ сборки: это и проверка продукта, и
+    дымовой тест рантайма разом. Стенды Rust гоняет workflow отдельно (`cargo
+    test` в shell и setup): `run_all.py --rust` знает и про svc, а его на Mac нет."""
+    if skip:
+        print("стенды: ПРОПУЩЕНЫ (--skip-tests) — это отладка, не выпуск")
+        return
+    runner = DESK / "tests" / "run_all.py"
+    if not runner.is_file():
+        raise SystemExit(f"нет прогона стендов: {runner}")
+    print("стенды: питон и окно — рантаймом сборки…")
+    done = subprocess.run([str(runtime_python(out)), str(runner)], cwd=str(DESK))
+    if done.returncode != 0:
+        raise SystemExit("стенды красные — сборка остановлена. Чинить, а не собирать.")
+
+
+# --- главное ------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="сборка Hélène для macOS (Apple Silicon)")
+    parser.add_argument("--out", default=str(DESK / "installer" / "build-mac"))
+    parser.add_argument("--from-release", default="", metavar="TAG",
+                        help=f"взять дерево агента из Windows-архива этого выпуска "
+                             f"(по умолчанию {RELEASE_TAG_DEFAULT}, если не задан --tree)")
+    parser.add_argument("--tree", default="", metavar="PATH",
+                        help="взять дерево агента из рабочей копии (отладка; отбор как у build_dist)")
+    parser.add_argument("--skip-runtime", action="store_true",
+                        help="не пересобирать runtime/ (python, пакеты, git) — только для отладки")
+    parser.add_argument("--skip-rust", action="store_true",
+                        help="не звать cargo: взять бинари из target/release как есть")
+    parser.add_argument("--skip-tests", action="store_true",
+                        help="не гонять стенды (отладка); в выпуске — никогда")
+    parser.add_argument("--allow-partial", action="store_true",
+                        help="разрешить неполную сборку (отладка); попадёт в паспорт")
+    args = parser.parse_args()
+    if args.from_release and args.tree:
+        raise SystemExit("--from-release и --tree вместе не бывают: дерево либо из выпуска, либо с диска")
+    if sys.platform != "darwin":
+        raise SystemExit("эта сборка идёт только на macOS (sips, iconutil, codesign, ditto); "
+                         "на других системах из неё импортируются только чистые функции")
+
+    version, declared = deskpkg.product_version()
+    tag = args.from_release or ("" if args.tree else RELEASE_TAG_DEFAULT)
+    if tag and version_from_tag(tag) != version:
+        raise SystemExit(f"ветка объявляет версию {version}, а дерево просят из выпуска {tag}: "
+                         "сборка Mac обязана быть той же версии, что архив, из которого берётся дерево")
+    out = Path(args.out).resolve() / FOLDER
+    cache = Path(args.out).resolve() / "cache"
+    names = asset_names(version)
+    print(f"{PRODUCT} {version} для {PLATFORM}/{ARCH}")
+    print(f"сборка -> {out}")
+    if args.allow_partial:
+        print("⚠ --allow-partial: это ОТЛАДОЧНАЯ полусборка, не выпуск")
+
+    # Корень чистится целиком, кроме рантайма (дорого) — как ROOT_KEEP у Windows.
+    if out.exists():
+        for item in out.iterdir():
+            if item.name == "runtime" and args.skip_runtime:
+                continue
+            (shutil.rmtree(item) if item.is_dir() else item.unlink())
+    out.mkdir(parents=True, exist_ok=True)
+    cache.mkdir(parents=True, exist_ok=True)
+
+    # Сеть — до долгой работы: недоступный адрес должен ронять сборку сразу.
+    # Это секунды (35 МБ или кэш), а ловит отсутствие сети раньше всего.
+    print("скачиваемое:")
+    fetch(PBS_URL, cache / PBS_NAME)
+    fetch(GIT_URL, cache / GIT_NAME)
+
+    # Порядок шагов — по вероятности падения, а не по раскладке архива: сперва
+    # то, что ломается чаще и проверяется дешевле (фронты, компиляция под mac),
+    # потом долгие рантайм и git. Иначе ошибка компиляции показывалась бы к
+    # двадцатой минуте прогона CI, после восьми минут pip и make.
+    print("фронты:")
+    build_fronts()
+
+    print("rust:")
+    if args.skip_rust:
+        print("  cargo не зовётся (--skip-rust) — бинари из target/release")
+    else:
+        build_rust()
+    missing: list[str] = []
+    print("реле:")
+    relay: dict | None = None
+    try:
+        relay_exe, relay = build_relay(cache, args.skip_rust)
+        shutil.copy2(relay_exe, out / "helene-relay")
+        (out / "helene-relay").chmod(0o755)
+        print("  helene-relay: положен")
+    except SystemExit as e:
+        if not args.allow_partial:
+            raise
+        missing.append(f"helene-relay — {e}")
+        print(f"  ⚠ {e}")
+    relay_src_dir = cache / "praxis-relay"
+
+    if args.skip_runtime:
+        print("runtime: пропущен (--skip-runtime)")
+        git_bundle = None
+    else:
+        print("runtime:")
+        stage_runtime(out, cache)
+        print("git:")
+        git_bundle = stage_git_bundle(out, cache)
+    print("  дымовой тест рантайма…")
+    freeze = smoke_runtime(out)
+    print(f"  импорты живы, пакетов: {len(freeze.splitlines())}")
+    macos_floor = runtime_macos_floor(out)
+    if not (out / "runtime" / "git" / "bin" / "git").is_file():
+        raise SystemExit("нет runtime/git/bin/git — с --skip-runtime git должен уже лежать в сборке")
+
+    print("дерево агента:")
+    if args.tree:
+        live = Path(args.tree).resolve()
+        staged_tree = stage_from_tree(out, live)
+        source_release = None
+    else:
+        staged_tree = stage_from_release(out, cache, tag)
+        source_release = staged_tree
+    live = out / "tree"
+
+    print("desk:")
+    flavor = getattr(deskpkg, "MACOS", None)
+    if flavor is None:
+        raise SystemExit("deskpkg не знает вида «macos» (deskpkg.MACOS) — пакет desk для Mac не объявлен")
+    pkg = deskpkg.build(out / "app", flavor, allow_partial=args.allow_partial, log=print)
+    for part in pkg["parts"]:
+        print(f"  {part['name']:<14} {part['files']:>4}")
+    (out / "requirements.txt").write_text("\n".join(deps()) + "\n", encoding="utf-8", newline="\n")
+    staged = {"tree_files": staged_tree["tree_files"], "static_digest": pkg["static"], "desk": pkg}
+
+    # Стенды — после дерева и пакета: они гоняются рантаймом сборки, и это
+    # разом проверка продукта и дымовой тест рантайма.
+    run_stands(out, args.skip_tests)
+
+    print("бандлы:")
+    work = cache / "bundle-work"
+    for kind in BUNDLES:
+        exe = rust_binary(kind)
+        if not exe.is_file():
+            missing.append(f"{BUNDLES[kind]['app']} — нет {exe} (cargo build --release --features custom-protocol)")
+            continue
+        make_bundle(out, kind, version, exe, work)
+
+    print("документы:")
+    (out / "ПЕРВЫЙ-ЗАПУСК.md").write_text(FIRST_RUN_MAC, encoding="utf-8", newline="\n")
+    bd.copy_text_lf(DESK / "resources" / "ОБНОВЛЕНИЕ.md", out / "ОБНОВЛЕНИЕ.md")
+    bd.copy_text_lf(DESK / "resources" / "HELENE-MAP.md", out / "КАК-УСТРОЕН-HELENE.md")
+    bd.copy_text_lf(DESK / "installer" / "ЛИЦЕНЗИЯ.md", out / "ЛИЦЕНЗИЯ.md")
+    bd.copy_text_lf(DESK / "installer" / "NOTICE", out / "NOTICE")
+    (out / "ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md").write_text(THIRD_PARTY_MAC, encoding="utf-8", newline="\n")
+    sh_src = DESK / "installer" / "install.sh"
+    if not sh_src.is_file():
+        raise SystemExit(f"нет {sh_src}")
+    install_sh = stamp_install_sh(sh_src.read_text(encoding="utf-8").replace("\r\n", "\n"), tag or f"v{version}")
+    (out / "install.sh").write_text(install_sh, encoding="utf-8", newline="\n")
+    (out / "install.sh").chmod(0o755)
+    n_lic = bd.collect_rust_licenses(out, args.allow_partial, live, parts=("shell", "setup"),
+                                     include_body=False, exes="Helene.app и Helene Setup.app")
+    print(f"  лицензии крейтов: {n_lic}")
+    if (relay_src_dir / "Cargo.lock").is_file():
+        print(f"  лицензии крейтов реле: {collect_relay_licenses(out, relay_src_dir, args.allow_partial)}")
+    (out / "helene.json").write_text(helene_json_mac(), encoding="utf-8", newline="\n")
+    (out / "data").mkdir(exist_ok=True)
+
+    print("подпись ad-hoc:")
+    signed = codesign_all(out)
+
+    print("паспорт сборки:")
+    desk_head, desk_dirty = bd._git_field(DESK, "desk")
+    lost = missing_in_root(out)
+    for rel in lost:
+        print(f"  ⚠ в сборке нет: {rel}")
+    partial = missing + [f"нет в сборке: {rel}" for rel in lost] + \
+        ([] if not pkg["skipped"] else [f"пакет desk без {s['name']}" for s in pkg["skipped"]])
+    if partial and not args.allow_partial:
+        raise SystemExit("сборка неполная:\n  " + "\n  ".join(partial) + "\n(для отладочной полусборки: --allow-partial)")
+    manifest = build_passport(
+        version=version, declared=declared, desk_head=desk_head, desk_dirty=desk_dirty,
+        tree_head=staged_tree["tree_head"], tree_dirty=staged_tree["tree_dirty"],
+        source_release=({k: source_release[k] for k in ("tag", "asset", "sha256", "tree_files", "passport", "core")}
+                        if source_release else None),
+        staged=staged, relay=relay, freeze=freeze,
+        downloads={PBS_NAME: SHA256[PBS_URL], GIT_NAME: SHA256[GIT_URL]},
+        complete=not partial, partial_reason=partial, signed=signed,
+        git_bundle=git_bundle, macos_floor=macos_floor)
+    (out / "helene-build.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+    # Гард ПОСЛЕ паспорта и до архива — как у Windows. Раскладка рантайма на Mac
+    # другая (`lib/python3.14/site-packages`, а не `Lib/site-packages`), поэтому
+    # известные ложняки Windows-списка переводятся на неё: иначе `rsa/key.py`
+    # (зависимость telethon) ронял бы каждую сборку тем же «private key».
+    print("секрет-гард:")
+    lib = f"lib/python{PY_VERSION.rsplit('.', 1)[0]}/site-packages/"
+    bd.RUNTIME_KNOWN_FALSE = set(bd.RUNTIME_KNOWN_FALSE) | {
+        (lib + rel.split("site-packages/", 1)[1], label)
+        for rel, label in bd.RUNTIME_KNOWN_FALSE if "site-packages/" in rel
+    }
+    scanned = bd.scan_for_secrets(out, live, scan_runtime=not args.skip_runtime)
+    print(f"  просканировано файлов: {scanned} — чисто")
+
+    total = sum(f.stat().st_size for f in out.rglob("*") if f.is_file() and not f.is_symlink())
+    print(f"итого: {total / 1e6:.1f} МБ до сжатия")
+    zip_path = out.parent / names["zip"]
+    zip_path.unlink(missing_ok=True)
+    print("zip (ditto)…")
+    # ditto, а не zipfile: симлинки рантайма (bin/python3 → python3.14), права на
+    # исполнение и бандлы .app должны приехать как есть; --keepParent даёт в корне
+    # архива папку Helene/, как у Windows.
+    run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", out, zip_path], cwd=out.parent, timeout=1800)
+    digest = bd.sha256(zip_path)
+    (out.parent / names["sha256"]).write_text(sha256_line(digest, names["zip"]), encoding="utf-8", newline="\n")
+    shutil.copy2(out / "install.sh", out.parent / "install.sh")
+    print(f"готово: {zip_path} ({zip_path.stat().st_size / 1e6:.1f} МБ)")
+    print(f"sha256: {digest}")
+    print(f"рядом: {names['sha256']}, install.sh")
+
+
+if __name__ == "__main__":
+    main()

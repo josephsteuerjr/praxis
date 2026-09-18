@@ -170,6 +170,18 @@ STT-коробка). Подробно — `ОБНОВЛЕНИЕ.md`, `installer/
 Что где лежит внутри поставки и что можно переписать — `resources/HELENE-MAP.md`
 (едет в архив как `КАК-УСТРОЕН-HELENE.md`).
 
+**macOS (Apple Silicon, с 0.7.1).** Тот же выпуск несёт второй архив,
+`Helene-<версия>-macos-arm64.zip`, и рядом `install.sh`. Ставится одной строкой —
+`curl -fsSL https://github.com/josephsteuerjr/praxis/releases/download/v0.7.1/install.sh | sh` —
+в `~/Applications/Helene`: `Helene.app` (окно и значок в строке меню),
+`Helene Setup.app` (мастер), `helene-relay`, `runtime/` (свой CPython 3.14 со всеми
+пакетами, голос включая, и `runtime/git/` — git из исходника), `app/`, `tree/`
+(байт в байт из Windows-архива того же выпуска), `data/`. Ограда `shell` —
+seatbelt macOS. Чего в сборке для Mac нет: тела и тула `computer`, службы и
+брокера, Intel-маков, подписи Developer ID/нотаризации/dmg, правил брандмауэра.
+Собирается на GitHub Actions (`.github/workflows/macos.yml` → `installer/build_mac.py`);
+как выпускать — `installer/RELEASE.md`, раздел «Сборка для macOS».
+
 ## Режим доступа и служба — два независимых измерения
 
 **Режим — это изоляция инструментов**, и значений у него два. Ключ в `helene.json` —
@@ -276,6 +288,14 @@ if ($code) { throw "cargo build прокси" }
 Флаг `--allow-partial` у `build_dist.py` превращает эту остановку в
 предупреждение — он для отладочной полусборки, не для выпуска.
 
+**Сборка для macOS** идёт не здесь, а на раннере GitHub `macos-15` (Apple
+Silicon): `gh workflow run macos.yml -f tag=v0.7.1 -f upload=true --ref <ветка>`.
+На самом Mac то же руками: `python3 installer/build_mac.py --from-release v0.7.1`
+(нужны Rust, Node 24, Xcode Command Line Tools, `gh`; итог —
+`installer/build-mac/Helene-<версия>-macos-arm64.zip`, `.sha256` и `install.sh`).
+Windows-сборку `build_mac.py` не трогает и общее берёт из `build_dist` импортом.
+Чистые части сборки проверяются на любой ОС: `python tests/t_build_mac.py`.
+
 Про `--features custom-protocol`: флаг обязателен для `setup` — у него в
 `setup/tauri.conf.json` задан `devUrl`, и без флага Tauri соберёт dev-режим,
 который ждёт dev-сервер на localhost. У `shell` `devUrl` нет, поэтому
@@ -295,6 +315,12 @@ SmartScreen при первом запуске просит «Подробнее
 helene-setup.exe --install решения.json --quiet
 helene-setup.exe --uninstall --purge --quiet
 ```
+
+На macOS — `install.sh` из выпуска (или `sh install.sh --from <zip>` с
+архивом на диске): он сверяет сумму, распаковывает в staging и открывает
+`Helene Setup.app`; при уже стоящей программе — обновляет поверх тихо.
+Снятие: `sh install.sh --uninstall [--purge]`. Тот же мастер в бандле понимает
+те же ключи: `"Helene Setup.app/Contents/MacOS/helene-setup" --install решения.json --quiet`.
 
 ## Обновить
 

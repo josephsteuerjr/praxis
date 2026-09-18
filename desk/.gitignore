@@ -72,3 +72,9 @@ secret-strings.txt
 logs/
 # локальные пробы
 local-demo/
+# сборка для macOS (installer/build_mac.py): своя папка, как installer/build/
+installer/build-mac/
+
+# локальная типовая проверка под darwin: cargo check --target aarch64-apple-darwin --target-dir target-mac-check
+shell/target-mac-check/
+setup/target-mac-check/

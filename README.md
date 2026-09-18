@@ -190,14 +190,51 @@ strict plan with budgets.
 
 ---
 
+## macOS (Apple Silicon)
+
+Since 0.7.1 Hélène also ships for macOS on Apple Silicon (M1 and later, macOS 14 or newer).
+One line installs it. The archive is fetched with `curl`, so Gatekeeper never sees a browser
+download — the build is not signed with a Developer ID:
+
+```sh
+curl -fsSL https://github.com/josephsteuerjr/praxis/releases/download/v0.7.1/install.sh | sh
+```
+
+The script checks the machine and the OS, downloads `Helene-<version>-macos-arm64.zip` and
+its `.sha256`, verifies the sum, unpacks into `~/Library/Caches/app.helene.desk/staging` and
+opens the setup wizard (`Helene Setup.app`), which installs into `~/Applications/Helene`:
+
+- `Helene.app` — the window and the menu-bar icon (`app.helene.desk`); `Helene Setup.app` —
+  the wizard; `helene-relay` — the ChatGPT subscription relay.
+- `runtime/` — its own CPython 3.14 with every package, voice included (`faster-whisper`,
+  `piper-tts`), and `runtime/git/` — git built from source, so the agent's own repository
+  works out of the box. Nothing is installed into the system.
+- `tree/` — the agent code, byte for byte the same as in the Windows archive of the same
+  release; `data/` — the agent's memory, born on first launch.
+- The `shell` tool runs under a seatbelt (`sandbox-exec`) profile: the agent's commands see
+  the runtime and the code and write only into its own home. No administrator rights.
+
+Run the same line again to update: the script sees the installed copy, stops it and installs
+over it without touching `data/` or `helene.json` — the window's "Check for updates" does the
+same through the same script. `sh install.sh --uninstall` removes the program and keeps the
+data; `--uninstall --purge` removes both.
+
+What the macOS build does **not** have, on purpose — and the documents inside say so: the
+computer driver (the `computer` tool), the Windows service and the privilege broker, Intel
+Macs, a Developer ID signature, notarization or a dmg, and firewall rules (macOS asks by
+itself). The archive is built on GitHub Actions (`.github/workflows/macos.yml` →
+`desk/installer/build_mac.py`) and carries a passport with every source and checksum.
+
+---
+
 ## Praxis, Hélène, and who to talk to
 
 **Praxis** is the agent this runtime was written for and against: she lives on a server,
 moderates a chat, writes her own code, keeps her own memory — and she is on Telegram as
 [@praxis_intelligence](https://t.me/praxis_intelligence).
 
-**Hélène** is the Windows edition: a runtime for building **your own** agent, not a
-finished personality. It ships with a template constitution and twenty skills, and what the
+**Hélène** is the desktop edition — Windows, and since 0.7.1 macOS on Apple Silicon: a
+runtime for building **your own** agent, not a finished personality. It ships with a template constitution and twenty skills, and what the
 agent becomes from there is between you and it.
 
 Author: Yegor Kosyrev — Telegram [@tatarskiy_e4pochmak](https://t.me/tatarskiy_e4pochmak).
@@ -210,11 +247,12 @@ Author: Yegor Kosyrev — Telegram [@tatarskiy_e4pochmak](https://t.me/tatarskiy
 |---|---|
 | [`praxis/`](praxis) | the core: durable runs, files-as-canon memory, Telegram, self-authorship |
 | [`helene/`](helene) | the Windows edition of that core, declared as a layer — only the files that differ, with a table saying how far each one is and why |
-| [`desk/`](desk) | the Hélène application: window, channel, local runner, shell, service, installer |
+| [`desk/`](desk) | the Hélène application: window, channel, local runner, shell, service, installer, the macOS build (`installer/build_mac.py`, `installer/install.sh`) |
 | [`pult/`](pult) | the Pult application: the same window onto a core that lives on a server |
 
-Releases of Hélène are published here — one archive that unpacks into a folder. The relay
-is a product of its own: [praxis-relay](https://github.com/josephsteuerjr/praxis-relay).
+Releases of Hélène are published here — one archive that unpacks into a folder on Windows,
+and for macOS a zip with `install.sh` next to it. The relay is a product of its own:
+[praxis-relay](https://github.com/josephsteuerjr/praxis-relay).
 
 ## Licence
 
