@@ -38,7 +38,7 @@ log = logging.getLogger("frame.boot")
 #     хода это заметка. Опущенный рычаг вернул бы «последний текст = сообщение».
 #   PRAXIS_WORK_LOOP + CONTINUATIONS — ход не кончается на первом тексте, закрывает
 #     его её `end_turn`.
-#   PRAXIS_FRAME_SHADOW — захват кадра (экран «Кадр» Пульта живёт на этих слепках).
+#   PRAXIS_FRAME_SHADOW — захват кадра (экран «Кадр» в окне живёт на этих слепках).
 # Веб-поиск по умолчанию опущен: hosted-рука зависит от провайдера, а продукт обязан
 # подниматься на любом OAI-совместимом эндпойнте, включая локальную модель.
 #   ⚠ 03.09. Отсюда убрана ручка `PRAXIS_EVALUATOR: risky`: её не читает НИ ОДНА
@@ -1041,7 +1041,17 @@ def project_brain(tree: Path, cfg: dict) -> str:
     -> строка для лога: что сделано и почему.
     """
     target = tree / "memory" / "llm.json"
-    receipt = tree / "memory" / ".state" / "pult_brain.json"
+    receipt = tree / "memory" / ".state" / "brain_projection.json"
+    # Расписка звалась `pult_brain.json` до 18.09.2026. Переносим её один раз:
+    # без этого пропавшая расписка читается как «конфига мозга ещё нет», и
+    # первый же запуск МОЛЧА отменит её собственный выбор рукой switch_brain.
+    legacy_receipt = receipt.with_name("pult_brain.json")
+    if not receipt.exists() and legacy_receipt.exists():
+        try:
+            receipt.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(legacy_receipt, receipt)
+        except OSError as exc:  # дальше просто спроецируем заново
+            log.warning("расписка мозга не перенеслась: %s", exc)
     built = _brain_config(cfg)
     # Свёртки памяти — вторая по расходу статья продукта после самих ходов, и до
     # 04.09 о ней не говорила ни одна строка: роль молча брала модель голоса.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Выкладка Пульта на сервер: тот же пакет desk, что ставится на Windows.
+"""Выкладка поставки на сервер: тот же пакет desk, что ставится на Windows.
 
 Зачем в репозитории. Сервер получал копию руками — скриптом из временной папки
-очередной сессии, и состав «что именно считается Пультом» жил в голове того, кто
+очередной сессии, и состав «что именно считается поставкой» жил в голове того, кто
 последним его писал. Теперь состав, версия и зависимости объявлены в
 ``deskpkg.py``, а эта выкладка ставит СОБРАННЫЙ ПАКЕТ целиком — тот же, что
 ``installer/build_dist.py`` кладёт в ``app/`` поставки Hélène. Расхождение между
@@ -105,7 +105,7 @@ def _channel_port(run, target: str = "/opt/praxisdesk") -> int | None:
     скормлен этой же функции — ключа `port` в нём нет.
 
     Порт публикует композ строкой `127.0.0.1:${PRAXIS_DESK_PORT:-8094}:8094`, а само
-    значение лежит в `desk.env` рядом с Пультом. Оттуда и читаем: там оно и живёт.
+    значение лежит в `desk.env` рядом с поставкой. Оттуда и читаем: там оно и живёт.
     """
     code, out, _ = run(f"cat {target}/desk.env 2>/dev/null")
     if code != 0 or not out.strip():
@@ -124,9 +124,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default=os.environ.get("PRAXIS_DEPLOY_HOST", ""))
     ap.add_argument("--user", default=os.environ.get("PRAXIS_DEPLOY_USER", "root"))
-    ap.add_argument("--target", default="/opt/praxisdesk", help="каталог Пульта на сервере")
+    ap.add_argument("--target", default="/opt/praxisdesk", help="каталог поставки на сервере")
     ap.add_argument("--container", default="praxis-desk", help="контейнер, который перезапустить")
-    ap.add_argument("--base", default="", help="адрес Пульта для проверок (по умолчанию https://<host>)")
+    ap.add_argument("--base", default="", help="адрес канала для проверок (по умолчанию https://<host>)")
     ap.add_argument("--key", default=os.environ.get("PRAXIS_DESK_TOKEN", ""), help="ключ канала для проверок")
     ap.add_argument("--skip-build", action="store_true")
     ap.add_argument("--dry-run", action="store_true")

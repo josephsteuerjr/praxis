@@ -9,7 +9,7 @@
 оболочки: один шов, за которым может стоять что угодно.
 
 Что здесь есть по-настоящему:
-  * доставка её реплики в Пульт (архив комнаты + событие жизни + расписка ей);
+  * доставка её реплики в окно (архив комнаты + событие жизни + расписка ей);
   * чтение своей же комнаты (`read_context`, `read_chat`, поиск по переписке);
   * честный отказ на адресатов, которых в этом продукте нет.
 
@@ -46,6 +46,7 @@ from deskd import rooms  # noqa: E402
 ROOM_DEFAULT = rooms.ROOM_DEFAULT
 ROOM_PATTERN = rooms.ROOM_PATTERN
 ROOM_ARCHIVE_DIR = rooms.ROOM_ARCHIVE_DIR
+ROOM_LEGACY = rooms.ROOM_LEGACY      # надгробие ключа до 10.09.2026, см. deskd/rooms.py
 is_room = rooms.is_room
 
 
@@ -170,7 +171,7 @@ def _registry(tree: Path, stream: str, archive: Path, *,
 
 
 class Desk:
-    """Одна комната продукта: разговор владельца с ней в окне Пульта."""
+    """Одна комната продукта: разговор владельца с ней в окне."""
 
     def __init__(self, tree: Path, stream: str, speaker: str, title: str,
                  memory_life=None, agent_name: str = "Агент"):
@@ -188,7 +189,7 @@ class Desk:
                 media_path: str = "", media_kind: str = "") -> None:
         """Лента комнаты в её формате: memory/groups/<поток>.jsonl + реестр состояния.
 
-        Пульт читает комнаты именно отсюда (deskd.readers.chats/chat_tail).
+        Окно читает комнаты именно отсюда (deskd.readers.chats/chat_tail).
 
         ⚠ Здесь стояло обещание «а её `group_context` — из того же архива, один файл
         на обоих читателей». Оно неверно: её `group_context` читает

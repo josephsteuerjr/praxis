@@ -102,7 +102,7 @@ def interrupt(tree: Path, by: str = "owner", scope: str = "all", reason: str = "
     scope = str(scope or "all").strip() or "all"
     path = Path(tree) / "memory" / ".control" / INTERRUPT
     request = {"by": str(by or "owner")[:40], "scope": scope,
-               "reason": str(reason or "").strip()[:200] or "прервано с Пульта", "at": _utc()}
+               "reason": str(reason or "").strip()[:200] or "прервано из окна", "at": _utc()}
     try:
         _write(path, request)
     except OSError as exc:
@@ -246,7 +246,7 @@ def tail(tree: Path, name: str, lines: int = 200) -> dict:
 # --- контейнеры: то, что живёт НЕ в дереве ------------------------------------
 #
 # Файловый протокол выше бесполезен ровно тогда, когда он нужнее всего: если
-# агент лёг, просьбу со стола некому взять. Поэтому рядом с Пультом может стоять
+# агент лёг, просьбу со стола некому взять. Поэтому рядом с каналом может стоять
 # отдельная служба (`server/deskctl.py`) — она вне агента, знает закрытый список
 # контейнеров и умеет три вещи: показать их состояние, отдать хвост журнала,
 # перезапустить. Канал сюда только ходит; решать, что позволено, — её дело.

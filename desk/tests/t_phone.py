@@ -114,10 +114,10 @@ class Scope(unittest.TestCase):
             self.assertFalse(deskapp._scope_ok("device", path), path)
 
     def test_pairing_is_owner_only_but_not_machine_only(self):
-        """Пару выдаёт владелец — и с этой машины, и из Пульта на сервере.
+        """Пару выдаёт владелец — и с этой машины, и из окна к серверу.
 
         `local_only` на /pair/* делал QR невозможным ровно там, где он нужен:
-        окно Пульта стоит не на той машине, где канал, и получало 403.
+        окно к серверу стоит не на той машине, где канал, и получало 403.
         Ключу устройства сюда по-прежнему нельзя.
         """
         for path in ("/pair/new", "/pair/devices", "/pair/revoke"):
@@ -187,7 +187,7 @@ class ConfigJs(unittest.TestCase):
 
     def test_channel_names_the_agent(self):
         text = deskapp._config_js()
-        self.assertIn("window.PULT_CONFIG = ", text)
+        self.assertIn("window.DESK_CONFIG = ", text)
         self.assertIn('"agent": "Праксис"', text)
         # Имя продукта не выдумывается: пусто — страница возьмёт своё.
         self.assertNotIn("product", text)

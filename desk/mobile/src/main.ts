@@ -9,8 +9,8 @@ import { watchShellVersion } from "../../ui-kit/version";
 
 declare global {
   interface Window {
-    PULT_CONFIG_OVERRIDE?: { base: string; key: string; agent?: string };
-    PULT_CONFIG?: { base: string; key: string; agent?: string } | null;
+    DESK_CONFIG_OVERRIDE?: { base: string; key: string; agent?: string };
+    DESK_CONFIG?: { base: string; key: string; agent?: string } | null;
   }
 }
 
@@ -18,7 +18,7 @@ const params = new URLSearchParams(location.search);
 const standalone = matchMedia("(display-mode: standalone)").matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
 const isApple = /iPhone|iPad|iPod/.test(navigator.userAgent);
 // Приоритет: подстановка dev-сервера, потом config.js хостинга.
-const override = window.PULT_CONFIG_OVERRIDE || window.PULT_CONFIG || undefined;
+const override = window.DESK_CONFIG_OVERRIDE || window.DESK_CONFIG || undefined;
 const base = override?.base || "";
 const STORAGE = "frame.device";
 

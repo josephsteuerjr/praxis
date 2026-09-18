@@ -67,8 +67,8 @@ let chosen: Lang | "" = "";
  * должен выиграть. В вебе и в PWA списка нет — там `navigator.languages`.
  */
 function systemTags(): string[] {
-  const shell = (globalThis as { PULT_CONFIG_OVERRIDE?: { locales?: string[] }; PULT_CONFIG?: { locales?: string[] } });
-  const fromShell = shell.PULT_CONFIG_OVERRIDE?.locales || shell.PULT_CONFIG?.locales;
+  const shell = (globalThis as { DESK_CONFIG_OVERRIDE?: { locales?: string[] }; DESK_CONFIG?: { locales?: string[] } });
+  const fromShell = shell.DESK_CONFIG_OVERRIDE?.locales || shell.DESK_CONFIG?.locales;
   if (fromShell && fromShell.length) return fromShell;
   const nav = (globalThis as { navigator?: { languages?: readonly string[]; language?: string } }).navigator;
   if (nav?.languages?.length) return [...nav.languages];

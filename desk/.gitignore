@@ -15,14 +15,14 @@ local-demo/frame.exe
 local-demo/.close-hint-shown
 shell/target/
 # сборка варианта Praxis (shell/build-praxis.ps1) — свой каталог, чтобы
-# helene.exe и praxis-pult.exe не затирали друг друга
+# helene.exe и praxis.exe не затирали друг друга
 shell/target-praxis/
 svc/target/
 app/dist/
 app/node_modules/
-# Пульт — второе приложение на том же общем окне (разделение 10.09)
-pult/dist/
-pult/node_modules/
+# Praxis — второе приложение на том же общем окне (разделение 10.09, с 18.09 — remote/)
+remote/dist/
+remote/node_modules/
 
 # сборки и зависимости
 svc/target/

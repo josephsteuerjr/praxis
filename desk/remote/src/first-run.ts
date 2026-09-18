@@ -1,11 +1,11 @@
-// Первый запуск Пульта: адрес сервера и ключ канала спрашиваются в окне.
+// Первый запуск издания к серверу: адрес и ключ канала спрашиваются в окне.
 //
 // У варианта Praxis установщика нет по замыслу — поставка распаковывается. До
 // 0.5.0 окно с пустым адресом открывалось «как есть» и билось об ошибки связи, а
 // человек должен был догадаться отредактировать helene.json рядом с exe. Пишем
 // тем же путём, что «Настройки»: config_save → restart_self.
 //
-// ⚠ Живёт у Пульта, а не в общем окне: у Элен харнесс рядом, и спрашивать адрес
+// ⚠ Живёт у Praxis, а не в общем окне: у Элен харнесс рядом, и спрашивать адрес
 // не у кого. До 10.09 эта карточка лежала в теле окна Элен за веткой
 // `cfg.needs_remote` — то есть окно возило в себе первый запуск чужого продукта.
 import { ApiError, cfg, shell } from "../../ui-kit/window/api";
@@ -23,7 +23,7 @@ export function askForServer(view: HTMLElement): boolean {
   document.body.classList.add("first-run");
   view.innerHTML = `<div class="first-run-card">
     <h2>${esc(cfg.product || PRODUCT_NAME)} · подключение к своему серверу</h2>
-    <p class="muted">Это окно не запускает агента: оно подключается к Пульту, который уже работает на твоём сервере. Нужны адрес и ключ канала (<code>PRAXIS_DESK_TOKEN</code> из <code>desk.env</code> на сервере).</p>
+    <p class="muted">Это окно не запускает агента: оно подключается к агенту, который уже работает на твоём сервере. Нужны адрес и ключ канала (<code>PRAXIS_DESK_TOKEN</code> из <code>desk.env</code> на сервере).</p>
     <label>Адрес сервера<input id="fr-base" type="url" placeholder="https://praxis.example.org" autocomplete="off" spellcheck="false"></label>
     <label>Ключ канала<input id="fr-key" type="password" placeholder="ключ из desk.env" autocomplete="off" spellcheck="false"></label>
     <div class="first-run-row"><button id="fr-go" class="btn" type="button">Подключиться</button><span id="fr-note" class="muted"></span></div>
@@ -47,7 +47,7 @@ export function askForServer(view: HTMLElement): boolean {
       // как «агент не отвечает, программа продолжает попытки» — здесь это неправда:
       // никто ничего не повторяет, и адрес может быть просто набран с опечаткой.
       const probe = await fetch(address + "/api/health" + (key.value ? "?key=" + encodeURIComponent(key.value.trim()) : "")).catch(() => {
-        throw new ApiError("по этому адресу никто не ответил — проверь адрес и что Пульт на сервере запущен");
+        throw new ApiError("по этому адресу никто не ответил — проверь адрес и что агент на сервере запущен");
       });
       if (!probe.ok) throw new ApiError(probe.status === 403 ? "сервер не принял ключ канала" : `сервер ответил ${probe.status}`);
       const loaded = await shell<{ config?: Record<string, unknown>; mtime_ns?: string }>("config_load");

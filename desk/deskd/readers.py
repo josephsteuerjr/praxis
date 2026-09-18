@@ -96,7 +96,7 @@ def desk_build(root: Path | None = None) -> dict:
     """Чем поднят канал: версия и отпечаток пакета desk (``desk.json`` рядом).
 
     Пакет кладут обе установки — и поставка Windows в ``app/``, и выкладка
-    Пульта на сервер (``deskpkg.build``). На сервере это ЕДИНСТВЕННЫЙ способ
+    поставки на сервер (``deskpkg.build``). На сервере это ЕДИНСТВЕННЫЙ способ
     узнать версию: оболочки, которая отвечает окну ``app_info``, там нет, и
     подпись в окне до 0.5.1 показывала одно имя продукта без числа.
 
@@ -577,10 +577,10 @@ def _title_for(chat_id, titles: dict[str, str]) -> str:
     key = str(chat_id or "")
     if not key:
         return ""
-    if key == "pult" or rooms.is_room(key):
+    if key == rooms.ROOM_LEGACY or rooms.is_room(key):
         # Комната окна — не Telegram, чужого имени у неё нет: имя из реестра
         # комнат, у комнаты по умолчанию — имя агента.
-        return rooms.title(tree(), "window" if key == "pult" else key,
+        return rooms.title(tree(), rooms.ROOM_DEFAULT if key == rooms.ROOM_LEGACY else key,
                            product_config().get("agent_name") or "")
     if key in titles:
         return titles[key]
@@ -1694,7 +1694,7 @@ def reader_status(base: Path | None = None, now: float | None = None) -> dict:
             "since": _num(receipt.get("since")),
             # Была ли квитанция ХОТЬ РАЗ. Раннер Hélène пишет её при старте, поэтому
             # «нет квитанции вовсе» значит не «агент сейчас выключен», а «этот агент
-            # окно не читает» — так живёт Пульт Праксис на сервере, где записка
+            # окно не читает» — так живёт Praxis на сервере, где записка
             # владельца ложится в дерево и ждёт читателя, которого нет. Окно обязано
             # говорить это словами, а не обещать «прочитает в следующий ход».
             "ever": bool(receipt)}
@@ -1832,7 +1832,7 @@ def _state_impl() -> dict:
     base = tree()
     st = base / "memory" / ".state"
     anatomy = _load_json(st / "anatomy.json")
-    # Дерево без снимка Hélène (Пульт Праксис) — имя из конфига продукта или
+    # Дерево без снимка Hélène (Praxis) — имя из конфига продукта или
     # среды сервера (КОНТРАКТ-B→A §9), а не «Агент».
     agent = str(anatomy.get("agent_name") or product_config().get("agent_name")
                 or os.environ.get("HELENE_AGENT_NAME") or "").strip() or "Агент"

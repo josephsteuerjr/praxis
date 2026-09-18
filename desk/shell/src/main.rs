@@ -63,7 +63,7 @@ const TOAST_ID: &str = "app.helene.desk";
 
 /// Имя продукта ЭТОЙ СБОРКИ. Константы выше — значения Hélène по умолчанию; та же
 /// оболочка, собранная с другим `productName`/`identifier` (через TAURI_CONFIG при
-/// сборке), зовётся своим именем: Пульт Праксис = «Praxis» / `ru.praxis.pult`. До
+/// сборке), зовётся своим именем: окно к серверу = «Praxis» / `app.praxis.desk`. До
 /// 09.09 имя было вшито, и окно Праксис на компьютере владельца выглядело как второе
 /// окно Hélène: тот же заголовок, значок, подпись, ярлык и уведомления (слово владельца).
 /// Читается один раз в main() из generate_context!(); до этого — значения Hélène.
@@ -3492,7 +3492,7 @@ fn channel_script(base: &Path, port: u16, key: &str, agent: &str, id: &str) -> S
         })
         .collect();
     format!(
-        "window.PULT_CONFIG_OVERRIDE = {};",
+        "window.DESK_CONFIG_OVERRIDE = {};",
         serde_json::json!({
             "base": format!("http://127.0.0.1:{port}"),
             "key": key,
@@ -3517,7 +3517,7 @@ fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
     let t = serde_json::Value::String(title);
     let b = serde_json::Value::String(body);
     format!(
-        r#"window.PULT_CONFIG_OVERRIDE = {cfg};
+        r#"window.DESK_CONFIG_OVERRIDE = {cfg};
 (function () {{
   var title = {t}, body = {b};
   function draw() {{
@@ -3691,17 +3691,17 @@ fn main() {
                 let key = cfg.get("key").and_then(|v| v.as_str()).unwrap_or("");
                 if !base_url.is_empty() {
                     init_script = format!(
-                        "window.PULT_CONFIG_OVERRIDE = {};",
+                        "window.DESK_CONFIG_OVERRIDE = {};",
                         serde_json::json!({"base": base_url, "key": key, "agent": agent, "product": product_ui()})
                     );
                 } else {
-                    // Пульт распакован, но адрес сервера ещё не вписан. Раньше окно
+                    // Praxis распакован, но адрес сервера ещё не вписан. Раньше окно
                     // открывалось «как есть» и билось об пустой адрес ошибками связи;
                     // установщика у варианта нет по замыслу, поэтому первый запуск
                     // спрашивает адрес и ключ сам (`needs_remote` → карточка в окне,
                     // `config_save` + `restart_self` — те же команды, что у настроек).
                     init_script = format!(
-                        "window.PULT_CONFIG_OVERRIDE = {};",
+                        "window.DESK_CONFIG_OVERRIDE = {};",
                         serde_json::json!({"base": "", "key": "", "agent": agent,
                                            "product": product_ui(), "needs_remote": true})
                     );
@@ -3776,7 +3776,7 @@ fn main() {
             register_toast_identity(toast_id(), product_ui(), None);
             ensure_start_menu_shortcut(toast_id(), product_fs(), None);
             // Каталог значков выбирает сборка (build.rs → HELENE_ICON_DIR): icons/ у
-            // Hélène, icons-praxis/ у Пульта Праксис. Тот же каталог даёт значок exe
+            // Hélène, icons-praxis/ у Praxis. Тот же каталог даёт значок exe
             // через bundle.icon в TAURI_CONFIG.
             let window_icon = tauri::image::Image::from_bytes(include_bytes!(concat!(
                 "../", env!("HELENE_ICON_DIR"), "/icon.png"
@@ -4536,8 +4536,8 @@ fn version_newer(candidate: &str, current: &str) -> bool {
 ///
 /// Канал релизов один на обе программы (`helene`), и в одном релизе лежат
 /// `Helene-<v>.zip` и `Praxis-<v>.zip`. До 0.5.0 бралось первое вложение с .zip —
-/// то есть Пульт Praxis скачал бы поставку Hélène с рантаймом и ядром, а Hélène
-/// могла получить пульт без ядра. Предпочтение — вложению `<productName>-…zip`
+/// то есть Praxis скачал бы поставку Hélène с рантаймом и ядром, а Hélène
+/// могла получить окно к серверу без ядра. Предпочтение — вложению `<productName>-…zip`
 /// (без учёта регистра); `allow_any` (только у Hélène: старые релизы звались
 /// просто `Helene.zip`) разрешает откат на любой .zip, у варианта отката нет —
 /// без своего архива кнопка ведёт на страницу релиза, как и раньше без вложений.

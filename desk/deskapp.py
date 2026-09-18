@@ -57,10 +57,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "localharness"))
 try:
     import voice  # noqa: E402 — путь добавлен строкой выше
 except ImportError:
-    # Пакет ПУЛЬТА раннера не несёт вовсе (`deskpkg.PARTS`: localharness только у
+    # Серверный пакет раннера не несёт вовсе (`deskpkg.PARTS`: localharness только у
     # Windows-издания) — и голоса у него нет по построению: агент живёт на
     # сервере, расшифровывает там же. Падать на импорте здесь значило бы уронить
-    # весь канал Пульта ради ручки, которой у него не должно быть.
+    # весь канал ради ручки, которой у него не должно быть.
     voice = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -149,7 +149,7 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
 # /tunnel и /events пускаем: внутри канала область проверяется ещё раз, по
 # каждому маршруту (_tunnel_dispatch), иначе телефон обошёл бы разбор прав.
 # ⚠ Управление (контейнеры, журналы, мозг) телефону ОТКРЫТО намеренно: пара —
-# это пульт владельца, он выдаёт её сам и отзывает одной кнопкой. Смысл кнопки
+# это его собственное окно, он выдаёт её сам и отзывает одной кнопкой. Смысл кнопки
 # «перезапустить» в том, чтобы она была под рукой, когда до компьютера не
 # дойти; закрытая от телефона, она бесполезна ровно в этом случае. Что можно
 # трогать — решает служба на сервере закрытым списком, а не эта строка.
@@ -233,7 +233,7 @@ def _devices_path() -> Path:
     По умолчанию — в состоянии агента (`memory/.state/devices.json`): на
     Windows канал и дерево живут вместе, и файл там с самого начала.
 
-    ⚠ На сервере это НЕ РАБОТАЛО и работать не могло: Пульт смотрит в чужое
+    ⚠ На сервере это НЕ РАБОТАЛО и работать не могло: канал смотрит в чужое
     дерево, смонтированное только на чтение, и запись ключа падала
     `OSError: Read-only file system` — телефон получал 503 «устройство не
     записалось», а владелец видел это как «телефон не подключается» (найдено
@@ -553,7 +553,7 @@ async def mobile_sw(request):
 def _agent_name() -> str:
     """Имя агента для телефона и мини-аппа (КОНТРАКТ-B→A §9): снимок анатомии
     → `agent.name` из helene.json → `HELENE_AGENT_NAME` (сервер без конфига
-    продукта) → «Агент». У дерева без снимка Hélène (Пульт Праксис) первого
+    продукта) → «Агент». У дерева без снимка Hélène (Praxis) первого
     источника нет — телефон получал «Агент»."""
     anatomy = readers.anatomy() or {}
     return str(anatomy.get("agent_name") or readers.product_config().get("agent_name")
@@ -999,8 +999,8 @@ async def _r_voice(c: Call):
     """Слышит ли агент: библиотека, модель, ход скачивания и причина молчания."""
     if voice is None:
         return {"schema": "helene.voice.v1", "enabled": False, "ready": False,
-                "why": "этот канал стоит без исполнителя ходов (Пульт) — голос живёт там, "
-                       "где живёт агент",
+                "why": "этот канал стоит без исполнителя ходов (издание к серверу) — "
+                       "голос живёт там, где живёт агент",
                 "model": "", "catalog": [], "installed": {}, "dir": "",
                 "library": {"present": False, "why": "в этой установке нет исполнителя ходов"},
                 "download": None}
@@ -1044,7 +1044,7 @@ async def _r_brain_set(c: Call):
 
 async def _r_interrupt(c: Call):
     """Прервать живой ход агента (12.09): просьба в memory/.control, раннер читает на тике.
-    Телефону открыто наравне с перезапуском — это пульт владельца."""
+    Телефону открыто наравне с перезапуском — это окно владельца."""
     body = c.body or {}
     return await asyncio.to_thread(control.interrupt, readers.tree(),
                                    str(c.role or "owner"), str(body.get("scope") or "all"),
@@ -1090,7 +1090,7 @@ ROUTES: tuple[Route, ...] = (
     # Управление харнессом, который живёт не здесь (deskd/control.py). В
     # _DEVICE_PATHS их нет намеренно: перезапуск и журналы — дело владельца, а
     # не спаренного телефона.
-    # Контейнеры и мозг — через службу рядом с Пультом (server/deskctl.py). Она
+    # Контейнеры и мозг — через службу рядом с каналом (server/deskctl.py). Она
     # вне агента: перезапуск нужен ровно тогда, когда агент лёг и файловый
     # протокол выше уже некому исполнить.
     Route("GET", "/api/containers", _r_containers),
@@ -1112,10 +1112,10 @@ ROUTES: tuple[Route, ...] = (
     # Телефон: пары выдаёт и отзывает ВЛАДЕЛЕЦ — тот, у кого ключ окна.
     #
     # ⚠ Здесь стояло `local_only=True` («только окно на этой машине»), и это
-    # ломало единственную раскладку, в которой QR по-настоящему нужен: Пульт к
+    # ломало единственную раскладку, в которой QR по-настоящему нужен: окно к
     # харнессу на сервере. Окно там по определению не на той машине, канал
     # отвечал 403 «только с этой машины», и телефон подключить было НЕЧЕМ
-    # (найдено владельцем 09.09 на живом Пульте Праксис).
+    # (найдено владельцем 09.09 на живом Praxis).
     # Защиты эта строка не добавляла: пару выдаёт только роль `owner`, а ключ
     # окна и так открывает всё — переписку, конституцию (`/api/md`) и отправку
     # реплик. Ключу устройства сюда по-прежнему нельзя: /pair/* нет ни в
@@ -1255,7 +1255,7 @@ async def _say(text: str, chat: str = "", attachments=None) -> dict:
     """Сообщение ей. Durable-файл в memory/.control/desk_inbox — и всё.
 
     `chat` — адрес комнаты (слово владельца 31.08: окно — ещё одна дверь владельца в
-    ЛЮБУЮ его комнату). Пусто/«pult» — прежний путь. Telegram-ключ — записка
+    ЛЮБУЮ его комнату). Пусто/«window» — прежний путь (и старый ключ до 10.09.2026). Telegram-ключ — записка
     `<stamp>__to__<ключ>.md`: руннер запишет реплику владельца в память ЭТОЙ
     комнаты и поведёт ход там; ответ уедет в Telegram. Мёртвый руннер = мёртвый
     бот, и класть адресное сообщение туда, откуда оно никогда не уедет адресату,
@@ -1284,7 +1284,7 @@ async def _say(text: str, chat: str = "", attachments=None) -> dict:
         raise web.HTTPBadRequest(text="пустое сообщение")
     if len(text) > 20_000:
         raise web.HTTPBadRequest(text="слишком длинно (20k)")
-    if chat and chat not in ("window", "pult") and not _CHAT_KEY_RE.match(chat) \
+    if chat and chat not in (rooms.ROOM_DEFAULT, rooms.ROOM_LEGACY) and not _CHAT_KEY_RE.match(chat) \
             and not rooms.is_room(chat):
         raise web.HTTPBadRequest(text=f"не похоже на адрес комнаты: {chat!r}")
     if files and chat and _CHAT_KEY_RE.match(chat) and not rooms.is_room(chat):
@@ -1297,7 +1297,7 @@ async def _say(text: str, chat: str = "", attachments=None) -> dict:
     body = (f"# Сообщение с окна владельца · {stamp}\n\n{text}\n")
     # Адресная записка — и в Telegram-комнату, и в другую комнату окна
     # (`window-<hex>`, задача A §3): раннер ведёт ход в ней (`__to__<ключ>`).
-    targeted = bool(chat and chat not in ("window", "pult"))
+    targeted = bool(chat and chat not in (rooms.ROOM_DEFAULT, rooms.ROOM_LEGACY))
 
     def _write() -> dict:
         written = []
@@ -1669,10 +1669,10 @@ def _config_js() -> str:
     cfg = {"base": "", "key": "", "agent": _agent_name()}
     if product:
         # Пусто — страница возьмёт своё имя по умолчанию. Врать «Hélène» там,
-        # где стоит Пульт Праксис, нельзя, а угадывать неоткуда.
+        # где стоит Praxis, нельзя, а угадывать неоткуда.
         cfg["product"] = product
     return ("/* config.js: канал называет себя сам, файла на диске нет */\n"
-            "window.PULT_CONFIG = " + json.dumps(cfg, ensure_ascii=False) + ";\n")
+            "window.DESK_CONFIG = " + json.dumps(cfg, ensure_ascii=False) + ";\n")
 
 
 async def config_js(request):

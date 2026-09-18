@@ -7,7 +7,7 @@
 // владелец видит это словами. Заглушка включается сама по первому 404 и
 // помечает комнаты `stub: true`.
 import { ApiError, api, del, post } from "./api";
-import { S, WINDOW_PREFIX, WINDOW_ROOM, isWindowRoom, runIsLive, type Room, type Run } from "./state";
+import { LEGACY_WINDOW_KEY, S, WINDOW_PREFIX, WINDOW_ROOM, isWindowRoom, runIsLive, type Room, type Run } from "./state";
 
 export interface ChatRow {
   peer_id: string;
@@ -55,7 +55,7 @@ export function buildRooms(runs: Run[], chats?: ChatRow[]): Room[] {
   byKey.set(WINDOW_ROOM, { key: WINDOW_ROOM, name: S.agent, kind: "window", live: false, count: 0, mtime: Number.MAX_SAFE_INTEGER });
   for (const c of chats || []) {
     const key = String(c.peer_id);
-    if (key === "pult" || key === WINDOW_ROOM) continue;
+    if (key === LEGACY_WINDOW_KEY || key === WINDOW_ROOM) continue;
     const kind: Room["kind"] = c.kind === "window" || (c.kind !== "telegram" && isWindowRoom(key)) ? "window" : "telegram";
     if (!byKey.has(key)) {
       byKey.set(key, {
@@ -74,7 +74,7 @@ export function buildRooms(runs: Run[], chats?: ChatRow[]): Room[] {
   for (const r of runs) {
     if (r.kind !== "chat_turn" || r.chat_id == null) continue;
     let key = String(r.chat_id);
-    if (key === "pult") key = WINDOW_ROOM;
+    if (key === LEGACY_WINDOW_KEY) key = WINDOW_ROOM;
     // A successful catalog is authoritative for local rooms. Historical runs
     // remain visible in the activity list, but must not resurrect archived chats.
     if (chats !== undefined && isWindowRoom(key) && !byKey.has(key)) continue;

@@ -859,7 +859,7 @@ HELENE_JSON = """{
 # --- версии -------------------------------------------------------------------
 
 # Версия продукта объявлена в пакете desk: её спрашивает и эта сборка, и
-# выкладка Пульта на сервер, и один разбор Cargo.toml на обоих — то же правило,
+# выкладка поставки на сервер, и один разбор Cargo.toml на обоих — то же правило,
 # что и для состава.
 product_version = deskpkg.product_version
 
@@ -989,7 +989,7 @@ def _exe_version(path: Path) -> str:
 
 
 # Имя продукта ВНУТРИ exe (Tauri пишет productName в VERSIONINFO.ProductName).
-# Оболочка Hélène и Пульт Praxis — один крейт с разным TAURI_CONFIG; по одному
+# Оболочка Hélène и оболочка Praxis — один крейт с разным TAURI_CONFIG; по одному
 # лишь имени файла их не различить, и 08.09 копия с identity Hélène ушла в папку
 # Praxis: single-instance фокусировал окно Миры вместо своего.
 def _exe_product_name(path: Path) -> str:
@@ -1008,17 +1008,17 @@ def _exe_product_name(path: Path) -> str:
 ROOT_KEEP = {"runtime"}   # дорого пересобирать; чистится отдельно, флагом
 
 
-# --- вариант Praxis: Пульт к своему серверу --------------------------------------
+# --- вариант Praxis: окно к своему серверу ---------------------------------------
 
 # Та же оболочка, собранная с другим productName/identifier (shell/build-praxis.ps1),
 # в СВОЙ каталог сборки: target/ остаётся за helene.exe, target-praxis/ — за Praxis.
 SHELL_PRAXIS_EXE = DESK / "shell" / "target-praxis" / "release" / "helene.exe"
 PRAXIS_PRODUCT = "Praxis"
-PRAXIS_IDENTIFIER = "ru.praxis.pult"
+PRAXIS_IDENTIFIER = "app.praxis.desk"
 PRAXIS_BUILD_HINT = "собери вариант: pwsh -File shell/build-praxis.ps1"
 
-# Конфиг Пульта Praxis: режим remote, адрес и ключ впишет человек
-# (installer/ПУЛЬТ-PRAXIS.md). `setup_complete` стоит, чтобы оболочка не искала
+# Конфиг варианта Praxis: режим remote, адрес и ключ впишет человек
+# (installer/PRAXIS.md). `setup_complete` стоит, чтобы оболочка не искала
 # helene-setup.exe: установщика у этого варианта нет по замыслу. Автопроверка
 # обновлений выключена — канал общий с Hélène, окно ищет в релизе свой
 # Praxis-<версия>.zip, а руками обновляться проще через распаковку поверх.
@@ -1205,10 +1205,10 @@ def relay_linux_provenance(binary: Path, allow_partial: bool) -> dict:
     return made
 
 
-def build_praxis_pult(args) -> None:
+def build_praxis_app(args) -> None:
     """Поставка варианта Praxis: окно в режиме remote без ядра, рантайма и тела.
 
-    Состав повторяет то, что 09.09 было собрано руками в Programs\\PraxisPult
+    Состав повторяет то, что 09.09 было собрано руками в Programs\\Praxis
     (ПЕРЕДАЧА-09.09 §3): exe варианта, значок, статика окна, helene.json-заготовка,
     документ подключения, лицензии. Ничего из дерева агента сюда не едет — и
     поэтому секрет-гард здесь сканирует только то, что положено, кред-полом из
@@ -1216,7 +1216,7 @@ def build_praxis_pult(args) -> None:
     """
     out = Path(args.out).resolve() / PRAXIS_PRODUCT
     version, declared = product_version()
-    print(f"{PRAXIS_PRODUCT} (Пульт к своему серверу) {version}")
+    print(f"{PRAXIS_PRODUCT} (окно к своему серверу) {version}")
     print(f"дистрибутив -> {out}")
     if out.exists():
         shutil.rmtree(out)
@@ -1228,36 +1228,37 @@ def build_praxis_pult(args) -> None:
     inside = _exe_version(SHELL_PRAXIS_EXE)
     want = declared.get("shell/Cargo.toml", "")
     if inside and want and inside != want:
-        raise SystemExit(f"praxis-pult.exe: внутри {inside}, а shell/Cargo.toml объявляет {want} — "
+        raise SystemExit(f"praxis.exe: внутри {inside}, а shell/Cargo.toml объявляет {want} — "
                          f"exe не пересобран после подъёма версии ({PRAXIS_BUILD_HINT})")
     product_inside = _exe_product_name(SHELL_PRAXIS_EXE)
     if product_inside != PRAXIS_PRODUCT:
         raise SystemExit(f"в {SHELL_PRAXIS_EXE} productName «{product_inside or '?'}», а нужен "
                          f"«{PRAXIS_PRODUCT}»: это оболочка Hélène, не вариант ({PRAXIS_BUILD_HINT})")
-    shutil.copy2(SHELL_PRAXIS_EXE, out / "praxis-pult.exe")
-    print(f"  praxis-pult.exe: положен (productName={product_inside}, версия {inside or '?'})")
+    shutil.copy2(SHELL_PRAXIS_EXE, out / "praxis.exe")
+    print(f"  praxis.exe: положен (productName={product_inside}, версия {inside or '?'})")
     icon = DESK / "shell" / "icons-praxis" / "icon.ico"
     if not icon.is_file():
         raise SystemExit(f"нет значка варианта: {icon}")
-    # Двумя именами: praxis.ico — то, что ищет оболочка для уведомлений и ярлыка
-    # (<productName>.ico), praxis-pult.ico — как в ручной поставке 09.09.
+    # Одним именем: praxis.ico — ровно то, что ищет оболочка для уведомлений и
+    # ярлыка (<productName>.ico). Второй копии (praxis-pult.ico) не стало 18.09.2026
+    # вместе со словом «пульт»: её не искал никто, она осталась от ручной
+    # поставки 09.09.
     shutil.copy2(icon, out / "praxis.ico")
-    shutil.copy2(icon, out / "praxis-pult.ico")
 
     print("окно:")
-    # Настольный Пульт везёт окно ПУЛЬТА: агент у него на сервере, и карточек
+    # Настольный Praxis везёт УДАЛЁННОЕ издание окна: агент у него на сервере, и карточек
     # местного агента в этой сборке нет вовсе (разделение приложений 10.09).
-    static_digest = copy_static(out / "app" / "static", deskpkg.PULT)
-    print(f"  app/static: окно Пульта, {static_digest[:12]}")
+    static_digest = copy_static(out / "app" / "static", deskpkg.REMOTE)
+    print(f"  app/static: окно Praxis, {static_digest[:12]}")
 
     print("документы:")
     (out / "helene.json").write_text(PRAXIS_JSON, encoding="utf-8", newline="\n")
-    copy_text_lf(DESK / "installer" / "ПУЛЬТ-PRAXIS.md", out / "ПУЛЬТ-PRAXIS.md")
+    copy_text_lf(DESK / "installer" / "PRAXIS.md", out / "PRAXIS.md")
     copy_text_lf(DESK / "installer" / "THIRD-PARTY.md", out / "ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md")
     copy_text_lf(DESK / "installer" / "ЛИЦЕНЗИЯ.md", out / "ЛИЦЕНЗИЯ.md")
     copy_text_lf(DESK / "installer" / "NOTICE", out / "NOTICE")
     n_lic = collect_rust_licenses(out, args.allow_partial, parts=("shell",),
-                                  include_body=False, exes="praxis-pult.exe")
+                                  include_body=False, exes="praxis.exe")
     print(f"  лицензии крейтов: {n_lic}")
 
     print("паспорт сборки:")
@@ -1336,8 +1337,8 @@ def main() -> None:
     parser.add_argument("--tree", default="",
                         help="путь к дереву агента (по умолчанию ../live или HELENE_TREE_SRC)")
     parser.add_argument("--variant", choices=("helene", "praxis"), default="helene",
-                        help="helene — полная поставка Hélène (по умолчанию); praxis — Пульт "
-                             "Praxis: то же окно в режиме remote, без ядра, рантайма и тела")
+                        help="helene — полная поставка Hélène (по умолчанию); praxis — издание "
+                             "к серверу: то же окно в режиме remote, без ядра, рантайма и тела")
     parser.add_argument("--skip-tests", action="store_true",
                         help="не гонять стенды перед сборкой (отладка); в выпуске — никогда")
     parser.add_argument("--from-core", action="store_true",
@@ -1346,7 +1347,7 @@ def main() -> None:
                              "издание целиком — см. installer/core_src.py --check")
     args = parser.parse_args()
     if args.variant == "praxis":
-        build_praxis_pult(args)
+        build_praxis_app(args)
         return
     out = Path(args.out).resolve() / "Helene"   # имя папки — латиницей
     cache = Path(args.out).resolve() / "cache"
@@ -1534,7 +1535,7 @@ def main() -> None:
     if server_out.exists():
         shutil.rmtree(server_out)
     server_out.mkdir()
-    # Рекурсивно: у server/ появились ПОДПАПКИ (рецепт контейнера Пульта), а
+    # Рекурсивно: у server/ появились ПОДПАПКИ (рецепт контейнера канала), а
     # плоский обход отдавал каталог в shutil.copy2 и валил сборку голым
     # PermissionError на предпоследнем шаге — после всей долгой работы.
     def _copy_server(src: Path, dst: Path) -> int:

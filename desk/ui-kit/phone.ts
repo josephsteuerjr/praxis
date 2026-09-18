@@ -110,7 +110,9 @@ type Tab = "now" | "chats" | "tasks" | "wakes" | "system";
 
 const WINDOW_ROOM: string = contract.rooms.default;
 const WINDOW_PREFIX: string = contract.rooms.pattern.replace(/^\^/, "").split("[")[0];
-const isWindowRoom = (key: string) => key === WINDOW_ROOM || key === "pult" || key.startsWith(WINDOW_PREFIX);
+/** Старый ключ комнаты окна (до 10.09.2026) — `contract.rooms.legacy`, см. window/state.ts. */
+const LEGACY_WINDOW_KEY: string = contract.rooms.legacy;
+const isWindowRoom = (key: string) => key === WINDOW_ROOM || key === LEGACY_WINDOW_KEY || key.startsWith(WINDOW_PREFIX);
 
 export class Denied extends Error {}
 export class Offline extends Error {}
@@ -150,7 +152,7 @@ const TABS: Array<[Tab, string]> = [
   ["chats", "Чаты"],
   ["tasks", "Задачи"],
   ["wakes", "Пробуждения"],
-  // Пятая вкладка — пульт в кармане: перезапустить упавшее, посмотреть ошибки,
+  // Пятая вкладка — управление в кармане: перезапустить упавшее, посмотреть ошибки,
   // сменить модель. Она появляется, только если рядом с каналом объявлена
   // служба управления; у телефона к домашней Элен её нет, и вкладка молчит об
   // этом словами, а не пустым экраном.
@@ -372,7 +374,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   const runLive = (r: Run) => r.status === "running" && (foreign() ? recent(r) : !!state?.runner?.busy && state?.runner?.run === r.id);
   const roomKey = (r: Run) => {
     const k = String(r.chat_id ?? "");
-    return k === "pult" ? WINDOW_ROOM : k;
+    return k === LEGACY_WINDOW_KEY ? WINDOW_ROOM : k;
   };
   const liveRun = (): Run | undefined => runs.find((r) => runLive(r));
 
@@ -715,7 +717,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     const next: Room[] = [{ key: WINDOW_ROOM, name: agent, kind: "window", live: false, count: 0, at: 0 }];
     for (const c of chats) {
       const k = String(c.peer_id);
-      if (k === WINDOW_ROOM || k === "pult") continue;
+      if (k === WINDOW_ROOM || k === LEGACY_WINDOW_KEY) continue;
       const kind: Room["kind"] = c.kind === "window" || (c.kind !== "telegram" && isWindowRoom(k)) ? "window" : "telegram";
       next.push({ key: k, name: c.title || (kind === "window" ? "Новый чат" : "чат " + k), kind, live: false, count: c.messages || 0, at: Number(c.mtime_ns) / 1e6 || 0 });
     }
@@ -778,7 +780,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   // Ссылки с карточки хода (steps.ts): открыть место в чате / надиктовать просьбу агенту в композер.
   let pendingJump = "";
   const roomByKey = (key: string) => {
-    const k = key === "pult" || key === "window" ? WINDOW_ROOM : key;
+    const k = key === LEGACY_WINDOW_KEY || key === WINDOW_ROOM ? WINDOW_ROOM : key;
     return { key: k, name: rooms.find((r) => r.key === k)?.name || (isWindowRoom(k) ? agent : k) };
   };
   window.addEventListener("steps-open", (e) => {
