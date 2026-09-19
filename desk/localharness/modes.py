@@ -121,6 +121,10 @@ HAS_COMPUTER = os.name == "nt" or sys.platform == "darwin"
 #: в каком положении. Отдельная константа, а не `os.name` по месту: стенды
 #: подменяют её, чтобы разобрать обе картины на любой машине.
 HAS_SERVICE_TOGGLES = os.name == "nt"
+#: Тексты по платформе (`texts()`, `service_texts()`, `computer_texts()`) — флаг,
+#: а не `sys.platform` в каждой функции: стенды подменяют его, чтобы разобрать
+#: картину Windows на раннере macOS и наоборот (как HAS_SERVICE/HAS_COMPUTER).
+MACOS_TEXTS = sys.platform == "darwin"
 
 #: Имя службы в SCM (svc/src/main.rs::SERVICE_NAME). Латиницей.
 SERVICE_NAME = "Helene"
@@ -194,7 +198,7 @@ def texts() -> dict[str, str]:
     Одна точка выбора на `resolve`, `describe` и `catalogue`: то, что уезжает в
     `/api/mode`, в анатомию и в карточки, обязано быть одним и тем же текстом.
     """
-    return TEXTS_MACOS if sys.platform == "darwin" else TEXTS
+    return TEXTS_MACOS if MACOS_TEXTS else TEXTS
 
 # --------------------------------------------------------------------------- #
 #  Служба: тексты опции, а не режима
@@ -246,7 +250,7 @@ def service_texts() -> tuple[str, str, str]:
     уезжает в `/api/mode`, в карточку окна и в сцену мастера, обязано быть одним
     и тем же текстом. На Windows оговорки нет — там всё сказано описанием.
     """
-    if sys.platform == "darwin":
+    if MACOS_TEXTS:
         return SERVICE_TITLE_MACOS, SERVICE_TEXT_MACOS, SERVICE_WARNING_MACOS
     return SERVICE_TITLE, SERVICE_TEXT, ""
 
@@ -358,7 +362,7 @@ def computer_texts() -> tuple[str, dict[str, str]]:
     """Текст опции и тексты прав для ЭТОЙ платформы: macOS — `*_MACOS`, иначе
     общие. Одна точка выбора на `computer_option()`: то, что уезжает в
     `/api/mode` и в карточку, обязано быть одним и тем же текстом."""
-    if sys.platform == "darwin":
+    if MACOS_TEXTS:
         return COMPUTER_TEXT_MACOS, COMPUTER_SCOPE_TEXTS_MACOS
     return COMPUTER_TEXT, COMPUTER_SCOPE_TEXTS
 

@@ -332,10 +332,10 @@ class Platform(unittest.TestCase):
     """
 
     def setUp(self):
-        self.saved = (modes.HAS_SERVICE, modes.HAS_COMPUTER, modes.HAS_SERVICE_TOGGLES)
+        self.saved = (modes.HAS_SERVICE, modes.HAS_COMPUTER, modes.HAS_SERVICE_TOGGLES, modes.MACOS_TEXTS)
 
     def tearDown(self):
-        modes.HAS_SERVICE, modes.HAS_COMPUTER, modes.HAS_SERVICE_TOGGLES = self.saved
+        modes.HAS_SERVICE, modes.HAS_COMPUTER, modes.HAS_SERVICE_TOGGLES, modes.MACOS_TEXTS = self.saved
 
     def test_flags_follow_the_platform(self):
         import importlib
@@ -345,6 +345,7 @@ class Platform(unittest.TestCase):
         self.assertEqual(fresh.HAS_SERVICE, os.name == "nt" or sys.platform == "darwin")
         self.assertEqual(fresh.HAS_COMPUTER, os.name == "nt" or sys.platform == "darwin")
         self.assertEqual(fresh.HAS_SERVICE_TOGGLES, os.name == "nt")
+        self.assertEqual(fresh.MACOS_TEXTS, sys.platform == "darwin")
 
     def test_pipe_keeps_the_computer_section_without_a_service(self):
         # Картина системы без службы (не Windows и не macOS): тело есть, службы
@@ -397,6 +398,7 @@ class Platform(unittest.TestCase):
         # Стенды и Windows приносят ответ SCM явно — ему верим как есть.
         modes.HAS_SERVICE = False
         modes.HAS_SERVICE_TOGGLES = True  # ответ SCM — Windows, с двумя галочками
+        modes.MACOS_TEXTS = False  # и с текстами Windows
         picture = modes.resolve({"agent_mode": "sandbox", "service": {"session0": True}},
                                 installed=True)
         self.assertTrue(picture["service_here"])
@@ -406,6 +408,7 @@ class Platform(unittest.TestCase):
     def test_windows_picture_is_untouched(self):
         modes.HAS_SERVICE = True
         modes.HAS_SERVICE_TOGGLES = True  # картина Windows — с двумя галочками
+        modes.MACOS_TEXTS = False  # и с текстами Windows
         cfg = {"agent_mode": "sandbox", "service": {"session0": True}}
         picture = modes.resolve(cfg, installed=False)
         self.assertTrue(picture["service_here"])
