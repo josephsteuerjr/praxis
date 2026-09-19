@@ -175,11 +175,15 @@ STT-коробка). Подробно — `ОБНОВЛЕНИЕ.md`, `installer/
 `curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh`
 (GitHub отдаёт последний выпуск; какой тег качать, знает сам скрипт) —
 в `~/Applications/Helene`: `Helene.app` (окно и значок в строке меню),
-`Helene Setup.app` (мастер), `helene-relay`, `runtime/` (свой CPython 3.14 со всеми
-пакетами, голос включая, и `runtime/git/` — git из исходника), `app/`, `tree/`
-(байт в байт из Windows-архива того же выпуска), `data/`. Ограда `shell` —
-seatbelt macOS. Чего в сборке для Mac нет: тела и тула `computer`, службы и
-брокера, Intel-маков, подписи Developer ID/нотаризации/dmg, правил брандмауэра.
+`Helene Setup.app` (мастер), `helene-relay`, с 0.8.0 — `helene-body` и
+`helene-bridge` (тело тула `computer`: экран, окна и ввод через CoreGraphics,
+дерево окна через Accessibility; два разрешения TCC, без них — отказ словами;
+после каждого обновления разрешения слетают — подпись ad-hoc), `runtime/` (свой
+CPython 3.14 со всеми пакетами, голос включая, и `runtime/git/` — git из
+исходника), `app/`, `tree/` (байт в байт из Windows-архива того же выпуска),
+`data/`. Ограда `shell` — seatbelt macOS; брокер прав — сама оболочка через
+системный диалог пароля. Чего в сборке для Mac нет: Intel-маков, подписи
+Developer ID/нотаризации/dmg, службы без входа в систему, правил брандмауэра.
 Собирается на GitHub Actions (`.github/workflows/macos.yml` → `installer/build_mac.py`);
 как выпускать — `installer/RELEASE.md`, раздел «Сборка для macOS».
 
@@ -291,14 +295,19 @@ if ($code) { throw "cargo build прокси" }
 
 **Сборка для macOS** идёт не здесь, а на раннере GitHub `macos-15` (Apple
 Silicon, `.github/workflows/macos.yml`). Пока файла workflow нет в `main`,
-прогон запускается push-ом в `port/macos`, а выкладка — руками из артефакта:
-`gh run download <id> -n Helene-v0.7.1-macos-arm64`, затем `gh release upload
-v0.7.1 Helene-0.7.1-macos-arm64.zip Helene-0.7.1-macos-arm64.zip.sha256
-install.sh --clobber`. После влития в `main` — по кнопке с выкладкой тем же
-шагом: `gh workflow run macos.yml -f tag=v0.7.1 -f upload=true`.
-На самом Mac то же руками: `python3 installer/build_mac.py --from-release v0.7.1`
+прогон запускается push-ом в `port/macos` или `port/macos-body`, а выкладка —
+руками из артефакта: `gh run download <id> -n Helene-v0.8.0-macos-arm64`, затем
+`gh release upload v0.8.0 Helene-0.8.0-macos-arm64.zip
+Helene-0.8.0-macos-arm64.zip.sha256 install.sh --clobber`. После влития в
+`main` — по кнопке с выкладкой тем же шагом: `gh workflow run macos.yml -f
+tag=v0.8.0 -f upload=true`. Тело (`helene-body`, `helene-bridge`) сборка
+собирает из `praxis/body` этого репозитория (`--target-dir` в кэше сборки), а
+workflow гоняет его `cargo test` на настоящем Mac и живые стенды
+(`tests/t_body.py`, `tests/t_body_macos.py`) бинарями сборки.
+На самом Mac то же руками: `python3 installer/build_mac.py --from-release v0.8.0`
 (нужны Rust, Node 24, Xcode Command Line Tools, `gh`; итог —
-`installer/build-mac/Helene-<версия>-macos-arm64.zip`, `.sha256` и `install.sh`).
+`installer/build-mac/Helene-<версия>-macos-arm64.zip`, `.sha256` и `install.sh`;
+`--skip-body` — отладочная полусборка без тела, паспорт получит `complete: false`).
 Windows-сборку `build_mac.py` не трогает и общее берёт из `build_dist` импортом.
 Чистые части сборки проверяются на любой ОС: `python tests/t_build_mac.py`.
 

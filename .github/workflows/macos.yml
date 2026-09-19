@@ -2,33 +2,44 @@
 #
 # Что происходит: раннер macos-15 (arm64) собирает архив Helene-<v>-macos-arm64.zip
 # скриптом desk/installer/build_mac.py (дерево агента — из Windows-архива того же
-# выпуска; фронты, Rust, реле, рантайм, git, бандлы, ad-hoc подпись, паспорт,
-# секрет-гард), гоняет стенды Rust и живые проверки ограды рантаймом сборки,
-# ставит программу тихо в ~/Applications/Helene, открывает её, снимает экран и
-# дёргает канал. Архив, сумма, install.sh, паспорт, снимок и журналы — в
+# выпуска; фронты, Rust, реле, тело тула `computer` из praxis/body, рантайм, git,
+# бандлы, ad-hoc подпись, паспорт, секрет-гард), гоняет стенды Rust (оболочка,
+# мастер, мост и тело — на настоящем Mac) и живые проверки ограды рантаймом
+# сборки, ставит программу тихо в ~/Applications/Helene с включённым «Управлением
+# компьютером», открывает её, снимает экран, дёргает канал и ждёт, пока тело
+# подключится к мосту (data/memory/.state/body.json → connected: true); затем
+# живые стенды тела бинарями сборки (t_body.py, t_body_macos.py — контракт тела
+# на macOS: status, снимок, окна, процессы, буфер обмена, дерево окна). Архив,
+# сумма, install.sh, паспорт, снимок и журналы (включая журналы тела) — в
 # артефактах прогона.
+#
+# Разрешения TCC («Запись экрана», «Универсальный доступ») у процессов раннера —
+# какие есть: стенды тела печатают отказ словами и не падают на нём; падают они
+# на лжи (снимок «ok» без разрешения) и на поломке (разрешение есть, а тело
+# не отвечает).
 #
 # Два пути к выпуску — честно, потому что первый нужен, пока файла workflow нет
 # в main (workflow_dispatch виден GitHub только с ветки по умолчанию):
-#   (а) прогон от push в port/macos (без выкладки: inputs на push пусты) →
-#       gh run download <id> -n Helene-v0.7.2-macos-arm64
-#       gh release upload v0.7.2 Helene-0.7.2-macos-arm64.zip \
-#           Helene-0.7.2-macos-arm64.zip.sha256 install.sh --clobber
+#   (а) прогон от push в port/macos или port/macos-body (без выкладки: inputs на
+#       push пусты) →
+#       gh run download <id> -n Helene-v0.8.0-macos-arm64
+#       gh release upload v0.8.0 Helene-0.8.0-macos-arm64.zip \
+#           Helene-0.8.0-macos-arm64.zip.sha256 install.sh --clobber
 #   (б) после влития в main:
-#       gh workflow run macos.yml -f tag=v0.7.2 -f upload=true
+#       gh workflow run macos.yml -f tag=v0.8.0 -f upload=true
 #       — тот же прогон, плюс шаг «Выложить в выпуск» (--clobber в тот же тег;
 #       Windows-архив не трогается).
 name: macOS (Apple Silicon)
 
 on:
   push:
-    branches: [port/macos]
+    branches: [port/macos, port/macos-body]
   workflow_dispatch:
     inputs:
       tag:
         description: "Выпуск: чьё дерево агента берём и куда выкладываем"
         type: string
-        default: v0.7.2
+        default: v0.8.0
         required: true
       upload:
         description: "Выложить архив, .sha256 и install.sh в этот выпуск (--clobber)"
@@ -47,7 +58,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       # На push inputs пусты — тег по умолчанию тот же, что у build_mac.py.
-      TAG: ${{ inputs.tag || 'v0.7.2' }}
+      TAG: ${{ inputs.tag || 'v0.8.0' }}
       HOME_DIR: /Users/runner/Applications/Helene
     steps:
       - uses: actions/checkout@v4
@@ -64,11 +75,18 @@ jobs:
 
       # cache-on-failure: красный прогон тоже сохраняет кэш cargo — иначе каждый
       # следующий круг после падения начинал бы компиляцию с нуля.
+      # Тело (praxis/body) собирается с --target-dir в кэше сборки, не в своём
+      # target/: каталог назван в cache-directories, а workspace — чтобы его
+      # Cargo.lock входил в ключ кэша. `runner` в `with:` шага доступен (в env
+      # job — нет, см. выше).
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             desk/shell
             desk/setup
+            praxis/body
+          cache-directories: |
+            ${{ runner.temp }}/build/cache/body-target
           cache-on-failure: true
 
       - uses: actions/setup-node@v4
@@ -95,6 +113,15 @@ jobs:
           (cd desk/shell && cargo test --features custom-protocol)
           (cd desk/setup && cargo test --features custom-protocol)
 
+      # Стенды моста и тела — на настоящем Mac: чистые функции под cfg(test) и
+      # живые под cfg(all(test, target_os = "macos")) (с честным пропуском без
+      # TCC). Тот же --target-dir, что у сборки (build_mac.body_target_dir):
+      # зависимости не компилируются второй раз и кэшируются вместе с ним.
+      - name: Стенды тела (cargo test -p praxis-body -p praxis-bridge)
+        run: |
+          cd praxis/body
+          cargo test -p praxis-body -p praxis-bridge --target-dir "$BUILD/cache/body-target"
+
       - name: Ограда seatbelt — живые проверки рантаймом сборки
         run: |
           cd desk
@@ -103,6 +130,8 @@ jobs:
       # Тихая установка из собранной папки — тем же мастером и тем же JSON, что
       # у человека. Провайдер «локальная модель»: ключа у неё нет по построению,
       # а адрес никуда не ведёт — окно и канал должны подняться и без модели.
+      # "computer": true — «Управление компьютером» включено: движок при старте
+      # поднимает мост и тело, и дымовой шаг ждёт их подключения.
       # shell: bash даёт `-eo pipefail`: отказ внутри конвейера не глотается.
       - name: Тихая установка в ~/Applications/Helene
         shell: bash
@@ -119,13 +148,18 @@ jobs:
             "telegram": {"bot_token": "", "owner_id": ""},
             "agent_mode": "sandbox",
             "service": false,
-            "computer": false,
+            "computer": true,
             "dir": "$HOME_DIR"
           }
           EOF
           "$BUILD/Helene/Helene Setup.app/Contents/MacOS/helene-setup" --install "$RUNNER_TEMP/decisions.json" --quiet
           test -f "$HOME_DIR/helene.json" || { echo "после установки нет $HOME_DIR/helene.json"; exit 1; }
           test -f "$HOME_DIR/helene-build.json" || { echo "после установки нет паспорта в корне"; exit 1; }
+          for exe in helene-bridge helene-body; do
+            test -x "$HOME_DIR/$exe" || { echo "после установки нет исполняемого $HOME_DIR/$exe — тело не приехало"; exit 1; }
+          done
+          python3 -c 'import json,sys; c=json.load(open(sys.argv[1], encoding="utf-8-sig")); sys.exit(0 if (c.get("computer") or {}).get("enabled") is True else 1)' "$HOME_DIR/helene.json" \
+            || { echo "мастер не записал computer.enabled=true в helene.json (decisions.json просил computer: true)"; cat "$HOME_DIR/helene.json"; exit 1; }
 
       - name: Дымовой запуск — окно, снимок экрана, канал
         shell: bash
@@ -156,14 +190,59 @@ jobs:
           curl -fsS --max-time 10 -o "$RUNNER_TEMP/state.json" "http://127.0.0.1:$PORT/api/state?key=$TOKEN"
           head -c 2000 "$RUNNER_TEMP/state.json"
           echo
+          # Тело: движок поднимает мост и тело при старте (computer.enabled из
+          # тихой установки), сторож пишет data/memory/.state/body.json по своей
+          # пробе body.status через мост — это единственное честное «подключено».
+          # Ждём connected: true до 40 с; иначе снимок состояния, хвосты журналов
+          # тела и падение.
+          BODY_STATE="$HOME_DIR/data/memory/.state/body.json"
+          connected=0
+          for i in $(seq 1 40); do
+            if [ -f "$BODY_STATE" ] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1], encoding="utf-8")).get("connected") is True else 1)' "$BODY_STATE" 2>/dev/null; then
+              connected=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$connected" -eq 1 ]; then
+            echo "тело подключено к мосту (ждали $i с):"
+            cat "$BODY_STATE"
+            echo
+          else
+            echo "тело НЕ подключилось за 40 с"
+            if [ -f "$BODY_STATE" ]; then cat "$BODY_STATE"; echo; else echo "(нет $BODY_STATE — движок тело не поднимал)"; fi
+            for f in "$HOME_DIR/data/body/bridge.log" "$HOME_DIR/data/body/body.log" "$HOME_DIR/data/runner.log"; do
+              if [ -f "$f" ]; then echo "=== $f (хвост)"; tail -n 60 "$f"; else echo "=== $f: нет"; fi
+            done
+            exit 1
+          fi
+
+      # Живые стенды тела — рантаймом сборки и бинарями из неё (HELENE_BODY_DIR):
+      # t_body.py поднимает свой мост и тело на другом порту и спрашивает
+      # desktop.status; t_body_macos.py проходит контракт тела на macOS (§2 плана
+      # 19.09): status → platform/tcc/hints, снимок экрана (ok + PNG > 10 КБ или
+      # честный отказ), список окон, процессы, буфер обмена туда-обратно, дерево
+      # окна Helene по pid. Идёт ПОСЛЕ дымового запуска нарочно: окно Helene.app
+      # уже на экране, и дерево читается с него. Без разрешений TCC у раннера
+      # стенд печатает отказы словами; падает на лжи и на поломке.
+      - name: Тело — живые стенды рантаймом сборки
+        shell: bash
+        run: |
+          cd desk
+          export HELENE_BODY_DIR="$BUILD/Helene"
+          "$BUILD/Helene/runtime/bin/python3" tests/t_body.py
+          "$BUILD/Helene/runtime/bin/python3" tests/t_body_macos.py
 
       - name: Журналы
         if: always()
         run: |
           mkdir -p "$LOGS"
           # install.log мастер кладёт в корень поставки (папку с helene-build.json).
+          # Журналы тела — data/body/: bridge.log и body.log, плюс снимок состояния
+          # сторожа memory/.state/body.json (без токенов: их на диске нет).
           for f in "$HOME_DIR/helene.log" "$HOME_DIR/data/deskapp.log" "$HOME_DIR/data/runner.log" \
-                   "$BUILD/Helene/install.log"; do
+                   "$HOME_DIR/data/body/bridge.log" "$HOME_DIR/data/body/body.log" \
+                   "$HOME_DIR/data/memory/.state/body.json" "$BUILD/Helene/install.log"; do
             if [ -f "$f" ]; then
               echo "=== $f (хвост)"; tail -n 80 "$f"
               cp "$f" "$LOGS/$(basename "$f")"

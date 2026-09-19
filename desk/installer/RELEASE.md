@@ -185,18 +185,19 @@
    по умолчанию, `gh workflow run … --ref port/macos` до влития невозможен, а на
    `push` входы (`inputs.upload`) пусты — выложить через CI нельзя.
 
-   (а) До влития. Прогон запускается сам на push в `port/macos`; артефакт —
-   архив, сумма, `install.sh`, паспорт, снимок экрана и журналы — смотреть
-   глазами, потом выложить руками:
+   (а) До влития. Прогон запускается сам на push в `port/macos` или
+   `port/macos-body`; артефакт — архив, сумма, `install.sh`, паспорт, снимок
+   экрана и журналы (включая журналы тела) — смотреть глазами, потом выложить
+   руками:
 
        gh run list --workflow macos.yml            # id прогона
-       gh run download <id> -n Helene-v0.7.1-macos-arm64
-       gh release upload v0.7.1 Helene-0.7.1-macos-arm64.zip \
-           Helene-0.7.1-macos-arm64.zip.sha256 install.sh --clobber
+       gh run download <id> -n Helene-v0.8.0-macos-arm64
+       gh release upload v0.8.0 Helene-0.8.0-macos-arm64.zip \
+           Helene-0.8.0-macos-arm64.zip.sha256 install.sh --clobber
 
    (б) После влития в `main` — по кнопке, с выкладкой тем же шагом:
 
-       gh workflow run macos.yml -f tag=v0.7.1 -f upload=true
+       gh workflow run macos.yml -f tag=v0.8.0 -f upload=true
        gh run watch
 
    `--clobber` в обоих путях: повторная выкладка заменяет прежнюю Mac-сборку,
@@ -211,24 +212,38 @@
    `LSMinimumSystemVersion` (14.0 — столько просят колёса голоса); все пакеты
    встали колёсами, кроме `pyaes` (чистый Python исходником); `runtime/git`
    отвечает на `--version`, `--exec-path` внутри себя и делает `git init`;
-   реле стоит на коммите `64fc946` (0.8.1); оба бандла и всё Mach-O в рантайме
-   подписаны ad-hoc и проходят `codesign --verify`; состав архива полный
-   (`REQUIRED_ROOT`); секрет-гард тот же, что у Windows (кред-пол дерева +
-   форма присвоения + текстовые файлы рантайма). Дальше workflow гоняет `cargo
-   test` в `shell` и `setup`, живые проверки ограды (`tests/t_fence_macos.py`),
-   ставит программу тихо в `~/Applications/Helene`, открывает `Helene.app`,
-   снимает экран и дёргает `/api/health` и `/api/state` канала по секрету
-   дерева.
+   реле стоит на коммите `64fc946` (0.8.1); тело (`helene-body`, `helene-bridge`)
+   собрано из `praxis/body` репозитория (`--target-dir` в кэше сборки), оба
+   бинаря отвечают на `--help`, их лицензии — `licenses/body/`; оба бандла,
+   реле, мост, тело и всё Mach-O в рантайме подписаны ad-hoc и проходят
+   `codesign --verify`; состав архива полный (`REQUIRED_ROOT`); секрет-гард
+   тот же, что у Windows (кред-пол дерева + форма присвоения + текстовые файлы
+   рантайма). Дальше workflow гоняет `cargo test` в `shell` и `setup` и
+   `cargo test -p praxis-body -p praxis-bridge` (стенды тела на настоящем Mac),
+   живые проверки ограды (`tests/t_fence_macos.py`), ставит программу тихо в
+   `~/Applications/Helene` с `"computer": true`, открывает `Helene.app`,
+   снимает экран, дёргает `/api/health` и `/api/state` канала по секрету
+   дерева и ждёт до 40 с `connected: true` в `data/memory/.state/body.json`
+   (иначе хвосты `data/body/*.log` и падение); потом живые стенды тела
+   бинарями сборки — `tests/t_body.py` и `tests/t_body_macos.py` (контракт
+   тела: status с `platform`/`tcc`/`hints`, снимок ok+PNG или честный отказ,
+   окна, процессы, буфер обмена, дерево окна Helene). Разрешения TCC у
+   раннера — какие есть: без них стенд печатает отказ словами и не падает;
+   падает на лжи (снимок «ok» без разрешения) и на поломке.
 
    Чего сборка НЕ проверяет: мастер и окно живьём в руках человека — снимок
    экрана из артефактов посмотреть глазами; обновление поверх стоящей
-   программы через `install.sh` (на раннере стоит только свежая установка).
+   программы через `install.sh` (на раннере стоит только свежая установка);
+   выдачу разрешений TCC руками и брокер с диалогом пароля (на раннере некому
+   нажать) — чек-лист для человека с Маком в `ПЕРВЫЙ-ЗАПУСК.md` архива.
 
 4. **Глазами** — `helene-build.json` из артефактов: `platform: macos`,
    `arch: arm64`, `complete: true`, `git.desk` без `-dirty`, `source_release`
    (тег, актив и его sha256, паспорт Windows-архива коротко), `python` 3.14.7,
    `git_bundle`, `macos_min` и `macos_floor_wheels` рядом (второе не больше
-   первого), `relay.commit`, `signed_adhoc`, `packages`.
+   первого), `relay.commit`, `body.commit` (коммит зеркала прода из
+   `CORE-SOURCE.json`) с `body.digest` и `body.exe_sha256`, `signed_adhoc`,
+   `packages`.
 
 5. **В описании выпуска** — третьей строкой сумма Mac-архива, тем же видом,
    что и Windows: `sha256 Helene-<версия>-macos-arm64.zip: <digest>`. Окно на
@@ -237,12 +252,20 @@
    `curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh`
    (какой тег качать, знает сам `install.sh`: `HELENE_TAG_DEFAULT` штампует сборка).
 
-6. **На самом Mac** то же руками: `python3 installer/build_mac.py --from-release v0.7.1`
+6. **На самом Mac** то же руками: `python3 installer/build_mac.py --from-release v0.8.0`
    (нужны Rust, Node 24, Xcode Command Line Tools, `gh` с входом). Итог — в
    `installer/build-mac/`. `--skip-runtime`, `--skip-rust`, `--skip-tests`,
-   `--allow-partial` — только отладка, как у Windows-сборки. Чистые части
+   `--allow-partial`, `--skip-body` (полусборка без тела: паспорт получит
+   `complete: false`) — только отладка, как у Windows-сборки. Чистые части
    сборки (плист, имена активов, паспорт, отбор архива, Mach-O, штамп
-   `install.sh`, статика workflow) держит `tests/t_build_mac.py` на любой ОС.
+   `install.sh`, отпечаток и паспорт тела, лицензии, статика workflow) держит
+   `tests/t_build_mac.py` на любой ОС.
+
+7. **Про разрешения тела.** Подпись ad-hoc новая на каждую сборку, а TCC
+   помнит программу по подписи: после КАЖДОГО обновления у пользователя слетают
+   «Запись экрана» и «Универсальный доступ» — об этом говорят `ПЕРВЫЙ-ЗАПУСК.md`
+   и `ОБНОВЛЕНИЕ.md` (убрать `Helene` из списка и добавить снова). Уйдёт только
+   с Developer ID, которого по решению владельца нет.
 
 ## Открытые остатки цепочки поставки
 
@@ -260,4 +283,10 @@
 - **Windows-артефакт собирается на машине владельца**, на той же, где живёт
   агент с рукой shell; CI у него нет. Mac-артефакт — на раннере GitHub
   (`macos.yml`), но подписан ad-hoc: Developer ID и нотаризации нет, отсюда
-  установка через `curl`, а не через образ.
+  установка через `curl`, а не через образ, и слетающие после каждого
+  обновления разрешения тела (TCC помнит подпись).
+- **Исходник тела на Mac живёт в двух местах**: Windows-сборка берёт крейты из
+  `live/body` соседа (её репозиторий), Mac-сборка — из `praxis/body` этого
+  репозитория, где лежат darwin-ветки, пока она не взяла патч в прод.
+  Перезеркаливание `praxis/` (`installer/core_src.py --export-core`) сотрёт их —
+  сначала патч ей, потом зеркало.

@@ -207,6 +207,9 @@ class MachO(unittest.TestCase):
             (root / "Helene.app" / "Contents" / "MacOS").mkdir(parents=True)
             (root / "Helene.app" / "Contents" / "MacOS" / "helene").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 8)
             (root / "helene-relay").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 8)
+            # Мост и тело — свободные бинари корня, как реле: подписываются каждый.
+            (root / "helene-bridge").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 8)
+            (root / "helene-body").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 8)
             so = root / "runtime" / "lib" / "python3.14" / "site-packages" / "x" / "ext.so"
             so.parent.mkdir(parents=True)
             so.write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 8)
@@ -214,10 +217,11 @@ class MachO(unittest.TestCase):
             (root / "runtime" / "git").mkdir()
             (root / "runtime" / "git" / "git").write_bytes(b"\xca\xfe\xba\xbe" + (1).to_bytes(4, "big") + b"\0" * 8)
             got = [p.relative_to(root).as_posix() for p in build_mac.sign_targets(root)]
-            self.assertEqual(got, ["Helene.app", "helene-relay",
+            self.assertEqual(got, ["Helene.app", "helene-relay", "helene-bridge", "helene-body",
                                    "runtime/git/git", "runtime/lib/python3.14/site-packages/x/ext.so"])
             # Бандла мастера нет — и в списке его нет: список по факту, не по плану.
             self.assertNotIn("Helene Setup.app", got)
+        self.assertEqual(build_mac.ROOT_BINARIES, ("helene-relay", "helene-bridge", "helene-body"))
 
 
 class Wheels(unittest.TestCase):
@@ -324,6 +328,9 @@ class Passport(unittest.TestCase):
                          "files": {"a": "1", "b": "2"}, "skipped": []}}
 
     def test_shape(self):
+        body = build_mac.body_summary(mirror={"head": "3c6b8e35", "taken_at": "t", "dirty": False},
+                                      crates=build_mac.BODY_CRATES, digest="cd" * 32, files=40,
+                                      exe_sha256={"helene-body": "ee" * 32}, target_dir="/tmp/body-target")
         p = build_mac.build_passport(
             version="0.7.1", declared={"shell/Cargo.toml": "0.7.1"},
             desk_head="abc", desk_dirty=False, tree_head="3b297aa4", tree_dirty=False,
@@ -331,10 +338,12 @@ class Passport(unittest.TestCase):
                             "tree_files": 234, "passport": {}, "core": {"drift": {"undeclared": 0}}},
             staged=self._staged(), relay={"commit": build_mac.RELAY_COMMIT}, freeze="a==1\nb==2",
             downloads={build_mac.PBS_NAME: "x"}, complete=True, partial_reason=[], signed=3,
-            git_bundle={"version": "2.55.0"}, macos_floor="14.0")
+            git_bundle={"version": "2.55.0"}, macos_floor="14.0", body=body)
         for key in ("product", "version", "built_utc", "complete", "git", "python", "packages",
-                    "downloads", "desk", "relay", "tree_files", "static", "declared_versions"):
+                    "downloads", "desk", "relay", "body", "tree_files", "static", "declared_versions"):
             self.assertIn(key, p, key)
+        self.assertEqual(p["body"]["commit"], "3c6b8e35")
+        self.assertEqual(p["body"]["crates"], ["praxis-body", "praxis-bridge"])
         self.assertEqual(p["platform"], "macos")
         self.assertEqual(p["arch"], "arm64")
         self.assertEqual(p["product"], "Hélène")
@@ -363,6 +372,9 @@ class Passport(unittest.TestCase):
         self.assertFalse(p["complete"])
         self.assertIsNone(p["core"])
         self.assertIsNone(p["source_release"])
+        # Без тела (--skip-body) поле есть и пусто — паспорт не молчит о составе.
+        self.assertIn("body", p)
+        self.assertIsNone(p["body"])
 
 
 class Composition(unittest.TestCase):
@@ -371,15 +383,20 @@ class Composition(unittest.TestCase):
         for rel in ("Helene.app/Contents/MacOS/helene", "Helene Setup.app/Contents/MacOS/helene-setup",
                     "helene-relay", "runtime/bin/python3", "runtime/git/bin/git",
                     "runtime/git/COPYING",   # GPL-2.0: текст лицензии рядом, make install его не кладёт
+                    # 0.8.0: тело тула computer — мост, тело, их лицензии и модуль движка.
+                    "helene-bridge", "helene-body", "licenses/body/README.md", "app/localharness/body.py",
                     "helene.json", "helene-build.json", "install.sh", "tree", "data",
                     "ПЕРВЫЙ-ЗАПУСК.md", "ОБНОВЛЕНИЕ.md", "КАК-УСТРОЕН-HELENE.md",
                     "ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md", "NOTICE"):
             self.assertIn(rel, req, rel)
-        # Windows-состава здесь нет: ни exe, ни службы, ни тела.
+        # Windows-имён здесь нет: ни exe, ни службы (брокер на Mac — сама оболочка).
         for rel in req:
             self.assertFalse(rel.endswith(".exe"), rel)
             self.assertNotIn("svc", rel)
-            self.assertNotIn("body", rel)
+        # Что корень получает от тела — ровно то, что --skip-body вправе не ждать.
+        self.assertEqual(build_mac.BODY_ROOT_ENTRIES, ("helene-bridge", "helene-body", "licenses/body/README.md"))
+        for rel in build_mac.BODY_ROOT_ENTRIES:
+            self.assertIn(rel, req, rel)
 
     def test_missing_in_root(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -400,13 +417,39 @@ class Composition(unittest.TestCase):
 class Texts(unittest.TestCase):
     def test_first_run_names_what_is_absent(self):
         text = build_mac.FIRST_RUN_MAC
-        for word in ("computer", "служб", "брокер", "Intel", "Developer ID", "нотариз", "dmg",
+        for word in ("computer", "Intel", "Developer ID", "нотариз", "dmg", "LaunchDaemon",
                      "брандмауэр", "seatbelt", "~/Applications/Helene", "install.sh", "ОБНОВЛЕНИЕ.md"):
             self.assertIn(word, text, word)
         self.assertNotIn("SmartScreen", text)
-        # Windows-имена здесь допустимы только в списке того, чего нет.
-        head = text.split("Чего в сборке для macOS нет")[0]
-        self.assertNotIn(".exe", head)
+        # Windows-имён на Mac нет нигде: тело здесь — helene-body и helene-bridge без .exe.
+        self.assertNotIn(".exe", text)
+        # Список отсутствующего — от заголовка до абзаца об ограде.
+        absent = text.split("Чего в сборке для macOS нет")[1].split("Ограда тула")[0]
+        for word in ("Intel", "Developer ID", "LaunchDaemon", "брандмауэр"):
+            self.assertIn(word, absent, word)
+        # 0.8.0: тело и брокер ЕСТЬ — в списке отсутствующего их быть не должно.
+        self.assertNotIn("тела", absent)
+        self.assertNotIn("брокер", absent)
+
+    def test_first_run_explains_the_body_permissions_and_the_broker(self):
+        # План 19.09 §5 и §3(D): два разрешения и где они, ⚠ после каждого
+        # обновления они слетают (ad-hoc) — убрать из списка и добавить снова;
+        # брокер — диалог пароля macOS; чек-лист прокликки для человека с Маком.
+        text = build_mac.FIRST_RUN_MAC
+        for word in ("## Управление компьютером", "helene-body", "helene-bridge",
+                     "Запись экрана и системного звука", "Универсальный доступ",
+                     "Конфиденциальность и безопасность", "Открыть настройки",
+                     "После каждого обновления", "ad-hoc", "убрать", "«−»", "добавить снова",
+                     "## Права администратора", "пароль", "with\nadministrator privileges",
+                     "## Что проверить руками", "сделай снимок экрана", "прочитай окно Finder",
+                     "нажми кнопку", "попроси права", "снаружи ограды", "не врёт"):
+            self.assertIn(word, text, word)
+        # Честность: живьём человеком не проверено — так и написано.
+        self.assertIn("не прогонялось", text)
+        # Порядок разделов: включение → разрешения → брокер → чек-лист → чего нет.
+        order = [text.index(s) for s in ("## Управление компьютером", "## Права администратора",
+                                         "## Что проверить руками", "Чего в сборке для macOS нет")]
+        self.assertEqual(order, sorted(order))
         # Судья 19.09: на Sequoia обхода правой кнопкой нет — путь через
         # Настройки; скачанный браузером архив отдаётся скрипту (--from), а не
         # открывается бандлами; первым открывают мастер, не Helene.app.
@@ -420,12 +463,147 @@ class Texts(unittest.TestCase):
         text = build_mac.THIRD_PARTY_MAC
         self.assertNotIn("__GIT_VERSION__", text)
         self.assertIn(build_mac.GIT_VERSION, text)
-        for word in ("GPL-2.0", "licenses/rust/", "licenses/relay/", "python-build-standalone",
-                     "runtime/lib/python3.14/LICENSE.txt", "faster-whisper", "piper-tts", "Apache-2.0"):
+        for word in ("GPL-2.0", "licenses/rust/", "licenses/relay/", "licenses/body/",
+                     "python-build-standalone", "runtime/lib/python3.14/LICENSE.txt",
+                     "faster-whisper", "piper-tts", "Apache-2.0"):
             self.assertIn(word, text, word)
-        # Windows-только компоненты названы как ОТСУТСТВУЮЩИЕ, а не как состав.
+        # Тело: те же слова о лицензии, что у Windows (installer/THIRD-PARTY.md) —
+        # код тела Apache-2.0 по решению автора, поле PolyForm в манифесте устарело.
+        body = text.split("## Тело тула `computer`")[1].split("## ")[0]
+        for word in ("praxis/body", "praxis-body-protocol", "core-graphics", "PolyForm-Noncommercial-1.0.0",
+                     "Apache-2.0", "27.08.2026", "licenses/body/README.md"):
+            self.assertIn(word, body, word)
+        # Windows-только компоненты названы как ОТСУТСТВУЮЩИЕ, а не как состав;
+        # тело и мост — уже состав, в этом списке их нет.
         self.assertIn("Чего в этой поставке нет", text)
+        absent = text.split("Чего в этой поставке нет")[1]
+        self.assertNotIn("helene-body", absent)
+        self.assertNotIn("helene-bridge", absent)
         self.assertNotIn("MinGit, минимальная сборка", text)
+
+
+class Body(unittest.TestCase):
+    """Тело тула `computer` в сборке: исходник в репозитории, отпечаток, паспорт,
+    лицензии, флаг полусборки. Сам cargo идёт только на macOS (workflow)."""
+
+    def test_source_is_in_the_repository_and_names_match_the_engine(self):
+        self.assertTrue((build_mac.BODY_SRC / "Cargo.toml").is_file(), build_mac.BODY_SRC)
+        self.assertTrue((build_mac.BODY_SRC / "Cargo.lock").is_file(), "без Cargo.lock лицензии не собрать")
+        for crate in build_mac.BODY_CRATES:
+            self.assertTrue((build_mac.BODY_SRC / "crates" / crate / "Cargo.toml").is_file(), crate)
+        self.assertEqual(build_mac.BODY_CRATES, ("praxis-body", "praxis-bridge"))
+        self.assertEqual(build_mac.BODY_BINARIES, {"praxis-bridge": "helene-bridge", "praxis-body": "helene-body"})
+        # Имена без .exe — те же, что объявляет движок на darwin (localharness/body.py).
+        sys.path.insert(0, str(DESK / "localharness"))
+        import body as engine_body  # noqa: PLC0415
+        if sys.platform == "darwin":
+            self.assertEqual({engine_body.BRIDGE_EXE, engine_body.BODY_EXE}, set(build_mac.BODY_BINARIES.values()))
+        else:
+            for name in build_mac.BODY_BINARIES.values():
+                self.assertIn(name, (engine_body.BRIDGE_EXE.replace(".exe", ""), engine_body.BODY_EXE.replace(".exe", "")))
+        self.assertTrue(build_mac.CORE_SOURCE.is_file(), "нет CORE-SOURCE.json — паспорт тела без коммита зеркала")
+
+    def test_source_files_and_digest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp)
+            (src / "crates" / "praxis-body" / "src" / "sub").mkdir(parents=True)
+            (src / "target" / "release").mkdir(parents=True)
+            (src / "Cargo.toml").write_text("[workspace]\n")
+            (src / "Cargo.lock").write_text("# lock\n")
+            (src / "README.md").write_text("не исходник\n")
+            (src / "crates" / "praxis-body" / "Cargo.toml").write_text("[package]\n")
+            (src / "crates" / "praxis-body" / "src" / "main.rs").write_text("fn main() {}\n")
+            (src / "crates" / "praxis-body" / "src" / "sub" / "m.rs").write_text("pub fn f() {}\n")
+            (src / "target" / "release" / "praxis-body").write_bytes(b"\xcf\xfa\xed\xfe")
+            files = [p.relative_to(src).as_posix() for p in build_mac.body_source_files(src)]
+            self.assertEqual(files, ["Cargo.lock", "Cargo.toml", "crates/praxis-body/Cargo.toml",
+                                     "crates/praxis-body/src/main.rs", "crates/praxis-body/src/sub/m.rs"])
+            digest, n = build_mac.body_source_digest(src)
+            self.assertEqual(n, 5)
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
+            # CRLF не меняет отпечаток: зеркало на Windows и оригинал на проде — одно.
+            (src / "crates" / "praxis-body" / "src" / "main.rs").write_bytes(b"fn main() {}\r\n")
+            self.assertEqual(build_mac.body_source_digest(src), (digest, 5))
+            (src / "crates" / "praxis-body" / "src" / "main.rs").write_bytes(b"fn main() { }\n")
+            self.assertNotEqual(build_mac.body_source_digest(src)[0], digest)
+
+    def test_core_source_is_the_prod_mirror(self):
+        mirror = build_mac.core_source()
+        self.assertRegex(str(mirror.get("head")), r"^[0-9a-f]{7,40}$")
+        self.assertEqual(build_mac.core_source(Path(tempfile.gettempdir()) / "нет-такого.json"), {})
+
+    def test_body_summary_shape(self):
+        info = build_mac.body_summary(mirror={"head": "3c6b8e35", "taken_at": "2026-09-19T02:41:04+00:00",
+                                              "dirty": False},
+                                      crates=build_mac.BODY_CRATES, digest="ab" * 32, files=41,
+                                      exe_sha256={"helene-body": "cd" * 32, "helene-bridge": "ef" * 32},
+                                      target_dir="/x/cache/body-target")
+        self.assertEqual(info["source"], "praxis/body")
+        self.assertEqual(info["commit"], "3c6b8e35")
+        self.assertEqual(info["crates"], ["praxis-body", "praxis-bridge"])
+        self.assertEqual(info["binaries"], build_mac.BODY_BINARIES)
+        self.assertEqual(info["files"], 41)
+        self.assertEqual(info["digest"], "ab" * 32)
+        self.assertEqual(set(info["exe_sha256"]), {"helene-body", "helene-bridge"})
+        self.assertFalse(info["mirror_dirty"])
+        self.assertRegex(info["built_utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        json.dumps(info, ensure_ascii=False)
+        # Без CORE-SOURCE.json коммит пуст, а не выдуман.
+        self.assertEqual(build_mac.body_summary(mirror={}, crates=(), digest="", files=0,
+                                                exe_sha256={}, target_dir="")["commit"], "")
+
+    def test_body_target_dir_is_in_the_build_cache(self):
+        self.assertEqual(build_mac.body_target_dir(Path("/o/cache")), Path("/o/cache") / "body-target")
+        # Workflow гоняет cargo test тела тем же каталогом.
+        self.assertIn("cache/body-target", WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_license_texts_dedupe_and_name_the_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = Path(tmp) / "registry"
+            for crate, files in (("a-1.0.0", {"LICENSE-MIT": "MIT text"}),
+                                 ("b-2.0.0", {}),
+                                 ("c-3.0.0", {"LICENSE-MIT": "MIT text", "LICENSE-APACHE": "Apache text"})):
+                (registry / crate).mkdir(parents=True)
+                for name, text in files.items():
+                    (registry / crate / name).write_text(text)
+            dest = Path(tmp) / "licenses" / "body"
+            index, missing = build_mac.license_texts(dest, [("a", "1.0.0"), ("b", "2.0.0"), ("c", "3.0.0"),
+                                                            ("a", "1.0.0")], registry)
+            self.assertEqual(missing, ["b 2.0.0"])
+            self.assertEqual(len(index), 2)
+            self.assertTrue(index[0].startswith("- **a 1.0.0** — [LICENSE-MIT](texts/"))
+            # Один и тот же текст лежит один раз: два разных — два файла.
+            self.assertEqual(len(list((dest / "texts").glob("*.txt"))), 2)
+            self.assertEqual(build_mac._missing_note([]), [])
+            self.assertIn("b 2.0.0", build_mac._missing_note(missing)[0])
+
+    def test_body_license_head_tells_the_truth(self):
+        head = "\n".join(build_mac.body_license_head(87, "3c6b8e35abcdef", ["x 1.0"]))
+        for word in ("helene-bridge и helene-body", "praxis/body", "3c6b8e3", "praxis-body-protocol",
+                     "Apache-2.0", "PolyForm-Noncommercial-1.0.0", "27.08.2026", "87 крейтов",
+                     "ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md", "x 1.0"):
+            self.assertIn(word, head, word)
+        self.assertIn("?", "\n".join(build_mac.body_license_head(1, "", [])))
+        # Коммит для шапки — из записи паспорта тела (`commit`), из CORE-SOURCE.json
+        # (`head`) или пусто: сборка передаёт сюда запись build_body, не зеркало.
+        self.assertEqual(build_mac.mirror_head({"commit": "3c6b8e35"}), "3c6b8e35")
+        self.assertEqual(build_mac.mirror_head({"head": "0453d75"}), "0453d75")
+        self.assertEqual(build_mac.mirror_head(None), "")
+        self.assertEqual(build_mac.mirror_head(build_mac.core_source()), build_mac.core_source()["head"])
+
+    def test_skip_body_is_a_declared_debug_flag(self):
+        parser = build_mac.arg_parser()
+        self.assertFalse(parser.parse_args([]).skip_body)
+        self.assertTrue(parser.parse_args(["--skip-body"]).skip_body)
+        for flag in ("--skip-runtime", "--skip-rust", "--skip-tests", "--allow-partial"):
+            self.assertTrue(getattr(parser.parse_args([flag]), flag[2:].replace("-", "_")), flag)
+        # Шапка файла обещает флаг — и объясняет, что это полусборка.
+        self.assertIn("--skip-body", build_mac.__doc__)
+        import inspect  # noqa: PLC0415
+        src = inspect.getsource(build_mac.main)
+        self.assertIn("skipped_body", src)
+        self.assertIn("body=body_info", src)
+        self.assertIn("collect_body_licenses(out, BODY_SRC", src)
 
 
 class InstallSh(unittest.TestCase):
@@ -508,10 +686,25 @@ class Workflow(unittest.TestCase):
                        # кнопке; прогон от push, пока файла нет в main.
                        "shell: bash", "stat -f %z", "osascript", "cache-on-failure: true",
                        "github.event_name == 'workflow_dispatch' && inputs.upload",
-                       "push:", "gh run download"):
+                       "push:", "gh run download",
+                       # 0.8.0, тело: стенды крейтов на настоящем Mac тем же target-dir,
+                       # что у сборки; тихая установка с включённым «Управлением
+                       # компьютером»; дымовой шаг ждёт connected: true в снимке
+                       # сторожа; живые стенды тела бинарями сборки; журналы тела.
+                       "cargo test -p praxis-body -p praxis-bridge --target-dir \"$BUILD/cache/body-target\"",
+                       '"computer": true', "data/memory/.state/body.json", 'get("connected") is True',
+                       "data/body/bridge.log", "data/body/body.log",
+                       'HELENE_BODY_DIR="$BUILD/Helene"', "tests/t_body.py", "tests/t_body_macos.py",
+                       "praxis/body", "cache-directories:", "build/cache/body-target"):
             self.assertIn(needle, self.text, needle)
         self.assertNotIn("\t", self.text, "табуляция в YAML")
         self.assertNotIn("| head", self.text, "под pipefail обрезанный конвейер валит шаг")
+        # Ловушка 19.09: `runner` в env job — ноль задач; пути в $GITHUB_ENV.
+        self.assertNotIn("${{ runner.temp }}/build\"\n    env", self.text)
+        self.assertIn('>> "$GITHUB_ENV"', self.text)
+        # Живые стенды тела — после дымового запуска: дерево читается с окна Helene.app.
+        self.assertLess(self.text.index("Дымовой запуск"), self.text.index("Тело — живые стенды"))
+        self.assertLess(self.text.index("Тело — живые стенды"), self.text.index("name: Журналы"))
 
     def test_yaml_parses_if_pyyaml_is_around(self):
         try:
@@ -527,8 +720,12 @@ class Workflow(unittest.TestCase):
         self.assertIs(inputs["upload"]["default"], False)
         job = doc["jobs"]["build"]
         self.assertEqual(job["runs-on"], "macos-15")
+        self.assertEqual(job["env"]["TAG"], "${{ inputs.tag || '%s' }}" % build_mac.RELEASE_TAG_DEFAULT)
         names = [s.get("name") or s.get("uses") for s in job["steps"]]
         self.assertEqual(names[0], "actions/checkout@v4")
+        cache = next(s for s in job["steps"] if str(s.get("uses", "")).startswith("Swatinem/rust-cache"))
+        self.assertIn("praxis/body", cache["with"]["workspaces"])
+        self.assertIn("build/cache/body-target", cache["with"]["cache-directories"])
         self.assertTrue(any("gh release upload" in (s.get("run") or "") for s in job["steps"]))
         upload = next(s for s in job["steps"] if "gh release upload" in (s.get("run") or ""))
         self.assertIn("inputs.upload", str(upload.get("if")))

@@ -214,17 +214,29 @@ unpacks into `~/Library/Caches/app.helene.install/staging` and opens the setup w
   release; `data/` — the agent's memory, born on first launch.
 - The `shell` tool runs under a seatbelt (`sandbox-exec`) profile: the agent's commands see
   the runtime and the code and write only into its own home. No administrator rights.
+- Since 0.8.0: `helene-body` and `helene-bridge` — the computer driver (the `computer`
+  tool: screen, windows, keyboard and mouse through CoreGraphics, the window tree through
+  Accessibility, files and processes), started by the engine next to itself, outside the
+  seatbelt, when "Computer control" is on. Two system permissions are needed — "Screen &
+  System Audio Recording" and "Accessibility" — and without them the body refuses in words
+  (a capture without Screen Recording is a refusal with a hint, not the wallpaper).
+  Because the build is signed ad hoc, both permissions drop after every update: remove
+  Helene from both lists and add it again. The privilege broker is the app itself: the agent
+  asks, the owner sees the command and the reason, macOS asks for the password in its own
+  dialog.
 
 Run the same line again to update: the script sees the installed copy, stops it and installs
 over it without touching `data/` or `helene.json` — the window's "Check for updates" does the
 same through the same script. `sh install.sh --uninstall` removes the program and keeps the
 data; `--uninstall --purge` removes both.
 
-What the macOS build does **not** have, on purpose — and the documents inside say so: the
-computer driver (the `computer` tool), the Windows service and the privilege broker, Intel
-Macs, a Developer ID signature, notarization or a dmg, and firewall rules (macOS asks by
+What the macOS build does **not** have, on purpose — and the documents inside say so: Intel
+Macs, a Developer ID signature, notarization or a dmg (hence `install.sh` and the dropping
+permissions), a service that runs without a login session, and firewall rules (macOS asks by
 itself). The archive is built on GitHub Actions (`.github/workflows/macos.yml` →
-`desk/installer/build_mac.py`) and carries a passport with every source and checksum.
+`desk/installer/build_mac.py`) and carries a passport with every source and checksum; the
+body is built and tested there on a real Mac, but the permissions flow has not yet been
+clicked through by a person — the checklist is in `ПЕРВЫЙ-ЗАПУСК.md` inside the archive.
 
 ---
 

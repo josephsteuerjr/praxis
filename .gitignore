@@ -1,3 +1,7 @@
 
 # 13.09: новый код 0.6.0 (голос, прерывание, КЕАТ-порт) отложен по слову Егора
 _hold-0.6.0/
+
+# darwin-типовая проверка тела на Windows (см. desk-notes/ТЕЛО-МАК-19.09-ПЛАН.md)
+praxis/body/target-mac-check/
+praxis/body/target/

@@ -13,25 +13,32 @@ Windows-архива `Helene-<версия>.zip`):
     Helene.app/               оболочка (крейт shell → бинарь `helene`), app.helene.desk
     Helene Setup.app/         мастер (крейт setup → бинарь `helene-setup`), app.helene.setup
     helene-relay              реле подписки ChatGPT (praxis-relay @ 64fc946 = 0.8.1)
+    helene-bridge             мост тела тула `computer` (praxis-bridge из praxis/body — исходник
+                              в ЭТОМ репозитории, зеркало прода Праксис + darwin-ветки)
+    helene-body               тело: экран, окна, клавиатура и мышь (CoreGraphics), дерево окна
+                              (Accessibility), файлы, процессы; поднимает их движок рядом с собой,
+                              снаружи ограды, когда включено «Управление компьютером»
     runtime/                  CPython 3.14.7 (python-build-standalone) + все пакеты, голос включая
     runtime/git/              git 2.55.0, собранный из исходника с RUNTIME_PREFIX (как MinGit на Windows)
     app/                      пакет desk вида macos (deskpkg.build) — собирается ЗАНОВО из этой ветки
     tree/                     код агента — байт в байт из Windows-архива выпуска
     data/                     пусто; рождается при первом запуске
-    server/ licenses/         как у Windows
+    server/ licenses/         как у Windows; плюс licenses/body/ — крейты моста и тела
     helene.json               шаблон конфига поставки (python → runtime/bin/python3)
     helene-build.json         паспорт сборки; по нему оболочка и мастер находят корень установки
     install.sh                установка, обновление и снятие — тот же файл, что curl-однострочник
     ПЕРВЫЙ-ЗАПУСК.md ОБНОВЛЕНИЕ.md КАК-УСТРОЕН-HELENE.md ЛИЦЕНЗИЯ.md
     ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md NOTICE requirements.txt
 
-Чего в этой сборке нет по решению владельца: тела (тул `computer`), службы и
-брокера прав, Intel-маков, подписи Developer ID и нотаризации, dmg. Об этом
-говорят документы поставки — не экран.
+Чего в этой сборке нет по решению владельца: Intel-маков, подписи Developer ID
+и нотаризации, dmg, службы без входа в систему (LaunchDaemon). Об этом говорят
+документы поставки — не экран. Тело и брокер прав есть с 0.8.0: тело — два
+бинаря выше, брокер — сама оболочка через системный диалог пароля (osascript).
 
 Запуск (на macOS):
     python3 installer/build_mac.py [--out DIR] [--from-release TAG | --tree PATH]
-                                   [--skip-runtime] [--skip-rust] [--skip-tests] [--allow-partial]
+                                   [--skip-runtime] [--skip-rust] [--skip-body]
+                                   [--skip-tests] [--allow-partial]
 
 Правило то же, что у `build_dist.py`: сборка либо выпускает ПОЛНЫЙ архив, либо
 падает с понятной строкой. Windows-сборка не трогается: общее импортируется из
@@ -108,11 +115,34 @@ RELAY_REPO = "https://github.com/josephsteuerjr/praxis-relay"
 RELAY_COMMIT = "64fc946981f28639bdfe0234dda0dca234d7e530"
 RELAY_BIN = "codex-proxy-server"
 
+# Тело тула `computer`: мост и тело — крейты `praxis/body` В ЭТОМ репозитории
+# (зеркало прода Праксис, `CORE-SOURCE.json`, плюс darwin-ветки порта 19.09),
+# клонировать нечего. Windows-сборка берёт те же крейты из `live/body` соседа
+# (`build_dist.py`, BODY_TARGET); здесь исходник — репозиторий, потому что
+# darwin-ветки живут в нём, пока она не взяла патч в прод. Собираются ВНЕ
+# исходника (`--target-dir` в кэше сборки), чтобы `praxis/` оставался чистым.
+# Версия крейтов — своя (workspace 0.1.0), в объявления продукта не входит, как
+# у реле; в паспорт едет коммит зеркала и отпечаток исходника.
+BODY_SRC = ROOT / "praxis" / "body"
+BODY_CRATES = ("praxis-body", "praxis-bridge")
+#: Бинарь крейта → имя в корне поставки (без `.exe`: имена по платформе решает
+#: движок, `localharness/body.py`).
+BODY_BINARIES = {"praxis-bridge": "helene-bridge", "praxis-body": "helene-body"}
+#: Что в исходнике тела считается исходником: то, из чего собирается бинарь.
+#: `target*/`, README и скрипты деплоя — не в счёт (как PATTERNS у реле).
+BODY_SRC_PATTERNS = ("Cargo.toml", "Cargo.lock", "crates/*/Cargo.toml", "crates/*/src/**/*.rs")
+#: Откуда зеркало `praxis/`: коммит прода и дата снимка (`installer/core_src.py`).
+CORE_SOURCE = ROOT / "CORE-SOURCE.json"
+
+# Свободные бинари в корне поставки (не в бандлах): подписываются ad-hoc
+# каждый (`sign_targets`), и каждый обязателен (`REQUIRED_ROOT`).
+ROOT_BINARIES = ("helene-relay", "helene-bridge", "helene-body")
+
 # Откуда берётся дерево агента: из Windows-архива того же выпуска. Дерево там —
 # проверенный прод; собирать его на Mac заново значило бы выпустить под одним
 # тегом два разных дерева.
 RELEASE_REPO = "josephsteuerjr/praxis"
-RELEASE_TAG_DEFAULT = "v0.7.2"
+RELEASE_TAG_DEFAULT = "v0.8.0"
 
 # Минимум macOS. Задуман 12.0, но колёса голоса под cp314/arm64 (numpy,
 # onnxruntime, av — проверено `pip download` 19.09.2026) собраны с тегом
@@ -198,12 +228,12 @@ REQUIRED_ROOT = (
     "Helene.app/Contents/MacOS/helene", "Helene.app/Contents/Info.plist",
     "Helene.app/Contents/Resources/icon.icns",
     "Helene Setup.app/Contents/MacOS/helene-setup", "Helene Setup.app/Contents/Info.plist",
-    "helene-relay",
+    "helene-relay", "helene-bridge", "helene-body",
     "runtime/bin/python3", "runtime/git/bin/git", "runtime/git/libexec/git-core",
     "runtime/git/share/git-core/templates", "runtime/git/COPYING",
     "app/deskapp.py", "app/desk.json", "app/static/index.html", "app/mobile/index.html",
-    "app/localharness/runner.py", "app/resources/SOUL.md",
-    "tree", "data", "server", "licenses/rust/README.md",
+    "app/localharness/runner.py", "app/localharness/body.py", "app/resources/SOUL.md",
+    "tree", "data", "server", "licenses/rust/README.md", "licenses/body/README.md",
     "helene.json", "helene-build.json", "install.sh", "requirements.txt",
     "ПЕРВЫЙ-ЗАПУСК.md", "ОБНОВЛЕНИЕ.md", "КАК-УСТРОЕН-HELENE.md", "ЛИЦЕНЗИЯ.md",
     "ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md", "NOTICE",
@@ -379,20 +409,26 @@ def is_mach_o(path: Path) -> bool:
 
 
 def sign_targets(root: Path) -> list[Path]:
-    """Что подписывать ad-hoc: оба бандла, реле и всё Mach-O в runtime/ (сам
-    python, libpython, расширения из колёс, git и его libexec). Неподписанный
-    arm64-бинарь macOS убивает при запуске, а подписи из чужих колёс бывают и
-    валидными, и никакими — поэтому список, а решение по каждому — `codesign
-    --verify` (см. codesign_all)."""
+    """Что подписывать ad-hoc: оба бандла, свободные бинари корня (реле, мост,
+    тело) и всё Mach-O в runtime/ (сам python, libpython, расширения из колёс,
+    git и его libexec). Неподписанный arm64-бинарь macOS убивает при запуске, а
+    подписи из чужих колёс бывают и валидными, и никакими — поэтому список, а
+    решение по каждому — `codesign --verify` (см. codesign_all).
+
+    ⚠ Подпись ad-hoc — это ещё и то, почему после КАЖДОГО обновления слетают
+    разрешения TCC у тела («Запись экрана», «Универсальный доступ»): система
+    помнит программу по подписи, а у ad-hoc она новая на каждую сборку.
+    Документы поставки об этом говорят (ПЕРВЫЙ-ЗАПУСК.md, ОБНОВЛЕНИЕ.md)."""
     root = Path(root)
     found: list[Path] = []
     for b in BUNDLES.values():
         app = root / b["app"]
         if app.is_dir():
             found.append(app)
-    relay = root / "helene-relay"
-    if relay.is_file():
-        found.append(relay)
+    for name in ROOT_BINARIES:
+        exe = root / name
+        if exe.is_file():
+            found.append(exe)
     runtime = root / "runtime"
     if runtime.is_dir():
         for p in sorted(runtime.rglob("*")):
@@ -412,11 +448,64 @@ def sha256_line(digest: str, name: str) -> str:
     return f"{digest} *{name}\n"
 
 
+def body_source_files(src: Path) -> list[Path]:
+    """Файлы исходника тела по BODY_SRC_PATTERNS — отсортированно, без следов сборки."""
+    src = Path(src)
+    seen: set[Path] = set()
+    for pat in BODY_SRC_PATTERNS:
+        seen.update(p for p in src.glob(pat) if p.is_file())
+    return sorted(seen)
+
+
+def body_source_digest(src: Path) -> tuple[str, int]:
+    """Отпечаток исходника тела -> (sha256, число файлов). Содержимое к LF — как
+    `relay_src.digest`: зеркало на Windows и оригинал на проде иначе отличались
+    бы каждым файлом."""
+    files = body_source_files(src)
+    lines = []
+    for path in files:
+        rel = path.relative_to(src).as_posix()
+        raw = path.read_bytes().replace(b"\r\n", b"\n")
+        lines.append(rel + " " + hashlib.sha256(raw).hexdigest())
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest(), len(files)
+
+
+def core_source(path: Path = CORE_SOURCE) -> dict:
+    """`CORE-SOURCE.json`: откуда зеркало `praxis/` (коммит прода, дата, число файлов).
+    Нет файла — пусто, и паспорт это скажет полем `commit: ""`, а не упадёт:
+    тело собрано из того, что лежит в репозитории, и это факт сборки."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def body_summary(*, mirror: dict, crates: tuple[str, ...], digest: str, files: int,
+                 exe_sha256: dict, target_dir: str) -> dict:
+    """Поле `body` паспорта: коммит зеркала прода (`CORE-SOURCE.json`), крейты,
+    отпечаток исходника, суммы бинарей. Darwin-ветки живут в этом репозитории
+    поверх зеркала — их коммит есть в `git.desk` того же паспорта."""
+    return {
+        "source": "praxis/body",
+        "commit": str(mirror.get("head") or ""),
+        "mirror_taken_at": str(mirror.get("taken_at") or ""),
+        "mirror_dirty": bool(mirror.get("dirty")),
+        "crates": list(crates),
+        "binaries": dict(BODY_BINARIES),
+        "files": files,
+        "digest": digest,
+        "exe_sha256": dict(exe_sha256),
+        "target_dir": target_dir,
+        "built_utc": _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
 def build_passport(*, version: str, declared: dict, desk_head: str, desk_dirty: bool,
                    tree_head: str, tree_dirty: bool, source_release: dict | None,
                    staged: dict, relay: dict | None, freeze: str, downloads: dict,
                    complete: bool, partial_reason: list[str], signed: int,
-                   git_bundle: dict | None, macos_floor: str) -> dict:
+                   git_bundle: dict | None, macos_floor: str, body: dict | None = None) -> dict:
     """Паспорт той же формы, что у Windows (`build_dist.main`), плюс платформа."""
     return {
         "product": PRODUCT,
@@ -441,6 +530,9 @@ def build_passport(*, version: str, declared: dict, desk_head: str, desk_dirty: 
         "tree_files": staged["tree_files"],
         "static": staged["static_digest"],
         "relay": relay,
+        # Тело: коммит зеркала прода, крейты, отпечаток исходника, суммы бинарей.
+        # None — сборка без тела (--skip-body), и тогда complete=false.
+        "body": body,
         "core": (source_release or {}).get("core") if source_release else None,
         "desk": {"version": staged["desk"]["version"],
                  "flavor": staged["desk"]["flavor"],
@@ -496,19 +588,79 @@ FIRST_RUN_MAC = """# Hélène · первый запуск на macOS
 Настройках, или скопировать `data/` и `helene.json` поверх свежей установки при
 закрытой программе.
 
+## Управление компьютером
+
+Тул `computer` — окна, экран, клавиатура и мышь, файлы и процессы этой машины —
+на Mac есть с 0.8.0. Включается в мастере (сцена «Управление компьютером») или
+потом в «Настройках», карточка с тем же именем; умолчание — выключено: агент
+водит твоей мышью по-настоящему, и слабая модель может не понять, что делает.
+Тело (`helene-body`) и мост (`helene-bridge`) лежат в корне папки программы;
+поднимает их движок рядом с собой, снаружи ограды, и они умирают вместе с ним.
+Координаты — пункты экрана, как у клика; снимок экрана по умолчанию уменьшен
+до них.
+
+Системе нужны два разрешения. Без них тело не врёт, а отказывает словами
+(снимок без «Записи экрана» — не обои, а отказ с подсказкой, куда идти):
+
+- **«Запись экрана и системного звука»** — снимки экрана и заголовки чужих окон;
+- **«Универсальный доступ»** — клавиатура, мышь и чтение дерева окна.
+
+Где: Системные настройки → «Конфиденциальность и безопасность» → нужный
+раздел → включить `Helene`. macOS спросит сама при первом обращении тела (в
+окне на карточке есть и кнопки «Открыть настройки», ведущие прямо в раздел).
+«Универсальный доступ» действует сразу; «Запись экрана» macOS применяет только
+к заново запущенному процессу — после галочки перезапусти программу.
+
+⚠ **После каждого обновления Hélène оба разрешения слетают.** Подписи
+Developer ID у программы нет, подпись ad-hoc новая на каждую сборку, а система
+помнит программу по подписи: старая строка в списке остаётся, но не действует.
+Лечится руками, в тех же двух разделах: убрать `Helene` из списка кнопкой «−»
+и добавить снова кнопкой «+» (бандл — `~/Applications/Helene/Helene.app`).
+Пока это не сделано, тул отвечает «нет разрешения …» и называет путь.
+
+## Права администратора
+
+Брокер прав на Mac — сама программа, без отдельной службы: когда агент просит
+действие с правами администратора, окно показывает команду и «зачем», ты
+подтверждаешь, и macOS спрашивает пароль своим диалогом (`osascript … with
+administrator privileges`). Пароль видит только система, программе он не
+достаётся, в журналы не попадает. Отказ в диалоге — отказ агенту словами.
+Правил брандмауэра брокер на Mac не ставит: macOS сама спросит, разрешить ли
+входящие соединения, когда включишь «Телефон».
+
+## Что проверить руками
+
+Живьём на Маке человеком это ещё не прогонялось — только на раннере GitHub
+(там тело поднялось и подключилось, а разрешения — какие есть у раннера).
+Если ты первый, пройди по порядку и напиши, что не так:
+
+1. Включить «Управление компьютером» → два системных диалога (или кнопки
+   «Открыть настройки» на карточке) → обе галочки стоят.
+2. Ход «сделай снимок экрана» — приходит картинка с окнами, а не обои и не отказ.
+3. Ход «прочитай окно Finder» — дерево с кнопками, списками и текстом.
+4. Ход «нажми кнопку … в этом окне» — нажалась.
+5. Брокер: «попроси права и создай папку в /usr/local/…» → диалог пароля →
+   квитанция в чате с тем, что вышло.
+6. После обновления программы: разрешения слетели — убрать и добавить `Helene`
+   заново, повторить п. 2.
+
+Куда писать — issues репозитория https://github.com/josephsteuerjr/praxis/issues,
+с версией из `helene-build.json`.
+
 Чего в сборке для macOS нет (это не поломка, а состав):
 
-- тела и тула `computer` — окна, экран, клавиатура и мышь этой машины агенту не
-  видны; на Windows это делает `helene-body.exe`, на Mac аналога пока нет;
-- службы и брокера прав — агент живёт, пока открыта программа (окно можно
-  закрыть, значок остаётся в строке меню); автозапуск — «Настройки»;
 - Intel-маков — только Apple Silicon (M1 и новее), macOS 14 и новее;
-- подписи Developer ID, нотаризации и dmg — отсюда и `install.sh`;
+- подписи Developer ID, нотаризации и dmg — отсюда `install.sh` вместо образа
+  и слетающие после обновления разрешения;
+- службы без входа в систему (LaunchDaemon) — агент живёт, пока открыта
+  программа (окно можно закрыть, значок остаётся в строке меню); автозапуск при
+  входе — «Настройки»;
 - правил брандмауэра — macOS сам спросит, разрешить ли программе входящие
   соединения, когда включишь «Телефон».
 
 Ограда тула `shell` здесь — seatbelt (`sandbox-exec`) macOS: команды агента
-видят рантайм и код, пишут только в его дом. Права администратора не нужны.
+видят рантайм и код, пишут только в его дом. Права администратора не нужны;
+тело и брокер — снаружи ограды, это записано в «Системе» и в самой опции.
 
 Когда выйдет новая версия — «Настройки» → «Проверить обновления», или тот же
 однострочник установки: он увидит, что программа уже стоит, остановит её и
@@ -524,6 +676,8 @@ Hélène собрана из открытых компонентов. Ниже �
   `licenses/rust/` (список и ссылки на тексты — `licenses/rust/README.md`;
   собирается при сборке из `Cargo.lock` обоих крейтов);
 - крейты реле подписки ChatGPT (`helene-relay`) — в `licenses/relay/`;
+- крейты моста и тела тула `computer` (`helene-bridge`, `helene-body`) — в
+  `licenses/body/`;
 - пакеты Python — в `runtime/lib/python3.14/site-packages/<пакет>.dist-info/`;
 - CPython — `runtime/lib/python3.14/LICENSE.txt`.
 
@@ -581,6 +735,23 @@ https://mirrors.edge.kernel.org/pub/software/scm/git/ (`git-__GIT_VERSION__.tar.
 - `helene-relay` — MIT, исходники: https://github.com/josephsteuerjr/praxis-relay
   (коммит записан в паспорте сборки); тексты — `licenses/relay/`
 
+## Тело тула `computer` (`helene-body`, `helene-bridge`)
+
+Оба собраны из крейтов `praxis/body` репозитория Hélène (зеркало кода Праксис
+плюс ветки для macOS): `praxis-body`, `praxis-bridge`, `praxis-body-protocol`;
+коммит зеркала и отпечаток исходника записаны в паспорте сборки (`body`), сами
+исходники — в репозитории https://github.com/josephsteuerjr/praxis (`praxis/body`).
+Их зависимости (axum, tokio, rusqlite с bundled SQLite — Public Domain,
+core-foundation и core-graphics — MIT или Apache-2.0, и остальные) перечислены
+в `licenses/body/README.md`, тексты — рядом.
+
+Условия самого кода тела — те же, что у дерева: Apache-2.0 (см. «Код агента»
+ниже). ⚠ В `praxis/body/Cargo.toml` поле `license` этого workspace всё ещё
+объявляет `PolyForm-Noncommercial-1.0.0` — это старая запись, оставшаяся с
+тех пор, когда дерево ещё не было открыто под Apache-2.0; решение автора о
+лицензии дерева (27.08.2026) её перекрывает, но поле в манифесте стоит
+поправить в самом дереве (это правка хребта Праксис, здесь её не делают).
+
 ## Стороннее внутри дерева агента
 
 - `tree/panel_static/3d-force-graph.min.js` — 3d-force-graph версии 1.80.0,
@@ -596,8 +767,9 @@ https://mirrors.edge.kernel.org/pub/software/scm/git/ (`git-__GIT_VERSION__.tar.
 уведомление об авторстве — `tree/NOTICE` (и `NOTICE` в корне поставки).
 
 Чего в этой поставке нет из Windows-состава: BusyBox (`runtime/bash.exe` — на
-Mac свой `/bin/sh`), MinGit, службы и тела (`helene-svc.exe`, `helene-body.exe`,
-`helene-bridge.exe`).
+Mac свой `/bin/sh`), MinGit (здесь git из исходника, выше) и службы
+(`helene-svc.exe`): брокер прав на Mac — сама оболочка через системный диалог
+пароля, отдельного бинаря у него нет.
 """.replace("__GIT_VERSION__", GIT_VERSION)
 
 
@@ -1005,6 +1177,49 @@ def build_relay(cache: Path, skip_rust: bool) -> tuple[Path, dict]:
     }
 
 
+# --- тело -----------------------------------------------------------------------------
+
+def body_target_dir(cache: Path) -> Path:
+    """Куда cargo кладёт бинари тела: в кэш сборки, не в `praxis/body/target`
+    (исходник — зеркало прода, следов сборки в нём быть не должно). Workflow
+    гоняет `cargo test` тела с тем же `--target-dir`, чтобы зависимости
+    компилировались один раз и кэшировались вместе с кэшем сборки."""
+    return Path(cache) / "body-target"
+
+
+def build_body(cache: Path, skip_rust: bool) -> tuple[dict[str, Path], dict]:
+    """Мост и тело из `praxis/body` этого репозитория -> {имя в поставке: путь к
+    бинарю}, запись для паспорта. Клонировать нечего: исходник лежит рядом."""
+    src = BODY_SRC
+    if not (src / "Cargo.toml").is_file():
+        raise SystemExit(f"нет исходника тела: {src / 'Cargo.toml'} — зеркало praxis/ без body/")
+    for crate in BODY_CRATES:
+        if not (src / "crates" / crate / "Cargo.toml").is_file():
+            raise SystemExit(f"в {src} нет крейта {crate} — тело собирать не из чего")
+    target = body_target_dir(cache)
+    if not skip_rust:
+        packages = [arg for crate in BODY_CRATES for arg in ("-p", crate)]
+        run(["cargo", "build", "--release", *packages, "--target-dir", target], cwd=src, timeout=5400)
+    exes: dict[str, Path] = {}
+    for crate, name in BODY_BINARIES.items():
+        exe = target / "release" / crate
+        if not exe.is_file():
+            raise SystemExit(f"нет собранного бинаря тела: {exe}"
+                             + (" (с --skip-rust он должен уже лежать в кэше)" if skip_rust else ""))
+        # Бинарь обязан хотя бы запуститься на этой машине: clap отвечает на
+        # --help кодом 0, а «Killed: 9» или чужая dylib видны уже здесь.
+        capture([exe, "--help"], timeout=120)
+        exes[name] = exe
+    digest, files = body_source_digest(src)
+    mirror = core_source()
+    info = body_summary(mirror=mirror, crates=BODY_CRATES, digest=digest, files=files,
+                        exe_sha256={name: bd.sha256(exe) for name, exe in exes.items()},
+                        target_dir=str(target))
+    print(f"  тело из praxis/body @ зеркало {info['commit'][:7] or '(CORE-SOURCE.json нет)'}: "
+          f"{files} файлов исходника, отпечаток {digest[:12]}")
+    return exes, info
+
+
 # --- бандлы и подпись ---------------------------------------------------------------
 
 def make_icns(png: Path, dest: Path, work: Path) -> None:
@@ -1066,7 +1281,43 @@ def codesign_all(out: Path) -> int:
     return signed
 
 
-# --- лицензии реле ------------------------------------------------------------------
+# --- лицензии реле и тела ---------------------------------------------------------
+
+def license_texts(dest: Path, crates, registry: Path) -> tuple[list[str], list[str]]:
+    """Тексты лицензий крейтов из локального реестра cargo -> (строки указателя,
+    крейты без файла лицензии). Тот же приём, что `build_dist.collect_rust_licenses`:
+    одинаковые тексты кладутся в `dest/texts/` по одному разу, по sha256."""
+    texts = Path(dest) / "texts"
+    texts.mkdir(parents=True, exist_ok=True)
+    index: list[str] = []
+    missing: list[str] = []
+    for name, ver in sorted(set(crates)):
+        crate_dir = Path(registry) / f"{name}-{ver}"
+        files = []
+        if crate_dir.is_dir():
+            for glob in bd.LICENSE_FILE_GLOBS:
+                files += [f for f in crate_dir.glob(glob) if f.is_file()]
+        if not files:
+            missing.append(f"{name} {ver}")
+            continue
+        refs = []
+        for f in sorted(set(files)):
+            raw = f.read_bytes()
+            digest = hashlib.sha256(raw).hexdigest()[:16]
+            target = texts / f"{digest}.txt"
+            if not target.exists():
+                target.write_bytes(raw)
+            refs.append(f"[{f.name}](texts/{digest}.txt)")
+        index.append(f"- **{name} {ver}** — " + ", ".join(refs))
+    return index, missing
+
+
+def _missing_note(missing: list[str]) -> list[str]:
+    if not missing:
+        return []
+    return ["Без файла лицензии в исходниках крейта (лицензия объявлена полем "
+            "`license` в его Cargo.toml): " + ", ".join(missing) + ".", ""]
+
 
 def collect_relay_licenses(out: Path, src: Path, allow_partial: bool) -> int:
     """Тексты лицензий крейтов реле — тем же приёмом, что `collect_rust_licenses`,
@@ -1085,28 +1336,7 @@ def collect_relay_licenses(out: Path, src: Path, allow_partial: bool) -> int:
             raise SystemExit("нет локального реестра cargo — тексты лицензий крейтов реле собрать не из чего")
         print("  ⚠ нет реестра cargo: лицензии крейтов реле не собраны")
         return 0
-    texts = dest / "texts"
-    texts.mkdir(exist_ok=True)
-    index: list[str] = []
-    missing: list[str] = []
-    for name, ver in sorted(set(crates)):
-        crate_dir = registry / f"{name}-{ver}"
-        files = []
-        if crate_dir.is_dir():
-            for glob in bd.LICENSE_FILE_GLOBS:
-                files += [f for f in crate_dir.glob(glob) if f.is_file()]
-        if not files:
-            missing.append(f"{name} {ver}")
-            continue
-        refs = []
-        for f in sorted(set(files)):
-            raw = f.read_bytes()
-            digest = hashlib.sha256(raw).hexdigest()[:16]
-            target = texts / f"{digest}.txt"
-            if not target.exists():
-                target.write_bytes(raw)
-            refs.append(f"[{f.name}](texts/{digest}.txt)")
-        index.append(f"- **{name} {ver}** — " + ", ".join(refs))
+    index, missing = license_texts(dest, crates, registry)
     head = [
         "# Лицензии Rust-крейтов, влинкованных в helene-relay",
         "",
@@ -1114,10 +1344,61 @@ def collect_relay_licenses(out: Path, src: Path, allow_partial: bool) -> int:
         f"Собрано автоматически при сборке из его Cargo.lock ({len(set(crates))} крейтов).",
         "Одинаковые тексты лежат в `texts/` по одному разу; ссылки ниже ведут на них.",
         "",
-    ]
-    if missing:
-        head += ["Без файла лицензии в исходниках крейта (лицензия объявлена полем "
-                 "`license` в его Cargo.toml): " + ", ".join(missing) + ".", ""]
+    ] + _missing_note(missing)
+    (dest / "README.md").write_text("\n".join(head + sorted(index)) + "\n",
+                                    encoding="utf-8", newline="\n")
+    return len(index)
+
+
+def body_license_head(n_crates: int, mirror_head: str, missing: list[str]) -> list[str]:
+    """Шапка `licenses/body/README.md`: чьи крейты, откуда, на каких условиях.
+    Слова о лицензии тела — те же, что в ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md у Windows:
+    код тела — Apache-2.0 по решению автора, поле `license` в манифесте
+    устарело; молчать об этом нельзя, писать PolyForm как факт — тоже."""
+    return [
+        "# Лицензии Rust-крейтов, влинкованных в helene-bridge и helene-body",
+        "",
+        "Мост и тело тула `computer` собраны из крейтов `praxis/body` репозитория Hélène "
+        f"(зеркало кода Праксис, коммит прода {mirror_head[:7] or '?'}, плюс ветки для macOS): "
+        "`praxis-bridge`, `praxis-body`, `praxis-body-protocol`.",
+        "Условия самого кода тела — те же, что у дерева агента: Apache-2.0 (`tree/LICENSE`, "
+        "`NOTICE` в корне поставки); поле `license = \"PolyForm-Noncommercial-1.0.0\"` в "
+        "`praxis/body/Cargo.toml` — старая запись до открытия дерева под Apache-2.0, решение "
+        "автора (27.08.2026) её перекрывает. Подробнее — `ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md`.",
+        "",
+        f"Зависимости собраны автоматически при сборке из его Cargo.lock ({n_crates} крейтов).",
+        "Одинаковые тексты лежат в `texts/` по одному разу; ссылки ниже ведут на них.",
+        "",
+    ] + _missing_note(missing)
+
+
+def mirror_head(info: dict | None) -> str:
+    """Коммит зеркала прода — из записи паспорта тела (`commit`), из
+    `CORE-SOURCE.json` (`head`) или пусто; шапка лицензий тогда пишет «?»."""
+    info = info or {}
+    return str(info.get("commit") or info.get("head") or "")
+
+
+def collect_body_licenses(out: Path, src: Path, allow_partial: bool,
+                          body: dict | None = None) -> int:
+    """Тексты лицензий крейтов моста и тела — по `praxis/body/Cargo.lock`, в
+    `licenses/body/` (у Windows они слиты в `licenses/rust/` — здесь отдельно,
+    как у реле: у тела свой исходник и своя судьба). Собственные крейты
+    workspace в `Cargo.lock` без `source` — их лицензию называет шапка.
+    `body` — запись паспорта от `build_body` (коммит зеркала берётся из неё)."""
+    dest = out / "licenses" / "body"
+    dest.mkdir(parents=True, exist_ok=True)
+    crates = bd._lock_crates(src / "Cargo.lock")
+    if not crates:
+        raise SystemExit(f"не прочитался Cargo.lock тела ({src}) — лицензии моста и тела собрать не из чего")
+    registry = bd._cargo_registry_src()
+    if registry is None:
+        if not allow_partial:
+            raise SystemExit("нет локального реестра cargo — тексты лицензий крейтов тела собрать не из чего")
+        print("  ⚠ нет реестра cargo: лицензии крейтов тела не собраны")
+        return 0
+    index, missing = license_texts(dest, crates, registry)
+    head = body_license_head(len(set(crates)), mirror_head(body) or mirror_head(core_source()), missing)
     (dest / "README.md").write_text("\n".join(head + sorted(index)) + "\n",
                                     encoding="utf-8", newline="\n")
     return len(index)
@@ -1157,7 +1438,12 @@ def run_stands(out: Path, skip: bool) -> None:
 
 # --- главное ------------------------------------------------------------------------
 
-def main() -> None:
+#: Что в корне поставки — от тела: с `--skip-body` этих записей не ждём, а
+#: пишем в паспорт `complete: false` с причиной.
+BODY_ROOT_ENTRIES = tuple(BODY_BINARIES.values()) + ("licenses/body/README.md",)
+
+
+def arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="сборка Hélène для macOS (Apple Silicon)")
     parser.add_argument("--out", default=str(DESK / "installer" / "build-mac"))
     parser.add_argument("--from-release", default="", metavar="TAG",
@@ -1168,12 +1454,19 @@ def main() -> None:
     parser.add_argument("--skip-runtime", action="store_true",
                         help="не пересобирать runtime/ (python, пакеты, git) — только для отладки")
     parser.add_argument("--skip-rust", action="store_true",
-                        help="не звать cargo: взять бинари из target/release как есть")
+                        help="не звать cargo: взять бинари из target/release (и тело из кэша) как есть")
+    parser.add_argument("--skip-body", action="store_true",
+                        help="собрать без тела (helene-body, helene-bridge): отладочная полусборка, "
+                             "паспорт получит complete=false; в выпуске — никогда")
     parser.add_argument("--skip-tests", action="store_true",
                         help="не гонять стенды (отладка); в выпуске — никогда")
     parser.add_argument("--allow-partial", action="store_true",
                         help="разрешить неполную сборку (отладка); попадёт в паспорт")
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = arg_parser().parse_args()
     if args.from_release and args.tree:
         raise SystemExit("--from-release и --tree вместе не бывают: дерево либо из выпуска, либо с диска")
     if sys.platform != "darwin":
@@ -1234,6 +1527,23 @@ def main() -> None:
         missing.append(f"helene-relay — {e}")
         print(f"  ⚠ {e}")
     relay_src_dir = cache / "praxis-relay"
+
+    print("тело:")
+    body_info: dict | None = None
+    if args.skip_body:
+        print("  ⚠ --skip-body: тела в сборке не будет — это ОТЛАДОЧНАЯ полусборка, не выпуск")
+    else:
+        try:
+            body_exes, body_info = build_body(cache, args.skip_rust)
+            for name, exe in body_exes.items():
+                shutil.copy2(exe, out / name)
+                (out / name).chmod(0o755)
+                print(f"  {name}: положен ({(out / name).stat().st_size / 1e6:.1f} МБ)")
+        except SystemExit as e:
+            if not args.allow_partial:
+                raise
+            missing.append(f"тело (helene-body, helene-bridge) — {e}")
+            print(f"  ⚠ {e}")
 
     if args.skip_runtime:
         print("runtime: пропущен (--skip-runtime)")
@@ -1304,6 +1614,8 @@ def main() -> None:
     print(f"  лицензии крейтов: {n_lic}")
     if (relay_src_dir / "Cargo.lock").is_file():
         print(f"  лицензии крейтов реле: {collect_relay_licenses(out, relay_src_dir, args.allow_partial)}")
+    if body_info is not None:
+        print(f"  лицензии крейтов тела: {collect_body_licenses(out, BODY_SRC, args.allow_partial, body_info)}")
     (out / "helene.json").write_text(helene_json_mac(), encoding="utf-8", newline="\n")
     (out / "data").mkdir(exist_ok=True)
 
@@ -1314,13 +1626,18 @@ def main() -> None:
     desk_head, desk_dirty = bd._git_field(DESK, "desk")
     # Паспорт пишется этим же шагом — его отсутствие ДО записи не нехватка (седьмой
     # круг CI дошёл сюда с полным составом и упал ровно на этой строке).
-    lost = [rel for rel in missing_in_root(out) if rel != "helene-build.json"]
+    # С --skip-body записей тела в корне не ждём: их отсутствие — осознанная
+    # полусборка, она едет в паспорт своей строкой ниже, а не как «нет в сборке».
+    skipped_body = ["тела нет: --skip-body (отладочная полусборка, не выпуск)"] if args.skip_body else []
+    lost = [rel for rel in missing_in_root(out)
+            if rel != "helene-build.json" and not (args.skip_body and rel in BODY_ROOT_ENTRIES)]
     for rel in lost:
         print(f"  ⚠ в сборке нет: {rel}")
     partial = missing + [f"нет в сборке: {rel}" for rel in lost] + \
         ([] if not pkg["skipped"] else [f"пакет desk без {s['name']}" for s in pkg["skipped"]])
     if partial and not args.allow_partial:
         raise SystemExit("сборка неполная:\n  " + "\n  ".join(partial) + "\n(для отладочной полусборки: --allow-partial)")
+    partial += skipped_body
     manifest = build_passport(
         version=version, declared=declared, desk_head=desk_head, desk_dirty=desk_dirty,
         tree_head=staged_tree["tree_head"], tree_dirty=staged_tree["tree_dirty"],
@@ -1329,11 +1646,12 @@ def main() -> None:
         staged=staged, relay=relay, freeze=freeze,
         downloads={PBS_NAME: SHA256[PBS_URL], GIT_NAME: SHA256[GIT_URL]},
         complete=not partial, partial_reason=partial, signed=signed,
-        git_bundle=git_bundle, macos_floor=macos_floor)
+        git_bundle=git_bundle, macos_floor=macos_floor, body=body_info)
     (out / "helene-build.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
-    if missing_in_root(out):
-        raise SystemExit("после записи паспорта в корне всё ещё не хватает: " + ", ".join(missing_in_root(out)))
+    still = [rel for rel in missing_in_root(out) if not (args.skip_body and rel in BODY_ROOT_ENTRIES)]
+    if still:
+        raise SystemExit("после записи паспорта в корне всё ещё не хватает: " + ", ".join(still))
 
     # Гард ПОСЛЕ паспорта и до архива — как у Windows. Раскладка рантайма на Mac
     # другая (`lib/python3.14/site-packages`, а не `Lib/site-packages`), поэтому
