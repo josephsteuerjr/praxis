@@ -232,7 +232,7 @@ export class ModeScene extends FormScene {
     this.serviceDesc = el("p", "mode-text", SERVICE_OPTION.text);
     this.serviceNote = el("p", "mode-note", SERVICE_NOTE);
     // Чего служба НЕ даёт — рядом с тем, что даёт. Пусто на Windows (там всё
-    // сказано описанием), на Mac — окна, экран и FileVault до первого входа.
+    // сказано описанием), на Mac — окна и экран без открытого окна Helene.
     this.serviceWarn = el("p", "mode-warn", "");
     this.serviceWarn.hidden = true;
     main.append(this.serviceSwitch, this.serviceDesc, this.serviceNote, this.serviceWarn);

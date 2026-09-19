@@ -151,7 +151,10 @@ export class InstallScene extends FormScene {
           : r.service === "absent"
             ? "Служба не поставилась: права администратора не были даны."
             : r.service === "missing"
-              ? "Служба не установлена: в этой сборке нет helene-svc.exe."
+              // Имя файла — по системе: на Mac `.exe` нет ни у кого, и строка
+              // про «helene-svc.exe» отправляла бы владельца искать то, чего в
+              // поставке для его системы не бывает.
+              ? `Служба не установлена: в этой сборке нет ${isMac() ? "helene-svc" : "helene-svc.exe"}.`
               : r.service.startsWith("failed: ")
                 ? `Служба не поставилась: ${r.service.slice(8)}`
                 : "";

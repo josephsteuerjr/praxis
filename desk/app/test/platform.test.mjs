@@ -124,7 +124,12 @@ assert.match(agent, /^\s*cards\.push\(inGroup\(computer\.el, GROUP\.rights\)\);/
 const computerTs = read(src, "computer.ts");
 assert.match(computerTs, /const mac = platform === "macos"/, "карточка тела не различает систему агента");
 assert.match(computerTs, /shell\("open_privacy_pane", \{ kind \}\)/, "кнопки «Открыть настройки» не зовут open_privacy_pane");
-assert.match(computerTs, /\["screen_recording", "screen", "Запись экрана"\]/, "строки про «Запись экрана» нет");
+// ⚠ Имя пункта — ровно то, что написано в Системных настройках Sequoia:
+// «Запись экрана» там больше нет, есть «Запись экрана и системного звука».
+assert.match(computerTs, /\["screen_recording", "screen", "Запись экрана и системного звука"\]/,
+             "строка разрешения зовёт раздел не так, как его зовёт сама система");
+assert.ok(computerTs.includes("«Запись экрана и системного звука» и «Универсальный доступ»"),
+          "примечание карточки не называет разделы системы полными именами");
 assert.match(computerTs, /\["accessibility", "accessibility", "Универсальный доступ"\]/, "строки про «Универсальный доступ» нет");
 assert.match(computerTs, /tccBox\.hidden = !tcc \|\| typeof tcc !== "object"/, "строки про разрешения рисуются без слова тела (по догадке)");
 assert.ok(!/helene-body\.exe и helene-bridge\.exe рядом/.test(computerTs), "имена тела в карточке снова захардкожены с .exe");

@@ -38,8 +38,8 @@ declare module "virtual:helene-modes" {
     title: string;
     text: string;
     /** Чего служба НЕ даёт. Пусто на Windows (там всё сказано описанием); на
-     *  macOS — окон и экрана у неё нет, а при FileVault до первого входа после
-     *  перезагрузки не идёт ничего. */
+     *  macOS — окон и экрана у неё нет: тело тула `computer` поднимает окно.
+     *  FileVault сюда не едет — он в документах поставки. */
     warning?: string;
     toggles: ServiceToggle[];
   }

@@ -248,11 +248,12 @@ export function modeCard(
   svcBox.append(el("h4", "", option?.title || live.service_title || (mac ? "Служба" : "Служба Windows")));
   const svcText = option?.text || live.service_text || "";
   if (svcText) svcBox.append(el("p", "choice-text", svcText));
-  // Чего служба НЕ даёт — рядом с тем, что даёт, и ДО кнопки. На macOS это
-  // окна и экран (их у процесса вне сеанса нет) и FileVault до первого входа.
-  const svcWarn = option?.warning || live.service_warning || "";
-  if (svcWarn) svcBox.append(el("p", "receipt err", svcWarn));
   else {
+    // Запасной текст — ровно про ОТСУТСТВИЕ описания, и ни про что больше.
+    // ⚠ Этот блок однажды уже разъехался: между `if (svcText)` и его `else`
+    // вставили оговорку, `else` прилип к ней — и на Windows, где оговорки нет
+    // по построению, окно на каждом открытии врало «код агента старее окна».
+    // Поэтому здесь отдельный блок, а не `else` от соседнего условия.
     svcBox.append(
       el(
         "p",
@@ -262,6 +263,10 @@ export function modeCard(
       ),
     );
   }
+  // Чего служба НЕ даёт — рядом с тем, что даёт, и ДО кнопки. На macOS это
+  // окна и экран: их у процесса вне сеанса нет.
+  const svcWarn = option?.warning || live.service_warning || "";
+  if (svcWarn) svcBox.append(el("p", "receipt err", svcWarn));
 
   /** Заперта ли установка службы и почему. Пустая строка — можно ставить. */
   const lockedWhy = (): string => {
@@ -296,8 +301,11 @@ export function modeCard(
       svcClient.textContent =
         st === "running"
           ? "Движок и канал держит служба — это окно работает клиентом: своих процессов оно не " +
-            "поднимает, и «Перезапустить» их не тронет. Тело тула `computer` поднимает окно, " +
-            "пока оно открыто."
+            "поднимает, и «Перезапустить» их не тронет." +
+            // Кто поднимает тело под службой — разное на разных системах:
+            // на macOS это окно (TCC живёт у Helene.app), на Windows тело
+            // поднимает сам движок в интерактивной половине (`session-host`).
+            (mac ? " Тело тула `computer` поднимает окно, пока оно открыто." : "")
           : "";
       // Ответ оболочки свежее ответа трубы: пересобираем всё, что от него зависит.
       installed = st !== "absent";

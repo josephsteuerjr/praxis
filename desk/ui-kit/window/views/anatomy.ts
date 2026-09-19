@@ -44,6 +44,26 @@ function layerNameOnMac(h: string): string {
   return h.replace("helene.exe", "Helene.app").replace(/helene-(body|bridge)\.exe/g, "helene-$1");
 }
 
+/** Текст слоя ТЕЛА на macOS.
+ *
+ * Отдельный текст, а не подмена слов: на Mac у тела другой родитель. Под окном
+ * его поднимает код агента, а под СЛУЖБОЙ — окно: у процесса вне графической
+ * сессии нет ни рабочего стола, ни разрешений системы, и написать здесь общее
+ * «код агента поднимает обоих» значило бы соврать половине владельцев.
+ */
+const BODY_LAYER_MACOS =
+  "Окна, экран, клавиатура и мышь, файлы и процессы для тулы computer. Под окном обоих поднимает " +
+  "код агента рядом с собой, в твоём сеансе, снаружи ограды. Под службой — наоборот: демон сеанса не " +
+  "видит, и тело поднимает ОКНО Helene, пока оно открыто; закрыл окно — тела нет. Включает и выдаёт " +
+  "права владелец в Настройках («Управление компьютером»), плюс два разрешения самой системы: «Запись " +
+  "экрана и системного звука» и «Универсальный доступ». Мозга внутри нет: тело исполняет то, что " +
+  "прислала тул, и возвращает расписку.";
+
+/** Слой на macOS: имя без `.exe`, а у тела — и свой текст. */
+function layerOnMac(h: string, t: string): [string, string] {
+  return [layerNameOnMac(h), h.startsWith("helene-body") ? BODY_LAYER_MACOS : t];
+}
+
 const LAYERS: Array<[string, string]> = [
   ["helene.exe — оболочка (Rust, Tauri)", "Окно, значок у часов, уведомления. Сама не думает и не переписывается: собрана один раз и поднимает всё остальное тихими дочерними процессами по helene.json."],
   ["канал frame.desk.v1 → deskapp.py", "Всё, что окно показывает, приезжает по одному каналу (запросы и живые события). deskapp — читатель дерева: только файлы, никаких замков движка. Тот же протокол работает с удалённым кодом агента."],
@@ -278,11 +298,11 @@ export async function render(container: HTMLElement): Promise<void> {
   const intro = INTRO.map(
     ([h, t]) => `<details class="fold" open><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`,
   ).join("");
-  // На macOS оболочка — бандл, а тело и мост зовутся без `.exe`: слои те же,
-  // имена — свои (`layerNameOnMac`).
+  // На macOS оболочка — бандл, тело и мост зовутся без `.exe`, а у слоя тела
+  // свой текст: под службой его поднимает окно, а не код агента (`layerOnMac`).
   const mac = isMacPlatform(S.platform);
   const layers = LAYERS
-    .map(([h, t]) => [mac ? layerNameOnMac(h) : h, t] as [string, string])
+    .map(([h, t]) => (mac ? layerOnMac(h, t) : [h, t]) as [string, string])
     .map(([h, t]) => `<details class="fold"><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`)
     .join("");
   const body = a.computer

@@ -158,7 +158,7 @@
   "setup.uninstall.purge_body.macos": "The data folder disappears together with the program: memory, diary, constitution and everything the agent wrote about itself and about people — irreversibly, with no trash bin. There will be no КАК-ВЕРНУТЬСЯ.md note: there will be nowhere to return to. If you want to take the memory with you, close this window and run `\"Helene Setup.app/Contents/MacOS/helene-setup\" --export` next to the program — it builds an archive you can carry to a new machine — and only then come back and remove.",
   "settings.service.title.macos": "Work without you being logged in",
   "settings.service.text.macos": "Installed once; the system asks for an administrator password. launchd then runs the agent: Telegram and the phone answer while the window is closed, and keep answering after you log out. If it crashes, it comes back by itself. This changes nothing about the fence: you pick the mode separately and it works the same.",
-  "settings.service.warning.macos": "Such an agent has no windows and no screen: a process outside your session cannot see the desktop. The `computer` tool comes alive when you open the Helene window — the window is what starts the body. And with FileVault on, nothing runs after a reboot until you log in for the first time: until then the disk is locked.",
+  "settings.service.warning.macos": "Such an agent has no windows and no screen: a process outside your session cannot see the desktop. The `computer` tool comes alive when you open the Helene window — the window is what starts the body.",
   "setup.uninstall.explain_title": "What happens to the data",
   "setup.uninstall.keep_title": "Keep the data",
   "setup.uninstall.keep_text": "memory, constitution, model key, Telegram and ChatGPT sign-ins stay in the data folder",
@@ -170,11 +170,11 @@
   "setup.uninstall.result_partial": "Not fully removed",
   "setup.uninstall.result_ok": "Removed",
   "setup.uninstall.btn_close": "Close",
-  "settings.computer.screen.macos": "Screen Recording",
+  "settings.computer.screen.macos": "Screen & System Audio Recording",
   "settings.computer.accessibility.macos": "Accessibility",
   "settings.computer.granted.macos": "granted",
   "settings.computer.missing.macos": "missing",
   "settings.computer.open_settings.macos": "Open System Settings",
-  "settings.computer.tcc_note.macos": "Both permissions are granted in System Settings, under Privacy & Security. After the program updates the system treats it as new: remove Helene from the list and add it again.",
+  "settings.computer.tcc_note.macos": "Both permissions are granted in System Settings, under Privacy & Security: the items “Screen & System Audio Recording” and “Accessibility”. After the program updates the system treats it as new: remove Helene from the list and add it again.",
   "settings.computer.no_body.macos": "No body in this build: helene-body and helene-bridge were not found next to the program."
 }

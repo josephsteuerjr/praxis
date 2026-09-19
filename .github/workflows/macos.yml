@@ -18,17 +18,24 @@
 # на лжи (снимок «ok» без разрешения) и на поломке (разрешение есть, а тело
 # не отвечает).
 #
-# Два пути к выпуску — честно, потому что первый нужен, пока файла workflow нет
-# в main (workflow_dispatch виден GitHub только с ветки по умолчанию):
-#   (а) прогон от push в port/macos или port/macos-body (без выкладки: inputs на
-#       push пусты) →
-#       gh run download <id> -n Helene-v0.8.0-macos-arm64
-#       gh release upload v0.8.0 Helene-0.8.0-macos-arm64.zip \
-#           Helene-0.8.0-macos-arm64.zip.sha256 install.sh --clobber
-#   (б) после влития в main:
+# ⚠⚠ АРТЕФАКТ PUSH-ПРОГОНА В ВЫПУСК НЕ КЛАДЁТСЯ. Дерево агента (`tree/`, `server/`)
+# сборка берёт из Windows-архива выпуска TREE_TAG, а называет архив по TAG. На push
+# выпуска новой версии ещё нет, поэтому TREE_TAG отстаёт (сейчас v0.7.2) — внутри
+# такого архива дерево ПРОШЛОЙ версии, а имя файла обещает новую. Выложить его
+# значило бы отдать людям выпуск с чужим деревом. Поэтому:
+#   · шаг «Выложить в выпуск» стоит на гарде `[ "$TREE_TAG" = "$TAG" ]`;
+#   · артефакт такого прогона и НАЗЫВАЕТСЯ не по-выпускному:
+#     `Helene-<TAG>-macos-arm64-tree-<TREE_TAG>` (шаг «Имя артефакта») — чтобы скачавший
+#     не принял его за готовую сборку выпуска;
+#   · проверить у любого архива: `helene-build.json` → `source_release.tag` обязан
+#     совпасть с `version`.
+# Выкладка — ТОЛЬКО кнопкой и только после влития в `main` (`workflow_dispatch`
+# GitHub видит только с ветки по умолчанию):
 #       gh workflow run macos.yml -f tag=v0.8.0 -f upload=true
 #       — тот же прогон, плюс шаг «Выложить в выпуск» (--clobber в тот же тег;
 #       Windows-архив не трогается).
+# Прогон от push в port/macos или port/macos-body — проверочный: inputs на push
+# пусты, выкладки не будет, артефакт смотрят глазами (`gh run download <id>`).
 name: macOS (Apple Silicon)
 
 on:
@@ -75,6 +82,21 @@ jobs:
         run: |
           echo "BUILD=$RUNNER_TEMP/build" >> "$GITHUB_ENV"
           echo "LOGS=$RUNNER_TEMP/logs" >> "$GITHUB_ENV"
+
+      # Имя артефакта — рядом с путями, а не у самой выкладки: шаг артефакта
+      # идёт с `if: always()`, и на красном прогоне переменная обязана уже быть.
+      #
+      # Когда дерево агента приехало из ДРУГОГО выпуска (TREE_TAG != TAG —
+      # так на каждом push, пока выпуска новой версии ещё нет), имя артефакта
+      # говорит это вслух. Скачавший `Helene-v0.8.0-macos-arm64` вправе считать,
+      # что держит сборку выпуска v0.8.0; `…-tree-v0.7.2` такого не обещает.
+      - name: Имя артефакта
+        run: |
+          if [ "$TREE_TAG" = "$TAG" ]; then
+            echo "ARTIFACT_NAME=Helene-$TAG-macos-arm64" >> "$GITHUB_ENV"
+          else
+            echo "ARTIFACT_NAME=Helene-$TAG-macos-arm64-tree-$TREE_TAG" >> "$GITHUB_ENV"
+          fi
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -323,6 +345,105 @@ jobs:
           "$BUILD/Helene/runtime/bin/python3" tests/t_body.py
           "$BUILD/Helene/runtime/bin/python3" tests/t_body_macos.py
 
+      # Обновление ПОВЕРХ установленного — тем же `install.sh`, которым обновляется
+      # человек (и которым окно обновляет само себя). До 0.8.0 раннер ставил только
+      # НАЧИСТО, и «обновление со службой» оставалось словами документа.
+      #
+      # Тихий путь: `helene.json` на месте → install.sh идёт веткой `update`,
+      # решения читает из установленного конфига (`decisions_json`: служба — из
+      # `installed.service`, «Управление компьютером» — из `computer.enabled`) и
+      # зовёт мастер `--install <json> --quiet`. Мастер СНИМАЕТ демон до
+      # копирования (иначе launchd держит старый `helene-svc` в той же папке) и
+      # СТАВИТ его заново после.
+      #
+      # ⚠ Чего этот шаг НЕ проверяет: ДИАЛОГ ПАРОЛЯ. На раннере `GITHUB_ACTIONS=true`
+      # и sudo без пароля, поэтому оба административных шага проходят молча
+      # (`mac_svc_run_admin` → sudo). У человека это два системных диалога подряд;
+      # фоновый путь (окно запускает install.sh отсоединённо) не проверен вовсе.
+      - name: Обновление поверх установленного (install.sh --from)
+        shell: bash
+        run: |
+          TOKEN_FILE="$HOME_DIR/data/memory/.state/desk-token"
+          BEFORE="$(cat "$TOKEN_FILE")"
+          test -n "$BEFORE" || { echo "до обновления нет ключа канала $TOKEN_FILE"; exit 1; }
+          UPDLOG="$RUNNER_TEMP/update.log"
+          # Код возврата ловим сами: под pipefail и -e отказ install.sh оборвал бы
+          # шаг раньше, чем мы успеем показать его журнал.
+          set +e
+          sh "$BUILD/Helene/install.sh" --from "$BUILD"/Helene-*-macos-arm64.zip > "$UPDLOG" 2>&1
+          rc=$?
+          set -e
+          mkdir -p "$LOGS"
+          cp "$UPDLOG" "$LOGS/update.log" 2>/dev/null || true
+          echo "=== install.sh (хвост)"
+          tail -n 60 "$UPDLOG"
+          [ "$rc" -eq 0 ] || { echo "install.sh вернул $rc — обновление не прошло"; exit 1; }
+          grep -q "обновляю поверх" "$UPDLOG" \
+            || { echo "install.sh пошёл НЕ веткой обновления — проверять было нечего"; exit 1; }
+          grep -q "обновлено до" "$UPDLOG" \
+            || { echo "тихое обновление не доложило об успехе"; exit 1; }
+          # helene.json цел: обновление не трогает ни настройки, ни решение о службе.
+          python3 - "$HOME_DIR/helene.json" <<'PY'
+          import json, sys
+          cfg = json.load(open(sys.argv[1], encoding="utf-8-sig"))
+          got = (cfg.get("computer") or {}).get("enabled")
+          assert got is True, f"обновление потеряло computer.enabled: {got!r}"
+          got = (cfg.get("installed") or {}).get("service")
+          assert got is True, f"обновление потеряло installed.service: {got!r}"
+          print("helene.json цел: computer.enabled=true, installed.service=true")
+          PY
+          # data/ цела: ключ канала тот же байт в байт (новый значил бы, что
+          # обновление переписало .state, то есть тронуло память агента).
+          AFTER="$(cat "$TOKEN_FILE")"
+          test "$AFTER" = "$BEFORE" \
+            || { echo "ключ канала после обновления другой — обновление тронуло data/"; exit 1; }
+          echo "data/ цела: ключ канала тот же"
+          # Паспорт в корне — от НОВОЙ поставки, а не оставшийся от прежней.
+          python3 - "$HOME_DIR/helene-build.json" "$BUILD/Helene/helene-build.json" <<'PY'
+          import json, sys
+          live = json.load(open(sys.argv[1], encoding="utf-8"))
+          fresh = json.load(open(sys.argv[2], encoding="utf-8"))
+          assert live == fresh, (
+              "паспорт в корне не от свежей поставки: "
+              f"version {live.get('version')!r} / {fresh.get('version')!r}, "
+              f"git.desk {(live.get('git') or {}).get('desk')!r} / {(fresh.get('git') or {}).get('desk')!r}")
+          print(f"паспорт в корне новый: {live.get('version')}")
+          PY
+          # Служба снова работает: мастер поставил демон заново, launchd его держит.
+          up=0
+          for i in $(seq 1 30); do
+            if sudo launchctl print system/app.helene.svc > "$RUNNER_TEMP/launchctl-upd.txt" 2>&1; then
+              up=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$up" -ne 1 ]; then
+            echo "после обновления демон app.helene.svc не загружен — мастер снял его и не поставил обратно"
+            tail -n 30 "$RUNNER_TEMP/launchctl-upd.txt"
+            tail -n 60 "$HOME_DIR/data/service.log" 2>/dev/null || echo "(журнала службы нет)"
+            exit 1
+          fi
+          echo "демон загружен снова (ждали $i попыток по 2 с)"
+          # И канал отвечает — уже от нового бинаря, без открытого окна.
+          PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("port", 8094))' "$HOME_DIR/helene.json")"
+          ok=0
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 5 "http://127.0.0.1:$PORT/api/health?key=$BEFORE" > "$RUNNER_TEMP/health-upd.json" 2>/dev/null; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "канал после обновления не ответил за 120 с на порту $PORT"
+            tail -n 60 "$HOME_DIR/data/service.log" 2>/dev/null || echo "(журнала службы нет)"
+            tail -n 60 "$HOME_DIR/data/deskapp.log" 2>/dev/null || echo "(журнала канала нет)"
+            exit 1
+          fi
+          echo "канал после обновления отвечает на $PORT:"
+          cat "$RUNNER_TEMP/health-upd.json"; echo
+
       # Снятие: `bootout` выгружает демон вместе с детьми (SIGTERM → демон →
       # killpg по группам). Проверяем, что он действительно ушёл и что порт
       # освободился — забытый демон с KeepAlive поднимал бы движок из удалённой
@@ -393,7 +514,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: Helene-${{ env.TAG }}-macos-arm64
+          name: ${{ env.ARTIFACT_NAME }}
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/build/Helene-*-macos-arm64.zip

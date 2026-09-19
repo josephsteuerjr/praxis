@@ -158,7 +158,7 @@
   "setup.uninstall.purge_body.macos": "data 文件夹会随程序一起消失：记忆、日记、宪章，以及智能体写下的关于自己和关于人的一切——不可挽回，不进回收站。也不会有 КАК-ВЕРНУТЬСЯ.md 这张字条：已经无处可回。想把记忆带走，就关掉这个窗口，在程序旁边运行 `\"Helene Setup.app/Contents/MacOS/helene-setup\" --export`——它会打包出一份迁移存档，之后再卸载。",
   "settings.service.title.macos": "在你未登录时也继续工作",
   "settings.service.text.macos": "只需安装一次，系统会询问管理员密码。之后由 launchd 启动智能体：窗口关着时 Telegram 和手机照样有回应，你退出登录后也仍然有回应。进程崩了会自己起来。这不改变围栏：模式是单独选择的，工作方式不变。",
-  "settings.service.warning.macos": "这样的智能体没有窗口也没有屏幕：在你的会话之外的进程看不到桌面。`computer` 工具要等你打开 Helene 窗口才会活过来——身体是由窗口启动的。另外，如果开启了 FileVault，重启后在你第一次登录之前什么都不会运行：在那之前磁盘是锁着的。",
+  "settings.service.warning.macos": "这样的智能体没有窗口也没有屏幕：在你的会话之外的进程看不到桌面。`computer` 工具要等你打开 Helene 窗口才会活过来——身体是由窗口启动的。",
   "setup.uninstall.explain_title": "会留下什么",
   "setup.uninstall.keep_title": "保留数据",
   "setup.uninstall.keep_text": "记忆、宪章、模型密钥、Telegram 和 ChatGPT 的登录都留在 data 文件夹里",
@@ -170,11 +170,11 @@
   "setup.uninstall.result_partial": "没有卸干净",
   "setup.uninstall.result_ok": "已卸载",
   "setup.uninstall.btn_close": "关闭",
-  "settings.computer.screen.macos": "屏幕录制",
+  "settings.computer.screen.macos": "屏幕与系统音频录制",
   "settings.computer.accessibility.macos": "辅助功能",
   "settings.computer.granted.macos": "已授予",
   "settings.computer.missing.macos": "未授予",
   "settings.computer.open_settings.macos": "打开系统设置",
-  "settings.computer.tcc_note.macos": "两项授权都在“系统设置”的“隐私与安全性”里发放。程序更新后系统会把它当作新程序：把 Helene 从列表里移除，再重新添加。",
+  "settings.computer.tcc_note.macos": "两项授权都在“系统设置”的“隐私与安全性”里发放：“屏幕与系统音频录制”和“辅助功能”两项。程序更新后系统会把它当作新程序：把 Helene 从列表里移除，再重新添加。",
   "settings.computer.no_body.macos": "这个构建里没有“身体”：程序旁边找不到 helene-body 和 helene-bridge。"
 }

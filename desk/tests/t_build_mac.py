@@ -765,7 +765,17 @@ class Workflow(unittest.TestCase):
                        '"service": true', "helene-svc",
                        "/Library/LaunchDaemons/app.helene.svc.plist",
                        "launchctl bootstrap system", "launchctl bootout system/app.helene.svc",
-                       "подключаюсь без своих детей", "body-token", "data/service.log"):
+                       "подключаюсь без своих детей", "body-token", "data/service.log",
+                       # Судья 19.09, выкладка: гард «дерево из того же выпуска»
+                       # стоит В ШАГЕ выкладки, а имя артефакта не выглядит
+                       # выпускным, когда дерево приехало из другого тега.
+                       '[ "$TREE_TAG" = "$TAG" ]',
+                       "ARTIFACT_NAME=Helene-$TAG-macos-arm64-tree-$TREE_TAG",
+                       "name: ${{ env.ARTIFACT_NAME }}",
+                       # Судья 19.09, обновление: раннер ставил только начисто —
+                       # теперь гоняет и обновление ПОВЕРХ тем же install.sh.
+                       "install.sh --from", "обновляю поверх", "обновлено до",
+                       "installed.service", "computer.enabled"):
             self.assertIn(needle, self.text, needle)
         self.assertNotIn("\t", self.text, "табуляция в YAML")
         self.assertNotIn("| head", self.text, "под pipefail обрезанный конвейер валит шаг")
@@ -779,9 +789,25 @@ class Workflow(unittest.TestCase):
         # «канал держит окно», и проверка «отвечает без окна» ничего не значит.
         self.assertLess(self.text.index("Служба — канал отвечает без окна"),
                         self.text.index("Дымовой запуск"))
+        # Обновление поверх — после живых стендов и ДО снятия службы: иначе
+        # проверять «служба поднялась обратно» будет не на чем.
+        self.assertLess(self.text.index("Тело — живые стенды"),
+                        self.text.index("Обновление поверх установленного"))
+        self.assertLess(self.text.index("Обновление поверх установленного"),
+                        self.text.index("Служба — снятие"))
         # Снятие — после всего живого, но до сбора журналов.
         self.assertLess(self.text.index("Тело — живые стенды"), self.text.index("Служба — снятие"))
         self.assertLess(self.text.index("Служба — снятие"), self.text.index("name: Журналы"))
+        # Имя артефакта считается РАНЬШЕ сборки: шаг артефакта идёт с
+        # `if: always()`, и на красном прогоне переменная обязана уже быть.
+        self.assertLess(self.text.index("name: Имя артефакта"),
+                        self.text.index("name: Сборка (build_mac.py)"))
+        # Гард выкладки живёт именно в шаге выкладки, а не где-то рядом.
+        upload = self.text[self.text.index("name: Выложить в выпуск"):]
+        self.assertIn('[ "$TREE_TAG" = "$TAG" ]', upload,
+                      "шаг выкладки без гарда: артефакт с чужим деревом уехал бы в выпуск")
+        self.assertLess(upload.index('[ "$TREE_TAG" = "$TAG" ]'), upload.index("gh release upload"),
+                        "гард обязан стоять ДО выкладки")
         # ⚠ Живой ключ устройства в артефакт не уезжает.
         artifact = self.text[self.text.index("upload-artifact"):]
         self.assertNotIn("body-token", artifact, "ключ к телу уехал бы в артефакт прогона")
@@ -809,6 +835,14 @@ class Workflow(unittest.TestCase):
         self.assertTrue(any("gh release upload" in (s.get("run") or "") for s in job["steps"]))
         upload = next(s for s in job["steps"] if "gh release upload" in (s.get("run") or ""))
         self.assertIn("inputs.upload", str(upload.get("if")))
+        # Имя артефакта — переменной, а не литералом с тегом: на прогоне с
+        # чужим деревом оно другое (см. шаг «Имя артефакта»).
+        art = next(s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/upload-artifact"))
+        self.assertEqual(art["with"]["name"], "${{ env.ARTIFACT_NAME }}")
+        # Шаг обновления — есть, идёт bash-ем (pipefail) и зовёт install.sh поверх.
+        upd = next(s for s in job["steps"] if "Обновление поверх" in str(s.get("name")))
+        self.assertEqual(upd.get("shell"), "bash")
+        self.assertIn('install.sh" --from', upd["run"])
 
 
 if __name__ == "__main__":

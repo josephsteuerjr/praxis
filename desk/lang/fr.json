@@ -158,7 +158,7 @@
   "setup.uninstall.purge_body.macos": "Le dossier data disparaîtra avec le programme : la mémoire, le journal, la constitution et tout ce que l'agent a écrit sur lui-même et sur les gens — sans retour, sans corbeille. Il n'y aura pas de note COMMENT-REVENIR.md : il n'y aura nulle part où revenir. Si vous voulez emporter la mémoire, fermez cette fenêtre et lancez `\"Helene Setup.app/Contents/MacOS/helene-setup\" --export` depuis le dossier du programme — il assemblera une archive de transfert ; ensuite seulement, retirez.",
   "settings.service.title.macos": "Fonctionner sans que tu sois connecté",
   "settings.service.text.macos": "S'installe une seule fois ; le système demande le mot de passe administrateur. C'est launchd qui lance l'agent : Telegram et le téléphone répondent fenêtre fermée, et continuent de répondre après ta déconnexion. S'il tombe, il repart tout seul. Cela ne change rien à l'enclos : le mode se choisit à part et fonctionne pareil.",
-  "settings.service.warning.macos": "Un tel agent n'a ni fenêtres ni écran : un processus hors de ta session ne voit pas le bureau. L'outil `computer` reprend vie quand tu ouvres la fenêtre Helene — c'est elle qui lance le corps. Et avec FileVault activé, rien ne démarre après un redémarrage tant que tu ne t'es pas connecté une première fois : le disque reste verrouillé.",
+  "settings.service.warning.macos": "Un tel agent n'a ni fenêtres ni écran : un processus hors de ta session ne voit pas le bureau. L'outil `computer` reprend vie quand tu ouvres la fenêtre Helene — c'est elle qui lance le corps.",
   "setup.uninstall.explain_title": "Ce qui restera",
   "setup.uninstall.keep_title": "Garder les données",
   "setup.uninstall.keep_text": "mémoire, constitution, clé du modèle, connexions Telegram et ChatGPT restent dans le dossier data",
@@ -170,11 +170,11 @@
   "setup.uninstall.result_partial": "Retrait incomplet",
   "setup.uninstall.result_ok": "Retiré",
   "setup.uninstall.btn_close": "Fermer",
-  "settings.computer.screen.macos": "Enregistrement de l'écran",
+  "settings.computer.screen.macos": "Enregistrement de l'écran et de l'audio système",
   "settings.computer.accessibility.macos": "Accessibilité",
   "settings.computer.granted.macos": "accordée",
   "settings.computer.missing.macos": "absente",
   "settings.computer.open_settings.macos": "Ouvrir les réglages",
-  "settings.computer.tcc_note.macos": "Les deux autorisations s'accordent dans les Réglages Système, section « Confidentialité et sécurité ». Après une mise à jour, le système considère le programme comme nouveau : retirez Helene de la liste et ajoutez-le à nouveau.",
+  "settings.computer.tcc_note.macos": "Les deux autorisations s'accordent dans les Réglages Système, section « Confidentialité et sécurité » : les rubriques « Enregistrement de l'écran et de l'audio système » et « Accessibilité ». Après une mise à jour, le système considère le programme comme nouveau : retire Helene de la liste et ajoute-le à nouveau.",
   "settings.computer.no_body.macos": "Pas de corps dans cette version : helene-body et helene-bridge sont introuvables à côté du programme."
 }

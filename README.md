@@ -224,6 +224,13 @@ unpacks into `~/Library/Caches/app.helene.install/staging` and opens the setup w
   Helene from both lists and add it again. The privilege broker is the app itself: the agent
   asks, the owner sees the command and the reason, macOS asks for the password in its own
   dialog.
+- Since 0.8.0: the service without a login session — a launchd daemon `app.helene.svc`
+  running as the owner, installed and removed from the "Service" card (macOS asks for the
+  administrator password). Telegram and the phone keep answering when no window is open and
+  after you log out. It has no windows and no screen: a process outside your session sees no
+  desktop, so under the service the `computer` body is started by the window while the
+  window is open. With FileVault on, nothing runs after a reboot until the first login —
+  the disk is locked until then.
 
 Run the same line again to update: the script sees the installed copy, stops it and installs
 over it without touching `data/` or `helene.json` — the window's "Check for updates" does the
@@ -232,11 +239,12 @@ data; `--uninstall --purge` removes both.
 
 What the macOS build does **not** have, on purpose — and the documents inside say so: Intel
 Macs, a Developer ID signature, notarization or a dmg (hence `install.sh` and the dropping
-permissions), a service that runs without a login session, and firewall rules (macOS asks by
-itself). The archive is built on GitHub Actions (`.github/workflows/macos.yml` →
-`desk/installer/build_mac.py`) and carries a passport with every source and checksum; the
-body is built and tested there on a real Mac, but the permissions flow has not yet been
-clicked through by a person — the checklist is in `ПЕРВЫЙ-ЗАПУСК.md` inside the archive.
+permissions), and firewall rules (macOS asks by itself). The archive is built on GitHub
+Actions (`.github/workflows/macos.yml` → `desk/installer/build_mac.py`) and carries a
+passport with every source and checksum; the body, the broker and the service are built and
+exercised there on a real Mac, but nobody has yet clicked through the permission dialogs or
+the password prompts by hand — on the runner `sudo` needs no password, which is not what a
+person's machine does. The checklist is in `ПЕРВЫЙ-ЗАПУСК.md` inside the archive.
 
 ---
 

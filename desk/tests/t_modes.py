@@ -773,8 +773,10 @@ class MacService(unittest.TestCase):
     def test_the_warning_says_what_the_service_does_not_give(self):
         warn = modes.SERVICE_WARNING_MACOS.lower()
         self.assertIn("окон", warn, "оговорка молчит про окна и экран")
-        self.assertIn("filevault", warn, "оговорка молчит про FileVault до первого входа")
         self.assertIn("окно helene", warn, "оговорка не говорит, чем тул `computer` оживает")
+        # FileVault ушёл отсюда 19.09 (план §6): это свойство чужой настройки,
+        # и на экране оно стояло бы у всех. Его место — документы поставки.
+        self.assertNotIn("filevault", warn, "FileVault — в документы, не на экран")
 
     def test_option_has_no_toggles_on_mac(self):
         with patch.object(sys, "platform", "darwin"):
@@ -796,8 +798,12 @@ class MacService(unittest.TestCase):
         self.assertTrue(picture["session0_set"], "что записано в файле — факт файла")
         self.assertEqual(picture["session0_warning"], "")
         said = " ".join(picture["notes"]).lower()
-        self.assertIn("нулевой сессии на этой системе нет", said,
+        self.assertIn("service.session0", said,
                       "запись, которая не действует, обязана быть названа")
+        self.assertIn("ничего не меняет", said)
+        # ⛔ Форма «на этой системе нет» на экран не едет: примечание говорит,
+        # что делает ключ, а не чего у владельца не существует.
+        self.assertNotIn("на этой системе нет", said)
         self.assertNotIn("брандмауэр", said, "про правило брандмауэра на Mac говорить нечего")
 
     def test_describe_carries_the_warning(self):
