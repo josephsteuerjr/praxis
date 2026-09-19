@@ -289,8 +289,32 @@ class Downloads(unittest.TestCase):
 
     def test_git_make_vars_keep_it_portable(self):
         for var in ("RUNTIME_PREFIX=YesPlease", "prefix=/", "NO_PERL=1", "NO_TCLTK=1",
-                    "APPLE_COMMON_CRYPTO=1", "NO_OPENSSL=1", "SKIP_DASHED_BUILT_INS=YesPlease"):
-            self.assertIn(var, build_mac.GIT_MAKE_VARS)
+                    "APPLE_COMMON_CRYPTO=1", "NO_OPENSSL=1", "SKIP_DASHED_BUILT_INS=YesPlease",
+                    # Только системные библиотеки: на Darwin 24+ git сам тянет
+                    # libiconv из Homebrew, а curl — через curl-config из PATH.
+                    "NO_HOMEBREW=1", "CURL_LDFLAGS=-lcurl", "CURL_CONFIG=/usr/bin/true"):
+            self.assertIn(var, build_mac.GIT_MAKE_VARS, var)
+        self.assertEqual(build_mac.SYSTEM_DYLIB_PREFIXES, ("/usr/lib/", "/System/"))
+
+    def test_foreign_dylibs(self):
+        clean = ("runtime/git/libexec/git-core/git-remote-http:\n"
+                 "\t/usr/lib/libcurl.4.dylib (compatibility version 7.0.0, current version 9.0.0)\n"
+                 "\t/usr/lib/libz.1.dylib (compatibility version 1.0.0, current version 1.2.12)\n"
+                 "\t/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices (compatibility version 1.0.0, current version 1226.0.0)\n"
+                 "\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)\n")
+        self.assertEqual(build_mac.foreign_dylibs(clean), [])
+        brew = clean + "\t/opt/homebrew/opt/libiconv/lib/libiconv.2.dylib (compatibility version 9.0.0, current version 9.1.0)\n" \
+                       "\t@rpath/libfoo.dylib (compatibility version 1.0.0, current version 1.0.0)\n"
+        self.assertEqual(build_mac.foreign_dylibs(brew),
+                         ["/opt/homebrew/opt/libiconv/lib/libiconv.2.dylib", "@rpath/libfoo.dylib"])
+        self.assertEqual(build_mac.foreign_dylibs(""), [])
+
+    def test_vtool_minos(self):
+        text = ("runtime/git/bin/git:\nLoad command 10\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n"
+                " platform MACOS\n    minos 14.0\n      sdk 15.2\n   ntools 1\n     tool LD\n  version 1115.7.3\n")
+        self.assertEqual(build_mac.vtool_minos(text), "14.0")
+        self.assertEqual(build_mac.vtool_minos("no build version here"), "")
+        self.assertLessEqual(build_mac.version_tuple("14.0"), build_mac.version_tuple(build_mac.MACOS_MIN))
 
 
 class Passport(unittest.TestCase):
@@ -346,6 +370,7 @@ class Composition(unittest.TestCase):
         req = build_mac.REQUIRED_ROOT
         for rel in ("Helene.app/Contents/MacOS/helene", "Helene Setup.app/Contents/MacOS/helene-setup",
                     "helene-relay", "runtime/bin/python3", "runtime/git/bin/git",
+                    "runtime/git/COPYING",   # GPL-2.0: текст лицензии рядом, make install его не кладёт
                     "helene.json", "helene-build.json", "install.sh", "tree", "data",
                     "ПЕРВЫЙ-ЗАПУСК.md", "ОБНОВЛЕНИЕ.md", "КАК-УСТРОЕН-HELENE.md",
                     "ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md", "NOTICE"):
@@ -382,6 +407,14 @@ class Texts(unittest.TestCase):
         # Windows-имена здесь допустимы только в списке того, чего нет.
         head = text.split("Чего в сборке для macOS нет")[0]
         self.assertNotIn(".exe", head)
+        # Судья 19.09: на Sequoia обхода правой кнопкой нет — путь через
+        # Настройки; скачанный браузером архив отдаётся скрипту (--from), а не
+        # открывается бандлами; первым открывают мастер, не Helene.app.
+        self.assertIn("Открыть всё равно", text)
+        self.assertIn("--from", text)
+        self.assertIn("releases/latest/download/install.sh", text)
+        self.assertNotRegex(text, r"правая кнопка по\s+`Helene\.app`")
+        self.assertIn("Первым открывается мастер", text)
 
     def test_third_party_is_the_mac_composition(self):
         text = build_mac.THIRD_PARTY_MAC
@@ -412,9 +445,15 @@ class InstallSh(unittest.TestCase):
                        "HELENE_TAG", "uname -m", "sw_vers -productVersion", "hw.optional.arm64",
                        "shasum -a 256", "ditto -x -k", "xattr -dr com.apple.quarantine",
                        "Helene Setup.app/Contents/MacOS/helene-setup", "--install", "--quiet",
-                       "Library/Caches/app.helene.desk", "staging", "pgrep -f",
+                       "Library/Caches/app.helene.install", "staging",
+                       "ps -axo pid=,ppid=,comm=", "index(comm[id], home) == 1",
                        "open \"$HOME_DIR/Helene.app\"", "releases/download"):
             self.assertIn(needle, self.text, needle)
+        # Кэш — свой каталог, не bundle id окна (app.helene.desk: туда пишет
+        # WKWebView, снятие его сносит). Процессы — по пути исполняемого файла,
+        # не по строке команды: `pgrep -f` гасил бы и `tail -f helene.log`.
+        self.assertNotIn("Caches/app.helene.desk", self.text)
+        self.assertNotIn("pgrep -f", self.text)
         # Все пути с пробелом (Helene Setup.app) — только в кавычках.
         for line in self.text.splitlines():
             if "Helene Setup.app" in line and not line.lstrip().startswith("#"):
@@ -463,9 +502,16 @@ class Workflow(unittest.TestCase):
                        "actions/upload-artifact@v4", "gh release upload", "--clobber",
                        "cargo test --features custom-protocol", "t_fence_macos.py",
                        "--install", "--quiet", "screencapture", "/api/health", "/api/state",
-                       "desk-token", "helene-build.json", "if: always()"):
+                       "desk-token", "helene-build.json", "if: always()",
+                       # Судья 19.09: pipefail на дымовых шагах, пустой снимок —
+                       # вслух, видимые процессы — в журнал; выкладка только по
+                       # кнопке; прогон от push, пока файла нет в main.
+                       "shell: bash", "stat -f %z", "osascript", "cache-on-failure: true",
+                       "github.event_name == 'workflow_dispatch' && inputs.upload",
+                       "push:", "gh run download"):
             self.assertIn(needle, self.text, needle)
         self.assertNotIn("\t", self.text, "табуляция в YAML")
+        self.assertNotIn("| head", self.text, "под pipefail обрезанный конвейер валит шаг")
 
     def test_yaml_parses_if_pyyaml_is_around(self):
         try:

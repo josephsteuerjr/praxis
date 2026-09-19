@@ -129,7 +129,7 @@ Mac папка программы — `~/Applications/Helene`, и отличия
 |---|---|---|
 | Оболочка: окно, значок в строке меню, надзор за процессами | `Helene.app` (внутри — `Contents/MacOS/helene`) | Тот же Rust-крейт `shell/`; идентификатор `app.helene.desk` |
 | Мастер установки и снятия | `Helene Setup.app` | Крейт `setup/`, `app.helene.setup`. Тихие ключи те же: `--install <json> --quiet`, `--uninstall [--purge] --quiet` |
-| Установка, обновление, снятие одной строкой | `install.sh` (в корне папки и в выпуске на GitHub) | Скачивает архив, сверяет сумму, распаковывает в `~/Library/Caches/app.helene.desk/staging`, зовёт мастер; при стоящей программе — обновляет тихо, не трогая `data/` и `helene.json` |
+| Установка, обновление, снятие одной строкой | `install.sh` (в корне папки и в выпуске на GitHub) | Скачивает архив, сверяет сумму, распаковывает в `~/Library/Caches/app.helene.install/staging` (свой каталог: `app.helene.desk` — кэш самого окна), зовёт мастер; при стоящей программе — обновляет тихо, не трогая `data/` и `helene.json` |
 | Реле подписки ChatGPT | `helene-relay` | Тот же исходник (praxis-relay), собран под arm64 |
 | Встроенный Python | `runtime/bin/python3` (python-build-standalone 3.14) | Не трогать. `helene.json` → `python` указывает сюда |
 | Git для агента | `runtime/git/bin/git` | Собран из исходника git с RUNTIME_PREFIX: переносим, в систему ничего не пишет |

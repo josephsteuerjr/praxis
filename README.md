@@ -197,12 +197,13 @@ One line installs it. The archive is fetched with `curl`, so Gatekeeper never se
 download — the build is not signed with a Developer ID:
 
 ```sh
-curl -fsSL https://github.com/josephsteuerjr/praxis/releases/download/v0.7.1/install.sh | sh
+curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh
 ```
 
 The script checks the machine and the OS, downloads `Helene-<version>-macos-arm64.zip` and
-its `.sha256`, verifies the sum, unpacks into `~/Library/Caches/app.helene.desk/staging` and
-opens the setup wizard (`Helene Setup.app`), which installs into `~/Applications/Helene`:
+its `.sha256` (the release tag is stamped into the script by the build), verifies the sum,
+unpacks into `~/Library/Caches/app.helene.install/staging` and opens the setup wizard
+(`Helene Setup.app`), which installs into `~/Applications/Helene`:
 
 - `Helene.app` — the window and the menu-bar icon (`app.helene.desk`); `Helene Setup.app` —
   the wizard; `helene-relay` — the ChatGPT subscription relay.

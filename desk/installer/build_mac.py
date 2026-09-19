@@ -153,15 +153,34 @@ ICONSET = (
     ("icon_256x256@2x", 512), ("icon_512x512", 512), ("icon_512x512@2x", 1024),
 )
 
-# Переменные make для git: без perl/tcl/gettext/python/gitweb (на Mac из коробки
-# их нет, агенту они не нужны), TLS и SHA-1 — системные (CommonCrypto), без
-# hardlink'ов в libexec (в zip они всё равно не переживут), без дублей
-# `git-add` и прочих dashed-форм.
+# Переменные make для git. NO_PERL — не потому, что perl'а на Mac нет (он есть),
+# а чтобы не тащить perl-скрипты git (send-email, svn), которым нужны модули,
+# которых у человека нет; tcl/gettext/python/gitweb агенту не нужны. TLS и
+# SHA-1 — системные (CommonCrypto), без hardlink'ов в libexec (в zip они всё
+# равно не переживут), без дублей `git-add` и прочих dashed-форм.
+#
+# Только системные библиотеки. На Darwin 24+ git сам берёт libiconv из Homebrew
+# (config.mak.uname: USE_HOMEBREW_LIBICONV), а curl ищет через `curl-config` из
+# PATH — на раннере это Homebrew, и у человека без Homebrew бинарь падал бы
+# «Library not loaded». NO_HOMEBREW снимает первое (git тогда сам включает свой
+# обход для системного iconv — ICONV_RESTART_RESET), CURL_LDFLAGS и
+# CURL_CONFIG=/usr/bin/true — второе; CURL_CFLAGS с путём SDK добавляет
+# stage_git_bundle. Что вышло на деле, проверяет `otool -L` (foreign_dylibs).
 GIT_MAKE_VARS = (
     "prefix=/", "RUNTIME_PREFIX=YesPlease", "NO_GETTEXT=1", "NO_TCLTK=1", "NO_PERL=1",
     "NO_PYTHON=1", "NO_GITWEB=1", "NO_EXPAT=1", "NO_OPENSSL=1", "APPLE_COMMON_CRYPTO=1",
     "NO_INSTALL_HARDLINKS=YesPlease", "SKIP_DASHED_BUILT_INS=YesPlease",
+    "NO_HOMEBREW=1", "CURL_LDFLAGS=-lcurl", "CURL_CONFIG=/usr/bin/true",
 )
+
+# Что бинарь вправе грузить: только системное. /opt/homebrew, /usr/local, @rpath —
+# зависимость от машины раннера, у человека этого нет.
+SYSTEM_DYLIB_PREFIXES = ("/usr/lib/", "/System/")
+
+# Пакеты голоса и их тяжёлые зависимости — их версии сборка называет вслух:
+# на красном круге CI иначе не видно, что именно встало в рантайм.
+VOICE_PACKAGES = frozenset({"faster-whisper", "piper-tts", "ctranslate2", "onnxruntime",
+                            "av", "numpy", "tokenizers", "huggingface-hub"})
 
 # Записи Windows-архива, которые едут в Mac-сборку как есть. `app/` НЕ берём:
 # пакет desk собирается заново из этой ветки — движок на Mac другой.
@@ -181,7 +200,7 @@ REQUIRED_ROOT = (
     "Helene Setup.app/Contents/MacOS/helene-setup", "Helene Setup.app/Contents/Info.plist",
     "helene-relay",
     "runtime/bin/python3", "runtime/git/bin/git", "runtime/git/libexec/git-core",
-    "runtime/git/share/git-core/templates",
+    "runtime/git/share/git-core/templates", "runtime/git/COPYING",
     "app/deskapp.py", "app/desk.json", "app/static/index.html", "app/mobile/index.html",
     "app/localharness/runner.py", "app/resources/SOUL.md",
     "tree", "data", "server", "licenses/rust/README.md",
@@ -316,6 +335,27 @@ def version_tuple(text: str) -> tuple[int, ...]:
     return tuple(int(p) for p in re.findall(r"\d+", text)) or (0,)
 
 
+def foreign_dylibs(otool_text: str) -> list[str]:
+    """Из вывода `otool -L` — библиотеки не из системы. Пусто — бинарь переносим.
+
+    Первая строка вывода — имя самого файла (без отступа), дальше по строке на
+    библиотеку с отступом и версиями в скобках."""
+    out: list[str] = []
+    for line in otool_text.splitlines():
+        if not line.startswith(("\t", " ")):
+            continue
+        lib = line.strip().split(" (", 1)[0].strip()
+        if lib and not lib.startswith(SYSTEM_DYLIB_PREFIXES):
+            out.append(lib)
+    return out
+
+
+def vtool_minos(text: str) -> str:
+    """Из `vtool -show-build` — minos: минимум macOS, под который слинкован бинарь."""
+    m = re.search(r"^\s*minos\s+(\d+(?:\.\d+)*)\s*$", text, re.M)
+    return m.group(1) if m else ""
+
+
 # Mach-O: 64-битный, 32-битный и «толстый» (universal) заголовок, оба порядка
 # байт. Толстый заголовок совпадает с магией class-файлов Java — отсекаем по
 # числу архитектур: больше 32 их не бывает.
@@ -424,9 +464,21 @@ FIRST_RUN_MAC = """# Hélène · первый запуск на macOS
 `open ~/Applications/Helene/Helene.app`. Ярлык в Dock перетаскивается оттуда же.
 
 Подписи Developer ID у программы нет. Файлы, скачанные `curl`, карантина не
-получают, и Gatekeeper молчит; если архив скачан браузером и распакован руками,
-macOS скажет «не удаётся проверить разработчика» — тогда правая кнопка по
-`Helene.app` → «Открыть», один раз.
+получают — поэтому установка идёт однострочником. Если архив скачан браузером,
+не открывай из него бандлы руками: карантин висит на всём внутри, и Gatekeeper
+убьёт не только мастер, но и `helene-relay` с `python3`, которых мастер зовёт.
+Отдай архив скрипту — он снимает карантин при распаковке:
+
+    curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh -s -- --from ~/Downloads/Helene-<версия>-macos-arm64.zip
+
+(или `sh Helene/install.sh --from <архив>` из уже распакованной папки). Если
+`Helene Setup.app` всё же открыт руками и macOS говорит «не удаётся проверить
+разработчика»: на macOS 15 (Sequoia) и новее обхода правой кнопкой нет —
+Настройки → «Конфиденциальность и безопасность» → внизу «Открыть всё равно»,
+и так для каждого бинаря, который macOS остановит следом; на macOS 14 —
+правая кнопка по бандлу → «Открыть». Первым открывается мастер
+`Helene Setup.app`, а не `Helene.app`: программу в `~/Applications/Helene`
+кладёт он.
 
 1. При первой установке открывается мастер `Helene Setup.app`: имя агента и
    своё, **конституция** (текст, по которому агент будет жить, — его можно
@@ -829,17 +881,47 @@ def stage_git_bundle(out: Path, cache: Path) -> dict:
     if not (src / "Makefile").is_file():
         raise SystemExit(f"в {GIT_NAME} нет git-{GIT_VERSION}/Makefile — раскладка исходника изменилась")
     ncpu = capture(["sysctl", "-n", "hw.ncpu"], timeout=60, check=False).strip() or "4"
-    print(f"  собираю git {GIT_VERSION} ({ncpu} потоков)…")
-    run(["make", f"-j{ncpu}", *GIT_MAKE_VARS], cwd=src, timeout=3600)
+    # Заголовки curl — из SDK, а не из того, что `curl-config` найдёт в PATH:
+    # линкуемся с системной libcurl, значит и объявления должны быть её.
+    sdk = capture(["xcrun", "--show-sdk-path"], timeout=120).strip()
+    if not sdk or not Path(sdk).is_dir():
+        raise SystemExit("xcrun --show-sdk-path не назвал SDK — нужны Xcode Command Line Tools")
+    make_vars = [*GIT_MAKE_VARS, f"CURL_CFLAGS=-I{sdk}/usr/include"]
+    # Целевой минимум — MACOS_MIN, а не версия хоста: без переменной clang
+    # линкует под macOS раннера (15), и на 14 это «Symbol not found».
+    env = {**os.environ, "MACOSX_DEPLOYMENT_TARGET": MACOS_MIN}
+    print(f"  собираю git {GIT_VERSION} ({ncpu} потоков, minos {MACOS_MIN}, SDK {sdk})…")
+    run(["make", f"-j{ncpu}", *make_vars], cwd=src, timeout=3600, env=env)
     dest = out / "runtime" / "git"
     shutil.rmtree(dest, ignore_errors=True)
-    run(["make", "install", f"DESTDIR={dest}", *GIT_MAKE_VARS], cwd=src, timeout=1800)
+    run(["make", "install", f"DESTDIR={dest}", *make_vars], cwd=src, timeout=1800, env=env)
     git = dest / "bin" / "git"
     if not git.is_file():
         raise SystemExit(f"после make install нет {git}")
+    # GPL-2.0 требует текст лицензии рядом с программой; `make install` его не
+    # кладёт, а ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md обещает runtime/git/COPYING.
+    if not (src / "COPYING").is_file():
+        raise SystemExit(f"в исходнике git нет COPYING ({src}) — лицензию положить не из чего")
+    shutil.copy2(src / "COPYING", dest / "COPYING")
     said = capture([git, "--version"], timeout=120).strip()
     if "git version" not in said:
         raise SystemExit(f"runtime/git не отвечает на --version: {said!r}")
+    # Переносимость по библиотекам: только /usr/lib и /System. Чужая строка в
+    # otool — подцепился Homebrew (curl или iconv), у человека это не загрузится.
+    for rel in ("bin/git", "libexec/git-core/git-remote-http"):
+        p = dest / rel
+        if not p.is_file():
+            raise SystemExit(f"после make install нет runtime/git/{rel}")
+        foreign = foreign_dylibs(capture(["otool", "-L", p], timeout=120))
+        if foreign:
+            raise SystemExit(f"runtime/git/{rel} слинкован с чужими библиотеками: "
+                             f"{', '.join(foreign)} — это Homebrew раннера, у человека его нет")
+    minos = vtool_minos(capture(["vtool", "-show-build", git], timeout=120))
+    if not minos:
+        raise SystemExit("vtool -show-build не назвал minos у runtime/git/bin/git")
+    if version_tuple(minos) > version_tuple(MACOS_MIN):
+        raise SystemExit(f"runtime/git слинкован под macOS {minos}, а обещано {MACOS_MIN}: "
+                         "MACOSX_DEPLOYMENT_TARGET не сработал")
     # Переносимость: exec-path обязан лежать ВНУТРИ runtime/git (RUNTIME_PREFIX),
     # и `git init` обязан находить шаблоны — без PATH и без чужого git.
     env = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "HOME": str(cache), "PATH": "/usr/bin:/bin"}
@@ -854,8 +936,9 @@ def stage_git_bundle(out: Path, cache: Path) -> dict:
     files = [p for p in dest.rglob("*") if p.is_file()]
     size = sum(p.stat().st_size for p in files if not p.is_symlink())
     shutil.rmtree(src_root, ignore_errors=True)
-    print(f"  runtime/git ({said}) положен: {len(files)} файлов, {size / 1e6:.1f} МБ")
-    return {"version": GIT_VERSION, "files": len(files), "bytes": size, "exec_path": "libexec/git-core"}
+    print(f"  runtime/git ({said}) положен: {len(files)} файлов, {size / 1e6:.1f} МБ, minos {minos}")
+    return {"version": GIT_VERSION, "files": len(files), "bytes": size, "exec_path": "libexec/git-core",
+            "minos": minos, "license": "COPYING"}
 
 
 # --- фронты, Rust, реле -------------------------------------------------------------
@@ -1163,6 +1246,9 @@ def main() -> None:
     print("  дымовой тест рантайма…")
     freeze = smoke_runtime(out)
     print(f"  импорты живы, пакетов: {len(freeze.splitlines())}")
+    voice = [line for line in freeze.splitlines()
+             if line.split("==", 1)[0].strip().lower().replace("_", "-") in VOICE_PACKAGES]
+    print("  голос: " + (", ".join(voice) if voice else "НИЧЕГО ИЗ VOICE_PACKAGES НЕ ВСТАЛО"))
     macos_floor = runtime_macos_floor(out)
     if not (out / "runtime" / "git" / "bin" / "git").is_file():
         raise SystemExit("нет runtime/git/bin/git — с --skip-runtime git должен уже лежать в сборке")

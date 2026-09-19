@@ -180,15 +180,27 @@
    заново из ветки: движок на Mac другой. Версия ветки обязана совпадать с
    тегом, иначе сборка падает.
 
-2. **Запустить сборку** с той ветки, где живёт порт:
+2. **Запустить сборку и выложить** — два пути, и первый честно нужен, пока
+   файла workflow нет в `main`: `workflow_dispatch` GitHub видит только с ветки
+   по умолчанию, `gh workflow run … --ref port/macos` до влития невозможен, а на
+   `push` входы (`inputs.upload`) пусты — выложить через CI нельзя.
 
-       gh workflow run macos.yml -f tag=v0.7.1 -f upload=false --ref port/macos
-       gh run watch            # или gh run list --workflow macos.yml
+   (а) До влития. Прогон запускается сам на push в `port/macos`; артефакт —
+   архив, сумма, `install.sh`, паспорт, снимок экрана и журналы — смотреть
+   глазами, потом выложить руками:
 
-   Без `upload` архив, сумма, `install.sh`, паспорт, снимок экрана и журналы
-   приезжают артефактом прогона — смотреть глазами. С `-f upload=true` те же
-   три файла кладутся в выпуск (`gh release upload … --clobber`: повторный
-   прогон заменяет прежнюю Mac-сборку).
+       gh run list --workflow macos.yml            # id прогона
+       gh run download <id> -n Helene-v0.7.1-macos-arm64
+       gh release upload v0.7.1 Helene-0.7.1-macos-arm64.zip \
+           Helene-0.7.1-macos-arm64.zip.sha256 install.sh --clobber
+
+   (б) После влития в `main` — по кнопке, с выкладкой тем же шагом:
+
+       gh workflow run macos.yml -f tag=v0.7.1 -f upload=true
+       gh run watch
+
+   `--clobber` в обоих путях: повторная выкладка заменяет прежнюю Mac-сборку,
+   Windows-архив не трогается.
 
 3. **Что сборка проверяет сама** (падает, а не предупреждает): версия ветки =
    тег; скачанное (python-build-standalone 3.14.7, исходник git 2.55.0)
@@ -221,7 +233,9 @@
 5. **В описании выпуска** — третьей строкой сумма Mac-архива, тем же видом,
    что и Windows: `sha256 Helene-<версия>-macos-arm64.zip: <digest>`. Окно на
    Mac берёт сумму из digest актива GitHub или из этой строки. Однострочник
-   для README: `curl -fsSL https://github.com/josephsteuerjr/praxis/releases/download/v<версия>/install.sh | sh`.
+   для документов — без номера версии, GitHub отдаёт последний выпуск:
+   `curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh`
+   (какой тег качать, знает сам `install.sh`: `HELENE_TAG_DEFAULT` штампует сборка).
 
 6. **На самом Mac** то же руками: `python3 installer/build_mac.py --from-release v0.7.1`
    (нужны Rust, Node 24, Xcode Command Line Tools, `gh` с входом). Итог — в

@@ -1,20 +1,26 @@
-# Сборка Hélène для macOS (Apple Silicon) — по кнопке, не по push.
-#
-#   gh workflow run macos.yml -f tag=v0.7.1 -f upload=true --ref port/macos
+# Сборка Hélène для macOS (Apple Silicon).
 #
 # Что происходит: раннер macos-15 (arm64) собирает архив Helene-<v>-macos-arm64.zip
 # скриптом desk/installer/build_mac.py (дерево агента — из Windows-архива того же
-# выпуска; рантайм, git, фронты, Rust, реле, бандлы, ad-hoc подпись, паспорт,
+# выпуска; фронты, Rust, реле, рантайм, git, бандлы, ad-hoc подпись, паспорт,
 # секрет-гард), гоняет стенды Rust и живые проверки ограды рантаймом сборки,
 # ставит программу тихо в ~/Applications/Helene, открывает её, снимает экран и
 # дёргает канал. Архив, сумма, install.sh, паспорт, снимок и журналы — в
-# артефактах прогона; с upload=true архив, сумма и install.sh кладутся в выпуск.
+# артефактах прогона.
+#
+# Два пути к выпуску — честно, потому что первый нужен, пока файла workflow нет
+# в main (workflow_dispatch виден GitHub только с ветки по умолчанию):
+#   (а) прогон от push в port/macos (без выкладки: inputs на push пусты) →
+#       gh run download <id> -n Helene-v0.7.1-macos-arm64
+#       gh release upload v0.7.1 Helene-0.7.1-macos-arm64.zip \
+#           Helene-0.7.1-macos-arm64.zip.sha256 install.sh --clobber
+#   (б) после влития в main:
+#       gh workflow run macos.yml -f tag=v0.7.1 -f upload=true
+#       — тот же прогон, плюс шаг «Выложить в выпуск» (--clobber в тот же тег;
+#       Windows-архив не трогается).
 name: macOS (Apple Silicon)
 
 on:
-  # Пока workflow не влит в main, GitHub не даёт запустить его кнопкой с другой
-  # ветки («not found on the default branch»); push в ветку порта запускает
-  # его сам — с тегом по умолчанию и без выкладки.
   push:
     branches: [port/macos]
   workflow_dispatch:
@@ -40,17 +46,13 @@ jobs:
     timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}
+      # На push inputs пусты — тег по умолчанию тот же, что у build_mac.py.
       TAG: ${{ inputs.tag || 'v0.7.1' }}
+      BUILD: ${{ runner.temp }}/build
+      LOGS: ${{ runner.temp }}/logs
       HOME_DIR: /Users/runner/Applications/Helene
     steps:
       - uses: actions/checkout@v4
-
-      # Контекст `runner` в env на уровне job недоступен (GitHub отвергает файл
-      # ещё до запуска), поэтому временные пути объявляются первым шагом.
-      - name: Пути сборки
-        run: |
-          echo "BUILD=$RUNNER_TEMP/build" >> "$GITHUB_ENV"
-          echo "LOGS=$RUNNER_TEMP/logs" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -95,7 +97,9 @@ jobs:
       # Тихая установка из собранной папки — тем же мастером и тем же JSON, что
       # у человека. Провайдер «локальная модель»: ключа у неё нет по построению,
       # а адрес никуда не ведёт — окно и канал должны подняться и без модели.
+      # shell: bash даёт `-eo pipefail`: отказ внутри конвейера не глотается.
       - name: Тихая установка в ~/Applications/Helene
+        shell: bash
         run: |
           cat > "$RUNNER_TEMP/decisions.json" <<EOF
           {
@@ -118,10 +122,23 @@ jobs:
           test -f "$HOME_DIR/helene-build.json" || { echo "после установки нет паспорта в корне"; exit 1; }
 
       - name: Дымовой запуск — окно, снимок экрана, канал
+        shell: bash
         run: |
           open "$HOME_DIR/Helene.app"
           sleep 20
           screencapture -x "$RUNNER_TEMP/window.png" || echo "снимок экрана не снялся"
+          # Пустой снимок (без окна) — это несколько килобайт: не падаем, но
+          # говорим вслух, и рядом — кто вообще виден на экране раннера.
+          if [ -f "$RUNNER_TEMP/window.png" ]; then
+            size="$(stat -f %z "$RUNNER_TEMP/window.png")"
+            if [ "$size" -lt 10240 ]; then
+              echo "снимок экрана подозрительно мал ($size байт) — скорее всего пустой, окна на нём нет"
+            else
+              echo "снимок экрана: $size байт"
+            fi
+          fi
+          echo "видимые процессы:"
+          osascript -e 'tell application "System Events" to get name of every process whose visible is true' || true
           PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("port", 8094))' "$HOME_DIR/helene.json")"
           TOKEN_FILE="$HOME_DIR/data/memory/.state/desk-token"
           test -f "$TOKEN_FILE" || { echo "оболочка не завела секрет канала: $TOKEN_FILE"; ls -la "$HOME_DIR/data" || true; exit 1; }
@@ -129,7 +146,9 @@ jobs:
           echo "канал на порту $PORT"
           curl -fsS --max-time 10 "http://127.0.0.1:$PORT/api/health?key=$TOKEN"
           echo
-          curl -fsS --max-time 10 "http://127.0.0.1:$PORT/api/state?key=$TOKEN" | head -c 2000
+          # В файл, а не head-ом в конвейере: под pipefail обрезанный конвейер валил бы шаг.
+          curl -fsS --max-time 10 -o "$RUNNER_TEMP/state.json" "http://127.0.0.1:$PORT/api/state?key=$TOKEN"
+          head -c 2000 "$RUNNER_TEMP/state.json"
           echo
 
       - name: Журналы
@@ -161,10 +180,11 @@ jobs:
             ${{ runner.temp }}/window.png
             ${{ runner.temp }}/logs/
 
-      # В тот же выпуск, Windows-архив не трогается. --clobber: повторный прогон
-      # заменяет прежнюю Mac-сборку, а не падает на «asset already exists».
+      # Только по кнопке и только с upload=true: на push inputs пусты, и шаг не
+      # идёт. В тот же выпуск, Windows-архив не трогается. --clobber: повторный
+      # прогон заменяет прежнюю Mac-сборку, а не падает на «asset already exists».
       - name: Выложить в выпуск
-        if: ${{ inputs.upload }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload }}
         run: |
           gh release upload "$TAG" \
             "$BUILD"/Helene-*-macos-arm64.zip \

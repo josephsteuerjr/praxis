@@ -5,7 +5,7 @@
 #   sh install.sh [--from Helene-0.7.1-macos-arm64.zip] [--relaunch]
 #   sh install.sh --uninstall [--purge]
 #
-# Что делает. Скачивает архив выпуска и его сумму в ~/Library/Caches/app.helene.desk,
+# Что делает. Скачивает архив выпуска и его сумму в ~/Library/Caches/app.helene.install,
 # сверяет сумму, распаковывает во временную папку (staging) и оттуда запускает
 # мастер `Helene Setup.app` — тот же поток, что на Windows: мастер копирует
 # программу в ~/Applications/Helene и отказывает, если попросить поставить
@@ -35,7 +35,10 @@ BASE_URL="https://github.com/$REPO/releases/download/$TAG"
 # Корень установки. Оболочка при обновлении из окна передаёт свой (HELENE_ROOT):
 # она знает, где стоит, лучше умолчания.
 HOME_DIR="${HELENE_ROOT:-$HOME/Applications/$FOLDER}"
-CACHE="$HOME/Library/Caches/app.helene.desk"
+# Свой каталог, не app.helene.desk: тот — кэш самого Helene.app по bundle id
+# (туда пишет WKWebView, снятие его сносит, а чистка кэшей macOS могла бы
+# снести staging посреди установки).
+CACHE="$HOME/Library/Caches/app.helene.install"
 STAGING="$CACHE/staging"
 SETUP_REL="Helene Setup.app/Contents/MacOS/helene-setup"
 TMP="${TMPDIR:-/tmp}"
@@ -118,7 +121,7 @@ check_platform() {
         ''|*[!0-9]*) die "не понял версию macOS: $ver" ;;
     esac
     [ "$major" -ge "$HELENE_MACOS_MIN" ] || die "нужна macOS $HELENE_MACOS_MIN или новее, а это $ver"
-    for tool in ditto shasum xattr curl open pgrep; do
+    for tool in ditto shasum xattr curl open ps awk; do
         command -v "$tool" >/dev/null 2>&1 || die "нет команды $tool"
     done
 }
@@ -189,10 +192,27 @@ wait_old_shell() {
     done
 }
 
-# Всё, что запущено из папки установки: оболочка, движок, канал, реле. Себя и
-# своего родителя не трогаем — скрипт могли запустить из этой же папки.
+# Всё, что запущено ИЗ папки установки: оболочка, движок, канал, реле — по пути
+# исполняемого файла (comm), как это делает мастер, а не по строке командной
+# строки: поиск по подстроке команды (pgrep по всей строке) гасил бы и
+# `tail -f helene.log`, и редактор с открытым helene.json. Своя цепочка
+# родителей исключается: скрипт могла запустить оболочка из этой же папки, и
+# она выходит сама (wait_old_shell).
 running_pids() {
-    pgrep -f "$HOME_DIR/" 2>/dev/null | grep -v -x -e "$$" -e "$PPID" || true
+    ps -axo pid=,ppid=,comm= 2>/dev/null | awk -v home="$HOME_DIR/" -v me="$$" '
+        {
+            id = $1; parent[id] = $2
+            cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
+            comm[id] = cmd; order[NR] = id
+        }
+        END {
+            p = me; n = 0
+            while (p > 1 && n < 64) { mine[p] = 1; p = parent[p]; n++ }
+            for (k = 1; k <= NR; k++) {
+                id = order[k]
+                if (!(id in mine) && index(comm[id], home) == 1) print id
+            }
+        }' || true
 }
 
 stop_running() {
@@ -303,9 +323,14 @@ update() {
     umask 077
     if decisions_json "$json"; then decided=1; else decided=0; fi
     umask "$old_umask"
+    # Оба отказа ниже отдают дело мастеру с окном: человек доделывает в нём.
+    # STOPPED=0 перед его открытием — иначе ловушка запустила бы ещё и прежний
+    # Helene.app, и на экране оказались бы две программы сразу.
     if [ "$decided" -ne 1 ]; then
         rm -f "$json"
         say "не смог прочитать прежние решения из $HOME_DIR/helene.json — открываю мастер, обновление доделай в нём"
+        say "журнал этого скрипта при обновлении из окна: $HOME_DIR/install-sh.log"
+        STOPPED=0
         open "$STAGING/$FOLDER/Helene Setup.app" || true
         exit 1
     fi
@@ -317,6 +342,8 @@ update() {
         rm -f "$json"
         # Мастер пишет install.log в корень поставки (папку с helene-build.json).
         say "тихое обновление не удалось — открываю мастер, доделай обновление в нём"
+        say "журналы: $STAGING/$FOLDER/install.log (мастер), $HOME_DIR/install-sh.log (этот скрипт, при обновлении из окна)"
+        STOPPED=0
         open "$STAGING/$FOLDER/Helene Setup.app" || true
         exit 1
     fi

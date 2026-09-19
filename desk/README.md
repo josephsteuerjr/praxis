@@ -172,7 +172,8 @@ STT-коробка). Подробно — `ОБНОВЛЕНИЕ.md`, `installer/
 
 **macOS (Apple Silicon, с 0.7.1).** Тот же выпуск несёт второй архив,
 `Helene-<версия>-macos-arm64.zip`, и рядом `install.sh`. Ставится одной строкой —
-`curl -fsSL https://github.com/josephsteuerjr/praxis/releases/download/v0.7.1/install.sh | sh` —
+`curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh`
+(GitHub отдаёт последний выпуск; какой тег качать, знает сам скрипт) —
 в `~/Applications/Helene`: `Helene.app` (окно и значок в строке меню),
 `Helene Setup.app` (мастер), `helene-relay`, `runtime/` (свой CPython 3.14 со всеми
 пакетами, голос включая, и `runtime/git/` — git из исходника), `app/`, `tree/`
@@ -289,7 +290,12 @@ if ($code) { throw "cargo build прокси" }
 предупреждение — он для отладочной полусборки, не для выпуска.
 
 **Сборка для macOS** идёт не здесь, а на раннере GitHub `macos-15` (Apple
-Silicon): `gh workflow run macos.yml -f tag=v0.7.1 -f upload=true --ref <ветка>`.
+Silicon, `.github/workflows/macos.yml`). Пока файла workflow нет в `main`,
+прогон запускается push-ом в `port/macos`, а выкладка — руками из артефакта:
+`gh run download <id> -n Helene-v0.7.1-macos-arm64`, затем `gh release upload
+v0.7.1 Helene-0.7.1-macos-arm64.zip Helene-0.7.1-macos-arm64.zip.sha256
+install.sh --clobber`. После влития в `main` — по кнопке с выкладкой тем же
+шагом: `gh workflow run macos.yml -f tag=v0.7.1 -f upload=true`.
 На самом Mac то же руками: `python3 installer/build_mac.py --from-release v0.7.1`
 (нужны Rust, Node 24, Xcode Command Line Tools, `gh`; итог —
 `installer/build-mac/Helene-<версия>-macos-arm64.zip`, `.sha256` и `install.sh`).
