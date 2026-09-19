@@ -200,6 +200,14 @@ download — the build is not signed with a Developer ID:
 curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh
 ```
 
+Run it as the user who is logged in at the Mac's screen, in that user's own Terminal — no
+`sudo`, no `su`. The wizard is a window: `open` starts it in the session the Terminal lives
+in, as that session's owner, so under `sudo` it would not run as root, and after `su` into
+another account it starts as the first user and cannot read the second one's home. The
+script refuses in words in all three cases (`sudo`, `su`, no GUI session over ssh) before
+downloading anything. Administrator rights are not needed; the app asks for the
+administrator password itself when it needs one (the service, privileged actions).
+
 The script checks the machine and the OS, downloads `Helene-<version>-macos-arm64.zip` and
 its `.sha256` (the release tag is stamped into the script by the build), verifies the sum,
 unpacks into `~/Library/Caches/app.helene.install/staging` and opens the setup wizard

@@ -14,6 +14,12 @@
 # (`--install <json> --quiet`) и не трогает data/ и helene.json — решения для
 # него читаются из уже установленного конфига.
 #
+# От кого запускать. От того пользователя, который вошёл на экран Mac, в его
+# Терминале — без sudo и без su. Мастер — окно: `open` отдаёт его той сессии,
+# в которой живёт Терминал, и он стартует от её хозяина, а не от того, кто
+# набрал команду. Под sudo, после su в другого пользователя и без графической
+# сессии скрипт отказывает словами до закачки (check_session).
+#
 # Почему curl, а не браузер. Подписи Developer ID у программы нет; файл, скачанный
 # браузером, получает карантин, и Gatekeeper на Sequoia его блокирует. Файлы от
 # curl карантина не получают; с распакованного он на всякий случай снимается.
@@ -84,6 +90,8 @@ $PRODUCT $VERSION для macOS (Apple Silicon)
   sh install.sh --uninstall --purge снять вместе с data/ и helene.json
 
 Ставится в $HOME_DIR. Другой выпуск: HELENE_TAG=v0.8.1 sh install.sh
+Запускать от своего пользователя — того, кто вошёл на экран Mac, — без sudo и su:
+прав администратора установка не требует, пароль программа спросит сама, когда он понадобится.
 EOF
 }
 
@@ -121,9 +129,37 @@ check_platform() {
         ''|*[!0-9]*) die "не понял версию macOS: $ver" ;;
     esac
     [ "$major" -ge "$HELENE_MACOS_MIN" ] || die "нужна macOS $HELENE_MACOS_MIN или новее, а это $ver"
-    for tool in ditto shasum xattr curl open ps awk; do
+    for tool in ditto shasum xattr curl open ps awk launchctl; do
         command -v "$tool" >/dev/null 2>&1 || die "нет команды $tool"
     done
+}
+
+# Мастер — окно. `open` отдаёт его LaunchServices той сессии, в которой живёт
+# Терминал, и программа стартует от хозяина сессии, а не от того, кто набрал
+# команду: под sudo — не от root, а после `su psv` в Терминале hermes — от
+# hermes, которому /Users/psv/Library закрыта (0700). Живой случай 20.09: так
+# мастер упал с «you don't have permission to view it» — после закачки 224 МБ.
+# Поэтому сессия проверяется ДО закачки, и отказ — словами.
+check_session() {
+    uid="$(id -u)"
+    me="$(id -un)"
+    if [ "$uid" -eq 0 ]; then
+        die "$PRODUCT ставится без прав администратора — в папку пользователя, и мастер у неё с окном. Запусти то же самое без sudo, от своего пользователя${SUDO_USER:+ ($SUDO_USER)}. Пароль администратора программа спросит сама, когда он ей понадобится: для службы и действий с правами"
+    fi
+    # launchctl manageruid — uid сессии (домена launchd), в которой идёт этот
+    # процесс; su и sudo его не меняют. 0 — системный домен (демон, не человек):
+    # по нему судить нечего, дальше решает проверка графической сессии.
+    manager="$(launchctl manageruid 2>/dev/null || true)"
+    case "$manager" in
+        ''|*[!0-9]*) manager=0 ;;
+    esac
+    if [ "$manager" -ne 0 ] && [ "$manager" -ne "$uid" ]; then
+        owner="$(id -un "$manager" 2>/dev/null || echo "uid $manager")"
+        die "этот Терминал принадлежит пользователю $owner, а скрипт идёт от $me (после su). Мастер — окно: оно откроется у $owner, а папка $HOME для него закрыта. Войди на Mac пользователем $me и запусти установку в его Терминале, без su и sudo"
+    fi
+    if ! launchctl print "gui/$uid" >/dev/null 2>&1; then
+        die "у пользователя $me нет входа на экран этого Mac — графической сессии нет (так бывает по ssh и после su). Мастер $PRODUCT — окно, открыться ему негде: войди на Mac этим пользователем и запусти установку в его Терминале"
+    fi
 }
 
 download() {
@@ -380,7 +416,11 @@ update() {
 
 fresh() {
     say "первая установка: открываю мастер $PRODUCT — он поставит программу в $HOME_DIR"
-    open "$STAGING/$FOLDER/Helene Setup.app"
+    # Отказ `open` иначе уронил бы скрипт (set -e) с одной системной строкой
+    # про NSCocoaErrorDomain и без слова о том, что делать.
+    if ! open "$STAGING/$FOLDER/Helene Setup.app"; then
+        die "мастер не открылся (что сказала система — строкой выше). Открыть его руками — из Терминала того пользователя, что вошёл на экран Mac, без sudo: open \"$STAGING/$FOLDER/Helene Setup.app\""
+    fi
 }
 
 uninstall() {
@@ -417,6 +457,7 @@ uninstall() {
 
 main() {
     check_platform
+    check_session
     if [ "$UNINSTALL" -eq 1 ]; then
         uninstall
         exit 0

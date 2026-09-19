@@ -444,6 +444,54 @@ jobs:
           echo "канал после обновления отвечает на $PORT:"
           cat "$RUNNER_TEMP/health-upd.json"; echo
 
+      # Ограда install.sh на живом Mac — случай 20.09: человек обновлялся из
+      # Терминала одного пользователя после `su` в другого; скрипт искал установку
+      # в доме второго, пошёл «первой установкой», а мастер через `open` стартовал
+      # от первого и не смог прочитать папку второго («you don't have permission
+      # to view it») — после 224 МБ закачки. Теперь check_session отказывает
+      # словами до закачки: под sudo, после su и без графической сессии. Второго
+      # пользователя создаёт sysadminctl; раннер одноразовый. Скрипт и проба —
+      # в /tmp: дом раннера для чужого пользователя может быть закрыт, а падать
+      # стенд должен на словах ограды, не на «cannot open».
+      - name: install.sh — отказ словами под sudo и после su
+        shell: bash
+        run: |
+          set -- "$BUILD"/Helene-*-macos-arm64.zip
+          ZIP="$1"
+          test -f "$ZIP" || { echo "нет архива сборки: $ZIP"; exit 1; }
+          cp "$BUILD/Helene/install.sh" /tmp/helene-install.sh
+          chmod 644 /tmp/helene-install.sh
+          cat > /tmp/helene-probe.sh <<'EOF'
+          uid="$(id -u)"
+          echo "id -u=$uid ($(id -un)) manageruid=$(launchctl manageruid 2>&1) managername=$(launchctl managername 2>&1) console=$(stat -f %Su /dev/console 2>&1)"
+          if launchctl print "gui/$uid" >/dev/null 2>&1; then echo "gui/$uid: есть"; else echo "gui/$uid: нет"; fi
+          EOF
+          chmod 644 /tmp/helene-probe.sh
+          echo "=== сессия раннера"; sh /tmp/helene-probe.sh
+          echo "=== сессия под sudo -n"; sudo -n sh /tmp/helene-probe.sh
+          set +e
+          OUT="$(sudo -n sh /tmp/helene-install.sh --from "$ZIP" 2>&1)"; rc=$?
+          set -e
+          echo "=== sudo -n sh install.sh --from … → код $rc"; echo "$OUT"
+          [ "$rc" -ne 0 ] || { echo "под sudo install.sh НЕ отказал"; exit 1; }
+          grep -q "без sudo" <<<"$OUT" || { echo "отказ под sudo без слов «без sudo»"; exit 1; }
+          ! grep -q "распаковываю" <<<"$OUT" || { echo "под sudo скрипт дошёл до распаковки"; exit 1; }
+          if sudo -n sysadminctl -addUser helenesu -fullName "Helene su-проба" -password "helene-su-1" -home /Users/helenesu > "$RUNNER_TEMP/adduser.log" 2>&1; then
+            sudo -n createhomedir -c -u helenesu > /dev/null 2>&1 || true
+            echo "=== сессия после sudo su helenesu"; sudo -n su helenesu -c "sh /tmp/helene-probe.sh"
+            set +e
+            OUT="$(sudo -n su helenesu -c "sh /tmp/helene-install.sh --from '$ZIP'" 2>&1)"; rc=$?
+            set -e
+            echo "=== sudo -n su helenesu -c 'sh install.sh --from …' → код $rc"; echo "$OUT"
+            [ "$rc" -ne 0 ] || { echo "после su install.sh НЕ отказал"; exit 1; }
+            grep -q -e "после su" -e "нет входа на экран" <<<"$OUT" || { echo "отказ после su без слов о сессии"; exit 1; }
+            ! grep -q "распаковываю" <<<"$OUT" || { echo "после su скрипт дошёл до распаковки"; exit 1; }
+            sudo -n sysadminctl -deleteUser helenesu > /dev/null 2>&1 || true
+          else
+            echo "⚠ sysadminctl не создал второго пользователя — проба su пропущена (sudo проверен):"
+            cat "$RUNNER_TEMP/adduser.log"
+          fi
+
       # Снятие: `bootout` выгружает демон вместе с детьми (SIGTERM → демон →
       # killpg по группам). Проверяем, что он действительно ушёл и что порт
       # освободился — забытый демон с KeepAlive поднимал бы движок из удалённой

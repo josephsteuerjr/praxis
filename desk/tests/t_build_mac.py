@@ -812,6 +812,22 @@ class Workflow(unittest.TestCase):
         artifact = self.text[self.text.index("upload-artifact"):]
         self.assertNotIn("body-token", artifact, "ключ к телу уехал бы в артефакт прогона")
 
+    def test_install_sh_guard_is_exercised_on_a_real_mac(self):
+        """20.09: под sudo и после su в другого пользователя install.sh обязан
+        отказать словами до закачки. Стенд идёт после обновления поверх (скрипт
+        уже доказал, что в своей сессии работает) и до снятия службы; второго
+        пользователя создаёт sysadminctl и убирает за собой."""
+        step = "install.sh — отказ словами под sudo и после su"
+        self.assertIn(step, self.text)
+        self.assertLess(self.text.index("Обновление поверх установленного"), self.text.index(step))
+        self.assertLess(self.text.index(step), self.text.index("Служба — снятие"))
+        body = self.text[self.text.index(step):self.text.index("Служба — снятие")]
+        for needle in ("sudo -n sh /tmp/helene-install.sh", "sysadminctl -addUser", "su helenesu -c",
+                       "launchctl manageruid", 'grep -q "без sudo"',
+                       '-e "после su" -e "нет входа на экран"', "распаковываю",
+                       "sysadminctl -deleteUser"):
+            self.assertIn(needle, body, needle)
+
     def test_yaml_parses_if_pyyaml_is_around(self):
         try:
             import yaml  # noqa: PLC0415
@@ -843,6 +859,46 @@ class Workflow(unittest.TestCase):
         upd = next(s for s in job["steps"] if "Обновление поверх" in str(s.get("name")))
         self.assertEqual(upd.get("shell"), "bash")
         self.assertIn('install.sh" --from', upd["run"])
+
+
+class InstallShSession(unittest.TestCase):
+    """Случай 20.09: человек обновлялся из Терминала одного пользователя после
+    `su` в другого. Скрипт искал установку в доме второго (пусто → «первая
+    установка»), а мастер через `open` стартовал от первого — `open` отдаёт окно
+    сессии Терминала — и не смог прочитать папку второго («you don't have
+    permission to view it»), после 224 МБ закачки. Ограда: сессия проверяется
+    ДО закачки, отказ — словами; отказ `open` тоже говорит, что делать."""
+
+    def setUp(self):
+        self.text = INSTALL_SH.read_text(encoding="utf-8").replace("\r\n", "\n")
+
+    def test_session_is_checked_before_download(self):
+        main = self.text[self.text.index("main() {"):]
+        self.assertLess(main.index("check_platform"), main.index("check_session"))
+        self.assertLess(main.index("check_session"), main.index("download"))
+        guard = self.text[self.text.index("check_session() {"):self.text.index("download() {")]
+        # root — отказ; su — по uid сессии launchd; без графической сессии — отказ.
+        self.assertIn('[ "$uid" -eq 0 ]', guard)
+        self.assertIn("launchctl manageruid", guard)
+        self.assertIn('launchctl print "gui/$uid"', guard)
+        for words in ("без sudo", "после su", "без su и sudo", "нет входа на экран"):
+            self.assertIn(words, guard, words)
+        # Системный домен (manageruid 0) — не улика против человека: по нему не отказываем.
+        self.assertIn('[ "$manager" -ne 0 ] && [ "$manager" -ne "$uid" ]', guard)
+        tools = self.text[self.text.index("for tool in"):].split("\n", 1)[0]
+        self.assertIn("launchctl", tools)
+
+    def test_open_failure_at_first_install_says_what_to_do(self):
+        fresh = self.text[self.text.index("fresh() {"):self.text.index("uninstall() {")]
+        self.assertIn('if ! open "$STAGING/$FOLDER/Helene Setup.app"; then', fresh)
+        self.assertIn("мастер не открылся", fresh)
+        self.assertIn("без sudo", fresh)
+
+    def test_documents_say_who_runs_it(self):
+        self.assertIn("без `sudo` и без `su`", build_mac.FIRST_RUN_MAC)
+        self.assertIn("без sudo и su", self.text[self.text.index("usage() {"):self.text.index("while [ $# -gt 0 ]")])
+        readme = (DESK.parent / "README.md").read_text(encoding="utf-8")
+        self.assertIn("no `su`", readme)
 
 
 if __name__ == "__main__":
