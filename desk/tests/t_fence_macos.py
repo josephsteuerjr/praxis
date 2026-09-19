@@ -497,14 +497,20 @@ class Live(unittest.TestCase):
         self.assertNotEqual(code, 0, "в temp пользователя записалось из ограды")
         self.assertFalse(fresh.exists())
         # …а свой temp команды — в доме: mktemp кладёт туда, и запись доезжает.
-        # Диагностика в текст отказа: пятый круг CI показал, что mktemp берёт
-        # /var/folders раннера, хотя TMPDIR экспортирован первой командой, —
-        # кто его перебивает, видно только из самой ограды.
-        out, code, _ = self.sh('echo "TMPDIR=$TMPDIR HOME=$HOME"; command -v mktemp; '
-                               'getconf DARWIN_USER_TEMP_DIR; env | grep -i tmp; '
-                               'f=$(mktemp) && echo "$f" && echo x > "$f"')
+        # ⚠ Шестой круг CI показал живьём: TMPDIR/TMP/TEMP внутри ограды верные
+        # (<workspace>/.tmp), но Apple-овский `/usr/bin/mktemp` БЕЗ шаблона всё равно
+        # идёт в DARWIN_USER_TEMP_DIR (/var/folders/…/T), а он закрыт — «Operation not
+        # permitted». Это свойство утилиты, не ограды: с явным шаблоном mktemp честно
+        # берёт TMPDIR, и им же живут питон, git, curl, pip. Стережём то, что обещаем:
+        # среда команды указывает в дом, и temp с явным путём там пишется.
+        out, code, _ = self.sh('echo "TMPDIR=$TMPDIR"; f=$(mktemp "$TMPDIR/x.XXXXXX") '
+                               '&& d=$(mktemp -d "$TMPDIR/d.XXXXXX") && echo "$f $d" '
+                               '&& echo x > "$f" && echo y > "$d/y"')
         self.assertEqual(code, 0, out)
-        self.assertIn(str(fence_macos._abs(self.g.workspace) / ".tmp"), out)
+        tmp = str(fence_macos._abs(self.g.workspace) / ".tmp")
+        self.assertIn(f"TMPDIR={tmp}", out)
+        self.assertIn(f"{tmp}/x.", out)
+        self.assertIn(f"{tmp}/d.", out)
 
     def test_питон_поставки_первый_в_PATH(self):
         fake = self.g.root / "runtime" / "bin" / "python3"
