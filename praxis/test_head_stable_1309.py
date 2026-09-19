@@ -298,14 +298,16 @@ class PrivateDossierLinesMoveToTheOwnerTier(unittest.TestCase):
         self.assertEqual(hidden, 2)
         self.assertEqual(removed, "- [private] b\n  cont\n")
 
-    def test_lever_on_owner_sees_private_in_its_own_tier_not_in_the_dossier(self):
+    def test_lever_on_owner_in_a_room_gets_the_same_filtered_body_no_tier(self):
+        # 17.09: «or ctx.owner» убран из сборки досье. Ход владельца в ГРУППЕ — тот же
+        # отфильтрованный корпус, что у гостя: реплика, сочинённая в группе, публична.
+        # Ярус «ПРИВАТНОЕ ИЗ ДОСЬЕ» в группах больше не существует вовсе.
         frame_layout.begin()
         with mock.patch.dict(os.environ, LEVER):
             block = agent._participant_memory_block("Кто-то", room_ctx(owner=True, principal="42"))
         self.assertNotIn("развёлся", block)
-        private = frame_layout.snapshot().get("head_stable_private") or ""
-        self.assertIn("развёлся в марте", private)
-        self.assertIn("guest · memory/people/guest.md", private)
+        self.assertIn("строк приватных записей снято 2", block)
+        self.assertFalse(frame_layout.snapshot().get("head_stable_private"))
 
     def test_lever_on_guest_sees_neither(self):
         frame_layout.begin()
@@ -316,13 +318,19 @@ class PrivateDossierLinesMoveToTheOwnerTier(unittest.TestCase):
         self.assertIn("строк приватных записей снято 2", block)
         self.assertFalse(frame_layout.snapshot().get("head_stable_private"))
 
-    def test_lever_off_owner_still_sees_private_inline(self):
+    def test_lever_off_owner_in_room_gets_filtered_body_too(self):
+        # 17.09: и без рычага стабильной головы владелец в ГРУППЕ видит отфильтрованное
+        # тело — приватное возвращается только в owner-DM, независимо от рычага.
         frame_layout.begin()
         block = agent._participant_memory_block("Кто-то", room_ctx(owner=True, principal="42"))
-        self.assertIn("развёлся в марте", block)
+        self.assertNotIn("развёлся", block)
+        self.assertIn("строк приватных записей снято 2", block)
         self.assertFalse(frame_layout.snapshot().get("head_stable_private"))
 
-    def test_hermetic_18200_budget_keeps_the_logical_dossier_atomic(self):
+    def test_hermetic_18200_budget_keeps_the_public_dossier_atomic(self):
+        # 17.09: приватного яруса в группах больше нет — «логическое досье атомарно»
+        # теперь значит: публичное тело доезжает целиком и у владельца, и у гостя,
+        # приватный сентинел не появляется нигде (в т.ч. в голове), бюджет соблюдён.
         sentinel = "развёлся в марте"
         public = "любит чай"
         budget = "18200"
@@ -330,7 +338,7 @@ class PrivateDossierLinesMoveToTheOwnerTier(unittest.TestCase):
               mock.patch.object(agent, "hands_pointer_text", return_value=""),
               mock.patch.dict(os.environ, {"PRAXIS_CONTEXT_BUDGET": budget})):
             baseline = frame_for(room_ctx(owner=True, principal="42"))
-        self.assertIn(sentinel, baseline[2])
+        self.assertNotIn(sentinel, baseline[0] + baseline[1] + baseline[2])
         self.assertIn(public, baseline[2])
 
         with (mock.patch.object(agent, "_persona_text", return_value="P" * 9000),
@@ -346,16 +354,18 @@ class PrivateDossierLinesMoveToTheOwnerTier(unittest.TestCase):
             guest = frame_for(room_ctx(owner=False, known=False, principal="42"))
             owner_second = frame_for(room_ctx(owner=True, principal="42"))
 
-        for owner_frame in (owner_first, owner_second):
-            self.assertIn(sentinel, owner_frame[2])
-            self.assertIn(public, owner_frame[2])
-            self.assertNotIn(sentinel, owner_frame[0] + owner_frame[1])
-        self.assertNotIn(sentinel, guest[0] + guest[1] + guest[2])
+        for frame in (owner_first, owner_second, guest):
+            self.assertNotIn(sentinel, frame[0] + frame[1] + frame[2])
+            self.assertIn(public, frame[2])
         self.assertEqual(owner_first[1], guest[1])
         self.assertEqual(guest[1], owner_second[1])
         self.assertLessEqual(owner_budget["used_final"], owner_budget["limit"])
 
-    def test_18200_budget_drops_both_halves_of_a_50k_private_dossier(self):
+    def test_18200_budget_huge_private_lines_never_enter_and_public_survives(self):
+        # 17.09: приватные строки в группе не собираются вовсе, поэтому гигантское
+        # [private]-поле не может выбить публичное тело из бюджета: атомарная пара
+        # «публичное + приватное» больше не существует, приватное просто отрезано
+        # до любого бюджетного решения.
         public = "PUBLIC-DOSSIER-SENTINEL"
         private = "PRIVATE-DOSSIER-SENTINEL-" + ("X" * 50000)
         (self.people / "guest.md").write_text(
@@ -374,21 +384,23 @@ class PrivateDossierLinesMoveToTheOwnerTier(unittest.TestCase):
                 frame_trace.finish(token)
 
         physical_frame = "".join(owner)
-        self.assertNotIn(public, physical_frame,
-                         "public half survived after its atomic private half did not fit")
+        self.assertIn(public, physical_frame,
+                      "public body was lost although private never entered the budget")
         self.assertNotIn("PRIVATE-DOSSIER-SENTINEL", physical_frame)
         self.assertLessEqual(accounting["used_final"], accounting["limit"])
         self.assertEqual(accounting["limit"], 18200)
 
-    def test_constrained_budget_owner_guest_owner_keeps_private_without_head_leak(self):
+    def test_constrained_budget_owner_guest_owner_share_filtered_body_no_leak(self):
+        # 17.09: сентинел приватной строки не появляется ни у кого в группе — ни при
+        # каком бюджете. Ищем границу, где публичное тело доезжает целиком, и проверяем
+        # инвариант: у владельца и гостя одна голова, приватного нигде нет.
         sentinel = "развёлся в марте"
-        # Find this hermetic tree's tight boundary where both physical sections of the
-        # stable-head dossier fit (fixtures legitimately change its absolute value).
+        public = "любит чай"
         budget = None
         for limit in range(16000, 40001, 100):
             with mock.patch.dict(os.environ, {**LEVER, "PRAXIS_CONTEXT_BUDGET": str(limit)}):
                 candidate = frame_for(room_ctx(owner=True, principal="42"))
-            if sentinel in candidate[2]:
+            if public in candidate[2]:
                 budget = str(limit)
                 break
         self.assertIsNotNone(budget, "could not establish constrained stable dossier boundary")
@@ -397,26 +409,24 @@ class PrivateDossierLinesMoveToTheOwnerTier(unittest.TestCase):
             owner_first = frame_for(room_ctx(owner=True, principal="42"))
             guest = frame_for(room_ctx(owner=False, known=False, principal="42"))
             owner_second = frame_for(room_ctx(owner=True, principal="42"))
-        for owner_frame in (owner_first, owner_second):
-            self.assertNotIn(sentinel, owner_frame[0] + owner_frame[1])
-            self.assertIn(sentinel, owner_frame[2])
-        self.assertNotIn(sentinel, guest[0] + guest[1] + guest[2])
+        for frame in (owner_first, owner_second, guest):
+            self.assertNotIn(sentinel, frame[0] + frame[1] + frame[2])
+        self.assertIn(public, owner_first[2])
         self.assertEqual(owner_first[1], guest[1])
         self.assertEqual(guest[1], owner_second[1])
 
-    def test_full_frames_owner_guest_owner_do_not_leak_and_restore_private_sentinel(self):
+    def test_full_frames_owner_guest_owner_never_see_private_sentinel_in_a_room(self):
+        # 17.09: в группе приватного яруса нет ни у кого — у владельца тоже. Сентинел
+        # не появляется ни в голове, ни в живом конверте; головы всех троих совпадают.
         sentinel = "развёлся в марте"
         with mock.patch.dict(os.environ, LEVER):
             owner_first = frame_for(room_ctx(owner=True, principal="42"))
             guest = frame_for(room_ctx(owner=False, known=False, principal="42"))
             owner_second = frame_for(room_ctx(owner=True, principal="42"))
 
-        for owner_frame in (owner_first, owner_second):
-            self.assertNotIn(sentinel, owner_frame[1], "private data entered stable system head")
-            self.assertIn(sentinel, owner_frame[2], "owner lost the private live tier")
-        self.assertNotIn(sentinel, guest[0])
-        self.assertNotIn(sentinel, guest[1])
-        self.assertNotIn(sentinel, guest[2], "guest inherited the preceding owner's private tier")
+        for frame in (owner_first, guest, owner_second):
+            self.assertNotIn(sentinel, frame[0] + frame[1] + frame[2],
+                             "private data appeared in a group frame")
         self.assertEqual(owner_first[1], guest[1])
         self.assertEqual(guest[1], owner_second[1])
 

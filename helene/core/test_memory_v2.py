@@ -51,6 +51,19 @@ import llm  # noqa: E402
 import consolidate as co  # noqa: E402
 import run_context  # noqa: E402
 
+# ⚠ 18.09, УКАЗАТЕЛИ РУК. Этот стенд меряет ПОЛНЫЙ манифест как список `tools`; под
+# указателями туда уезжают только родные руки плюс `describe`/`call`, и проверка
+# краснела бы на верной правке. Семантику указателей проверяет test_pointer_en_1809.
+# Рычаг снимается ТОЛЬКО в setUpModule — правило дерева: рычаг в теле теста утекает
+# в соседей по процессу.
+def setUpModule():
+    os.environ["PRAXIS_TOOLS_POINTERS"] = "off"
+
+
+def tearDownModule():
+    os.environ.pop("PRAXIS_TOOLS_POINTERS", None)
+
+
 
 def fake_embed(text: str) -> list[float]:
     """Детерминированный bag-of-words вектор: общие слова -> близкие векторы."""

@@ -91,6 +91,7 @@ intrinsic, «пятый вопрос кадра» (почему это пере�
 from __future__ import annotations
 
 import contextvars
+import hashlib as _hashlib
 import os
 import re
 
@@ -99,6 +100,9 @@ import gutter
 
 ENV_LEVER = "PRAXIS_FRAME_FORM"
 ENV_STRICT = "PRAXIS_FRAME_STRICT"
+# 16.09: её прошлые реплики в ленте — ВЫЗОВАМИ руки `reply`, а не прозой.
+# Умолчание выключено: без рычага лента прежняя байт-в-байт.
+ENV_TAPE_HANDS = "PRAXIS_FRAME_TAPE_HANDS"
 
 RULE = "────"      # ──── : правило заголовка секции
 SIGN = "↳"                        # ↳    : перо СБОРЩИКА
@@ -228,6 +232,13 @@ _TIERS: tuple[tuple[str, str, str, str], ...] = (
     # поверх такого тела значит спорить с ним же.
     ("Куда здесь уходит ответ", "документ", "telegram_routes", "маршрут на момент сборки"),
     ("Эта комната", "документ", "rooms/{room}.md", "если профиль заведён"),
+    # 15.09, эпоха комнаты (frame_epoch): живые ярусы под PRAXIS_FRAME_EPOCH.
+    ("Эпоха этой комнаты", "прибор", "memory/.state/epoch/{room}.json",
+     "снято на этом ходе; в эпоху не входит"),
+    ("Кто передо мной", "документ", "привязка tg → memory/people/",
+     "снято на этом ходе; в эпоху не входит"),
+    ("Досье говорящего — не в эпохе", "документ", "memory/people/",
+     "человек появился после заморозки эпохи; целиком"),
     ("Визитка", "ядро", "soul/visit_card.md", "только в группе"),
     ("ВНУТРЕННЯЯ память, всплывшая по теме", "поиск", "", ""),
     # 13.09, PRAXIS_FRAME_HEAD_STABLE: то, что стояло в system только на ходах владельца и
@@ -256,6 +267,25 @@ def form_new() -> bool:
     """new | old. Отсутствие переменной = new (см. докстринг модуля)."""
     raw = (os.getenv(ENV_LEVER) or "").strip().lower()
     return raw not in ("old", "0", "off", "false", "no")
+
+
+def tape_hands() -> bool:
+    """Показывать ли её прошлые ходы ленты вызовами руки `reply`.
+
+    ⚠ ЗАЧЕМ. Замер 16.09 (`desk-notes/РУКИ-16.09-ФАНАУТ.md`): в ленте её реплики лежали
+    ОБЫЧНЫМ ТЕКСТОМ в роли `assistant` — на 122 815 знаков ни одного `tool_use`. Это
+    единственная демонстрация ассистентского хода во всём кадре, и модель ей следовала:
+    средняя длина её реплик в ленте 1115 знаков, средняя длина недоставленной прозы —
+    1165, расхождение 4 %. Режим прозы (`end_turn` при нуле рук) — 34/48 = 71 % на базе,
+    0/42 под этой правкой, Фишер p = 3e-13; на трёх кадрах, где она осознанно молчала,
+    правка не изменила ничего (reply 0/12 и там, и там).
+
+    Это тот же корень, что закрыли 15.09 правкой `ad89ee80`: кадр показывал образец
+    машинного конверта и модель его подделывала. Конверт сняли — проза осталась.
+
+    Умолчание ВЫКЛЮЧЕНО: без рычага лента собирается прежним путём байт-в-байт.
+    """
+    return (os.getenv(ENV_TAPE_HANDS) or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def strict() -> bool:
@@ -1187,6 +1217,48 @@ def _assay_impl(frame: str) -> dict:
     }
 
 
+# Расписка о доставке. Короткая и ПРАВДИВАЯ: в ленту попадает только то, что вправду
+# ушло собеседнику — проверено по 13 сорванным ходам 16.09 против 42 последующих кадров,
+# недоставленной прозы в ленте нет ни одной. Соврать здесь значило бы построить кадр на
+# ложном образце, то есть ровно на том, что мы этой правкой и убираем.
+TAPE_HAND = "reply"
+TAPE_RECEIPT = "delivered"
+
+
+def _hand_pair(message):
+    """Её реплика ленты -> [вызов руки `reply`] + [расписка о доставке].
+
+    Идентификатор вызова считается ОТ ТЕКСТА, а не от позиции: лента едет окном, и при
+    сдвиге окна позиционный id поменялся бы у всех сообщений разом и убил префиксный кэш
+    (кэш z.ai режется сообщениями целиком — `praxis-zai-cache-is-message-granular-1609`).
+
+    Реплику, которую нельзя честно положить в руку (пустая, или блоки не только текстовые
+    — картинка, документ), пропускаем как есть: выдумывать за неё вызов нечестно.
+    """
+    content = message.get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        if any(not isinstance(b, dict) or b.get("type") != "text" for b in content):
+            return [message]
+        text = "\n".join(str(b.get("text") or "") for b in content)
+    else:
+        return [message]
+    if not text.strip():
+        return [message]
+    call_id = "tape_" + _sha12(text)
+    return [
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": call_id, "name": TAPE_HAND, "input": {"text": text}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": call_id, "content": TAPE_RECEIPT}]},
+    ]
+
+
+def _sha12(text: str) -> str:
+    return _hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:12]
+
+
 def tape(messages):
     """Лента при РЕНДЕРЕ: гуттер накладывается ровно один раз и не хранится в сообщении.
 
@@ -1211,12 +1283,20 @@ def tape(messages):
     держат дословный текст без единого `>`. Гуттер живёт только в том списке, который
     уезжает в модель, и снимается однозначно (`gutter.unquote`).
 
+    ⚠ РОЛЬ assistant ПОД РЫЧАГОМ `PRAXIS_FRAME_TAPE_HANDS` — см. :func:`tape_hands`:
+    её прошлая реплика едет не прозой, а вызовом руки `reply` и распиской о доставке.
+    Гуттера на ней по-прежнему нет и быть не может — это её собственные слова.
+
     Возвращает НОВЫЙ список — входной не мутируется: тот же список читают расписки.
     """
+    hands = tape_hands()
     out = []
     for message in list(messages or ()):
-        if not isinstance(message, dict) or str(message.get("role") or "") == "assistant":
+        if not isinstance(message, dict):
             out.append(message)
+            continue
+        if str(message.get("role") or "") == "assistant":
+            out.extend(_hand_pair(message) if hands else [message])
             continue
         content = message.get("content")
         if isinstance(content, str):
@@ -1261,6 +1341,16 @@ def assay_tape(messages) -> dict:
             continue
         role = str(message.get("role") or "")
         if role == "assistant":
+            continue
+        # ⚠ РАСПИСКА ЛЕНТЫ — НАШ СОБСТВЕННЫЙ ТЕКСТ, А НЕ ДОСТАВЛЕННЫЙ ЧУЖОЙ. Под рычагом
+        # `PRAXIS_FRAME_TAPE_HANDS` за каждой её репликой идёт сообщение роли `user` с
+        # одним блоком `tool_result` — это строительные леса кадра, сток их не касается.
+        # Считать их гостями значило бы раздуть `guest_messages` вдвое и назвать утечкой
+        # собственную разметку — ровно та ошибка, которую этот прибор и ловит у других.
+        content_blocks = message.get("content")
+        if (isinstance(content_blocks, list) and content_blocks
+                and all(isinstance(b, dict) and b.get("type") == "tool_result"
+                        for b in content_blocks)):
             continue
         guest += 1
         content = message.get("content")

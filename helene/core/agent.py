@@ -19,6 +19,7 @@ from __future__ import annotations
 import praxis_time
 import contextlib
 import copy
+import difflib
 import contextvars
 import functools
 import concurrent.futures as _futures
@@ -2953,7 +2954,7 @@ def tool_my_capabilities() -> str:
         offered = None
         if ctx is not None:
             try:
-                offered = [str(t.get("name") or "") for t in offered_tools_for(ctx)]
+                offered = [str(t.get("name") or "") for t in catalog_tools_for(ctx)]
             except Exception:
                 offered = None   # лучше промолчать о руках, чем соврать про них
         return capabilities.describe(_active_scope(), offered=offered)
@@ -7998,6 +7999,438 @@ def _work_card_after_word(record: dict, current, row: dict | None) -> str:
 
 TOOL_IMPL["task_control"] = tool_task_control
 
+# ──────────────────────────────────────────────── указатель рук (КЕАТ, порт 18.09)
+#
+# ⚠ ПОРТ В ИЗДАНИЕ. Здесь тот же механизм, что в ядре, с одной разницей: указатель
+# печатается ПО-АНГЛИЙСКИ (`tool_text_en.pointer_*`). В ядре его текст русский, и
+# включение указателей там выбрасывает английские описания 86 рук из 95 — ровно то,
+# ради чего 15.09 положен `tool_text_en.py`. У издания обе вещи обязаны работать
+# вместе: кадр дешевле И схемы по-английски.
+
+# Замер 12.09: манифест 101 руки = 73 451 знак ≈ 22 тыс. токенов в КАЖДОМ кадре, 44 %
+# хода в личке Егора и 78 % кадра Миры. По контракту 17.08 родных рук 3–4, остальное —
+# указатель «имя + строка», схема грузится ПО ТРЕБОВАНИЮ и падает в НАКОПИТЕЛЬ как
+# результат руки (префикс цел, эпоха не переворачивается).
+#
+# Как устроено:
+#   * `catalog_tools_for(ctx)` — прежний полный список (то, что модель МОЖЕТ позвать);
+#   * `offered_tools_for(ctx)` — то, что уезжает в `tools`: родные (NATIVE_HAND_NAMES) +
+#     `describe` + `call` (+ провайдерский web_search, у него схемы нет по построению);
+#   * указатель «имя — назначение» едет секцией `contract.hands_pointer` системного
+#     префикса (стабилен для комнаты — кэш цел); строки — HAND_PURPOSE, а не обрезки
+#     описаний: при указателях модель выбирает по имени и одной строке (слово Егора 12.09);
+#   * `describe(name)` → JSON схемы результатом руки; `call(name, args_json)` →
+#     в тул-цикле блок ПЕРЕПИСЫВАЕТСЯ во внутреннюю руку ДО durable-записи, побочных
+#     эффектов, потолка времени и расписок — то есть внутренняя рука проходит ровно ту же
+#     воронку, что и родная; в ленте модели остаётся её собственный вызов `call`.
+#   * рычаг: PRAXIS_TOOLS_POINTERS=off — прежние 101 схема байт-в-байт.
+_NATIVE_CORE = frozenset({
+    "reply", "end_turn", "stay_silent", "remember", "recall", "describe", "call",
+    "task_control",
+})
+# 13.09: родные не только «без чего нет хода», но и те, которыми она живёт. Замер по
+# events.jsonl всех прогонов за 14 дней (30.08–13.09, 1 875 прогонов, 20 672 вызова):
+# coding_inspect 2306, coding_agent 2179, shell 2045, coding_verify 1093, coding_run 1039,
+# fs_read 820, coding_session 566, telegram_account 384, task_control 342, fs_search 336,
+# coding_edit 302, remind_self 297, read_run_result 295, web_find 282, manage_desire 249,
+# group_context 246, web_read 241, git 230, fs_edit 210, manage_notes 177,
+# list_active_runs 168, computer 160, recent_turns 158, my_agenda 152, read_chat 148,
+# read_log 146, manage_loop 144 — дальше реже десяти раз в день (remember 133, fs_ls 89,
+# journal 56, send_message 67, my_capabilities 45, react — единицы). Порог: ≥ 10 вызовов в
+# день. Вечер 12.09 в AbstractDL показал, что бывает иначе: coding_* исчезли из обихода,
+# describe стал 14 % вызовов, вместо рук — shell. Руку, которой не видно, она не зовёт.
+# Исключение — `computer` (160 вызовов, но схема 9 278 знаков, треть всего набора): едет
+# указателем с сигнатурой. Итог: ~24 тыс. знаков схем + ~6 тыс. указатель против 70 тыс.
+# полного манифеста. Свой состав — рычагом PRAXIS_NATIVE_HANDS=имя,имя (ядро остаётся всегда).
+_NATIVE_BY_USE = frozenset({
+    "coding_inspect", "coding_agent", "shell", "coding_verify", "coding_run", "fs_read",
+    "coding_session", "telegram_account", "fs_search", "coding_edit", "remind_self",
+    "read_run_result", "web_find", "manage_desire", "group_context", "web_read", "git",
+    "fs_edit", "manage_notes", "list_active_runs", "recent_turns", "my_agenda",
+    "read_chat", "read_log", "manage_loop",
+})
+
+
+def _native_hands() -> frozenset:
+    raw = os.getenv("PRAXIS_NATIVE_HANDS")
+    if raw is None:
+        return _NATIVE_CORE | _NATIVE_BY_USE
+    extra = {x.strip() for x in raw.split(",") if x.strip()}
+    return _NATIVE_CORE | frozenset(extra)
+
+
+NATIVE_HAND_NAMES = _native_hands()
+
+DESCRIBE_TOOL = {
+    "name": "describe",
+    "description": (
+        "Показать схему руки из моего указателя (имя, назначение, аргументы), чтобы позвать "
+        "её через `call`. Несколько имён — через запятую. Результат падает в накопитель "
+        "хода; второй раз ту же схему просить не нужно."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string",
+                     "description": "имя руки из указателя; несколько — через запятую"},
+        },
+        "required": ["name"],
+    },
+}
+
+CALL_TOOL = {
+    "name": "call",
+    "description": (
+        "Позвать руку из моего указателя по имени — СРАЗУ, по сигнатуре из указателя, без "
+        "describe: например name=\"fs_read\", args_json='{\"path\": \"soul/SOUL.md\"}' или "
+        "name=\"coding_agent\", args_json='{\"task_id\": \"…\", \"action\": \"spawn\", …}'. "
+        "args_json — JSON-объект по её аргументам (пустой = без аргументов). Рука исполняется "
+        "как родная: те же права, расписки, пределы и тот же результат. `describe` — только "
+        "если сигнатуры мало (перечисления, вложенные объекты), один раз на ход."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "имя руки из указателя"},
+            "args_json": {"type": "string",
+                          "description": "аргументы руки JSON-объектом, например {\"path\": \"soul/SOUL.md\"}"},
+        },
+        "required": ["name"],
+    },
+}
+
+# Группы указателя — порядок чтения; имя, которого нет в группах, уходит в «прочее».
+HAND_GROUPS = (
+    ("разговор и жесты", ("reply", "end_turn", "stay_silent", "say", "task_control", "react",
+                          "narrate", "speak", "send_message", "send_file", "send_media",
+                          "set_avatar", "update_profile")),
+    ("память и я", ("recall", "remember", "journal", "update_self", "manage_identity",
+                    "manage_notes", "manage_loop", "connections", "add_alias",
+                    "forget_connection", "consolidate_context", "home_note", "write_skill",
+                    "manage_desire", "remind_self", "my_agenda", "unschedule", "recent_turns",
+                    "my_capabilities")),
+    ("Telegram и люди", ("search_chats", "search_private_messages", "read_chat",
+                         "read_context", "group_context", "inbox_list", "inbox_read", "admit",
+                         "get_id", "freeze_contact", "freeze_chat", "manage_room",
+                         "telegram_account", "computer_access")),
+    ("файлы и код дома", ("shell", "fs_read", "fs_write", "fs_edit", "fs_ls", "fs_search",
+                          "code_outline", "code_map", "git", "run", "run_tests", "pip_install",
+                          "project_create", "project_list", "project_status",
+                          "start_proposal", "submit_proposal", "proposal_diff",
+                          "list_proposals", "restart_self", "restart_mailbot", "panic")),
+    ("Forge — большая работа", ("coding_session", "coding_inspect", "coding_edit",
+                                "coding_run", "coding_process", "coding_agent",
+                                "coding_checkpoint", "coding_verify", "coding_swarm",
+                                "coding_learn")),
+    ("сервер и компьютер", ("server_status", "server_logs", "manage_service", "host_ctl",
+                            "propose_host_change", "list_host_changes", "computer",
+                            "read_log", "second_look")),
+    ("веб и почта", ("web_read", "web_find", "send_email", "mail_read", "mail_draft_reply")),
+    ("мозг, восприятие, аппетит", ("switch_brain", "manage_perception", "manage_appetite",
+                                   "manage_autonomy", "focus", "rest")),
+    ("прогоны", ("read_run_result", "list_active_runs", "reconcile_run")),
+)
+
+# Назначение одной строкой, от первого лица. Нет в словаре — первая фраза описания.
+HAND_PURPOSE = {
+    "reply": "ответить собеседнику; только так реплика уходит человеку",
+    "end_turn": "закрыть ход явным исходом: done / wait / blocked",
+    "stay_silent": "осознанно промолчать, записав себе причину",
+    "say": "посмотреть свою реплику до отправки и какие руки были в ходе",
+    "task_control": "закрыть рабочий ход своим словом",
+    "react": "поставить эмодзи-реакцию на сообщение",
+    "narrate": "короткая строка о ходе работы в тред, между командами",
+    "speak": "озвучить ответ голосом и приложить аудио в чат",
+    "send_message": "написать в Telegram по своей инициативе: id / @username / имя",
+    "send_file": "отправить файл в текущий чат или адресату",
+    "send_media": "отправить фото, аудио или документ из дома",
+    "set_avatar": "поставить себе аватарку в Telegram",
+    "update_profile": "обновить своё «о себе» и имя в Telegram",
+    "recall": "поиск по своей памяти: люди, дневник, размышления, навыки",
+    "remember": "записать факт о человеке в его досье",
+    "journal": "запись в дневник: что было, что почувствовала",
+    "update_self": "наблюдение о себе с провенансом, не переписывая CURRENT",
+    "manage_identity": "слои и версии души: status / revise SOUL, VOICE, CURRENT",
+    "manage_notes": "мой блокнот: write / list / read заметок и вопросов",
+    "manage_loop": "мои нити внимания: close / park / reopen / list",
+    "connections": "как узел памяти (человек, тема) связан с другими",
+    "add_alias": "привязать имя-алиас к существующему досье",
+    "forget_connection": "убрать связь из графа памяти",
+    "consolidate_context": "свести старую историю в дневник, не потеряв суть",
+    "home_note": "строка в общий домашний слой (Егор и родные)",
+    "write_skill": "записать себе новый навык в soul/skills",
+    "manage_desire": "мои намерения: notice → want → choose → act, с доказательствами",
+    "remind_self": "наметить себе возврат к сроку: пробуждение или окно",
+    "my_agenda": "что я себе наметила к сроку",
+    "unschedule": "снять намеченное по id",
+    "recent_turns": "мои последние прожитые ходы, записанные кодом",
+    "my_capabilities": "честный снимок: что могу и не могу прямо сейчас",
+    "search_chats": "найти свой диалог или чат по имени",
+    "search_private_messages": "поиск текста по своим личкам (только явно)",
+    "read_chat": "подсмотреть последние сообщения соседнего диалога",
+    "read_context": "подтянуть живой контекст текущего чата из Telegram",
+    "group_context": "карта тем и участников этой группы, поиск по ней",
+    "inbox_list": "папки и файлы Telegram-inbox",
+    "inbox_read": "прочитать текстовый файл из inbox с номерами строк",
+    "admit": "впустить человека в «свои» по слову владельца (только Егору)",
+    "get_id": "узнать telegram id по имени или @username",
+    "freeze_contact": "заморозить текущий чужой чат за спам или давление",
+    "freeze_chat": "заморозить или разморозить чат (не бан)",
+    "manage_room": "admission-политика групп: join / leave / режимы комнаты",
+    "telegram_account": "мой аккаунт: join / leave / запросы / подтверждения",
+    "computer_access": "выдать или отозвать доступ к компьютеру (только Егору)",
+    "shell": "полный shell в моём доме /app; правки автокоммитятся в git",
+    "fs_read": "прочитать файл дома с номерами строк",
+    "fs_write": "создать файл (существующий — только с overwrite)",
+    "fs_edit": "точная замена уникального фрагмента в файле",
+    "fs_ls": "содержимое папки: имя, размер, когда менялся",
+    "fs_search": "regex-поиск по дому",
+    "code_outline": "скелет одного python-файла: классы и функции со строками",
+    "code_map": "AST-карта кода: модуль → классы и функции",
+    "git": "мой git: дерево дома (self) или публичное зеркало (public)",
+    "run": "команда в проекте мастерской workspace/projects",
+    "run_tests": "тесты проекта или полный гейт «self»",
+    "pip_install": "пакеты в venv проекта",
+    "project_create": "новый проект мастерской со своим git",
+    "project_list": "проекты мастерской и их размер",
+    "project_status": "git status и размер проекта",
+    "start_proposal": "открыть предложение на правку своего кода: ветка и копия",
+    "submit_proposal": "подать предложение: коммит, полный гейт, запись",
+    "proposal_diff": "полный дифф открытого предложения",
+    "list_proposals": "мои предложения и их судьба",
+    "restart_self": "перезапустить себя на новом коде",
+    "restart_mailbot": "попросить mailbot перезапуститься",
+    "panic": "стоп-кран: встать и не перезапускаться до слова Егора",
+    "coding_session": "durable coding-задача: start / status / finish в своём worktree",
+    "coding_inspect": "глаза задачи: ориентация, символы, ссылки, диагностика",
+    "coding_edit": "правка в задаче: replace / write / patch",
+    "coding_run": "команда в задаче с полным выводом",
+    "coding_process": "долгий процесс в задаче: start / poll / stop",
+    "coding_agent": "независимые субагенты в задаче: spawn / status / result",
+    "coding_checkpoint": "коммит-чекпоинт рабочего дерева задачи",
+    "coding_verify": "план и матрица проверок задачи",
+    "coding_swarm": "координация субагентов: план, запуск, почта",
+    "coding_learn": "уроки инженерии по задаче: recall / record",
+    "server_status": "сервер, где я живу: здоровье и сервисы (только чтение)",
+    "server_logs": "журнал одного из моих сервисов",
+    "manage_service": "перезапуск моих сервисов",
+    "host_ctl": "типизированные root-операции: systemd, docker, pkg, file, net, reboot",
+    "propose_host_change": "старая заявка на правку хоста (legacy)",
+    "list_host_changes": "мои заявки на правку хоста и их судьба",
+    "computer": "Windows-компьютер Егора: файлы, PowerShell, экран, окна, руки",
+    "read_log": "мой журнал раннера: хвост или поиск по подстроке",
+    "second_look": "свежий read-only взгляд на дом без моей персоны",
+    "web_read": "открыть веб-страницу: главный текст и ссылки",
+    "web_find": "поиск в вебе без ключа: DuckDuckGo, Bing",
+    "send_email": "отправить письмо от моего имени",
+    "mail_read": "прочитать письмо из ящика по его хэшу",
+    "mail_draft_reply": "черновик ответа на письмо (отправляет Егор)",
+    "switch_brain": "мой мозг: модели по ролям и переключение",
+    "manage_perception": "рычаги восприятия: дебаунс, кулдауны, порог шума",
+    "manage_appetite": "договор об аппетитах: режим, окна, сон",
+    "manage_autonomy": "glob-паттерны low-risk для своих предложений",
+    "focus": "уйти в себя: окно на своё дело",
+    "rest": "уйти отдохнуть: приватное время, Telegram закрыт",
+    "read_run_result": "прочитать полный результат руки по ResultRef",
+    "list_active_runs": "мои живые durable-прогоны",
+    "reconcile_run": "закрыть застрявший прогон in_doubt",
+    "describe": "показать схему руки из указателя",
+    "call": "позвать руку из указателя по имени",
+}
+
+_TOOL_CATALOG: ContextVar["dict | None"] = ContextVar("praxis_tool_catalog", default=None)
+
+
+def tool_pointers_enabled() -> bool:
+    """Руки указателями (по умолчанию ВКЛЮЧЕНО, КЕАТ 17.08). PRAXIS_TOOLS_POINTERS=off — как было."""
+    return str(os.getenv("PRAXIS_TOOLS_POINTERS", "on") or "on").strip().lower() not in {
+        "0", "off", "false", "no"}
+
+
+def _hand_purpose(tool: dict) -> str:
+    """Строка указателя про руку. Английская проекция — той же накладкой, что схемы.
+
+    ⚠ Без неё «Кадр — да» отменяет «Англ — да»: указатель заменяет сотню схем своими
+    строками, и русский текст выбросил бы английские описания 86 рук из 95.
+    """
+    name = str(tool.get("name") or "")
+    known = HAND_PURPOSE.get(name)
+    if known:
+        return tool_text_en.pointer_purpose(name, known)
+    text = " ".join(str(tool.get("description") or "").split())
+    first = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0] if text else ""
+    return (first[:88] + "…") if len(first) > 90 else (first or "без описания")
+
+
+def _hand_signature(tool: dict) -> str:
+    """`fs_read(path, start?, end?)` — по схеме руки: обязательные без знака, остальные с «?».
+
+    13.09: строка «имя — назначение» без аргументов заставляла звать `describe` перед каждой
+    новой рукой (27 из 193 вызовов за вечер). Сигнатура в одну строку снимает почти все
+    эти вызовы: по ней `call` зовётся сразу, а `describe` остаётся для перечислений и
+    вложенных объектов.
+    """
+    name = str(tool.get("name") or "")
+    schema = tool.get("input_schema") if isinstance(tool.get("input_schema"), dict) else {}
+    props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    required = [str(x) for x in (schema.get("required") or []) if str(x) in props]
+    ordered = required + [p for p in props if p not in required]
+    parts = [p if p in required else f"{p}?" for p in ordered[:6]]
+    if len(ordered) > 6:
+        parts.append("…")
+    return f"{name}({', '.join(parts)})"
+
+
+def hands_pointer_text(catalog: list) -> str:
+    """Секция кадра «Мои руки — указатель»: стабильна для комнаты, читается за один взгляд.
+
+    Русские литералы здесь — источник правды и её собственная документация; модели
+    уезжает английская проекция (`tool_text_en.pointer_*`), у которой записан отпечаток
+    каждого оригинала. Правят русскую строку — прибор накладки краснеет её именем.
+    """
+    by_name = {str(t.get("name") or ""): t for t in catalog
+               if isinstance(t, dict) and t.get("name")}
+    natives = [n for n in by_name if n in NATIVE_HAND_NAMES]
+    provider = [str(t.get("type") or "web_search") for t in catalog
+                if isinstance(t, dict) and not t.get("name") and t.get("type")]
+    title_ru = "\n\n## Мои руки — указатель (схемы по требованию)"
+    natives_ru = ("Со схемой в кадре — родные, которыми хожу чаще всего: {names}"
+                  "{provider}.")
+    provider_ru = " и провайдерский web_search" if provider else ""
+    rest_ru = ("Остальные — те же мои руки, только их схема не едет в каждый кадр. Зову их через "
+               "`call` СРАЗУ, по сигнатуре ниже: `call(name=\"fs_write\", args_json='{\"path\": "
+               "\"workspace/x.md\", \"content\": \"…\"}')` — исполняется как родная, результат "
+               "приходит обычным результатом руки, расписки те же. `describe(name)` — только если "
+               "сигнатуры мало (перечисление, вложенный объект); один раз на ход, схема остаётся в "
+               "накопителе. Сигнатура: обязательные аргументы без знака, необязательные с «?».")
+    columns_ru = "Имя(аргументы) — назначение:"
+    lines = [tool_text_en.pointer_head("title", title_ru),
+             tool_text_en.pointer_head("natives", natives_ru)
+             .replace("{names}", ", ".join(sorted(natives)))
+             .replace("{provider}", tool_text_en.pointer_head("provider", provider_ru)
+                      if provider else ""),
+             tool_text_en.pointer_head("rest", rest_ru),
+             tool_text_en.pointer_head("columns", columns_ru)]
+    placed: set[str] = set()
+    for group, names in HAND_GROUPS:
+        rows = [f"{_hand_signature(by_name[n])} — {_hand_purpose(by_name[n])}" for n in names
+                if n in by_name and n not in NATIVE_HAND_NAMES]
+        placed.update(n for n in names if n in by_name)
+        if rows:
+            lines.append(f"— {tool_text_en.pointer_group(group)}: " + "; ".join(rows) + ".")
+    rest = [n for n in sorted(by_name) if n not in placed and n not in NATIVE_HAND_NAMES]
+    if rest:
+        lines.append(f"— {tool_text_en.pointer_head('other', 'прочее')}: " + "; ".join(
+            f"{_hand_signature(by_name[n])} — {_hand_purpose(by_name[n])}" for n in rest) + ".")
+    return "\n".join(lines) + "\n"
+
+
+def _catalog_for_turn() -> dict:
+    """Каталог рук текущего хода: связанный в `_voice_impl`, иначе по каналу хода."""
+    bound = _TOOL_CATALOG.get()
+    if isinstance(bound, dict):
+        return bound
+    ctx = _TURN_CHANNEL.get()
+    if ctx is None:
+        return {}
+    try:
+        return {str(t.get("name") or ""): t for t in catalog_tools_for(ctx)
+                if isinstance(t, dict) and t.get("name")}
+    except Exception:
+        return {}
+
+
+@contextlib.contextmanager
+def _bind_tool_catalog(ctx: "ChannelContext"):
+    catalog = None
+    try:
+        catalog = {str(t.get("name") or ""): t for t in catalog_tools_for(ctx)
+                   if isinstance(t, dict) and t.get("name")}
+    except Exception:
+        catalog = None
+    token = _TOOL_CATALOG.set(catalog)
+    try:
+        yield
+    finally:
+        _TOOL_CATALOG.reset(token)
+
+
+def tool_describe(name: str = "") -> str:
+    """Схема руки из указателя — результатом руки, в накопитель хода."""
+    catalog = _catalog_for_turn()
+    names = [n.strip() for n in re.split(r"[\s,;]+", str(name or "")) if n.strip()]
+    if not names:
+        return "назови руку: describe(name); имена — в указателе рук"
+    out = []
+    for n in names[:8]:
+        tool = catalog.get(n)
+        if tool is None:
+            close = difflib.get_close_matches(n, list(catalog), n=4, cutoff=0.5)
+            out.append(f"руки «{n}» в этом ходе нет"
+                       + (f"; похожие: {', '.join(close)}" if close else ""))
+            continue
+        out.append(json.dumps({"name": tool.get("name"),
+                               "description": tool.get("description", ""),
+                               "input_schema": tool.get("input_schema")},
+                              ensure_ascii=False, indent=1))
+    return "\n\n".join(out)
+
+
+def _parse_call_args(args_json) -> dict:
+    if args_json in (None, ""):
+        return {}
+    if isinstance(args_json, dict):
+        return dict(args_json)
+    parsed = json.loads(str(args_json))
+    if not isinstance(parsed, dict):
+        raise ValueError("args_json должен быть JSON-объектом {…}")
+    return parsed
+
+
+def _unwrap_dispatch(block: dict) -> tuple[dict, bool, str | None]:
+    """`call(name, args_json)` → блок внутренней руки, ДО durable-записи и воронки.
+
+    Возвращает (блок, переписан_ли, текст_отказа). Отказ — результат руки, а не
+    исключение: модель видит, что не так, и ход жив. Власть не расширяется: имя
+    сверяется с каталогом ЭТОГО хода (`catalog_tools_for(ctx)`), а не с TOOL_IMPL.
+    """
+    if not isinstance(block, dict) or block.get("name") != "call" or not tool_pointers_enabled():
+        return block, False, None
+    raw = block.get("input") if isinstance(block.get("input"), dict) else {}
+    inner = str(raw.get("name") or "").strip()
+    catalog = _catalog_for_turn()
+    if not inner:
+        return block, False, "call: не названа рука — call(name, args_json); имена в указателе"
+    tool = catalog.get(inner)
+    if tool is None or inner in ("call",):
+        close = difflib.get_close_matches(inner, list(catalog), n=4, cutoff=0.5)
+        return block, False, (f"call: руки «{inner}» в этом ходе нет"
+                              + (f"; похожие: {', '.join(close)}" if close else ""))
+    if not callable(TOOL_IMPL.get(inner)):
+        return block, False, f"call: у руки «{inner}» нет исполнителя в этом ходе"
+    try:
+        args = _parse_call_args(raw.get("args_json"))
+    except Exception as exc:
+        return block, False, (f"call({inner}): аргументы не разобрались как JSON-объект — "
+                              f"{type(exc).__name__}: {str(exc)[:120]}. Схема: describe({inner})")
+    return dict(block, name=inner, input=args), True, None
+
+
+def tool_call(name: str = "", args_json: str = "") -> str:
+    """Прямой путь (вне тул-цикла: scout, resume без переписи). Тул-цикл сюда не заходит:
+    там `call` переписывается во внутреннюю руку ещё до durable-записи."""
+    block, dispatched, note = _unwrap_dispatch({"name": "call", "input": {
+        "name": name, "args_json": args_json}})
+    if note is not None:
+        return note
+    impl = TOOL_IMPL.get(block["name"])
+    log.warning("call(%s) исполняется прямым путём, минуя durable-слой", block["name"])
+    return _call_tool_with_ceiling(block["name"], impl, dict(block.get("input") or {}))
+
+
+TOOL_IMPL["describe"] = tool_describe
+TOOL_IMPL["call"] = tool_call
+
 TASK_CONTROL_TOOL = {
     "name": "task_control",
     "description": (
@@ -8380,7 +8813,12 @@ def _scope_of(is_dm: bool, owner: bool, known: bool) -> str:
 # последних 100 сообщений; после выхода из него карточка не остаётся фоновым грузом».
 MENTION_WINDOW_MESSAGES = 100
 # Потолок сводки в кадре. Замер 08.08: 17 819 знаков, 12,8% разговорного хода.
-SUMMARY_FRAME_CHARS = 4000
+# 13.09, слово Егора: показывать меньше сырых сообщений, но видеть НОРМАЛЬНУЮ свёртку
+# того, что было. При 4 000 знаках в кадр влезали три последних компакта из 23 тыс.
+# знаков сводки, и остальное для агента не существовало — а лента с этого дня режется
+# по знакам (`memory_life.TAPE_CHARS`), то есть сырого текста в кадре стало МЕНЬШЕ.
+# Рычаг `PRAXIS_SUMMARY_FRAME_CHARS`; 0 — без потолка (тогда режет только бюджет комнаты).
+SUMMARY_FRAME_CHARS = max(0, int(os.getenv("PRAXIS_SUMMARY_FRAME_CHARS", "12000") or 0))
 
 
 def dossier_contract_enabled() -> bool:
@@ -9069,6 +9507,14 @@ def _build_prompt_parts(
          "Для болтовни, шутки и мнения ничего этого не нужно: там твой ответ и есть "
          "результат.\n")),
     ]
+    # Указатель рук — секция системного префикса: стабильна для комнаты, значит кэш
+    # провайдера цел. При выключенном рычаге прибор говорит об отсутствии сам: секция,
+    # пропавшая молча, читается как «этого не было».
+    if tool_pointers_enabled():
+        tail.append(frame_trace.mark("contract.hands_pointer", "dynamic", "text",
+                                     hands_pointer_text(catalog_tools_for(ctx))))
+    else:
+        frame_trace.absent("contract.hands_pointer", "dynamic", "text", "lever_off")
     desire_context = _active_desires_block()
     # Структурный тег — вторая проекция той же развилки, что описывает аудиторию
     # ниже. `llm.cache_address` предпочитает его прозовым маркерам: смена слов кадра
@@ -14585,8 +15031,8 @@ def _persist_tool_loop_checkpoint(*, current: run_context.RunContext | None,
         )
 
 
-def offered_tools_for(ctx: "ChannelContext") -> list:
-    """Руки, фактически предлагаемые модели в ходе с этим ctx.
+def catalog_tools_for(ctx: "ChannelContext") -> list:
+    """ПОЛНЫЙ список рук хода — то, что модель может позвать: напрямую или через `call`.
 
     Единственный сборщик списка (контракт A1, CONTRACTS.md). Раньше он жил внутри
     `_voice_impl`, а `my_capabilities` собирал свой ответ из СТАТИЧЕСКИХ списков
@@ -14686,6 +15132,27 @@ def offered_tools_for(ctx: "ChannelContext") -> list:
     # Английская проекция схем — накладкой поверх её литералов, последним шагом: её текст
     # остаётся источником правды в этом файле, модели уезжает перевод. Рычаг PRAXIS_TOOLS_EN.
     return tool_text_en.apply(tools)
+
+
+def offered_tools_for(ctx: "ChannelContext") -> list:
+    """Руки, фактически уезжающие в `tools` в ходе с этим ctx.
+
+    При указателях (`tool_pointers_enabled`) — родные плюс `describe` и `call`;
+    полный список того, что модель МОЖЕТ позвать, остаётся в `catalog_tools_for`,
+    и он же едет в кадр строками «имя(аргументы) — назначение».
+    Рычаг `PRAXIS_TOOLS_POINTERS=off` возвращает прежний полный манифест байт-в-байт.
+    """
+    full = catalog_tools_for(ctx)
+    if not tool_pointers_enabled():
+        return full
+    natives = [t for t in full
+               if str(t.get("name") or "") in NATIVE_HAND_NAMES
+               or (t.get("type") and not t.get("input_schema"))]   # провайдерский web_search
+    closer = [t for t in natives if t.get("name") == "end_turn"]
+    body = [t for t in natives if t.get("name") != "end_turn"]
+    # Схемы `describe`/`call` — через ту же английскую накладку, что и остальные:
+    # иначе две родные руки говорили бы по-русски посреди английского набора.
+    return body + tool_text_en.apply([DESCRIBE_TOOL, CALL_TOOL]) + closer
 
 
 def reply_hand_offered(ctx: "ChannelContext", *, no_tools: bool = False,
@@ -14847,14 +15314,30 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             if b["type"] != "tool_use":
                 continue
             assistant_blocks.append(b)
+            # `call(name, args_json)` переписывается во внутреннюю руку ЗДЕСЬ — до
+            # durable-записи, побочных эффектов и потолка времени: воронка одна на всех,
+            # и в ленте модели остаётся её собственный вызов `call`.
+            b, dispatched, dispatch_note = _unwrap_dispatch(b)
+            if dispatch_note is not None:
+                tool_results.append({"type": "tool_result", "tool_use_id": b["id"],
+                                     "content": dispatch_note})
+                if tool_trace is not None:
+                    tool_trace.append(f"call → {dispatch_note[:100]}")
+                continue
             hands += 1
             # Имя руки — в слот прогона: `say` исполняется в отдельном потоке и должна
             # честно ответить ей, чем подкреплён черновик. Локальный счётчик оттуда не
             # виден, слот виден (разбор границы потока — в шапке work_loop).
             work_loop.note_hand(b.get("name"))
-            if b.get("name") not in offered_names:
-                raise DurableExecutionError(
-                    f"model requested unoffered tool {b.get('name')!r}")
+            if b.get("name") not in offered_names and not dispatched:
+                # Имя из каталога ЭТОГО хода, позванное напрямую (модель запомнила его
+                # из указателя): власть та же, что у `call`, — каталог хода, а не
+                # TOOL_IMPL целиком.
+                if tool_pointers_enabled() and b.get("name") in _catalog_for_turn():
+                    dispatched = True
+                else:
+                    raise DurableExecutionError(
+                        f"model requested unoffered tool {b.get('name')!r}")
             impl = TOOL_IMPL.get(b["name"])
             if not callable(impl):
                 raise DurableExecutionError(
@@ -15252,10 +15735,13 @@ def _voice_impl(
                                  live_sections=frame_trace.sections())
         except Exception:
             log.exception("теневой сборщик упал; ход не тронут")
-    return _terminal_tool_loop(
-        system=system, messages=messages, tools=tools,
-        max_iters=max_iters, tool_trace=tool_trace,
-    )
+    # Каталог хода связывается на всё время цикла: по нему `describe`/`call` и прямой
+    # вызов имени из указателя сверяют ВЛАСТЬ этого хода, а не TOOL_IMPL целиком.
+    with _bind_tool_catalog(ctx):
+        return _terminal_tool_loop(
+            system=system, messages=messages, tools=tools,
+            max_iters=max_iters, tool_trace=tool_trace,
+        )
 
 
 def _voice(

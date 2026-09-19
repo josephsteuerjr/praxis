@@ -1,10 +1,11 @@
 {
  "mirror": "praxis",
- "source": "C:\\Users\\yegor\\Downloads\\Praxis\\_her\\tree",
- "head": "e39af273",
+ "source": "/opt/praxis (прод; tracked-файлы без memory/ и soul/, снимок tar по sftp, сумма сверена)",
+ "head": "3c6b8e35",
  "dirty": false,
- "taken_at": "2026-09-14T23:45:07+00:00",
- "files": 550,
- "digest": "fc6979d18d80d8daddb705c241e9655186b74688a9f81506f783ee29d126d237",
- "by": "installer/core_src.py --export-core"
+ "taken_at": "2026-09-19T02:41:04+00:00",
+ "files": 566,
+ "digest": "799a76c09ed30f245345d78310c4656b77d5be392d6d362ee8f4967f7ed3d874",
+ "by": "installer/core_src.py --export-core",
+ "note": "19.09.2026: перенос со снимка прода, а не из _her/tree (то стоит на ветке-кандидате); мусор прода (rep*.txt, *.log) и .proposal-orphans в зеркало не взяты"
 }

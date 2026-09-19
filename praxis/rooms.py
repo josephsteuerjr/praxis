@@ -365,10 +365,22 @@ def _env_int(name: str, default: int, low: int, high: int) -> int:
 
 
 def default_policy() -> dict:
-    """One configurable source for deep-room defaults used by every transport path."""
-    engagement = str(os.getenv("PRAXIS_ROOM_ENGAGEMENT", "reflective")).strip().casefold()
+    """One configurable source for deep-room defaults used by every transport path.
+
+    ⚑ УМОЛЧАНИЕ УЧАСТИЯ — `addressed` (16.09, слово Егора). Было `reflective`, то есть
+    «могу выйти в разговор сама». Живой счёт в момент правки: из шестнадцати комнат
+    пятнадцать стояли `addressed` и ровно ОДНА — `reflective`, самая свежая. То есть
+    `reflective` нигде не был выбором: он был штампом протокола входа
+    (`mtproto_runner._newcomer`), и дальше каждую комнату переводили руками.
+    Умолчание, которое всегда правят вручную, — не умолчание, а работа.
+
+    Цена ошибки здесь несимметрична: лишний `addressed` — это «не заговорила сама»,
+    лишний `reflective` в шумной комнате — это ходы на 65 вызовов подряд, которые
+    ещё и нечем прервать. Выбираем сторону, которую человек может отменить одним словом.
+    """
+    engagement = str(os.getenv("PRAXIS_ROOM_ENGAGEMENT", "addressed")).strip().casefold()
     if engagement not in ENGAGEMENTS:
-        engagement = "reflective"
+        engagement = "addressed"
     cross_topics = str(os.getenv("PRAXIS_ROOM_CROSS_TOPICS", "map")).strip().casefold()
     if cross_topics not in CROSS_TOPICS:
         cross_topics = "map"
@@ -433,7 +445,9 @@ def parse_profile(raw: str) -> dict:
     defaults = default_policy()
     engagement = str(header.get("engagement") or defaults["engagement"]).strip().casefold()
     if engagement not in ENGAGEMENTS:
-        engagement = "reflective"
+        # Непрочитанный заголовок падает в ту же сторону, что и умолчание: тише, а не
+        # разговорчивее. Иначе испорченная строка профиля молча ПОВЫШАЛА бы участие.
+        engagement = "addressed"
     cross_topics = str(header.get("cross_topics") or defaults["cross_topics"]).strip().casefold()
     if cross_topics not in CROSS_TOPICS:
         cross_topics = "off"
@@ -880,6 +894,95 @@ def effective_mode(chat_id: str | int, now: float | None = None, *, strict: bool
 
 MODE_WORD = {"normal": "обычно", "observer": "наблюдай",
              "quiet": "тише", "frozen": "замри", "dead": "мертва"}
+
+# 15.09.2026. Чем кончается замороженная комната для входящих — одной строкой, чтобы
+# поиск не заставлял догадываться. Живой случай: её спросили про «Ouroboros AI», она
+# позвала `search_chats("уробор")`, получила «(ничего не нашла)» и ушла искать в веб,
+# ответив в группу «разобралась, что смогла извне». Комната при этом была у неё в
+# памяти, а молчала потому, что заморожена ЕЮ ЖЕ 10.09 — но об этом нигде не говорилось.
+MODE_INTAKE = {
+    "frozen": "сообщения оттуда ко мне НЕ приходят, пока режим «замри»",
+    "dead": "комната мертва: входа оттуда нет",
+    "quiet": "вход есть, но я там молчу",
+    "observer": "вход есть, отвечаю только по обращению",
+}
+
+# Кириллица → латиница ОДНОЙ таблицей: сверка имён приводит обе стороны к общему
+# скелету. Зачем: имена чатов пишут и латиницей, и кириллицей, а спрашивают как придётся.
+# Подстрочная сверка «уробор» с «Ouroboros AI» не могла совпасть НИКОГДА — разные
+# алфавиты, и рука честно отвечала «нет» на вопрос, которого не понимала.
+# Таблица односторонняя намеренно: латиница остаётся собой, кириллица переводится к ней,
+# поэтому один проход покрывает оба направления запроса.
+_LATIN = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
+    "з": "z", "и": "i", "й": "i", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+    "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "ts",
+    "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e",
+    "ю": "iu", "я": "ia",
+}
+
+
+# Второй проход скелета: буквы, звучащие одинаково, сводятся к одной. Без него
+# «абстракт» (кирилл. «к» → `k`) не встречается с «AbstractDL» (лат. `c`) — и рука опять
+# отвечает «нет» про комнату, которая вот она. Повторы схлопываются по той же причине:
+# «Glassscale» и «Glasscale» — одно имя, а не два.
+_SKELETON = {"c": "k", "x": "ks", "y": "i", "w": "v"}
+
+
+def latin_fold(text: str) -> str:
+    """Общий скелет строки для сверки имён: регистр снят, кириллица переложена латиницей,
+    одинаково звучащие согласные сведены, повторы букв схлопнуты.
+
+    ⚠ Это МЕРКА СХОДСТВА, а не транслитерация для показа человеку: «щ» здесь «sch», «c» и
+    «к» неразличимы, обратного преобразования нет. Печатать этим нельзя — только сравнивать.
+    ⚠ И чего мерка НЕ умеет: она про БУКВЫ, а не про смысл. «мицелий» и «mycelium» —
+    перевод, а не разное написание, и совпасть они не должны; честный ноль здесь лучше
+    угаданного совпадения.
+    """
+    out = []
+    for ch in str(text or "").casefold():
+        ch = _LATIN.get(ch, ch)
+        out.append("".join(_SKELETON.get(c, c) for c in ch))
+    folded = "".join(out)
+    squeezed = []
+    for ch in folded:
+        if not squeezed or squeezed[-1] != ch:
+            squeezed.append(ch)
+    return "".join(squeezed)
+
+
+def search_profiles(query: str, limit: int = 10) -> list[dict]:
+    """ЕЁ СОБСТВЕННЫЕ профили комнат под запрос: [{chat_id, title, mode, where}].
+
+    Ищет по названию комнаты и по её же тексту (сводка предыстории, нормы). Сверка идёт
+    через `latin_fold`, поэтому алфавит запроса значения не имеет. Совпадения по названию
+    идут первыми: спрашивают чаще именно про имя.
+
+    Режим берётся живой (`effective_mode`), а не из строки файла: у замороженной комнаты
+    бывает срок, и «замри» с истёкшим сроком — это уже «обычно».
+    """
+    needle = latin_fold(query).strip()
+    if not needle or not ROOMS_DIR.exists():
+        return []
+    by_title, by_body = [], []
+    for path in sorted(ROOMS_DIR.glob("*.md")):
+        chat_id = path.stem
+        try:
+            raw = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        d = parse_profile(raw)
+        title = str(d.get("title") or "").lstrip("# ").strip()
+        row = {"chat_id": chat_id, "title": title or f"комната {chat_id}"}
+        try:
+            row["mode"] = effective_mode(chat_id)
+        except Exception:
+            row["mode"] = str(d.get("mode") or "normal")
+        if needle in latin_fold(title) or needle in latin_fold(chat_id):
+            by_title.append(dict(row, where="название"))
+        elif needle in latin_fold(d.get("body") or ""):
+            by_body.append(dict(row, where="её текст о комнате"))
+    return (by_title + by_body)[:max(1, int(limit))]
 
 
 def set_own_mode(chat_id: str | int, mode: str, reason: str = "",

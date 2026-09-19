@@ -1565,22 +1565,100 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
             "folded_lines": [str(item.get("line") or "") for item in inputs]}
 
 
+# Разбор свёрток места: пофайловый кэш по отпечатку жизни.
+#
+# Свёртка неизменяема по построению — `_write_compact` кладёт файл один раз и больше его
+# не трогает. Но `_parse_place_compacts` перечитывал и перепроверял ВСЕ файлы места заново
+# на каждый вызов, а вызывается он из обоих графов, то есть из каждой сборки кадра.
+#
+# Замер 16.09 в боевом контейнере, место `-1001240718803` (2080 файлов, 13 МБ):
+#     вызов целиком                         1,25 с
+#       из них чтение байтов                0,16 с
+#       отпечаток (stat + sha хвоста)       0,12 с
+#       разбор шапки                        0,13 с
+#       выделение recap                     0,26 с
+#       остальное — проверки схемы и привязки
+# Стадия кадра `old_context.summary` платила это КАЖДЫЙ ход: на живом ходе она стоила
+# 3,6–3,9 с, из них 1,2–1,5 с — вот этот перечитанный разбор.
+#
+# Ключ кэша — `memory_provenance._life_file_signature` (путь, размер, mtime_ns, инода и
+# sha256 хвоста). Тот же самый, которым индекс доказательств решает, перечитывать ли файл:
+# одно понятие «файл изменился» на всё дерево, а не второе своё. Отпечаток считается
+# ВСЕГДА — кэш экономит разбор и проверки, но не право не смотреть на диск. Слепое пятно
+# отпечатка названо в самой `_life_file_signature` и здесь не расширяется.
+#
+# ⚠ Цена вслух: кэш держит и тело recap — около 20 МБ на все места, из них 13 МБ Абстракт.
+# Рядом с 3,4 ГБ, которые контейнер занимает и без него, это 0,6 %. Станет дорого — тела
+# читаются по требованию: шапки нужны всем, тело recap — только `context_summary`.
+#
+# ⚠ Наружу отдаются КОПИИ: прежний разбор возвращал свежие объекты на каждый вызов, и
+# `rebuild_state` кладёт эти же шапки в состояние места. Кэш, отдающий свой собственный
+# словарь, однажды получил бы правку снаружи и молча раздавал бы её дальше.
+_COMPACT_PARSE_CACHE: dict[str, tuple[tuple, tuple[dict, str]]] = {}
+_COMPACT_PARSE_LOCK = threading.Lock()
+
+
+def _copy_compact_parse(item: tuple[dict, str]) -> tuple[dict, str]:
+    """Свежие объекты на каждый вызов — как их отдавал разбор с диска."""
+    meta, recap = item
+    if not meta:
+        return {}, recap
+    fresh = dict(meta)
+    fresh["source_event_ids"] = list(meta["source_event_ids"])
+    fresh["source_compact_ids"] = list(meta["source_compact_ids"])
+    return fresh, recap
+
+
 def _parse_place_compacts(chat_id: str | int) -> tuple[dict[str, tuple[dict, str]], bool]:
     """Прочитать с диска все компакты места. Самая дорогая половина — и общая для
-    обоих графов, поэтому она отдельно: разбор один, фильтров два."""
+    обоих графов, поэтому она отдельно: разбор один, фильтров два.
+
+    Разбор каждого файла запоминается по его отпечатку (`_COMPACT_PARSE_CACHE`): свёртки
+    неизменяемы, а перечитывались на каждый ход. Отказ файла запоминается тоже — иначе
+    битый файл проверялся бы заново каждый раз именно потому, что он битый.
+    """
     expected_chat = str(chat_id)
     parsed: dict[str, tuple[dict, str]] = {}
     legacy_seen = False
+    walked: list[str] = []
+    seen: set[str] = set()
     for member in _member_keys(expected_chat):
         cdir = _compact_dir(member)
-        for path in sorted(cdir.glob("*.md")) if cdir.exists() else []:
-            meta, recap = _read_compact_candidate(path, member)
+        if not cdir.exists():
+            continue
+        walked.append(cdir.as_posix() + "/")
+        for path in sorted(cdir.glob("*.md")):
+            key = path.as_posix()
+            seen.add(key)
+            signature = memory_provenance._life_file_signature(path)
+            item = None
+            if signature is not None:
+                with _COMPACT_PARSE_LOCK:
+                    hit = _COMPACT_PARSE_CACHE.get(key)
+                if hit is not None and hit[0] == signature:
+                    item = _copy_compact_parse(hit[1])
+            if item is None:
+                item = _read_compact_candidate(path, member)
+                if signature is not None:
+                    with _COMPACT_PARSE_LOCK:
+                        _COMPACT_PARSE_CACHE[key] = (signature, _copy_compact_parse(item))
+            meta, recap = item
             if not meta:
                 continue
             if meta["legacy"]:
                 legacy_seen = True
                 continue
             parsed[meta["id"]] = (meta, recap)
+    if walked:
+        # Исчезнувший файл уходит и из памяти: кэш не должен переживать своё основание.
+        # Заодно уходит всё, что лежит вне нынешнего корня свёрток: стенды уводят BASE в
+        # одноразовый каталог, и записи прежнего корня иначе копились бы до конца прогона.
+        root = COMPACTS_DIR.as_posix() + "/"
+        with _COMPACT_PARSE_LOCK:
+            for stale in [k for k in _COMPACT_PARSE_CACHE
+                          if not k.startswith(root)
+                          or (k not in seen and any(k.startswith(d) for d in walked))]:
+                del _COMPACT_PARSE_CACHE[stale]
     return parsed, legacy_seen
 
 

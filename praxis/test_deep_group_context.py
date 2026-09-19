@@ -386,12 +386,18 @@ class TestRoomPolicy(unittest.TestCase):
             item.stop()
         self.temp.cleanup()
 
-    def test_default_is_deep_reflective_and_values_are_clamped(self):
+    def test_default_is_deep_addressed_and_values_are_clamped(self):
+        # 16.09, слово Егора: умолчание участия — `addressed`. Глубина комнаты (лента,
+        # сводка, кросс-темы, добор) осталась прежней — поехало ровно участие, и только
+        # оно. Почему: из шестнадцати живых комнат пятнадцать стояли `addressed` и одна
+        # `reflective` — самая свежая, то есть та, которую ещё не успели поправить руками
+        # после протокола входа. Умолчание, которое всегда правят, умолчанием не было.
         self.assertEqual(rooms.room_policy("-1001"), {
-            "engagement": "reflective", "context_hot": 200,
+            "engagement": "addressed", "context_hot": 200,
             "context_summary_chars": 24000, "cross_topics": "map",
             "backfill_limit": 1500,
         })
+        # Явный выбор по-прежнему сильнее умолчания — ниже он и проверяется.
         rooms.profile_update(
             "-1001", engagement="reflective", context_hot=999,
             context_summary_chars=999999, cross_topics="map", backfill_limit=99999,

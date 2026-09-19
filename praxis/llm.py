@@ -34,6 +34,7 @@ import time as _time
 import tool_offerings
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 log = logging.getLogger("praxis-llm")
 
@@ -1216,6 +1217,126 @@ def _canonicalize_image_blocks(messages):
     return out
 
 
+# ======================================================================================
+# УЗКИЙ ВЗГЛЯД: одно обращение к зрячей модели вместо целого кадра.
+#
+# ЗАМЕР 16.09, комната -1001240718803, ход с картинкой. Сейчас пиксели едут внутри её
+# ОБЫЧНОГО кадра, и весь кадр уходит в зрячую модель:
+#
+#     схемы рук        75 612 знаков
+#     system           22 342
+#     эпоха E          26 820
+#     лента            37 313
+#     живой хвост      34 682
+#     ИТОГО           196 770 знаков текста — чтобы посмотреть на одну картинку
+#
+# У зрячей модели свой префикс кэша, и ходы с картинкой редки, поэтому он почти всегда
+# холодный. Счёт за сутки без астры: 10 ходов из 32 съели 471 693 свежих токена — ПОЛОВИНУ
+# всего свежего. Каждый такой ход платит дважды: полный кадр во flash и остывший возврат.
+#
+# ЧТО ДЕЛАЕТ РЫЧАГ. Перед маршрутизацией пиксели уходят зрячей модели ОДНИМ узким
+# обращением: только картинка и просьба описать, без её ленты, досье, хвоста и ста одной
+# руки. Ответ встаёт в кадр текстом на место картинки, и её собственный ход идёт дальше на
+# её модели, с полным контекстом и по тёплому префиксу.
+#
+# ⚠ ЧТО ЭТО МЕНЯЕТ ДЛЯ НЕЁ, ВСЛУХ. Под рычагом она пикселей больше НЕ ВИДИТ — она читает
+# описание, сделанное другой моделью. Это обмен, а не чистый выигрыш: сейчас на ходе с
+# картинкой она видит сама, но отвечает более слабой моделью; под рычагом отвечает своей,
+# но глазами чужими. Подменённый блок говорит об этом прямо, чтобы она не приняла описание
+# за собственное зрение.
+#
+# ⚠ ОТКАЗ — НЕ МОЛЧАНИЕ. Не получилось описать (нет зрячей модели, упал вызов, пустой
+# ответ) — накладка НЕ подменяет ничего и возвращает ленту как была: дальше отрабатывает
+# прежняя маршрутизация, то есть целый кадр в зрячую модель. Хуже, чем было, не станет.
+VISION_PREPASS_LEVER = "PRAXIS_VISION_PREPASS"
+#: Защита от рекурсии: узкий вызов идёт через тот же `chat`, и второй раз смотреть нечего.
+_IN_VISION_PREPASS = _cv.ContextVar("praxis_vision_prepass", default=False)
+#: Потолок описания. Одна картинка — это абзац-другой, а не сочинение.
+VISION_PREPASS_MAX_TOKENS = 1200
+
+_VISION_PREPASS_SYS = (
+    "You are the sighted leg of one agent. You get ONE image and nothing else from her "
+    "context: no conversation, no people, no history. Describe only what is actually "
+    "visible — objects, layout, colours, UI state, numbers — and transcribe every piece of "
+    "text verbatim in its own language. Do not guess who sent it or why. If the image is "
+    "unreadable or empty, say exactly that."
+)
+_VISION_PREPASS_ASK = "Опиши, что на этой картинке, и дословно перепиши весь текст на ней."
+
+
+def vision_prepass_enabled() -> bool:
+    """Рычаг узкого взгляда. Умолчание — ВЫКЛЮЧЕНО: кадр прежний байт-в-байт."""
+    return str(os.environ.get(VISION_PREPASS_LEVER) or "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
+def _vision_prepass_marker(model: str, text: str) -> str:
+    return ("[эту картинку посмотрела зрячая модель " + str(model or "?")
+            + " отдельным узким обращением: твоего кадра она не видела, и пикселей в "
+            "ЭТОМ кадре нет — ниже её описание, а не твоё зрение]\n" + text)
+
+
+def _describe_images_narrowly(role: str, framework: str, model: str, messages):
+    """Заменить блоки-картинки описанием, снятым одним узким обращением к зрячей модели.
+
+    Возвращает (лента, сколько описано). Ноль описанных — лента та же самая, и вызывающий
+    код обязан отработать так, как отрабатывал без рычага.
+    """
+    if not _has_image_blocks(messages) or _IN_VISION_PREPASS.get():
+        return messages, 0
+    if accepts_images(model=model):
+        return messages, 0            # её модель и так зрячая — смотреть нечем помогать
+    sighted = vision_model(role, model, framework)
+    if not sighted:
+        return messages, 0
+    try:
+        canonical = _canonicalize_image_blocks(messages)
+    except Exception:
+        log.warning("узкий взгляд: картинка не привелась к канону — смотрю как раньше",
+                    exc_info=True)
+        return messages, 0
+    out, described = [], 0
+    token = _IN_VISION_PREPASS.set(True)
+    try:
+        for message in canonical:
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list) or not any(_is_image_block(b) for b in content):
+                out.append(message)
+                continue
+            blocks = []
+            for block in content:
+                if not _is_image_block(block):
+                    blocks.append(block)
+                    continue
+                text = _look_once(role, sighted, block)
+                if not text:
+                    # Ни одной подмены в этом сообщении: пусть едет прежним путём.
+                    return messages, 0
+                blocks.append({"type": "text",
+                               "text": _vision_prepass_marker(sighted, text)})
+                described += 1
+            out.append(dict(message, content=blocks))
+    finally:
+        _IN_VISION_PREPASS.reset(token)
+    return (out, described) if described else (messages, 0)
+
+
+def _look_once(role: str, sighted: str, block: dict) -> str:
+    """Одно обращение к зрячей модели: картинка и просьба. Пусто — значит не вышло."""
+    try:
+        answer = chat(role, system=_VISION_PREPASS_SYS,
+                      messages=[{"role": "user", "content": [
+                          block, {"type": "text", "text": _VISION_PREPASS_ASK}]}],
+                      max_tokens=VISION_PREPASS_MAX_TOKENS, model=sighted)
+    except Exception:
+        log.warning("узкий взгляд упал — картинка поедет прежним путём", exc_info=True)
+        return ""
+    text = str(getattr(answer, "text", "") or "").strip()
+    if not text:
+        log.warning("узкий взгляд вернул пустое — картинка поедет прежним путём")
+    return text
+
+
 def _route_image_leg(role: str, framework: str, model: str, messages):
     """Return (effective_model, leg_messages, substituted, omitted) for one leg."""
     if not _has_image_blocks(messages):
@@ -1361,6 +1482,30 @@ def cache_address(model: str, sys_text: str) -> str:
     return "praxis:%s:%s:%s" % (model or "?", mark or "-", room.group(1) if room else "-")
 
 
+def _max_tokens_field(cli) -> str:
+    """Имя потолка ответа — по АДРЕСАТУ клиента, не по имени модели.
+
+    Настоящий OpenAI (`api.openai.com`) для нынешних моделей принимает только
+    `max_completion_tokens` и отвечает 400 на `max_tokens` («Unsupported parameter:
+    max_tokens is not supported with this model. Use max_completion_tokens instead»);
+    реле и совместимые серверы объявляют `max_tokens`, а `max_completion_tokens`
+    у реле в `ChatRequest` нет вовсе — serde выбросил бы его молча (тот самый год
+    тишины, см. `_call_openai`). Различаем по хосту `base_url` клиента: имя модели у
+    двух установок может быть ровно одно и то же, а требования — противоположные,
+    потому что на том конце другой сервер (живой случай 19.09.2026, баг-репорт Arête).
+
+    Признак один и жёсткий — хост `openai.com` (и поддомены). Это заплатка до
+    «профиля провайдера», где адресат объявляет свои поля сам; но и профиль должен
+    исходить из того же: спрашивать адресата, а не угадывать по имени модели.
+    """
+    try:
+        host = (urlparse(str(getattr(cli, "base_url", "") or "")).hostname or "").lower()
+    except (ValueError, TypeError, AttributeError):
+        host = ""
+    direct_openai = host == "openai.com" or host.endswith(".openai.com")
+    return "max_completion_tokens" if direct_openai else "max_tokens"
+
+
 def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinking,
                  reasoning_effort: str | None = None) -> LLMResponse:
     msgs = messages_to_openai(messages)
@@ -1394,7 +1539,12 @@ def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinki
     # ⚠ КОГДА ЭТОТ ПУТЬ ПОВЕДЁТ К НАСТОЯЩЕМУ OpenAI — пересмотреть: reasoning-моделям там
     # нужен именно `max_completion_tokens`. Это работа «профиля провайдера», и она названа
     # отдельно; здесь важно не угадывать адресата по имени модели.
-    kw["max_tokens"] = max_tokens
+    #
+    # 19.09.2026: повёл. У пользователя Элен 0.7.1 клиент смотрит прямо в api.openai.com,
+    # мимо реле, и каждый запрос падал с 400 «Use max_completion_tokens instead». Имя поля
+    # теперь выбирает адресат — по хосту `base_url` клиента (`_max_tokens_field`), путь
+    # через реле не задет.
+    kw[_max_tokens_field(cli)] = max_tokens
     ot = tools_to_openai(tools)
     if ot:
         kw["tools"] = ot
@@ -1907,6 +2057,14 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     # Keep the caller's original image tape available to a different fallback leg.
     # Sanitising one text-only leg must not blind a later natively sighted leg.
     image_messages = messages
+    # Узкий взгляд — ДО маршрутизации: если картинку удалось описать одним обращением,
+    # дальше едет обычная текстовая лента, и подмены модели не происходит вовсе.
+    if vision_prepass_enabled():
+        described_messages, described = _describe_images_narrowly(role, fw, model, messages)
+        if described:
+            log.info("llm: %s — картинок описано узким взглядом: %d; ход остаётся на %s",
+                     _ROLE_RU[role], described, model)
+            messages = image_messages = described_messages
     model, messages, vision_used, pixels_omitted = _route_image_leg(
         role, fw, model, image_messages)
     if vision_used:

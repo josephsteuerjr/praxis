@@ -29,6 +29,7 @@ import agent
 import bufstore
 import context_envelope
 import formation
+import frame_epoch
 import group_context
 import llm
 import memory_life
@@ -291,6 +292,9 @@ class GroupWake:
 
 _group_wakes: dict[str, GroupWake] = {}
 _seen_ids: dict[str, deque] = defaultdict(lambda: deque(maxlen=SEEN_IDS_KEEP))  # 9.0: дедуп catch_up
+# 15.09, эпоха комнаты: якорь свёртки, с которого собран последний снимок ленты комнаты.
+# Ход читает его через frame_epoch.bind, чтобы E и лента говорили об одной границе.
+_EPOCH_ANCHORS: dict[str, int] = {}
 _recent_msgs: dict[str, deque] = defaultdict(lambda: deque(maxlen=12))  # 15: (msg_id, автор, гист) для ОТВЕТ->#id
 # PASS 16.2: недавние отправители на чат — (ts, имя, id). Честный источник для get_id
 # в классе «айди спамера»: отправитель БЫЛ в апдейте, но резолв по диалогам/участникам
@@ -1302,8 +1306,14 @@ async def _initialize_joined_room(chat_id: str, entity, *, title: str | None = N
             log.info("новичок-протокол [%s]: профиль уже есть — не сбрасываю (re-add)", chat_id)
         return
     rooms.set_mode(chat_id, "normal", reason="", set_by=set_by)
-    rooms.profile_update(chat_id, engagement="reflective")
-    log.info("новичок-протокол [%s]: вошла в «%s», режим normal/reflective", chat_id, title or "?")
+    # 16.09: новая комната больше не открывается «могу заговорить сама». Протокол не
+    # пишет участие в профиль вовсе — пусть действует умолчание `rooms.default_policy`
+    # (`addressed`, рычаг `PRAXIS_ROOM_ENGAGEMENT`). Прежняя строка вписывала
+    # `reflective` ЯВНО и тем перебивала рычаг владельца: в проде стояло
+    # `PRAXIS_ROOM_ENGAGEMENT=addressed`, а каждая новая комната всё равно рождалась
+    # разговорчивой, и её потом правили руками.
+    log.info("новичок-протокол [%s]: вошла в «%s», режим normal, участие — по умолчанию (%s)",
+             chat_id, title or "?", rooms.default_policy()["engagement"])
     lines: list[str] = []
     try:
         msgs = await client.get_messages(entity, limit=BACKFILL_N)
@@ -1729,6 +1739,35 @@ def _group_context_frozen(chat_id: str, policy: dict) -> tuple[str, tuple]:
         # разговор. Замер до того: архивный снимок 70+ тыс. знаков, ход 46 тыс. токенов.
         if memory_life.GROUP_TAPE_CHARS > 0:
             max_chars = min(max_chars, memory_life.GROUP_TAPE_CHARS)
+        # 15.09: ЛЕНТА ЭПОХИ (frame_epoch, рычаг PRAXIS_FRAME_EPOCH + список комнат). Окно не
+        # скользит: начало — якорь свёртки memory_life, конец — последняя запись архива, каждая
+        # запись отрисована один раз, правки и удаления дописаны там, где пришли. Замер 15.09:
+        # под стабильной головой первый вызов хода всё равно платил ~48k свежих токенов —
+        # ленту, потому что окно уезжало на первом же сообщении. Потолок в знаках здесь не
+        # применяется (слово Егора 15.09: «больше никаких лимитов контекста, только
+        # дописывание»); физический предохранитель — frame_epoch.max_chars, и при его
+        # срабатывании ход идёт прежним окном, а причина называется в логе.
+        if frame_epoch.room_enabled(chat_id):
+            anchor = frame_epoch.anchor_for(chat_id)
+            if anchor is None:
+                log.info("эпоха [%s]: якоря нет (горячее окно пусто) — лента прежним окном", chat_id)
+            else:
+                try:
+                    rows = group_context.epoch_rows(
+                        route.peer_id, since_message_id=anchor, topic_id=route.topic_id,
+                        whole_room=scope.whole_room, members=scope.members,
+                        thread_word=scope.thread_word)
+                    size = sum(len(row["line"]) + 1 for row in rows)
+                    cap = frame_epoch.max_chars()
+                    if rows and (cap <= 0 or size <= cap):
+                        _EPOCH_ANCHORS[chat_id] = int(anchor)
+                        return "\n".join(row["line"] for row in rows), _fold_service_rows(rows)
+                    log.warning("эпоха [%s]: лента с якоря #%s %s — лента прежним окном", chat_id,
+                                anchor, ("пуста" if not rows else
+                                         f"превысила предохранитель ({size} зн. > {cap})"))
+                except Exception:
+                    log.exception("эпоха [%s]: лента с якоря не собралась — прежнее окно", chat_id)
+            _EPOCH_ANCHORS.pop(chat_id, None)
         try:
             rows = group_context.context_rows(
                 route.peer_id, topic_id=route.topic_id, limit=limit,
@@ -4647,14 +4686,17 @@ async def _run_pass(chat_id: str) -> None:
                 )
             else:
                 # в группе без «печатает…»: тишина ([молчу]) — частый честный исход, не изображаем набор
-                envelope, cancellation_seen = await _await_despite_cancellation(
-                    _voice_turn_offloaded(
-                        chat_id, last_n, speaker,
-                        ctx=ctx, orient=topic_orient, media_refs=turn_media,
-                        history=turn_history, current_text=turn_current,
-                        occurrence_sidecar=turn_occurrences or None,
+                # Якорь эпохи привязывается к ходу здесь: сборщик кадра (agent) читает его из
+                # контекста и не считает заново — между снимком и ходом могла пройти свёртка.
+                with frame_epoch.bind(chat_id, _EPOCH_ANCHORS.get(chat_id)):
+                    envelope, cancellation_seen = await _await_despite_cancellation(
+                        _voice_turn_offloaded(
+                            chat_id, last_n, speaker,
+                            ctx=ctx, orient=topic_orient, media_refs=turn_media,
+                            history=turn_history, current_text=turn_current,
+                            occurrence_sidecar=turn_occurrences or None,
+                        )
                     )
-                )
         finally:
             _TURN_TOPIC_ROUTE.reset(topic_token)
         if envelope.deferred:
@@ -5304,14 +5346,22 @@ def _sync_resolve_id(ref):
 
 
 def _sync_search_chats(query: str) -> str:
+    """Диалоги Telegram по ИМЕНИ. Пустая строка — совпадений нет (словами скажет вызывающий).
+
+    15.09: сверка идёт через общий латинский скелет (`rooms.latin_fold`), а не по сырым
+    строкам. Прежняя подстрочная сверка не могла совпасть между алфавитами: запрос
+    «уробор» против имени «Ouroboros AI» давал «нет» при живой комнате в её же памяти.
+    """
     async def _coro():
-        q, out = query.lower(), []
+        q, out = rooms.latin_fold(query).strip(), []
+        if not q:
+            return ""
         async for d in client.iter_dialogs():
-            if q in (d.name or "").lower():
+            if q in rooms.latin_fold(d.name or ""):
                 out.append(f"{d.name}: {d.id}")
                 if len(out) >= 10:
                     break
-        return "\n".join(out) or "(ничего не нашла)"
+        return "\n".join(out)
     return _threadsafe_result(_coro, 30)
 
 

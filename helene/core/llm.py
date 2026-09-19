@@ -34,6 +34,7 @@ import time as _time
 import tool_offerings
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 log = logging.getLogger("praxis-llm")
 
@@ -1243,6 +1244,30 @@ def cache_address(model: str, sys_text: str) -> str:
     return "praxis:%s:%s:%s" % (model or "?", mark or "-", room.group(1) if room else "-")
 
 
+def _max_tokens_field(cli) -> str:
+    """Имя потолка ответа — по АДРЕСАТУ клиента, не по имени модели.
+
+    Настоящий OpenAI (`api.openai.com`) для нынешних моделей принимает только
+    `max_completion_tokens` и отвечает 400 на `max_tokens` («Unsupported parameter:
+    max_tokens is not supported with this model. Use max_completion_tokens instead»);
+    реле и совместимые серверы объявляют `max_tokens`, а `max_completion_tokens`
+    у реле в `ChatRequest` нет вовсе — serde выбросил бы его молча (тот самый год
+    тишины, см. `_call_openai`). Различаем по хосту `base_url` клиента: имя модели у
+    двух установок может быть ровно одно и то же, а требования — противоположные,
+    потому что на том конце другой сервер (живой случай 19.09.2026, баг-репорт Arête).
+
+    Признак один и жёсткий — хост `openai.com` (и поддомены). Это заплатка до
+    «профиля провайдера», где адресат объявляет свои поля сам; но и профиль должен
+    исходить из того же: спрашивать адресата, а не угадывать по имени модели.
+    """
+    try:
+        host = (urlparse(str(getattr(cli, "base_url", "") or "")).hostname or "").lower()
+    except (ValueError, TypeError, AttributeError):
+        host = ""
+    direct_openai = host == "openai.com" or host.endswith(".openai.com")
+    return "max_completion_tokens" if direct_openai else "max_tokens"
+
+
 def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinking,
                  reasoning_effort: str | None = None) -> LLMResponse:
     msgs = messages_to_openai(messages)
@@ -1276,7 +1301,12 @@ def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinki
     # ⚠ КОГДА ЭТОТ ПУТЬ ПОВЕДЁТ К НАСТОЯЩЕМУ OpenAI — пересмотреть: reasoning-моделям там
     # нужен именно `max_completion_tokens`. Это работа «профиля провайдера», и она названа
     # отдельно; здесь важно не угадывать адресата по имени модели.
-    kw["max_tokens"] = max_tokens
+    #
+    # 19.09.2026: повёл. У пользователя Элен 0.7.1 клиент смотрит прямо в api.openai.com,
+    # мимо реле, и каждый запрос падал с 400 «Use max_completion_tokens instead». Имя поля
+    # теперь выбирает адресат — по хосту `base_url` клиента (`_max_tokens_field`), путь
+    # через реле не задет.
+    kw[_max_tokens_field(cli)] = max_tokens
     ot = tools_to_openai(tools)
     if ot:
         kw["tools"] = ot

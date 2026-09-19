@@ -43,7 +43,7 @@ def _features(text: str, *, first_message: bool, repeated_within_hour: bool) -> 
         found.append("first_message")
     if re.search(r"(?:ден(?:ьг|ег)|доход|заработ|оплат|зарплат|₽|руб(?:л|\b)|\bu(?:s|с)(?:d|д)(?:t|т)\b|\bтыс\.?\b|\d[\d\s]*(?:р\.?|₽)|(?:по\s+(?:факту|завершени\w*))\s+\d[\d\s]*)", value):
         found.append("money")
-    if re.search(r"(?:куплю|продам|предлагаю|ищем|ищу\s+кто|нуж(?:ен|на|ны)|подсобить|разбирать|раскладывать|очистить|собрать\s+мусор|по\s+завершени)", value):
+    if re.search(r"(?:куплю|продам|предлагаю|ищем|ищу\s+кто|нуж(?:ен|на|ны)\s+(?:человек|люд|рабоч|исполнител|помощник|грузчик|водител|курьер|уборщик)|подсобить|разбирать|раскладывать|очистить|собрать\s+мусор|по\s+завершени)", value):
         found.append("commercial_offer")
     if re.search(r"(?:пиши(?:те)?|напиши(?:те)?|став(?:ь|ьте)|жми(?:те)?|перейди(?:те)?|найди(?:те)?|ищи(?:те)?|в личк|в лс|остав(?:ь|ьте).{0,12}(?:\+|плюс)|отклик)", value):
         found.append("call_to_action")
@@ -54,12 +54,22 @@ def _features(text: str, *, first_message: bool, repeated_within_hour: bool) -> 
     return tuple(found)
 
 
+KNOWN_SENDER_MIN_MESSAGES = 5
+
+
 def detect_message(*, peer_id: int, text: str, first_message: bool,
-                   repeated_within_hour: bool = False) -> Detection:
+                   repeated_within_hour: bool = False,
+                   known_sender: bool = False) -> Detection:
+    """Threshold rule (2026-09-18, torvn77 false positive): a lone `repeat`
+    feature is explainable but not sufficient for senders with channel history;
+    any second independent feature, or any repeat by a fresh sender, still flags."""
     if int(peer_id) != TARGET_PEER_ID:
         return Detection("pass", ())
     matched = _features(text, first_message=bool(first_message),
                         repeated_within_hour=bool(repeated_within_hour))
+    lone_repeat = matched == ("repeat",)
+    if lone_repeat and known_sender:
+        return Detection("pass", matched)
     flagged = "repeat" in matched or len(set(matched)) >= 2
     return Detection("review" if flagged else "pass", matched)
 
@@ -85,9 +95,10 @@ def _history_seed() -> dict:
                 ts = 0.0
             key = str(int(sender))
             previous = senders.get(key) or {}
+            count = int(previous.get("count") or 0) + 1
             if ts >= float(previous.get("ts") or 0):
                 digest = hashlib.sha256(normalize_text(str(row.get("text") or "")).encode("utf-8")).hexdigest()
-                senders[key] = {"digest": digest, "ts": ts}
+                senders[key] = {"digest": digest, "ts": ts, "count": count}
             messages[str(int(message))] = ts
         return {"senders": senders, "messages": messages}
     except Exception:
@@ -130,8 +141,9 @@ def observe_message(*, peer_id: int, message_id: int, sender_id: int,
         previous = senders.get(sender_key) or {}
         first = not bool(previous)
         repeated = previous.get("digest") == digest and now - float(previous.get("ts") or 0) <= 3600
+        known = int(previous.get("count") or 0) >= KNOWN_SENDER_MIN_MESSAGES
         result = detect_message(peer_id=peer_id, text=text, first_message=first,
-                                repeated_within_hour=repeated)
+                                repeated_within_hour=repeated, known_sender=known)
         if result.verdict != "pass":
             from core import events as core_events
             emitted = core_events.emit("moderation_review", "telegram.new_message", {
@@ -141,7 +153,8 @@ def observe_message(*, peer_id: int, message_id: int, sender_id: int,
             }, dedup_key=f"moderation:{int(peer_id)}:{int(message_id)}", ts=now)
             if emitted is None:
                 return result  # WAL failed: do not consume message_id; replay must retry.
-        senders[sender_key] = {"digest": digest, "ts": now}
+        senders[sender_key] = {"digest": digest, "ts": now,
+                               "count": int(previous.get("count") or 0) + 1}
         messages[message_key] = now
         if len(messages) > 4000:
             state["messages"] = dict(sorted(messages.items(), key=lambda item: item[1])[-2000:])

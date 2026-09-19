@@ -3339,6 +3339,19 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
         if branch:
             _run(["git", "-C", str(source_git), "branch", "-D", branch], timeout=30)
         submission = f"Интегрировано в {expected or current}: {merged}; временный worktree убран."
+        try:
+            # Манифест рельсов не должен стареть от дневных мержей: уже третий раз
+            # номер строки судьи в soul/rails.md гниёт (16855→16999→17008→17011),
+            # потому что мерж сдвигает agent.py, а файл чинит только ночной сон.
+            # Тяжёлые билдеры значений (outbound_judge_sites и родня) читают исходник
+            # с диска по mtime; живой agent в этом процессе для них только плюс
+            # (_live), не подмена. sync_md пишет только при расхождении.
+            import rails
+            if rails.sync_md():
+                _event(task_id, "rails_manifest_synced",
+                       summary="мерж сдвинул строки — манифест перевыпущен")
+        except Exception:
+            pass  # манифест — зеркало, а не рельс: отказ синка не отменяет мерж
     task["status"] = new_status
     task["finished"] = _now() if new_status == "done" else ""
     task["review"] = str(review or "").strip()

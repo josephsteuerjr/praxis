@@ -75,12 +75,13 @@ class FrozenCorpusContractTests(unittest.TestCase):
 
 class DetectorThresholdTests(unittest.TestCase):
     def detect(self, text: str, *, first: bool = False, repeat: bool = False,
-               peer_id: int = TARGET_PEER_ID):
+               peer_id: int = TARGET_PEER_ID, known: bool = False):
         return detect_message(
             peer_id=peer_id,
             text=text,
             first_message=first,
             repeated_within_hour=repeat,
+            known_sender=known,
         )
 
     def test_single_weak_signal_does_not_cross_threshold(self):
@@ -98,10 +99,22 @@ class DetectorThresholdTests(unittest.TestCase):
         self.assertIn("first_message", result.matched_features)
         self.assertIn("money", result.matched_features)
 
-    def test_repeat_is_an_unconditional_explainable_signal(self):
+    def test_repeat_is_an_unconditional_explainable_signal_for_fresh_senders(self):
         result = self.detect("Нейтральная повторённая строка", repeat=True)
         self.assertNotEqual(result.verdict, "pass")
         self.assertIn("repeat", result.matched_features)
+
+    def test_lone_repeat_by_known_sender_passes(self):
+        # 2026-09-18 torvn77 false positive: known participant, lone repeat feature.
+        result = self.detect("Нейтральная повторённая строка", repeat=True, known=True)
+        self.assertEqual(result.verdict, "pass")
+        self.assertEqual(result.matched_features, ("repeat",))
+
+    def test_known_sender_repeat_with_second_feature_still_flags(self):
+        result = self.detect("Предлагаю доход, пиши в лс", repeat=True, known=True)
+        self.assertNotEqual(result.verdict, "pass")
+        self.assertIn("repeat", result.matched_features)
+        self.assertIn("money", result.matched_features)
 
     def test_homoglyph_normalization_does_not_bypass_money_signal(self):
         # Latin a/o inside a Cyrillic word.

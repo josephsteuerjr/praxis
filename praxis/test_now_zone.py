@@ -752,11 +752,17 @@ class InAGroupThePeopleStayApart(ZoneBase):
             self.assertIn(f"message #{row['message_id']}", line)
         self.assertIn("reply_to=#551", lines[1])
 
-    def test_her_own_line_drops_the_signature_but_keeps_the_coordinates(self):
-        line = group_context._format_message(dict(self.ROWS[1]), as_self=True)
+    def test_her_own_line_is_the_body_without_the_machine_envelope(self):
+        """15.09: шапка в роли `assistant` воспроизводилась моделью как образец."""
+        row = dict(self.ROWS[1])
+        line = group_context._format_message(row, as_self=True)
         self.assertNotIn("Пётр", line)
-        self.assertIn("message #553", line)
-        self.assertIn("reply_to=#551", line)
+        self.assertNotIn("message #553", line)
+        self.assertNotIn("reply_to=#551", line)
+        self.assertFalse(line.startswith("["), "строка всё ещё открывается конвертом")
+        self.assertIn(str(row["text"]), line)
+        full = group_context._format_message(row)
+        self.assertIn("message #553", full, "архивная строка потеряла адрес")
 
     def test_the_feed_line_counts_the_same_people_the_turn_carries(self):
         ctx = self.group()

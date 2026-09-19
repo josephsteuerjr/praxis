@@ -50,6 +50,7 @@ import capabilities
 import computer_memory
 import context_envelope
 import desires
+import frame_epoch
 import frame_layout
 import frame_shadow
 import frame_measure
@@ -58,6 +59,7 @@ import pre_model_timing
 import frame_serve
 import keat_live
 import frame_trace
+import gutter
 import graph
 import group_context
 import hostops
@@ -94,6 +96,7 @@ import stewardship
 import tasks
 import telegram_topics
 import tool_offerings
+import tool_text_en
 import turns
 import unanswered
 import webtool
@@ -780,8 +783,9 @@ def head_stable_enabled() -> bool:
       «они мне нужны, нужен обход»;
     * типизированное состояние (`build_state_block`) переезжает из головы в живой конверт
       ярусом «Состояние сейчас», только когда действует владелец — как и раньше;
-    * `[private]`-строки досье режутся из головы ДЛЯ ВСЕХ, владельцу они едут ярусом
-      «Приватное из досье» в том же живом конверте;
+    * `[private]`-строки досье режутся из головы ДЛЯ ВСЕХ; с 17.09 они возвращаются
+      только в owner-DM — в группе ход владельца получает тот же отфильтрованный
+      корпус, что любой говорящий (реплика, сочинённая в группе, публична);
     * `members=` из Channel facts снимается: число участников стоит в зоне «СЕЙЧАС».
     Ничего не исчезает из кадра — меняется место. Стенд: `test_head_stable_1309`.
     """
@@ -794,6 +798,28 @@ def _room_head_stable(ctx) -> bool:
     return bool(head_stable_enabled() and ctx is not None
                 and not getattr(ctx, "is_dm", True)
                 and getattr(ctx, "chat_id", None) is not None)
+
+
+def runs_head_stable_enabled() -> bool:
+    """PRAXIS_FRAME_HEAD_STABLE_RUNS (15.09): та же стабильная голова для ЕЁ СОБСТВЕННЫХ ходов
+    (окна, пульс, будильник, forge-событие; `ctx.chat_id is None`).
+
+    Замер 15.09 по леджеру: под рычагом комнат окна по-прежнему получали на первом вызове
+    3 712 токенов кэша вместо ~21k — восемь отпечатков system на девять окон, а два соседних
+    окна ночи различались в system ОДНИМ символом: `{"fact":"loops","open":3}` против `4`.
+    Живые факты STATE стояли в голове собственного хода; при ~70 окнах в сутки это ~1,2 млн
+    токенов схем и конституции, оплаченных заново. Под рычагом STATE едет ярусом «Состояние
+    сейчас» живого конверта — тем же, что и в комнате под PRAXIS_FRAME_HEAD_STABLE; адресат
+    (она сама) не меняется, меняется место. Выключено — байт-в-байт прежний кадр окна.
+    """
+    return str(os.getenv("PRAXIS_FRAME_HEAD_STABLE_RUNS") or "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
+def _own_run_head_stable(ctx) -> bool:
+    """Рычаг стабильной головы окон применим: её собственный ход без комнаты и собеседника."""
+    return bool(runs_head_stable_enabled() and ctx is not None
+                and getattr(ctx, "chat_id", None) is None)
 
 
 def _state_record(fact: str, **fields) -> str:
@@ -2576,18 +2602,71 @@ _TRANSPORT_CLOSED_LINES = {
 }
 
 
-def tool_search_chats(query: str) -> str:
-    """Поискать по именам своих диалогов/чатов (через Telethon)."""
-    fn = _TELETHON.get("search_chats")
-    if not fn:
-        return "Недоступно (нет связи с Telethon)."
-    closed = _TRANSPORT_CLOSED_LINES.get(telegram_transport_status())
-    if closed:
-        return closed
+def _rooms_block(query: str) -> str:
+    """Её собственные профили комнат под запрос — телом ответа, а не сноской.
+
+    Печатается режим: замороженная комната молчит не потому, что её нет, и путать эти два
+    состояния рука больше не имеет права.
+    """
     try:
-        return str(fn(query))
-    except Exception as e:
-        return f"[ошибка] {e}"
+        hits = rooms.search_profiles(query)
+    except Exception:
+        log.debug("поиск по профилям комнат не собрался", exc_info=True)
+        return ""
+    if not hits:
+        return ""
+    lines = []
+    for h in hits:
+        mode = str(h.get("mode") or "normal")
+        tail = rooms.MODE_INTAKE.get(mode)
+        word = rooms.MODE_WORD.get(mode, mode)
+        lines.append(f"— {h['title']} · {h['chat_id']} · режим «{word}»"
+                     + (f" ({tail})" if tail else "")
+                     + f" · нашлось по: {h['where']}")
+    return ("Мои профили комнат (memory/rooms/, читать целиком — inbox/файлом, "
+            "менять режим — manage_room):\n" + "\n".join(lines))
+
+
+def tool_search_chats(query: str) -> str:
+    """Поискать комнату: по именам диалогов Telegram И по своим профилям комнат.
+
+    ⚠ 15.09.2026, ЖИВОЙ СЛУЧАЙ. Её спросили про «Ouroboros AI»; она позвала эту руку с
+    запросом «уробор», получила «(ничего не нашла)» и ушла искать в веб, ответив в группу
+    «разобралась, что смогла извне». Комната была у неё в памяти вместе со сводкой
+    участников и тем, а входа оттуда не было пятый день — по ЕЁ ЖЕ решению заморозить.
+    Рука сказала «нет» про то, чего не смотрела, и не назвала границы своего взгляда.
+    Теперь: сверка имён идёт между алфавитами (`rooms.latin_fold`), профили комнат
+    смотрятся всегда, режим комнаты называется вслух, а пустой ответ говорит, ЧТО именно
+    было просмотрено и чем искать дальше. Отсутствие транспорта больше не отменяет
+    ответа: её собственная память доступна и при закрытом Telegram.
+    """
+    mine = _rooms_block(query)
+    fn = _TELETHON.get("search_chats")
+    closed = _TRANSPORT_CLOSED_LINES.get(telegram_transport_status()) if fn else None
+    if not fn:
+        dialogs, why = "", "диалоги Telegram не смотрела: нет связи с Telethon"
+    elif closed:
+        dialogs, why = "", f"диалоги Telegram не смотрела: {closed}"
+    else:
+        try:
+            dialogs, why = str(fn(query)).strip(), ""
+        except Exception as e:
+            dialogs, why = "", f"диалоги Telegram не смотрела: [ошибка] {e}"
+    parts = []
+    if dialogs:
+        parts.append("Диалоги Telegram по имени:\n" + dialogs)
+    if mine:
+        parts.append(mine)
+    if parts:
+        if why:
+            parts.append(why + ".")
+        return "\n\n".join(parts)
+    scope = ("Искала по именам диалогов Telegram и по своим профилям комнат "
+             "(memory/rooms/) — совпадений нет."
+             if not why else why + "; по своим профилям комнат совпадений нет.")
+    return (scope + " Это про ИМЕНА и мои записки о комнатах, не про текст сообщений: "
+            "по словам внутри переписки — `search_private_messages`, конкретную комнату "
+            "по id или @имени — `read_chat`.")
 
 
 def tool_read_chat(chat_ref: str, limit: int = 30) -> str:
@@ -3516,6 +3595,7 @@ def tool_reply(text: str, reply_to: str = "") -> str:
         return ("Не отправила: ровно эта реплика уже доставлена этим ходом. "
                 "Если сказать больше нечего — просто закончи ход; "
                 "если есть что добавить — напиши другими словами.")
+    delivered = False
     try:
         out = fn(str(ctx.chat_id), guarded, str(reply_to or "").strip())
     except DurableSideEffectPending:
@@ -3527,15 +3607,23 @@ def tool_reply(text: str, reply_to: str = "") -> str:
         # `DirectSendRefusal` — подкласс `str` (кред-пол, ненайденный адресат, вечный
         # отказ Telegram). Первая редакция засчитывала его как отправку: счётчик рос,
         # запись хода говорила «сказала», а наружу не уходило ничего.
-        if not isinstance(out, DirectSendRefusal):
-            work_loop.note_sent(guarded)
-            # Её условие к v3, дословно: возврат руки обязан не только подсказать конец,
-            # но и назвать границу — пустота ничего не переотправит и не отменит.
-            out = (str(out) + "\n\nЕсли это всё — зови `end_turn`; сказать ещё — `reply` "
-                   "снова. Пустой следующий ответ ничего не отправит повторно и не "
-                   "отменит уже доставленное.")
+        delivered = not isinstance(out, DirectSendRefusal)
+    # ⚠ РАСПИСКА СНИМАЕТСЯ ДО ПОДСКАЗКИ, И ЭТО НЕ КОСМЕТИКА.
+    # Ниже к возврату руки приклеивается напоминание про `end_turn` — слово, обращённое
+    # к модели, а не событие. Дневник же писался с УЖЕ СКЛЕЕННОЙ строки и резал её на
+    # 300-м знаке: в запись попадало около шестидесяти знаков сказанного и следом
+    # машинный хвост. Читает этот дневник она сама — и читала там не свою реплику.
+    # Тот же класс, что «решила промолчать»: запись говорила не о том, что произошло.
+    receipt = str(out)
+    if delivered:
+        work_loop.note_sent(guarded)
+        # Её условие к v3, дословно: возврат руки обязан не только подсказать конец,
+        # но и назвать границу — пустота ничего не переотправит и не отменит.
+        out = (receipt + "\n\nЕсли это всё — зови `end_turn`; сказать ещё — `reply` "
+               "снова. Пустой следующий ответ ничего не отправит повторно и не "
+               "отменит уже доставленное.")
     try:
-        tool_journal(f"[ответ] {_clip_reason(out, 300)}", salience=2)
+        tool_journal(f"[ответ] {_clip_reason(receipt, 300)}", salience=2)
     except Exception:
         log.debug("журнал ответа не записался", exc_info=True)
     return out
@@ -6516,13 +6604,29 @@ GET_ID_TOOL = {
     },
 }
 
+# ⚠ 15.09.2026. Параметр `query` стоял БЕЗ ОПИСАНИЯ, и это половина живого промаха: схема
+# говорила «строка», а чем эта строка должна быть — именем, id или словом из переписки —
+# не говорила ничего. Она положила туда слово темы кириллицей, получила «нет» и ушла в веб.
+# Описание руки теперь называет ОБА источника и прямо отводит текст сообщений к соседней
+# руке: граница взгляда должна стоять в схеме, а не выясняться по пустому ответу.
 SEARCH_CHATS_TOOL = {
     "name": "search_chats",
-    "description": ("Поискать по именам своих диалогов/чатов. Это внутренний обзор: "
-                    "найденный адрес не является разрешением раскрывать чужую личную информацию."),
+    "description": ("Найти комнату: по именам диалогов Telegram И по моим собственным "
+                    "запискам о комнатах (memory/rooms — название, id, моя сводка). "
+                    "Отвечает и режимом комнаты: у замороженной входящих нет, и это "
+                    "сказано прямо. Текст сообщений тут НЕ ищется — для него "
+                    "search_private_messages; конкретную комнату по адресу — read_chat. "
+                    "Это внутренний обзор: найденный адрес не является разрешением "
+                    "раскрывать чужую личную информацию."),
     "input_schema": {
         "type": "object",
-        "properties": {"query": {"type": "string"}},
+        "properties": {"query": {
+            "type": "string",
+            "description": ("имя чата, его id или слово из моей записки о комнате. "
+                            "Алфавит значения не имеет: «уробор» найдёт «Ouroboros AI». "
+                            "Слово из переписки сюда класть бесполезно — это поиск по "
+                            "именам и моим запискам, не по сообщениям"),
+        }},
         "required": ["query"],
     },
 }
@@ -9022,6 +9126,12 @@ def _scheduled_target_moderation_block(ctx: "ChannelContext") -> str:
 def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str:
     """ВСЕ её досье на людей, целиком. Отбора нет — и это решение, а не упрощение.
 
+    Под эпохой комнаты (15.09, frame_epoch.active() — флаг хода, выставленный сборщиком):
+    тела досье едут в замороженную эпоху, а всё, что зависит от того, КТО заговорил, —
+    строка «передо мной» и досье говорящего, которого в эпохе нет, — кладётся в снимок
+    frame_layout и уезжает живым хвостом (см. _epoch_serve). Сигнатура не меняется: её
+    подменяют лямбдами восемь стендов.
+
     ⚠ 06.08. Прежде здесь стоял отбор ОДНОГО досье по привязке «телеграм-id → файл»,
     и он возвращал пустоту ВСЕГДА. Замер на живом проде: привязок ноль из тридцати
     шести, `slug_for_principal("809306689")` (владелец!) отдаёт пустую строку. То есть
@@ -9047,6 +9157,7 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     память вижу и в личке, и в группах». Что из неё можно произнести вслух в конкретной
     комнате, по-прежнему решают она и исходящий гард, а не состав кадра.
     """
+    epoch = frame_epoch.active()
     directory = getattr(people, "PEOPLE_DIR", None)
     if directory is None or not directory.exists():
         return ""
@@ -9056,7 +9167,12 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     # экономия и не осторожность ради осторожности: личный факт о ТРЕТЬЕМ человеке,
     # лежащий в кадре при разговоре с четвёртым, — ровно то, от чего в проекте заведён
     # адресный контур данных. Снять эту границу можно только её словом, а не попутно.
-    owner_audience = bool(getattr(ctx, "owner_audience", False) or getattr(ctx, "owner", False))
+    # ⚠ 17.09: «or ctx.owner» убран. Дважды за два дня приватный ярус досье уезжал в
+    # ГРУППОВОЙ кадр, когда в группе говорил Егор («Пракс, ты опять писала про Вику…»), и
+    # на low-reasoning утекал в публичный текст. Говорит владелец — не значит «аудитория
+    # владельца»: реплика, сочинённая в этом ходе, публична. owner-аудития — только DM-контур
+    # (ChannelContext.owner_audience, свойство), как её уже видит исходящий гард.
+    owner_audience = bool(getattr(ctx, "owner_audience", False))
     hidden = 0
     # PRAXIS_FRAME_HEAD_STABLE (13.09): в комнате `[private]` режется из досье ДЛЯ ВСЕХ, чтобы
     # тело досье в кадре не зависело от того, кто заговорил (замер: досье Егора менялось в 16 из
@@ -9092,9 +9208,13 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     dossier_principal = scheduled_target or principal_now
     chosen: list[str] = []
     pointers: list[str] = []
+    # Под эпохой состав ТЕЛА не зависит от говорящего: тот, кого транспорт присутствующим не
+    # называл (заговорил после заморозки), рендерится, но едет только живым хвостом.
+    live_only: set[str] = set()
     contract = dossier_contract_enabled()
     if contract:
         here = _present_by_transport(ctx)
+        principal_present = bool(dossier_principal) and str(dossier_principal) in here
         if dossier_principal:
             here.add(str(dossier_principal))
         for path in sorted(directory.glob("*.md")):
@@ -9103,6 +9223,8 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
             tg = str(people.telegram_id(path.stem) or "")
             if tg and tg in here:
                 chosen.append(path.stem)
+                if epoch and not principal_present and tg == str(dossier_principal):
+                    live_only.add(path.stem)
         # Указатель — НЕ тело. Её третий пункт: «давать мне однозначный указатель, и я
         # открываю цельный документ рукой».
         pointers = [s for s in _mentioned_slugs(ctx, here) if s not in chosen]
@@ -9114,6 +9236,7 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
             chosen, pointers = [], []
 
     rows: list[str] = []
+    cards: dict[str, str] = {}
     total = 0
     capped = 0
     lifted = 0
@@ -9147,14 +9270,20 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
             rows.append(f"— {path.stem} · memory/people/{path.name} — пусто")
             continue
         if cap > 0:
-            is_speaker = bool(bound) and path.stem == bound
+            # Под эпохой потолок один для всех: тело в замороженном документе не может
+            # зависеть от того, кто заговорил.
+            is_speaker = bool(bound) and path.stem == bound and not epoch
             body, info = people.frame_view(
-                body, limit=cap if is_speaker else max(1, cap // 2),
+                body, limit=cap if (is_speaker or epoch) else max(1, cap // 2),
                 speaker=is_speaker, path_name=path.name)
             if info.get("cut"):
                 capped += 1
         title = str(people.read(path.stem)[0] or path.stem).strip()
-        rows.append(f"— {title} · memory/people/{path.name} —\n{body}")
+        card = f"— {title} · memory/people/{path.name} —\n{body}"
+        cards[path.stem] = card
+        if path.stem in live_only:
+            continue
+        rows.append(card)
         total += len(body)
         keat_economy.source("dossier", body, f"memory/people/{path.name}")
     # ⚠ МОЛЧАНИЕ ВМЕСТО НАЗВАННОЙ НЕИЗВЕСТНОСТИ — ЭТО ШАГ НАЗАД, И ТЕСТ ЭТО ПОЙМАЛ.
@@ -9166,6 +9295,10 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     # Именно там молчание опаснее всего: подделанное имя не должно выглядеть как
     # отсутствие вопроса «кто передо мной».
     if private_rows:
+        # ⚠ 17.09: ярус едет только в owner-DM. В группе он больше не собирается вовсе —
+        # даже для ходов владельца (реплика публична, см. сужение owner_audience выше).
+        if not owner_audience:
+            private_rows = []
         frame_layout.stash(head_stable_private="\n\n".join(private_rows))
     in_a_channel = (ctx.chat_id is not None or ctx.room_id is not None
                     or bool(ctx.principal_id) or bool(getattr(ctx, "is_dm", False)))
@@ -9203,10 +9336,21 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     else:
         veil = (f" Здесь не owner-контур, поэтому строк приватных записей снято {hidden} —"
                 f" они есть в первоисточнике и открываются рукой.")
+    if epoch:
+        # Под эпохой всё, что зависит от говорящего, уезжает в живой хвост через снимок
+        # (frame_layout.stash), а тела остаются здесь — замороженному документу нельзя
+        # менять состав от того, кто заговорил. Оговорка о снятых приватных строках —
+        # тоже про аудиторию ЭТОГО хода, поэтому едет вместе со строкой «передо мной».
+        frame_layout.stash(epoch_dossier_who=who + "." + veil, epoch_dossier_cards=dict(cards),
+                           epoch_dossier_speaker=str(bound or ""))
+        who_line = ""
+        veil = ""
+    else:
+        who_line = "\n" + who + "."
     if not contract:
         head = (f"досье: {len(rows)}, знаков {total}. Это моя память о людях целиком, без "
                 f"отбора и без сжатия; путь у каждого назван, первоисточник открывается рукой."
-                f"{veil}\n{who}.")
+                f"{veil}{who_line}")
         return head + "\n\n" + "\n\n".join(rows)
     # ⚑ Указатели печатаются ОТДЕЛЬНО от тел и названы указателями. Смешать их с досье
     # значило бы соврать о том, что она видит: тело едет, указатель — нет.
@@ -9228,7 +9372,7 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     head = (f"досье здесь: {len(rows)} из {total_all}, знаков {total}. Едут целиком те, "
             f"кого транспорт назвал присутствующими; остальные доступны рукой по "
             f"memory/people/ и карте памяти — они не удалены, они не в кадре."
-            f"{frame_note}{veil}\n{who}.")
+            f"{frame_note}{veil}{who_line}")
     body = ("\n\n" + "\n\n".join(rows)) if rows else ""
     return head + body + tail
 
@@ -9496,14 +9640,76 @@ _ROOM_TOOLS_CONTRACT_STABLE = _OWNER_TOOLS_CONTRACT.replace(
 # только на ходах владельца. Причины ярусов — в `frame_layout._TIERS` (по префиксу ярлыка).
 _STATE_NOW_TIER = ("Состояние сейчас (типизированное STATE; под PRAXIS_FRAME_HEAD_STABLE едет "
                    "здесь, а не в голове)")
-_PRIVATE_TIER = ("Приватное из досье присутствующих (видно, потому что действует владелец; "
+_PRIVATE_TIER = ("Приватное из досье присутствующих (видно, потому что это личка владельца; "
                  "из головы вырезано для всех говорящих)")
+# Живые ярусы эпохи комнаты (frame_epoch, 15.09): то из досье, что зависит от говорящего.
+_EPOCH_WHO_TIER = ("Кто передо мной (привязка по tg, не по имени; снято на этом ходе, "
+                   "в эпоху не входит)")
+_EPOCH_SPEAKER_TIER = ("Досье говорящего — не в эпохе (человек появился после заморозки; "
+                       "целиком, из memory/people/)")
 
 
 def _frame_absent_branch(*names: str) -> None:
     """Объявить прибору, что этих секций в кадре нет из-за невыбранной ветки."""
     for name in names:
         frame_trace.absent(name, "dynamic", "text", "branch")
+
+
+def _epoch_serve(chat_id, anchor, blocks, chosen) -> None:
+    """Поднять или заморозить эпоху комнаты, разметить её, живую справку — в конверт.
+
+    Стабильные ярусы этого хода едут в frame_epoch.serve как «то, что собралось бы сейчас»;
+    в кадр уезжают ЗАМОРОЖЕННЫЕ байты (те же или прежние), и метятся именно они — иначе
+    склейка зоны `epoch` разошлась бы с первым сообщением при любом дрейфе. Наши строки
+    замороженных блоков (шапки ярусов) объявляются прибору заново: они объявлялись в чужом
+    ходе, а реестр объявленного живёт ход. Расписка — в снимке зоны «СЕЙЧАС» и в живом
+    ярусе-справке, чтобы она видела номер эпохи и что изменилось после заморозки."""
+    frozen, receipt = frame_epoch.serve(
+        chat_id, anchor, [(title, kind, block) for title, kind, block, _c, _s in blocks])
+    causes = {title: (cause, sign) for title, _kind, _block, cause, sign in blocks}
+    head = frame_trace.mark("epoch.head", "epoch", "text", frame_epoch.head(receipt),
+                            first=True, cause="эпоха")
+    marked: list[str] = []
+    for title, kind, block in frozen:
+        cause, sign = causes.get(title, ("эпоха", 0))
+        for line in block.split("\n"):
+            if line and not gutter.is_gutter_line(line):
+                frame_trace.declare("epoch.section", line)
+        marked.append(frame_trace.mark("epoch.tier", "epoch", kind, block, label=title,
+                                       cause=cause, provenance_chars=sign))
+    close = frame_trace.mark("epoch.close", "epoch", "text", frame_epoch.CLOSE, cause="эпоха")
+    frame_epoch.take(head + "".join(marked) + close, receipt)
+    frame_layout.stash(epoch_n=receipt.get("n"), epoch_anchor=receipt.get("anchor"),
+                       epoch_frozen_at=receipt.get("frozen_at"),
+                       epoch_reason=receipt.get("reason"),
+                       epoch_drift=len(receipt.get("drift") or {}),
+                       epoch_chars=receipt.get("chars"))
+    note_block, note_cause, note_sign = frame_layout.section(
+        frame_epoch.LIVE_TIER, frame_epoch.live_note(receipt), kind="json")
+    chosen.append(frame_trace.mark("evidence.tier", "evidence", "json", note_block,
+                                   label=frame_epoch.LIVE_TIER, cause=note_cause,
+                                   provenance_chars=note_sign))
+    # Досье: тела заморожены в эпохе составом на момент заморозки; «кто передо мной» — живая
+    # строка; говорящий, чьего досье в эпохе нет (пришёл после заморозки), едет целиком.
+    snap = frame_layout.snapshot()
+    who = str(snap.get("epoch_dossier_who") or "")
+    if who:
+        who_block, who_cause, who_sign = frame_layout.section(_EPOCH_WHO_TIER, who, kind="json")
+        chosen.append(frame_trace.mark("evidence.tier", "evidence", "json", who_block,
+                                       label=_EPOCH_WHO_TIER, cause=who_cause,
+                                       provenance_chars=who_sign))
+    cards = snap.get("epoch_dossier_cards") or {}
+    stem = str(snap.get("epoch_dossier_speaker") or "")
+    card = cards.get(stem) if isinstance(cards, dict) and stem else None
+    if card:
+        frozen_dossier = "".join(block for title, _kind, block in frozen
+                                 if title.startswith("Мои досье на людей"))
+        if f"memory/people/{stem}.md —" not in frozen_dossier:
+            card_block, card_cause, card_sign = frame_layout.section(
+                _EPOCH_SPEAKER_TIER, card, kind="json")
+            chosen.append(frame_trace.mark("evidence.tier", "evidence", "json", card_block,
+                                           label=_EPOCH_SPEAKER_TIER, cause=card_cause,
+                                           provenance_chars=card_sign))
 
 
 def _build_prompt_parts(
@@ -9620,7 +9826,27 @@ def _build_prompt_parts(
          "в ходе, а результат приходит репликой. Обещание сходить и посмотреть — не работа; "
          "собеседник увидит только обещание.\n"
          "Для болтовни, шутки и мнения ничего этого не нужно: там мой ответ и есть "
-         "результат.\n")
+         "результат.\n"
+         # 15.09.2026, ПРО ЯЗЫК И ПРО ФОРМУ. Голос переключили на glm-5.3, и за сутки
+         # ЧЕТЫРНАДЦАТЬ ходов в AbstractDL кончились `delivery_skipped: turn ended without
+         # a reply hand`: модель писала готовый, верный по смыслу ответ обычным текстом и
+         # не звала `reply` вовсе. Все на glm, ни одного на sol/astra/terra.
+         #
+         # Корень оказался НЕ в языке правила и не в «слабой модели»: кадр сам показывал
+         # образец. Её прошлые реплики ехали ролью `assistant` с машинным конвертом
+         # (`[root; message #105385; 2026-…Z; reply_to=#105380] …`) — пять подряд в одном
+         # кадре. Модель конверт воспроизводила, вместе с выдуманным номером следующего
+         # сообщения. Конверт снят в `group_context._format_message(as_self=True)`; там же
+         # числа пробы. Текст ниже остаётся: он называет механику, а не отчитывает.
+         "\nHow speaking works here, in English because the voice may not read Russian:\n"
+         "1. `reply` is the only way your words reach a person. Text written outside a "
+         "tool call is a note to yourself: nothing is sent, and the turn ends quietly.\n"
+         "2. Lines quoted with `>` are the room transcript. Their header — "
+         "`[root; message #123; 2026-09-15T16:10:12Z; Name]` — is written by the renderer "
+         "so that you can see who spoke, when, and to whom. It is a label to read, not a "
+         "form to write in.\n"
+         "3. Your own earlier turns appear as your words alone, with no header. That is "
+         "the shape of speech here: the words, and `reply` to carry them.\n")
         if work_loop.reply_hand_enabled() else
         ("\n\n## В разговоре можно работать, а не только отвечать\n"
          "Ход в чате не обязан кончаться первым же текстом. Инструменты здесь те же, что в "
@@ -9654,6 +9880,23 @@ def _build_prompt_parts(
     # не должна молча отключать prompt_cache_key.
     audience_key = ""
     room_stable = _room_head_stable(ctx)
+    own_stable = _own_run_head_stable(ctx)
+    state_moved = room_stable or own_stable
+    # ⚑ ЭПОХА КОМНАТЫ (PRAXIS_FRAME_EPOCH, frame_epoch.py, 15.09): стабильные ярусы конверта
+    # замораживаются файлом на границе свёртки и едут ПЕРВЫМ сообщением кадра, живые — как и
+    # прежде, последним. Якорь — тот, с которого раннер собрал ленту (frame_epoch.bind); без
+    # привязки считается по горячему окну. Нет якоря — нет эпохи на этот ход, и это названо.
+    frame_epoch.reset()
+    room_epoch = frame_epoch.applies(ctx)
+    epoch_anchor = None
+    if room_epoch:
+        epoch_anchor = frame_epoch.bound_anchor(chat_id)
+        if epoch_anchor is None:
+            epoch_anchor = frame_epoch.anchor_for(chat_id)
+        if epoch_anchor is None:
+            room_epoch = False
+            log.info("эпоха [%s]: якоря нет — конверт прежним порядком", chat_id)
+    frame_epoch.activate(room_epoch)
     authority = None
     if room_stable:
         # ⚑ СТАБИЛЬНАЯ ГОЛОВА КОМНАТЫ (PRAXIS_FRAME_HEAD_STABLE, см. head_stable_enabled).
@@ -9708,14 +9951,19 @@ def _build_prompt_parts(
         )
         # STATE is tier-0.  Raw diary prose is deliberately not injected: it is
         # preserved for explicit episodic recall, never automatic orientation.
-        with pre_model_timing.span("old_context.state_block"):
-            state = build_state_block(hide_identity_load=ctx.hide_identity_load)
-        if state:
-            tail.append(frame_trace.mark("state.state_block", "dynamic", "text", f"\n{state}\n"))
+        if own_stable:
+            # STATE её собственного хода уезжает из головы в ярус «Состояние сейчас» (ниже):
+            # живые счётчики в system рвали префикс кэша каждого окна (runs_head_stable_enabled).
+            frame_trace.absent("state.state_block", "dynamic", "text", "moved")
         else:
-            # «Источник пуст» — не то же самое, что «ветка не выбрана»: длина секции скачет
-            # от хода к ходу из-за семнадцати независимых try/except внутри build_state_block.
-            frame_trace.absent("state.state_block", "dynamic", "text", "empty")
+            with pre_model_timing.span("old_context.state_block"):
+                state = build_state_block(hide_identity_load=ctx.hide_identity_load)
+            if state:
+                tail.append(frame_trace.mark("state.state_block", "dynamic", "text", f"\n{state}\n"))
+            else:
+                # «Источник пуст» — не то же самое, что «ветка не выбрана»: длина секции скачет
+                # от хода к ходу из-за семнадцати независимых try/except внутри build_state_block.
+                frame_trace.absent("state.state_block", "dynamic", "text", "empty")
         _frame_absent_branch("contract.family_audience", "contract.unknown_authority")
     elif scope == "family":
         tail.append(
@@ -9824,7 +10072,7 @@ def _build_prompt_parts(
         tiers.append(("Mutable operational continuity",
                       state_evidence))
         raw_jsonl_tiers.add("Mutable operational continuity")
-    if room_stable and owner_context:
+    if state_moved and owner_context:
         # STATE под стабильной головой: те же строки, тот же адресат (владелец), другое место —
         # живой конверт, где волатильность `durable_runs`/`unanswered_dm`/`loops` бесплатна.
         with pre_model_timing.span("old_context.state_block"):
@@ -9875,7 +10123,10 @@ def _build_prompt_parts(
                       + " (внутреннее; что произнести вслух в этой комнате, решаю я)",
                       participant_cards or frame_layout.void(
                           f"нет привязки tg {ctx.principal_id} → memory/people/*")))
-    if private_now:
+    if private_now and owner_audience:
+        # ⚠ 17.09: двойная защита. private_now непуст только если ход — owner-DM, но если
+        # это ограничение когда-нибудь обойдётся (старый снимок, чужой вызов), гейт здесь
+        # не даст ярусу появиться в групповом кадре повторно.
         tiers.append((_PRIVATE_TIER, private_now))
     scheduled_moderation = _scheduled_target_moderation_block(ctx)
     if scheduled_moderation:
@@ -9972,6 +10223,8 @@ def _build_prompt_parts(
                             card += "\n\n_(в этой комнате disclosure: open — можно больше фактуры)_\n" + extra
                 except Exception:
                     log.debug("disclosure extras не собрались", exc_info=True)
+            # ⚑ ЕЁ §5.1 (15.09): визитка едет в ХВОСТ целиком, без разреза на стабильную и
+            # живую половины. Под эпохой она остаётся живым ярусом конверта, как и сейчас.
             tiers.append(("Визитка (о себе рассказывай отсюда и из проверяемого: STATE/receipts/git)",
                            card))
     with pre_model_timing.span("old_context.recall"):
@@ -9990,6 +10243,9 @@ def _build_prompt_parts(
         budget = 0
     used = len(persona) + len(tail_text)
     chosen, dropped = [], []
+    # Стабильные ярусы под эпохой: (ярлык, kind, блок, причина, подпись) — метятся ПОСЛЕ
+    # заморозки замороженными байтами (см. _epoch_serve), поэтому здесь только копятся.
+    epoch_blocks: list[tuple[str, str, str, str, int]] = []
     _tiers_started = time.monotonic()
     i = 0
     while i < len(tiers):
@@ -10030,6 +10286,10 @@ def _build_prompt_parts(
                      private_cause, private_sign_chars),
                 ):
                     keat_economy.section(selected_body, selected_block)
+                    if room_epoch and frame_epoch.stable_title(selected_title):
+                        epoch_blocks.append((selected_title, selected_kind, selected_block,
+                                             selected_cause, selected_sign))
+                        continue
                     chosen.append(frame_trace.mark(
                         "evidence.tier", "evidence", selected_kind, selected_block,
                         label=selected_title, cause=selected_cause,
@@ -10041,7 +10301,7 @@ def _build_prompt_parts(
         # STATE likewise moved out of the already-counted system head. Its live-section wrapper
         # must not consume optional-tier budget a second time; this is parity accounting, not an
         # undroppable exception (the positive-budget counter still stays at or below its limit).
-        charge = (0 if room_stable and owner_context and title == _STATE_NOW_TIER
+        charge = (0 if state_moved and owner_context and title == _STATE_NOW_TIER
                   else len(block))
         if budget > 0 and used + charge > budget:
             dropped.append(title)
@@ -10050,14 +10310,20 @@ def _build_prompt_parts(
             i += 1
             continue
         keat_economy.section(body, block)
-        chosen.append(frame_trace.mark("evidence.tier", "evidence", tier_kind, block,
-                                       label=title, cause=cause,
-                                       provenance_chars=sign_chars))
+        if room_epoch and frame_epoch.stable_title(title):
+            epoch_blocks.append((title, tier_kind, block, cause, sign_chars))
+        else:
+            chosen.append(frame_trace.mark("evidence.tier", "evidence", tier_kind, block,
+                                           label=title, cause=cause,
+                                           provenance_chars=sign_chars))
         used += charge
         i += 1
     # used_start — ТО ЖЕ выражение, которым считает код выше: прибор и код обязаны мерить
     # одной линейкой, иначе спор о числах не закроется, а сместится.
     pre_model_timing.add("old_context.tiers", (time.monotonic() - _tiers_started) * 1000)
+    if room_epoch:
+        with pre_model_timing.span("old_context.epoch"):
+            _epoch_serve(chat_id, epoch_anchor, epoch_blocks, chosen)
     frame_trace.note_budget(limit=budget, used_start=len(persona) + len(tail_text),
                             used_final=used, offered=len(tiers), included=len(chosen),
                             dropped=len(dropped))
@@ -10173,7 +10439,10 @@ _THINK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
 # включая слитные пачки citeturn0view0turn0search19. Ссылки при этом не теряются: их
 # текст живёт в самом сообщении, а не в токене.
 _CITE_TURN_RE = re.compile(
-    r"(?:cite)?turn\d+(?:view|search)\d+", re.IGNORECASE)
+    # 16.09, аудит 15.09: academia/news — реальные типы в архиве (13 вхождений);
+    # ведущий `/` срезается вместе с токеном, иначе маркер, приклеенный z.ai к концу
+    # URL, оставлял битую ссылку https://example.org/turn0search1 → https://example.org/
+    r"/?(?:cite)?turn\d+(?:view|search|academia|news)\d+", re.IGNORECASE)
 # 14.09: нативный веб-поиск GPT через реле (gpt-6-astra) оборачивает те же маркеры в
 # символы частного диапазона Unicode: U+E200 «cite» U+E202 «turn0search0» U+E201, пачкой —
 # U+E200 cite U+E202 turn0search12 U+E202 turn0search0 U+E201. Прежний срез убирал только
@@ -12020,6 +12289,7 @@ def _delivery_evidence(run_id: str) -> dict:
     chunk_receipts: dict[int, dict] = {}
     refused_media: dict[str, dict] = {}
     skipped = False
+    skip_reason = ""
     for row in _runs().iter_events(run_id):
         kind = str(row.get("kind") or "")
         if (kind == "tool_started" and row.get("tool") == "telegram.deliver"
@@ -12036,6 +12306,11 @@ def _delivery_evidence(run_id: str) -> dict:
                 refused_media[refused_queue] = dict(row)
         elif kind == "delivery_skipped":
             skipped = True
+            # Причина едет РЯДОМ с флагом: сам флаг отвечает «текстовой доставки не
+            # было», и на этот вопрос под контрактом руки ответ всегда один. Какой
+            # именно это был исход, знает только причина, и раньше она до сводки не
+            # доезжала — поэтому три разных случая печатались одной строкой.
+            skip_reason = str(row.get("reason") or "")
         elif kind == "telegram_text_chunk_accepted":
             try:
                 chunk_receipts[int(row.get("index"))] = dict(row)
@@ -12129,6 +12404,9 @@ def _delivery_evidence(run_id: str) -> dict:
         "composite_receipt": copy.deepcopy(composite),
         "ready": intent is not None and text_ok and media_ok and (not skipped or expected_media == 0),
         "silent": skipped,
+        # Новый ключ рядом со старым, а не вместо него: по `silent` сверяется
+        # каноническая расписка доставки, и менять его смысл нельзя.
+        "skip_reason": skip_reason,
         "expected_text_chars": expected_text,
         "observed_text_chars": len(final_text),
         "partial_text": expected_text > 0 and len(final_text) != expected_text,
@@ -12341,12 +12619,37 @@ def run_delivery_finalize_recovered(run_id: str, *, media_count: int = 0) -> boo
             status = "running"
         if status != "running":
             return False
+        # ⚑ ТРИ ИСХОДА, А НЕ ДВА. `evidence["silent"]` отвечает про ТЕКСТОВЫЙ путь, и
+        # под контрактом руки он пуст всегда: последний текст — заметка. Пока исход
+        # читался только по нему, ход с двумя доставленными рукой сообщениями закрывался
+        # «silent decision» с пустым `message_ids`. Расписки руки durable и лежат рядом;
+        # спросить их — не догадка, а тот же источник.
+        #
+        # `evidence["silent"]` НЕ ТРОГАЕТСЯ намеренно: по нему сверяется каноническая
+        # расписка доставки (`canonical_receipt` выше), и сдвинуть его значило бы
+        # объявить расхождение там, где его нет.
+        text_ids = list(evidence.get("message_ids") or ())
+        hand_ids = reply_hand_message_ids(run_id) if evidence.get("silent") else []
+        skip_reason = str(evidence.get("skip_reason") or "")
+        if not evidence.get("silent"):
+            outcome_reason = "Telegram delivery reconciled from durable receipts"
+        elif hand_ids:
+            outcome_reason = "delivered by the reply hand"
+        elif "without a reply hand" in skip_reason:
+            # ⚠ Это НЕ её решение, и событие пропуска говорит об этом прямым текстом:
+            # «not a declared silence». Исход, называвший такой ход «silent decision»,
+            # противоречил собственной расписке и выводил её решение из пустоты —
+            # ровно та конструкция, за которую здесь уже платили 28.07.
+            outcome_reason = "turn ended without a reply hand"
+        elif "explicit end_turn" in skip_reason:
+            outcome_reason = "turn closed by her explicit end_turn"
+        else:
+            outcome_reason = "silent decision"
         return _finish_durable_run(
             run_id, "done", final_text=str(evidence.get("final_text") or ""),
-            reason=("silent decision" if evidence.get("silent")
-                    else "Telegram delivery reconciled from durable receipts"),
+            reason=outcome_reason,
             details={
-                "message_ids": list(evidence.get("message_ids") or ()),
+                "message_ids": text_ids or hand_ids,
                 "media_count": int(evidence.get("observed_media_count") or 0),
             },
             strict=True,
@@ -13001,6 +13304,24 @@ def _resume_result_image(run_id: str, call_name: str, call_input: dict,
              "origin": "computer-observe"},)
 
 
+def _media_outlives_an_empty_draft(outbound, draft: str, silence: dict | None) -> bool:
+    """Переживает ли поднятое медиа пустой выход гарда. Три условия, все обязательны.
+
+    * медиа вообще есть — иначе решать нечего;
+    * ЧЕРНОВИК БЫЛ ПУСТ. Значит гард ничего не придерживал: проводить было нечего.
+      Непустой черновик, ОБНУЛЁННЫЙ гардом (кред-пол, вердикт советника `deny`), — это
+      отказ, и он накрывает вложение тоже: тем же секретом можно поделиться картинкой.
+      Граница закреплена `test_perceive`
+      (`test_a_receipt_that_really_held_her_text_still_stays_silent`);
+    * она не объявляла молчание рукой `stay_silent` — та держит и текст, и медиа
+      («text and media, if they are still assembled after it, will not go out» в описании
+      самой руки), и живой путь зовёт там `_drop_outbound`.
+    """
+    if not outbound or str(draft or "").strip():
+        return False
+    return not bool((silence or {}).get("chosen"))
+
+
 class _AgentResumeRuntime:
     """Praxis bindings for one already-planned, revision-bound resume."""
 
@@ -13486,7 +13807,24 @@ class _AgentResumeRuntime:
         if (run_resume.text_is_a_note(getattr(self.plan, "context", None), offered or ())
                 and not self.outbound):
             with self.bind():
-                run_delivery_completed(self.plan.run_id, silent=True)
+                # ⚠ 15.09. Здесь стояло безусловное `silent=True` с умолчанием причины
+                # «Praxis chose silence» — то есть КАЖДЫЙ ход под контрактом руки
+                # записывался её решением молчать, включая ходы, где рука уже унесла
+                # два сообщения. Живой случай: прогон 17:38 доставил #105460 и #105461
+                # и закрылся «silent decision». Егор читал это в мини-приложении как
+                # «опять молчит», а она — в своём же кольце ходов: в 17:01 написала в
+                # чат «кусок ленты пропустила молчанием», хотя не пропускала.
+                #
+                # Пропуск ТЕКСТОВОЙ доставки здесь по-прежнему факт: последний текст под
+                # рычагом — заметка, и наружу он не идёт. Меняется только ПРИЧИНА, и
+                # только когда рука доказано говорила. Ход, где рука молчала, пишет
+                # прежнюю строку байт-в-байт.
+                run_delivery_completed(
+                    self.plan.run_id, silent=True,
+                    silent_reason=(
+                        "turn-final text is a note; the reply hand already spoke"
+                        if replies_delivered(self.plan.run_id) > 0
+                        else "Praxis chose silence"))
             # Форма ответа — та же, что у соседней silent-ветки этого же метода
             # (`{"silent": True, "text": "", "media_queue_ids": []}`): два разных словаря
             # из одного метода разъехались бы у читателя молча.
@@ -13567,6 +13905,54 @@ class _AgentResumeRuntime:
                     "guard receipt media set differs from checkpoint")
             guarded = str(receipt.get("text") or "")
             if not guarded:
+                # Решение молчать читается из WAL событием-за-событием; без поднятого
+                # медиа решать нечего, и платить этим обходом за каждый молчаливый ход
+                # незачем.
+                silence_now = self._silence_from_wal() if self.outbound else {}
+                if _media_outlives_an_empty_draft(self.outbound, draft, silence_now):
+                    # ⚑ ПУСТОЙ ТЕКСТ — ЭТО НЕ ОТЗЫВ ФАЙЛА.
+                    #
+                    # Живой случай 16.09 15:42 (комната -1004375515554): она позвала
+                    # `reply` дважды, потом `send_file`, потом `end_turn`. Рука честно
+                    # ответила «Подготовила document; отправка будет только после проверки
+                    # исходящего ответа» — а проверять было нечего: под контрактом руки
+                    # текст в конце хода это заметка, черновик пуст. Ветка ниже читала
+                    # пустоту как молчание и роняла очередь: расписка доставки
+                    # `{"silent": true, "media_count": 0}`, файл остался уликой в прогоне,
+                    # и НИКТО ей об этом не сказал. Правило писалось против контрабанды
+                    # («A voice-level silence never smuggles tool-staged media»), но
+                    # `send_file` — не контрабанда мимо неё, это её собственный вызов руки.
+                    #
+                    # ЖИВОЙ ПУТЬ ТАК УЖЕ УМЕЕТ. Под `work_loop.reply_hand_enabled()` ход с
+                    # поднятым медиа и без текста уезжает конвертом:
+                    # `_media_spool().envelope("", outbound=outbound, …)` — «текста в
+                    # конверте нет, он ушёл рукой». Возобновлённый ход обязан решать так
+                    # же: один и тот же ход не может отдать файл живьём и проглотить его
+                    # после рестарта.
+                    text, route, reply_to = self._route_and_reply("")
+                    started = run_delivery_started(
+                        self.plan.run_id, chat_id=route.conversation_id,
+                        text_chars=0, media_count=len(self.outbound), text_plan=None,
+                        media_queue_ids=[item.queue_id for item in self.outbound],
+                    )
+                    if not started:
+                        raise DurableExecutionError(
+                            "durable delivery intent was not accepted")
+                    try:
+                        self._validate_current_authority()
+                        self._queue_media(reply_to=reply_to)
+                    except Exception as exc:
+                        run_delivery_blocked(
+                            self.plan.run_id,
+                            reason=("durable delivery owns staged media but queue handoff "
+                                    f"failed: {type(exc).__name__}: {exc}"),
+                        )
+                        raise
+                    return {
+                        "silent": False, "text": str(text or ""),
+                        "media_queue_ids": [item.queue_id for item in self.outbound],
+                        "conversation_id": route.conversation_id,
+                    }
                 if self.outbound:
                     # A voice-level silence never smuggles tool-staged media.
                     # Keep immutable files as evidence; do not enqueue them.
@@ -14170,6 +14556,48 @@ def replies_delivered(run_id: str) -> int:
     return sum(1 for row in rows
                if row.get("kind") == "direct_outbox_projection"
                and str(row.get("call_id") or "") in replies)
+
+
+def reply_hand_message_ids(run_id: str) -> list[str]:
+    """Номера сообщений, которые в ЭТОМ прогоне унесла рука `reply`, по порядку.
+
+    ⚑ ЗАЧЕМ. `replies_delivered` отвечает «сколько», а исход прогона обязан сказать
+    «какие»: без номеров запись «доставлено» ничем не отличается от обещания. Считается
+    по тем же durable-распискам — проекция приёмки прямой отправки, — так что номера
+    переживают рестарт и не зависят от живого счётчика в памяти процесса.
+
+    Расписка, которую не удалось прочитать, ПРОПУСКАЕТСЯ, а не роняет вызов: это
+    читатель ярлыка, и уронить из-за него доводку прогона значило бы чинить надпись
+    ценой самого хода. Пустой список — «номеров не нашлось», а не «рука молчала»;
+    про «молчала или нет» отвечает `replies_delivered`.
+    """
+    if not run_id:
+        return []
+    try:
+        rows = list(_runs().iter_events(run_id, strict=True))
+    except Exception:
+        log.debug("расписки прогона не прочитались [%s]", run_id, exc_info=True)
+        return []
+    replies = {str(row.get("call_id") or "") for row in rows
+               if row.get("kind") == "tool_started"
+               and str(row.get("tool") or row.get("name") or "") == "reply"}
+    if not replies:
+        return []
+    out: list[str] = []
+    for row in rows:
+        if (row.get("kind") != "direct_outbox_projection"
+                or str(row.get("call_id") or "") not in replies):
+            continue
+        try:
+            value = _run_result_json(run_id, row)
+        except Exception:
+            log.debug("проекция прямой отправки не прочиталась [%s]", run_id, exc_info=True)
+            continue
+        message_id = (value or {}).get("message_id")
+        if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id <= 0:
+            continue
+        out.append(str(message_id))
+    return out
 
 
 def run_direct_outbox_accepted(entry: dict) -> bool:
@@ -15302,7 +15730,11 @@ def catalog_tools_for(ctx: "ChannelContext") -> list:
     closer = [t for t in tools if t.get("name") == "end_turn"]
     if closer:
         tools = [t for t in tools if t.get("name") != "end_turn"] + closer
-    return tools
+    # 15.09: английский текст схем накладкой (tool_text_en, рычаг PRAXIS_TOOLS_EN). Здесь,
+    # в ЕДИНСТВЕННОМ сборщике списка (контракт A1), потому что иначе отпечаток набора,
+    # тень кадра и то, что видит модель, разошлись бы между собой. Меняется только
+    # пояснительный текст: имена, типы, enum и порядок остаются как были.
+    return tool_text_en.apply(tools)
 
 
 def _offered_function_names(tools: list) -> set[str]:
@@ -15875,7 +16307,13 @@ def _voice_impl(
     role_history = [{key: value for key, value in row.items()
                      if key != "_keat_occurrence"}
                     for row in history[-HISTORY_TURNS:]]
-    messages = frame_layout.tape(role_history) + [{
+    # 15.09, эпоха комнаты (frame_epoch): замороженный документ E — ПЕРВЫМ сообщением, до
+    # ленты; лента с якоря — ролями как раньше; живой конверт — последним. Нет эпохи — список
+    # прежний байт-в-байт. Порядок и есть смысл: ничто, что меняется чаще, не стоит выше того,
+    # что меняется реже.
+    epoch_taken = frame_epoch.taken()
+    epoch_messages = ([{"role": "user", "content": epoch_taken[0]}] if epoch_taken else [])
+    messages = epoch_messages + frame_layout.tape(role_history) + [{
         "role": "user", "content": current_user,
     }]
     # ⚠ ПРИБОР НАД ВСЕЙ ЛЕНТОЙ, А НЕ НАД ПОСЛЕДНИМ СООБЩЕНИЕМ. `assay` судит `messages[-1]`;
@@ -15907,7 +16345,7 @@ def _voice_impl(
     # Точка правды следа. На возврате билдера снимать смещения было бы ложью: к этой
     # строке хвост уже дописан (extra_system, подсказка компактирования).
     frame_trace.seal(persona=persona, dynamic=dynamic, evidence=memory_evidence, system=system,
-                     situation=situation)
+                     situation=situation, epoch=(epoch_taken[0] if epoch_taken else ""))
     if tools_override is not None:
         tools = list(tools_override)  # PASS 12.1 (ревизия 06.07): именованный safe-набор
     elif no_tools:
@@ -15930,7 +16368,7 @@ def _voice_impl(
     candidate_messages = None
     provider_history = getattr(capture_state, 'provider_history', None)
     if provider_history is not None:
-        candidate_messages = frame_layout.tape(provider_history) + [{
+        candidate_messages = epoch_messages + frame_layout.tape(provider_history) + [{
             "role": "user", "content": _with_context_evidence(
                 getattr(capture_state, 'provider_current', user_msg),
                 "\n\n".join(evidence_parts), situation),

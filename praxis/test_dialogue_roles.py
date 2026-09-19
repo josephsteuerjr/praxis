@@ -319,17 +319,23 @@ class GroupRolesRideOnTopOfTheRender(unittest.TestCase):
                          "лента разошлась с тем, что видит расписка")
         self.assertIn("Praxis [id 5]", joined, "подпись пропала из самой ленты")
 
-    def test_her_line_loses_only_her_name_and_keeps_its_coordinates(self):
+    def test_her_role_line_is_her_words_and_nothing_of_the_envelope(self):
+        """15.09: конверт в роли `assistant` был образцом для подделки, а не адресом.
+
+        Её реплика в роли — тело. Архивная строка (`line`) конверт сохраняет целиком:
+        там роли нет, и там он вправду координата.
+        """
         self._say(7, "Аркадий", "вопрос")
         self._say(8, "Praxis", "мой ответ", mine=True, reply=7)
         mine = [r for r in self._rows() if r["self"]]
         self.assertEqual(len(mine), 1)
         role_line = mine[0]["role_line"]
-        self.assertNotIn("Praxis", role_line, "её реплика снова подписана её именем")
-        self.assertIn("message #8", role_line, "потерян её адрес в комнате")
-        self.assertIn("reply_to=#7", role_line, "потеряно, кому она отвечала")
-        self.assertIn("topic #7", role_line)
-        self.assertIn("мой ответ", role_line)
+        self.assertEqual(role_line, "мой ответ", "в роль уехало не только её тело")
+        self.assertNotIn("message #8", role_line, "конверт снова учит подделывать шапку")
+        self.assertNotIn("reply_to=#7", role_line)
+        self.assertNotIn("topic #7", role_line)
+        self.assertIn("message #8", mine[0]["line"], "архивная строка потеряла адрес")
+        self.assertIn("Praxis [id 5]", mine[0]["line"], "архивная строка потеряла автора")
 
     def test_authorship_comes_from_the_record_not_from_the_name(self):
         """Чужое сообщение от лица «Praxis» не имеет права стать её репликой."""
