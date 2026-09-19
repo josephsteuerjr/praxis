@@ -1162,6 +1162,7 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
     impl["computer"] = computer
     if sys.platform == "darwin":
         describe_for_mac(agent_mod)
+        speak_mac(agent_mod)
     log.info("тело: рука computer подключена — %s", windows_truth())
 
 
@@ -1262,3 +1263,113 @@ def describe_for_mac(agent_mod) -> int:
         log.info("тело: описания тулов computer/computer_access переведены на слова macOS "
                  "(схем: %d)", len(seen))
     return len(seen)
+
+
+# --------------------------------------------------------------------------- #
+#  macOS: указатель руки и блок владельца в кадре тоже написаны под Windows
+# --------------------------------------------------------------------------- #
+#
+# Живой случай 20.09 (Mac, 0.8.1): на просьбу подвинуть мышь агент ответил «на маке
+# не реализовано», не позвав тул. Схему `computer` describe_for_mac уже переводил,
+# но модель читает не схему: с указателями рук (PRAXIS_TOOLS_POINTERS=on, издание
+# 0.7.1) она видит строку «Yegor's Windows computer: files, PowerShell, …»
+# (`tool_text_en.POINTER_PURPOSE`, по-русски — `agent.HAND_PURPOSE`), а в блоке
+# владельца кадра — «The Windows PC is your DIRECT body … run/poll/stop PowerShell».
+# Оба текста — правда для сервера Праксис и для Windows-издания, и ложь на Mac.
+# Правим так же, как схему: подстрочно, в загруженном модуле, идемпотентно, и стенд
+# `tests/t_tool_text_mac.py` краснеет на каждую пару, которой в дереве больше нет.
+
+#: Указатель руки `computer`: русская строка дерева и её английская проекция.
+MAC_POINTER_TEXT: tuple[tuple[str, str], ...] = (
+    ("Windows-компьютер Егора", "компьютер владельца (macOS)"),
+    ("Yegor's Windows computer", "the owner's Mac"),
+    ("PowerShell", "zsh"),
+)
+
+#: Блок владельца в кадре (`contract.owner_tools`). Только про тело и его оболочку:
+#: остальное в блоке — про сервер, и на Mac оно ровно так же неверно, как на Windows.
+MAC_OWNER_TEXT: tuple[tuple[str, str], ...] = (
+    ("The Windows PC is your DIRECT body", "This Mac is your DIRECT body"),
+    ("run/poll/stop PowerShell, observe files and screen",
+     "run/poll/stop shell (zsh) processes, observe files and screen"),
+    ("spawning coding_agent subagents on Windows still goes through it. The PC has no LLM",
+     "spawning coding_agent subagents there still goes through it. The Mac has no LLM"),
+)
+
+#: Имя отрезка кадра с блоком владельца — как его метит дерево (`frame_trace.mark`).
+OWNER_TOOLS_MARK = "contract.owner_tools"
+
+
+def mac_pointer_text(text: str) -> str:
+    """Строка указателя руки `computer` словами macOS. Чистая, идемпотентна."""
+    for old, new in MAC_POINTER_TEXT:
+        text = text.replace(old, new)
+    return text
+
+
+def mac_owner_text(text: str) -> str:
+    """Блок владельца словами macOS. Чистая, идемпотентна."""
+    for old, new in MAC_OWNER_TEXT:
+        text = text.replace(old, new)
+    return text
+
+
+def pointers_for_mac(agent_mod) -> int:
+    """Указатель руки `computer` — в обоих словарях дерева. -> сколько строк тронуто.
+
+    `HAND_PURPOSE` — русский оригинал у самого дерева; `tool_text_en.POINTER_PURPOSE` —
+    английская проекция, которую модель читает при включённом рычаге. Правится то,
+    что есть; чужая форма словаря не роняет.
+    """
+    touched = 0
+    ru = getattr(agent_mod, "HAND_PURPOSE", None)
+    en_mod = getattr(agent_mod, "tool_text_en", None)
+    en = getattr(en_mod, "POINTER_PURPOSE", None)
+    for table in (ru, en):
+        if not isinstance(table, dict):
+            continue
+        old = table.get("computer")
+        if isinstance(old, str):
+            new = mac_pointer_text(old)
+            if new != old:
+                table["computer"] = new
+                touched += 1
+    return touched
+
+
+def owner_words_for_mac(agent_mod) -> bool:
+    """Блок владельца в кадре — словами macOS. -> обёртка поставлена этим вызовом.
+
+    Текст блока — литерал внутри сборки промпта, снаружи его не поправить. Но
+    каждый отрезок кадра дерево проводит через `frame_trace.mark(name, zone, kind,
+    text)`, и у этого отрезка имя известно (`OWNER_TOOLS_MARK`). Обёртка меняет
+    ТОЛЬКО его; всё остальное уходит в `mark` как пришло, тем же объектом — как
+    `mark` и обещает. Повторный вызов обёртку не удваивает.
+    """
+    ft = getattr(agent_mod, "frame_trace", None)
+    mark = getattr(ft, "mark", None)
+    if not callable(mark) or getattr(mark, "_helene_mac", False):
+        return False
+
+    def mac_mark(name, zone, kind, text, *args, **kwargs):
+        if name == OWNER_TOOLS_MARK and isinstance(text, str):
+            text = mac_owner_text(text)
+        return mark(name, zone, kind, text, *args, **kwargs)
+
+    mac_mark._helene_mac = True
+    mac_mark.__wrapped__ = mark
+    mac_mark.__name__ = getattr(mark, "__name__", "mark")
+    mac_mark.__doc__ = getattr(mark, "__doc__", "")
+    ft.mark = mac_mark
+    return True
+
+
+def speak_mac(agent_mod) -> dict:
+    """Всё, что модель читает про тело на Mac, — словами Mac: указатель и блок владельца.
+
+    Схемы тулов правит `describe_for_mac`; здесь — остальные два места. Зовётся из
+    `install` только на darwin; на Windows ничего этого нет по построению.
+    """
+    done = {"pointers": pointers_for_mac(agent_mod), "owner": owner_words_for_mac(agent_mod)}
+    log.info("тело: указатель руки и блок владельца — словами macOS (%s)", done)
+    return done

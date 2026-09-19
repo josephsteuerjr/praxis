@@ -638,6 +638,76 @@ class Platform(unittest.TestCase):
         # Соседний тул не трогаем: правятся ровно два имени.
         self.assertEqual(other["description"], "Windows shell")
 
+    def test_pointer_and_owner_block_speak_mac(self):
+        """20.09, Mac 0.8.1: «на маке не реализовано» — модель читала указатель
+        «Yegor's Windows computer: … PowerShell» и блок владельца «The Windows PC is
+        your DIRECT body»; схему describe_for_mac переводил, а эти два места — нет."""
+        ru = "Windows-компьютер Егора: файлы, PowerShell, экран, окна, руки"
+        en = "Yegor's Windows computer: files, PowerShell, screen, app windows, tools"
+        for sample in (ru, en):
+            said = body.mac_pointer_text(sample)
+            for word in ("Windows", "PowerShell", "Егора", "Yegor"):
+                self.assertNotIn(word, said, f"«{word}» осталось: {said}")
+            self.assertEqual(body.mac_pointer_text(said), said, "не идемпотентно")
+        self.assertEqual(body.mac_pointer_text(ru), "компьютер владельца (macOS): файлы, zsh, экран, окна, руки")
+        self.assertEqual(body.mac_pointer_text(en), "the owner's Mac: files, zsh, screen, app windows, tools")
+        owner = ("Audit is hash-chained. The Windows PC is your DIRECT body: the `computer` tool is the "
+                 "primary path there (read/hash/write/replace files, run/poll/stop PowerShell, observe "
+                 "files and screen, send artifacts, full desktop hands). No task container is required; "
+                 "`coding_session(scope='windows')` is a deprecated keyhole: it still works, existing wcode "
+                 "tasks finish normally, and spawning coding_agent subagents on Windows still goes through "
+                 "it. The PC has no LLM, memory or task store. Leave an evidence trail Yegor reads.\n")
+        said = body.mac_owner_text(owner)
+        for word in ("Windows PC", "PowerShell", "on Windows", "The PC has"):
+            self.assertNotIn(word, said, f"«{word}» осталось: {said}")
+        self.assertIn("This Mac is your DIRECT body", said)
+        self.assertIn("run/poll/stop shell (zsh) processes, observe files and screen", said)
+        self.assertIn("The Mac has no LLM, memory or task store", said)
+        # Соседние предложения целы, идемпотентно.
+        self.assertIn("Audit is hash-chained. This Mac", said)
+        self.assertIn("Leave an evidence trail Yegor reads.", said)
+        self.assertEqual(body.mac_owner_text(said), said)
+        self.assertEqual(body.mac_owner_text(""), "")
+
+    def test_speak_mac_patches_both_dictionaries_once_and_wraps_only_the_owner_mark(self):
+        agent = types.ModuleType("agent")
+        agent.HAND_PURPOSE = {"computer": "Windows-компьютер Егора: файлы, PowerShell, экран, окна, руки",
+                              "shell": "мои руки в контейнере"}
+        agent.tool_text_en = types.ModuleType("tool_text_en")
+        agent.tool_text_en.POINTER_PURPOSE = {
+            "computer": "Yegor's Windows computer: files, PowerShell, screen, app windows, tools",
+            "shell": "hands in the container"}
+        agent.frame_trace = types.ModuleType("frame_trace")
+        calls: list[tuple] = []
+
+        def mark(name, zone, kind, text, **kw):
+            calls.append((name, zone, kind, text, kw))
+            return text
+        agent.frame_trace.mark = mark
+
+        self.assertEqual(body.speak_mac(agent), {"pointers": 2, "owner": True})
+        self.assertEqual(agent.HAND_PURPOSE["computer"],
+                         "компьютер владельца (macOS): файлы, zsh, экран, окна, руки")
+        self.assertEqual(agent.tool_text_en.POINTER_PURPOSE["computer"],
+                         "the owner's Mac: files, zsh, screen, app windows, tools")
+        # Соседей не трогаем.
+        self.assertEqual(agent.HAND_PURPOSE["shell"], "мои руки в контейнере")
+        self.assertEqual(agent.tool_text_en.POINTER_PURPOSE["shell"], "hands in the container")
+        # Блок владельца переводится, всё остальное уходит в `mark` тем же объектом.
+        owner = "The Windows PC is your DIRECT body: run/poll/stop PowerShell, observe files and screen."
+        got = agent.frame_trace.mark(body.OWNER_TOOLS_MARK, "dynamic", "text", owner, label="x")
+        self.assertEqual(got, "This Mac is your DIRECT body: run/poll/stop shell (zsh) processes, "
+                              "observe files and screen.")
+        self.assertEqual(calls[-1][0], body.OWNER_TOOLS_MARK)
+        self.assertEqual(calls[-1][4], {"label": "x"})
+        other = "The Windows PC is mentioned here too"
+        self.assertIs(agent.frame_trace.mark("contract.other", "dynamic", "text", other), other)
+        # Повтор: словари уже переведены, обёртка не удваивается.
+        self.assertEqual(body.speak_mac(agent), {"pointers": 0, "owner": False})
+        self.assertIs(agent.frame_trace.mark.__wrapped__, mark)
+        # Чужая форма (нет словарей, нет frame_trace) не роняет.
+        self.assertEqual(body.speak_mac(types.ModuleType("bare")), {"pointers": 0, "owner": False})
+
     def test_install_on_darwin_rewrites_the_description_and_on_windows_leaves_it(self):
         from unittest.mock import patch
         g = Ground(_cfg())
