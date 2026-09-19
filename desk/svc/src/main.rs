@@ -311,6 +311,42 @@ fn adopt(child: &Child) {
     let _ = child;
 }
 
+/// Забыть пожатого ребёнка. ⚠⚠ ЗАЧЕМ (находка судей 19.09): после `wait` номер
+/// процесса СВОБОДЕН, и система выдаёт его следующему, кто запустится. Список
+/// же держал его до конца жизни службы — и `killpg` на остановке слал SIGKILL
+/// группе, которая к нам давно не имеет отношения. Под службой это чужие
+/// процессы владельца, убитые молча и без единой строки в журнале.
+#[cfg(unix)]
+fn forget_child(child: &Child) {
+    if let Ok(mut list) = PGIDS.lock() {
+        let pid = child.id() as i32;
+        list.retain(|p| *p != pid);
+    }
+}
+
+#[cfg(not(unix))]
+fn forget_child(_child: &Child) {}
+
+/// Кому из списка ещё можно слать сигнал. Чистая функция с подставной пробой —
+/// по ней и стенд: цена ошибки здесь не видна ни в одном журнале, потому что
+/// сигнал уходит ЧУЖОМУ процессу, и выглядит это как «у меня само закрылось».
+///
+/// `alive_leader` отвечает на ОБА вопроса сразу: жив ли процесс с таким номером
+/// и сам ли он лидер своей группы. Переиспользованный pid лидером нашей группы
+/// не будет; а если и стал им — это чужая группа с чужими детьми, и тем более
+/// не наша.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn live_groups(list: &[i32], alive_leader: impl Fn(i32) -> bool) -> Vec<i32> {
+    list.iter().copied().filter(|pid| *pid > 1 && alive_leader(*pid)).collect()
+}
+
+/// Живая проба для `live_groups`: `kill(pid, 0)` — «процесс есть и он мой»,
+/// `getpgid(pid) == pid` — «он лидер своей группы».
+#[cfg(unix)]
+fn unix_alive_leader(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 && libc::getpgid(pid) == pid }
+}
+
 fn kill_all_descendants() {
     #[cfg(windows)]
     if let Some(job) = JOB.get_or_init(job::Job::new).as_ref() {
@@ -321,14 +357,20 @@ fn kill_all_descendants() {
     // Молча SIGKILL нельзя: прерванный ход движка тогда не закрывается.
     #[cfg(unix)]
     {
-        let groups: Vec<i32> = PGIDS.lock().map(|g| g.clone()).unwrap_or_default();
+        let all: Vec<i32> = PGIDS.lock().map(|g| g.clone()).unwrap_or_default();
+        // ⚠ Бьём ТОЛЬКО по группам живых детей. Пожатый ребёнок из списка уже
+        // ушёл (`forget_child`), но гонка между `wait` и остановкой остаётся —
+        // и второй раз проверить дешевле, чем убить чужое.
+        let groups = live_groups(&all, unix_alive_leader);
         for pgid in &groups {
             unsafe { libc::killpg(*pgid, libc::SIGTERM) };
         }
         if !groups.is_empty() {
             std::thread::sleep(Duration::from_millis(1000));
-            for pgid in &groups {
-                unsafe { libc::killpg(*pgid, libc::SIGKILL) };
+            // Перепроверяем ПОСЛЕ паузы: за секунду ребёнок мог уйти сам, его
+            // pid — освободиться, и SIGKILL по нему был бы уже чужим.
+            for pgid in live_groups(&groups, unix_alive_leader) {
+                unsafe { libc::killpg(pgid, libc::SIGKILL) };
             }
         }
         if let Ok(mut list) = PGIDS.lock() {
@@ -1030,6 +1072,7 @@ fn supervise(
                         kid.backoff = 0;
                     }
                     let _ = child.wait();
+                    forget_child(child);
                     kid.child = None;
                     kid.started = None;
                     kid.back_off(now);
@@ -1113,6 +1156,7 @@ fn supervise(
             if let Some(child) = &mut kid.child {
                 let _ = child.kill();
                 let _ = child.wait();
+                forget_child(child);
                 kid.child = None;
                 kid.started = None;
                 let (said, port) = (kid.said(), kid.port);
@@ -1161,6 +1205,7 @@ fn supervise(
             if dead && Instant::now() >= relay_not_before {
                 if let Some(child) = &mut relay {
                     let _ = child.wait();
+                    forget_child(child);
                     log.line(&format!("реле: умерло — перезапускаю (пауза {relay_backoff} c)"));
                 }
                 relay = None;
@@ -1762,6 +1807,29 @@ fn relax_acl(config: &Path, log: &mut Log) {
 // Протокол, имена, SDDL и клиентская сторона — общие с оболочкой, один текст
 // на обе стороны трубы: см. common/broker.rs.
 include!("../../common/broker.rs");
+
+#[cfg(test)]
+mod pgid_tests {
+    use super::*;
+
+    /// ⚠ Находка судей 19.09: список групп держал pid пожатого ребёнка до конца
+    /// жизни службы, и `killpg` на остановке уходил тому, кому этот номер уже
+    /// достался. Пожатый — не убиваем.
+    #[test]
+    fn a_reaped_child_is_not_signalled() {
+        // «Живы и лидеры» — только 11 и 13; 12 пожат (номер свободен), 14 жив,
+        // но лидер чужой группы — значит тоже не наш.
+        let alive = |pid: i32| matches!(pid, 11 | 13);
+        assert_eq!(live_groups(&[11, 12, 13, 14], alive), vec![11, 13]);
+        // Пустой список — пустой ответ, а не «бей по всем».
+        assert!(live_groups(&[], alive).is_empty());
+        // Ни одного живого — ни одного сигнала.
+        assert!(live_groups(&[12, 14], alive).is_empty());
+        // pid 1 (init) и 0 (вся группа вызывающего!) не бьём никогда: `killpg(0)`
+        // это SIGKILL самим себе вместе со всеми детьми.
+        assert!(live_groups(&[0, 1], |_| true).is_empty());
+    }
+}
 
 /// Первый экземпляр трубы заводится с `FILE_FLAG_FIRST_PIPE_INSTANCE`: если имя
 /// уже занято, значит его занял НЕ мы, и служить на чужом канале нельзя ни

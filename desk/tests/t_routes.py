@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import tempfile
+import json
 import unittest
 from pathlib import Path
 
@@ -126,6 +127,30 @@ class Dispatch(unittest.TestCase):
         reply = self._run(deskapp._tunnel_dispatch("GET", "/api/home", None, local=True))
         self.assertEqual(reply["status"], 200)
         self.assertEqual(reply["body"]["tree"], str(self.tree.resolve()))
+
+    def test_who_answers_without_a_key_and_carries_no_secrets(self):
+        """⚠ п.8 (судьи 19.09): окно обязано узнать держателя порта ДО того, как
+        предъявит ему ключ дерева. Раньше на 401/403 оно слало `?key=<токен>`
+        любому, кто занял локальный порт, — а по этому ключу отдаются ключ
+        модели, токен бота и правка конституции.
+
+        Поэтому ручка обязана (1) отвечать БЕЗ ключа и (2) не нести ничего, чего
+        нельзя показать чужому: имя продукта, корень установки и pid — и только.
+        """
+        self.assertTrue(deskapp._open_path("/api/who"),
+                        "/api/who обязан отвечать до ключа — иначе опознание невозможно")
+        reply = self._run(deskapp._tunnel_dispatch("GET", "/api/who", None, local=True))
+        self.assertEqual(reply["status"], 200, reply)
+        body = reply["body"]
+        self.assertEqual(sorted(body), ["pid", "product", "root"],
+                         "в опознании не должно быть ничего сверх трёх полей")
+        self.assertTrue(body["product"])
+        self.assertIsInstance(body["pid"], int)
+        # Дерево данных, токены и конфиг сюда НЕ едут: опознание — это «свой или
+        # чужой», а не «расскажи о себе всё».
+        flat = json.dumps(body, ensure_ascii=False).lower()
+        for word in ("token", "key", "tree", "secret"):
+            self.assertNotIn(word, flat, word)
 
     def test_404_and_403_are_words(self):
         self.assertEqual(self._run(deskapp._tunnel_dispatch("GET", "/api/nope", None))["status"], 404)

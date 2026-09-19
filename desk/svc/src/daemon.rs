@@ -67,19 +67,21 @@ fn catch_signals() {
 /// Пусто — честный отказ: демон с чужим `UserName` поднимал бы агента не тому
 /// человеку, а пустой `UserName` launchd читает как root.
 fn owner_name() -> Result<String, String> {
-    if let Ok(user) = std::env::var("USER") {
-        if !user.trim().is_empty() {
-            return Ok(user.trim().to_string());
-        }
+    let mut name = std::env::var("USER").unwrap_or_default().trim().to_string();
+    if name.is_empty() {
+        let out = std::process::Command::new("/usr/bin/id")
+            .arg("-un")
+            .output()
+            .map_err(|e| format!("не спросить имя владельца: {e}"))?;
+        name = String::from_utf8_lossy(&out.stdout).trim().to_string();
     }
-    let out = std::process::Command::new("/usr/bin/id")
-        .arg("-un")
-        .output()
-        .map_err(|e| format!("не спросить имя владельца: {e}"))?;
-    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if name.is_empty() {
         return Err("не понял, от чьего имени ставить демон: ни USER, ни `id -un`".into());
     }
+    // ⚠ Проверка root — ЗДЕСЬ, у единственного писателя описания: и окно, и
+    // мастер зовут `helene-svc plist`, и отказ отсюда доходит до обоих одними
+    // словами. `USER` под `sudo` остаётся прежним, поэтому спрашиваем и uid.
+    mac_svc_owner_ok(&name, Some(unsafe { libc::geteuid() }))?;
     Ok(name)
 }
 

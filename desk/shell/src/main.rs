@@ -1271,24 +1271,93 @@ fn home_probe(port: u16, key: &str) -> Holder {
     }
 }
 
-/// Кто держит порт. Два шага, и порядок здесь важен.
+/// Опознавательная карточка держателя порта: имя продукта и корень установки.
+/// Ответ БЕЗ КЛЮЧА и без секретов (`deskd/control.py::who`).
+struct WhoSaid {
+    product: String,
+    root: String,
+}
+
+/// Спросить порт, кто он такой, — анонимно.
+fn who_probe(port: u16) -> Option<WhoSaid> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_millis(2500))
+        .redirects(0)
+        .try_proxy_from_env(false)
+        .build();
+    let body = agent
+        .get(&format!("http://127.0.0.1:{port}/api/who"))
+        .call()
+        .ok()?
+        .into_string()
+        .ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    Some(WhoSaid {
+        product: v.get("product").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        root: v.get("root").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+    })
+}
+
+/// Наш ли это канал: то же имя продукта и тот же корень установки.
+/// Чистая функция — стенд гоняется на любой ОС.
+///
+/// Пути сравниваются после `canonicalize` у вызывающего; здесь — построчно и
+/// без учёта регистра на Windows, где `C:\Helene` и `c:\helene` это одна папка.
+fn who_is_ours(said: &WhoSaid, product: &str, root: &Path) -> bool {
+    if said.product.trim() != product.trim() || said.root.trim().is_empty() {
+        return false;
+    }
+    let theirs = Path::new(said.root.trim());
+    let theirs = theirs.canonicalize().unwrap_or_else(|_| theirs.to_path_buf());
+    let ours = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if cfg!(windows) {
+        theirs.to_string_lossy().to_lowercase() == ours.to_string_lossy().to_lowercase()
+    } else {
+        theirs == ours
+    }
+}
+
+/// Кто держит порт. Три шага, и порядок здесь важен.
 ///
 /// Сначала спрашиваем БЕЗ ключа: держатель порта — не обязательно наш, и
-/// отдавать секрет дерева первому, кто занял порт, нельзя. Ключ предъявляем
-/// только тому, кто ответил «нужен ключ» (401/403): под замком собственная
-/// труба иначе выглядела бы «чужой программой», а это ложное обвинение и
-/// мёртвое окно.
+/// отдавать секрет дерева первому, кто занял порт, нельзя.
+///
+/// ⚠⚠ ЧТО БЫЛО ДО 19.09 (находка судей). На 401/403 окно СРАЗУ слало
+/// `?key=<токен дерева>` — то есть вручало ключ владельца любой программе,
+/// успевшей занять локальный порт. А занять его может кто угодно в этой
+/// учётке, включая процесс, поднятый самим агентом; по этому ключу отдаются
+/// ключ модели, токен бота, конституция и правка конфига. «Он ответил 403,
+/// значит он наш под замком» — это не вывод, а предположение.
+///
+/// Теперь между «нужен ключ» и ключом стоит ОПОЗНАНИЕ: анонимная ручка
+/// `/api/who` называет продукт и корень установки (ни то, ни другое не секрет).
+/// Не сошлось — ключа он не получит, а владельцу скажут словами, что порт занят
+/// чужим процессом. Не ответила вовсе (старая сборка без этой ручки) — тоже не
+/// получит: молчание прибора это не «свой».
 fn harness_holder(port: u16, key: &str) -> Holder {
     match home_probe(port, "") {
         Holder::Guarded => {
             if key.is_empty() {
-                Holder::Guarded
-            } else {
-                match home_probe(port, key) {
-                    Holder::Tree(tree) => Holder::Tree(tree),
-                    // Наш ключ ему не подошёл — чей это харнесс, мы не знаем.
-                    _ => Holder::Guarded,
-                }
+                return Holder::Guarded;
+            }
+            let Some(said) = who_probe(port) else {
+                log_line(&format!(
+                    "порт {port} отвечает «нужен ключ», но не называет себя (/api/who) — \
+                     ключ ему не предъявляю"
+                ));
+                return Holder::Silent;
+            };
+            if !who_is_ours(&said, product_ui(), &install_root()) {
+                log_line(&format!(
+                    "порт {port} держит чужой процесс: назвался «{}» из «{}» — ключ ему не предъявляю",
+                    said.product, said.root
+                ));
+                return Holder::Silent;
+            }
+            match home_probe(port, key) {
+                Holder::Tree(tree) => Holder::Tree(tree),
+                // Наш ключ ему не подошёл — чей это харнесс, мы не знаем.
+                _ => Holder::Guarded,
             }
         }
         other => other,
@@ -1794,9 +1863,13 @@ fn stop_child(child: &mut Child) {
         libc::killpg(group, libc::SIGTERM);
     }
     let deadline = Instant::now() + Duration::from_secs(3);
+    let mut reaped = false;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(_)) => {
+                reaped = true;
+                break;
+            }
             Ok(None) => {}
             Err(_) => break,
         }
@@ -1805,15 +1878,43 @@ fn stop_child(child: &mut Child) {
                 libc::killpg(group, libc::SIGKILL);
             }
             let _ = child.wait();
+            reaped = true;
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     // Лидер вышел, а группа жива, пока жив последний её процесс: добиваем
     // внуков, которые SIGTERM проигнорировали.
-    unsafe {
-        libc::killpg(group, libc::SIGKILL);
+    //
+    // ⚠⚠ НО ТОЛЬКО ЕСЛИ PID ЕЩЁ НАШ (судьи 19.09). После `wait` номер процесса
+    // свободен, и система выдаёт его следующему, кто запустится; на Mac это
+    // происходит за секунды. Безусловный `killpg` по пожатому pid — это SIGKILL
+    // ЧУЖОЙ группе процессов: у владельца молча умирал бы случайный терминал
+    // или браузер, и связать это с закрытием окна было бы нечем.
+    if may_signal_group(reaped, unix_group_leader_alive(group)) {
+        unsafe {
+            libc::killpg(group, libc::SIGKILL);
+        }
     }
+}
+
+/// Жив ли процесс и сам ли он лидер своей группы. Оба вопроса сразу: pid,
+/// который переиспользовали, лидером нашей группы уже не будет, а если и стал
+/// им — это чужая группа с чужими детьми.
+#[cfg(unix)]
+fn unix_group_leader_alive(pid: libc::pid_t) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 && libc::getpgid(pid) == pid }
+}
+
+/// Можно ли слать сигнал группе процессов. Чистая функция — по ней и стенд,
+/// потому что цена ошибки здесь не видна ни в одном журнале: сигнал уходит
+/// ЧУЖОМУ процессу, и выглядит это как «у меня само закрылось».
+///
+/// `reaped` — ребёнка уже пожали (`wait` вернул статус), то есть его pid
+/// свободен; `alive_leader` — по этому номеру прямо сейчас живёт лидер группы.
+#[cfg_attr(windows, allow(dead_code))]
+fn may_signal_group(reaped: bool, alive_leader: bool) -> bool {
+    !reaped && alive_leader
 }
 
 // ───────────────────────────────── тело под службой (macOS, §6 плана 19.09)
@@ -2134,6 +2235,7 @@ fn mac_service_op(op: &str) -> Result<String, String> {
         product_ui(),
         if op == "install" { "поставить" } else { "снять" }
     );
+    let mut staged: Option<PathBuf> = None;
     let line = if op == "install" {
         if !svc.is_file() {
             return Err("в этой сборке нет helene-svc — ставить нечего".into());
@@ -2153,17 +2255,35 @@ fn mac_service_op(op: &str) -> Result<String, String> {
         // Временный файл — от имени ВЛАДЕЛЬЦА: под администратором мы делаем
         // ровно три вещи (cp, chown, chmod) плюс загрузку, и ни одна из них не
         // пишет содержимое. Меньше прав — меньше того, чем можно ошибиться.
-        let tmp = std::env::temp_dir().join("app.helene.svc.plist");
-        std::fs::write(&tmp, out.stdout)
-            .map_err(|e| format!("описание демона не записалось в {}: {e}", tmp.display()))?;
-        mac_svc_install_line(&tmp)
+        //
+        // ⚠⚠ И НЕ В ОБЩЕЙ ПАПКЕ ПОД ПРЕДСКАЗУЕМЫМ ИМЕНЕМ (судьи 19.09): между
+        // этой записью и нажатием «Да» в диалоге пароля проходят секунды, если
+        // не минуты, и `temp_dir()/app.helene.svc.plist` успевал подменить любой
+        // процесс учётки — дальше под root копировалось уже чужое описание.
+        // Теперь своя папка 0700 со случайным именем, файл под O_EXCL|0600, а
+        // хэш содержимого сверяется под root перед `cp`.
+        let (dir, tmp, hash) = mac_svc_stage_plist(&out.stdout)?;
+        staged = Some(dir);
+        mac_svc_install_line(&tmp, &hash)
     } else {
         mac_svc_remove_line()
     };
     let said = mac_svc_run_admin(&line, &prompt);
+    if let Some(dir) = staged {
+        let _ = std::fs::remove_dir_all(dir);
+    }
     let state = mac_svc_state();
+    // ⚠ Служба — ЭТО НЕ ДВИЖОК. Демон под `KeepAlive` бывает «running», пока
+    // агент в нём падает по кругу, и расписка «Служба поставлена и работает»
+    // была бы правдой о launchd и неправдой о машине владельца. Спрашиваем сам
+    // канал — анонимно, без ключа (`/api/who`).
+    let engine = mac_svc_engine_alive(mac_port_of(&root));
+    let note = mac_svc_engine_note(&state, engine);
+    let with_note = |text: &str| -> String {
+        if note.is_empty() { text.to_string() } else { format!("{text} ({note})") }
+    };
     match (op, &said, state.as_str()) {
-        ("install", Ok(_), "running") => Ok("Служба поставлена и работает — агент отвечает без окна.".into()),
+        ("install", Ok(_), "running") => Ok(with_note("Служба поставлена и работает — агент отвечает без окна.")),
         ("install", Ok(_), "stopped") => Ok(
             "Служба поставлена, но launchd её сейчас не держит. Загляни в data/service.log —              причина там."
                 .into(),
@@ -2177,10 +2297,23 @@ fn mac_service_op(op: &str) -> Result<String, String> {
                 .into(),
         ),
         ("install", Err(why), _) => Err(format!("Служба не поставлена: {why}")),
-        (_, Ok(_), "absent") => Ok("Служба снята.".into()),
+        // ⚠ Мина 8094: службы нет, а порт держит кто-то ещё. Молча сказать
+        // «Служба снята» и оставить владельца гадать, почему агент не
+        // поднимается, — это то самое молчание прибора вместо факта.
+        (_, Ok(_), "absent") => Ok(with_note("Служба снята.")),
         (_, Ok(_), st) => Err(format!("Команда прошла, а служба осталась: {st}.")),
         (_, Err(why), "absent") => Ok(format!("Службы нет ({why}).")),
         (_, Err(why), _) => Err(format!("Служба не снята: {why}")),
+    }
+}
+
+/// Порт канала этой установки — для анонимной пробы движка. `None` — конфига
+/// нет или порт в нём не назван: тогда о движке не говорим ничего.
+#[cfg(target_os = "macos")]
+fn mac_port_of(root: &Path) -> Option<u16> {
+    match read_config(&root.join(CONFIG_NAME)) {
+        ConfigRead::Ok(v) => v.get("port").and_then(|p| p.as_u64()).map(|n| n as u16),
+        _ => None,
     }
 }
 
@@ -2262,9 +2395,32 @@ async fn service_state() -> String {
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn service_state() -> String {
-    tauri::async_runtime::spawn_blocking(mac_svc_state)
+    tauri::async_runtime::spawn_blocking(mac_svc_state_said)
         .await
         .unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// То же состояние демона — и строка в журнал о том, отвечает ли ДВИЖОК.
+///
+/// Машинное слово (`running`/`stopped`/`absent`/`unknown`) остаётся прежним: по
+/// нему живут карточка, мастер и их стенды. Но сама по себе строка «running»
+/// говорит только про launchd, а владельцу нужно знать про агента — поэтому
+/// разница уезжает в журнал, и только когда она МЕНЯЕТСЯ: ручку опрашивают
+/// каждые 2,5 с, и строка на каждый опрос была бы не журналом, а шумом.
+#[cfg(target_os = "macos")]
+fn mac_svc_state_said() -> String {
+    static SAID: Mutex<String> = Mutex::new(String::new());
+    let state = mac_svc_state();
+    let note = mac_svc_engine_note(&state, mac_svc_engine_alive(mac_port_of(&install_root())));
+    if !note.is_empty() {
+        if let Ok(mut last) = SAID.lock() {
+            if *last != note {
+                *last = note.to_string();
+                log_line(note);
+            }
+        }
+    }
+    state
 }
 
 /// Вне Windows и macOS службы нет как механизма — `missing`, а не `absent`:
@@ -3838,13 +3994,15 @@ fn ask_owner_yes(title: &str, text: &str) -> bool {
 /// подписей владельца; вторая, для `exec`, — системный диалог пароля.
 #[cfg(target_os = "macos")]
 fn ask_owner_yes(title: &str, text: &str) -> bool {
-    let script = format!(
-        "display dialog {} with title {} buttons {{\"Нет\", \"Да\"}} default button 1 cancel button 1 with icon caution",
-        applescript_quote(text),
-        applescript_quote(title)
-    );
-    match osascript(&script) {
-        Ok(out) => out.contains("button returned:Да"),
+    let (yes, no) = mac_yes_no(&ui_lang());
+    match osascript(&mac_confirm_script(title, text, yes, no)) {
+        // ⚠ Ответ читается ПО НОМЕРУ КНОПКИ, а не по слову (судьи 19.09).
+        // Раньше здесь стояло `contains("button returned:Да")`: у владельца с
+        // английским интерфейсом кнопки всё равно были русскими, а стоило бы им
+        // стать «Yes/No» — и сравнение молча перестало бы находить согласие, то
+        // есть «Да» читалось бы как отказ. Номер называет сам AppleScript, и он
+        // не зависит ни от языка, ни от того, как система перерисовала кнопку.
+        Ok(out) => out.trim() == "2",
         Err(err) => {
             // «User canceled» — это «Нет», а не поломка; остальное — в журнал.
             if !err.contains("-128") {
@@ -3852,6 +4010,66 @@ fn ask_owner_yes(title: &str, text: &str) -> bool {
             }
             false
         }
+    }
+}
+
+/// Скрипт окна подтверждения: две кнопки и НОМЕР нажатой на выходе.
+/// Чистая функция — стенд гоняется на любой ОС.
+///
+/// Кнопка по умолчанию и кнопка отмены — первая («Нет»): Enter и Esc отказывают.
+/// Сравнение внутри AppleScript идёт с тем же списком, что мы ему передали,
+/// поэтому «какая это по счёту кнопка» не зависит от языка интерфейса.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mac_confirm_script(title: &str, text: &str, yes: &str, no: &str) -> String {
+    format!(
+        "set btns to {{{no}, {yes}}}\n\
+         set r to display dialog {text} with title {title} buttons btns \
+         default button 1 cancel button 1 with icon caution\n\
+         repeat with i from 1 to count of btns\n\
+         if (button returned of r) is (item i of btns) then return (i as text)\n\
+         end repeat\n\
+         return \"0\"",
+        no = applescript_quote(no),
+        yes = applescript_quote(yes),
+        text = applescript_quote(text),
+        title = applescript_quote(title),
+    )
+}
+
+/// Подписи кнопок согласия и отказа на языке интерфейса. Языки — те же, что у
+/// `lang/*.json` (ru, en, fr, zh); умолчание английское, как в `lang.ts`:
+/// программу ставит кто угодно, и язык, которого человек не знает, — это не
+/// «запасной вариант», а закрытая дверь.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mac_yes_no(lang: &str) -> (&'static str, &'static str) {
+    match lang {
+        "ru" => ("Да", "Нет"),
+        "fr" => ("Oui", "Non"),
+        "zh" => ("是", "否"),
+        _ => ("Yes", "No"),
+    }
+}
+
+/// Язык интерфейса из `helene.json` (`lang`). Пусто — не выбран, берём системный
+/// на стороне страницы; здесь это значит «английский» (см. `mac_yes_no`).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn ui_lang_from(cfg: &serde_json::Value) -> String {
+    let raw = cfg
+        .get("lang")
+        .or_else(|| cfg.get("ui").and_then(|u| u.get("lang")))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    // `ru-RU`, `zh-Hans` — тег может быть полным: берём только первую часть.
+    raw.split(['-', '_']).next().unwrap_or("").to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn ui_lang() -> String {
+    match read_config(&install_root().join(CONFIG_NAME)) {
+        ConfigRead::Ok(v) => ui_lang_from(&v),
+        _ => String::new(),
     }
 }
 
@@ -4060,9 +4278,12 @@ fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
                 continue;
             }
             shown += 1;
+            // Отпечаток файла — частью того же текста, что читает владелец:
+            // отдельным окном его бы закрыли не читая.
+            let extra = ready.as_ref().map(broker_prepared_note).unwrap_or_default();
             if !ask_owner_yes(
                 &format!("{}: агент просит права", product_ui()),
-                &broker_confirm_text(&wish),
+                &format!("{}{extra}", broker_confirm_text(&wish)),
             ) {
                 refusal = Some("владелец отказал в окне подтверждения".to_string());
             }
@@ -4153,8 +4374,30 @@ fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
 /// Что нужно, чтобы исполнить подписанную просьбу.
 #[cfg(windows)]
 type BrokerPrepared = BrokerAsk;
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 type BrokerPrepared = BrokerWish;
+#[cfg(target_os = "macos")]
+type BrokerPrepared = MacPrepared;
+
+/// macOS: подписанная просьба И ОТПЕЧАТОК ФАЙЛА, который она зовёт.
+///
+/// ⚠⚠ ЗАЧЕМ ОТПЕЧАТОК (находка судей 19.09). Владелец подписывает ПУТЬ, а
+/// исполняется СОДЕРЖИМОЕ. Между «Да» в окне и запуском команды проходит целый
+/// диалог пароля, и всё это время файл по этому пути может переписать кто
+/// угодно, кому он доступен на запись, — включая самого агента, если путь ведёт
+/// в его дом. Подпись владельца тогда относилась бы к одному файлу, а права
+/// получал бы другой.
+///
+/// Поэтому: sha256 считается ДО вопроса, показывается владельцу восемью знаками
+/// и сверяется перед исполнением. Для системных путей (`/usr`, `/bin`, `/sbin`,
+/// `/System`, `/opt/homebrew`) отпечатка нет: туда без root не пишут, а лишняя
+/// строка в окне подтверждения — это шум, за которым перестают читать нужное.
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+struct MacPrepared {
+    wish: BrokerWish,
+    digest: Option<String>,
+}
 
 /// Чем кончилось исполнение — ТРИ исхода, не два: отказ владельца во втором
 /// диалоге (пароль на macOS) — это «refused», а не «failed», и в файле ответов
@@ -4182,11 +4425,99 @@ fn broker_prepare(tree: &Path, wish: &BrokerWish) -> Result<BrokerPrepared, Stri
 /// быть на месте — просьбу о несуществующей команде владельцу показывать незачем.
 #[cfg(target_os = "macos")]
 fn broker_prepare(_tree: &Path, wish: &BrokerWish) -> Result<BrokerPrepared, String> {
+    // Выключатель владельца — ПЕРВЫМ и на каждой просьбе: конфиг читается
+    // заново, значит «выключил» действует немедленно, а не «после перезапуска
+    // окна». Отказ идёт БЕЗ диалога: показывать окно подтверждения там, где
+    // дверь закрыта целиком, — значит спрашивать о том, что уже решено.
+    if !mac_broker_enabled() {
+        return Err(BROKER_OFF_SAID.to_string());
+    }
     mac_wish_check(wish)?;
-    if wish.op.runs() && !Path::new(&wish.cmd).is_file() {
+    if !wish.op.runs() {
+        return Ok(MacPrepared { wish: wish.clone(), digest: None });
+    }
+    if !Path::new(&wish.cmd).is_file() {
         return Err(format!("программы «{}» нет по этому пути — просить не о чем", wish.cmd));
     }
-    Ok(wish.clone())
+    // Отпечаток — только для файлов вне системных папок: туда без root не
+    // пишут, и подменить их между «Да» и запуском некому.
+    let digest = if mac_system_path(&wish.cmd) {
+        None
+    } else {
+        match std::fs::read(&wish.cmd) {
+            Ok(bytes) => Some(mac_svc_sha256(&bytes)),
+            Err(e) => {
+                return Err(format!(
+                    "файл «{}» не прочитался ({e}) — я не могу показать владельцу, \
+                     ЧТО именно он подписывает",
+                    wish.cmd
+                ))
+            }
+        }
+    };
+    Ok(MacPrepared { wish: wish.clone(), digest })
+}
+
+/// Выключатель брокера владельцем (`service.broker` в helene.json). Умолчание —
+/// включён: то же, что у службы на Windows (`svc::load_plan`), и по той же
+/// причине — выключенный по умолчанию брокер был бы мёртвым кодом.
+///
+/// Читается ЗАНОВО на каждой просьбе: «действует немедленно» значит именно это.
+#[cfg(target_os = "macos")]
+fn mac_broker_enabled() -> bool {
+    match read_config(&install_root().join(CONFIG_NAME)) {
+        ConfigRead::Ok(v) => v
+            .get("service")
+            .and_then(|x| x.get("broker"))
+            .and_then(|b| b.as_bool())
+            .unwrap_or(true),
+        // Конфига нет или он битый — это не «владелец выключил брокера».
+        _ => true,
+    }
+}
+
+/// Слова отказа при выключенном брокере — одни на журнал и на ответ агенту.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const BROKER_OFF_SAID: &str =
+    "брокер выключен владельцем: Настройки → Система (ключ service.broker в helene.json).      Пока он выключен, просьбы получают отказ сразу — окно подтверждения не показывается";
+
+/// Системная ли это папка. Файлы оттуда не переписать без root, значит и
+/// отпечаток их содержимого владельцу показывать незачем. Чистая функция —
+/// стенд гоняется на любой ОС.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mac_system_path(cmd: &str) -> bool {
+    ["/usr/", "/bin/", "/sbin/", "/System/", "/opt/homebrew/", "/usr/local/"]
+        .iter()
+        .any(|root| cmd.starts_with(root))
+}
+
+/// Строка окна подтверждения про отпечаток — та, что дописывается к общему
+/// тексту (`broker_confirm_text`). Windows: пусто, там подпись относится к
+/// команде, которую исполняет служба своими проверками.
+#[cfg(windows)]
+fn broker_prepared_note(_prepared: &BrokerPrepared) -> String {
+    String::new()
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn broker_prepared_note(_prepared: &BrokerPrepared) -> String {
+    String::new()
+}
+
+/// macOS: владельцу говорится прямо, что содержимое файла ему НЕ показано, и
+/// даётся отпечаток — по нему он может сверить файл сам. Восемь знаков, а не
+/// шестьдесят четыре: длинную строку не читают вовсе, а восьми хватает, чтобы
+/// заметить подмену, и они же стоят в журнале.
+#[cfg(target_os = "macos")]
+fn broker_prepared_note(prepared: &BrokerPrepared) -> String {
+    match &prepared.digest {
+        Some(hex) => format!(
+            "\n\nФайл вне системных папок: содержимое тебе не показано; отпечаток {}. \
+             Он же проверяется перед запуском — подменят файл после «Да», и команда не пойдёт.",
+            &hex[..8.min(hex.len())]
+        ),
+        None => String::new(),
+    }
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -4230,8 +4561,15 @@ fn mac_wish_check(wish: &BrokerWish) -> Result<(), String> {
     if why.chars().count() > 500 {
         return Err("«зачем» длиннее 500 знаков — это уже не объяснение".into());
     }
-    if why.chars().any(|c| c.is_control()) {
-        return Err("«зачем» — одной строкой: перевод строки в нём подделывает журнал".into());
+    // ⚠ Не только `is_control()` (судьи 19.09): U+2028 и U+2029 — переводы
+    // строки для всего, что рисует текст, U+0085 — тоже, а знаки формата
+    // (U+200E, U+202E, мягкий перенос) переставляют текст прямо на экране
+    // владельца. Одна граница на обе стороны — `broker_invisible`.
+    if why.chars().any(broker_invisible) {
+        return Err("«зачем» — одной строкой обычными знаками: перевод строки (в том числе \
+                    невидимый — U+2028, U+0085) подделывает журнал, а знаки формата \
+                    переставляют текст прямо на экране владельца"
+            .into());
     }
     if wish.timeout_sec == 0 || wish.timeout_sec > BROKER_TIMEOUT_MAX {
         return Err(format!("timeout_sec бывает от 1 до {BROKER_TIMEOUT_MAX} с"));
@@ -4241,6 +4579,9 @@ fn mac_wish_check(wish: &BrokerWish) -> Result<(), String> {
     }
     if wish.args.iter().any(|a| a.contains('\0')) {
         return Err("в args есть нулевой байт — команда оборвётся на нём".into());
+    }
+    if wish.args.iter().any(|a| a.chars().any(broker_invisible)) {
+        return Err(BROKER_INVISIBLE_SAID.into());
     }
     match wish.op {
         BrokerOp::Ping => Ok(()),
@@ -4259,8 +4600,8 @@ fn mac_cmd_ok(cmd: &str) -> Result<(), String> {
     if cmd.is_empty() {
         return Err("нет команды (поле cmd)".into());
     }
-    if cmd.chars().any(|c| c.is_control()) {
-        return Err("в имени программы управляющий знак или перевод строки".into());
+    if cmd.chars().any(broker_invisible) {
+        return Err(BROKER_INVISIBLE_SAID.into());
     }
     if !cmd.starts_with('/') {
         return Err(format!(
@@ -4316,9 +4657,22 @@ const MAC_CODE_MARK: &str = "HELENE-CODE";
 /// оба потока целиком. `without altering line endings` — иначе AppleScript
 /// перепишет переводы строк в `\r`, и метка кода не найдётся.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn mac_admin_script(cmd: &str, args: &[String], prompt: &str) -> String {
+fn mac_admin_script(cmd: &str, args: &[String], prompt: &str, digest: Option<&str>) -> String {
+    // ⚠ Сверка отпечатка — ПЕРВОЙ строкой и УЖЕ под правами администратора:
+    // владелец подписал путь, а исполнится содержимое, и между «Да» и вводом
+    // пароля файл по этому пути мог переписать кто угодно, кому он доступен на
+    // запись. Не сошлось — отказ словами (код 91), а не «запустили что дали».
+    let guard = match digest {
+        Some(hex) => format!(
+            "if [ \"$(/usr/bin/shasum -a 256 {file} | /usr/bin/cut -d' ' -f1)\" != {hash} ]; then \
+             echo 'файл команды подменили после «Да» — не исполняю' >&2; exit 91; fi; ",
+            file = sh_quote(cmd),
+            hash = sh_quote(hex),
+        ),
+        None => String::new(),
+    };
     let line = format!(
-        "{} 2>&1; printf '\\n{MAC_CODE_MARK} %s' \"$?\"",
+        "{guard}{} 2>&1; printf '\\n{MAC_CODE_MARK} %s' \"$?\"",
         mac_shell_line(cmd, args)
     );
     format!(
@@ -4326,6 +4680,29 @@ fn mac_admin_script(cmd: &str, args: &[String], prompt: &str) -> String {
         applescript_quote(&line),
         applescript_quote(prompt)
     )
+}
+
+/// Сколько команды влезает во ВТОРОЙ экран — системный диалог пароля.
+///
+/// ⚠ Раньше там стояло только «зачем» словами агента. Но «Да» в нашем окне и
+/// пароль в системном — это две РАЗНЫЕ подписи, и вторая ставится на диалоге,
+/// который рисует не продукт: владелец видел там объяснение без единого слова о
+/// том, что именно сейчас исполнится. Команда обрезана, и обрезка названа.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const MAC_PROMPT_CMD_MAX: usize = 200;
+
+/// Подсказка для диалога пароля: «зачем» И сама команда, коротко.
+/// Чистая функция — по ней стенд на любой ОС.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mac_password_prompt(product: &str, why: &str, shown: &str) -> String {
+    let total = shown.chars().count();
+    let short = if total > MAC_PROMPT_CMD_MAX {
+        let head: String = shown.chars().take(MAC_PROMPT_CMD_MAX).collect();
+        format!("{head}… (обрезано, всего {total} знаков)")
+    } else {
+        shown.to_string()
+    };
+    format!("{product}: агент просит права администратора — {why} · команда: {short}")
 }
 
 /// Вывод команды и её код — из того, что вернул osascript. Метки нет — код
@@ -4414,7 +4791,8 @@ fn mac_run_group(cmd: &mut Command, limit: Duration) -> Result<MacRan, String> {
 /// macOS: исполнить подписанную просьбу самой оболочкой и собрать квитанцию
 /// той же формы, что отдаёт служба на Windows (`BrokerReceipt`).
 #[cfg(target_os = "macos")]
-fn mac_broker_run(wish: &BrokerWish) -> BrokerRun {
+fn mac_broker_run(prepared: &MacPrepared) -> BrokerRun {
+    let wish = &prepared.wish;
     let at = local_stamp();
     let started = Instant::now();
     let receipt = |ok: bool, code: Option<i32>, pid: Option<u32>, out: &str, err: &str, note: String| BrokerReceipt {
@@ -4445,6 +4823,26 @@ fn mac_broker_run(wish: &BrokerWish) -> BrokerRun {
         // случай ответ — тот же отказ, а не паника.
         BrokerOp::Firewall => BrokerRun::Refused("на macOS брандмауэр спрашивает сам".to_string()),
         BrokerOp::SpawnInteractive => {
+            // Та же сверка, что у `exec`, только своими руками: диалога пароля
+            // здесь нет, но окно подтверждения есть, и между «Да» и запуском
+            // файл по подписанному пути точно так же мог стать другим.
+            if let Some(hex) = &prepared.digest {
+                match std::fs::read(&wish.cmd) {
+                    Ok(bytes) if &mac_svc_sha256(&bytes) == hex => {}
+                    Ok(_) => {
+                        return BrokerRun::Refused(format!(
+                            "файл «{}» подменили после «Да» — отпечаток не сошёлся, не исполняю",
+                            wish.cmd
+                        ))
+                    }
+                    Err(e) => {
+                        return BrokerRun::Failed(format!(
+                            "файл «{}» не перечитался перед запуском ({e}) — не исполняю",
+                            wish.cmd
+                        ))
+                    }
+                }
+            }
             let mut cmd = Command::new(&wish.cmd);
             cmd.args(&wish.args).current_dir("/");
             match mac_run_group(&mut cmd, Duration::from_secs(wish.timeout_sec.max(1))) {
@@ -4464,10 +4862,16 @@ fn mac_broker_run(wish: &BrokerWish) -> BrokerRun {
             }
         }
         BrokerOp::Exec => {
-            // Подсказка в диалоге пароля — «зачем» словами агента: владелец
-            // видит их второй раз, уже над полем пароля.
-            let prompt = format!("{}: агент просит права администратора — {}", product_ui(), wish.why);
-            let script = mac_admin_script(&wish.cmd, &wish.args, &prompt);
+            // Подсказка в диалоге пароля — «зачем» словами агента И САМА
+            // КОМАНДА: это второй экран и вторая подпись, и подписывать её
+            // вслепую владельцу больше не предлагают.
+            let prompt = mac_password_prompt(
+                product_ui(),
+                &wish.why,
+                &broker_shown_command(&wish.cmd, &wish.args),
+            );
+            let script =
+                mac_admin_script(&wish.cmd, &wish.args, &prompt, prepared.digest.as_deref());
             let mut cmd = Command::new("/usr/bin/osascript");
             cmd.arg("-e").arg(&script).current_dir("/");
             let limit = Duration::from_secs(wish.timeout_sec.saturating_add(MAC_PASSWORD_GRACE_SEC));
@@ -7467,7 +7871,7 @@ mod tests {
     /// переписываются — и всё экранировано для AppleScript (кавычка, слэш).
     #[test]
     fn the_admin_script_is_escaped_for_applescript_and_carries_the_code_mark() {
-        let script = mac_admin_script("/bin/mkdir", &["/tmp/it's here".into()], "Hélène: зачем \"так\"");
+        let script = mac_admin_script("/bin/mkdir", &["/tmp/it's here".into()], "Hélène: зачем \"так\"", None);
         assert!(script.starts_with("do shell script \""), "{script}");
         assert!(
             script.ends_with("with administrator privileges without altering line endings"),
@@ -7478,6 +7882,141 @@ mod tests {
         assert!(script.contains(r#" 2>&1; printf '\\nHELENE-CODE %s' \"$?\""#), "{script}");
         assert!(script.contains(r#"with prompt "Hélène: зачем \"так\"""#), "{script}");
         assert!(!script.contains('\n'), "перевод строки порвал бы -e: {script}");
+    }
+
+    /// ⚠ п.6 (судьи 19.09): владелец подписывает ПУТЬ, а исполняется
+    /// СОДЕРЖИМОЕ. Сверка отпечатка обязана стоять ПЕРЕД командой и уже под
+    /// правами администратора — иначе подмена после «Да» проходит незамеченной.
+    #[test]
+    fn the_admin_script_checks_the_file_before_running_it() {
+        let script = mac_admin_script("/Users/tom/bin/tool", &[], "зачем", Some("feed0000"));
+        let check = script.find("shasum").expect("нет сверки отпечатка");
+        let run = script.find("/Users/tom/bin/tool 2>&1").expect("нет самой команды");
+        assert!(check < run, "сверка обязана стоять ДО команды: {script}");
+        assert!(script.contains("feed0000"), "{script}");
+        assert!(script.contains("exit 91"), "{script}");
+        assert!(script.contains("подменили"), "отказ обязан быть словами: {script}");
+        // Системный путь отпечатка не несёт — лишней строки в скрипте нет.
+        let plain = mac_admin_script("/usr/bin/id", &[], "зачем", None);
+        assert!(!plain.contains("shasum"), "{plain}");
+    }
+
+    /// Системные папки — те, куда без root не пишут. Дом владельца и его
+    /// «Загрузки» системными не считаются никогда.
+    #[test]
+    fn system_folders_need_no_fingerprint() {
+        for good in ["/usr/bin/id", "/bin/sh", "/sbin/ping", "/System/Library/x",
+                     "/opt/homebrew/bin/brew", "/usr/local/bin/tool"] {
+            assert!(mac_system_path(good), "{good}");
+        }
+        for bad in ["/Users/tom/bin/tool", "/tmp/x", "/Volumes/usb/id", "/opt/other/x",
+                    "/private/tmp/id"] {
+            assert!(!mac_system_path(bad), "{bad}");
+        }
+    }
+
+    /// Второй экран — системный диалог пароля. Туда едет не только «зачем», но и
+    /// сама команда: подписывать вслепую владельцу больше не предлагают.
+    #[test]
+    fn the_password_prompt_shows_the_command_too() {
+        let said = mac_password_prompt("Hélène", "почистить кэш", "/usr/bin/rm -rf /tmp/x");
+        assert!(said.contains("почистить кэш"), "{said}");
+        assert!(said.contains("/usr/bin/rm -rf /tmp/x"), "{said}");
+        // Длинную команду режем и ГОВОРИМ, что обрезали: молча урезанная строка
+        // в окне подписи — это враньё в сторону спокойствия.
+        let long = "x".repeat(400);
+        let cut = mac_password_prompt("Hélène", "зачем", &long);
+        assert!(cut.contains("обрезано, всего 400 знаков"), "{cut}");
+        assert!(cut.chars().count() < 400, "{cut}");
+    }
+
+    /// ⚠ п.12: ответ диалога читается по НОМЕРУ кнопки. Слово «Да» на другом
+    /// языке интерфейса просто не нашлось бы, и согласие читалось бы отказом.
+    #[test]
+    fn the_confirm_dialog_speaks_the_ui_language_and_answers_by_index() {
+        assert_eq!(mac_yes_no("ru"), ("Да", "Нет"));
+        assert_eq!(mac_yes_no("fr"), ("Oui", "Non"));
+        assert_eq!(mac_yes_no("zh"), ("是", "否"));
+        // Умолчание — английский, как в lang.ts: язык, которого человек не
+        // знает, это не «запасной вариант», а закрытая дверь.
+        assert_eq!(mac_yes_no(""), ("Yes", "No"));
+        assert_eq!(mac_yes_no("de"), ("Yes", "No"));
+
+        let cfg = serde_json::json!({"lang": "ru-RU"});
+        assert_eq!(ui_lang_from(&cfg), "ru");
+        assert_eq!(ui_lang_from(&serde_json::json!({"ui": {"lang": "FR"}})), "fr");
+        assert_eq!(ui_lang_from(&serde_json::json!({})), "");
+
+        let (yes, no) = mac_yes_no("ru");
+        let script = mac_confirm_script("Заголовок", "Текст", yes, no);
+        // Кнопка по умолчанию и отмена — первая, то есть «Нет»: Enter и Esc
+        // отказывают.
+        assert!(script.contains("default button 1"), "{script}");
+        assert!(script.contains("cancel button 1"), "{script}");
+        // «Нет» стоит первой, «Да» второй — окно вернёт «2» на согласие.
+        let no_at = script.find("\"Нет\"").expect("нет кнопки отказа");
+        let yes_at = script.find("\"Да\"").expect("нет кнопки согласия");
+        assert!(no_at < yes_at, "{script}");
+        assert!(script.contains("(i as text)"), "ответ обязан быть номером: {script}");
+    }
+
+    /// ⚠ п.8: ключ дерева предъявляется только тому, кто назвался нашим
+    /// продуктом И нашим корнем установки. «Ответил 403» — это не «свой».
+    #[test]
+    fn the_key_goes_only_to_our_own_install() {
+        let root = std::env::temp_dir();
+        let ours = WhoSaid { product: "Hélène".into(), root: root.display().to_string() };
+        assert!(who_is_ours(&ours, "Hélène", &root));
+        // Чужой продукт на том же корне — не наш.
+        let other = WhoSaid { product: "Praxis".into(), root: root.display().to_string() };
+        assert!(!who_is_ours(&other, "Hélène", &root));
+        // Наш продукт, но другая установка — тоже не наш: у неё своё дерево.
+        let elsewhere = WhoSaid { product: "Hélène".into(), root: root.join("другая").display().to_string() };
+        assert!(!who_is_ours(&elsewhere, "Hélène", &root));
+        // Промолчал о корне — не наш: молчание прибора это не факт.
+        let mute = WhoSaid { product: "Hélène".into(), root: String::new() };
+        assert!(!who_is_ours(&mute, "Hélène", &root));
+    }
+
+    /// ⚠ п.5: по пожатому ребёнку сигнал группе не идёт — его номер мог
+    /// достаться чужому процессу.
+    #[test]
+    fn a_reaped_child_is_never_signalled_by_group() {
+        assert!(!may_signal_group(true, true), "пожатый — не наш, кто бы там ни жил");
+        assert!(!may_signal_group(true, false));
+        assert!(!may_signal_group(false, false), "никого нет — некого и бить");
+        assert!(may_signal_group(false, true));
+    }
+
+    /// ⚠ п.2: граница macOS отвергает невидимые знаки во всех трёх полях —
+    /// владелец решает по тому, что увидел в окне.
+    #[test]
+    fn the_mac_border_refuses_invisible_separators() {
+        let wish = |cmd: &str, arg: &str, why: &str| BrokerWish {
+            id: "a1".into(),
+            op: BrokerOp::Exec,
+            cmd: cmd.into(),
+            args: vec![arg.into()],
+            why: why.into(),
+            timeout_sec: 60,
+            at_unix: 0,
+        };
+        assert!(mac_wish_check(&wish("/usr/bin/id", "-u", "узнать номер")).is_ok());
+
+        let why_bad = mac_wish_check(&wish("/usr/bin/id", "-u", "узнать\u{2028}rm -rf /"))
+            .expect_err("U+2028 в «зачем» обязан быть отказом");
+        assert!(why_bad.contains("невидимый"), "{why_bad}");
+
+        let arg_bad = mac_wish_check(&wish("/usr/bin/id", "-u\u{200e}", "узнать номер"))
+            .expect_err("знак формата в аргументе обязан быть отказом");
+        assert!(arg_bad.contains("невидимые знаки"), "{arg_bad}");
+
+        let cmd_bad = mac_wish_check(&wish("/usr/bin/i\u{00ad}d", "-u", "узнать номер"))
+            .expect_err("мягкий перенос в пути обязан быть отказом");
+        assert!(cmd_bad.contains("невидимые знаки"), "{cmd_bad}");
+
+        // Неразрывный пробел — обычный видимый знак, из-за него не отказываем.
+        assert!(mac_wish_check(&wish("/usr/bin/id", "-u", "узнать\u{00a0}номер")).is_ok());
     }
 
     /// Вывод команды и её код — из того, что вернул osascript; без метки код

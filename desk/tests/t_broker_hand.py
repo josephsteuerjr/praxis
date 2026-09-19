@@ -85,6 +85,34 @@ class Border(unittest.TestCase):
         self.assertIn("500", broker.check_why("я" * 501))
         self.assertEqual(broker.check_why("открыть порт трубы для телефона"), "")
 
+    def test_invisible_separators_are_refused(self):
+        """⚠ Находка судей 19.09: граница ловила только `ord(c) < 32`.
+
+        U+2028 и U+2029 — переводы строки для всего, что рисует текст; U+0085 —
+        тоже; знаки формата (U+200E, U+202E, мягкий перенос) переставляют текст
+        прямо на экране владельца. Просьба могла нарисовать в окне одну команду,
+        а уехать в исполнение другой — и тем же приёмом подделать журнал.
+        """
+        self.assertTrue(broker.has_invisible("раз\u2028два"))
+        self.assertTrue(broker.has_invisible("раз\u2029два"))
+        self.assertTrue(broker.has_invisible("раз\u0085два"))
+        self.assertTrue(broker.has_invisible("раз\u200eдва"))
+        self.assertTrue(broker.has_invisible("раз\u00adдва"))
+        self.assertTrue(broker.has_invisible("раз\tдва"))
+        # Неразрывный пробел — ОБЫЧНЫЙ пробел (Zs), он видим: из-за него не
+        # отказываем, иначе мешали бы по делу.
+        self.assertFalse(broker.has_invisible("раз\u00a0два"))
+        self.assertFalse(broker.has_invisible("обычная строка — с тире"))
+
+        # Все три поля просьбы.
+        self.assertIn("невидимый", broker.check_why("правило\u2028rm -rf /"))
+        self.assertIn("невидимые знаки", broker.check_args(["show\u2028delete"]))
+        self.assertIn("невидимые знаки",
+                      broker.check_cmd("C:\\Windows\\System32\\net\u200bsh.exe"))
+        # Чистая просьба проходит — граница не ломает работу.
+        self.assertEqual(broker.check_args(["advfirewall", "show"]), "")
+        self.assertEqual(broker.check_why("открыть порт трубы для телефона"), "")
+
     def test_op_and_timeout(self):
         self.assertIn("не знаю такой двери",
                       broker.check("root", "", None, "зачем-то", 60))
@@ -114,7 +142,10 @@ class PosixBorder(unittest.TestCase):
             posix_form = os.path.splitdrive(str(exe))[1].replace("\\", "/")
             self.assertEqual(broker.check_cmd(posix_form, posix=True), "")
             self.assertIn("абсолютным", broker.check_cmd(exe.name, posix=True))
-        self.assertIn("перевод строки", broker.check_cmd("/usr/bin/id\n", posix=True))
+        # Перевод строки в имени программы — частный случай невидимого знака:
+        # граница переехала 19.09 и ловит теперь и U+2028, и знаки формата.
+        self.assertIn("невидимые знаки", broker.check_cmd("/usr/bin/id\n", posix=True))
+        self.assertIn("нулевой байт", broker.check_cmd("/usr/bin/id\0", posix=True))
         # Форма Windows от параметра не зависит.
         self.assertEqual(broker.check_cmd(r"C:\Windows\System32\netsh.exe", posix=False), "")
         self.assertIn("полным путём", broker.check_cmd("/usr/bin/id", posix=False))
@@ -135,6 +166,17 @@ class PosixBorder(unittest.TestCase):
         self.assertIn("нулевой сессии", broker.exec_words(mac=False))
         self.assertIn("пароль", broker.check("root", "", None, "зачем-то", 60)
                       if sys.platform == "darwin" else broker.exec_words(mac=True))
+
+    def test_the_mac_tool_names_the_password_as_the_signature(self):
+        """п.3: на Mac аналога галочки нулевой сессии нет, и сказать об этом
+        обязан САМ тул — иначе агент будет просить «включить exec насовсем»."""
+        mac = broker.tool_schema(mac=True)
+        text = mac["description"]
+        self.assertIn("пароля", text)
+        self.assertIn("Настройки", text)
+        # Запреты прежнего стенда остаются в силе: слов другой платформы тут нет.
+        for word in ("Windows", "нулевой сессии", "служба", "СИСТЕМЫ", "macOS"):
+            self.assertNotIn(word, text, word)
 
     def test_listing_on_darwin_does_not_ask_for_a_service(self):
         from unittest.mock import patch

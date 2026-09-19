@@ -327,13 +327,48 @@ def secret_paths(install_root: Path, tree: Path) -> list[Path]:
     модели, токен бота, правку конфига и конституции. Секрет на всех платформах
     (Windows читал его AppContainer из `memory` так же) — закрываем здесь для
     всех трёх оград сразу.
+
+    ⚠⚠ ДОБАВЛЕНО 19.09 ПО НАХОДКЕ СУДЕЙ — четыре файла, которых здесь не было:
+
+    `memory/.state/body-token` — КЛЮЧ УСТРОЙСТВА. Под службой движок кладёт его
+    сюда, и по нему тело (`helene-body`) пускает к экрану, мыши и клавиатуре
+    владельца. Агент под оградой мог прочитать его своей же командой `shell` и
+    ходить в тело МИМО тула `computer` — то есть мимо всех его проверок и мимо
+    записи в журнал.
+
+    `memory/.state/broker-asks.json` и `broker-answers.json` — ОБМЕН С БРОКЕРОМ.
+    Просьбу пишет рука брокера, ответ — оболочка; оба файла лежат в `memory`,
+    выданной контейнеру на изменение. Агент с доступом на запись мог переписать
+    «зачем» в просьбе, которую читает владелец (то есть подписать одно, а
+    выполнить другое), и — хуже — подделать СВОЙ ЖЕ ответ в `broker-answers.json`
+    со словом `allowed`: рука прочитала бы согласие, которого владелец не давал.
+
+    `memory/.state/broker-token` — токен трубы службы на Windows. Права на нём
+    ставит сама служба («СИСТЕМА, администраторы, владелец»), и в песочнице он
+    и так недоступен; здесь он назван явно, чтобы файловые руки (`STATE["denied"]`)
+    тоже его не отдавали и чтобы список секретов был ОДИН, а не «часть тут,
+    часть в службе».
     """
+    state = Path(tree) / "memory" / ".state"
     return [Path(install_root) / "helene.json",
             Path(tree) / "memory" / "llm.json",
-            Path(tree) / "memory" / ".state" / "anatomy.json",
-            Path(tree) / "memory" / ".state" / "desk-token",
+            state / "anatomy.json",
+            state / "desk-token",
+            state / "body-token",
+            state / "broker-token",
+            state / "broker-asks.json",
+            state / "broker-answers.json",
             Path(tree) / "relay",
             Path(tree) / "telegram"]
+
+
+#: Секреты, которых на машине может не быть вовсе, и это НОРМА, а не «ещё не
+#: создан». `body-token` пишется только под службой, `broker-token` — только
+#: когда служба установлена, файлы обмена брокера — только когда агент попросил
+#: хоть раз. Без этого списка `_secure_secrets` считал бы установку вечно
+#: недоделанной, не ставил маркер и гонял `icacls` по кругу на каждом старте.
+SECRETS_MAYBE_ABSENT = ("body-token", "broker-token",
+                        "broker-asks.json", "broker-answers.json")
 
 
 def shut_out_container(path: Path, *, share_read: bool = False) -> bool:
@@ -357,7 +392,23 @@ def shut_out_container(path: Path, *, share_read: bool = False) -> bool:
     больше нет (проверено живьём, см. стенд `r2/t_fence_anatomy.py`).
     """
     target = Path(path)
-    if os.name != "nt" or not target.exists():
+    if os.name != "nt":
+        # ⚠ Не «молча False» (судьи 19.09). Вне Windows ACL нет, и защиту даёт
+        # не этот вызов, а сам профиль ограды: на macOS seatbelt запрещает эти
+        # пути и на чтение, и на запись (`fence_macos.Container.profile`, секция
+        # секретов), на Linux они подменяются пустым tmpfs (`fence_posix`).
+        # Молчание здесь читалось бы как «защиты нет» — а она есть, просто
+        # ставится один раз на профиль, а не по файлу.
+        #
+        # Один раз за жизнь процесса, а не на каждый вызов: эту функцию зовут на
+        # каждую запись анатомии и каждую просьбу о папке, и строка в журнал
+        # каждый раз была бы не честностью, а шумом, за которым перестают читать.
+        if not STATE.get("said_profile_guards"):
+            STATE["said_profile_guards"] = True
+            log.info("секреты закрывает ПРОФИЛЬ ограды (seatbelt/bwrap), а не права файлов — "
+                     "прав файлов на этой системе мы не меняем")
+        return False
+    if not target.exists():
         return False
     user = os.environ.get("USERNAME") or ""
     args = [str(target), "/inheritance:r"]
@@ -1106,7 +1157,12 @@ class Container:
         unprotected: list[str] = []
         for path in self._secrets(tree):
             if not path.exists():
-                pending = True          # ещё не создан — вернёмся на следующем старте
+                # Файла может не быть ВООБЩЕ (`SECRETS_MAYBE_ABSENT`): тела под
+                # службой нет, служба не ставилась, брокера ни разу не просили.
+                # Считать такую установку недоделанной значило бы не ставить
+                # маркер никогда и гонять icacls на каждом старте.
+                if path.name not in SECRETS_MAYBE_ABSENT:
+                    pending = True      # ещё не создан — вернёмся на следующем старте
                 continue
             suffix = "(OI)(CI)F" if path.is_dir() else "F"
             args = [str(path), "/inheritance:r"]

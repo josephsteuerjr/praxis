@@ -198,8 +198,24 @@ wait_old_shell() {
 # `tail -f helene.log`, и редактор с открытым helene.json. Своя цепочка
 # родителей исключается: скрипт могла запустить оболочка из этой же папки, и
 # она выходит сама (wait_old_shell).
+# ⚠ ДЕМОН СЛУЖБЫ ЗДЕСЬ НЕ ГАСИТСЯ (судьи 19.09). `helene-svc` живёт под launchd
+# с `KeepAlive`: убитый нами процесс launchd поднимает обратно через секунду, и
+# цикл ожидания ниже крутился бы все тридцать секунд впустую, а потом слал бы
+# SIGKILL тому, кто уже другой. Снимает демон МАСТЕР — `launchctl bootout` под
+# диалогом пароля (`setup/src/install.rs::service_op`), и это единственный путь,
+# который работает. Поэтому `helene-svc` вырезан и из списка, и из ожидания, а
+# владельцу сказано одной строкой, кто его снимет.
+svc_pids() {
+    ps -axo pid=,comm= 2>/dev/null | awk -v svc="$HOME_DIR/helene-svc" '
+        {
+            id = $1
+            cmd = $2; for (i = 3; i <= NF; i++) cmd = cmd " " $i
+            if (index(cmd, svc) == 1) print id
+        }' || true
+}
+
 running_pids() {
-    ps -axo pid=,ppid=,comm= 2>/dev/null | awk -v home="$HOME_DIR/" -v me="$$" '
+    ps -axo pid=,ppid=,comm= 2>/dev/null | awk -v home="$HOME_DIR/" -v svc="$HOME_DIR/helene-svc" -v me="$$" '
         {
             id = $1; parent[id] = $2
             cmd = $3; for (i = 4; i <= NF; i++) cmd = cmd " " $i
@@ -210,12 +226,15 @@ running_pids() {
             while (p > 1 && n < 64) { mine[p] = 1; p = parent[p]; n++ }
             for (k = 1; k <= NR; k++) {
                 id = order[k]
-                if (!(id in mine) && index(comm[id], home) == 1) print id
+                if (id in mine) continue
+                if (index(comm[id], svc) == 1) continue
+                if (index(comm[id], home) == 1) print id
             }
         }' || true
 }
 
 stop_running() {
+    [ -n "$(svc_pids)" ] && say "служба работает — её снимет мастер (спросит пароль администратора)"
     pids="$(running_pids)"
     [ -n "$pids" ] || return 0
     say "останавливаю работающую $PRODUCT…"

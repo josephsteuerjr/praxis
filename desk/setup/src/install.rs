@@ -1851,20 +1851,39 @@ fn install_service(dir: &Path) -> String {
         }
         Err(e) => return format!("failed: helene-svc не запустился: {e}"),
     };
-    let tmp = std::env::temp_dir().join("app.helene.svc.plist");
-    if let Err(e) = std::fs::write(&tmp, out) {
-        return format!("failed: {}", io_note(&tmp, &e));
-    }
+    // ⚠ Своя папка 0700 со случайным именем и файл под O_EXCL|0600, а не
+    // предсказуемый `temp_dir()/app.helene.svc.plist`: между записью и «Да» в
+    // диалоге пароля его успевал подменить любой процесс учётки, и под root
+    // копировалось уже чужое описание. Плюс хэш в админ-строку — третья дверь.
+    let (tmp_dir, tmp, hash) = match mac_svc_stage_plist(&out) {
+        Ok(v) => v,
+        Err(e) => return format!("failed: {e}"),
+    };
     let said = mac_svc_run_admin(
-        &mac_svc_install_line(&tmp),
+        &mac_svc_install_line(&tmp, &hash),
         &format!("{PRODUCT_UI}: поставить службу «Работать без входа в систему»"),
     );
+    let _ = std::fs::remove_dir_all(&tmp_dir);
     let state = mac_svc_state();
+    // Служба — не движок: демон под KeepAlive бывает «running», пока агент в нём
+    // падает по кругу. Слова о движке дописываются к расписке, машинное слово
+    // состояния не трогаем — по нему живут мастер и карточка.
+    let note = mac_svc_engine_note(&state, mac_svc_engine_alive(mac_svc_port(dir)));
     match (said, state.as_str()) {
         (Err(e), "absent") => format!("failed: {e}"),
         (Err(e), st) => format!("{st} (команда ответила отказом: {e})"),
+        (Ok(_), st) if !note.is_empty() => format!("{st} ({note})"),
         (Ok(_), st) => st.to_string(),
     }
+}
+
+/// Порт канала из `helene.json` установки — для пробы движка. `None` — конфига
+/// нет или порт в нём не назван: тогда о движке ничего не говорим.
+#[cfg(target_os = "macos")]
+fn mac_svc_port(dir: &Path) -> Option<u16> {
+    let raw = std::fs::read_to_string(dir.join("helene.json")).ok()?;
+    let cfg: serde_json::Value = serde_json::from_str(raw.trim_start_matches('\u{feff}')).ok()?;
+    cfg.get("port").and_then(|v| v.as_u64()).map(|n| n as u16)
 }
 
 /// На прочих POSIX службы в поставке нет.
@@ -2243,10 +2262,20 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
                 }),
                 Err(e) => {
                     if service_state() == "running" {
-                        return Err(format!(
-                            "служба Windows «{PRODUCT}» продолжает работать и держит файлы программы ({e}). \
-                             Останови её (sc stop {PRODUCT}) и повтори установку."
-                        ));
+                        // ⚠ Слова — ТОЙ системы, на которой мы стоим: «служба
+                        // Windows… sc stop» на Mac это совет в пустоту, а совет
+                        // в пустоту хуже молчания (судьи 19.09).
+                        return Err(if cfg!(windows) {
+                            format!(
+                                "служба Windows «{PRODUCT}» продолжает работать и держит файлы программы ({e}). \
+                                 Останови её (sc stop {PRODUCT}) и повтори установку."
+                            )
+                        } else {
+                            format!(
+                                "служба продолжает работать и держит файлы программы ({e}). {}",
+                                service_hand_removal()
+                            )
+                        });
                     }
                     pre_steps.push(Step {
                         label: "Прежняя служба".into(),
@@ -2459,9 +2488,18 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
 
     let mut warning: Option<String> = None;
     let service = if s.wants_service() {
+        // ⚠ «Система спросит пароль» — только когда путь действительно через
+        // диалог. На раннере CI и при `HELENE_ADMIN_NOPROMPT=1` мы идём через
+        // sudo без пароля (`mac_svc_noprompt_allowed`), и обещание диалога было
+        // бы неправдой в тихой установке (судьи 19.09).
         tick(
             if cfg!(windows) {
                 "Ставлю службу Windows (появится окно прав администратора)"
+            } else if mac_svc_noprompt_allowed(
+                std::env::var("GITHUB_ACTIONS").ok().as_deref(),
+                std::env::var("HELENE_ADMIN_NOPROMPT").ok().as_deref(),
+            ) {
+                "Ставлю службу (права администратора — без диалога: так настроена эта машина)"
             } else {
                 "Ставлю службу (система спросит пароль администратора)"
             },
@@ -2489,7 +2527,14 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
         steps.push(Step { label: "Служба".into(), ok: state == "running", note: Some(note) });
         state
     } else {
-        if service_before != "absent" {
+        // ⚠ `service_before` снят ДО установки (пре-шаг выше), и на macOS
+        // снимает он не «скрипт», а `launchctl bootout` под диалогом пароля.
+        // Повторное снятие по устаревшему значению показывало владельцу ВТОРОЙ
+        // диалог пароля ради демона, которого уже нет, — и «отмена» в нём
+        // рисовала в расписке «служба осталась на машине» о снятой службе
+        // (судьи 19.09). Спрашиваем состояние СЕЙЧАС.
+        let service_now = if service_before == "absent" { "absent".to_string() } else { service_state() };
+        if service_now != "absent" {
             // Галку сняли, а служба осталась бы жить от LocalSystem, и helene.json
             // при этом писал бы service:false — конфиг врал бы о состоянии машины.
             tick(

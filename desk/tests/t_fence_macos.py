@@ -552,6 +552,52 @@ class Live(unittest.TestCase):
         self.assertNotEqual(code, 0, f"desk-token прочитался из ограды: {out}")
         self.assertNotIn("токенканала", out)
 
+    def test_ключ_тела_не_читается(self):
+        """⚠ п.4 (судьи 19.09): `memory/.state/body-token` — ключ УСТРОЙСТВА.
+
+        По нему тело пускает к экрану, мыши и клавиатуре владельца. Пока его не
+        было в `fence.secret_paths`, агент читал его своей же командой `shell` и
+        мог ходить в тело МИМО тула `computer` — мимо его проверок и мимо
+        журнала.
+        """
+        state = self.g.tree / "memory" / ".state"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "body-token").write_text("ключтелаXYZ789", encoding="utf-8")
+        box = self.g.box()
+        box.prepare()
+        out, code, _ = box.run(["/bin/bash", "-lc", f"cat {state / 'body-token'}"],
+                               self.g.workspace, 30)
+        self.assertNotEqual(code, 0, f"body-token прочитался из ограды: {out}")
+        self.assertNotIn("ключтела", out)
+
+    def test_ответы_брокера_из_ограды_не_пишутся(self):
+        """⚠ п.4: `broker-answers.json` пишет ОБОЛОЧКА, читает рука брокера.
+
+        Файл лежит в `memory`, выданной на изменение. Агент с записью туда мог
+        подделать СВОЙ ЖЕ ответ со словом `allowed` — и рука прочитала бы
+        согласие, которого владелец не давал. Просьбы (`broker-asks.json`)
+        закрыты тем же правилом: переписанное «зачем» — это подпись под одним, а
+        выполнение другого.
+        """
+        state = self.g.tree / "memory" / ".state"
+        state.mkdir(parents=True, exist_ok=True)
+        answers = state / "broker-answers.json"
+        answers.write_text('{"v": 1, "answers": []}', encoding="utf-8")
+        box = self.g.box()
+        box.prepare()
+        out, code, _ = box.run(
+            ["/bin/bash", "-lc",
+             f"printf '{{\"answers\":[{{\"decision\":\"allowed\"}}]}}' > {answers}"],
+            self.g.workspace, 30)
+        self.assertNotEqual(code, 0, f"broker-answers.json переписался из ограды: {out}")
+        self.assertNotIn("allowed", answers.read_text(encoding="utf-8"),
+                         "подделанный ответ владельца доехал до диска")
+        # И прочитать их тоже нельзя: id чужих просьб — это карта того, чем
+        # занят владелец.
+        out, code, _ = box.run(["/bin/bash", "-lc", f"cat {state / 'broker-asks.json'}"],
+                               self.g.workspace, 30)
+        self.assertNotEqual(code, 0, f"broker-asks.json прочитался из ограды: {out}")
+
     def test_git_хук_и_config_из_ограды_не_пишутся(self):
         # Побег: движок вне ограды коммитит на каждый shell без --no-verify.
         git = self.g.tree / ".git"

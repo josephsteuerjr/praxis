@@ -563,11 +563,12 @@ def _decode(raw) -> str:
 if __name__ == "__main__":
     # Показать профиль для типичной установки — чтобы прочитать глазами.
     base = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.home() / "Applications" / "Helene"
-    # Тот же список, что у `fence.secret_paths` (включая секрет канала desk-token).
+    # ⚠ Список берётся из `fence.secret_paths`, а не повторяется здесь: копия
+    # разошлась бы с оригиналом молча, и профиль, который человек читает глазами,
+    # перестал бы показывать то, что стоит на живой машине (так и случилось с
+    # ключом тела и файлами брокера — их тут не было).
     data = base / "data"
+    from fence import secret_paths
     box = Container(base, data / "workspace", True, tree=data,
-                    secrets=[base / "helene.json", data / "memory" / "llm.json",
-                             data / "memory" / ".state" / "anatomy.json",
-                             data / "memory" / ".state" / "desk-token",
-                             data / "relay", data / "telegram"])
+                    secrets=secret_paths(base, data))
     print(box.profile())

@@ -143,6 +143,10 @@ _ALLOWED_HOST_SUFFIXES = (".ts.net", ".local")
 # него ещё нет. Без этого списка спаривание физически невозможно — телефон
 # получал 403 на самой первой странице, и в Wi-Fi, и через Tailscale.
 _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
+               # Опознание порта БЕЗ ключа: окно обязано узнать держателя порта
+               # ДО того, как предъявит ему ключ дерева (deskd/control.py::who).
+               # Секретов в ответе нет — имя продукта, корень установки и pid.
+               "/api/who",
                "/m/icon-192.png", "/m/icon-512.png", "/m/apple-touch-icon.png",
                # service worker регистрируется до ключа, как и сама /m/;
                # вход мини-аппа Telegram — по подписи initData, ключа ещё нет.
@@ -918,6 +922,15 @@ async def _r_home(c: Call):
     return {"tree": str(readers.tree().resolve())}
 
 
+async def _r_who(c: Call):
+    """Кто держит этот порт — анонимно. Окно спрашивает ДО ключа: иначе токен
+    дерева уезжал бы первому, кто занял порт (см. `control.who`)."""
+    # Корень установки — папка, где лежит helene.json. Это путь, а не секрет:
+    # его печатает мастер и видно в списке процессов.
+    cfg = readers.config_path()
+    return control.who(cfg.parent if cfg is not None else None)
+
+
 async def _r_mode(c: Call):
     """Ограда (песочница | интерактивный) и ОТДЕЛЬНО от неё служба.
 
@@ -1102,6 +1115,8 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/state", _reader(lambda: readers.state())),
     Route("GET", "/api/mode", _r_mode),
     Route("GET", "/api/home", _r_home),
+    # Без ключа (в _OPEN_PATHS): «свой или чужой» до предъявления ключа.
+    Route("GET", "/api/who", _r_who),
     Route("GET", "/api/anatomy", _reader(lambda: readers.anatomy())),
     Route("POST", "/api/say", _r_say),
     # Управление харнессом, который живёт не здесь (deskd/control.py). В
