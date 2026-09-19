@@ -497,7 +497,12 @@ class Live(unittest.TestCase):
         self.assertNotEqual(code, 0, "в temp пользователя записалось из ограды")
         self.assertFalse(fresh.exists())
         # …а свой temp команды — в доме: mktemp кладёт туда, и запись доезжает.
-        out, code, _ = self.sh('f=$(mktemp) && echo "$f" && echo x > "$f"')
+        # Диагностика в текст отказа: пятый круг CI показал, что mktemp берёт
+        # /var/folders раннера, хотя TMPDIR экспортирован первой командой, —
+        # кто его перебивает, видно только из самой ограды.
+        out, code, _ = self.sh('echo "TMPDIR=$TMPDIR HOME=$HOME"; command -v mktemp; '
+                               'getconf DARWIN_USER_TEMP_DIR; env | grep -i tmp; '
+                               'f=$(mktemp) && echo "$f" && echo x > "$f"')
         self.assertEqual(code, 0, out)
         self.assertIn(str(fence_macos._abs(self.g.workspace) / ".tmp"), out)
 
@@ -562,7 +567,7 @@ class Live(unittest.TestCase):
     def test_сеть_наружу_и_dns_живут_а_lan_bind_закрыт(self):
         # Положительный стенд: allowlist mach + DNS не должны сломать сеть.
         # Если сломают — это увидит CI, и список расширят.
-        out, code, _ = self.sh("curl -fsS --max-time 15 https://api.github.com/zen && echo OK")
+        out, code, _ = self.sh("curl -fsS --max-time 15 https://github.com/robots.txt && echo OK")
         self.assertEqual(code, 0, "исходящий HTTPS/TLS не прошёл под allowlist: " + out)
         self.assertIn("OK", out)
         out, code, _ = self.sh("python3 -c \"import socket; socket.getaddrinfo('github.com', 443); "
