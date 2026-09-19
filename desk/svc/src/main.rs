@@ -3824,6 +3824,9 @@ mod broker_tests {
 
     /// Имя трубы и путь к секрету считаются из папки установки и дерева — тех
     /// же, что видит оболочка. Разъедься они, клиент стучался бы не в ту трубу.
+    /// Труба и её имя — Windows; на macOS брокера службы нет, и стенд там падал
+    /// на разделителе пути (круг 11 CI) — семантика виндовая, под cfg(windows).
+    #[cfg(windows)]
     #[test]
     fn pipe_and_token_are_derived_from_the_install() {
         let root = Path::new(r"C:\Users\Иван\AppData\Local\Programs\Helene");
