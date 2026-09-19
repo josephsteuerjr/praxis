@@ -906,7 +906,10 @@ mod broker_protocol_tests {
     #[test]
     fn token_and_log_live_where_promised() {
         let tree = std::path::Path::new(r"C:\Helene\data");
-        assert!(broker_token_path(tree).ends_with(r"memory\.state\broker-token"));
+        // Хвост — компонентами, а не строкой с обратными слэшами: на macOS тот же
+        // стенд компилируется и гоняется (общий common/), и там `\` — не разделитель.
+        let tail = |a: &str, b: &str, c: &str| std::path::Path::new(a).join(b).join(c);
+        assert!(broker_token_path(tree).ends_with(tail("memory", ".state", "broker-token")));
         assert!(broker_log_path(tree).ends_with("broker.log"));
         // Не тот же файл, что у трубы харнесса: разные замки от разных дверей.
         assert_ne!(
@@ -924,9 +927,10 @@ mod broker_protocol_tests {
         let tree = std::path::Path::new(r"C:\Helene\data");
         let asks = broker_asks_path(tree);
         let answers = broker_answers_path(tree);
-        assert!(asks.ends_with(r"memory\.state\broker-asks.json"), "{}", asks.display());
+        let tail = |a: &str, b: &str, c: &str| std::path::Path::new(a).join(b).join(c);
+        assert!(asks.ends_with(tail("memory", ".state", "broker-asks.json")), "{}", asks.display());
         assert!(
-            answers.ends_with(r"memory\.state\broker-answers.json"),
+            answers.ends_with(tail("memory", ".state", "broker-answers.json")),
             "{}",
             answers.display()
         );
