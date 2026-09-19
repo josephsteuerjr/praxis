@@ -345,7 +345,7 @@ class Platform(unittest.TestCase):
         self.assertEqual(fresh.HAS_SERVICE, os.name == "nt" or sys.platform == "darwin")
         self.assertEqual(fresh.HAS_COMPUTER, os.name == "nt" or sys.platform == "darwin")
         self.assertEqual(fresh.HAS_SERVICE_TOGGLES, os.name == "nt")
-        self.assertEqual(fresh.MACOS_TEXTS, sys.platform == "darwin")
+        self.assertIsNone(fresh.MACOS_TEXTS, "подмена текстов по умолчанию не задана — платформа по sys.platform")
 
     def test_pipe_keeps_the_computer_section_without_a_service(self):
         # Картина системы без службы (не Windows и не macOS): тело есть, службы
