@@ -1312,7 +1312,9 @@ def main() -> None:
 
     print("паспорт сборки:")
     desk_head, desk_dirty = bd._git_field(DESK, "desk")
-    lost = missing_in_root(out)
+    # Паспорт пишется этим же шагом — его отсутствие ДО записи не нехватка (седьмой
+    # круг CI дошёл сюда с полным составом и упал ровно на этой строке).
+    lost = [rel for rel in missing_in_root(out) if rel != "helene-build.json"]
     for rel in lost:
         print(f"  ⚠ в сборке нет: {rel}")
     partial = missing + [f"нет в сборке: {rel}" for rel in lost] + \
@@ -1330,6 +1332,8 @@ def main() -> None:
         git_bundle=git_bundle, macos_floor=macos_floor)
     (out / "helene-build.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    if missing_in_root(out):
+        raise SystemExit("после записи паспорта в корне всё ещё не хватает: " + ", ".join(missing_in_root(out)))
 
     # Гард ПОСЛЕ паспорта и до архива — как у Windows. Раскладка рантайма на Mac
     # другая (`lib/python3.14/site-packages`, а не `Lib/site-packages`), поэтому
