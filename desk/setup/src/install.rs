@@ -1153,13 +1153,21 @@ struct Proc {
 /// как у «Helene Setup.app».
 #[cfg(not(windows))]
 fn parse_ps(text: &str) -> Vec<Proc> {
+    // `ps -axo pid=,ppid=,comm=` выравнивает числа пробелами, и их между полями
+    // несколько: `splitn` по одному пробелу давал пустой второй токен, `parse`
+    // падал, и таблица выходила ПУСТОЙ на каждой строке — остановка процессов
+    // никого не находила (девятый круг CI, стенд `processes_are_matched_by_…`).
+    // Режем по первому пробелу и снимаем пробелы перед следующим полем; путь
+    // программы (третье поле) может содержать пробелы — он берётся целиком.
     text.lines()
         .filter_map(|line| {
-            let mut it = line.trim().splitn(3, char::is_whitespace);
-            let pid = it.next()?.parse().ok()?;
-            let ppid = it.next()?.trim().parse().ok()?;
-            let comm = it.next().map(|c| c.trim().to_string()).unwrap_or_default();
-            Some(Proc { pid, ppid, comm })
+            let t = line.trim_start();
+            let (pid_s, rest) = t.split_once(char::is_whitespace)?;
+            let rest = rest.trim_start();
+            let (ppid_s, comm) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            let pid = pid_s.parse().ok()?;
+            let ppid = ppid_s.parse().ok()?;
+            Some(Proc { pid, ppid, comm: comm.trim().to_string() })
         })
         .collect()
 }
@@ -2921,7 +2929,10 @@ mod tests {
     /// Тело руки `computer`: выключено по умолчанию, блок в конфиге есть
     /// всегда (с портом и всеми четырьмя правами), включение — только словом
     /// визарда; переустановка не стирает ни сужённые права, ни порт владельца.
+    // Семантика службы и тела — Windows: на macOS wants_service/wants_computer
+    // отвечают «нет» по построению (свой стенд service_and_body_exist_only_on_windows).
     #[test]
+    #[cfg(windows)]
     fn computer_block_is_written_and_merged() {
         let mut s = setup_for("api");
         let cfg = config_json(&s, None, RELAY_PORT);
@@ -3386,7 +3397,10 @@ mod tests {
     /// ⚠⚠ P0. Служба — не ограда: она ставится ПОВЕРХ любой из двух и ни одну
     /// не снимает. Пока их держали одним списком, владелец, выбравший службу с
     /// песочницей, получал `sandbox.enabled = false` — ограду снимали молча.
+    // Семантика службы и тела — Windows: на macOS wants_service/wants_computer
+    // отвечают «нет» по построению (свой стенд service_and_body_exist_only_on_windows).
     #[test]
+    #[cfg(windows)]
     fn service_never_takes_the_fence_off() {
         for fence in ["sandbox", "interactive"] {
             let mut s = setup_for("api");
@@ -3408,7 +3422,10 @@ mod tests {
     /// оттуда читаем (иначе выбор владельца пропал бы), а оградой её не
     /// считаем: оградой становится песочница — умолчание визарда и более узкие
     /// права из двух.
+    // Семантика службы и тела — Windows: на macOS wants_service/wants_computer
+    // отвечают «нет» по построению (свой стенд service_and_body_exist_only_on_windows).
     #[test]
+    #[cfg(windows)]
     fn legacy_service_mode_is_a_service_not_a_fence() {
         let mut s = setup_for("api");
         s.agent_mode = "service".into();
@@ -3422,7 +3439,10 @@ mod tests {
 
     /// Пустой ключ — визард старого выпуска, ограду он не присылал вовсе.
     /// Молча расширять права нельзя: умолчание — песочница.
+    // Семантика службы и тела — Windows: на macOS wants_service/wants_computer
+    // отвечают «нет» по построению (свой стенд service_and_body_exist_only_on_windows).
     #[test]
+    #[cfg(windows)]
     fn missing_fence_defaults_to_sandbox() {
         let mut s = setup_for("api");
         s.agent_mode = String::new();
@@ -3435,7 +3455,10 @@ mod tests {
 
     /// Нулевая сессия живёт в `service.session0` (там её читает служба) и
     /// действует только вместе со службой: без неё исполнять некому.
+    // Семантика службы и тела — Windows: на macOS wants_service/wants_computer
+    // отвечают «нет» по построению (свой стенд service_and_body_exist_only_on_windows).
     #[test]
+    #[cfg(windows)]
     fn session0_only_with_the_service() {
         let mut s = setup_for("api");
         s.session0 = true;
@@ -3488,7 +3511,10 @@ mod tests {
     /// Тот же P0 на переустановке. В файле лежит наследие первой волны:
     /// `agent_mode: "service"` при живой ограде. Визард приходит со службой —
     /// и ограда обязана остаться на месте.
+    // Семантика службы и тела — Windows: на macOS wants_service/wants_computer
+    // отвечают «нет» по построению (свой стенд service_and_body_exist_only_on_windows).
     #[test]
+    #[cfg(windows)]
     fn merge_keeps_the_fence_when_the_service_stays() {
         let old = serde_json::json!({
             "agent_mode": "service",
