@@ -585,6 +585,13 @@ class Body:
         прочитавшее вчерашний, получило бы тело, которому мост отвечает «чужой».
         Права сужаем ДО записи (`os.open` с 0o600): создать файл открытым, а
         потом закрыть — это окно, в которое ключ уже видно.
+
+        ⚠ Режим в `os.open` действует ТОЛЬКО на создание. Временный файл от
+        прошлого запуска (упали между `open` и `replace`) уже существует — и
+        тогда `O_CREAT` прав не меняет, а `O_TRUNC` пишет ключ в файл с теми
+        правами, какие там были, хоть 0644. Поэтому `fchmod` по уже открытому
+        дескриптору: сужает права именно тому файлу, в который пишем, и до
+        того, как в нём что-то появилось (гонку через имя это тоже закрывает).
         """
         path = self.token_path()
         try:
@@ -592,6 +599,11 @@ class Body:
             tmp = path.with_name(".tmp-" + path.name)
             fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
+                try:
+                    os.fchmod(fd, 0o600)
+                except (AttributeError, OSError):
+                    # Windows: режимов POSIX там нет, права даёт ACL папки данных.
+                    pass
                 os.write(fd, self.device_token.encode("utf-8"))
             finally:
                 os.close(fd)
@@ -1170,11 +1182,24 @@ MAC_TOOL_TEXT: tuple[tuple[str, str], ...] = (
     ("coding path on Windows (no wcode proxy task needed; receipts bind to your current run "
      "automatically)", "coding path on this computer (receipts bind to your current run automatically)"),
     ("; .ps1/.psm1/.psd1 with non-ASCII text get a UTF-8 BOM so PowerShell 5.1 parses them", ""),
-    ("reads the UI Automation control tree", "reads the Accessibility control tree"),
+    # ⚠ «reads the UI Automation control tree» здесь БЫЛО и ничего не находило: в живом
+    # описании стоит «returns the …» (`helene/core/agent.py`, схема `computer`). Мёртвая
+    # пара не безобидна — она выглядит как забота о фразе, которой на самом деле никто не
+    # правит, и следующий читатель верит ей вместо того, чтобы проверить. Стенд
+    # `tests/t_tool_text_mac.py` теперь краснеет на каждую такую.
     ("returns the UI Automation control tree", "returns the Accessibility control tree"),
     ("It goes through UI Automation patterns", "It goes through Accessibility actions"),
     ("many controls (WinForms TextBox) select all text on focus", "some controls select all text on focus"),
     ("one Win32 notch", "one wheel notch"),
+)
+
+#: То же для тула `computer_access` — корня доверия к руке `computer`. Он свой отдельный
+#: тул со своим описанием, и Windows в нём ровно одно слово; держать его в общем словаре
+#: нельзя: стенд `t_tool_text_mac.py` сверяет КАЖДУЮ пару `MAC_TOOL_TEXT` с живым
+#: описанием тула `computer`, и пара, которой там нечего искать, читалась бы как мёртвая.
+MAC_ACCESS_TOOL_TEXT: tuple[tuple[str, str], ...] = (
+    ("Owner-only root of trust for Windows access",
+     "Owner-only root of trust for computer access"),
 )
 
 
@@ -1185,21 +1210,35 @@ def mac_tool_text(text: str) -> str:
     return text
 
 
-def _mac_walk(node) -> None:
+def mac_access_tool_text(text: str) -> str:
+    """Текст схемы `computer_access` словами macOS. Чистая функция, идемпотентна."""
+    for old, new in MAC_ACCESS_TOOL_TEXT:
+        text = text.replace(old, new)
+    return text
+
+
+def _mac_walk(node, say=None) -> None:
     """Те же замены по всем `description` схемы, на любой глубине."""
+    say = say or mac_tool_text
     if isinstance(node, dict):
         for key, value in node.items():
             if key == "description" and isinstance(value, str):
-                node[key] = mac_tool_text(value)
+                node[key] = say(value)
             else:
-                _mac_walk(value)
+                _mac_walk(value, say)
     elif isinstance(node, list):
         for item in node:
-            _mac_walk(item)
+            _mac_walk(item, say)
+
+
+#: Какому тулу каким словарём править описание. `computer_access` здесь потому, что он
+#: говорит «for Windows access» на машине, где Windows нет: корень доверия к руке
+#: `computer` обязан называть ту же вещь тем же словом, что и сама рука.
+_MAC_TOOL_TEXTS = {"computer": mac_tool_text, "computer_access": mac_access_tool_text}
 
 
 def describe_for_mac(agent_mod) -> int:
-    """Поправить описание тула `computer` во всех списках схем дерева.
+    """Поправить описания тулов `computer` и `computer_access` во всех списках дерева.
 
     Правится ЗАГРУЖЕННЫЙ модуль, не файл: дерево — код Праксис, его файлы не
     трогаем (тот же приём, что у `install` с `TOOL_IMPL`). Один и тот же словарь
@@ -1212,9 +1251,14 @@ def describe_for_mac(agent_mod) -> int:
         if not isinstance(lst, list):
             continue
         for tool in lst:
-            if isinstance(tool, dict) and tool.get("name") == "computer" and id(tool) not in seen:
-                seen.add(id(tool))
-                _mac_walk(tool)
+            if not isinstance(tool, dict) or id(tool) in seen:
+                continue
+            say = _MAC_TOOL_TEXTS.get(tool.get("name"))
+            if say is None:
+                continue
+            seen.add(id(tool))
+            _mac_walk(tool, say)
     if seen:
-        log.info("тело: описание тула computer переведено на слова macOS (схем: %d)", len(seen))
+        log.info("тело: описания тулов computer/computer_access переведены на слова macOS "
+                 "(схем: %d)", len(seen))
     return len(seen)

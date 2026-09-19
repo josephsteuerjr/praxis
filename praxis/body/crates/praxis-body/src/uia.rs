@@ -470,6 +470,10 @@ struct Node {
     ax_subrole: Option<String>,
     #[cfg(target_os = "macos")]
     patterns: Vec<&'static str>,
+    /// Только macOS: поле пароля (`AXSecureTextField`). `value` у него всегда пуст — не
+    /// «поле пустое», а «мы его не читаем».
+    #[cfg(target_os = "macos")]
+    secure: bool,
 }
 
 impl Node {
@@ -533,6 +537,9 @@ impl Node {
             // ключа, а четыреста лишних `[]` — это токены, которые читает модель.
             if !self.patterns.is_empty() {
                 object.insert("patterns".into(), json!(self.patterns));
+            }
+            if self.secure {
+                object.insert("secure".into(), json!(true));
             }
         }
         if let Some(hwnd) = self.hwnd {
@@ -1079,6 +1086,7 @@ mod platform {
             ax_role: node.ax_role,
             ax_subrole: node.ax_subrole,
             patterns: node.patterns,
+            secure: node.secure,
         }
     }
 
@@ -1181,6 +1189,8 @@ mod platform {
             "patterns lists which desktop.element.act verbs the element supports, derived from its AX actions and settable attributes; a missing patterns key means none of the eight applies"
                 .to_string(),
             "dpi is the Windows-style figure 96 x scale; on macOS the truth is scale (points to pixels), and every coordinate here is in points"
+                .to_string(),
+            "secure: true marks a password field (AXSecureTextField): its value is never read (absent, not empty), it never carries set_value, and set_value on it is refused"
                 .to_string(),
         ];
         if walk.read_failures > 0 {

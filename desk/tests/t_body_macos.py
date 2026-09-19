@@ -17,6 +17,10 @@
   desktop.clipboard.*     write → read туда-обратно (без разрешения — честный отказ)
   desktop.window.read     окно Helene по pid из списка: дерево с узлами при
                           «Универсальном доступе», иначе отказ с этими словами
+  desktop.window.activate ok ТОЛЬКО когда переднее окно стало запрошенным;
+                          иначе — отказ рамки со словами и с waited_ms
+  desktop.input.perform   безвредная пачка shift вниз/вверх; одинокий `cmd down`
+                          отпускается сам и называется в modifiers_auto_released
 
 Стенд различает «нет разрешения» и «сломано». TCC (`tcc.screen_recording`,
 `tcc.accessibility`) читается из desktop.status ДО проб, и ожидание ставится по
@@ -321,7 +325,10 @@ class Contract(unittest.TestCase):
             self.skipTest("окон нет — читать нечего")
 
         def looks_like_helene(row: dict) -> bool:
-            blob = " ".join(str(row.get(k) or "") for k in ("class", "process_path", "title")).lower()
+            # `class` — идентификатор пакета, `owner` — имя владельца: разные поля с
+            # 19.09, и своё окно может назваться любым из них.
+            blob = " ".join(str(row.get(k) or "")
+                            for k in ("class", "owner", "process_path", "title")).lower()
             return "helene" in blob
 
         own = [row for row in rows if looks_like_helene(row)]
@@ -347,6 +354,117 @@ class Contract(unittest.TestCase):
             self.assertTrue(_mentions(said, AX_WORDS),
                             f"отказ без слов про «Универсальный доступ»: {r}")
             print(f"  [TCC] нет «Универсального доступа» — дерево отказано словами: {said[:200]}")
+
+    # ---- desktop.window.activate ------------------------------------------ #
+
+    def test_7_activate_is_honest(self):
+        """Поднять окно — и не соврать, если не поднялось.
+
+        ⚠ ЗАЧЕМ ИМЕННО ТАК. `body.call` расплющивает ответ рамкой транспорта:
+        `{**рамка, **результат, "ok": рамка.ok}`. Результат `{"ok": false}`
+        доехал бы до модели как `"ok": true` — ложь в сторону успеха, и модель
+        пошла бы печатать в чужое окно. Поэтому «не подняли» обязано быть
+        ОШИБКОЙ рамки, и тогда снаружи это видно как `ok:false` + `error`.
+
+        Ложь ловится в обе стороны: `ok:true` при `foreground_hwnd`, который не
+        равен запрошенному, — падение; отказ при живом «Универсальном доступе»
+        — тоже падение (сломано, а не запрещено).
+        """
+        rows = type(self).windows or (self.call("desktop.window.list", {"limit": 100}).get("items") or [])
+        if not rows:
+            self.skipTest("окон нет — поднимать нечего")
+
+        def looks_like_helene(row: dict) -> bool:
+            blob = " ".join(str(row.get(k) or "") for k in ("class", "process_path", "title")).lower()
+            return "helene" in blob
+
+        own = [row for row in rows if looks_like_helene(row)]
+        # Своё окно, иначе Finder, иначе первое: чужой стол дёргать нечем.
+        finder = [row for row in rows if "finder" in str(row.get("class") or "").lower()
+                  or "finder" in str(row.get("owner") or "").lower()]
+        target = (own or finder or rows)[0]
+        hwnd = target["hwnd"]
+        who = (f"pid {target.get('pid')}, class {target.get('class')!r}, "
+               f"owner {target.get('owner')!r}, title {target.get('title')!r}")
+        r = self.call("desktop.window.activate", {"hwnd": hwnd, "timeout_ms": 3000})
+        said = _text(r)
+        if r.get("ok"):
+            # Успех — только по ФАКТУ: переднее окно стало запрошенным.
+            self.assertEqual(r.get("requested_hwnd"), hwnd, r)
+            self.assertEqual(
+                str(r.get("foreground_hwnd") or "").lower(), str(hwnd).lower(),
+                f"ok:true, а переднее окно другое — это ложь в сторону успеха: {r}")
+            self.assertIn("waited_ms", r, r)
+            print(f"  окно поднято по-настоящему ({who}): method={r.get('method')}, "
+                  f"activated={r.get('activated')}, raised={r.get('raised')}, "
+                  f"waited_ms={r.get('waited_ms')}")
+        else:
+            # Отказ обязан назвать, что удалось и почему не вышло.
+            self.assertTrue(said, f"отказ без единого слова: {r}")
+            self.assertTrue(
+                _mentions(said, AX_WORDS + ("не поднялось", "was not activated", "did not come")),
+                f"отказ без слов про «Универсальный доступ» и без «не поднялось»: {r}")
+            for word in ("foreground_hwnd", "waited_ms"):
+                self.assertIn(word, said, f"в отказе нет {word}: {r}")
+            if self.tcc.get("accessibility"):
+                # Разрешение есть — окно всё же могло не выйти вперёд (полноэкранный
+                # сосед, Mission Control). Это законно, но СЛОВАМИ, а не «ok».
+                print(f"  окно не поднялось при живом «Универсальном доступе» ({who}) — "
+                      f"отказ словами: {said[:220]}")
+            else:
+                self.assertTrue(_mentions(said, AX_WORDS),
+                                f"нет «Универсального доступа», а отказ молчит о нём: {r}")
+                print(f"  [TCC] нет «Универсального доступа» — поднятие отказано словами: {said[:200]}")
+
+    # ---- desktop.input.perform -------------------------------------------- #
+
+    def test_8_input_is_honest(self):
+        """Ввод: безвредная пачка и одинокий зажатый модификатор.
+
+        Первая пачка — shift вниз и сразу вверх: на экране от неё ничего не
+        происходит, а путь событий проверяется весь. Вторая — один `cmd down`
+        без пары: состояние модификаторов живёт РОВНО ОДИН ВЫЗОВ (глобального
+        состояния HID тело не держит), поэтому тело обязано отпустить его само
+        и сказать об этом словами — иначе следующий щелчок человека станет
+        ⌘-щелчком, а модель будет думать, что ⌘ всё ещё зажат.
+        """
+        shift = self.call("desktop.input.perform", {"events": [
+            {"type": "key", "key": "shift", "action": "down"},
+            {"type": "key", "key": "shift", "action": "up"},
+        ]})
+        if self.tcc.get("accessibility"):
+            self.assertTrue(shift.get("ok"), f"«Универсальный доступ» есть, а ввод не прошёл: {shift}")
+            self.assertGreaterEqual(int(shift.get("input_batches") or 0), 1, shift)
+            self.assertEqual(shift.get("buttons_held_at_exit"), [], shift)
+            self.assertEqual(shift.get("modifiers_auto_released"), [],
+                             f"пачка закрыла shift сама — отпускать было нечего: {shift}")
+            limits = shift.get("limits") or {}
+            self.assertEqual(limits.get("modifiers_scope"), "call", limits)
+            print(f"  ввод: пачек {shift.get('input_batches')}, записей {shift.get('input_records')}, "
+                  f"modifiers_scope={limits.get('modifiers_scope')}")
+        else:
+            self.assertFalse(shift.get("ok"), f"«Универсального доступа» нет, а ввод «ok»: {shift}")
+            said = _text(shift)
+            self.assertTrue(_mentions(said, AX_WORDS), f"отказ ввода без слов про разрешение: {shift}")
+            print(f"  [TCC] нет «Универсального доступа» — ввод отказан словами: {said[:200]}")
+
+        lone = self.call("desktop.input.perform", {"events": [
+            {"type": "key", "key": "cmd", "action": "down"},
+        ]})
+        if self.tcc.get("accessibility"):
+            self.assertTrue(lone.get("ok"), f"одинокий cmd down не прошёл: {lone}")
+            self.assertEqual(lone.get("modifiers_auto_released"), ["cmd"],
+                             f"⌘ остался зажат после вызова: {lone}")
+            self.assertEqual(lone.get("modifiers_held_at_exit"), [], lone)
+            notes = lone.get("notes")
+            self.assertIsInstance(notes, list, lone)
+            self.assertTrue(any("modifier" in str(n).lower() for n in notes),
+                            f"⌘ отпустили молча — модель так и будет думать, что он зажат: {lone}")
+            print(f"  одинокий cmd down: отпущен сам ({lone.get('modifiers_auto_released')}), "
+                  f"заметка есть")
+        else:
+            self.assertFalse(lone.get("ok"), f"«Универсального доступа» нет, а ввод «ok»: {lone}")
+            self.assertTrue(_mentions(_text(lone), AX_WORDS), lone)
 
 
 if __name__ == "__main__":

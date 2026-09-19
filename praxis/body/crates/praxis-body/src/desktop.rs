@@ -1336,6 +1336,8 @@ mod mac_pure {
             "numeric_keys": "a numeric key is a macOS virtual key code (kVK_*), not a Windows VK code",
             "wheel": format!("delta {WHEEL_NOTCH} = one notch = {WHEEL_LINES_PER_NOTCH} lines; positive = up, or right when horizontal (as on Windows)"),
             "button_hold": "a held mouse button never survives the call: whatever this batch leaves down is released before returning and named in buttons_auto_released",
+            "modifiers_scope": "call",
+            "modifier_hold": "modifiers_scope is \"call\": shift/ctrl/alt/cmd pressed with `key down` live only until this call returns - whatever is still down is released AFTER the last event of the batch and named in modifiers_auto_released. Hold and use a modifier in ONE batch: a hotkey event, or key down -> key press -> key up together. The body keeps no global HID state between calls",
             "focus_guard": "expected_foreground/expected_pid are re-checked before EVERY batch (each typed character is a batch), so a drag or a text is aborted mid-way if the foreground moves; the held button is released and named in the error",
             "permissions": "input needs the Accessibility permission (TCC); without it macOS drops posted events silently, so the body refuses before the first event",
         })
@@ -1401,8 +1403,11 @@ mod mac_pure {
     }
 
     /// Строка процесса — форма Windows-ветки; чего у macOS нет (сессии, число потоков,
-    /// время создания в FILETIME), стоит `null`, а не выдумка.
-    pub(super) fn process_row(row: &PsRow, path: Option<&str>) -> Value {
+    /// время создания в FILETIME), стоит `null`, а не выдумка. Время старта у macOS ЕСТЬ
+    /// (`proc_pidinfo`), но в СВОИХ единицах — секунды Unix, и едет оно своим полем
+    /// `process_started_unix`; `created_filetime` остаётся `null`, потому что FILETIME
+    /// — это 100 нс от 1601 года, и подстановка туда секунд была бы ложью формой.
+    pub(super) fn process_row(row: &PsRow, path: Option<&str>, started: Option<u64>) -> Value {
         let path = path.or_else(|| row.comm.starts_with('/').then_some(row.comm.as_str()));
         json!({
             "pid": row.pid,
@@ -1413,6 +1418,7 @@ mod mac_pure {
             "path": path,
             "session_id": null,
             "created_filetime": null,
+            "process_started_unix": started,
         })
     }
 
@@ -1452,10 +1458,23 @@ mod mac_pure {
     /// Строка окна — форма Windows-ветки `window_row`. `titles_visible` — есть ли
     /// «Запись экрана»: без неё система не отдаёт заголовки чужих окон, и `title: null`
     /// получает `note`, чтобы «без названия» не читалось как «окно без заголовка».
-    /// Чего у macOS нет (поток, сессия, время создания, «свёрнуто» из CGWindowList) — `null`.
+    ///
+    /// `class` — идентификатор пакета (`com.apple.finder`), как у `read_window`
+    /// (`uia::window_info`); запасное — имя владельца. Имя владельца при этом остаётся
+    /// отдельным полем `owner`: это разные вещи, и раньше `class` молча подменял одно
+    /// другим, из-за чего отбор по `class` на Mac и на Windows значил разное.
+    ///
+    /// `fingerprint` — `hwnd:pid:<время старта процесса>`, как на Windows: номера
+    /// процессов система переиспользует, и без времени старта один pid выдавал бы новый
+    /// процесс за прежний. Не узнали — в отпечатке `0`, а в строке `process_started_unix:
+    /// null`. `process_created_filetime` остаётся `null`: это единицы Windows (100 нс от
+    /// 1601 года), и выдавать за них секунды Unix значило бы соврать формой.
+    /// Чего у macOS нет (поток, сессия, «свёрнуто» из CGWindowList) — `null`.
     pub(super) fn window_row(
         facts: &WindowFacts,
         process_path: Option<&str>,
+        class_name: Option<&str>,
+        process_started: Option<u64>,
         titles_visible: bool,
         foreground: Option<bool>,
     ) -> Value {
@@ -1466,14 +1485,16 @@ mod mac_pure {
         let height = round(facts.height);
         let mut row = json!({
             "hwnd": hex,
-            "fingerprint": format!("{hex}:{}:0", facts.pid),
+            "fingerprint": format!("{hex}:{}:{}", facts.pid, process_started.unwrap_or(0)),
             "pid": facts.pid,
             "thread_id": null,
             "session_id": null,
             "process_path": process_path,
             "process_created_filetime": null,
+            "process_started_unix": process_started,
             "title": facts.title,
-            "class": facts.owner,
+            "class": class_name.unwrap_or(facts.owner.as_str()),
+            "owner": facts.owner,
             "rect": {
                 "left": left,
                 "top": top,
@@ -1625,27 +1646,67 @@ mod mac_pure {
         Nearest,
     }
 
-    pub(super) fn choose_downscale(
+    /// Что выйдет из снимка: масштаб, способ уменьшения, размер результата В ПУНКТАХ и
+    /// разошлась ли рамка с образом.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub(super) struct CapturePlan {
+        /// Пикселей на пункт — выведен из ШИРИНЫ: `образ / рамка`.
+        pub(super) scale: f64,
+        pub(super) downscale: Downscale,
+        /// Пункты результата — сколько стола в нём на самом деле.
+        pub(super) width: usize,
+        pub(super) height: usize,
+        /// Размер рамки в пунктах, если он разошёлся с образом больше чем на пункт.
+        pub(super) frame_mismatch: Option<(usize, usize)>,
+    }
+
+    /// План снимка. ⚠ ГЛАВНОЕ: размер результата считается от ФАКТИЧЕСКОГО образа, а от
+    /// рамки берётся только левый верхний угол и масштаб по ширине.
+    ///
+    /// Почему. Рамка окна из CGWindowList и образ из CGWindowListCreateImage совпадают
+    /// не всегда: рамка округлена до пунктов, а образ идёт без тени и полей
+    /// (`kCGWindowImageBoundsIgnoreFraming`). Раньше целью уменьшения была РАМКА, и
+    /// образ 1000×600 при рамке 500×301 уезжал ближайшим пикселем в 500×301 — растяжка
+    /// до чужого размера: картинка, которой на экране не было, и каждая координата в ней
+    /// смещена. Теперь тот же случай — честное уменьшение блоками в 500×300.
+    pub(super) fn plan_capture(
         pixel_width: usize,
         pixel_height: usize,
-        point_width: usize,
-        point_height: usize,
+        frame_width: usize,
+        frame_height: usize,
         native: bool,
-    ) -> Downscale {
-        if native || point_width == 0 || point_height == 0 {
-            return Downscale::None;
-        }
-        if pixel_width == point_width && pixel_height == point_height {
-            return Downscale::None;
-        }
-        let factor = pixel_width / point_width;
-        if factor >= 2
-            && pixel_width == point_width * factor
-            && pixel_height == point_height * factor
+    ) -> CapturePlan {
+        let scale = if frame_width == 0 || pixel_width == 0 {
+            1.0
+        } else {
+            pixel_width as f64 / frame_width as f64
+        };
+        let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+        let width = ((pixel_width as f64) / scale).round().max(1.0) as usize;
+        let height = ((pixel_height as f64) / scale).round().max(1.0) as usize;
+        let factor = scale as usize;
+        let downscale = if native || (width == pixel_width && height == pixel_height) {
+            Downscale::None
+        } else if scale.fract() == 0.0
+            && factor >= 2
+            && pixel_width.is_multiple_of(factor)
+            && pixel_height.is_multiple_of(factor)
         {
-            return Downscale::Box(factor);
+            // Целый масштаб — усреднение блоков: текст остаётся читаемым.
+            Downscale::Box(factor)
+        } else {
+            // Нецелый масштаб (снимок через дисплеи с разным масштабом) или образ с
+            // нечётной стороной — ближайший пиксель, но до СВОЕГО размера.
+            Downscale::Nearest
+        };
+        CapturePlan {
+            scale,
+            downscale,
+            width,
+            height,
+            frame_mismatch: (frame_width.abs_diff(width) > 1 || frame_height.abs_diff(height) > 1)
+                .then_some((frame_width, frame_height)),
         }
-        Downscale::Nearest
     }
 
     /// Усреднение блоков `factor×factor`; размеры обязаны делиться на `factor`.
@@ -1712,19 +1773,15 @@ mod mac_pure {
 /// без разрешения — отказ словами ДО дела.
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::ffi::c_void;
     use std::fs;
     use std::io::Write as _;
     use std::path::Path;
     use std::process::{Command, Stdio};
+    use std::sync::{Mutex, OnceLock};
     use std::thread;
     use std::time::Duration;
 
     use anyhow::{Context, Result, anyhow, bail};
-    use core_foundation::array::CFArray;
-    use core_foundation::base::{CFRelease, CFRetain, CFType, CFTypeRef, TCFType};
-    use core_foundation::boolean::CFBoolean;
-    use core_foundation::string::{CFString, CFStringRef};
     use core_graphics::display::CGDisplay;
     use core_graphics::event::{
         CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGMouseButton, EventField,
@@ -1733,9 +1790,8 @@ mod platform {
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     use core_graphics::geometry::{CGPoint, CGRect, CGSize};
     use core_graphics::window::{
-        CGWindowID, kCGNullWindowID, kCGWindowImageBestResolution,
-        kCGWindowImageBoundsIgnoreFraming, kCGWindowListOptionIncludingWindow,
-        kCGWindowListOptionOnScreenOnly,
+        kCGNullWindowID, kCGWindowImageBestResolution, kCGWindowImageBoundsIgnoreFraming,
+        kCGWindowListOptionIncludingWindow, kCGWindowListOptionOnScreenOnly,
     };
     use foreign_types::ForeignTypeRef;
     use serde_json::{Value, json};
@@ -1744,103 +1800,27 @@ mod platform {
         ActivateArgs, CaptureArgs, ClipboardReadArgs, ClipboardWriteArgs, Downscale, HwndArg,
         InputArgs, MAX_ACTIVATE_TIMEOUT_MS, MAX_CLIPBOARD_CHARS, MAX_INPUT_EVENTS,
         MAX_TOTAL_INPUT_DELAY_MS, MouseButton, PreparedChunk, ProcessListArgs, Record, Screen,
-        TEXT_UNIT_PAUSE_MS, WindowFacts, WindowListArgs, app_bundle, choose_downscale,
-        downscale_box, hwnd_hex, input_limits, page, parse_ps, pixel_layout, plan_totals,
+        TEXT_UNIT_PAUSE_MS, WindowFacts, WindowListArgs, app_bundle, downscale_box, hwnd_hex,
+        input_limits, page, parse_ps, pixel_layout, plan_capture, plan_totals,
         prepare_input_events, process_row, resample_nearest, round, to_bgra, window_row,
     };
     use super::{capture_allocation, capture_name, write_png};
+    // Accessibility — только через `ax.rs`: трейт нужен, чтобы звать `set_bool` и
+    // `perform` у `AxElement` теми же руками, что и дерево окна.
+    use crate::ax::{self, Element as _};
     use crate::mac::{self, Tcc, WindowInfo};
 
     // ─── FFI, которого нет в крейтах ────────────────────────────────────────────────
 
-    type AXUIElementRef = *const c_void;
-    type AXError = i32;
-    const AX_SUCCESS: AXError = 0;
-
-    #[link(name = "ApplicationServices", kind = "framework")]
-    unsafe extern "C" {
-        fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
-        fn AXUIElementCopyAttributeValue(
-            element: AXUIElementRef,
-            attribute: CFStringRef,
-            value: *mut CFTypeRef,
-        ) -> AXError;
-        fn AXUIElementSetAttributeValue(
-            element: AXUIElementRef,
-            attribute: CFStringRef,
-            value: CFTypeRef,
-        ) -> AXError;
-        fn AXUIElementPerformAction(element: AXUIElementRef, action: CFStringRef) -> AXError;
-        /// Приватная, но единственная связь AXWindow ↔ CGWindowID; тем же пользуется
-        /// дерево окна в `ax.rs`.
-        fn _AXUIElementGetWindow(element: AXUIElementRef, window: *mut CGWindowID) -> AXError;
-    }
+    // Accessibility здесь БОЛЬШЕ НЕТ. Поднятие окна ходит через `crate::ax::live`
+    // (`AxElement`, `ax_window_for`): там приватная `_AXUIElementGetWindow` берётся
+    // через `dlsym`, а если её не станет — работает запасной путь по pid, рамке и
+    // заголовку. Второй `extern` к ней был бы вторым способом найти то же окно, и
+    // разъехались бы эти два способа молча.
 
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
         fn CGImageGetBitmapInfo(image: *mut core_graphics::sys::CGImage) -> u32;
-    }
-
-    /// Владеющая ссылка на элемент Accessibility (+1); отпускается при выходе.
-    struct AxElement(AXUIElementRef);
-
-    impl Drop for AxElement {
-        fn drop(&mut self) {
-            if !self.0.is_null() {
-                unsafe { CFRelease(self.0) };
-            }
-        }
-    }
-
-    fn ax_copy(element: AXUIElementRef, attribute: &str) -> Option<CFType> {
-        let name = CFString::new(attribute);
-        let mut value: CFTypeRef = std::ptr::null();
-        let error = unsafe {
-            AXUIElementCopyAttributeValue(element, name.as_concrete_TypeRef(), &mut value)
-        };
-        if error != AX_SUCCESS || value.is_null() {
-            return None;
-        }
-        Some(unsafe { CFType::wrap_under_create_rule(value) })
-    }
-
-    fn ax_bool(element: AXUIElementRef, attribute: &str) -> Option<bool> {
-        ax_copy(element, attribute)?
-            .downcast::<CFBoolean>()
-            .map(bool::from)
-    }
-
-    fn ax_set_bool(element: AXUIElementRef, attribute: &str, value: bool) -> AXError {
-        let name = CFString::new(attribute);
-        let flag = CFBoolean::from(value);
-        unsafe { AXUIElementSetAttributeValue(element, name.as_concrete_TypeRef(), flag.as_CFTypeRef()) }
-    }
-
-    fn ax_perform(element: AXUIElementRef, action: &str) -> AXError {
-        let name = CFString::new(action);
-        unsafe { AXUIElementPerformAction(element, name.as_concrete_TypeRef()) }
-    }
-
-    fn ax_window_id(element: AXUIElementRef) -> Option<CGWindowID> {
-        let mut id: CGWindowID = 0;
-        let error = unsafe { _AXUIElementGetWindow(element, &mut id) };
-        (error == AX_SUCCESS && id != 0).then_some(id)
-    }
-
-    /// AX-окно приложения с этим CGWindowID — среди `AXWindows` приложения.
-    fn ax_find_window(app: AXUIElementRef, id: CGWindowID) -> Option<AxElement> {
-        let windows = ax_copy(app, "AXWindows")?.downcast::<CFArray<*const c_void>>()?;
-        for item in windows.iter() {
-            let raw: *const c_void = *item;
-            if raw.is_null() {
-                continue;
-            }
-            if ax_window_id(raw) == Some(id) {
-                unsafe { CFRetain(raw) };
-                return Some(AxElement(raw));
-            }
-        }
-        None
     }
 
     // ─── общее ──────────────────────────────────────────────────────────────────────
@@ -1886,6 +1866,14 @@ mod platform {
             on_screen: window.on_screen,
             z_order,
         }
+    }
+
+    /// `class` строки окна — идентификатор пакета владельца (`com.apple.finder`), ровно
+    /// то же, что кладёт в `class` чтение окна (`uia::window_info`). Не узнали пакет
+    /// (голый бинарь, процесс без прав) — `None`, и тогда строка ставит туда имя
+    /// владельца, а не пустоту.
+    fn window_class(window: &WindowInfo) -> Option<String> {
+        ax::live::bundle_identifier(window.pid)
     }
 
     /// Путь исполняемого файла процесса (`proc_pidpath`); чужие процессы без прав — `None`.
@@ -1951,7 +1939,14 @@ mod platform {
             "interactive": mac::gui_session(),
             "session_id": null,
             "foreground": foreground.as_ref().map(|window| {
-                window_row(&facts(window, 0), process_path(window.pid).as_deref(), tcc.screen_recording, None)
+                window_row(
+                    &facts(window, 0),
+                    process_path(window.pid).as_deref(),
+                    window_class(window).as_deref(),
+                    mac::process_started(window.pid),
+                    tcc.screen_recording,
+                    None,
+                )
             }),
             "cursor": cursor,
             "virtual_screen": virtual_screen(),
@@ -1985,8 +1980,9 @@ mod platform {
         let mut items: Vec<Value> = rows
             .iter()
             .filter_map(|row| {
-                let path = process_path(row.pid as i32);
-                let value = process_row(row, path.as_deref());
+                let pid = row.pid as i32;
+                let path = process_path(pid);
+                let value = process_row(row, path.as_deref(), mac::process_started(pid));
                 let matches = needle.is_empty()
                     || value["name"]
                         .as_str()
@@ -2023,6 +2019,8 @@ mod platform {
         let foreground = mac::frontmost()?.map(|window| window.id);
         let needle = args.title_contains.to_lowercase();
         let mut rows = Vec::new();
+        let mut seen: std::collections::HashMap<i32, (Option<String>, Option<String>, Option<u64>)> =
+            std::collections::HashMap::new();
         for window in &windows {
             if !args.all_layers && !window.is_ordinary() {
                 continue;
@@ -2039,9 +2037,23 @@ mod platform {
                 continue;
             }
             let z_order = rows.len();
+            // Про один процесс спрашиваем один раз: у приложения десятки окон, а
+            // `bundle_identifier` открывает пакет и читает Info.plist с диска.
+            let about = seen
+                .entry(window.pid)
+                .or_insert_with(|| {
+                    (
+                        process_path(window.pid),
+                        window_class(window),
+                        mac::process_started(window.pid),
+                    )
+                })
+                .clone();
             rows.push(window_row(
                 &facts(window, z_order),
-                process_path(window.pid).as_deref(),
+                about.0.as_deref(),
+                about.1.as_deref(),
+                about.2,
                 tcc.screen_recording,
                 Some(Some(window.id) == foreground),
             ));
@@ -2068,10 +2080,18 @@ mod platform {
 
     // ─── desktop.window.activate ────────────────────────────────────────────────────
 
-    /// Поднять окно. С «Универсальным доступом» — по-настоящему: приложение вперёд
-    /// (`AXFrontmost`), окно развернуть (`AXMinimized`) и поднять (`AXRaise`). Без него
-    /// остаётся только `open <bundle>` — он активирует ПРИЛОЖЕНИЕ, а не окно, и об этом
-    /// сказано в `note`; голый бинарь без пакета `.app` поднять нечем — отказ словами.
+    /// Поднять окно — и сказать правду о том, поднялось ли оно.
+    ///
+    /// ⚠ ПОЧЕМУ ЭТО ОШИБКА, А НЕ `ok: false`. Рамка транспорта накрывает `ok` результата
+    /// (`runtime.rs` ставит `ok: true` на любой `Ok`, а дерево и движок шьют
+    /// `{**рамка, **результат, "ok": рамка.ok}`): ответ `{"ok": false}` доехал бы до
+    /// модели как `"ok": true`. Поэтому «не подняли» — `Err` со словами, ровно как отказы
+    /// TCC. Успех считается по ФАКТУ: переднее окно системы стало запрошенным.
+    ///
+    /// С «Универсальным доступом» — по-настоящему: приложение вперёд (`AXFrontmost`),
+    /// окно развернуть (`AXMinimized`) и поднять (`AXRaise`). Без него остаётся только
+    /// `open <bundle>` — он активирует ПРИЛОЖЕНИЕ, а не окно; голый бинарь без пакета
+    /// `.app` поднять нечем — отказ словами.
     fn window_activate(args: ActivateArgs) -> Result<Value> {
         let id = args.hwnd.value()?;
         if args.timeout_ms > MAX_ACTIVATE_TIMEOUT_MS {
@@ -2089,39 +2109,50 @@ mod platform {
         let mut notes: Vec<String> = Vec::new();
         let mut raised = false;
         let mut restored = false;
-        let (method, ax_app, ax_window, mut activated) = if tcc.accessibility {
-            let app = AxElement(unsafe { AXUIElementCreateApplication(window.pid) });
-            if app.0.is_null() {
-                bail!("AXUIElementCreateApplication failed for pid {}", window.pid)
+        let mut ax_frontmost = false;
+        let timeout = Duration::from_millis(args.timeout_ms.clamp(1_000, MAX_ACTIVATE_TIMEOUT_MS));
+        let (method, ax_app, ax_window) = if tcc.accessibility {
+            let app = ax::live::AxElement::application(window.pid, timeout).with_context(|| {
+                format!("AXUIElementCreateApplication returned NULL for pid {}", window.pid)
+            })?;
+            ax_frontmost = app.set_bool("AXFrontmost", true).is_ok();
+            if !ax_frontmost {
+                notes.push("the application refused AXFrontmost".into());
             }
-            let front = ax_set_bool(app.0, "AXFrontmost", true);
-            let activated = front == AX_SUCCESS;
-            if !activated {
-                notes.push(format!("the application refused AXFrontmost (AXError {front})"));
-            }
-            let found = ax_find_window(app.0, id);
-            match &found {
-                Some(target) => {
-                    if args.restore && ax_bool(target.0, "AXMinimized") == Some(true) {
-                        restored = ax_set_bool(target.0, "AXMinimized", false) == AX_SUCCESS;
+            // Та же дорога, что у чтения окна: номер окна через приватную функцию
+            // (dlsym), а если её нет — pid, рамка, заголовок. Второго способа искать
+            // окно в теле нет.
+            let found = match ax::live::ax_window_for(&window, timeout) {
+                Ok(target) => {
+                    let minimized = matches!(
+                        target
+                            .copy_attribute("AXMinimized")
+                            .ok()
+                            .flatten()
+                            .map(|value| ax::live::raw_of(&value)),
+                        Some(ax::Raw::Bool(true))
+                    );
+                    if args.restore && minimized {
+                        restored = target.set_bool("AXMinimized", false).is_ok();
                         if !restored {
                             notes.push("the window refused to leave the Dock (AXMinimized)".into());
                         }
                     }
-                    let raise = ax_perform(target.0, "AXRaise");
-                    raised = raise == AX_SUCCESS;
+                    raised = target.perform("AXRaise").is_ok();
                     if !raised {
-                        notes.push(format!("the window refused AXRaise (AXError {raise})"));
+                        notes.push("the window refused AXRaise".into());
                     }
+                    Some(target)
                 }
-                None => notes.push(
-                    "the Accessibility window for this CGWindowID was not found \
-                     (_AXUIElementGetWindow matched none of the app's windows): only the \
-                     application was brought to front, not this particular window"
-                        .into(),
-                ),
-            }
-            ("accessibility", Some(app), found, activated)
+                Err(words) => {
+                    notes.push(format!(
+                        "the Accessibility window for this CGWindowID was not found ({words}): at \
+                         best the application was brought to front, not this particular window"
+                    ));
+                    None
+                }
+            };
+            ("accessibility", Some(app), found)
         } else {
             let path = process_path(window.pid).with_context(|| {
                 format!(
@@ -2150,12 +2181,11 @@ mod platform {
                 )
             }
             notes.push(format!(
-                "no Accessibility permission: the whole application was activated with `open \
-                 {bundle}`; this particular window was not raised and a minimized window is \
+                "no Accessibility permission: `open {bundle}` was asked to activate the whole \
+                 application; this particular window is not raised and a minimized window is \
                  not restored"
             ));
-            notes.extend(tcc.hints().iter().map(|hint| hint.to_string()));
-            ("open", None, None, true)
+            ("open", None, None)
         };
         let mut waited = 0u64;
         let mut attempts = 1u32;
@@ -2165,28 +2195,64 @@ mod platform {
             if waited.is_multiple_of(500)
                 && let (Some(app), Some(target)) = (&ax_app, &ax_window)
             {
-                activated |= ax_set_bool(app.0, "AXFrontmost", true) == AX_SUCCESS;
-                raised |= ax_perform(target.0, "AXRaise") == AX_SUCCESS;
+                ax_frontmost |= app.set_bool("AXFrontmost", true).is_ok();
+                raised |= target.perform("AXRaise").is_ok();
                 attempts += 1;
             }
         }
         let actual = mac::frontmost()?;
+        // `activated` — только по ФАКТУ: переднее окно стола принадлежит нужному
+        // процессу. Литерала здесь быть не может: `open` возвращает ноль и тогда, когда
+        // приложение так и не вышло вперёд, а AXFrontmost говорит «принято», не «сделано».
+        let activated = actual.as_ref().is_some_and(|w| w.pid == window.pid);
+        let won = actual.as_ref().is_some_and(|w| w.id == id);
+        let note = (!notes.is_empty()).then(|| notes.join("; "));
+        if !won {
+            let did = if activated {
+                "the application is in front, but THIS window did not come up"
+            } else if method == "open" {
+                "`open` was accepted, but the application did not come to the front"
+            } else {
+                "neither the application nor the window came to the front"
+            };
+            let mut said = format!(
+                "window {} was not activated: {did} (method={method}, ax_frontmost={ax_frontmost}, \
+                 activated={activated}, raised={raised}, restored={restored}, attempts={attempts}, \
+                 waited_ms={waited}, foreground_before={}, foreground_hwnd={})",
+                hwnd_hex(id),
+                foreground_value(before.as_ref()),
+                foreground_value(actual.as_ref()),
+            );
+            if let Some(note) = &note {
+                said.push_str("; ");
+                said.push_str(note);
+            }
+            if !tcc.accessibility {
+                // Дело именно в разрешении — «куда идти» едет вместе с отказом.
+                said.push_str("; ");
+                said.push_str(&tcc.hints().join("; "));
+            }
+            return Err(anyhow!(said));
+        }
         Ok(json!({
-            "ok": actual.as_ref().is_some_and(|w| w.id == id),
+            "ok": true,
             "requested_hwnd": hwnd_hex(id),
             "foreground_before": foreground_value(before.as_ref()),
             "foreground_hwnd": foreground_value(actual.as_ref()),
             "method": method,
             "activated": activated,
+            "ax_frontmost": ax_frontmost,
             "raised": raised,
             "restored": restored,
             "attempts": attempts,
             "waited_ms": waited,
-            "note": (!notes.is_empty()).then(|| notes.join("; ")),
+            "note": note,
             "tcc": tcc,
+            "hints": tcc.hints(),
             "platform": "macos",
         }))
     }
+
 
     // ─── desktop.input.perform ──────────────────────────────────────────────────────
 
@@ -2198,6 +2264,10 @@ mod platform {
         cursor: (f64, f64),
         held: Vec<MouseButton>,
         modifiers: CGEventFlags,
+        /// Коды модификаторов, которые ЭТА пачка зажала и ещё не отпустила. Флаги
+        /// (`modifiers`) говорят «что подмешать в событие», а коды — «кому послать
+        /// key up»; одно из другого не выводится (⌘ слева и справа дают один флаг).
+        held_modifiers: Vec<u16>,
         screen: Screen,
         clamped_moves: usize,
     }
@@ -2211,9 +2281,35 @@ mod platform {
                 cursor,
                 held: Vec::new(),
                 modifiers: CGEventFlags::empty(),
+                held_modifiers: Vec::new(),
                 screen,
                 clamped_moves: 0,
             })
+        }
+
+        /// Отпустить модификаторы, которые пачка оставила зажатыми, — ПОСЛЕ последнего
+        /// её события. Состояние модификаторов живёт ровно один вызов: глобального
+        /// состояния HID тело не держит, и «зажать сейчас, нажать следующим вызовом» не
+        /// работает ни у кого. Уйти же с зажатой ⌘ нельзя — следующий щелчок человека
+        /// станет ⌘-щелчком. Возвращает имена отпущенного.
+        fn release_modifiers(&mut self) -> Vec<&'static str> {
+            if self.held_modifiers.is_empty() {
+                return Vec::new();
+            }
+            let mut names = Vec::new();
+            for code in std::mem::take(&mut self.held_modifiers).into_iter().rev() {
+                names.push(modifier_name(code));
+                if let Some(flag) = modifier_flag(code) {
+                    self.modifiers.remove(flag);
+                }
+                if let Ok(event) = CGEvent::new_keyboard_event(self.source.clone(), code, false) {
+                    event.set_flags(self.modifiers);
+                    event.post(CGEventTapLocation::HID);
+                }
+            }
+            names.reverse();
+            remember_held(&self.held, &self.held_modifiers);
+            names
         }
 
         fn post(&mut self, record: &Record) -> Result<()> {
@@ -2221,6 +2317,9 @@ mod platform {
                 Record::KeyDown(code) => {
                     if let Some(flag) = modifier_flag(*code) {
                         self.modifiers |= flag;
+                        if !self.held_modifiers.contains(code) {
+                            self.held_modifiers.push(*code);
+                        }
                     }
                     let event = CGEvent::new_keyboard_event(self.source.clone(), *code, true)
                         .map_err(|_| anyhow!("CGEventCreateKeyboardEvent failed"))?;
@@ -2230,6 +2329,7 @@ mod platform {
                 Record::KeyUp(code) => {
                     if let Some(flag) = modifier_flag(*code) {
                         self.modifiers.remove(flag);
+                        self.held_modifiers.retain(|held| held != code);
                     }
                     let event = CGEvent::new_keyboard_event(self.source.clone(), *code, false)
                         .map_err(|_| anyhow!("CGEventCreateKeyboardEvent failed"))?;
@@ -2303,6 +2403,9 @@ mod platform {
                     event.post(CGEventTapLocation::HID);
                 }
             }
+            // Сторож родителя живёт на своём потоке и до `Poster` не дотянется:
+            // запись на общую доску — единственный способ дать ему отпустить это.
+            remember_held(&self.held, &self.held_modifiers);
             Ok(())
         }
 
@@ -2332,6 +2435,24 @@ mod platform {
         }
     }
 
+    /// Имя модификатора по коду — для ответа: «что отпустили» словами человека,
+    /// а не кодами kVK.
+    fn modifier_name(code: u16) -> &'static str {
+        match code {
+            0x38 => "shift",
+            0x3C => "right_shift",
+            0x3B => "ctrl",
+            0x3E => "right_ctrl",
+            0x3A => "alt",
+            0x3D => "right_alt",
+            0x37 => "cmd",
+            0x36 => "right_cmd",
+            0x39 => "capslock",
+            0x3F => "fn",
+            _ => "modifier",
+        }
+    }
+
     fn modifier_flag(code: u16) -> Option<CGEventFlags> {
         Some(match code {
             0x38 | 0x3C => CGEventFlags::CGEventFlagShift,
@@ -2342,6 +2463,64 @@ mod platform {
             0x3F => CGEventFlags::CGEventFlagSecondaryFn,
             _ => return None,
         })
+    }
+
+    // ─── что зажато прямо сейчас (для сторожа родителя) ─────────────────────────────
+
+    /// Общая доска: какие кнопки и какие модификаторы этот процесс держит нажатыми
+    /// ПРЯМО СЕЙЧАС. Нужна одному — сторожу родителя: движок умер, тело уходит следом
+    /// через `process::exit`, а `exit` стек НЕ разматывает, и `Drop` у `HeldButtons`
+    /// с `Poster` не сработает. Уйти с зажатой левой кнопкой или ⌘ — оставить стол
+    /// сломанным: следующее движение мыши станет выделением, следующий щелчок — ⌘-щелчком.
+    static HELD_NOW: Mutex<(Vec<MouseButton>, Vec<u16>)> = Mutex::new((Vec::new(), Vec::new()));
+
+    fn remember_held(buttons: &[MouseButton], modifiers: &[u16]) {
+        if let Ok(mut held) = HELD_NOW.lock() {
+            held.0.clear();
+            held.0.extend_from_slice(buttons);
+            held.1.clear();
+            held.1.extend_from_slice(modifiers);
+        }
+    }
+
+    /// Поставить сторожу отпускание — один раз на процесс, при первой пачке ввода.
+    /// Раньше не за чем: до первого ввода отпускать нечего, а `CGEventSource` под
+    /// службой без графической сессии не создастся вовсе.
+    fn arm_release_on_parent_death() {
+        static ARMED: OnceLock<()> = OnceLock::new();
+        ARMED.get_or_init(|| {
+            mac::on_parent_death(Box::new(release_everything_held));
+        });
+    }
+
+    /// Отпустить всё, что записано на доске. Свой источник событий: чужой живёт на
+    /// потоке вызова и сюда не переезжает.
+    fn release_everything_held() {
+        let Ok(held) = HELD_NOW.lock() else { return };
+        let (buttons, modifiers) = (held.0.clone(), held.1.clone());
+        drop(held);
+        if buttons.is_empty() && modifiers.is_empty() {
+            return;
+        }
+        let Ok(source) = hid_source() else { return };
+        let (x, y) = cursor_location(&source).unwrap_or((0.0, 0.0));
+        for button in buttons.into_iter().rev() {
+            let (kind, cg_button) = match button {
+                MouseButton::Left => (CGEventType::LeftMouseUp, CGMouseButton::Left),
+                MouseButton::Right => (CGEventType::RightMouseUp, CGMouseButton::Right),
+                MouseButton::Middle => (CGEventType::OtherMouseUp, CGMouseButton::Center),
+            };
+            if let Ok(event) =
+                CGEvent::new_mouse_event(source.clone(), kind, CGPoint::new(x, y), cg_button)
+            {
+                event.post(CGEventTapLocation::HID);
+            }
+        }
+        for code in modifiers.into_iter().rev() {
+            if let Ok(event) = CGEvent::new_keyboard_event(source.clone(), code, false) {
+                event.post(CGEventTapLocation::HID);
+            }
+        }
     }
 
     /// Ведомость зажатых кнопок (см. Windows-ветку `HeldButtons`): что этот вызов
@@ -2484,6 +2663,7 @@ mod platform {
             ));
         }
         let before = ensure_foreground(args.expected_foreground.as_ref(), args.expected_pid)?;
+        arm_release_on_parent_death();
         let mut poster = Poster::new(screen)?;
         let mut held = HeldButtons::new(poster.source.clone());
         let mut paused_ms = 0u64;
@@ -2511,17 +2691,29 @@ mod platform {
             }
             Ok(())
         })();
+        // Порядок: сначала модификаторы (последним событием пачки), потом кнопки —
+        // отпустить ⌘ уже после того, как щелчок с ним ушёл.
+        let modifiers_released = poster.release_modifiers();
         let auto_released = held.release_all();
+        remember_held(&[], &[]);
         if let Err(error) = outcome {
-            if auto_released.is_empty() {
+            if auto_released.is_empty() && modifiers_released.is_empty() {
                 return Err(error);
             }
             return Err(anyhow!(
-                "{error:#}; released still-held mouse buttons before returning: {}",
-                auto_released.join(", ")
+                "{error:#}; released before returning: buttons [{}], modifiers [{}]",
+                auto_released.join(", "),
+                modifiers_released.join(", ")
             ));
         }
         let after = mac::frontmost()?;
+        let mut notes: Vec<String> = Vec::new();
+        if !modifiers_released.is_empty() {
+            notes.push(format!(
+                "modifiers do not survive the call: [{}] stayed down at the end of this batch and                  were released after its last event. Hold and use a modifier in ONE batch — a                  hotkey event, or key down -> key press -> key up together",
+                modifiers_released.join(", ")
+            ));
+        }
         Ok(json!({
             "ok": true,
             "events": args.events.len(),
@@ -2532,6 +2724,9 @@ mod platform {
             "clamped_moves": totals.clamped_moves + poster.clamped_moves,
             "buttons_auto_released": auto_released,
             "buttons_held_at_exit": Vec::<&str>::new(),
+            "modifiers_auto_released": modifiers_released,
+            "modifiers_held_at_exit": Vec::<&str>::new(),
+            "notes": notes,
             "foreground_before": foreground_value(before.as_ref()),
             "foreground_after": foreground_value(after.as_ref()),
             "virtual_screen": virtual_screen(),
@@ -2662,14 +2857,14 @@ mod platform {
         )?;
         let data = image.data();
         let bgra = to_bgra(data.bytes(), pixel_width, pixel_height, image.bytes_per_row(), layout)?;
-        let (point_width, point_height) = (region.width as usize, region.height as usize);
-        let (bgra, saved_width, saved_height, downscale) = match choose_downscale(
+        let plan = plan_capture(
             pixel_width,
             pixel_height,
-            point_width,
-            point_height,
+            region.width as usize,
+            region.height as usize,
             args.native,
-        ) {
+        );
+        let (bgra, saved_width, saved_height, downscale) = match plan.downscale {
             Downscale::None => (bgra, pixel_width, pixel_height, "none"),
             Downscale::Box(factor) => {
                 let (scaled, width, height) = downscale_box(&bgra, pixel_width, pixel_height, factor)
@@ -2677,9 +2872,9 @@ mod platform {
                 (scaled, width, height, "box-average")
             }
             Downscale::Nearest => (
-                resample_nearest(&bgra, pixel_width, pixel_height, point_width, point_height),
-                point_width,
-                point_height,
+                resample_nearest(&bgra, pixel_width, pixel_height, plan.width, plan.height),
+                plan.width,
+                plan.height,
                 "nearest",
             ),
         };
@@ -2693,6 +2888,15 @@ mod platform {
             &bgra,
         )?;
         let size = fs::metadata(&path)?.len();
+        // Угол — из рамки, размер — из образа: рамка говорит, ГДЕ снято, а сколько
+        // стола попало в кадр, знает только сам образ.
+        let mut notes: Vec<String> = Vec::new();
+        if let Some((frame_width, frame_height)) = plan.frame_mismatch {
+            notes.push(format!(
+                "the window frame from CGWindowList ({frame_width}x{frame_height} pt) and the                  image the system returned ({}x{} pt at scale {}) disagree by more than a point;                  width/height here describe the IMAGE, left/top come from the frame",
+                plan.width, plan.height, plan.scale
+            ));
+        }
         Ok(json!({
             "ok": true,
             "path": path,
@@ -2701,15 +2905,18 @@ mod platform {
             "size": size,
             "left": region.left,
             "top": region.top,
-            "width": region.width,
-            "height": region.height,
+            "width": plan.width,
+            "height": plan.height,
+            "frame_width": region.width,
+            "frame_height": region.height,
             "pixel_width": saved_width,
             "pixel_height": saved_height,
             "source_pixel_width": pixel_width,
             "source_pixel_height": pixel_height,
-            "scale": pixel_width as f64 / region.width as f64,
+            "scale": plan.scale,
             "native": args.native,
             "downscale": downscale,
+            "notes": notes,
             "target": target,
             "target_hwnd": target_hwnd.map(hwnd_hex),
             "composition": composition,
@@ -5006,7 +5213,7 @@ mod tests {
         );
         assert_eq!(rows[2].comm, "helene-body");
 
-        let row = mac_pure::process_row(&rows[1], None);
+        let row = mac_pure::process_row(&rows[1], None, Some(1_726_700_000));
         assert_eq!(row["pid"], 12345);
         assert_eq!(row["parent_pid"], 1);
         assert_eq!(row["name"], "Google Chrome");
@@ -5015,13 +5222,17 @@ mod tests {
             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
         );
         assert!(row["session_id"].is_null());
+        // FILETIME — единицы Windows: на macOS его нет, и секунды Unix едут своим полем.
         assert!(row["created_filetime"].is_null());
+        assert_eq!(row["process_started_unix"], 1_726_700_000u64);
         assert!(row["threads"].is_null());
-        // Относительный comm без proc_pidpath — путь неизвестен, а не выдуман.
-        let bare = mac_pure::process_row(&rows[2], None);
+        // Относительный comm без proc_pidpath — путь неизвестен, а не выдуман; время
+        // старта не узнали — `null`, а не ноль.
+        let bare = mac_pure::process_row(&rows[2], None, None);
         assert_eq!(bare["name"], "helene-body");
         assert!(bare["path"].is_null());
-        let resolved = mac_pure::process_row(&rows[2], Some("/opt/helene/helene-body"));
+        assert!(bare["process_started_unix"].is_null());
+        let resolved = mac_pure::process_row(&rows[2], Some("/opt/helene/helene-body"), None);
         assert_eq!(resolved["path"], "/opt/helene/helene-body");
     }
 
@@ -5040,11 +5251,23 @@ mod tests {
             on_screen: true,
             z_order: 2,
         };
-        let hidden = mac_pure::window_row(&facts, Some("/System/Finder"), false, Some(true));
+        let hidden = mac_pure::window_row(
+            &facts,
+            Some("/System/Finder"),
+            Some("com.apple.finder"),
+            Some(1_726_700_000),
+            false,
+            Some(true),
+        );
         assert_eq!(hidden["hwnd"], "0x1F");
-        assert_eq!(hidden["fingerprint"], "0x1F:4242:0");
+        // Отпечаток — hwnd:pid:время старта, как на Windows: pid система переиспользует.
+        assert_eq!(hidden["fingerprint"], "0x1F:4242:1726700000");
         assert_eq!(hidden["pid"], 4242);
-        assert_eq!(hidden["class"], "Finder");
+        // `class` — идентификатор пакета (как у read_window), имя владельца — своим полем.
+        assert_eq!(hidden["class"], "com.apple.finder");
+        assert_eq!(hidden["owner"], "Finder");
+        assert_eq!(hidden["process_started_unix"], 1_726_700_000u64);
+        assert!(hidden["process_created_filetime"].is_null());
         assert_eq!(hidden["process_path"], "/System/Finder");
         assert_eq!(hidden["rect"]["left"], 100);
         assert_eq!(hidden["rect"]["right"], 740);
@@ -5063,14 +5286,22 @@ mod tests {
                 ..facts.clone()
             },
             None,
+            None,
+            None,
             true,
             None,
         );
         assert_eq!(titled["title"], "Documents");
         assert!(titled.get("note").is_none());
         assert!(titled.get("foreground").is_none());
+        // Пакет не узнали — `class` падает на имя владельца, а не на пустоту; время
+        // старта неизвестно — в отпечатке ноль, в поле `null`.
+        assert_eq!(titled["class"], "Finder");
+        assert_eq!(titled["owner"], "Finder");
+        assert_eq!(titled["fingerprint"], "0x1F:4242:0");
+        assert!(titled["process_started_unix"].is_null());
         // Заголовка нет, но разрешение есть: это честное «без заголовка», без заметки.
-        let untitled = mac_pure::window_row(&facts, None, true, None);
+        let untitled = mac_pure::window_row(&facts, None, None, None, true, None);
         assert!(untitled["title"].is_null() && untitled.get("note").is_none());
     }
 
@@ -5272,6 +5503,9 @@ mod tests {
         assert_eq!(limits["typing_pacing_ms"], 20);
         assert_eq!(limits["max_text_chars_per_call_at_pacing"], 1_500);
         assert!(limits["permissions"].as_str().unwrap().contains("Accessibility"));
+        // Состояние модификаторов живёт ровно один вызов, и предел говорит это словом.
+        assert_eq!(limits["modifiers_scope"], "call");
+        assert!(limits["modifier_hold"].as_str().unwrap().contains("ONE batch"));
     }
 
     /// Раскладка байтов CGImage читается из CGBitmapInfo, а не предполагается.
@@ -5311,7 +5545,7 @@ mod tests {
 
     #[test]
     fn mac_downscale_box_averages_and_nearest_resamples() {
-        use mac_pure::{Downscale, choose_downscale, downscale_box, resample_nearest};
+        use mac_pure::{Downscale, downscale_box, plan_capture, resample_nearest};
         // 4×2 → 2×1: левый блок — четыре разных серых (среднее 10), правый — 200.
         let mut bgra = Vec::new();
         for row in [[4u8, 8, 200, 200], [12, 16, 200, 200]] {
@@ -5330,12 +5564,50 @@ mod tests {
         assert_eq!(&nearest[..4], &[4, 4, 4, 255]);
         assert_eq!(&nearest[4..8], &[200, 200, 200, 255]);
 
-        assert_eq!(choose_downscale(2880, 1800, 1440, 900, false), Downscale::Box(2));
-        assert_eq!(choose_downscale(4320, 2700, 1440, 900, false), Downscale::Box(3));
-        assert_eq!(choose_downscale(1440, 900, 1440, 900, false), Downscale::None);
-        assert_eq!(choose_downscale(2880, 1800, 1440, 900, true), Downscale::None);
-        assert_eq!(choose_downscale(2160, 1350, 1440, 900, false), Downscale::Nearest);
-        assert_eq!(choose_downscale(2880, 1801, 1440, 900, false), Downscale::Nearest);
+        let plan = |pw, ph, fw, fh, native| plan_capture(pw, ph, fw, fh, native);
+        assert_eq!(plan(2880, 1800, 1440, 900, false).downscale, Downscale::Box(2));
+        assert_eq!(plan(4320, 2700, 1440, 900, false).downscale, Downscale::Box(3));
+        assert_eq!(plan(1440, 900, 1440, 900, false).downscale, Downscale::None);
+        assert_eq!(plan(2880, 1800, 1440, 900, true).downscale, Downscale::None);
+        // Нецелый масштаб (снимок через дисплеи с разным масштабом) — ближайший пиксель.
+        assert_eq!(plan(2160, 1350, 1440, 900, false).downscale, Downscale::Nearest);
+        assert_eq!(plan(2880, 1801, 1440, 900, false).downscale, Downscale::Nearest);
+    }
+
+    /// ⚠ Размер результата — от ОБРАЗА, не от рамки. Образ 1000×600 при рамке 500×301
+    /// (рамка CGWindowList округлена, образ идёт без полей) раньше уезжал ближайшим
+    /// пикселем в 500×301 — растяжка до чужого размера. Теперь это честное усреднение
+    /// блоками в 500×300 при целом масштабе 2.
+    #[test]
+    fn mac_capture_plan_measures_the_image_not_the_frame() {
+        use mac_pure::{Downscale, plan_capture};
+        let plan = plan_capture(1000, 600, 500, 301, false);
+        assert_eq!(plan.scale, 2.0);
+        assert_eq!(plan.downscale, Downscale::Box(2));
+        assert_eq!((plan.width, plan.height), (500, 300));
+        // Разошлись ровно на пункт — это округление рамки, а не повод для заметки.
+        assert_eq!(plan.frame_mismatch, None);
+
+        // Разошлись сильно — обе цифры называются вслух.
+        let off = plan_capture(1000, 600, 500, 380, false);
+        assert_eq!((off.width, off.height), (500, 300));
+        assert_eq!(off.frame_mismatch, Some((500, 380)));
+
+        // Масштаб 1: уменьшать нечего, растягивать до рамки — тем более.
+        let plain = plan_capture(800, 613, 800, 614, false);
+        assert_eq!(plain.downscale, Downscale::None);
+        assert_eq!((plain.width, plain.height), (800, 613));
+
+        // `native`: образ как есть, но пункты в ответе всё равно считаны от образа.
+        let native = plan_capture(1000, 600, 500, 301, true);
+        assert_eq!(native.downscale, Downscale::None);
+        assert_eq!((native.width, native.height), (500, 300));
+
+        // Нечётная сторона образа при целом масштабе — блоками нельзя, но цель всё
+        // равно СВОЯ (500×301), а не рамка.
+        let odd = plan_capture(1000, 601, 500, 300, false);
+        assert_eq!(odd.downscale, Downscale::Nearest);
+        assert_eq!((odd.width, odd.height), (500, 301));
     }
 
     #[test]
@@ -5528,6 +5800,66 @@ mod tests {
         )
         .unwrap_err();
         assert!(missing.to_string().contains("no longer exists"), "{missing}");
+
+        // ⚠ Поднятие окна: «не подняли» обязано быть ОШИБКОЙ — рамка транспорта шьёт
+        // `ok` результата своим, и `{"ok": false}` доехал бы до модели как `true`.
+        // Поднимаем ПЕРЕДНЕЕ окно: оно уже впереди, так что стол не дёргается.
+        if let Some(front) = crate::mac::frontmost().unwrap() {
+            let hwnd = format!("0x{:X}", front.id);
+            let result = dispatch(
+                "desktop.window.activate",
+                serde_json::json!({"hwnd": hwnd, "timeout_ms": 1500}),
+                &state,
+            );
+            match result {
+                Ok(value) => {
+                    // Успех считается по ФАКТУ, а не по возврату `open`/AXFrontmost.
+                    assert_eq!(value["ok"], true, "{value}");
+                    assert_eq!(value["foreground_hwnd"], hwnd, "ok без переднего окна: {value}");
+                    assert_eq!(value["requested_hwnd"], hwnd, "{value}");
+                    assert!(value["activated"].is_boolean(), "{value}");
+                    assert!(value["waited_ms"].is_u64(), "{value}");
+                }
+                Err(error) => {
+                    let said = error.to_string();
+                    assert!(said.contains("was not activated"), "{said}");
+                    assert!(said.contains("foreground_hwnd"), "{said}");
+                    assert!(said.contains("waited_ms"), "{said}");
+                    if !tcc.accessibility {
+                        assert!(said.contains("Универсальный доступ"), "{said}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Пачка, кончившаяся зажатым модификатором, отпускает его САМА и говорит об этом:
+    /// состояние модификаторов живёт один вызов, и молчать об этом значит обещать модели
+    /// «зажми сейчас, нажми потом», чего тело не умеет.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_live_a_lone_modifier_down_is_released_and_named() {
+        let state = mac_state();
+        let tcc = crate::mac::tcc();
+        let result = dispatch(
+            "desktop.input.perform",
+            serde_json::json!({"events": [{"type": "key", "key": "cmd", "action": "down"}]}),
+            &state,
+        );
+        if tcc.accessibility {
+            let result = result.unwrap();
+            assert_eq!(result["ok"], true, "{result}");
+            assert_eq!(result["modifiers_auto_released"], serde_json::json!(["cmd"]), "{result}");
+            assert_eq!(result["modifiers_held_at_exit"], serde_json::json!([]), "{result}");
+            let notes = result["notes"].as_array().unwrap();
+            assert!(
+                notes.iter().any(|note| note.as_str().unwrap_or("").contains("modifiers do not survive")),
+                "{result}"
+            );
+        } else {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("Универсальный доступ"), "{error}");
+        }
     }
 
     #[cfg(target_os = "macos")]

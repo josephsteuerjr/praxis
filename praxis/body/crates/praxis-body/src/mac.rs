@@ -304,7 +304,59 @@ pub fn request_screen_capture() -> bool {
     unsafe { CGRequestScreenCaptureAccess() }
 }
 
+// ─── процессы ────────────────────────────────────────────────────────────────────────
+
+/// Время старта процесса — Unix-секунды (`proc_pidinfo`, `PROC_PIDTBSDINFO`). Нужно
+/// отпечатку окна (`fingerprint`): номера процессов система переиспользует, и один pid
+/// без времени старта выдал бы новый процесс за прежний. Чужой процесс, на который нет
+/// прав, и мёртвый pid — `None`, и тогда в отпечатке стоит `0`, а в строке `null`: «не
+/// узнали» не то же самое, что «ноль секунд».
+pub fn process_started(pid: i32) -> Option<u64> {
+    if pid <= 0 {
+        return None;
+    }
+    // SAFETY: proc_pidinfo пишет не больше size байт в наш буфер известного размера и
+    // возвращает, сколько написал; нули — законное начальное состояние структуры.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            std::ptr::from_mut(&mut info).cast::<c_void>(),
+            size,
+        )
+    };
+    (written == size).then_some(info.pbi_start_tvsec)
+}
+
 // ─── сторож родителя ─────────────────────────────────────────────────────────────────
+
+/// Что сделать, если родитель умер, — ДО `process::exit`. Держит ввод: тело, уходящее с
+/// зажатой ⌘ или левой кнопкой, оставляет стол сломанным, а `Drop` сюда не успевает —
+/// `process::exit` стек не разматывает. Кто зажимает, тот и кладёт сюда отпускание
+/// (`desktop.rs` при первой пачке ввода).
+static ON_PARENT_DEATH: std::sync::Mutex<Vec<Box<dyn Fn() + Send + Sync>>> =
+    std::sync::Mutex::new(Vec::new());
+
+pub fn on_parent_death(hook: Box<dyn Fn() + Send + Sync>) {
+    match ON_PARENT_DEATH.lock() {
+        Ok(mut hooks) => hooks.push(hook),
+        Err(poisoned) => poisoned.into_inner().push(hook),
+    }
+}
+
+/// Позвать всех перед выходом. Отравленный замок не повод уйти с зажатой кнопкой.
+fn run_parent_death_hooks() {
+    let hooks = match ON_PARENT_DEATH.lock() {
+        Ok(hooks) => hooks,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    for hook in hooks.iter() {
+        hook();
+    }
+}
 
 /// Умер родитель — уходим. На macOS осиротевший процесс переезжает под launchd
 /// (ppid становится 1): это и есть сигнал. Замена job-объекту Windows, под которым
@@ -325,6 +377,9 @@ pub fn watch_parent(name: &'static str) {
                     tracing::warn!(
                         "{name}: родитель {parent} исчез (теперь ppid {now}) — завершаюсь вместе с ним"
                     );
+                    // Сначала отпустить зажатое, потом уходить: иначе стол остаётся с
+                    // прижатой кнопкой или модификатором, и виноватым выглядит человек.
+                    run_parent_death_hooks();
                     std::process::exit(0);
                 }
             }

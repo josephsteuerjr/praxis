@@ -69,7 +69,12 @@ pub fn role_of(
         }
         "AXRadioGroup" | "AXGroup" | "AXLayoutItem" | "AXColumn" => "group",
         "AXTabGroup" => "tab",
-        "AXTextField" | "AXTextArea" | "AXDateField" | "AXTimeField" => "edit",
+        // `AXSecureTextField` встречается и ролью, и подролью (у `AXTextField`). И то и
+        // другое — поле ввода: `edit`. Что оно с паролем, говорит отдельное поле `secure`,
+        // а не выдуманная роль, которой нет в словаре UIA.
+        "AXTextField" | "AXTextArea" | "AXDateField" | "AXTimeField" | "AXSecureTextField" => {
+            "edit"
+        }
         "AXStaticText" | "AXHeading" => "text",
         "AXImage" => "image",
         "AXLink" => "hyperlink",
@@ -109,6 +114,26 @@ fn is_toggle(ax_role: &str, ax_subrole: Option<&str>) -> bool {
         || ax_role == "AXDisclosureTriangle"
         || (ax_role == "AXButton" && matches!(ax_subrole, Some("AXToggle") | Some("AXSwitch")))
 }
+
+/// Поле пароля. macOS помечает его подролью `AXSecureTextField` (у `AXTextField`), а
+/// кое-где — прямо ролью. Для нас это значит три вещи разом, и все три — про честность,
+/// а не про удобство:
+/// * значение НЕ читается. Система отдаёт туда точки, а не пароль, но прочитанное
+///   уехало бы в кадр, в журнал и в расписку — и однажды это был бы настоящий пароль;
+/// * `value_contains` по нему не ищет: искать нечего, пустое поле не должно выглядеть
+///   совпадением;
+/// * `set_value` отказан ДО вызова Accessibility: пароль в чужое поле кладёт владелец
+///   руками. Тело умеет нажать и сфокусировать — этого хватит, чтобы он это сделал.
+fn is_secure(ax_role: &str, ax_subrole: Option<&str>) -> bool {
+    ax_role == "AXSecureTextField" || ax_subrole == Some("AXSecureTextField")
+}
+
+/// Слова отказа на `set_value` в поле пароля — одни и те же и в `patterns`, и в действии.
+pub const SECURE_FIELD_REFUSAL: &str =
+    "this is a password field (AXSecureTextField): set_value into it is refused before \
+     Accessibility is even asked, and its value is never read — «поле пароля: значение туда \
+     кладёт только владелец руками». invoke, focus and scroll_into_view still work, so you \
+     can bring the field up and ask him to type";
 
 // ─── что читается у элемента ────────────────────────────────────────────────────────────
 
@@ -363,7 +388,12 @@ pub fn patterns_of<E: Element>(
     // Проверка записываемости — сообщение в чужой процесс, поэтому её задают только про
     // атрибуты, которые у элемента ЕСТЬ: спрашивать «можно ли писать в AXExpanded» у
     // кнопки без AXExpanded — тратить время на заведомое «нет».
-    if attributes.value.is_some() && element.settable("AXValue") {
+    // Поле пароля не получает `set_value`, даже если AX говорит «пиши»: обещать глагол,
+    // который отказан, — это промах модели на ровном месте.
+    if attributes.value.is_some()
+        && !is_secure(ax_role, ax_subrole)
+        && element.settable("AXValue")
+    {
         out.push("set_value");
     }
     if has("AXPress") && is_toggle(ax_role, ax_subrole) {
@@ -409,6 +439,8 @@ pub struct AxNode {
     pub selected: Option<bool>,
     pub expanded: Option<&'static str>,
     pub patterns: Vec<&'static str>,
+    /// Поле пароля: `value` у такого узла всегда `None` — не «пусто», а «не читаем».
+    pub secure: bool,
     pub text_truncated: bool,
     pub children_unread: Option<&'static str>,
 }
@@ -481,6 +513,9 @@ impl AxNode {
         }
         if !self.patterns.is_empty() {
             object.insert("patterns".into(), json!(self.patterns));
+        }
+        if self.secure {
+            object.insert("secure".into(), json!(true));
         }
         Value::Object(object)
     }
@@ -575,7 +610,13 @@ pub fn node_from<E: Element>(
     // значение (так же UIA называет Text: надпись и есть имя). Значение тогда не
     // повторяется вторым полем: оно то же самое.
     let is_static_text = matches!(ax_role.as_deref(), Some("AXStaticText") | Some("AXHeading"));
-    let value_text = attributes.value.as_ref().and_then(AxValue::text);
+    // Поле пароля: значение не читается вовсе — ни в узел, ни в отбор, ни в расписку.
+    let secure = is_secure(ax_role.as_deref().unwrap_or(""), attributes.subrole.as_deref());
+    let value_text = if secure {
+        None
+    } else {
+        attributes.value.as_ref().and_then(AxValue::text)
+    };
     let mut named_by_value = false;
     let name = attributes
         .title
@@ -654,6 +695,7 @@ pub fn node_from<E: Element>(
         selected,
         expanded,
         patterns,
+        secure,
         text_truncated: truncated,
         children_unread: None,
     })
@@ -903,6 +945,14 @@ pub fn perform<E: Element>(
         )
     };
     let failed = |what: &str, failure: AxFailure| -> String { format!("{what}: {failure}") };
+    // Пароль — раньше всего остального и БЕЗ единого сообщения в чужое приложение (даже
+    // спрашивать действия не за чем): значение туда кладёт владелец руками.
+    if act == Act::SetValue
+        && (node.secure
+            || is_secure(node.ax_role.as_deref().unwrap_or(""), node.ax_subrole.as_deref()))
+    {
+        return Err(SECURE_FIELD_REFUSAL.to_string());
+    }
     // Свежий взгляд в момент действия, а не то, что помнил обход: между ними окно могло
     // перерисоваться (у UIA — `GetCurrentPattern` вместо кэша).
     let actions = element.actions().map_err(|f| failed("AXUIElementCopyActionNames", f))?;
@@ -1090,7 +1140,7 @@ pub mod live {
     /// по pid, заголовку и рамке), а не перестанет линковаться.
     type GetWindowFn = unsafe extern "C" fn(AXUIElementRef, *mut CGWindowID) -> AXError;
 
-    fn private_get_window() -> Option<GetWindowFn> {
+    pub(crate) fn private_get_window() -> Option<GetWindowFn> {
         static CELL: OnceLock<Option<usize>> = OnceLock::new();
         let address = *CELL.get_or_init(|| {
             let symbol = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"_AXUIElementGetWindow".as_ptr()) };
@@ -1516,6 +1566,19 @@ pub mod live {
             title,
             compared,
         })
+    }
+
+    /// AX-окно для окна WindowServer — одной строкой, для тех, кому нужен только
+    /// элемент. Единственный путь связи CGWindowID ↔ AXWindow в теле: приватная
+    /// `_AXUIElementGetWindow` берётся через `dlsym` (см. [`private_get_window`]), а
+    /// если её нет — сопоставление по pid, рамке и заголовку внутри [`attach`].
+    /// `desktop.rs` (поднятие окна) зовёт ЭТО, а не второй `extern`: два разных способа
+    /// найти одно окно однажды разъехались бы, и разъезд был бы молчаливым.
+    pub(crate) fn ax_window_for(
+        window: &mac::WindowInfo,
+        timeout: Duration,
+    ) -> Result<AxElement, String> {
+        attach(window, timeout).map(|found| found.window)
     }
 
     /// Идентификатор пакета приложения по pid — то, что на Windows зовётся `class`:
@@ -2237,6 +2300,58 @@ mod tests {
         perform(&check, &node, Act::Toggle, None, || Ok(())).unwrap();
         let after = node_from(&check, 1, Some(0), Some("AXWindow"), u64::MAX, SCREEN).unwrap();
         assert_eq!(after.checked, Some("on"));
+    }
+
+    /// Поле пароля: значение НЕ читается, `set_value` отказан до единого сообщения в
+    /// чужое приложение, а нажать и сфокусировать — можно (этого хватит, чтобы владелец
+    /// напечатал сам).
+    #[test]
+    fn a_password_field_hides_its_value_and_refuses_set_value_but_not_focus() {
+        for field in [
+            // Обычная разметка macOS: роль текстового поля, подроль — «секретное».
+            Fake::new("AXTextField")
+                .subrole("AXSecureTextField")
+                .title("Пароль")
+                .value(AxValue::Text("hunter2".into()))
+                .focused(false)
+                .actions(&["AXPress", "AXScrollToVisible"])
+                .settable(&["AXValue", "AXFocused"]),
+            // Встречается и прямо ролью — слово то же, и смысл обязан быть тот же.
+            Fake::new("AXSecureTextField")
+                .title("Пароль")
+                .value(AxValue::Text("hunter2".into()))
+                .focused(false)
+                .actions(&["AXPress", "AXScrollToVisible"])
+                .settable(&["AXValue", "AXFocused"]),
+        ] {
+            let node = node_from(&field, 1, Some(0), Some("AXWindow"), u64::MAX, SCREEN).unwrap();
+            assert_eq!(node.role, "edit", "{:?}", node.ax_role);
+            assert!(node.secure, "поле пароля не помечено: {node:?}");
+            // Значение спрятано — и это НЕ «поле пустое»: об этом говорит `secure`.
+            assert_eq!(node.value, None, "значение поля пароля уехало в узел: {node:?}");
+            assert_eq!(node.describe()["secure"], json!(true));
+            assert!(node.describe().get("value").is_none());
+            // Обещанных глаголов не больше, чем разрешено: `set_value` среди них нет.
+            assert!(!node.patterns.contains(&"set_value"), "{:?}", node.patterns);
+            assert!(node.patterns.contains(&"invoke") && node.patterns.contains(&"focus"));
+
+            // Отбор по значению по нему не идёт: искать нечего, и пустое совпадением
+            // быть не должно.
+            let by_value =
+                Selector { value_contains: Some("hunter".into()), ..Selector::default() };
+            assert!(!node.matches(&by_value));
+
+            // Отказ — словами, и ни одного сообщения в приложение: журнал пуст.
+            let error = perform(&field, &node, Act::SetValue, Some("hunter2"), || Ok(())).unwrap_err();
+            assert!(error.contains("password field"), "{error}");
+            assert!(error.contains("владелец"), "{error}");
+            assert_eq!(field.log(), Vec::<String>::new(), "AX всё-таки позвали: {:?}", field.log());
+
+            // А нажать и сфокусировать — можно: тело поднимает поле, печатает человек.
+            perform(&field, &node, Act::Invoke, None, || Ok(())).unwrap();
+            perform(&field, &node, Act::Focus, None, || Ok(())).unwrap();
+            assert_eq!(field.log(), vec!["perform AXPress", "set AXFocused=true"]);
+        }
     }
 
     #[test]

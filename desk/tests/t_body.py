@@ -368,6 +368,33 @@ class UnderService(unittest.TestCase):
         # И ни слова «на macOS этого нет» — это свойство режима, а не отказ.
         self.assertNotIn("нет на", snap["reason"])
 
+    @unittest.skipIf(os.name == "nt", "режимы POSIX: на Windows права даёт ACL папки данных")
+    def test_a_leftover_temp_file_does_not_keep_its_wide_rights(self):
+        """⚠ Режим в `os.open` действует только на СОЗДАНИЕ файла.
+
+        Временный файл от прошлого запуска (упали между `open` и `replace`)
+        уже существует — и `O_CREAT|O_TRUNC` пишет ключ в него с теми правами,
+        какие там были, хоть 0644. Ключ устройства открывает мост: прочитавший
+        его сосед по машине поднимает своё тело от имени Hélène. Поэтому права
+        сужаются `fchmod` по уже открытому дескриптору, и вот это тут и стоит.
+        """
+        g = self._ground()
+        with patch.object(sys, "platform", "darwin"),                 patch.dict(os.environ, {"HELENE_SERVICE": "1"}):
+            live = body.Body(g.root, g.tree, _cfg())
+            token_path = live.token_path()
+            token_path.parent.mkdir(parents=True, exist_ok=True)
+            leftover = token_path.with_name(".tmp-" + token_path.name)
+            leftover.write_text("мусор прошлого запуска", encoding="utf-8")
+            os.chmod(leftover, 0o644)
+            self.assertEqual(oct(leftover.stat().st_mode & 0o777), "0o644")
+
+            live.write_device_token()
+
+        self.assertEqual(oct(token_path.stat().st_mode & 0o777), "0o600",
+                         "ключ устройства унаследовал права брошенного временного файла")
+        self.assertEqual(token_path.read_text(encoding="utf-8"), live.device_token)
+        self.assertFalse(leftover.exists(), "временный файл остался рядом с ключом")
+
     def test_stopping_takes_the_token_away(self):
         g = self._ground()
         with patch.object(sys, "platform", "darwin"), \
@@ -470,7 +497,10 @@ class Absent(unittest.TestCase):
 #: ровно те подстроки, что перечислены в `body.MAC_TOOL_TEXT`.
 _CORE_TOOL_TEXT = (
     "Use the connected Windows computer from any Telegram chat where this caller has an owner-issued grant. "
-    "read_window reads the UI Automation control tree as text; hwnd defaults to foreground. "
+    # ⚠ «returns», а не «reads»: в ЖИВОМ описании дерева стоит именно так, и образец,
+    # который говорит иначе, проверял бы замену, которой нечего заменять (такая пара тут
+    # и была — снята 19.09; за живым текстом следит tests/t_tool_text_mac.py).
+    "read_window returns the UI Automation control tree as text; hwnd defaults to foreground. "
     "It goes through UI Automation patterns, so no pixels are involved: DPI, a window that "
     "moved and a list that scrolled stop being your problem. "
     "CURRENT chat; run/poll/stop manage PowerShell processes. desktop_status/windows/read_window/"
@@ -493,6 +523,14 @@ _LAYER_TOOL_TEXT = (
     "goes the artifact route; .ps1/.psm1/.psd1 with non-ASCII text get a UTF-8 BOM so PowerShell 5.1 parses "
     "them); replace swaps EXACTLY ONE occurrence of old; expected_sha256 does "
     "compare-and-swap on both, backup=true keeps a backup."
+)
+
+#: Описание тула `computer_access` — корня доверия к руке. Одно слово Windows, но оно
+#: обещает платформу, которой на этой машине нет.
+_ACCESS_TOOL_TEXT = (
+    "Owner-only root of trust for Windows access. grant/revoke a stable Telegram user id; "
+    "trusted users cannot delegate. scopes: computer.read, computer.files, computer.process, "
+    "computer.apps. list shows current grants."
 )
 
 #: Слова, которых в описании для Mac быть не должно.
@@ -570,6 +608,35 @@ class Platform(unittest.TestCase):
         self.assertEqual(body.describe_for_mac(agent), 1)
         self.assertEqual(json.dumps(tool, ensure_ascii=False, sort_keys=True), before)
         self.assertEqual(body.describe_for_mac(types.ModuleType("empty")), 0)
+
+    def test_the_access_tool_stops_saying_windows_too(self):
+        """Корень доверия к руке — тул `computer_access` — тоже говорил про Windows.
+
+        Он свой отдельный тул со своим описанием, и в общий словарь замен его
+        класть нельзя: стенд `t_tool_text_mac.py` сверяет каждую пару
+        `MAC_TOOL_TEXT` с живым описанием тула `computer`, и пара, которой там
+        нечего искать, читалась бы как мёртвая.
+        """
+        said = body.mac_access_tool_text(_ACCESS_TOOL_TEXT)
+        self.assertIn("Owner-only root of trust for computer access", said)
+        self.assertNotIn("Windows", said)
+        self.assertEqual(body.mac_access_tool_text(said), said, "не идемпотентно")
+        # Словарь не мёртвый: каждой паре есть что заменить в ЖИВОМ описании дерева.
+        agent_src = (Path(__file__).resolve().parents[2] / "helene" / "core" / "agent.py")
+        if agent_src.is_file():
+            live = agent_src.read_text(encoding="utf-8")
+            for old_text, _ in body.MAC_ACCESS_TOOL_TEXT:
+                self.assertIn(old_text, live,
+                              f"замена мёртвая — в дереве такой подстроки нет: {old_text!r}")
+
+        tool = {"name": "computer_access", "description": _ACCESS_TOOL_TEXT}
+        other = {"name": "shell", "description": "Windows shell"}
+        agent = types.ModuleType("agent")
+        agent.OWNER_TOOLS = [tool, other]
+        self.assertEqual(body.describe_for_mac(agent), 1)
+        self.assertNotIn("Windows", tool["description"])
+        # Соседний тул не трогаем: правятся ровно два имени.
+        self.assertEqual(other["description"], "Windows shell")
 
     def test_install_on_darwin_rewrites_the_description_and_on_windows_leaves_it(self):
         from unittest.mock import patch
