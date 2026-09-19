@@ -213,8 +213,20 @@ class Contract(unittest.TestCase):
         self.assertIsInstance(scale, (int, float), f"scale — не число: {scale!r}")
         self.assertGreaterEqual(float(scale), 1.0, scale)
         # Сторож движка увидел то же тело: снимок для окна написан и говорит «подключено».
-        snap = json.loads((self.tree / "memory" / ".state" / "body.json").read_text("utf-8"))
-        self.assertTrue(snap.get("connected"), snap)
+        # Снимок пишет сторож раз в несколько секунд ПОСЛЕ своей пробы — сразу после
+        # подъёма там ещё «подключается» (так упал выпускной прогон 0.8.1 при живом теле).
+        # Ждём его слова до 20 с; «не дождались» — тогда и падаем, с последним снимком.
+        snap_path = self.tree / "memory" / ".state" / "body.json"
+        snap: dict = {}
+        for _ in range(40):
+            try:
+                snap = json.loads(snap_path.read_text("utf-8"))
+            except (OSError, ValueError):
+                snap = {}
+            if snap.get("connected") is True:
+                break
+            time.sleep(0.5)
+        self.assertTrue(snap.get("connected"), f"сторож так и не записал «подключено» за 20 с: {snap}")
         self.assertEqual((body.STATE.get("identity") or {}).get("kind"), "interactive",
                          "тело без графической сессии: %s" % body.STATE.get("identity"))
         # Разрешения в снимок кладёт сторож своей пробой desktop.status — не чаще
