@@ -217,7 +217,7 @@ def asset_names(version: str) -> dict[str, str]:
 def info_plist(kind: str, version: str) -> dict:
     """Info.plist бандла: имя по-французски, идентификатор — контракт четырёх."""
     b = BUNDLES[kind]
-    return {
+    plist = {
         "CFBundleName": b["name"],
         "CFBundleDisplayName": b["name"],
         "CFBundleIdentifier": b["identifier"],
@@ -234,6 +234,14 @@ def info_plist(kind: str, version: str) -> dict:
         # без этого ключа ATS режет незашифрованную петлю.
         "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},
     }
+    if kind == "shell":
+        # Голосовые из окна — getUserMedia в WKWebView; без строки назначения
+        # TCC не спрашивает, а убивает процесс при первом обращении к микрофону.
+        plist["NSMicrophoneUsageDescription"] = "Hélène записывает голосовые сообщения для агента"
+        # Окно живёт спрятанным в строку меню, а сторожа детей и проверка
+        # обновлений в оболочке спят на thread::sleep — App Nap их замедлил бы.
+        plist["LSAppNapIsDisabled"] = True
+    return plist
 
 
 def helene_json_mac() -> str:
@@ -852,8 +860,15 @@ def stage_git_bundle(out: Path, cache: Path) -> dict:
 
 # --- фронты, Rust, реле -------------------------------------------------------------
 
+# Все пять фронтов, а не три, что едут в Mac-архив (окно, телефон, мастер).
+# Окно Пульта и мини-апп в поставку не входят, но стенд пакета desk
+# (`tests/t_deskpkg.py`) собирает пакет КАЖДОГО вида, и вид `server` без
+# `pult/dist` и `miniapp/dist` красный — это минута сборки, а не полусборка.
+FRONTS = ("app", "mobile", "setup/ui", "pult", "miniapp")
+
+
 def build_fronts() -> None:
-    for rel in ("app", "mobile", "setup/ui"):
+    for rel in FRONTS:
         print(f"  {rel}:")
         run(["npm", "ci", "--no-audit", "--no-fund"], cwd=DESK / rel, timeout=1800)
         run(["npm", "run", "build"], cwd=DESK / rel, timeout=1800)
@@ -1037,8 +1052,22 @@ def run_stands(out: Path, skip: bool) -> None:
     runner = DESK / "tests" / "run_all.py"
     if not runner.is_file():
         raise SystemExit(f"нет прогона стендов: {runner}")
-    print("стенды: питон и окно — рантаймом сборки…")
-    done = subprocess.run([str(runtime_python(out)), str(runner)], cwd=str(DESK))
+    # Дерево агента стенды ищут через `layout.tree()`: HELENE_TREE_SRC, иначе
+    # сосед `live/` рядом с репозиторием. На раннере соседа нет — дерево уже
+    # лежит в сборке, его и называем; остальная среда — как есть.
+    tree = out / "tree"
+    if not (tree / "agent.py").is_file():
+        raise SystemExit(f"стендам нужно дерево агента, а в {tree} его нет — сперва шаг «дерево агента»")
+    # PYTHONPATH — мост для стенда, который к `layout.tree()` не ходит, а
+    # вставляет в sys.path соседа `../live` буквально (`tests/t_seed_git.py`):
+    # без него `self_model` из дерева не найти. Имена верхнего уровня дерева
+    # (123) со стандартной библиотекой и модулями desk не пересекаются
+    # (проверено 19.09), а пути desk стенды ставят в sys.path первыми.
+    inherited = os.environ.get("PYTHONPATH", "")
+    env = {**os.environ, "HELENE_TREE_SRC": str(tree), "PYTHONUTF8": "1",
+           "PYTHONPATH": str(tree) + (os.pathsep + inherited if inherited else "")}
+    print(f"стенды: питон и окно — рантаймом сборки, дерево {tree}…")
+    done = subprocess.run([str(runtime_python(out)), str(runner)], cwd=str(DESK), env=env)
     if done.returncode != 0:
         raise SystemExit("стенды красные — сборка остановлена. Чинить, а не собирать.")
 

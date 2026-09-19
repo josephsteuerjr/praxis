@@ -67,10 +67,14 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          # Все пять фронтов (build_mac.FRONTS): пульт и мини-апп в архив не
+          # едут, но стенд пакета desk собирает и серверный вид.
           cache-dependency-path: |
             desk/app/package-lock.json
             desk/mobile/package-lock.json
             desk/setup/ui/package-lock.json
+            desk/pult/package-lock.json
+            desk/miniapp/package-lock.json
 
       - name: Сборка (build_mac.py)
         run: python3 desk/installer/build_mac.py --from-release "$TAG" --out "$BUILD"

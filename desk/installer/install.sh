@@ -50,6 +50,26 @@ SETUP=""
 say() { printf '%s\n' "$*"; }
 die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 
+# После остановки старой копии любой выход с ошибкой обязан вернуть человеку
+# программу: при обновлении из окна оболочка уже вышла сама, и `die` оставил бы
+# его без Hélène. Ловушка на выход: отказ после остановки — назвать журналы и
+# открыть прежний бандл обратно, если он цел (best effort). При обновлении из
+# окна вывод этого скрипта оболочка пишет в <корень>/install-sh.log.
+STOPPED=0
+on_exit() {
+    rc=$?
+    if [ "$rc" -ne 0 ] && [ "$STOPPED" -eq 1 ]; then
+        say "обновление не завершилось (код $rc); журналы: $STAGING/$FOLDER/install.log (мастер), $HOME_DIR/install-sh.log (этот скрипт, при обновлении из окна)"
+        if [ -x "$HOME_DIR/Helene.app/Contents/MacOS/helene" ]; then
+            say "запускаю обратно прежнюю копию: $HOME_DIR/Helene.app"
+            open "$HOME_DIR/Helene.app" 2>/dev/null || say "прежняя копия не открылась: open \"$HOME_DIR/Helene.app\""
+        else
+            say "прежней копии в $HOME_DIR нет целиком — поставить заново: sh install.sh --from \"$ZIP\""
+        fi
+    fi
+}
+trap on_exit EXIT
+
 usage() {
     cat <<EOF
 $PRODUCT $VERSION для macOS (Apple Silicon)
@@ -155,6 +175,20 @@ stage() {
     xattr -dr com.apple.quarantine "$STAGING" 2>/dev/null || true
 }
 
+# Оболочка при обновлении из окна передаёт свой pid (HELENE_OLD_PID) и выходит
+# сама через полторы секунды. Ждём её выхода до 10 с, а не гасим: процесс,
+# который уходит сам, убивать незачем, и его дети умрут его рукой.
+wait_old_shell() {
+    pid="${HELENE_OLD_PID:-}"
+    [ -n "$pid" ] || return 0
+    case "$pid" in *[!0-9]*) return 0 ;; esac
+    i=0
+    while [ "$i" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        i=$((i + 1))
+    done
+}
+
 # Всё, что запущено из папки установки: оболочка, движок, канал, реле. Себя и
 # своего родителя не трогаем — скрипт могли запустить из этой же папки.
 running_pids() {
@@ -195,7 +229,8 @@ import sys
 
 home = pathlib.Path(sys.argv[1])
 out = pathlib.Path(sys.argv[2])
-cfg = json.loads((home / "helene.json").read_text(encoding="utf-8"))
+# utf-8-sig: файл мог быть записан с BOM (Rust-мастер такое читает, json.loads — нет).
+cfg = json.loads((home / "helene.json").read_text(encoding="utf-8-sig"))
 model = cfg.get("model") or {}
 base = str(model.get("base_url") or "")
 key = str(model.get("key") or "")
@@ -255,28 +290,38 @@ installed_version() {
 
 update() {
     say "$PRODUCT уже стоит в $HOME_DIR ($(installed_version)) — обновляю поверх; data/ и helene.json не трогаются"
+    wait_old_shell
     stop_running
-    umask 077
+    # С этой строки любой отказ возвращает прежнюю копию (см. on_exit).
+    STOPPED=1
     json="$CACHE/update-decisions.json"
     rm -f "$json"
-    if ! decisions_json "$json"; then
+    # В JSON решений — ключ модели: пишем его только владельцу. umask — на время
+    # записи, мастеру возвращаем прежний: иначе права на файлы установки
+    # зависели бы от того, обновление это или первая установка.
+    old_umask="$(umask)"
+    umask 077
+    if decisions_json "$json"; then decided=1; else decided=0; fi
+    umask "$old_umask"
+    if [ "$decided" -ne 1 ]; then
+        rm -f "$json"
         say "не смог прочитать прежние решения из $HOME_DIR/helene.json — открываю мастер, обновление доделай в нём"
-        open "$STAGING/$FOLDER/Helene Setup.app"
-        exit 0
+        open "$STAGING/$FOLDER/Helene Setup.app" || true
+        exit 1
     fi
     if "$SETUP" --install "$json" --quiet; then
         rm -f "$json"
+        STOPPED=0
         say "обновлено до $(installed_version): $HOME_DIR"
     else
         rm -f "$json"
         # Мастер пишет install.log в корень поставки (папку с helene-build.json).
-        say "тихое обновление не удалось; журнал: $STAGING/$FOLDER/install.log"
-        say "открываю мастер — доделай обновление в нём"
-        open "$STAGING/$FOLDER/Helene Setup.app"
+        say "тихое обновление не удалось — открываю мастер, доделай обновление в нём"
+        open "$STAGING/$FOLDER/Helene Setup.app" || true
         exit 1
     fi
     if [ "$RELAUNCH" -eq 1 ]; then
-        open "$HOME_DIR/Helene.app"
+        open "$HOME_DIR/Helene.app" || say "не открылось: open \"$HOME_DIR/Helene.app\""
     else
         say "открыть: open \"$HOME_DIR/Helene.app\""
     fi
@@ -292,11 +337,14 @@ uninstall() {
     stop_running
     setup="$HOME_DIR/$SETUP_REL"
     if [ -x "$setup" ]; then
+        # Код выхода ловим сами: под `set -e` отказ мастера ронял бы скрипт
+        # молча, без слова о том, где журнал.
         if [ "$PURGE" -eq 1 ]; then
-            "$setup" --uninstall --purge --quiet
+            "$setup" --uninstall --purge --quiet && rc=0 || rc=$?
         else
-            "$setup" --uninstall --quiet
+            "$setup" --uninstall --quiet && rc=0 || rc=$?
         fi
+        [ "$rc" -eq 0 ] || die "мастер отказался снимать (код $rc); журнал: $TMP/helene-uninstall.log"
         say "снято мастером; журнал: $TMP/helene-uninstall.log"
     elif [ "$PURGE" -eq 1 ]; then
         rm -rf "$HOME_DIR"

@@ -91,6 +91,18 @@ class Plist(unittest.TestCase):
             raw = plistlib.dumps(p, sort_keys=False)
             self.assertEqual(plistlib.loads(raw), p)
 
+    def test_shell_bundle_asks_for_the_microphone_and_refuses_app_nap(self):
+        # Адверсарка 19.09: без NSMicrophoneUsageDescription TCC убивает процесс
+        # на первом getUserMedia; App Nap усыпил бы сторожей детей и проверку
+        # обновлений, которые спят на thread::sleep за спрятанным окном.
+        shell = build_mac.info_plist("shell", "0.7.1")
+        self.assertEqual(shell["NSMicrophoneUsageDescription"],
+                         "Hélène записывает голосовые сообщения для агента")
+        self.assertIs(shell["LSAppNapIsDisabled"], True)
+        setup = build_mac.info_plist("setup", "0.7.1")
+        self.assertNotIn("NSMicrophoneUsageDescription", setup)
+        self.assertNotIn("LSAppNapIsDisabled", setup)
+
     def test_min_macos_is_a_version(self):
         self.assertRegex(build_mac.MACOS_MIN, r"^\d+\.\d+$")
         # Колёса голоса под cp314/arm64 собраны под macOS 14 — меньше обещать нельзя.
@@ -233,6 +245,31 @@ class Wheels(unittest.TestCase):
             self.assertIn(dep, got)
         self.assertEqual(got[len(build_dist.TREE_DEPS) + len(build_dist.VOICE_DEPS):],
                          deskpkg.requirements(deskpkg.MACOS))
+
+
+class Stands(unittest.TestCase):
+    def test_all_five_fronts_are_built(self):
+        # Стенд пакета desk собирает пакет каждого вида, серверному нужны
+        # pult/dist и miniapp/dist — фронты строятся все, не три «для архива».
+        self.assertEqual(set(build_mac.FRONTS), {"app", "mobile", "setup/ui", "pult", "miniapp"})
+        for rel in build_mac.FRONTS:
+            self.assertTrue((DESK / rel / "package-lock.json").is_file(), rel)
+            scripts = json.loads((DESK / rel / "package.json").read_text(encoding="utf-8")).get("scripts", {})
+            self.assertIn("build", scripts, rel)
+
+    def test_workflow_caches_every_front_lock(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        for rel in build_mac.FRONTS:
+            self.assertIn(f"desk/{rel}/package-lock.json", text, rel)
+
+    def test_stands_get_the_tree_from_the_build(self):
+        # Стенды ищут дерево через layout.tree(): без HELENE_TREE_SRC на раннере
+        # они шли бы к соседу live/, которого там нет (второй круг CI, 19.09).
+        import inspect  # noqa: PLC0415
+        src = inspect.getsource(build_mac.run_stands)
+        self.assertIn('"HELENE_TREE_SRC": str(tree)', src)
+        self.assertIn("**os.environ", src)
+        self.assertIn("env=env", src)
 
 
 class Downloads(unittest.TestCase):
@@ -389,7 +426,31 @@ class InstallSh(unittest.TestCase):
         for key in ('"agent"', '"owner"', '"constitution"', '"provider"', '"agent_mode"',
                     '"telegram"', '"computer"', '"dir"', "sk-frame-", "SOUL.md"):
             self.assertIn(key, self.text, key)
+        # Адверсарка 19.09: umask только вокруг JSON решений и обратно мастеру;
+        # BOM в helene.json; ждать выход оболочки по HELENE_OLD_PID, а не гасить;
+        # код выхода мастера при снятии не глотать.
         self.assertIn("umask 077", self.text)
+        self.assertIn('umask "$old_umask"', self.text)
+        self.assertIn('encoding="utf-8-sig"', self.text)
+        self.assertIn("HELENE_OLD_PID", self.text)
+        self.assertIn('kill -0 "$pid"', self.text)
+        self.assertIn("helene-uninstall.log", self.text)
+        self.assertRegex(self.text, r'--uninstall( --purge)? --quiet && rc=0 \|\| rc=\$\?')
+        # Отказ после остановки старой копии возвращает её человеку: ловушка на
+        # выход, флаг после stop_running, журналы названы, бандл открыт обратно.
+        self.assertIn("trap on_exit EXIT", self.text)
+        self.assertIn("STOPPED=1", self.text)
+        self.assertIn("install-sh.log", self.text)
+        self.assertIn('open "$HOME_DIR/Helene.app" 2>/dev/null', self.text)
+        update = self.text[self.text.index("update() {"):self.text.index("fresh() {")]
+        self.assertNotIn("die ", update, "die в update() обошёл бы возврат прежней копии")
+        self.assertNotIn("exit 0", update.split("STOPPED=1", 1)[1].split("STOPPED=0", 1)[0])
+
+    def test_stands_bridge_pythonpath_to_the_tree(self):
+        import inspect  # noqa: PLC0415
+        src = inspect.getsource(build_mac.run_stands)
+        self.assertIn('"PYTHONPATH": str(tree)', src)
+        self.assertIn("os.pathsep", src)
 
 
 class Workflow(unittest.TestCase):

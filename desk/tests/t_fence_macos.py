@@ -194,24 +194,28 @@ class Profile(unittest.TestCase):
             self.assertEqual(rule.count("("), rule.count(")"), rule)
         self.assertEqual(fence_macos._q('a"b\\c'), '"a\\"b\\\\c"')
 
-    def test_временные_папки_пользователя_сужаются_по_TMPDIR(self):
-        with patch.dict(os.environ, {"TMPDIR": "/private/var/folders/ab/cdef123/T/"}):
-            rules = _rules(self.g.box().profile())
-        rw = " ".join(r for r in rules if r.startswith("(allow file-read* file-write*"))
-        self.assertIn('(subpath "/private/var/folders/ab/cdef123")', rw)
-        self.assertNotIn('(subpath "/private/var/folders")', rw,
-                         "чужие временные папки не должны быть открыты на запись")
-        self.assertIn('(allow file-read* (literal "/private/var/folders"))', rules)
-        with patch.dict(os.environ, {"TMPDIR": ""}):
-            rw2 = " ".join(r for r in _rules(self.g.box().profile())
-                           if r.startswith("(allow file-read* file-write*"))
-        self.assertIn('(subpath "/private/var/folders")', rw2)
-        with patch.dict(os.environ, {"TMPDIR": "/tmp"}):
-            self.assertIsNone(fence_macos._user_folders())
-        # Написание через ссылку `/var/folders/…` — то, что лежит в TMPDIR на
-        # macOS до разбора ссылок, — сужает так же.
-        with patch.dict(os.environ, {"TMPDIR": "/var/folders/zz/abc123/T/"}):
-            self.assertEqual(fence_macos._user_folders(), "/private/var/folders/zz/abc123")
+    def test_временные_папки_пользователя_закрыты(self):
+        # ⚠ Найдено первым живым прогоном на macOS: разрешение на
+        # /private/var/folders накрывало чужие папки и код продукта — фикстуры
+        # стендов живут в temp, и там же лежат кэши всех программ пользователя.
+        # Ни одно правило не называет их — ни на чтение, ни на запись, при любом
+        # TMPDIR раннера; свой temp команде даёт среда (<workspace>/.tmp).
+        for tmpdir in ("/private/var/folders/ab/cdef123/T/", "/var/folders/zz/abc123/T/",
+                       "", "/tmp"):
+            with patch.dict(os.environ, {"TMPDIR": tmpdir}):
+                rules = _rules(self.g.box().profile())
+            for r in rules:
+                if r.startswith("(allow"):
+                    self.assertNotIn("var/folders", r, f"TMPDIR={tmpdir!r}: {r}")
+                    self.assertNotIn(f"(subpath {fence_macos._q('/private/var')})", r)
+                    self.assertNotIn(f"(subpath {fence_macos._q('/private/tmp')})", r)
+        env = self.g.box().env()
+        tmp = str(fence_macos._abs(self.g.workspace) / ".tmp")
+        self.assertEqual((env["TMPDIR"], env["TMP"], env["TEMP"]), (tmp, tmp, tmp))
+        # А свой .tmp внутри дома выдан на запись — там и живут временные файлы.
+        rw = " ".join(r for r in _rules(self.g.box().profile())
+                      if r.startswith("(allow file-read* file-write*"))
+        self.assertIn(f"(subpath {fence_macos._q(tmp)})", rw)
 
     def test_командная_строка_и_PATH_поставки_для_login_shell(self):
         box = self.g.box()
@@ -357,6 +361,26 @@ class Live(unittest.TestCase):
         self.assertIn("текст владельца", out)
         out, code, _ = self.sh(f"echo x >> {link / 'a.txt'}")
         self.assertNotEqual(code, 0, "папка на чтение записалась")
+
+    def test_временные_папки_пользователя_закрыты_живьём(self):
+        # Настоящая temp раннера (/private/var/folders/…/T) — та самая дыра
+        # первого прогона: файл рядом с фикстурой не читается и не пишется…
+        runner_tmp = Path(os.path.realpath(tempfile.gettempdir()))
+        stray = runner_tmp / f"helene-чужой-{os.getpid()}.txt"
+        stray.write_text("не для агента", encoding="utf-8")
+        self.addCleanup(lambda: stray.unlink(missing_ok=True))
+        out, code, _ = self.sh(f"cat {stray}")
+        self.assertNotEqual(code, 0, "temp пользователя прочитался из ограды: " + out)
+        self.assertNotIn("не для агента", out)
+        fresh = runner_tmp / f"helene-запись-{os.getpid()}.txt"
+        self.addCleanup(lambda: fresh.unlink(missing_ok=True))
+        out, code, _ = self.sh(f"echo x > {fresh}")
+        self.assertNotEqual(code, 0, "в temp пользователя записалось из ограды")
+        self.assertFalse(fresh.exists())
+        # …а свой temp команды — в доме: mktemp кладёт туда, и запись доезжает.
+        out, code, _ = self.sh('f=$(mktemp) && echo "$f" && echo x > "$f"')
+        self.assertEqual(code, 0, out)
+        self.assertIn(str(fence_macos._abs(self.g.workspace) / ".tmp"), out)
 
     def test_питон_поставки_первый_в_PATH(self):
         fake = self.g.root / "runtime" / "bin" / "python3"

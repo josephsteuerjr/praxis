@@ -38,6 +38,16 @@
 (`~/Documents`, `~/Library`, ключи в связке) в этом списке нет: агент видит
 своё (дом, память, душу), код продукта и то, что владелец смонтировал.
 
+⚠ ВРЕМЕННЫЕ ПАПКИ ЗАКРЫТЫ. `/private/var/folders/<xx>/<hash>` — это кэши и
+временные файлы ВСЕХ программ пользователя, и первый живой прогон на macOS
+показал: разрешение на них накрывало и чужие папки, и код продукта (стенд
+кладёт фикстуры именно в temp — и обязан класть их туда дальше). Поэтому в
+профиле их нет ни на чтение, ни на запись; командам отдан `<workspace>/.tmp`
+через TMPDIR/TMP/TEMP — его чтут питон, git, curl, pip, npm и `mktemp`.
+Библиотеки Apple, которые пишут по `confstr(_CS_DARWIN_USER_TEMP_DIR)` мимо
+TMPDIR, получат отказ — это цена закрытой папки, и она названа здесь, а не
+спрятана.
+
 ⚠ `/var`, `/tmp`, `/etc` на macOS — символические ссылки в `/private/…`, и
 ядро сверяет ПУТЬ ПОСЛЕ РАЗБОРА ссылок; поэтому в профиле оба написания.
 
@@ -64,7 +74,7 @@ import shlex
 import signal
 import subprocess
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 log = logging.getLogger("helene.fence.macos")
 
@@ -83,10 +93,8 @@ SYSTEM_RO = ("/usr", "/System", "/Library", "/private/etc", "/private/var/db",
 #: папка, без содержимого): `/var` → `/private/var`, `/tmp` → `/private/tmp`.
 SYSTEM_RO_LITERAL = ("/", "/private", "/private/var", "/private/tmp", "/tmp", "/var",
                      "/etc")
-#: Временные папки пользователя. Библиотеки Apple пишут туда мимо TMPDIR
-#: (`confstr(_CS_DARWIN_USER_TEMP_DIR)`), и без записи сюда падают вещи вроде
-#: `security` и `codesign`. Сужается до папки ЭТОГО пользователя, когда её
-#: можно вывести из TMPDIR (`_user_folders`).
+#: Временные папки пользователя — закрыты (см. шапку): ни одно правило профиля
+#: не должно их называть. Константа нужна стендам, которые это стерегут.
 USER_FOLDERS = "/private/var/folders"
 
 #: Интерпретаторы, для которых login-shell переставляет PATH (см. шапку).
@@ -109,30 +117,6 @@ def _q(path) -> str:
     """Строка SBPL: в кавычках, обратный слэш и кавычка экранированы."""
     text = str(path).replace("\\", "\\\\").replace('"', '\\"')
     return f'"{text}"'
-
-
-def _user_folders() -> str | None:
-    """`/private/var/folders/<xx>/<hash>` этого пользователя — по TMPDIR раннера.
-
-    Раннер живёт в сессии владельца, и его TMPDIR — `/var/folders/…/T/`. Папка на
-    два уровня выше — весь набор временных папок пользователя (`T`, `C`, `X`).
-    Не вывелось (TMPDIR пуст или в другом месте) — None: тогда разрешается вся
-    `/private/var/folders`, как без сужения.
-    """
-    raw = (os.environ.get("TMPDIR") or "").strip()
-    if not raw:
-        return None
-    # Ссылки снимаются только на macOS (`/var` → `/private/var`); стенды на
-    # других платформах подают путь уже в том виде, в каком его увидит ядро,
-    # а написание через ссылку принимается и без realpath.
-    text = os.path.realpath(raw) if sys.platform == "darwin" else raw
-    parts = PurePosixPath(text).parts
-    if parts[:3] == ("/", "var", "folders"):
-        parts = ("/", "private") + parts[1:]
-    base = PurePosixPath(USER_FOLDERS).parts
-    if parts[:len(base)] != base or len(parts) < len(base) + 2:
-        return None
-    return str(PurePosixPath(*parts[:len(base) + 2]))
 
 
 class Container:
@@ -192,7 +176,6 @@ class Container:
         """Профиль SBPL для этой установки. Отдельным методом ради стендов."""
         root, tree, home = _abs(self.root), _abs(self.tree), _abs(self.workspace)
         tmp = home / ".tmp"
-        user_folders = _user_folders()
         secrets = [_abs(p) for p in self.secrets]
 
         def rule(verb: str, ops: str, filters: list[str]) -> str:
@@ -247,14 +230,10 @@ class Container:
             f"(literal {_q('/dev/null')})",
             f"(literal {_q('/dev/tty')})",
             f"(subpath {_q('/dev/fd')})",
-            f"(subpath {_q(user_folders or USER_FOLDERS)})",
         ]
-        lines.append(";; Дом агента и временные папки — на чтение и запись.")
+        lines.append(";; Дом агента — на чтение и запись. Временные файлы — в")
+        lines.append(";; <workspace>/.tmp (TMPDIR); /private/var/folders закрыт (см. шапку).")
         lines.append(rule("allow", "file-read* file-write*", home_rw))
-        if user_folders is not None:
-            # Чужие временные папки под /private/var/folders — только метаданные;
-            # своя выдана целиком строкой выше.
-            lines.append(rule("allow", "file-read*", [f"(literal {_q(USER_FOLDERS)})"]))
         # Монтирования владельца: слова доступа — те же, что в конфиге и в
         # `fence.mount_access`: "write" даёт запись, всё остальное — чтение.
         for row in self.mounts:
