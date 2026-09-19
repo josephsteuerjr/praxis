@@ -726,6 +726,29 @@ def release_tree() -> None:
 PARENT_PID_ENV = "HELENE_PARENT_PID"
 _WATCH: dict = {"parent": 0}
 
+#: Колбэки мягкого выхода: отрабатывают при SIGTERM ДО SystemExit и перед жёстким
+#: добиванием сторожа (`os._exit`), которого atexit уже не застаёт. Ими, например,
+#: ограда macOS снимает детей команд, переживших движок (`fence_macos`).
+_SOFT_EXIT_HOOKS: list = []
+
+
+def on_soft_exit(fn) -> None:
+    """Зарегистрировать колбэк мягкого выхода. Идемпотентно (один и тот же — раз).
+
+    На Windows обработчик SIGTERM не ставится (детей держит job-объект оболочки),
+    так что зарегистрированные колбэки там просто не сработают — и это верно.
+    """
+    if callable(fn) and fn not in _SOFT_EXIT_HOOKS:
+        _SOFT_EXIT_HOOKS.append(fn)
+
+
+def _run_soft_exit_hooks(name: str) -> None:
+    for fn in list(_SOFT_EXIT_HOOKS):
+        try:
+            fn()
+        except Exception:
+            log.warning("%s: колбэк мягкого выхода упал", name, exc_info=True)
+
 
 def parent_pid() -> int:
     """pid оболочки из HELENE_PARENT_PID; 0 — не задан или не число."""
@@ -753,6 +776,9 @@ def arm_soft_exit(name: str) -> bool:
 
     def _on_term(signum, _frame):
         log.info("%s: получен SIGTERM — завершаюсь", name)
+        # Колбэки — ЗДЕСЬ, до SystemExit: если ход застрянет в чужом коде и
+        # сторож добьёт процесс `os._exit`, atexit не отработает, а эти уже да.
+        _run_soft_exit_hooks(name)
         raise SystemExit(128 + int(signum))
 
     try:
@@ -798,6 +824,10 @@ def watch_parent(name: str, *, every: float = 2.0, grace: float = 8.0) -> int:
                 log.warning("%s: SIGTERM себе не ушёл: %s", name, exc)
             time.sleep(grace)
             log.error("%s: не завершился за %.0f с после SIGTERM — выхожу жёстко", name, grace)
+            # Backstop: если главный поток застрял и `_on_term` не отработал,
+            # колбэки (снятие детей ограды) не звал никто — зовём отсюда перед
+            # жёстким `os._exit`, который atexit уже не застанет. Идемпотентно.
+            _run_soft_exit_hooks(name)
             try:
                 logging.shutdown()
             finally:

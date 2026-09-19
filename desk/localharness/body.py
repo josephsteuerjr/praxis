@@ -802,35 +802,36 @@ def _owner_turn(agent_mod) -> bool:
     return bool(ctx is not None and getattr(ctx, "owner", False))
 
 
-#: Ответ тула `computer` в сборке без тела. Без слов о платформе: это ответ
-#: агенту, и «чего нет» здесь важнее, чем «почему».
-ABSENT_ANSWER = ("Тула окон в этой сборке нет: тело для него не входит в основу, и "
-                 "поднять его нечем. Ограда здесь ни при чём — это отдельная опция, "
-                 "а не режим.")
+#: Списки схем тулов у дерева, из которых снимаем `computer` в сборке без тела.
+#: `computer` живёт в `OWNER_TOOLS`, но списки берём с запасом: пусть дерево
+#: переложит его в другой — снимется всё равно. Пустых/отсутствующих не боимся.
+_TOOL_LISTS = ("BASE_TOOLS", "OWNER_TOOLS", "PRAXIS_SELF_TOOLS", "SHARED_CONTEXT_TOOLS",
+               "TOOLS", "ABSENCE_TOOLS", "FAMILY_TOOLS", "WORKSHOP_TOOLS", "FORGE_TOOLS")
 
 
 def _install_absent(agent_mod) -> None:
-    """Сборка без тела: тул `computer` отвечает словами, а не отказом клиента.
+    """Сборка без тела (порт macOS): рука `computer` СНИМАЕТСЯ вовсе, а не отвечает
+    словами. Приём тот же, что у брокера (`broker.install` при `not HAS_BROKER`):
+    обещать модели тул, который всегда откажет, хуже, чем не иметь его. Раньше тул
+    оставался в наборе с ответом-заглушкой — модель видела `computer`, звала его и
+    получала отказ, а экран «Система» рисовал его «вне ограды» виндовым текстом
+    про галочки «Управление компьютером», которых на macOS нет.
 
-    Сам тул у дерева остаётся, но за ним стоит клиент моста (`body_client`) с
-    чужими умолчаниями: без обёртки агент получал бы отказ клиента с адресом,
-    которого здесь нет. Права — всегда «нет»: давать их некому.
+    Снимаем из `TOOL_IMPL` (исполнение) и из всех списков схем (что видит модель).
+    Права — всегда «нет»: давать их некому. Из `hands_report` руку убирает сама
+    ограда, спросив `body.HAS_BODY`.
     """
     if callable(getattr(agent_mod, "_computer_allowed", None)):
         agent_mod._computer_allowed = lambda scope: False
     impl = getattr(agent_mod, "TOOL_IMPL", None)
-    original = impl.get("computer") if isinstance(impl, dict) else None
-    if not callable(original) or getattr(original, "_helene_body", False):
-        return
-
-    def computer(*args, **kwargs):
-        return ABSENT_ANSWER
-
-    computer._helene_body = True
-    computer.__name__ = getattr(original, "__name__", "computer")
-    computer.__doc__ = getattr(original, "__doc__", "")
-    impl["computer"] = computer
-    log.info("тело: тул computer в этой сборке без тела — отвечает словами")
+    if isinstance(impl, dict):
+        impl.pop("computer", None)
+    for attr in _TOOL_LISTS:
+        lst = getattr(agent_mod, attr, None)
+        if isinstance(lst, list):
+            lst[:] = [t for t in lst
+                      if not (isinstance(t, dict) and t.get("name") == "computer")]
+    log.info("тело: тул computer снят из набора — в этой сборке тела нет")
 
 
 def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -> None:

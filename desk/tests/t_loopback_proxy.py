@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import unittest
@@ -89,8 +90,16 @@ class Loopback(unittest.TestCase):
                          f"с рычагом запрос к 127.0.0.1 обязан доехать:\n{done.stderr}")
         self.assertIn("OK", done.stdout)
 
+    @unittest.skipUnless(os.name == "nt",
+                         "стенд про Windows-прокси из реестра: на macOS/Linux Python "
+                         "берёт прокси из System Configuration, а не только из среды, "
+                         "и запрос к 127.0.0.1 доходит напрямую даже без рычага")
     def test_without_the_lever_it_breaks(self):
-        """Без рычага тот же запрос уезжает в прокси — стенд красный не зря."""
+        """Без рычага тот же запрос уезжает в прокси — стенд красный не зря.
+
+        Только Windows: там прокси живёт в реестре и `urllib` берёт его из среды,
+        так что дохлый `http_proxy` ломает даже петлю. На macOS прокси приходит из
+        System Configuration мимо среды — положительный стенд ниже покрывает обе."""
         done = probe(lever=False)
         self.assertNotEqual(done.returncode, 0,
                             "без рычага запрос к 127.0.0.1 доехал — значит стенд "

@@ -82,6 +82,18 @@ class Knobs(unittest.TestCase):
         with patch.dict(os.environ, {"HELENE_PARENT_PID": ""}):
             self.assertEqual(boot.watch_parent("стенд"), 0)
 
+    def test_soft_exit_hooks_run_once_and_are_idempotent(self):
+        # Колбэк мягкого выхода — им ограда macOS снимает детей команд, которых
+        # atexit при жёстком добивании сторожа не застаёт.
+        ran = []
+        fn = lambda: ran.append(1)  # noqa: E731
+        boot.on_soft_exit(fn)
+        boot.on_soft_exit(fn)                 # тот же — не дублируется
+        self.addCleanup(lambda: boot._SOFT_EXIT_HOOKS.remove(fn)
+                        if fn in boot._SOFT_EXIT_HOOKS else None)
+        boot._run_soft_exit_hooks("стенд")
+        self.assertEqual(ran, [1], "колбэк отработал ровно один раз")
+
     @unittest.skipUnless(os.name == "nt", "про Windows: там сторожа нет по построению")
     def test_windows_never_arms(self):
         with patch.dict(os.environ, {"HELENE_PARENT_PID": str(os.getppid())}):

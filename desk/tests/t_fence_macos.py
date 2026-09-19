@@ -99,8 +99,9 @@ class Profile(unittest.TestCase):
         rw = [r for r in rules if r.startswith("(allow file-read* file-write*")]
         ro = [r for r in rules if r.startswith("(allow file-read* ") and "file-write*" not in r]
         home = " ".join(rw)
-        for path in (self.g.workspace, self.g.tree / "memory", self.g.tree / "soul",
-                     self.g.tree / ".git"):
+        # `.git` НЕ в общем rw — у него свои правила (см. test_git_…): чтение
+        # целиком, запись без config/hooks/info.
+        for path in (self.g.workspace, self.g.tree / "memory", self.g.tree / "soul"):
             self.assertIn(f"(subpath {self.q(path)})", home, f"{path} не выдан на запись")
         code = " ".join(ro)
         for path in (self.g.root / "app", self.g.root / "tree", self.g.root / "runtime"):
@@ -111,6 +112,40 @@ class Profile(unittest.TestCase):
         self.assertNotIn(f"(subpath {self.q(self.g.root)})", code + home)
         self.assertNotIn(f"(subpath {self.q(self.g.tree)})", code + home,
                          "дерево данных целиком — это и relay/, и telegram/")
+
+    def test_git_config_и_хуки_из_ограды_только_на_чтение(self):
+        # Побег: движок вне ограды коммитит на каждый shell без --no-verify, и
+        # хук `.git/hooks/pre-commit` или core.hooksPath из `.git/config`,
+        # записанные ИЗ ограды, исполнились бы снаружи неё с полной средой.
+        rules = _rules(self.g.box().profile())
+        git = self.q(self.g.tree / ".git")
+        read = [r for r in rules if r.startswith("(allow file-read*") and "file-write*" not in r]
+        self.assertTrue(any(f"(subpath {git})" in r for r in read),
+                        "весь .git должен читаться — иначе git внутри ограды не работает")
+        write = [r for r in rules if r.startswith("(allow file-write*")]
+        self.assertEqual(len(write), 1, "запись в .git — одним правилом с исключениями")
+        w = write[0]
+        self.assertIn(f"(require-all (subpath {git})", w)
+        for name in ("config", "hooks", "info"):
+            self.assertIn(f"(require-not (subpath {self.q(self.g.tree / '.git' / name)}))", w,
+                          f".git/{name} обязан быть закрыт на запись из ограды")
+        # И .git НЕ в общем rw-правиле — иначе хук писался бы через него.
+        rw = " ".join(r for r in rules if r.startswith("(allow file-read* file-write*"))
+        self.assertNotIn(f"(subpath {git})", rw)
+
+    def test_mach_lookup_поимённо_без_launchservices_и_pasteboard(self):
+        text = self.g.box().profile()
+        self.assertNotIn("(allow mach-lookup)", text, "полный mach-lookup открывает open/pbpaste")
+        rules = _rules(text)
+        mach = next(r for r in rules if r.startswith("(allow mach-lookup"))
+        for name in ("com.apple.trustd", "com.apple.mDNSResponder",
+                     "com.apple.cfprefsd.daemon", "com.apple.system.opendirectoryd.libinfo"):
+            self.assertIn(f'(global-name "{name}")', mach, f"{name} нужен bash/python/git")
+        # По ПРАВИЛАМ (не комментариям — их `_rules` отбрасывает): ни одно allow
+        # не выдаёт launchservicesd (open) или pasteboard (pbpaste).
+        allows = "\n".join(r for r in rules if r.startswith("(allow"))
+        for banned in ("launchservicesd", "pasteboard", "com.apple.pbs"):
+            self.assertNotIn(banned, allows, f"{banned} открыл бы процесс/буфер вне ограды")
 
     def test_закрыто_по_умолчанию_и_системное_только_на_чтение(self):
         text = self.g.box().profile()
@@ -152,34 +187,68 @@ class Profile(unittest.TestCase):
 
     def test_сеть_по_флагу(self):
         with_net = self.g.box(network=True).profile()
-        self.assertIn("(allow network*)", with_net)
+        # Наружу — куда угодно; слушать/принимать — только на localhost, чтобы
+        # команда из ограды не раздала workspace по LAN. Не `(allow network*)`.
+        self.assertNotIn("(allow network*)", with_net,
+                         "blanket network* дал бы bind/inbound на всех интерфейсах")
+        self.assertIn("(allow network-outbound)", with_net)
+        self.assertIn('(allow network-bind (local ip "localhost:*"))', with_net)
+        self.assertIn('(allow network-inbound (local ip "localhost:*"))', with_net)
         self.assertNotIn("(deny network*)", with_net)
         without = self.g.box(network=False).profile()
         self.assertIn("(deny network*)", without)
-        self.assertNotIn("(allow network*)", without)
+        self.assertNotIn("(allow network-outbound)", without)
+        self.assertNotIn("(allow network-bind", without)
         self.assertNotIn("(allow system-socket)", without)
 
     def test_монтирования_по_словам_доступа(self):
         box = self.g.box()
         docs, work = self.g.root.parent / "docs-ro", self.g.root.parent / "work-rw"
+        volx = Path("/Volumes/x")
         box.sync_mounts([
             {"path": str(docs), "real": str(docs), "link": str(self.g.workspace / "mnt" / "docs"),
              "access": "read", "error": ""},
             {"path": str(work), "real": str(work), "link": str(self.g.workspace / "mnt" / "work"),
              "access": "write", "error": ""},
-            # С ошибкой и без стыка — в профиль не попадают.
+            # С ошибкой — в профиль не попадает (папки нет).
             {"path": "/Users/кто-то", "real": "/Users/кто-то", "link": "",
              "access": "write", "error": "папки нет"},
-            {"path": "/Volumes/x", "real": "/Volumes/x", "link": "", "access": "write",
+            # БЕЗ стыка, но без ошибки — попадает: право даётся по реальному пути,
+            # стык (символическая ссылка) — удобство, не право (как на Windows).
+            {"path": str(volx), "real": str(volx), "link": "", "access": "write",
              "error": ""},
         ])
         rules = _rules(box.profile())
         self.assertIn(f"(allow file-read* (subpath {self.q(docs)}))", rules)
         self.assertIn(f"(allow file-read* file-write* (subpath {self.q(work)}))", rules)
-        text = "\n".join(rules)
-        self.assertNotIn("кто-то", text)
-        self.assertNotIn("/Volumes/x", text)
+        self.assertIn(f"(allow file-read* file-write* (subpath {self.q(volx)}))", rules,
+                      "папка без стыка, но без ошибки, открывается по реальному пути")
+        self.assertNotIn("кто-то", "\n".join(rules))
         self.assertIn("смонтировано папок: 4", box.describe())
+
+    def test_проба_повторяется_после_монтирования_и_снимает_кривое(self):
+        # prepare() пробовал профиль БЕЗ папок; кривое правило монтирования упало
+        # бы на КАЖДОЙ команде. Пробуем профиль С папками и при отказе снимаем
+        # монтирования, а не ограду.
+        box = self.g.box()
+        box.sandbox_exec = fence_macos.SANDBOX_EXEC       # притворимся подготовленной
+        docs = self.g.root.parent / "docs"
+        row = {"path": str(docs), "real": str(docs), "link": "", "access": "read", "error": ""}
+
+        class _R:
+            def __init__(self, rc, err=""):
+                self.returncode, self.stdout, self.stderr = rc, "", err
+
+        with patch.object(fence_macos.subprocess, "run", lambda *a, **k: _R(1, "плохое правило")):
+            box.sync_mounts([dict(row)])
+        self.assertEqual(box.mounts, [], "кривое монтирование не снято из профиля")
+        self.assertIn("плохое", box.mounts_fault)
+        self.assertEqual(box.sandbox_exec, fence_macos.SANDBOX_EXEC, "ограда осталась поднятой")
+
+        with patch.object(fence_macos.subprocess, "run", lambda *a, **k: _R(0)):
+            box.sync_mounts([dict(row)])
+        self.assertEqual(len(box.mounts), 1, "исправное монтирование остаётся")
+        self.assertEqual(box.mounts_fault, "")
 
     def test_экранирование_кавычки_и_пробела(self):
         weird = self.g.root / 'папка "с кавычкой" и пробелом\\хвост'
@@ -196,23 +265,28 @@ class Profile(unittest.TestCase):
 
     def test_временные_папки_пользователя_закрыты(self):
         # ⚠ Найдено первым живым прогоном на macOS: разрешение на
-        # /private/var/folders накрывало чужие папки и код продукта — фикстуры
-        # стендов живут в temp, и там же лежат кэши всех программ пользователя.
-        # Ни одно правило не называет их — ни на чтение, ни на запись, при любом
-        # TMPDIR раннера; свой temp команде даёт среда (<workspace>/.tmp).
+        # /private/var/folders накрывало чужие папки и код продукта. Проверяем
+        # именно это: ни одно allow не даёт subpath на набор temp пользователя
+        # ЦЕЛИКОМ (/private/var/folders) и на его корень <xx>/<hash> с T/C/X.
+        # Пути ВНУТРИ фикстуры (сама она живёт в /private/var/folders/…/T на
+        # раннере) — не в счёт: это дом и код установки, они и должны быть выданы.
         for tmpdir in ("/private/var/folders/ab/cdef123/T/", "/var/folders/zz/abc123/T/",
                        "", "/tmp"):
             with patch.dict(os.environ, {"TMPDIR": tmpdir}):
                 rules = _rules(self.g.box().profile())
-            for r in rules:
-                if r.startswith("(allow"):
-                    self.assertNotIn("var/folders", r, f"TMPDIR={tmpdir!r}: {r}")
-                    self.assertNotIn(f"(subpath {fence_macos._q('/private/var')})", r)
-                    self.assertNotIn(f"(subpath {fence_macos._q('/private/tmp')})", r)
+            allows = "\n".join(r for r in rules if r.startswith("(allow"))
+            for whole in ("/private/var/folders", "/var/folders", "/private/var",
+                          "/private/tmp", "/tmp"):
+                self.assertNotIn(f"(subpath {fence_macos._q(whole)})", allows,
+                                 f"TMPDIR={tmpdir!r}: набор temp открыт целиком — {whole}")
+            for root in ("/private/var/folders/ab/cdef123", "/private/var/folders/ab/cdef123/T",
+                         "/private/var/folders/ab/cdef123/C", "/private/var/folders/zz/abc123"):
+                self.assertNotIn(f"(subpath {fence_macos._q(root)})", allows,
+                                 f"TMPDIR={tmpdir!r}: корень temp пользователя открыт — {root}")
+        # Свой temp команды — в доме, и он выдан на запись; туда и кладёт mktemp.
         env = self.g.box().env()
         tmp = str(fence_macos._abs(self.g.workspace) / ".tmp")
         self.assertEqual((env["TMPDIR"], env["TMP"], env["TEMP"]), (tmp, tmp, tmp))
-        # А свой .tmp внутри дома выдан на запись — там и живут временные файлы.
         rw = " ".join(r for r in _rules(self.g.box().profile())
                       if r.startswith("(allow file-read* file-write*"))
         self.assertIn(f"(subpath {fence_macos._q(tmp)})", rw)
@@ -228,8 +302,13 @@ class Profile(unittest.TestCase):
         self.assertTrue(line[6].startswith("export PATH="), line[6])
         self.assertIn(str(runtime / "bin"), line[6])
         self.assertIn(str(runtime / "git" / "bin"), line[6])
-        self.assertTrue(line[6].endswith(':"$PATH"; python3 -V'), line[6])
-        # `sh -c` и голый argv — как есть: PATH им даёт среда.
+        self.assertIn(':"$PATH"; ', line[6])
+        # TMPDIR поставки — тоже первой командой (launchd раздаёт свой /var/folders,
+        # закрытый оградой, и `mktemp` без этого падал бы Operation not permitted).
+        self.assertIn("export TMPDIR=", line[6])
+        self.assertIn(str(fence_macos._abs(self.g.workspace) / ".tmp"), line[6])
+        self.assertTrue(line[6].endswith("; python3 -V"), line[6])
+        # `sh -c` и голый argv — как есть: PATH и TMPDIR им даёт среда.
         self.assertEqual(box.argv(["/bin/sh", "-c", "ls"], self.g.workspace)[4:],
                          ["/bin/sh", "-c", "ls"])
         self.assertEqual(box.argv(["pytest", "-q"], self.g.workspace)[4:], ["pytest", "-q"])
@@ -250,6 +329,15 @@ class Profile(unittest.TestCase):
         for leak in ("HELENE_TOKEN", "PRAXIS_OWNER_ID", "OPENAI_API_KEY"):
             self.assertNotIn(leak, env, f"{leak} утёк в среду команды")
 
+    def test_lang_по_умолчанию_если_пусто(self):
+        # GUI-процесс из Finder не получает LANG — без него питон садится на ASCII
+        # и спотыкается о кириллицу. Ограда ставит en_US.UTF-8, если LANG пуст.
+        clean = {k: v for k, v in os.environ.items() if k != "LANG"}
+        with patch.dict(os.environ, clean, clear=True):
+            self.assertEqual(self.g.box().env()["LANG"], "en_US.UTF-8")
+        with patch.dict(os.environ, {"LANG": "ru_RU.UTF-8"}):
+            self.assertEqual(self.g.box().env()["LANG"], "ru_RU.UTF-8", "заданный LANG не трогаем")
+
     def test_описание_и_без_prepare_не_запускает(self):
         box = self.g.box(network=False)
         self.assertIn("seatbelt", box.describe())
@@ -269,6 +357,37 @@ class Profile(unittest.TestCase):
         # Отчёт «в ограде» обязан называть механизм, а не всегда AppContainer.
         want = "AppContainer" if os.name == "nt" else ("seatbelt" if DARWIN else "bubblewrap")
         self.assertEqual(fence.container_word(), want)
+
+
+class Children(unittest.TestCase):
+    """Реестр живых pgid: дети команды не должны пережить движок (killpg по всем
+    на atexit/мягком выходе). Здесь — чистая логика реестра, `killpg` подменён."""
+
+    def setUp(self):
+        self._saved = set(fence_macos._LIVE_PGIDS)
+        fence_macos._LIVE_PGIDS.clear()
+        self.addCleanup(lambda: (fence_macos._LIVE_PGIDS.clear(),
+                                 fence_macos._LIVE_PGIDS.update(self._saved)))
+
+    def test_все_живые_группы_снимаются_и_реестр_чистится(self):
+        fence_macos._register_pgid(4242)
+        fence_macos._register_pgid(4243)
+        killed = []
+        # create=True: на Windows у os нет killpg, а стенды гоняются и там.
+        with patch.object(fence_macos.os, "killpg", lambda pg, sig: killed.append(pg),
+                          create=True):
+            fence_macos.kill_live_children()
+        self.assertEqual(sorted(killed), [4242, 4243])
+        self.assertEqual(fence_macos._LIVE_PGIDS, set(), "реестр очищен после снятия")
+
+    def test_забытая_группа_не_снимается(self):
+        fence_macos._register_pgid(51)
+        fence_macos._forget_pgid(51)
+        killed = []
+        with patch.object(fence_macos.os, "killpg", lambda pg, sig: killed.append(pg),
+                          create=True):
+            fence_macos.kill_live_children()
+        self.assertEqual(killed, [])
 
 
 @unittest.skipIf(os.name == "nt", "диспетчер ограды на POSIX: на Windows ветка AppContainer")
@@ -402,10 +521,54 @@ class Live(unittest.TestCase):
                                         self.g.workspace, 2)
         self.assertTrue(timed)
         self.assertEqual(code, 124)
-        self.assertIn("оборвано по таймауту", out)
+        # Строку про таймаут добавляет сам тул («[прервано по таймауту]») — ограда
+        # своей НЕ пишет, иначе на экране две подряд (как виндовая ограда).
+        self.assertNotIn("оборвано по таймауту", out)
         time.sleep(0.5)
         left = subprocess.run(["pgrep", "-f", "sleep 137"], capture_output=True, text=True)
         self.assertEqual(left.stdout.strip(), "", "внук пережил таймаут: " + left.stdout)
+
+    def test_секрет_канала_desk_token_не_читается(self):
+        # desk-token в memory (rw) — секрет канала: cat из ограды + curl отдавали
+        # бы shell роль владельца. Он в fence.secret_paths, значит закрыт.
+        state = self.g.tree / "memory" / ".state"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "desk-token").write_text("токенканалаABC123", encoding="utf-8")
+        box = self.g.box()          # secrets перечитались из fence.secret_paths
+        box.prepare()
+        out, code, _ = box.run(["/bin/bash", "-lc", f"cat {state / 'desk-token'}"],
+                               self.g.workspace, 30)
+        self.assertNotEqual(code, 0, f"desk-token прочитался из ограды: {out}")
+        self.assertNotIn("токенканала", out)
+
+    def test_git_хук_и_config_из_ограды_не_пишутся(self):
+        # Побег: движок вне ограды коммитит на каждый shell без --no-verify.
+        git = self.g.tree / ".git"
+        (git / "hooks").mkdir(parents=True, exist_ok=True)
+        (git / "objects").mkdir(parents=True, exist_ok=True)
+        (git / "config").write_text("[core]\n", encoding="utf-8")
+        # Читать .git можно (git внутри ограды работает)…
+        out, code, _ = self.sh(f"cat {git / 'config'}")
+        self.assertEqual(code, 0, out)
+        # …писать в objects — тоже (git add кладёт объекты)…
+        out, code, _ = self.sh(f"echo x > {git / 'objects' / 'proba'}")
+        self.assertEqual(code, 0, out)
+        # …а хук и config — нет: иначе движок исполнит их снаружи ограды.
+        out, code, _ = self.sh(f"echo '#!/bin/sh' > {git / 'hooks' / 'pre-commit'}")
+        self.assertNotEqual(code, 0, "хук записался из ограды — это побег")
+        out, code, _ = self.sh(f"echo x >> {git / 'config'}")
+        self.assertNotEqual(code, 0, "config записался из ограды (core.hooksPath — тот же побег)")
+
+    def test_сеть_наружу_и_dns_живут_а_lan_bind_закрыт(self):
+        # Положительный стенд: allowlist mach + DNS не должны сломать сеть.
+        # Если сломают — это увидит CI, и список расширят.
+        out, code, _ = self.sh("curl -fsS --max-time 15 https://api.github.com/zen && echo OK")
+        self.assertEqual(code, 0, "исходящий HTTPS/TLS не прошёл под allowlist: " + out)
+        self.assertIn("OK", out)
+        out, code, _ = self.sh("python3 -c \"import socket; socket.getaddrinfo('github.com', 443); "
+                               "print('DNS-OK')\"")
+        self.assertEqual(code, 0, "getaddrinfo не прошёл — DNS/mDNSResponder закрыт: " + out)
+        self.assertIn("DNS-OK", out)
 
 
 if __name__ == "__main__":

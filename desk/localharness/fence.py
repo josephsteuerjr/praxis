@@ -319,10 +319,19 @@ def secret_paths(install_root: Path, tree: Path) -> list[Path]:
     модели читала их обычным `cat`. Ключи из файла убраны (`boot.public_model`),
     но дверь закрывается с обеих сторон — снимок устройства это ещё и карта
     того, где что лежит, и контейнеру она не нужна.
+
+    `memory/.state/desk-token` — СЕКРЕТ КАНАЛА: оболочка кладёт его сюда и им же
+    в `HELENE_TOKEN` открывает трубе роль владельца. Он тоже лежит в `memory`
+    (rw для контейнера), и без него `cat desk-token` + `curl 127.0.0.1:<порт>/
+    api/agent-config?key=…` из shell отдавали бы shell роль владельца: ключ
+    модели, токен бота, правку конфига и конституции. Секрет на всех платформах
+    (Windows читал его AppContainer из `memory` так же) — закрываем здесь для
+    всех трёх оград сразу.
     """
     return [Path(install_root) / "helene.json",
             Path(tree) / "memory" / "llm.json",
             Path(tree) / "memory" / ".state" / "anatomy.json",
+            Path(tree) / "memory" / ".state" / "desk-token",
             Path(tree) / "relay",
             Path(tree) / "telegram"]
 
@@ -644,6 +653,17 @@ def _read_config(path: Path) -> dict:
         return {}
 
 
+def _drop_stick(path: Path) -> None:
+    """Снять стык. На Windows это junction — `os.rmdir`; на POSIX стык это
+    символическая ссылка, и `os.rmdir` на неё падает ENOTDIR, снимать надо
+    `os.unlink`. Без этого размонтированная владельцем папка оставалась бы в доме
+    навсегда: код снятия молча спотыкался на каждом стыке."""
+    if os.name != "nt" and os.path.islink(str(path)):
+        os.unlink(str(path))
+    else:
+        os.rmdir(str(path))
+
+
 def _is_junction(path: Path) -> bool:
     if os.name != "nt":
         # На POSIX роль стыка играет символическая ссылка: снимать и сверять
@@ -767,6 +787,9 @@ class Mounts:
         try:
             if self.container is not None:
                 self.container.sync_mounts(self._rows)
+                # macOS: проба профиля С папками могла снять кривое монтирование
+                # (см. `fence_macos.Container.sync_mounts`) — покажем это окну.
+                STATE["mounts_fault"] = getattr(self.container, "mounts_fault", "")
         except Exception:
             log.exception("монтирование: права контейнеру не выданы")
 
@@ -795,7 +818,7 @@ class Mounts:
                 continue
             if _is_junction(entry):
                 try:
-                    os.rmdir(str(entry))
+                    _drop_stick(entry)
                     log.info("монтирование: стык снят — %s", entry)
                 except OSError as exc:
                     log.warning("монтирование: стык не снят (%s): %s", entry, exc)
@@ -807,7 +830,7 @@ class Mounts:
                     row["link"] = str(link)
                     continue
                 try:
-                    os.rmdir(str(link))
+                    _drop_stick(link)
                 except OSError as exc:
                     row["link_error"] = f"старый стык не снят: {exc}"
                     log.warning("монтирование: старый стык не снят (%s): %s", link, exc)
@@ -1736,6 +1759,11 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
                     secrets=secret_paths(install_root, tree))
                 container.prepare()
                 STATE["reason"] = container.describe()
+                # Куда пишет shell — в снимок устройства (иначе анатомия говорит
+                # «shell пишет никуда»). На Windows это делает `Container._grant`.
+                roots = getattr(container, "writable_roots", None)
+                if callable(roots):
+                    STATE["writable_roots"] = [str(p) for p in roots()]
             STATE["container"] = True
             log.info("песочница: %s", STATE["reason"])
         except Exception as exc:
@@ -2024,7 +2052,17 @@ def hands_report(agent_mod) -> list[dict]:
         if caveat:
             why = f"{why}; {caveat}"
         rows.append({"name": name, "touches": touches, "fence": fence_kind, "why": why})
-    unknown = sorted(set(MACHINE_HANDS) - set(impl))
+    known = set(MACHINE_HANDS)
+    try:
+        import body as _body_mod
+        if not _body_mod.HAS_BODY:
+            # Тела в этой сборке нет (порт macOS): `body._install_absent` сняла
+            # руку `computer` из набора вовсе (как брокер). В отчёте её тоже быть
+            # не должно — иначе снятая рука приедет ложным `unknown`.
+            known.discard("computer")
+    except Exception:
+        pass
+    unknown = sorted(known - set(impl))
     for name in unknown:
         # Имя, которого в живом наборе рук больше нет. Это наша ложь о
         # несуществующем — говорим о ней вслух, а не вычёркиваем молча.

@@ -31,14 +31,23 @@ from core import events
 from alarm_clock import AlarmClock
 from forge_events import ForgeEvents
 from continuity import Continuity
-import test_agent_resume_runtime as core_fixtures
+try:
+    import test_agent_resume_runtime as core_fixtures
+except ModuleNotFoundError:
+    # Дерево СБОРКИ (tree/ из архива выпуска) тестов ядра не везёт (TREE_EXCLUDE
+    # их не берёт); на Windows/разработке они лежат рядом (live/). Где их нет —
+    # пропускаем честной причиной, не ослабляя проверку там, где они есть.
+    core_fixtures = None
+_CORE_FIXTURES = getattr(core_fixtures, "AgentResumeRuntimeTests", None)
 
 
+@unittest.skipUnless(_CORE_FIXTURES is not None,
+                     "фикстуры ядра (test_agent_resume_runtime) недоступны в дереве сборки")
 class ContinuityTests(unittest.TestCase):
     # Reuse only artifact writers, never inherit or run the core's whole suite.
-    _model = core_fixtures.AgentResumeRuntimeTests._model
-    _checkpoint = core_fixtures.AgentResumeRuntimeTests._checkpoint
-    _pause = core_fixtures.AgentResumeRuntimeTests._pause
+    _model = getattr(_CORE_FIXTURES, "_model", None)
+    _checkpoint = getattr(_CORE_FIXTURES, "_checkpoint", None)
+    _pause = getattr(_CORE_FIXTURES, "_pause", None)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="helene-continuity-")

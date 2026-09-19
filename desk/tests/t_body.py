@@ -324,22 +324,27 @@ class Absent(unittest.TestCase):
             self.assertNotIn(word, said, "слово о платформе в том, что может уехать на экран")
         self.assertEqual(body.windows_truth(), "", "строки про окна нет — окно её не рисует")
 
-    def test_hand_answers_in_words_and_grants_nothing(self):
+    def test_hand_is_removed_from_the_set_and_grants_nothing(self):
+        # Сборка без тела снимает `computer` ВОВСЕ (как брокер), а не оставляет
+        # ответ-заглушку: модель не должна видеть тул, который всегда откажет.
         g = Ground(_cfg())
         self.addCleanup(g.close)
         called: list = []
         agent = _fake_agent(called)
+        agent.BASE_TOOLS = [{"name": "recall"}]
+        agent.OWNER_TOOLS = [{"name": "computer"}, {"name": "shell"}]
         agent._computer_allowed = lambda scope: True
         body.install(agent, g.tree, _cfg(), config_path=g.config)
-        said = agent.TOOL_IMPL["computer"](action="windows")
-        self.assertEqual(said, body.ABSENT_ANSWER)
-        self.assertIn("в этой сборке нет", said)
-        self.assertNotIn("macOS", said)
+        self.assertNotIn("computer", agent.TOOL_IMPL, "тул остался в TOOL_IMPL")
+        self.assertFalse(any(t.get("name") == "computer" for t in agent.OWNER_TOOLS),
+                         "схема computer осталась в наборе — модель её увидит")
+        self.assertTrue(any(t.get("name") == "shell" for t in agent.OWNER_TOOLS),
+                        "снят только computer, остальные тулы на месте")
         self.assertEqual(called, [], "тело дерева не должно вызываться")
         self.assertFalse(agent._computer_allowed("computer.read"))
-        # Повторная установка не заворачивает обёртку в обёртку.
+        # Повторная установка не падает на уже снятом туле.
         body.install(agent, g.tree, _cfg(), config_path=g.config)
-        self.assertEqual(agent.TOOL_IMPL["computer"](action="status"), body.ABSENT_ANSWER)
+        self.assertNotIn("computer", agent.TOOL_IMPL)
 
 
 def _built_pair() -> Path | None:

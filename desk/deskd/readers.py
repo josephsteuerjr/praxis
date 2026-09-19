@@ -63,13 +63,17 @@ def tree() -> Path:
 
 
 def _tree_from_config() -> Path | None:
-    """Дерево по `tree` из helene.json рядом с каналом; None — конфига нет."""
+    """Дерево по `tree` из helene.json рядом с каналом; None — конфига нет ИЛИ
+    указанной папки нет на диске. Проверка `is_dir()` важна: без неё труба брала
+    бы за дерево несуществующий путь из конфига и не падала бы в фолбэк рядом с
+    `desk/`, а safe_write_md писал бы в пустоту."""
     path = config_path()
     if path is None:
         return None
     raw = str(_load_json(path).get("tree") or "data")
     tree_path = Path(raw)
-    return tree_path if tree_path.is_absolute() else (path.parent / tree_path).resolve()
+    tree_path = tree_path if tree_path.is_absolute() else (path.parent / tree_path).resolve()
+    return tree_path if tree_path.is_dir() else None
 
 
 def _said(path: Path, why: str) -> Path:

@@ -186,6 +186,18 @@ class Report(Ground):
         self.assertIn("снаружи ограды", why(rows, "computer"))
         self.assertNotIn("шима ограды там нет", why(rows, "computer"))
 
+    def test_computer_на_сборке_без_тела_не_приезжает_ложным_unknown(self):
+        """Порт macOS снимает `computer` из набора (`body._install_absent`). Отчёт
+        не должен воскрешать снятую руку родом `unknown`."""
+        import body
+        saved = body.HAS_BODY
+        body.HAS_BODY = False
+        try:
+            rows = fence.hands_report(agent_with(without=("computer",)))
+        finally:
+            body.HAS_BODY = saved
+        self.assertEqual(verdict(rows, "computer"), "(нет в отчёте)")
+
     def test_a_hand_the_map_remembers_but_the_set_no_longer_offers_is_called_out(self):
         """Карта протухает и с этой стороны: имя, которого больше нет.
 
