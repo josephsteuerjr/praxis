@@ -112,7 +112,7 @@ RELAY_BIN = "codex-proxy-server"
 # проверенный прод; собирать его на Mac заново значило бы выпустить под одним
 # тегом два разных дерева.
 RELEASE_REPO = "josephsteuerjr/praxis"
-RELEASE_TAG_DEFAULT = "v0.7.1"
+RELEASE_TAG_DEFAULT = "v0.7.2"
 
 # Минимум macOS. Задуман 12.0, но колёса голоса под cp314/arm64 (numpy,
 # onnxruntime, av — проверено `pip download` 19.09.2026) собраны с тегом

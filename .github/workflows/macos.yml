@@ -11,11 +11,11 @@
 # Два пути к выпуску — честно, потому что первый нужен, пока файла workflow нет
 # в main (workflow_dispatch виден GitHub только с ветки по умолчанию):
 #   (а) прогон от push в port/macos (без выкладки: inputs на push пусты) →
-#       gh run download <id> -n Helene-v0.7.1-macos-arm64
-#       gh release upload v0.7.1 Helene-0.7.1-macos-arm64.zip \
-#           Helene-0.7.1-macos-arm64.zip.sha256 install.sh --clobber
+#       gh run download <id> -n Helene-v0.7.2-macos-arm64
+#       gh release upload v0.7.2 Helene-0.7.2-macos-arm64.zip \
+#           Helene-0.7.2-macos-arm64.zip.sha256 install.sh --clobber
 #   (б) после влития в main:
-#       gh workflow run macos.yml -f tag=v0.7.1 -f upload=true
+#       gh workflow run macos.yml -f tag=v0.7.2 -f upload=true
 #       — тот же прогон, плюс шаг «Выложить в выпуск» (--clobber в тот же тег;
 #       Windows-архив не трогается).
 name: macOS (Apple Silicon)
@@ -28,7 +28,7 @@ on:
       tag:
         description: "Выпуск: чьё дерево агента берём и куда выкладываем"
         type: string
-        default: v0.7.1
+        default: v0.7.2
         required: true
       upload:
         description: "Выложить архив, .sha256 и install.sh в этот выпуск (--clobber)"
@@ -47,7 +47,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       # На push inputs пусты — тег по умолчанию тот же, что у build_mac.py.
-      TAG: ${{ inputs.tag || 'v0.7.1' }}
+      TAG: ${{ inputs.tag || 'v0.7.2' }}
       HOME_DIR: /Users/runner/Applications/Helene
     steps:
       - uses: actions/checkout@v4
