@@ -30,9 +30,10 @@ libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Уведомления macOS (Центр уведомлений) — то, что на Windows делает
-# tauri-winrt-notification. Плагин зовётся только из Rust (`toast`), в
-# capabilities окна его нет: веб-части он не нужен.
-tauri-plugin-notification = "2"
+# tauri-winrt-notification. Напрямую `notify-rust`, а не tauri-plugin-notification:
+# у плагина `show()` отвечает `Ok(())` всегда (внутри `let _ = spawn(…)`), и отказ
+# Центра уведомлений терялся бы без строки в журнале — см. `toast`.
+notify-rust = "4"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

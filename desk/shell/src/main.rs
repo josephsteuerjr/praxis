@@ -157,31 +157,28 @@ fn toast(title: &str, body: &str) {
     }
 }
 
-/// Хэндл приложения для уведомлений macOS: плагину нужен именно он, а `toast`
-/// зовут отовсюду — из надзора, из сторожей, из `start_children` ещё ДО того,
-/// как приложение построено. Пока хэндла нет, уведомление идёт через osascript.
-#[cfg(target_os = "macos")]
-static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
-
-/// Уведомление macOS — Центр уведомлений через tauri-plugin-notification.
-/// Плагин требует, чтобы bundle с нашим идентификатором был известен
-/// LaunchServices; не сработал (сборка не в бандле, первый запуск из staging) —
-/// тот же текст уходит через `osascript`, а причина в helene.log. Молчать
-/// нельзя ни в одной ветке: уведомление — это слово агента человеку.
+/// Уведомление macOS — Центр уведомлений через `notify-rust` НАПРЯМУЮ и
+/// синхронно. Не через tauri-plugin-notification: его `show()` отвечает
+/// `Ok(())` всегда (внутри `let _ = spawn(…)`), и отказ Центра уведомлений
+/// пропадал бы без строки в журнале — а это слово агента человеку.
+/// Отправитель (`set_application`) ставится один раз на процесс: бандл с нашим
+/// идентификатором должен быть известен LaunchServices; не известен (сборка не
+/// в бандле, первый запуск из staging) — уведомление идёт от имени процесса
+/// как есть, и об этом сказано в helene.log. Не показалось — тот же текст
+/// через `osascript display notification`, и отказ обоих путей — в журнал.
 #[cfg(target_os = "macos")]
 fn toast(title: &str, body: &str) {
-    use tauri_plugin_notification::NotificationExt;
-    let via_plugin = match APP_HANDLE.get() {
-        Some(app) => app
-            .notification()
-            .builder()
-            .title(title)
-            .body(body)
-            .show()
-            .map_err(|e| e.to_string()),
-        None => Err("приложение ещё не построено".to_string()),
-    };
-    if let Err(why) = via_plugin {
+    static SENDER: std::sync::Once = std::sync::Once::new();
+    SENDER.call_once(|| {
+        if let Err(err) = notify_rust::set_application(toast_id()) {
+            log_line(&format!(
+                "уведомления: отправитель {} не принят ({err}) — уведомления пойдут от имени процесса как есть",
+                toast_id()
+            ));
+        }
+    });
+    let sent = notify_rust::Notification::new().summary(title).body(body).show();
+    if let Err(why) = sent {
         let script = format!(
             "display notification {} with title {}",
             applescript_quote(body),
@@ -2284,23 +2281,21 @@ fn launch_agent_text(label: &str, program: &str) -> String {
     )
 }
 
-/// macOS: записать plist и зарегистрировать его в launchd (`bootstrap`) —
-/// или снять (`bootout`) и удалить файл. Ошибки launchctl — словами: тумблер
-/// не имеет права рапортовать «включено», когда launchd отказал.
+/// macOS: записать plist — или удалить его. Только файл, без `launchctl`, ровно
+/// как ярлык в автозагрузке Windows: launchd читает `~/Library/LaunchAgents`
+/// сам при входе в систему.
+///
+/// ⚠ Почему ни `bootstrap`, ни `bootout`. `bootstrap` с `RunAtLoad` тут же
+/// поднял бы второй экземпляр (single-instance погасил бы его, значок мигнул бы
+/// на ровном месте). А `bootout gui/<uid>/<метка>` ЗАВЕРШАЕТ САМУ работающую
+/// программу, если её поднял launchd по этому же plist: вход в систему →
+/// автозапуск → тумблер в любую сторону → Hélène исчезает с экрана. Поймано
+/// адверсаркой до живой пробы. Старый путь бинаря в уже загруженном задании
+/// доживает до выхода из системы — при следующем входе launchd прочитает файл.
 #[cfg(not(windows))]
 fn autostart_set_blocking(on: bool) -> Result<(), String> {
     let plist = launch_agent_plist().ok_or("не нашёл домашнюю папку (HOME)")?;
-    let uid = unsafe { libc::getuid() };
-    let label = toast_id();
-    let launchctl = posix_tool("launchctl");
-    let run = |args: &[&str]| -> Result<std::process::Output, String> {
-        let mut cmd = Command::new(&launchctl);
-        cmd.args(args);
-        run_hidden_for(&mut cmd, Duration::from_secs(30))
-    };
     if !on {
-        // Снять из launchd: «не загружен» — не ошибка, файла могло и не быть.
-        let _ = run(&["bootout", &format!("gui/{uid}/{label}")]);
         return match std::fs::remove_file(&plist) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -2311,16 +2306,8 @@ fn autostart_set_blocking(on: bool) -> Result<(), String> {
     if let Some(dir) = plist.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("нет папки LaunchAgents: {e}"))?;
     }
-    std::fs::write(&plist, launch_agent_text(label, &exe.to_string_lossy()))
+    std::fs::write(&plist, launch_agent_text(toast_id(), &exe.to_string_lossy()))
         .map_err(|e| format!("файл автозапуска не записался: {e}"))?;
-    // Регистрировать в launchd прямо сейчас (`bootstrap`) НЕ надо: `RunAtLoad`
-    // тут же поднял бы второй экземпляр, single-instance его погасил бы, и
-    // значок в Dock мигнул бы на ровном месте. Тумблер обещает «поднимется при
-    // входе в систему» — launchd читает `~/Library/LaunchAgents` сам при входе,
-    // ровно как Windows читает папку автозагрузки. Прежняя регистрация (если
-    // тумблер уже включали в этой сессии) снимается, чтобы не остался старый
-    // путь бинаря после обновления.
-    let _ = run(&["bootout", &format!("gui/{uid}/{label}")]);
     Ok(())
 }
 
@@ -3497,6 +3484,11 @@ fn ask_owner_yes(title: &str, text: &str) -> bool {
 /// macOS: тот же вопрос родным диалогом (`display dialog`). Кнопка по умолчанию
 /// и кнопка отмены — «Нет»: Enter и Esc отказывают; «Да» приходит строкой
 /// `button returned:Да`. Диалог не открылся — отказ, и причина в журнале.
+///
+/// Сегодня на macOS сюда не дойти: брокера прав здесь нет, и `broker_pass`
+/// отказывает просьбе агента до вопроса владельцу («брокера на этой платформе
+/// нет»). Функция оставлена как честная половина протокола — появится брокер,
+/// вопрос будет задан тем же окном.
 #[cfg(target_os = "macos")]
 fn ask_owner_yes(title: &str, text: &str) -> bool {
     let script = format!(
@@ -4030,6 +4022,10 @@ fn hand_over_to_setup(base: &Path) -> bool {
         log_line(&format!("продукт не настроен, а {label} рядом нет — открываю окно как есть"));
         return false;
     }
+    // macOS: бинарь мастера запускается ПРЯМО, а не через `open -W`: здесь нужен
+    // pid, чтобы отличить «поднялся» от «умер сразу» (ниже), а `open` его не
+    // отдаёт. Цена — окно мастера не выводится на передний план системой, как
+    // при запуске бандла; сам мастер активирует своё окно (задача B).
     let mut child = match Command::new(&setup).current_dir(base).spawn() {
         Ok(c) => c,
         Err(err) => {
@@ -4326,10 +4322,6 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main(app);
         }));
-    // Уведомления macOS — плагином (Центр уведомлений); на Windows их показывает
-    // tauri-winrt-notification напрямую, см. `toast`.
-    #[cfg(target_os = "macos")]
-    let builder = builder.plugin(tauri_plugin_notification::init());
     let built = builder
         // Память окна: размер, положение и «развёрнуто/нет» переживают перезапуск.
         .plugin(tauri_plugin_window_state::Builder::default().build())
@@ -4373,9 +4365,6 @@ fn main() {
             agent_add
         ])
         .setup(move |app| {
-            // Хэндл для уведомлений macOS — до первого `toast` из сторожей ниже.
-            #[cfg(target_os = "macos")]
-            let _ = APP_HANDLE.set(app.handle().clone());
             // Продукт зовётся своим именем: заголовок, ярлык, значок, уведомления —
             // Hélène; имя агента — только там, где говорит агент (слово владельца).
             register_toast_identity(toast_id(), product_ui(), None);
@@ -4548,7 +4537,20 @@ fn main() {
                 if let tauri::RunEvent::Reopen { .. } = &event {
                     show_main(app);
                 }
-                #[cfg(not(target_os = "macos"))]
+                // ⚠ ⌘Q. На macOS Tauri сам ставит меню с «Quit»: это `terminate:`,
+                // а он даёт `LoopDestroyed` → `RunEvent::Exit` БЕЗ `ExitRequested`
+                // — и без этой ветки `kill_children` не звался бы вовсе. Движок и
+                // канал ушли бы сторожем ppid, а `helene-relay` сторожа не имеет:
+                // сирота на порту, и следующий запуск говорил бы «порт реле уже
+                // занят — своё реле не поднимаю». `kill_children` гасит и
+                // незавершённый `helene-relay login` (`relay_abort` внутри). Из
+                // трея и после `app.exit(0)` дети уже мертвы — повтор безвреден.
+                #[cfg(not(windows))]
+                if let tauri::RunEvent::Exit = &event {
+                    let state = app.state::<LocalHarness>();
+                    kill_children(&state);
+                }
+                #[cfg(windows)]
                 let _ = app;
                 if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
                     // ⚠⚠ Выход — только по слову владельца («Выход» у значка
@@ -5529,18 +5531,18 @@ async fn update_install(app: tauri::AppHandle, path: String) -> Result<serde_jso
     #[cfg(windows)]
     let _ = app;
     tauri::async_runtime::spawn_blocking(move || {
-        let stem = archive.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Helene".into());
-        let dest = archive.parent().map(Path::to_path_buf).unwrap_or_else(downloads_dir).join(&stem);
-        if dest.exists() {
-            std::fs::remove_dir_all(&dest).map_err(|e| format!("не очистилась папка распаковки: {e}"))?;
-        }
         #[cfg(windows)]
         {
+            let stem = archive.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Helene".into());
+            let dest = archive.parent().map(Path::to_path_buf).unwrap_or_else(downloads_dir).join(&stem);
+            if dest.exists() {
+                std::fs::remove_dir_all(&dest).map_err(|e| format!("не очистилась папка распаковки: {e}"))?;
+            }
             update_install_windows(&archive, &dest)
         }
         #[cfg(not(windows))]
         {
-            update_install_posix(app, &archive, &dest)
+            update_install_posix(app, &archive)
         }
     })
     .await
@@ -5589,66 +5591,107 @@ fn update_install_windows(archive: &Path, dest: &Path) -> Result<serde_json::Val
     Ok(serde_json::json!({ "setup": setup.display().to_string(), "dir": workdir.display().to_string() }))
 }
 
-/// Обновление на POSIX (macOS): распаковка `ditto`, запуск `install.sh` из
-/// архива отсоединённо, выход оболочки. Смысл Windows-ветки повторён целиком:
-/// архив рядом с собой → своя папка распаковки → установщик из неё.
+/// Имя записи `install.sh` в списке архива: в корне (`install.sh`) или в
+/// единственной папке верхнего уровня (`Helene/install.sh`). Чистая функция
+/// над выводом `unzip -Z1`: две разные раскладки архива — и ни одна не должна
+/// читаться как «скрипта нет».
+fn install_script_entry(listing: &str) -> Option<String> {
+    let names: Vec<&str> = listing.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    if names.iter().any(|n| *n == "install.sh") {
+        return Some("install.sh".to_string());
+    }
+    let nested: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|n| n.ends_with("/install.sh") && n.matches('/').count() == 1)
+        .collect();
+    match nested.as_slice() {
+        [one] => Some((*one).to_string()),
+        _ => None,
+    }
+}
+
+/// Обновление на POSIX (macOS): из архива достаётся ОДИН файл — `install.sh`
+/// (`unzip -p`), и он запускается отсоединённо с `--from <zip> --relaunch`;
+/// распаковывает архив целиком уже сам скрипт. Раньше здесь лежала полная
+/// распаковка сотен мегабайт в `~/Downloads/<stem>/` ради одного файла — а
+/// потом install.sh распаковывал zip второй раз. Смысл Windows-ветки тот же:
+/// архив рядом с собой → установщик из него → оболочка отдаёт дело и выходит.
 #[cfg(not(windows))]
-fn update_install_posix(app: tauri::AppHandle, archive: &Path, dest: &Path) -> Result<serde_json::Value, String> {
-    std::fs::create_dir_all(dest).map_err(|e| format!("не создалась папка распаковки: {e}"))?;
-    let mut unpack = if cfg!(target_os = "macos") {
-        let mut c = Command::new(posix_tool("ditto"));
-        c.arg("-x").arg("-k").arg(archive).arg(dest);
-        c
-    } else {
-        let mut c = Command::new(posix_tool("unzip"));
-        c.arg("-q").arg("-o").arg(archive).arg("-d").arg(dest);
-        c
-    };
-    let out = run_hidden_for(&mut unpack, Duration::from_secs(600))?;
+fn update_install_posix(app: tauri::AppHandle, archive: &Path) -> Result<serde_json::Value, String> {
+    let unzip = posix_tool("unzip");
+    let mut list = Command::new(&unzip);
+    list.arg("-Z1").arg(archive);
+    let out = run_hidden_for(&mut list, Duration::from_secs(120))?;
     if !out.status.success() {
         return Err(format!(
-            "архив не распаковался: {}",
+            "архив не читается: {}",
             String::from_utf8_lossy(&out.stderr).trim().chars().take(200).collect::<String>()
         ));
     }
-    // install.sh — в корне архива или в его единственной подпапке.
-    let mut script = dest.join("install.sh");
-    if !script.exists() {
-        let subdirs: Vec<PathBuf> = std::fs::read_dir(dest)
-            .map_err(|e| e.to_string())?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_dir())
-            .collect();
-        if let [one] = subdirs.as_slice() {
-            script = one.join("install.sh");
-        }
+    let Some(entry) = install_script_entry(&String::from_utf8_lossy(&out.stdout)) else {
+        return Err("в архиве нет install.sh — это не поставка для macOS".into());
+    };
+    let mut take = Command::new(&unzip);
+    take.arg("-p").arg(archive).arg(&entry);
+    let out = run_hidden_for(&mut take, Duration::from_secs(120))?;
+    if !out.status.success() || out.stdout.is_empty() {
+        return Err(format!(
+            "install.sh не достался из архива: {}",
+            String::from_utf8_lossy(&out.stderr).trim().chars().take(200).collect::<String>()
+        ));
     }
-    if !script.exists() {
-        return Err(format!("в архиве нет install.sh (распаковано в {})", dest.display()));
-    }
-    let workdir = script.parent().map(Path::to_path_buf).unwrap_or_else(|| dest.to_path_buf());
+    // Скрипт — во временную папку с pid: %TEMP% общий, и файл, исполняемый
+    // sh, не должен быть тем, что кто-то успел положить туда раньше.
+    let workdir = std::env::temp_dir().join(format!("helene-update-{}", std::process::id()));
+    std::fs::create_dir_all(&workdir).map_err(|e| format!("не создалась временная папка: {e}"))?;
+    let script = workdir.join("install.sh");
+    std::fs::write(&script, &out.stdout).map_err(|e| format!("install.sh не записался: {e}"))?;
+    // Вывод скрипта — в журнал в корне установки, а не в /dev/null: любой `die`
+    // до открытия мастера иначе оставлял бы владельца без программы и без следа.
+    let root = install_root();
+    let sh_log_path = root.join("install-sh.log");
+    let sh_log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&sh_log_path)
+        .map_err(|e| format!("не открылся {}: {e}", sh_log_path.display()))?;
+    let sh_err = sh_log.try_clone().map_err(|e| e.to_string())?;
     let mut cmd = Command::new(posix_tool("sh"));
     cmd.arg(&script)
         .arg("--from")
         .arg(archive)
         .arg("--relaunch")
+        // install.sh ждёт нашей смерти по этому pid (до ~10 с), прежде чем
+        // менять файлы; поэтому ниже выход обязан состояться, а не «быть запрошен».
         .env("HELENE_OLD_PID", std::process::id().to_string())
-        .env("HELENE_ROOT", install_root())
+        .env("HELENE_ROOT", &root)
         .current_dir(&workdir)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(sh_log))
+        .stderr(Stdio::from(sh_err))
         .process_group(0);
     cmd.spawn().map_err(|e| format!("install.sh не запустился: {e}"))?;
-    log_line(&format!("обновление: запущен {} --from {} --relaunch; выхожу через 1,5 с", script.display(), archive.display()));
+    log_line(&format!(
+        "обновление: запущен {} --from {} --relaunch (его вывод — в {}); выхожу через 1,5 с",
+        script.display(),
+        archive.display(),
+        sh_log_path.display()
+    ));
     // Выход — отдельным потоком и с паузой: ответ этой команды должен доехать
     // до окна, а дети — умереть до того, как install.sh начнёт менять файлы.
+    // `app.exit` лишь просит цикл событий выйти; если тот не вышел за три
+    // секунды, процесс гасится сам — install.sh иначе дождался бы потолка и
+    // убил бы нас, а дети и вход в подписку к этому моменту уже остановлены.
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(1500));
         let state = app.state::<LocalHarness>();
         kill_children(&state);
         relay_abort();
         app.exit(0);
+        std::thread::sleep(Duration::from_secs(3));
+        log_line("обновление: цикл событий не вышел за три секунды — завершаю процесс сам");
+        std::process::exit(0);
     });
     Ok(serde_json::json!({ "setup": script.display().to_string(), "dir": workdir.display().to_string() }))
 }
@@ -5939,7 +5982,8 @@ fn logs_bundle_blocking(tree: PathBuf) -> Result<String, String> {
         }
     }
     if dropped > 0 {
-        log_line(&format!("прошлых архивов логов удалено из %TEMP%: {dropped}"));
+        let where_ = if cfg!(windows) { "%TEMP%" } else { "$TMPDIR" };
+        log_line(&format!("прошлых архивов логов удалено из {where_}: {dropped}"));
     }
     let stage = std::env::temp_dir().join(format!("helene-logs-{stamp}"));
     std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
