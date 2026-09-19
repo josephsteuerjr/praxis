@@ -2725,7 +2725,10 @@ pub fn uninstall(purge: bool) -> Result<String, String> {
         let _ = port; // имя правила брандмауэра здесь не нужно
         macos_remove_autostart();
         if let Some(home) = home_dir() {
-            let _ = std::fs::remove_dir_all(home.join("Library").join("Caches").join(AUMID));
+            // Кэш самого бандла (Library/Caches/<AUMID>) сносится выше вместе с
+            // WebKit; staging install.sh живёт под своим именем, чтобы чистка
+            // кэшей программы не унесла распакованный архив посреди установки.
+            let _ = std::fs::remove_dir_all(home.join("Library").join("Caches").join("app.helene.install"));
         }
     }
 

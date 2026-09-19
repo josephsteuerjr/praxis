@@ -5289,13 +5289,16 @@ fn update_check_blocking(url: &str) -> Result<serde_json::Value, String> {
             .unwrap_or_default();
         let url = if !text("url").is_empty() { text("url") } else { asset_zip.unwrap_or_else(|| text("html_url")) };
         let notes = if !text("notes").is_empty() { text("notes") } else { text("body") };
-        // Вторая строка заметок релиза — sha256 архива (installer/RELEASE.md,
-        // шаг 4): когда GitHub не отдал digest ассета, сумма берётся отсюда.
-        let sha_from_notes = notes
-            .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| !c.is_ascii_hexdigit()).to_lowercase())
-            .find(|w| w.len() == 64 && w.bytes().all(|b| b.is_ascii_hexdigit()))
+        // Заметки релиза несут sha256 КАЖДОГО архива (installer/RELEASE.md,
+        // шаг 4): Windows, Praxis и macOS. Когда GitHub не отдал digest ассета,
+        // сумма берётся из строки, где назван именно наш архив; первое попавшееся
+        // 64-hex слово — это сумма Windows-архива, и на Mac она отвергла бы верный
+        // файл как «сумма не совпала».
+        let asset_name = asset
+            .as_ref()
+            .and_then(|a| a.get("name").and_then(|n| n.as_str()).map(str::to_string))
             .unwrap_or_default();
+        let sha_from_notes = sha_for_asset(&notes, &asset_name);
         // Первая строка описания релиза — обычно заголовок «# Изменения»:
         // окно печатало его как «что нового».
         let notes: String = notes
@@ -5317,6 +5320,27 @@ fn update_check_blocking(url: &str) -> Result<serde_json::Value, String> {
             "sha256": if digest.is_empty() { sha_from_notes } else { digest },
         }))
     }
+}
+
+/// sha256 архива из заметок релиза: строка, где назван сам архив, иначе первое
+/// 64-hex слово (заметки до 0.7.1 несли одну сумму — Windows-архива).
+fn sha_for_asset(notes: &str, asset_name: &str) -> String {
+    let hex_in = |line: &str| -> Option<String> {
+        line.split_whitespace()
+            .map(|w| w.trim_matches(|c: char| !c.is_ascii_hexdigit()).to_lowercase())
+            .find(|w| w.len() == 64 && w.bytes().all(|b| b.is_ascii_hexdigit()))
+    };
+    let name = asset_name.trim().to_lowercase();
+    if !name.is_empty() {
+        if let Some(sha) = notes
+            .lines()
+            .filter(|l| l.to_lowercase().contains(&name))
+            .find_map(hex_in)
+        {
+            return sha;
+        }
+    }
+    hex_in(notes).unwrap_or_default()
 }
 
 /// Проверка обновлений при старте — раз в сутки, без вопросов и без
@@ -6915,6 +6939,22 @@ mod tests {
         ]);
         let mac_only = mac_only.as_array().unwrap();
         assert!(pick_update_zip(mac_only, "Helene", true, false).is_none());
+    }
+
+    /// Заметки с тремя суммами: Mac берёт свою строку, Windows — свою; без
+    /// имени актива или без своей строки — первая сумма, как было.
+    #[test]
+    fn notes_sha_follows_the_named_asset() {
+        let notes = "Hélène 0.7.1
+                     sha256 Helene-0.7.1.zip: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                     sha256 Praxis-0.7.1.zip: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                     sha256 Helene-0.7.1-macos-arm64.zip: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+";
+        assert_eq!(sha_for_asset(notes, "Helene-0.7.1-macos-arm64.zip"), "c".repeat(64));
+        assert_eq!(sha_for_asset(notes, "Helene-0.7.1.zip"), "a".repeat(64));
+        assert_eq!(sha_for_asset(notes, ""), "a".repeat(64));
+        assert_eq!(sha_for_asset(notes, "Helene-0.9.0.zip"), "a".repeat(64));
+        assert_eq!(sha_for_asset("нет сумм", "Helene-0.7.1.zip"), "");
     }
 
     /// Корень установки — первая папка вверх от exe с паспортом сборки; без
