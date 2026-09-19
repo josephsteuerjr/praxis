@@ -243,8 +243,9 @@ export function humanError(e: unknown): HumanError {
   if (low.includes("filenotfounderror") || low.includes("winerror 2") || low.includes("winerror 3")) {
     return { text: "Этого файла больше нет — возможно, агент его убрал.", detail: raw };
   }
+  // «Система», а не «Windows»: та же строка едет и на macOS (порт 0.7.1).
   if (low.includes("permissionerror") || low.includes("winerror 5")) {
-    return { text: "Windows не дал сюда заглянуть.", detail: raw };
+    return { text: "Система не дала сюда заглянуть.", detail: raw };
   }
   if (/\b40[13]\b/.test(raw)) return { text: "Канал не пустил: ключ доступа не подошёл.", detail: raw };
   if (/\b404\b/.test(raw)) return { text: "Программа попросила у агента то, чего он не знает.", detail: raw };

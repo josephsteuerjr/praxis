@@ -74,8 +74,19 @@ const state = read(win, "state.ts");
 
 // Слово системы приезжает из app_info один раз и ложится в S.platform.
 assert.match(host, /shell<HostInfo>\("app_info"\)/, "host.ts перестал спрашивать app_info у оболочки");
-assert.match(chrome, /S\.platform = platformOf\(i\)/, "окно перестало класть систему хоста в S.platform");
+assert.match(chrome, /S\.platform = platformOf\(i\) \|\| S\.platform/, "окно перестало класть систему хоста в S.platform");
 assert.match(state, /platform: "" as string/, "в S нет поля platform (или оно не пустое по умолчанию)");
+// До ответа оболочки — слово клиента (в оболочке хост = клиент), и только в
+// оболочке: без этого первый рендер «Системы» и «Что поручить» шёл с
+// Windows-словами на Mac и не перерисовывался. Ответ, сменивший затвор,
+// перерисовывает открытый раздел.
+assert.match(chrome, /if \(inTauri && clientMac\) S\.platform = "macos";/, "до ответа app_info система хоста не берётся у клиента");
+assert.match(chrome, /if \(isMacPlatform\(was\) !== isMacPlatform\(S\.platform\)\) void show\(S\.view, \{ quiet: true \}\);/,
+  "смена затвора по ответу app_info не перерисовывает открытый раздел");
+assert.match(frame, /const platform = platformOf\(host\) \|\| S\.platform;/, "настройки не берут слово клиента, когда оболочка молчит");
+assert.match(agent, /agentsCard\(mac\)/, "карточке агентов не передают систему хоста");
+assert.match(read(src, "agentscard.ts"), /Helene\.app\/Contents\/MacOS\/helene --agent/, "подсказка про --agent на Mac зовёт helene.exe");
+assert.ok(!/Windows не дал/.test(read(desk, "ui-kit", "text.ts")), "text.ts винит Windows в PermissionError и на macOS");
 // Подписи клавиш — по клиенту, и обработчик слушает metaKey.
 assert.match(chrome, /kbdLabel\("Ctrl\+" \+ key, clientMac\)/, "подпись клавиши в полке снова захардкожена как Ctrl+");
 assert.match(chrome, /e\.ctrlKey \|\| e\.metaKey/, "сочетания перестали слушать ⌘ (metaKey)");

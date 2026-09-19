@@ -30,7 +30,7 @@ interface AgentRow {
  * Карточка живёт только в оболочке: в браузере и на телефоне переключать и
  * заводить нечего — они пришли к одному каналу по адресу.
  */
-export function agentsCard(): { el: HTMLElement } {
+export function agentsCard(mac = false): { el: HTMLElement } {
   const box = el("div", "agents-card");
   const list = el("div", "agents-list");
   const add = el("div", "actions");
@@ -108,7 +108,11 @@ export function agentsCard(): { el: HTMLElement } {
       "Агенты",
       box,
       "Одна установка — сколько угодно агентов: рантайм, код и обновление общие, дом и настройки у каждого свои. " +
-        "Переключает окно полка слева и значок у часов; ярлык на конкретного агента — helene.exe --agent <папка>.",
+        // Значок и путь бинаря — этой системы: на Mac оболочка живёт в бандле, а
+        // значок — в строке меню.
+        (mac
+          ? "Переключает окно полка слева и значок в строке меню; открыть конкретного агента — Helene.app/Contents/MacOS/helene --agent <папка>."
+          : "Переключает окно полка слева и значок у часов; ярлык на конкретного агента — helene.exe --agent <папка>."),
     ),
   };
 }

@@ -213,8 +213,10 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // Система агента — от оболочки, один раз (host.ts): на macOS автозапуск
   // зовётся иначе, службы и брандмауэра нет, и издание прячет свои карточки
   // по тому же слову.
+  // Старая оболочка `platform` не шлёт — тогда слово, которое окно уже знает
+  // (S.platform: клиент в оболочке = хост).
   const host = await hostInfo();
-  const platform = platformOf(host);
+  const platform = platformOf(host) || S.platform;
   const mac = isMacPlatform(platform);
 
   // Издание приносит свои карточки и свою часть записи в конфиг. Всё, что

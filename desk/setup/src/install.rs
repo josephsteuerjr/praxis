@@ -134,6 +134,13 @@ const STATIC_REL: &str = "app\\static";
 #[cfg(not(windows))]
 const STATIC_REL: &str = "app/static";
 
+/// Где живёт значок программы, когда окно закрыто: трей на Windows, строка
+/// меню на macOS — в отказе «закрой окно полностью».
+#[cfg(windows)]
+const TRAY_WORD: &str = "значок в трее";
+#[cfg(not(windows))]
+const TRAY_WORD: &str = "значок в строке меню";
+
 /// Оболочка установленной программы: `helene.exe` рядом с остальным или бандл
 /// `Helene.app`. Путь уезжает в расписку (`Receipt.exe`) и дальше в `open_frame`.
 pub fn shell_exe(dir: &Path) -> PathBuf {
@@ -377,15 +384,34 @@ pub fn exe_dir() -> PathBuf {
 /// На macOS установщик лежит внутри бандла (`Helene Setup.app/Contents/MacOS/`),
 /// и «рядом с exe» — это не корень. Правило одно на оболочку и установщик: от
 /// исполняемого файла вверх по родителям, не больше пяти уровней, до первой
-/// папки с паспортом сборки `helene-build.json`; не нашли — папка exe, как
-/// на Windows.
+/// папки с паспортом сборки `helene-build.json`; паспорта нет, но exe лежит в
+/// `*.app/Contents/MacOS` — корень над бандлом; иначе папка exe, как на Windows.
+///
+/// ⚠ Считается ОДИН раз за процесс (`OnceLock`, как `install_root()` в
+/// оболочке). Снятие удаляет паспорт вместе с остальным, и повторный вызов уже
+/// после этого находил бы не корень, а папку `MacOS` внутри бандла: хвост
+/// `uninstall_finish` бил `rm -rf` мимо, бандл мастера и `~/Applications/Helene`
+/// оставались при расписке «удалена вместе с данными». Правило про бандл —
+/// второй заслон: повторное снятие из папки, где остались только `data/` и
+/// `Helene Setup.app` (паспорта уже нет), обязано найти тот же корень, а не
+/// снести собственный бинарь, оставив `data/` с ключами целой.
 #[cfg(not(windows))]
 pub fn exe_dir() -> PathBuf {
-    let here = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."));
-    root_above(&here).unwrap_or(here)
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let here = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("."));
+        root_from_exe_dir(&here)
+    })
+    .clone()
+}
+
+/// Корень по папке исполняемого файла — паспорт, потом бандл, потом сама папка.
+#[cfg(not(windows))]
+fn root_from_exe_dir(here: &Path) -> PathBuf {
+    root_above(here).or_else(|| bundle_root(here)).unwrap_or_else(|| here.to_path_buf())
 }
 
 /// Первая папка с `helene-build.json`, начиная с `from` и до пяти родителей выше.
@@ -400,6 +426,25 @@ fn root_above(from: &Path) -> Option<PathBuf> {
         cur = dir.parent().map(Path::to_path_buf);
     }
     None
+}
+
+/// `…/Что-то.app/Contents/MacOS` → папка, в которой лежит бандл. Иначе None.
+#[cfg(not(windows))]
+fn bundle_root(exe_dir: &Path) -> Option<PathBuf> {
+    let is = |p: Option<&Path>, name: &str| p.and_then(Path::file_name).map(|n| n == name).unwrap_or(false);
+    if !is(Some(exe_dir), "MacOS") {
+        return None;
+    }
+    let contents = exe_dir.parent()?;
+    if !is(Some(contents), "Contents") {
+        return None;
+    }
+    let app = contents.parent()?;
+    let bundle = app.file_name()?.to_str()?.ends_with(".app");
+    if !bundle {
+        return None;
+    }
+    app.parent().map(Path::to_path_buf)
 }
 
 /// Системные программы — только полным путём из %SystemRoot%.
@@ -646,11 +691,48 @@ fn copy_tree(src: &Path, dst: &Path, skip_root: &[&str], skip_rel: &[&str], rel:
         if from.is_dir() {
             count += copy_tree(&from, &to, &[], skip_rel, &here)?;
         } else {
+            // ⚠ macOS: `fs::copy` поверх существующего файла пишет В ТОТ ЖЕ vnode
+            // (open(O_TRUNC) + fcopyfile), а кэш подписи ядра привязан к vnode:
+            // перезаписанный на месте Mach-O, который уже исполнялся
+            // (`Helene.app/Contents/MacOS/helene`, `helene-relay`,
+            // `runtime/bin/python3.14`, любой `.so`), при следующем запуске
+            // умирает с «Killed: 9» (Go #42684). Поэтому прежний файл сначала
+            // убираем — копия ложится новым inode, заодно работает clonefile.
+            // На Windows порядок прежний: там занятый файл честно отказывает.
+            #[cfg(unix)]
+            if let Ok(meta) = std::fs::symlink_metadata(&to) {
+                if !meta.is_dir() {
+                    std::fs::remove_file(&to).map_err(|e| io_note(&to, &e))?;
+                }
+            }
             std::fs::copy(&from, &to).map_err(|e| io_note(&to, &e))?;
             count += 1;
         }
     }
     Ok(count)
+}
+
+/// Снять карантин Gatekeeper со всей папки установки — ДО первого запуска.
+///
+/// Архив, скачанный браузером и распакованный Finder, несёт `com.apple.quarantine`
+/// на каждом файле, а копирование (`fcopyfile`/`clonefile`) переносит его дальше.
+/// «Правая кнопка → Открыть» одобряет ТОЛЬКО бандл, по которому кликнули: окно
+/// откроется, а `runtime/bin/python3.14`, `helene-relay` и `git` Gatekeeper
+/// убьёт на exec — движок молчит без единого слова. `find -xattrname` трогает
+/// только файлы, у которых атрибут есть: `xattr -dr` на всей папке ругался бы
+/// на каждый файл без него, и по коду выхода нельзя было бы понять, снялось ли.
+/// -> число снятых не считаем: `find` молчит; расписка — снялось или нет.
+#[cfg(not(windows))]
+fn strip_quarantine(dir: &Path) -> Result<(), String> {
+    let mut cmd = Command::new("find");
+    cmd.arg(dir)
+        .args(["-xattrname", "com.apple.quarantine", "-exec", "xattr", "-d", "com.apple.quarantine", "{}", "+"]);
+    let out = run_hidden_for(&mut cmd, std::time::Duration::from_secs(300))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(console_text(&out.stderr).chars().take(200).collect())
+    }
 }
 
 // ------------------------------------------------- обновление поверх: что менять
@@ -1046,49 +1128,87 @@ fn locked_files(dir: &Path) -> Vec<String> {
     busy
 }
 
-// --- то же на macOS: pgrep/kill вместо CIM и Stop-Process ---------------------
+// --- то же на macOS: ps/kill вместо CIM и Stop-Process -------------------------
 //
-// Процессы установки узнаём по КОМАНДНОЙ СТРОКЕ (`pgrep -f`): оболочка запущена
-// через `open` полным путём бандла, детей (канал, движок, реле, питон) она
-// поднимает тоже полными путями из своего корня. Свой pid исключаем сами: pgrep
-// не видит только себя, а установщик, запущенный из установленной копии
-// (снятие), лежит в той же папке и совпал бы с образцом.
+// Процессы установки узнаём по ПУТИ ИСПОЛНЯЕМОГО ФАЙЛА (`ps -o comm`): оболочка
+// запущена через `open` полным путём бандла, детей (канал, движок, реле, питон)
+// она поднимает тоже полными путями из своего корня.
+//
+// ⚠ Не по командной строке (`pgrep -f`): тот образец совпадал с ЛЮБЫМ
+// процессом, у которого путь папки стоит в аргументах, — `sh
+// ~/Applications/Helene/install.sh` (обновление и снятие через него), `tail -f
+// …/helene.log`, редактор с открытым helene.json. Первый же `stop_running`
+// мастера убивал сценарий обновления («Terminated: 15»): `--relaunch` и
+// «обновлено» не выполнялись, JSON с ключом оставался в кэше.
 
-/// Путь как образец для `pgrep -f`: это расширенное регулярное выражение, и
-/// скобка или точка в имени папки без экранирования означали бы другое.
+/// Одна строка `ps`: процесс, его родитель, путь исполняемого файла.
 #[cfg(not(windows))]
-fn regex_escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 8);
-    for c in text.chars() {
-        if "\\.^$|?*+()[]{}".contains(c) {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
+struct Proc {
+    pid: u32,
+    ppid: u32,
+    comm: String,
 }
 
-/// pid всех процессов, запущенных из этой папки (кроме нас). None — pgrep не
-/// нашёлся или не ответил; пустой список — из папки не работает ничего.
+/// Разбор `ps -axo pid=,ppid=,comm=`: два числа, дальше путь — с пробелами,
+/// как у «Helene Setup.app».
+#[cfg(not(windows))]
+fn parse_ps(text: &str) -> Vec<Proc> {
+    text.lines()
+        .filter_map(|line| {
+            let mut it = line.trim().splitn(3, char::is_whitespace);
+            let pid = it.next()?.parse().ok()?;
+            let ppid = it.next()?.trim().parse().ok()?;
+            let comm = it.next().map(|c| c.trim().to_string()).unwrap_or_default();
+            Some(Proc { pid, ppid, comm })
+        })
+        .collect()
+}
+
+/// Что из папки `dir` работает прямо сейчас: пары (pid, имя программы), кроме нас
+/// самих и наших родителей. Родителей не трогаем (кто запустил мастер, тот
+/// ждёт его — сценарий обновления), с одним исключением: сама оболочка
+/// `Helene.app`. Она зовёт мастер для тихого обновления и ОБЯЗАНА быть
+/// погашена, как `helene.exe` на Windows, иначе «Открыть» после установки
+/// активировало бы старый живой экземпляр, а не новую версию.
+#[cfg(not(windows))]
+fn procs_under_named(dir: &Path, table: &[Proc]) -> Vec<(u32, String)> {
+    let prefix = format!("{}/", dir.display()).to_lowercase();
+    let shell_prefix = format!("{}/", shell_exe(dir).display()).to_lowercase();
+    let me = std::process::id();
+    // Цепочка родителей — от нас вверх; на цикле или обрыве останавливаемся.
+    let mut ancestors: Vec<u32> = Vec::new();
+    let mut cur = me;
+    for _ in 0..64 {
+        let Some(p) = table.iter().find(|p| p.pid == cur) else { break };
+        if p.ppid == 0 || p.ppid == cur || ancestors.contains(&p.ppid) {
+            break;
+        }
+        ancestors.push(p.ppid);
+        cur = p.ppid;
+    }
+    table
+        .iter()
+        .filter(|p| p.pid != me)
+        .filter(|p| {
+            let comm = p.comm.to_lowercase();
+            comm.starts_with(&prefix) && (!ancestors.contains(&p.pid) || comm.starts_with(&shell_prefix))
+        })
+        .map(|p| (p.pid, p.comm.rsplit('/').next().unwrap_or(&p.comm).to_string()))
+        .collect()
+}
+
+/// pid всех процессов, запущенных из этой папки (кроме нас и наших родителей).
+/// None — `ps` не нашёлся или не ответил; пустой список — из папки не работает ничего.
 #[cfg(not(windows))]
 fn pids_under(dir: &Path) -> Option<Vec<u32>> {
-    let pattern = regex_escape(&format!("{}/", dir.display()));
-    let mut cmd = Command::new("pgrep");
-    cmd.arg("-f").arg("--").arg(&pattern);
+    let mut cmd = Command::new("ps");
+    cmd.args(["-axo", "pid=,ppid=,comm="]);
     let out = run_hidden_for(&mut cmd, std::time::Duration::from_secs(10)).ok()?;
-    // Код 1 у pgrep — «ничего не нашёл», это ответ; остальные коды — отказ.
-    match out.status.code() {
-        Some(0) | Some(1) => {}
-        _ => return None,
+    if !out.status.success() {
+        return None;
     }
-    let me = std::process::id();
-    Some(
-        console_text(&out.stdout)
-            .lines()
-            .filter_map(|l| l.trim().parse::<u32>().ok())
-            .filter(|pid| *pid != me)
-            .collect(),
-    )
+    let table = parse_ps(&console_text(&out.stdout));
+    Some(procs_under_named(dir, &table).into_iter().map(|(pid, _)| pid).collect())
 }
 
 /// Послать сигнал каждому процессу списка. Через `kill(1)`, а не libc: лишняя
@@ -1137,14 +1257,12 @@ pub fn stop_running(dir: &Path) -> bool {
 /// имена и называем, чтобы отказ звучал так же: «часть программы ещё работает».
 #[cfg(not(windows))]
 fn locked_files(dir: &Path) -> Vec<String> {
-    let Some(pids) = pids_under(dir) else { return Vec::new() };
+    let mut cmd = Command::new("ps");
+    cmd.args(["-axo", "pid=,ppid=,comm="]);
+    let Ok(out) = run_hidden_for(&mut cmd, std::time::Duration::from_secs(10)) else { return Vec::new() };
+    let table = parse_ps(&console_text(&out.stdout));
     let mut names: Vec<String> = Vec::new();
-    for pid in pids {
-        let mut cmd = Command::new("ps");
-        cmd.args(["-o", "comm=", "-p", &pid.to_string()]);
-        let Ok(out) = run_hidden_for(&mut cmd, std::time::Duration::from_secs(5)) else { continue };
-        let comm = console_text(&out.stdout);
-        let name = comm.rsplit('/').next().unwrap_or(&comm).to_string();
+    for (_, name) in procs_under_named(dir, &table) {
         if !name.is_empty() && !names.contains(&name) {
             names.push(name);
         }
@@ -1920,8 +2038,12 @@ fn validate_setup(s: &Setup) -> Result<(), String> {
     if s.constitution.trim().is_empty() {
         return Err("конституция пуста".into());
     }
-    if s.constitution.contains("{{") {
-        return Err("в конституции остался незаполненный шаблон ({{…}})".into());
+    // Незаполненный шаблон — ровно два пропуска канона (`resources/SOUL.md`):
+    // `{{agent}}` и `{{owner}}`. Любые другие `{{…}}` — текст самой конституции:
+    // тихое обновление везёт её из установленного SOUL.md, который агент и
+    // владелец правили, и резать установку за скобки в их тексте нельзя.
+    if s.constitution.contains("{{agent}}") || s.constitution.contains("{{owner}}") {
+        return Err("в конституции остался незаполненный шаблон ({{agent}} / {{owner}})".into());
     }
     match s.provider.as_str() {
         "api" | "anthropic" => {
@@ -1952,8 +2074,12 @@ fn validate_setup(s: &Setup) -> Result<(), String> {
 /// Сама установка. `progress` зовётся перед каждым шагом.
 pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt, String> {
     validate_setup(s)?;
+    // Имена в отказе — этой системы: на Mac оболочка зовётся `Helene.app`.
     let payload = payload_dir().ok_or_else(|| {
-        "рядом с установщиком нет поставки (helene.exe, app/, runtime/) — запусти его из папки Hélène".to_string()
+        format!(
+            "рядом с установщиком нет поставки ({}, app/, runtime/) — запусти его из папки Hélène",
+            PAYLOAD_MARKERS[0]
+        )
     })?;
     let dir = if s.dir.trim().is_empty() {
         default_dir().ok_or(NO_DEFAULT_DIR)?
@@ -1965,9 +2091,16 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
     // мусора), а dir == payload гасил живого агента и падал на первом же файле.
     let (np, nd) = (norm_path(&payload), norm_path(&dir));
     if inside_or_same(&nd, &np) || inside_or_same(&np, &nd) {
+        // На Mac поставку могли распаковать прямо в ~/Applications/Helene:
+        // говорим, как выйти, а не только что нельзя.
+        let how = if cfg!(windows) {
+            String::new()
+        } else {
+            " Распакуй архив в другое место (например, в «Загрузки») и запусти Helene Setup оттуда — или поставь через install.sh.".to_string()
+        };
         return Err(format!(
             "папка установки ({}) и папка поставки ({}) не должны совпадать или лежать одна в другой. \
-             Если {PRODUCT_UI} уже установлена здесь, настройки меняются в окне программы, а не установщиком.",
+             Если {PRODUCT_UI} уже установлена здесь, настройки меняются в окне программы, а не установщиком.{how}",
             dir.display(),
             payload.display()
         ));
@@ -2005,7 +2138,7 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
             if !busy.is_empty() {
                 return Err(format!(
                     "часть программы ещё работает и держит файлы: {}. Закрой окно {PRODUCT_UI} \
-                     (полностью, включая значок в трее) и повтори установку.",
+                     (полностью, включая {TRAY_WORD}) и повтори установку.",
                     busy.join(", ")
                 ));
             }
@@ -2090,7 +2223,18 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
     }
     // helene.json и data/ поставки не копируем: конфиг пишем свой, данные рождаются здесь.
     let copied = copy_dir_skip(&payload, &dir, &SKIP_FROM_PAYLOAD, &skip_rel)?;
-    steps.push(Step { label: "Файлы программы".into(), ok: true, note: Some(format!("{copied} файлов")) });
+    // macOS: карантин Gatekeeper снимаем со всей папки сразу после копирования,
+    // до первого запуска. Отдельного шага нет — строка примечания уезжает в
+    // install.log вместе с распиской; отказ не роняет установку (файлы уже на
+    // месте), но и не молчит.
+    #[cfg(not(windows))]
+    let files_note = match strip_quarantine(&dir) {
+        Ok(()) => format!("{copied} файлов; карантин Gatekeeper снят"),
+        Err(e) => format!("{copied} файлов; карантин Gatekeeper НЕ снят: {e} — сними вручную: xattr -dr com.apple.quarantine {}", dir.display()),
+    };
+    #[cfg(windows)]
+    let files_note = format!("{copied} файлов");
+    steps.push(Step { label: "Файлы программы".into(), ok: true, note: Some(files_note) });
     steps.push(Step {
         label: "Интерфейс окна".into(),
         ok: true,
@@ -2153,6 +2297,14 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
         match move_relay_auth(&dir) {
             Some(Ok(note)) => steps.push(Step { label: "Подписка ChatGPT".into(), ok: true, note: Some(note) }),
             Some(Err(note)) => steps.push(Step { label: "Подписка ChatGPT".into(), ok: false, note: Some(note) }),
+            // Входа в этом запуске не было. Обновление поверх: прежний вход лежит
+            // в `data/relay/local_auth` и цел — журнал не должен объявлять «вход
+            // не выполнен» там, где он выполнен.
+            None if dir.join("data").join("relay").join("local_auth").join("auth.json").is_file() => steps.push(Step {
+                label: "Подписка ChatGPT".into(),
+                ok: true,
+                note: Some("вход в ChatGPT уже выполнен в этой установке — оставлен как есть".into()),
+            }),
             None => steps.push(Step {
                 label: "Подписка ChatGPT".into(),
                 ok: false,
@@ -3002,17 +3154,66 @@ mod tests {
         assert_eq!(civil_yyyymmdd(1_767_225_600), "20260101");
     }
 
-    /// Образец для `pgrep -f`: путь со скобками и точкой — как буквы, а не как
-    /// регулярное выражение; `/` не трогаем, он не метасимвол.
+    /// Кавычки для /bin/sh: путь с пробелом и с апострофом.
     #[test]
     #[cfg(not(windows))]
-    fn pgrep_pattern_is_literal() {
-        assert_eq!(regex_escape("/Users/o.b/My (stuff)/Helene/"), "/Users/o\\.b/My \\(stuff\\)/Helene/");
+    fn sh_quote_keeps_spaces_and_apostrophes() {
         assert_eq!(sh_quote(Path::new("/Users/x/Helene Setup.app")), "'/Users/x/Helene Setup.app'");
         assert_eq!(sh_quote(Path::new("/a'b")), "'/a'\\''b'");
     }
 
-    /// Корень на macOS — вверх до паспорта сборки, не дальше пяти уровней.
+    /// Живые процессы папки — по пути ИСПОЛНЯЕМОГО файла, не по командной
+    /// строке: `sh …/install.sh`, `tail …/helene.log` и редактор с helene.json
+    /// в список не попадают; свои родители тоже — кроме самой оболочки, которая
+    /// зовёт мастер для обновления и обязана быть погашена.
+    #[test]
+    #[cfg(not(windows))]
+    fn processes_are_matched_by_executable_not_by_arguments() {
+        let dir = Path::new("/Users/yegor/Applications/Helene");
+        let me = std::process::id();
+        let ps = format!(
+            "  1     0 /sbin/launchd\n\
+             100     1 /Applications/Utilities/Terminal.app/Contents/MacOS/Terminal\n\
+             200   100 sh\n\
+             {me}   200 /Users/yegor/Applications/Helene/Helene Setup.app/Contents/MacOS/helene-setup\n\
+             300     1 /Users/yegor/Applications/Helene/Helene.app/Contents/MacOS/helene\n\
+             301   300 /Users/yegor/Applications/Helene/runtime/bin/python3.14\n\
+             302   300 /Users/yegor/Applications/Helene/helene-relay\n\
+             400   100 tail\n\
+             500     1 /Applications/TextEdit.app/Contents/MacOS/TextEdit\n\
+             600     1 /Users/yegor/Applications/Helene-old/helene-relay\n"
+        );
+        let table = parse_ps(&ps);
+        assert_eq!(table.len(), 10);
+        assert_eq!(table[3].comm, "/Users/yegor/Applications/Helene/Helene Setup.app/Contents/MacOS/helene-setup", "путь с пробелом цел");
+        let found = procs_under_named(dir, &table);
+        let pids: Vec<u32> = found.iter().map(|(p, _)| *p).collect();
+        assert_eq!(pids, vec![300, 301, 302], "{found:?}");
+        assert_eq!(found[0].1, "helene", "имя — базовое, для отказа владельцу");
+        // Мастер запущен САМОЙ оболочкой (тихое обновление): оболочка — наш
+        // родитель, но гасится всё равно, как helene.exe на Windows. А вот
+        // sh/Terminal над ней (сценарий обновления) не трогаем.
+        let ps2 = format!(
+            "  1     0 /sbin/launchd\n\
+             200     1 sh\n\
+             300   200 /Users/yegor/Applications/Helene/Helene.app/Contents/MacOS/helene\n\
+             {me}   300 /Users/yegor/Applications/Helene/Helene Setup.app/Contents/MacOS/helene-setup\n\
+             301   300 /Users/yegor/Applications/Helene/runtime/bin/python3.14\n"
+        );
+        let pids: Vec<u32> = procs_under_named(dir, &parse_ps(&ps2)).iter().map(|(p, _)| *p).collect();
+        assert_eq!(pids, vec![300, 301]);
+        // Родитель из ТОЙ ЖЕ папки, но не оболочка (например, установщик,
+        // запущенный установщиком) — щадим: он ждёт нас.
+        let ps3 = format!(
+            "  1     0 /sbin/launchd\n\
+             250     1 /Users/yegor/Applications/Helene/runtime/bin/python3.14\n\
+             {me}   250 /Users/yegor/Applications/Helene/Helene Setup.app/Contents/MacOS/helene-setup\n"
+        );
+        assert!(procs_under_named(dir, &parse_ps(&ps3)).is_empty());
+    }
+
+    /// Корень на macOS — вверх до паспорта сборки, не дальше пяти уровней; без
+    /// паспорта (снятие уже унесло его) — над бандлом; иначе сама папка exe.
     #[test]
     #[cfg(not(windows))]
     fn root_is_found_above_the_bundle() {
@@ -3021,10 +3222,52 @@ mod tests {
         let exe_dir = root.join("Helene Setup.app").join("Contents").join("MacOS");
         std::fs::create_dir_all(&exe_dir).unwrap();
         assert_eq!(root_above(&exe_dir).unwrap(), root);
+        assert_eq!(root_from_exe_dir(&exe_dir), root);
         let deep = root.join("a").join("b").join("c").join("d").join("e").join("f");
         std::fs::create_dir_all(&deep).unwrap();
         assert_eq!(root_above(&deep), None, "шесть уровней — слишком глубоко");
+        assert_eq!(root_from_exe_dir(&deep), deep, "не бандл и без паспорта — сама папка");
+        // Паспорта нет (после снятия с «оставить данные»): корень — над бандлом,
+        // а не папка MacOS внутри него.
+        std::fs::remove_file(root.join("helene-build.json")).unwrap();
+        assert_eq!(root_above(&exe_dir), None);
+        assert_eq!(bundle_root(&exe_dir).unwrap(), root);
+        assert_eq!(root_from_exe_dir(&exe_dir), root);
+        assert_eq!(bundle_root(Path::new("/x/Foo.app/Contents/Resources")), None);
+        assert_eq!(bundle_root(Path::new("/x/Foo/Contents/MacOS")), None);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Копия поверх существующего файла — НОВЫЙ inode: перезаписанный на месте
+    /// Mach-O, который уже исполнялся, macOS убивает при следующем запуске.
+    #[test]
+    #[cfg(unix)]
+    fn copy_replaces_files_with_a_new_inode() {
+        use std::os::unix::fs::MetadataExt;
+        let src = temp_dir("ino-src");
+        let dst = temp_dir("ino-dst");
+        put(&src, "bin/helene", "v1");
+        copy_dir_skip(&src, &dst, &[], &[]).unwrap();
+        let before = std::fs::metadata(dst.join("bin/helene")).unwrap().ino();
+        put(&src, "bin/helene", "v2");
+        copy_dir_skip(&src, &dst, &[], &[]).unwrap();
+        let after = std::fs::metadata(dst.join("bin/helene")).unwrap();
+        assert_ne!(after.ino(), before, "файл переписан в тот же inode");
+        assert_eq!(std::fs::read_to_string(dst.join("bin/helene")).unwrap(), "v2");
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+    }
+
+    /// Скобки в тексте конституции — не шаблон; шаблон — ровно `{{agent}}` и
+    /// `{{owner}}`. Тихое обновление везёт конституцию из установленного
+    /// SOUL.md, и резать его за `{{…}}` в тексте агента нельзя.
+    #[test]
+    fn validate_keeps_braces_that_are_not_placeholders() {
+        let mut s = setup_for("api");
+        s.constitution = "Шаблон записи: {{дата}} — {{что случилось}}".into();
+        assert!(validate_setup(&s).is_ok());
+        s.constitution = "Меня зовут {{owner}}".into();
+        assert!(validate_setup(&s).is_err());
     }
 
     /// Символические ссылки рантайма переезжают ссылками, а не копиями цели.

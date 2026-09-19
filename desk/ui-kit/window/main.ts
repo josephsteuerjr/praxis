@@ -1171,13 +1171,23 @@ export function start(opts: WindowOptions): void {
     const v = shellVersion || S.agentState?.desk?.version || "";
     railSign.textContent = v ? `${product} ${v}` : product;
   }
+  // Система агента: в оболочке окно живёт на той же машине, что и агент, поэтому
+  // до ответа `app_info` берём слово клиента — иначе первый рендер «Системы» и
+  // «Что поручить» проходил бы с открытым затвором, с Windows-словами на Mac, и
+  // не перерисовывался. В браузере (Пульт) хост — сервер, там слово клиента
+  // ничего не значит: остаётся "" , и не прячется ничего.
+  if (inTauri && clientMac) S.platform = "macos";
   // Тот же ответ несёт систему агента (`platform`): по ней экраны прячут то,
-  // чего на ней нет. Один вызов на окно — host.ts кэширует.
+  // чего на ней нет. Один вызов на окно — host.ts кэширует. Старая оболочка
+  // поля не шлёт — тогда остаётся слово клиента. Если затвор от ответа
+  // изменился, открытый раздел перерисовывается.
   void hostInfo().then((i) => {
     if (!i) return;
     shellVersion = i.version || "";
-    S.platform = platformOf(i);
+    const was = S.platform;
+    S.platform = platformOf(i) || S.platform;
     paintRailSign();
+    if (isMacPlatform(was) !== isMacPlatform(S.platform)) void show(S.view, { quiet: true });
   });
   syncComposer();
   addEventListener("frame-room", syncComposer);

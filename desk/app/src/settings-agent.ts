@@ -600,7 +600,7 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
   //
   // Карточка стоит перед «Данными агента» намеренно: сразу за ней идёт папка
   // ЭТОГО агента, и владелец видит, чей дом ему показывают.
-  cards.push(inGroup(agentsCard().el, GROUP.agent));
+  cards.push(inGroup(agentsCard(mac).el, GROUP.agent));
 
   // --- данные
   const data = el("div", "actions");
