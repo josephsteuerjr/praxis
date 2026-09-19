@@ -18,8 +18,15 @@
 // Живая правда о теле («подключено», «мост есть, тела нет», «выключено») —
 // снимок харнесса `memory/.state/body.json`, он же `computer_live` в ответе
 // трубы. Окно его только показывает и никогда не пишет.
-import { api } from "../../ui-kit/window/api";
-import { el, fmtTimeSec, humanError } from "../../ui-kit/window/lib";
+//
+// macOS (0.8.0): тело есть и там — `helene-body` и `helene-bridge` без `.exe`,
+// окна через Accessibility. Системе нужны два разрешения (TCC): «Запись экрана»
+// и «Универсальный доступ»; их состояние тело отдаёт в снимок (`tcc`, `hints`),
+// а карточка рисует две строки «есть/нет» и кнопки «Открыть настройки»
+// (команда оболочки `open_privacy_pane`). Выдать разрешение программно нельзя —
+// галочку ставит владелец сам, и после обновления программы заново.
+import { api, shell } from "../../ui-kit/window/api";
+import { el, fmtTimeSec, humanError, toast } from "../../ui-kit/window/lib";
 import contract from "../../ui-kit/contract.json";
 import { button, toggle as switchRow } from "../../ui-kit/dom";
 import type { ComputerLive, ComputerOption, ModeState } from "../../ui-kit/window/mode";
@@ -58,18 +65,34 @@ export function storedComputer(block: unknown): StoredComputer {
   return { enabled: b.enabled === true, scopes };
 }
 
-/** Строка о теле по снимку харнесса. Только то, что он прислал. */
-export function liveLine(live: ComputerLive | undefined, enabledNow: boolean): { text: string; ok: boolean | null } {
+/** Имена тела и моста рядом с программой — по системе агента: на Mac без `.exe`. */
+function bodyNames(mac: boolean, sep: string): string {
+  return mac ? `helene-body${sep}helene-bridge` : `helene-body.exe${sep}helene-bridge.exe`;
+}
+
+/** Два разрешения macOS в порядке показа: ключ снимка, раздел настроек, слова. */
+const TCC_ROWS: ReadonlyArray<[keyof NonNullable<ComputerLive["tcc"]>, string, string]> = [
+  ["screen_recording", "screen", "Запись экрана"],
+  ["accessibility", "accessibility", "Универсальный доступ"],
+];
+
+const TCC_NOTE =
+  "Оба разрешения выдаются в Системных настройках, раздел «Конфиденциальность и безопасность». " +
+  "После обновления программы система считает её новой: убери Helene из списка и добавь снова.";
+
+/** Строка о теле по снимку харнесса. Только то, что он прислал. `mac` — система
+ *  агента: на ней зависят только имена файлов тела. */
+export function liveLine(live: ComputerLive | undefined, enabledNow: boolean, mac = false): { text: string; ok: boolean | null } {
   if (!live || typeof live !== "object" || live.enabled === undefined) {
     return { text: "Снимка тела ещё нет: код агента пишет его при старте.", ok: null };
   }
   const at = live.checked_at ? ` Проверено ${fmtTimeSec(live.checked_at)}.` : "";
   if (!live.enabled) {
-    const have = live.available === false ? " Тела в сборке нет: helene-body.exe и helene-bridge.exe рядом с программой не найдены." : "";
+    const have = live.available === false ? ` Тела в сборке нет: ${bodyNames(mac, " и ")} рядом с программой не найдены.` : "";
     const pending = enabledNow ? " Включено в черновике — поднимется после сохранения и перезапуска." : "";
     return { text: `Выключено.${have}${pending}`, ok: null };
   }
-  if (live.available === false) return { text: `Опция включена, но тела в сборке нет: ${live.reason || "helene-body.exe / helene-bridge.exe не найдены"}.`, ok: false };
+  if (live.available === false) return { text: `Опция включена, но тела в сборке нет: ${live.reason || `${bodyNames(mac, " / ")} не найдены`}.`, ok: false };
   if (live.connected === true) {
     const id = live.identity || {};
     const who = [id.kind, id.session_id !== undefined && id.session_id !== null ? `сессия ${id.session_id}` : "", id.integrity].filter(Boolean).join(", ");
@@ -82,11 +105,14 @@ export function liveLine(live: ComputerLive | undefined, enabledNow: boolean): {
 /**
  * Карточка «Управление компьютером».
  *
- * @param live   ответ `/api/mode` (там `computer_option` и `computer_live`); null — труба не ответила
- * @param stored блок `computer` из ФАЙЛА: по нему пишем обратно
+ * @param live     ответ `/api/mode` (там `computer_option` и `computer_live`); null — труба не ответила
+ * @param stored   блок `computer` из ФАЙЛА: по нему пишем обратно
+ * @param platform система агента (`windows` | `macos`; пусто — Windows, как было): на Mac —
+ *                 имена без `.exe` и строки про два разрешения системы
  */
-export function computerCard(live: ModeState | null, stored: StoredComputer): ComputerCard {
+export function computerCard(live: ModeState | null, stored: StoredComputer, platform = ""): ComputerCard {
   const box = el("section", "card");
+  const mac = platform === "macos";
   let enabled = stored.enabled;
   const scopes = new Set(stored.scopes);
   const option: ComputerOption | null | undefined = live?.computer_option;
@@ -160,11 +186,36 @@ export function computerCard(live: ModeState | null, stored: StoredComputer): Co
     }
   };
 
+  // --- macOS: два разрешения системы — по слову тела (снимок `tcc`), не по
+  // догадке. Нет поля — строк нет: тело ещё не спрашивали или оно старее окна.
+  const tccBox = el("div", "mode-block");
+  tccBox.hidden = true;
+  const syncTcc = (snap: ComputerLive | undefined) => {
+    tccBox.replaceChildren();
+    const tcc = mac && snap && typeof snap === "object" ? snap.tcc : null;
+    tccBox.hidden = !tcc || typeof tcc !== "object";
+    if (tccBox.hidden || !tcc) return;
+    for (const [key, kind, title] of TCC_ROWS) {
+      const ok = tcc[key] === true;
+      const row = el("div", "actions");
+      row.append(el("span", "receipt " + (ok ? "ok" : "err"), `${title}: ${ok ? "есть" : "нет"}`));
+      if (!ok) {
+        row.append(
+          button("Открыть настройки", "quiet", () => void shell("open_privacy_pane", { kind }).catch((e) => toast(humanError(e).text))),
+        );
+      }
+      tccBox.append(row);
+    }
+    for (const hint of snap?.hints || []) if (hint) tccBox.append(el("p", "field-hint", hint));
+    tccBox.append(el("p", "field-hint", TCC_NOTE));
+  };
+
   // --- живое состояние: снимок харнесса, кнопка «Проверить» перечитывает трубу.
   const syncStatus = (snap: ComputerLive | undefined) => {
-    const line = liveLine(snap, enabled);
+    const line = liveLine(snap, enabled, mac);
     status.className = "receipt " + (line.ok === true ? "ok" : line.ok === false ? "err" : "");
     status.textContent = line.text;
+    syncTcc(snap);
   };
   const check = button("Проверить", "quiet", async () => {
     try {
@@ -177,7 +228,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer): Co
   });
   const row = el("div", "actions");
   row.append(check, status);
-  box.append(row);
+  box.append(row, tccBox);
 
   const logs = live?.computer_live?.logs;
   box.append(

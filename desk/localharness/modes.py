@@ -105,15 +105,14 @@ DEFAULT_MODE = "interactive"
 #: Ключ режима в helene.json. См. докстринг: `mode` занят под local|remote.
 KEY = "agent_mode"
 
-#: Служба (SCM) и тело тула `computer` (UIA, `body.py`) есть только на Windows.
-#: На macOS их нет по замыслу порта — основа без тела, службы и брокера:
-#: секции службы и тела в картину НЕ отдаются (`service_here`, `mode_state`),
-#: окно карточек не рисует (прячет по `app_info.platform`), а журнал говорит
-#: одной строкой. Две константы, а не одна: механизмы разные, и у порта на
-#: Linux они могут разойтись. Стенды подменяют их, чтобы разобрать обе картины
-#: на любой машине.
+#: Служба (SCM) есть только на Windows; тело тула `computer` (`body.py`) — на
+#: Windows (UIA) и с 19.09 на macOS (Accessibility, CoreGraphics). Где чего нет,
+#: секция в картину НЕ отдаётся (`service_here`, `mode_state`), окно карточки
+#: не рисует (прячет по `app_info.platform`), а журнал говорит одной строкой.
+#: Две константы, а не одна: механизмы разные и платформы у них разные. Стенды
+#: подменяют их, чтобы разобрать обе картины на любой машине.
 HAS_SERVICE = os.name == "nt"
-HAS_COMPUTER = os.name == "nt"
+HAS_COMPUTER = os.name == "nt" or sys.platform == "darwin"
 
 #: Имя службы в SCM (svc/src/main.rs::SERVICE_NAME). Латиницей.
 SERVICE_NAME = "Helene"
@@ -249,6 +248,23 @@ COMPUTER_WARNING = ("Опция для энтузиастов, не для сл�
                     "твоей мышью и клавиатурой по-настоящему и видит экран. "
                     "Слабая модель может не понять, что делает.")
 
+#: Та же опция словами macOS. Общий текст обещает `helene-body.exe`, а на Mac
+#: тело зовётся без `.exe`, водит окнами через Accessibility и требует двух
+#: разрешений системы — «Запись экрана» и «Универсальный доступ», которые после
+#: обновления программы надо выдать заново (подпись сборки ad-hoc: система
+#: считает обновлённую программу новой). ⚠ Имя константы разбирает сборка
+#: установщика (setup/ui/vite.config.ts) — той же формой, что COMPUTER_TEXT.
+COMPUTER_TEXT_MACOS = ("Тул `computer`: окна, экран, клавиатура и мышь, файлы и "
+                       "процессы на этой машине. Работает через отдельное тело "
+                       "(helene-body), которое код агента поднимает рядом с собой в "
+                       "твоей сессии — снаружи ограды, поэтому в песочнице оно тоже "
+                       "работает. Системе нужны два разрешения для Helene: «Запись "
+                       "экрана» и «Универсальный доступ» — она спросит их сама при "
+                       "первом обращении; после обновления программы их придётся "
+                       "выдать заново (подпись у сборки временная, и система считает "
+                       "обновлённую программу новой). Что именно разрешено, решают "
+                       "четыре права ниже; от режима опция не зависит.")
+
 #: Умолчание опции — выключено: включают осознанно, прочитав оговорку.
 COMPUTER_DEFAULT = False
 
@@ -277,6 +293,27 @@ COMPUTER_SCOPE_TEXTS = {
     "computer.apps": ("Список окон, активация, клавиатура и мышь, снимки "
                       "экрана, чтение окна как текста, буфер обмена."),
 }
+
+#: Те же четыре права словами macOS: команды идут в zsh, а окна и экран стоят
+#: за двумя разрешениями системы. Ключи — те же, что у COMPUTER_SCOPE_TEXTS.
+COMPUTER_SCOPE_TEXTS_MACOS = {
+    "computer.read": COMPUTER_SCOPE_TEXTS["computer.read"],
+    "computer.files": COMPUTER_SCOPE_TEXTS["computer.files"],
+    "computer.process": ("Запускать команды zsh в твоей сессии и следить за ними. "
+                         "Тоже мимо ограды."),
+    "computer.apps": ("Список окон, активация, клавиатура и мышь, снимки экрана, "
+                      "чтение окна как текста, буфер обмена. Нужны разрешения "
+                      "«Запись экрана» и «Универсальный доступ»."),
+}
+
+
+def computer_texts() -> tuple[str, dict[str, str]]:
+    """Текст опции и тексты прав для ЭТОЙ платформы: macOS — `*_MACOS`, иначе
+    общие. Одна точка выбора на `computer_option()`: то, что уезжает в
+    `/api/mode` и в карточку, обязано быть одним и тем же текстом."""
+    if sys.platform == "darwin":
+        return COMPUTER_TEXT_MACOS, COMPUTER_SCOPE_TEXTS_MACOS
+    return COMPUTER_TEXT, COMPUTER_SCOPE_TEXTS
 
 
 def computer_state(cfg: dict) -> dict:
@@ -309,17 +346,19 @@ def computer_state(cfg: dict) -> dict:
 
 
 def computer_option() -> dict:
-    """Опция управления компьютером с четырьмя правами — для экранов."""
+    """Опция управления компьютером с четырьмя правами — для экранов.
+    Тексты — по платформе (`computer_texts`), ключи и порядок — общие."""
+    text, scope_texts = computer_texts()
     return {
         "name": "computer",
         "title": COMPUTER_TITLE,
-        "text": COMPUTER_TEXT,
+        "text": text,
         "warning": COMPUTER_WARNING,
         "default": COMPUTER_DEFAULT,
         "needs_admin": False,
         "scopes": [
             {"key": key, "title": COMPUTER_SCOPE_TITLES[key],
-             "text": COMPUTER_SCOPE_TEXTS[key]}
+             "text": scope_texts[key]}
             for key in COMPUTER_SCOPES
         ],
     }

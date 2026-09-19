@@ -9,7 +9,8 @@
 «unavailable» в любом режиме.
 
 Теперь оба едут в поставке (`helene-bridge.exe`, `helene-body.exe`, сборка
-`installer/build_dist.py` из `live/body/crates`), а поднимает их ЭТОТ модуль —
+`installer/build_dist.py` из `live/body/crates`; на macOS — `helene-bridge`,
+`helene-body` из `build_mac.py`), а поднимает их ЭТОТ модуль —
 детьми самого раннера, а не оболочки. Почему не оболочка, хотя план 06.09
 предлагал её: под службой харнесс поднимает не `helene.exe`, а
 `helene-svc.exe session-host` (задача планировщика в сессии владельца,
@@ -29,6 +30,21 @@ controller для руки), мост и тело получают их чере
 упавших с растущей паузой и раз в четверть минуты спрашивает тело
 `body.status` через мост — это единственное честное «тело подключено», и
 оно пишется в `memory/.state/body.json` для окна и телефона.
+
+macOS (порт 19.09). Тело и мост те же крейты, собранные под darwin
+(`helene-bridge`, `helene-body` — без `.exe`, в корне поставки, `build_mac.py`).
+Job-объекта на POSIX нет: дети поднимаются в своей группе процессов
+(`start_new_session`) и гасятся группой (`killpg`: SIGTERM, через пять секунд
+SIGKILL), а от аварии движка их сторожит их собственный сторож родителя
+(`mac::watch_parent` в теле). Окнами тело водит через Accessibility, экраном —
+через CoreGraphics, и для обоих системе нужны два разрешения TCC — «Запись
+экрана» и «Универсальный доступ». Их состояние тело отдаёт в `desktop.status`
+(`tcc`, `hints`, `platform`), а сторож кладёт в снимок `body.json` — не чаще,
+чем идёт проба `body.status`; окно рисует по ним две строки и кнопки «Открыть
+настройки». Описание тула `computer` у дерева написано под Windows (PowerShell,
+UI Automation); на darwin оно правится подстрочными заменами поверх
+загруженного модуля (`mac_tool_text`) — файлы дерева не трогаем, это код
+Праксис.
 
 Права. У дерева права на действия руки уже есть: `_COMPUTER_ACTION_SCOPES`
 (action → один из четырёх скоупов `computer_access.SCOPES`), но решает их
@@ -50,19 +66,37 @@ from __future__ import annotations
 
 import atexit
 import ctypes
-import ctypes.wintypes as wt
 import datetime as dt
 import json
 import logging
 import os
 import re
 import secrets
+import signal
 import socket
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+
+# Типы Windows API — только на Windows. Структуры job-объекта ниже описаны на
+# уровне модуля и ссылаются на `wt.DWORD`, поэтому на POSIX подставляются те же
+# ctypes-типы (приём из `fence.py`): модуль обязан импортироваться на darwin,
+# где job-объекта нет, а дети живут группой процессов.
+if os.name == "nt":
+    import ctypes.wintypes as wt  # noqa: E402 — только на Windows
+else:
+    class _WinTypesOnPosix:
+        """Имена wintypes теми же ctypes-типами — чтобы структуры описались."""
+
+        DWORD = ctypes.c_uint32
+        BOOL = ctypes.c_int
+        UINT = ctypes.c_uint
+        HANDLE = ctypes.c_void_p
+        LPCWSTR = ctypes.c_wchar_p
+
+    wt = _WinTypesOnPosix()
 
 log = logging.getLogger("helene.body")
 
@@ -74,13 +108,28 @@ DEFAULT_PORT = 9480
 PORT_SPAN = 20
 #: Четыре права дерева — в том порядке, в котором их показывает окно.
 SCOPES = ("computer.read", "computer.files", "computer.process", "computer.apps")
-BRIDGE_EXE = "helene-bridge.exe"
-BODY_EXE = "helene-body.exe"
-#: Тело есть только на Windows (UIA через COM). Порт на macOS — основа без
-#: тела: здесь ничего не поднимается, секции тела в снимке нет
-#: (`runner._computer_state` → None), тул `computer` отвечает словами.
-#: Та же правда со стороны каталога — `modes.HAS_COMPUTER`.
-HAS_BODY = os.name == "nt"
+
+
+def exe_name(base: str) -> str:
+    """Имя исполняемого по платформе: на Windows с `.exe`, на POSIX — как есть."""
+    return f"{base}.exe" if os.name == "nt" else base
+
+
+#: Мост и тело в корне поставки; на macOS — те же имена без `.exe`
+#: (`build_mac.py` кладёт их рядом с бандлами).
+BRIDGE_EXE = exe_name("helene-bridge")
+BODY_EXE = exe_name("helene-body")
+#: Тело есть на Windows (UIA через COM) и с 19.09 на macOS (Accessibility и
+#: CoreGraphics). На прочих POSIX его нет: ничего не поднимается, секции тела в
+#: снимке нет (`runner._computer_state` → None), тул `computer` снимается из
+#: набора. Та же правда со стороны каталога — `modes.HAS_COMPUTER`.
+HAS_BODY = os.name == "nt" or sys.platform == "darwin"
+#: Спрашивать ли у тела `desktop.status` ради разрешений системы (TCC): только
+#: там, где они есть. На Windows проба остаётся одной — `body.status`.
+ASKS_TCC = sys.platform == "darwin"
+#: Имя устройства, когда у машины нет имени: как в умолчании самого клиента
+#: дерева на Windows и своё на Mac.
+DEFAULT_DEVICE = "windows-pc" if os.name == "nt" else "mac"
 #: Снимок для окна и телефона (сторож пишет его раз в несколько секунд).
 STATE_FILE = ("memory", ".state", "body.json")
 
@@ -103,6 +152,12 @@ STATE: dict = {
     "checked_at": "",
     "logs": [],
 }
+if ASKS_TCC:
+    # Разрешения системы — из `desktop.status` тела (`tcc`, `hints`, `platform`);
+    # None/пусто — ещё не спрашивали или тело их не отдаёт. На Windows этих
+    # ключей в снимке нет: там их некому заполнить, а пустое поле читалось бы
+    # окном как «разрешений нет».
+    STATE.update({"tcc": None, "hints": [], "platform": ""})
 
 _BODY: "Body | None" = None
 _TOKENS: dict = {}          # url, controller, device — читает подменённый _settings
@@ -144,11 +199,14 @@ def device_id() -> str:
     """Имя устройства для тела: имя машины, как его видит владелец.
 
     Ограничения `config.rs::validate`: 1..128 знаков, без управляющих и
-    `/ \\ ? #`. Имя машины под них подходит; пустое — `windows-pc`, как в
-    умолчании самого клиента."""
+    `/ \\ ? #`. Имя машины под них подходит; пустое — `DEFAULT_DEVICE`
+    (`windows-pc`, как в умолчании самого клиента, на Mac — `mac`). На macOS
+    `gethostname()` отдаёт `Имя.local` — хвост `.local` владельцу ни о чём."""
     raw = str(os.environ.get("COMPUTERNAME") or socket.gethostname() or "").strip()
+    if sys.platform == "darwin" and raw.lower().endswith(".local"):
+        raw = raw[:-len(".local")]
     safe = re.sub(r"[\x00-\x1f/\\?#]+", "-", raw).strip("-").lower()
-    return safe[:128] or "windows-pc"
+    return safe[:128] or DEFAULT_DEVICE
 
 
 # --------------------------------------------------------------------------- #
@@ -164,7 +222,7 @@ def _exe_pair(install_root: Path) -> tuple[Path, Path] | None:
     candidates.append(Path(install_root))
     for base in candidates:
         for bridge_name, body_name in ((BRIDGE_EXE, BODY_EXE),
-                                       ("praxis-bridge.exe", "praxis-body.exe")):
+                                       (exe_name("praxis-bridge"), exe_name("praxis-body"))):
             bridge, body = base / bridge_name, base / body_name
             if bridge.is_file() and body.is_file():
                 return bridge, body
@@ -311,10 +369,9 @@ class _Child:
             except OSError:
                 pass
             out = open(self.log_path, "ab")
-            flags = _CREATE_NO_WINDOW if os.name == "nt" else 0
             self.proc = subprocess.Popen(
                 self.argv, env=self.env, cwd=str(self.cwd), stdin=subprocess.DEVNULL,
-                stdout=out, stderr=subprocess.STDOUT, creationflags=flags)
+                stdout=out, stderr=subprocess.STDOUT, **spawn_kwargs())
             out.close()
             _adopt(job, self.proc)
             self.started_at = time.monotonic()
@@ -329,6 +386,9 @@ class _Child:
         proc, self.proc = self.proc, None
         if proc is None or proc.poll() is not None:
             return
+        if os.name != "nt":
+            kill_group(proc)
+            return
         try:
             proc.terminate()
             proc.wait(timeout=5)
@@ -337,6 +397,58 @@ class _Child:
                 proc.kill()
             except Exception:
                 pass
+
+
+def spawn_kwargs(posix: bool | None = None) -> dict:
+    """Чем поднимать ребёнка на этой платформе.
+
+    Windows — без окна консоли (`CREATE_NO_WINDOW`), группу держит job-объект.
+    POSIX — своя сессия и группа процессов (`start_new_session`): job-объекта
+    нет, и остановить тело вместе с его внуками можно только группой
+    (`kill_group`). Параметр — для стенда: обе ветки разбираются на любой ОС.
+    """
+    if (os.name != "nt") if posix is None else posix:
+        return {"start_new_session": True}
+    return {"creationflags": _CREATE_NO_WINDOW}
+
+
+def kill_group(proc: subprocess.Popen, *, grace: float = 5.0) -> None:
+    """POSIX: погасить ребёнка группой — SIGTERM, через `grace` секунд SIGKILL.
+
+    Ребёнок — лидер своей группы (`start_new_session`), значит `killpg` по его
+    pid накрывает и внуков. Тело, которому дали договорить (SIGTERM), закрывает
+    вебсокет и файлы штатно; не вышел за срок — SIGKILL всей группе, чтобы мост
+    не остался держать порт после движка.
+    """
+    if proc.poll() is not None:
+        return
+    killpg = getattr(os, "killpg", None)
+    if killpg is None:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return
+    try:
+        killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except Exception:
+        log.debug("тело: SIGTERM группе %s не ушёл", proc.pid, exc_info=True)
+    try:
+        proc.wait(timeout=grace)
+    except Exception:
+        try:
+            killpg(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=2)
+        except Exception:
+            pass
+    # Лидер вышел, а группа живёт, пока жив её последний процесс: внуки, которые
+    # SIGTERM проигнорировали, добиваются отдельно. Пустая группа даёт ESRCH.
+    try:
+        killpg(proc.pid, signal.SIGKILL)
+    except Exception:
+        pass
 
 
 class Body:
@@ -483,6 +595,8 @@ class Body:
             STATE["connected"] = True
             STATE["reason"] = (f"тело живо: мост 127.0.0.1:{self.port}, сессия "
                                f"{identity.get('session_id')}, {identity.get('kind')}")
+            if ASKS_TCC:
+                self.probe_desktop(timeout=timeout)
         else:
             STATE["connected"] = False
             why = str(result.get("error") or result.get("code") or "нет ответа")
@@ -490,6 +604,27 @@ class Body:
             STATE["reason"] = ("мост не отвечает" if not bridge_alive else
                                "мост есть, тело ещё не подключилось") + f" ({why})"
         return ok
+
+    def probe_desktop(self, *, timeout: float = 4.0) -> dict:
+        """Разрешения системы — из `desktop.status` тела (macOS: `tcc`, `hints`,
+        `platform`). Зовётся из `probe` и только вслед за удачным `body.status`:
+        не чаще его и ни разу — без тела. Ответ без `tcc` (тело старее движка)
+        оставляет `None`: окно тогда строк про разрешения не рисует, а не
+        показывает «нет» там, где не спрашивали."""
+        result = call("desktop.status", {}, timeout=timeout)
+        tcc = result.get("tcc") if result.get("ok") else None
+        if isinstance(tcc, dict):
+            STATE["tcc"] = {"screen_recording": bool(tcc.get("screen_recording")),
+                            "accessibility": bool(tcc.get("accessibility"))}
+            hints = result.get("hints")
+            STATE["hints"] = ([str(h) for h in hints if str(h).strip()]
+                              if isinstance(hints, (list, tuple)) else [])
+            STATE["platform"] = str(result.get("platform") or "")
+        elif result.get("ok"):
+            STATE["tcc"] = None
+            STATE["hints"] = []
+            STATE["platform"] = str(result.get("platform") or "")
+        return result
 
     def _write_state(self) -> None:
         path = self.tree.joinpath(*STATE_FILE)
@@ -583,7 +718,7 @@ def prune_spool(path: Path, *, frames_older_min: int = 10,
 
 def _settings() -> tuple[str, str, str]:
     return (str(_TOKENS.get("url") or ""), str(_TOKENS.get("controller") or ""),
-            str(_TOKENS.get("device") or "windows-pc"))
+            str(_TOKENS.get("device") or DEFAULT_DEVICE))
 
 
 def call(capability: str, args: dict | None = None, *, timeout: float = 30.0) -> dict:
@@ -742,7 +877,25 @@ def windows_truth() -> str:
         return f"окна: опция включена, но тела в поставке нет ({BRIDGE_EXE}, {BODY_EXE})"
     rights = ", ".join(STATE.get("scopes") or []) or "ни одного права"
     return (f"окна: тело поднято кодом агента снаружи ограды (мост 127.0.0.1:{STATE.get('port')}, "
-            f"{STATE.get('reason')}); права владельца: {rights}")
+            f"{STATE.get('reason')}); права владельца: {rights}{tcc_words()}")
+
+
+def tcc_words() -> str:
+    """Хвост строки про окна на macOS: каких разрешений системы не хватает.
+
+    Пусто, когда все есть или ещё не спрашивали: «не спрашивали» и «нет» —
+    разные ответы, и второй словами не подменяет первый.
+    """
+    tcc = STATE.get("tcc")
+    if not isinstance(tcc, dict):
+        return ""
+    missing = [name for key, name in (("screen_recording", "«Запись экрана»"),
+                                      ("accessibility", "«Универсальный доступ»"))
+               if not tcc.get(key)]
+    if not missing:
+        return ""
+    return ("; системе не хватает разрешений: " + ", ".join(missing)
+            + " (Системные настройки → Конфиденциальность и безопасность)")
 
 
 # --------------------------------------------------------------------------- #
@@ -810,7 +963,7 @@ _TOOL_LISTS = ("BASE_TOOLS", "OWNER_TOOLS", "PRAXIS_SELF_TOOLS", "SHARED_CONTEXT
 
 
 def _install_absent(agent_mod) -> None:
-    """Сборка без тела (порт macOS): рука `computer` СНИМАЕТСЯ вовсе, а не отвечает
+    """Сборка без тела (прочие POSIX): рука `computer` СНИМАЕТСЯ вовсе, а не отвечает
     словами. Приём тот же, что у брокера (`broker.install` при `not HAS_BROKER`):
     обещать модели тул, который всегда откажет, хуже, чем не иметь его. Раньше тул
     оставался в наборе с ответом-заглушкой — модель видела `computer`, звала его и
@@ -917,4 +1070,73 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
     computer.__name__ = getattr(original, "__name__", "computer")
     computer.__doc__ = getattr(original, "__doc__", "")
     impl["computer"] = computer
+    if sys.platform == "darwin":
+        describe_for_mac(agent_mod)
     log.info("тело: рука computer подключена — %s", windows_truth())
+
+
+# --------------------------------------------------------------------------- #
+#  macOS: описание тула `computer` у дерева написано под Windows
+# --------------------------------------------------------------------------- #
+
+#: Подстрочные замены в схеме тула `computer` для darwin — в том порядке, в
+#: каком идут. Описание у дерева одно на все платформы и говорит про PowerShell,
+#: UI Automation и Win32; модель на Mac читала бы обещания, которых тело не
+#: сдержит (и звала бы `run` с командами PowerShell). Замены — по подстрокам,
+#: а не переписыванием: описание меняется у неё часто, и полная копия здесь
+#: отставала бы молча. Подстрока, которой в тексте нет, просто не срабатывает.
+MAC_TOOL_TEXT: tuple[tuple[str, str], ...] = (
+    ("Use the connected Windows computer", "Use the connected computer (macOS)"),
+    ("run/poll/stop manage PowerShell processes", "run/poll/stop manage shell processes (zsh)"),
+    ("native interactive-desktop hands (no Office COM)", "native desktop hands (Accessibility)"),
+    ("coding path on Windows (no wcode proxy task needed; receipts bind to your current run "
+     "automatically)", "coding path on this computer (receipts bind to your current run automatically)"),
+    ("; .ps1/.psm1/.psd1 with non-ASCII text get a UTF-8 BOM so PowerShell 5.1 parses them", ""),
+    ("reads the UI Automation control tree", "reads the Accessibility control tree"),
+    ("returns the UI Automation control tree", "returns the Accessibility control tree"),
+    ("It goes through UI Automation patterns", "It goes through Accessibility actions"),
+    ("many controls (WinForms TextBox) select all text on focus", "some controls select all text on focus"),
+    ("one Win32 notch", "one wheel notch"),
+)
+
+
+def mac_tool_text(text: str) -> str:
+    """Текст схемы `computer` словами macOS. Чистая функция, идемпотентна."""
+    for old, new in MAC_TOOL_TEXT:
+        text = text.replace(old, new)
+    return text
+
+
+def _mac_walk(node) -> None:
+    """Те же замены по всем `description` схемы, на любой глубине."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "description" and isinstance(value, str):
+                node[key] = mac_tool_text(value)
+            else:
+                _mac_walk(value)
+    elif isinstance(node, list):
+        for item in node:
+            _mac_walk(item)
+
+
+def describe_for_mac(agent_mod) -> int:
+    """Поправить описание тула `computer` во всех списках схем дерева.
+
+    Правится ЗАГРУЖЕННЫЙ модуль, не файл: дерево — код Праксис, его файлы не
+    трогаем (тот же приём, что у `install` с `TOOL_IMPL`). Один и тот же словарь
+    схемы может лежать в нескольких списках — правки идемпотентны, повтор
+    безвреден. -> сколько схем тронуто.
+    """
+    seen: set[int] = set()
+    for attr in _TOOL_LISTS:
+        lst = getattr(agent_mod, attr, None)
+        if not isinstance(lst, list):
+            continue
+        for tool in lst:
+            if isinstance(tool, dict) and tool.get("name") == "computer" and id(tool) not in seen:
+                seen.add(id(tool))
+                _mac_walk(tool)
+    if seen:
+        log.info("тело: описание тула computer переведено на слова macOS (схем: %d)", len(seen))
+    return len(seen)

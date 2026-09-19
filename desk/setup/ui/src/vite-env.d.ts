@@ -56,4 +56,8 @@ declare module "virtual:helene-modes" {
   export const SERVICE_OPTION: ServiceOption;
   export const SESSION0_WARNING: string;
   export const COMPUTER_OPTION: ComputerOption;
+  /** Та же опция словами macOS — из `COMPUTER_TEXT_MACOS` в modes.py (тело без
+   *  `.exe`, zsh, два разрешения системы). null — константы в modes.py нет, и
+   *  на Mac показывается общий текст. */
+  export const COMPUTER_OPTION_MACOS: ComputerOption | null;
 }

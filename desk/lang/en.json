@@ -76,7 +76,7 @@
   "setup.keys.models.more": "and ${models.length - shown.length} more — type the name yourself",
   "setup.mode.title": "What is the agent allowed to do?",
   "setup.mode.lead": "Three questions, and they are independent: how far the agent reaches, whether to install the Windows service, and whether to give them windows and a mouse.",
-  "setup.mode.lead.macos": "One question: how far the agent reaches. It can be changed later, in Settings.",
+  "setup.mode.lead.macos": "Two questions, and they are unrelated: how far the agent reaches, and whether it gets windows and the mouse. Both can be changed later, in Settings.",
   "setup.mode.fence.aria_label": "Tool fence",
   "setup.mode.install_note.sandbox": "Folders outside it that the agent should see are added later, in settings.",
   "setup.mode.install_note.interactive": "The agent asks for them separately, in a Windows prompt, when a particular action needs them.",
@@ -86,6 +86,7 @@
   "setup.mode.session0.off": "Off for now: the agent lives in your session and sees the desktop. If you turn it on, they get system rights but stop seeing the desktop, and a weak model may not understand what it is doing.",
   "setup.mode.computer.note": "No administrator rights are needed. All four rights are granted at once; you can narrow them in settings.",
   "setup.mode.computer.off": "Off for now: the `computer` tool exists, but there is no body under it — it refuses in words.",
+  "setup.mode.computer_note.macos": "No administrator rights needed. All four permissions are granted at once; narrow them later in Settings. macOS will ask for two system permissions — Screen Recording and Accessibility; after the program updates they have to be granted again.",
   "setup.mode.foot": "In the sandbox that is their whole world — the only thing they can break is themselves.",
   "setup.install.head": "Ready to install",
   "setup.install.btn_install": "Install",
@@ -164,5 +165,12 @@
   "setup.uninstall.result_failed": "It did not work",
   "setup.uninstall.result_partial": "Not fully removed",
   "setup.uninstall.result_ok": "Removed",
-  "setup.uninstall.btn_close": "Close"
+  "setup.uninstall.btn_close": "Close",
+  "settings.computer.screen.macos": "Screen Recording",
+  "settings.computer.accessibility.macos": "Accessibility",
+  "settings.computer.granted.macos": "granted",
+  "settings.computer.missing.macos": "missing",
+  "settings.computer.open_settings.macos": "Open System Settings",
+  "settings.computer.tcc_note.macos": "Both permissions are granted in System Settings, under Privacy & Security. After the program updates the system treats it as new: remove Helene from the list and add it again.",
+  "settings.computer.no_body.macos": "No body in this build: helene-body and helene-bridge were not found next to the program."
 }

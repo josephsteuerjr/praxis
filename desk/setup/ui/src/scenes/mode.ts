@@ -24,7 +24,7 @@
 // Куда уезжает выбор: ограда — ключом `agent_mode` (НЕ `mode`: тот занят под
 // местожительство харнесса, local|remote), служба — полем `service` установки,
 // галочка — в `service.session0`, туда, где её читает служба.
-import { COMPUTER_OPTION, MODE_CARDS, MODE_CARDS_MACOS, SERVICE_OPTION, SESSION0_WARNING, type ModeCard } from "virtual:helene-modes";
+import { COMPUTER_OPTION, COMPUTER_OPTION_MACOS, MODE_CARDS, MODE_CARDS_MACOS, SERVICE_OPTION, SESSION0_WARNING, type ModeCard } from "virtual:helene-modes";
 import { FormScene } from "./base";
 import { el, toggle } from "./form";
 import { adminRights, isMac, setup, type AdminRights, type AgentMode } from "../setup";
@@ -42,12 +42,14 @@ const INSTALL_NOTE_MACOS: Record<string, string> = {
   interactive: "Прав администратора не нужно: агент работает с твоими правами — не больше и не меньше.",
 };
 
-/** Лид сцены: на Windows вопроса три, на macOS — один (службы и тела там нет,
- *  и опций под ними не рисуется). */
+/** Лид сцены: на Windows вопроса три, на macOS — два (службы там нет, а тело
+ *  тула `computer` есть с 0.8.0). */
 const LEAD =
   "Три вопроса, и они не связаны: насколько далеко агент дотягивается, ставить ли службу Windows " +
   "и давать ли ему окна и мышь. Поменять можно потом, в настройках.";
-const LEAD_MACOS = "Один вопрос: насколько далеко агент дотягивается. Поменять можно потом, в настройках.";
+const LEAD_MACOS =
+  "Два вопроса, и они не связаны: насколько далеко агент дотягивается и давать ли ему окна и мышь. " +
+  "Поменять можно потом, в настройках.";
 
 /** Что произойдёт при установке со службой. Только про установку: про саму
  *  службу уже сказано выше словами харнесса, и повторять их здесь незачем. */
@@ -85,6 +87,13 @@ const SESSION0 = (() => {
 const COMPUTER_NOTE =
   "Прав администратора не нужно. Все четыре права выдаются сразу, сузить можно в настройках.";
 
+/** То же на macOS: прав администратора нет и там, но у тела два разрешения
+ *  системы, и после обновления программы их выдают заново (подпись ad-hoc). */
+const COMPUTER_NOTE_MACOS =
+  "Прав администратора не нужно. Все четыре права выдаются сразу, сузить можно в настройках. " +
+  "Система спросит два разрешения — «Запись экрана» и «Универсальный доступ»; после обновления " +
+  "программы их надо выдать заново.";
+
 /** Слово к выключенной опции: чтобы выключенная не выглядела запретом. */
 const COMPUTER_OFF = "Пока выключено: тул `computer` есть, а тела под ним нет — он отказывает словами.";
 
@@ -95,6 +104,7 @@ export class ModeScene extends FormScene {
   private cardNotes = new Map<AgentMode, HTMLElement>();
   private lead: HTMLElement;
   private options: HTMLElement;
+  private serviceBoxEl!: HTMLElement;
   private serviceSwitch!: HTMLButtonElement;
   private serviceWhy!: HTMLElement;
   private extra!: HTMLElement;
@@ -102,6 +112,9 @@ export class ModeScene extends FormScene {
   private extraText!: HTMLElement;
   private computerSwitch!: HTMLButtonElement;
   private computerText!: HTMLElement;
+  /** Описание и примечание опции тела — на Mac подменяются словами macOS. */
+  private computerDesc!: HTMLElement;
+  private computerNote!: HTMLElement;
   private rights: AdminRights = { can: true, certain: false, elevated: false };
 
   constructor(root: HTMLElement) {
@@ -128,8 +141,8 @@ export class ModeScene extends FormScene {
     );
 
     // Две опции — в один ряд: столбиком они не умещаются в кадр 1080. Внутри
-    // каждой карточки колонки складываются. На macOS ряда нет вовсе: ни
-    // службы, ни тела там не бывает (`syncPlatform`).
+    // каждой карточки колонки складываются. На macOS в ряду одна карточка —
+    // тело: службы там не бывает (`syncPlatform`).
     const options = el("div", "options-row");
     options.append(this.serviceBox(), this.computerBox());
     this.options = options;
@@ -196,6 +209,7 @@ export class ModeScene extends FormScene {
    *  ряду. Ряд — это выбор одного из; служба выбором из ряда не является. */
   private serviceBox(): HTMLElement {
     const box = el("div", "service-card");
+    this.serviceBoxEl = box;
     const main = el("div", "service-main");
     this.serviceSwitch = toggle({
       label: SERVICE_OPTION.title,
@@ -248,11 +262,9 @@ export class ModeScene extends FormScene {
         this.syncComputer();
       },
     });
-    main.append(
-      this.computerSwitch,
-      el("p", "mode-text", COMPUTER_OPTION.text),
-      el("p", "mode-note", COMPUTER_NOTE),
-    );
+    this.computerDesc = el("p", "mode-text", COMPUTER_OPTION.text);
+    this.computerNote = el("p", "mode-note", COMPUTER_NOTE);
+    main.append(this.computerSwitch, this.computerDesc, this.computerNote);
     const extra = el("div", "mode-extra");
     this.computerText = el("p", "mode-warn", COMPUTER_OFF);
     extra.append(this.computerText);
@@ -308,17 +320,21 @@ export class ModeScene extends FormScene {
 
   /** Что рисовать на этой системе. Зовётся из `beforeEnter`, а не из
    *  конструктора: сцены строятся до ответа `defaults`, где живёт `platform`.
-   *  На macOS ряд опций (служба, тело) не показывается вовсе, а решения по
-   *  ним выключены — в JSON установки не должно уехать то, чего нет. */
+   *  На macOS опции службы нет, и решения по ней выключены — в JSON установки
+   *  не должно уехать то, чего нет; опция тела остаётся (тело есть с 0.8.0),
+   *  только словами macOS: без `.exe`, с двумя разрешениями системы. */
   private syncPlatform() {
     const mac = isMac();
     this.lead.textContent = mac ? LEAD_MACOS : LEAD;
-    this.options.hidden = mac;
+    this.serviceBoxEl.hidden = mac;
+    this.options.classList.toggle("one", mac);
     if (mac) {
       setup.service = false;
       setup.session0 = false;
-      setup.computer = false;
     }
+    const computer = mac && COMPUTER_OPTION_MACOS ? COMPUTER_OPTION_MACOS : COMPUTER_OPTION;
+    this.computerDesc.textContent = computer.text;
+    this.computerNote.textContent = mac ? COMPUTER_NOTE_MACOS : COMPUTER_NOTE;
     for (const [name, note] of this.cardNotes) {
       note.textContent = (mac && INSTALL_NOTE_MACOS[name]) || INSTALL_NOTE[name] || "";
     }

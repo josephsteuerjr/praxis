@@ -76,7 +76,7 @@
   "setup.keys.models.more": "另有 ${models.length - shown.length} 个——名字手动填",
   "setup.mode.title": "智能体可以做什么？",
   "setup.mode.lead": "三个问题，彼此无关：智能体的手能伸多远、要不要装 Windows 服务、给不给它窗口和鼠标。以后可以在设置里改。",
-  "setup.mode.lead.macos": "只有一个问题：智能体的手能伸多远。以后可以在设置里改。",
+  "setup.mode.lead.macos": "两个互不相关的问题：智能体的手能伸多远，以及是否把窗口和鼠标交给它。以后都可以在设置里改。",
   "setup.mode.fence.aria_label": "工具围栏",
   "setup.mode.install_note.sandbox": "不需要管理员权限：程序装在你自己的文件夹里。想让智能体看到别的文件夹，装完以后在设置里加。",
   "setup.mode.install_note.interactive": "围栏本身不需要管理员权限。某个动作需要时，会由 Windows 单独弹窗向你要一次。",
@@ -86,6 +86,7 @@
   "setup.mode.session0.off": "目前关闭：智能体住在你的会话里，看得见桌面。开启后它会拿到系统权限，但从此看不见桌面，而弱一些的模型可能不明白自己在做什么。",
   "setup.mode.computer.note": "不需要管理员权限。这四项权限是一次一起给的，之后可以在设置里收窄。",
   "setup.mode.computer.off": "暂未启用：`computer` 工具在，但其下没有主体——它会用话语拒绝。",
+  "setup.mode.computer_note.macos": "不需要管理员权限。四项权限一次全部授予，以后可在设置里收窄。系统会索要两项授权——“屏幕录制”和“辅助功能”；程序更新之后需要重新授予。",
   "setup.mode.foot": "无论哪种围栏，在自己的文件夹里它都是自由的：改自己的代码和记忆。在沙箱里，这就是它的全部世界——它能弄坏的只有自己。",
   "setup.install.head": "可以安装了",
   "setup.install.btn_install": "安装",
@@ -164,5 +165,12 @@
   "setup.uninstall.result_failed": "没有成功",
   "setup.uninstall.result_partial": "没有卸干净",
   "setup.uninstall.result_ok": "已卸载",
-  "setup.uninstall.btn_close": "关闭"
+  "setup.uninstall.btn_close": "关闭",
+  "settings.computer.screen.macos": "屏幕录制",
+  "settings.computer.accessibility.macos": "辅助功能",
+  "settings.computer.granted.macos": "已授予",
+  "settings.computer.missing.macos": "未授予",
+  "settings.computer.open_settings.macos": "打开系统设置",
+  "settings.computer.tcc_note.macos": "两项授权都在“系统设置”的“隐私与安全性”里发放。程序更新后系统会把它当作新程序：把 Helene 从列表里移除，再重新添加。",
+  "settings.computer.no_body.macos": "这个构建里没有“身体”：程序旁边找不到 helene-body 和 helene-bridge。"
 }

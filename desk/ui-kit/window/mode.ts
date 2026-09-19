@@ -122,6 +122,14 @@ export interface ComputerLive {
   identity?: { kind?: string; session_id?: number | null; integrity?: string; elevated?: boolean };
   checked_at?: string;
   logs?: string[];
+  /** macOS: система агента по слову тела (`desktop.status.platform`). */
+  platform?: string;
+  /** macOS: два разрешения системы (TCC) по слову тела — «Запись экрана» и
+   *  «Универсальный доступ». null или нет поля — не спрашивали, и окно строк
+   *  про них не рисует: «не спрашивали» и «нет» — разные ответы. */
+  tcc?: { screen_recording?: boolean; accessibility?: boolean } | null;
+  /** macOS: слова тела о том, какого разрешения нет и куда за ним идти. */
+  hints?: string[];
 }
 
 /**

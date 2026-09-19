@@ -272,9 +272,10 @@ def mode_state() -> dict:
         log.exception("режим не разобрался")
         return mode_unknown("режим не разобрался — смотри helene.log")
     picture["choices"] = mod.catalogue()
-    # Секции службы и тела — только там, где они есть (Windows). На macOS их нет
-    # по замыслу порта: вместо текстов — None, и окно карточек не рисует (прячет
-    # по `app_info.platform`; `service_here` — та же правда со стороны канала).
+    # Секции службы и тела — только там, где они есть: служба — Windows, тело —
+    # Windows и macOS (`modes.HAS_COMPUTER`). Где чего нет — None вместо текстов,
+    # и окно карточки не рисует (прячет по `app_info.platform`; `service_here` —
+    # та же правда со стороны канала).
     picture["service"] = mod.service_option() if picture.get("service_here", True) else None
     # Управление компьютером — опция поверх любого режима, не режим (06.09).
     # Что записал владелец — из конфига; что с телом на самом деле — снимок

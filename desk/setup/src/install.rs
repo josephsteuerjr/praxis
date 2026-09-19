@@ -273,11 +273,12 @@ impl Setup {
         cfg!(windows) && (self.service || self.agent_mode.trim() == "service")
     }
 
-    /// Поднимать ли тело тула `computer`. На macOS тела нет (основа порта — без
-    /// UIA), и `true` из JSON в конфиг не проходит: движок отказал бы словами,
-    /// а конфиг обещал бы окна и мышь.
+    /// Поднимать ли тело тула `computer`. Есть на Windows (UIA) и на macOS
+    /// (Accessibility, порт тела 19.09); на прочих POSIX тела нет, и `true` из
+    /// JSON в конфиг не проходит: движок отказал бы словами, а конфиг обещал бы
+    /// окна и мышь.
     pub fn wants_computer(&self) -> bool {
-        cfg!(windows) && self.computer
+        (cfg!(windows) || cfg!(target_os = "macos")) && self.computer
     }
 
     /// Нулевая сессия действует только вместе со службой: без неё исполнять
@@ -851,8 +852,8 @@ fn config_json(s: &Setup, prev_relay_key: Option<String>, relay_port: u16) -> se
         "sandbox": { "enabled": agent_mode == "sandbox", "network": true },
         "service": { "session0": s.wants_session0(), "firewall": s.firewall },
         // Третий ответ, тоже независимый: тело руки `computer`. Все четыре
-        // права сразу — сузить владелец может в Настройках. На macOS тела нет —
-        // блок есть, выключатель всегда false (`wants_computer`).
+        // права сразу — сузить владелец может в Настройках. Где тела нет
+        // (прочие POSIX) — блок есть, выключатель всегда false (`wants_computer`).
         "computer": computer_block(s.wants_computer()),
         "python": PYTHON_REL,
         "app": "app/deskapp.py",
@@ -2929,10 +2930,10 @@ mod tests {
     /// Тело руки `computer`: выключено по умолчанию, блок в конфиге есть
     /// всегда (с портом и всеми четырьмя правами), включение — только словом
     /// визарда; переустановка не стирает ни сужённые права, ни порт владельца.
-    // Семантика службы и тела — Windows: на macOS wants_service/wants_computer
-    // отвечают «нет» по построению (свой стенд service_and_body_exist_only_on_windows).
+    // Тело есть на Windows и macOS; где его нет, `wants_computer` отвечает «нет»
+    // по построению (свой стенд the_service_is_windows_only_the_body_is_not).
     #[test]
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     fn computer_block_is_written_and_merged() {
         let mut s = setup_for("api");
         let cfg = config_json(&s, None, RELAY_PORT);
@@ -3138,24 +3139,30 @@ mod tests {
         assert_eq!(RELAY_NAME.ends_with(".exe"), cfg!(windows));
     }
 
-    /// Служба и тело — Windows. На macOS решение из JSON (тихое обновление везёт
-    /// прежние) в конфиг не проходит: `installed.service` и `computer.enabled`
-    /// остаются false, а не обещают то, чего нет.
+    /// Служба — только Windows; тело — Windows и macOS (порт тела 19.09). Где
+    /// чего нет, решение из JSON (тихое обновление везёт прежние) в конфиг не
+    /// проходит: `installed.service` и `computer.enabled` остаются false, а не
+    /// обещают то, чего нет.
     #[test]
-    fn service_and_body_exist_only_on_windows() {
+    fn the_service_is_windows_only_the_body_is_not() {
+        let body_here = cfg!(any(windows, target_os = "macos"));
         let mut s = setup_for("api");
         s.service = true;
         s.session0 = true;
         s.computer = true;
         assert_eq!(s.wants_service(), cfg!(windows));
         assert_eq!(s.wants_session0(), cfg!(windows));
-        assert_eq!(s.wants_computer(), cfg!(windows));
+        assert_eq!(s.wants_computer(), body_here);
         let cfg = config_json(&s, None, RELAY_PORT);
         assert_eq!(cfg["installed"]["service"], cfg!(windows));
-        assert_eq!(cfg["computer"]["enabled"], cfg!(windows));
+        assert_eq!(cfg["computer"]["enabled"], body_here);
         assert_eq!(cfg["sandbox"]["enabled"], true, "ограда от системы не зависит");
         let out = merge_config(Some(serde_json::json!({ "computer": { "enabled": true } })), config_json(&s, None, RELAY_PORT), &s);
-        assert_eq!(out["computer"]["enabled"], cfg!(windows));
+        assert_eq!(out["computer"]["enabled"], body_here);
+        // Выключатель — слово визарда на любой системе: `false` проходит везде.
+        s.computer = false;
+        assert!(!s.wants_computer());
+        assert_eq!(config_json(&s, None, RELAY_PORT)["computer"]["enabled"], false);
     }
 
     /// Дата установки без внешней программы: границы года и високосный день.
@@ -3397,8 +3404,8 @@ mod tests {
     /// ⚠⚠ P0. Служба — не ограда: она ставится ПОВЕРХ любой из двух и ни одну
     /// не снимает. Пока их держали одним списком, владелец, выбравший службу с
     /// песочницей, получал `sandbox.enabled = false` — ограду снимали молча.
-    // Семантика службы и тела — Windows: на macOS wants_service/wants_computer
-    // отвечают «нет» по построению (свой стенд service_and_body_exist_only_on_windows).
+    // Семантика службы — Windows: на macOS wants_service отвечает «нет» по
+    // построению (свой стенд the_service_is_windows_only_the_body_is_not).
     #[test]
     #[cfg(windows)]
     fn service_never_takes_the_fence_off() {
@@ -3422,8 +3429,8 @@ mod tests {
     /// оттуда читаем (иначе выбор владельца пропал бы), а оградой её не
     /// считаем: оградой становится песочница — умолчание визарда и более узкие
     /// права из двух.
-    // Семантика службы и тела — Windows: на macOS wants_service/wants_computer
-    // отвечают «нет» по построению (свой стенд service_and_body_exist_only_on_windows).
+    // Семантика службы — Windows: на macOS wants_service отвечает «нет» по
+    // построению (свой стенд the_service_is_windows_only_the_body_is_not).
     #[test]
     #[cfg(windows)]
     fn legacy_service_mode_is_a_service_not_a_fence() {
@@ -3439,8 +3446,8 @@ mod tests {
 
     /// Пустой ключ — визард старого выпуска, ограду он не присылал вовсе.
     /// Молча расширять права нельзя: умолчание — песочница.
-    // Семантика службы и тела — Windows: на macOS wants_service/wants_computer
-    // отвечают «нет» по построению (свой стенд service_and_body_exist_only_on_windows).
+    // Семантика службы — Windows: на macOS wants_service отвечает «нет» по
+    // построению (свой стенд the_service_is_windows_only_the_body_is_not).
     #[test]
     #[cfg(windows)]
     fn missing_fence_defaults_to_sandbox() {
@@ -3455,8 +3462,8 @@ mod tests {
 
     /// Нулевая сессия живёт в `service.session0` (там её читает служба) и
     /// действует только вместе со службой: без неё исполнять некому.
-    // Семантика службы и тела — Windows: на macOS wants_service/wants_computer
-    // отвечают «нет» по построению (свой стенд service_and_body_exist_only_on_windows).
+    // Семантика службы — Windows: на macOS wants_service отвечает «нет» по
+    // построению (свой стенд the_service_is_windows_only_the_body_is_not).
     #[test]
     #[cfg(windows)]
     fn session0_only_with_the_service() {
@@ -3511,8 +3518,8 @@ mod tests {
     /// Тот же P0 на переустановке. В файле лежит наследие первой волны:
     /// `agent_mode: "service"` при живой ограде. Визард приходит со службой —
     /// и ограда обязана остаться на месте.
-    // Семантика службы и тела — Windows: на macOS wants_service/wants_computer
-    // отвечают «нет» по построению (свой стенд service_and_body_exist_only_on_windows).
+    // Семантика службы — Windows: на macOS wants_service отвечает «нет» по
+    // построению (свой стенд the_service_is_windows_only_the_body_is_not).
     #[test]
     #[cfg(windows)]
     fn merge_keeps_the_fence_when_the_service_stays() {

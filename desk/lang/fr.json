@@ -76,7 +76,7 @@
   "setup.keys.models.more": "et ${models.length - shown.length} de plus — saisissez le nom à la main",
   "setup.mode.title": "Que peut faire l'agent ?",
   "setup.mode.lead": "Trois questions indépendantes : jusqu'où va l'agent, faut-il installer le service Windows, faut-il lui donner les fenêtres et la souris. Modifiable ensuite, dans les réglages.",
-  "setup.mode.lead.macos": "Une seule question : jusqu'où va l'agent. Modifiable ensuite, dans les réglages.",
+  "setup.mode.lead.macos": "Deux questions, sans lien entre elles : jusqu'où va l'agent, et lui donne-t-on les fenêtres et la souris. Modifiable ensuite, dans les réglages.",
   "setup.mode.fence.aria_label": "Clôture des outils",
   "setup.mode.install_note.sandbox": "Pas besoin de droits d'administrateur : le programme s'installe dans votre dossier. Les dossiers extérieurs que l'agent pourra voir se branchent ensuite, dans les réglages.",
   "setup.mode.install_note.interactive": "Pas besoin de droits d'administrateur pour la clôture elle-même. L'agent les demandera à part, par une fenêtre Windows, quand une action précise en aura besoin.",
@@ -86,6 +86,7 @@
   "setup.mode.session0.off": "Désactivé pour l'instant : l'agent vit dans votre session et voit le bureau. Si vous l'activez, il obtiendra les droits du système, mais cessera de voir le bureau — et un modèle un peu faible risque alors de ne plus comprendre ce qu'il fait.",
   "setup.mode.computer.note": "Pas besoin de droits d'administrateur. Les quatre droits sont donnés ensemble ; vous pourrez les restreindre dans les réglages.",
   "setup.mode.computer.off": "Désactivé pour l'instant : l'outil `computer` existe, mais aucun corps ne le porte — il refuse en toutes lettres.",
+  "setup.mode.computer_note.macos": "Pas besoin de droits d'administrateur. Les quatre permissions sont accordées d'un coup ; on peut les restreindre dans les réglages. Le système demandera deux autorisations — « Enregistrement de l'écran » et « Accessibilité » ; après une mise à jour du programme, il faudra les accorder à nouveau.",
   "setup.mode.foot": "Dans son propre dossier, il est libre quel que soit le périmètre : il modifie son code et sa mémoire. Dans le bac à sable, ce dossier est tout son monde — il ne peut casser que lui-même.",
   "setup.install.head": "Prêt à installer",
   "setup.install.btn_install": "Installer",
@@ -164,5 +165,12 @@
   "setup.uninstall.result_failed": "Échec",
   "setup.uninstall.result_partial": "Retrait incomplet",
   "setup.uninstall.result_ok": "Retiré",
-  "setup.uninstall.btn_close": "Fermer"
+  "setup.uninstall.btn_close": "Fermer",
+  "settings.computer.screen.macos": "Enregistrement de l'écran",
+  "settings.computer.accessibility.macos": "Accessibilité",
+  "settings.computer.granted.macos": "accordée",
+  "settings.computer.missing.macos": "absente",
+  "settings.computer.open_settings.macos": "Ouvrir les réglages",
+  "settings.computer.tcc_note.macos": "Les deux autorisations s'accordent dans les Réglages Système, section « Confidentialité et sécurité ». Après une mise à jour, le système considère le programme comme nouveau : retirez Helene de la liste et ajoutez-le à nouveau.",
+  "settings.computer.no_body.macos": "Pas de corps dans cette version : helene-body et helene-bridge sont introuvables à côté du programme."
 }

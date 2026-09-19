@@ -581,11 +581,11 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
   // Тело руки `computer` живёт снаружи ограды, поэтому карточка не прячется
   // ни в одном режиме. Тексты и четыре права — из трубы (`computer_option`),
   // живое состояние тела — из снимка харнесса (`computer_live`); окно
-  // пишет ровно два ключа блока и сливает остальное.
-  // На macOS тела нет — карточки нет; блок `computer` в файле при этом
-  // сохраняется как лежал (`collect` пишет его теми же значениями).
-  const computer = computerCard(modeLive, storedComputer(draft.computer));
-  if (!mac) cards.push(inGroup(computer.el, GROUP.rights));
+  // пишет ровно два ключа блока и сливает остальное. Система агента идёт
+  // карточке: на macOS (тело есть с 0.8.0) она называет файлы без `.exe` и
+  // рисует строки про два разрешения системы.
+  const computer = computerCard(modeLive, storedComputer(draft.computer), platform);
+  cards.push(inGroup(computer.el, GROUP.rights));
 
   // --- голос: единственная часть продукта, которой не хватает гигабайта
   //

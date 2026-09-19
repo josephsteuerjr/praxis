@@ -2150,6 +2150,47 @@ fn reveal_path(path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Раздел «Конфиденциальность и безопасность» Системных настроек macOS — по
+/// кнопке «Открыть настройки» карточки «Управление компьютером»: `screen` —
+/// «Запись экрана», `accessibility` — «Универсальный доступ». Открывается
+/// системное окно, галочку ставит владелец сам: выдать разрешение TCC
+/// программно нельзя, и это правильно. Окно зовёт команду только на macOS
+/// (карточка рисует кнопки по `tcc` в снимке тела).
+#[tauri::command]
+fn open_privacy_pane(kind: String) -> Result<(), String> {
+    let Some(url) = privacy_pane_url(&kind) else {
+        return Err(format!("не знаю такого раздела разрешений: «{kind}»"));
+    };
+    #[cfg(target_os = "macos")]
+    {
+        Command::new(posix_tool("open"))
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = url;
+        Err("открывать нечего: разрешения экрана и ввода на этой системе не выдаются отдельным разделом настроек".into())
+    }
+}
+
+/// Адрес раздела — чистая функция под стендом: опечатка в нём открыла бы
+/// Системные настройки на общей странице, и владелец искал бы галочку сам.
+fn privacy_pane_url(kind: &str) -> Option<&'static str> {
+    match kind.trim() {
+        "screen" => Some("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"),
+        "accessibility" => {
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        }
+        _ => None,
+    }
+}
+
 /// Известная папка пользователя из реестра, а не склейка из %APPDATA%.
 /// Групповая политика «Перенаправление папок» уводит меню «Пуск» и
 /// автозагрузку на сетевой диск: склейка молча промахивалась, ярлык ложился
@@ -2952,6 +2993,7 @@ fn netsh_via_uac(runs: &[Vec<String>]) -> Result<NetshDone, String> {
 /// бы вызов навсегда — а «служба не отвечает» должно быть состоянием, а не
 /// зависшим окном. Поэтому ждём в отдельном потоке и со сроком; поток, если он
 /// всё-таки повис, умрёт сам, когда труба оборвётся.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn broker_call_deadline(
     pipe: &str,
     ask: &BrokerAsk,
@@ -3419,7 +3461,8 @@ fn broker_wishes(raw: &str) -> Vec<Result<BrokerWish, BrokerBad>> {
 /// Собрать просьбу так, как её ПРИМЕТ служба, и проверить ровно её же
 /// проверками (`common/broker.rs`). Смысл — не «удобно», а «владельцу не
 /// покажут команду, которую служба всё равно отвергнет»: иначе он подписывал бы
-/// отказы.
+/// отказы. На macOS службы нет, и та же роль у `mac_wish_check`.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn broker_wish_ask(wish: &BrokerWish, token: &str) -> Result<BrokerAsk, String> {
     let mut ask = BrokerAsk::new(token, wish.op, &wish.cmd, &wish.args, &wish.why);
     ask.id = wish.id.clone();
@@ -3431,16 +3474,26 @@ fn broker_wish_ask(wish: &BrokerWish, token: &str) -> Result<BrokerAsk, String> 
 /// это единственный экран, по которому человек решает отдать права системы, и
 /// «зачем» в нём — слова САМОГО АГЕНТА, а не факт.
 fn broker_confirm_text(wish: &BrokerWish) -> String {
-    let door = match wish.op {
-        BrokerOp::Exec => {
+    broker_confirm_text_for(wish, cfg!(target_os = "macos"))
+}
+
+/// То же — с явной платформой, чтобы стенд разобрал обе на любой ОС. На macOS
+/// `exec` — права администратора через системный диалог пароля, а не «права
+/// системы»: их там нет, и слова окна обязаны совпадать с тем, что произойдёт.
+fn broker_confirm_text_for(wish: &BrokerWish, mac: bool) -> String {
+    let door = match (wish.op, mac) {
+        (BrokerOp::Exec, false) => {
             "ПРАВАМИ СИСТЕМЫ — это выше твоих собственных прав администратора"
         }
-        BrokerOp::SpawnInteractive => "твоими правами, в твоей сессии",
-        BrokerOp::Ping => "ничего не выполняя (проверка связи)",
+        (BrokerOp::Exec, true) => {
+            "ПРАВАМИ АДМИНИСТРАТОРА — после «Да» система отдельно спросит твой пароль"
+        }
+        (BrokerOp::SpawnInteractive, _) => "твоими правами, в твоей сессии",
+        (BrokerOp::Ping, _) => "ничего не выполняя (проверка связи)",
         // Узкая дверь: агент выбирает только порт, само правило собирает служба.
         // Показывать её теми же словами, что и «права системы», было бы враньём
         // в сторону страха — а пугать там, где риска нет, тоже обман.
-        BrokerOp::Firewall => "правами службы, и только чтобы поставить правило брандмауэра",
+        (BrokerOp::Firewall, _) => "правами службы, и только чтобы поставить правило брандмауэра",
     };
     let shown = broker_shown_command(&wish.cmd, &wish.args);
     let total = shown.chars().count();
@@ -3485,10 +3538,9 @@ fn ask_owner_yes(title: &str, text: &str) -> bool {
 /// и кнопка отмены — «Нет»: Enter и Esc отказывают; «Да» приходит строкой
 /// `button returned:Да`. Диалог не открылся — отказ, и причина в журнале.
 ///
-/// Сегодня на macOS сюда не дойти: брокера прав здесь нет, и `broker_pass`
-/// отказывает просьбе агента до вопроса владельцу («брокера на этой платформе
-/// нет»). Функция оставлена как честная половина протокола — появится брокер,
-/// вопрос будет задан тем же окном.
+/// Сюда доходит просьба агента к брокеру: на macOS брокер — сама оболочка
+/// (`broker_prepare`/`broker_execute` ниже), и это окно — первая из двух
+/// подписей владельца; вторая, для `exec`, — системный диалог пароля.
 #[cfg(target_os = "macos")]
 fn ask_owner_yes(title: &str, text: &str) -> bool {
     let script = format!(
@@ -3531,6 +3583,14 @@ fn broker_alive(tree: &Path) -> bool {
     broker_call_deadline(&broker_pipe_name(&exe_dir()), &ask, Duration::from_secs(6))
         .map(|receipt| receipt.ok)
         .unwrap_or(false)
+}
+
+/// Вне Windows трубы нет. macOS: брокер — сама оболочка, жива она — жив и он.
+/// Прочие POSIX — брокера нет.
+#[cfg(not(windows))]
+#[allow(dead_code)]
+fn broker_alive(_tree: &Path) -> bool {
+    cfg!(target_os = "macos")
 }
 
 /// Строка в журнал владельца (`broker.log`) И в журнал оболочки рядом с exe.
@@ -3680,7 +3740,7 @@ fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
         // разбегается по веткам: развилка «спросили или нет» тут одна.
         let at = if wish.at_unix > 0 { wish.at_unix } else { file_at };
         let mut refusal: Option<String> = None;
-        let mut ready: Option<BrokerAsk> = None;
+        let mut ready: Option<BrokerPrepared> = None;
         if now.saturating_sub(at) > BROKER_WISH_STALE_SEC {
             refusal = Some(format!(
                 "просьба ждала дольше {} минут — за это время агент ушёл дальше, и \
@@ -3688,24 +3748,12 @@ fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
                 BROKER_WISH_STALE_SEC / 60
             ));
         } else {
-            match broker_token_read(tree) {
-                None => {
-                    // Слова — по платформе: на macOS службы нет как механизма, и
-                    // звать агента «поставить её на экране „Система“» было бы ложью.
-                    refusal = Some(if cfg!(windows) {
-                        "брокера нет: служба не установлена, и повышать права некому. \
-                         Служба ставится один раз под администратором на экране «Система»"
-                            .to_string()
-                    } else {
-                        "брокера на этой платформе нет: повышать права некому".to_string()
-                    })
-                }
-                // Слова отказа — службины, слово в слово: пересказ разъехался бы
-                // с оригиналом, а владельцу и агенту нужен один текст.
-                Some(token) => match broker_wish_ask(&wish, &token) {
-                    Ok(ask) => ready = Some(ask),
-                    Err(why) => refusal = Some(why),
-                },
+            // Кто исполнит и примет ли он такую просьбу — по платформе
+            // (`broker_prepare`): служба по трубе на Windows, сама оболочка на
+            // macOS. Слова отказа — исполнителя, слово в слово.
+            match broker_prepare(tree, &wish) {
+                Ok(prepared) => ready = Some(prepared),
+                Err(why) => refusal = Some(why),
             }
         }
         // `ping` ничего не выполняет — спрашивать владельца не о чем. Это
@@ -3737,12 +3785,11 @@ fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
             added += 1;
             continue;
         }
-        let ask = ready.expect("без отказа просьба собрана выше");
-        let limit = Duration::from_secs(wish.timeout_sec.saturating_add(30));
-        match broker_call_deadline(&broker_pipe_name(&exe_dir()), &ask, limit) {
-            Ok(receipt) => {
+        let prepared = ready.expect("без отказа просьба собрана выше");
+        match broker_execute(&prepared, &wish) {
+            BrokerRun::Done(receipt) => {
                 let outcome = if !receipt.ok {
-                    "ОТКАЗ службы".to_string()
+                    if cfg!(windows) { "ОТКАЗ службы" } else { "не вышло" }.to_string()
                 } else {
                     match receipt.code {
                         Some(code) => format!("код {code}"),
@@ -3767,7 +3814,22 @@ fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
                 ));
                 added += 1;
             }
-            Err(err) => {
+            // Вторая подпись владельца не состоялась (macOS: отменён диалог
+            // пароля). Это ОТКАЗ, а не «не вышло»: агент обязан прочитать его
+            // как отказ и не переспрашивать тем же.
+            BrokerRun::Refused(note) => {
+                broker_note_owner(
+                    tree,
+                    &format!(
+                        "ОТКАЗ · зачем: {} · команда: {} · {note}",
+                        wish.why,
+                        broker_shown_command(&wish.cmd, &wish.args)
+                    ),
+                );
+                answers.push(broker_answer_row(&wish, "refused", &note, None));
+                added += 1;
+            }
+            BrokerRun::Failed(err) => {
                 broker_note_owner(
                     tree,
                     &format!("владелец разрешил, но брокер не ответил: {err} · зачем: {}", wish.why),
@@ -3781,6 +3843,386 @@ fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
         broker_answers_save(tree, &answers);
     }
     all
+}
+
+// ───────────────────────── чем исполняется подписанная просьба: по платформе
+//
+// Windows: просьба уезжает службе по трубе с её токеном (`BrokerAsk`), исполняет
+// служба. macOS: службы и трубы нет — брокер САМА ОБОЛОЧКА: подписанную просьбу
+// она исполняет сама (`spawn_interactive` — правами владельца, `exec` — через
+// `osascript … with administrator privileges`, где пароль спрашивает система, и
+// этот диалог — вторая подпись владельца). Прочие POSIX: брокера нет. Общий ход
+// `broker_pass` один на всех: разбор, протухание, вопрос владельцу, квитанция,
+// журнал — расходятся только эти две функции.
+
+/// Что нужно, чтобы исполнить подписанную просьбу.
+#[cfg(windows)]
+type BrokerPrepared = BrokerAsk;
+#[cfg(not(windows))]
+type BrokerPrepared = BrokerWish;
+
+/// Чем кончилось исполнение — ТРИ исхода, не два: отказ владельца во втором
+/// диалоге (пароль на macOS) — это «refused», а не «failed», и в файле ответов
+/// он обязан зваться своим словом.
+enum BrokerRun {
+    Done(BrokerReceipt),
+    Refused(String),
+    Failed(String),
+}
+
+/// Windows: токен службы и её же проверки; без токена — службы нет.
+#[cfg(windows)]
+fn broker_prepare(tree: &Path, wish: &BrokerWish) -> Result<BrokerPrepared, String> {
+    let Some(token) = broker_token_read(tree) else {
+        return Err("брокера нет: служба не установлена, и повышать права некому. \
+                    Служба ставится один раз под администратором на экране «Система»"
+            .to_string());
+    };
+    // Слова отказа — службины, слово в слово: пересказ разъехался бы с
+    // оригиналом, а владельцу и агенту нужен один текст.
+    broker_wish_ask(wish, &token)
+}
+
+/// macOS: та же граница, что у службы, только путь — POSIX; программа обязана
+/// быть на месте — просьбу о несуществующей команде владельцу показывать незачем.
+#[cfg(target_os = "macos")]
+fn broker_prepare(_tree: &Path, wish: &BrokerWish) -> Result<BrokerPrepared, String> {
+    mac_wish_check(wish)?;
+    if wish.op.runs() && !Path::new(&wish.cmd).is_file() {
+        return Err(format!("программы «{}» нет по этому пути — просить не о чем", wish.cmd));
+    }
+    Ok(wish.clone())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn broker_prepare(_tree: &Path, _wish: &BrokerWish) -> Result<BrokerPrepared, String> {
+    Err("брокера на этой платформе нет: повышать права некому".to_string())
+}
+
+#[cfg(windows)]
+fn broker_execute(prepared: &BrokerPrepared, wish: &BrokerWish) -> BrokerRun {
+    let limit = Duration::from_secs(wish.timeout_sec.saturating_add(30));
+    match broker_call_deadline(&broker_pipe_name(&exe_dir()), prepared, limit) {
+        Ok(receipt) => BrokerRun::Done(receipt),
+        Err(err) => BrokerRun::Failed(err),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn broker_execute(prepared: &BrokerPrepared, _wish: &BrokerWish) -> BrokerRun {
+    mac_broker_run(prepared)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn broker_execute(_prepared: &BrokerPrepared, _wish: &BrokerWish) -> BrokerRun {
+    BrokerRun::Failed("брокера на этой платформе нет".to_string())
+}
+
+/// macOS: граница просьбы — та же, что у службы на Windows (`BrokerAsk::parse`
+/// в common/broker.rs), только путь — POSIX: абсолютный и без «..». Голое имя
+/// искалось бы по PATH владельца, а `exec` идёт правами администратора —
+/// подменённый в PATH файл ничем не лучше подложенного в папку установки.
+/// Чистая функция под стендом на любой ОС.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mac_wish_check(wish: &BrokerWish) -> Result<(), String> {
+    let why = wish.why.trim();
+    if why.is_empty() {
+        return Err("не сказано «зачем». Это поле идёт в журнал владельцу — брокер без него не работает".into());
+    }
+    if why.chars().count() < 3 || !why.chars().any(|c| c.is_alphabetic()) {
+        return Err("«зачем» должно быть словами, а не знаком-заглушкой".into());
+    }
+    if why.chars().count() > 500 {
+        return Err("«зачем» длиннее 500 знаков — это уже не объяснение".into());
+    }
+    if why.chars().any(|c| c.is_control()) {
+        return Err("«зачем» — одной строкой: перевод строки в нём подделывает журнал".into());
+    }
+    if wish.timeout_sec == 0 || wish.timeout_sec > BROKER_TIMEOUT_MAX {
+        return Err(format!("timeout_sec бывает от 1 до {BROKER_TIMEOUT_MAX} с"));
+    }
+    if wish.args.len() > 256 {
+        return Err("больше 256 аргументов — это не команда".into());
+    }
+    if wish.args.iter().any(|a| a.contains('\0')) {
+        return Err("в args есть нулевой байт — команда оборвётся на нём".into());
+    }
+    match wish.op {
+        BrokerOp::Ping => Ok(()),
+        // Правило брандмауэра — дверь Windows: там его ставит служба ради кнопки
+        // «Телефон». На macOS брандмауэр спрашивает владельца сам при первом
+        // входящем, и ставить нечего.
+        BrokerOp::Firewall => Err("на macOS брандмауэр спрашивает сам — правило ставить не нужно, \
+                                   и двери firewall здесь нет"
+            .into()),
+        BrokerOp::Exec | BrokerOp::SpawnInteractive => mac_cmd_ok(&wish.cmd),
+    }
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mac_cmd_ok(cmd: &str) -> Result<(), String> {
+    if cmd.is_empty() {
+        return Err("нет команды (поле cmd)".into());
+    }
+    if cmd.chars().any(|c| c.is_control()) {
+        return Err("в имени программы управляющий знак или перевод строки".into());
+    }
+    if !cmd.starts_with('/') {
+        return Err(format!(
+            "команду надо называть абсолютным путём, а не «{cmd}»: голое имя ищется по PATH, \
+             и подменённый там файл исполнился бы чужими правами"
+        ));
+    }
+    if cmd.contains("..") {
+        return Err("в пути есть «..» — назови программу прямо".into());
+    }
+    Ok(())
+}
+
+/// Аргумент для /bin/sh — в одинарных кавычках: внутри них sh не разворачивает
+/// ничего, а сама одинарная кавычка закрывается, экранируется и открывается
+/// снова (`'\''`). Пустой аргумент — `''`. Голым остаётся только то, что sh не
+/// тронет ни при каких настройках.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn sh_quote(arg: &str) -> String {
+    if !arg.is_empty()
+        && arg.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-+=:,@%".contains(&b))
+    {
+        return arg.to_string();
+    }
+    format!("'{}'", arg.replace('\'', "'\\''"))
+}
+
+/// Командная строка для /bin/sh: программа и аргументы по одному, каждый в
+/// своих кавычках. Это то, что исполнит `do shell script` под администратором,
+/// поэтому склейка ЕДИНСТВЕННАЯ и стоит под стендом: цена ошибки здесь —
+/// «запустилось не то», а не «не запустилось».
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mac_shell_line(cmd: &str, args: &[String]) -> String {
+    let mut out = sh_quote(cmd);
+    for a in args {
+        out.push(' ');
+        out.push_str(&sh_quote(a));
+    }
+    out
+}
+
+/// Метка кода возврата в выводе. `do shell script` кода команды не отдаёт:
+/// ноль он молча глотает, а ненулевой превращает в ошибку скрипта вместе со
+/// stderr. Поэтому код печатает сам sh последней строкой, а оболочка его
+/// вычитывает (`mac_split_code`).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const MAC_CODE_MARK: &str = "HELENE-CODE";
+
+/// Скрипт для `osascript -e`: команда правами администратора с системным
+/// диалогом пароля — он и есть вторая подпись владельца, своего окна пароля у
+/// оболочки нет и быть не должно. stderr слит в stdout (`2>&1`): порознь
+/// `do shell script` отдаёт stderr только в тексте ошибки, а квитанции нужны
+/// оба потока целиком. `without altering line endings` — иначе AppleScript
+/// перепишет переводы строк в `\r`, и метка кода не найдётся.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mac_admin_script(cmd: &str, args: &[String], prompt: &str) -> String {
+    let line = format!(
+        "{} 2>&1; printf '\\n{MAC_CODE_MARK} %s' \"$?\"",
+        mac_shell_line(cmd, args)
+    );
+    format!(
+        "do shell script {} with prompt {} with administrator privileges without altering line endings",
+        applescript_quote(&line),
+        applescript_quote(prompt)
+    )
+}
+
+/// Вывод команды и её код — из того, что вернул osascript. Метки нет — код
+/// неизвестен (`None`), и это сказано, а не подменено нулём.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mac_split_code(text: &str) -> (String, Option<i32>) {
+    let trimmed = text.trim_end_matches(['\n', '\r']);
+    let at = trimmed.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    if let Some(rest) = trimmed[at..].strip_prefix(MAC_CODE_MARK) {
+        if let Ok(code) = rest.trim().parse::<i32>() {
+            return (trimmed[..at].trim_end_matches(['\n', '\r']).to_string(), Some(code));
+        }
+    }
+    (trimmed.to_string(), None)
+}
+
+/// Сколько сверх `timeout_sec` ждём `exec`: между «Да» и командой стоит человек
+/// с диалогом пароля.
+#[cfg(target_os = "macos")]
+const MAC_PASSWORD_GRACE_SEC: u64 = 120;
+
+/// Что вышло у процесса, поднятого оболочкой: код (None — снят по сроку или
+/// сигналом), оба потока целиком, срок вышел или нет.
+#[cfg(target_os = "macos")]
+struct MacRan {
+    pid: u32,
+    code: Option<i32>,
+    killed: bool,
+    out: String,
+    err: String,
+}
+
+/// Поднять процесс в своей группе, дождаться со сроком, собрать оба потока.
+/// По сроку — SIGKILL всей группе: внуки не должны пережить срок, а
+/// `run_hidden_for` гасит только лидера и теряет уже собранный вывод.
+#[cfg(target_os = "macos")]
+fn mac_run_group(cmd: &mut Command, limit: Duration) -> Result<MacRan, String> {
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
+    let mut child = cmd.spawn().map_err(|e| format!("не поднялось: {e}"))?;
+    let pid = child.id();
+    let out_pipe = child.stdout.take();
+    let err_pipe = child.stderr.take();
+    let out_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut p) = out_pipe {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let err_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut p) = err_pipe {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let deadline = Instant::now() + limit;
+    let mut killed = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(err) => return Err(err.to_string()),
+        }
+        if Instant::now() >= deadline {
+            unsafe {
+                libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+            }
+            let _ = child.wait();
+            killed = true;
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(80));
+    };
+    let out = out_thread.join().unwrap_or_default();
+    let err = err_thread.join().unwrap_or_default();
+    Ok(MacRan {
+        pid,
+        code: status.and_then(|s| s.code()),
+        killed,
+        out: String::from_utf8_lossy(&out).into_owned(),
+        err: String::from_utf8_lossy(&err).into_owned(),
+    })
+}
+
+/// macOS: исполнить подписанную просьбу самой оболочкой и собрать квитанцию
+/// той же формы, что отдаёт служба на Windows (`BrokerReceipt`).
+#[cfg(target_os = "macos")]
+fn mac_broker_run(wish: &BrokerWish) -> BrokerRun {
+    let at = local_stamp();
+    let started = Instant::now();
+    let receipt = |ok: bool, code: Option<i32>, pid: Option<u32>, out: &str, err: &str, note: String| BrokerReceipt {
+        id: wish.id.clone(),
+        ok,
+        op: wish.op.as_str().to_string(),
+        code,
+        pid,
+        out: broker_cut(out),
+        err: broker_cut(err),
+        ms: started.elapsed().as_millis() as u64,
+        at: at.clone(),
+        why: wish.why.clone(),
+        note,
+    };
+    match wish.op {
+        BrokerOp::Ping => BrokerRun::Done(receipt(
+            true,
+            Some(0),
+            None,
+            "",
+            "",
+            "брокер здесь — само окно: оно живо, просьбы подписывает владелец, пароль администратора \
+             для exec спрашивает система"
+                .to_string(),
+        )),
+        // До вопроса владельцу сюда не доходит (`mac_wish_check`); на всякий
+        // случай ответ — тот же отказ, а не паника.
+        BrokerOp::Firewall => BrokerRun::Refused("на macOS брандмауэр спрашивает сам".to_string()),
+        BrokerOp::SpawnInteractive => {
+            let mut cmd = Command::new(&wish.cmd);
+            cmd.args(&wish.args).current_dir("/");
+            match mac_run_group(&mut cmd, Duration::from_secs(wish.timeout_sec.max(1))) {
+                Err(err) => BrokerRun::Failed(err),
+                Ok(ran) if ran.killed => BrokerRun::Done(receipt(
+                    false,
+                    None,
+                    Some(ran.pid),
+                    &ran.out,
+                    &ran.err,
+                    format!("убит по таймауту ({} с)", wish.timeout_sec),
+                )),
+                Ok(ran) => {
+                    let note = if ran.code.is_none() { "процесс завершён сигналом".to_string() } else { String::new() };
+                    BrokerRun::Done(receipt(true, ran.code, Some(ran.pid), &ran.out, &ran.err, note))
+                }
+            }
+        }
+        BrokerOp::Exec => {
+            // Подсказка в диалоге пароля — «зачем» словами агента: владелец
+            // видит их второй раз, уже над полем пароля.
+            let prompt = format!("{}: агент просит права администратора — {}", product_ui(), wish.why);
+            let script = mac_admin_script(&wish.cmd, &wish.args, &prompt);
+            let mut cmd = Command::new("/usr/bin/osascript");
+            cmd.arg("-e").arg(&script).current_dir("/");
+            let limit = Duration::from_secs(wish.timeout_sec.saturating_add(MAC_PASSWORD_GRACE_SEC));
+            match mac_run_group(&mut cmd, limit) {
+                Err(err) => BrokerRun::Failed(format!("osascript не запустился: {err}")),
+                Ok(ran) if ran.killed => BrokerRun::Done(receipt(
+                    false,
+                    None,
+                    None,
+                    &ran.out,
+                    &ran.err,
+                    format!(
+                        "не дождался за {} с — диалог закрыт; команда под администратором, если \
+                         успела начаться, могла остаться работать",
+                        limit.as_secs()
+                    ),
+                )),
+                Ok(ran) if ran.code != Some(0) => {
+                    let said = ran.err.trim();
+                    // «User canceled (-128)» — владелец закрыл диалог пароля: это его
+                    // отказ, а не поломка. Всё остальное (неверный пароль трижды,
+                    // сломанный osascript) — «не вышло» словами системы.
+                    if said.contains("-128") {
+                        return BrokerRun::Refused("владелец отменил диалог пароля".to_string());
+                    }
+                    BrokerRun::Done(receipt(
+                        false,
+                        None,
+                        None,
+                        &ran.out,
+                        &ran.err,
+                        if said.is_empty() {
+                            format!("система не выполнила команду (osascript вернул код {:?})", ran.code)
+                        } else {
+                            format!("система не выполнила команду: {said}")
+                        },
+                    ))
+                }
+                Ok(ran) => {
+                    let (out, code) = mac_split_code(&ran.out);
+                    let note = if code.is_none() {
+                        "код возврата не пришёл — в выводе нет метки".to_string()
+                    } else {
+                        "вывод и ошибки слиты в один поток: так отдаёт osascript под администратором".to_string()
+                    };
+                    BrokerRun::Done(receipt(true, code, None, &out, "", note))
+                }
+            }
+        }
+    }
 }
 
 /// Сторож просьб. Отдельный поток: окно подтверждения блокирует того, кто его
@@ -4357,6 +4799,7 @@ fn main() {
             update_install,
             logs_bundle,
             reveal_path,
+            open_privacy_pane,
             telegram_account,
             voice_fetch,
             carry_export,
@@ -6614,6 +7057,134 @@ mod tests {
         assert_eq!(refused["note"], "владелец отказал");
         assert!(refused.get("code").is_none());
         assert!(!refused.to_string().contains("token"));
+    }
+
+    // ───────────────────────────── брокер на macOS: оболочка исполняет сама
+    //
+    // Живьём эта ветка требует Mac с человеком у двух диалогов; здесь — всё
+    // чистое: слова окна, граница просьбы, строка для sh, скрипт osascript и
+    // разбор его вывода. Гоняется на любой ОС.
+
+    fn mac_wish(op: BrokerOp, cmd: &str, args: &[&str], why: &str) -> BrokerWish {
+        BrokerWish {
+            id: "m1".into(),
+            op,
+            cmd: cmd.into(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            why: why.into(),
+            timeout_sec: 60,
+            at_unix: 0,
+        }
+    }
+
+    /// На macOS `exec` — права администратора через системный диалог пароля,
+    /// «прав системы» там нет: окно обязано говорить то, что произойдёт. На
+    /// Windows слова прежние.
+    #[test]
+    fn on_macos_the_exec_door_is_the_administrator_password_dialog() {
+        let wish = mac_wish(BrokerOp::Exec, "/bin/mkdir", &["-p", "/usr/local/helene"], "создать папку");
+        let mac = broker_confirm_text_for(&wish, true);
+        assert!(mac.contains("ПРАВАМИ АДМИНИСТРАТОРА"), "{mac}");
+        assert!(mac.contains("спросит твой пароль"), "{mac}");
+        assert!(!mac.contains("ПРАВАМИ СИСТЕМЫ"), "{mac}");
+        assert!(mac.contains("/bin/mkdir -p /usr/local/helene"), "{mac}");
+        let win = broker_confirm_text_for(&wish, false);
+        assert!(win.contains("ПРАВАМИ СИСТЕМЫ"), "{win}");
+        assert!(!win.contains("пароль"), "{win}");
+        // Вторая дверь на обеих платформах — своими правами.
+        let side = mac_wish(BrokerOp::SpawnInteractive, "/usr/bin/id", &[], "кто я");
+        assert!(broker_confirm_text_for(&side, true).contains("твоими правами"));
+        assert_eq!(broker_confirm_text(&wish), broker_confirm_text_for(&wish, cfg!(target_os = "macos")));
+    }
+
+    /// Граница на macOS — та же, что у службы, только путь POSIX. Что
+    /// отвергается здесь, владельцу не показывают.
+    #[test]
+    fn macos_border_wants_an_absolute_path_and_the_same_why() {
+        let ok = mac_wish(BrokerOp::Exec, "/bin/mkdir", &["-p", "/usr/local/helene"], "создать папку");
+        assert!(mac_wish_check(&ok).is_ok());
+        assert!(mac_wish_check(&mac_wish(BrokerOp::Ping, "", &[], "проверка связи")).is_ok());
+        let bare = mac_wish(BrokerOp::Exec, "mkdir", &[], "создать папку");
+        assert!(mac_wish_check(&bare).unwrap_err().contains("абсолютным путём"));
+        let dots = mac_wish(BrokerOp::Exec, "/usr/bin/../bin/mkdir", &[], "создать папку");
+        assert!(mac_wish_check(&dots).unwrap_err().contains("«..»"));
+        let none = mac_wish(BrokerOp::SpawnInteractive, "", &[], "создать папку");
+        assert!(mac_wish_check(&none).unwrap_err().contains("нет команды"));
+        let firewall = mac_wish(BrokerOp::Firewall, "", &["8094"], "правило для телефона");
+        assert!(mac_wish_check(&firewall).unwrap_err().contains("брандмауэр спрашивает сам"));
+        let mute = BrokerWish { why: "  ".into(), ..ok.clone() };
+        assert!(mac_wish_check(&mute).unwrap_err().contains("зачем"));
+        let forged = BrokerWish { why: "раз\nвсё хорошо".into(), ..ok.clone() };
+        assert!(mac_wish_check(&forged).unwrap_err().contains("одной строкой"));
+        let forever = BrokerWish { timeout_sec: 100_000, ..ok.clone() };
+        assert!(mac_wish_check(&forever).unwrap_err().contains("600"));
+        let never = BrokerWish { timeout_sec: 0, ..ok.clone() };
+        assert!(mac_wish_check(&never).is_err());
+        let nul = BrokerWish { args: vec!["a\0b".into()], ..ok };
+        assert!(mac_wish_check(&nul).unwrap_err().contains("нулевой байт"));
+    }
+
+    /// Строка для /bin/sh: каждый аргумент в своих кавычках, одинарная кавычка
+    /// внутри не рвёт их, а `$(…)`, пробелы и звёздочки sh не разворачивает.
+    #[test]
+    fn the_shell_line_keeps_every_argument_whole() {
+        assert_eq!(sh_quote("abc"), "abc");
+        assert_eq!(sh_quote("/usr/local/bin/x-y_z.1"), "/usr/local/bin/x-y_z.1");
+        assert_eq!(sh_quote(""), "''");
+        assert_eq!(sh_quote("a b"), "'a b'");
+        assert_eq!(sh_quote("it's"), "'it'\\''s'");
+        assert_eq!(sh_quote("$(rm -rf /)"), "'$(rm -rf /)'");
+        assert_eq!(sh_quote("*"), "'*'");
+        assert_eq!(
+            mac_shell_line("/bin/mkdir", &["-p".into(), "/usr/local/my dir".into()]),
+            "/bin/mkdir -p '/usr/local/my dir'"
+        );
+        assert_eq!(mac_shell_line("/usr/bin/id", &[]), "/usr/bin/id");
+    }
+
+    /// Скрипт osascript: команда под администратором с подсказкой владельцу,
+    /// stderr слит в stdout, код печатается меткой, переводы строк не
+    /// переписываются — и всё экранировано для AppleScript (кавычка, слэш).
+    #[test]
+    fn the_admin_script_is_escaped_for_applescript_and_carries_the_code_mark() {
+        let script = mac_admin_script("/bin/mkdir", &["/tmp/it's here".into()], "Hélène: зачем \"так\"");
+        assert!(script.starts_with("do shell script \""), "{script}");
+        assert!(
+            script.ends_with("with administrator privileges without altering line endings"),
+            "{script}"
+        );
+        // Одинарная кавычка — для sh, и слэш перед ней удвоен — для AppleScript.
+        assert!(script.contains(r#"'/tmp/it'\\''s here'"#), "{script}");
+        assert!(script.contains(r#" 2>&1; printf '\\nHELENE-CODE %s' \"$?\""#), "{script}");
+        assert!(script.contains(r#"with prompt "Hélène: зачем \"так\"""#), "{script}");
+        assert!(!script.contains('\n'), "перевод строки порвал бы -e: {script}");
+    }
+
+    /// Вывод команды и её код — из того, что вернул osascript; без метки код
+    /// НЕИЗВЕСТЕН, а не ноль.
+    #[test]
+    fn the_code_mark_is_read_back_and_never_invented() {
+        assert_eq!(mac_split_code("hello\nworld\nHELENE-CODE 3\n"), ("hello\nworld".to_string(), Some(3)));
+        assert_eq!(mac_split_code("HELENE-CODE 0"), (String::new(), Some(0)));
+        assert_eq!(mac_split_code("no mark at all"), ("no mark at all".to_string(), None));
+        assert_eq!(mac_split_code("x\nHELENE-CODE zz"), ("x\nHELENE-CODE zz".to_string(), None));
+        assert_eq!(mac_split_code(""), (String::new(), None));
+    }
+
+    /// Кнопки «Открыть настройки» ведут ровно в два раздела; чужое слово — не
+    /// «общая страница настроек», а отказ.
+    #[test]
+    fn privacy_panes_are_exactly_two() {
+        assert_eq!(
+            privacy_pane_url("screen"),
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        );
+        assert_eq!(
+            privacy_pane_url(" accessibility "),
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        );
+        assert_eq!(privacy_pane_url("camera"), None);
+        assert_eq!(privacy_pane_url(""), None);
     }
 
     /// netsh отвечает в кодировке консоли. Без разбора OEM причина отказа

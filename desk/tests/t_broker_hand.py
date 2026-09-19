@@ -29,9 +29,12 @@ sys.path.insert(0, str(HERE.parent / "localharness"))
 import broker  # noqa: E402
 
 # Стенд разбирает САМ тул; есть ли брокер на этой платформе, решает
-# `broker.HAS_BROKER` (только Windows). Поднимаем флаг, чтобы разбор шёл и на
-# раннере macOS; отсутствие брокера проверяется отдельно (`Absent`).
+# `broker.HAS_BROKER` (Windows — служба, macOS — сама оболочка). Поднимаем флаг,
+# чтобы разбор шёл на любом раннере; отсутствие брокера (прочие POSIX)
+# проверяется отдельно (`Absent`). Форма пути — Windows, чтобы стенд был один
+# на обе платформы; POSIX-форма разбирается своим стендом (`PosixBorder`).
 broker.HAS_BROKER = True
+broker.POSIX_PATHS = False
 
 
 def _tree(root: Path) -> Path:
@@ -89,6 +92,59 @@ class Border(unittest.TestCase):
                       broker.check("ping", "", None, "проверка связи", 601))
         # ping ничего не выполняет — команда ему не нужна.
         self.assertEqual(broker.check("ping", "", None, "проверка связи", 60), "")
+
+
+class PosixBorder(unittest.TestCase):
+    """macOS: команда — абсолютным путём, без «..», и программа на месте.
+
+    Голое имя на POSIX искалось бы по PATH владельца, а `exec` на Mac идёт
+    правами администратора: подменённый в PATH файл ничем не лучше подложенного
+    в папку установки. Ветка выбирается явно, чтобы гоняться и на Windows.
+    """
+
+    def test_command_is_an_absolute_existing_path(self):
+        self.assertIn("абсолютным путём", broker.check_cmd("id", posix=True))
+        self.assertIn("«..»", broker.check_cmd("/usr/bin/../bin/id", posix=True))
+        self.assertIn("нет по этому пути", broker.check_cmd("/nonexistent/helene-x", posix=True))
+        with tempfile.TemporaryDirectory() as tmp:
+            exe = Path(tmp) / "tool"
+            exe.write_bytes(b"#!/bin/sh\n")
+            # На Windows стенд подставляет путь без буквы диска: `/Users/…` там
+            # читается от корня текущего диска, и файл на месте.
+            posix_form = os.path.splitdrive(str(exe))[1].replace("\\", "/")
+            self.assertEqual(broker.check_cmd(posix_form, posix=True), "")
+            self.assertIn("абсолютным", broker.check_cmd(exe.name, posix=True))
+        self.assertIn("перевод строки", broker.check_cmd("/usr/bin/id\n", posix=True))
+        # Форма Windows от параметра не зависит.
+        self.assertEqual(broker.check_cmd(r"C:\Windows\System32\netsh.exe", posix=False), "")
+        self.assertIn("полным путём", broker.check_cmd("/usr/bin/id", posix=False))
+
+    def test_the_tool_speaks_the_platforms_words(self):
+        mac = broker.tool_schema(mac=True)
+        win = broker.tool_schema(mac=False)
+        self.assertEqual(mac["name"], win["name"])
+        self.assertEqual(list(mac["input_schema"]["properties"]), list(win["input_schema"]["properties"]))
+        for word in ("Windows", "нулевой сессии", "служба", "СИСТЕМЫ", "macOS"):
+            self.assertNotIn(word, mac["description"], word)
+            self.assertNotIn(word, mac["input_schema"]["properties"]["op"]["description"], word)
+        self.assertIn("/usr/bin", mac["description"])
+        self.assertIn("пароль", mac["description"])
+        self.assertIn("не ответил» — это не «отказал»", mac["description"])
+        self.assertIn("служба Windows", win["description"])
+        self.assertIn("пароль", broker.exec_words(mac=True))
+        self.assertIn("нулевой сессии", broker.exec_words(mac=False))
+        self.assertIn("пароль", broker.check("root", "", None, "зачем-то", 60)
+                      if sys.platform == "darwin" else broker.exec_words(mac=True))
+
+    def test_listing_on_darwin_does_not_ask_for_a_service(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = _tree(Path(tmp))
+            with patch.object(sys, "platform", "darwin"):
+                said = broker.Broker(tree).listing()
+        self.assertIn("само окно", said)
+        for word in ("служба установлена", "службы нет", "спросить не у кого", "macOS"):
+            self.assertNotIn(word, said, word)
 
 
 class WithoutTheDesk(unittest.TestCase):
@@ -256,13 +312,17 @@ class Absent(unittest.TestCase):
             broker.HAS_BROKER = saved
 
     def test_flag_follows_the_platform(self):
-        # Сам флаг — про Windows: только там есть служба, которая исполняет просьбы.
+        # Windows — служба исполняет просьбы; macOS — сама оболочка (19.09);
+        # прочие POSIX — без брокера.
         import importlib
         fresh = importlib.reload(broker)
         try:
-            self.assertEqual(fresh.HAS_BROKER, os.name == "nt")
+            self.assertEqual(fresh.HAS_BROKER, os.name == "nt" or sys.platform == "darwin")
+            self.assertEqual(fresh.POSIX_PATHS, os.name != "nt")
+            self.assertEqual(fresh.TOOL, fresh.tool_schema())
         finally:
             fresh.HAS_BROKER = True
+            fresh.POSIX_PATHS = False
 
 
 if __name__ == "__main__":

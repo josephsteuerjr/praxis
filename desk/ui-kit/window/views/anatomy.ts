@@ -39,6 +39,11 @@ const INTRO: Array<[string, string]> = [
   ],
 ];
 
+/** Имена слоёв на macOS: оболочка — бандл, тело и мост — без `.exe`. */
+function layerNameOnMac(h: string): string {
+  return h.replace("helene.exe", "Helene.app").replace(/helene-(body|bridge)\.exe/g, "helene-$1");
+}
+
 const LAYERS: Array<[string, string]> = [
   ["helene.exe — оболочка (Rust, Tauri)", "Окно, значок у часов, уведомления. Сама не думает и не переписывается: собрана один раз и поднимает всё остальное тихими дочерними процессами по helene.json."],
   ["канал frame.desk.v1 → deskapp.py", "Всё, что окно показывает, приезжает по одному каналу (запросы и живые события). deskapp — читатель дерева: только файлы, никаких замков движка. Тот же протокол работает с удалённым кодом агента."],
@@ -272,15 +277,14 @@ export async function render(container: HTMLElement): Promise<void> {
   const intro = INTRO.map(
     ([h, t]) => `<details class="fold" open><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`,
   ).join("");
-  // На macOS оболочка — бандл, а тела (helene-body/helene-bridge) нет вовсе:
-  // слой про него не показываем, слой оболочки называем её именем там.
+  // На macOS оболочка — бандл, а тело и мост зовутся без `.exe`: слои те же,
+  // имена — свои (`layerNameOnMac`).
   const mac = isMacPlatform(S.platform);
   const layers = LAYERS
-    .filter(([h]) => !(mac && h.startsWith("helene-body.exe")))
-    .map(([h, t]) => [mac && h.startsWith("helene.exe") ? h.replace("helene.exe", "Helene.app") : h, t] as [string, string])
+    .map(([h, t]) => [mac ? layerNameOnMac(h) : h, t] as [string, string])
     .map(([h, t]) => `<details class="fold"><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`)
     .join("");
-  const body = a.computer && !mac
+  const body = a.computer
     ? ` · тело: ${esc(!a.computer.enabled ? "выключено владельцем" : !a.computer.available ? "нет в сборке" : a.computer.connected === true ? `подключено, мост 127.0.0.1:${a.computer.port}` : a.computer.connected === false ? "не отвечает" : "поднималось на старте")}${a.computer.enabled && a.computer.scopes ? ` (права: ${esc(a.computer.scopes.join(", ") || "нет")})` : ""}`
     : "";
   const meta = tools.length

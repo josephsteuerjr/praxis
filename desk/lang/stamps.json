@@ -385,9 +385,9 @@
     "zh": "af13be18"
   },
   "setup.mode.lead.macos": {
-    "en": "3c9820c8",
-    "fr": "3c9820c8",
-    "zh": "3c9820c8"
+    "en": "02436583",
+    "fr": "02436583",
+    "zh": "02436583"
   },
   "setup.mode.fence.aria_label": {
     "en": "51739adc",
@@ -828,5 +828,45 @@
     "en": "a7a40336",
     "fr": "a7a40336",
     "zh": "a7a40336"
+  },
+  "setup.mode.computer_note.macos": {
+    "en": "9b3d946b",
+    "fr": "9b3d946b",
+    "zh": "9b3d946b"
+  },
+  "settings.computer.screen.macos": {
+    "en": "eec9411b",
+    "fr": "eec9411b",
+    "zh": "eec9411b"
+  },
+  "settings.computer.accessibility.macos": {
+    "en": "ce2519ca",
+    "fr": "ce2519ca",
+    "zh": "ce2519ca"
+  },
+  "settings.computer.granted.macos": {
+    "en": "747f78e5",
+    "fr": "747f78e5",
+    "zh": "747f78e5"
+  },
+  "settings.computer.missing.macos": {
+    "en": "dc9337ff",
+    "fr": "dc9337ff",
+    "zh": "dc9337ff"
+  },
+  "settings.computer.open_settings.macos": {
+    "en": "7c8ef82d",
+    "fr": "7c8ef82d",
+    "zh": "7c8ef82d"
+  },
+  "settings.computer.tcc_note.macos": {
+    "en": "b9065465",
+    "fr": "b9065465",
+    "zh": "b9065465"
+  },
+  "settings.computer.no_body.macos": {
+    "en": "7cf6ade8",
+    "fr": "7cf6ade8",
+    "zh": "7cf6ade8"
   }
 }

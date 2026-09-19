@@ -22,6 +22,7 @@ import contextvars
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -36,8 +37,8 @@ import body  # noqa: E402
 import modes  # noqa: E402
 
 # Стенд разбирает САМО тело; есть ли оно на этой платформе, решает
-# `body.HAS_BODY` (только Windows). Поднимаем флаг, чтобы разбор шёл и на
-# раннере macOS; сборка без тела проверяется отдельно (`Absent`).
+# `body.HAS_BODY` (Windows и macOS). Поднимаем флаг, чтобы разбор шёл на любом
+# раннере; сборка без тела (прочие POSIX) проверяется отдельно (`Absent`).
 body.HAS_BODY = True
 
 
@@ -285,7 +286,7 @@ class Launch(unittest.TestCase):
 
 
 class Absent(unittest.TestCase):
-    """Сборка без тела (macOS): ничего не поднимается, тревог нет, секции нет.
+    """Сборка без тела (прочие POSIX): ничего не поднимается, тревог нет, секции нет.
 
     Что уезжает на экран — снимок `computer` и строка про окна — пусто, а не
     «нет на этой платформе»: окно секцию просто не рисует. Тулу `computer`
@@ -305,8 +306,10 @@ class Absent(unittest.TestCase):
         import importlib
         fresh = importlib.reload(body)
         try:
-            self.assertEqual(fresh.HAS_BODY, os.name == "nt")
+            # Тело есть на Windows (UIA) и на macOS (Accessibility); прочие POSIX — без.
+            self.assertEqual(fresh.HAS_BODY, os.name == "nt" or sys.platform == "darwin")
             self.assertEqual(fresh.HAS_BODY, modes.HAS_COMPUTER)
+            self.assertEqual(fresh.ASKS_TCC, sys.platform == "darwin")
         finally:
             fresh.HAS_BODY = True
 
@@ -345,6 +348,215 @@ class Absent(unittest.TestCase):
         # Повторная установка не падает на уже снятом туле.
         body.install(agent, g.tree, _cfg(), config_path=g.config)
         self.assertNotIn("computer", agent.TOOL_IMPL)
+
+
+#: Описание тула `computer` у дерева — два живых образца (ядро `praxis/agent.py`
+#: и слой `helene/core/agent.py`), урезанные до фраз, в которых сидят слова
+#: Windows. Остальной текст здесь не нужен: замены подстрочные, а стенд стережёт
+#: ровно те подстроки, что перечислены в `body.MAC_TOOL_TEXT`.
+_CORE_TOOL_TEXT = (
+    "Use the connected Windows computer from any Telegram chat where this caller has an owner-issued grant. "
+    "read_window reads the UI Automation control tree as text; hwnd defaults to foreground. "
+    "It goes through UI Automation patterns, so no pixels are involved: DPI, a window that "
+    "moved and a list that scrolled stop being your problem. "
+    "CURRENT chat; run/poll/stop manage PowerShell processes. desktop_status/windows/read_window/"
+    "clipboard_read/clipboard_write/processes are native interactive-desktop hands (no Office COM). Prefer the "
+    "use signed steps or direction=up/down/left/right; the server converts one step to one Win32 notch. Wheel "
+    "read/hash/write/replace are DIRECT file verbs on the PC disk and the primary "
+    "coding path on Windows (no wcode proxy task needed; receipts bind to your current run automatically): "
+    "read returns numbered lines start..end with sha256; write is fs.write_atomic (content ≤1.5MB — bigger "
+    "goes the artifact route); replace swaps EXACTLY ONE occurrence of old."
+)
+_LAYER_TOOL_TEXT = (
+    "Use the connected Windows computer from any Telegram chat where this caller has an owner-issued grant. "
+    "CURRENT chat; run/poll/stop manage PowerShell processes. desktop_status/windows/read_window/activate/input/"
+    "screenshot/observe/clipboard_read/clipboard_write/processes are native interactive-desktop hands (no Office COM). "
+    "read_window returns the UI Automation control tree of a window as text (role, name, value, automation id, "
+    "click into a text field do not assume the caret is free: many controls (WinForms TextBox) select all text on "
+    "focus and type_text would REPLACE it — press End/Escape or click a second time before typing. "
+    "coding path on Windows (no wcode proxy task needed; receipts bind to your current run automatically): "
+    "read returns numbered lines start..end with sha256; write is fs.write_atomic (content ≤1.5MB — bigger "
+    "goes the artifact route; .ps1/.psm1/.psd1 with non-ASCII text get a UTF-8 BOM so PowerShell 5.1 parses "
+    "them); replace swaps EXACTLY ONE occurrence of old; expected_sha256 does "
+    "compare-and-swap on both, backup=true keeps a backup."
+)
+
+#: Слова, которых в описании для Mac быть не должно.
+_WINDOWS_WORDS = ("Windows", "PowerShell", "Win32", "UI Automation", "wcode", "BOM",
+                  "Office COM", "WinForms")
+
+
+class Platform(unittest.TestCase):
+    """Порт на macOS: имена без `.exe`, группа процессов вместо job-объекта,
+    разрешения системы в снимке и описание тула словами macOS. Всё, что здесь
+    чистое, гоняется и на Windows."""
+
+    def setUp(self):
+        self.saved_state = dict(body.STATE)
+        self.saved_asks = body.ASKS_TCC
+
+    def tearDown(self):
+        body.STATE.clear()
+        body.STATE.update(self.saved_state)
+        body.ASKS_TCC = self.saved_asks
+
+    def test_exe_names_follow_the_platform(self):
+        self.assertEqual(body.exe_name("helene-body").endswith(".exe"), os.name == "nt")
+        self.assertEqual(body.BODY_EXE, body.exe_name("helene-body"))
+        self.assertEqual(body.BRIDGE_EXE, body.exe_name("helene-bridge"))
+        # На Windows — ровно те имена, что и до порта.
+        if os.name == "nt":
+            self.assertEqual((body.BRIDGE_EXE, body.BODY_EXE), ("helene-bridge.exe", "helene-body.exe"))
+
+    def test_children_get_a_console_less_window_or_a_process_group(self):
+        self.assertEqual(body.spawn_kwargs(posix=True), {"start_new_session": True})
+        self.assertEqual(body.spawn_kwargs(posix=False), {"creationflags": 0x08000000})
+        self.assertEqual(body.spawn_kwargs(), body.spawn_kwargs(posix=os.name != "nt"))
+
+    def test_default_device_is_not_windows_pc_off_windows(self):
+        self.assertEqual(body.DEFAULT_DEVICE, "windows-pc" if os.name == "nt" else "mac")
+        saved = dict(body._TOKENS)
+        body._TOKENS.clear()
+        try:
+            self.assertEqual(body._settings()[2], body.DEFAULT_DEVICE)
+        finally:
+            body._TOKENS.update(saved)
+
+    def test_mac_tool_text_drops_every_windows_word(self):
+        for sample in (_CORE_TOOL_TEXT, _LAYER_TOOL_TEXT):
+            said = body.mac_tool_text(sample)
+            for word in _WINDOWS_WORDS:
+                self.assertNotIn(word, said, f"«{word}» осталось: {said[:200]}")
+            self.assertIn("Use the connected computer (macOS)", said)
+            self.assertIn("manage shell processes (zsh)", said)
+            self.assertIn("native desktop hands (Accessibility)", said)
+            self.assertIn("receipts bind to your current run automatically", said)
+            # Ни одна замена не порвала соседнее предложение.
+            self.assertIn("goes the artifact route); replace swaps", said)
+            # Идемпотентно: второй проход ничего не меняет.
+            self.assertEqual(body.mac_tool_text(said), said)
+        self.assertEqual(body.mac_tool_text("nothing to do here"), "nothing to do here")
+        self.assertEqual(body.mac_tool_text(""), "")
+
+    def test_describe_for_mac_patches_each_schema_once(self):
+        tool = {"name": "computer", "description": _CORE_TOOL_TEXT,
+                "input_schema": {"type": "object", "properties": {
+                    "command": {"type": "string",
+                                "description": "run/poll/stop manage PowerShell processes"}}}}
+        agent = types.ModuleType("agent")
+        agent.OWNER_TOOLS = [tool, {"name": "shell", "description": "Windows shell"}]
+        agent.TOOLS = [tool]                     # тот же словарь во втором списке
+        agent.BASE_TOOLS = "не список"           # чужая форма не роняет
+        self.assertEqual(body.describe_for_mac(agent), 1)
+        self.assertNotIn("Windows", tool["description"])
+        self.assertNotIn("PowerShell", tool["input_schema"]["properties"]["command"]["description"])
+        # Соседний тул не трогаем: правится только `computer`.
+        self.assertEqual(agent.OWNER_TOOLS[1]["description"], "Windows shell")
+        before = json.dumps(tool, ensure_ascii=False, sort_keys=True)
+        self.assertEqual(body.describe_for_mac(agent), 1)
+        self.assertEqual(json.dumps(tool, ensure_ascii=False, sort_keys=True), before)
+        self.assertEqual(body.describe_for_mac(types.ModuleType("empty")), 0)
+
+    def test_install_on_darwin_rewrites_the_description_and_on_windows_leaves_it(self):
+        from unittest.mock import patch
+        g = Ground(_cfg())
+        self.addCleanup(g.close)
+        saved_client = sys.modules.get("body_client")
+        sys.modules["body_client"] = _fake_body_client()
+        self.addCleanup(lambda: sys.modules.__setitem__("body_client", saved_client)
+                        if saved_client else sys.modules.pop("body_client", None))
+        for platform, expect in (("darwin", "Use the connected computer (macOS)"),
+                                 ("win32", "Use the connected Windows computer")):
+            agent = _fake_agent([])
+            agent.OWNER_TOOLS = [{"name": "computer", "description": _CORE_TOOL_TEXT}]
+            with patch.object(sys, "platform", platform):
+                body.install(agent, g.tree, _cfg(), config_path=g.config)
+            self.assertIn(expect, agent.OWNER_TOOLS[0]["description"], platform)
+
+    def test_probe_desktop_fills_tcc_hints_and_platform(self):
+        from unittest.mock import patch
+        g = Ground(_cfg())
+        self.addCleanup(g.close)
+        b = body.Body(g.root, g.tree, _cfg())
+        answers = [
+            {"ok": True, "platform": "macos", "scale": 2.0,
+             "tcc": {"screen_recording": False, "accessibility": True},
+             "hints": ["нет разрешения «Запись экрана»: Системные настройки → …", "", 7]},
+            {"ok": True, "platform": "macos"},                # тело старее движка: без tcc
+            {"ok": False, "code": "timeout", "error": "нет ответа"},
+        ]
+        with patch.object(body, "call", lambda cap, args=None, timeout=0: answers.pop(0)):
+            b.probe_desktop()
+            self.assertEqual(body.STATE["tcc"], {"screen_recording": False, "accessibility": True})
+            self.assertEqual(body.STATE["hints"], ["нет разрешения «Запись экрана»: Системные настройки → …", "7"])
+            self.assertEqual(body.STATE["platform"], "macos")
+            body.STATE.update({"enabled": True, "available": True, "scopes": ["computer.apps"]})
+            self.assertIn("«Запись экрана»", body.windows_truth())
+            self.assertNotIn("«Универсальный доступ»", body.windows_truth())
+            b.probe_desktop()
+            self.assertIsNone(body.STATE["tcc"], "без tcc в ответе — «не спрашивали», а не «нет»")
+            self.assertEqual(body.STATE["hints"], [])
+            self.assertEqual(body.tcc_words(), "")
+            body.STATE["tcc"] = {"screen_recording": True, "accessibility": True}
+            b.probe_desktop()                                 # отказ не трогает прежнее
+            self.assertEqual(body.STATE["tcc"], {"screen_recording": True, "accessibility": True})
+            self.assertEqual(body.tcc_words(), "", "все разрешения есть — хвоста нет")
+
+    def test_desktop_is_asked_only_after_the_body_answered_and_only_where_tcc_is(self):
+        from unittest.mock import patch
+        g = Ground(_cfg())
+        self.addCleanup(g.close)
+        b = body.Body(g.root, g.tree, _cfg())
+        asked: list[str] = []
+
+        def fake_call(cap, args=None, timeout=0):
+            asked.append(cap)
+            if cap == "body.status":
+                return {"ok": True, "identity": {"kind": "interactive"}}
+            return {"ok": True, "platform": "macos",
+                    "tcc": {"screen_recording": True, "accessibility": True}, "hints": []}
+
+        with patch.object(body, "call", fake_call):
+            body.ASKS_TCC = True
+            self.assertTrue(b.probe())
+            self.assertEqual(asked, ["body.status", "desktop.status"])
+            asked.clear()
+            body.ASKS_TCC = False
+            self.assertTrue(b.probe())
+            self.assertEqual(asked, ["body.status"], "на Windows проба одна")
+        asked.clear()
+        with patch.object(body, "call", lambda cap, args=None, timeout=0:
+                          asked.append(cap) or {"ok": False, "error": "нет"}):
+            body.ASKS_TCC = True
+            self.assertFalse(b.probe())
+            self.assertEqual(asked, ["body.status"], "без тела про разрешения не спрашиваем")
+
+
+@unittest.skipUnless(os.name != "nt", "группа процессов — только POSIX (на Windows job-объект)")
+class ProcessGroup(unittest.TestCase):
+    """POSIX: ребёнок поднимается лидером своей группы и гасится группой —
+    SIGTERM, а кто его игнорирует, тот получает SIGKILL. Подставной ребёнок —
+    этот же питон."""
+
+    def test_child_leads_its_group_and_dies_by_sigterm(self):
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                                stdin=subprocess.DEVNULL, **body.spawn_kwargs())
+        self.assertEqual(os.getpgid(proc.pid), proc.pid, "ребёнок не лидер своей группы")
+        started = time.monotonic()
+        body.kill_group(proc, grace=3.0)
+        self.assertIsNotNone(proc.poll(), "ребёнок пережил kill_group")
+        self.assertLess(time.monotonic() - started, 3.0, "SIGTERM должен был хватить")
+
+    def test_a_child_ignoring_sigterm_is_killed_after_grace(self):
+        proc = subprocess.Popen(
+            [sys.executable, "-c",
+             "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"],
+            stdin=subprocess.DEVNULL, **body.spawn_kwargs())
+        time.sleep(0.5)                                       # дать ребёнку поставить обработчик
+        started = time.monotonic()
+        body.kill_group(proc, grace=1.0)
+        self.assertIsNotNone(proc.poll(), "ребёнок пережил SIGKILL группе")
+        self.assertLess(time.monotonic() - started, 5.0)
 
 
 def _built_pair() -> Path | None:
@@ -406,7 +618,8 @@ class Spool(unittest.TestCase):
         self.assertEqual(body.prune_spool(Path(tmp) / "нет.db"), {"frames": 0, "responses": 0})
 
 
-@unittest.skipUnless(os.name == "nt", "живое тело (UIA) — только Windows; в порте тела нет")
+@unittest.skipUnless(os.name == "nt", "живое тело (UIA) — здесь только Windows; на macOS его "
+                     "гоняет tests/t_body_macos.py на раннере")
 class Live(unittest.TestCase):
     """Живьём: поднять, дождаться, спросить рабочий стол, погасить."""
 

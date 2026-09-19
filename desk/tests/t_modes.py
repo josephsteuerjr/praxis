@@ -313,7 +313,32 @@ class Platform(unittest.TestCase):
         import importlib
         fresh = importlib.reload(modes)
         self.assertEqual(fresh.HAS_SERVICE, os.name == "nt")
-        self.assertEqual(fresh.HAS_COMPUTER, os.name == "nt")
+        # Тело — на Windows и на macOS (порт 19.09); служба — только Windows.
+        self.assertEqual(fresh.HAS_COMPUTER, os.name == "nt" or sys.platform == "darwin")
+
+    def test_pipe_keeps_the_computer_section_without_a_service(self):
+        # Картина macOS: службы нет, тело есть — секция тела в картине остаётся,
+        # и тексты в ней — словами Mac.
+        sys.path.insert(0, str(HERE.parent))
+        import deskd.readers as readers          # noqa: PLC0415
+        modes.HAS_SERVICE = False
+        modes.HAS_COMPUTER = True
+        with tempfile.TemporaryDirectory(prefix="helene-modes-") as tmp:
+            cfg_path = Path(tmp) / "helene.json"
+            cfg_path.write_text(json.dumps({"agent_mode": "sandbox", "tree": "data",
+                                            "computer": {"enabled": True}}),
+                                encoding="utf-8")
+            with patch.dict(os.environ, {"HELENE_CONFIG": str(cfg_path),
+                                         "HELENE_TREE": str(Path(tmp) / "data")}), \
+                    patch.object(sys, "platform", "darwin"):
+                picture = readers.mode_state()
+        self.assertIsNone(picture["service"])
+        self.assertEqual(picture["computer"]["enabled"], True)
+        self.assertEqual(picture["computer_option"]["text"], modes.COMPUTER_TEXT_MACOS)
+        self.assertEqual(picture["computer_live"], {}, "снимка ещё нет — пусто, не выдумка")
+        text = json.dumps(picture, ensure_ascii=False).lower()
+        self.assertNotIn("macos", text)
+        self.assertNotIn(".exe", text)
 
     def test_without_a_service_the_section_is_empty_but_the_fence_is_whole(self):
         modes.HAS_SERVICE = False
@@ -503,6 +528,83 @@ class MacTexts(unittest.TestCase):
             self.assertEqual(picture["text"], modes.TEXTS["interactive"])
             self.assertEqual([c["text"] for c in modes.catalogue()],
                              [modes.TEXTS[n] for n in modes.MODES])
+
+
+def _plugin_const(src: str, name: str) -> str:
+    """Разбор простой константы так, как её читает сборка установщика.
+
+    Зеркало `constantChunk` + `joinLiterals` из `setup/ui/vite.config.ts`:
+    от `NAME =` до первой строки, начинающейся не с пробела, или пустой строки;
+    значение — все строковые литералы куска подряд.
+    """
+    import re
+    at = re.search(rf"^{name}\s*(?::[^=\n]*)?=", src, re.M)
+    if not at:
+        raise AssertionError(f"modes.py: не нашёл {name}")
+    rest = src[src.index("=", at.start()) + 1:]
+    end = re.search(r"\n(?=\S)|\n[ \t]*\n", rest)
+    chunk = rest if not end else rest[:end.start()]
+    parts = []
+    for literal in re.findall(r'"((?:[^"\\]|\\.)*)"', chunk):
+        try:
+            parts.append(json.loads(f'"{literal}"'))
+        except ValueError:
+            parts.append(literal)
+    if not parts:
+        raise AssertionError(f"modes.py: нет текста в {name}")
+    return "".join(parts)
+
+
+class MacComputerTexts(unittest.TestCase):
+    """Опция «Управление компьютером» словами macOS (порт тела 19.09).
+
+    Общий текст обещает `helene-body.exe` и PowerShell; на Mac тело зовётся без
+    `.exe`, команды идут в zsh, а окна и экран стоят за двумя разрешениями
+    системы. Двойник обязан читаться сборкой установщика той же формой, что
+    COMPUTER_TEXT, и уезжать в картину на darwin.
+    """
+
+    FORBIDDEN = ("windows", ".exe", "powershell", "macos", "этого нет")
+
+    def test_texts_have_the_same_shape_and_no_windows_promises(self):
+        self.assertEqual(set(modes.COMPUTER_SCOPE_TEXTS_MACOS), set(modes.COMPUTER_SCOPES))
+        self.assertNotEqual(modes.COMPUTER_TEXT_MACOS, modes.COMPUTER_TEXT)
+        for name, text in [("COMPUTER_TEXT_MACOS", modes.COMPUTER_TEXT_MACOS),
+                           *modes.COMPUTER_SCOPE_TEXTS_MACOS.items()]:
+            self.assertTrue(text.strip(), name)
+            low = text.lower()
+            for word in self.FORBIDDEN:
+                self.assertNotIn(word, low, f"{name}: «{word}» в тексте для macOS")
+        # Два разрешения названы там, где владелец включает опцию, и у права окон.
+        for where in (modes.COMPUTER_TEXT_MACOS, modes.COMPUTER_SCOPE_TEXTS_MACOS["computer.apps"]):
+            self.assertIn("Запись экрана", where)
+            self.assertIn("Универсальный доступ", where)
+        self.assertIn("обновления программы", modes.COMPUTER_TEXT_MACOS)
+        self.assertIn("zsh", modes.COMPUTER_SCOPE_TEXTS_MACOS["computer.process"])
+        self.assertIn("helene-body", modes.COMPUTER_TEXT_MACOS)
+
+    def test_installer_plugin_reads_the_same_constant(self):
+        src = (HERE.parent / "localharness" / "modes.py").read_text(encoding="utf-8")
+        self.assertEqual(_plugin_const(src, "COMPUTER_TEXT_MACOS"), modes.COMPUTER_TEXT_MACOS)
+        # Зеркало верно и на константах, которые плагин читает с самого начала.
+        self.assertEqual(_plugin_const(src, "COMPUTER_TEXT"), modes.COMPUTER_TEXT)
+        self.assertEqual(_plugin_const(src, "COMPUTER_TITLE"), modes.COMPUTER_TITLE)
+        self.assertEqual(_plugin_const(src, "COMPUTER_WARNING"), modes.COMPUTER_WARNING)
+        self.assertEqual(_plugin_const(src, "SESSION0_WARNING"), modes.SESSION0_WARNING)
+
+    def test_darwin_option_takes_the_mac_texts_and_windows_is_untouched(self):
+        with patch.object(sys, "platform", "darwin"):
+            option = modes.computer_option()
+            self.assertEqual(option["text"], modes.COMPUTER_TEXT_MACOS)
+            self.assertEqual([s["text"] for s in option["scopes"]],
+                             [modes.COMPUTER_SCOPE_TEXTS_MACOS[k] for k in modes.COMPUTER_SCOPES])
+            self.assertEqual([s["key"] for s in option["scopes"]], list(modes.COMPUTER_SCOPES))
+            self.assertEqual(option["warning"], modes.COMPUTER_WARNING)
+        with patch.object(sys, "platform", "win32"):
+            option = modes.computer_option()
+            self.assertEqual(option["text"], modes.COMPUTER_TEXT)
+            self.assertEqual([s["text"] for s in option["scopes"]],
+                             [modes.COMPUTER_SCOPE_TEXTS[k] for k in modes.COMPUTER_SCOPES])
 
 
 class PipeShape(unittest.TestCase):

@@ -1,12 +1,17 @@
 // Тест против одного класса: окно обещает на macOS то, чего там нет.
 //
-// Порт 0.7.1 на macOS (19.09) — без службы Windows, без тела тула `computer`,
-// без правила брандмауэра и UAC. Решение владельца: не писать «на macOS этого
-// нет», а просто НЕ РИСОВАТЬ карточку, строку, кнопку. Значит, у каждого такого
-// места должен стоять затвор по слову системы, которое оболочка отдаёт в
-// `app_info.platform` (ui-kit/window/host.ts → S.platform), и затвор должен
-// быть ЗАКРЫТ по умолчанию: без ответа оболочки (Пульт в браузере, старая
-// оболочка) не прячется ничего — иначе на Windows пропала бы карточка службы.
+// Порт 0.7.1 на macOS (19.09) — без службы Windows, без правила брандмауэра и
+// UAC. Решение владельца: не писать «на macOS этого нет», а просто НЕ РИСОВАТЬ
+// карточку, строку, кнопку. Значит, у каждого такого места должен стоять затвор
+// по слову системы, которое оболочка отдаёт в `app_info.platform`
+// (ui-kit/window/host.ts → S.platform), и затвор должен быть ЗАКРЫТ по
+// умолчанию: без ответа оболочки (Пульт в браузере, старая оболочка) не
+// прячется ничего — иначе на Windows пропала бы карточка службы.
+//
+// ⚠ Тело тула `computer` с 0.8.0 на macOS ЕСТЬ (Accessibility, CoreGraphics):
+// его карточка, слой в анатомии и задача «Сделать на компьютере» больше НЕ за
+// затвором — наоборот, стенд стережёт, чтобы затвор туда не вернулся. На Mac
+// меняются только слова: имена без `.exe` и две строки про разрешения системы.
 //
 // Две половины: чистые правила прогоном (ui-kit/platform.ts — без DOM) и
 // затворы чтением исходника, как в settings-remote.test.mjs: переезд строки
@@ -100,20 +105,33 @@ assert.match(frame, /if \(inTauri && !mac\) \{[\s\S]{0,80}"firewall_allow"/, "п
 assert.match(frame, /if \(!mac\) \{[\s\S]{0,120}"service_state"/, "расписка «Сохранено» спрашивает службу и на macOS");
 assert.match(frame, /runtime\/bin\/python3 app\/localharness\/carry\.py import/, "подсказка импорта на Mac зовёт python.exe");
 
-// Издание Элен: секция службы и карточка тела — только не на Mac.
+// Издание Элен: секция службы — только не на Mac; карточка тела — везде, и ей
+// идёт система хоста (имена без `.exe`, строки про разрешения).
 assert.match(agent, /const mac = platform === "macos"/, "издание Элен не читает систему хоста");
-assert.match(agent, /if \(!mac\) cards\.push\(inGroup\(computer\.el, GROUP\.rights\)\)/, "карточка тела рисуется и на macOS");
+assert.match(agent, /computerCard\(modeLive, storedComputer\(draft\.computer\), platform\)/, "карточке тела не передают систему хоста");
+assert.match(agent, /^\s*cards\.push\(inGroup\(computer\.el, GROUP\.rights\)\);/m, "карточка тела снова за затвором — а тело на macOS есть с 0.8.0");
+const computerTs = read(src, "computer.ts");
+assert.match(computerTs, /const mac = platform === "macos"/, "карточка тела не различает систему агента");
+assert.match(computerTs, /shell\("open_privacy_pane", \{ kind \}\)/, "кнопки «Открыть настройки» не зовут open_privacy_pane");
+assert.match(computerTs, /\["screen_recording", "screen", "Запись экрана"\]/, "строки про «Запись экрана» нет");
+assert.match(computerTs, /\["accessibility", "accessibility", "Универсальный доступ"\]/, "строки про «Универсальный доступ» нет");
+assert.match(computerTs, /tccBox\.hidden = !tcc \|\| typeof tcc !== "object"/, "строки про разрешения рисуются без слова тела (по догадке)");
+assert.ok(!/helene-body\.exe и helene-bridge\.exe рядом/.test(computerTs), "имена тела в карточке снова захардкожены с .exe");
 assert.match(agent, /\}, mac\);\s*cards\.push\(inGroup\(mode\.el/, "карточке режима не передают систему хоста");
 assert.match(modecard, /if \(!mac\) box\.append\(svcBox\)/, "секция службы рисуется и на macOS");
 assert.match(modecard, /mac \? "" : ` Служба Windows: \$\{svc\}\.`/, "строка «Сейчас» на Mac говорит про службу Windows");
 assert.match(modecard, /if \(!mac\) \{\s*void svcRefresh\(\)/, "карточка режима спрашивает службу у оболочки и на macOS");
 
-// «Что поручить»: задача про управление компьютером — не на Mac.
+// «Что поручить»: задача про управление компьютером — на любой системе (тело
+// есть и на Mac); затвора по mac у неё быть не должно.
 assert.match(learn, /computer: true,/, "задача про компьютер не помечена как требующая тела");
-assert.match(learn, /!\(mac && t\.computer\)/, "задача про компьютер показывается и на macOS");
-// «Система»: слой тела и строка службы — не на Mac.
+assert.ok(!/mac && t\.computer/.test(learn), "задача про компьютер снова спрятана на macOS — тело там есть с 0.8.0");
+// «Система»: строка службы — не на Mac; слой тела — везде, на Mac без `.exe`.
 assert.match(anatomy, /mac \? "" : `служба Windows: \$\{svc\}`/, "анатомия на Mac пишет про службу Windows");
-assert.match(anatomy, /!\(mac && h\.startsWith\("helene-body\.exe"\)\)/, "анатомия на Mac показывает слой тела");
+assert.match(anatomy, /function layerNameOnMac/, "в анатомии нет переименования слоёв для Mac");
+assert.match(anatomy, /helene-\(body\|bridge\)\\\.exe/, "слой тела на Mac называется с .exe");
+assert.ok(!/!\(mac && h\.startsWith\("helene-body\.exe"\)\)/.test(anatomy), "анатомия на Mac прячет слой тела — а тело там есть");
+assert.ok(!/a\.computer && !mac/.test(anatomy), "строка о теле в анатомии спрятана на Mac");
 // Монтирование: форма пути — системы агента.
 assert.match(mounts, /pathProblem\(path, S\.platform\)/, "проверка пути к папке не знает систему агента");
 
@@ -133,14 +151,22 @@ assert.match(setupTs, /platform\?: string;/, "Defaults установщика б
 assert.match(setupTs, /export function isMac\(\)/, "в setup.ts нет isMac()");
 assert.match(setupMain, /machine\.platform = String\(d\.platform \|\| ""\)/, "main.ts установщика не берёт platform из defaults");
 assert.match(setupMain, /!isMac\(\) && \(await legacy\.look\(home\)\)/, "сцена прежних служб вставляется и на macOS");
-assert.match(modeScene, /this\.options\.hidden = mac;/, "ряд опций (служба, тело) показывается и на macOS");
-// Атрибут hidden перебивается `display: grid` у ряда — без явного правила ряд
-// оставался на экране (нашлось живой пробой в браузере, 19.09).
-assert.match(readFileSync(join(setupUi, "styles.css"), "utf8"), /\.options-row\[hidden\]\s*\{\s*display:\s*none;/,
-  "styles.css: у .options-row нет правила [hidden] — на macOS опции службы и тела остались бы на экране");
-assert.match(modeScene, /setup\.service = false;\s*setup\.session0 = false;\s*setup\.computer = false;/, "на macOS в JSON установки могут уехать служба или тело");
+assert.match(modeScene, /this\.serviceBoxEl\.hidden = mac;/, "опция службы показывается и на macOS");
+assert.match(modeScene, /this\.options\.classList\.toggle\("one", mac\)/, "ряд из одной карточки на macOS не сужается");
+assert.match(modeScene, /mac && COMPUTER_OPTION_MACOS \? COMPUTER_OPTION_MACOS : COMPUTER_OPTION/, "опция тела на Mac не берёт слова macOS из modes.py");
+assert.match(modeScene, /mac \? COMPUTER_NOTE_MACOS : COMPUTER_NOTE/, "примечание про два разрешения на Mac не показывается");
+// Атрибут hidden перебивается `display: grid` у карточки — без явного правила
+// карточка службы оставалась бы на экране (тот же класс, что у ряда 19.09).
+const setupCss = readFileSync(join(setupUi, "styles.css"), "utf8");
+assert.match(setupCss, /\.options-row\[hidden\],\s*\.service-card\[hidden\]\s*\{\s*display:\s*none;/,
+  "styles.css: у .service-card нет правила [hidden] — на macOS опция службы осталась бы на экране");
+assert.match(setupCss, /\.options-row\.one\s*\{/, "styles.css: нет правила для ряда из одной карточки");
+assert.match(modeScene, /setup\.service = false;\s*setup\.session0 = false;/, "на macOS в JSON установки может уехать служба");
+assert.ok(!/setup\.computer = false;/.test(modeScene), "на macOS тело выключается принудительно — а оно там есть с 0.8.0");
 assert.match(modeScene, /this\.syncPlatform\(\);\s*this\.select\(setup\.agent_mode\)/, "syncPlatform не зовётся из beforeEnter");
 assert.match(installScene, /if \(!isMac\(\)\) \{\s*this\.row\(\s*"Служба Windows"/, "сводка на macOS показывает строку службы");
+assert.match(installScene, /\}\s*this\.row\(\s*"Управление компьютером"/, "строка тела в сводке стоит под затвором службы — на macOS её бы не было");
+assert.match(read(desk, "setup", "ui", "vite.config.ts"), /COMPUTER_TEXT_MACOS/, "vite.config.ts не читает COMPUTER_TEXT_MACOS из modes.py");
 assert.match(installScene, /isMac\(\) \? "открой Helene\.app оттуда"/, "на macOS обещают ярлык на рабочем столе");
 assert.match(uninstallScene, /isMac\(\) \? LEAD_MACOS : LEAD/, "лид снятия на macOS обещает службу и ярлыки");
 assert.match(uninstallScene, /Helene Setup\.app\/Contents\/MacOS\/helene-setup/, "команда экспорта на macOS зовёт helene-setup.exe");
@@ -183,7 +209,10 @@ assert.match(installScene, /copyText\(text\)/, "кнопка «Скопиров�
 const lang = join(desk, "lang");
 const ru = JSON.parse(readFileSync(join(lang, "ru.json"), "utf8"));
 for (const key of ["setup.mode.lead.macos", "setup.mode.install_note.interactive.macos", "setup.install.open_failed.macos",
-                   "setup.uninstall.lead.macos", "setup.uninstall.purge_body.macos"]) {
+                   "setup.uninstall.lead.macos", "setup.uninstall.purge_body.macos", "setup.mode.computer_note.macos",
+                   "settings.computer.screen.macos", "settings.computer.accessibility.macos", "settings.computer.granted.macos",
+                   "settings.computer.missing.macos", "settings.computer.open_settings.macos", "settings.computer.tcc_note.macos",
+                   "settings.computer.no_body.macos"]) {
   assert.ok(ru[key], `в lang/ru.json нет ключа ${key}`);
   for (const c of ["en", "fr", "zh"]) {
     const cat = JSON.parse(readFileSync(join(lang, `${c}.json`), "utf8"));
@@ -191,7 +220,12 @@ for (const key of ["setup.mode.lead.macos", "setup.mode.install_note.interactive
   }
 }
 // И слова в сценах — те же, что в каталоге (каталог — реестр строк установщика).
-assert.ok(modeScene.includes(ru["setup.mode.lead.macos"]), "лид сцены режима на Mac разошёлся с каталогом");
+// Лиды собраны из двух литералов — сверяем по кускам склейки, как и раньше целиком.
+const joined = (text) => text.replace(/"\s*\+\s*"/g, "");
+assert.ok(joined(modeScene).includes(ru["setup.mode.lead.macos"]), "лид сцены режима на Mac разошёлся с каталогом");
+assert.ok(joined(modeScene).includes(ru["setup.mode.computer_note.macos"]), "примечание про два разрешения на Mac разошлось с каталогом");
 assert.ok(uninstallScene.includes(ru["setup.uninstall.lead.macos"]), "лид снятия на Mac разошёлся с каталогом");
+assert.ok(joined(computerTs).includes(ru["settings.computer.tcc_note.macos"]), "записка про разрешения в карточке тела разошлась с каталогом");
+assert.ok(computerTs.includes(ru["settings.computer.open_settings.macos"]), "кнопка «Открыть настройки» разошлась с каталогом");
 
-console.log("платформа: на macOS служба, тело и брандмауэр не рисуются; без ответа оболочки не прячется ничего");
+console.log("платформа: на macOS служба и брандмауэр не рисуются, тело — рисуется словами Mac; без ответа оболочки не прячется ничего");

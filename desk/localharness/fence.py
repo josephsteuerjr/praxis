@@ -2056,7 +2056,7 @@ def hands_report(agent_mod) -> list[dict]:
     try:
         import body as _body_mod
         if not _body_mod.HAS_BODY:
-            # Тела в этой сборке нет (порт macOS): `body._install_absent` сняла
+            # Тела в этой сборке нет (прочие POSIX): `body._install_absent` сняла
             # руку `computer` из набора вовсе (как брокер). В отчёте её тоже быть
             # не должно — иначе снятая рука приедет ложным `unknown`.
             known.discard("computer")
