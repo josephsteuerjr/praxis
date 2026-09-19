@@ -241,7 +241,21 @@ class TwoDoorsOfTheService(unittest.TestCase):
         self.assertIs(cfg["service"]["firewall"], modes.FIREWALL_DEFAULT)
 
 
-class Truth(unittest.TestCase):
+class WindowsToggles:
+    """Семантика Windows для стендов, которые разбирают две галочки службы
+    (нулевая сессия и брандмауэр): на macOS их нет (`HAS_SERVICE_TOGGLES`), и
+    стенд обязан подменить флаг, а не брать флаг своей ОС — иначе на раннере
+    macOS он падает, как падали круги 5 и 7."""
+
+    def setUp(self):
+        self._toggles_saved = (modes.HAS_SERVICE, modes.HAS_SERVICE_TOGGLES)
+        modes.HAS_SERVICE, modes.HAS_SERVICE_TOGGLES = True, True
+
+    def tearDown(self):
+        modes.HAS_SERVICE, modes.HAS_SERVICE_TOGGLES = self._toggles_saved
+
+
+class Truth(WindowsToggles, unittest.TestCase):
     """Тексты, которые владелец читает как обещание продукта."""
 
     def test_service_text_does_not_promise_life_without_login(self):
@@ -288,7 +302,7 @@ class Truth(unittest.TestCase):
                          modes.SESSION0_WARNING)
 
 
-class Describe(unittest.TestCase):
+class Describe(WindowsToggles, unittest.TestCase):
     """Срез для окна: два ответа рядом, ни одного склеенного."""
 
     def test_shape_has_fence_and_service_apart(self):
@@ -390,6 +404,8 @@ class Platform(unittest.TestCase):
 
     def test_windows_picture_is_untouched(self):
         modes.HAS_SERVICE = True
+        modes.HAS_SERVICE_TOGGLES = True  # картина Windows — с двумя галочками
+        modes.HAS_SERVICE_TOGGLES = True  # картина Windows — с двумя галочками
         cfg = {"agent_mode": "sandbox", "service": {"session0": True}}
         picture = modes.resolve(cfg, installed=False)
         self.assertTrue(picture["service_here"])
