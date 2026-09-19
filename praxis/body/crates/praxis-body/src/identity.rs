@@ -23,7 +23,11 @@ pub fn current() -> ExecutionIdentity {
     {
         windows_identity()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        macos_identity()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let user = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
         let root = unsafe { libc::geteuid() } == 0;
@@ -42,6 +46,35 @@ pub fn current() -> ExecutionIdentity {
             },
             elevated: root,
         }
+    }
+}
+
+/// macOS: `kind` — про рабочий стол, а не про права. Interactive ⇔ есть графическая
+/// сессия (WindowServer, пользователь за консолью — `mac::gui_session`); без неё тело
+/// работает как служба (System): файлы и процессы отвечают, а глаголы стола честно
+/// уходят в «нет интерактивного хоста», как у службы на Windows. Права — отдельно:
+/// root → integrity `system` и `elevated`, обычный пользователь → `medium`.
+/// SID у macOS нет; `user_sid` = `uid:<effective uid>` — то, что можно сверить с `ps`.
+/// `session_id` — понятие Windows, здесь его нет: `None`, не выдумка.
+#[cfg(target_os = "macos")]
+fn macos_identity() -> ExecutionIdentity {
+    let uid = unsafe { libc::geteuid() };
+    let root = uid == 0;
+    let interactive = !root && crate::mac::gui_session();
+    ExecutionIdentity {
+        kind: if interactive {
+            ExecutionKind::Interactive
+        } else {
+            ExecutionKind::System
+        },
+        user_sid: Some(format!("uid:{uid}")),
+        session_id: None,
+        integrity: if root {
+            IntegrityLevel::System
+        } else {
+            IntegrityLevel::Medium
+        },
+        elevated: root,
     }
 }
 

@@ -1,3 +1,5 @@
+mod ax;
+mod mac;
 mod dpi;
 mod artifact;
 mod compose;
@@ -99,6 +101,10 @@ impl From<ExecutionArg> for ExecutionKind {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Первой строкой: на macOS тело живёт под движком Hélène без job-объекта Windows,
+    // и без сторожа осиротевшее тело пережило бы выход программы (см. `mac::watch_parent`).
+    #[cfg(target_os = "macos")]
+    mac::watch_parent("praxis-body");
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

@@ -40,3 +40,16 @@ windows = { workspace = true, features = ["Win32_System_Com", "Win32_UI_Accessib
 
 [target.'cfg(not(windows))'.dependencies]
 libc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Порт тела на macOS (19.09): снимок экрана, окна, мышь и клавиатура — CoreGraphics;
+# словари окон и строки — CoreFoundation. Дерево окна (Accessibility) — свои
+# extern "C" к ApplicationServices в src/ax.rs, без отдельного крейта.
+core-foundation = "0.10"
+# `highsierra` — только ради `CGEvent::new_scroll_event` (колесо в desktop.input.perform):
+# в крейте оно спрятано за этим флагом, других отличий флаг не включает.
+core-graphics = { version = "0.25", features = ["highsierra"] }
+# Трейт `ForeignTypeRef` — чтобы взять сырой указатель `CGImage` для двух функций
+# CoreGraphics, которых в крейте нет (`CGImageGetBitmapInfo`, `CGImageGetAlphaInfo`):
+# без них формат байтов снимка пришлось бы угадывать.
+foreign-types = "0.5"

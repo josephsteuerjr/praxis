@@ -7,17 +7,17 @@
 
 use std::path::{Path, PathBuf};
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 use std::fs::{self, File};
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 use std::io::{self, BufWriter, Write};
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use praxis_body_protocol::{AdapterDescriptor, CapabilityDescriptor};
 use serde_json::Value;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,25 +134,32 @@ pub fn descriptors() -> Vec<CapabilityDescriptor> {
 }
 
 pub fn adapter_descriptor() -> AdapterDescriptor {
+    // Windows-строка не меняется; macOS — свой адаптер с теми же глаголами и формами
+    // (порт 19.09), и доступен он ровно там, где собран.
+    let (name, version) = if cfg!(target_os = "macos") {
+        ("native-macos-desktop", "1")
+    } else {
+        ("native-win32-desktop", "3")
+    };
     AdapterDescriptor {
-        name: "native-win32-desktop".into(),
-        version: "3".into(),
+        name: name.into(),
+        version: version.into(),
         capabilities: CAPABILITIES
             .iter()
             .map(|capability| capability.name.to_string())
             .collect(),
-        available: cfg!(windows),
+        available: cfg!(any(windows, target_os = "macos")),
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 const MAX_CAPTURE_PIXELS: u64 = 40_000_000;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 const MAX_CAPTURE_RAW_BYTES: usize = 128 * 1024 * 1024;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 const MAX_CAPTURE_PNG_BYTES: usize = 128 * 1024 * 1024;
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 fn capture_allocation(width: i32, height: i32) -> Result<usize> {
     if width <= 0 || height <= 0 {
         bail!("capture rectangle must have positive width and height")
@@ -172,14 +179,14 @@ fn capture_allocation(width: i32, height: i32) -> Result<usize> {
     Ok(raw_bytes)
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 struct SizeLimitedWriter<W> {
     inner: W,
     written: usize,
     limit: usize,
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 impl<W> SizeLimitedWriter<W> {
     fn new(inner: W, limit: usize) -> Self {
         Self {
@@ -190,7 +197,7 @@ impl<W> SizeLimitedWriter<W> {
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 impl<W: Write> Write for SizeLimitedWriter<W> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         if buffer.len() > self.limit.saturating_sub(self.written) {
@@ -212,7 +219,7 @@ impl<W: Write> Write for SizeLimitedWriter<W> {
     }
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 fn write_png(path: &Path, width: i32, height: i32, bgra: &[u8]) -> Result<()> {
     let expected = capture_allocation(width, height)?;
     if bgra.len() != expected {
@@ -270,7 +277,7 @@ fn write_png(path: &Path, width: i32, height: i32, bgra: &[u8]) -> Result<()> {
     committed
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 fn capture_name(requested: &str) -> String {
     let mut filtered: String = requested
         .chars()
@@ -339,7 +346,7 @@ pub fn dispatch(capability: &str, args: Value, state_dir: &Path) -> Result<Value
     })
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 mod platform {
     use std::path::Path;
 
@@ -347,7 +354,2454 @@ mod platform {
     use serde_json::Value;
 
     pub fn dispatch(_capability: &str, _args: Value, _state_dir: &Path) -> Result<Value> {
-        bail!("native desktop capabilities require an interactive Windows session")
+        bail!("native desktop capabilities require an interactive Windows or macOS session")
+    }
+}
+
+/// Платформенно-нейтральная часть macOS-ветки: аргументы глаголов, планировщик ввода,
+/// таблица клавиш, разбор `ps`, пиксели снимка, формы строк JSON. Ни одного вызова
+/// системы — стенды на любой ОС проверяют ровно тот код, который потом исполняется на
+/// Mac, а живая часть (`platform` под `target_os = "macos"`) только шлёт готовое в
+/// CoreGraphics. Формы JSON — те же, что у Windows-ветки: дерево Праксис и
+/// `body_client.py` не должны заметить платформу иначе как по полю `platform`.
+#[cfg(any(target_os = "macos", test))]
+// Вне macOS модуль живёт только ради стендов: аргументы глаголов и планировщик там никто
+// не зовёт, и предупреждать об этом на каждой сборке Windows незачем.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod mac_pure {
+    use anyhow::{Context, Result, bail};
+    use serde::Deserialize;
+    use serde_json::{Value, json};
+
+    // Пределы — те же числа, что у Windows-ветки, и едут в каждом ответе (`input_limits`).
+    pub(super) const DEFAULT_PAGE: usize = 2_048;
+    pub(super) const MAX_PAGE: usize = 20_000;
+    pub(super) const DEFAULT_CLIPBOARD_CHARS: usize = 1_000_000;
+    pub(super) const MAX_CLIPBOARD_CHARS: usize = 1_000_000;
+    pub(super) const MAX_INPUT_EVENTS: usize = 512;
+    pub(super) const MAX_INPUT_TEXT_UTF16_UNITS: usize = 16_384;
+    pub(super) const MAX_HOTKEY_KEYS: usize = 32;
+    pub(super) const MAX_CLICK_COUNT: u32 = 64;
+    pub(super) const MAX_INPUT_RECORDS: usize = 65_536;
+    // body_client ждёт 60 секунд; оставляем запас на сам вызов и ответ.
+    pub(super) const MAX_TOTAL_INPUT_DELAY_MS: u64 = 30_000;
+    pub(super) const MAX_DRAG_STEPS: u32 = 256;
+    pub(super) const DEFAULT_DRAG_STEPS: u32 = 24;
+    pub(super) const MAX_DRAG_PAUSE_MS: u64 = 5_000;
+    pub(super) const DEFAULT_DRAG_HOLD_MS: u64 = 60;
+    pub(super) const DEFAULT_DRAG_STEP_DELAY_MS: u64 = 8;
+    pub(super) const DEFAULT_DRAG_SETTLE_MS: u64 = 60;
+    pub(super) const MAX_ACTIVATE_TIMEOUT_MS: u64 = 15_000;
+    /// Пауза между знаками текста. Урок VK_PACKET на Windows: знаки, отправленные одной
+    /// пачкой, терялись, 20 мс между ними лечит. На macOS знак уходит парой событий
+    /// (down/up) через CGEventKeyboardSetUnicodeString, и после каждого знака стоит та же
+    /// пауза. Она входит в общий бюджет MAX_TOTAL_INPUT_DELAY_MS, поэтому за один вызов
+    /// помещается ~1 500 знаков — предел назван в `limits` и в тексте отказа, не спрятан.
+    pub(super) const TEXT_UNIT_PAUSE_MS: u64 = 20;
+    /// Одна зарубка колеса Windows (delta 120) — три строки: столько по умолчанию
+    /// прокручивает Windows, и столько же имеет в виду дерево, когда говорит «steps: 1».
+    pub(super) const WHEEL_LINES_PER_NOTCH: i32 = 3;
+    pub(super) const WHEEL_NOTCH: i32 = 120;
+
+    // ─── аргументы (формы Windows-ветки) ────────────────────────────────────────────
+
+    /// `hwnd` = CGWindowID: число или строка `0x…`, как на Windows.
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(untagged)]
+    pub(super) enum HwndArg {
+        Number(u64),
+        Text(String),
+    }
+
+    impl HwndArg {
+        pub(super) fn value(&self) -> Result<u32> {
+            let value = match self {
+                Self::Number(value) => *value,
+                Self::Text(value) => {
+                    let value = value.trim();
+                    if let Some(hex) = value
+                        .strip_prefix("0x")
+                        .or_else(|| value.strip_prefix("0X"))
+                    {
+                        u64::from_str_radix(hex, 16)
+                            .context("hwnd must be a positive integer or hexadecimal string")?
+                    } else {
+                        value.parse::<u64>().context(
+                            "hwnd must be a positive integer or 0x-prefixed hexadecimal string",
+                        )?
+                    }
+                }
+            };
+            if value == 0 || value > u64::from(u32::MAX) {
+                bail!("invalid hwnd: a CGWindowID is a nonzero 32-bit number")
+            }
+            Ok(value as u32)
+        }
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    pub(super) struct PageArgs {
+        #[serde(default)]
+        pub(super) offset: usize,
+        #[serde(default = "default_page")]
+        pub(super) limit: usize,
+    }
+
+    fn default_page() -> usize {
+        DEFAULT_PAGE
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    pub(super) struct ProcessListArgs {
+        #[serde(flatten)]
+        pub(super) page: PageArgs,
+        #[serde(default)]
+        pub(super) name_contains: String,
+        #[serde(default)]
+        pub(super) session_id: Option<u32>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub(super) struct WindowListArgs {
+        #[serde(flatten)]
+        pub(super) page: PageArgs,
+        #[serde(default = "yes")]
+        pub(super) visible_only: bool,
+        #[serde(default)]
+        pub(super) pid: Option<u32>,
+        #[serde(default)]
+        pub(super) title_contains: String,
+        /// WindowServer перечисляет и строку меню, док, оверлеи, окна статуса — на
+        /// Windows их аналоги не top-level окна. По умолчанию — только обычные окна
+        /// (слой 0); `true` — всё, что знает WindowServer. Умолчание названо в ответе.
+        #[serde(default)]
+        pub(super) all_layers: bool,
+    }
+
+    impl Default for WindowListArgs {
+        fn default() -> Self {
+            Self {
+                page: PageArgs::default(),
+                visible_only: true,
+                pid: None,
+                title_contains: String::new(),
+                all_layers: false,
+            }
+        }
+    }
+
+    fn yes() -> bool {
+        true
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub(super) struct ActivateArgs {
+        pub(super) hwnd: HwndArg,
+        #[serde(default)]
+        pub(super) expected_pid: Option<u32>,
+        #[serde(default = "yes")]
+        pub(super) restore: bool,
+        #[serde(default = "activate_timeout")]
+        pub(super) timeout_ms: u64,
+    }
+
+    fn activate_timeout() -> u64 {
+        1_500
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub(super) struct InputArgs {
+        #[serde(default)]
+        pub(super) expected_foreground: Option<HwndArg>,
+        #[serde(default)]
+        pub(super) expected_pid: Option<u32>,
+        pub(super) events: Vec<InputEvent>,
+        #[serde(default)]
+        pub(super) inter_event_delay_ms: u64,
+    }
+
+    /// Те же шаги, что у Windows-ветки v2 (см. её комментарии к каждому).
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    pub(super) enum InputEvent {
+        Text {
+            text: String,
+        },
+        Hotkey {
+            keys: Vec<KeyArg>,
+        },
+        Key {
+            key: KeyArg,
+            #[serde(default = "press_action")]
+            action: String,
+        },
+        Mouse {
+            x: i32,
+            y: i32,
+            #[serde(default)]
+            relative: bool,
+        },
+        Click {
+            #[serde(default = "left_button")]
+            button: String,
+            #[serde(default)]
+            x: Option<i32>,
+            #[serde(default)]
+            y: Option<i32>,
+            #[serde(default = "one")]
+            count: u32,
+        },
+        Wheel {
+            delta: i32,
+            #[serde(default)]
+            horizontal: bool,
+            #[serde(default)]
+            x: Option<i32>,
+            #[serde(default)]
+            y: Option<i32>,
+        },
+        MouseDown {
+            #[serde(default = "left_button")]
+            button: String,
+            #[serde(default)]
+            x: Option<i32>,
+            #[serde(default)]
+            y: Option<i32>,
+        },
+        MouseUp {
+            #[serde(default = "left_button")]
+            button: String,
+            #[serde(default)]
+            x: Option<i32>,
+            #[serde(default)]
+            y: Option<i32>,
+        },
+        Drag {
+            #[serde(default = "left_button")]
+            button: String,
+            x: i32,
+            y: i32,
+            to_x: i32,
+            to_y: i32,
+            #[serde(default = "default_drag_steps")]
+            steps: u32,
+            #[serde(default = "default_drag_hold_ms")]
+            hold_ms: u64,
+            #[serde(default = "default_drag_step_delay_ms")]
+            step_delay_ms: u64,
+            #[serde(default = "default_drag_settle_ms")]
+            settle_ms: u64,
+        },
+    }
+
+    /// Имя клавиши из таблицы Windows-ветки или число. ⚠ Число здесь — код macOS
+    /// (`kVK_*`), а не Windows VK: таблицы разные, и подменять одно другим молча нельзя.
+    /// Об этом сказано в `limits.numeric_keys`.
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(untagged)]
+    pub(super) enum KeyArg {
+        Number(u16),
+        Text(String),
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum MouseButton {
+        Left,
+        Right,
+        Middle,
+    }
+
+    impl MouseButton {
+        pub(super) fn parse(raw: &str) -> Result<Self> {
+            match raw.trim().to_ascii_lowercase().as_str() {
+                "left" => Ok(Self::Left),
+                "right" => Ok(Self::Right),
+                "middle" => Ok(Self::Middle),
+                _ => bail!("button must be left, right, or middle"),
+            }
+        }
+
+        pub(super) fn name(self) -> &'static str {
+            match self {
+                Self::Left => "left",
+                Self::Right => "right",
+                Self::Middle => "middle",
+            }
+        }
+    }
+
+    fn press_action() -> String {
+        "press".into()
+    }
+
+    fn left_button() -> String {
+        "left".into()
+    }
+
+    fn one() -> u32 {
+        1
+    }
+
+    fn default_drag_steps() -> u32 {
+        DEFAULT_DRAG_STEPS
+    }
+
+    fn default_drag_hold_ms() -> u64 {
+        DEFAULT_DRAG_HOLD_MS
+    }
+
+    fn default_drag_step_delay_ms() -> u64 {
+        DEFAULT_DRAG_STEP_DELAY_MS
+    }
+
+    fn default_drag_settle_ms() -> u64 {
+        DEFAULT_DRAG_SETTLE_MS
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub(super) struct CaptureArgs {
+        #[serde(default = "desktop_target")]
+        pub(super) target: String,
+        #[serde(default)]
+        pub(super) hwnd: Option<HwndArg>,
+        #[serde(default)]
+        pub(super) x: Option<i32>,
+        #[serde(default)]
+        pub(super) y: Option<i32>,
+        #[serde(default)]
+        pub(super) width: Option<i32>,
+        #[serde(default)]
+        pub(super) height: Option<i32>,
+        #[serde(default)]
+        pub(super) name: String,
+        /// `true` — отдать пиксели как есть (на Retina вдвое больше пунктов);
+        /// по умолчанию снимок уменьшается до пунктов, 1:1 с координатами клика.
+        #[serde(default)]
+        pub(super) native: bool,
+    }
+
+    fn desktop_target() -> String {
+        "desktop".into()
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub(super) struct ClipboardReadArgs {
+        #[serde(default = "default_clipboard_chars")]
+        pub(super) limit_chars: usize,
+    }
+
+    fn default_clipboard_chars() -> usize {
+        DEFAULT_CLIPBOARD_CHARS
+    }
+
+    #[derive(Debug, Deserialize)]
+    pub(super) struct ClipboardWriteArgs {
+        pub(super) text: String,
+    }
+
+    // ─── планировщик ввода ──────────────────────────────────────────────────────────
+
+    /// Одна отправка в CoreGraphics. Координаты — пункты, глобально, уже подтянутые к
+    /// краю экрана; тип события (Moved/Dragged, click state) выбирает отправитель по
+    /// тому, что реально нажато к этому моменту.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) enum Record {
+        KeyDown(u16),
+        KeyUp(u16),
+        /// Один знак текста: 1 или 2 единицы UTF-16 (суррогатная пара — одним событием).
+        Unicode { units: Vec<u16>, down: bool },
+        MoveTo { x: i32, y: i32 },
+        /// Сдвиг от живого положения курсора; подтягивается к краю при отправке.
+        MoveBy { dx: i32, dy: i32 },
+        ButtonDown { button: MouseButton, click_state: u32 },
+        ButtonUp { button: MouseButton, click_state: u32 },
+        /// Строки. Знак — как на Windows: положительное — вверх / вправо.
+        Wheel { vertical: i32, horizontal: i32 },
+    }
+
+    /// Отправки одного шага плюс пауза после них (см. Windows-ветку `PreparedChunk`).
+    #[derive(Debug)]
+    pub(super) struct PreparedChunk {
+        pub(super) records: Vec<Record>,
+        pub(super) pause_ms: u64,
+        pub(super) press: Option<MouseButton>,
+        pub(super) release: Option<MouseButton>,
+        pub(super) clamped_moves: usize,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) struct PlanTotals {
+        pub(super) batches: usize,
+        pub(super) records: usize,
+        pub(super) pause_ms: u64,
+        pub(super) clamped_moves: usize,
+    }
+
+    /// Виртуальный экран в пунктах (все дисплеи), для подтягивания координат к краю.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) struct Screen {
+        pub(super) left: i32,
+        pub(super) top: i32,
+        pub(super) width: i32,
+        pub(super) height: i32,
+    }
+
+    impl Screen {
+        /// Точка внутри экрана и признак «пришлось подтянуть к краю».
+        pub(super) fn clamp(&self, x: i32, y: i32) -> (i32, i32, bool) {
+            let (cx, pulled_x) = clamp_axis(x, self.left, self.width);
+            let (cy, pulled_y) = clamp_axis(y, self.top, self.height);
+            (cx, cy, pulled_x || pulled_y)
+        }
+    }
+
+    fn clamp_axis(value: i32, origin: i32, length: i32) -> (i32, bool) {
+        if length <= 1 {
+            return (origin, value != origin);
+        }
+        let last = i64::from(origin) + i64::from(length) - 1;
+        let clamped = i64::from(value).clamp(i64::from(origin), last);
+        (clamped as i32, clamped != i64::from(value))
+    }
+
+    pub(super) fn prepare_input_events(
+        events: &[InputEvent],
+        inter_event_delay_ms: u64,
+        screen: Screen,
+    ) -> Result<Vec<PreparedChunk>> {
+        let mut total = 0usize;
+        let mut chunks: Vec<PreparedChunk> = Vec::with_capacity(events.len());
+        for (index, event) in events.iter().enumerate() {
+            let produced = event_chunks(event, screen)?;
+            for chunk in &produced {
+                total = total
+                    .checked_add(chunk.records.len())
+                    .context("input record count overflow")?;
+                if total > MAX_INPUT_RECORDS {
+                    bail!("input batch expands to {total} records (maximum {MAX_INPUT_RECORDS})")
+                }
+            }
+            chunks.extend(produced);
+            if index + 1 < events.len()
+                && inter_event_delay_ms > 0
+                && let Some(last) = chunks.last_mut()
+            {
+                last.pause_ms = last
+                    .pause_ms
+                    .checked_add(inter_event_delay_ms)
+                    .context("input delay overflow")?;
+            }
+        }
+        Ok(chunks)
+    }
+
+    /// Всё, что известно о пачке ДО первой отправки — те же числа, что едут в ответ.
+    /// Пауза последнего шага не считается: после него ничего не ждут (как на Windows).
+    pub(super) fn plan_totals(chunks: &[PreparedChunk]) -> Result<PlanTotals> {
+        let mut records = 0usize;
+        let mut pause_ms = 0u64;
+        let mut clamped_moves = 0usize;
+        for (index, chunk) in chunks.iter().enumerate() {
+            records = records
+                .checked_add(chunk.records.len())
+                .context("input record count overflow")?;
+            if index + 1 < chunks.len() {
+                pause_ms = pause_ms
+                    .checked_add(chunk.pause_ms)
+                    .context("input delay overflow")?;
+            }
+            clamped_moves = clamped_moves
+                .checked_add(chunk.clamped_moves)
+                .context("clamped move count overflow")?;
+        }
+        Ok(PlanTotals {
+            batches: chunks.len(),
+            records,
+            pause_ms,
+            clamped_moves,
+        })
+    }
+
+    /// Что шаг делает с состоянием кнопок: (что нажал, что отпустил).
+    pub(super) fn event_button_effect(
+        event: &InputEvent,
+    ) -> Result<(Option<MouseButton>, Option<MouseButton>)> {
+        Ok(match event {
+            InputEvent::Click { button, .. } | InputEvent::Drag { button, .. } => {
+                let button = MouseButton::parse(button)?;
+                (Some(button), Some(button))
+            }
+            InputEvent::MouseDown { button, .. } => (Some(MouseButton::parse(button)?), None),
+            InputEvent::MouseUp { button, .. } => (None, Some(MouseButton::parse(button)?)),
+            _ => (None, None),
+        })
+    }
+
+    /// Что останется зажатым, если все шаги дойдут до стола целиком. Живой цикл ведёт
+    /// ту же ведомость по фактическим отправкам; здесь она считается наперёд для стендов.
+    #[cfg(test)]
+    pub(super) fn net_held(events: &[InputEvent]) -> Result<Vec<&'static str>> {
+        let mut held: Vec<MouseButton> = Vec::new();
+        for event in events {
+            let (press, release) = event_button_effect(event)?;
+            if let Some(button) = press
+                && !held.contains(&button)
+            {
+                held.push(button);
+            }
+            if let Some(button) = release {
+                held.retain(|value| *value != button);
+            }
+        }
+        Ok(held.into_iter().map(MouseButton::name).collect())
+    }
+
+    fn event_chunks(event: &InputEvent, screen: Screen) -> Result<Vec<PreparedChunk>> {
+        match event {
+            InputEvent::Drag {
+                button,
+                x,
+                y,
+                to_x,
+                to_y,
+                steps,
+                hold_ms,
+                step_delay_ms,
+                settle_ms,
+            } => drag_chunks(
+                MouseButton::parse(button)?,
+                (*x, *y),
+                (*to_x, *to_y),
+                *steps,
+                (*hold_ms, *step_delay_ms, *settle_ms),
+                screen,
+            ),
+            InputEvent::Text { text } => text_chunks(text),
+            _ => {
+                let (press, release) = event_button_effect(event)?;
+                let mut clamped_moves = 0usize;
+                let records = event_records(event, screen, &mut clamped_moves)?;
+                Ok(vec![PreparedChunk {
+                    records,
+                    pause_ms: 0,
+                    press,
+                    release,
+                    clamped_moves,
+                }])
+            }
+        }
+    }
+
+    /// Текст — по одному знаку на отправку с паузой TEXT_UNIT_PAUSE_MS после каждого.
+    /// Перевод строки и табуляция — настоящими клавишами: юникодный `\n` многие
+    /// программы Mac не считают за Return, а Return считают все.
+    fn text_chunks(text: &str) -> Result<Vec<PreparedChunk>> {
+        let units = text.encode_utf16().count();
+        if units > MAX_INPUT_TEXT_UTF16_UNITS {
+            bail!("input text has {units} UTF-16 units (maximum {MAX_INPUT_TEXT_UTF16_UNITS})")
+        }
+        let mut chunks = Vec::with_capacity(text.chars().count());
+        let mut previous = '\0';
+        for value in text.chars() {
+            if value == '\n' && previous == '\r' {
+                previous = value;
+                continue;
+            }
+            previous = value;
+            let records = match value {
+                '\r' | '\n' => vec![Record::KeyDown(KEY_RETURN), Record::KeyUp(KEY_RETURN)],
+                '\t' => vec![Record::KeyDown(KEY_TAB), Record::KeyUp(KEY_TAB)],
+                _ => {
+                    let mut buffer = [0u16; 2];
+                    let encoded = value.encode_utf16(&mut buffer).to_vec();
+                    vec![
+                        Record::Unicode {
+                            units: encoded.clone(),
+                            down: true,
+                        },
+                        Record::Unicode {
+                            units: encoded,
+                            down: false,
+                        },
+                    ]
+                }
+            };
+            chunks.push(PreparedChunk {
+                records,
+                pause_ms: TEXT_UNIT_PAUSE_MS,
+                press: None,
+                release: None,
+                clamped_moves: 0,
+            });
+        }
+        Ok(chunks)
+    }
+
+    fn drag_chunks(
+        button: MouseButton,
+        from: (i32, i32),
+        to: (i32, i32),
+        steps: u32,
+        pauses: (u64, u64, u64),
+        screen: Screen,
+    ) -> Result<Vec<PreparedChunk>> {
+        if !(1..=MAX_DRAG_STEPS).contains(&steps) {
+            bail!("drag steps must be between 1 and {MAX_DRAG_STEPS}")
+        }
+        let (hold_ms, step_delay_ms, settle_ms) = pauses;
+        for (name, value) in [
+            ("hold_ms", hold_ms),
+            ("step_delay_ms", step_delay_ms),
+            ("settle_ms", settle_ms),
+        ] {
+            if value > MAX_DRAG_PAUSE_MS {
+                bail!("drag {name} is {value}ms (maximum {MAX_DRAG_PAUSE_MS}ms per pause)")
+            }
+        }
+        let mut chunks = Vec::with_capacity(steps as usize + 2);
+        let mut clamped_moves = 0usize;
+        let press = vec![
+            absolute_move(from.0, from.1, screen, &mut clamped_moves),
+            Record::ButtonDown {
+                button,
+                click_state: 1,
+            },
+        ];
+        chunks.push(PreparedChunk {
+            records: press,
+            pause_ms: hold_ms,
+            press: Some(button),
+            release: None,
+            clamped_moves,
+        });
+        for step in 1..=steps {
+            let point = |start: i32, end: i32| -> i32 {
+                let span = i64::from(end) - i64::from(start);
+                (i64::from(start) + span * i64::from(step) / i64::from(steps)) as i32
+            };
+            let mut clamped_moves = 0usize;
+            let record = absolute_move(
+                point(from.0, to.0),
+                point(from.1, to.1),
+                screen,
+                &mut clamped_moves,
+            );
+            chunks.push(PreparedChunk {
+                records: vec![record],
+                pause_ms: if step == steps { settle_ms } else { step_delay_ms },
+                press: None,
+                release: None,
+                clamped_moves,
+            });
+        }
+        chunks.push(PreparedChunk {
+            records: vec![Record::ButtonUp {
+                button,
+                click_state: 1,
+            }],
+            pause_ms: 0,
+            press: None,
+            release: Some(button),
+            clamped_moves: 0,
+        });
+        Ok(chunks)
+    }
+
+    fn event_records(
+        event: &InputEvent,
+        screen: Screen,
+        clamped_moves: &mut usize,
+    ) -> Result<Vec<Record>> {
+        match event {
+            InputEvent::Hotkey { keys } => hotkey_records(keys),
+            InputEvent::Key { key, action } => key_action_records(key, action),
+            InputEvent::Mouse { x, y, relative } => {
+                if *relative {
+                    Ok(vec![Record::MoveBy { dx: *x, dy: *y }])
+                } else {
+                    Ok(vec![absolute_move(*x, *y, screen, clamped_moves)])
+                }
+            }
+            InputEvent::Click {
+                button,
+                x,
+                y,
+                count,
+            } => click_records(button, *x, *y, *count, screen, clamped_moves),
+            InputEvent::Wheel {
+                delta,
+                horizontal,
+                x,
+                y,
+            } => wheel_records(*delta, *horizontal, *x, *y, screen, clamped_moves),
+            InputEvent::MouseDown { button, x, y } => {
+                button_edge_records(button, *x, *y, true, screen, clamped_moves)
+            }
+            InputEvent::MouseUp { button, x, y } => {
+                button_edge_records(button, *x, *y, false, screen, clamped_moves)
+            }
+            InputEvent::Text { .. } | InputEvent::Drag { .. } => {
+                bail!("text and drag are expanded into batches by event_chunks")
+            }
+        }
+    }
+
+    fn button_edge_records(
+        button: &str,
+        x: Option<i32>,
+        y: Option<i32>,
+        press: bool,
+        screen: Screen,
+        clamped_moves: &mut usize,
+    ) -> Result<Vec<Record>> {
+        if x.is_some() != y.is_some() {
+            bail!("mouse button x and y must be supplied together")
+        }
+        let button = MouseButton::parse(button)?;
+        let mut records = Vec::with_capacity(2);
+        if let (Some(x), Some(y)) = (x, y) {
+            records.push(absolute_move(x, y, screen, clamped_moves));
+        }
+        records.push(if press {
+            Record::ButtonDown {
+                button,
+                click_state: 1,
+            }
+        } else {
+            Record::ButtonUp {
+                button,
+                click_state: 1,
+            }
+        });
+        Ok(records)
+    }
+
+    fn hotkey_records(keys: &[KeyArg]) -> Result<Vec<Record>> {
+        if keys.is_empty() {
+            bail!("hotkey keys must not be empty")
+        }
+        if keys.len() > MAX_HOTKEY_KEYS {
+            bail!("hotkey has {} keys (maximum {MAX_HOTKEY_KEYS})", keys.len())
+        }
+        let codes = keys.iter().map(key_code).collect::<Result<Vec<_>>>()?;
+        let mut records = Vec::with_capacity(codes.len() * 2);
+        records.extend(codes.iter().map(|code| Record::KeyDown(*code)));
+        records.extend(codes.iter().rev().map(|code| Record::KeyUp(*code)));
+        Ok(records)
+    }
+
+    fn key_action_records(key: &KeyArg, action: &str) -> Result<Vec<Record>> {
+        let code = key_code(key)?;
+        match action.trim().to_ascii_lowercase().as_str() {
+            "down" => Ok(vec![Record::KeyDown(code)]),
+            "up" => Ok(vec![Record::KeyUp(code)]),
+            "press" => Ok(vec![Record::KeyDown(code), Record::KeyUp(code)]),
+            _ => bail!("key action must be press, down, or up"),
+        }
+    }
+
+    /// Двойной и тройной щелчок на Mac — это click state 2 и 3 у самих событий, а не
+    /// просто два нажатия подряд: без него программы видят два одиночных щелчка.
+    fn click_records(
+        button: &str,
+        x: Option<i32>,
+        y: Option<i32>,
+        count: u32,
+        screen: Screen,
+        clamped_moves: &mut usize,
+    ) -> Result<Vec<Record>> {
+        if x.is_some() != y.is_some() {
+            bail!("click x and y must be supplied together")
+        }
+        let button = MouseButton::parse(button)?;
+        if !(1..=MAX_CLICK_COUNT).contains(&count) {
+            bail!("click count must be between 1 and {MAX_CLICK_COUNT}")
+        }
+        let mut records = Vec::with_capacity(count as usize * 2 + usize::from(x.is_some()));
+        if let (Some(x), Some(y)) = (x, y) {
+            records.push(absolute_move(x, y, screen, clamped_moves));
+        }
+        for click_state in 1..=count {
+            records.push(Record::ButtonDown {
+                button,
+                click_state,
+            });
+            records.push(Record::ButtonUp {
+                button,
+                click_state,
+            });
+        }
+        Ok(records)
+    }
+
+    fn wheel_records(
+        delta: i32,
+        horizontal: bool,
+        x: Option<i32>,
+        y: Option<i32>,
+        screen: Screen,
+        clamped_moves: &mut usize,
+    ) -> Result<Vec<Record>> {
+        if x.is_some() != y.is_some() {
+            bail!("wheel x and y must be supplied together")
+        }
+        let mut records = Vec::with_capacity(2);
+        if let (Some(x), Some(y)) = (x, y) {
+            records.push(absolute_move(x, y, screen, clamped_moves));
+        }
+        let lines = wheel_lines(delta);
+        records.push(if horizontal {
+            Record::Wheel {
+                vertical: 0,
+                horizontal: lines,
+            }
+        } else {
+            Record::Wheel {
+                vertical: lines,
+                horizontal: 0,
+            }
+        });
+        Ok(records)
+    }
+
+    /// Строки прокрутки из Windows-дельты: 120 — одна зарубка — три строки; знак
+    /// сохраняется, и ненулевая дельта меньше трети зарубки всё равно даёт одну строку,
+    /// а не молчаливый ноль.
+    pub(super) fn wheel_lines(delta: i32) -> i32 {
+        if delta == 0 {
+            return 0;
+        }
+        let lines = i64::from(delta) * i64::from(WHEEL_LINES_PER_NOTCH) / i64::from(WHEEL_NOTCH);
+        if lines == 0 {
+            delta.signum()
+        } else {
+            lines.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+        }
+    }
+
+    fn absolute_move(x: i32, y: i32, screen: Screen, clamped_moves: &mut usize) -> Record {
+        let (cx, cy, pulled) = screen.clamp(x, y);
+        if pulled {
+            // Координата за пределами экрана подтягивается к краю — и это считается,
+            // а не делается молча (см. Windows-ветку `absolute_move`).
+            *clamped_moves = clamped_moves.saturating_add(1);
+        }
+        Record::MoveTo { x: cx, y: cy }
+    }
+
+    // ─── клавиши ────────────────────────────────────────────────────────────────────
+
+    pub(super) const KEY_RETURN: u16 = 0x24;
+    pub(super) const KEY_TAB: u16 = 0x30;
+
+    pub(super) fn key_code(key: &KeyArg) -> Result<u16> {
+        match key {
+            KeyArg::Number(0) => bail!("virtual key must be nonzero"),
+            KeyArg::Number(value) => Ok(*value),
+            KeyArg::Text(raw) => key_code_by_name(raw),
+        }
+    }
+
+    /// Имена — те же, что у Windows-ветки (`key_value`), плюс родные синонимы Mac.
+    /// Коды — `kVK_*` из Carbon Events.h; буквы и цифры — по физическим клавишам
+    /// раскладки ANSI (для сочетаний это и нужно: ⌘C — это клавиша C, какая бы раскладка
+    /// ни стояла; сам текст идёт юникодом и от раскладки не зависит).
+    pub(super) fn key_code_by_name(raw: &str) -> Result<u16> {
+        let key = raw.trim().to_ascii_lowercase();
+        let value = match key.as_str() {
+            "backspace" => 0x33,
+            "tab" => KEY_TAB,
+            "enter" | "return" => KEY_RETURN,
+            "shift" | "left_shift" => 0x38,
+            "right_shift" => 0x3C,
+            "ctrl" | "control" | "left_ctrl" => 0x3B,
+            "right_ctrl" | "right_control" => 0x3E,
+            "alt" | "option" | "left_alt" => 0x3A,
+            "right_alt" | "right_option" => 0x3D,
+            "win" | "meta" | "left_win" | "cmd" | "command" | "left_cmd" => 0x37,
+            "right_win" | "right_cmd" | "right_command" => 0x36,
+            "caps_lock" | "capslock" => 0x39,
+            "escape" | "esc" => 0x35,
+            "space" => 0x31,
+            "page_up" | "pageup" => 0x74,
+            "page_down" | "pagedown" => 0x79,
+            "end" => 0x77,
+            "home" => 0x73,
+            "left" => 0x7B,
+            "up" => 0x7E,
+            "right" => 0x7C,
+            "down" => 0x7D,
+            // Клавиша Insert внешней PC-клавиатуры приходит в macOS как Help (0x72);
+            // своей клавиши Insert у Mac нет.
+            "insert" => 0x72,
+            "delete" | "del" => 0x75,
+            "fn" => 0x3F,
+            "pause" | "print_screen" | "printscreen" => {
+                bail!("key {raw:?} does not exist on a Mac keyboard")
+            }
+            _ if key.len() == 1 => {
+                let byte = key.as_bytes()[0];
+                match byte {
+                    b'a' => 0x00,
+                    b's' => 0x01,
+                    b'd' => 0x02,
+                    b'f' => 0x03,
+                    b'h' => 0x04,
+                    b'g' => 0x05,
+                    b'z' => 0x06,
+                    b'x' => 0x07,
+                    b'c' => 0x08,
+                    b'v' => 0x09,
+                    b'b' => 0x0B,
+                    b'q' => 0x0C,
+                    b'w' => 0x0D,
+                    b'e' => 0x0E,
+                    b'r' => 0x0F,
+                    b'y' => 0x10,
+                    b't' => 0x11,
+                    b'1' => 0x12,
+                    b'2' => 0x13,
+                    b'3' => 0x14,
+                    b'4' => 0x15,
+                    b'6' => 0x16,
+                    b'5' => 0x17,
+                    b'9' => 0x19,
+                    b'7' => 0x1A,
+                    b'8' => 0x1C,
+                    b'0' => 0x1D,
+                    b'o' => 0x1F,
+                    b'u' => 0x20,
+                    b'i' => 0x22,
+                    b'p' => 0x23,
+                    b'l' => 0x25,
+                    b'j' => 0x26,
+                    b'k' => 0x28,
+                    b'n' => 0x2D,
+                    b'm' => 0x2E,
+                    _ => bail!("unsupported named key {raw:?}; pass a numeric macOS key code (kVK)"),
+                }
+            }
+            _ if key.starts_with('f') => {
+                let number = key[1..].parse::<u16>().unwrap_or_default();
+                match number {
+                    1 => 0x7A,
+                    2 => 0x78,
+                    3 => 0x63,
+                    4 => 0x76,
+                    5 => 0x60,
+                    6 => 0x61,
+                    7 => 0x62,
+                    8 => 0x64,
+                    9 => 0x65,
+                    10 => 0x6D,
+                    11 => 0x67,
+                    12 => 0x6F,
+                    13 => 0x69,
+                    14 => 0x6B,
+                    15 => 0x71,
+                    16 => 0x6A,
+                    17 => 0x40,
+                    18 => 0x4F,
+                    19 => 0x50,
+                    20 => 0x5A,
+                    _ => bail!("function key must be f1 through f20 on macOS"),
+                }
+            }
+            _ => bail!("unsupported named key {raw:?}; pass a numeric macOS key code (kVK)"),
+        };
+        Ok(value)
+    }
+
+    /// Пределы ввода едут в КАЖДОМ ответе (см. Windows-ветку `input_limits`).
+    pub(super) fn input_limits() -> Value {
+        json!({
+            "max_events": MAX_INPUT_EVENTS,
+            "max_input_records": MAX_INPUT_RECORDS,
+            "max_text_utf16_units": MAX_INPUT_TEXT_UTF16_UNITS,
+            "max_hotkey_keys": MAX_HOTKEY_KEYS,
+            "max_click_count": MAX_CLICK_COUNT,
+            "max_total_delay_ms": MAX_TOTAL_INPUT_DELAY_MS,
+            "max_drag_steps": MAX_DRAG_STEPS,
+            "default_drag_steps": DEFAULT_DRAG_STEPS,
+            "max_drag_pause_ms": MAX_DRAG_PAUSE_MS,
+            "default_drag_pauses_ms": {
+                "hold": DEFAULT_DRAG_HOLD_MS,
+                "step_delay": DEFAULT_DRAG_STEP_DELAY_MS,
+                "settle": DEFAULT_DRAG_SETTLE_MS,
+            },
+            "typing_pacing_ms": TEXT_UNIT_PAUSE_MS,
+            "max_text_chars_per_call_at_pacing": MAX_TOTAL_INPUT_DELAY_MS / TEXT_UNIT_PAUSE_MS,
+            "coordinates": "points in the global CoreGraphics space (origin at the top-left of the main display, Y down); absolute x/y are clamped into virtual_screen; clamped_moves says how many were pulled to the edge",
+            "keys": "same names as on Windows; win/cmd/meta = Command, alt/option = Option, ctrl = Control; letters and digits are physical ANSI keys (hotkeys), text goes as Unicode",
+            "numeric_keys": "a numeric key is a macOS virtual key code (kVK_*), not a Windows VK code",
+            "wheel": format!("delta {WHEEL_NOTCH} = one notch = {WHEEL_LINES_PER_NOTCH} lines; positive = up, or right when horizontal (as on Windows)"),
+            "button_hold": "a held mouse button never survives the call: whatever this batch leaves down is released before returning and named in buttons_auto_released",
+            "focus_guard": "expected_foreground/expected_pid are re-checked before EVERY batch (each typed character is a batch), so a drag or a text is aborted mid-way if the foreground moves; the held button is released and named in the error",
+            "permissions": "input needs the Accessibility permission (TCC); without it macOS drops posted events silently, so the body refuses before the first event",
+        })
+    }
+
+    // ─── процессы ───────────────────────────────────────────────────────────────────
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) struct PsRow {
+        pub(super) pid: u32,
+        pub(super) ppid: u32,
+        pub(super) uid: u32,
+        /// `comm` у macOS `ps` — путь исполняемого файла как его запустили; может
+        /// содержать пробелы («…/Google Chrome.app/Contents/MacOS/Google Chrome»).
+        pub(super) comm: String,
+    }
+
+    /// Разбор `ps -axo pid=,ppid=,uid=,comm=`. ⚠ `ps` выравнивает числа пробелами
+    /// слева — строка начинается с пробелов, и наивный `split(' ')` даёт пустые поля
+    /// (на раннере так уже получали пустую таблицу). Поэтому — обрезка и
+    /// `splitn(4)` по пробельным пробегам, хвост целиком — путь. Нечитаемые строки не
+    /// выбрасываются молча: их число возвращается рядом.
+    pub(super) fn parse_ps(text: &str) -> (Vec<PsRow>, usize) {
+        let mut rows = Vec::new();
+        let mut skipped = 0usize;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let parsed = (|| {
+                let (pid, rest) = split_first(line)?;
+                let (ppid, rest) = split_first(rest)?;
+                let (uid, comm) = split_first(rest)?;
+                let comm = comm.trim().to_string();
+                if comm.is_empty() {
+                    return None;
+                }
+                Some(PsRow {
+                    pid: pid.parse().ok()?,
+                    ppid: ppid.parse().ok()?,
+                    uid: uid.parse().ok()?,
+                    comm,
+                })
+            })();
+            match parsed {
+                Some(row) => rows.push(row),
+                None => skipped += 1,
+            }
+        }
+        (rows, skipped)
+    }
+
+    /// Первое поле и остаток после пробельного пробега (без ведущих пробелов).
+    fn split_first(text: &str) -> Option<(&str, &str)> {
+        let text = text.trim_start();
+        let end = text.find(char::is_whitespace)?;
+        Some((&text[..end], text[end..].trim_start()))
+    }
+
+    pub(super) fn file_name(path: &str) -> &str {
+        path.rsplit('/').next().unwrap_or(path)
+    }
+
+    /// Строка процесса — форма Windows-ветки; чего у macOS нет (сессии, число потоков,
+    /// время создания в FILETIME), стоит `null`, а не выдумка.
+    pub(super) fn process_row(row: &PsRow, path: Option<&str>) -> Value {
+        let path = path.or_else(|| row.comm.starts_with('/').then_some(row.comm.as_str()));
+        json!({
+            "pid": row.pid,
+            "parent_pid": row.ppid,
+            "uid": row.uid,
+            "threads": null,
+            "name": file_name(path.unwrap_or(row.comm.as_str())),
+            "path": path,
+            "session_id": null,
+            "created_filetime": null,
+        })
+    }
+
+    /// Путь к пакету `.app` по пути исполняемого файла внутри него:
+    /// `/Applications/Safari.app/Contents/MacOS/Safari` → `/Applications/Safari.app`.
+    pub(super) fn app_bundle(executable: &str) -> Option<String> {
+        let index = executable.rfind(".app/")?;
+        Some(executable[..index + 4].to_string())
+    }
+
+    // ─── окна ───────────────────────────────────────────────────────────────────────
+
+    /// Что известно об окне без единого вызова системы — вход для `window_row`.
+    #[derive(Debug, Clone, PartialEq)]
+    pub(super) struct WindowFacts {
+        pub(super) id: u32,
+        pub(super) pid: i32,
+        pub(super) owner: String,
+        pub(super) title: Option<String>,
+        pub(super) layer: i32,
+        pub(super) x: f64,
+        pub(super) y: f64,
+        pub(super) width: f64,
+        pub(super) height: f64,
+        pub(super) on_screen: bool,
+        pub(super) z_order: usize,
+    }
+
+    pub(super) fn hwnd_hex(id: u32) -> String {
+        format!("0x{id:X}")
+    }
+
+    pub(super) fn round(value: f64) -> i64 {
+        value.round() as i64
+    }
+
+    /// Строка окна — форма Windows-ветки `window_row`. `titles_visible` — есть ли
+    /// «Запись экрана»: без неё система не отдаёт заголовки чужих окон, и `title: null`
+    /// получает `note`, чтобы «без названия» не читалось как «окно без заголовка».
+    /// Чего у macOS нет (поток, сессия, время создания, «свёрнуто» из CGWindowList) — `null`.
+    pub(super) fn window_row(
+        facts: &WindowFacts,
+        process_path: Option<&str>,
+        titles_visible: bool,
+        foreground: Option<bool>,
+    ) -> Value {
+        let hex = hwnd_hex(facts.id);
+        let left = round(facts.x);
+        let top = round(facts.y);
+        let width = round(facts.width);
+        let height = round(facts.height);
+        let mut row = json!({
+            "hwnd": hex,
+            "fingerprint": format!("{hex}:{}:0", facts.pid),
+            "pid": facts.pid,
+            "thread_id": null,
+            "session_id": null,
+            "process_path": process_path,
+            "process_created_filetime": null,
+            "title": facts.title,
+            "class": facts.owner,
+            "rect": {
+                "left": left,
+                "top": top,
+                "right": left + width,
+                "bottom": top + height,
+                "width": width,
+                "height": height,
+            },
+            "visible": facts.on_screen,
+            "minimized": null,
+            "z_order": facts.z_order,
+            "layer": facts.layer,
+        });
+        if let Some(foreground) = foreground {
+            row["foreground"] = Value::Bool(foreground);
+        }
+        if facts.title.is_none() && !titles_visible {
+            row["note"] = Value::String(
+                "title hidden: without the Screen Recording permission macOS does not \
+                 report other apps' window titles"
+                    .into(),
+            );
+        }
+        row
+    }
+
+    pub(super) fn page(rows: Vec<Value>, args: PageArgs) -> Value {
+        let total = rows.len();
+        let limit = args.limit.clamp(1, MAX_PAGE);
+        let items: Vec<_> = rows.into_iter().skip(args.offset).take(limit).collect();
+        json!({
+            "ok": true,
+            "total": total,
+            "offset": args.offset,
+            "limit": limit,
+            "returned": items.len(),
+            "next_offset": (args.offset + items.len() < total).then_some(args.offset + items.len()),
+            "items": items,
+        })
+    }
+
+    // ─── снимок ─────────────────────────────────────────────────────────────────────
+
+    /// Раскладка байтов 32-битного пикселя CGImage в памяти.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum PixelLayout {
+        Bgra,
+        Argb,
+        Rgba,
+        Abgr,
+    }
+
+    const CG_ALPHA_INFO_MASK: u32 = 0x1F;
+    const CG_BYTE_ORDER_MASK: u32 = 0x7000;
+    const CG_BYTE_ORDER_32_LITTLE: u32 = 2 << 12;
+    const CG_BYTE_ORDER_32_BIG: u32 = 4 << 12;
+    const CG_FLOAT_COMPONENTS: u32 = 1 << 8;
+
+    /// Раскладка по `CGBitmapInfo` снимка. CGWindowListCreateImage на практике отдаёт
+    /// `kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little` (BGRA в памяти),
+    /// но это не обещание API, поэтому раскладка читается, а не предполагается; чужой
+    /// формат — отказ словами, а не картинка с перепутанными каналами.
+    pub(super) fn pixel_layout(
+        bitmap_info: u32,
+        bits_per_pixel: usize,
+        bits_per_component: usize,
+    ) -> Result<PixelLayout> {
+        if bits_per_pixel != 32 || bits_per_component != 8 {
+            bail!(
+                "capture image is {bits_per_pixel} bits per pixel / {bits_per_component} per \
+                 component; only 32-bit 8-8-8-8 images are handled"
+            )
+        }
+        if bitmap_info & CG_FLOAT_COMPONENTS != 0 {
+            bail!("capture image has float components; only 8-bit integer channels are handled")
+        }
+        // 0 none, 1 premultiplied last, 2 premultiplied first, 3 last, 4 first,
+        // 5 none-skip-last, 6 none-skip-first, 7 alpha only.
+        let alpha = bitmap_info & CG_ALPHA_INFO_MASK;
+        let alpha_first = match alpha {
+            2 | 4 | 6 => true,
+            0 | 1 | 3 | 5 => false,
+            _ => bail!("capture image has alpha info {alpha}, which carries no colour"),
+        };
+        let little = match bitmap_info & CG_BYTE_ORDER_MASK {
+            CG_BYTE_ORDER_32_LITTLE => true,
+            0 | CG_BYTE_ORDER_32_BIG => false,
+            other => bail!("capture image has byte order {other:#x}, not a 32-bit order"),
+        };
+        Ok(match (alpha_first, little) {
+            (true, true) => PixelLayout::Bgra,
+            (true, false) => PixelLayout::Argb,
+            (false, true) => PixelLayout::Abgr,
+            (false, false) => PixelLayout::Rgba,
+        })
+    }
+
+    /// Плотный BGRA (то, что ест `write_png`) из строк CGImage любой из четырёх
+    /// раскладок; `bytes_per_row` может быть шире `width * 4` — хвост строки выкидывается.
+    /// Альфа не используется: снимок экрана непрозрачен, а у окна с прозрачными углами
+    /// премультиплицированный цвет — это «поверх чёрного», и так его и видно.
+    pub(super) fn to_bgra(
+        bytes: &[u8],
+        width: usize,
+        height: usize,
+        bytes_per_row: usize,
+        layout: PixelLayout,
+    ) -> Result<Vec<u8>> {
+        let row_bytes = width.checked_mul(4).context("capture row size overflow")?;
+        if bytes_per_row < row_bytes {
+            bail!("capture rows are {bytes_per_row} bytes, narrower than {width} pixels")
+        }
+        let needed = bytes_per_row
+            .checked_mul(height.saturating_sub(1))
+            .and_then(|value| value.checked_add(row_bytes))
+            .context("capture buffer size overflow")?;
+        if bytes.len() < needed {
+            bail!(
+                "capture buffer has {} bytes; {needed} needed for {width}x{height}",
+                bytes.len()
+            )
+        }
+        let mut out = Vec::with_capacity(row_bytes * height);
+        for row in 0..height {
+            let start = row * bytes_per_row;
+            for pixel in bytes[start..start + row_bytes].chunks_exact(4) {
+                let (b, g, r) = match layout {
+                    PixelLayout::Bgra => (pixel[0], pixel[1], pixel[2]),
+                    PixelLayout::Argb => (pixel[3], pixel[2], pixel[1]),
+                    PixelLayout::Rgba => (pixel[2], pixel[1], pixel[0]),
+                    PixelLayout::Abgr => (pixel[1], pixel[2], pixel[3]),
+                };
+                out.extend_from_slice(&[b, g, r, 255]);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Как уменьшать снимок до пунктов.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum Downscale {
+        /// Пиксели и пункты совпадают (или просили `native`).
+        None,
+        /// Целый масштаб (Retina: 2): усреднение блоков n×n — честнее, чем выбросить три
+        /// пикселя из четырёх, и текст остаётся читаемым.
+        Box(usize),
+        /// Нецелое отношение (снимок через дисплеи с разным масштабом, окно, срезанное
+        /// краем): ближайший пиксель. Назван в ответе полем `downscale`.
+        Nearest,
+    }
+
+    pub(super) fn choose_downscale(
+        pixel_width: usize,
+        pixel_height: usize,
+        point_width: usize,
+        point_height: usize,
+        native: bool,
+    ) -> Downscale {
+        if native || point_width == 0 || point_height == 0 {
+            return Downscale::None;
+        }
+        if pixel_width == point_width && pixel_height == point_height {
+            return Downscale::None;
+        }
+        let factor = pixel_width / point_width;
+        if factor >= 2
+            && pixel_width == point_width * factor
+            && pixel_height == point_height * factor
+        {
+            return Downscale::Box(factor);
+        }
+        Downscale::Nearest
+    }
+
+    /// Усреднение блоков `factor×factor`; размеры обязаны делиться на `factor`.
+    pub(super) fn downscale_box(
+        bgra: &[u8],
+        width: usize,
+        height: usize,
+        factor: usize,
+    ) -> Option<(Vec<u8>, usize, usize)> {
+        if factor < 2 || width % factor != 0 || height % factor != 0 || bgra.len() != width * height * 4 {
+            return None;
+        }
+        let (target_w, target_h) = (width / factor, height / factor);
+        let area = (factor * factor) as u32;
+        let mut out = Vec::with_capacity(target_w * target_h * 4);
+        for ty in 0..target_h {
+            for tx in 0..target_w {
+                let mut sum = [0u32; 3];
+                for dy in 0..factor {
+                    let row = (ty * factor + dy) * width * 4;
+                    for dx in 0..factor {
+                        let at = row + (tx * factor + dx) * 4;
+                        sum[0] += u32::from(bgra[at]);
+                        sum[1] += u32::from(bgra[at + 1]);
+                        sum[2] += u32::from(bgra[at + 2]);
+                    }
+                }
+                out.extend_from_slice(&[
+                    ((sum[0] + area / 2) / area) as u8,
+                    ((sum[1] + area / 2) / area) as u8,
+                    ((sum[2] + area / 2) / area) as u8,
+                    255,
+                ]);
+            }
+        }
+        Some((out, target_w, target_h))
+    }
+
+    /// Ближайший пиксель к целевому размеру (для нецелого масштаба).
+    pub(super) fn resample_nearest(
+        bgra: &[u8],
+        width: usize,
+        height: usize,
+        target_w: usize,
+        target_h: usize,
+    ) -> Vec<u8> {
+        let mut out = Vec::with_capacity(target_w * target_h * 4);
+        for ty in 0..target_h {
+            let sy = ((ty * height) / target_h.max(1)).min(height.saturating_sub(1));
+            for tx in 0..target_w {
+                let sx = ((tx * width) / target_w.max(1)).min(width.saturating_sub(1));
+                let at = (sy * width + sx) * 4;
+                out.extend_from_slice(&bgra[at..at + 4]);
+            }
+        }
+        out
+    }
+}
+
+/// macOS: экран, ввод, окна, процессы, буфер обмена — через CoreGraphics (события и
+/// снимок), CGWindowList (окна, из `mac.rs`), Accessibility (поднять окно), `ps`,
+/// `pbpaste`/`pbcopy`. Формы JSON — Windows-ветки; отличия названы полем `platform`
+/// и полями `tcc`/`hints`. Правила координат и TCC — в шапке `mac.rs`: всё в пунктах,
+/// без разрешения — отказ словами ДО дела.
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::ffi::c_void;
+    use std::fs;
+    use std::io::Write as _;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+    use std::thread;
+    use std::time::Duration;
+
+    use anyhow::{Context, Result, anyhow, bail};
+    use core_foundation::array::CFArray;
+    use core_foundation::base::{CFRelease, CFRetain, CFType, CFTypeRef, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::string::{CFString, CFStringRef};
+    use core_graphics::display::CGDisplay;
+    use core_graphics::event::{
+        CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGMouseButton, EventField,
+        ScrollEventUnit,
+    };
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+    use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+    use core_graphics::window::{
+        CGWindowID, kCGNullWindowID, kCGWindowImageBestResolution,
+        kCGWindowImageBoundsIgnoreFraming, kCGWindowListOptionIncludingWindow,
+        kCGWindowListOptionOnScreenOnly,
+    };
+    use foreign_types::ForeignTypeRef;
+    use serde_json::{Value, json};
+
+    use super::mac_pure::{
+        ActivateArgs, CaptureArgs, ClipboardReadArgs, ClipboardWriteArgs, Downscale, HwndArg,
+        InputArgs, MAX_ACTIVATE_TIMEOUT_MS, MAX_CLIPBOARD_CHARS, MAX_INPUT_EVENTS,
+        MAX_TOTAL_INPUT_DELAY_MS, MouseButton, PreparedChunk, ProcessListArgs, Record, Screen,
+        TEXT_UNIT_PAUSE_MS, WindowFacts, WindowListArgs, app_bundle, choose_downscale,
+        downscale_box, hwnd_hex, input_limits, page, parse_ps, pixel_layout, plan_totals,
+        prepare_input_events, process_row, resample_nearest, round, to_bgra, window_row,
+    };
+    use super::{capture_allocation, capture_name, write_png};
+    use crate::mac::{self, Tcc, WindowInfo};
+
+    // ─── FFI, которого нет в крейтах ────────────────────────────────────────────────
+
+    type AXUIElementRef = *const c_void;
+    type AXError = i32;
+    const AX_SUCCESS: AXError = 0;
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    unsafe extern "C" {
+        fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
+        fn AXUIElementCopyAttributeValue(
+            element: AXUIElementRef,
+            attribute: CFStringRef,
+            value: *mut CFTypeRef,
+        ) -> AXError;
+        fn AXUIElementSetAttributeValue(
+            element: AXUIElementRef,
+            attribute: CFStringRef,
+            value: CFTypeRef,
+        ) -> AXError;
+        fn AXUIElementPerformAction(element: AXUIElementRef, action: CFStringRef) -> AXError;
+        /// Приватная, но единственная связь AXWindow ↔ CGWindowID; тем же пользуется
+        /// дерево окна в `ax.rs`.
+        fn _AXUIElementGetWindow(element: AXUIElementRef, window: *mut CGWindowID) -> AXError;
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGImageGetBitmapInfo(image: *mut core_graphics::sys::CGImage) -> u32;
+    }
+
+    /// Владеющая ссылка на элемент Accessibility (+1); отпускается при выходе.
+    struct AxElement(AXUIElementRef);
+
+    impl Drop for AxElement {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe { CFRelease(self.0) };
+            }
+        }
+    }
+
+    fn ax_copy(element: AXUIElementRef, attribute: &str) -> Option<CFType> {
+        let name = CFString::new(attribute);
+        let mut value: CFTypeRef = std::ptr::null();
+        let error = unsafe {
+            AXUIElementCopyAttributeValue(element, name.as_concrete_TypeRef(), &mut value)
+        };
+        if error != AX_SUCCESS || value.is_null() {
+            return None;
+        }
+        Some(unsafe { CFType::wrap_under_create_rule(value) })
+    }
+
+    fn ax_bool(element: AXUIElementRef, attribute: &str) -> Option<bool> {
+        ax_copy(element, attribute)?
+            .downcast::<CFBoolean>()
+            .map(bool::from)
+    }
+
+    fn ax_set_bool(element: AXUIElementRef, attribute: &str, value: bool) -> AXError {
+        let name = CFString::new(attribute);
+        let flag = CFBoolean::from(value);
+        unsafe { AXUIElementSetAttributeValue(element, name.as_concrete_TypeRef(), flag.as_CFTypeRef()) }
+    }
+
+    fn ax_perform(element: AXUIElementRef, action: &str) -> AXError {
+        let name = CFString::new(action);
+        unsafe { AXUIElementPerformAction(element, name.as_concrete_TypeRef()) }
+    }
+
+    fn ax_window_id(element: AXUIElementRef) -> Option<CGWindowID> {
+        let mut id: CGWindowID = 0;
+        let error = unsafe { _AXUIElementGetWindow(element, &mut id) };
+        (error == AX_SUCCESS && id != 0).then_some(id)
+    }
+
+    /// AX-окно приложения с этим CGWindowID — среди `AXWindows` приложения.
+    fn ax_find_window(app: AXUIElementRef, id: CGWindowID) -> Option<AxElement> {
+        let windows = ax_copy(app, "AXWindows")?.downcast::<CFArray<*const c_void>>()?;
+        for item in windows.iter() {
+            let raw: *const c_void = *item;
+            if raw.is_null() {
+                continue;
+            }
+            if ax_window_id(raw) == Some(id) {
+                unsafe { CFRetain(raw) };
+                return Some(AxElement(raw));
+            }
+        }
+        None
+    }
+
+    // ─── общее ──────────────────────────────────────────────────────────────────────
+
+    pub fn dispatch(capability: &str, args: Value, state_dir: &Path) -> Result<Value> {
+        match capability {
+            "desktop.status" => desktop_status(),
+            "os.process.list" => process_list(serde_json::from_value(args)?),
+            "desktop.window.list" => window_list(serde_json::from_value(args)?),
+            "desktop.window.activate" => window_activate(serde_json::from_value(args)?),
+            "desktop.input.perform" => input_perform(serde_json::from_value(args)?),
+            "desktop.screen.capture" => screen_capture(serde_json::from_value(args)?, state_dir),
+            "desktop.clipboard.read" => clipboard_read(serde_json::from_value(args)?),
+            "desktop.clipboard.write" => clipboard_write(serde_json::from_value(args)?),
+            _ => bail!("unknown native desktop capability {capability}"),
+        }
+    }
+
+    /// Отказ по TCC — ОШИБКА рамки, не результат. ⚠ `body_client.call()` дерева накрывает
+    /// `ok` тела рамкой транспорта (`ok=frame.ok`): результат `ok:false` доезжал бы до
+    /// модели как `"ok": true` — ложь в сторону успеха. В тексте ошибки — слова
+    /// `Tcc::hints()`, чтобы «куда идти» доехало вместе с отказом (решение ведущего 19.09).
+    fn refused_by_tcc(what: &str, tcc: Tcc) -> anyhow::Error {
+        anyhow!(
+            "{what}; {} (tcc: screen_recording={}, accessibility={}; platform=macos)",
+            tcc.hints().join("; "),
+            tcc.screen_recording,
+            tcc.accessibility
+        )
+    }
+
+    fn facts(window: &WindowInfo, z_order: usize) -> WindowFacts {
+        WindowFacts {
+            id: window.id,
+            pid: window.pid,
+            owner: window.owner.clone(),
+            title: window.title.clone(),
+            layer: window.layer,
+            x: window.x,
+            y: window.y,
+            width: window.width,
+            height: window.height,
+            on_screen: window.on_screen,
+            z_order,
+        }
+    }
+
+    /// Путь исполняемого файла процесса (`proc_pidpath`); чужие процессы без прав — `None`.
+    fn process_path(pid: i32) -> Option<String> {
+        let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        let length = unsafe {
+            libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32)
+        };
+        (length > 0).then(|| String::from_utf8_lossy(&buffer[..length as usize]).into_owned())
+    }
+
+    fn screen_points() -> Screen {
+        let screen = mac::virtual_screen();
+        Screen {
+            left: round(screen.left) as i32,
+            top: round(screen.top) as i32,
+            width: round(screen.width) as i32,
+            height: round(screen.height) as i32,
+        }
+    }
+
+    fn virtual_screen() -> Value {
+        let screen = mac::virtual_screen();
+        let (left, top) = (round(screen.left), round(screen.top));
+        let (width, height) = (round(screen.width), round(screen.height));
+        json!({
+            "left": left,
+            "top": top,
+            "width": width,
+            "height": height,
+            "right": left + width,
+            "bottom": top + height,
+            "displays": screen.displays,
+        })
+    }
+
+    fn hid_source() -> Result<CGEventSource> {
+        CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+            .map_err(|_| anyhow!("CGEventSourceCreate(HIDSystemState) failed"))
+    }
+
+    fn cursor_location(source: &CGEventSource) -> Option<(f64, f64)> {
+        let event = CGEvent::new(source.clone()).ok()?;
+        let point = event.location();
+        Some((point.x, point.y))
+    }
+
+    fn foreground_value(window: Option<&WindowInfo>) -> Value {
+        window.map_or(Value::Null, |w| Value::String(hwnd_hex(w.id)))
+    }
+
+    // ─── desktop.status ─────────────────────────────────────────────────────────────
+
+    fn desktop_status() -> Result<Value> {
+        let tcc = mac::tcc();
+        let foreground = mac::frontmost()?;
+        let cursor = hid_source()
+            .ok()
+            .and_then(|source| cursor_location(&source))
+            .map(|(x, y)| json!({"x": round(x), "y": round(y)}));
+        Ok(json!({
+            "ok": true,
+            "interactive": mac::gui_session(),
+            "session_id": null,
+            "foreground": foreground.as_ref().map(|window| {
+                window_row(&facts(window, 0), process_path(window.pid).as_deref(), tcc.screen_recording, None)
+            }),
+            "cursor": cursor,
+            "virtual_screen": virtual_screen(),
+            "platform": "macos",
+            "scale": mac::main_scale(),
+            "tcc": tcc,
+            "hints": tcc.hints(),
+        }))
+    }
+
+    // ─── os.process.list ────────────────────────────────────────────────────────────
+
+    fn process_list(args: ProcessListArgs) -> Result<Value> {
+        if args.session_id.is_some() {
+            bail!("os.process.list: macOS has no session ids; omit session_id")
+        }
+        let output = Command::new("ps")
+            .args(["-axo", "pid=,ppid=,uid=,comm="])
+            .stdin(Stdio::null())
+            .output()
+            .context("run ps")?;
+        if !output.status.success() {
+            bail!(
+                "ps exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+        }
+        let (rows, skipped) = parse_ps(&String::from_utf8_lossy(&output.stdout));
+        let needle = args.name_contains.to_lowercase();
+        let mut items: Vec<Value> = rows
+            .iter()
+            .filter_map(|row| {
+                let path = process_path(row.pid as i32);
+                let value = process_row(row, path.as_deref());
+                let matches = needle.is_empty()
+                    || value["name"]
+                        .as_str()
+                        .is_some_and(|name| name.to_lowercase().contains(&needle))
+                    || value["path"]
+                        .as_str()
+                        .is_some_and(|path| path.to_lowercase().contains(&needle));
+                matches.then_some(value)
+            })
+            .collect();
+        items.sort_by_key(|row| row["pid"].as_u64().unwrap_or_default());
+        let mut result = page(items, args.page);
+        result["platform"] = Value::String("macos".into());
+        if skipped > 0 {
+            result["unparsed_lines"] = Value::from(skipped);
+        }
+        Ok(result)
+    }
+
+    // ─── desktop.window.list ────────────────────────────────────────────────────────
+
+    fn window_list(args: WindowListArgs) -> Result<Value> {
+        let tcc = mac::tcc();
+        if !args.title_contains.is_empty() && !tcc.screen_recording {
+            // Без «Записи экрана» заголовков чужих окон нет — фильтр по ним отдал бы
+            // пустой список, который читается как «такого окна нет». Это ложь.
+            return Err(refused_by_tcc(
+                "title_contains cannot be applied: without the Screen Recording permission \
+                 macOS hides other apps' window titles, so the filter would match nothing",
+                tcc,
+            ));
+        }
+        let windows = mac::window_list(args.visible_only)?;
+        let foreground = mac::frontmost()?.map(|window| window.id);
+        let needle = args.title_contains.to_lowercase();
+        let mut rows = Vec::new();
+        for window in &windows {
+            if !args.all_layers && !window.is_ordinary() {
+                continue;
+            }
+            if args.pid.is_some_and(|expected| window.pid as u32 != expected) {
+                continue;
+            }
+            if !needle.is_empty()
+                && !window
+                    .title
+                    .as_deref()
+                    .is_some_and(|title| title.to_lowercase().contains(&needle))
+            {
+                continue;
+            }
+            let z_order = rows.len();
+            rows.push(window_row(
+                &facts(window, z_order),
+                process_path(window.pid).as_deref(),
+                tcc.screen_recording,
+                Some(Some(window.id) == foreground),
+            ));
+        }
+        let mut result = page(rows, args.page);
+        result["foreground_hwnd"] = foreground.map_or(Value::Null, |id| Value::String(hwnd_hex(id)));
+        result["platform"] = Value::String("macos".into());
+        result["tcc"] = json!(tcc);
+        result["layers"] = Value::String(if args.all_layers {
+            "all WindowServer windows (menu bar, dock, overlays included)".into()
+        } else {
+            "ordinary windows only (layer 0, opaque, non-empty); pass all_layers: true for the \
+             menu bar, dock and overlays"
+                .into()
+        });
+        if !tcc.screen_recording {
+            result["note"] = Value::String(
+                "titles of other apps' windows are hidden: no Screen Recording permission".into(),
+            );
+            result["hints"] = json!(tcc.hints());
+        }
+        Ok(result)
+    }
+
+    // ─── desktop.window.activate ────────────────────────────────────────────────────
+
+    /// Поднять окно. С «Универсальным доступом» — по-настоящему: приложение вперёд
+    /// (`AXFrontmost`), окно развернуть (`AXMinimized`) и поднять (`AXRaise`). Без него
+    /// остаётся только `open <bundle>` — он активирует ПРИЛОЖЕНИЕ, а не окно, и об этом
+    /// сказано в `note`; голый бинарь без пакета `.app` поднять нечем — отказ словами.
+    fn window_activate(args: ActivateArgs) -> Result<Value> {
+        let id = args.hwnd.value()?;
+        if args.timeout_ms > MAX_ACTIVATE_TIMEOUT_MS {
+            bail!("activation timeout must not exceed {MAX_ACTIVATE_TIMEOUT_MS}ms")
+        }
+        let window = mac::window_by_id(id)?
+            .with_context(|| format!("window {} no longer exists", hwnd_hex(id)))?;
+        if let Some(expected) = args.expected_pid
+            && window.pid as u32 != expected
+        {
+            bail!("window pid changed: expected {expected}, actual {}", window.pid)
+        }
+        let before = mac::frontmost()?;
+        let tcc = mac::tcc();
+        let mut notes: Vec<String> = Vec::new();
+        let mut raised = false;
+        let mut restored = false;
+        let (method, ax_app, ax_window, mut activated) = if tcc.accessibility {
+            let app = AxElement(unsafe { AXUIElementCreateApplication(window.pid) });
+            if app.0.is_null() {
+                bail!("AXUIElementCreateApplication failed for pid {}", window.pid)
+            }
+            let front = ax_set_bool(app.0, "AXFrontmost", true);
+            let activated = front == AX_SUCCESS;
+            if !activated {
+                notes.push(format!("the application refused AXFrontmost (AXError {front})"));
+            }
+            let found = ax_find_window(app.0, id);
+            match &found {
+                Some(target) => {
+                    if args.restore && ax_bool(target.0, "AXMinimized") == Some(true) {
+                        restored = ax_set_bool(target.0, "AXMinimized", false) == AX_SUCCESS;
+                        if !restored {
+                            notes.push("the window refused to leave the Dock (AXMinimized)".into());
+                        }
+                    }
+                    let raise = ax_perform(target.0, "AXRaise");
+                    raised = raise == AX_SUCCESS;
+                    if !raised {
+                        notes.push(format!("the window refused AXRaise (AXError {raise})"));
+                    }
+                }
+                None => notes.push(
+                    "the Accessibility window for this CGWindowID was not found \
+                     (_AXUIElementGetWindow matched none of the app's windows): only the \
+                     application was brought to front, not this particular window"
+                        .into(),
+                ),
+            }
+            ("accessibility", Some(app), found, activated)
+        } else {
+            let path = process_path(window.pid).with_context(|| {
+                format!(
+                    "no Accessibility permission and the executable of pid {} cannot be \
+                     resolved: nothing can raise the window; {}",
+                    window.pid,
+                    tcc.hints().join("; ")
+                )
+            })?;
+            let bundle = app_bundle(&path).with_context(|| {
+                format!(
+                    "no Accessibility permission and {path} is not inside an .app bundle: \
+                     `open` cannot activate it; {}",
+                    tcc.hints().join("; ")
+                )
+            })?;
+            let output = Command::new("open")
+                .arg(&bundle)
+                .stdin(Stdio::null())
+                .output()
+                .context("run open")?;
+            if !output.status.success() {
+                bail!(
+                    "open {bundle} failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )
+            }
+            notes.push(format!(
+                "no Accessibility permission: the whole application was activated with `open \
+                 {bundle}`; this particular window was not raised and a minimized window is \
+                 not restored"
+            ));
+            notes.extend(tcc.hints().iter().map(|hint| hint.to_string()));
+            ("open", None, None, true)
+        };
+        let mut waited = 0u64;
+        let mut attempts = 1u32;
+        while mac::frontmost()?.map(|w| w.id) != Some(id) && waited < args.timeout_ms {
+            thread::sleep(Duration::from_millis(25));
+            waited += 25;
+            if waited.is_multiple_of(500)
+                && let (Some(app), Some(target)) = (&ax_app, &ax_window)
+            {
+                activated |= ax_set_bool(app.0, "AXFrontmost", true) == AX_SUCCESS;
+                raised |= ax_perform(target.0, "AXRaise") == AX_SUCCESS;
+                attempts += 1;
+            }
+        }
+        let actual = mac::frontmost()?;
+        Ok(json!({
+            "ok": actual.as_ref().is_some_and(|w| w.id == id),
+            "requested_hwnd": hwnd_hex(id),
+            "foreground_before": foreground_value(before.as_ref()),
+            "foreground_hwnd": foreground_value(actual.as_ref()),
+            "method": method,
+            "activated": activated,
+            "raised": raised,
+            "restored": restored,
+            "attempts": attempts,
+            "waited_ms": waited,
+            "note": (!notes.is_empty()).then(|| notes.join("; ")),
+            "tcc": tcc,
+            "platform": "macos",
+        }))
+    }
+
+    // ─── desktop.input.perform ──────────────────────────────────────────────────────
+
+    /// Отправитель: один источник событий на вызов, живое положение курсора, что
+    /// реально нажато (для типа Dragged/Moved) и какие модификаторы зажаты (флаги
+    /// каждого события — иначе ⌘C уходит как «C»).
+    struct Poster {
+        source: CGEventSource,
+        cursor: (f64, f64),
+        held: Vec<MouseButton>,
+        modifiers: CGEventFlags,
+        screen: Screen,
+        clamped_moves: usize,
+    }
+
+    impl Poster {
+        fn new(screen: Screen) -> Result<Self> {
+            let source = hid_source()?;
+            let cursor = cursor_location(&source).unwrap_or((0.0, 0.0));
+            Ok(Self {
+                source,
+                cursor,
+                held: Vec::new(),
+                modifiers: CGEventFlags::empty(),
+                screen,
+                clamped_moves: 0,
+            })
+        }
+
+        fn post(&mut self, record: &Record) -> Result<()> {
+            match record {
+                Record::KeyDown(code) => {
+                    if let Some(flag) = modifier_flag(*code) {
+                        self.modifiers |= flag;
+                    }
+                    let event = CGEvent::new_keyboard_event(self.source.clone(), *code, true)
+                        .map_err(|_| anyhow!("CGEventCreateKeyboardEvent failed"))?;
+                    event.set_flags(self.modifiers);
+                    event.post(CGEventTapLocation::HID);
+                }
+                Record::KeyUp(code) => {
+                    if let Some(flag) = modifier_flag(*code) {
+                        self.modifiers.remove(flag);
+                    }
+                    let event = CGEvent::new_keyboard_event(self.source.clone(), *code, false)
+                        .map_err(|_| anyhow!("CGEventCreateKeyboardEvent failed"))?;
+                    event.set_flags(self.modifiers);
+                    event.post(CGEventTapLocation::HID);
+                }
+                Record::Unicode { units, down } => {
+                    // Код клавиши 0 (ANSI A) — формальность: знак берётся из строки
+                    // события, а не из кода; так делают все, кто печатает юникодом.
+                    let event = CGEvent::new_keyboard_event(self.source.clone(), 0, *down)
+                        .map_err(|_| anyhow!("CGEventCreateKeyboardEvent failed"))?;
+                    event.set_string_from_utf16_unchecked(units);
+                    event.set_flags(self.modifiers);
+                    event.post(CGEventTapLocation::HID);
+                }
+                Record::MoveTo { x, y } => self.move_to(f64::from(*x), f64::from(*y))?,
+                Record::MoveBy { dx, dy } => {
+                    let x = (self.cursor.0 + f64::from(*dx)).round() as i32;
+                    let y = (self.cursor.1 + f64::from(*dy)).round() as i32;
+                    let (cx, cy, pulled) = self.screen.clamp(x, y);
+                    if pulled {
+                        self.clamped_moves += 1;
+                    }
+                    self.move_to(f64::from(cx), f64::from(cy))?;
+                }
+                Record::ButtonDown {
+                    button,
+                    click_state,
+                } => {
+                    let (kind, cg_button) = match button {
+                        MouseButton::Left => (CGEventType::LeftMouseDown, CGMouseButton::Left),
+                        MouseButton::Right => (CGEventType::RightMouseDown, CGMouseButton::Right),
+                        MouseButton::Middle => (CGEventType::OtherMouseDown, CGMouseButton::Center),
+                    };
+                    self.mouse(kind, cg_button, i64::from(*click_state))?;
+                    if !self.held.contains(button) {
+                        self.held.push(*button);
+                    }
+                }
+                Record::ButtonUp {
+                    button,
+                    click_state,
+                } => {
+                    let (kind, cg_button) = match button {
+                        MouseButton::Left => (CGEventType::LeftMouseUp, CGMouseButton::Left),
+                        MouseButton::Right => (CGEventType::RightMouseUp, CGMouseButton::Right),
+                        MouseButton::Middle => (CGEventType::OtherMouseUp, CGMouseButton::Center),
+                    };
+                    self.mouse(kind, cg_button, i64::from(*click_state))?;
+                    self.held.retain(|value| value != button);
+                }
+                Record::Wheel {
+                    vertical,
+                    horizontal,
+                } => {
+                    // Единицы — строки. Знак вертикали у Quartz тот же, что на Windows
+                    // (плюс — вверх); по горизонтали Quartz считает плюс за «влево»
+                    // (WebKit переворачивает знак, отдавая deltaX странице), Windows — за
+                    // «вправо», поэтому здесь минус.
+                    let event = CGEvent::new_scroll_event(
+                        self.source.clone(),
+                        ScrollEventUnit::LINE,
+                        2,
+                        *vertical,
+                        -*horizontal,
+                        0,
+                    )
+                    .map_err(|_| anyhow!("CGEventCreateScrollWheelEvent failed"))?;
+                    event.set_location(CGPoint::new(self.cursor.0, self.cursor.1));
+                    event.set_flags(self.modifiers);
+                    event.post(CGEventTapLocation::HID);
+                }
+            }
+            Ok(())
+        }
+
+        /// Сдвиг курсора. С зажатой кнопкой это Dragged, а не Moved: иначе Finder,
+        /// ползунки и выделение текста не видят перетаскивания.
+        fn move_to(&mut self, x: f64, y: f64) -> Result<()> {
+            let (kind, button) = match self.held.first() {
+                Some(MouseButton::Left) => (CGEventType::LeftMouseDragged, CGMouseButton::Left),
+                Some(MouseButton::Right) => (CGEventType::RightMouseDragged, CGMouseButton::Right),
+                Some(MouseButton::Middle) => (CGEventType::OtherMouseDragged, CGMouseButton::Center),
+                None => (CGEventType::MouseMoved, CGMouseButton::Left),
+            };
+            self.cursor = (x, y);
+            self.mouse(kind, button, 0)
+        }
+
+        fn mouse(&mut self, kind: CGEventType, button: CGMouseButton, click_state: i64) -> Result<()> {
+            let point = CGPoint::new(self.cursor.0, self.cursor.1);
+            let event = CGEvent::new_mouse_event(self.source.clone(), kind, point, button)
+                .map_err(|_| anyhow!("CGEventCreateMouseEvent failed"))?;
+            if click_state > 0 {
+                event.set_integer_value_field(EventField::MOUSE_EVENT_CLICK_STATE, click_state);
+            }
+            event.set_flags(self.modifiers);
+            event.post(CGEventTapLocation::HID);
+            Ok(())
+        }
+    }
+
+    fn modifier_flag(code: u16) -> Option<CGEventFlags> {
+        Some(match code {
+            0x38 | 0x3C => CGEventFlags::CGEventFlagShift,
+            0x3B | 0x3E => CGEventFlags::CGEventFlagControl,
+            0x3A | 0x3D => CGEventFlags::CGEventFlagAlternate,
+            0x37 | 0x36 => CGEventFlags::CGEventFlagCommand,
+            0x39 => CGEventFlags::CGEventFlagAlphaShift,
+            0x3F => CGEventFlags::CGEventFlagSecondaryFn,
+            _ => return None,
+        })
+    }
+
+    /// Ведомость зажатых кнопок (см. Windows-ветку `HeldButtons`): что этот вызов
+    /// оставил зажатым, отпускается на выходе и называется в ответе; `Drop` — последний
+    /// рубеж. Отпускание идёт по живому положению курсора.
+    struct HeldButtons {
+        held: Vec<MouseButton>,
+        source: CGEventSource,
+    }
+
+    impl HeldButtons {
+        fn new(source: CGEventSource) -> Self {
+            Self {
+                held: Vec::new(),
+                source,
+            }
+        }
+
+        fn press(&mut self, button: MouseButton) {
+            if !self.held.contains(&button) {
+                self.held.push(button);
+            }
+        }
+
+        fn release(&mut self, button: MouseButton) {
+            self.held.retain(|value| *value != button);
+        }
+
+        fn release_all(&mut self) -> Vec<&'static str> {
+            if self.held.is_empty() {
+                return Vec::new();
+            }
+            let names: Vec<&'static str> = self.held.iter().map(|button| button.name()).collect();
+            let (x, y) = cursor_location(&self.source).unwrap_or((0.0, 0.0));
+            for button in std::mem::take(&mut self.held).into_iter().rev() {
+                let (kind, cg_button) = match button {
+                    MouseButton::Left => (CGEventType::LeftMouseUp, CGMouseButton::Left),
+                    MouseButton::Right => (CGEventType::RightMouseUp, CGMouseButton::Right),
+                    MouseButton::Middle => (CGEventType::OtherMouseUp, CGMouseButton::Center),
+                };
+                // Без права на отказ: если событие не создалось, сказать об этом можно
+                // только текстом ответа — но не удержанием кнопки.
+                if let Ok(event) = CGEvent::new_mouse_event(
+                    self.source.clone(),
+                    kind,
+                    CGPoint::new(x, y),
+                    cg_button,
+                ) {
+                    event.post(CGEventTapLocation::HID);
+                }
+            }
+            names
+        }
+    }
+
+    impl Drop for HeldButtons {
+        fn drop(&mut self) {
+            let _ = self.release_all();
+        }
+    }
+
+    fn ensure_foreground(
+        expected: Option<&HwndArg>,
+        expected_pid: Option<u32>,
+    ) -> Result<Option<WindowInfo>> {
+        let actual = mac::frontmost()?;
+        if let Some(expected) = expected {
+            let id = expected.value()?;
+            match &actual {
+                Some(window) if window.id == id => {}
+                Some(window) => bail!(
+                    "foreground changed: expected {}, actual {}",
+                    hwnd_hex(id),
+                    hwnd_hex(window.id)
+                ),
+                None => bail!(
+                    "foreground changed: expected {}, but no ordinary window is on screen",
+                    hwnd_hex(id)
+                ),
+            }
+        }
+        if let Some(expected_pid) = expected_pid {
+            match &actual {
+                Some(window) if window.pid as u32 == expected_pid => {}
+                Some(window) => bail!(
+                    "foreground pid changed: expected {expected_pid}, actual {}",
+                    window.pid
+                ),
+                None => bail!(
+                    "foreground pid changed: expected {expected_pid}, but no ordinary window is \
+                     on screen"
+                ),
+            }
+        }
+        // Без ожиданий пустой стол — не отказ: строка меню и Spotlight принимают ввод
+        // и без единого окна.
+        Ok(actual)
+    }
+
+    fn input_perform(args: InputArgs) -> Result<Value> {
+        if args.events.is_empty() {
+            bail!("events must not be empty")
+        }
+        if args.events.len() > MAX_INPUT_EVENTS {
+            bail!(
+                "too many input events: {} (maximum {MAX_INPUT_EVENTS})",
+                args.events.len()
+            )
+        }
+        let screen = screen_points();
+        // Вся пачка раскладывается и проверяется ДО первой отправки — и до вопроса о
+        // разрешении: предел бьёт по форме просьбы, разрешение — по столу.
+        let chunks = prepare_input_events(&args.events, args.inter_event_delay_ms, screen)?;
+        let totals = plan_totals(&chunks)?;
+        if totals.pause_ms > MAX_TOTAL_INPUT_DELAY_MS {
+            let typed = args
+                .events
+                .iter()
+                .any(|event| matches!(event, super::mac_pure::InputEvent::Text { .. }));
+            bail!(
+                "total input delay is {}ms (maximum {MAX_TOTAL_INPUT_DELAY_MS}ms){}",
+                totals.pause_ms,
+                if typed {
+                    format!(
+                        "; text is paced at {TEXT_UNIT_PAUSE_MS}ms per character on macOS, so \
+                         keep one call under {} characters",
+                        MAX_TOTAL_INPUT_DELAY_MS / TEXT_UNIT_PAUSE_MS
+                    )
+                } else {
+                    String::new()
+                }
+            )
+        }
+        let tcc = mac::tcc();
+        if !tcc.accessibility {
+            return Err(refused_by_tcc(
+                "input refused: no Accessibility permission — macOS would drop the posted \
+                 events silently, so nothing was sent",
+                tcc,
+            ));
+        }
+        let before = ensure_foreground(args.expected_foreground.as_ref(), args.expected_pid)?;
+        let mut poster = Poster::new(screen)?;
+        let mut held = HeldButtons::new(poster.source.clone());
+        let mut paused_ms = 0u64;
+        // Сторож фокуса стоит перед КАЖДОЙ пачкой (каждый знак текста — пачка), но
+        // только когда есть что сторожить: без ожиданий он лишь читал бы список окон
+        // WindowServer полторы тысячи раз подряд — это миллисекунды на знак поверх
+        // 20 мс паузы, и на длинном тексте они съедали бы срок ожидания body_client.
+        let guarded = args.expected_foreground.is_some() || args.expected_pid.is_some();
+        let outcome = (|| -> Result<()> {
+            for (index, chunk) in chunks.iter().enumerate() {
+                if guarded {
+                    ensure_foreground(args.expected_foreground.as_ref(), args.expected_pid)?;
+                }
+                if let Some(button) = chunk.press {
+                    held.press(button);
+                }
+                post_chunk(&mut poster, chunk)?;
+                if let Some(button) = chunk.release {
+                    held.release(button);
+                }
+                if chunk.pause_ms > 0 && index + 1 < chunks.len() {
+                    thread::sleep(Duration::from_millis(chunk.pause_ms));
+                    paused_ms = paused_ms.saturating_add(chunk.pause_ms);
+                }
+            }
+            Ok(())
+        })();
+        let auto_released = held.release_all();
+        if let Err(error) = outcome {
+            if auto_released.is_empty() {
+                return Err(error);
+            }
+            return Err(anyhow!(
+                "{error:#}; released still-held mouse buttons before returning: {}",
+                auto_released.join(", ")
+            ));
+        }
+        let after = mac::frontmost()?;
+        Ok(json!({
+            "ok": true,
+            "events": args.events.len(),
+            "input_batches": totals.batches,
+            "input_records": totals.records,
+            "planned_pause_ms": totals.pause_ms,
+            "paused_ms": paused_ms,
+            "clamped_moves": totals.clamped_moves + poster.clamped_moves,
+            "buttons_auto_released": auto_released,
+            "buttons_held_at_exit": Vec::<&str>::new(),
+            "foreground_before": foreground_value(before.as_ref()),
+            "foreground_after": foreground_value(after.as_ref()),
+            "virtual_screen": virtual_screen(),
+            "limits": input_limits(),
+            "platform": "macos",
+            "tcc": tcc,
+        }))
+    }
+
+    fn post_chunk(poster: &mut Poster, chunk: &PreparedChunk) -> Result<()> {
+        for record in &chunk.records {
+            poster.post(record)?;
+        }
+        Ok(())
+    }
+
+    // ─── desktop.screen.capture ─────────────────────────────────────────────────────
+
+    #[derive(Debug, Clone, Copy)]
+    struct CaptureRegion {
+        left: i32,
+        top: i32,
+        width: i32,
+        height: i32,
+    }
+
+    fn cg_rect(region: CaptureRegion) -> CGRect {
+        CGRect::new(
+            &CGPoint::new(f64::from(region.left), f64::from(region.top)),
+            &CGSize::new(f64::from(region.width), f64::from(region.height)),
+        )
+    }
+
+    /// `CGRectNull`: «границы окна» для CGWindowListCreateImage.
+    fn cg_rect_null() -> CGRect {
+        CGRect::new(
+            &CGPoint::new(f64::INFINITY, f64::INFINITY),
+            &CGSize::new(0.0, 0.0),
+        )
+    }
+
+    fn screen_capture(args: CaptureArgs, state_dir: &Path) -> Result<Value> {
+        let tcc = mac::tcc();
+        if !tcc.screen_recording {
+            // Без «Записи экрана» система не ошибается, а отдаёт обои без чужих окон.
+            return Err(refused_by_tcc(
+                "screen capture refused: no Screen Recording permission — macOS would return \
+                 the wallpaper without other apps' windows instead of the desktop",
+                tcc,
+            ));
+        }
+        let target = args.target.to_ascii_lowercase();
+        let (region, target_hwnd, composition) = match target.as_str() {
+            "desktop" => {
+                let screen = screen_points();
+                (
+                    CaptureRegion {
+                        left: screen.left,
+                        top: screen.top,
+                        width: screen.width,
+                        height: screen.height,
+                    },
+                    None,
+                    "everything on screen inside the rectangle",
+                )
+            }
+            "region" => (
+                CaptureRegion {
+                    left: args.x.context("region requires x")?,
+                    top: args.y.context("region requires y")?,
+                    width: args.width.context("region requires width")?,
+                    height: args.height.context("region requires height")?,
+                },
+                None,
+                "everything on screen inside the rectangle",
+            ),
+            "window" => {
+                let id = args.hwnd.context("window capture requires hwnd")?.value()?;
+                let window = mac::window_by_id(id)?
+                    .with_context(|| format!("window {} no longer exists", hwnd_hex(id)))?;
+                (
+                    CaptureRegion {
+                        left: round(window.x) as i32,
+                        top: round(window.y) as i32,
+                        width: round(window.width) as i32,
+                        height: round(window.height) as i32,
+                    },
+                    Some(id),
+                    "this window only (kCGWindowListOptionIncludingWindow): windows above it \
+                     are not in the image, transparent parts come out black",
+                )
+            }
+            _ => bail!("capture target must be desktop, region, or window"),
+        };
+        if region.width <= 0 || region.height <= 0 {
+            bail!("capture rectangle must have positive width and height")
+        }
+        let image = match target_hwnd {
+            Some(id) => CGDisplay::screenshot(
+                cg_rect_null(),
+                kCGWindowListOptionIncludingWindow,
+                id,
+                kCGWindowImageBestResolution | kCGWindowImageBoundsIgnoreFraming,
+            ),
+            None => CGDisplay::screenshot(
+                cg_rect(region),
+                kCGWindowListOptionOnScreenOnly,
+                kCGNullWindowID,
+                kCGWindowImageBestResolution,
+            ),
+        }
+        .context(
+            "CGWindowListCreateImage returned no image (the rectangle may lie outside every \
+             display, or the window has nothing to show)",
+        )?;
+        let (pixel_width, pixel_height) = (image.width(), image.height());
+        if pixel_width == 0 || pixel_height == 0 {
+            bail!("capture image is empty ({pixel_width}x{pixel_height} pixels)")
+        }
+        capture_allocation(
+            i32::try_from(pixel_width).context("capture width exceeds i32")?,
+            i32::try_from(pixel_height).context("capture height exceeds i32")?,
+        )?;
+        let layout = pixel_layout(
+            unsafe { CGImageGetBitmapInfo(image.as_ptr()) },
+            image.bits_per_pixel(),
+            image.bits_per_component(),
+        )?;
+        let data = image.data();
+        let bgra = to_bgra(data.bytes(), pixel_width, pixel_height, image.bytes_per_row(), layout)?;
+        let (point_width, point_height) = (region.width as usize, region.height as usize);
+        let (bgra, saved_width, saved_height, downscale) = match choose_downscale(
+            pixel_width,
+            pixel_height,
+            point_width,
+            point_height,
+            args.native,
+        ) {
+            Downscale::None => (bgra, pixel_width, pixel_height, "none"),
+            Downscale::Box(factor) => {
+                let (scaled, width, height) = downscale_box(&bgra, pixel_width, pixel_height, factor)
+                    .context("box downscale refused a non-divisible image")?;
+                (scaled, width, height, "box-average")
+            }
+            Downscale::Nearest => (
+                resample_nearest(&bgra, pixel_width, pixel_height, point_width, point_height),
+                point_width,
+                point_height,
+                "nearest",
+            ),
+        };
+        let directory = state_dir.join("desktop").join("captures");
+        fs::create_dir_all(&directory)?;
+        let path = directory.join(capture_name(&args.name));
+        write_png(
+            &path,
+            i32::try_from(saved_width)?,
+            i32::try_from(saved_height)?,
+            &bgra,
+        )?;
+        let size = fs::metadata(&path)?.len();
+        Ok(json!({
+            "ok": true,
+            "path": path,
+            "format": "png",
+            "mime": "image/png",
+            "size": size,
+            "left": region.left,
+            "top": region.top,
+            "width": region.width,
+            "height": region.height,
+            "pixel_width": saved_width,
+            "pixel_height": saved_height,
+            "source_pixel_width": pixel_width,
+            "source_pixel_height": pixel_height,
+            "scale": pixel_width as f64 / region.width as f64,
+            "native": args.native,
+            "downscale": downscale,
+            "target": target,
+            "target_hwnd": target_hwnd.map(hwnd_hex),
+            "composition": composition,
+            // Окно снимается из его собственного буфера — с перекрытыми частями; это не
+            // «то, что видно на столе», и поле обязано это сказать.
+            "visible_desktop_capture": target_hwnd.is_none(),
+            "platform": "macos",
+        }))
+    }
+
+    // ─── буфер обмена ───────────────────────────────────────────────────────────────
+
+    /// `pbpaste`/`pbcopy` — без AppKit. Кодировка у них от локали, а под launchd локали
+    /// нет вовсе, поэтому UTF-8 задаётся явно детям, не трогая чужое окружение.
+    fn pasteboard(tool: &str) -> Command {
+        let mut command = Command::new(tool);
+        command
+            .env("LANG", "en_US.UTF-8")
+            .env("LC_CTYPE", "en_US.UTF-8")
+            .env("LC_ALL", "en_US.UTF-8");
+        command
+    }
+
+    fn clipboard_read(args: ClipboardReadArgs) -> Result<Value> {
+        let output = pasteboard("pbpaste")
+            .args(["-Prefer", "txt"])
+            .stdin(Stdio::null())
+            .output()
+            .context("run pbpaste")?;
+        if !output.status.success() {
+            bail!(
+                "pbpaste exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let length = units.len();
+        let limit = args.limit_chars.clamp(1, MAX_CLIPBOARD_CHARS).min(length);
+        let mut result = json!({
+            "ok": true,
+            "available": true,
+            "format": "unicode_text",
+            "text": String::from_utf16_lossy(&units[..limit]),
+            "chars": length,
+            "truncated": limit < length,
+            "platform": "macos",
+        });
+        if length == 0 {
+            // pbpaste молчит одинаково и на пустом тексте, и когда текста в буфере нет
+            // (там картинка, файл). Различить без AppKit нельзя — сказано вслух.
+            result["note"] = Value::String(
+                "pbpaste returned nothing: the pasteboard holds either an empty text or no \
+                 text at all (an image or a file), which cannot be told apart here"
+                    .into(),
+            );
+        }
+        Ok(result)
+    }
+
+    fn clipboard_write(args: ClipboardWriteArgs) -> Result<Value> {
+        let units = args.text.encode_utf16().count();
+        if units > MAX_CLIPBOARD_CHARS {
+            bail!("clipboard text has {units} UTF-16 units (maximum {MAX_CLIPBOARD_CHARS})")
+        }
+        let mut child = pasteboard("pbcopy")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("run pbcopy")?;
+        child
+            .stdin
+            .take()
+            .context("pbcopy has no stdin")?
+            .write_all(args.text.as_bytes())
+            .context("feed pbcopy")?;
+        let output = child.wait_with_output().context("wait for pbcopy")?;
+        if !output.status.success() {
+            bail!(
+                "pbcopy exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+        }
+        Ok(json!({
+            "ok": true,
+            "format": "unicode_text",
+            "chars": units,
+            "platform": "macos",
+        }))
     }
 }
 
@@ -2110,7 +4564,10 @@ mod tests {
             )) + 1;
             assert_eq!(descriptor.version, expected, "{}", descriptor.name);
         }
-        assert_eq!(adapter_descriptor().version, "3");
+        assert_eq!(
+            adapter_descriptor().version,
+            if cfg!(target_os = "macos") { "1" } else { "3" }
+        );
     }
 
     #[test]
@@ -2132,8 +4589,13 @@ mod tests {
     }
 
     #[test]
-    fn adapter_is_only_advertised_as_available_on_windows() {
-        assert_eq!(adapter_descriptor().available, cfg!(windows));
+    fn adapter_is_only_advertised_as_available_where_it_runs() {
+        let adapter = adapter_descriptor();
+        assert_eq!(adapter.available, cfg!(any(windows, target_os = "macos")));
+        assert_eq!(
+            adapter.name,
+            if cfg!(target_os = "macos") { "native-macos-desktop" } else { "native-win32-desktop" }
+        );
     }
 
     #[cfg(windows)]
@@ -2455,5 +4917,645 @@ mod tests {
         let state = std::env::temp_dir().join("praxis-desktop-blocking-pool");
         let result = dispatch("desktop.status", serde_json::json!({}), &state).unwrap();
         assert_eq!(result["ok"], true);
+    }
+
+    // ─── macOS: чистые стенды — любая ОС, ни одного вызова системы ──────────────────
+
+    fn mac_events(value: serde_json::Value) -> Vec<mac_pure::InputEvent> {
+        serde_json::from_value(value).expect("input events must parse")
+    }
+
+    const MAC_SCREEN: mac_pure::Screen = mac_pure::Screen {
+        left: -1920,
+        top: 0,
+        width: 3360,
+        height: 900,
+    };
+
+    #[test]
+    fn mac_key_table_maps_windows_names_to_kvk() {
+        for (name, code) in [
+            ("enter", 0x24),
+            ("return", 0x24),
+            ("tab", 0x30),
+            ("esc", 0x35),
+            ("space", 0x31),
+            ("backspace", 0x33),
+            ("delete", 0x75),
+            ("del", 0x75),
+            ("insert", 0x72),
+            ("home", 0x73),
+            ("end", 0x77),
+            ("pageup", 0x74),
+            ("page_down", 0x79),
+            ("left", 0x7B),
+            ("up", 0x7E),
+            ("right", 0x7C),
+            ("down", 0x7D),
+            ("ctrl", 0x3B),
+            ("control", 0x3B),
+            ("shift", 0x38),
+            ("alt", 0x3A),
+            ("option", 0x3A),
+            ("win", 0x37),
+            ("cmd", 0x37),
+            ("meta", 0x37),
+            ("right_win", 0x36),
+            ("capslock", 0x39),
+            ("a", 0x00),
+            ("Z", 0x06),
+            ("5", 0x17),
+            ("0", 0x1D),
+            ("f1", 0x7A),
+            ("F12", 0x6F),
+            ("f20", 0x5A),
+        ] {
+            assert_eq!(
+                mac_pure::key_code_by_name(name).unwrap(),
+                code,
+                "{name}"
+            );
+        }
+        for absent in ["f21", "f24", "pause", "print_screen", "", "ё", "-"] {
+            assert!(mac_pure::key_code_by_name(absent).is_err(), "{absent:?}");
+        }
+        assert_eq!(mac_pure::key_code(&mac_pure::KeyArg::Number(0x24)).unwrap(), 0x24);
+        assert!(mac_pure::key_code(&mac_pure::KeyArg::Number(0)).is_err());
+    }
+
+    /// `ps` выравнивает числа пробелами слева, а путь может содержать пробелы:
+    /// на раннере наивный разбор уже давал пустую таблицу.
+    #[test]
+    fn mac_ps_parser_survives_leading_spaces_and_paths_with_spaces() {
+        let sample = "    1     0     0 /sbin/launchd\n\
+                      12345   1   501 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n\
+                      \n\
+                      garbage line here\n\
+                      777 1 501 helene-body\n";
+        let (rows, skipped) = mac_pure::parse_ps(sample);
+        assert_eq!(skipped, 1);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            rows[1],
+            mac_pure::PsRow {
+                pid: 12345,
+                ppid: 1,
+                uid: 501,
+                comm: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".into(),
+            }
+        );
+        assert_eq!(rows[2].comm, "helene-body");
+
+        let row = mac_pure::process_row(&rows[1], None);
+        assert_eq!(row["pid"], 12345);
+        assert_eq!(row["parent_pid"], 1);
+        assert_eq!(row["name"], "Google Chrome");
+        assert_eq!(
+            row["path"],
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        );
+        assert!(row["session_id"].is_null());
+        assert!(row["created_filetime"].is_null());
+        assert!(row["threads"].is_null());
+        // Относительный comm без proc_pidpath — путь неизвестен, а не выдуман.
+        let bare = mac_pure::process_row(&rows[2], None);
+        assert_eq!(bare["name"], "helene-body");
+        assert!(bare["path"].is_null());
+        let resolved = mac_pure::process_row(&rows[2], Some("/opt/helene/helene-body"));
+        assert_eq!(resolved["path"], "/opt/helene/helene-body");
+    }
+
+    #[test]
+    fn mac_window_row_has_the_windows_shape_and_names_hidden_titles() {
+        let facts = mac_pure::WindowFacts {
+            id: 31,
+            pid: 4242,
+            owner: "Finder".into(),
+            title: None,
+            layer: 0,
+            x: 100.0,
+            y: 50.0,
+            width: 640.0,
+            height: 480.0,
+            on_screen: true,
+            z_order: 2,
+        };
+        let hidden = mac_pure::window_row(&facts, Some("/System/Finder"), false, Some(true));
+        assert_eq!(hidden["hwnd"], "0x1F");
+        assert_eq!(hidden["fingerprint"], "0x1F:4242:0");
+        assert_eq!(hidden["pid"], 4242);
+        assert_eq!(hidden["class"], "Finder");
+        assert_eq!(hidden["process_path"], "/System/Finder");
+        assert_eq!(hidden["rect"]["left"], 100);
+        assert_eq!(hidden["rect"]["right"], 740);
+        assert_eq!(hidden["rect"]["bottom"], 530);
+        assert_eq!(hidden["rect"]["width"], 640);
+        assert_eq!(hidden["visible"], true);
+        assert_eq!(hidden["foreground"], true);
+        assert_eq!(hidden["z_order"], 2);
+        assert!(hidden["title"].is_null());
+        assert!(hidden["session_id"].is_null() && hidden["minimized"].is_null());
+        assert!(hidden["note"].as_str().unwrap().contains("Screen Recording"));
+
+        let titled = mac_pure::window_row(
+            &mac_pure::WindowFacts {
+                title: Some("Documents".into()),
+                ..facts.clone()
+            },
+            None,
+            true,
+            None,
+        );
+        assert_eq!(titled["title"], "Documents");
+        assert!(titled.get("note").is_none());
+        assert!(titled.get("foreground").is_none());
+        // Заголовка нет, но разрешение есть: это честное «без заголовка», без заметки.
+        let untitled = mac_pure::window_row(&facts, None, true, None);
+        assert!(untitled["title"].is_null() && untitled.get("note").is_none());
+    }
+
+    #[test]
+    fn mac_hwnd_parses_like_windows() {
+        let parse = |value: serde_json::Value| {
+            serde_json::from_value::<mac_pure::HwndArg>(value)
+                .unwrap()
+                .value()
+        };
+        assert_eq!(parse(serde_json::json!("0x1A")).unwrap(), 26);
+        assert_eq!(parse(serde_json::json!("26")).unwrap(), 26);
+        assert_eq!(parse(serde_json::json!(26)).unwrap(), 26);
+        assert!(parse(serde_json::json!(0)).is_err());
+        assert!(parse(serde_json::json!("0x")).is_err());
+        assert!(parse(serde_json::json!(1u64 << 40)).is_err());
+        assert_eq!(mac_pure::hwnd_hex(255), "0xFF");
+    }
+
+    #[test]
+    fn mac_wheel_delta_maps_to_lines_without_silent_zero() {
+        assert_eq!(mac_pure::wheel_lines(120), 3);
+        assert_eq!(mac_pure::wheel_lines(-240), -6);
+        assert_eq!(mac_pure::wheel_lines(60), 1);
+        assert_eq!(mac_pure::wheel_lines(-10), -1);
+        assert_eq!(mac_pure::wheel_lines(0), 0);
+    }
+
+    /// Текст — по знаку на отправку с паузой 20 мс; перевод строки — клавишей Return;
+    /// перетаскивание — те же пачки и паузы, что на Windows.
+    #[test]
+    fn mac_input_plan_paces_text_and_counts_drag_pauses() {
+        let plan = |value, delay| {
+            let events = mac_events(value);
+            let chunks = mac_pure::prepare_input_events(&events, delay, MAC_SCREEN).unwrap();
+            (mac_pure::plan_totals(&chunks).unwrap(), chunks)
+        };
+        let (totals, chunks) = plan(serde_json::json!([{"type": "text", "text": "ab\r\n🙂"}]), 0);
+        // a, b, Return (одна клавиша на CRLF), 🙂 — четыре пачки, пауза после трёх.
+        assert_eq!(totals.batches, 4);
+        assert_eq!(totals.pause_ms, 3 * mac_pure::TEXT_UNIT_PAUSE_MS);
+        assert_eq!(totals.records, 8);
+        assert_eq!(
+            chunks[2].records,
+            vec![
+                mac_pure::Record::KeyDown(mac_pure::KEY_RETURN),
+                mac_pure::Record::KeyUp(mac_pure::KEY_RETURN)
+            ]
+        );
+        assert!(matches!(
+            &chunks[3].records[0],
+            mac_pure::Record::Unicode { units, down: true } if units.len() == 2
+        ));
+
+        let (drag, _) = plan(
+            serde_json::json!([{
+                "type": "drag", "x": 0, "y": 0, "to_x": 100, "to_y": 50,
+                "steps": 10, "hold_ms": 50, "step_delay_ms": 7, "settle_ms": 30
+            }]),
+            0,
+        );
+        assert_eq!(drag.batches, 12);
+        assert_eq!(drag.pause_ms, 143);
+
+        let (paired, _) = plan(
+            serde_json::json!([
+                {"type": "drag", "x": 0, "y": 0, "to_x": 100, "to_y": 50,
+                 "steps": 10, "hold_ms": 50, "step_delay_ms": 7, "settle_ms": 30},
+                {"type": "key", "key": "a"}
+            ]),
+            200,
+        );
+        assert_eq!(paired.pause_ms, 343);
+        assert_eq!(paired.batches, 13);
+
+        let (defaults, _) = plan(
+            serde_json::json!([{"type": "drag", "x": 0, "y": 0, "to_x": 10, "to_y": 10}]),
+            0,
+        );
+        assert_eq!(defaults.batches, 26);
+        assert_eq!(defaults.pause_ms, 60 + 23 * 8 + 60);
+
+        // Тройной щелчок — click state 1, 2, 3, а не три одиночных.
+        let (_, click) = plan(
+            serde_json::json!([{"type": "click", "count": 3, "x": 5, "y": 5}]),
+            0,
+        );
+        let states: Vec<u32> = click[0]
+            .records
+            .iter()
+            .filter_map(|record| match record {
+                mac_pure::Record::ButtonDown { click_state, .. } => Some(*click_state),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(states, vec![1, 2, 3]);
+
+        // Сочетание: модификаторы вниз по порядку, вверх — в обратном.
+        let (_, hotkey) = plan(
+            serde_json::json!([{"type": "hotkey", "keys": ["cmd", "shift", "s"]}]),
+            0,
+        );
+        assert_eq!(
+            hotkey[0].records,
+            vec![
+                mac_pure::Record::KeyDown(0x37),
+                mac_pure::Record::KeyDown(0x38),
+                mac_pure::Record::KeyDown(0x01),
+                mac_pure::Record::KeyUp(0x01),
+                mac_pure::Record::KeyUp(0x38),
+                mac_pure::Record::KeyUp(0x37),
+            ]
+        );
+
+        // Колесо: вниз — минус строки; с точкой — сначала сдвиг курсора.
+        let (_, wheel) = plan(
+            serde_json::json!([{"type": "wheel", "delta": -240, "x": 10, "y": 10}]),
+            0,
+        );
+        assert_eq!(
+            wheel[0].records,
+            vec![
+                mac_pure::Record::MoveTo { x: 10, y: 10 },
+                mac_pure::Record::Wheel { vertical: -6, horizontal: 0 }
+            ]
+        );
+
+        // Ведомость зажатого — та же арифметика, что на Windows.
+        let held = |value| mac_pure::net_held(&mac_events(value)).unwrap();
+        assert_eq!(
+            held(serde_json::json!([{"type": "mouse_down", "button": "left"}])),
+            vec!["left"]
+        );
+        assert_eq!(
+            held(serde_json::json!([
+                {"type": "mouse_down", "button": "left"},
+                {"type": "mouse_down", "button": "right"},
+                {"type": "mouse_up", "button": "left"}
+            ])),
+            vec!["right"]
+        );
+        assert!(held(serde_json::json!([{"type": "click", "count": 3}])).is_empty());
+        assert!(held(serde_json::json!([{"type": "mouse_up", "button": "middle"}])).is_empty());
+    }
+
+    #[test]
+    fn mac_input_plan_refuses_the_same_limits_as_windows_and_counts_clamps() {
+        let refused = |value| {
+            mac_pure::prepare_input_events(&mac_events(value), 0, MAC_SCREEN)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(refused(serde_json::json!([{"type": "text", "text": "x".repeat(16_385)}]))
+            .contains("UTF-16 units"));
+        assert!(refused(serde_json::json!([{"type": "click", "count": 65}])).contains("click count"));
+        assert!(refused(serde_json::json!([
+            {"type": "drag", "x": 0, "y": 0, "to_x": 1, "to_y": 1, "steps": 257}
+        ]))
+        .contains("drag steps must be between 1 and 256"));
+        assert!(refused(serde_json::json!([
+            {"type": "drag", "x": 0, "y": 0, "to_x": 1, "to_y": 1, "hold_ms": 5001}
+        ]))
+        .contains("drag hold_ms is 5001ms"));
+        assert!(refused(serde_json::json!([{"type": "click", "x": 1}])).contains("together"));
+        assert!(refused(serde_json::json!([{"type": "key", "key": "a", "action": "hold"}]))
+            .contains("press, down, or up"));
+        assert!(refused(serde_json::json!([{"type": "hotkey", "keys": []}])).contains("not be empty"));
+
+        // Точка за экраном подтягивается к краю и СЧИТАЕТСЯ.
+        let events = mac_events(serde_json::json!([
+            {"type": "mouse_down", "x": -1920, "y": 0},
+            {"type": "mouse", "x": -1921, "y": 0},
+            {"type": "mouse", "x": 0, "y": 900},
+            {"type": "mouse_up", "x": 1439, "y": 899}
+        ]));
+        let chunks = mac_pure::prepare_input_events(&events, 0, MAC_SCREEN).unwrap();
+        let totals = mac_pure::plan_totals(&chunks).unwrap();
+        assert_eq!(totals.clamped_moves, 2);
+        assert_eq!(chunks[1].records, vec![mac_pure::Record::MoveTo { x: -1920, y: 0 }]);
+        assert_eq!(chunks[2].records, vec![mac_pure::Record::MoveTo { x: 0, y: 899 }]);
+
+        // Бюджет пауз: 200 шагов по 150 мс — ровно потолок; текст в 1 501 знак — уже нет.
+        let budget = |value| {
+            let events = mac_events(value);
+            mac_pure::plan_totals(&mac_pure::prepare_input_events(&events, 0, MAC_SCREEN).unwrap())
+                .unwrap()
+                .pause_ms
+        };
+        assert_eq!(
+            budget(serde_json::json!([{
+                "type": "drag", "x": 0, "y": 0, "to_x": 1, "to_y": 1,
+                "steps": 200, "hold_ms": 0, "step_delay_ms": 150, "settle_ms": 150
+            }])),
+            30_000
+        );
+        assert_eq!(budget(serde_json::json!([{"type": "text", "text": "x".repeat(1_501)}])), 30_000);
+        assert_eq!(budget(serde_json::json!([{"type": "text", "text": "x".repeat(1_502)}])), 30_020);
+        let limits = mac_pure::input_limits();
+        assert_eq!(limits["typing_pacing_ms"], 20);
+        assert_eq!(limits["max_text_chars_per_call_at_pacing"], 1_500);
+        assert!(limits["permissions"].as_str().unwrap().contains("Accessibility"));
+    }
+
+    /// Раскладка байтов CGImage читается из CGBitmapInfo, а не предполагается.
+    #[test]
+    fn mac_pixel_layout_reads_bitmap_info_and_to_bgra_handles_padding() {
+        use mac_pure::{PixelLayout, pixel_layout, to_bgra};
+        const LITTLE: u32 = 2 << 12;
+        const BIG: u32 = 4 << 12;
+        assert_eq!(pixel_layout(2 | LITTLE, 32, 8).unwrap(), PixelLayout::Bgra);
+        assert_eq!(pixel_layout(6 | LITTLE, 32, 8).unwrap(), PixelLayout::Bgra);
+        assert_eq!(pixel_layout(2 | BIG, 32, 8).unwrap(), PixelLayout::Argb);
+        assert_eq!(pixel_layout(2, 32, 8).unwrap(), PixelLayout::Argb);
+        assert_eq!(pixel_layout(1 | BIG, 32, 8).unwrap(), PixelLayout::Rgba);
+        assert_eq!(pixel_layout(5, 32, 8).unwrap(), PixelLayout::Rgba);
+        assert_eq!(pixel_layout(1 | LITTLE, 32, 8).unwrap(), PixelLayout::Abgr);
+        assert!(pixel_layout(2 | LITTLE, 16, 5).is_err());
+        assert!(pixel_layout(2 | (1 << 8), 32, 8).is_err());
+        assert!(pixel_layout(7, 32, 8).is_err());
+
+        // Две строки по одному пикселю, строка с хвостом в 4 байта мусора.
+        let red_then_blue = |layout: PixelLayout| -> Vec<u8> {
+            let (red, blue): ([u8; 4], [u8; 4]) = match layout {
+                PixelLayout::Bgra => ([0, 0, 255, 255], [255, 0, 0, 255]),
+                PixelLayout::Argb => ([255, 255, 0, 0], [255, 0, 0, 255]),
+                PixelLayout::Rgba => ([255, 0, 0, 255], [0, 0, 255, 255]),
+                PixelLayout::Abgr => ([255, 0, 0, 255], [255, 255, 0, 0]),
+            };
+            [red.as_slice(), &[9, 9, 9, 9], blue.as_slice(), &[9, 9, 9, 9]].concat()
+        };
+        for layout in [PixelLayout::Bgra, PixelLayout::Argb, PixelLayout::Rgba, PixelLayout::Abgr] {
+            let bgra = to_bgra(&red_then_blue(layout), 1, 2, 8, layout).unwrap();
+            assert_eq!(bgra, vec![0, 0, 255, 255, 255, 0, 0, 255], "{layout:?}");
+        }
+        assert!(to_bgra(&[0u8; 8], 2, 2, 8, PixelLayout::Bgra).is_err());
+        assert!(to_bgra(&[0u8; 16], 3, 1, 8, PixelLayout::Bgra).is_err());
+    }
+
+    #[test]
+    fn mac_downscale_box_averages_and_nearest_resamples() {
+        use mac_pure::{Downscale, choose_downscale, downscale_box, resample_nearest};
+        // 4×2 → 2×1: левый блок — четыре разных серых (среднее 10), правый — 200.
+        let mut bgra = Vec::new();
+        for row in [[4u8, 8, 200, 200], [12, 16, 200, 200]] {
+            for value in row {
+                bgra.extend_from_slice(&[value, value, value, 255]);
+            }
+        }
+        let (scaled, width, height) = downscale_box(&bgra, 4, 2, 2).unwrap();
+        assert_eq!((width, height), (2, 1));
+        assert_eq!(scaled, vec![10, 10, 10, 255, 200, 200, 200, 255]);
+        assert!(downscale_box(&bgra, 4, 2, 3).is_none());
+        assert!(downscale_box(&bgra, 4, 2, 1).is_none());
+
+        let nearest = resample_nearest(&bgra, 4, 2, 2, 2);
+        assert_eq!(nearest.len(), 16);
+        assert_eq!(&nearest[..4], &[4, 4, 4, 255]);
+        assert_eq!(&nearest[4..8], &[200, 200, 200, 255]);
+
+        assert_eq!(choose_downscale(2880, 1800, 1440, 900, false), Downscale::Box(2));
+        assert_eq!(choose_downscale(4320, 2700, 1440, 900, false), Downscale::Box(3));
+        assert_eq!(choose_downscale(1440, 900, 1440, 900, false), Downscale::None);
+        assert_eq!(choose_downscale(2880, 1800, 1440, 900, true), Downscale::None);
+        assert_eq!(choose_downscale(2160, 1350, 1440, 900, false), Downscale::Nearest);
+        assert_eq!(choose_downscale(2880, 1801, 1440, 900, false), Downscale::Nearest);
+    }
+
+    #[test]
+    fn mac_app_bundle_is_cut_from_the_executable_path() {
+        assert_eq!(
+            mac_pure::app_bundle("/Applications/Safari.app/Contents/MacOS/Safari").as_deref(),
+            Some("/Applications/Safari.app")
+        );
+        assert_eq!(
+            mac_pure::app_bundle("/Applications/Xcode.app/Contents/Applications/Simulator.app/Contents/MacOS/Simulator")
+                .as_deref(),
+            Some("/Applications/Xcode.app/Contents/Applications/Simulator.app")
+        );
+        assert!(mac_pure::app_bundle("/opt/helene/helene-body").is_none());
+        assert!(mac_pure::app_bundle("/Applications/Safari.app").is_none());
+    }
+
+    #[test]
+    fn mac_page_and_process_filters_share_the_windows_shape() {
+        let rows = (1..=5).map(|pid| serde_json::json!({"pid": pid})).collect();
+        let page = mac_pure::page(rows, mac_pure::PageArgs { offset: 3, limit: 1 });
+        assert_eq!(page["total"], 5);
+        assert_eq!(page["returned"], 1);
+        assert_eq!(page["next_offset"], 4);
+        assert_eq!(page["items"][0]["pid"], 4);
+        let args: mac_pure::WindowListArgs = serde_json::from_value(serde_json::json!({
+            "limit": 8, "visible_only": false, "title_contains": "Finder"
+        }))
+        .unwrap();
+        assert!(!args.visible_only && !args.all_layers);
+        assert_eq!(args.page.limit, 8);
+        let capture: mac_pure::CaptureArgs =
+            serde_json::from_value(serde_json::json!({"target": "window", "hwnd": "0x2A"})).unwrap();
+        assert!(!capture.native);
+        assert_eq!(capture.hwnd.unwrap().value().unwrap(), 42);
+    }
+
+    // ─── macOS: живые стенды — только на Mac; без TCC — честный отказ, не пропуск ───
+
+    #[cfg(target_os = "macos")]
+    fn mac_state() -> PathBuf {
+        std::env::temp_dir().join(format!("praxis-desktop-mac-{}", Uuid::new_v4()))
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_live_status_answers_with_platform_and_tcc() {
+        let status = dispatch("desktop.status", serde_json::json!({}), &mac_state()).unwrap();
+        assert_eq!(status["ok"], true, "{status}");
+        assert_eq!(status["platform"], "macos");
+        assert!(status["session_id"].is_null());
+        assert!(status["interactive"].is_boolean());
+        assert!(status["tcc"]["screen_recording"].is_boolean());
+        assert!(status["tcc"]["accessibility"].is_boolean());
+        assert!(status["hints"].is_array());
+        assert!(status["scale"].as_f64().unwrap() >= 1.0);
+        let screen = &status["virtual_screen"];
+        assert!(screen["width"].as_i64().unwrap() > 0 && screen["height"].as_i64().unwrap() > 0);
+        assert_eq!(status["hints"].as_array().unwrap().len(), usize::from(!status["tcc"]["screen_recording"].as_bool().unwrap()) + usize::from(!status["tcc"]["accessibility"].as_bool().unwrap()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_live_window_list_and_process_list_answer_honestly() {
+        let state = mac_state();
+        let all = dispatch(
+            "desktop.window.list",
+            serde_json::json!({"visible_only": false, "all_layers": true, "limit": 50}),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(all["ok"], true, "{all}");
+        assert_eq!(all["platform"], "macos");
+        assert!(all["layers"].as_str().unwrap().contains("all"));
+        if crate::mac::gui_session() {
+            assert!(all["total"].as_u64().unwrap() >= 1, "{all}");
+        }
+        let ordinary = dispatch("desktop.window.list", serde_json::json!({}), &state).unwrap();
+        assert_eq!(ordinary["ok"], true, "{ordinary}");
+        assert!(ordinary["layers"].as_str().unwrap().contains("ordinary"));
+        for row in ordinary["items"].as_array().unwrap() {
+            assert!(row["hwnd"].as_str().unwrap().starts_with("0x"));
+            assert!(row["rect"]["width"].as_i64().is_some());
+            assert!(row["visible"].is_boolean());
+        }
+        let tcc = crate::mac::tcc();
+        let filtered = dispatch(
+            "desktop.window.list",
+            serde_json::json!({"title_contains": "praxis-no-such-window"}),
+            &state,
+        );
+        if tcc.screen_recording {
+            let filtered = filtered.unwrap();
+            assert_eq!(filtered["ok"], true);
+            assert_eq!(filtered["total"], 0);
+        } else {
+            // Отказ — ошибка рамки со словами подсказки, а не результат `ok:false`.
+            let error = filtered.unwrap_err().to_string();
+            assert!(error.contains("title_contains cannot be applied"), "{error}");
+            assert!(error.contains("Запись экрана"), "{error}");
+            assert!(error.contains("screen_recording=false"), "{error}");
+        }
+
+        let processes = dispatch("os.process.list", serde_json::json!({"limit": 20_000}), &state).unwrap();
+        assert_eq!(processes["ok"], true, "{processes}");
+        let me = std::process::id();
+        assert!(
+            processes["items"].as_array().unwrap().iter().any(|row| row["pid"] == me),
+            "own pid {me} missing: {processes}"
+        );
+        let error = dispatch("os.process.list", serde_json::json!({"session_id": 1}), &state).unwrap_err();
+        assert!(error.to_string().contains("session ids"), "{error}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_live_capture_gives_a_png_or_refuses_with_hints() {
+        let state = mac_state();
+        let tcc = crate::mac::tcc();
+        let result = dispatch("desktop.screen.capture", serde_json::json!({}), &state);
+        if tcc.screen_recording {
+            let result = result.unwrap();
+            assert_eq!(result["ok"], true, "{result}");
+            let path = PathBuf::from(result["path"].as_str().unwrap());
+            let bytes = fs::read(&path).unwrap();
+            assert!(bytes.len() > 10 * 1024, "PNG is only {} bytes", bytes.len());
+            assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+            let scale = result["scale"].as_f64().unwrap();
+            assert!(scale >= 1.0, "{result}");
+            assert_eq!(result["downscale"], if scale > 1.0 { "box-average" } else { "none" });
+            assert_eq!(result["pixel_width"], result["width"]);
+            let native = dispatch("desktop.screen.capture", serde_json::json!({"native": true}), &state).unwrap();
+            assert_eq!(native["ok"], true, "{native}");
+            assert_eq!(native["pixel_width"], native["source_pixel_width"]);
+            assert!(artifact_output("desktop.screen.capture", &result).unwrap().is_some());
+            let _ = fs::remove_dir_all(&state);
+        } else {
+            // Отказ — ошибка рамки: слова «куда идти» в тексте, на диске ничего.
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("Screen Recording"), "{error}");
+            assert!(error.contains("Запись экрана"), "{error}");
+            assert!(error.contains("platform=macos"), "{error}");
+            assert!(!state.join("desktop").exists(), "nothing may be written on refusal");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_live_input_and_activation_refuse_without_accessibility() {
+        let state = mac_state();
+        let tcc = crate::mac::tcc();
+        // Сдвиг на (0, 0) — единственный безвредный ввод на чужом столе.
+        let input = dispatch(
+            "desktop.input.perform",
+            serde_json::json!({"events": [{"type": "mouse", "x": 0, "y": 0, "relative": true}]}),
+            &state,
+        );
+        if tcc.accessibility {
+            let input = input.unwrap();
+            assert_eq!(input["ok"], true, "{input}");
+            assert_eq!(input["input_batches"], 1);
+            assert_eq!(input["limits"]["typing_pacing_ms"], 20);
+        } else {
+            // Отказ — ошибка рамки со словами подсказки.
+            let error = input.unwrap_err().to_string();
+            assert!(error.contains("Accessibility"), "{error}");
+            assert!(error.contains("Универсальный доступ"), "{error}");
+            assert!(error.contains("accessibility=false"), "{error}");
+        }
+        // Пределы бьют раньше разрешений и раньше стола — как на Windows.
+        let error = dispatch(
+            "desktop.input.perform",
+            serde_json::json!({"events": [{"type": "text", "text": "x".repeat(16_385)}]}),
+            &state,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("UTF-16 units"), "{error}");
+        let error = dispatch(
+            "desktop.input.perform",
+            serde_json::json!({"events": [{"type": "text", "text": "x".repeat(2_000)}]}),
+            &state,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("paced"), "{error}");
+
+        let missing = dispatch(
+            "desktop.window.activate",
+            serde_json::json!({"hwnd": "0xFFFFFFF"}),
+            &state,
+        )
+        .unwrap_err();
+        assert!(missing.to_string().contains("no longer exists"), "{missing}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_live_clipboard_round_trip() {
+        if !crate::mac::gui_session() {
+            eprintln!("нет графической сессии — pbcopy/pbpaste не проверить");
+            return;
+        }
+        let state = mac_state();
+        let text = "Привет, Mac 🙂";
+        let written = dispatch("desktop.clipboard.write", serde_json::json!({"text": text}), &state).unwrap();
+        assert_eq!(written["ok"], true, "{written}");
+        assert_eq!(written["chars"], text.encode_utf16().count());
+        let read = dispatch("desktop.clipboard.read", serde_json::json!({}), &state).unwrap();
+        assert_eq!(read["ok"], true, "{read}");
+        assert_eq!(read["text"], text);
+        assert_eq!(read["truncated"], false);
+        let short = dispatch("desktop.clipboard.read", serde_json::json!({"limit_chars": 6}), &state).unwrap();
+        assert_eq!(short["text"], "Привет");
+        assert_eq!(short["truncated"], true);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mac_live_dispatch_runs_from_tokio_via_the_blocking_pool() {
+        let result = dispatch("desktop.status", serde_json::json!({}), &mac_state()).unwrap();
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["platform"], "macos");
     }
 }

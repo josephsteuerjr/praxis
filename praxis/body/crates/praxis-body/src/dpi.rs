@@ -47,7 +47,22 @@ fn inner() -> &'static str {
     }
 }
 
-#[cfg(not(windows))]
+/// macOS: объявлять ничего не надо — система считает в ПУНКТАХ всегда, и все её API
+/// (CGWindowList, CGEvent, Accessibility) отвечают в одной системе координат. Масштаб
+/// (пикселей на пункт) живёт только в снимке экрана, который тело уменьшает до пунктов
+/// (см. `desktop.screen.capture`). В журнал — масштаб главного дисплея, чтобы «почему
+/// снимок 2880 в ширину» имело ответ.
+#[cfg(target_os = "macos")]
+fn inner() -> &'static str {
+    tracing::info!(
+        "dpi: macOS считает в пунктах; масштаб главного дисплея {} px/pt, снимки экрана \
+         уменьшаются до пунктов (native: true — без уменьшения)",
+        crate::mac::main_scale()
+    );
+    "points"
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn inner() -> &'static str {
     "not-windows"
 }

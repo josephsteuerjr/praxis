@@ -62,14 +62,21 @@ pub fn descriptors() -> Vec<CapabilityDescriptor> {
 /// с другой зависимостью, и в манифесте она обязана быть видна отдельно.
 pub fn adapter_descriptor() -> AdapterDescriptor {
     AdapterDescriptor {
-        name: "uia-window-reader".into(),
+        // На macOS под теми же глаголами — другой механизм (Accessibility, `ax.rs`), и в
+        // манифесте он обязан быть виден под своим именем, а не прикидываться UIA.
+        name: if cfg!(target_os = "macos") {
+            "ax-window-reader"
+        } else {
+            "uia-window-reader"
+        }
+        .into(),
         version: "1".into(),
         capabilities: vec![
             CAPABILITY.to_string(),
             crate::element::CAPABILITY.to_string(),
             crate::element::FIND_CAPABILITY.to_string(),
         ],
-        available: cfg!(windows),
+        available: cfg!(any(windows, target_os = "macos")),
     }
 }
 
@@ -454,6 +461,15 @@ struct Node {
     expanded: Option<&'static str>,
     text_truncated: bool,
     children_unread: Option<&'static str>,
+    /// Только macOS: сырые `AXRole`/`AXSubrole` и список действий над элементом
+    /// (`patterns`, слова `element::Act`). Под cfg, а не всегда: Windows-ветка собирает
+    /// `Node` перечислением всех полей, и новое поле сломало бы её сборку.
+    #[cfg(target_os = "macos")]
+    ax_role: Option<String>,
+    #[cfg(target_os = "macos")]
+    ax_subrole: Option<String>,
+    #[cfg(target_os = "macos")]
+    patterns: Vec<&'static str>,
 }
 
 impl Node {
@@ -469,6 +485,12 @@ impl Node {
         .into_iter()
         .flatten()
         {
+            text.push('\u{1}');
+            text.push_str(part);
+        }
+        // На macOS `text_contains: "AXButton"` — обычный способ спросить про сырую роль.
+        #[cfg(target_os = "macos")]
+        for part in [self.ax_role.as_deref(), self.ax_subrole.as_deref()].into_iter().flatten() {
             text.push('\u{1}');
             text.push_str(part);
         }
@@ -495,6 +517,22 @@ impl Node {
         ] {
             if let Some(value) = value {
                 object.insert(key.into(), json!(value));
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            for (key, value) in [
+                ("ax_role", self.ax_role.as_ref()),
+                ("ax_subrole", self.ax_subrole.as_ref()),
+            ] {
+                if let Some(value) = value {
+                    object.insert(key.into(), json!(value));
+                }
+            }
+            // Пустой список не печатается: «ничего нельзя» и так видно по отсутствию
+            // ключа, а четыреста лишних `[]` — это токены, которые читает модель.
+            if !self.patterns.is_empty() {
+                object.insert("patterns".into(), json!(self.patterns));
             }
         }
         if let Some(hwnd) = self.hwnd {
@@ -743,10 +781,7 @@ fn render(rendered: Rendered<'_>) -> Value {
     object.insert("elapsed_ms".into(), json!(elapsed_ms));
     object.insert("walk_ms".into(), json!(walk.walk_ms));
     object.insert("uia_workers_live".into(), json!(workers_live));
-    object.insert(
-        "coordinates".into(),
-        json!("screen pixels on the virtual desktop, same space desktop.input.perform takes"),
-    );
+    object.insert("coordinates".into(), json!(COORDINATES_NOTE));
     object.insert(
         "state_semantics".into(),
         json!("a missing state key means the element does not expose it; it does not mean false"),
@@ -893,7 +928,7 @@ fn run(capability: &str, args: Value) -> Result<Value> {
     platform::read(&plan)
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 mod platform {
     use anyhow::{Result, bail};
     use serde_json::Value;
@@ -908,6 +943,499 @@ mod platform {
 
     pub fn find(_plan: &crate::element::FindPlan) -> Result<Value> {
         bail!("desktop.element.find requires an interactive Windows session")
+    }
+}
+
+/// macOS: те же три глагола через Accessibility. Всё, что знает об AX, живёт в `ax.rs`;
+/// здесь — поток под обход (как апартамент COM у Windows-ветки: чужое зависшее окно не
+/// должно вешать тело), разрешение TCC до дела, привязка окна WindowServer к AX-окну и
+/// перевод прочитанного в те же `Node`/`Walk`, что рендерит `render`.
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use anyhow::{Result, anyhow, bail};
+    use serde_json::Value;
+
+    use super::{Node, Plan, Rect, Rendered, WORKER_GRACE_MS, Walk, WindowInfo, render};
+    use crate::ax::live::{AxElement, attach, bundle_identifier};
+    use crate::ax::{self, AxNode, AxWalk, Screen, WalkLimits};
+    use crate::element::{Choice, choose};
+    use crate::mac;
+
+    /// Живые потоки обхода — тот же счётчик, что `UIA_WORKERS`: брошенный поток, застрявший
+    /// в сообщении к зависшему приложению, не должен быть невидимым.
+    static AX_WORKERS: AtomicU64 = AtomicU64::new(0);
+
+    const WINDOW_READ_AX_DETAIL: &str =
+        "macOS Accessibility (AXUIElement): one AXUIElementCopyMultipleAttributeValues plus the action list per element, children fetched no further than the cap, walked breadth-first on a dedicated thread under AXUIElementSetMessagingTimeout";
+
+    /// Срок одного сообщения Accessibility: не дольше срока просьбы и не дольше 5 с
+    /// (система по умолчанию ждёт 6 — дольше любого нашего срока чтения).
+    fn messaging_timeout(timeout_ms: u64) -> Duration {
+        Duration::from_millis(timeout_ms.clamp(100, 5_000))
+    }
+
+    /// Разрешение — ДО дела, отказ словами. Без «Универсального доступа» система не
+    /// ошибается, а врёт: дерево пусто, действия глотаются. Подсказка — только про этот
+    /// доступ: про «Запись экрана» глагол ничего не знает и говорить не должен.
+    fn require_accessibility(capability: &str) -> Result<()> {
+        if mac::tcc().accessibility {
+            return Ok(());
+        }
+        let only = mac::Tcc { screen_recording: true, accessibility: false };
+        bail!("{}", ax::accessibility_refusal(capability, &only.hints()))
+    }
+
+    struct Target {
+        window: mac::WindowInfo,
+        resolved_from: &'static str,
+        foreground: bool,
+    }
+
+    /// Какое окно берём: названное (`hwnd` = CGWindowID) или самое верхнее обычное. Одно
+    /// место на все три руки — иначе «переднее окно» у чтения и у действия разошлись бы.
+    fn target_window(said: Option<u64>) -> Result<Target> {
+        match said {
+            Some(value) => {
+                let id = u32::try_from(value).map_err(|_| {
+                    anyhow!("window 0x{value:X} is not a CGWindowID: on macOS they fit in 32 bits")
+                })?;
+                let window = mac::window_by_id(id)?
+                    .ok_or_else(|| anyhow!("window 0x{value:X} no longer exists"))?;
+                let foreground = mac::frontmost()?.is_some_and(|front| front.id == id);
+                Ok(Target { window, resolved_from: "argument", foreground })
+            }
+            None => {
+                let window = mac::frontmost()?.ok_or_else(|| {
+                    anyhow!("there is no foreground window in the interactive desktop")
+                })?;
+                Ok(Target { window, resolved_from: "foreground", foreground: true })
+            }
+        }
+    }
+
+    fn screen() -> Screen {
+        let virtual_screen = mac::virtual_screen();
+        Screen {
+            left: virtual_screen.left,
+            top: virtual_screen.top,
+            width: virtual_screen.width,
+            height: virtual_screen.height,
+        }
+    }
+
+    fn rect_of(x: f64, y: f64, width: f64, height: f64) -> Option<Rect> {
+        let rect = Rect {
+            left: x.round() as i32,
+            top: y.round() as i32,
+            right: (x + width).round() as i32,
+            bottom: (y + height).round() as i32,
+        };
+        (!rect.is_empty()).then_some(rect)
+    }
+
+    /// Паспорт окна в форме Windows-ветки. `class` — идентификатор пакета (как у
+    /// `desktop.window.list`), иначе имя владельца; `dpi` — число в духе Windows,
+    /// 96 × масштаб: правда на macOS — масштаб, и он в ответе рядом.
+    fn window_info(target: &Target, ax_title: Option<String>) -> WindowInfo {
+        let window = &target.window;
+        let scale = mac::scale_at(window.x + window.width / 2.0, window.y + window.height / 2.0);
+        WindowInfo {
+            hwnd: window.id as u64,
+            title: ax_title.or_else(|| window.title.clone()).unwrap_or_default(),
+            class: bundle_identifier(window.pid).unwrap_or_else(|| window.owner.clone()),
+            pid: window.pid.max(0) as u32,
+            rect: rect_of(window.x, window.y, window.width, window.height),
+            foreground: target.foreground,
+            resolved_from: target.resolved_from,
+            dpi: (scale * 96.0).round() as u32,
+        }
+    }
+
+    fn node_of(node: AxNode, hwnd: Option<u64>) -> Node {
+        Node {
+            parent: node.parent,
+            depth: node.depth,
+            role: node.role.to_string(),
+            localized_role: node.localized_role,
+            name: node.name,
+            value: node.value,
+            automation_id: node.automation_id,
+            class: None,
+            hwnd,
+            rect: node.rect.map(|(left, top, right, bottom)| Rect { left, top, right, bottom }),
+            enabled: node.enabled,
+            focused: node.focused,
+            offscreen: node.offscreen,
+            checked: node.checked,
+            selected: node.selected,
+            expanded: node.expanded,
+            text_truncated: node.text_truncated,
+            children_unread: node.children_unread,
+            ax_role: node.ax_role,
+            ax_subrole: node.ax_subrole,
+            patterns: node.patterns,
+        }
+    }
+
+    /// Прочитанное — в форму рендера. Номер окна получает только корень: у детей
+    /// оконных handle на macOS нет.
+    fn walk_of(walk: AxWalk, window_id: u64) -> Walk {
+        Walk {
+            nodes: walk
+                .nodes
+                .into_iter()
+                .enumerate()
+                .map(|(index, node)| node_of(node, (index == 0).then_some(window_id)))
+                .collect(),
+            discovered_unread: walk.discovered_unread,
+            subtrees_unread: walk.subtrees_unread,
+            skipped_offscreen: walk.skipped_offscreen,
+            depth_reached: walk.depth_reached,
+            truncated_by: walk.truncated_by,
+            walk_ms: walk.walk_ms,
+        }
+    }
+
+    pub fn read(plan: &Plan) -> Result<Value> {
+        let started = Instant::now();
+        if plan.force_win32 {
+            bail!(
+                "backend=win32 is the Windows reader; on macOS the only reader is Accessibility, \
+                 ask for backend=auto"
+            )
+        }
+        require_accessibility(super::CAPABILITY)?;
+        let target = target_window(plan.hwnd)?;
+
+        let (sender, receiver) = mpsc::channel();
+        let job = plan.clone();
+        let window = target.window.clone();
+        AX_WORKERS.fetch_add(1, Ordering::SeqCst);
+        // Обход — на СВОЁМ потоке: сообщение зависшему приложению ждёт свой срок, и
+        // ждать его должен этот поток, а не рабочие потоки tokio.
+        let spawned = thread::Builder::new()
+            .name("praxis-ax-read".into())
+            .spawn(move || {
+                let outcome = read_in_worker(&window, &job);
+                let _ = sender.send(outcome);
+                AX_WORKERS.fetch_sub(1, Ordering::SeqCst);
+            });
+        if let Err(error) = spawned {
+            AX_WORKERS.fetch_sub(1, Ordering::SeqCst);
+            bail!("could not start the ax worker thread: {error}")
+        }
+        let grace = Duration::from_millis(plan.limits.timeout_ms + WORKER_GRACE_MS);
+        match receiver.recv_timeout(grace) {
+            Ok(Ok((walk, title, extra_notes))) => {
+                let window = window_info(&target, title);
+                Ok(render(Rendered {
+                    plan,
+                    window: &window,
+                    walk: &walk,
+                    backend: "ax",
+                    backend_detail: WINDOW_READ_AX_DETAIL,
+                    fallback_reason: None,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    extra_notes,
+                    workers_live: AX_WORKERS.load(Ordering::SeqCst),
+                }))
+            }
+            Ok(Err(error)) => Err(error),
+            // Запасного пути на macOS нет (Win32-обход — не про эту ОС), поэтому немота
+            // Accessibility — отказ словами, а не тихий пустой ответ.
+            Err(RecvTimeoutError::Timeout) => bail!(
+                "Accessibility did not answer within timeout_ms={} plus worker_grace_ms={}; the \
+                 target application is probably busy and its reader thread is still running \
+                 (ax workers live: {})",
+                plan.limits.timeout_ms,
+                WORKER_GRACE_MS,
+                AX_WORKERS.load(Ordering::SeqCst)
+            ),
+            Err(RecvTimeoutError::Disconnected) => bail!("the ax worker thread ended without an answer"),
+        }
+    }
+
+    fn read_in_worker(window: &mac::WindowInfo, plan: &Plan) -> Result<(Walk, Option<String>, Vec<String>)> {
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(plan.limits.timeout_ms);
+        let timeout = messaging_timeout(plan.limits.timeout_ms);
+        AxElement::set_global_timeout(timeout);
+        let attached = attach(window, timeout).map_err(|words| anyhow!("{words}"))?;
+        let limits = WalkLimits {
+            max_nodes: plan.limits.max_nodes,
+            max_depth: plan.limits.max_depth,
+            max_children_per_node: plan.limits.max_children_per_node,
+            max_text_chars: plan.limits.max_text_chars,
+        };
+        let walk = ax::walk(attached.window, limits, deadline, screen(), plan.visible_only);
+        let mut notes = vec![
+            format!(
+                "the AX window was matched by {} ({} AX windows of the application compared)",
+                attached.matched_by, attached.compared
+            ),
+            "patterns lists which desktop.element.act verbs the element supports, derived from its AX actions and settable attributes; a missing patterns key means none of the eight applies"
+                .to_string(),
+            "dpi is the Windows-style figure 96 x scale; on macOS the truth is scale (points to pixels), and every coordinate here is in points"
+                .to_string(),
+        ];
+        if walk.read_failures > 0 {
+            notes.push(format!(
+                "{} elements answered with an Accessibility error while being read and appear as role=custom without attributes (first: {})",
+                walk.read_failures,
+                walk.first_read_failure.clone().unwrap_or_default()
+            ));
+        }
+        if walk.truncated_by.contains(&"api_disabled") {
+            notes.push(
+                "Accessibility answered api_disabled mid-read: «Универсальный доступ» was revoked; this reading stops where it stopped"
+                    .to_string(),
+            );
+        }
+        Ok((walk_of(walk, window.id as u64), attached.title, notes))
+    }
+
+    /// Действие над названным элементом — своя дорога, а не «прочитать и ударить по
+    /// `rect`» (см. `element.rs`): элемент находится и получает действие на одном потоке,
+    /// координат в этом пути нет.
+    pub fn act(plan: &crate::element::Plan) -> Result<Value> {
+        let started = Instant::now();
+        require_accessibility(crate::element::CAPABILITY)?;
+        let target = target_window(plan.hwnd)?;
+
+        let (sender, receiver) = mpsc::channel();
+        let job = plan.clone();
+        let window = target.window.clone();
+        let front = plan.hwnd.is_none();
+        AX_WORKERS.fetch_add(1, Ordering::SeqCst);
+        let spawned = thread::Builder::new()
+            .name("praxis-ax-act".into())
+            .spawn(move || {
+                let outcome = act_in_worker(&window, front, &job, started);
+                let _ = sender.send(outcome);
+                AX_WORKERS.fetch_sub(1, Ordering::SeqCst);
+            });
+        if let Err(error) = spawned {
+            AX_WORKERS.fetch_sub(1, Ordering::SeqCst);
+            bail!("could not start the ax worker thread: {error}")
+        }
+        let grace = Duration::from_millis(plan.timeout_ms + WORKER_GRACE_MS * 2);
+        match receiver.recv_timeout(grace) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => bail!(
+                "Accessibility did not answer within timeout_ms={} plus grace; \
+                 the worker may still be running; an in-flight action may have acted. Do not retry with a new idempotency key",
+                plan.timeout_ms
+            ),
+            Err(RecvTimeoutError::Disconnected) => bail!("the ax worker thread died without answering"),
+        }
+    }
+
+    fn act_in_worker(
+        window: &mac::WindowInfo,
+        front: bool,
+        plan: &crate::element::Plan,
+        started: Instant,
+    ) -> Result<Value> {
+        // Ноль значит один ограниченный проход, а не бесконечный и не никакой.
+        let deadline = started + Duration::from_millis(plan.timeout_ms.max(WORKER_GRACE_MS));
+        let timeout = messaging_timeout(plan.timeout_ms.max(WORKER_GRACE_MS));
+        AxElement::set_global_timeout(timeout);
+        let attached = attach(window, timeout).map_err(|words| anyhow!("{words}"))?;
+        let root = attached.window;
+        let screen = screen();
+
+        let mut polls = 0u64;
+        loop {
+            polls += 1;
+            let (found, scanned, hit_limit) = ax::sweep(
+                &root,
+                &plan.select,
+                plan.max_nodes,
+                plan.max_depth,
+                deadline,
+                screen,
+            )
+            .map_err(|failure| anyhow!("{failure}"))?;
+            // Частичный обход не доказывает единственности (даже с nth).
+            if let Some(limit) = hit_limit {
+                let (reason, hint) = crate::element::not_found(Some(limit), false, false);
+                return Ok(serde_json::json!({
+                    "ok": false, "reason": reason, "hint": hint,
+                    "matched": found.len(), "nodes_scanned": scanned,
+                    "searched_whole_window": false,
+                    "waited_ms": started.elapsed().as_millis() as u64, "polls": polls,
+                }));
+            }
+
+            let indexes: Vec<usize> = (0..found.len()).collect();
+            match choose(&indexes, plan.select.nth) {
+                Choice::One { index, .. } => {
+                    let hit = &found[index];
+                    // Свежий взгляд перед ударом: то, что помнил обход, могло перерисоваться.
+                    let fresh = ax::node_from(
+                        &hit.element,
+                        hit.node.depth,
+                        None,
+                        hit.parent_ax_role.as_deref(),
+                        u64::MAX,
+                        screen,
+                    )
+                    .map_err(|failure| anyhow!("re-reading the chosen element before the action: {failure}"))?;
+                    if !fresh.matches(&plan.select) {
+                        bail!("selected element changed before action")
+                    }
+                    let guard = || -> std::result::Result<(), String> {
+                        if Instant::now() >= deadline {
+                            return Err("element action deadline expired before mutation".into());
+                        }
+                        match mac::window_by_id(window.id) {
+                            Ok(Some(now)) if now.pid == window.pid => {}
+                            _ => return Err("target window changed before element action".into()),
+                        }
+                        if front
+                            && !mac::frontmost().ok().flatten().is_some_and(|top| top.id == window.id)
+                        {
+                            return Err("foreground changed before element action".into());
+                        }
+                        Ok(())
+                    };
+                    ax::perform(&hit.element, &fresh, plan.act, plan.text.as_deref(), guard)
+                        .map_err(|words| anyhow!("{words}"))?;
+                    // Перечитываем ТОТ ЖЕ элемент после. Нажатие часто закрывает окно, и
+                    // элемента больше нет — тогда `element_after: null`: «состояние после
+                    // недоступно» — это ответ, который дерево знает.
+                    let after = match ax::node_from(
+                        &hit.element,
+                        hit.node.depth,
+                        None,
+                        hit.parent_ax_role.as_deref(),
+                        u64::MAX,
+                        screen,
+                    ) {
+                        Ok(node) => node.describe(),
+                        Err(_) => Value::Null,
+                    };
+                    return Ok(crate::element::receipt(
+                        plan,
+                        hit.json.clone(),
+                        after,
+                        started.elapsed().as_millis() as u64,
+                        polls,
+                    ));
+                }
+                Choice::Ambiguous { total } => {
+                    // Двое — вопрос без ответа, и ждать здесь нечего: время его не решит.
+                    let candidates = found.iter().map(|hit| hit.json.clone()).collect();
+                    return Ok(crate::element::ambiguous_error(total, candidates));
+                }
+                Choice::None => {
+                    if plan.timeout_ms == 0 || Instant::now() >= deadline {
+                        let (reason, hint) = crate::element::not_found(
+                            hit_limit,
+                            plan.select.nth.is_some(),
+                            !found.is_empty(),
+                        );
+                        return Ok(serde_json::json!({
+                            "ok": false,
+                            "reason": reason,
+                            "matched": found.len(),
+                            "nodes_scanned": scanned,
+                            "searched_whole_window": hit_limit.is_none(),
+                            "waited_ms": started.elapsed().as_millis() as u64,
+                            "polls": polls,
+                            "hint": hint,
+                        }));
+                    }
+                    thread::sleep(Duration::from_millis(120));
+                }
+            }
+        }
+    }
+
+    /// Поиск по дереву окна: показать, кто подошёл, ничего не трогая.
+    pub fn find(plan: &crate::element::FindPlan) -> Result<Value> {
+        require_accessibility(crate::element::FIND_CAPABILITY)?;
+        let target = target_window(plan.hwnd)?;
+        let (sender, receiver) = mpsc::channel();
+        let job = plan.clone();
+        let window = target.window.clone();
+        AX_WORKERS.fetch_add(1, Ordering::SeqCst);
+        let spawned = thread::Builder::new()
+            .name("praxis-ax-find".into())
+            .spawn(move || {
+                let outcome = find_in_worker(&window, &job);
+                let _ = sender.send(outcome);
+                AX_WORKERS.fetch_sub(1, Ordering::SeqCst);
+            });
+        if let Err(error) = spawned {
+            AX_WORKERS.fetch_sub(1, Ordering::SeqCst);
+            bail!("could not start the ax worker thread: {error}")
+        }
+        let grace = Duration::from_millis(super::find_worker_wait_ms(plan.timeout_ms));
+        match receiver.recv_timeout(grace) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => bail!(
+                "Accessibility did not answer within timeout_ms={} plus sweep/grace; \
+                 the target window is probably busy and its worker thread is still running",
+                plan.timeout_ms
+            ),
+            Err(RecvTimeoutError::Disconnected) => bail!("the ax worker thread died without answering"),
+        }
+    }
+
+    fn find_in_worker(window: &mac::WindowInfo, plan: &crate::element::FindPlan) -> Result<Value> {
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(plan.timeout_ms);
+        let timeout = messaging_timeout(plan.timeout_ms.max(super::SWEEP_MS));
+        AxElement::set_global_timeout(timeout);
+        let attached = attach(window, timeout).map_err(|words| anyhow!("{words}"))?;
+        let root = attached.window;
+        let screen = screen();
+
+        let mut polls = 0u64;
+        loop {
+            polls += 1;
+            // Одному проходу — собственный потолок (`SWEEP_MS`): срок просьбы у поиска
+            // бывает нулевым («посмотри сейчас»), а обход с нулевым сроком не успел бы
+            // ничего. См. ту же оговорку у Windows-ветки.
+            let sweep_by = Instant::now() + Duration::from_millis(super::SWEEP_MS);
+            let by = if deadline > sweep_by { deadline } else { sweep_by };
+            let (found, scanned, hit_limit) =
+                ax::sweep(&root, &plan.select, plan.max_nodes, plan.max_depth, by, screen)
+                    .map_err(|failure| anyhow!("{failure}"))?;
+            if !found.is_empty() || Instant::now() >= deadline {
+                let matched = found.len();
+                let shown: Vec<Value> = found.into_iter().take(plan.limit).map(|hit| hit.json).collect();
+                if matched == 0 {
+                    let (reason, hint) = crate::element::not_found(hit_limit, false, false);
+                    return Ok(serde_json::json!({
+                        "ok": false,
+                        "reason": reason,
+                        "matched": 0,
+                        "nodes_scanned": scanned,
+                        "searched_whole_window": hit_limit.is_none(),
+                        "waited_ms": started.elapsed().as_millis() as u64,
+                        "polls": polls,
+                        "hint": hint,
+                    }));
+                }
+                return Ok(crate::element::find_receipt(
+                    plan,
+                    matched,
+                    shown,
+                    scanned,
+                    hit_limit.is_none(),
+                    started.elapsed().as_millis() as u64,
+                    polls,
+                ));
+            }
+            thread::sleep(Duration::from_millis(120));
+        }
     }
 }
 
@@ -2146,6 +2674,14 @@ const WINDOW_READ_UIA_DETAIL: &str =
     "IUIAutomation control view, properties and patterns read from one cache request, walked on a dedicated MTA thread";
 const WINDOW_READ_WIN32_DETAIL: &str =
     "plain Win32 child-window walk with timed WM_GETTEXT; no COM involved";
+/// В какой системе координат прямоугольники ответа. На Windows — пиксели виртуального
+/// рабочего стола; на macOS — пункты в глобальной системе CoreGraphics (на Retina пункт —
+/// два пикселя), и ввод считает в них же. Одна строка на обе ОС была бы ложью на одной.
+const COORDINATES_NOTE: &str = if cfg!(target_os = "macos") {
+    "screen points in the global CoreGraphics space (origin at the top-left of the main display; on Retina one point is two pixels), same space desktop.input.perform takes"
+} else {
+    "screen pixels on the virtual desktop, same space desktop.input.perform takes"
+};
 
 #[cfg(test)]
 mod tests {
@@ -2281,7 +2817,14 @@ mod tests {
                 crate::element::FIND_CAPABILITY.to_string(),
             ]
         );
-        assert_eq!(adapter.available, cfg!(windows));
+        assert_eq!(adapter.available, cfg!(any(windows, target_os = "macos")));
+        // На macOS под теми же глаголами — другой механизм, и манифест зовёт его своим
+        // именем; на Windows имя прежнее.
+        assert_eq!(
+            adapter.name,
+            if cfg!(target_os = "macos") { "ax-window-reader" } else { "uia-window-reader" }
+        );
+        assert_eq!(adapter.version, "1");
     }
 
     #[test]
@@ -2592,7 +3135,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     #[test]
     fn without_windows_the_verb_says_why_instead_of_returning_nothing() {
         let error = run(CAPABILITY, json!({})).unwrap_err();
@@ -2602,6 +3145,59 @@ mod tests {
                 .contains("requires an interactive Windows session"),
             "{error}"
         );
+    }
+
+    /// На macOS узел несёт сырую роль и список действий, а координаты названы пунктами:
+    /// формы те же, что у Windows, плюс то, чего на Windows нет.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn on_macos_a_node_carries_its_raw_role_and_patterns_and_coordinates_are_points() {
+        let mut walk = sample_walk();
+        walk.nodes[2].ax_role = Some("AXMenuItem".into());
+        walk.nodes[2].patterns = vec!["invoke", "focus"];
+        let value = rendered(&test_plan(Shape::Flat, ""), &walk);
+        let save = &value["items"][2];
+        assert_eq!(save["ax_role"], "AXMenuItem");
+        assert_eq!(save["patterns"], json!(["invoke", "focus"]));
+        assert!(save.get("ax_subrole").is_none());
+        // Пустой список действий не печатается: отсутствие ключа и есть «ничего нельзя».
+        assert!(value["items"][0].get("patterns").is_none());
+        assert!(value["coordinates"].as_str().unwrap().contains("points"), "{}", value["coordinates"]);
+        // Сырая роль ищется фильтром text_contains так же, как имя.
+        let filtered = rendered(&test_plan(Shape::Flat, "axmenuitem"), &walk);
+        assert_eq!(filtered["nodes_returned"], 1);
+        assert_eq!(filtered["items"][0]["name"], "Save");
+    }
+
+    /// Живой: на раннере macOS без «Универсального доступа» глагол обязан отказать
+    /// словами и назвать дорогу к настройке; с разрешением отказ по этой причине
+    /// невозможен — либо чтение, либо честное «нет переднего окна».
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn on_macos_without_accessibility_the_verbs_refuse_with_words_and_never_lie() {
+        let granted = crate::mac::tcc().accessibility;
+        for (capability, args) in [
+            (CAPABILITY, json!({})),
+            (crate::element::FIND_CAPABILITY, json!({"select": {"role": "button"}})),
+            (crate::element::CAPABILITY, json!({"do": "focus", "select": {"role": "button"}})),
+        ] {
+            let outcome = run(capability, args);
+            match (&outcome, granted) {
+                (Err(error), false) => {
+                    let words = format!("{error:#}");
+                    assert!(words.contains("«Универсальный доступ»"), "{capability}: {words}");
+                    assert!(words.contains("Системные настройки"), "{capability}: {words}");
+                    assert!(words.contains(capability), "{capability}: {words}");
+                }
+                (Ok(value), false) => panic!("{capability} answered without accessibility: {value}"),
+                (Err(error), true) => {
+                    let words = format!("{error:#}");
+                    assert!(!words.contains("«Универсальный доступ»"), "{capability}: {words}");
+                    println!("{capability} with accessibility: {words}");
+                }
+                (Ok(value), true) => println!("{capability} with accessibility: ok={}", value["ok"]),
+            }
+        }
     }
 
     /// Живой замер. Не входит в гейт: требует рабочего стола с окном на переднем плане.
