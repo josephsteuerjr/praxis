@@ -48,11 +48,17 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       # На push inputs пусты — тег по умолчанию тот же, что у build_mac.py.
       TAG: ${{ inputs.tag || 'v0.7.1' }}
-      BUILD: ${{ runner.temp }}/build
-      LOGS: ${{ runner.temp }}/logs
       HOME_DIR: /Users/runner/Applications/Helene
     steps:
       - uses: actions/checkout@v4
+
+      # Контекст `runner` в env на уровне job недоступен — GitHub отвергает
+      # файл ещё до запуска, без единой задачи (так падали круги 1 и 4).
+      # Временные пути объявляются первым шагом.
+      - name: Пути сборки
+        run: |
+          echo "BUILD=$RUNNER_TEMP/build" >> "$GITHUB_ENV"
+          echo "LOGS=$RUNNER_TEMP/logs" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
 
