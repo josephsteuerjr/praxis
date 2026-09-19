@@ -163,7 +163,20 @@ class Stated(unittest.TestCase):
 
 
 class TwoDoorsOfTheService(unittest.TestCase):
-    """`session0` и `firewall` — две РАЗНЫЕ галочки, а не одна на два смысла."""
+    """`session0` и `firewall` — две РАЗНЫЕ галочки, а не одна на два смысла.
+
+    Обе галочки — Windows (`HAS_SERVICE_TOGGLES`): на macOS служба идёт от имени
+    владельца, и ни нулевой сессии, ни правила брандмауэра у неё нет. Стенд
+    разбирает семантику Windows на любой ОС — флаг подменяется, как в
+    `PlatformFlags`; иначе на раннере macOS он падал, беря флаг своей ОС.
+    """
+
+    def setUp(self):
+        self.saved = (modes.HAS_SERVICE, modes.HAS_SERVICE_TOGGLES)
+        modes.HAS_SERVICE, modes.HAS_SERVICE_TOGGLES = True, True
+
+    def tearDown(self):
+        modes.HAS_SERVICE, modes.HAS_SERVICE_TOGGLES = self.saved
 
     def test_firewall_is_on_by_default(self):
         # Из-за одного общего ключа кнопка QR под службой была мертва по
