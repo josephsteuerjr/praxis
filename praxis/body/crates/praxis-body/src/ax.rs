@@ -2357,10 +2357,17 @@ mod live_tests {
             assert!(words.contains("«Универсальный доступ»"));
             return;
         }
-        // Разрешение есть: у тестового процесса окон нет, но список обязан вернуться
-        // без ошибки, а окно на экране (переднее, иначе Finder) — читаться.
-        let windows = application.windows().expect("AXWindows of own process");
-        println!("собственный процесс: {} AX-окон (ожидается 0)", windows.len());
+        // Разрешение есть. Собственный процесс стенда — не AppKit-программа: Accessibility
+        // в нём не реализован, и система честно отвечает kAXErrorNotImplemented (-25208)
+        // на любой его атрибут — так упал третий круг CI, ждавший пустого списка без
+        // ошибки. Пустой список и этот код — оба «окон нет», поломка — любой другой отказ.
+        match application.windows() {
+            Ok(windows) => println!("собственный процесс: {} AX-окон (ожидается 0)", windows.len()),
+            Err(failure) if failure.code == -25208 => println!(
+                "собственный процесс без AppKit не реализует Accessibility ({failure}) — это не поломка"
+            ),
+            Err(failure) => panic!("AXWindows of own process: {failure}"),
+        }
         let mut candidates: Vec<mac::WindowInfo> = mac::frontmost().expect("window list").into_iter().collect();
         candidates.extend(
             mac::window_list(true)
