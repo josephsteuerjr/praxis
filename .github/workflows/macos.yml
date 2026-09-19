@@ -247,7 +247,16 @@ jobs:
           # нет ни рабочего стола, ни разрешений TCC. Зато обязан лежать ключ
           # устройства для окна — по нему окно и поднимет тело.
           BODY_STATE="$HOME_DIR/data/memory/.state/body.json"
-          test -f "$BODY_STATE" || { echo "движок под службой не написал $BODY_STATE"; exit 1; }
+          # Снимок сторожа пишется после пробы тела через мост, а не в момент
+          # подъёма движка, и канал успевает ответить раньше него (прогон 20.09:
+          # демон поднят в :06, канал ответил в :07, снимка ещё не было). Ждём
+          # до 30 с — та же гонка, что в дымовом шаге (2c326c6).
+          for i in $(seq 1 30); do
+            [ -f "$BODY_STATE" ] && break
+            sleep 1
+          done
+          test -f "$BODY_STATE" || { echo "движок под службой не написал $BODY_STATE за 30 с"; tail -n 40 "$HOME_DIR/data/service.log" 2>/dev/null; exit 1; }
+          echo "снимок сторожа появился (ждали $i с)"
           cat "$BODY_STATE"; echo
           python3 - "$BODY_STATE" <<'PY'
           import json, sys
