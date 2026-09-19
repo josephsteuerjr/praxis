@@ -141,7 +141,7 @@ download() {
         say "архив уже в кэше, сумма сходится"
     else
         rm -f "$zip" "$zip.part"
-        say "качаю $ASSET…"
+        say "качаю ${ASSET}…"
         curl -fL --progress-bar -o "$zip.part" "$BASE_URL/$ASSET" || die "не скачался $BASE_URL/$ASSET"
         got="$(sha_of "$zip.part")"
         if [ "$got" != "$want" ]; then
@@ -237,7 +237,7 @@ stop_running() {
     [ -n "$(svc_pids)" ] && say "служба работает — её снимет мастер (спросит пароль администратора)"
     pids="$(running_pids)"
     [ -n "$pids" ] || return 0
-    say "останавливаю работающую $PRODUCT…"
+    say "останавливаю работающую ${PRODUCT}…"
     for pid in $pids; do
         kill "$pid" 2>/dev/null || true
     done
