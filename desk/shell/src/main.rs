@@ -6983,7 +6983,7 @@ mod tests {
             timeout_sec: 60,
             at_unix: 0,
         };
-        let text = broker_confirm_text(&wish);
+        let text = broker_confirm_text_for(&wish, false);
         assert!(text.contains("ПРАВАМИ СИСТЕМЫ"), "{text}");
         assert!(text.contains("его слова"), "{text}");
         assert!(text.contains("правило брандмауэра для телефона"), "{text}");
@@ -6997,7 +6997,7 @@ mod tests {
         // Вторая дверь называется своими правами, а не системными: путать их
         // нельзя, разница между ними и есть весь вопрос.
         let side = BrokerWish { op: BrokerOp::SpawnInteractive, ..wish.clone() };
-        let text = broker_confirm_text(&side);
+        let text = broker_confirm_text_for(&side, false);
         assert!(text.contains("твоими правами"), "{text}");
         assert!(!text.contains("ПРАВАМИ СИСТЕМЫ"), "{text}");
 
@@ -7007,13 +7007,23 @@ mod tests {
             args: vec![" ".repeat(4000), "del /q C:\\*".into()],
             ..side
         };
-        let text = broker_confirm_text(&padded);
+        let text = broker_confirm_text_for(&padded, false);
         assert!(text.contains("КОМАНДА ОБРЕЗАНА"), "{text}");
         assert!(text.contains("повод отказать"), "{text}");
         // Хвост, ради которого набивали пробелы, до окна и не доехал — но и
         // окно не делает вид, что показало команду целиком.
         assert!(!text.contains("del /q"), "хвост показан, значит обрезки не было");
         assert!(text.len() < 4000, "окно всё-таки распухло: {}", text.len());
+        // На macOS «прав системы» нет: та же дверь названа правами администратора,
+        // и сказано, что пароль спросит сама система. Стенд разбирает обе
+        // платформы явно — на раннере macOS он падал, беря слова своей ОС.
+        let text = broker_confirm_text_for(&wish, true);
+        assert!(text.contains("ПРАВАМИ АДМИНИСТРАТОРА"), "{text}");
+        assert!(text.contains("пароль"), "{text}");
+        assert!(!text.contains("ПРАВАМИ СИСТЕМЫ"), "{text}");
+        assert!(text.contains("правило брандмауэра для телефона"), "{text}");
+        let text = broker_confirm_text_for(&BrokerWish { op: BrokerOp::SpawnInteractive, ..wish.clone() }, true);
+        assert!(text.contains("твоими правами"), "{text}");
     }
 
     /// Ответ агенту — не «успех», а всё, что видела оболочка. И в нём нет
