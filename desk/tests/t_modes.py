@@ -396,6 +396,7 @@ class Platform(unittest.TestCase):
     def test_explicit_scm_answer_is_still_the_seam(self):
         # Стенды и Windows приносят ответ SCM явно — ему верим как есть.
         modes.HAS_SERVICE = False
+        modes.HAS_SERVICE_TOGGLES = True  # ответ SCM — Windows, с двумя галочками
         picture = modes.resolve({"agent_mode": "sandbox", "service": {"session0": True}},
                                 installed=True)
         self.assertTrue(picture["service_here"])
@@ -404,7 +405,6 @@ class Platform(unittest.TestCase):
 
     def test_windows_picture_is_untouched(self):
         modes.HAS_SERVICE = True
-        modes.HAS_SERVICE_TOGGLES = True  # картина Windows — с двумя галочками
         modes.HAS_SERVICE_TOGGLES = True  # картина Windows — с двумя галочками
         cfg = {"agent_mode": "sandbox", "service": {"session0": True}}
         picture = modes.resolve(cfg, installed=False)
