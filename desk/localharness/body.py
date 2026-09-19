@@ -1348,8 +1348,14 @@ def owner_words_for_mac(agent_mod) -> bool:
     """
     ft = getattr(agent_mod, "frame_trace", None)
     mark = getattr(ft, "mark", None)
-    if not callable(mark) or getattr(mark, "_helene_mac", False):
+    if not callable(mark):
         return False
+    # Обёртка могла уже встать ниже по цепочке — поверх неё ставит свою owner_words.
+    probe, hops = mark, 0
+    while callable(probe) and hops < 16:
+        if getattr(probe, "_helene_mac", False):
+            return False
+        probe, hops = getattr(probe, "__wrapped__", None), hops + 1
 
     def mac_mark(name, zone, kind, text, *args, **kwargs):
         if name == OWNER_TOOLS_MARK and isinstance(text, str):
