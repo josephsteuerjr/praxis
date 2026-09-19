@@ -59,6 +59,16 @@ class Tags(unittest.TestCase):
         self.assertIn("-macos-arm64", names["zip"])
         self.assertNotEqual(names["zip"], names["windows_zip"])
 
+    def test_resolve_tags_names_the_build_by_tag_and_takes_the_tree_from_release(self):
+        d = build_mac.RELEASE_TAG_DEFAULT
+        self.assertEqual(build_mac.resolve_tags("", "", ""), (d, d))
+        self.assertEqual(build_mac.resolve_tags("v0.7.2", "", ""), ("v0.7.2", "v0.7.2"))
+        # проверочный прогон CI: дерево из прежнего выпуска, имя — новое
+        self.assertEqual(build_mac.resolve_tags("v0.7.2", "v0.8.0", ""), ("v0.7.2", "v0.8.0"))
+        # дерево с диска: выпуска нет, имя — как попросили или пустое
+        self.assertEqual(build_mac.resolve_tags("", "", "/x/tree"), ("", ""))
+        self.assertEqual(build_mac.resolve_tags("", "v0.8.0", "/x/tree"), ("", "v0.8.0"))
+
     def test_default_release_tag_is_the_product_version(self):
         version = deskpkg.product_version()[0]
         self.assertEqual(build_mac.version_from_tag(build_mac.RELEASE_TAG_DEFAULT), version)

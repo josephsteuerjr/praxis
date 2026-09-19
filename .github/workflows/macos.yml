@@ -59,6 +59,11 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       # На push inputs пусты — тег по умолчанию тот же, что у build_mac.py.
       TAG: ${{ inputs.tag || 'v0.8.0' }}
+      # Откуда дерево агента: Windows-архив ЭТОГО выпуска. На push (проверочный
+      # прогон) выпуска новой версии ещё нет — дерево берётся из последнего
+      # существующего (тот же снимок прода), а сборка называется по TAG.
+      # Выкладка (кнопка) требует TREE_TAG == TAG — см. шаг «Выложить в выпуск».
+      TREE_TAG: ${{ inputs.tag || 'v0.7.2' }}
       HOME_DIR: /Users/runner/Applications/Helene
     steps:
       - uses: actions/checkout@v4
@@ -103,7 +108,7 @@ jobs:
             desk/miniapp/package-lock.json
 
       - name: Сборка (build_mac.py)
-        run: python3 desk/installer/build_mac.py --from-release "$TAG" --out "$BUILD"
+        run: python3 desk/installer/build_mac.py --from-release "$TREE_TAG" --tag "$TAG" --out "$BUILD"
 
       # Стенды питона и окна сборка уже прогнала рантаймом, который собрала
       # (build_mac.run_stands). Здесь — то, чего она не зовёт: Rust обоих
@@ -271,6 +276,7 @@ jobs:
       - name: Выложить в выпуск
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload }}
         run: |
+          [ "$TREE_TAG" = "$TAG" ] || { echo "дерево из $TREE_TAG, а выпуск $TAG — такой архив не выкладывается"; exit 1; }
           gh release upload "$TAG" \
             "$BUILD"/Helene-*-macos-arm64.zip \
             "$BUILD"/Helene-*-macos-arm64.zip.sha256 \

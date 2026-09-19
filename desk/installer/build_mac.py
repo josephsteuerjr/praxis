@@ -242,6 +242,21 @@ REQUIRED_ROOT = (
 
 # --- чистые функции (идут и на Windows, их держит tests/t_build_mac.py) --------------
 
+def resolve_tags(from_release: str, tag: str, tree_path: str) -> tuple[str, str]:
+    """(откуда дерево, как называется сборка).
+
+    Дерево агента едет из Windows-архива выпуска `from_release` (по умолчанию —
+    `RELEASE_TAG_DEFAULT`, если дерево не с диска). Имя сборки (`--tag`) — тег,
+    которым подписываются архив и `install.sh`; по умолчанию тот же. Разные они
+    бывают ТОЛЬКО в проверочных прогонах CI до выкладки: версия уже поднята, а
+    архива нового выпуска ещё нет — дерево берётся из последнего существующего.
+    Выкладывать такую сборку нельзя: это стережёт шаг выкладки в workflow, а в
+    паспорте видно `source_release.tag` ≠ `version`."""
+    tree_tag = (from_release or "").strip() or ("" if tree_path else RELEASE_TAG_DEFAULT)
+    named = (tag or "").strip() or tree_tag
+    return tree_tag, named
+
+
 def version_from_tag(tag: str) -> str:
     """'v0.7.1' → '0.7.1'. Непонятный тег — отказ, а не нули (как parse_version в оболочке)."""
     m = re.fullmatch(r"[vV]?(\d+\.\d+\.\d+)", (tag or "").strip())
@@ -1449,6 +1464,9 @@ def arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--from-release", default="", metavar="TAG",
                         help=f"взять дерево агента из Windows-архива этого выпуска "
                              f"(по умолчанию {RELEASE_TAG_DEFAULT}, если не задан --tree)")
+    parser.add_argument("--tag", default="", metavar="TAG",
+                        help="тег, которым называются архив и install.sh (по умолчанию = --from-release); "
+                             "другой — только для проверочных прогонов CI до выкладки")
     parser.add_argument("--tree", default="", metavar="PATH",
                         help="взять дерево агента из рабочей копии (отладка; отбор как у build_dist)")
     parser.add_argument("--skip-runtime", action="store_true",
@@ -1474,10 +1492,13 @@ def main() -> None:
                          "на других системах из неё импортируются только чистые функции")
 
     version, declared = deskpkg.product_version()
-    tag = args.from_release or ("" if args.tree else RELEASE_TAG_DEFAULT)
+    tree_tag, tag = resolve_tags(args.from_release, args.tag, args.tree)
     if tag and version_from_tag(tag) != version:
-        raise SystemExit(f"ветка объявляет версию {version}, а дерево просят из выпуска {tag}: "
-                         "сборка Mac обязана быть той же версии, что архив, из которого берётся дерево")
+        raise SystemExit(f"ветка объявляет версию {version}, а сборку просят назвать {tag}: "
+                         "имя сборки Mac обязано совпадать с версией ветки")
+    if tree_tag and tree_tag != tag:
+        print(f"⚠ дерево агента — из выпуска {tree_tag}, а сборка называется {tag}: это ПРОВЕРОЧНЫЙ "
+              "прогон до выкладки; в выпуск такой архив не кладётся (паспорт: source_release.tag)")
     out = Path(args.out).resolve() / FOLDER
     cache = Path(args.out).resolve() / "cache"
     names = asset_names(version)
@@ -1569,7 +1590,7 @@ def main() -> None:
         staged_tree = stage_from_tree(out, live)
         source_release = None
     else:
-        staged_tree = stage_from_release(out, cache, tag)
+        staged_tree = stage_from_release(out, cache, tree_tag)
         source_release = staged_tree
     live = out / "tree"
 
