@@ -275,17 +275,27 @@ class Contract(unittest.TestCase):
     # ---- os.process.list -------------------------------------------------- #
 
     def test_4_process_list_sees_us(self):
-        r = self.call("os.process.list", {"limit": 500})
+        # Первая страница без фильтра — это pid по возрастанию, и на раннере 500
+        # строк кончаются раньше наших процессов (четвёртый круг CI). Ищем по
+        # имени, как делает дерево: `name_contains` смотрит и в имя, и в путь.
+        r = self.call("os.process.list", {"limit": 50})
         self.assertTrue(r.get("ok"), r)
         rows = r.get("items")
         self.assertIsInstance(rows, list, r)
-        names = [str(row.get("name") or "").lower() for row in rows]
-        paths = [str(row.get("path") or "").lower() for row in rows]
-        ours = [n for n, p in zip(names, paths) if "helene" in n or "helene" in p or n.startswith("python")]
-        self.assertTrue(ours, f"среди {len(rows)} процессов нет ни helene, ни python3: {names[:20]}")
+        self.assertTrue(rows, r)
         for row in rows:
             self.assertIsInstance(row.get("pid"), int, row)
-        print(f"  процессов: {r.get('total')}, свои: {sorted(set(ours))[:6]}")
+        ours = []
+        for needle in ("helene", "python"):
+            f = self.call("os.process.list", {"limit": 50, "name_contains": needle})
+            self.assertTrue(f.get("ok"), f)
+            for row in f.get("items") or []:
+                name = str(row.get("name") or "").lower()
+                path = str(row.get("path") or "").lower()
+                self.assertTrue(needle in name or needle in path, f"{needle!r} мимо фильтра: {row}")
+                ours.append(name or path)
+        self.assertTrue(ours, f"по фильтру не нашлись ни helene, ни python: всего процессов {r.get('total')}")
+        print(f"  процессов: {r.get('total')}, свои по фильтру: {sorted(set(ours))[:6]}")
 
     # ---- clipboard -------------------------------------------------------- #
 
