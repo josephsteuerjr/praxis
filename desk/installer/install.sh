@@ -289,7 +289,12 @@ setup = {
     "telegram": {"bot_token": str(tg.get("bot_token") or ""),
                  "owner_id": str(tg.get("owner_id") or "")},
     "agent_mode": str(cfg.get("agent_mode") or "sandbox"),
-    "service": False,
+    # Служба: решение ВЛАДЕЛЬЦА, а не умолчание обновления. `installed.service`
+    # — след мастера; он же и читается обратно. Поставь здесь False, и тихое
+    # обновление молча сняло бы демон (мастер снимает прежнюю службу перед
+    # копированием и ставит её обратно только по этому полю).
+    "service": bool((cfg.get("installed") or {}).get("service")),
+    # Нулевой сессии на macOS нет как механизма — и записать её отсюда нельзя.
     "session0": False,
     "computer": bool((cfg.get("computer") or {}).get("enabled")),
     "dir": str(home),

@@ -811,16 +811,16 @@ export function start(opts: WindowOptions): void {
    */
   async function restartHarness() {
     let svc = "";
-    // На macOS службы нет по построению — и спрашивать про неё нечего.
-    if (!isMacPlatform(S.platform)) {
-      try {
-        svc = await shell<string>("service_state");
-      } catch {
-        // вне приложения (веб) — служба не при делах
-      }
+    // Служба есть на обеих системах (SCM и демон launchd) — спрашиваем всегда.
+    // Вне приложения (Пульт в браузере) ручки нет, и это не служба «не стоит»,
+    // а «спросить не у кого»: пустая строка, и перезапуск идёт как обычно.
+    try {
+      svc = await shell<string>("service_state");
+    } catch {
+      // вне приложения (веб) — служба не при делах
     }
     if (svc === "running") {
-      toast("Агента держит служба Windows: перезапуск окна её не тронет. Настройки → Режим: сними и поставь службу заново.");
+      toast(`Агента держит ${isMacPlatform(S.platform) ? "служба" : "служба Windows"}: перезапуск окна её не тронет. Настройки → Режим: сними и поставь службу заново.`);
       void show("settings");
       return;
     }

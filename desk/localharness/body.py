@@ -132,6 +132,25 @@ ASKS_TCC = sys.platform == "darwin"
 DEFAULT_DEVICE = "windows-pc" if os.name == "nt" else "mac"
 #: Снимок для окна и телефона (сторож пишет его раз в несколько секунд).
 STATE_FILE = ("memory", ".state", "body.json")
+#: Токен устройства для ОКНА, когда движок поднят службой (macOS, §6 плана
+#: 19.09). Под демоном launchd движок живёт вне графической сессии: WindowServer
+#: его не видит, TCC ему ничего не выдаст — тело оттуда не работает. Поэтому он
+#: поднимает только МОСТ и кладёт сюда ключ устройства, а тело поднимает окно
+#: (`shell::watch_service_body`) и подаёт ключ телу через `PRAXIS_BODY_TOKEN`.
+#: Файл перезаписывается на КАЖДОМ старте движка и закрыт правами 0600.
+TOKEN_FILE = ("memory", ".state", "body-token")
+
+
+def under_service() -> bool:
+    """Поднят ли движок службой: демон launchd ставит детям `HELENE_SERVICE=1`.
+
+    Только на darwin. На Windows эту переменную не ставит никто: там служба
+    поднимает интерактивную половину задачей планировщика — В СЕССИИ владельца,
+    с рабочим столом, и тело у неё работает как обычно. Читать переменную и там
+    значило бы менять проверенное поведение ради платформы, которой это не
+    касается.
+    """
+    return sys.platform == "darwin" and os.environ.get("HELENE_SERVICE") == "1"
 
 _CREATE_NO_WINDOW = 0x08000000
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
@@ -148,6 +167,9 @@ STATE: dict = {
     "bridge_pid": 0,
     "body_pid": 0,
     "connected": None,      # None — ещё не спрашивали; False — мост есть, тела нет
+    # Движок поднят службой: тело поднимает окно, а не он (macOS). Ключ есть
+    # всегда, чтобы форма снимка не зависела от того, дошло ли дело до подъёма.
+    "service": False,
     "identity": {},
     "checked_at": "",
     "logs": [],
@@ -468,6 +490,8 @@ class Body:
         self.device = device_id()
         self.device_token = ""
         self.controller_token = ""
+        #: Движок поднят службой (демон launchd): тело поднимает окно, не мы.
+        self.service = under_service()
 
     # ---- подъём ---------------------------------------------------------- #
 
@@ -516,24 +540,75 @@ class Body:
             _Child("мост", [str(bridge_exe), "--listen", f"127.0.0.1:{self.port}",
                             "--state-dir", str(bridge_dir)],
                    bridge_env, self.home, self.home / "bridge.log"),
-            _Child("тело", [str(body_exe), "connect", "--config", str(body_json)],
-                   body_env, self.home, self.home / "body.log"),
         ]
+        # Под службой тело поднимает ОКНО, а не движок: у процесса вне
+        # графической сессии нет ни рабочего стола, ни разрешений TCC, и
+        # поднятое отсюда тело честно отказывало бы на каждый вызов.
+        if self.service:
+            self.write_device_token()
+            log.info("тело: движок поднят службой — поднимаю только мост; тело подключится, "
+                     "когда откроется окно %s", "Helene")
+        else:
+            self.children.append(
+                _Child("тело", [str(body_exe), "connect", "--config", str(body_json)],
+                       body_env, self.home, self.home / "body.log"))
         self.job = _make_job()
         _TOKENS.update({"url": f"http://127.0.0.1:{self.port}",
                         "controller": self.controller_token, "device": self.device})
         STATE.update({"port": self.port, "device": self.device,
                       "logs": [str(c.log_path) for c in self.children],
-                      "reason": f"мост 127.0.0.1:{self.port}, тело подключается"})
+                      "service": self.service,
+                      "reason": (f"мост 127.0.0.1:{self.port}; тело подключится, когда откроется "
+                                 f"окно Helene — движок поднят службой, и рабочего стола у него нет"
+                                 if self.service else
+                                 f"мост 127.0.0.1:{self.port}, тело подключается")})
         for child in self.children:
             child.spawn(self.job)
         STATE["bridge_pid"] = self.children[0].proc.pid if self.children[0].proc else 0
-        STATE["body_pid"] = self.children[1].proc.pid if self.children[1].proc else 0
+        # Под службой второго ребёнка нет вовсе — не «его pid ноль», а «его
+        # здесь не поднимают». Обращение по индексу роняло бы сторож.
+        STATE["body_pid"] = (self.children[1].proc.pid
+                             if len(self.children) > 1 and self.children[1].proc else 0)
         self.thread = threading.Thread(target=self._watch, name="helene-body", daemon=True)
         self.thread.start()
         atexit.register(self.stop)
         self._write_state()
         return True
+
+    def token_path(self) -> Path:
+        return self.tree.joinpath(*TOKEN_FILE)
+
+    def write_device_token(self) -> None:
+        """Положить ключ устройства для окна: 0600, заново на каждом старте.
+
+        Заново — потому что ключ живёт ровно столько, сколько этот мост: окно,
+        прочитавшее вчерашний, получило бы тело, которому мост отвечает «чужой».
+        Права сужаем ДО записи (`os.open` с 0o600): создать файл открытым, а
+        потом закрыть — это окно, в которое ключ уже видно.
+        """
+        path = self.token_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(".tmp-" + path.name)
+            fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, self.device_token.encode("utf-8"))
+            finally:
+                os.close(fd)
+            os.replace(tmp, path)
+        except OSError as exc:
+            # Молчать нельзя: без ключа окно тело не поднимет, и снаружи это
+            # выглядит как «тул computer сломался».
+            log.warning("тело: ключ устройства не записался в %s: %s — окно не сможет "
+                        "поднять тело под службой", path, exc)
+
+    def drop_device_token(self) -> None:
+        """Убрать ключ: мост ушёл, и ключ к нему больше ничего не открывает.
+        Оставленный, он заставлял бы окно поднимать тело в пустоту."""
+        try:
+            self.token_path().unlink(missing_ok=True)
+        except OSError:
+            log.debug("тело: ключ устройства не убрался", exc_info=True)
 
     # ---- сторож ---------------------------------------------------------- #
 
@@ -565,7 +640,8 @@ class Body:
                 if now >= child.retry_at:
                     child.spawn(self.job)
             STATE["bridge_pid"] = self.children[0].proc.pid if self.children[0].alive() else 0
-            STATE["body_pid"] = self.children[1].proc.pid if self.children[1].alive() else 0
+            STATE["body_pid"] = (self.children[1].proc.pid
+                                 if len(self.children) > 1 and self.children[1].alive() else 0)
             # Пробы: первые полминуты — часто (тело подключается секунды), потом
             # раз в 15 с. Проба и есть правда о «подключено».
             young = any(now - c.started_at < 30 for c in self.children if c.alive())
@@ -644,6 +720,8 @@ class Body:
         if self.stopping.is_set():
             return
         self.stopping.set()
+        if self.service:
+            self.drop_device_token()
         for child in self.children:
             child.kill()
         if self.job:

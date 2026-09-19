@@ -297,28 +297,31 @@ class Describe(unittest.TestCase):
 
 
 class Platform(unittest.TestCase):
-    """Порт без службы и тела (macOS): секций нет в картине, а не «нет» словами.
+    """Где чего нет — секции нет в картине, а не «нет» словами.
 
-    Флаги `HAS_SERVICE`/`HAS_COMPUTER` подменяются, чтобы разобрать обе
-    картины на любой машине; на Windows картина обязана остаться прежней.
+    Флаги `HAS_SERVICE`/`HAS_COMPUTER`/`HAS_SERVICE_TOGGLES` подменяются, чтобы
+    разобрать все картины на любой машине; на Windows картина обязана остаться
+    прежней.
     """
 
     def setUp(self):
-        self.saved = (modes.HAS_SERVICE, modes.HAS_COMPUTER)
+        self.saved = (modes.HAS_SERVICE, modes.HAS_COMPUTER, modes.HAS_SERVICE_TOGGLES)
 
     def tearDown(self):
-        modes.HAS_SERVICE, modes.HAS_COMPUTER = self.saved
+        modes.HAS_SERVICE, modes.HAS_COMPUTER, modes.HAS_SERVICE_TOGGLES = self.saved
 
     def test_flags_follow_the_platform(self):
         import importlib
         fresh = importlib.reload(modes)
-        self.assertEqual(fresh.HAS_SERVICE, os.name == "nt")
-        # Тело — на Windows и на macOS (порт 19.09); служба — только Windows.
+        # Служба есть на Windows (SCM) и на macOS (демон launchd, 0.8.0); тело —
+        # там же. Галочки службы — механизмы Windows, и только они.
+        self.assertEqual(fresh.HAS_SERVICE, os.name == "nt" or sys.platform == "darwin")
         self.assertEqual(fresh.HAS_COMPUTER, os.name == "nt" or sys.platform == "darwin")
+        self.assertEqual(fresh.HAS_SERVICE_TOGGLES, os.name == "nt")
 
     def test_pipe_keeps_the_computer_section_without_a_service(self):
-        # Картина macOS: службы нет, тело есть — секция тела в картине остаётся,
-        # и тексты в ней — словами Mac.
+        # Картина системы без службы (не Windows и не macOS): тело есть, службы
+        # нет — секция тела в картине остаётся, и тексты в ней словами Mac.
         sys.path.insert(0, str(HERE.parent))
         import deskd.readers as readers          # noqa: PLC0415
         modes.HAS_SERVICE = False
@@ -694,6 +697,98 @@ class OnDisk(unittest.TestCase):
         self.assertIn("не прочитан", picture["error"])
         self.assertIn(picture["name"], modes.MODES)
 
+
+
+
+class MacService(unittest.TestCase):
+    """Служба на macOS (демон launchd, 0.8.0): свои слова, и ни одной галочки.
+
+    ⚠ Что стережёт стенд. Тексты Windows обещают то, чего на Mac нет (UAC,
+    закрытая папка установки, нулевая сессия), а тексты Mac обещают то, чего
+    нет на Windows (launchd). Разъедься они — владелец читал бы про чужую
+    машину; а одна общая галочка «нулевая сессия» на Mac была бы обещанием
+    двери, которой там не существует.
+    """
+
+    def setUp(self):
+        self.saved = (modes.HAS_SERVICE, modes.HAS_COMPUTER, modes.HAS_SERVICE_TOGGLES)
+        # Картина macOS: служба и тело есть, галочек службы нет.
+        modes.HAS_SERVICE = True
+        modes.HAS_COMPUTER = True
+        modes.HAS_SERVICE_TOGGLES = False
+
+    def tearDown(self):
+        modes.HAS_SERVICE, modes.HAS_COMPUTER, modes.HAS_SERVICE_TOGGLES = self.saved
+
+    def test_texts_follow_the_platform(self):
+        with patch.object(sys, "platform", "darwin"):
+            title, text, warning = modes.service_texts()
+        self.assertEqual(title, modes.SERVICE_TITLE_MACOS)
+        self.assertEqual(text, modes.SERVICE_TEXT_MACOS)
+        self.assertEqual(warning, modes.SERVICE_WARNING_MACOS)
+        with patch.object(sys, "platform", "win32"):
+            self.assertEqual(modes.service_texts(), (modes.SERVICE_TITLE, modes.SERVICE_TEXT, ""))
+
+    def test_mac_words_do_not_promise_windows(self):
+        both = modes.SERVICE_TITLE_MACOS + " " + modes.SERVICE_TEXT_MACOS + " " + modes.SERVICE_WARNING_MACOS
+        low = both.lower()
+        for bad in ("windows", "uac", "брандмауэр", "нулев", "администраторам"):
+            self.assertNotIn(bad, low, f"в словах службы на Mac слово не про эту машину: {bad}")
+        # И наоборот: обещание, ради которого служба и ставится, названо.
+        self.assertIn("без входа в систему", modes.SERVICE_TITLE_MACOS.lower())
+        self.assertIn("launchd", modes.SERVICE_TEXT_MACOS)
+
+    def test_the_warning_says_what_the_service_does_not_give(self):
+        warn = modes.SERVICE_WARNING_MACOS.lower()
+        self.assertIn("окон", warn, "оговорка молчит про окна и экран")
+        self.assertIn("filevault", warn, "оговорка молчит про FileVault до первого входа")
+        self.assertIn("окно helene", warn, "оговорка не говорит, чем тул `computer` оживает")
+
+    def test_option_has_no_toggles_on_mac(self):
+        with patch.object(sys, "platform", "darwin"):
+            option = modes.service_option()
+        self.assertEqual(option["toggles"], [], "на macOS у службы нет ни нулевой сессии, ни брандмауэра")
+        self.assertEqual(option["title"], modes.SERVICE_TITLE_MACOS)
+        self.assertEqual(option["warning"], modes.SERVICE_WARNING_MACOS)
+        self.assertTrue(option["needs_admin"], "описание демона кладёт администратор")
+
+    def test_toggles_from_a_windows_config_do_not_act(self):
+        # Конфиг, приехавший с Windows тихим обновлением: обе галочки записаны.
+        cfg = {"agent_mode": "sandbox", "service": {"session0": True, "firewall": True}}
+        with patch.object(sys, "platform", "darwin"):
+            picture = modes.resolve(cfg, installed=True)
+        self.assertTrue(picture["service_here"])
+        self.assertTrue(picture["service_installed"])
+        self.assertFalse(picture["session0"], "нулевой сессии на macOS нет — действовать нечему")
+        self.assertFalse(picture["firewall"])
+        self.assertTrue(picture["session0_set"], "что записано в файле — факт файла")
+        self.assertEqual(picture["session0_warning"], "")
+        said = " ".join(picture["notes"]).lower()
+        self.assertIn("нулевой сессии на этой системе нет", said,
+                      "запись, которая не действует, обязана быть названа")
+        self.assertNotIn("брандмауэр", said, "про правило брандмауэра на Mac говорить нечего")
+
+    def test_describe_carries_the_warning(self):
+        with patch.object(sys, "platform", "darwin"):
+            out = modes.describe(modes.resolve({"agent_mode": "interactive"}, installed=False))
+        self.assertTrue(out["service_here"])
+        self.assertEqual(out["service_title"], modes.SERVICE_TITLE_MACOS)
+        self.assertEqual(out["service_warning"], modes.SERVICE_WARNING_MACOS)
+
+    def test_installed_is_asked_of_the_daemon_file(self):
+        with patch.object(sys, "platform", "darwin"):
+            with patch.object(modes.Path, "is_file", lambda self: True):
+                self.assertTrue(modes.service_installed({}))
+            with patch.object(modes.Path, "is_file", lambda self: False):
+                self.assertFalse(modes.service_installed({}),
+                                 "след установщика не должен побеждать файловую систему")
+
+    def test_the_label_matches_the_shared_recipe(self):
+        # Метка и путь — те же строки, что в common/mac_service.rs: спрашивать
+        # про один демон, а ставить другой нельзя.
+        rust = (HERE.parent / "common" / "mac_service.rs").read_text(encoding="utf-8")
+        self.assertIn(f'MAC_SVC_LABEL: &str = "{modes.MAC_SERVICE_LABEL}"', rust)
+        self.assertIn(f'MAC_SVC_PLIST: &str = "{modes.MAC_SERVICE_PLIST}"', rust)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -217,7 +217,10 @@ class MachO(unittest.TestCase):
             (root / "Helene.app" / "Contents" / "MacOS").mkdir(parents=True)
             (root / "Helene.app" / "Contents" / "MacOS" / "helene").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 8)
             (root / "helene-relay").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 8)
-            # Мост и тело — свободные бинари корня, как реле: подписываются каждый.
+            # Служба, мост и тело — свободные бинари корня, как реле:
+            # подписывается каждый. Неподписанный arm64-бинарь система убивает
+            # при запуске, и launchd не исключение.
+            (root / "helene-svc").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 8)
             (root / "helene-bridge").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 8)
             (root / "helene-body").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 8)
             so = root / "runtime" / "lib" / "python3.14" / "site-packages" / "x" / "ext.so"
@@ -227,11 +230,12 @@ class MachO(unittest.TestCase):
             (root / "runtime" / "git").mkdir()
             (root / "runtime" / "git" / "git").write_bytes(b"\xca\xfe\xba\xbe" + (1).to_bytes(4, "big") + b"\0" * 8)
             got = [p.relative_to(root).as_posix() for p in build_mac.sign_targets(root)]
-            self.assertEqual(got, ["Helene.app", "helene-relay", "helene-bridge", "helene-body",
+            self.assertEqual(got, ["Helene.app", "helene-relay", "helene-svc", "helene-bridge", "helene-body",
                                    "runtime/git/git", "runtime/lib/python3.14/site-packages/x/ext.so"])
             # Бандла мастера нет — и в списке его нет: список по факту, не по плану.
             self.assertNotIn("Helene Setup.app", got)
-        self.assertEqual(build_mac.ROOT_BINARIES, ("helene-relay", "helene-bridge", "helene-body"))
+        self.assertEqual(build_mac.ROOT_BINARIES,
+                         ("helene-relay", "helene-svc", "helene-bridge", "helene-body"))
 
 
 class Wheels(unittest.TestCase):
@@ -393,20 +397,35 @@ class Composition(unittest.TestCase):
         for rel in ("Helene.app/Contents/MacOS/helene", "Helene Setup.app/Contents/MacOS/helene-setup",
                     "helene-relay", "runtime/bin/python3", "runtime/git/bin/git",
                     "runtime/git/COPYING",   # GPL-2.0: текст лицензии рядом, make install его не кладёт
-                    # 0.8.0: тело тула computer — мост, тело, их лицензии и модуль движка.
+                    # 0.8.0: тело тула computer — мост, тело, их лицензии и модуль движка;
+                    # служба без входа в систему — `helene-svc` (демон launchd).
                     "helene-bridge", "helene-body", "licenses/body/README.md", "app/localharness/body.py",
+                    "helene-svc",
                     "helene.json", "helene-build.json", "install.sh", "tree", "data",
                     "ПЕРВЫЙ-ЗАПУСК.md", "ОБНОВЛЕНИЕ.md", "КАК-УСТРОЕН-HELENE.md",
                     "ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md", "NOTICE"):
             self.assertIn(rel, req, rel)
-        # Windows-имён здесь нет: ни exe, ни службы (брокер на Mac — сама оболочка).
+        # Windows-имён здесь нет: `.exe` не бывает ни у одного файла поставки.
+        # Служба здесь ЕСТЬ (0.8.0) — но без суффикса и без скриптов PowerShell:
+        # install-service.ps1 и uninstall-service.ps1 на Mac не значат ничего.
         for rel in req:
             self.assertFalse(rel.endswith(".exe"), rel)
-            self.assertNotIn("svc", rel)
+            self.assertFalse(rel.endswith(".ps1"), rel)
+        self.assertIn("helene-svc", req)
         # Что корень получает от тела — ровно то, что --skip-body вправе не ждать.
         self.assertEqual(build_mac.BODY_ROOT_ENTRIES, ("helene-bridge", "helene-body", "licenses/body/README.md"))
         for rel in build_mac.BODY_ROOT_ENTRIES:
             self.assertIn(rel, req, rel)
+
+    def test_the_service_binary_comes_from_its_own_crate(self):
+        """Служба собирается голым cargo из `desk/svc` — тем же крейтом, что на
+        Windows. Разойдись имена, в поставке оказался бы не тот бинарь (или не
+        оказалось бы вовсе, а `missing_in_root` сказал бы об этом уже в конце)."""
+        self.assertEqual(build_mac.SVC_BIN, "helene-svc", "имя службы без `.exe` — это macOS")
+        self.assertEqual(build_mac.SVC_CRATE.name, "svc")
+        self.assertTrue((build_mac.SVC_CRATE / "Cargo.toml").is_file(), "крейта службы нет на месте")
+        # Бандлом служба НЕ собирается: окна у неё нет и быть не должно.
+        self.assertNotIn("svc", build_mac.BUNDLES)
 
     def test_missing_in_root(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -427,7 +446,7 @@ class Composition(unittest.TestCase):
 class Texts(unittest.TestCase):
     def test_first_run_names_what_is_absent(self):
         text = build_mac.FIRST_RUN_MAC
-        for word in ("computer", "Intel", "Developer ID", "нотариз", "dmg", "LaunchDaemon",
+        for word in ("computer", "Intel", "Developer ID", "нотариз", "dmg",
                      "брандмауэр", "seatbelt", "~/Applications/Helene", "install.sh", "ОБНОВЛЕНИЕ.md"):
             self.assertIn(word, text, word)
         self.assertNotIn("SmartScreen", text)
@@ -435,11 +454,36 @@ class Texts(unittest.TestCase):
         self.assertNotIn(".exe", text)
         # Список отсутствующего — от заголовка до абзаца об ограде.
         absent = text.split("Чего в сборке для macOS нет")[1].split("Ограда тула")[0]
-        for word in ("Intel", "Developer ID", "LaunchDaemon", "брандмауэр"):
+        for word in ("Intel", "Developer ID", "брандмауэр"):
             self.assertIn(word, absent, word)
-        # 0.8.0: тело и брокер ЕСТЬ — в списке отсутствующего их быть не должно.
+        # 0.8.0: тело, брокер и СЛУЖБА есть — в списке отсутствующего их быть
+        # не должно. Нулевая сессия — должна: её на Mac нет как механизма.
         self.assertNotIn("тела", absent)
         self.assertNotIn("брокер", absent)
+        self.assertNotIn("LaunchDaemon", absent)
+        self.assertNotIn("службы без входа", absent)
+        self.assertIn("нулевой сессии", absent)
+
+    def test_first_run_explains_the_service(self):
+        """§6 плана 19.09: что служба даёт, чего не даёт и как её снять.
+
+        ⛔ «На macOS этого нет» на экран не пишем — а вот в документе поставки
+        обязаны быть названы ОБЕ границы режима: окон у него нет, и при
+        FileVault до первого входа не идёт ничего.
+        """
+        text = build_mac.FIRST_RUN_MAC
+        for word in ("## Работать без входа в систему", "launchd", "app.helene.svc",
+                     "/Library/LaunchDaemons", "пароль администратора",
+                     "окон и экрана у неё нет", "FileVault", "data/service.log",
+                     "launchctl bootout system/app.helene.svc",
+                     "Снять службу", "Поставить службу"):
+            self.assertIn(word, text, word)
+        # Демон идёт от имени владельца — не от root: это несущее свойство.
+        self.assertIn("не от root", text)
+        # И чек-лист человека с Маком спрашивает про службу тоже.
+        checks = text.split("## Что проверить руками")[1]
+        self.assertIn("Служба", checks)
+        self.assertIn("Telegram", checks)
 
     def test_first_run_explains_the_body_permissions_and_the_broker(self):
         # План 19.09 §5 и §3(D): два разрешения и где они, ⚠ после каждого
@@ -653,6 +697,13 @@ class InstallSh(unittest.TestCase):
         for key in ('"agent"', '"owner"', '"constitution"', '"provider"', '"agent_mode"',
                     '"telegram"', '"computer"', '"dir"', "sk-frame-", "SOUL.md"):
             self.assertIn(key, self.text, key)
+        # ⚠ Служба — тоже решение владельца. `False` здесь означал бы, что тихое
+        # обновление молча снимает демон: мастер снимает прежнюю службу ПЕРЕД
+        # копированием и ставит обратно только по этому полю.
+        self.assertIn('"service": bool((cfg.get("installed") or {}).get("service"))', self.text)
+        self.assertNotIn('"service": False', self.text)
+        # Нулевая сессия — механизм Windows, отсюда она не пишется никогда.
+        self.assertIn('"session0": False', self.text)
         # Адверсарка 19.09: umask только вокруг JSON решений и обратно мастеру;
         # BOM в helene.json; ждать выход оболочки по HELENE_OLD_PID, а не гасить;
         # код выхода мастера при снятии не глотать.
@@ -705,7 +756,16 @@ class Workflow(unittest.TestCase):
                        '"computer": true', "data/memory/.state/body.json", 'get("connected") is True',
                        "data/body/bridge.log", "data/body/body.log",
                        'HELENE_BODY_DIR="$BUILD/Helene"', "tests/t_body.py", "tests/t_body_macos.py",
-                       "praxis/body", "cache-directories:", "build/cache/body-target"):
+                       "praxis/body", "cache-directories:", "build/cache/body-target",
+                       # 0.8.0, служба: крейт svc собирается и гоняется стендами на
+                       # Mac; тихая установка ставит демон; канал отвечает БЕЗ окна;
+                       # окно потом становится клиентом и поднимает тело; bootout
+                       # снимает демон; журнал службы уезжает в артефакт.
+                       "cd desk/svc && cargo test", "desk/svc",
+                       '"service": true', "helene-svc",
+                       "/Library/LaunchDaemons/app.helene.svc.plist",
+                       "launchctl bootstrap system", "launchctl bootout system/app.helene.svc",
+                       "подключаюсь без своих детей", "body-token", "data/service.log"):
             self.assertIn(needle, self.text, needle)
         self.assertNotIn("\t", self.text, "табуляция в YAML")
         self.assertNotIn("| head", self.text, "под pipefail обрезанный конвейер валит шаг")
@@ -715,6 +775,16 @@ class Workflow(unittest.TestCase):
         # Живые стенды тела — после дымового запуска: дерево читается с окна Helene.app.
         self.assertLess(self.text.index("Дымовой запуск"), self.text.index("Тело — живые стенды"))
         self.assertLess(self.text.index("Тело — живые стенды"), self.text.index("name: Журналы"))
+        # Служба — ДО окна: иначе нельзя отличить «канал держит демон» от
+        # «канал держит окно», и проверка «отвечает без окна» ничего не значит.
+        self.assertLess(self.text.index("Служба — канал отвечает без окна"),
+                        self.text.index("Дымовой запуск"))
+        # Снятие — после всего живого, но до сбора журналов.
+        self.assertLess(self.text.index("Тело — живые стенды"), self.text.index("Служба — снятие"))
+        self.assertLess(self.text.index("Служба — снятие"), self.text.index("name: Журналы"))
+        # ⚠ Живой ключ устройства в артефакт не уезжает.
+        artifact = self.text[self.text.index("upload-artifact"):]
+        self.assertNotIn("body-token", artifact, "ключ к телу уехал бы в артефакт прогона")
 
     def test_yaml_parses_if_pyyaml_is_around(self):
         try:

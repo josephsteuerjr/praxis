@@ -198,6 +198,10 @@ def product_config() -> dict:
 # ⚠ Служба здесь НЕ режим (04.09). Она опция поверх любой из двух оград и ограду
 # не снимает; поэтому `name` — всегда `sandbox` или `interactive`, а про службу
 # отвечают `service_installed`, `session0` и `firewall`.
+#
+# С 19.09 служба есть и на macOS (демон launchd): механизм другой, вопрос
+# владельцу тот же. Галочек `session0` и `firewall` там нет — это механизмы
+# Windows, и `modes.service_option()` отдаёт пустой список тумблеров.
 
 #: Ответ, когда режим прочитать не вышло. Форма та же, что при удаче: окно
 #: читает поля без проверок, и рубеж не должен ронять экран вместо трубы. Имя
@@ -209,6 +213,7 @@ _MODE_UNKNOWN: dict = {
     "sandbox": False, "explicit": False, "source": "",
     "service_here": False,
     "service_installed": None, "service_title": "", "service_text": "",
+    "service_warning": "",
     "session0": False, "session0_set": False, "session0_warning": "",
     "firewall": False, "firewall_set": False, "legacy_service": False,
     "notes": [], "choices": [], "service": None, "config": "",
@@ -272,8 +277,8 @@ def mode_state() -> dict:
         log.exception("режим не разобрался")
         return mode_unknown("режим не разобрался — смотри helene.log")
     picture["choices"] = mod.catalogue()
-    # Секции службы и тела — только там, где они есть: служба — Windows, тело —
-    # Windows и macOS (`modes.HAS_COMPUTER`). Где чего нет — None вместо текстов,
+    # Секции службы и тела — только там, где они есть: служба — Windows и macOS
+    # (`modes.HAS_SERVICE`), тело — там же (`modes.HAS_COMPUTER`). Где чего нет — None вместо текстов,
     # и окно карточки не рисует (прячет по `app_info.platform`; `service_here` —
     # та же правда со стороны канала).
     picture["service"] = mod.service_option() if picture.get("service_here", True) else None

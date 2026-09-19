@@ -1816,6 +1816,196 @@ fn stop_child(child: &mut Child) {
     }
 }
 
+// ───────────────────────────────── тело под службой (macOS, §6 плана 19.09)
+//
+// ЗАЧЕМ. Под демоном launchd движок живёт вне графической сессии: WindowServer
+// его не видит, TCC ему ничего не выдаст, и тело (`helene-body`) оттуда просто
+// не работает. Поэтому движок под службой поднимает ТОЛЬКО мост и кладёт токен
+// устройства в `memory/.state/body-token`, а тело поднимает ОКНО — оно и есть
+// та самая графическая сессия, и разрешения «Запись экрана» с «Универсальным
+// доступом» выданы именно Helene.app.
+//
+// Это зеркало Windows, где служба живёт в нулевой сессии, а интерактивную
+// половину поднимает задача планировщика в сессии владельца.
+
+/// Тело, поднятое окном под службой. Отдельно от `LocalHarness.children`: у
+/// этого ребёнка другое условие жизни (он появляется, когда движок уже жив у
+/// службы) и другой владелец решения — опция «Управление компьютером».
+#[cfg(target_os = "macos")]
+static SERVICE_BODY: Mutex<Option<Child>> = Mutex::new(None);
+
+/// Погасить тело, поднятое окном. Зовётся из `kill_children`: выход из строки
+/// меню и ⌘Q обязаны уносить его с собой, иначе оно осталось бы висеть на
+/// мосту службы после закрытия окна — то есть агент «видел бы экран», когда
+/// владелец его закрыл.
+#[cfg(target_os = "macos")]
+fn stop_service_body() {
+    if let Ok(mut guard) = SERVICE_BODY.lock() {
+        if let Some(child) = guard.as_mut() {
+            stop_child(child);
+        }
+        *guard = None;
+    }
+}
+
+/// Токен устройства, который движок под службой положил для окна. Файл
+/// перезаписывается движком на каждом старте и лежит правами 0600 — читает его
+/// только владелец. Пустой или обрезанный файл — это НЕ токен: пустая строка в
+/// `PRAXIS_BODY_TOKEN` означала бы тело, которое мост пускает без ключа.
+#[cfg(target_os = "macos")]
+fn service_body_token(tree: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(tree.join("memory").join(".state").join("body-token")).ok()?;
+    let token = raw.trim().to_string();
+    (token.len() >= 16).then_some(token)
+}
+
+/// Жив ли мост, к которому тело должно подключиться.
+///
+/// ⚠ ЗАЧЕМ ЭТА ПРОВЕРКА. Движок под службой убирает ключ устройства, когда
+/// гасится сам, — но только если успевает: `launchctl bootout` снимает группу
+/// сигналом, и питон уходит без своих `atexit`. Тогда на диске остаётся ключ к
+/// мосту, которого уже нет, а окно поднимало бы тело раз за разом в пустоту —
+/// с растущей паузой и строкой в журнал на каждый круг. Адрес моста берём
+/// оттуда же, откуда его возьмёт тело, — из его конфига.
+#[cfg(target_os = "macos")]
+fn service_bridge_alive(body_json: &Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(body_json) else { return false };
+    let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&raw) else { return false };
+    let url = cfg.get("bridge_ws_url").and_then(|v| v.as_str()).unwrap_or("");
+    let Some(port) = url.rsplit(':').next().and_then(|p| p.trim().parse::<u16>().ok()) else {
+        return false;
+    };
+    harness_alive(port)
+}
+
+/// Надзор за телом под службой. Раз в три секунды: жив ли ребёнок, нужен ли он
+/// вообще и можно ли его поднять.
+///
+/// Условия подъёма названы все и проверяются каждый раз, потому что любое из
+/// них меняется на живой системе:
+///   * окно работает КЛИЕНТОМ — своих детей у него нет (движок держит служба);
+///   * владелец включил «Управление компьютером» (`computer.enabled`);
+///   * движок уже положил токен устройства и конфиг тела — то есть мост поднят
+///     и ждёт подключения;
+///   * `helene-body` в поставке есть.
+/// Не сложилось — ждём молча (одна строка в журнал на смену состояния): это
+/// обычная жизнь, а не сбой.
+#[cfg(target_os = "macos")]
+fn watch_service_body(app: tauri::AppHandle, tree: PathBuf, config: PathBuf) {
+    use std::sync::atomic::Ordering;
+    let exe = install_root().join("helene-body");
+    let body_json = tree.join("body").join("body.json");
+    let mut backoff: u64 = 0;
+    let mut not_before = Instant::now();
+    let mut said = String::new();
+    loop {
+        std::thread::sleep(Duration::from_secs(3));
+        let state = app.state::<LocalHarness>();
+        if state.stopping.load(Ordering::Relaxed) {
+            stop_service_body();
+            return;
+        }
+        // Ребёнок жив? Умер — пауза растёт, как у остальных детей окна.
+        {
+            let Ok(mut guard) = SERVICE_BODY.lock() else { continue };
+            if let Some(child) = guard.as_mut() {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        *guard = None;
+                        backoff = if backoff == 0 { 5 } else { (backoff * 2).min(60) };
+                        not_before = Instant::now() + Duration::from_secs(backoff);
+                        log_line(&format!(
+                            "тело под службой завершилось ({status}) — подниму через {backoff} с"
+                        ));
+                    }
+                    Ok(None) => continue,   // живо — больше ничего не нужно
+                    Err(_) => continue,     // не смогли спросить — это не смерть
+                }
+            }
+        }
+        if Instant::now() < not_before {
+            continue;
+        }
+        // Своих детей нет — значит движок держит кто-то другой (служба или
+        // второе окно). Если окно подняло свой движок, тело поднимает он сам.
+        let client = state
+            .children
+            .lock()
+            .map(|g| g.iter().all(|m| m.child.is_none()))
+            .unwrap_or(false);
+        let cfg = match read_config(&config) {
+            ConfigRead::Ok(v) => v,
+            _ => serde_json::json!({}),
+        };
+        let wanted = cfg
+            .get("computer")
+            .and_then(|c| c.get("enabled"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let token = service_body_token(&tree);
+        let why = if !client {
+            "движок подняло само окно — тело поднимает он"
+        } else if !wanted {
+            "опция «Управление компьютером» выключена"
+        } else if !exe.is_file() {
+            "в этой сборке нет helene-body"
+        } else if !body_json.is_file() || token.is_none() {
+            "движок службы ещё не поднял мост (нет конфига тела или токена устройства)"
+        } else if !service_bridge_alive(&body_json) {
+            "мост службы не отвечает — поднимать тело некуда"
+        } else {
+            ""
+        };
+        if !why.is_empty() {
+            if said != why {
+                said = why.to_string();
+                log_line(&format!("тело под службой не поднимаю: {why}"));
+            }
+            continue;
+        }
+        let Some(token) = token else { continue };
+        let home = tree.join("body");
+        let mut cmd = Command::new(&exe);
+        cmd.arg("connect")
+            .arg("--config")
+            .arg(&body_json)
+            .current_dir(&home)
+            // Токен — ЧЕРЕЗ СРЕДУ, а не аргументом: аргументы видны всей машине
+            // в `ps`, и ключ к телу владельца лежал бы там открытым текстом.
+            .env("PRAXIS_BODY_TOKEN", &token)
+            .env("RUST_LOG", "praxis_body=info")
+            .env("HELENE_PARENT_PID", std::process::id().to_string());
+        if let Some(log) = child_log(&home, Path::new("body")) {
+            if let Ok(err) = log.try_clone() {
+                cmd.stdout(Stdio::from(log)).stderr(Stdio::from(err));
+            }
+        }
+        cmd.process_group(0);
+        match cmd.spawn() {
+            Ok(child) => {
+                adopt(&child);
+                log_line(&format!(
+                    "тело под службой поднято окном (pid {}, конфиг тела {})",
+                    child.id(),
+                    body_json.display()
+                ));
+                said = "поднято".to_string();
+                if let Ok(mut guard) = SERVICE_BODY.lock() {
+                    *guard = Some(child);
+                }
+            }
+            Err(err) => {
+                backoff = if backoff == 0 { 5 } else { (backoff * 2).min(60) };
+                not_before = Instant::now() + Duration::from_secs(backoff);
+                log_line(&format!(
+                    "тело под службой не поднялось ({}): {err} — ещё попытка через {backoff} с",
+                    exe.display()
+                ));
+            }
+        }
+    }
+}
+
 fn relay_abort() {
     let mut guard = login_lock();
     abort_login_child(&mut guard);
@@ -1905,12 +2095,93 @@ async fn install_service() -> Result<String, String> {
         .unwrap_or_else(|_| Err("вызов службы прерван".into()))
 }
 
+/// macOS: демон launchd. Ставится тем же приёмом, что просьба брокера, —
+/// системным диалогом пароля (`osascript … with administrator privileges`),
+/// а на машине с беспарольным sudo (раннер CI) через `sudo -n`.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn install_service() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| mac_service_op("install"))
+        .await
+        .unwrap_or_else(|_| Err("вызов службы прерван".into()))
+}
+
 /// Службы на этой платформе нет; окно её карточку прячет (`app_info.platform`),
 /// а до этих ручек из интерфейса не дойти — ответ словами на всякий случай.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tauri::command]
 async fn install_service() -> Result<String, String> {
     Err("службы на этой платформе нет".into())
+}
+
+/// Поставить или снять демон launchd. Одна функция на обе кнопки: описание
+/// собирает САМ `helene-svc` (`plist --config`), а окно только кладёт его во
+/// временный файл и просит администратора перенести на место — иначе форма
+/// описания разъехалась бы между тем, кто его пишет, и тем, кто по нему живёт.
+///
+/// Расписка — по состоянию ПОСЛЕ (launchctl), а не по коду команды: ровно то же
+/// правило, что у Windows (`service_op_from_window` спрашивает SCM).
+#[cfg(target_os = "macos")]
+fn mac_service_op(op: &str) -> Result<String, String> {
+    let root = install_root();
+    // Конфиг КОРНЕВОГО агента: демон поднимает всех агентов установки сам
+    // (`common/agents.rs`), как служба на Windows. Взяв здесь конфиг текущего
+    // агента окна, мы бы поставили демон на одного из соседей.
+    let config = root.join(CONFIG_NAME);
+    let svc = root.join("helene-svc");
+    let prompt = format!(
+        "{}: {} службу «Работать без входа в систему»",
+        product_ui(),
+        if op == "install" { "поставить" } else { "снять" }
+    );
+    let line = if op == "install" {
+        if !svc.is_file() {
+            return Err("в этой сборке нет helene-svc — ставить нечего".into());
+        }
+        let out = Command::new(&svc)
+            .arg("plist")
+            .arg("--config")
+            .arg(&config)
+            .output()
+            .map_err(|e| format!("helene-svc не запустился: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "описание демона не собралось: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        // Временный файл — от имени ВЛАДЕЛЬЦА: под администратором мы делаем
+        // ровно три вещи (cp, chown, chmod) плюс загрузку, и ни одна из них не
+        // пишет содержимое. Меньше прав — меньше того, чем можно ошибиться.
+        let tmp = std::env::temp_dir().join("app.helene.svc.plist");
+        std::fs::write(&tmp, out.stdout)
+            .map_err(|e| format!("описание демона не записалось в {}: {e}", tmp.display()))?;
+        mac_svc_install_line(&tmp)
+    } else {
+        mac_svc_remove_line()
+    };
+    let said = mac_svc_run_admin(&line, &prompt);
+    let state = mac_svc_state();
+    match (op, &said, state.as_str()) {
+        ("install", Ok(_), "running") => Ok("Служба поставлена и работает — агент отвечает без окна.".into()),
+        ("install", Ok(_), "stopped") => Ok(
+            "Служба поставлена, но launchd её сейчас не держит. Загляни в data/service.log —              причина там."
+                .into(),
+        ),
+        ("install", Ok(_), "unknown") => Ok(
+            "Служба поставлена; спросить launchd о её состоянии не вышло. Что происходит —              видно в data/service.log."
+                .into(),
+        ),
+        ("install", Ok(_), _) => Err(
+            "Команда прошла, а описания демона на месте нет — служба не встала. Подробности в              data/service.log."
+                .into(),
+        ),
+        ("install", Err(why), _) => Err(format!("Служба не поставлена: {why}")),
+        (_, Ok(_), "absent") => Ok("Служба снята.".into()),
+        (_, Ok(_), st) => Err(format!("Команда прошла, а служба осталась: {st}.")),
+        (_, Err(why), "absent") => Ok(format!("Службы нет ({why}).")),
+        (_, Err(why), _) => Err(format!("Служба не снята: {why}")),
+    }
 }
 
 /// Поднятая операция со службой из окна: расписка — по SCM, не по «запустил».
@@ -1985,9 +2256,20 @@ async fn service_state() -> String {
         .unwrap_or_else(|_| "absent".to_string())
 }
 
-/// Вне Windows службы нет как механизма — `missing`, а не `absent`: второе
-/// значит «можно поставить», и окно рисовало бы под него кнопку.
-#[cfg(not(windows))]
+/// macOS: состояние демона launchd — `running` | `stopped` | `absent` |
+/// `unknown`. Прав не требует (`launchctl print` — чтение), но может и не
+/// ответить, и тогда ответ честный «не знаю», а не выдуманное «нет».
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn service_state() -> String {
+    tauri::async_runtime::spawn_blocking(mac_svc_state)
+        .await
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// Вне Windows и macOS службы нет как механизма — `missing`, а не `absent`:
+/// второе значит «можно поставить», и окно рисовало бы под него кнопку.
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tauri::command]
 async fn service_state() -> String {
     "missing".to_string()
@@ -2038,7 +2320,15 @@ async fn remove_service() -> Result<String, String> {
         .unwrap_or_else(|_| Err("вызов службы прерван".into()))
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn remove_service() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| mac_service_op("remove"))
+        .await
+        .unwrap_or_else(|_| Err("вызов службы прерван".into()))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tauri::command]
 async fn remove_service() -> Result<String, String> {
     Err("службы на этой платформе нет".into())
@@ -2462,6 +2752,11 @@ include!("../../common/ps.rs");
 include!("../../common/agents.rs");
 #[cfg(windows)]
 include!("../../common/service_op.rs");
+// Демон launchd (`app.helene.svc`) — то же, что service_op.rs, но для macOS:
+// plist, строки launchctl, разбор состояния. Включается на ВСЕХ платформах, как
+// model_probe: стенды сборки plist и экранирования идут и на Windows, а живые
+// части (`mac_svc_state`, `mac_svc_run_admin`) гейтятся внутри файла.
+include!("../../common/mac_service.rs");
 include!("../../common/stamp.rs");
 include!("../../common/random_hex.rs");
 include!("../../common/run_hidden.rs");
@@ -4845,6 +5140,17 @@ fn main() {
             });
             let handle = app.handle().clone();
             std::thread::spawn(move || watch_children(handle));
+            // macOS: тело под службой поднимает ОКНО — у движка вне графической
+            // сессии его поднять негде (см. watch_service_body). Поток идёт
+            // всегда: служба ставится и снимается на живой системе, и решать
+            // это раз при старте значило бы требовать перезапуск окна.
+            #[cfg(target_os = "macos")]
+            {
+                let handle = app.handle().clone();
+                let tree = current_tree();
+                let config = current_config_path();
+                std::thread::spawn(move || watch_service_body(handle, tree, config));
+            }
             // Раз в сутки — есть ли версия новее; только уведомление.
             std::thread::spawn(update_autocheck);
 
@@ -5191,6 +5497,10 @@ fn kill_children(state: &tauri::State<LocalHarness>) {
     // Незавершённый вход в ChatGPT — тоже наш ребёнок: без этого
     // helene-relay.exe login переживал выход из трея и держал порт 1455.
     relay_abort();
+    // И тело, поднятое окном под службой: движок службы переживёт выход из
+    // окна, а тело обязано уйти вместе с окном — владелец закрыл программу.
+    #[cfg(target_os = "macos")]
+    stop_service_body();
 }
 
 /// Надзор: упавший ребёнок поднимается снова с растущей паузой; шестое падение

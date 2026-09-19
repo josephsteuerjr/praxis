@@ -73,7 +73,13 @@ export interface ServiceOption {
   name: string;
   title: string;
   text: string;
+  /** Чего служба НЕ даёт. Пусто на Windows (там всё сказано описанием); на
+   *  macOS — окон и экрана у неё нет, а при FileVault до первого входа после
+   *  перезагрузки не идёт ничего. Старый харнесс поля не шлёт. */
+  warning?: string;
   needs_admin: boolean;
+  /** На macOS список ПУСТ: нулевая сессия и правило брандмауэра — механизмы
+   *  Windows, и серые переключатели вместо них были бы обещанием выбора. */
   toggles: ServiceToggle[];
 }
 
@@ -150,6 +156,8 @@ export interface ModeState {
   service_installed: boolean | null;
   service_title: string;
   service_text: string;
+  /** Оговорка опции службы. Старый харнесс поля не шлёт. */
+  service_warning?: string;
   /** Действующая нулевая сессия: без службы всегда false. */
   session0: boolean;
   /** Как галочка ЗАПИСАНА в файле — по ней и надо писать обратно. */

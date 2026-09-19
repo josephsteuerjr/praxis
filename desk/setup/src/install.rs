@@ -71,6 +71,9 @@ include!("../../common/model_probe.rs");
 include!("../../common/ps.rs");
 #[cfg(windows)]
 include!("../../common/service_op.rs");
+// Демон launchd (`app.helene.svc`) на macOS: описание, строки launchctl, разбор
+// состояния. Один текст на службу, окно и мастер — см. common/mac_service.rs.
+include!("../../common/mac_service.rs");
 include!("../../common/random_hex.rs");
 include!("../../common/run_hidden.rs");
 
@@ -266,11 +269,15 @@ impl Setup {
 
     /// Ставить ли службу. Собственное поле владельца плюс след старого визарда:
     /// там служба приезжала третьим значением `agent_mode`, и терять её нельзя.
-    /// На macOS службы нет по построению: что бы ни приехало в JSON (тихое
-    /// обновление везёт решения с прежней установки), ответ — «нет», и в
-    /// helene.json уезжает `installed.service: false`, а не обещание.
+    ///
+    /// С 0.8.0 служба есть и на macOS — демон launchd `app.helene.svc`
+    /// (`common/mac_service.rs`). Механизмы разные (SCM против launchd), вопрос
+    /// владельцу один: жить ли агенту без открытого окна. На прочих POSIX её
+    /// нет, и `true` из JSON туда не проходит: в helene.json уезжает
+    /// `installed.service: false`, а не обещание.
     pub fn wants_service(&self) -> bool {
-        cfg!(windows) && (self.service || self.agent_mode.trim() == "service")
+        (cfg!(windows) || cfg!(target_os = "macos"))
+            && (self.service || self.agent_mode.trim() == "service")
     }
 
     /// Поднимать ли тело тула `computer`. Есть на Windows (UIA) и на macOS
@@ -283,8 +290,13 @@ impl Setup {
 
     /// Нулевая сессия действует только вместе со службой: без неё исполнять
     /// некому, а `true` в файле читался бы как разрешение.
+    ///
+    /// На macOS её нет как механизма: демон launchd идёт ОТ ИМЕНИ ВЛАДЕЛЬЦА
+    /// (`UserName` в описании), а права администратора агент просит системным
+    /// диалогом пароля через брокер. Записать `true` там значило бы обещать
+    /// дверь, которой нет.
     pub fn wants_session0(&self) -> bool {
-        self.session0 && self.wants_service()
+        cfg!(windows) && self.session0 && self.wants_service()
     }
 }
 
@@ -1761,17 +1773,37 @@ fn service_op(op: &str, name: &str, script: Option<&Path>) -> Result<(), String>
     service_op_verdict(out.status.code())
 }
 
-/// На macOS службы нет по построению. Дойти сюда из интерфейса нельзя: опция
-/// службы там не рисуется, а `service_state` отвечает «absent», и все ветки
-/// «снять прежнюю» обходятся стороной. Строка — на случай `--install <json>`
-/// с чужими решениями.
-#[cfg(not(windows))]
+/// macOS: снять демон launchd. Ставит его `install_service` (ему нужен ещё и
+/// собранный plist), а сюда приходят только снятия — и переустановки, и
+/// удаления программы, и «галочку сняли».
+///
+/// `name` и `script` не значат здесь ничего: поколений продукта под launchd не
+/// было, метка одна (`app.helene.svc`), а скрипт снятия — две строки launchctl,
+/// и держать их файлом в поставке значило бы завести второй источник правды.
+#[cfg(target_os = "macos")]
+fn service_op(op: &str, _name: &str, _script: Option<&Path>) -> Result<(), String> {
+    if op != "uninstall" && op != "stop" {
+        return Err(format!("на macOS команда службы «{op}» не делается этим путём"));
+    }
+    mac_svc_run_admin(
+        &mac_svc_remove_line(),
+        &format!("{PRODUCT_UI}: снять службу «Работать без входа в систему»"),
+    )
+    .map(|_| ())
+}
+
+/// На прочих POSIX службы нет по построению. Дойти сюда из интерфейса нельзя:
+/// опция службы там не рисуется, а `service_state` отвечает «absent», и все
+/// ветки «снять прежнюю» обходятся стороной. Строка — на случай
+/// `--install <json>` с чужими решениями.
+#[cfg(not(any(windows, target_os = "macos")))]
 fn service_op(_op: &str, _name: &str, _script: Option<&Path>) -> Result<(), String> {
-    Err("службы Windows на этой системе нет".into())
+    Err("службы на этой системе нет".into())
 }
 
 /// Служба: один UAC на машинную часть. Ждём завершения скрипта, потом
 /// спрашиваем SCM сами — квитанция о фактическом состоянии, не «запустил».
+#[cfg(windows)]
 fn install_service(dir: &Path) -> String {
     let script = dir.join("install-service.ps1");
     if !script.exists() || !dir.join("helene-svc.exe").exists() {
@@ -1787,6 +1819,80 @@ fn install_service(dir: &Path) -> String {
         return state;
     }
     service_state()
+}
+
+/// macOS: поставить демон launchd. Описание собирает САМ `helene-svc`
+/// (`plist --config`) — один писатель формы, как на Windows скрипт службы.
+/// Мастер кладёт его во временный файл своими правами и просит администратора
+/// перенести на место и загрузить; приговор — по состоянию ПОСЛЕ, а не по коду
+/// команды.
+///
+/// Пароль спрашивает система: при тихой установке на машине с беспарольным
+/// sudo (раннер CI) диалога не будет вовсе — `mac_svc_run_admin` сам выбирает
+/// путь.
+#[cfg(target_os = "macos")]
+fn install_service(dir: &Path) -> String {
+    let svc = dir.join("helene-svc");
+    if !svc.is_file() {
+        return "missing".into();
+    }
+    let out = match Command::new(&svc)
+        .arg("plist")
+        .arg("--config")
+        .arg(dir.join("helene.json"))
+        .output()
+    {
+        Ok(out) if out.status.success() => out.stdout,
+        Ok(out) => {
+            return format!(
+                "failed: описание демона не собралось: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )
+        }
+        Err(e) => return format!("failed: helene-svc не запустился: {e}"),
+    };
+    let tmp = std::env::temp_dir().join("app.helene.svc.plist");
+    if let Err(e) = std::fs::write(&tmp, out) {
+        return format!("failed: {}", io_note(&tmp, &e));
+    }
+    let said = mac_svc_run_admin(
+        &mac_svc_install_line(&tmp),
+        &format!("{PRODUCT_UI}: поставить службу «Работать без входа в систему»"),
+    );
+    let state = mac_svc_state();
+    match (said, state.as_str()) {
+        (Err(e), "absent") => format!("failed: {e}"),
+        (Err(e), st) => format!("{st} (команда ответила отказом: {e})"),
+        (Ok(_), st) => st.to_string(),
+    }
+}
+
+/// На прочих POSIX службы в поставке нет.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn install_service(_dir: &Path) -> String {
+    "missing".into()
+}
+
+/// Как снять службу руками — словами ТОЙ системы, на которой мы стоим.
+/// Раньше здесь всегда стояло `sc stop`/`sc delete`: на Mac это совет в пустоту.
+fn service_hand_removal() -> String {
+    if cfg!(windows) {
+        format!("Сними вручную: sc stop {PRODUCT} и sc delete {PRODUCT}")
+    } else {
+        format!(
+            "Сними вручную: sudo launchctl bootout system/{MAC_SVC_LABEL} и sudo rm {MAC_SVC_PLIST}"
+        )
+    }
+}
+
+/// Имя исполняемого файла по платформе: суффикс `.exe` только на Windows.
+/// Та же функция, что у оболочки и у службы, — файлы поставки зовут трое.
+fn exe_name(stem: &str) -> String {
+    if cfg!(windows) {
+        format!("{stem}.exe")
+    } else {
+        stem.to_string()
+    }
 }
 
 /// Предупреждение, которое служба кладёт рядом с конфигом при установке
@@ -1874,9 +1980,17 @@ pub fn service_state() -> String {
     service_state_of(PRODUCT)
 }
 
-/// macOS: SCM нет, службы нет — «absent» всегда. По этому ответу все ветки
-/// про прежнюю службу в `install` и `uninstall` обходятся сами.
-#[cfg(not(windows))]
+/// macOS: у launchd поколений продукта не было — метка одна, и `name` здесь
+/// не значит ничего. Ответ — `running` | `stopped` | `absent` | `unknown`;
+/// последнее честнее, чем выдуманное «нет» (см. `mac_svc_state_words`).
+#[cfg(target_os = "macos")]
+pub fn service_state_of(_name: &str) -> String {
+    mac_svc_state()
+}
+
+/// На прочих POSIX службы нет вовсе — «absent» всегда. По этому ответу все
+/// ветки про прежнюю службу в `install` и `uninstall` обходятся сами.
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn service_state_of(_name: &str) -> String {
     "absent".into()
 }
@@ -2345,11 +2459,21 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
 
     let mut warning: Option<String> = None;
     let service = if s.wants_service() {
-        tick("Ставлю службу Windows (появится окно прав администратора)", &mut progress);
+        tick(
+            if cfg!(windows) {
+                "Ставлю службу Windows (появится окно прав администратора)"
+            } else {
+                "Ставлю службу (система спросит пароль администратора)"
+            },
+            &mut progress,
+        );
         let state = install_service(&dir);
         let note = match state.as_str() {
-            "missing" => "в этой сборке нет службы (helene-svc.exe)".to_string(),
+            "missing" => format!("в этой сборке нет службы ({})", exe_name("helene-svc")),
             "absent" => "служба не установлена: права администратора не были даны".to_string(),
+            "unknown" => "служба поставлена; спросить систему о её состоянии не вышло — \
+                          что происходит, видно в data/service.log"
+                .to_string(),
             other => other.to_string(),
         };
         // Служба зарегистрирована — значит её предупреждение (СИСТЕМА запускает
@@ -2368,13 +2492,16 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
         if service_before != "absent" {
             // Галку сняли, а служба осталась бы жить от LocalSystem, и helene.json
             // при этом писал бы service:false — конфиг врал бы о состоянии машины.
-            tick("Снимаю прежнюю службу Windows", &mut progress);
+            tick(
+                if cfg!(windows) { "Снимаю прежнюю службу Windows" } else { "Снимаю прежнюю службу" },
+                &mut progress,
+            );
             match service_op("uninstall", PRODUCT, Some(&dir.join("uninstall-service.ps1"))) {
                 Ok(()) => steps.push(Step { label: "Прежняя служба снята".into(), ok: true, note: None }),
                 Err(e) => steps.push(Step {
                     label: "Прежняя служба".into(),
                     ok: false,
-                    note: Some(format!("осталась на машине: {e}. Сними вручную: sc stop {PRODUCT} и sc delete {PRODUCT}")),
+                    note: Some(format!("осталась на машине: {e}. {}", service_hand_removal())),
                 }),
             }
         }
@@ -2647,14 +2774,19 @@ pub fn uninstall(purge: bool) -> Result<String, String> {
         let script = dir.join("uninstall-service.ps1");
         let script = if script.exists() { Some(script) } else { None };
         if let Err(e) = service_op("uninstall", PRODUCT, script.as_deref()) {
-            problems.push(format!("служба Windows не снялась: {e}"));
+            problems.push(format!("служба не снялась: {e}"));
         }
-        // Верим SCM, а не коду возврата: живая служба LocalSystem с автозапуском
-        // — та самая мина, из-за которой следующая установка получала чужого агента.
+        // Верим системе, а не коду возврата: живая служба с автозапуском — та
+        // самая мина, из-за которой следующая установка получала чужого агента.
+        // На macOS то же самое: оставленный `app.helene.svc` поднимал бы движок
+        // из удалённой папки при каждой загрузке.
         if service_state() != "absent" {
             service_left = true;
             if !problems.iter().any(|p| p.starts_with("служба")) {
-                problems.push("служба Windows осталась зарегистрированной".into());
+                problems.push(format!(
+                    "служба осталась зарегистрированной. {}",
+                    service_hand_removal()
+                ));
             }
         }
     }
@@ -2931,7 +3063,7 @@ mod tests {
     /// всегда (с портом и всеми четырьмя правами), включение — только словом
     /// визарда; переустановка не стирает ни сужённые права, ни порт владельца.
     // Тело есть на Windows и macOS; где его нет, `wants_computer` отвечает «нет»
-    // по построению (свой стенд the_service_is_windows_only_the_body_is_not).
+    // по построению (свой стенд the_service_and_body_follow_the_platform).
     #[test]
     #[cfg(any(windows, target_os = "macos"))]
     fn computer_block_is_written_and_merged() {
@@ -3139,30 +3271,46 @@ mod tests {
         assert_eq!(RELAY_NAME.ends_with(".exe"), cfg!(windows));
     }
 
-    /// Служба — только Windows; тело — Windows и macOS (порт тела 19.09). Где
-    /// чего нет, решение из JSON (тихое обновление везёт прежние) в конфиг не
-    /// проходит: `installed.service` и `computer.enabled` остаются false, а не
-    /// обещают то, чего нет.
+    /// Служба и тело есть на Windows и на macOS (порт 19.09: тело —
+    /// Accessibility, служба — демон launchd); нулевой сессии на Mac нет как
+    /// механизма — демон и так идёт от имени владельца. Где чего нет, решение
+    /// из JSON (тихое обновление везёт прежние) в конфиг не проходит:
+    /// `installed.service`, `service.session0` и `computer.enabled` остаются
+    /// false, а не обещают то, чего нет.
     #[test]
-    fn the_service_is_windows_only_the_body_is_not() {
-        let body_here = cfg!(any(windows, target_os = "macos"));
+    fn the_service_and_body_follow_the_platform() {
+        let here = cfg!(any(windows, target_os = "macos"));
         let mut s = setup_for("api");
         s.service = true;
         s.session0 = true;
         s.computer = true;
-        assert_eq!(s.wants_service(), cfg!(windows));
-        assert_eq!(s.wants_session0(), cfg!(windows));
-        assert_eq!(s.wants_computer(), body_here);
+        assert_eq!(s.wants_service(), here);
+        assert_eq!(s.wants_session0(), cfg!(windows), "нулевая сессия — только Windows");
+        assert_eq!(s.wants_computer(), here);
         let cfg = config_json(&s, None, RELAY_PORT);
-        assert_eq!(cfg["installed"]["service"], cfg!(windows));
-        assert_eq!(cfg["computer"]["enabled"], body_here);
+        assert_eq!(cfg["installed"]["service"], here);
+        assert_eq!(cfg["service"]["session0"], cfg!(windows));
+        assert_eq!(cfg["computer"]["enabled"], here);
         assert_eq!(cfg["sandbox"]["enabled"], true, "ограда от системы не зависит");
         let out = merge_config(Some(serde_json::json!({ "computer": { "enabled": true } })), config_json(&s, None, RELAY_PORT), &s);
-        assert_eq!(out["computer"]["enabled"], body_here);
+        assert_eq!(out["computer"]["enabled"], here);
         // Выключатель — слово визарда на любой системе: `false` проходит везде.
         s.computer = false;
         assert!(!s.wants_computer());
         assert_eq!(config_json(&s, None, RELAY_PORT)["computer"]["enabled"], false);
+    }
+
+    /// Совет «сними вручную» обязан быть про ТУ систему, на которой стоим:
+    /// `sc delete` на Mac — совет в пустоту, а `launchctl bootout` на Windows.
+    #[test]
+    fn hand_removal_speaks_the_systems_own_words() {
+        let said = service_hand_removal();
+        if cfg!(windows) {
+            assert!(said.contains("sc delete"), "{said}");
+        } else {
+            assert!(said.contains("launchctl bootout system/app.helene.svc"), "{said}");
+            assert!(said.contains("/Library/LaunchDaemons/app.helene.svc.plist"), "{said}");
+        }
     }
 
     /// Дата установки без внешней программы: границы года и високосный день.

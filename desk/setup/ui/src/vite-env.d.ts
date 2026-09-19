@@ -11,8 +11,9 @@ declare module "*.md?raw" {
  *  одно, а получает другое.
  *
  *  ⚠ Это ДВА измерения, а не один список. `MODE_CARDS` — насколько далеко
- *  агент дотягивается; `SERVICE_OPTION` — ставить ли службу Windows, поверх
- *  любой из оград. Служба ограду не снимает и не включает. */
+ *  агент дотягивается; `SERVICE_OPTION` — ставить ли службу (Windows — SCM,
+ *  macOS — демон launchd), поверх любой из оград. Служба ограду не снимает и
+ *  не включает. */
 declare module "virtual:helene-modes" {
   export interface ModeCard {
     /** sandbox | interactive — ключ `agent_mode` в helene.json. */
@@ -36,6 +37,10 @@ declare module "virtual:helene-modes" {
   export interface ServiceOption {
     title: string;
     text: string;
+    /** Чего служба НЕ даёт. Пусто на Windows (там всё сказано описанием); на
+     *  macOS — окон и экрана у неё нет, а при FileVault до первого входа после
+     *  перезагрузки не идёт ничего. */
+    warning?: string;
     toggles: ServiceToggle[];
   }
   /** Управление компьютером — опция ПОВЕРХ любого режима (modes.computer_option):
@@ -54,6 +59,11 @@ declare module "virtual:helene-modes" {
    *  modes.py такого словаря нет, и на Mac показываются общие тексты. */
   export const MODE_CARDS_MACOS: ModeCard[] | null;
   export const SERVICE_OPTION: ServiceOption;
+  /** Та же опция словами macOS — из `SERVICE_TITLE_MACOS`/`SERVICE_TEXT_MACOS`/
+   *  `SERVICE_WARNING_MACOS` в modes.py. Механизм там другой (демон launchd), и
+   *  галочек у него нет: `toggles` пуст. null — констант в modes.py нет, и на
+   *  Mac показываются общие тексты. */
+  export const SERVICE_OPTION_MACOS: ServiceOption | null;
   export const SESSION0_WARNING: string;
   export const COMPUTER_OPTION: ComputerOption;
   /** Та же опция словами macOS — из `COMPUTER_TEXT_MACOS` в modes.py (тело без

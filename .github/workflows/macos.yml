@@ -89,6 +89,7 @@ jobs:
           workspaces: |
             desk/shell
             desk/setup
+            desk/svc
             praxis/body
           cache-directories: |
             ${{ runner.temp }}/build/cache/body-target
@@ -111,12 +112,15 @@ jobs:
         run: python3 desk/installer/build_mac.py --from-release "$TREE_TAG" --tag "$TAG" --out "$BUILD"
 
       # Стенды питона и окна сборка уже прогнала рантаймом, который собрала
-      # (build_mac.run_stands). Здесь — то, чего она не зовёт: Rust обоих
-      # крейтов (`run_all.py --rust` знает и про svc, а его на Mac нет).
-      - name: Стенды Rust (shell, setup)
+      # (build_mac.run_stands). Здесь — то, чего она не зовёт: Rust трёх крейтов.
+      # Служба с 0.8.0 собирается и на macOS (`svc/src/daemon.rs`, демон launchd),
+      # и её стенды — сборка plist, строки launchctl, разбор состояния — идут
+      # здесь же.
+      - name: Стенды Rust (shell, setup, svc)
         run: |
           (cd desk/shell && cargo test --features custom-protocol)
           (cd desk/setup && cargo test --features custom-protocol)
+          (cd desk/svc && cargo test)
 
       # Стенды моста и тела — на настоящем Mac: чистые функции под cfg(test) и
       # живые под cfg(all(test, target_os = "macos")) (с честным пропуском без
@@ -135,8 +139,10 @@ jobs:
       # Тихая установка из собранной папки — тем же мастером и тем же JSON, что
       # у человека. Провайдер «локальная модель»: ключа у неё нет по построению,
       # а адрес никуда не ведёт — окно и канал должны подняться и без модели.
-      # "computer": true — «Управление компьютером» включено: движок при старте
-      # поднимает мост и тело, и дымовой шаг ждёт их подключения.
+      # "computer": true — «Управление компьютером» включено; "service": true —
+      # ставим демон launchd. Прав администратора мастер просит тем же путём,
+      # что и у человека (`mac_svc_run_admin`), только на раннере проходит
+      # `sudo -n` и системного диалога пароля не будет.
       # shell: bash даёт `-eo pipefail`: отказ внутри конвейера не глотается.
       - name: Тихая установка в ~/Applications/Helene
         shell: bash
@@ -152,7 +158,7 @@ jobs:
             "local": {"base_url": "http://127.0.0.1:11434/v1", "model": "smoke"},
             "telegram": {"bot_token": "", "owner_id": ""},
             "agent_mode": "sandbox",
-            "service": false,
+            "service": true,
             "computer": true,
             "dir": "$HOME_DIR"
           }
@@ -160,11 +166,79 @@ jobs:
           "$BUILD/Helene/Helene Setup.app/Contents/MacOS/helene-setup" --install "$RUNNER_TEMP/decisions.json" --quiet
           test -f "$HOME_DIR/helene.json" || { echo "после установки нет $HOME_DIR/helene.json"; exit 1; }
           test -f "$HOME_DIR/helene-build.json" || { echo "после установки нет паспорта в корне"; exit 1; }
-          for exe in helene-bridge helene-body; do
-            test -x "$HOME_DIR/$exe" || { echo "после установки нет исполняемого $HOME_DIR/$exe — тело не приехало"; exit 1; }
+          for exe in helene-bridge helene-body helene-svc; do
+            test -x "$HOME_DIR/$exe" || { echo "после установки нет исполняемого $HOME_DIR/$exe"; exit 1; }
           done
           python3 -c 'import json,sys; c=json.load(open(sys.argv[1], encoding="utf-8-sig")); sys.exit(0 if (c.get("computer") or {}).get("enabled") is True else 1)' "$HOME_DIR/helene.json" \
             || { echo "мастер не записал computer.enabled=true в helene.json (decisions.json просил computer: true)"; cat "$HOME_DIR/helene.json"; exit 1; }
+
+      # Служба без входа в систему: движок и реле живут под launchd, окна нет.
+      # Порядок нарочно такой — сначала служба одна, потом окно: иначе нельзя
+      # отличить «канал держит демон» от «канал держит окно».
+      - name: Служба — канал отвечает без окна
+        shell: bash
+        run: |
+          PLIST=/Library/LaunchDaemons/app.helene.svc.plist
+          # Описание собрал сам helene-svc при установке — печатаем, что легло.
+          test -f "$PLIST" || { echo "мастер не положил описание демона в $PLIST"; exit 1; }
+          echo "=== $PLIST"
+          sudo cat "$PLIST"
+          ls -l "$PLIST"
+          # Мастер ставил демон через sudo -n; повторно грузить не надо, но если
+          # launchd его почему-то не держит — грузим руками и говорим об этом.
+          if ! sudo launchctl print system/app.helene.svc > "$RUNNER_TEMP/launchctl.txt" 2>&1; then
+            echo "демон не загружен после установки — гружу руками:"
+            cat "$RUNNER_TEMP/launchctl.txt"
+            sudo launchctl bootstrap system "$PLIST"
+            sudo launchctl print system/app.helene.svc > "$RUNNER_TEMP/launchctl.txt" 2>&1
+          fi
+          head -n 30 "$RUNNER_TEMP/launchctl.txt"
+          # ⚠ Читает ли `launchctl print` обычный пользователь — живьём не
+          # проверялось; окно на этом НЕ держится (`mac_svc_state_words` отвечает
+          # `unknown`, а не выдуманным «нет»). Здесь просто печатаем ответ.
+          echo "launchctl print без sudo:"
+          launchctl print system/app.helene.svc > "$RUNNER_TEMP/launchctl-user.txt" 2>&1 \
+            && head -n 5 "$RUNNER_TEMP/launchctl-user.txt" \
+            || echo "  обычному пользователю отказано (код $?) — это состояние, а не сбой"
+          PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("port", 8094))' "$HOME_DIR/helene.json")"
+          TOKEN_FILE="$HOME_DIR/data/memory/.state/desk-token"
+          ok=0
+          for i in $(seq 1 60); do
+            if [ -f "$TOKEN_FILE" ] && curl -fsS --max-time 5 "http://127.0.0.1:$PORT/api/health?key=$(cat "$TOKEN_FILE")" > "$RUNNER_TEMP/health-svc.json" 2>/dev/null; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "канал службы не ответил за 120 с — окна не открывалось, поднять его было некому"
+            for f in "$HOME_DIR/data/service.log" "$HOME_DIR/data/deskapp.log" "$HOME_DIR/data/runner.log"; do
+              if [ -f "$f" ]; then echo "=== $f (хвост)"; tail -n 60 "$f"; else echo "=== $f: нет"; fi
+            done
+            exit 1
+          fi
+          echo "канал службы отвечает на $PORT без окна:"
+          cat "$RUNNER_TEMP/health-svc.json"; echo
+          echo "=== data/service.log (хвост)"
+          tail -n 40 "$HOME_DIR/data/service.log" || true
+          # Тела под службой быть НЕ ДОЛЖНО: у процесса вне графической сессии
+          # нет ни рабочего стола, ни разрешений TCC. Зато обязан лежать ключ
+          # устройства для окна — по нему окно и поднимет тело.
+          BODY_STATE="$HOME_DIR/data/memory/.state/body.json"
+          test -f "$BODY_STATE" || { echo "движок под службой не написал $BODY_STATE"; exit 1; }
+          cat "$BODY_STATE"; echo
+          python3 - "$BODY_STATE" <<'PY'
+          import json, sys
+          snap = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert snap.get("service") is True, f"снимок не помечен службой: {snap.get('service')!r}"
+          assert snap.get("body_pid") in (0, None), f"движок службы поднял тело: pid {snap.get('body_pid')}"
+          assert "окно Helene" in str(snap.get("reason")), f"снимок молчит про окно: {snap.get('reason')!r}"
+          PY
+          TOKEN_BODY="$HOME_DIR/data/memory/.state/body-token"
+          test -s "$TOKEN_BODY" || { echo "движок службы не положил ключ устройства $TOKEN_BODY"; exit 1; }
+          MODE="$(stat -f %Lp "$TOKEN_BODY")"
+          test "$MODE" = "600" || { echo "ключ устройства открыт соседям: права $MODE, ждали 600"; exit 1; }
+          echo "ключ устройства на месте, права $MODE"
 
       - name: Дымовой запуск — окно, снимок экрана, канал
         shell: bash
@@ -195,11 +269,20 @@ jobs:
           curl -fsS --max-time 10 -o "$RUNNER_TEMP/state.json" "http://127.0.0.1:$PORT/api/state?key=$TOKEN"
           head -c 2000 "$RUNNER_TEMP/state.json"
           echo
-          # Тело: движок поднимает мост и тело при старте (computer.enabled из
-          # тихой установки), сторож пишет data/memory/.state/body.json по своей
-          # пробе body.status через мост — это единственное честное «подключено».
-          # Ждём connected: true до 40 с; иначе снимок состояния, хвосты журналов
-          # тела и падение.
+          # Окно обязано стать КЛИЕНТОМ: движок и канал держит служба, своих
+          # детей окно не поднимает. Слова об этом — в helene.log; молчание там
+          # означало бы второй движок на одном дереве (мина порта 8094).
+          sleep 5
+          if [ -f "$HOME_DIR/helene.log" ]; then
+            echo "=== helene.log (хвост)"; tail -n 40 "$HOME_DIR/helene.log"
+          fi
+          grep -q "подключаюсь без своих детей" "$HOME_DIR/helene.log" \
+            || { echo "окно не назвало себя клиентом — похоже, подняло свою пару детей поверх службы"; exit 1; }
+          # Тело: под службой его поднимает ОКНО (helene-body connect, ключ из
+          # memory/.state/body-token через среду). Сторож движка пишет
+          # data/memory/.state/body.json по своей пробе body.status через мост —
+          # это единственное честное «подключено». Ждём connected: true до 40 с;
+          # иначе снимок состояния, хвосты журналов тела и падение.
           BODY_STATE="$HOME_DIR/data/memory/.state/body.json"
           connected=0
           for i in $(seq 1 40); do
@@ -210,11 +293,13 @@ jobs:
             sleep 1
           done
           if [ "$connected" -eq 1 ]; then
-            echo "тело подключено к мосту (ждали $i с):"
+            echo "тело подключено к мосту окном под службой (ждали $i с):"
             cat "$BODY_STATE"
             echo
+            pgrep -f "$HOME_DIR/helene-body" > /dev/null \
+              || { echo "connected: true, а процесса тела нет — снимок врёт"; exit 1; }
           else
-            echo "тело НЕ подключилось за 40 с"
+            echo "тело НЕ подключилось за 40 с (под службой его поднимает окно)"
             if [ -f "$BODY_STATE" ]; then cat "$BODY_STATE"; echo; else echo "(нет $BODY_STATE — движок тело не поднимал)"; fi
             for f in "$HOME_DIR/data/body/bridge.log" "$HOME_DIR/data/body/body.log" "$HOME_DIR/data/runner.log"; do
               if [ -f "$f" ]; then echo "=== $f (хвост)"; tail -n 60 "$f"; else echo "=== $f: нет"; fi
@@ -238,6 +323,50 @@ jobs:
           "$BUILD/Helene/runtime/bin/python3" tests/t_body.py
           "$BUILD/Helene/runtime/bin/python3" tests/t_body_macos.py
 
+      # Снятие: `bootout` выгружает демон вместе с детьми (SIGTERM → демон →
+      # killpg по группам). Проверяем, что он действительно ушёл и что порт
+      # освободился — забытый демон с KeepAlive поднимал бы движок из удалённой
+      # папки при каждой загрузке.
+      - name: Служба — снятие
+        if: always()
+        shell: bash
+        run: |
+          echo "=== data/service.log (хвост перед снятием)"
+          tail -n 40 "$HOME_DIR/data/service.log" 2>/dev/null || echo "(журнала службы нет)"
+          sudo launchctl bootout system/app.helene.svc || echo "bootout ответил отказом (код $?)"
+          gone=0
+          for i in $(seq 1 15); do
+            if ! sudo launchctl print system/app.helene.svc > /dev/null 2>&1; then
+              gone=1
+              break
+            fi
+            sleep 1
+          done
+          # В файл, а не head-ом в конвейере: под pipefail обрезанный конвейер
+          # валил бы шаг раньше, чем мы успеем сказать причину.
+          if [ "$gone" -ne 1 ]; then
+            echo "демон остался загруженным после bootout"
+            sudo launchctl print system/app.helene.svc > "$RUNNER_TEMP/launchctl-after.txt" 2>&1 || true
+            head -n 30 "$RUNNER_TEMP/launchctl-after.txt"
+            exit 1
+          fi
+          echo "демон выгружен (ждали $i с)"
+          # Дети демона уходят вместе с ним: канал на порту больше не отвечает.
+          # Шаг идёт с `if: always()`, и установки могло не случиться вовсе —
+          # тогда проверять нечего, а падать здесь значило бы прятать настоящую
+          # причину красного прогона.
+          test -f "$HOME_DIR/helene.json" || { echo "установки нет — проверять порт нечем"; exit 0; }
+          PORT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("port", 8094))' "$HOME_DIR/helene.json")"
+          for i in $(seq 1 15); do
+            pgrep -f "$HOME_DIR/app/deskapp.py" > /dev/null || break
+            sleep 1
+          done
+          if pgrep -f "$HOME_DIR/app/deskapp.py" > /dev/null; then
+            echo "⚠ канал ещё жив — его мог поднять уже само окно (оно открыто и видит свободный порт)"
+            ps -axo pid=,command= | grep "$HOME_DIR" | grep -v grep || true
+          fi
+          echo "порт $PORT: $(nc -z 127.0.0.1 "$PORT" && echo занят || echo свободен)"
+
       - name: Журналы
         if: always()
         run: |
@@ -245,7 +374,11 @@ jobs:
           # install.log мастер кладёт в корень поставки (папку с helene-build.json).
           # Журналы тела — data/body/: bridge.log и body.log, плюс снимок состояния
           # сторожа memory/.state/body.json (без токенов: их на диске нет).
+          # data/service.log — журнал демона launchd: туда же launchd сливает его
+          # stdout и stderr (StandardOutPath в описании).
+          # ⚠ body-token в артефакт НЕ кладём: это живой ключ к телу.
           for f in "$HOME_DIR/helene.log" "$HOME_DIR/data/deskapp.log" "$HOME_DIR/data/runner.log" \
+                   "$HOME_DIR/data/service.log" \
                    "$HOME_DIR/data/body/bridge.log" "$HOME_DIR/data/body/body.log" \
                    "$HOME_DIR/data/memory/.state/body.json" "$BUILD/Helene/install.log"; do
             if [ -f "$f" ]; then

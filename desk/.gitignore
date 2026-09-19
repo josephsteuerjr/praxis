@@ -78,3 +78,4 @@ installer/build-mac/
 # локальная типовая проверка под darwin: cargo check --target aarch64-apple-darwin --target-dir target-mac-check
 shell/target-mac-check/
 setup/target-mac-check/
+svc/target-mac-check/

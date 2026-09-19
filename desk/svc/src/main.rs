@@ -36,6 +36,14 @@
 //!   helene-svc broker --config <path>              (только труба брокера — отладка)
 //!   helene-svc foreground --config <path>          (та же логика в консоли — отладка)
 
+// На macOS от этого файла живут только общие части (план, журнал, супервизор
+// пары детей): SCM, задача планировщика, права папки и труба брокера там не
+// значат ничего и в бинарь не попадают. Их вспомогательные функции остаются
+// в исходнике непозванными — это осознанно, а не забытый код.
+#![cfg_attr(target_os = "macos", allow(dead_code))]
+
+/// Тип аргументов `service_main` — вход SCM и больше ничей.
+#[cfg(windows)]
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -44,14 +52,27 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+// Сервис-контрол — только на Windows: на macOS процесс держит launchd, и
+// крейта `windows-service` в дереве зависимостей там нет вовсе (Cargo.toml).
+#[cfg(windows)]
 use windows_service::service::{
     ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceControlAccept,
     ServiceErrorControl, ServiceExitCode, ServiceFailureActions, ServiceFailureResetPeriod,
     ServiceInfo, ServiceStartType, ServiceState, ServiceStatus, ServiceType,
 };
+#[cfg(windows)]
 use windows_service::service_control_handler::{self, ServiceControlHandlerResult, ServiceStatusHandle};
+#[cfg(windows)]
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+#[cfg(windows)]
 use windows_service::{define_windows_service, service_dispatcher};
+
+/// Демон launchd: та же пара детей, что у окна и у `session-host`, только под
+/// присмотром launchd и без единой строки Win32. Отдельным модулем, а не
+/// ветками в этом файле: монолит службы Windows — проверенный код, и
+/// переписывать его ради второй платформы значит рисковать первой.
+#[cfg(target_os = "macos")]
+mod daemon;
 
 const SERVICE_NAME: &str = "Helene";  // идентификатор в SCM — латиницей
 /// Порт встроенного реле по умолчанию — как в `ui-kit/contract.json`.
@@ -155,6 +176,24 @@ fn plain_path(p: &Path) -> PathBuf {
     }
 }
 
+/// Имя свободного бинаря поставки: с `.exe` на Windows, без него на macOS.
+/// Ровно то же правило, что у оболочки (`shell/src/main.rs::exe_name`) и у
+/// движка (`localharness/body.py::exe_name`) — трое зовут одни и те же файлы.
+fn exe_name(base: &str) -> String {
+    if cfg!(windows) { format!("{base}.exe") } else { base.to_string() }
+}
+
+/// Встроенный питон поставки: `runtime\python.exe` на Windows,
+/// `runtime/bin/python3` на macOS (рантайм python-build-standalone кладётся
+/// туда, `installer/build_mac.py`).
+fn embedded_python(base: &Path) -> PathBuf {
+    if cfg!(windows) {
+        base.join("runtime").join("python.exe")
+    } else {
+        base.join("runtime").join("bin").join("python3")
+    }
+}
+
 /// Системные программы — только полным путём из `%SystemRoot%`.
 /// `Command::new("netsh")` ищет exe СНАЧАЛА в папке СВОЕГО процесса, а папка
 /// процесса службы — это папка установки: туда пишет обычный пользователь и
@@ -248,12 +287,27 @@ mod job {
 #[cfg(windows)]
 static JOB: std::sync::OnceLock<Option<job::Job>> = std::sync::OnceLock::new();
 
+/// Группы процессов детей (POSIX). Job-объекта здесь нет, а внуки — процессы
+/// питона, ограды seatbelt и реле — переживали бы смерть родителя точно так же,
+/// как переживали `sc stop` на Windows до job-объекта. Каждый ребёнок поднят
+/// лидером СВОЕЙ группы (`process_group(0)` в spawn_child), значит `killpg` по
+/// его pid снимает и его, и всё, что он завёл.
+#[cfg(unix)]
+static PGIDS: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
+
 fn adopt(child: &Child) {
     #[cfg(windows)]
     if let Some(job) = JOB.get_or_init(job::Job::new).as_ref() {
         job.adopt(child);
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    if let Ok(mut list) = PGIDS.lock() {
+        let pid = child.id() as i32;
+        if !list.contains(&pid) {
+            list.push(pid);
+        }
+    }
+    #[cfg(not(any(windows, unix)))]
     let _ = child;
 }
 
@@ -261,6 +315,25 @@ fn kill_all_descendants() {
     #[cfg(windows)]
     if let Some(job) = JOB.get_or_init(job::Job::new).as_ref() {
         job.terminate();
+    }
+    // POSIX: сначала SIGTERM всей группе (движок и канал закрываются сами и
+    // успевают дописать журналы), через секунду — SIGKILL тем, кто не ушёл.
+    // Молча SIGKILL нельзя: прерванный ход движка тогда не закрывается.
+    #[cfg(unix)]
+    {
+        let groups: Vec<i32> = PGIDS.lock().map(|g| g.clone()).unwrap_or_default();
+        for pgid in &groups {
+            unsafe { libc::killpg(*pgid, libc::SIGTERM) };
+        }
+        if !groups.is_empty() {
+            std::thread::sleep(Duration::from_millis(1000));
+            for pgid in &groups {
+                unsafe { libc::killpg(*pgid, libc::SIGKILL) };
+            }
+        }
+        if let Ok(mut list) = PGIDS.lock() {
+            list.clear();
+        }
     }
 }
 
@@ -357,6 +430,17 @@ fn spawn_child(
     }
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
+    // POSIX: своя группа процессов (чтобы `killpg` снял и внуков) и pid
+    // родителя — на Mac job-объекта нет, и движок с каналом сторожат его сами
+    // (`localharness.boot.watch_parent`). На Windows ни того, ни другого не
+    // ставим: там за внуков отвечает job-объект, а лишняя переменная в среде
+    // детей меняла бы проверенное поведение службы.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+        cmd.env("HELENE_PARENT_PID", std::process::id().to_string());
+    }
     match cmd.spawn() {
         Ok(child) => {
             adopt(&child);
@@ -441,7 +525,11 @@ fn load_plan(config_path: &Path) -> Result<Plan, String> {
     let python = match cfg.get("python").and_then(|v| v.as_str()) {
         Some(raw) if raw != "python" => resolve(&base, raw),
         _ => {
-            let embedded = base.join("runtime").join("python.exe");
+            // Имя встроенного питона решает платформа: `runtime\python.exe` в
+            // Windows-поставке, `runtime/bin/python3` в macOS-поставке
+            // (`installer/build_mac.py::stage_runtime`). Один путь на обе
+            // означал бы «нет питона» на второй.
+            let embedded = embedded_python(&base);
             if embedded.exists() { embedded } else { PathBuf::from("python") }
         }
     };
@@ -1122,7 +1210,7 @@ fn spawn_relay(plan: &Plan) -> Result<Child, String> {
         .parent()
         .ok_or_else(|| "не понял, где лежит конфиг".to_string())?
         .to_path_buf();
-    let exe = base.join("helene-relay.exe");
+    let exe = base.join(exe_name("helene-relay"));
     if !exe.exists() {
         return Err(format!("в этой сборке нет {}", exe.display()));
     }
@@ -1139,7 +1227,7 @@ fn spawn_relay(plan: &Plan) -> Result<Child, String> {
         // Тот же контракт, что у оболочки: ключ мозга обязателен Bearer-ом.
         cmd.env("RELAY_API_KEY", &plan.relay_key);
     }
-    let python = base.join("runtime").join("python.exe");
+    let python = embedded_python(&base);
     if python.exists() {
         cmd.env("RELAY_PYTHON", &python);
     }
@@ -2058,6 +2146,7 @@ fn broker_firewall(ask: &BrokerAsk, tree: &Path) -> Ran {
     }
 }
 
+#[cfg(windows)]
 fn broker_spawn_session(ask: &BrokerAsk, cwd: &Path) -> Ran {
     use windows_sys::Win32::Foundation::{
         CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
@@ -2874,6 +2963,13 @@ fn admin_only_dir(p: &Path) -> bool {
 /// действительно видит), в `service.log` при каждом старте и в stdout, который
 /// виден только при ручном запуске `helene-svc install` из консоли.
 fn user_writable_warning() -> Option<String> {
+    // Только про Windows. На macOS демон идёт ОТ ИМЕНИ ВЛАДЕЛЬЦА (`UserName` в
+    // описании launchd), а не от root: подменивший файл получит ровно те права,
+    // что у него уже были, и «служба работает как СИСТЕМА» было бы здесь
+    // неправдой. Дыры, о которой предупреждает этот текст, на Mac нет.
+    if !cfg!(windows) {
+        return None;
+    }
     let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     if admin_only_dir(&dir) {
         return None;
@@ -2907,8 +3003,10 @@ fn warning_file(config: &Path) -> PathBuf {
         .join(WARNING_NAME)
 }
 
+#[cfg(windows)]
 define_windows_service!(ffi_service_main, service_main);
 
+#[cfg(windows)]
 fn set_state(
     status: &ServiceStatusHandle,
     state: ServiceState,
@@ -2928,6 +3026,7 @@ fn set_state(
     });
 }
 
+#[cfg(windows)]
 fn service_main(_arguments: Vec<OsString>) {
     let config = config_path();
     // Обработчик и первая квитанция SCM — ДО чтения конфига. Раньше оба ранних
@@ -3042,6 +3141,7 @@ fn service_main(_arguments: Vec<OsString>) {
     );
 }
 
+#[cfg(windows)]
 fn install(config: &Path) -> Result<(), String> {
     // Конфиг проверяем ДО регистрации: сломанный helene.json иначе всплывал бы
     // как «служба не ответила своевременно (1053)» на следующей загрузке, без
@@ -3136,6 +3236,7 @@ fn install(config: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn uninstall() -> Result<(), String> {
     let manager =
         ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
@@ -3199,6 +3300,21 @@ fn main() {
     std::panic::set_hook(Box::new(|info| {
         early_line(&config_path(), &format!("паника: {info}"));
     }));
+    // На macOS у этого бинаря два режима и ни одного Win32: `daemon` (супервизор
+    // под launchd) и `plist` (печать описания демона). Остальные команды —
+    // SCM, задача планировщика, права папки, труба брокера — там не значат
+    // ничего, и предлагать их в подсказке значило бы обещать несуществующее.
+    #[cfg(target_os = "macos")]
+    daemon::main();
+    #[cfg(not(target_os = "macos"))]
+    cli();
+}
+
+/// Разбор командной строки на Windows (и на прочих не-macOS, где собирается
+/// только каркас). Вынесено из `main` ради платформенной развилки — тело
+/// функции то же, что было.
+#[cfg(not(target_os = "macos"))]
+fn cli() {
     let mode = std::env::args().nth(1).unwrap_or_default();
     match mode.as_str() {
         "install" => {
@@ -3726,7 +3842,11 @@ mod broker_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{console_text, decode_codepage, decode_config};
+    use super::decode_config;
+    // Кодовые страницы консоли — механизм Windows: `MultiByteToWideChar`.
+    // На macOS вывод системных утилит и так UTF-8, и стенда там нет.
+    #[cfg(windows)]
+    use super::{console_text, decode_codepage};
 
     /// Вывод schtasks, icacls и netsh читается в кодовой странице СИСТЕМЫ.
     ///
@@ -3737,6 +3857,7 @@ mod tests {
     /// Страницы спрашиваются поимённо — иначе стенд зеленел бы только у того,
     /// у кого система русская.
     #[test]
+    #[cfg(windows)]
     fn console_text_reads_the_page_the_system_speaks() {
         assert_eq!(decode_codepage(&[0x8E, 0xAA], 866), "Ок");
         assert_ne!(decode_codepage(&[0x8E, 0xAA], 437), "Ок");

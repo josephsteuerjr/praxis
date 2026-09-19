@@ -29,6 +29,7 @@ import time
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "localharness"))
@@ -283,6 +284,119 @@ class Launch(unittest.TestCase):
         self.assertIsNotNone(chosen)
         self.assertNotEqual(chosen, held)
         self.assertGreater(chosen, held)
+
+
+class UnderService(unittest.TestCase):
+    """Движок поднят службой (macOS, §6 плана 19.09): мост без тела.
+
+    ⚠ ЗАЧЕМ ЭТА ВЕТКА. Под демоном launchd движок живёт вне графической сессии:
+    WindowServer его не видит, TCC ему ничего не выдаст. Поднятое оттуда тело
+    отказывало бы на каждый вызов — и это выглядело бы как поломка тула, а не
+    как устройство режима. Поэтому движок поднимает ТОЛЬКО мост, кладёт ключ
+    устройства для окна и говорит словами, чего ждать.
+
+    Платформа подставляется (`sys.platform`), как это делают соседние стенды:
+    ветка обязана разбираться и на Windows, где её никогда не будет.
+    """
+
+    def setUp(self):
+        self.saved_state = dict(body.STATE)
+        self.saved_env = os.environ.get("HELENE_SERVICE")
+        self.saved_spawn = body._Child.spawn
+        # Детей не поднимаем: стенд про решение «кого поднимать», а не про то,
+        # как запускается процесс (это проверяет живая часть ниже).
+        self.spawned: list[str] = []
+        body._Child.spawn = lambda child, job, _log=self.spawned: (_log.append(child.name), True)[1]
+
+    def tearDown(self):
+        body._Child.spawn = self.saved_spawn
+        body.STATE.clear()
+        body.STATE.update(self.saved_state)
+        if self.saved_env is None:
+            os.environ.pop("HELENE_SERVICE", None)
+        else:
+            os.environ["HELENE_SERVICE"] = self.saved_env
+
+    def _ground(self) -> "Ground":
+        g = Ground(_cfg())
+        self.addCleanup(g.close)
+        # Мост и тело «в поставке»: `_exe_pair` смотрит только на существование.
+        for name in (body.BRIDGE_EXE, body.BODY_EXE):
+            (g.root / name).write_bytes(b"")
+        os.environ.pop("HELENE_BODY_DIR", None)
+        return g
+
+    def test_flag_is_darwin_and_the_variable_together(self):
+        with patch.object(sys, "platform", "darwin"):
+            with patch.dict(os.environ, {"HELENE_SERVICE": "1"}):
+                self.assertTrue(body.under_service())
+            with patch.dict(os.environ, {"HELENE_SERVICE": "0"}):
+                self.assertFalse(body.under_service())
+            os.environ.pop("HELENE_SERVICE", None)
+            self.assertFalse(body.under_service())
+        # На Windows переменную не ставит никто, и читать её здесь нельзя:
+        # там интерактивную половину поднимает задача планировщика, с телом.
+        with patch.object(sys, "platform", "win32"), \
+                patch.dict(os.environ, {"HELENE_SERVICE": "1"}):
+            self.assertFalse(body.under_service())
+
+    def test_service_raises_the_bridge_only_and_leaves_a_token(self):
+        g = self._ground()
+        with patch.object(sys, "platform", "darwin"), \
+                patch.dict(os.environ, {"HELENE_SERVICE": "1"}):
+            live = body.Body(g.root, g.tree, _cfg())
+            self.assertTrue(live.service)
+            self.assertTrue(live.start())
+            self.addCleanup(live.stop)
+            token_path = live.token_path()
+            token = token_path.read_text(encoding="utf-8")
+
+        self.assertEqual(self.spawned, ["мост"], "под службой поднимается только мост")
+        self.assertEqual(body.STATE["body_pid"], 0)
+        self.assertTrue(body.STATE["service"])
+        self.assertIn("окно Helene", body.STATE["reason"],
+                      "снимок обязан сказать, чем тело оживёт")
+        self.assertEqual(token, live.device_token)
+        self.assertGreaterEqual(len(token), 16, "ключ устройства пуст — мост пустит любого")
+        # Файл ключа закрыт от соседей. На Windows режимы POSIX не значат
+        # ничего (там права — ACL папки данных), поэтому спрашиваем там, где
+        # они есть.
+        if os.name != "nt":
+            self.assertEqual(oct(token_path.stat().st_mode & 0o777), "0o600")
+        snap = json.loads((g.tree / "memory" / ".state" / "body.json").read_text("utf-8"))
+        self.assertIn("окно Helene", snap["reason"])
+        # И ни слова «на macOS этого нет» — это свойство режима, а не отказ.
+        self.assertNotIn("нет на", snap["reason"])
+
+    def test_stopping_takes_the_token_away(self):
+        g = self._ground()
+        with patch.object(sys, "platform", "darwin"), \
+                patch.dict(os.environ, {"HELENE_SERVICE": "1"}):
+            live = body.Body(g.root, g.tree, _cfg())
+            self.assertTrue(live.start())
+            path = live.token_path()
+            self.assertTrue(path.is_file())
+            live.stop()
+        self.assertFalse(path.is_file(),
+                         "ключ пережил мост — окно поднимало бы тело в пустоту")
+
+    def test_without_the_service_both_children_stay(self):
+        """Путь без службы не изменился ни на Mac, ни на Windows."""
+        g = self._ground()
+        os.environ.pop("HELENE_SERVICE", None)
+        for platform in ("darwin", "win32"):
+            self.spawned.clear()
+            with patch.object(sys, "platform", platform):
+                live = body.Body(g.root, g.tree, _cfg())
+                self.assertFalse(live.service)
+                self.assertTrue(live.start())
+                self.addCleanup(live.stop)
+            self.assertEqual(self.spawned, ["мост", "тело"], platform)
+            self.assertFalse(live.token_path().is_file(),
+                             "ключ устройства пишется только под службой")
+            self.assertFalse(body.STATE["service"])
+            self.assertIn("тело подключается", body.STATE["reason"])
+            live.stop()
 
 
 class Absent(unittest.TestCase):

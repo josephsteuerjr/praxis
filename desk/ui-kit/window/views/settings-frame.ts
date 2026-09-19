@@ -411,14 +411,12 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         saveOut.className = "receipt ok";
         // Под службой перезапуск ОКНА настройки не применит: службу конфиг
         // читает один раз при своём старте. Раньше расписка обещала обратное.
-        // На macOS службы нет — и спрашивать нечего.
+        // Служба есть и на macOS (демон launchd) — спрашиваем на обеих.
         let svc = "";
-        if (!mac) {
-          try {
-            svc = await shell<string>("service_state");
-          } catch {
-            // не смогли спросить — говорим общее
-          }
+        try {
+          svc = await shell<string>("service_state");
+        } catch {
+          // не смогли спросить — говорим общее
         }
         // Хвост расписки — от ИЗДАНИЯ: у Элен это карточка режима (она знает,
         // что осталось сделать — поставить или снять службу), у Пульта его нет
@@ -426,7 +424,8 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         // про службу каркасу незачем.
         const modeNote = built.note();
         if (svc === "running") {
-          saveOut.textContent = "Сохранено. Агента держит служба Windows: чтобы настройки применились, сними и поставь её заново (карточка «Режим» выше)." + modeNote;
+          saveOut.textContent =
+            `Сохранено. Агента держит ${mac ? "служба" : "служба Windows"}: чтобы настройки применились, сними и поставь её заново (карточка «Режим» выше).` + modeNote;
           restartBtn.hidden = true;
         } else {
           saveOut.textContent = "Сохранено. Чтобы применить, перезапусти программу." + modeNote;

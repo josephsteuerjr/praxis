@@ -13,6 +13,8 @@ Windows-архива `Helene-<версия>.zip`):
     Helene.app/               оболочка (крейт shell → бинарь `helene`), app.helene.desk
     Helene Setup.app/         мастер (крейт setup → бинарь `helene-setup`), app.helene.setup
     helene-relay              реле подписки ChatGPT (praxis-relay @ 64fc946 = 0.8.1)
+    helene-svc                служба без входа в систему: `daemon` — супервизор канала, движка и
+                              реле под launchd, `plist` — описание демона app.helene.svc (крейт svc)
     helene-bridge             мост тела тула `computer` (praxis-bridge из praxis/body — исходник
                               в ЭТОМ репозитории, зеркало прода Праксис + darwin-ветки)
     helene-body               тело: экран, окна, клавиатура и мышь (CoreGraphics), дерево окна
@@ -31,9 +33,10 @@ Windows-архива `Helene-<версия>.zip`):
     ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md NOTICE requirements.txt
 
 Чего в этой сборке нет по решению владельца: Intel-маков, подписи Developer ID
-и нотаризации, dmg, службы без входа в систему (LaunchDaemon). Об этом говорят
-документы поставки — не экран. Тело и брокер прав есть с 0.8.0: тело — два
-бинаря выше, брокер — сама оболочка через системный диалог пароля (osascript).
+и нотаризации, dmg. Об этом говорят документы поставки — не экран. Тело, брокер
+прав и служба есть с 0.8.0: тело — два бинаря выше, брокер — сама оболочка через
+системный диалог пароля (osascript), служба — `helene-svc` и демон launchd
+`app.helene.svc` в /Library/LaunchDaemons (ставится под администратором).
 
 Запуск (на macOS):
     python3 installer/build_mac.py [--out DIR] [--from-release TAG | --tree PATH]
@@ -136,7 +139,13 @@ CORE_SOURCE = ROOT / "CORE-SOURCE.json"
 
 # Свободные бинари в корне поставки (не в бандлах): подписываются ad-hoc
 # каждый (`sign_targets`), и каждый обязателен (`REQUIRED_ROOT`).
-ROOT_BINARIES = ("helene-relay", "helene-bridge", "helene-body")
+ROOT_BINARIES = ("helene-relay", "helene-svc", "helene-bridge", "helene-body")
+
+#: Служба: крейт `desk/svc`, обычный cargo-бинарь (не бандл — окна у него нет и
+#: быть не должно, его запускает launchd). На Windows тот же крейт собирает
+#: `helene-svc.exe`; здесь имя без суффикса.
+SVC_CRATE = DESK / "svc"
+SVC_BIN = "helene-svc"
 
 # Откуда берётся дерево агента: из Windows-архива того же выпуска. Дерево там —
 # проверенный прод; собирать его на Mac заново значило бы выпустить под одним
@@ -228,7 +237,7 @@ REQUIRED_ROOT = (
     "Helene.app/Contents/MacOS/helene", "Helene.app/Contents/Info.plist",
     "Helene.app/Contents/Resources/icon.icns",
     "Helene Setup.app/Contents/MacOS/helene-setup", "Helene Setup.app/Contents/Info.plist",
-    "helene-relay", "helene-bridge", "helene-body",
+    "helene-relay", "helene-svc", "helene-bridge", "helene-body",
     "runtime/bin/python3", "runtime/git/bin/git", "runtime/git/libexec/git-core",
     "runtime/git/share/git-core/templates", "runtime/git/COPYING",
     "app/deskapp.py", "app/desk.json", "app/static/index.html", "app/mobile/index.html",
@@ -633,6 +642,37 @@ Developer ID у программы нет, подпись ad-hoc новая на
 и добавить снова кнопкой «+» (бандл — `~/Applications/Helene/Helene.app`).
 Пока это не сделано, тул отвечает «нет разрешения …» и называет путь.
 
+## Работать без входа в систему (служба)
+
+По умолчанию агент живёт, пока открыта программа: окно можно закрыть, значок
+остаётся в строке меню, но выйдешь из учётной записи — агент закроется вместе с
+сеансом. Служба это меняет: движок и реле поднимает `launchd`, и Telegram с
+телефоном отвечают, когда окна нет вовсе.
+
+Включается в мастере (переключатель «Работать без входа в систему») или потом в
+«Настройках», карточка «Режим» → кнопка «Поставить службу». Система один раз
+спросит пароль администратора: описание демона (`app.helene.svc`) кладётся в
+`/Library/LaunchDaemons`, владельцем root. Больше под этими правами не делается
+ничего — сам агент идёт от ТВОЕГО имени (`UserName` в описании), не от root.
+
+Чего служба не даёт, и это свойство режима, а не поломка:
+
+- **окон и экрана у неё нет.** Процесс вне твоего сеанса не видит рабочего
+  стола, и разрешений TCC система ему не выдаст. Тул `computer` оживает, когда
+  ты откроешь окно Helene: тело (`helene-body`) поднимает именно оно, а движок
+  службы держит для него мост. Окно закрыто — тела нет, и `Настройки` про это
+  говорят словами;
+- **при включённом FileVault после перезагрузки не идёт ничего**, пока ты не
+  войдёшь в систему первый раз: до этого диск заперт, и launchd нечего читать.
+
+Журнал службы — `~/Applications/Helene/data/service.log`. Снять: та же карточка
+«Режим» → «Снять службу» (снова пароль), или руками:
+
+    sudo launchctl bootout system/app.helene.svc
+    sudo rm /Library/LaunchDaemons/app.helene.svc.plist
+
+Снятие программы мастером снимает и службу.
+
 ## Права администратора
 
 Брокер прав на Mac — сама программа, без отдельной службы: когда агент просит
@@ -658,6 +698,11 @@ administrator privileges`). Пароль видит только система,
    квитанция в чате с тем, что вышло.
 6. После обновления программы: разрешения слетели — убрать и добавить `Helene`
    заново, повторить п. 2.
+7. Служба: «Настройки» → «Режим» → «Поставить службу» → пароль → строка
+   «Служба работает». Закрыть окно совсем (значок в строке меню → «Выход») и
+   написать агенту в Telegram — он обязан ответить. Открыть окно снова: оно
+   должно сказать в `helene.log` «подключаюсь без своих детей», а тул
+   `computer` — ожить. Выйти из учётной записи и войти обратно — агент жив.
 
 Куда писать — issues репозитория https://github.com/josephsteuerjr/praxis/issues,
 с версией из `helene-build.json`.
@@ -667,11 +712,10 @@ administrator privileges`). Пароль видит только система,
 - Intel-маков — только Apple Silicon (M1 и новее), macOS 14 и новее;
 - подписи Developer ID, нотаризации и dmg — отсюда `install.sh` вместо образа
   и слетающие после обновления разрешения;
-- службы без входа в систему (LaunchDaemon) — агент живёт, пока открыта
-  программа (окно можно закрыть, значок остаётся в строке меню); автозапуск при
-  входе — «Настройки»;
 - правил брандмауэра — macOS сам спросит, разрешить ли программе входящие
-  соединения, когда включишь «Телефон».
+  соединения, когда включишь «Телефон»;
+- нулевой сессии: она есть только на Windows. Служба здесь идёт от твоего
+  имени, а права администратора агент просит отдельно — диалогом пароля.
 
 Ограда тула `shell` здесь — seatbelt (`sandbox-exec`) macOS: команды агента
 видят рантайм и код, пишут только в его дом. Права администратора не нужны;
@@ -782,9 +826,10 @@ core-foundation и core-graphics — MIT или Apache-2.0, и остальны�
 уведомление об авторстве — `tree/NOTICE` (и `NOTICE` в корне поставки).
 
 Чего в этой поставке нет из Windows-состава: BusyBox (`runtime/bash.exe` — на
-Mac свой `/bin/sh`), MinGit (здесь git из исходника, выше) и службы
-(`helene-svc.exe`): брокер прав на Mac — сама оболочка через системный диалог
-пароля, отдельного бинаря у него нет.
+Mac свой `/bin/sh`) и MinGit (здесь git из исходника, выше). Служба есть —
+`helene-svc`, тот же крейт, что `helene-svc.exe` на Windows, только вместо SCM
+и трубы брокера у него демон launchd: брокер прав на Mac — сама оболочка через
+системный диалог пароля, отдельного бинаря у него нет.
 """.replace("__GIT_VERSION__", GIT_VERSION)
 
 
@@ -1156,6 +1201,22 @@ def build_rust() -> None:
             cwd=DESK / b["crate"], timeout=5400)
         if not rust_binary(kind).is_file():
             raise SystemExit(f"после cargo build нет {rust_binary(kind)}")
+
+
+def build_svc() -> Path:
+    """Собрать службу (крейт `desk/svc`) и вернуть путь к бинарю.
+
+    Отдельно от `build_rust`: там Tauri-бандлы с фичей `custom-protocol`, а
+    здесь голый cargo. Своего `--target-dir` не задаём — крейт собирается в
+    `desk/svc/target`, как и на Windows, и кэш раннера (Swatinem/rust-cache)
+    его подхватывает.
+    """
+    print(f"  {SVC_CRATE.name}:")
+    run(["cargo", "build", "--release"], cwd=SVC_CRATE, timeout=5400)
+    exe = SVC_CRATE / "target" / "release" / SVC_BIN
+    if not exe.is_file():
+        raise SystemExit(f"после cargo build нет {exe}")
+    return exe
 
 
 def relay_source(cache: Path) -> Path:
@@ -1548,6 +1609,23 @@ def main() -> None:
         missing.append(f"helene-relay — {e}")
         print(f"  ⚠ {e}")
     relay_src_dir = cache / "praxis-relay"
+
+    # Служба: тот же крейт, что на Windows, режим `daemon` под launchd.
+    print("служба:")
+    try:
+        svc_exe = (SVC_CRATE / "target" / "release" / SVC_BIN) if args.skip_rust else build_svc()
+        if not svc_exe.is_file():
+            raise SystemExit(f"нет {svc_exe} (--skip-rust без прежней сборки)")
+        shutil.copy2(svc_exe, out / SVC_BIN)
+        (out / SVC_BIN).chmod(0o755)
+        # Версия крейта уже сверена с остальными девятью объявлениями
+        # (`deskpkg.product_version`, ключ svc/Cargo.toml) — здесь только размер.
+        print(f"  {SVC_BIN}: положен ({(out / SVC_BIN).stat().st_size / 1e6:.1f} МБ)")
+    except SystemExit as e:
+        if not args.allow_partial:
+            raise
+        missing.append(f"{SVC_BIN} — {e}")
+        print(f"  ⚠ {e}")
 
     print("тело:")
     body_info: dict | None = None

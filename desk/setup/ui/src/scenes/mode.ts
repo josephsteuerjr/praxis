@@ -24,7 +24,7 @@
 // Куда уезжает выбор: ограда — ключом `agent_mode` (НЕ `mode`: тот занят под
 // местожительство харнесса, local|remote), служба — полем `service` установки,
 // галочка — в `service.session0`, туда, где её читает служба.
-import { COMPUTER_OPTION, COMPUTER_OPTION_MACOS, MODE_CARDS, MODE_CARDS_MACOS, SERVICE_OPTION, SESSION0_WARNING, type ModeCard } from "virtual:helene-modes";
+import { COMPUTER_OPTION, COMPUTER_OPTION_MACOS, MODE_CARDS, MODE_CARDS_MACOS, SERVICE_OPTION, SERVICE_OPTION_MACOS, SESSION0_WARNING, type ModeCard } from "virtual:helene-modes";
 import { FormScene } from "./base";
 import { el, toggle } from "./form";
 import { adminRights, isMac, setup, type AdminRights, type AgentMode } from "../setup";
@@ -42,19 +42,26 @@ const INSTALL_NOTE_MACOS: Record<string, string> = {
   interactive: "Прав администратора не нужно: агент работает с твоими правами — не больше и не меньше.",
 };
 
-/** Лид сцены: на Windows вопроса три, на macOS — два (службы там нет, а тело
- *  тула `computer` есть с 0.8.0). */
+/** Лид сцены: вопроса три на обеих системах. Служба на macOS своя (демон
+ *  launchd), тело тула `computer` есть с 0.8.0 — прячется теперь только то,
+ *  чего на системе действительно нет. */
 const LEAD =
   "Три вопроса, и они не связаны: насколько далеко агент дотягивается, ставить ли службу Windows " +
   "и давать ли ему окна и мышь. Поменять можно потом, в настройках.";
 const LEAD_MACOS =
-  "Два вопроса, и они не связаны: насколько далеко агент дотягивается и давать ли ему окна и мышь. " +
-  "Поменять можно потом, в настройках.";
+  "Три вопроса, и они не связаны: насколько далеко агент дотягивается, работать ли ему без входа " +
+  "в систему и давать ли ему окна и мышь. Поменять можно потом, в настройках.";
 
 /** Что произойдёт при установке со службой. Только про установку: про саму
  *  службу уже сказано выше словами харнесса, и повторять их здесь незачем. */
 const SERVICE_NOTE =
   "Windows один раз спросит права администратора: зарегистрировать службу может только он.";
+
+/** То же на macOS: права спрашивает система диалогом пароля, а положить
+ *  описание демона в /Library/LaunchDaemons может только администратор. */
+const SERVICE_NOTE_MACOS =
+  "Система один раз спросит пароль администратора: положить описание службы в системную папку " +
+  "может только он. Больше ничего под этими правами не делается.";
 
 /** Почему опция недоступна. Серая галочка без причины — это загадка, а не
  *  честность. */
@@ -103,10 +110,15 @@ export class ModeScene extends FormScene {
   private cardTexts = new Map<AgentMode, HTMLElement>();
   private cardNotes = new Map<AgentMode, HTMLElement>();
   private lead: HTMLElement;
-  private options: HTMLElement;
-  private serviceBoxEl!: HTMLElement;
   private serviceSwitch!: HTMLButtonElement;
   private serviceWhy!: HTMLElement;
+  /** Описание, примечание и оговорка опции службы — на Mac их подменяют
+   *  слова macOS, не пересобирая блок. */
+  private serviceDesc!: HTMLElement;
+  private serviceNote!: HTMLElement;
+  private serviceWarn!: HTMLElement;
+  /** Блок нулевой сессии: на macOS её нет как механизма — блока там нет тоже
+   *  (`syncService`: он открывается только при включённой службе и не на Mac). */
   private extra!: HTMLElement;
   private session0Switch!: HTMLButtonElement;
   private extraText!: HTMLElement;
@@ -141,11 +153,10 @@ export class ModeScene extends FormScene {
     );
 
     // Две опции — в один ряд: столбиком они не умещаются в кадр 1080. Внутри
-    // каждой карточки колонки складываются. На macOS в ряду одна карточка —
-    // тело: службы там не бывает (`syncPlatform`).
+    // каждой карточки колонки складываются. Обе есть на обеих системах: служба
+    // на macOS — демон launchd, тело — Accessibility (0.8.0).
     const options = el("div", "options-row");
     options.append(this.serviceBox(), this.computerBox());
-    this.options = options;
     this.mount(head, lead, row, options, notes);
     // Вторая галочка опции (`service.firewall`) на экран не выведена, но её
     // умолчание берём отсюда же, а не заводим второй правдой в setup.ts.
@@ -209,7 +220,6 @@ export class ModeScene extends FormScene {
    *  ряду. Ряд — это выбор одного из; служба выбором из ряда не является. */
   private serviceBox(): HTMLElement {
     const box = el("div", "service-card");
-    this.serviceBoxEl = box;
     const main = el("div", "service-main");
     this.serviceSwitch = toggle({
       label: SERVICE_OPTION.title,
@@ -219,11 +229,13 @@ export class ModeScene extends FormScene {
         this.syncService();
       },
     });
-    main.append(
-      this.serviceSwitch,
-      el("p", "mode-text", SERVICE_OPTION.text),
-      el("p", "mode-note", SERVICE_NOTE),
-    );
+    this.serviceDesc = el("p", "mode-text", SERVICE_OPTION.text);
+    this.serviceNote = el("p", "mode-note", SERVICE_NOTE);
+    // Чего служба НЕ даёт — рядом с тем, что даёт. Пусто на Windows (там всё
+    // сказано описанием), на Mac — окна, экран и FileVault до первого входа.
+    this.serviceWarn = el("p", "mode-warn", "");
+    this.serviceWarn.hidden = true;
+    main.append(this.serviceSwitch, this.serviceDesc, this.serviceNote, this.serviceWarn);
     this.serviceWhy = el("p", "mode-why", NO_ADMIN);
     this.serviceWhy.hidden = true;
     main.append(this.serviceWhy);
@@ -293,7 +305,9 @@ export class ModeScene extends FormScene {
    *  установщик всё равно запишет её только вместе со службой (install.rs). */
   private syncService() {
     this.serviceSwitch.setAttribute("aria-checked", String(setup.service));
-    this.extra.hidden = !setup.service;
+    // Галочка нулевой сессии — только там, где она вообще есть: на macOS блок
+    // спрятан насовсем (`syncPlatform`), и включённая служба его не открывает.
+    this.extra.hidden = !setup.service || isMac();
     this.syncSession0();
   }
 
@@ -320,16 +334,23 @@ export class ModeScene extends FormScene {
 
   /** Что рисовать на этой системе. Зовётся из `beforeEnter`, а не из
    *  конструктора: сцены строятся до ответа `defaults`, где живёт `platform`.
-   *  На macOS опции службы нет, и решения по ней выключены — в JSON установки
-   *  не должно уехать то, чего нет; опция тела остаётся (тело есть с 0.8.0),
-   *  только словами macOS: без `.exe`, с двумя разрешениями системы. */
+   *  На macOS обе опции ЕСТЬ (служба — демон launchd, тело — Accessibility),
+   *  и меняются только слова. Нет там нулевой сессии: демон и так идёт от
+   *  имени владельца, и её решение в JSON установки уехать не должно. */
   private syncPlatform() {
     const mac = isMac();
     this.lead.textContent = mac ? LEAD_MACOS : LEAD;
-    this.serviceBoxEl.hidden = mac;
-    this.options.classList.toggle("one", mac);
+    // Служба есть на обеих системах; на Mac у неё свои слова и НЕТ галочки
+    // нулевой сессии — там демон и так идёт от имени владельца, а права
+    // администратора агент просит системным диалогом пароля.
+    const service = mac && SERVICE_OPTION_MACOS ? SERVICE_OPTION_MACOS : SERVICE_OPTION;
+    const label = this.serviceSwitch.querySelector<HTMLElement>(".switch-label");
+    if (label) label.textContent = service.title;
+    this.serviceDesc.textContent = service.text;
+    this.serviceNote.textContent = mac ? SERVICE_NOTE_MACOS : SERVICE_NOTE;
+    this.serviceWarn.textContent = service.warning || "";
+    this.serviceWarn.hidden = !service.warning;
     if (mac) {
-      setup.service = false;
       setup.session0 = false;
     }
     const computer = mac && COMPUTER_OPTION_MACOS ? COMPUTER_OPTION_MACOS : COMPUTER_OPTION;

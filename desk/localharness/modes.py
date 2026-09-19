@@ -105,17 +105,31 @@ DEFAULT_MODE = "interactive"
 #: Ключ режима в helene.json. См. докстринг: `mode` занят под local|remote.
 KEY = "agent_mode"
 
-#: Служба (SCM) есть только на Windows; тело тула `computer` (`body.py`) — на
-#: Windows (UIA) и с 19.09 на macOS (Accessibility, CoreGraphics). Где чего нет,
+#: Служба есть на Windows (SCM) и с 19.09 на macOS (демон launchd
+#: `app.helene.svc`, `common/mac_service.rs`); тело тула `computer` (`body.py`)
+#: — на Windows (UIA) и на macOS (Accessibility, CoreGraphics). Где чего нет,
 #: секция в картину НЕ отдаётся (`service_here`, `mode_state`), окно карточки
 #: не рисует (прячет по `app_info.platform`), а журнал говорит одной строкой.
 #: Две константы, а не одна: механизмы разные и платформы у них разные. Стенды
 #: подменяют их, чтобы разобрать обе картины на любой машине.
-HAS_SERVICE = os.name == "nt"
+HAS_SERVICE = os.name == "nt" or sys.platform == "darwin"
 HAS_COMPUTER = os.name == "nt" or sys.platform == "darwin"
+
+#: Есть ли у службы галочки. Обе — механизмы Windows: нулевая сессия (служба под
+#: LocalSystem) и правило брандмауэра (netsh). На macOS демон launchd и так идёт
+#: от имени владельца, а брандмауэр система спрашивает сама — там галочек нет ни
+#: в каком положении. Отдельная константа, а не `os.name` по месту: стенды
+#: подменяют её, чтобы разобрать обе картины на любой машине.
+HAS_SERVICE_TOGGLES = os.name == "nt"
 
 #: Имя службы в SCM (svc/src/main.rs::SERVICE_NAME). Латиницей.
 SERVICE_NAME = "Helene"
+
+#: Метка демона launchd на macOS и путь к его описанию. Те же строки, что в
+#: `common/mac_service.rs` (MAC_SVC_LABEL, MAC_SVC_PLIST): расхождение означало
+#: бы, что движок спрашивает про один демон, а ставится другой.
+MAC_SERVICE_LABEL = "app.helene.svc"
+MAC_SERVICE_PLIST = "/Library/LaunchDaemons/app.helene.svc.plist"
 
 #: Умолчание галочки «служба ставит правило брандмауэра». True: это узкое
 #: действие продукта по кнопке владельца, и с False кнопка «Телефон» под
@@ -203,6 +217,39 @@ SERVICE_TEXT = ("Ставится один раз, под администрат
                 "записям — читать и запускать, запись остаётся у системы и у "
                 "администраторов (без неё не встанет обновление). Ограду это "
                 "не меняет — режим ты выбираешь отдельно, и он работает так же.")
+
+#: Та же опция словами macOS. Службы Windows там нет, UAC и брандмауэра тоже;
+#: механизм другой — демон launchd от имени владельца. Форма та же, что у
+#: SERVICE_TITLE/SERVICE_TEXT: строковые литералы, которые разбирает сборка
+#: установщика (`setup/ui/vite.config.ts`). ⚠ Имена констант разбирает она же.
+SERVICE_TITLE_MACOS = "Работать без входа в систему"
+
+SERVICE_TEXT_MACOS = ("Ставится один раз, система спросит пароль администратора. "
+                      "Код агента поднимает launchd: Telegram и телефон отвечают, "
+                      "когда окно не открыто, и продолжают отвечать после выхода из "
+                      "учётной записи. Упавшее — поднимается само. Ограду это не "
+                      "меняет: режим ты выбираешь отдельно, и он работает так же.")
+
+#: Чего служба на Mac НЕ даёт. Это не «на macOS нет», а свойство режима, и
+#: владелец обязан прочитать его ДО, а не узнать потом.
+SERVICE_WARNING_MACOS = ("Окон и экрана у такого агента нет: процесс вне твоего "
+                         "сеанса не видит рабочего стола. Тул `computer` оживает, "
+                         "когда ты откроешь окно Helene — тело поднимает оно. И если "
+                         "включён FileVault, после перезагрузки не идёт ничего, пока "
+                         "ты не войдёшь в систему первый раз: диск до этого заперт.")
+
+
+def service_texts() -> tuple[str, str, str]:
+    """Заголовок, описание и оговорка опции службы для ЭТОЙ платформы.
+
+    Одна точка выбора на `resolve`, `describe` и `service_option`: то, что
+    уезжает в `/api/mode`, в карточку окна и в сцену мастера, обязано быть одним
+    и тем же текстом. На Windows оговорки нет — там всё сказано описанием.
+    """
+    if sys.platform == "darwin":
+        return SERVICE_TITLE_MACOS, SERVICE_TEXT_MACOS, SERVICE_WARNING_MACOS
+    return SERVICE_TITLE, SERVICE_TEXT, ""
+
 
 SESSION0_TITLE = "Разрешить агенту нулевую сессию"
 
@@ -476,6 +523,9 @@ def service_installed(cfg: dict | None = None, *, probe: bool = True) -> bool | 
         installed = _block(cfg, "installed")
         if "service" in installed:
             hint = bool(installed.get("service"))
+    if probe and sys.platform == "darwin":
+        found = _launchd_has_daemon()
+        return hint if found is None else found
     if not probe or os.name != "nt":
         return hint
     now = time.time()
@@ -486,6 +536,22 @@ def service_installed(cfg: dict | None = None, *, probe: bool = True) -> bool | 
         return hint
     _SCM_CACHE.update({"at": now, "value": found})
     return found
+
+
+def _launchd_has_daemon() -> bool | None:
+    """Стоит ли демон launchd. None — «спросить не у кого».
+
+    Спрашиваем у файловой системы, а не у конфига: `installed.service` — след
+    установщика, и он врёт после ручного `launchctl bootout` + `rm`. Наличие
+    `/Library/LaunchDaemons/app.helene.svc.plist` — это и есть «служба стоит»;
+    загружена она сейчас или нет, знает окно (`shell::service_state`), и здесь
+    это отдельный вопрос, а не подмена ответа.
+    """
+    try:
+        return Path(MAC_SERVICE_PLIST).is_file()
+    except OSError:
+        log.debug("launchd не опросился", exc_info=True)
+        return None
 
 
 def _scm_has_service(name: str) -> bool | None:
@@ -593,11 +659,16 @@ def resolve(cfg: dict, *, installed: bool | None = None) -> dict:
     want_sandbox = name == "sandbox"
     stored_session0 = session0(cfg)
     stored_firewall = firewall(cfg)
+    # Обе галочки — механизмы Windows: нулевая сессия (служба под LocalSystem) и
+    # правило брандмауэра (netsh). На macOS демон и так идёт от имени владельца,
+    # а брандмауэр система спрашивает сама — там они не действуют ни в каком
+    # положении, и говорить о них на экране значило бы обещать несуществующее.
+    toggles_here = service_here and HAS_SERVICE_TOGGLES
     # Без службы обе галочки — слова в файле: некому их исполнить. `None`
     # (SCM не ответил) считаем «может стоять»: промолчать про права системы
     # хуже, чем сказать лишнее.
-    effective_session0 = service_here and stored_session0 and installed is not False
-    effective_firewall = service_here and stored_firewall and installed is not False
+    effective_session0 = toggles_here and stored_session0 and installed is not False
+    effective_firewall = toggles_here and stored_firewall and installed is not False
 
     # Совпадает ли ручка с режимом ПРЯМО В ФАЙЛЕ. Мало выставить её в памяти:
     # экран настроек и владелец с блокнотом читают файл, и вечно расходящаяся
@@ -624,14 +695,19 @@ def resolve(cfg: dict, *, installed: bool | None = None) -> dict:
             f"sandbox.enabled = {str(bool(sandbox_block.get('enabled'))).lower()}, "
             f"а режим «{TITLES[name]}» требует "
             f"{str(want_sandbox).lower()} — побеждает режим")
-    if service_here and stored_session0 and installed is False:
+    if toggles_here and stored_session0 and installed is False:
         notes.append("service.session0 = true, но служба не установлена — "
                      "нулевую сессию некому дать, галочка не действует. "
                      "Служба ставится в Настройках, карточка «Режим»")
+    if service_here and not toggles_here and stored_session0:
+        notes.append("service.session0 = true, а нулевой сессии на этой системе нет: "
+                     "служба идёт от твоего имени, и права администратора агент "
+                     "просит отдельно, системным диалогом пароля. Галочка не "
+                     "действует — её можно стереть из helene.json")
     # Про выключенную привилегию говорим, только когда служба ЕСТЬ: без службы
     # правило и так ставит окно, и строка об этом была бы не расхождением, а
     # шумом на каждом старте у каждого, кто службу не ставил.
-    if service_here and not stored_firewall and installed is not False:
+    if toggles_here and not stored_firewall and installed is not False:
         notes.append("service.firewall = false — правило брандмауэра служба не "
                      "ставит: кнопка «Телефон» спросит права окном Windows")
 
@@ -645,8 +721,9 @@ def resolve(cfg: dict, *, installed: bool | None = None) -> dict:
         "needs_write": (not explicit) or where == "mode" or not sandbox_agrees,
         "service_here": service_here,
         "service_installed": installed,
-        "service_title": SERVICE_TITLE if service_here else "",
-        "service_text": SERVICE_TEXT if service_here else "",
+        "service_title": service_texts()[0] if service_here else "",
+        "service_text": service_texts()[1] if service_here else "",
+        "service_warning": service_texts()[2] if service_here else "",
         "session0": effective_session0,
         "session0_set": stored_session0,
         "session0_warning": SESSION0_WARNING if effective_session0 else "",
@@ -702,6 +779,14 @@ def journal(picture: dict, *, where: str = "") -> None:
     installed = picture.get("service_installed")
     if not picture.get("service_here", HAS_SERVICE):
         log.info("служба: на этой платформе её нет — галочки service.* не действуют")
+    elif not HAS_SERVICE_TOGGLES:
+        # На macOS галочек у службы нет: демон идёт от имени владельца, а
+        # брандмауэр система спрашивает сама. Писать про них «запрещена» значило
+        # бы называть состоянием то, чего нет как механизма.
+        log.info("служба (демон launchd %s): %s — окон и экрана у неё нет, "
+                 "тело тула computer поднимает окно",
+                 MAC_SERVICE_LABEL,
+                 {True: "установлена", False: "не установлена"}.get(installed, "не спросили"))
     else:
         log.info("служба: %s · нулевая сессия: %s · правило брандмауэра: %s",
                  {True: "установлена", False: "не установлена"}.get(installed, "не спросили"),
@@ -798,8 +883,9 @@ def describe(picture: dict) -> dict:
         "source": picture.get("source") or "",
         "service_here": here,
         "service_installed": picture.get("service_installed"),
-        "service_title": (picture.get("service_title") or SERVICE_TITLE) if here else "",
-        "service_text": (picture.get("service_text") or SERVICE_TEXT) if here else "",
+        "service_title": (picture.get("service_title") or service_texts()[0]) if here else "",
+        "service_text": (picture.get("service_text") or service_texts()[1]) if here else "",
+        "service_warning": (picture.get("service_warning") or service_texts()[2]) if here else "",
         "session0": bool(picture.get("session0")),
         "session0_set": bool(picture.get("session0_set")),
         "session0_warning": picture.get("session0_warning") or "",
@@ -835,25 +921,31 @@ def service_option() -> dict:
     Отдельная функция, а не третий пункт `catalogue()`: служба ставится поверх
     ЛЮБОГО режима и ни одну ограду не снимает.
     """
+    title, text, warning = service_texts()
+    # Галочки — механизмы Windows: нулевая сессия (служба под LocalSystem) и
+    # правило брандмауэра (netsh). На macOS их нет, и пустой список честнее
+    # серых переключателей, которые ничего не меняют.
+    toggles = [] if not HAS_SERVICE_TOGGLES else [
+        {
+            "key": "service.session0",
+            "title": SESSION0_TITLE,
+            "text": SESSION0_TEXT,
+            "warning": SESSION0_WARNING,
+            "default": False,
+        },
+        {
+            "key": "service.firewall",
+            "title": FIREWALL_TITLE,
+            "text": FIREWALL_TEXT,
+            "warning": "",
+            "default": FIREWALL_DEFAULT,
+        },
+    ]
     return {
         "name": "service",
-        "title": SERVICE_TITLE,
-        "text": SERVICE_TEXT,
+        "title": title,
+        "text": text,
+        "warning": warning,
         "needs_admin": True,
-        "toggles": [
-            {
-                "key": "service.session0",
-                "title": SESSION0_TITLE,
-                "text": SESSION0_TEXT,
-                "warning": SESSION0_WARNING,
-                "default": False,
-            },
-            {
-                "key": "service.firewall",
-                "title": FIREWALL_TITLE,
-                "text": FIREWALL_TEXT,
-                "warning": "",
-                "default": FIREWALL_DEFAULT,
-            },
-        ],
+        "toggles": toggles,
     }

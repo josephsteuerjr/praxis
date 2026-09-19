@@ -125,11 +125,12 @@ function spendHTML(p: { calls_day?: number | null; cache_day?: number | null; ca
 function modeHTML(m: ModeState | null): string {
   if (!m || !m.name) return "";
   const svc = m.service_installed === null ? "спросить не удалось" : m.service_installed ? "установлена" : "не установлена";
-  // На macOS службы, нулевой сессии и брандмауэра нет: строк про них нет тоже.
+  // Служба есть на обеих системах, а нулевой сессии и брандмауэра на macOS
+  // нет: строк про них там нет тоже. Имя механизма — своё у каждой.
   const mac = isMacPlatform(S.platform);
   const facts = [
     `ограда песочницы: ${m.sandbox ? "включена" : "выключена"}`,
-    mac ? "" : `служба Windows: ${svc}`,
+    `${mac ? "служба (демон launchd)" : "служба Windows"}: ${svc}`,
     // Две галочки службы — разные вопросы, и на экране они стоят порознь.
     // `session0` — права системы агенту; `firewall` — правило брандмауэра для
     // кнопки «Телефон». Про брандмауэр говорим только когда он ВЫКЛЮЧЕН: это

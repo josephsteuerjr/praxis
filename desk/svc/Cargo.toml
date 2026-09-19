@@ -5,7 +5,19 @@ edition = "2021"
 
 [dependencies]
 serde_json = "1"
-windows-service = "0.8"
+
+# На POSIX штамп журнала (`common/stamp.rs`) берёт местное время через
+# `localtime_r`, а демон гасит детей группами процессов (`killpg`, `SIGTERM`) —
+# job-объекта там нет. Та же версия, что у оболочки.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Сервис-контрол Windows (SCM) — только там, где он есть. До порта на macOS
+# крейт `windows-service` стоял в ОБЩИХ зависимостях, и cargo пытался собрать
+# его на Mac, где `windows-sys` не собирается вовсе: режим `daemon` (launchd) не
+# дошёл бы до компиляции. Сам код SCM гейтится `cfg(windows)` (`service_main`,
+# `install`, `uninstall`).
+#
 # Job-объект (внуки не переживают остановку службы) и местное время в журнале.
 # Та же версия, что у оболочки — супервизоров два, механика одна.
 # Win32_System_RemoteDesktop — узнать, вошёл ли кто-нибудь в систему (служба
@@ -25,6 +37,7 @@ windows-service = "0.8"
 #   Win32_System_Environment  — окружение владельца для процесса, поднятого в
 #                               его сессии (без него у процесса окружение СИСТЕМЫ).
 [target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Environment", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
 [target.'cfg(windows)'.build-dependencies]

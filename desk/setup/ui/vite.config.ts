@@ -174,6 +174,20 @@ function modesFromPython(): Plugin {
         warning: constantText(py, "COMPUTER_WARNING"),
         default: constantBool(py, "COMPUTER_DEFAULT"),
       };
+      // Та же опция службы словами macOS (`SERVICE_TITLE_MACOS`,
+      // `SERVICE_TEXT_MACOS`, `SERVICE_WARNING_MACOS` в modes.py): механизм там
+      // другой — демон launchd, — и галочек у него нет (нулевая сессия и
+      // правило брандмауэра существуют только на Windows). Нет констант —
+      // сцена возьмёт общие, и это честный откат к старому движку.
+      const serviceMac = /^SERVICE_TEXT_MACOS\s*(?::[^=\n]*)?=/m.test(py)
+        ? {
+            ...option,
+            title: constantText(py, "SERVICE_TITLE_MACOS"),
+            text: constantText(py, "SERVICE_TEXT_MACOS"),
+            warning: constantText(py, "SERVICE_WARNING_MACOS"),
+            toggles: [],
+          }
+        : null;
       // Та же опция словами macOS (`COMPUTER_TEXT_MACOS` в modes.py): тело без
       // `.exe`, команды в zsh, два разрешения системы. Константы нет — null, и
       // сцена показывает общий текст; есть, но не разбирается — сборка падает,
@@ -186,6 +200,7 @@ function modesFromPython(): Plugin {
         `export const MODE_CARDS = ${JSON.stringify(cards, null, 2)};\n` +
         `export const MODE_CARDS_MACOS = ${JSON.stringify(cardsMac, null, 2)};\n` +
         `export const SERVICE_OPTION = ${JSON.stringify(option, null, 2)};\n` +
+        `export const SERVICE_OPTION_MACOS = ${JSON.stringify(serviceMac, null, 2)};\n` +
         `export const SESSION0_WARNING = ${JSON.stringify(session0Warning)};\n` +
         `export const COMPUTER_OPTION = ${JSON.stringify(computer, null, 2)};\n` +
         `export const COMPUTER_OPTION_MACOS = ${JSON.stringify(computerMac, null, 2)};\n`

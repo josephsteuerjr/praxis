@@ -385,9 +385,9 @@
     "zh": "af13be18"
   },
   "setup.mode.lead.macos": {
-    "en": "02436583",
-    "fr": "02436583",
-    "zh": "02436583"
+    "en": "f2d400bd",
+    "fr": "f2d400bd",
+    "zh": "f2d400bd"
   },
   "setup.mode.fence.aria_label": {
     "en": "51739adc",
@@ -745,9 +745,9 @@
     "zh": "43bd2de8"
   },
   "setup.uninstall.lead.macos": {
-    "en": "76578ad2",
-    "fr": "76578ad2",
-    "zh": "76578ad2"
+    "en": "73713aaa",
+    "fr": "73713aaa",
+    "zh": "73713aaa"
   },
   "setup.uninstall.btn_remove": {
     "en": "d4b51f7a",
@@ -773,6 +773,21 @@
     "en": "efb5f359",
     "fr": "efb5f359",
     "zh": "efb5f359"
+  },
+  "settings.service.title.macos": {
+    "en": "de3e0607",
+    "fr": "de3e0607",
+    "zh": "de3e0607"
+  },
+  "settings.service.text.macos": {
+    "en": "0c49b811",
+    "fr": "0c49b811",
+    "zh": "0c49b811"
+  },
+  "settings.service.warning.macos": {
+    "en": "1af6a523",
+    "fr": "1af6a523",
+    "zh": "1af6a523"
   },
   "setup.uninstall.explain_title": {
     "en": "39db928b",
@@ -833,6 +848,11 @@
     "en": "9b3d946b",
     "fr": "9b3d946b",
     "zh": "9b3d946b"
+  },
+  "setup.mode.service_note.macos": {
+    "en": "09eba2bc",
+    "fr": "09eba2bc",
+    "zh": "09eba2bc"
   },
   "settings.computer.screen.macos": {
     "en": "eec9411b",
