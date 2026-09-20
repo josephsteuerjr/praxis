@@ -77,6 +77,10 @@ mod daemon;
 const SERVICE_NAME: &str = "Helene";  // идентификатор в SCM — латиницей
 /// Порт встроенного реле по умолчанию — как в `ui-kit/contract.json`.
 const RELAY_PORT: u16 = 5011;
+/// Пауза, пока порт реле держит кто-то другой (обычно открытое окно). Не
+/// растущий backoff: это не поломка, а нормальное состояние, из которого надо
+/// выйти быстро — окно закрыли, и реле службы поднимается в ближайшие полминуты.
+const RELAY_YIELD_PAUSE_SEC: u64 = 20;
 const SERVICE_DISPLAY: &str = "Hélène · агент";
 // Прежний текст обещал «живым до входа пользователя». Это перестало быть
 // правдой в тот день, когда харнесс переехал в сессию владельца: до входа
@@ -491,6 +495,30 @@ fn spawn_child(
         // Причину раньше глотал `.ok()`, и в журнале оставалось только
         // «не поднялся» без единого слова о том, почему.
         Err(err) => Err(err.to_string()),
+    }
+}
+
+impl Plan {
+    /// План с минимумом, нужным стендам: дальше они правят нужные поля сами.
+    #[cfg(test)]
+    fn for_tests(config: PathBuf, tree: PathBuf) -> Self {
+        Plan {
+            mode: "service".into(),
+            python: PathBuf::new(),
+            app: PathBuf::new(),
+            runner: None,
+            config,
+            tree,
+            port: 8094,
+            relay_enabled: true,
+            relay_port: RELAY_PORT,
+            relay_key: String::new(),
+            relay_instructions: "minimal".into(),
+            phone: false,
+            session0: false,
+            broker: false,
+            firewall_rule: false,
+        }
     }
 }
 
@@ -1052,6 +1080,9 @@ fn supervise(
     let mut relay: Option<Child> = None;
     let mut relay_not_before = Instant::now();
     let mut relay_backoff: u64 = 0;
+    // Уже сказали в журнал, что порт реле держит кто-то другой: слово об этом
+    // состоянии говорится один раз, а не каждую паузу.
+    let mut relay_yielded = false;
     // Реле, которого нет в поставке, раньше писало «не поднялось» вечно.
     let mut relay_enabled = plan.relay_enabled;
     let mut port_checked: Option<Instant> = None;
@@ -1210,7 +1241,26 @@ fn supervise(
                 }
                 relay = None;
                 match spawn_relay(plan) {
-                    Ok(child) => relay = Some(child),
+                    Ok(Some(child)) => {
+                        relay = Some(child);
+                        relay_yielded = false;
+                        relay_backoff = if relay_backoff == 0 { 5 } else { (relay_backoff * 2).min(60) };
+                        relay_not_before = Instant::now() + Duration::from_secs(relay_backoff);
+                    }
+                    Ok(None) => {
+                        // Порт держит окно: ждём молча. Слово в журнал — ОДИН
+                        // раз на состояние, иначе оно повторялось бы каждую
+                        // паузу и топило собой всё остальное.
+                        if !relay_yielded {
+                            relay_yielded = true;
+                            log.line(&format!(
+                                "реле: порт {} уже держит другая копия (обычно открытое окно) — \
+                                 своё не поднимаю, подхвачу, когда освободится",
+                                plan.relay_port
+                            ));
+                        }
+                        relay_not_before = Instant::now() + Duration::from_secs(RELAY_YIELD_PAUSE_SEC);
+                    }
                     Err(err) => {
                         // Нет exe — это навсегда: говорим один раз и больше не
                         // возвращаемся, вместо строки в журнал каждую минуту.
@@ -1218,8 +1268,6 @@ fn supervise(
                         log.line(&format!("реле: {err} — больше не пробую до перезапуска службы"));
                     }
                 }
-                relay_backoff = if relay_backoff == 0 { 5 } else { (relay_backoff * 2).min(60) };
-                relay_not_before = Instant::now() + Duration::from_secs(relay_backoff);
             }
         }
         std::thread::sleep(Duration::from_millis(500));
@@ -1249,7 +1297,7 @@ fn supervise(
 /// Встроенное реле подписки. Та же семантика, что у оболочки
 /// (shell/main.rs::spawn_relay): реле живёт в <дерево>/relay, конфигурируется
 /// окружением, консоли не имеет.
-fn spawn_relay(plan: &Plan) -> Result<Child, String> {
+fn spawn_relay(plan: &Plan) -> Result<Option<Child>, String> {
     let base = plan
         .config
         .parent()
@@ -1258,6 +1306,21 @@ fn spawn_relay(plan: &Plan) -> Result<Child, String> {
     let exe = base.join(exe_name("helene-relay"));
     if !exe.exists() {
         return Err(format!("в этой сборке нет {}", exe.display()));
+    }
+    // ⚠⚠ Порт реле держит кто-то ещё — почти всегда это ОКНО: человек открыл
+    // Hélène, она подняла своё реле, а служба продолжала поднимать второе на
+    // том же порту. Каждая попытка умирала с «Address already in use», цикл
+    // повторялся, журнал засорялся (живой случай 20.09.2026 на Mac у Сергея:
+    // «служба раз в минуту пытается запустить второе реле на 5011»). Канал и
+    // движок служба в этом случае уважает по `port_busy_ids` — реле выпадало
+    // из этого правила.
+    //
+    // Отказ здесь НЕ окончательный (`Ok(None)`, не `Err`): окно закроют, порт
+    // освободится, и своё реле нужно будет поднять. `Err` в этом месте гасит
+    // реле до перезапуска службы — так отвечают только на «нет exe».
+    // Та же проба, что у окна (`shell::spawn_relay`).
+    if harness_alive(plan.relay_port) {
+        return Ok(None);
     }
     let home = plan.tree.join("relay");
     let _ = std::fs::create_dir_all(&home);
@@ -1284,7 +1347,7 @@ fn spawn_relay(plan: &Plan) -> Result<Child, String> {
     match cmd.spawn() {
         Ok(child) => {
             adopt(&child);
-            Ok(child)
+            Ok(Some(child))
         }
         Err(err) => Err(format!("не поднялось: {err}")),
     }
@@ -3914,6 +3977,59 @@ mod broker_tests {
 #[cfg(test)]
 mod tests {
     use super::decode_config;
+
+    /// ⚠⚠ Служба поднимала ВТОРОЕ реле на занятом порту — раз в минуту, вечно.
+    ///
+    /// Живой случай 20.09.2026 (Mac, Сергей): открыто окно, оно держит своё
+    /// реле на 5011, а служба каждую паузу запускала своё, получала «Address
+    /// already in use» и повторяла, засоряя журнал. Канал и движок в этом
+    /// случае она уважает (`port_busy_ids`), реле выпадало из правила — у окна
+    /// такая проверка есть с самого начала (`shell::spawn_relay`).
+    ///
+    /// Здесь проверяется ровно та развилка, из-за которой цикл и жил: занятый
+    /// порт даёт `Ok(None)` («подожду»), а не `Err` («больше не пробую») и не
+    /// запуск. Порт занимаем настоящим слушателем, exe реле подделываем пустым
+    /// файлом: до `spawn` дело дойти не должно.
+    #[test]
+    fn a_busy_relay_port_is_yielded_not_fought() {
+        use std::net::TcpListener;
+        let dir = std::env::temp_dir().join(format!("helene-relay-yield-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tree = dir.join("data");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(dir.join(super::exe_name("helene-relay")), b"").unwrap();
+
+        let held = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let busy = held.local_addr().unwrap().port();
+        let mut plan = super::Plan::for_tests(dir.join(super::CONFIG_NAME), tree.clone());
+        plan.relay_port = busy;
+        match super::spawn_relay(&plan) {
+            Ok(None) => {}
+            Ok(Some(mut child)) => {
+                let _ = child.kill();
+                panic!("служба подняла второе реле на занятом порту {busy}");
+            }
+            Err(err) => panic!("занятый порт — это ожидание, а не приговор реле: {err}"),
+        }
+        // Свободный порт: до запуска дело доходит, и падает уже сам «exe»
+        // (пустой файл), а не наша проверка. Отличаем одно от другого по тому,
+        // что ответ — Err, а не Ok(None).
+        drop(held);
+        let free = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let free_port = free.local_addr().unwrap().port();
+        drop(free);
+        plan.relay_port = free_port;
+        match super::spawn_relay(&plan) {
+            Ok(None) => panic!("свободный порт назван занятым — реле не поднимется никогда"),
+            Ok(Some(mut child)) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            Err(_) => {}
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     // Кодовые страницы консоли — механизм Windows: `MultiByteToWideChar`.
     // На macOS вывод системных утилит и так UTF-8, и стенда там нет.
     #[cfg(windows)]

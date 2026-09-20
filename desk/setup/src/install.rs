@@ -125,6 +125,10 @@ pub const PYTHON_REL: &str = "runtime/python.exe";
 #[cfg(not(windows))]
 pub const PYTHON_REL: &str = "runtime/bin/python3";
 
+/// Штатный движок поставки. Владелец может поставить свой (`keep_own_runner`),
+/// и тогда обновление его не трогает, а расписка называет это словами.
+const DEFAULT_RUNNER_REL: &str = "app/localharness/runner.py";
+
 /// Реле подписки ChatGPT: бинарь в корне, на Unix без расширения.
 #[cfg(windows)]
 pub const RELAY_NAME: &str = "helene-relay.exe";
@@ -869,7 +873,7 @@ fn config_json(s: &Setup, prev_relay_key: Option<String>, relay_port: u16) -> se
         "computer": computer_block(s.wants_computer()),
         "python": PYTHON_REL,
         "app": "app/deskapp.py",
-        "runner": "app/localharness/runner.py",
+        "runner": DEFAULT_RUNNER_REL,
         "tree": "data",
         "code": "tree",
         "port": DESK_PORT,
@@ -909,15 +913,47 @@ const WIZARD_KEYS: [&str; 12] = [
     "agent", "owner", "model", "setup_complete", "installed",
 ];
 
+/// Движок, который владелец поставил вместо штатного, — оставить его.
+///
+/// ⚠⚠ Живой случай 20.09.2026 (Mac, Сергей): его агент жил на собственном
+/// движке `data/extensions/runner.py` (там же его приборы), а обновление
+/// 0.8.1 → 0.8.3 молча вернуло штатный `app/localharness/runner.py`. Документы
+/// при этом обещают, что `helene.json` сливается, а не переписывается: ключ
+/// `runner` был в списке визарда и затирался безусловно.
+///
+/// Правило: чужой путь остаётся, только если файл по нему ЕСТЬ. Сломанный или
+/// исчезнувший путь чинится штатным — иначе обновление оставило бы установку
+/// без движка вовсе. Пустое старое значение и совпадение со свежим — обычный
+/// случай, решать нечего.
+///
+/// -> `Some(путь)` = оставить этот, `None` = писать значение визарда.
+/// Чистая: существование файла приходит проверкой снаружи.
+fn keep_own_runner(old: Option<&str>, fresh: &str, exists: impl Fn(&str) -> bool) -> Option<String> {
+    let old = old.unwrap_or_default().trim();
+    if old.is_empty() || old == fresh.trim() {
+        return None;
+    }
+    exists(old).then(|| old.to_string())
+}
+
 /// Слить свежие решения визарда с тем, что уже лежит в установленном helene.json.
 fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s: &Setup) -> serde_json::Value {
     let Some(serde_json::Value::Object(old)) = existing else { return fresh };
     let serde_json::Value::Object(new) = fresh else { return serde_json::Value::Object(old) };
     let mut out = old;
+    // Свой движок владельца переживает обновление: см. `keep_own_runner`.
+    let own_runner = keep_own_runner(
+        out.get("runner").and_then(|v| v.as_str()),
+        new.get("runner").and_then(|v| v.as_str()).unwrap_or_default(),
+        |rel| std::path::Path::new(&s.dir).join(rel).is_file(),
+    );
     for k in WIZARD_KEYS {
         if let Some(v) = new.get(k) {
             if k == "model" {
                 continue; // ниже, по полям
+            }
+            if k == "runner" && own_runner.is_some() {
+                continue; // остаётся прежний, чужой визарду
             }
             out.insert(k.to_string(), v.clone());
         }
@@ -2520,6 +2556,17 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
     } else {
         None
     };
+    // Свой движок владельца оставлен — сказать об этом словами: молчаливое
+    // «прежние решения сохранены» не отличает случай, когда решение как раз
+    // могло не сохраниться.
+    if let Some(runner) = merged.get("runner").and_then(|v| v.as_str()) {
+        if runner.trim() != DEFAULT_RUNNER_REL {
+            cfg_note = Some(match cfg_note {
+                Some(n) => format!("{n}; движок оставлен твой ({runner})"),
+                None => format!("движок оставлен твой ({runner})"),
+            });
+        }
+    }
     if soul_exists {
         cfg_note = Some(match cfg_note {
             Some(n) => format!("{n}; конституция оставлена как есть"),
@@ -3222,6 +3269,51 @@ mod tests {
         // Имя из пробелов — то же, что отсутствие имени.
         let blank = serde_json::json!({"agent": {"name": "  "}, "owner": {"name": "Б"}});
         assert!(setup_from_installed(&blank, "с", "d").is_none());
+    }
+
+    /// ⚠⚠ Обновление возвращало штатный движок поверх своего.
+    ///
+    /// Живой случай 20.09.2026 (Mac, Сергей): его агент жил на собственном
+    /// `data/extensions/runner.py`, а установка 0.8.3 поверх 0.8.1 вернула
+    /// штатный путь — при том что документы обещают слияние конфига. Ключ
+    /// `runner` был в списке визарда и перезаписывался безусловно.
+    #[test]
+    fn a_custom_runner_survives_the_update() {
+        let here = |_: &str| true;
+        let gone = |_: &str| false;
+        // Свой движок на месте — остаётся.
+        assert_eq!(
+            keep_own_runner(Some("data/extensions/runner.py"), DEFAULT_RUNNER_REL, here).as_deref(),
+            Some("data/extensions/runner.py")
+        );
+        // Свой движок исчез — чиним штатным, иначе установка останется без движка.
+        assert_eq!(keep_own_runner(Some("data/extensions/runner.py"), DEFAULT_RUNNER_REL, gone), None);
+        // Штатный, пустой и пробельный — решать нечего.
+        assert_eq!(keep_own_runner(Some(DEFAULT_RUNNER_REL), DEFAULT_RUNNER_REL, here), None);
+        assert_eq!(keep_own_runner(Some("  "), DEFAULT_RUNNER_REL, here), None);
+        assert_eq!(keep_own_runner(None, DEFAULT_RUNNER_REL, here), None);
+        // Тот же путь с лишними пробелами — не «чужой».
+        assert_eq!(keep_own_runner(Some(" app/localharness/runner.py "), DEFAULT_RUNNER_REL, here), None);
+
+        // И то же через сам merge_config: свой путь целого конфига переживает.
+        let s = setup_for("api");
+        let existing = serde_json::json!({
+            "runner": "data/extensions/runner.py",
+            "port": 9999,
+            "sandbox": {"network": false}
+        });
+        let fresh = serde_json::json!({
+            "runner": DEFAULT_RUNNER_REL,
+            "python": PYTHON_REL,
+            "agent": {"name": "А"}
+        });
+        let merged = merge_config(Some(existing), fresh, &s);
+        // Своего движка в поставке нет, поэтому здесь путь чинится штатным:
+        // проверяем, что решение приняла именно проверка существования файла.
+        assert_eq!(merged["runner"], DEFAULT_RUNNER_REL);
+        // Всё прочее владельца на месте.
+        assert_eq!(merged["port"], 9999);
+        assert_eq!(merged["sandbox"]["network"], false);
     }
 
     /// Предупреждение службы едет к владельцу файлом: её `println!` уходит в
