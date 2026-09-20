@@ -6444,7 +6444,7 @@ fn update_check_blocking(url: &str) -> Result<serde_json::Value, String> {
             .as_ref()
             .and_then(|a| a.get("digest").and_then(|d| d.as_str()).map(str::to_string))
             .unwrap_or_default();
-        let url = if !text("url").is_empty() { text("url") } else { asset_zip.unwrap_or_else(|| text("html_url")) };
+        let url = pick_update_url(&text("version"), &text("url"), asset_zip, &text("html_url"));
         let notes = if !text("notes").is_empty() { text("notes") } else { text("body") };
         // Заметки релиза несут sha256 КАЖДОГО архива (installer/RELEASE.md,
         // шаг 4): Windows, Praxis и macOS. Когда GitHub не отдал digest ассета,
@@ -6477,6 +6477,29 @@ fn update_check_blocking(url: &str) -> Result<serde_json::Value, String> {
             "sha256": if digest.is_empty() { sha_from_notes } else { digest },
         }))
     }
+}
+
+/// Куда ведёт «Скачать и установить»: архив, а не страница и не запись в API.
+///
+/// ⚠⚠⚠ Живой случай 20.09.2026 (0.7.1 у владельца, «Не получилось.»): выбор шёл
+/// по НЕПУСТОТЕ поля `url` — «свой JSON назвал адрес». Но ответ GitHub Releases
+/// тоже несёт `url`, и там это адрес САМОЙ ЗАПИСИ релиза в API
+/// (`https://api.github.com/repos/…/releases/392320465`). Поле не пустое никогда,
+/// поэтому ветка своего формата перебивала GitHub ВСЕГДА: окно скачивало не архив,
+/// а JSON-запись, и `update_file_name` честно отвечал «ссылка ведёт не на архив
+/// .zip». Кнопка не работала ни разу за всё время, пока адрес вёл на GitHub.
+///
+/// Форматы различаются не по `url`, а по тому, чем назвали версию: свой JSON —
+/// полем `version`, GitHub — `tag_name` (эту же развилку делает `raw_latest` выше).
+/// Без своего `version` адрес берётся у выбранного архива, и только если архива
+/// нет — страница релиза (`html_url`), чтобы человеку было куда пойти руками.
+fn pick_update_url(own_version: &str, own_url: &str, asset_zip: Option<String>, html_url: &str) -> String {
+    if !own_version.trim().is_empty() && !own_url.trim().is_empty() {
+        return own_url.to_string();
+    }
+    asset_zip.unwrap_or_else(|| {
+        if html_url.trim().is_empty() { own_url.to_string() } else { html_url.to_string() }
+    })
 }
 
 /// sha256 архива из заметок релиза: строка, где назван сам архив, иначе первое
@@ -6612,6 +6635,18 @@ fn update_file_name(url: &str) -> Result<String, String> {
 /// `sha_ok`: true — совпала; null — сверять было не с чем (сумма не пришла).
 #[tauri::command]
 async fn update_download(url: String, sha256: Option<String>) -> Result<serde_json::Value, String> {
+    // Отказ обязан оставить след. 20.09.2026: у владельца кнопка отвечала
+    // «Не получилось.», а в helene.log не было НИ ОДНОЙ строки об этом — успех
+    // логировался, отказ нет, и причину («ссылка ведёт не на архив .zip»)
+    // пришлось искать по исходникам вместо журнала.
+    let out = update_download_inner(url.clone(), sha256).await;
+    if let Err(ref why) = out {
+        log_line(&format!("обновление не скачалось ({url}): {why}"));
+    }
+    out
+}
+
+async fn update_download_inner(url: String, sha256: Option<String>) -> Result<serde_json::Value, String> {
     let url = url.trim().to_string();
     if !url.to_lowercase().starts_with("https://") {
         return Err("архив обновления скачивается только по https".into());
@@ -8385,6 +8420,34 @@ mod tests {
         assert_eq!(sha_for_asset(notes, ""), "a".repeat(64));
         assert_eq!(sha_for_asset(notes, "Helene-0.9.0.zip"), "a".repeat(64));
         assert_eq!(sha_for_asset("нет сумм", "Helene-0.7.1.zip"), "");
+    }
+
+    /// ⚠⚠⚠ Кнопка «Скачать и установить» вела на ЗАПИСЬ релиза в API, а не на
+    /// архив: ответ GitHub несёт своё поле `url`
+    /// (`https://api.github.com/repos/…/releases/392320465`), а выбор шёл по его
+    /// непустоте — «раз назван, значит это свой JSON». Поле не пустое никогда,
+    /// поэтому на GitHub-адресе кнопка не работала ни разу: `update_file_name`
+    /// отвечал «ссылка ведёт не на архив .zip», окно печатало «Не получилось.».
+    /// Живой случай 20.09.2026 у владельца (0.7.1 → 0.8.2).
+    #[test]
+    fn update_url_is_the_archive_not_the_api_record() {
+        use super::pick_update_url;
+        let api = "https://api.github.com/repos/josephsteuerjr/praxis/releases/392320465";
+        let zip = "https://github.com/josephsteuerjr/praxis/releases/download/v0.8.2/Helene-0.8.2.zip";
+        let page = "https://github.com/josephsteuerjr/praxis/releases/tag/v0.8.2";
+        // GitHub: версия названа tag_name (своего `version` нет) — берётся архив,
+        // а `url` записи игнорируется, каким бы он ни был.
+        assert_eq!(pick_update_url("", api, Some(zip.to_string()), page), zip);
+        // GitHub без подходящего архива — страница релиза, человеку есть куда пойти.
+        assert_eq!(pick_update_url("", api, None, page), page);
+        // Свой JSON: версия названа полем `version`, адрес — полем `url`.
+        assert_eq!(pick_update_url("0.9.0", zip, None, ""), zip);
+        // Свой JSON, где кто-то заодно положил и assets: адрес владельца сильнее.
+        assert_eq!(pick_update_url("0.9.0", zip, Some(page.to_string()), page), zip);
+        // Пусто со всех сторон — пустая строка, а не паника.
+        assert_eq!(pick_update_url("", "", None, ""), "");
+        // Свой JSON без адреса — то же правило, что у GitHub: архив, потом страница.
+        assert_eq!(pick_update_url("0.9.0", "", Some(zip.to_string()), page), zip);
     }
 
     /// Корень установки — первая папка вверх от exe с паспортом сборки; без
