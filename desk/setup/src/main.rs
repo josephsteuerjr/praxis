@@ -292,6 +292,58 @@ fn main() {
         }
         return;
     }
+    // Обновление поверх установленного, БЕЗ вопросов: решения берутся из самой
+    // установки (`install::setup_from_dir`), и визард не открывается вовсе.
+    //
+    //     helene-setup.exe --update [--dir <папка>]
+    //
+    // ⚠ Живой случай 20.09.2026: «блин, он мне ставить собрался, а не
+    // обновлять». Окно на Windows запускало мастер без аргументов — человек,
+    // нажавший «Скачать и установить», получал полный визард и вводил заново
+    // имя агента, конституцию и модель. На macOS то же место давно делает
+    // `install.sh` тихо. Теперь платформы сошлись.
+    //
+    // Не вышло прочитать решения (нет имён, нет конституции, папка не найдена)
+    // — это НЕ отказ: дальше открывается обычный визард, и человек отвечает
+    // сам. Единственное, чего здесь нельзя, — записать вместо его выбора
+    // умолчания. Ход и итог — в install.log рядом с установщиком.
+    if args.iter().any(|a| a == "--update") {
+        let asked = args
+            .iter()
+            .position(|a| a == "--dir")
+            .and_then(|i| args.get(i + 1))
+            .map(std::path::PathBuf::from);
+        let dir = asked.or_else(|| install::installed_info().map(|i| std::path::PathBuf::from(i.dir)));
+        let log_path = install::exe_dir().join("install.log");
+        match dir.as_deref().and_then(install::setup_from_dir) {
+            Some(setup) => {
+                let mut log = format!("обновление поверх {}\n", setup.dir);
+                let result = install::install(&setup, |p| {
+                    log.push_str(&format!("[{}/{}] {}\n", p.step, p.total, p.label));
+                });
+                match &result {
+                    Ok(r) => log.push_str(&format!("OK {}\n", serde_json::to_string(r).unwrap_or_default())),
+                    Err(e) => log.push_str(&format!("FAIL {e}\n")),
+                }
+                let _ = std::fs::write(&log_path, &log);
+                if let Err(e) = result {
+                    if !args.iter().any(|a| a == "--quiet") {
+                        message_box(&format!("Обновление не удалось: {e}"));
+                    }
+                    std::process::exit(1);
+                }
+                return;
+            }
+            None => {
+                let where_ = dir.map(|d| d.display().to_string()).unwrap_or_else(|| "не найдена".into());
+                let _ = std::fs::write(
+                    &log_path,
+                    format!("решений в установке нет ({where_}) — открываю визард\n"),
+                );
+                // Дальше — обычный поток с окном.
+            }
+        }
+    }
     // Экспорт агента без окна: `helene-setup.exe --export [--quiet]` — тот же
     // помощник, что и за кнопкой «Экспорт агента» в Настройках
     // (app/localharness/carry.py). Берётся установка из реестра, либо папка

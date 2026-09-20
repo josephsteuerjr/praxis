@@ -1366,6 +1366,91 @@ fn registered_dir() -> Option<PathBuf> {
 }
 
 /// Что уже установлено: сначала по записи в «Приложениях», иначе по папке по умолчанию.
+/// Решения владельца, вычитанные из УЖЕ УСТАНОВЛЕННОЙ копии, — чтобы
+/// обновление не переспрашивало то, что он однажды решил.
+///
+/// ⚠ Живой случай 20.09.2026, слова владельца: «блин, он мне ставить собрался,
+/// а не обновлять». На macOS `install.sh` собирал такие решения сам (его
+/// `decisions_json`) и звал мастер тихо; на Windows окно запускало мастер БЕЗ
+/// аргументов, и человек, обновляясь, получал полный визард — имя агента,
+/// конституцию, модель заново. Теперь обе платформы делают одно и то же, и
+/// правила здесь — те же, что в `install.sh`, слово в слово.
+///
+/// `None` — когда решать нечего или опасно: нет имён, нет конституции. Тогда
+/// зовущий открывает визард, и человек отвечает сам (мастер иначе записал бы
+/// поверх его выбора свои умолчания).
+///
+/// Чистая функция: конфиг и конституция приходят готовыми, диск не трогается.
+pub fn setup_from_installed(cfg: &serde_json::Value, soul: &str, dir: &str) -> Option<Setup> {
+    let text = |v: Option<&serde_json::Value>| {
+        v.and_then(|x| x.as_str()).unwrap_or("").trim().to_string()
+    };
+    let at = |obj: &str, key: &str| text(cfg.get(obj).and_then(|o| o.get(key)));
+    let flag = |obj: &str, key: &str| {
+        cfg.get(obj).and_then(|o| o.get(key)).and_then(|v| v.as_bool()).unwrap_or(false)
+    };
+    let agent = at("agent", "name");
+    let owner = at("owner", "name");
+    if agent.is_empty() || owner.is_empty() || soul.trim().is_empty() {
+        return None;
+    }
+    let base = at("model", "base_url");
+    let key = at("model", "key");
+    let name = at("model", "model");
+    // Тот же порядок разбора, что у `install.sh`: фреймворк сильнее всего,
+    // затем реле (или его ключ-признак), затем локальная модель.
+    let provider = if at("model", "framework") == "anthropic" {
+        "anthropic"
+    } else if flag("relay", "enabled") || key.starts_with("sk-frame-") {
+        "chatgpt"
+    } else if key == "local" {
+        "local"
+    } else {
+        "api"
+    };
+    Some(Setup {
+        agent,
+        owner,
+        constitution: soul.to_string(),
+        accepted: true,
+        provider: provider.to_string(),
+        chatgpt_model: if provider == "chatgpt" { name.clone() } else { String::new() },
+        reasoning_effort: at("model", "reasoning_effort"),
+        api: Endpoint { base_url: base.clone(), model: name.clone(), key: key.clone() },
+        anthropic: Endpoint { base_url: base.clone(), model: name.clone(), key },
+        local: LocalEndpoint { base_url: base, model: name },
+        telegram: Telegram {
+            bot_token: at("telegram", "bot_token"),
+            owner_id: at("telegram", "owner_id"),
+        },
+        agent_mode: {
+            let mode = text(cfg.get("agent_mode"));
+            if mode.is_empty() { "sandbox".to_string() } else { mode }
+        },
+        // ⚠ Служба, нулевая сессия и брандмауэр — решения ВЛАДЕЛЬЦА, а не
+        // умолчания обновления. `installed.service` — след мастера, он же и
+        // читается обратно: `false` здесь молча снял бы службу (мастер снимает
+        // прежнюю перед копированием и ставит обратно только по этому полю).
+        service: flag("installed", "service"),
+        session0: flag("service", "session0"),
+        firewall: cfg
+            .get("service")
+            .and_then(|s| s.get("firewall"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        computer: flag("computer", "enabled"),
+        dir: dir.to_string(),
+    })
+}
+
+/// Решения из установки по её папке: конфиг и конституция читаются с диска,
+/// правила — в `setup_from_installed`.
+pub fn setup_from_dir(dir: &Path) -> Option<Setup> {
+    let cfg = read_json(&dir.join("helene.json"))?;
+    let soul = std::fs::read_to_string(dir.join("data").join("soul").join("SOUL.md")).unwrap_or_default();
+    setup_from_installed(&cfg, &soul, &dir.display().to_string())
+}
+
 pub fn installed_info() -> Option<Installed> {
     let dir = registered_dir().or_else(default_dir)?;
     let cfg = read_json(&dir.join("helene.json"))?;
@@ -3060,6 +3145,84 @@ pub fn launch_installed(app: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⚠ «Блин, он мне ставить собрался, а не обновлять» (20.09.2026). Решения
+    /// владельца читаются из его же установки: имена, конституция, модель,
+    /// режим, служба, «Управление компьютером». Правила — те же, что у
+    /// `install.sh` на macOS.
+    #[test]
+    fn decisions_come_from_the_installed_copy() {
+        let cfg = serde_json::json!({
+            "agent": {"name": "Мира"},
+            "owner": {"name": "Егор"},
+            "agent_mode": "sandbox",
+            "model": {"framework": "anthropic", "base_url": "https://api.z.ai/api/anthropic",
+                      "model": "glm-5.3", "key": "секрет", "reasoning_effort": "low"},
+            "telegram": {"bot_token": "", "owner_id": ""},
+            "computer": {"enabled": true},
+            "service": {"firewall": true, "session0": false},
+            "installed": {"service": false, "version": "0.8.2"}
+        });
+        let s = setup_from_installed(&cfg, "конституция", r"C:\Helene").expect("решения есть");
+        assert_eq!((s.agent.as_str(), s.owner.as_str()), ("Мира", "Егор"));
+        assert_eq!(s.constitution, "конституция");
+        assert!(s.accepted);
+        assert_eq!(s.provider, "anthropic");
+        assert_eq!(s.chatgpt_model, "");
+        assert_eq!(s.reasoning_effort, "low");
+        assert_eq!((s.api.model.as_str(), s.api.key.as_str()), ("glm-5.3", "секрет"));
+        assert_eq!(s.anthropic.base_url, "https://api.z.ai/api/anthropic");
+        assert_eq!(s.local.model, "glm-5.3");
+        assert_eq!(s.agent_mode, "sandbox");
+        assert!(s.computer, "«Управление компьютером» было включено — обновление не гасит его");
+        assert!(!s.service, "службы не было — обновление её не ставит");
+        assert!(s.firewall, "решение о брандмауэре — владельца");
+        assert!(!s.session0);
+        assert_eq!(s.dir, r"C:\Helene");
+    }
+
+    /// Провайдер узнаётся тем же порядком, что в `install.sh`; служба и режим
+    /// не выдумываются; пустой режим — песочница.
+    #[test]
+    fn provider_and_service_follow_the_config() {
+        let with = |patch: serde_json::Value| -> Setup {
+            let mut cfg = serde_json::json!({"agent": {"name": "А"}, "owner": {"name": "Б"}});
+            for (k, v) in patch.as_object().unwrap() {
+                cfg[k] = v.clone();
+            }
+            setup_from_installed(&cfg, "с", "d").expect("решения есть")
+        };
+        assert_eq!(with(serde_json::json!({"relay": {"enabled": true}})).provider, "chatgpt");
+        assert_eq!(with(serde_json::json!({"model": {"key": "sk-frame-x"}})).provider, "chatgpt");
+        assert_eq!(with(serde_json::json!({"model": {"key": "local"}})).provider, "local");
+        assert_eq!(with(serde_json::json!({"model": {"key": "sk-real"}})).provider, "api");
+        // Фреймворк сильнее реле: у неё anthropic-адрес и ключ реле одновременно.
+        assert_eq!(
+            with(serde_json::json!({"model": {"framework": "anthropic"}, "relay": {"enabled": true}})).provider,
+            "anthropic"
+        );
+        // Режим не назван — песочница, а не пустая строка (её мастер не поймёт).
+        assert_eq!(with(serde_json::json!({})).agent_mode, "sandbox");
+        // Служба стояла — обновление ставит её обратно.
+        assert!(with(serde_json::json!({"installed": {"service": true}})).service);
+        // Брандмауэр не назван — умолчание `default_firewall`, то есть true.
+        assert!(with(serde_json::json!({})).firewall);
+    }
+
+    /// Без имён или без конституции решать нечего: зовущий откроет визард, а
+    /// умолчания поверх выбора владельца не поедут.
+    #[test]
+    fn no_decisions_without_names_or_constitution() {
+        let full = serde_json::json!({"agent": {"name": "А"}, "owner": {"name": "Б"}});
+        assert!(setup_from_installed(&full, "с", "d").is_some());
+        assert!(setup_from_installed(&full, "   \n", "d").is_none(), "пустая конституция");
+        assert!(setup_from_installed(&serde_json::json!({"owner": {"name": "Б"}}), "с", "d").is_none());
+        assert!(setup_from_installed(&serde_json::json!({"agent": {"name": "А"}}), "с", "d").is_none());
+        assert!(setup_from_installed(&serde_json::json!({}), "с", "d").is_none());
+        // Имя из пробелов — то же, что отсутствие имени.
+        let blank = serde_json::json!({"agent": {"name": "  "}, "owner": {"name": "Б"}});
+        assert!(setup_from_installed(&blank, "с", "d").is_none());
+    }
 
     /// Предупреждение службы едет к владельцу файлом: её `println!` уходит в
     /// скрытое поднятое окно. Читаем то, что она положила, — и молчим, когда

@@ -6799,11 +6799,23 @@ fn update_install_windows(archive: &Path, dest: &Path) -> Result<serde_json::Val
         return Err(format!("в архиве нет helene-setup.exe (распаковано в {})", dest.display()));
     }
     let workdir = setup.parent().map(Path::to_path_buf).unwrap_or_else(|| dest.to_path_buf());
-    Command::new(&setup)
-        .current_dir(&workdir)
-        .spawn()
-        .map_err(|e| format!("установщик не запустился: {e}"))?;
-    log_line(&format!("обновление: запущен установщик {}", setup.display()));
+    // `--update --dir <наш корень>`: мастер возьмёт решения из самой установки
+    // и поставит поверх молча. Визард он откроет сам, если решений не нашлось.
+    //
+    // ⚠ 20.09.2026, слова владельца: «блин, он мне ставить собрался, а не
+    // обновлять». До этого мастер звался без аргументов, и «Скачать и
+    // установить» приводило в полный визард — имя агента, конституция, модель
+    // заново, хотя всё это уже решено. Ждать его здесь нельзя и не нужно:
+    // мастер первым делом гасит работающую программу, включая это окно.
+    let root = install_root();
+    let mut cmd = Command::new(&setup);
+    cmd.current_dir(&workdir).arg("--update").arg("--dir").arg(&root);
+    cmd.spawn().map_err(|e| format!("установщик не запустился: {e}"))?;
+    log_line(&format!(
+        "обновление: запущен установщик {} (--update --dir {})",
+        setup.display(),
+        root.display()
+    ));
     Ok(serde_json::json!({ "setup": setup.display().to_string(), "dir": workdir.display().to_string() }))
 }
 
