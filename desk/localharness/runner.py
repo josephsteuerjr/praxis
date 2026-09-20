@@ -446,16 +446,24 @@ def _deliver_outbound(envelope, chat_id: str) -> int:
     return delivered
 
 
-def handle_desk(message: str, room: str = STREAM, attachments: list[str] | tuple[str, ...] = ()) -> None:
+def handle_desk(message: str, room: str = STREAM, attachments: list[str] | tuple[str, ...] = (),
+                 *, ingress_id: str = "") -> None:
     """Одна записка из окна — один ход агента в комнате `room`.
 
     `attachments` — пути картинок из подвала записки (0.5.0): они уезжают в
     медиа-спул и кладутся в кадр рядом с текстом; в памяти комнаты реплика
     владельца получает строку `[изображение: имя]` на каждую, чтобы прожитое
     не расходилось с тем, что видела модель.
+
+    `ingress_id` — СТАБИЛЬНАЯ идентичность входа: штамп имени записки из
+    inbox (20.09). Раньше source_id рождался из «сейчас», и повтор записи
+    после рестарта создавал другую identity — дубли в памяти и второй ход
+    по тому же поводу. Память жизни дедуплицирует по
+    `window:{source_id}:{direction}`, так что стабильный id делает replay
+    идемпотентным: тот же повод — та же строка жизни, не новая.
     """
     now = _now()
-    source_id = f"{room}-{int(now.timestamp() * 1000)}"
+    source_id = str(ingress_id or "").strip() or f"{room}-{int(now.timestamp() * 1000)}"
     desk = _room(room)
     heard, pictures = _hear_attachments(list(attachments or ()))
     refs, notes = _ingest_attachments(pictures, chat_id=room, message_id=source_id)
@@ -1429,6 +1437,46 @@ def _settle_mode(cfg: dict, config_path: Path) -> dict:
     return picture
 
 
+def _replay_unclaimed_notes(processed: Path, limit: int = 5) -> list[str]:
+    """Replay processed-записок, чей ход не дошёл до модели (срез 20.09).
+
+    Записка попадает в processed ДО хода; краш в окне между ними раньше означал
+    молчаливую потерю — стартовый цикл processed не возвращал. Здесь: у каждой
+    записки без парной `.done`-метки ход повторяется ПО ТОМУ ЖЕ ingress id
+    (штампу имени), поэтому память не дублируется. Успешный ход (handle_desk
+    вернулся без исключения) ставит `.done`; упавший остаётся для следующего
+    рестарта. Возвращаются имена отыгранных записок.
+    """
+    replayed: list[str] = []
+    for path in sorted(processed.glob("*.md"))[:max(0, int(limit or 5))]:
+        if (processed / (path.name + ".done")).exists():
+            continue
+        try:
+            message = _read_message(path)
+        except OSError:
+            continue
+        if not message:
+            (processed / (path.name + ".done")).write_text(
+                "empty\n", encoding="utf-8")
+            continue
+        target = _inbox_target(path.stem)
+        message, attached = _split_attachments(message)
+        log.warning("replay записки без хода: %s [%s]", path.name, target)
+        try:
+            if transport.is_room(target):
+                handle_desk(message, room=target, attachments=attached,
+                            ingress_id=f"note:{path.stem}")
+            else:
+                handle_owner_note(target, message)
+        except Exception:
+            log.exception("replay хода упал [%s] — записка осталась без .done", path.name)
+            continue
+        (processed / (path.name + ".done")).write_text(
+            f"{time.time():.0f}\n", encoding="utf-8")
+        replayed.append(path.name)
+    return replayed
+
+
 def main() -> None:
     global _desk, _desks, _bot, _speaker, _title, _agent_name, _tree, _deliver_unspoken, _mode, _continuity, _alarms, _forge_events
     parser = argparse.ArgumentParser()
@@ -1635,9 +1683,14 @@ def main() -> None:
             # (`window-<hex>`). Без суффикса — комната окна по умолчанию.
             target = _inbox_target(path.stem)
             message, attached = _split_attachments(message)
+            # 20.09: ШТАМП записки — ingress id хода. Записка уже в processed,
+            # но между переносом и ходом есть crash-окно; replay по тому же id
+            # не дублирует ни память (dedupe_key), ни жизнь комнаты.
+            ingress_id = f"note:{path.stem}"
             try:
                 if transport.is_room(target):
-                    handle_desk(message, room=target, attachments=attached)
+                    handle_desk(message, room=target, attachments=attached,
+                                ingress_id=ingress_id)
                 else:
                     if attached:
                         # Канал отказывает таким запискам сам; если файл всё же
@@ -1647,6 +1700,15 @@ def main() -> None:
                     handle_owner_note(target, message)
             except Exception:
                 log.exception("ход окна упал [%s]", target)
+        # 20.09: replay processed-записок, чей ход не дошёл до модели (краш между
+        # переносом в processed и ходом). Одна попытка на записку: отмечаем
+        # .done по факту завершения handle_desk без исключения; исключение внутри
+        # handle_desk уже залогировано и записка НЕ помечается — следующий рестарт
+        # попробует снова. Порядок — по имени файла, то есть по времени записи.
+        try:
+            _replay_unclaimed_notes(processed)
+        except Exception:
+            log.exception("восстановление processed-записок не прошло (повтор на следующем тике)")
         while _bot is not None:
             chat_id = _bot.pop_pending()
             if chat_id is None:
