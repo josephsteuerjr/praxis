@@ -5,16 +5,16 @@ export interface Cfg {
   base: string;
   key: string;
   agent?: string;
-  /** Имя продукта для подписи и заголовка (хостинг Пульта Праксис — «Praxis»). */
+  /** Имя продукта для подписи и заголовка (хостинг издания к серверу — «Praxis»). */
   product?: string;
-  /** Пульт распакован, но адрес сервера ещё не вписан: окно спрашивает его само. */
+  /** Поставка распакована, но адрес сервера ещё не вписан: окно спрашивает его само. */
   needs_remote?: boolean;
 }
 
 declare global {
   interface Window {
-    PULT_CONFIG_OVERRIDE?: Cfg;
-    PULT_CONFIG?: Cfg | null;
+    DESK_CONFIG_OVERRIDE?: Cfg;
+    DESK_CONFIG?: Cfg | null;
   }
 }
 
@@ -41,7 +41,7 @@ function keyFromUrl(): string {
   }
 }
 
-const shellCfg = window.PULT_CONFIG_OVERRIDE || window.PULT_CONFIG;
+const shellCfg = window.DESK_CONFIG_OVERRIDE || window.DESK_CONFIG;
 export const cfg: Cfg = shellCfg
   ? { ...shellCfg, key: shellCfg.key || keyFromUrl() }
   : { base: "", key: keyFromUrl() };

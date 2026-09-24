@@ -154,7 +154,7 @@ class Dispatch(unittest.TestCase):
 
     def test_404_and_403_are_words(self):
         self.assertEqual(self._run(deskapp._tunnel_dispatch("GET", "/api/nope", None))["status"], 404)
-        # Пара телефона — владельцу, откуда бы он ни пришёл: у Пульта окно
+        # Пара телефона — владельцу, откуда бы он ни пришёл: окно к серверу
         # стоит не на той машине, где канал (правка 09.09, см. t_phone.py).
         remote = self._run(deskapp._tunnel_dispatch("POST", "/pair/new", None, local=False))
         self.assertEqual(remote["status"], 200)

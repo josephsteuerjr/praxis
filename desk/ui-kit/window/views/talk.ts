@@ -5,7 +5,7 @@ import { api, mediaURL, post } from "../api";
 import { STARTERS } from "./learn";
 import { bindFail, esc, failHTML, fmtAge, fmtDay, fmtTime, humanError, md, q } from "../lib";
 import * as panel from "../panel";
-import { PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, type Run } from "../state";
+import { LEGACY_WINDOW_KEY, PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, type Run } from "../state";
 
 interface Msg {
   timestamp?: string;
@@ -39,7 +39,7 @@ function roomRuns(): Run[] {
   return S.runs.filter((r) => {
     if (r.kind !== "chat_turn" || r.chat_id == null) return false;
     const k = String(r.chat_id);
-    return k === key || (key === WINDOW_ROOM && k === "pult");
+    return k === key || (key === WINDOW_ROOM && k === LEGACY_WINDOW_KEY);
   });
 }
 
@@ -91,7 +91,7 @@ function brainErrorIsCurrent(): boolean {
 
 function brainNotice(): string {
   const s = S.agentState;
-  // Чужой харнесс (Пульт Праксис): «Не запущен» — про сердцебиение Hélène,
+  // Чужой харнесс (Praxis): «Не запущен» — про сердцебиение Hélène,
   // которого там нет по построению; состояние — в шапке, по вызовам модели.
   if (!s || foreignHarness()) return "";
   if (s.level === "error" || s.level === "warn") {

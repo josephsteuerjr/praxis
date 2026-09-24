@@ -8,7 +8,7 @@
         praxis/             ядро агента
         helene/core/        слой: чем издание Элен отличается от ядра
         desk/               приложение Элен  (мы здесь)
-        pult/               приложение Пульт
+        remote/             приложение Praxis: то же окно к серверу
     live/                   рабочая копия дерева агента   ┐
     _relay_prod_src/        зеркало исходника реле         ├ РЯДОМ, не внутри
     _body_target/           куда собираются тело и мост    ┘
@@ -30,11 +30,11 @@ import os
 from pathlib import Path
 
 DESK = Path(__file__).resolve().parent
-ROOT = DESK.parent                      # корень раскладки: praxis/, helene/, desk/, pult/
+ROOT = DESK.parent                      # корень раскладки: praxis/, helene/, desk/, remote/
 
 CORE = ROOT / "praxis"                  # ядро агента
 LAYER = ROOT / "helene" / "core"        # слой издания Элен
-PULT = ROOT / "pult"                    # приложение Пульт
+REMOTE = ROOT / "remote"                # приложение Praxis: то же окно к серверу
 
 
 def neighbour(name: str) -> Path:

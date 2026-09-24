@@ -82,9 +82,9 @@ owner merges — or the agent does, if the owner allowed it. → `praxis/selfdev
 The agent can live on this machine or on a server, and the window does not change. `remote`
 mode points it at a channel over HTTPS (`desk/server/`, Docker, with the STT box);
 `carry.py` exports the whole agent — memory, constitution, skills, its personal git, logins
-— as one archive and imports it on the other side. The Pult application is the same window
-onto a core running under a harness of its own. → `desk/localharness/carry.py`,
-`desk/server/README-СЕРВЕР.md`, `pult/`
+— as one archive and imports it on the other side. The Praxis application is the same
+window onto a core running under a harness of its own. → `desk/localharness/carry.py`,
+`desk/server/README-СЕРВЕР.md`, `remote/`
 
 ---
 
@@ -277,7 +277,7 @@ Author: Yegor Kosyrev — Telegram [@tatarskiy_e4pochmak](https://t.me/tatarskiy
 | [`praxis/`](praxis) | the core: durable runs, files-as-canon memory, Telegram, self-authorship |
 | [`helene/`](helene) | the Windows edition of that core, declared as a layer — only the files that differ, with a table saying how far each one is and why |
 | [`desk/`](desk) | the Hélène application: window, channel, local runner, shell, service, installer, the macOS build (`installer/build_mac.py`, `installer/install.sh`) |
-| [`pult/`](pult) | the Pult application: the same window onto a core that lives on a server |
+| [`remote/`](remote) | the Praxis application: the same window onto a core that lives on a server |
 
 Releases of Hélène are published here — one archive that unpacks into a folder on Windows,
 and for macOS a zip with `install.sh` next to it. The relay is a product of its own:

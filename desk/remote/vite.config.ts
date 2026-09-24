@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import { devOverride } from "../ui-kit/vite-dev";
 
-// UI Пульта Praxis: то же окно, но агент живёт на сервере. Общая часть — в
+// UI Praxis: то же окно, но агент живёт на сервере. Общая часть — в
 // ui-kit/window; здесь только вход и издание настроек. base './' — те же файлы
 // живут и в exe (Tauri), и за deskapp по HTTP; ui-kit лежит выше корня,
 // поэтому fs.allow.

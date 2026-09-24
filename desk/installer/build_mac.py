@@ -1200,8 +1200,8 @@ def stage_git_bundle(out: Path, cache: Path) -> dict:
 # Все пять фронтов, а не три, что едут в Mac-архив (окно, телефон, мастер).
 # Окно Пульта и мини-апп в поставку не входят, но стенд пакета desk
 # (`tests/t_deskpkg.py`) собирает пакет КАЖДОГО вида, и вид `server` без
-# `pult/dist` и `miniapp/dist` красный — это минута сборки, а не полусборка.
-FRONTS = ("app", "mobile", "setup/ui", "pult", "miniapp")
+# `remote/dist` и `miniapp/dist` красный — это минута сборки, а не полусборка.
+FRONTS = ("app", "mobile", "setup/ui", "remote", "miniapp")
 
 
 def build_fronts() -> None:

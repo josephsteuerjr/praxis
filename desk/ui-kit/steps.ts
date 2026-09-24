@@ -2,6 +2,17 @@
 // экране «Система») и для телефона. Данные — `GET /api/run/{id}`.
 import { esc, fmtK, md } from "./text";
 
+/**
+ * Старый ключ комнаты окна (до 10.09.2026) — копия `contract.rooms.legacy`.
+ *
+ * ⚠ Почему КОПИЯ, а не импорт JSON. Этот файл грузит стенд `app/test/actions.test.mjs`:
+ * он читает исходник, снимает типы и подключает его как data:-модуль, подменяя один
+ * относительный импорт. Из data:-адреса `./contract.json` не резолвится никогда.
+ * Копию сверяет `app/test/contract.test.mjs` — тем же способом, каким сверяются копии
+ * в Python и Rust.
+ */
+const LEGACY_WINDOW_KEY = "pult";
+
 export interface RunDetail {
   id?: string;
   origin?: { text: string; source: string };
@@ -118,7 +129,8 @@ function humanOrigin(text: string, label: string): { text: string; label: string
 /** Ссылки под поводом: место в чате и, для напоминаний, просьба агенту словами (в композер, не отправка). */
 function originLinks(d: RunDetail | undefined, kind: string, goal: string): string {
   if (!d) return "";
-  const room = String(d.manifest?.chat_id ?? "").replace(/^pult$/, "window");
+  const raw = String(d.manifest?.chat_id ?? "");
+  const room = raw === LEGACY_WINDOW_KEY ? "window" : raw;
   const at = d.manifest?.created_at || "";
   const links: string[] = [];
   if (room) links.push(`<a href="#" data-open-room="${esc(room)}" data-at="${esc(at)}">Открыть в чате</a>`);

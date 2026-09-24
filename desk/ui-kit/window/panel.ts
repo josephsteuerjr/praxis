@@ -6,7 +6,7 @@ import { api } from "./api";
 import { bindFail, esc, failHTML, fmtDur, fmtTime, humanError, q } from "./lib";
 import { frameStripHTML, renderSteps, stepsHTML, type RunDetail } from "../steps";
 export { stepsHTML, type RunDetail } from "../steps";
-import { S, foreignHarness, isWindowRoom, runIsLive, runIsRecent, type Run } from "./state";
+import { LEGACY_WINDOW_KEY, S, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsLive, runIsRecent, type Run } from "./state";
 
 interface Turn {
   run_id: string;
@@ -80,7 +80,7 @@ function liveRunId(): string {
     const run = S.runs.find((x) => {
       if (x.status !== "running" || !runIsRecent(x)) return false;
       let key = String(x.chat_id ?? "");
-      if (key === "pult") key = "window";
+      if (key === LEGACY_WINDOW_KEY) key = WINDOW_ROOM;
       return key === S.room;
     });
     return run ? run.id : "";
@@ -90,7 +90,7 @@ function liveRunId(): string {
   const run = S.runs.find((x) => x.id === r.run);
   if (!run) return r.run; // манифеста в списке ещё нет — покажем как есть
   let key = String(run.chat_id ?? "");
-  if (key === "pult") key = "window";
+  if (key === LEGACY_WINDOW_KEY) key = WINDOW_ROOM;
   if (run.chat_id == null) return r.run;
   return key === S.room || (isWindowRoom(key) && isWindowRoom(S.room) && key === S.room) ? r.run : "";
 }

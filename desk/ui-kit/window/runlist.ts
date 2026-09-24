@@ -4,7 +4,7 @@
 import { api } from "./api";
 import { esc, fmtDay, fmtTime, humanError } from "./lib";
 import { stepsHTML, type RunDetail } from "../steps";
-import { S, runIsLive, type Run } from "./state";
+import { LEGACY_WINDOW_KEY, S, WINDOW_ROOM, runIsLive, type Run } from "./state";
 
 export const RUN_KIND: Record<string, string> = {
   chat_turn: "сообщение",
@@ -44,7 +44,7 @@ function noteLabel(note: string): string {
 
 export function roomKeyOf(r: Run): string {
   const k = String(r.chat_id ?? "");
-  return k === "pult" ? "window" : k;
+  return k === LEGACY_WINDOW_KEY ? WINDOW_ROOM : k;
 }
 
 /** Слова агента для подписей: chat-turns комнат последних запусков (не чаще раза в 20 с на комнату). */

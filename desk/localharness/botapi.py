@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Telegram Bot API как ЕЁ транспорт — тот же шов, что Пульт и Telethon.
+"""Telegram Bot API как ЕЁ транспорт — тот же шов, что окно и Telethon.
 
 Зачем: MTProto-вход (номер, api_id/api_hash, сессия) отсекает большинство
 тестеров продукта. Бот от BotFather — один токен в helene.json, и её организм
@@ -7,7 +7,7 @@
 
 Устройство повторяет transport.py: наполняем `agent._TELETHON` крючками и НЕ
 трогаем ни строчки её кода. Поверх desk-крючков встаёт маршрутизатор: комната
-окна («pult») остаётся у окна, все остальные адреса — у бота.
+окна остаётся у окна, все остальные адреса — у бота.
 
 Что здесь честно работает: приём (long-poll getUpdates в своём потоке),
 отправка текстом и файлом, реакции, имя/описание бота (её update_profile),
@@ -208,7 +208,7 @@ class Contacts:
 
 class Rooms:
     """Записи и чтение переписки по чатам — в тех же файлах, что читают её кадр,
-    group_context и Пульт: memory/groups/<id>.jsonl + реестр .state/group_context."""
+    group_context и окно: memory/groups/<id>.jsonl + реестр .state/group_context."""
 
     def __init__(self, tree: Path, memory_life, agent_name: str):
         self.tree = Path(tree)
@@ -376,7 +376,7 @@ def peer_thread(conversation_id: str) -> tuple[str, int | None]:
     """Ключ разговора -> (peer_id, тема|None).
 
     Конвенция ЖИВОГО дерева, дословно: место = настоящая тема форума, ключ
-    `<chat>__topic__<id>` (см. telegram_routes; читатели Пульта режут по нему же).
+    `<chat>__topic__<id>` (см. telegram_routes; читатели окна режут по нему же).
     Обычный чат — ключ без суффикса.
     """
     peer, _, thread = str(conversation_id).partition("__topic__")
@@ -784,7 +784,7 @@ def install(agent_mod, desks, bot: BotTransport) -> None:
     def _send_message(to, text) -> str:
         # ⚠ Владелец окна и человек в Telegram — ОДИН И ТОТ ЖЕ человек с двумя
         # каналами, и имя между ними двусмысленно. Первый живой прогон это доказал:
-        # «владелец» совпал с именем окна, реплика легла в Пульт, а расписка без канала
+        # «владелец» совпал с именем окна, реплика легла в окно, а расписка без канала
         # позволила ей отчитаться «второй транспорт дышит». Правило теперь такое:
         # send_message — рука ДОТЯНУТЬСЯ, поэтому известный Telegram-контакт
         # предпочитается окну; окно достаётся адресам самого окна и владельцу,
@@ -877,7 +877,7 @@ def install(agent_mod, desks, bot: BotTransport) -> None:
     def _react(chat="", message_id=0, emoji="", remove=False) -> str:
         target = str(chat or "").strip() or str(agent_mod._active_chat() or "")
         if _is_desk(target):
-            return "В окне Пульта реакций нет — скажи словами."
+            return "В окне реакций нет — скажи словами."
         peer, _thread = peer_thread(target)   # реакция висит на сообщении, тема не нужна
         try:
             bot.client.call("setMessageReaction", chat_id=peer,

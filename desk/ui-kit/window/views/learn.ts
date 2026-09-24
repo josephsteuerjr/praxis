@@ -13,7 +13,7 @@
 // стоят только рамки с пропусками, которые человек заполняет сам. Это условие
 // приёмки раздела, а не пожелание.
 import { esc } from "../lib";
-import { PRODUCT_NAME } from "../state";
+import { LOCAL_AGENT } from "../state";
 
 /** Задачка: рамка с пропусками, которые заполняет владелец. */
 interface Task {
@@ -23,7 +23,7 @@ interface Task {
   what: string;
   /** Шаблон с дырами в угловых скобках. Уезжает в поле ввода как есть. */
   template: string;
-  /** Только у издания с агентом на этой машине (у Пульта такого нет). */
+  /** Только у издания с агентом на этой машине (у издания к серверу такого нет). */
   local?: boolean;
   /** Нужно тело тула `computer`. Оно есть на Windows и macOS (0.8.0), и
    *  включается владельцем — карточка про это не решает, только помечает. */
@@ -188,10 +188,10 @@ const HOW: Array<[string, string]> = [
 ];
 
 export async function render(container: HTMLElement): Promise<void> {
-  const local = PRODUCT_NAME !== "Пульт Praxis";
+  const local = LOCAL_AGENT;
   const tasks = TASKS.filter((t) => local || !t.local);
   container.innerHTML = `<div class="center learn">
-    <p class="learn-lead">Агент работает руками: ищет, читает, пишет, помнит, просыпается по расписанию.
+    <p class="learn-lead">Агент работает тулами: ищет, читает, пишет, помнит, просыпается по расписанию.
       Ниже — рамки задач с пропусками: нажми, и она уедет в поле ввода, а пропуски заполнишь ты.</p>
     <h3 class="section-title">Как идёт один ход</h3>
     ${diagram()}

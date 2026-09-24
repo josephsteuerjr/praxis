@@ -20,15 +20,15 @@ interface TelegramWebApp {
 declare global {
   interface Window {
     Telegram?: { WebApp?: TelegramWebApp };
-    PULT_CONFIG_OVERRIDE?: { base: string; key: string; agent?: string };
-    PULT_CONFIG?: { base: string; key: string; agent?: string } | null;
+    DESK_CONFIG_OVERRIDE?: { base: string; key: string; agent?: string };
+    DESK_CONFIG?: { base: string; key: string; agent?: string } | null;
   }
 }
 
 const tg = window.Telegram?.WebApp;
 const params = new URLSearchParams(location.search);
 // Приоритет: подстановка dev-сервера, потом config.js хостинга.
-const override = window.PULT_CONFIG_OVERRIDE || window.PULT_CONFIG || undefined;
+const override = window.DESK_CONFIG_OVERRIDE || window.DESK_CONFIG || undefined;
 const base = override?.base || "";
 const STORAGE = "frame.tg.device";
 

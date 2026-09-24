@@ -127,7 +127,7 @@ jobs:
             desk/app/package-lock.json
             desk/mobile/package-lock.json
             desk/setup/ui/package-lock.json
-            desk/pult/package-lock.json
+            desk/remote/package-lock.json
             desk/miniapp/package-lock.json
 
       - name: Сборка (build_mac.py)

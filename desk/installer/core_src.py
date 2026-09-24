@@ -63,7 +63,7 @@ DESK = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(DESK))
 import layout  # noqa: E402 — где на диске лежат соседи раскладки
 
-ROOT = layout.ROOT                       # раскладка 10.09: praxis/, helene/, desk/, pult/
+ROOT = layout.ROOT                       # раскладка 10.09: praxis/, helene/, desk/, remote/
 CORE_DEFAULT = layout.CORE
 LAYER_DEFAULT = layout.LAYER
 STAMP = "CORE-SOURCE.json"

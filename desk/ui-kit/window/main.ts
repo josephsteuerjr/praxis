@@ -4,7 +4,7 @@
 // владельца 07.09).
 //
 // ⚠ ПОЧЕМУ ЭТО ФУНКЦИЯ, А НЕ СКРИПТ. До 10.09 файл был телом окна Элен и
-// выполнялся при импорте, а Пульт поднимался тем же файлом с ветками
+// выполнялся при импорте, а издание к серверу поднималось тем же файлом с ветками
 // `cfg.needs_remote` внутри. Теперь окно поднимает ИЗДАНИЕ: `start()` строит всё
 // общее, а издание приносит своё — экран настроек и, если нужно, перехват
 // первого запуска. Веток про удалённый харнесс здесь нет ни одной.
@@ -14,7 +14,7 @@ import { applyTheme } from "../../ui-kit/dom";
 import { watchShellVersion } from "../../ui-kit/version";
 import { setResultFetcher } from "../../ui-kit/steps";
 import { bindFail, esc, failHTML, fmtAge, fmtDur, fmtK, fmtTs, humanError, q, toast } from "../../ui-kit/window/lib";
-import { PRODUCT_NAME, S, setProductName, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "../../ui-kit/window/state";
+import { LEGACY_WINDOW_KEY, PRODUCT_NAME, S, setLocalAgent, setProductName, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "../../ui-kit/window/state";
 import { hostInfo } from "../../ui-kit/window/host";
 import { clientIsMac, isMacPlatform, kbdLabel, platformOf } from "../../ui-kit/platform";
 import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "../../ui-kit/window/rooms";
@@ -39,7 +39,7 @@ export interface WindowOptions {
    * Перехват первого запуска. Вернуло `true` — издание заняло экран собой, и
    * окно к каналу НЕ подключается: связываться пока не с кем.
    *
-   * Нужен Пульту: у него нет установщика по замыслу (поставка распаковывается),
+   * Нужен Praxis: у него нет установщика по замыслу (поставка распаковывается),
    * и адрес сервера спрашивается прямо в окне. У Элен харнесс рядом, и первый
    * запуск перехватывать незачем.
    */
@@ -48,14 +48,23 @@ export interface WindowOptions {
    * Как зовётся ЭТО приложение, пока канал не сказал иначе.
    *
    * Нужно потому, что приложений два: «Hélène», вшитая в общий слой, подписывала
-   * бы Пульт чужим именем — в заголовке окна, на полке и в служебных плашках
+   * бы Praxis чужим именем — в заголовке окна, на полке и в служебных плашках
    * чата. Живое имя из канала (`cfg.product`) главнее.
    */
   productName: string;
+  /**
+   * Живёт ли агент на ЭТОЙ машине. У Элен — да, у окна к серверу — нет.
+   *
+   * По этому флагу гейтятся карточки, которые за каналом не про что: папки
+   * этого компьютера, управление им. По умолчанию `true`, чтобы старое
+   * издание не потеряло свои карточки молча.
+   */
+  localAgent?: boolean;
 }
 
 export function start(opts: WindowOptions): void {
   setProductName(opts.productName);
+  setLocalAgent(opts.localAgent !== false);
 
 
   // Длинный результат руки или её слово дочитываются файлом прогона по кнопке в ленте шагов.
@@ -157,7 +166,7 @@ export function start(opts: WindowOptions): void {
   });
 
   // ---------------------------------------------------------------- голосовое (0.6.0)
-  // Кнопка микрофона есть только в окне Элен (app/index.html): у Пульта за каналом
+  // Кнопка микрофона есть только в окне Элен (app/index.html): у издания к серверу
   // нет раннера, расшифровывать некому. Запись — MediaRecorder в webm/opus, до
   // пяти минут; вторая кнопка — стоп; результат ложится вложением рядом с текстом.
   // Готовность слуха спрашивается у канала (`/api/voice`) ДО записи: записывать то,
@@ -273,7 +282,7 @@ export function start(opts: WindowOptions): void {
   // без переключателя в окне.
   applyTheme("system");
 
-  // Веб-версия окна (Пульт за каналом) обновляется сама, когда на сервере новая
+  // Веб-версия окна (Praxis за каналом) обновляется сама, когда на сервере новая
   // сборка; в оболочке helene:// сверка тихо не срабатывает — там статика с диска.
   if (!inTauri) watchShellVersion();
 
@@ -443,7 +452,7 @@ export function start(opts: WindowOptions): void {
     learn,
     // Экран настроек — общий каркас плюс ИЗДАНИЕ. Карточки местного агента
     // приносит `agentEdition`: они читают и пишут helene.json рядом с окном и
-    // спрашивают харнесс на этой же машине. У Пульта здесь стоит своё издание.
+    // спрашивают харнесс на этой же машине. У Praxis здесь стоит своё издание.
     settings: { render: (root: HTMLElement) => settings.render(root, opts.settingsEdition) },
   };
 
@@ -651,7 +660,7 @@ export function start(opts: WindowOptions): void {
     const { runs, chats } = await fetchRooms();
     S.runs = runs;
     S.rooms = buildRooms(runs, chats);
-    // Чужой харнесс (Пульт Праксис): комната окна у неё пуста — чат открывается
+    // Чужой харнесс (Praxis): комната окна у неё пуста — чат открывается
     // на самой свежей комнате, пока владелец не выбрал сам.
     if (foreignHarness() && !roomPicked && S.room === WINDOW_ROOM) {
       const fresh = S.rooms.find((r) => r.kind === "telegram" && r.count > 0) ?? S.rooms.find((r) => r.kind === "telegram");
@@ -832,7 +841,7 @@ export function start(opts: WindowOptions): void {
   }
 
   /**
-   * Чужой харнесс (Пульт Праксис): сердцебиения Hélène нет, и канал честно
+   * Чужой харнесс (Praxis): сердцебиения Hélène нет, и канал честно
    * отвечает «Не запущен». Для окна это не тревога, а другой способ судить о
    * жизни: свежий вызов модели и идущие прогоны.
    */
@@ -1030,7 +1039,7 @@ export function start(opts: WindowOptions): void {
     if (midturn) return "агент читает сейчас";
     const st = S.agentState;
     // «Квитанции не было ни разу» — это не «агент выключен», а «этот агент окно не
-    // читает»: так выглядит Пульт к серверу, где записка ложится в дерево и ждёт
+    // читает»: так выглядит окно к серверу, где записка ложится в дерево и ждёт
     // читателя, которого там нет. Обещать «прочитает в следующий ход» здесь — врать.
     if (st && st.runner && st.runner.ever === false) return "лежит в дереве: этот агент окно не читает";
     if (st && st.runner && !st.runner.alive) return "ждёт запуска агента";
@@ -1158,13 +1167,13 @@ export function start(opts: WindowOptions): void {
   // ---------------------------------------------------------------- старт
 
   S.agent = (cfg.agent || "").trim() || "Агент";
-  // Подпись внизу полки и заголовок вкладки — имя продукта хостинга: у Пульта
-  // Праксис это «Praxis» (config.js), у Hélène — Hélène (слово владельца 07.09).
+  // Подпись внизу полки и заголовок вкладки — имя продукта хостинга: у издания к
+  // серверу это «Praxis» (config.js), у Hélène — Hélène (слово владельца 07.09).
   const product = (cfg.product || "").trim() || PRODUCT_NAME;
   railSign.textContent = product;
   document.title = product;
   // Версию говорит оболочка (`app_info`). Её нет ровно там, где окно открыто
-  // браузером — Пульт на сервере, — и подпись оставалась одним именем продукта.
+  // браузером — Praxis на сервере, — и подпись оставалась одним именем продукта.
   // Тогда версию берём у канала: он называет свой пакет desk в /api/state.
   let shellVersion = "";
   function paintRailSign(): void {
@@ -1206,7 +1215,7 @@ export function start(opts: WindowOptions): void {
   });
   // Ссылки с карточки хода (ui-kit/steps): открыть место в чате; надиктовать агенту просьбу в композер.
   function roomFor(key: string): Room {
-    const k = key === "pult" || key === "window" ? WINDOW_ROOM : key;
+    const k = key === LEGACY_WINDOW_KEY || key === WINDOW_ROOM ? WINDOW_ROOM : key;
     return S.rooms.find((r) => r.key === k) ?? ({ key: k, name: isWindowRoom(k) ? S.agent : k, kind: isWindowRoom(k) ? "window" : "telegram", live: false, count: 0, mtime: 0 } as Room);
   }
   addEventListener("steps-open", (e) => {
@@ -1245,7 +1254,7 @@ export function start(opts: WindowOptions): void {
     }, 250);
   });
   /**
-   * Первый запуск Пульта к своему серверу: адрес и ключ спрашиваются в окне.
+   * Первый запуск Praxis к своему серверу: адрес и ключ спрашиваются в окне.
    *
    * У варианта Praxis установщика нет по замыслу — поставка распаковывается. До
    * 0.5.0 окно с пустым адресом открывалось «как есть» и билось об ошибки связи,

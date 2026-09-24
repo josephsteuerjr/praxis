@@ -37,6 +37,16 @@ assert.ok(/COMPUTER_SCOPES: readonly string\[\] = contract\.computer_scopes/.tes
 assert.ok(!/"computer\.read"/.test(computerTs), "computer.ts держит свою копию списка скоупов");
 assert.ok(/WINDOW_ROOM: string = contract\.rooms\.default/.test(stateTs), "state.ts: ключ комнаты окна не из contract.json");
 assert.ok(/contract\.rooms\.default/.test(phoneTs), "ui-kit/phone.ts: ключ комнаты окна не из contract.json");
+assert.ok(/LEGACY_WINDOW_KEY: string = contract\.rooms\.legacy/.test(stateTs), "state.ts: старый ключ комнаты не из contract.json");
+assert.ok(/LEGACY_WINDOW_KEY: string = contract\.rooms\.legacy/.test(phoneTs), "ui-kit/phone.ts: старый ключ комнаты не из contract.json");
+// Два общих примитива держат КОПИЮ значения: их грузит actions.test.mjs как data:-модуль,
+// а оттуда относительный импорт JSON не резолвится. Копии сверяем здесь.
+for (const f of ["activity.ts", "steps.ts"]) {
+  const src = readFileSync(join(kit, f), "utf8");
+  const m = src.match(/const LEGACY_WINDOW_KEY = "([^"]+)"/);
+  assert.ok(m, `ui-kit/${f}: копии старого ключа комнаты нет вовсе`);
+  assert.equal(m[1], contract.rooms.legacy, `ui-kit/${f}: копия старого ключа разошлась с contract.json`);
+}
 
 // --- порт канала в прокси dev-серверов совпадает с contract.json
 for (const cfg of ["app", "mobile", "miniapp"]) {

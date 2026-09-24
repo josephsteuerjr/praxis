@@ -268,8 +268,8 @@ class Wheels(unittest.TestCase):
 class Stands(unittest.TestCase):
     def test_all_five_fronts_are_built(self):
         # Стенд пакета desk собирает пакет каждого вида, серверному нужны
-        # pult/dist и miniapp/dist — фронты строятся все, не три «для архива».
-        self.assertEqual(set(build_mac.FRONTS), {"app", "mobile", "setup/ui", "pult", "miniapp"})
+        # remote/dist и miniapp/dist — фронты строятся все, не три «для архива».
+        self.assertEqual(set(build_mac.FRONTS), {"app", "mobile", "setup/ui", "remote", "miniapp"})
         for rel in build_mac.FRONTS:
             self.assertTrue((DESK / rel / "package-lock.json").is_file(), rel)
             scripts = json.loads((DESK / rel / "package.json").read_text(encoding="utf-8")).get("scripts", {})
