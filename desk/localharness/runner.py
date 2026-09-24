@@ -66,6 +66,7 @@ _HEARTBEAT_SEC = 10.0
 
 _agent = None          # её дерево, загруженное в этот процесс
 _life = None           # memory_life — память дерева
+_refresh_care = None   # serialized background refresh, owned by main lifecycle
 _desk: transport.Desk | None = None      # комната окна по умолчанию (`window`)
 _desks: transport.Desks | None = None    # все комнаты окна (задача A §3)
 _bot = None            # botapi.BotTransport | None
@@ -369,6 +370,9 @@ def _compact(chat_id: str) -> None:
     except Exception:
         log.warning("свёртка горячего слоя не прошла [%s]", chat_id, exc_info=True)
         return
+    finally:
+        if _refresh_care is not None:
+            _refresh_care.request(chat_id)
     folded = int((result or {}).get("folded") or 0)
     if folded:
         log.info("свёртка [%s]: свёрнуто %d записей", chat_id, folded)
@@ -1652,6 +1656,11 @@ def main() -> None:
     control_stop, _control_thread = control_watch.start(
         tree, agent._runs(), agent.run_manager.NONTERMINAL_STATUSES)
     atexit.register(control_stop.set)
+    import refresh_care
+    global _refresh_care
+    _refresh_care = refresh_care.RefreshCare(
+        memory_life, cooldown=float(os.getenv("PRAXIS_REFRESH_COOLDOWN_SEC", "600") or 600)).start()
+    atexit.register(_refresh_care.stop)
     # Рождение — после того, как всё поднято и квитанция читателя уже пишется:
     # окно видит «думает», а не мёртвый руннер, пока идёт первый ход.
     _maybe_birth(tree)
