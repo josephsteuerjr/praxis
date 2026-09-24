@@ -143,10 +143,37 @@ class MtprotoClient:
             return self._updates(float(params.get("timeout") or 20))
         if method == "sendMessage":
             return self._run(self._send_message(params), timeout=_http_timeout)
-        if method in ("sendChatAction", "setMessageReaction", "setMyName",
-                      "setMyShortDescription"):
+        # 25.09 (F): у аккаунта тоже видно, что агент думает — «печатает…» идёт
+        # SetTypingRequest; пост «думаю…» правится и удаляется штатно.
+        if method == "sendChatAction":
+            return self._run(self._typing(params), timeout=_http_timeout)
+        if method == "editMessageText":
+            return self._run(self._edit_message(params), timeout=_http_timeout)
+        if method == "deleteMessage":
+            return self._run(self._delete_message(params), timeout=_http_timeout)
+        if method in ("setMessageReaction", "setMyName", "setMyShortDescription"):
             return True  # у аккаунта это либо не нужно, либо не про него
         raise botapi.BotApiError(method, 400, "метод не поддержан аккаунтом Telegram")
+
+    async def _typing(self, params: dict) -> bool:
+        from telethon.tl.functions.messages import SetTypingRequest
+        from telethon.tl.types import SendMessageTypingAction
+
+        chat = int(params["chat_id"])
+        thread = params.get("message_thread_id")
+        peer = await self.client.get_input_entity(chat)
+        await self.client(SetTypingRequest(peer=peer, action=SendMessageTypingAction(),
+                                           top_msg_id=int(thread) if thread else None))
+        return True
+
+    async def _edit_message(self, params: dict) -> bool:
+        await self.client.edit_message(int(params["chat_id"]), int(params["message_id"]),
+                                       str(params.get("text") or ""))
+        return True
+
+    async def _delete_message(self, params: dict) -> bool:
+        await self.client.delete_messages(int(params["chat_id"]), [int(params["message_id"])])
+        return True
 
     def _updates(self, wait: float) -> list[dict]:
         rows: list[dict] = []

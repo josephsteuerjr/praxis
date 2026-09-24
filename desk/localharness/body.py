@@ -701,6 +701,9 @@ class Body:
         показывает «нет» там, где не спрашивали."""
         result = call("desktop.status", {}, timeout=timeout)
         tcc = result.get("tcc") if result.get("ok") else None
+        STATE["console"] = (result.get("console")
+                            if result.get("ok") and isinstance(result.get("console"), bool)
+                            else None)
         if isinstance(tcc, dict):
             STATE["tcc"] = {"screen_recording": bool(tcc.get("screen_recording")),
                             "accessibility": bool(tcc.get("accessibility"))}
@@ -710,7 +713,9 @@ class Body:
             STATE["platform"] = str(result.get("platform") or "")
         elif result.get("ok"):
             STATE["tcc"] = None
-            STATE["hints"] = []
+            hints = result.get("hints")
+            STATE["hints"] = ([str(h) for h in hints if str(h).strip()]
+                              if isinstance(hints, (list, tuple)) else [])
             STATE["platform"] = str(result.get("platform") or "")
         return result
 
@@ -888,7 +893,9 @@ def _raw_call(capability: str, args: dict, *, timeout: float) -> dict:
                 return {"ok": False, "code": frame.get("code"), "error": frame.get("message")}
             if kind == "result":
                 result = frame.get("result") if isinstance(frame.get("result"), dict) else {}
-                return {**frame, **result, "ok": bool(frame.get("ok"))}
+                return {**frame, **result,
+                        "transport_ok": frame.get("ok") is True,
+                        "ok": frame.get("ok") is True and result.get("ok", True) is True}
         if not seen.get("ok"):
             return seen
         time.sleep(0.15)

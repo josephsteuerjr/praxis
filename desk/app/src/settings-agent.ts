@@ -512,6 +512,15 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
   }, { type: "password", mono: true, placeholder: "от @BotFather" }));
   tgPanes.bot.append(tg, tgWarn, el("p", "field-hint", "Бот — вторая дверь к агенту. Без токена агент живёт только в окне."));
   syncTgWarn();
+  // 25.09 (F): «печатает…» идёт всё время хода само; пост «думаю (ЧЧ:ММ)…» у долгого
+  // хода — по желанию владельца, для бота и для аккаунта одинаково.
+  let tgStatus = draft.telegram.status_message === true;
+  const tgStatusRow = toggle("Пост «думаю…» у долгого хода", tgStatus, (v) => (tgStatus = v));
+  tgStatusRow.style.marginTop = "14px";
+  const tgStatusHint = el("p", "field-hint",
+    "«Печатает…» видно всё время хода и так. Если включить, через 20 секунд хода агент оставит в чате пост " +
+    "«думаю (ЧЧ:ММ)…», раз в минуту будет его править, пока никто не написал следом, и уберёт перед ответом; " +
+    "если ход не состоялся — напишет в нём «не вышло: …».");
   const acc = el("div", "form-grid three");
   acc.style.marginTop = "14px";
   acc.append(
@@ -573,7 +582,7 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
     codeGrid,
     el("p", "field-hint", "Агент говорит из своего аккаунта Telegram, как человек: нужен отдельный номер и ключи приложения с my.telegram.org. Вход один раз; сессия лежит в data/telegram. Применяется перезапуском."),
   );
-  tgBox.append(tgPick, tgPanes.bot, tgPanes.account, ownerField);
+  tgBox.append(tgPick, tgPanes.bot, tgPanes.account, ownerField, tgStatusRow, tgStatusHint);
   syncTg();
   if (tgMode === "account" && draft.telegram.api_id) void accCall("status");
   cards.push(inGroup(card("Telegram", tgBox), GROUP.brain));
@@ -809,7 +818,7 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
           return "Для Telegram нужен и твой id: число. Без него бот включится и будет молчать на всё — "
                  + "ход разрешён только владельцу. Узнать id: напиши @userinfobot в Telegram, он ответит числом.";
         }
-        out.telegram = keepBlock(out.telegram, { owner_id: ownerIdRaw ? Number(ownerIdRaw) || 0 : 0, mode: tgMode });
+        out.telegram = keepBlock(out.telegram, { owner_id: ownerIdRaw ? Number(ownerIdRaw) || 0 : 0, mode: tgMode, status_message: tgStatus });
         // Ограда — в `agent_mode`, галочки службы — в `service`. Ключ `mode`
         // (местожительство харнесса: local | remote) не трогаем ни при каких
         // обстоятельствах: режим, записанный туда, оставляет окно без харнесса, а

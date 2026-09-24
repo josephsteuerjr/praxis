@@ -70,6 +70,7 @@ _refresh_care = None   # serialized background refresh, owned by main lifecycle
 _desk: transport.Desk | None = None      # комната окна по умолчанию (`window`)
 _desks: transport.Desks | None = None    # все комнаты окна (задача A §3)
 _bot = None            # botapi.BotTransport | None
+_status_message = False  # telegram.status_message: пост «думаю…» у долгого хода (turn_pulse)
 _speaker = "владелец"
 _title = "Hélène"
 _agent_name = "Агент"
@@ -641,15 +642,26 @@ def handle_bot(chat_id: str) -> None:
                                 known=bool(owner or _bot.is_allowed(sender_id)),
                                 addressed=True,
                                 title=_room_title(chat_id) or str(chat_id))
-    if is_dm:
-        _bot.typing(chat_id)
     _bot.sent_now.clear()
     started = time.time()
     _set_busy(True, chat_id=chat_id)
+    # 25.09 (F): видно, что агент думает, — «печатает…» всё время хода (раньше один
+    # sendChatAction на весь ход гас через ~5 с), а по желанию владельца
+    # (telegram.status_message) у долгого хода — пост «думаю (ЧЧ:ММ)…».
+    import turn_pulse
+    pulse = turn_pulse.TurnPulse(_bot, chat_id, typing=True,
+                                 status=bool(_status_message)).start()
+    failed = ""
     try:
         envelope = _run_turn(chat_id, convo, sender_name, ctx)
+        if envelope is None:
+            failed = "ход не дошёл до конца"
+    except BaseException as exc:
+        failed = type(exc).__name__
+        raise
     finally:
         _set_busy(False)
+        pulse.stop(failed=failed)
     if envelope is None:
         if is_dm and owner:
             try:
@@ -1658,6 +1670,8 @@ def main() -> None:
     except Exception:
         log.exception("рука брокера не выдана — просить права агенту нечем")
     tg = dict(cfg.get("telegram") or {})
+    global _status_message
+    _status_message = bool(tg.get("status_message", False))
     if str(tg.get("mode") or "bot") == "account" and tg.get("api_id") and tg.get("api_hash"):
         # Свой аккаунт агента по MTProto: сессия после входа в настройках.
         try:

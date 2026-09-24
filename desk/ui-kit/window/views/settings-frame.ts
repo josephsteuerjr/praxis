@@ -39,7 +39,7 @@ export interface Config {
   // (shell/src/main.rs, RELAY_INSTRUCTIONS). Раньше блок relay пересобирался
   // заново, и ручка исчезала при первом же «Сохранить».
   relay?: { enabled?: boolean; port?: number; instructions?: string; [k: string]: unknown };
-  telegram?: { bot_token?: string; owner_id?: number | string; mode?: string; api_id?: string | number; api_hash?: string; phone?: string };
+  telegram?: { bot_token?: string; owner_id?: number | string; mode?: string; api_id?: string | number; api_hash?: string; phone?: string; status_message?: boolean };
   // ⚠ `mounts` и `mounts_denied` карточка монтирования ТОЖЕ пишет, а
   // `[k: string]` держит и то, чего экран не знает: блок обязан СЛИВАТЬСЯ при
   // сохранении, иначе список смонтированных папок исчезает при первом же клике.

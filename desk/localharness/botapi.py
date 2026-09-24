@@ -394,6 +394,11 @@ class BotTransport:
         self.agent = agent_mod
         self.tree = Path(tree)
         self.client = BotClient(str(tg.get("bot_token") or ""))
+        # Пульс хода (turn_pulse): последний входящий id по комнате — чтобы правка
+        # поста «думаю» не перебивала человека, написавшего следом; крючок перед
+        # первой отправкой наружу — снять пост до ответа.
+        self.last_incoming: dict[str, int] = {}
+        self.before_send = None
         # .strip(): id сверяется СТРОКОЙ (`ident == str(self.owner_id)`), и
         # " 111 " из руками правленного helene.json не совпал бы с "111"
         # никогда — владелец получил бы бота, молчащего лично на него.
@@ -562,6 +567,7 @@ class BotTransport:
         thread_id = (int(message.get("message_thread_id") or 0)
                      if message.get("is_topic_message") else None)
         conversation = f"{chat_id}__topic__{thread_id}" if thread_id else chat_id
+        self.last_incoming[conversation] = int(message.get("message_id") or 0)
         created = message.get("forum_topic_created")
         if isinstance(created, dict) and created.get("name"):
             # Служебное сообщение создания темы: имени больше взять неоткуда —
@@ -642,7 +648,17 @@ class BotTransport:
         return str(replied.get("id") or "") == str(self.me.get("id") or "")
 
     # ----------------------------------------------------------- доставка
+    def _before_send(self) -> None:
+        """Крючок пульса хода: снять пост «думаю» ровно перед первым словом наружу."""
+        hook = self.before_send
+        if callable(hook):
+            try:
+                hook()
+            except Exception:
+                log.debug("крючок before_send отказал", exc_info=True)
+
     def deliver_text(self, chat_id: str, text: str, reply_to: str = "") -> str:
+        self._before_send()
         peer, thread = peer_thread(chat_id)
         parts = _chunks(text)
         first_id = None
@@ -681,6 +697,7 @@ class BotTransport:
 
     def deliver_file(self, path: Path, *, chat_id: str, caption: str = "",
                      media_kind: str = "document", voice_note: bool = False) -> str:
+        self._before_send()
         peer, thread = peer_thread(chat_id)
         method, field = {"photo": ("sendPhoto", "photo"),
                          "audio": ("sendAudio", "audio"),
@@ -710,6 +727,33 @@ class BotTransport:
                              message_thread_id=thread, action="typing")
         except Exception:
             pass                        # индикатор — не повод для шума
+
+    # ------------------------------------------------------- пост «думаю…» (F)
+    # Служебный пост о ходе (turn_pulse.TurnPulse): отправляется МИМО памяти агента —
+    # это не его слово, а плашка транспорта, и в ленту она не пишется.
+    def post_status(self, chat_id: str, text: str) -> int | None:
+        peer, thread = peer_thread(chat_id)
+        params: dict = {"chat_id": peer, "text": text, "disable_notification": True}
+        if thread is not None:
+            params["message_thread_id"] = thread
+        sent = self.client.call("sendMessage", **params)
+        mid = (sent or {}).get("message_id") if isinstance(sent, dict) else None
+        return int(mid) if mid else None
+
+    def edit_status(self, chat_id: str, message_id: int, text: str) -> bool:
+        peer, _thread = peer_thread(chat_id)
+        self.client.call("editMessageText", chat_id=peer, message_id=int(message_id), text=text)
+        return True
+
+    def delete_status(self, chat_id: str, message_id: int) -> bool:
+        peer, _thread = peer_thread(chat_id)
+        self.client.call("deleteMessage", chat_id=peer, message_id=int(message_id))
+        return True
+
+    def is_last_message(self, chat_id: str, message_id: int) -> bool:
+        """Пост ещё последний в комнате: после него никто не писал и агент не отвечал."""
+        last_in = int(self.last_incoming.get(str(chat_id), 0) or 0)
+        return last_in < int(message_id) and not any(c == str(chat_id) for c, _ in self.sent_now)
 
 
 # --------------------------------------------------------------------------- #
