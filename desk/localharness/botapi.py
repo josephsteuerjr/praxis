@@ -664,7 +664,7 @@ class BotTransport:
                     if i:
                         raise  # часть уже ушла — это не «не отправила», пусть видно
                     return self.agent.DirectSendRefusal(
-                        f"не отправила: Telegram отказал навсегда — {exc.description}. "
+                        f"не отправлено: Telegram отказал навсегда — {exc.description}. "
                         f"Боту можно писать только тем, кто сам ему писал, и только "
                         f"пока не заблокировал.")
                 else:
@@ -695,7 +695,7 @@ class BotTransport:
         except BotApiError as exc:
             if exc.permanent:
                 return self.agent.DirectSendRefusal(
-                    f"не отправила файл: Telegram отказал — {exc.description}.")
+                    f"файл не отправлен: Telegram отказал — {exc.description}.")
             raise
         note = f"[файл] {Path(path).name}" + (f"\n{caption}" if caption else "")
         self.rooms.record(chat_id, note, outgoing=True,
@@ -754,7 +754,7 @@ def install(agent_mod, desks, bot: BotTransport) -> None:
         if _is_desk(ref):
             return desk_hooks["send_message"](to, text)
         return agent_mod.DirectSendRefusal(
-            f"не отправила: «{ref}» я через бота не знаю. Бот пишет только тем, "
+            f"не отправлено: «{ref}» через бота не известен. Бот пишет только тем, "
             f"кого видел (они писали ему или в общий чат); разыскивать людей по "
             f"имени, как раньше, здесь нечем.")
 
@@ -773,7 +773,7 @@ def install(agent_mod, desks, bot: BotTransport) -> None:
                 return desk_hooks["send_file"](path, caption, to, media_kind,
                                                voice_note)
             return agent_mod.DirectSendRefusal(
-                f"не отправила файл: адресата «{ref}» бот не видел.")
+                f"файл не отправлен: адресата «{ref}» бот не видел.")
         src = Path(str(path))
         if not src.is_file():
             return f"Нет файла {path}."
@@ -793,7 +793,7 @@ def install(agent_mod, desks, bot: BotTransport) -> None:
             return desk_hooks["read_chat"](chat_ref, limit)
         target = ref if is_telegram_key(ref) else bot.contacts.resolve(ref)
         if not target:
-            return "(не нашла такой чат — бот видит только тех, кто ему писал)"
+            return "(такого чата не найдено — бот видит только тех, кто ему писал)"
         lines = bot.rooms.lines(target, int(limit))
         if not lines:
             return ("(архив этого чата пуст: бот помнит только то, что пришло при "
@@ -805,7 +805,7 @@ def install(agent_mod, desks, bot: BotTransport) -> None:
         head = desk_hooks["search_chats"](query)
         if head and not head.startswith("("):
             rows = [head] + rows          # комнаты окна — первыми
-        return "\n".join(rows) if rows else "(ничего не нашла)"
+        return "\n".join(rows) if rows else "(ничего не найдено)"
 
     def _search_private(query: str, limit: int = 20) -> str:
         needle = str(query or "").strip().lower()
@@ -821,7 +821,7 @@ def install(agent_mod, desks, bot: BotTransport) -> None:
                 if needle in line.lower():
                     hits.append(f"[{label}] {line}")
         if not hits:
-            return "(ничего не нашла)"
+            return "(ничего не найдено)"
         return "\n".join(hits[-max(1, int(limit)):])
 
     def _get_id(name_or_username):

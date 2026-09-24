@@ -493,7 +493,7 @@ def install(agent_mod, desks: Desks) -> None:
         # `DirectSendRefusal` — её способ отличить «не ушло» от «ушло», не нюхая текст.
         # Обычная строка здесь засчиталась бы как доставка, и её запись хода соврала бы.
         return agent_mod.DirectSendRefusal(
-            f"не отправила: наружу писать нечем — в этом продукте нет транспорта до "
+            f"не отправлено: наружу писать нечем — в этом продукте нет транспорта до "
             f"«{target}». Есть только комнаты окна: {desks.listing()}; чтобы сказать "
             f"это владельцу, отвечай обычной рукой ответа.")
 
@@ -501,7 +501,7 @@ def install(agent_mod, desks: Desks) -> None:
         desk = desks.find(chat_id)
         if desk is None:
             return agent_mod.DirectSendRefusal(
-                f"не отправила: адрес «{chat_id}» — не комната окна. "
+                f"не отправлено: адрес «{chat_id}» — не комната окна. "
                 f"Комнаты окна: {desks.listing()}.")
         return _deliver(desk, text, label=desks.speaker)
 
@@ -560,7 +560,7 @@ def install(agent_mod, desks: Desks) -> None:
     def _read_chat(chat_ref, limit: int = 30) -> str:
         desk = desks.find(chat_ref)
         if desk is None:
-            return f"(не нашла такой чат — комнаты окна: {desks.listing()})"
+            return f"(такого чата не найдено — комнаты окна: {desks.listing()})"
         return "\n".join(desk.lines(int(limit)))
 
     def _search_chats(query: str) -> str:
@@ -568,7 +568,7 @@ def install(agent_mod, desks: Desks) -> None:
         hits = [f"{desks.room_title(k)}: {k}" for k in desks.keys()
                 if not needle or needle in desks.room_title(k).lower() or needle in k.lower()]
         if not hits:
-            return f"(ничего не нашла — комнаты окна: {desks.listing()})"
+            return f"(ничего не найдено — комнаты окна: {desks.listing()})"
         return "\n".join(hits)
 
     def _search_private_messages(query: str, limit: int = 20) -> str:
@@ -583,7 +583,7 @@ def install(agent_mod, desks: Desks) -> None:
                 if needle in line.lower():
                     hits.append(f"[{title}] {line}" if len(keys) > 1 else line)
         if not hits:
-            return "(ничего не нашла)"
+            return "(ничего не найдено)"
         return "\n".join(hits[-max(1, int(limit)):])
 
     def _get_id(name_or_username: str):
