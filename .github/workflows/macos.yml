@@ -20,7 +20,7 @@
 #
 # ⚠⚠ АРТЕФАКТ PUSH-ПРОГОНА В ВЫПУСК НЕ КЛАДЁТСЯ. Дерево агента (`tree/`, `server/`)
 # сборка берёт из Windows-архива выпуска TREE_TAG, а называет архив по TAG. На push
-# выпуска новой версии ещё нет, поэтому TREE_TAG отстаёт (сейчас v0.8.3) — внутри
+# выпуска новой версии ещё нет, поэтому TREE_TAG отстаёт (сейчас v0.8.5) — внутри
 # такого архива дерево ПРОШЛОЙ версии, а имя файла обещает новую. Выложить его
 # значило бы отдать людям выпуск с чужим деревом. Поэтому:
 #   · шаг «Выложить в выпуск» стоит на гарде `[ "$TREE_TAG" = "$TAG" ]`;
@@ -70,7 +70,7 @@ jobs:
       # прогон) выпуска новой версии ещё нет — дерево берётся из последнего
       # существующего (тот же снимок прода), а сборка называется по TAG.
       # Выкладка (кнопка) требует TREE_TAG == TAG — см. шаг «Выложить в выпуск».
-      TREE_TAG: ${{ inputs.tag || 'v0.8.3' }}
+      TREE_TAG: ${{ inputs.tag || 'v0.8.5' }}
       HOME_DIR: /Users/runner/Applications/Helene
     steps:
       - uses: actions/checkout@v4
@@ -148,9 +148,15 @@ jobs:
       # живые под cfg(all(test, target_os = "macos")) (с честным пропуском без
       # TCC). Тот же --target-dir, что у сборки (build_mac.body_target_dir):
       # зависимости не компилируются второй раз и кэшируются вместе с ним.
+      # 25.09: исходник тела — ОДИН на обе сборки: крейты `body/` дерева поставки
+      # (`build_mac.body_src_for`), darwin-ветки живут там; зеркало `praxis/body` —
+      # её Windows-тело, как на проде, и на Mac ему тестироваться нечем.
       - name: Стенды тела (cargo test -p praxis-body -p praxis-bridge)
         run: |
-          cd praxis/body
+          BODY_SRC="$BUILD/Helene/tree/body"
+          if [ ! -f "$BODY_SRC/Cargo.toml" ]; then BODY_SRC="praxis/body"; fi
+          echo "тело: $BODY_SRC"
+          cd "$BODY_SRC"
           cargo test -p praxis-body -p praxis-bridge --target-dir "$BUILD/cache/body-target"
 
       - name: Ограда seatbelt — живые проверки рантаймом сборки
