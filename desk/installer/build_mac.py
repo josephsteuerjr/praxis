@@ -1662,9 +1662,6 @@ def main() -> None:
         missing.append(f"{SVC_BIN} — {e}")
         print(f"  ⚠ {e}")
 
-    if not (out / "runtime" / "git" / "bin" / "git").is_file():
-        raise SystemExit("нет runtime/git/bin/git — с --skip-runtime git должен уже лежать в сборке")
-
     print("дерево агента:")
     if args.tree:
         live = Path(args.tree).resolve()
@@ -1700,6 +1697,11 @@ def main() -> None:
         stage_runtime(out, cache)
         print("git:")
         git_bundle = stage_git_bundle(out, cache)
+    # Проверка — ПОСЛЕ шага рантайма: git кладёт stage_git_bundle, и до него его нет
+    # по построению. 25.09 проверка стояла раньше рантайма (переставлена вместе со
+    # сборкой тела) и валила прогон CI на первом же круге 0.8.6.
+    if not (out / "runtime" / "git" / "bin" / "git").is_file():
+        raise SystemExit("нет runtime/git/bin/git — с --skip-runtime git должен уже лежать в сборке")
     print("  дымовой тест рантайма…")
     freeze = smoke_runtime(out)
     print(f"  импорты живы, пакетов: {len(freeze.splitlines())}")
