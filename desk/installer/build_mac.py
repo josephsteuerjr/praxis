@@ -163,7 +163,7 @@ SVC_BIN = "helene-svc"
 # проверенный прод; собирать его на Mac заново значило бы выпустить под одним
 # тегом два разных дерева.
 RELEASE_REPO = "josephsteuerjr/praxis"
-RELEASE_TAG_DEFAULT = "v0.8.4"
+RELEASE_TAG_DEFAULT = "v0.8.5"
 
 # Минимум macOS. Задуман 12.0, но колёса голоса под cp314/arm64 (numpy,
 # onnxruntime, av — проверено `pip download` 19.09.2026) собраны с тегом
