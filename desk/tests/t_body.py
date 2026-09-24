@@ -685,7 +685,7 @@ class Platform(unittest.TestCase):
             return text
         agent.frame_trace.mark = mark
 
-        self.assertEqual(body.speak_mac(agent), {"pointers": 2, "owner": True})
+        self.assertEqual(body.speak_mac(agent), {"pointers": 2, "owner": True, "results": False})
         self.assertEqual(agent.HAND_PURPOSE["computer"],
                          "компьютер владельца (macOS): файлы, zsh, экран, окна, руки")
         self.assertEqual(agent.tool_text_en.POINTER_PURPOSE["computer"],
@@ -703,10 +703,10 @@ class Platform(unittest.TestCase):
         other = "The Windows PC is mentioned here too"
         self.assertIs(agent.frame_trace.mark("contract.other", "dynamic", "text", other), other)
         # Повтор: словари уже переведены, обёртка не удваивается.
-        self.assertEqual(body.speak_mac(agent), {"pointers": 0, "owner": False})
+        self.assertEqual(body.speak_mac(agent), {"pointers": 0, "owner": False, "results": False})
         self.assertIs(agent.frame_trace.mark.__wrapped__, mark)
         # Чужая форма (нет словарей, нет frame_trace) не роняет.
-        self.assertEqual(body.speak_mac(types.ModuleType("bare")), {"pointers": 0, "owner": False})
+        self.assertEqual(body.speak_mac(types.ModuleType("bare")), {"pointers": 0, "owner": False, "results": False})
 
     def test_install_on_darwin_rewrites_the_description_and_on_windows_leaves_it(self):
         from unittest.mock import patch

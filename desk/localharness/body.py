@@ -1161,7 +1161,14 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
                         f"{STATE.get('body_pid') or '—'}; логи: "
                         + ", ".join(STATE.get("logs") or []) + ". Повтори через несколько "
                         "секунд или спроси `action=status`.")
-        return original(*args, **kwargs)
+        out = original(*args, **kwargs)
+        # 25.09 (D2): результаты руки на Mac — словами Mac. Строка состояния и отказы
+        # маршрутов у дерева написаны под Windows («Windows body», «Session 0», «UI
+        # Automation tree»); отсюда у людей «на Mac UIA не реализовано» — AX реализован,
+        # врали слова. Схему правит describe_for_mac, результаты — здесь.
+        if sys.platform == "darwin" and isinstance(out, str):
+            return mac_result_text(out)
+        return out
 
     computer._helene_body = True
     computer.__name__ = getattr(original, "__name__", "computer")
@@ -1223,6 +1230,51 @@ def mac_access_tool_text(text: str) -> str:
     for old, new in MAC_ACCESS_TOOL_TEXT:
         text = text.replace(old, new)
     return text
+
+
+#: Тексты, которые модель читает в РЕЗУЛЬТАТАХ руки `computer` (не в схеме): строка
+#: состояния тела (`body_client.state_line`) и отказы маршрутов написаны под Windows.
+#: На Mac они говорили «Windows body» и «Session 0» — модель делала вывод «UI Automation
+#: на Mac не реализовано» (Сергей), хотя AX реализован целиком (`ax.rs`); врали слова.
+#: Подстроки, а не полная копия: результаты у дерева меняются, копия отставала бы молча.
+MAC_RESULT_TEXT: tuple[tuple[str, str], ...] = (
+    ("Windows body", "Body (macOS)"),
+    ("desktop недоступен из Session 0",
+     "экран сейчас не у этой сессии — у системной ноги рабочего стола нет"),
+    ("(UI Automation tree with names, values and centre coordinates)",
+     "(Accessibility tree with names, values and centre coordinates)"),
+    ("UI Automation tree", "Accessibility tree"),
+)
+
+
+def mac_result_text(text: str) -> str:
+    """Результат руки `computer` словами macOS. Чистая функция, идемпотентна."""
+    for old, new in MAC_RESULT_TEXT:
+        text = text.replace(old, new)
+    return text
+
+
+def results_for_mac(agent_mod) -> bool:
+    """`body_client.state_line` дерева — словами macOS. -> обёртка поставлена этим вызовом.
+
+    `computer action=status` возвращает эту строку как есть, а рука зовёт её по имени
+    модуля в момент вызова — подмена атрибута работает и не удваивается.
+    """
+    client = getattr(agent_mod, "body_client", None)
+    fn = getattr(client, "state_line", None)
+    if not callable(fn) or getattr(fn, "_helene_mac", False):
+        return False
+
+    def state_line(*args, **kwargs):
+        out = fn(*args, **kwargs)
+        return mac_result_text(out) if isinstance(out, str) else out
+
+    state_line._helene_mac = True
+    state_line.__wrapped__ = fn
+    state_line.__name__ = getattr(fn, "__name__", "state_line")
+    state_line.__doc__ = getattr(fn, "__doc__", "")
+    client.state_line = state_line
+    return True
 
 
 def _mac_walk(node, say=None) -> None:
@@ -1383,6 +1435,7 @@ def speak_mac(agent_mod) -> dict:
     Схемы тулов правит `describe_for_mac`; здесь — остальные два места. Зовётся из
     `install` только на darwin; на Windows ничего этого нет по построению.
     """
-    done = {"pointers": pointers_for_mac(agent_mod), "owner": owner_words_for_mac(agent_mod)}
-    log.info("тело: указатель руки и блок владельца — словами macOS (%s)", done)
+    done = {"pointers": pointers_for_mac(agent_mod), "owner": owner_words_for_mac(agent_mod),
+            "results": results_for_mac(agent_mod)}
+    log.info("тело: указатель руки, блок владельца и строка состояния — словами macOS (%s)", done)
     return done
