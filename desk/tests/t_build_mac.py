@@ -659,6 +659,16 @@ class Body(unittest.TestCase):
         self.assertIn("body=body_info", src)
         self.assertIn("collect_body_licenses(out, body_src_for(live)", src)
 
+    def test_git_check_runs_after_the_runtime_stage(self):
+        # 25.09: проверка «git уже лежит» стояла ДО stage_git_bundle (переставлена вместе
+        # со сборкой тела) и валила Mac-прогон 0.8.6 на первом круге — git кладёт именно
+        # шаг рантайма, до него файла нет по построению.
+        import inspect  # noqa: PLC0415
+        src = inspect.getsource(build_mac.main)
+        check = src.index("нет runtime/git/bin/git")
+        self.assertLess(src.index("stage_git_bundle(out, cache)"), check, "проверка git раньше шага рантайма")
+        self.assertLess(check, src.index("smoke_runtime(out)"), "проверка git после дымового теста — поздно")
+
 
 class InstallSh(unittest.TestCase):
     def setUp(self):

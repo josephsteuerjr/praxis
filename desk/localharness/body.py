@@ -1204,7 +1204,8 @@ MAC_TOOL_TEXT: tuple[tuple[str, str], ...] = (
     # `tests/t_tool_text_mac.py` теперь краснеет на каждую такую.
     ("returns the UI Automation control tree", "returns the Accessibility control tree"),
     ("It goes through UI Automation patterns", "It goes through Accessibility actions"),
-    ("many controls (WinForms TextBox) select all text on focus", "some controls select all text on focus"),
+    ("many controls (WinForms TextBox) select all text when focus arrives with the window",
+     "some controls select all text when focus arrives with the window"),
     ("one Win32 notch", "one wheel notch"),
 )
 

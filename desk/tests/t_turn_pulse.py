@@ -55,7 +55,14 @@ class Pulse(unittest.TestCase):
     def test_typing_is_repeated_while_the_turn_runs(self):
         bot = FakeBot()
         pulse = _pulse(bot, typing=True, status=False).start()
-        time.sleep(0.15)
+        # Ждём ФАКТА повторов, а не фиксированные 0,15 с: у цикла пол ожидания 0,05 с,
+        # и на раннере macOS (25.09, прогон 36066618293) за 0,15 с успевало два вызова.
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            with bot.lock:
+                if bot.typing_calls >= 3:
+                    break
+            time.sleep(0.01)
         pulse.stop()
         self.assertGreaterEqual(bot.typing_calls, 3, "один typing на ход гас через 5 с")
         self.assertEqual(bot.posted, [], "пост без опции не появляется")

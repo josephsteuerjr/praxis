@@ -3848,6 +3848,11 @@ mod platform {
             "max_total_delay_ms": MAX_TOTAL_INPUT_DELAY_MS,
             "text_unit_pause_ms": TEXT_UNIT_PAUSE_MS,
             "text_pacing": "text is typed one UTF-16 unit per SendInput (key down, key up, pause): asynchronous receivers (Notepad 11 / WinUI) read the LAST queued VK_PACKET char when a batch arrives at once; ~50 chars/s, reported as typing_pacing_ms and not counted in max_total_delay_ms — keep the caller timeout in mind for long texts",
+            // Замер живьём 25.09 (форма WinForms, посев в поле): активация окна отдаёт
+            // фокус полю с выделением ВСЕГО текста, и text сразу после неё ЗАТИРАЕТ
+            // посев; один клик в поле или End снимают выделение (дописано); Escape
+            // выделение НЕ снимает; второй клик в интервале двойного выделяет слово.
+            "focus_selection": "a window brought forward by activate focuses its field with ALL text selected (WinForms TextBox, Win32 EDIT) and text typed right away REPLACES it — click once into the field or press End first (a click that itself brings the window forward already places the caret); Escape keeps the selection; a second click within the double-click interval selects a word",
             "max_drag_steps": MAX_DRAG_STEPS,
             "default_drag_steps": DEFAULT_DRAG_STEPS,
             "max_drag_pause_ms": MAX_DRAG_PAUSE_MS,
