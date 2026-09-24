@@ -19,6 +19,7 @@ class FakeBot:
         self.deleted: list[int] = []
         self.before_send = None
         self.last_after_status = last_after_status
+        self.is_last_calls = 0
         self.lock = threading.Lock()
 
     def typing(self, chat_id):
@@ -41,6 +42,8 @@ class FakeBot:
         return True
 
     def is_last_message(self, chat_id, message_id):
+        with self.lock:
+            self.is_last_calls += 1
         return self.last_after_status
 
 
@@ -51,18 +54,23 @@ def _pulse(bot, **kw):
     return turn_pulse.TurnPulse(bot, "777", **kw)
 
 
+def _wait(pred, timeout: float = 3.0) -> bool:
+    """Ждать ФАКТА, а не секунд: у цикла пульса пол ожидания 0,05 с, и на раннере macOS
+    (25.09, прогоны 36066618293 и 36068981837) фиксированные 0,15–0,2 с не вмещали ни
+    трёх typing, ни одной правки поста."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return True
+        time.sleep(0.01)
+    return pred()
+
+
 class Pulse(unittest.TestCase):
     def test_typing_is_repeated_while_the_turn_runs(self):
         bot = FakeBot()
         pulse = _pulse(bot, typing=True, status=False).start()
-        # Ждём ФАКТА повторов, а не фиксированные 0,15 с: у цикла пол ожидания 0,05 с,
-        # и на раннере macOS (25.09, прогон 36066618293) за 0,15 с успевало два вызова.
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            with bot.lock:
-                if bot.typing_calls >= 3:
-                    break
-            time.sleep(0.01)
+        _wait(lambda: bot.typing_calls >= 3)
         pulse.stop()
         self.assertGreaterEqual(bot.typing_calls, 3, "один typing на ход гас через 5 с")
         self.assertEqual(bot.posted, [], "пост без опции не появляется")
@@ -71,7 +79,7 @@ class Pulse(unittest.TestCase):
         bot = FakeBot()
         pulse = _pulse(bot, typing=False, status=True).start()
         self.assertEqual(bot.before_send, pulse.retire_status, "крючок перед отправкой поставлен")
-        time.sleep(0.2)
+        _wait(lambda: len(bot.edited) >= 1)
         self.assertEqual(len(bot.posted), 1)
         self.assertTrue(bot.posted[0].startswith("думаю ("), bot.posted[0])
         self.assertGreaterEqual(len(bot.edited), 1, "пост правится раз в «минуту»")
@@ -85,16 +93,19 @@ class Pulse(unittest.TestCase):
     def test_status_is_not_edited_when_someone_wrote_after_it(self):
         bot = FakeBot(last_after_status=False)
         pulse = _pulse(bot, typing=False, status=True).start()
-        time.sleep(0.2)
+        # Пост появился, и после него цикл спросил «последний ли» хотя бы дважды —
+        # значит, шансов поправить у него было достаточно.
+        _wait(lambda: len(bot.posted) >= 1 and bot.is_last_calls >= 2)
         pulse.stop()
         self.assertEqual(len(bot.posted), 1)
+        self.assertGreaterEqual(bot.is_last_calls, 2)
         self.assertEqual(bot.edited, [], "человек написал следом — не перебиваем")
         self.assertEqual(bot.deleted, [101], "ход кончился без ответа — пост снят")
 
     def test_failed_turn_leaves_an_honest_note(self):
         bot = FakeBot()
         pulse = _pulse(bot, typing=False, status=True).start()
-        time.sleep(0.08)
+        _wait(lambda: len(bot.posted) >= 1)
         pulse.stop(failed="ход не дошёл до конца")
         self.assertEqual(bot.deleted, [])
         self.assertEqual(bot.edited[-1], (101, "не вышло: ход не дошёл до конца"))
