@@ -1,7 +1,7 @@
 // Чат: переписка комнаты в центре — слово агента текстом, как документ, слово
 // владельца пузырём справа; ошибки хода на месте, человеческим словом и с
 // действием. Ход агента — в панели справа (../panel).
-import { api, mediaURL } from "../api";
+import { api, mediaURL, post } from "../api";
 import { STARTERS } from "./learn";
 import { bindFail, esc, failHTML, fmtAge, fmtDay, fmtTime, humanError, md, q } from "../lib";
 import * as panel from "../panel";
@@ -107,9 +107,7 @@ function brainNotice(): string {
 }
 
 /**
- * Идущий ход и единственный честный способ его прекратить — снять руннера
- * перезапуском программы. Чистой «отмены» у хода нет: рука уже могла
- * отправить письмо, записать файл, потратить деньги.
+ * Cooperative stop requests do not restart the engine or undo completed effects.
  */
 function turnNotice(): string {
   const r = S.agentState?.runner;
@@ -286,29 +284,41 @@ export async function render(container: HTMLElement): Promise<void> {
 
 /**
  * Две ступени, потому что действие необратимо: первое нажатие говорит цену
- * словами, второе — снимает руннера.
+ * словами, второе — записывает просьбу об остановке без перезапуска.
  */
 function bindStopTurn(container: HTMLElement) {
   const box = container.querySelector<HTMLElement>("[data-turn-stop-box]");
   if (!box) return;
   const btn = box.querySelector<HTMLButtonElement>("[data-stop-turn]");
   if (!btn) return;
-  btn.addEventListener("click", () => {
+  btn.addEventListener("click", async () => {
     if (btn.dataset.stopTurn === "ask") {
       const text = box.querySelector("span:not(.dot)");
       if (text) {
         text.textContent =
-          "Прервать ход можно только перезапуском программы: агент оборвётся посреди работы. " +
-          "То, что он уже успел сделать — отправленные сообщения, записанные файлы, потраченные деньги, — останется сделанным; " +
-          "недоделанное он подхватит следующим ходом.";
+          "Движок остановит текущие ходы на ближайшей границе, без перезапуска. " +
+          "Отправленные сообщения, записанные файлы и потраченные деньги останутся; " +
+          "идущий вызов модели или тула не обрывается мгновенно.";
       }
       btn.dataset.stopTurn = "do";
       btn.textContent = "Всё равно прервать";
       return;
     }
     btn.disabled = true;
-    btn.textContent = "прерываю…";
-    dispatchEvent(new Event("frame-restart"));
+    btn.textContent = "отправляю просьбу…";
+    try {
+      const receipt = await post<{ok: boolean; note?: string}>("/api/interrupt", {scope: "all"});
+      if (!receipt.ok) throw new Error(receipt.note || "Просьба не записана");
+      const text = box.querySelector("span:not(.dot)");
+      if (text) text.textContent = receipt.note || "Просьба об остановке записана";
+      btn.textContent = "Просьба записана";
+    } catch (error) {
+      const text = box.querySelector("span:not(.dot)");
+      const failure = humanError(error);
+      if (text) text.textContent = [failure.text, failure.detail].filter(Boolean).join(" ");
+      btn.disabled = false;
+      btn.textContent = "Повторить просьбу";
+    }
   });
 }
 

@@ -65,6 +65,12 @@ class _StubAgent:
                                    **self.row}, ensure_ascii=False) + "\n")
         return self.envelope
 
+    def _runs(self):
+        return self
+
+    def status(self, run_id):
+        return {"status": self.row.get("run_status", "running")}
+
     def run_delivery_started(self, run_id, **kw):
         self.receipts.append(("started", run_id))
 
@@ -142,6 +148,14 @@ class WindowTurn(unittest.TestCase):
         self.desk.archive("Мира, проверь руку", outgoing=False)
         outcome = runner._turn_in_window("window-1", speaker="Егор")
         return outcome, self.desk.rows(), agent
+
+    def test_cancelled_turn_suppresses_boundary_word(self):
+        outcome, rows, agent = self._turn(
+            {"held": "unspoken", "note": "Это не должно уйти", "run_status": "cancelled"},
+            _Envelope("run-cancelled"))
+        self.assertEqual(outcome, "failed")
+        self.assertFalse(any(row.get("outgoing") for row in rows))
+        self.assertEqual(agent.receipts, [])
 
     def test_report_in_end_turn_note_reaches_the_window(self):
         outcome, rows, agent = self._turn(

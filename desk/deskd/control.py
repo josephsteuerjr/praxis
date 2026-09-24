@@ -29,6 +29,7 @@ import datetime as dt
 import json
 import os
 import secrets
+import threading
 import time
 from pathlib import Path
 
@@ -77,7 +78,7 @@ def _read(path: Path) -> dict:
 
 def _write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(".tmp-" + path.name)
+    tmp = path.with_name(".tmp-" + path.name + "-" + secrets.token_hex(6))
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n",
                    encoding="utf-8", newline="\n")
     os.replace(tmp, path)
@@ -88,28 +89,37 @@ def _utc() -> str:
 
 
 INTERRUPT = "interrupt.json"
+_INTERRUPT_LOCK = threading.Lock()
 
 
 def interrupt(tree: Path, by: str = "owner", scope: str = "all", reason: str = "") -> dict:
+    """Order this channel's concurrent publishers, including their timestamps."""
+    with _INTERRUPT_LOCK:
+        return _interrupt_locked(tree, by, scope, reason)
+
+
+def _interrupt_locked(tree: Path, by: str, scope: str, reason: str) -> dict:
     """Попросить раннер прервать живой ход агента (12.09).
 
-    Пишется файл `memory/.control/interrupt.json`; раннер читает его на тике часов
-    (≤ 5–10 с) и кооперативно отменяет живые прогоны через run_manager: руки дальше
+    Пишется файл `memory/.control/interrupt.json`; независимый наблюдатель движка
+    кооперативно отменяет живые прогоны через run_manager: руки дальше
     не зовутся, черновик ответа не уходит, а идущий вызов модели дорабатывает до
     границы. На сервере канал держит `memory/.control` на запись ровно для таких
     просьб; на Windows дерево своё. scope — «all» или id одного прогона.
     """
     scope = str(scope or "all").strip() or "all"
     path = Path(tree) / "memory" / ".control" / INTERRUPT
-    request = {"by": str(by or "owner")[:40], "scope": scope,
-               "reason": str(reason or "").strip()[:200] or "прервано с Пульта", "at": _utc()}
+    request = {"id": secrets.token_hex(12), "by": str(by or "owner")[:40], "scope": scope,
+               "reason": str(reason or "").strip()[:200] or "прервано из окна",
+               "at": dt.datetime.now(dt.timezone.utc).isoformat()}
     try:
         _write(path, request)
     except OSError as exc:
         return {"ok": False, "note": f"просьба не записалась: {exc}"}
     return {"ok": True, "request": request,
-            "note": "просьба записана; раннер остановит ход на ближайшем тике (до 10 с), "
-                    "идущий ответ модели дорабатывает до границы и не отправляется"}
+            "note": "просьба записана; движок проверит её независимо от текущего хода. "
+                    "Остановка кооперативная: вызов модели дорабатывает до границы; "
+                    "уже совершённые действия не отменяются"}
 
 
 def supervisor_state(tree: Path) -> dict:
@@ -135,6 +145,7 @@ def supervisor_state(tree: Path) -> dict:
         "targets": [{"id": key, "title": title} for key, title in TARGETS.items()],
         "receipt": _read(_state_dir(tree) / RECEIPT) or None,
         "pending": _read(_state_dir(tree) / REQUEST) or None,
+        "interrupt_receipt": _read(Path(tree) / "memory" / ".control" / "interrupt-receipt.json") or None,
     }
     if alive:
         state["control"] = {"available": True, "why": ""}

@@ -512,60 +512,65 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
         desk.deliver("⚠ ход не дошёл до конца — подробности в логе движка.",
                      source_id=source_id, system=True)
         return "failed"
-    spoken = list(desk.sent)
-    text = str(getattr(envelope, "text", "") or "").strip()
-    run_id = str(getattr(envelope, "run_id", "") or "")
-    media_count = _deliver_outbound(envelope, room)
-    ending, word = ("", "")
-    if not spoken and not text:
-        # Рука reply молчала и конверт пуст. Медиа этого НЕ отменяет: 06.09 ход
-        # со снимком экрана отдал в окно один «[файл]», а весь отчёт остался в
-        # заметке хода — прежнее условие `and not media_count` считало файл
-        # словом. Читаем запись хода: там либо её слово (заметка), либо её
-        # решение молчать, либо ничего.
-        ending, word = boundary_word(_turn_record(room))
-        if ending == WORD and (birth or _deliver_unspoken):
-            # Слово написано текстом, а не рукой reply: под поднятым рычагом это
-            # заметка себе, и до окна она не дошла бы. Продукт по умолчанию
-            # доставляет её на границе (agent.deliver_unspoken в helene.json),
-            # потому что слабые модели теряют так каждое третье слово; при
-            # рождении — всегда.
-            text = word
-            log.info("%s: слово пришло заметкой хода — доставляю на границе",
-                     "рождение" if birth else "ход")
-    if getattr(envelope, "deferred", False):
-        # Durable-чекпойнт придержал ход до подтверждения побочного эффекта. Молчать
-        # об этом нельзя: окно выглядело бы зависшим, а ход на самом деле жив.
-        desk.deliver("⏸ ход приостановлен на чекпойнте и ждёт подтверждения "
-                     f"(запуск {run_id}).", source_id=source_id, system=True)
-    elif getattr(envelope, "failed", False):
-        desk.deliver(f"⚠ ход не состоялся (запуск {run_id or 'без id'}) — "
-                     "подробности в карточке хода.", source_id=source_id, system=True)
-    elif not spoken and text:
-        # Рычаг речи опущен (или ход закрылся текстом): реплика — возврат хода,
-        # доставляем её мы. Под поднятым рычагом сюда не попадаем: слово ушло рукой.
-        desk.deliver(text, source_id=source_id)
-    elif not spoken and not text:
-        # Владелец обязан видеть либо слово, либо явную пометку — пустое окно
-        # после долгого хода читается как поломка. Пометка — плашка продукта
-        # (`system`, вид `silence`): окно её показывает серым, память агента её
-        # не получает, авторство ей не приписывается.
-        if ending == SILENCE:
-            log.info("ход %s: молчание по её решению%s", run_id,
-                     f" ({word})" if word else "")
-            desk.deliver(f"⋯ молчание по решению {_agent_name}"
-                         + (f": {word}" if word else " (это выбор, не сбой)"),
-                         source_id=source_id, system=True, kind="silence")
-        elif not birth:
-            # При рождении плашку кладёт _maybe_birth — со своими словами.
-            log.info("ход %s: закрыт без слова для окна%s", run_id,
-                     " (только файл)" if media_count else "")
-            desk.deliver("⋯ ход закрыт без реплики: слова для окна в нём не было"
-                         + (", только файл" if media_count else ""),
-                         source_id=source_id, system=True, kind="silence")
-    _close_run(envelope, room,
-               delivered_text=(text if not spoken else ""),
-               spoken_by_hand=len(spoken), media_count=media_count)
+    import control_watch
+    with control_watch.delivery(lambda: _agent._runs(), str(getattr(envelope, "run_id", "") or "")) as permitted:
+        if not permitted:
+            log.info("boundary suppressed by durable cancellation")
+            return "failed"
+        spoken = list(desk.sent)
+        text = str(getattr(envelope, "text", "") or "").strip()
+        run_id = str(getattr(envelope, "run_id", "") or "")
+        media_count = _deliver_outbound(envelope, room)
+        ending, word = ("", "")
+        if not spoken and not text:
+            # Рука reply молчала и конверт пуст. Медиа этого НЕ отменяет: 06.09 ход
+            # со снимком экрана отдал в окно один «[файл]», а весь отчёт остался в
+            # заметке хода — прежнее условие `and not media_count` считало файл
+            # словом. Читаем запись хода: там либо её слово (заметка), либо её
+            # решение молчать, либо ничего.
+            ending, word = boundary_word(_turn_record(room))
+            if ending == WORD and (birth or _deliver_unspoken):
+                # Слово написано текстом, а не рукой reply: под поднятым рычагом это
+                # заметка себе, и до окна она не дошла бы. Продукт по умолчанию
+                # доставляет её на границе (agent.deliver_unspoken в helene.json),
+                # потому что слабые модели теряют так каждое третье слово; при
+                # рождении — всегда.
+                text = word
+                log.info("%s: слово пришло заметкой хода — доставляю на границе",
+                         "рождение" if birth else "ход")
+        if getattr(envelope, "deferred", False):
+            # Durable-чекпойнт придержал ход до подтверждения побочного эффекта. Молчать
+            # об этом нельзя: окно выглядело бы зависшим, а ход на самом деле жив.
+            desk.deliver("⏸ ход приостановлен на чекпойнте и ждёт подтверждения "
+                         f"(запуск {run_id}).", source_id=source_id, system=True)
+        elif getattr(envelope, "failed", False):
+            desk.deliver(f"⚠ ход не состоялся (запуск {run_id or 'без id'}) — "
+                         "подробности в карточке хода.", source_id=source_id, system=True)
+        elif not spoken and text:
+            # Рычаг речи опущен (или ход закрылся текстом): реплика — возврат хода,
+            # доставляем её мы. Под поднятым рычагом сюда не попадаем: слово ушло рукой.
+            desk.deliver(text, source_id=source_id)
+        elif not spoken and not text:
+            # Владелец обязан видеть либо слово, либо явную пометку — пустое окно
+            # после долгого хода читается как поломка. Пометка — плашка продукта
+            # (`system`, вид `silence`): окно её показывает серым, память агента её
+            # не получает, авторство ей не приписывается.
+            if ending == SILENCE:
+                log.info("ход %s: молчание по её решению%s", run_id,
+                         f" ({word})" if word else "")
+                desk.deliver(f"⋯ молчание по решению {_agent_name}"
+                             + (f": {word}" if word else " (это выбор, не сбой)"),
+                             source_id=source_id, system=True, kind="silence")
+            elif not birth:
+                # При рождении плашку кладёт _maybe_birth — со своими словами.
+                log.info("ход %s: закрыт без слова для окна%s", run_id,
+                         " (только файл)" if media_count else "")
+                desk.deliver("⋯ ход закрыт без реплики: слова для окна в нём не было"
+                             + (", только файл" if media_count else ""),
+                             source_id=source_id, system=True, kind="silence")
+        _close_run(envelope, room,
+                   delivered_text=(text if not spoken else ""),
+                   spoken_by_hand=len(spoken), media_count=media_count)
     log.info("ход %s [окно%s]: %.1f с, реплик рукой %d%s", run_id or "—",
              "" if room == STREAM else f" {room}", time.time() - started, len(spoken),
              "" if not media_count else f", медиа {media_count}")
@@ -649,48 +654,53 @@ def handle_bot(chat_id: str) -> None:
             except Exception:
                 log.exception("не доложила владельцу о падении хода")
         return
-    spoken = [t for c, t in _bot.sent_now if c == str(chat_id)]
-    text = str(getattr(envelope, "text", "") or "").strip()
-    run_id = str(getattr(envelope, "run_id", "") or "")
-    media_count = _deliver_outbound(envelope, chat_id)
-    if getattr(envelope, "deferred", False) or getattr(envelope, "failed", False):
-        # Чужим людям внутренности не выкладываем — как в живом раннере: сбой
-        # виден в карточке хода и логе, владельцу в личке — словами.
-        state = "приостановлен" if getattr(envelope, "deferred", False) else "не состоялся"
-        log.warning("ход %s [бот %s]: %s", run_id or "—", chat_id, state)
-        if is_dm and owner:
+    import control_watch
+    with control_watch.delivery(lambda: _agent._runs(), str(getattr(envelope, "run_id", "") or "")) as permitted:
+        if not permitted:
+            log.info("boundary suppressed by durable cancellation")
+            return
+        spoken = [t for c, t in _bot.sent_now if c == str(chat_id)]
+        text = str(getattr(envelope, "text", "") or "").strip()
+        run_id = str(getattr(envelope, "run_id", "") or "")
+        media_count = _deliver_outbound(envelope, chat_id)
+        if getattr(envelope, "deferred", False) or getattr(envelope, "failed", False):
+            # Чужим людям внутренности не выкладываем — как в живом раннере: сбой
+            # виден в карточке хода и логе, владельцу в личке — словами.
+            state = "приостановлен" if getattr(envelope, "deferred", False) else "не состоялся"
+            log.warning("ход %s [бот %s]: %s", run_id or "—", chat_id, state)
+            if is_dm and owner:
+                try:
+                    _bot.deliver_text(chat_id, f"⚠ ход {state} (запуск {run_id}).")
+                except Exception:
+                    log.exception("не доложила владельцу о сбое хода")
+        if not spoken and not text:
+            # ⚑ 17.09. ТО ЖЕ ВОССТАНОВЛЕНИЕ, ЧТО У ОКНА (см. `_turn_in_window`), которого у
+            # бота не было — и из-за этого «бот молчит» выглядело её решением.
+            #
+            # Как это происходило. Под поднятым контрактом руки ядро возвращает конверт БЕЗ
+            # текста: последний текст хода — заметка себе, наружу он не идёт. Окно на этом
+            # месте читает запись хода и, если слово там всё-таки есть, доставляет его
+            # границей. Бот же падал прямиком в строку «она промолчала (это её решение, не
+            # сбой)» и писал в расписку `silent_reason="agent chose silence"` — то есть
+            # называл её решением ровно то, чего она не решала: слово было написано, просто
+            # не рукой. На слабых моделях так терялось каждое третье слово.
+            ending, word = boundary_word(_turn_record(chat_id))
+            if ending == WORD and _deliver_unspoken:
+                text = word
+                log.info("ход %s [бот %s]: слово пришло заметкой хода — доставляю на границе",
+                         run_id or "—", chat_id)
+        delivered_boundary = ""
+        if not spoken and text:
             try:
-                _bot.deliver_text(chat_id, f"⚠ ход {state} (запуск {run_id}).")
+                _bot.deliver_text(chat_id, text)
+                delivered_boundary = text
             except Exception:
-                log.exception("не доложила владельцу о сбое хода")
-    if not spoken and not text:
-        # ⚑ 17.09. ТО ЖЕ ВОССТАНОВЛЕНИЕ, ЧТО У ОКНА (см. `_turn_in_window`), которого у
-        # бота не было — и из-за этого «бот молчит» выглядело её решением.
-        #
-        # Как это происходило. Под поднятым контрактом руки ядро возвращает конверт БЕЗ
-        # текста: последний текст хода — заметка себе, наружу он не идёт. Окно на этом
-        # месте читает запись хода и, если слово там всё-таки есть, доставляет его
-        # границей. Бот же падал прямиком в строку «она промолчала (это её решение, не
-        # сбой)» и писал в расписку `silent_reason="agent chose silence"` — то есть
-        # называл её решением ровно то, чего она не решала: слово было написано, просто
-        # не рукой. На слабых моделях так терялось каждое третье слово.
-        ending, word = boundary_word(_turn_record(chat_id))
-        if ending == WORD and _deliver_unspoken:
-            text = word
-            log.info("ход %s [бот %s]: слово пришло заметкой хода — доставляю на границе",
-                     run_id or "—", chat_id)
-    delivered_boundary = ""
-    if not spoken and text:
-        try:
-            _bot.deliver_text(chat_id, text)
-            delivered_boundary = text
-        except Exception:
-            log.exception("возврат хода не доставился [%s]", chat_id)
-    elif not spoken and not text and not media_count:
-        log.info("ход %s [бот %s]: она промолчала (это её решение, не сбой)",
-                 run_id, chat_id)
-    _close_run(envelope, chat_id, delivered_text=delivered_boundary,
-               spoken_by_hand=len(spoken), media_count=media_count)
+                log.exception("возврат хода не доставился [%s]", chat_id)
+        elif not spoken and not text and not media_count:
+            log.info("ход %s [бот %s]: она промолчала (это её решение, не сбой)",
+                     run_id, chat_id)
+        _close_run(envelope, chat_id, delivered_text=delivered_boundary,
+                   spoken_by_hand=len(spoken), media_count=media_count)
     log.info("ход %s [бот %s]: %.1f с, реплик рукой %d%s", run_id or "—", chat_id,
              time.time() - started, len(spoken),
              "" if not media_count else f", медиа {media_count}")
@@ -1636,6 +1646,12 @@ def main() -> None:
     threading.Thread(target=_heartbeat_forever, args=(inbox,), name="heartbeat",
                      daemon=True).start()
     threading.Thread(target=_retention_forever, name="retention", daemon=True).start()
+    # Control must run independently: the main loop is inside the model/tool turn.
+    import atexit
+    import control_watch
+    control_stop, _control_thread = control_watch.start(
+        tree, agent._runs(), agent.run_manager.NONTERMINAL_STATUSES)
+    atexit.register(control_stop.set)
     # Рождение — после того, как всё поднято и квитанция читателя уже пишется:
     # окно видит «думает», а не мёртвый руннер, пока идёт первый ход.
     _maybe_birth(tree)
