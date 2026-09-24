@@ -1813,6 +1813,29 @@ def _mode_state_safe() -> dict:
         return mode_unknown("")
 
 
+def _quota_hold(path: Path, now: float) -> dict | None:
+    """Действующее удержание эндпойнта лимитом подписки из `quota.json` движка — или None.
+
+    Файл пишет `llm._hold_endpoint` дерева (25.09): слова для владельца («подписка
+    исчерпана до ЧЧ:ММ»), час восстановления и код реле. Истёкшее удержание читается
+    как «нет»: движок снимет его сам при следующем вызове, а окно не пугает вчерашним.
+    """
+    data = _load_json(path)
+    holds = data.get("holds") if isinstance(data, dict) else None
+    if not isinstance(holds, list):
+        return None
+    for hold in holds:
+        if not isinstance(hold, dict):
+            continue
+        until = _num(hold.get("until"))
+        if until and until <= now:
+            continue
+        return {"words": str(hold.get("words") or ""), "until": until or None,
+                "code": str(hold.get("code") or ""),
+                "framework": str(hold.get("framework") or "")}
+    return None
+
+
 def state() -> dict:
     """Шапка окна — с рубежом: отказ читателя не гасит окно и телефон.
 
@@ -1927,11 +1950,21 @@ def _state_impl() -> dict:
         if stamp.timestamp() > now and (next_wake is None or stamp < next_wake):
             next_wake = stamp
     transports = list(anatomy.get("transports") or [])
+    # 25.09 (C.4): эндпойнт основной ноги закрыт лимитом подписки — движок пишет
+    # `memory/.state/quota.json` (llm._hold_endpoint) с часом восстановления словами.
+    # Раньше владелец видел английскую диагностику реле как реплику агента.
+    quota = _quota_hold(st / "quota.json", now)
+    fallback_armed = bool(str(voice.get("fallback_model") or "").strip())
 
     action = None
     if not runner_alive:
         level, phrase = "error", "Не запущен"
         action = {"label": "Перезапустить", "target": "restart"}
+    elif quota is not None:
+        words = str(quota.get("words") or "подписка исчерпана")
+        level, phrase = "warn", (f"{words} — отвечает запасная модель" if fallback_armed
+                                 else f"{words} — запасной модели нет")
+        action = {"label": "Настройки", "target": "settings"}
     elif not configured:
         if named:
             # Отдельная фраза: имя модели заполнено, а ключа нет. Прежнее
@@ -1972,7 +2005,9 @@ def _state_impl() -> dict:
                   "base_url": str(model_cfg.get("base_url") or ""),
                   "last_call_at": last_ts or None,
                   "last_error": _short_error(last_err) if recent_error else None,
-                  "last_error_raw": (last_err[:300] if recent_error else None)},
+                  "last_error_raw": (last_err[:300] if recent_error else None),
+                  # Удержание эндпойнта лимитом подписки: слова и час (epoch) или None.
+                  "quota": quota},
         "relay": {"used": relay_used, "authorized": relay_auth},
         "telegram": {"enabled": any("Telegram" in x for x in transports)},
         # Режим — в шапке состояния, а не только в анатомии: владелец должен

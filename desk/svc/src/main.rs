@@ -522,6 +522,7 @@ impl Plan {
     }
 }
 
+#[derive(Clone)]
 struct Plan {
     mode: String,
     python: PathBuf,
@@ -942,6 +943,9 @@ fn supervise(
     firewall: bool,
     stopping: &mut dyn FnMut(),
 ) {
+    // 25.09 (C.1): план — своя копия, потому что helene.json перечитывается на тике
+    // (смена ключа/порта/выключателя реле применяется без снятия службы).
+    let mut plan: Plan = plan.clone();
     let now = Instant::now();
     // Секрет трубы заводится до подъёма детей: он уходит им в окружение, и его
     // же читает окно, чтобы говорить с харнессом службы. У каждого агента он
@@ -1085,6 +1089,12 @@ fn supervise(
     let mut relay_yielded = false;
     // Реле, которого нет в поставке, раньше писало «не поднялось» вечно.
     let mut relay_enabled = plan.relay_enabled;
+    // 25.09 (C.1/C.3): helene.json и auth.json реле перечитываются на тике. Смена
+    // ключа, порта или выключателя реле поднимает реле заново; новый вход в подписку —
+    // тоже (реле читает вход только при старте). Снимать службу больше не нужно.
+    let mut config_seen = file_mtime(&plan.config);
+    let mut config_checked: Option<Instant> = None;
+    let mut relay_auth_seen: Option<std::time::SystemTime> = None;
     let mut port_checked: Option<Instant> = None;
     // Агенты, чей порт держит не наша труба, — по прошлой проверке.
     let mut port_busy_ids: Vec<String> = Vec::new();
@@ -1224,6 +1234,53 @@ fn supervise(
             }
         }
 
+        // 25.09 (C.1/C.3): настройки реле и вход в подписку — на лету.
+        if config_checked.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(3)) {
+            config_checked = Some(now);
+            let mtime = file_mtime(&plan.config);
+            if mtime != config_seen {
+                config_seen = mtime;
+                match load_plan(&plan.config) {
+                    Ok(fresh) => {
+                        if relay_fingerprint(&fresh) != relay_fingerprint(&plan) {
+                            log.line("реле: настройки в helene.json изменились — применяю без перезапуска службы");
+                            if let Some(child) = &mut relay {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                forget_child(child);
+                            }
+                            relay = None;
+                            relay_backoff = 0;
+                            relay_not_before = Instant::now();
+                            relay_yielded = false;
+                            relay_enabled = fresh.relay_enabled;
+                            if !relay_enabled {
+                                log.line("реле: по новым настройкам выключено");
+                            }
+                        }
+                        plan = fresh;
+                    }
+                    Err(why) => log.line(&format!(
+                        "helene.json изменился, но не разобрался: {why} — работаю по прежним настройкам"
+                    )),
+                }
+            }
+            if relay.is_some() {
+                let auth = file_mtime(&relay_auth_path(&plan));
+                if auth.is_some() && auth != relay_auth_seen {
+                    log.line("реле: новый вход в подписку — поднимаю реле заново, чтобы оно его прочитало");
+                    if let Some(child) = &mut relay {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        forget_child(child);
+                    }
+                    relay = None;
+                    relay_backoff = 0;
+                    relay_not_before = Instant::now();
+                }
+            }
+        }
+
         if relay_enabled {
             let dead = match &mut relay {
                 Some(child) => match child.try_wait() {
@@ -1240,10 +1297,11 @@ fn supervise(
                     log.line(&format!("реле: умерло — перезапускаю (пауза {relay_backoff} c)"));
                 }
                 relay = None;
-                match spawn_relay(plan) {
+                match spawn_relay(&plan) {
                     Ok(Some(child)) => {
                         relay = Some(child);
                         relay_yielded = false;
+                        relay_auth_seen = file_mtime(&relay_auth_path(&plan));
                         relay_backoff = if relay_backoff == 0 { 5 } else { (relay_backoff * 2).min(60) };
                         relay_not_before = Instant::now() + Duration::from_secs(relay_backoff);
                     }
@@ -1294,6 +1352,24 @@ fn supervise(
     log.line("служба: остановлена");
 }
 
+/// mtime файла или None (нет файла/нет прав) — для наблюдения за helene.json и auth.json.
+fn file_mtime(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+}
+
+/// Отпечаток настроек реле в плане: разошёлся — реле надо поднять заново (25.09, C.1).
+fn relay_fingerprint(plan: &Plan) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        plan.relay_enabled, plan.relay_port, plan.relay_key, plan.relay_instructions
+    )
+}
+
+/// Файл входа в подписку — тот, который реле читает при старте (25.09, C.3).
+fn relay_auth_path(plan: &Plan) -> PathBuf {
+    plan.tree.join("relay").join("local_auth").join("auth.json")
+}
+
 /// Встроенное реле подписки. Та же семантика, что у оболочки
 /// (shell/main.rs::spawn_relay): реле живёт в <дерево>/relay, конфигурируется
 /// окружением, консоли не имеет.
@@ -1330,6 +1406,9 @@ fn spawn_relay(plan: &Plan) -> Result<Option<Child>, String> {
         .env("RELAY_PORT", plan.relay_port.to_string())
         .env("RELAY_LOCAL", "1")
         .env("RELAY_INSTRUCTIONS", &plan.relay_instructions)
+        // 25.09 (C.4): терминал реле — структурным полем `relay_terminal` рядом с чанком;
+        // движок читает его до content (лимит подписки — ошибка с часом восстановления).
+        .env("RELAY_TYPED_TERMINAL", "field")
         .env("RELAY_LOG_DIR", home.join("logs"));
     if !plan.relay_key.trim().is_empty() {
         // Тот же контракт, что у оболочки: ключ мозга обязателен Bearer-ом.

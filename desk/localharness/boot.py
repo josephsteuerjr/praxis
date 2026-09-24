@@ -1152,6 +1152,21 @@ def _brain_config(cfg: dict) -> dict:
             # `evaluator`; чужим провайдерам ничего не подставляется.
             role_cfg["reasoning_effort"] = "low"
         out["roles"][role] = role_cfg
+    # 25.09 (C.2, баг Сергея): запасной провайдер — на СВОЁМ эндпойнте и со своим ключом.
+    # Раньше второй фреймворк описывался пустым блоком: `fallback_framework` указывал
+    # в него, а адреса и ключа там не было — ядро молча отказывало (llm.py: без ключа
+    # клиента нет), и «запасной провайдер» в конфиге не работал никогда.
+    # Ограничение ядра остаётся: один клиент на фреймворк, поэтому запасной у ДРУГОГО
+    # протокола; «подписка → свой ключ OpenAI» этим не выразить (см. отчёт 25.09).
+    voice_fw = out["roles"]["voice"]["framework"]
+    fb_fw = str(voice.get("fallback_framework") or "").strip().lower()
+    if fb_fw in ("openai", "anthropic") and fb_fw != voice_fw:
+        fb_url = str(voice.get("fallback_base_url") or "").strip()
+        fb_key = str(voice.get("fallback_key") or "").strip()
+        if fb_url:
+            out["frameworks"][fb_fw]["base_url"] = fb_url
+        if fb_key:
+            out["frameworks"][fb_fw]["api_key"] = fb_key
     out["limits"]["max_tool_iters"] = _int_or(cfg.get("max_tool_iters") or 20, 20,
                                               what="max_tool_iters")
     pricing = cfg.get("pricing")
@@ -1199,6 +1214,54 @@ def _own_only(target: Path) -> None:
         log.warning("права на %s не сузились: %s", target, exc)
 
 
+#: Ключи роли, которыми владеет проекция: их отсутствие в helene.json значит «снять»,
+#: а не «оставить прежнее» (иначе убранный в окне фолбэк жил бы в llm.json вечно).
+_OWNED_ROLE_KEYS = ("framework", "model", "max_tokens", "fallback_model",
+                    "fallback_framework", "vision_model", "reasoning_effort")
+
+
+def _merge_brain(current: dict, built: dict) -> dict:
+    """Проекция ПОДМЕШИВАЕТСЯ по вложенным блокам, а не заменяет их целиком (25.09, C.2).
+
+    `merged.update(built)` затирал `frameworks` и `roles` целиком: ручная правка
+    вложенного блока (адрес и ключ второго фреймворка, `vision_models` роли) не
+    переживала ни одной проекции, а второй фреймворк из проекции приходил пустым — и
+    стирал живой. Теперь:
+      * `frameworks.<fw>`: непустое значение проекции побеждает, пустое не трогает
+        записанное руками;
+      * `roles.<role>`: ключи, которыми владеет проекция, заменяются набором (нет в
+        helene.json — снято), остальные (её `vision_models`, ручные ручки) остаются;
+      * всё прочее (`limits`, `pricing`) — как раньше, целиком из проекции.
+    """
+    merged = dict(current)
+    for key, value in built.items():
+        cur = merged.get(key)
+        if key == "frameworks" and isinstance(cur, dict) and isinstance(value, dict):
+            block = {name: dict(sub) if isinstance(sub, dict) else sub for name, sub in cur.items()}
+            for name, sub in value.items():
+                if isinstance(sub, dict):
+                    slot = block.get(name) if isinstance(block.get(name), dict) else {}
+                    for field, val in sub.items():
+                        if val not in (None, "") or field not in slot:
+                            slot[field] = val
+                    block[name] = slot
+                else:
+                    block[name] = sub
+            merged[key] = block
+        elif key == "roles" and isinstance(cur, dict) and isinstance(value, dict):
+            block = dict(cur)
+            for name, sub in value.items():
+                if isinstance(sub, dict) and isinstance(block.get(name), dict):
+                    kept = {k: v for k, v in block[name].items() if k not in _OWNED_ROLE_KEYS}
+                    block[name] = {**kept, **sub}
+                else:
+                    block[name] = sub
+            merged[key] = block
+        else:
+            merged[key] = value
+    return merged
+
+
 def project_brain(tree: Path, cfg: dict) -> str:
     """Положить мозг из helene.json в её `memory/llm.json` — но не затирать ЕЁ выбор.
 
@@ -1241,7 +1304,7 @@ def project_brain(tree: Path, cfg: dict) -> str:
                 merged = current
         except (OSError, ValueError):
             merged = {}
-    merged.update(built)
+    merged = _merge_brain(merged, built)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(".tmp-llm.json")
     tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=1),

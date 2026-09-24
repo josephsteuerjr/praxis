@@ -848,6 +848,49 @@ def _say_tree_is_busy(tree: Path, cfg: dict, holder: dict) -> None:
         log.exception("не сказал владельцу, что дерево занято")
 
 
+_CONFIG_WATCH_SEC = float(os.getenv("HELENE_CONFIG_WATCH_SEC", "5") or 5)
+
+
+def _config_watch_forever(config_path: Path, tree: Path) -> None:
+    """helene.json — на лету (25.09, C.1): смена мозга применяется без снятия службы.
+
+    Раньше мозг проецировался в её llm.json один раз на старте (`project_brain` в
+    main), и «Сохранено» в окне честно значило «после перезапуска»; под службой это
+    выливалось в «сними и поставь службу заново» (Сергей, Mac). Ядро при этом
+    перечитывает llm.json само на каждом вызове (llm._config по mtime) — не хватало
+    только проекции. Тик — по mtime файла; проекция идемпотентна (отпечаток блока
+    модели в расписке), и её собственный выбор `switch_brain` не затирается.
+    """
+    global _deliver_unspoken
+    try:
+        seen = config_path.stat().st_mtime_ns
+    except OSError:
+        seen = None
+    while True:
+        time.sleep(_CONFIG_WATCH_SEC)
+        try:
+            now = config_path.stat().st_mtime_ns
+        except OSError:
+            continue
+        if now == seen:
+            continue
+        seen = now
+        try:
+            cfg = json.loads(boot.read_config_text(config_path))
+            if not isinstance(cfg, dict):
+                raise ValueError("верхний уровень должен быть объектом {…}")
+        except (OSError, ValueError) as exc:
+            log.warning("helene.json изменился, но не читается (%s) — мозг не трогаю", exc)
+            continue
+        try:
+            log.info("helene.json изменился — %s", boot.project_brain(tree, cfg))
+        except Exception:
+            log.exception("мозг из изменённого helene.json не спроецировался")
+        _deliver_unspoken = bool((cfg.get("agent") or {}).get("deliver_unspoken", True))
+        if _agent is not None and hasattr(_agent, "BOUNDARY_DELIVERS_UNSPOKEN"):
+            _agent.BOUNDARY_DELIVERS_UNSPOKEN = bool(_deliver_unspoken)
+
+
 def _heartbeat_forever(inbox: Path) -> None:
     """Квитанция читателя — фоном и с занятостью.
 
@@ -1596,6 +1639,17 @@ def main() -> None:
         owner_words.install(agent, cfg)
     except Exception:
         log.exception("тексты дерева остались с именем владельца Праксис")
+    # Имя агента — «я» и для свёртки памяти (25.09): memory_life метит его строки [Я]
+    # по direction=out, а ограда чужого «я» знает только имена прода. Своё имя агент
+    # тоже вправе называть «я» — добавляем его в ограду, иначе «Я — Феофан» читалось бы
+    # как чужое «я» и сводка уходила бы в перезаход.
+    try:
+        import memory_life as _memory_life
+        own = boot.agent_name(cfg).strip().casefold()
+        if own and isinstance(getattr(_memory_life, "_OWN_NAMES", None), set):
+            _memory_life._OWN_NAMES.add(own)
+    except Exception:
+        log.debug("имя агента не легло в ограду свёртки", exc_info=True)
     # Рука брокера — ПОСЛЕ ограды: она закрывает свои файлы обмена от контейнера,
     # а поднят он или нет, решает предыдущий шаг. Без этой руки тексты продукта
     # обещали агенту брокера, которого у него не было.
@@ -1650,6 +1704,8 @@ def main() -> None:
     threading.Thread(target=_heartbeat_forever, args=(inbox,), name="heartbeat",
                      daemon=True).start()
     threading.Thread(target=_retention_forever, name="retention", daemon=True).start()
+    threading.Thread(target=_config_watch_forever, args=(config_path, tree),
+                     name="config-watch", daemon=True).start()
     # Control must run independently: the main loop is inside the model/tool turn.
     import atexit
     import control_watch

@@ -180,6 +180,14 @@ class _Agent:
         import contextvars
         self._TURN_CHANNEL = contextvars.ContextVar("turn_channel", default=None)
 
+    # Консьюмер прерываний (control_watch.delivery) спрашивает у дерева менеджер
+    # прогонов: заглушке хватает статуса «идёт».
+    def _runs(self):
+        return self
+
+    def status(self, run_id):
+        return {"status": "running"}
+
     def voice_turn_envelope(self, chat_id, convo, speaker, *, ctx, history, current_text, orient):
         token = self._TURN_CHANNEL.set(ctx)
         try:
@@ -243,7 +251,7 @@ class Harness(unittest.TestCase):
         self.assertEqual(self.desks.get(key).rows()[-1]["text"], "слово в сад")
         # Telegram-адрес — честный отказ особого типа.
         refusal = hooks["reply"]("-100123", "x")
-        self.assertIn("не отправила", str(refusal))
+        self.assertIn("не отправлено", str(refusal))
         self.assertIn("Сад", hooks["search_chats"]("сад"))
         self.assertIn("слово в сад", hooks["read_chat"]("Сад"))
         self.assertIn("слово в сад", hooks["fetch_context"](key))

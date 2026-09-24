@@ -33,7 +33,7 @@ export interface Config {
   phone?: { enabled?: boolean };
   update?: { url?: string };
   owner?: { name?: string; room?: string };
-  model?: { framework?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string; fallback_model?: string; vision_model?: string };
+  model?: { framework?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string; fallback_model?: string; fallback_framework?: string; fallback_base_url?: string; fallback_key?: string; vision_model?: string };
   // `instructions` экран не показывает, но обязан сохранить: этой ручкой
   // оболочка гасит 23 КБ чужого системного промпта Codex CLI перед конституцией
   // (shell/src/main.rs, RELAY_INSTRUCTIONS). Раньше блок relay пересобирался
@@ -407,30 +407,19 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       else delete out.key;
       out.setup_complete = true;
       try {
-        await writeConfig(out);
+        const relayNote = await writeConfig(out);
         saveOut.className = "receipt ok";
-        // Под службой перезапуск ОКНА настройки не применит: службу конфиг
-        // читает один раз при своём старте. Раньше расписка обещала обратное.
-        // Служба есть и на macOS (демон launchd) — спрашиваем на обеих.
-        let svc = "";
-        try {
-          svc = await shell<string>("service_state");
-        } catch {
-          // не смогли спросить — говорим общее
-        }
-        // Хвост расписки — от ИЗДАНИЯ: у Элен это карточка режима (она знает,
-        // что осталось сделать — поставить или снять службу), у Пульта его нет
-        // вовсе. Расписка не имеет права молчать о незакрытом деле, но и знать
-        // про службу каркасу незачем.
+        // 25.09 (C.1): мозг (модель, ключ, адрес, запасной) движок перечитывает сам
+        // в течение нескольких секунд, реле оболочка и служба поднимают заново по
+        // новым настройкам — ни перезапуск программы, ни снятие службы для этого
+        // больше не нужны. Что ещё требует перезапуска (ограда, песочница,
+        // Telegram-аккаунт) — говорит хвост расписки от издания (`built.note()`).
         const modeNote = built.note();
-        if (svc === "running") {
-          saveOut.textContent =
-            `Сохранено. Агента держит ${mac ? "служба" : "служба Windows"}: чтобы настройки применились, сними и поставь её заново (карточка «Режим» выше).` + modeNote;
-          restartBtn.hidden = true;
-        } else {
-          saveOut.textContent = "Сохранено. Чтобы применить, перезапусти программу." + modeNote;
-          restartBtn.hidden = false;
-        }
+        const relayWords = relayNote ? ` ${relayNote}.` : "";
+        saveOut.textContent =
+          "Сохранено. Модель и ключ движок применит сам через несколько секунд, реле — сразу." +
+          relayWords + modeNote;
+        restartBtn.hidden = !modeNote;
         S.agent = String(out.agent?.name || S.agent);
       } catch (e) {
         if (e instanceof StaleConfig) {
@@ -452,15 +441,17 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // оболочка отпечатка не шлёт — тогда пишем как раньше.
   let seenMtime: string | undefined = loaded.mtime_ns != null ? String(loaded.mtime_ns) : undefined;
   class StaleConfig extends Error {}
-  const writeConfig = async (out: Config, force = false) => {
+  const writeConfig = async (out: Config, force = false): Promise<string> => {
     const args: Record<string, unknown> = { config: JSON.stringify(out) };
     if (seenMtime && !force) args.mtimeNs = seenMtime;
     try {
-      const r = await shell<{ ok?: boolean; code?: string; error?: string; mtime_ns?: string | number } | null>("config_save", args);
+      const r = await shell<{ ok?: boolean; code?: string; error?: string; mtime_ns?: string | number; relay?: string } | null>("config_save", args);
       // КОНТРАКТ A→B §1: `{ok: false, code: "stale", mtime_ns, error}` — файл
       // менял кто-то ещё, черновик не записан.
       if (r && typeof r === "object" && r.ok === false && r.code === "stale") throw new StaleConfig(r.error || "stale");
       if (r && typeof r === "object" && r.mtime_ns != null) seenMtime = String(r.mtime_ns);
+      // 25.09: оболочка применила настройки реле сразу и сказала, что сделала.
+      return r && typeof r === "object" && typeof r.relay === "string" ? r.relay : "";
     } catch (e) {
       if (e instanceof StaleConfig) throw e;
       const text = e instanceof Error ? e.message : String(e ?? "");

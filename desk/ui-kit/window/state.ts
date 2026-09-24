@@ -15,6 +15,8 @@ export interface AgentState {
     last_call_at: number | null;
     last_error: string | null;
     last_error_raw: string | null;
+    /** Эндпойнт основной ноги закрыт лимитом подписки: слова и час восстановления (25.09). */
+    quota?: { words: string; until: number | null; code: string; framework: string } | null;
   };
   relay: { used: boolean; authorized: boolean };
   telegram: { enabled: boolean };

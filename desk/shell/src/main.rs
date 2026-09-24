@@ -468,14 +468,38 @@ impl ChildSpec {
         }
     }
 
-    fn spawn(&self) -> Option<Child> {
+    fn spawn(&self) -> SpawnOutcome {
         match self {
             ChildSpec::Script { python, script, args, tree, host, token, config } => {
-                spawn_child(python, script, args, tree, host, token, config)
+                match spawn_child(python, script, args, tree, host, token, config) {
+                    Some(child) => SpawnOutcome::Started(child),
+                    None => SpawnOutcome::Failed,
+                }
             }
-            ChildSpec::Relay { base, cfg, tree } => spawn_relay(base, cfg, tree),
+            ChildSpec::Relay { base, cfg, tree } => match spawn_relay(base, cfg, tree) {
+                RelaySpawn::Started(child) => SpawnOutcome::Started(child),
+                RelaySpawn::WaitingPort(port) => SpawnOutcome::Waiting(format!(
+                    "порт реле {port} держит другая копия (служба или прежнее окно) — своё реле \
+                     не поднимаю и подниму, когда он освободится"
+                )),
+                RelaySpawn::Unavailable(why) => {
+                    log_line(&why);
+                    SpawnOutcome::Failed
+                }
+            },
         }
     }
+}
+
+/// Исход подъёма ребёнка — типизированный (25.09, E.1). «Порт занят» — это ОЖИДАНИЕ, а
+/// не падение: раньше реле у окна при занятом порте 5011 писало в журнал каждые 30 с
+/// «не поднялся, ещё попытка», хотя ждать было единственно верным.
+enum SpawnOutcome {
+    Started(Child),
+    /// Ждём внешнего события (освободится порт). Слово — один раз на вход в состояние.
+    Waiting(String),
+    /// Не поднялся: причина уже в журнале, надзор попробует через 30 с.
+    Failed,
 }
 
 /// Ребёнок под надзором. `child` — Option, потому что «не поднялся» не значит
@@ -493,6 +517,9 @@ struct Managed {
     /// перезапуском не лечится: крутить 1→2→4→…→32 с и дальше по десять минут
     /// значит жечь машину и врать владельцу «поднимаю снова».
     halted: bool,
+    /// Ребёнок ждёт внешнего события (реле: порт держит другая копия). Пока ждём —
+    /// не падение и не повод для строки в журнал каждые 30 с (25.09, E.1).
+    waiting: bool,
 }
 
 /// Что оболочка должна поднять и где. Живёт после первой попытки: занятый
@@ -1415,24 +1442,170 @@ fn relay_port(cfg: &serde_json::Value) -> u16 {
         .min(u16::MAX as u64) as u16
 }
 
+/// Исход подъёма реле (25.09, E.1): «порт занят» — ожидание, не падение.
+enum RelaySpawn {
+    Started(Child),
+    /// Порт держит кто-то другой (служба, прежняя копия): ждём, падением не считаем.
+    WaitingPort(u16),
+    /// Нет exe или spawn упал — причина словами.
+    Unavailable(String),
+}
+
+/// Отпечаток настроек реле: по нему окно после «Сохранить» решает, поднимать ли своё
+/// реле заново (25.09, C.1 — смена мозга и реле без перезапуска окна и службы).
+fn relay_fingerprint(cfg: &serde_json::Value) -> String {
+    let key = cfg
+        .get("model")
+        .and_then(|m| m.get("key"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let instructions = cfg
+        .get("relay")
+        .and_then(|r| r.get("instructions"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("minimal");
+    format!("{}|{}|{}|{}", relay_enabled(cfg), relay_port(cfg), key, instructions)
+}
+
+/// mtime `auth.json` реле в момент подъёма СВОЕГО реле. Новый вход в подписку реле
+/// читает только при старте: изменившийся файл = реле надо поднять заново, и делает это
+/// окно само (`relay_status`), а не просит владельца перезапустить программу.
+static RELAY_AUTH_SEEN: Mutex<Option<std::time::SystemTime>> = Mutex::new(None);
+
+fn relay_auth_mtime() -> Option<std::time::SystemTime> {
+    std::fs::metadata(relay_home().join("local_auth").join("auth.json"))
+        .ok()
+        .and_then(|m| m.modified().ok())
+}
+
+/// 25.09 (C.1). Реле применяет новые настройки без перезапуска окна: своё реле гасится
+/// и поднимается заново по свежему конфигу (или не поднимается, если relay.enabled
+/// снят). Чужое реле (порт держит служба или прежняя копия) не трогаем — им занимается
+/// его хозяин: служба перечитывает helene.json и auth.json сама.
+fn reconcile_relay(state: &tauri::State<LocalHarness>, cfg: &serde_json::Value, why: &str) -> String {
+    let base_config = install_root().join(CONFIG_NAME);
+    let mut had_own = false;
+    if let Ok(mut guard) = state.children.lock() {
+        let mut i = 0;
+        while i < guard.len() {
+            if matches!(guard[i].spec, ChildSpec::Relay { .. }) {
+                if let Some(child) = guard[i].child.as_mut() {
+                    stop_child(child);
+                    had_own = true;
+                }
+                guard.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+    let mut spec: Option<ChildSpec> = None;
+    let mut agent_id = String::new();
+    if let Ok(mut plans) = state.plans.lock() {
+        if let Some(plan) = plans.iter_mut().find(|p| p.config == base_config) {
+            plan.specs.retain(|s| !matches!(s, ChildSpec::Relay { .. }));
+            if relay_enabled(cfg) {
+                let fresh = ChildSpec::Relay { base: install_root(), cfg: cfg.clone(), tree: plan.tree.clone() };
+                plan.specs.insert(0, fresh.clone());
+                spec = Some(fresh);
+                agent_id = plan.agent.clone();
+            }
+        }
+    }
+    let Some(spec) = spec else {
+        let line = format!(
+            "реле: {why} — {}",
+            if had_own { "своё реле погашено: по новым настройкам оно выключено" } else { "своего реле не было и не нужно" }
+        );
+        log_line(&line);
+        return line;
+    };
+    // Подъём — вне замка: CreateProcess под замком детей держал бы выход из трея.
+    let outcome = spec.spawn();
+    let (child, waiting, line) = match outcome {
+        SpawnOutcome::Started(child) => (Some(child), false, format!("реле: {why} — поднято заново по новым настройкам")),
+        SpawnOutcome::Waiting(said) => (None, true, format!("реле: {why} — {said}")),
+        SpawnOutcome::Failed => (None, false, format!("реле: {why} — не поднялось сразу, надзор попробует через 30 с")),
+    };
+    if let Ok(mut guard) = state.children.lock() {
+        guard.push(Managed {
+            agent: agent_id,
+            spec,
+            retry_at: child.is_none().then(|| Instant::now() + Duration::from_secs(30)),
+            child,
+            falls: Vec::new(),
+            halted: false,
+            waiting,
+        });
+    }
+    log_line(&line);
+    line
+}
+
+/// Живое реле о себе: применённый вход (какой слот активен, сколько настроено). Это
+/// ответ на «применится перезапуском», которое висело вечно: файл auth.json — не факт
+/// применения, факт — слово самого реле (25.09, C.3).
+#[tauri::command]
+async fn relay_account() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(relay_account_blocking)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn relay_account_blocking() -> Result<serde_json::Value, String> {
+    let cfg = config_value().ok_or_else(|| "helene.json не прочитан".to_string())?;
+    let port = relay_port(&cfg);
+    let key = cfg
+        .get("model")
+        .and_then(|m| m.get("key"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if !harness_alive(port) {
+        return Ok(serde_json::json!({ "reachable": false, "port": port }));
+    }
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_millis(700))
+        .timeout_read(Duration::from_secs(3))
+        .build();
+    let mut req = agent.get(&format!("http://127.0.0.1:{port}/v1/account"));
+    if !key.trim().is_empty() {
+        req = req.set("Authorization", &format!("Bearer {key}"));
+    }
+    match req.call() {
+        Ok(resp) => {
+            let text = resp.into_string().map_err(|e| format!("реле не дочиталось: {e}"))?;
+            let body: serde_json::Value =
+                serde_json::from_str(&text).map_err(|e| format!("реле ответило не JSON: {e}"))?;
+            Ok(serde_json::json!({
+                "reachable": true,
+                "port": port,
+                "active_slot": body.get("active_slot").cloned().unwrap_or(serde_json::Value::Null),
+                "configured_slots": body.get("configured_slots").cloned().unwrap_or(serde_json::Value::Null),
+            }))
+        }
+        Err(ureq::Error::Status(code, _)) => Ok(serde_json::json!({ "reachable": true, "port": port, "status": code })),
+        Err(err) => Ok(serde_json::json!({ "reachable": false, "port": port, "error": err.to_string() })),
+    }
+}
+
 /// Спека реле попадает в план только при relay.enabled — «сознательно не
 /// поднимаю» и «не смог» больше не сходятся в одном молчаливом None.
-fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> Option<Child> {
+fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> RelaySpawn {
     let relay = exe_name("helene-relay");
     let exe = base.join(&relay);
     if !exe.exists() {
-        log_line(&format!("relay.enabled, но {relay} рядом нет — реле не поднимаю"));
-        return None;
+        return RelaySpawn::Unavailable(format!("relay.enabled, но {relay} рядом нет — реле не поднимаю"));
     }
     let port = relay_port(cfg);
-    // Порт реле занимает кто-то ещё (осиротевшее реле прежней установки или
+    // Порт реле занимает кто-то ещё (служба, осиротевшее реле прежней установки или
     // чужая программа): раньше своё реле уходило в петлю перезапусков, а весь
     // мозг молча шёл в ЧУЖОЕ реле — то есть в чужую подписку и чужую сессию.
+    // Это ожидание, не падение: слово о нём говорит надзор один раз на состояние.
     if harness_alive(port) {
-        log_line(&format!(
-            "порт реле {port} уже занят — своё реле не поднимаю; закрой прежнюю копию или смени relay.port в {CONFIG_NAME}"
-        ));
-        return None;
+        return RelaySpawn::WaitingPort(port);
     }
     let home = tree.join("relay");
     let _ = std::fs::create_dir_all(&home);
@@ -1457,6 +1630,10 @@ fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> Option<Chil
         .env("RELAY_LOCAL", "1")
         .env("RELAY_INSTRUCTIONS", instructions)
         .env("RELAY_LOG_DIR", home.join("logs"))
+        // 25.09 (C.4): терминал реле — структурным полем `relay_terminal` рядом с чанком.
+        // Движок читает его до content: лимит подписки становится типизированной
+        // ошибкой с часом восстановления, а не английской репликой в чате.
+        .env("RELAY_TYPED_TERMINAL", "field")
         .env("HELENE_PARENT_PID", std::process::id().to_string());
     // Ключ мозга = ключ реле: сгенерированный при установке ключ обязателен
     // Bearer-ом на /chat/completions — открытый локальный порт позволял бы
@@ -1479,12 +1656,12 @@ fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> Option<Chil
     match cmd.spawn() {
         Ok(child) => {
             adopt(&child);
-            Some(child)
+            if let Ok(mut seen) = RELAY_AUTH_SEEN.lock() {
+                *seen = relay_auth_mtime();
+            }
+            RelaySpawn::Started(child)
         }
-        Err(err) => {
-            log_line(&format!("реле не поднялось: {err}"));
-            None
-        }
+        Err(err) => RelaySpawn::Unavailable(format!("реле не поднялось: {err}")),
     }
 }
 
@@ -1638,10 +1815,19 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
     let mut children = Vec::new();
     let mut failed: Vec<&'static str> = Vec::new();
     for spec in &plan.specs {
-        let child = spec.spawn();
-        if child.is_none() {
-            failed.push(spec.human());
-        }
+        let (child, waiting) = match spec.spawn() {
+            SpawnOutcome::Started(child) => (Some(child), false),
+            SpawnOutcome::Waiting(why) => {
+                // Ожидание (порт реле держит служба) — не «не поднялось»: в тост и в
+                // счётчик падений не идёт, слово в журнал — одно, при входе в состояние.
+                log_line(&why);
+                (None, true)
+            }
+            SpawnOutcome::Failed => {
+                failed.push(spec.human());
+                (None, false)
+            }
+        };
         children.push(Managed {
             agent: plan.agent.clone(),
             spec: spec.clone(),
@@ -1650,6 +1836,7 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
             child,
             falls: Vec::new(),
             halted: false,
+            waiting,
         });
     }
     if announce && !failed.is_empty() {
@@ -1704,11 +1891,36 @@ fn file_mtime_ns(path: &Path) -> Option<String> {
 /// пишем, как `safe_write_md` у маркдаунов (ревью 06.09, §3, решение 3).
 /// Старое окно без отпечатка пишет как раньше.
 #[tauri::command]
-fn config_save(config: String, mtime_ns: Option<String>) -> Result<serde_json::Value, String> {
+fn config_save(app: tauri::AppHandle, config: String, mtime_ns: Option<String>) -> Result<serde_json::Value, String> {
     // Файл ТОГО агента, которого показывает окно: у корневого — рядом с
     // программой, у соседа — его собственный. Иначе настройки второго агента
     // молча уезжали бы в конфиг первого.
-    config_save_at(&current_config_path(), &config, mtime_ns.as_deref())
+    let target = current_config_path();
+    let before = match read_config(&target) {
+        ConfigRead::Ok(v) => Some(v),
+        _ => None,
+    };
+    let mut out = config_save_at(&target, &config, mtime_ns.as_deref())?;
+    // 25.09 (C.1): настройки реле применяются сразу, без перезапуска окна. Реле одно
+    // на установку и живёт у корневого агента — сверяем только корневой конфиг.
+    // Мозг (модель, ключ, адрес) движок перечитывает сам: он следит за helene.json.
+    let saved = out.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    if saved && target == install_root().join(CONFIG_NAME) {
+        if let Ok(after) = serde_json::from_str::<serde_json::Value>(&config) {
+            let changed = before
+                .as_ref()
+                .map(|b| relay_fingerprint(b) != relay_fingerprint(&after))
+                .unwrap_or(true);
+            if changed {
+                let state = app.state::<LocalHarness>();
+                let said = reconcile_relay(&state, &after, "настройки реле изменились");
+                if let Some(obj) = out.as_object_mut() {
+                    obj.insert("relay".into(), serde_json::Value::String(said));
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn config_save_at(target: &Path, config: &str, mtime_ns: Option<&str>) -> Result<serde_json::Value, String> {
@@ -2168,18 +2380,40 @@ fn relay_login_blocking() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn relay_status() -> String {
+fn relay_status(app: tauri::AppHandle) -> String {
     let auth = relay_home().join("local_auth").join("auth.json");
-    if auth.exists() {
-        return "authorized".into();
-    }
-    {
+    let pending = {
         let mut guard = login_lock();
-        if let Some(child) = guard.as_mut() {
-            if child.try_wait().ok().flatten().is_none() {
-                return "pending".into();
+        guard
+            .as_mut()
+            .map(|child| child.try_wait().ok().flatten().is_none())
+            .unwrap_or(false)
+    };
+    if pending {
+        return "pending".into();
+    }
+    if auth.exists() {
+        // 25.09 (C.3): реле читает вход ТОЛЬКО при старте. Файл обновился после подъёма
+        // своего реле (новый вход) — поднимаем реле заново сами, а не вешаем владельцу
+        // вечное «применится перезапуском». Чужое реле (служба) перечитает вход само.
+        let now_seen = relay_auth_mtime();
+        let seen = RELAY_AUTH_SEEN.lock().ok().and_then(|g| *g);
+        if now_seen.is_some() && now_seen != seen {
+            let state = app.state::<LocalHarness>();
+            let owns = state
+                .children
+                .lock()
+                .map(|g| g.iter().any(|m| matches!(m.spec, ChildSpec::Relay { .. }) && m.child.is_some()))
+                .unwrap_or(false);
+            if owns {
+                if let Some(cfg) = config_value() {
+                    reconcile_relay(&state, &cfg, "новый вход в подписку");
+                }
+            } else if let Ok(mut g) = RELAY_AUTH_SEEN.lock() {
+                *g = now_seen;
             }
         }
+        return "authorized".into();
     }
     "no-auth".into()
 }
@@ -5491,6 +5725,7 @@ fn main() {
             admin_state,
             relay_login,
             relay_status,
+            relay_account,
             notify,
             app_info,
             update_check,
@@ -6057,22 +6292,40 @@ fn watch_children(app: tauri::AppHandle) {
                 }
                 Act::Spawn(spec) => {
                     let label = spec.label();
-                    let child = spec.spawn();
-                    let ok = child.is_some();
+                    let outcome = spec.spawn();
+                    let mut line = String::new();
                     if let Ok(mut guard) = state.children.lock() {
                         if let Some(m) = guard.get_mut(i) {
-                            if ok {
-                                m.child = child;
-                            } else {
-                                m.retry_at = Some(Instant::now() + Duration::from_secs(30));
+                            match outcome {
+                                SpawnOutcome::Started(child) => {
+                                    m.child = Some(child);
+                                    line = if m.waiting {
+                                        format!("{label}: порт освободился — поднято")
+                                    } else {
+                                        format!("{label} поднят снова")
+                                    };
+                                    m.waiting = false;
+                                }
+                                SpawnOutcome::Waiting(why) => {
+                                    // Ждём внешнего события: слово — один раз на вход в
+                                    // состояние, а не каждые 30 с (25.09, E.1).
+                                    m.retry_at = Some(Instant::now() + Duration::from_secs(30));
+                                    if !m.waiting {
+                                        line = why;
+                                    }
+                                    m.waiting = true;
+                                }
+                                SpawnOutcome::Failed => {
+                                    m.retry_at = Some(Instant::now() + Duration::from_secs(30));
+                                    m.waiting = false;
+                                    line = format!("{label} не поднялся, ещё попытка через 30 с");
+                                }
                             }
                         }
                     }
-                    log_line(&if ok {
-                        format!("{label} поднят снова")
-                    } else {
-                        format!("{label} не поднялся, ещё попытка через 30 с")
-                    });
+                    if !line.is_empty() {
+                        log_line(&line);
+                    }
                 }
             }
         }

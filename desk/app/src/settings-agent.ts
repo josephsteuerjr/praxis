@@ -133,6 +133,8 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
       // Ярлык «усилия» зависит от провайдера — на подписке пустое поле значит
       // «рассуждение выключено», а не «решает модель».
       syncEffort();
+      // Запасной другого провайдера — другого протокола: подсказка зависит от основного.
+      syncSpare();
     });
     pick.append(b);
   }
@@ -232,15 +234,32 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
       const st = await shell<string>("relay_status");
       relayAuthorized = st === "authorized";
       relayOut.className = "receipt " + (relayAuthorized ? "ok" : "");
-      // Реле читает учётные данные ОДИН раз, на старте: пока его не
-      // перезапустят, оно на каждый вызов отдаёт 503 login_required. Раньше
-      // здесь стояло зелёное «Вход выполнен», и агент всё равно молчал.
+      // Реле читает учётные данные ОДИН раз, на старте. 25.09 (C.3): новый вход
+      // оболочка (или служба) применяет сама — поднимает реле заново, а живое реле
+      // само говорит, какой слот у него активен (`relay_account` → GET /v1/account).
+      // Раньше здесь висело «применится перезапуском» — вечно, потому что файл
+      // входа не факт применения.
+      let applied = "";
+      if (relayAuthorized) {
+        try {
+          const acc = await shell<{ reachable?: boolean; active_slot?: string | null; configured_slots?: number | null; port?: number }>("relay_account");
+          if (acc?.reachable && acc.active_slot) {
+            applied = ` и применён (слот ${acc.active_slot}${acc.configured_slots ? ` из ${acc.configured_slots}` : ""})`;
+          } else if (acc?.reachable) {
+            applied = " — реле ещё перечитывает вход";
+          } else {
+            applied = ` — реле на порту ${acc?.port ?? RELAY_PORT} не отвечает, поднимется само`;
+          }
+        } catch {
+          applied = "";
+        }
+      }
       relayOut.textContent =
         relayAuthorized
-          ? "Вход выполнен — применится перезапуском"
+          ? `Вход выполнен${applied}`
           : st === "pending" ? "Ждём вход в браузере. Повторное нажатие отменит прежнюю попытку." : "Вход ещё не выполнен";
       loginBtn.textContent = st === "pending" ? "Начать вход заново" : "Войти в ChatGPT";
-      relayRestart.hidden = !relayAuthorized;
+      relayRestart.hidden = !relayAuthorized || applied.includes("применён");
     } catch (e) {
       relayOut.className = "receipt err";
       relayOut.textContent = humanError(e).text;
@@ -371,18 +390,76 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
   // окно — нет): владелец спросил «есть ли фолбэк в интерфейсе» — не было.
   let fallbackModel = String(draft.model.fallback_model || "");
   let visionModel = String(draft.model.vision_model || "");
-  const spareGrid = el("div", "form-grid two");
-  spareGrid.style.marginTop = "14px";
-  spareGrid.append(
-    field("Запасная модель", fallbackModel, (v) => (fallbackModel = v), { mono: true, placeholder: "пусто — без запасной" }),
-    field("Зрячая модель", visionModel, (v) => (visionModel = v), { mono: true, placeholder: "пусто — glm-5.3-flash для GLM" }),
+  // 25.09 (C.2, баг Сергея): запасной провайдер — не только «вторая модель того же
+  // провайдера», но и ДРУГОЙ провайдер со своим адресом и ключом. Ограничение ядра —
+  // один клиент на протокол: другой провайдер возможен только другого протокола
+  // (OpenAI-совместимый ↔ Anthropic-совместимый). «Подписка → свой ключ OpenAI» этим
+  // не выразить, и окно честно не предлагает такую пару.
+  const frameworkOf = (p: Provider): "openai" | "anthropic" => (p === "anthropic" ? "anthropic" : "openai");
+  type Spare = "none" | "same" | "other";
+  let spare: Spare = String(draft.model.fallback_key || draft.model.fallback_base_url || "").trim()
+    ? "other" : fallbackModel.trim() ? "same" : "none";
+  let spareUrl = String(draft.model.fallback_base_url || "");
+  let spareKey = String(draft.model.fallback_key || "");
+  const sparePick = el("div", "choice");
+  sparePick.setAttribute("role", "radiogroup");
+  const sparePanes: Record<Spare, HTMLElement> = { none: el("div"), same: el("div"), other: el("div") };
+  const spareOtherHint = el("p", "field-hint", "");
+  const syncSpare = () => {
+    for (const b of sparePick.querySelectorAll<HTMLButtonElement>(".choice-item")) b.setAttribute("aria-checked", String(b.dataset.value === spare));
+    for (const [k, pane] of Object.entries(sparePanes)) pane.hidden = k !== spare;
+    const other = frameworkOf(provider) === "anthropic" ? "OpenAI-совместимый (ключ API, локальная модель)" : "Anthropic-совместимый (Anthropic, Z.ai, MiniMax, Kimi)";
+    spareOtherHint.textContent =
+      `Другой провайдер — только другого протокола: сейчас основной ${frameworkOf(provider) === "anthropic" ? "на протоколе Anthropic" : "OpenAI-совместимый"}, ` +
+      `значит запасной — ${other}. Ключ подставится из сохранённых, если он есть.`;
+  };
+  for (const [value, title, text] of [
+    ["none", "Нет", "упала основная — ход не состоится"],
+    ["same", "Модель того же провайдера", "тот же адрес и ключ, другое имя модели"],
+    ["other", "Другой провайдер", "свой адрес и ключ; другой протокол"],
+  ] as Array<[Spare, string, string]>) {
+    const b = el("button", "choice-item");
+    b.type = "button";
+    b.setAttribute("role", "radio");
+    b.dataset.value = value;
+    b.append(el("span", "choice-title", title), el("span", "choice-text", text));
+    b.addEventListener("click", () => {
+      spare = value;
+      if (spare === "other" && !spareKey) {
+        const otherKey = frameworkOf(provider) === "anthropic" ? keyOf("api") : keyOf("anthropic");
+        if (otherKey) {
+          spareKey = otherKey;
+          setField(spareKeyField, otherKey);
+        }
+      }
+      syncSpare();
+    });
+    sparePick.append(b);
+  }
+  sparePanes.same.append(field("Запасная модель", fallbackModel, (v) => (fallbackModel = v), { mono: true, placeholder: "например, gpt-5.6-luna" }));
+  const spareKeyField = field("Ключ запасного", spareKey, (v) => (spareKey = v), { mono: true, type: "password", placeholder: "ключ провайдера" });
+  const spareGridOther = el("div", "form-grid two");
+  spareGridOther.append(
+    field("Адрес запасного", spareUrl, (v) => (spareUrl = v), { mono: true, placeholder: "https://api.z.ai/api/anthropic" }),
+    field("Модель запасного", fallbackModel, (v) => (fallbackModel = v), { mono: true, placeholder: "например, glm-5.3" }),
+  );
+  sparePanes.other.append(spareGridOther, spareKeyField, spareOtherHint);
+  const spareBox = el("div");
+  spareBox.style.marginTop = "14px";
+  spareBox.append(el("span", "models-label", "Запасной провайдер"), sparePick, sparePanes.none, sparePanes.same, sparePanes.other);
+  const visionGrid = el("div", "form-grid two");
+  visionGrid.style.marginTop = "14px";
+  visionGrid.append(
+    field("Зрячая модель", visionModel, (v) => (visionModel = v), { mono: true, placeholder: "пусто — по каталогу провайдера" }),
   );
   const spareHint = el("p", "field-hint",
-    "Запасная модель того же провайдера берёт ход, когда основная упала (обрыв, 5xx, пустой ответ). " +
-    "Зрячая модель получает ход, в котором есть картинка, если основная её не видит: для GLM это glm-5.3-flash " +
-    "того же ключа, у зрячих моделей (GPT, Claude) поле не нужно. Переключение происходит до вызова, роль и усилие не меняются.");
+    "Запасной берёт ход, когда основная упала (обрыв, 5xx, пустой ответ) или подписка исчерпала окно — тогда ходы идут " +
+    "к запасному до часа восстановления, а окно говорит «подписка исчерпана до ЧЧ:ММ». " +
+    "Зрячая модель получает ход, в котором есть картинка, если основная её не видит; без поля берётся зрячая из каталога " +
+    "того же провайдера. Переключение происходит до вызова, роль и усилие не меняются.");
   spareHint.style.marginTop = "8px";
-  model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint, spareGrid, spareHint);
+  model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint, spareBox, visionGrid, spareHint);
+  syncSpare();
   syncPick();
   syncEffort();
   cards.push(inGroup(card("Модель", model), GROUP.brain));
@@ -701,8 +778,24 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
         if (effortOut) out.model.reasoning_effort = effortOut;
         else delete out.model.reasoning_effort;
         // Запасная и зрячая модели: пустое поле — снять ручку, а не записать "".
-        if (fallbackModel.trim()) out.model.fallback_model = fallbackModel.trim();
-        else delete out.model.fallback_model;
+        // 25.09: запасной другого провайдера — со своим адресом и ключом и на другом
+        // протоколе (boot._brain_config кладёт их во второй фреймворк llm.json).
+        delete out.model.fallback_framework;
+        delete out.model.fallback_base_url;
+        delete out.model.fallback_key;
+        if (spare === "none" || !fallbackModel.trim()) {
+          delete out.model.fallback_model;
+        } else {
+          out.model.fallback_model = fallbackModel.trim();
+          if (spare === "other") {
+            if (!spareUrl.trim() || !spareKey.trim()) {
+              return "Запасному провайдеру нужны и адрес, и ключ — или выбери «Модель того же провайдера».";
+            }
+            out.model.fallback_framework = frameworkOf(provider) === "anthropic" ? "openai" : "anthropic";
+            out.model.fallback_base_url = spareUrl.trim();
+            out.model.fallback_key = spareKey.trim();
+          }
+        }
         if (visionModel.trim()) out.model.vision_model = visionModel.trim();
         else delete out.model.vision_model;
         // Telegram: токен без числового id — молчащий бот, а не «почти готово».
