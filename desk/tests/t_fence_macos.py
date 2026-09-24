@@ -619,7 +619,14 @@ class Live(unittest.TestCase):
     def test_сеть_наружу_и_dns_живут_а_lan_bind_закрыт(self):
         # Положительный стенд: allowlist mach + DNS не должны сломать сеть.
         # Если сломают — это увидит CI, и список расширят.
-        out, code, _ = self.sh("curl -fsS --max-time 15 https://github.com/robots.txt && echo OK")
+        # Три попытки на код 28 (таймаут): DNS раннера macOS иногда молчит все 15 с
+        # (прогон 36067936467, 25.09: «Resolving timed out»). Ограда закрывает сеть
+        # СТАБИЛЬНО — все три раза подряд, и стенд по-прежнему краснеет.
+        for _attempt in range(3):
+            out, code, _ = self.sh("curl -fsS --max-time 15 https://github.com/robots.txt && echo OK")
+            if code != 28:
+                break
+            time.sleep(2)
         self.assertEqual(code, 0, "исходящий HTTPS/TLS не прошёл под allowlist: " + out)
         self.assertIn("OK", out)
         out, code, _ = self.sh("python3 -c \"import socket; socket.getaddrinfo('github.com', 443); "
