@@ -41,6 +41,7 @@ _STATUS_MAP = {
     "timeout": "timeout",
     "lost": "failed",
     "needs_input": "needs_input",
+    "stalled": "failed",  # v1 не имеет incomplete; точная причина остаётся в forge_status
 }
 
 RECAP_CHARS = 2048
@@ -225,6 +226,8 @@ def _unit_line(payload: dict) -> str:
     verb = ("пропал без расписки — супервизор умер, result.json нет"
             if str(payload.get("forge_status") or "").strip().lower() == "lost"
             else _VERBS.get(status, status or "?"))
+    if str(payload.get("forge_status") or "").strip().lower() == "stalled":
+        verb = "завершил попытку без полного результата (stalled; в расписке v1 — failed)"
     subject = "воркер" if role in ("", "worker") else f"юнит «{role}»"
     goal = payload.get("goal") or payload.get("task_id")
     recap = _clip(" ".join(str(payload.get("recap") or payload.get("error") or "").split()),

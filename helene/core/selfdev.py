@@ -13,9 +13,11 @@ Praxis — контур доказуемых изменений собствен
   * auto: привычная low-risk область из memory/selfdev_policy.json;
   * review: всё остальное требует особенно внимательного собственного review.
 
-Зелёные, красные и таймаутные проверки остаются доказательством для review и rollback, но
+Зелёные и красные проверки остаются доказательством для review и rollback, но
 не становятся скрытым approval gate: завершив собственное ревью, Praxis мёржит решение сама
-во всех зонах и предупреждает Егора постфактум. ``override_reason`` остаётся полезным явным
+во всех зонах и предупреждает Егора постфактум. Таймаут гейта — не доказательство, а его
+отсутствие: мёрж ждёт, пока прогон уложится (24.09, слово Егора: «это уязвимость» — правка,
+из-за которой тест виснет, иначе вливалась как «пропущено»). ``override_reason`` остаётся полезным явным
 объяснением, когда известна причина красного результата, но его отсутствие не делегирует
 решение о мёрже наружу. Immune verdict — второе мнение, а не внешний судья.
 
@@ -57,7 +59,9 @@ JOURNAL_DIR = MEM_DIR / "journal"
 
 WT_SUBDIR = ".proposals"           # worktree-копии внутри репо (gitignored)
 GIT_TIMEOUT = 60
-TEST_TIMEOUT = int(os.getenv("PRAXIS_PROPOSAL_TEST_TIMEOUT", "600"))
+# Последовательный прогон всего набора — около 7 минут на пустой машине (23.09);
+# 600 с роняли его под любой нагрузкой. Таймаут держит мёрж, поэтому запас нужен честный.
+TEST_TIMEOUT = int(os.getenv("PRAXIS_PROPOSAL_TEST_TIMEOUT", "1200"))
 
 # High-risk classifier.  It affects receipts/review attention, never authority to merge.
 PROTECTED_PATTERNS = (
@@ -286,12 +290,12 @@ def test_status(tests: dict | None) -> str:
 
 
 def tests_block_merge(tests: dict | None) -> bool:
-    """Only an observed failed/error test verdict blocks self-merge.
+    """A failed/error verdict or a gate that never finished blocks self-merge.
 
-    A wall-clock timeout is inconclusive: it remains visible, but it is not evidence that
-    the diff broke tests and therefore must not manufacture a red gate.
+    A wall-clock timeout is not "skipped": a diff that makes a test hang produces exactly
+    this verdict, so merging on it would let the worst regressions through unverified.
     """
-    return test_status(tests) not in {"passed", "timed_out", "not_run"}
+    return test_status(tests) not in {"passed", "not_run"}
 
 
 def run_tests(pid: str) -> dict:
@@ -318,8 +322,8 @@ def run_tests(pid: str) -> dict:
                            cwd=str(wt), env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=TEST_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return {"ok": False, "status": "timed_out", "blocking": False,
-                "summary": f"тесты пропущены: не уложились в {TEST_TIMEOUT}s"}
+        return {"ok": False, "status": "timed_out", "blocking": True,
+                "summary": f"тесты не уложились в {TEST_TIMEOUT}s — проверки нет"}
     combined = ((r.stderr or "") + (r.stdout or "")).strip()
     m = re.search(r"Ran (\d+) tests?", combined)
     ran = m.group(1) if m else "?"
@@ -377,7 +381,7 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
         _deny("proposal_review", "submit", f"{pid}: ревью {problem}")
         return (f"Не отправляю: ревью {problem}. Прочитай свой дифф глазами — "
                 f"proposal_diff(id=\"{pid}\") — и передай review=: что меняется, чем рискует, "
-                "почему это правильно. Твой код ревьюишь ты сама, никто за тебя.")
+                "почему это правильно. Твой код ревьюишь ты, никто за тебя.")
     main = _main_branch()
 
     _git("add", "-A", cwd=wt)
@@ -422,6 +426,17 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
     log.info("proposal %s submitted: zone=%s tests_status=%s files=%d",
              pid, zone, test_status(tests), len(files))
 
+    if test_status(tests) == "timed_out":
+        # 24.09: таймаут — не «пропущено», а «не проверено». Предложение остаётся
+        # proposed; повторный submit того же id перепрогоняет гейт и мёржит на вердикте.
+        _journal(f"«{title.strip() or pid}» ({pid}): гейт не уложился в {TEST_TIMEOUT} с — "
+                 "мёрж отложен до прогона, который успеет.")
+        return (f"Предложение {pid} «{title.strip()}» НЕ смёржено: тесты не уложились в "
+                f"{TEST_TIMEOUT} с, проверки нет. Правка, из-за которой тест виснет, даёт ровно "
+                "такой исход, поэтому вслепую не вливаю. Посмотри, что грузит машину "
+                "(долгие счёты, параллельные прогоны), и повтори submit_proposal(id="
+                f"\"{pid}\", …) с тем же ревью — гейт прогонится заново.")
+
     if should_automerge(zone):
         # Sovereign contract: a completed own review is the merge decision. Test outcomes
         # remain evidence and a post-factum warning, never a hidden request for Yegor to
@@ -433,20 +448,18 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
             state = test_status(tests)
             if state == "passed":
                 proof = "тесты зелёные"
-            elif state == "timed_out":
-                proof = "тесты пропущены по таймауту; вердикт inconclusive"
             elif override_reason:
                 proof = f"красные тесты; объяснение: {override_reason}"
             else:
                 proof = "тесты красные; Егору уйдёт предупреждение постфактум"
-            return (f"Предложение {pid} «{title.strip()}» ({how}), {proof} — смёржила сама. "
+            return (f"Предложение {pid} «{title.strip()}» ({how}), {proof} — смёржено самостоятельно. "
                     f"{res['msg']}")
         return f"Предложение {pid} ({how}), но технически не смёржилось: {res['msg']}."
     return (f"Предложение {pid} «{title.strip()}» не получило известную risk-зону {zone!r}; "
             "это неисправность классификатора, а не запрос Егору на мёрж.")
 
 
-def diff_text(pid: str, cap: int = 12000) -> str:
+def diff_text(pid: str, cap: int | None = 12000) -> str:
     """Полный дифф предложения против основной ветки (для карточки/плитки/её глаз).
 
     PASS 16.4: пока worktree жив, видны и ещё НЕ закоммиченные правки (add -A + дифф
@@ -457,12 +470,19 @@ def diff_text(pid: str, cap: int = 12000) -> str:
     main = _main_branch()
     wt = worktree_path(pid)
     if wt.exists():
-        _git("add", "-A", cwd=wt)  # новые файлы тоже видны (submit всё равно делает add -A)
-        mb = _git("merge-base", main, "HEAD", cwd=wt).stdout.strip()
-        out = _git("diff", mb or main, cwd=wt).stdout
+        added = _git("add", "-A", cwd=wt)  # новые файлы тоже видны
+        base = _git("merge-base", main, "HEAD", cwd=wt)
+        if cap is None and (added.returncode != 0 or base.returncode != 0):
+            raise RuntimeError("не удалось собрать полный предмет ревью предложения")
+        mb = base.stdout.strip()
+        result = _git("diff", mb or main, cwd=wt)
     else:
-        out = _git("diff", f"{main}...{t['branch']}").stdout
-    return out[:cap] + ("\n… (обрезано)" if len(out) > cap else "")
+        result = _git("diff", f"{main}...{t['branch']}")
+    if cap is None and result.returncode != 0:
+        raise RuntimeError("не удалось прочитать полный дифф предложения")
+    out = result.stdout
+    # Карточка ограничена; внутренний рецензент получает весь предмет (cap=None).
+    return out if cap is None else out[:cap] + ("\n… (обрезано)" if len(out) > cap else "")
 
 
 def live_effect(branch: str, main: str | None = None) -> tuple[str, str]:
@@ -641,7 +661,7 @@ def apply(pid: str, by: str = "egor", override_reason: str = "") -> dict:
     if by == "auto":
         try:
             import immune
-            verdict, why = immune.review(diff_text(pid), message=t.get("title") or "",
+            verdict, why = immune.review(diff_text(pid, cap=None), message=t.get("title") or "",
                                          reason=t.get("why") or "")
         except Exception:
             log.warning("иммунитет не отработал на %s — считаю warn", pid, exc_info=True)
@@ -668,7 +688,7 @@ def apply(pid: str, by: str = "egor", override_reason: str = "") -> dict:
     _cleanup(pid, drop_branch=True)
     _update(pid, status="merged", decided_by=by, notified=(by != "auto"),
             override_reason=override_reason)
-    actor = "сама, после собственного review" if by == "auto" else "Егор одобрил"
+    actor = "самостоятельно, после собственного review" if by == "auto" else "Егор одобрил"
     _journal(f"«{title}» ({pid}) смёржено ({actor})"
              + (f"; override: {override_reason}" if override_reason else "")
              + " — перезапущусь на новом коде.")

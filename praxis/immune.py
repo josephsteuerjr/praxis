@@ -45,6 +45,7 @@ QUEUE_PATH = STATE_DIR / "immune_queue.json"
 CARDS_PATH = STATE_DIR / "immune_cards.json"
 JOURNAL_DIR = MEM_DIR / "journal"
 MAX_DIFF = int(os.getenv("PRAXIS_IMMUNE_MAX_DIFF", "400"))
+MAX_DIFF_CHARS = 24000      # полный предмет либо честный warn, никогда ревью префикса
 GIT_TIMEOUT = 30
 SELF_AUTHOR = "Praxis"          # автор selfgit-коммитов — только её ревьюим
 QUEUE_BATCH = max(1, int(os.getenv("PRAXIS_IMMUNE_QUEUE_BATCH", "3")))
@@ -149,6 +150,9 @@ def review(diff_text: str, message: str = "", reason: str = "", context: str = "
     if n_lines > MAX_DIFF:
         return ("warn", f"дифф крупнее окна рецензии ({n_lines} строк > {MAX_DIFF}); "
                         "проверить частями и сохранить результаты тестов")
+    if len(diff_text) > MAX_DIFF_CHARS:
+        return ("warn", f"дифф крупнее окна рецензии ({len(diff_text)} символов > "
+                        f"{MAX_DIFF_CHARS}); проверить частями и сохранить результаты тестов")
     if not diff_text.strip():
         return ("ok", "пустой дифф")
     hit = guarded_hit(diff_text)
@@ -161,7 +165,7 @@ def review(diff_text: str, message: str = "", reason: str = "", context: str = "
         f"Stated intent (commit/proposal message): {message or '—'}\n"
         f"Stated reason (why she did it): {reason or '—'}\n"
         + (f"Extra context: {context}\n" if context else "")
-        + f"\n{_invariants_context()}\n\nThe diff of HER edit:\n```diff\n{diff_text[:24000]}\n```"
+        + f"\n{_invariants_context()}\n\nThe diff of HER edit:\n```diff\n{diff_text}\n```"
     )
     try:
         resp = llm.chat("evaluator", system=_REVIEW_SYS, max_tokens=200,
@@ -270,11 +274,17 @@ def process_queue(batch: int = QUEUE_BATCH) -> int:
         if not sha:
             continue
         try:
-            author = _git("log", "-1", "--format=%an", sha).stdout.strip()
+            author_read = _git("log", "-1", "--format=%an", sha)
+            if author_read.returncode != 0:
+                raise RuntimeError(f"git log: код {author_read.returncode}")
+            author = author_read.stdout.strip()
             if author and author != SELF_AUTHOR:
                 log.info("иммунитет: %s не её коммит (автор %s) — пропускаю", sha[:8], author)
                 continue
-            diff = _git("show", "--format=", sha).stdout
+            diff_read = _git("show", "--format=", sha)
+            if diff_read.returncode != 0:
+                raise RuntimeError(f"git show: код {diff_read.returncode}")
+            diff = diff_read.stdout
         except Exception:
             log.warning("иммунитет: git show %s не удался — вернула в очередь", sha[:8], exc_info=True)
             kept.append(e)

@@ -59,6 +59,23 @@ class TestOffered(PointerBase):
                             or "web_search" in str(n), n)
         self.assertLess(len(json.dumps(offered, ensure_ascii=False)), 30000,
                         "родные руки со схемами — ~24 тыс. знаков против 70 тыс. манифеста")
+        # 22.09: PRAXIS_TEST прячет от песочницы reply(721)+end_turn(990)+web_search(68),
+        # и бюджет дважды «чинили» по зелёному тесту при красном бое. Мерим и боевой состав.
+        import os
+        import work_loop
+        if not work_loop.reply_hand_enabled():
+            # catalog_tools_for честно вынимает reply/end_turn при опущенном рычаге —
+            # добираем их каталогом с рычагом, временно поднятым, а не KeyError-ом.
+            os.environ["PRAXIS_CHAT_REPLY_HAND"] = "on"
+            try:
+                by_name = {str(t.get("name") or ""): t
+                           for t in agent.catalog_tools_for(ctx)}
+            finally:
+                os.environ.pop("PRAXIS_CHAT_REPLY_HAND", None)
+            live = list(offered) + [by_name[n] for n in ("reply", "end_turn")]
+            live.append({"type": "web_search"})
+            self.assertLess(len(json.dumps(live, ensure_ascii=False)), 30000,
+                            "боевой состав (с reply/end_turn/web_search) — тоже под 30000")
 
     def test_catalog_keeps_the_full_hand_set(self):
         owner = agent.ChannelContext.from_legacy("777", is_dm=True, owner=True, known=True, scope="owner")
@@ -235,7 +252,13 @@ class TestLoopEndToEnd(PointerBase):
 
         client = _Client()
         llm.use_test_client(client)
-        agent.voice_turn(None, "Егор: тест", speaker="Егор", is_owner=True)
+        with mock.patch.object(agent.serverd_client, "state_line",
+                               return_value=None), \
+             mock.patch.object(agent.serverd_client, "available",
+                               return_value=False), \
+             mock.patch.object(agent.body_client, "available",
+                               return_value=False):
+            agent.voice_turn(None, "Егор: тест", speaker="Егор", is_owner=True)
         self.assertEqual(received.get("required_field"), "x")
         self.assertEqual(received.get("optional_field"), "default")
         offered = _names(client.calls[0].get("tools", []))

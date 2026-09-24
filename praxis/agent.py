@@ -35,6 +35,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading as _threading
 import time
 import uuid
 from collections import deque
@@ -506,8 +507,8 @@ def _media_spool() -> media.MediaSpool:
     return _MEDIA_SPOOL
 
 
-def _test_runtime() -> bool:
-    return (_under_tests() or "unittest" in sys.modules or "pytest" in sys.modules
+def _test_runtime() -> bool:  # 23.09: снимок при импорте (см. `if not (_TEST_RUNTIME_AT_IMPORT := …)` ниже) — torch позже сам тянет unittest
+    return (_TEST_RUNTIME_AT_IMPORT or bool(os.environ.get("PRAXIS_TEST"))
             or bool(os.getenv("PYTEST_CURRENT_TEST")))
 
 
@@ -575,7 +576,7 @@ try:  # герметичность: любой тест-запуск (unittest/p
     from _sandbox import _looks_like_test_run as _under_tests
 except Exception:
     _under_tests = lambda: bool(os.environ.get("PRAXIS_TEST"))
-if not _under_tests():
+if not (_TEST_RUNTIME_AT_IMPORT := bool(_under_tests() or "unittest" in sys.modules or "pytest" in sys.modules)):
     load_dotenv(override=True)  # .env-тюнинг применяется и на простом restart_self (§9 пакета 2)
 
 BASE = Path(os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent)
@@ -1381,10 +1382,10 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
                     "kind": request.get("kind"), "ts": request.get("ts"),
                 })
             if isinstance(interpretation, dict):
-                add("appetite_interpretation", {
-                    "text": interpretation.get("text"), "plan": interpretation.get("plan"),
-                    "ts": interpretation.get("ts"),
-                })
+                # 24.09: толкование 13.09 «профиль chat (gpt-5.6-terra, medium)» ехало как текущее
+                # состояние, и она говорила людям «reasoning у меня medium (Terra)» при glm-5.3/low.
+                # Дата записи и фактический голос теперь рядом: `_appetite_interpretation_view`.
+                add("appetite_interpretation", _appetite_interpretation_view(interpretation))
     except Exception:
         pass
     continuity_readers = [
@@ -1431,12 +1432,57 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
 #  Инструменты (руки голоса)
 # --------------------------------------------------------------------------- #
 
-def _reindex(path: Path) -> None:
-    """Пересчитать векторы файла после записи. Никогда не валит запись памяти."""
+# ⚠ 21.09.2026. Пересчёт стоил ОДНОГО файла, пока строку писали изредка. Для дневника
+# `memory_index.upsert` делает `DELETE FROM chunks WHERE path=?`, заново чанкует ВЕСЬ файл
+# и в конце берёт `SELECT COUNT(*) FROM chunks` по всей базе — а база в этот день 443 МБ,
+# дневник 16 192 строки. Когда утренняя правка стала писать строку на каждую из 3443
+# принятых записей outbox, это сложилось в квадрат: boot встал, ядро держалось на 96 %,
+# часы не рождались. Пишущих в один файл подряд склеиваем: первый пересчёт идёт сразу,
+# остальные в течение окна — одним отложенным. Под стендом окна нет вовсе, иначе тест,
+# который пишет и тут же ищет, поймал бы пустой индекс.
+_REINDEX_DEBOUNCE_SEC = 0.0 if os.environ.get("PRAXIS_TEST") else 5.0
+_REINDEX_LOCK = _threading.Lock()
+_REINDEX_LAST: dict[str, float] = {}
+_REINDEX_TIMERS: dict[str, object] = {}
+
+
+def _reindex_now(path: Path) -> None:
+    """Сам пересчёт. Никогда не валит запись памяти."""
     try:
         memory_index.upsert(path)
     except Exception:
         log.debug("upsert индекса не удался для %s", path, exc_info=True)
+    finally:
+        with _REINDEX_LOCK:
+            _REINDEX_LAST[str(path)] = time.time()
+            _REINDEX_TIMERS.pop(str(path), None)
+
+
+def _reindex(path: Path) -> None:
+    """Пересчитать векторы файла после записи, склеивая частые правки одного файла."""
+    key = str(path)
+    now = time.time()
+    if _REINDEX_DEBOUNCE_SEC <= 0:
+        _reindex_now(path)
+        return
+    with _REINDEX_LOCK:
+        waited = now - _REINDEX_LAST.get(key, 0.0)
+        if waited >= _REINDEX_DEBOUNCE_SEC:
+            _REINDEX_LAST[key] = now      # окно занимаем ДО работы, чтобы не сошлись двое
+            due = True
+        else:
+            due = False
+            if key not in _REINDEX_TIMERS:
+                # Хвост пачки не должен остаться неиндексированным, если писать
+                # перестали: доводим отложенным пересчётом ровно один раз на файл.
+                timer = _threading.Timer(_REINDEX_DEBOUNCE_SEC - waited,
+                                         _reindex_now, args=(path,))
+                timer.name = "reindex-" + Path(key).name
+                timer.daemon = True
+                _REINDEX_TIMERS[key] = timer
+                timer.start()
+    if due:
+        _reindex_now(path)
 
 
 def _seed_experiment_report(limit: int = 200) -> str:
@@ -1476,7 +1522,7 @@ def _seed_experiment_report(limit: int = 200) -> str:
     ])
 
 
-def tool_recall(query: str, report: bool = False) -> str:
+def tool_recall(query: str = "", report: bool = False) -> str:
     """Hybrid internal recall: full memory regardless of the current audience.
 
     Privacy is enforced at the outbound boundary.  Scope must not amputate Praxis's
@@ -3912,14 +3958,25 @@ def tool_forget_connection(a: str, b: str) -> str:
     return graph.forget_connection(a, b)
 
 
-def tool_manage_loop(action: str, person: str, match: str = "", until: str = "",
+def tool_manage_loop(action: str, person: str = "", match: str = "", until: str = "",
                      force: bool = False, reason: str = "") -> str:
     """PASS 11.1: рука на своих нитях — одно касание, одно решение.
     close — закрыть [x]; park — усыпить до даты (пусто = +7 дней); reopen — разбудить
-    спящие; list — нити человека с состояниями.
+    спящие; list — нити человека с состояниями; list без person — все открытые и
+    спящие нити по всем досье (24.09: раньше person был обязателен даже для list,
+    и вызов падал TypeError, оставляя in_doubt-ран).
     PASS 21: парко-храповик — оспариваемая дисциплина, не закон: force=true с причиной
     ставит моё решение выше правила (и оставляет след в дневнике)."""
     act = (action or "").strip().lower()
+    if act == "list" and not (person or "").strip():
+        chunks: list[str] = []
+        for _p in sorted(people.PEOPLE_DIR.glob("*.md")):
+            slug = _p.stem
+            _, body = people.read(slug)
+            lines = [l.strip() for l in (body.get(people.LOOPS, "")).splitlines() if l.strip()]
+            if lines:
+                chunks.append(f"[{slug}]\n" + "\n".join(lines))
+        return "\n\n".join(chunks) if chunks else "Нитей нет."
     slug = graph.resolve((person or "").strip())
     if not slug or not people.path_for(slug).exists():
         return f"Не вижу досье для «{person}» — нить живёт у человека."
@@ -4295,8 +4352,8 @@ def _observe_image_pixels(local: Path, transfer_dir: Path | None, *, mime: str,
             # Text-only модель (GLM-5.3) пикселей не получит, а фраза «inspect the attached
             # pixels» толкала описывать экран по памяти о вводе (06.09, отозвано ею 07.09).
             # Честно: снимок сохранён для владельца, ей — структура окна. 09.09: если у
-            # роли есть зрячая замена (llm.vision_model, для glm — glm-5.3-flash), пиксели
-            # кладём — llm.chat переключит модель на этот вызов сам.
+            # роли есть зрячая замена (llm.vision_model: явный конфиг или выбор каталога),
+            # пиксели кладём — llm.chat переключит модель на этот вызов сам.
             return (
                 f"Snapshot saved as a run artifact{note}, but the configured voice route "
                 f"({llm.role_model('voice') or 'unknown'}) has neither verified image capability "
@@ -6971,13 +7028,12 @@ REACT_TOOL = {
 MANAGE_DESIRE_TOOL = {
     "name": "manage_desire",
     "description": (
-        "Inspect or advance your own provenance-backed intention. The causal order is strict: "
-        "notice -> want -> choose -> act -> observe -> change. `act` automatically links the "
-        "current durable run; its RECAP later supplies observed evidence but never auto-claims the "
-        "desire is satisfied. Use list/get for orientation, link_run for an already-spawned run, "
-        "and reopen only for an explicitly revisited satisfied/released desire. Raw journal/reflection "
-        "text is never valid provenance: cite independently verified conversation/run/artifact/owner "
-        "evidence. Owner/internal scope only."
+        "Inspect or advance your provenance-backed intention. Strict causal order: notice -> "
+        "want -> choose -> act -> observe -> change; `act` links the current durable run (its "
+        "RECAP is evidence, never auto-claim of satisfaction). list/get to orient, link_run for "
+        "a spawned run, reopen only for an explicitly revisited desire. Journal/reflection text "
+        "is not provenance — cite verified conversation/run/artifact/owner evidence. "
+        "Owner/internal scope only."
     ),
     "input_schema": {
         "type": "object",
@@ -7006,18 +7062,14 @@ MANAGE_DESIRE_TOOL = {
 TELEGRAM_ACCOUNT_TOOL = {
     "name": "telegram_account",
     "description": (
-        "Sovereign Telethon account dispatcher for you and the owner. join/leave change real membership from a t.me invite, "
-        "public link, @username or chat id, run room onboarding/cleanup and preserve exact receipts; use "
-        "these dedicated actions for membership rather than a raw Join/Leave constructor. "
-        "followups inspects the durable thread ledger — your own trace of what a thread already covered, "
-        "which is the only record you keep while the pulse holds the line closed. That trace never reaches "
-        "the owner by itself: a report is sent only when someone asked for it. watch_reply/unwatch_reply are "
-        "your hand on that — turn the report on or off for one thread; cancel_followup drops the thread. "
-        "Registry actions list/search/describe/call expose "
-        "the actually installed MTProto schema; account-critical auth/session/logout/2FA requests require "
-        "a separate two-message owner confirmation: you or the owner may initiate; the first call "
-        "returns an exact phrase, and only a new private owner message containing exactly that phrase "
-        "may use confirm. requested_by and confirmed_by remain separate in the receipt. "
+        "Telethon dispatcher for you and the owner. join/leave — real membership by invite, "
+        "link, @username or id, with room onboarding/cleanup and exact receipts (not a raw "
+        "Join/Leave). followups — durable thread ledger: what a thread already covered while "
+        "the line was closed; a report goes out only if someone asked (watch_reply/unwatch_reply "
+        "toggle it; cancel_followup drops the thread). list/search/describe/call expose the "
+        "installed MTProto schema; auth/session/logout/2FA need a two-message owner "
+        "confirmation: the first call returns an exact phrase, only a new private owner message "
+        "with that phrase may confirm; requested_by and confirmed_by stay separate. "
         "pending_confirmations/cancel_confirmation inspect or cancel unused challenges."
     ),
     "input_schema": {
@@ -7034,7 +7086,7 @@ TELEGRAM_ACCOUNT_TOOL = {
             "query": {"type": "string"},
             "request": {"type": "string", "description": "exact functions.*Request name"},
             "challenge_id": {"type": "string", "description": "critical challenge selector"},
-            "params_json": {"type": "string", "description": "call parameters as one JSON object; moderate_abstractdl expects peer_id/message_id/sender_id/decision; admin_abstractdl expects peer_id/action/params, where action is slow_mode {seconds: 0|10|30|60|300|900|3600}, default_rights {allow:[...], deny:[...]}, restrict {user_id, seconds} or unrestrict {user_id} \u2014 or {history: true} to read what has already been done to the room"},
+            "params_json": {"type": "string", "description": "call parameters as one JSON object; moderate_abstractdl expects peer_id/message_id/sender_id/decision; admin_abstractdl expects peer_id/action/params, where action is slow_mode {seconds: 0|10|30|60|300|900|3600}, default_rights {allow:[...], deny:[...]}, restrict {user_id, seconds}, unrestrict, ban_member {user_id}; purge_member {user_id} — ban + DeleteParticipantHistory for spammers; {history: true} — what was already done to the room"},
             "scope": {"type": "string", "description": "optional telegram.* registry filter"},
             "namespace": {"type": "string", "description": "optional registry namespace filter"},
             "risk": {"type": "string", "description": "optional registry risk filter"},
@@ -7143,14 +7195,10 @@ WORKSHOP_TOOLS = [
 FORGE_TOOLS = [
     {"name": "coding_session",
      "description": (
-         "Control a durable coding task. start binds a goal to an exact directory and normally "
-         "creates an isolated git worktree; target may be self or ANY directory visible to this "
-         "runtime. status/list survive restarts. finish assembles the evidence and, for self-code, "
-         "submits the existing proposal after your own diff review. The task root is an address/"
-         "concurrency boundary, not a policy limit. "
-         "abandon closes a task WITHOUT integrating anything — the way out when the root is "
-         "unreachable and finish has nothing to survey; it needs `review` as the reason and never "
-         "touches a branch or worktree."),
+         "Control a durable coding task. start binds a goal to a directory, normally an "
+         "isolated git worktree (target=self or a visible directory). status/list survive "
+         "restarts; finish assembles evidence and, for self-code, submits the proposal after "
+         "own diff review. abandon closes WITHOUT integrating; needs `review` as the reason."),
      "input_schema": _obj({
          "action": {"type": "string", "enum": ["start", "status", "list", "finish", "abandon"]},
          "task_id": {"type": "string"}, "goal": {"type": "string"},
@@ -7164,13 +7212,11 @@ FORGE_TOOLS = [
      }, ["action"])} ,
     {"name": "coding_inspect",
      "description": (
-         "Task-bound eyes. orientation/model map the place, manifests and semantic adapters; symbols/"
-         "references/diagnostics/impact/checks expose normalized code and test facts; observations shows "
-         "the durable Windows evidence map; read gives numbered lines plus sha256; diff and history keep "
-         "exact evidence. Read actual state instead of guessing. "
-         "watching/watch/unwatch — моя рука на наблюдении за ЧУЖИМ репозиторием (адрес в query): "
-         "перечислить, поставить, снять. Наблюдение спрашивает только HEAD и приносит сдвиг фактом "
-         "в моё же пробуждение; снятое возвращается, если я назову адрес снова."),
+         "Task-bound eyes: orientation/model map the place; symbols/references/diagnostics/"
+         "impact/checks give code and test facts; observations — Windows evidence map; read — "
+         "numbered lines + sha256; diff/history — exact evidence. Read state, don't guess. "
+         "watching/watch/unwatch — наблюдение за ЧУЖИМ репозиторием (адрес в query): поставить/"
+         "снять; спрашивает только HEAD, сдвиг приходит фактом в пробуждение."),
      "input_schema": _obj({
          "task_id": {"type": "string"},
          "action": {"type": "string", "enum": ["status", "orientation", "overview", "review", "model", "symbols",
@@ -7466,18 +7512,18 @@ MANAGE_LOOP_TOOL = {
         "сама решила к чему-то вернуться; это не task, не transport retry и не обязанность ответить. "
         "close — закрыть нить (сделана или отпускаешь; почему — одной честной строкой в дневник), "
         "park — усыпить до даты (проснётся по сроку или когда человек объявится; пустая дата = +7 дней), "
-        "reopen — разбудить спящие, list — нити человека. При возвращении сначала проверь, остаётся ли "
-        "она актуальной; закрыть без действия — нормальный результат."
+        "reopen — разбудить спящие, list — нити человека (без person — все нити по всем досье). "
+        "При возвращении сначала проверь, остаётся ли она актуальной; закрыть без действия — нормальный результат."
     ),
     "input_schema": _obj({
         "action": {"type": "string", "enum": ["close", "park", "reopen", "list"]},
-        "person": {"type": "string", "description": "имя/слаг человека, чья нить"},
+        "person": {"type": "string", "description": "имя/слаг человека, чья нить (не обязательна для list: пусто = все нити по всем досье)"},
         "match": {"type": "string", "description": "кусок текста нити (для close/park)"},
         "until": {"type": "string", "description": "ISO-дата пробуждения для park"},
         "force": {"type": "boolean", "description": "park: моё решение поверх парко-храповика "
                                                     "(дисциплина оспорима; причина обязательна)"},
         "reason": {"type": "string", "description": "park+force: почему парковать ещё раз"},
-    }, ["action", "person"]),
+    }, ["action"]),
 }
 
 # PASS 14: прожитые ходы — её собственный лог опыта (turns.py), рука на нём.
@@ -18618,6 +18664,45 @@ def sleep() -> str:
         "Дневник сохранён как episodic log; автоматических выводов из него не делаю. "
         "Ночная память работает по conversation/run evidence с provenance."
     )
+
+
+_BRAIN_MENTION_RE = re.compile(r"\b(?:gpt|glm|claude|deepseek|qwen)-[\w.\-]+|\b(?:Terra|Sol|Astra|Luna|Fable)\b",
+                               re.IGNORECASE)
+
+
+def _appetite_interpretation_view(interpretation: dict) -> dict:
+    """Её толкование просьбы об аппетитах — как запись с датой, а не как текущее состояние.
+
+    Толкование от 13.09 («Применяю профиль chat (gpt-5.6-terra, medium)») ехало в каждый кадр
+    без даты, рядом с настоящим мозгом, и 24.09 она ответила в чате «reasoning у меня стоит
+    medium (Terra)» при голосе glm-5.3 на low. Текст остаётся её — не переписываем; рядом
+    ставим, когда он записан, и фактический голос. Если запись называет другую модель, прямо
+    говорим, что этот профиль сейчас не действует.
+    """
+    view = {"text": interpretation.get("text"), "plan": interpretation.get("plan"),
+            "ts": interpretation.get("ts")}
+    try:
+        ts = float(interpretation.get("ts") or 0)
+    except (TypeError, ValueError):
+        ts = 0.0
+    if ts > 0:
+        days = max(0, int((time.time() - ts) // 86400))
+        view["recorded"] = f"{time.strftime('%d.%m.%Y', time.gmtime(ts))} ({days} дн. назад)"
+    model = llm.role_model("voice")
+    try:
+        effort = str(llm._config()["roles"]["voice"].get("reasoning_effort") or "")
+    except Exception:
+        effort = ""
+    if model:
+        view["voice_now"] = model + (f", reasoning {effort}" if effort else "")
+        text = f"{interpretation.get('text') or ''} {json.dumps(interpretation.get('plan') or {}, ensure_ascii=False)}"
+        named = {m.group(0) for m in _BRAIN_MENTION_RE.finditer(text)}
+        stale = sorted(n for n in named if n.casefold() not in model.casefold())
+        if stale:
+            view["stale"] = (f"профиль из этой записи ({', '.join(stale)}) сейчас НЕ действует: "
+                             f"голос — {view['voice_now']}; факт — в brain_configuration, "
+                             "менять — switch_brain")
+    return view
 
 
 # --------------------------------------------------------------------------- #

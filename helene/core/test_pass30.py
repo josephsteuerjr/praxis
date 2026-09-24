@@ -647,7 +647,7 @@ class HeldSelfWakeTests(unittest.TestCase):
 
         self.assertIn("their own material where they asked for it", agent._OUTBOUND_PRIVACY_SYS)
         self.assertIn("never cross-chat leakage", agent._OUTBOUND_PRIVACY_SYS)
-        self.assertIn("her own decisions, commitments, boundaries, plans, and actions",
+        self.assertIn("its own decisions, commitments, boundaries, plans, and actions",
                       agent._OUTBOUND_PRIVACY_SYS)
         self.assertIn("I am waiting for their PASS/FAIL", agent._OUTBOUND_PRIVACY_SYS)
 

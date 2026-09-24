@@ -657,7 +657,7 @@ class Body(unittest.TestCase):
         src = inspect.getsource(build_mac.main)
         self.assertIn("skipped_body", src)
         self.assertIn("body=body_info", src)
-        self.assertIn("collect_body_licenses(out, BODY_SRC", src)
+        self.assertIn("collect_body_licenses(out, body_src_for(live)", src)
 
 
 class InstallSh(unittest.TestCase):

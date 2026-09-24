@@ -135,7 +135,7 @@ def _cut_phrase(owner: str, mark: dict) -> str:
     """Фраза для записи хода: чей обрыв, какой моделью, на сколько символов."""
     who = _owner_ru(owner)
     tail = ("фраза не закончена (обрыв не сведён с ответом этого хода)"
-            if str(owner) == "voice" else "это не её фраза — оборвался служебный вызов")
+            if str(owner) == "voice" else "это не фраза агента — оборвался служебный вызов")
     return (f"оборвано потолком max_tokens: {who} "
             f"({mark.get('model') or 'модель'}, {int(mark.get('chars') or 0)} симв.) — "
             f"{tail}")[:CUT_LINE_CHARS]
@@ -771,12 +771,12 @@ def _no_addressee(t: dict) -> bool:
 # читаем по-старому. «authored» — черновик, который ещё не встретился с транспортом:
 # честнее всего сказать, что он написан, а не произнесён.
 _DELIVERY_VERB = {
-    "authored": "написала (доставка не подтверждена)",
-    "accepted": "сказала",
-    "partial": "сказала частично (принят не весь текст)",
-    "superseded": "не сказала: перебила себя и переписала ход",
-    "failed": "не сказала: доставка не удалась",
-    "blocked": "не сказала: доставка застряла, ждёт повтора",
+    "authored": "написано (доставка не подтверждена)",
+    "accepted": "сказано",
+    "partial": "сказано частично (принят не весь текст)",
+    "superseded": "не сказано: ход перебит и переписан",
+    "failed": "не сказано: доставка не удалась",
+    "blocked": "не сказано: доставка застряла, ждёт повтора",
 }
 
 
@@ -801,9 +801,9 @@ def format_line(t: dict) -> str:
         # которую она читает В МОМЕНТ хода, и забыл строку, которую она читает ПОТОМ. Так
         # она узнавала правду сейчас и неправду через час — то есть ровно то же самое.
         state = str(t.get("telegram") or "")
-        where = ("разбужена событием своего субагента (Telegram жив)" if state == "connected"
-                 else f"разбужена событием своего субагента (связи не было: {state})"
-                 if state else "разбужена событием своего субагента")
+        where = ("пробуждение по событию своего субагента (Telegram жив)" if state == "connected"
+                 else f"пробуждение по событию своего субагента (связи не было: {state})"
+                 if state else "пробуждение по событию своего субагента")
     elif kind == "wake":
         # Её собственный будильник. Разница с окном ровно в связи — и связь берётся ИЗ
         # ЗАПИСИ, снятой в момент подъёма. Утверждать её задним числом нельзя: ровно так
@@ -831,16 +831,16 @@ def format_line(t: dict) -> str:
     if t.get("in"):
         parts.append(f"вошло: «{t['in']}»")
     if t.get("tools"):
-        parts.append("делала: " + "; ".join(t["tools"]))
+        parts.append("действия: " + "; ".join(t["tools"]))
     held, why = t.get("held") or "", t.get("why") or ""
     if held == "voice":
-        parts.append("промолчала сама" + (f" ({why})" if why else ""))
+        parts.append("молчание по своему решению" + (f" ({why})" if why else ""))
     elif held == "privacy":
         parts.append(f"доставка удержана по полномочию данных ({why or 'без причины'})")
     elif held == "evaluator":
         parts.append(f"legacy-оценщик придержал ({why or 'без причины'})")
     elif held == "anti-repeat":
-        parts.append("промолчала (анти-повтор: чуть не повторилась)")
+        parts.append("молчание (анти-повтор: едва не вышел повтор)")
     elif held == "drift":
         parts.append("оборвано: комната заморожена дрейфом")
     elif held == "error":
@@ -870,10 +870,10 @@ def format_line(t: dict) -> str:
         if not note:
             parts.append("ничего не ушло наружу")
         elif _trace_sent_out(t):
-            parts.append(f"записала себе (это текст хода, не сообщение; что ушло — "
-                         f"см. «делала»): «{note}»")
+            parts.append(f"записано себе (это текст хода, не сообщение; что ушло — "
+                         f"см. «действия»): «{note}»")
         else:
-            parts.append(f"записала себе (у хода нет канала доставки; отправок в "
+            parts.append(f"записано себе (у хода нет канала доставки; отправок в "
                          f"следе нет): «{note}»")
     elif t.get("out"):
         said = str(t["out"])
@@ -884,7 +884,7 @@ def format_line(t: dict) -> str:
         # наличия черновика. Теперь глагол берётся из исхода доставки. Старые записи
         # (без поля) читаются как раньше: переписывать прошлое задним числом нельзя,
         # но и новую ложь копить незачем.
-        line = f"{_DELIVERY_VERB.get(str(t.get('delivery') or ''), 'сказала')}: «{said}»"
+        line = f"{_DELIVERY_VERB.get(str(t.get('delivery') or ''), 'сказано')}: «{said}»"
         if t.get("rewrote"):
             line += f" (правлено оценщиком: {why or t.get('verdict') or '?'})"
         parts.append(line)
@@ -900,7 +900,7 @@ def format_line(t: dict) -> str:
         if len(note_text) > OUT_SHOW_CHARS:
             note_text = (note_text[: OUT_SHOW_CHARS - 1]
                          + "…[обрезано для показа; полный текст в записи хода]")
-        parts.append(f"записала себе: «{note_text}»")
+        parts.append(f"записано себе: «{note_text}»")
     # Чужой обрыв — отдельной частью строки, ПОСЛЕ её итога и с названным владельцем.
     # Раньше он приезжал в `why` вплотную к её ответу, и прочесть это можно было только
     # как «её фразу оборвало».
@@ -987,9 +987,9 @@ def day_line(now: float | None = None, hours: float = 24.0) -> str:
     # а с появлением вида wake стало прямой неправдой: пробуждение — не окно, связь в нём
     # не рвётся. Считаем то, что действительно считается: ходы без собеседника.
     alone = sum(1 for t in rows if (t.get("kind") or "chat") != "chat")
-    line = (f"ходов {len(rows)} (своих, без собеседника {alone}): сказала наружу {said}, "
-            f"записала себе {self_notes}, "
-            f"промолчала сама {quiet}, удержано по data-authority {held_privacy}, "
+    line = (f"ходов {len(rows)} (своих, без собеседника {alone}): сказано наружу {said}, "
+            f"записано себе {self_notes}, "
+            f"молчание по своему решению {quiet}, удержано по data-authority {held_privacy}, "
             f"legacy-удержаний {held_other}, legacy-правок {rewrites}, тул-вызовов {tools_n}")
     if undelivered:
         line += f", не дошло {undelivered}"

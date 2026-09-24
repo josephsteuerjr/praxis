@@ -215,7 +215,9 @@ def call(capability: str, args: dict | None = None, *, execution: str = "interac
             if kind == "result":
                 result = frame.get("result") if isinstance(frame.get("result"), dict) else {}
                 return _observed(capability, call_args, execution, {
-                    **frame, **result, "ok": bool(frame.get("ok")),
+                    **frame, **result,
+                    "transport_ok": frame.get("ok") is True,
+                    "ok": frame.get("ok") is True and result.get("ok", True) is True,
                 })
             if kind in {"accepted", "progress", "cancelled"}:
                 return _observed(capability, call_args, execution, {"ok": True, **frame})
@@ -752,9 +754,9 @@ def _with_server_frame(result: dict, *, wait_s: float, truth_field: str = "",
 
     Два закона сразу.  Второй: срок, который держит сервер, — такой же предел, как кап узлов
     внутри тела, и он обязан приезжать в ответе, а не жить молча в сигнатуре функции.
-    Третий: `call()` (строка «**frame, **result, ok=frame.ok») затирает собственный `ok`
-    тела рамкой транспорта, поэтому у глаголов с частичным успехом — fs.delete/move/copy
-    (`complete`), desktop.window.wait (`met`) — «ok: true» значит только «ответ доехал».
+    Третий: `call()` сохраняет транспортный исход в `transport_ok`, а `ok` учитывает
+    и отказ самого тела. У глаголов с частичным успехом — fs.delete/move/copy
+    (`complete`), desktop.window.wait (`met`) — дополнительное поле остаётся истиной дела.
     Молча оставить это знание в чужом отчёте нельзя: первый же `if result["ok"]` объявит
     недоделанное сделанным, а это ровно тот сорт вранья, из-за которого затеяна волна.
     """
@@ -766,7 +768,7 @@ def _with_server_frame(result: dict, *, wait_s: float, truth_field: str = "",
         if truth_field in result:
             frame["truth"] = result.get(truth_field)
             frame["note"] = truth_note or (
-                f"ok здесь значит «ответ доехал»; сделано ли дело — в поле {truth_field}"
+                f"транспорт — transport_ok; сделано ли дело — в поле {truth_field}"
             )
         else:
             frame["note"] = (

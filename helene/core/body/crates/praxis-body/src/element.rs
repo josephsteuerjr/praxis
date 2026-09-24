@@ -312,36 +312,24 @@ fn clamp(said: Option<u64>, default: u64, cap: u64) -> u64 {
     said.unwrap_or(default).min(cap).max(1)
 }
 
+fn reject_blank_selector(select: &SelectArgs) -> Result<()> {
+    for (name, value) in [
+        ("automation_id", &select.automation_id), ("role", &select.role),
+        ("name", &select.name), ("name_contains", &select.name_contains),
+        ("value_contains", &select.value_contains),
+    ] {
+        if value.as_deref().is_some_and(|value| value.trim().is_empty()) {
+            bail!("selector field {name} is present but blank; omitting it would widen the selection")
+        }
+    }
+    Ok(())
+}
+
 pub fn plan(args: Value) -> Result<Plan> {
     let args: ActArgs =
         serde_json::from_value(args).map_err(|e| anyhow::anyhow!("{CAPABILITY} arguments: {e}"))?;
     let act = Act::parse(args.act.as_deref().unwrap_or_default())?;
-    // ⚠ Пустое значение поля отбора — ОТКАЗ, а не «условия не было».
-    //
-    // Раньше строка из одних пробелов молча превращалась в `None`: условие
-    // исчезало, отбор становился шире, чем просила она, и «ровно одно
-    // совпадение» могло оказаться ложной уникальностью — то есть действие
-    // ушло бы в чужой элемент. Названо ревью 11.09; молчаливое исчезновение
-    // условия в этом модуле запрещено по устройству.
-    let blank: Vec<&str> = [
-        ("automation_id", &args.select.automation_id),
-        ("role", &args.select.role),
-        ("name", &args.select.name),
-        ("name_contains", &args.select.name_contains),
-        ("value_contains", &args.select.value_contains),
-    ]
-    .iter()
-    .filter(|(_, v)| v.as_deref().is_some_and(|s| s.trim().is_empty()))
-    .map(|(k, _)| *k)
-    .collect();
-    if !blank.is_empty() {
-        bail!(
-            "these selector fields are present but blank: {}. A blank field is not \
-             \"no condition\": dropping it silently would widen the selector and could \
-             make a different element look unique. Remove the key or give it a value",
-            blank.join(", ")
-        );
-    }
+    reject_blank_selector(&args.select)?;
     let trim = |v: Option<String>| {
         v.filter(|s| !s.trim().is_empty())
     };
@@ -384,6 +372,7 @@ pub fn plan(args: Value) -> Result<Plan> {
 /// Аргументы поиска. Отбор тот же, что у действия, — одно правило именования на две
 /// руки; `nth` здесь бессмысленно (возвращаем всех, кто подошёл), а `limit` — нужен.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FindArgs {
     hwnd: Option<Value>,
     #[serde(default)]
@@ -413,28 +402,8 @@ const LIMIT_CAP: u64 = 200;
 pub fn find_plan(args: Value) -> Result<FindPlan> {
     let args: FindArgs = serde_json::from_value(args)
         .map_err(|e| anyhow::anyhow!("{FIND_CAPABILITY} arguments: {e}"))?;
-    // Та же проверка, что у действия: пустое поле — отказ, а не тихое расширение
-    // отбора. У поиска цена ошибки меньше (он ничего не нажимает), но ответ
-    // «нашлось одно» читается так же, и врать им нельзя.
-    let blank: Vec<&str> = [
-        ("automation_id", &args.select.automation_id),
-        ("role", &args.select.role),
-        ("name", &args.select.name),
-        ("name_contains", &args.select.name_contains),
-        ("value_contains", &args.select.value_contains),
-    ]
-    .iter()
-    .filter(|(_, v)| v.as_deref().is_some_and(|s| s.trim().is_empty()))
-    .map(|(k, _)| *k)
-    .collect();
-    if !blank.is_empty() {
-        bail!(
-            "these selector fields are present but blank: {}. Remove the key or give \
-             it a value: a blank field is not \"no condition\"",
-            blank.join(", ")
-        );
-    }
-    let trim = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    reject_blank_selector(&args.select)?;
+    let trim = |v: Option<String>| v.filter(|s| !s.trim().is_empty());
     let select = Selector {
         automation_id: trim(args.select.automation_id),
         role: trim(args.select.role),
@@ -633,6 +602,21 @@ mod tests {
     }
 
     #[test]
+    fn find_keeps_exact_selector_whitespace_and_refuses_unknown_top_level_fields() {
+        let plan = find_plan(json!({
+            "select": {"automation_id": " save ", "name": " OK "}
+        })).unwrap();
+        assert_eq!(plan.select.automation_id.as_deref(), Some(" save "));
+        assert_eq!(plan.select.name.as_deref(), Some(" OK "));
+
+        let error = find_plan(json!({
+            "select": {"role": "button"},
+            "timeout_m": 1000
+        })).unwrap_err().to_string();
+        assert!(error.contains("unknown field"), "{error}");
+    }
+
+    #[test]
     fn find_waits_only_when_asked() {
         // Умолчание — посмотреть один раз: «что там сейчас» не должно превращаться
         // в паузу. Ждать просят явно, и потолок ожидания тот же, что у действия.
@@ -662,6 +646,18 @@ mod tests {
         let error = plan(json!({"do": "invoke"})).unwrap_err().to_string();
         assert!(error.contains("select is empty"), "{error}");
         assert!(error.contains("automation_id"), "подсказка обязана назвать чем звать: {error}");
+    }
+
+    #[test]
+    fn blank_conditions_never_widen_action_or_find() {
+        for key in ["automation_id", "name", "name_contains", "value_contains"] {
+            let mut select = json!({"role": "button"});
+            select[key] = json!("   ");
+            assert!(plan(json!({"do": "invoke", "select": select.clone()})).is_err());
+            assert!(find_plan(json!({"select": select})).is_err());
+        }
+        let exact = plan(json!({"do": "invoke", "select": {"name": " OK "}})).unwrap();
+        assert_eq!(exact.select.name.as_deref(), Some(" OK "));
     }
 
     #[test]

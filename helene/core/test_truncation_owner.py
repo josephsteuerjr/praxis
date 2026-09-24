@@ -102,7 +102,7 @@ class TestOwnedTruncation(TurnsBase):
         line = turns.format_line(row)
         self.assertIn("вспомогательная модель", line,
                       "обрыв судьи — тоже факт хода, он не должен исчезать")
-        self.assertIn("не её фраза", line, "и он обязан быть назван чужим")
+        self.assertIn("не фраза агента", line, "и он обязан быть назван чужим")
 
     def test_an_unclaimed_cut_of_this_turn_is_written_down_not_dropped(self):
         turns.note_truncated(model="judge-model", chars=7, owner="evaluator")

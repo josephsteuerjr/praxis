@@ -1260,7 +1260,7 @@ def reconcile_lost_tasks() -> int:
                 f"признаков: ни живых процессов, ни новых событий. Цель: "
                 f"«{str(task.get('goal') or '')[:200]}». {_root_state_line(task)} "
                 + (trace_line + " " if trace_line else "") +
-                f"Я ничего не закрыла и не отменила — статус lost это ярлык «потеряна из "
+                f"Ничего не закрыто и не отменено мной — статус lost это ярлык «потеряна из "
                 f"виду» по порогу тишины {TASK_ABANDONED_SEC / 3600:.0f}ч, не приговор. "
                 f"Продолжить — теми же тулами по тому же id (первое действие вернёт "
                 f"active), закрыть — coding_session(finish), отпустить — просто оставить "
@@ -1633,7 +1633,7 @@ def _arm_upstreams_from_tasks() -> int:
 def _upstream_wake_text(moved: list[dict], blind: list[dict]) -> str:
     """Кадр факта. Ни одного глагола действия: увидела ≠ пошла проверять."""
     head = ("Это пробуждение поставил форж по стоячему наблюдению, а не отдельной твоей "
-            "просьбой: репозиторий ты назвала сама в цели coding-задачи.\n"
+            "просьбой: репозиторий назван тобой в цели coding-задачи.\n"
             "Что произошло — ФАКТ, не задача: я ничего не склонировала, не скачала, "
             "не смержила и ни о чём не договорилась. Что с этим делать — решаешь ты, "
             "и «ничего» тоже решение.")
@@ -1649,7 +1649,7 @@ def _upstream_wake_text(moved: list[dict], blind: list[dict]) -> str:
         if goal:
             lines.append(f"   ты называла его в задаче {', '.join(row.get('tasks') or []) or '—'}: "
                          f"«{_clip_seen(goal, 160)}»")
-        lines.append("   что там за коммиты — отсюда не видно: я спрашивала только HEAD. "
+        lines.append("   что там за коммиты — отсюда не видно: запрошен был только HEAD. "
                      "Посмотреть — твоими руками (clone/fetch в coding-задаче), я не ходила.")
     for row in blind:
         lines.append(
@@ -1781,7 +1781,7 @@ def check_upstreams(force: bool = False) -> int:
             live = data.get(str(row.get("key") or ""))
             if isinstance(live, dict) and live.get("head"):
                 live["known_head"] = live["head"]
-                live["known_source"] = "я тебе сказала"
+                live["known_source"] = "сказано мной тебе"
         for row in blind:
             live = data.get(str(row.get("key") or ""))
             if isinstance(live, dict):
@@ -1936,7 +1936,7 @@ def upstream_lever(action: str, task_id: str = "", arg: str = "") -> str:
                     missing.append(url)
                     continue
                 retired[key] = {"url": row.get("url") or url, "at": _now(),
-                                "reason": "сняла сама (coding_inspect action=unwatch)"}
+                                "reason": "снято по своему решению (coding_inspect action=unwatch)"}
                 gone.append(url)
             if gone:
                 _save_upstreams(data)
@@ -1976,7 +1976,7 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
         return "Нужна цель coding-задачи."
     source, label = _resolve_target(target)
     if source is None:
-        return f"Не открыла coding-задачу: {label}"
+        return f"Coding-задача не открыта: {label}"
     isolation = str(isolation or "auto").strip().lower()
     if isolation not in {"auto", "worktree", "direct"}:
         return "isolation: auto | worktree | direct"
@@ -1995,7 +1995,7 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
     if is_self and isolation != "direct":
         proposal = selfdev.begin(goal)
         if not proposal.get("ok"):
-            return f"Не открыла coding-задачу: {proposal.get('msg') or 'proposal worktree не создался'}"
+            return f"Coding-задача не открыта: {proposal.get('msg') or 'proposal worktree не создался'}"
         proposal_id = str(proposal["id"])
         root = Path(proposal["path"]).resolve()
         branch = f"proposal/{proposal_id}"
@@ -2080,10 +2080,10 @@ def start_host(goal: str, target: str, priority: str = "normal",
     if not target or not Path(target).is_absolute():
         return "Для host-задачи нужен абсолютный путь хоста."
     if not serverd_client.available():
-        return "Не открыла host-задачу: serverd broker не смонтирован."
+        return "Host-задача не открыта: serverd broker не смонтирован."
     probe = serverd_client.workspace_inspect_result(target, "orientation")
     if not probe.get("ok"):
-        return f"Не открыла host-задачу: [serverd] {probe.get('error')}"
+        return f"Host-задача не открыта: [serverd] {probe.get('error')}"
     orientation = str(probe.get("text") or "")
     task_id = _id("hcode")
     task = {
@@ -2118,10 +2118,10 @@ def start_windows(goal: str, target: str, priority: str = "normal",
     if not target or not PureWindowsPath(target).is_absolute():
         return "Для Windows-задачи нужен абсолютный Windows-путь."
     if not body_client.available():
-        return "Не открыла Windows-задачу: body controller не настроен."
+        return "Windows-задача не открыта: body controller не настроен."
     probe = body_client.workspace_inspect_result(target, "orientation")
     if not probe.get("ok"):
-        return f"Не открыла Windows-задачу: [windows-body] {probe.get('error')}"
+        return f"Windows-задача не открыта: [windows-body] {probe.get('error')}"
     orientation = str(probe.get("text") or "")
     task_id = _id("wcode")
     task = {
@@ -2729,8 +2729,20 @@ def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
     born = started_at or _proc_started_at(pid)
     try:
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
-                           text=True, encoding="utf-8", errors="replace", timeout=15)
+            # 20.09: returncode обязателен. taskkill молчит успехом и в случае отказа:
+            # rc=1 (доступ запрещён) или rc=128 (не найден) прежде выглядели как «остановлен».
+            # Издание: вывод taskkill читаем как UTF-8 с заменой — на русской консоли
+            # (cp866) он иначе падал UnicodeDecodeError.
+            proc = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                  capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=15)
+            rc = int(proc.returncode)
+            if rc == 0:
+                return "остановлен"
+            if rc == 128:
+                return "уже завершён"
+            detail = (proc.stderr or proc.stdout or "").strip()[:120]
+            return f"не остановлен: taskkill rc={rc}: {detail}".rstrip(": ")
         else:
             os.killpg(pid, signal.SIGTERM)
             deadline = time.monotonic() + 1.0
@@ -2871,7 +2883,7 @@ def verify(task_id: str, action: str = "plan", verification_id: str = "",
         if action == "plan":
             return _cap(json.dumps(plan, ensure_ascii=False, indent=2), 30000)
         if not plan.get("checks"):
-            return "Не нашла ни одной проверки; передай commands по одной на строку."
+            return "Ни одной проверки не найдено; передай commands по одной на строку."
         unit_id = _id("verify")
         d = _unit_dir(task_id, "verifications", unit_id)
         request = {
@@ -2910,13 +2922,22 @@ def verify(task_id: str, action: str = "plan", verification_id: str = "",
             logs.append(f"--- {log.name} ---\n{_tail(log, max(500, min(int(tail or 12000), 30000)))}")
         return _cap(json.dumps(result, ensure_ascii=False, indent=2) + "\n" + "\n".join(logs), 40000)
     if action == "stop":
+        prior = _read_json(d / "result.json")
+        if str((prior or {}).get("status") or "") in {"done", "error", "failed", "stalled"}:
+            _event(task_id, "verification_stopped", verification_id=verification_id,
+                   summary=f"{verification_id}: матрица уже завершилась; результат сохранён")
+            return f"{verification_id}: матрица уже завершилась — результат сохранён."
         msg = _kill_tree(int(state.get("supervisor_pid") or 0),
                          str(state.get("supervisor_started_at") or ""),
                          expect=str(d / "request.json"))
-        _atomic_json(d / "result.json", {"status": "stopped", "stopped": _now(), "note": msg})
-        _event(task_id, "verification_stopped", verification_id=verification_id,
+        if msg in {"остановлен", "уже завершён"}:
+            _atomic_json(d / "result.json", {"status": "stopped", "stopped": _now(), "note": msg})
+            _event(task_id, "verification_stopped", verification_id=verification_id,
+                   summary=f"{verification_id}: {msg}")
+            return f"{verification_id}: {msg}"
+        _event(task_id, "verification_stop_failed", verification_id=verification_id,
                summary=f"{verification_id}: {msg}")
-        return f"{verification_id}: {msg}"
+        return f"{verification_id}: {msg} — терминальный статус НЕ записан."
     return "action: plan | start | poll | stop | list"
 
 
@@ -2940,8 +2961,13 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
         brief = str(brief or "").strip()
         if not brief:
             return "Для субагента нужен brief."
-        unit_id = _id("agent")
+        # Явный agent_id — резервация swarm-узла: узел сохраняет устойчивую
+        # идентичность между резервацией и спавном (восстановление после рестарта).
+        unit_id = str(agent_id or "").strip() or _id("agent")
         d = _unit_dir(task_id, "agents", unit_id)
+        if d.exists():
+            return (f"Юнит {unit_id} уже существует (status={_unit_state(d).get('status')}); "
+                    f"повторный spawn отклонён — это была бы вторая копия того же юнита.")
         request = {
             "id": unit_id, "task_id": task_id, "goal": task.get("goal"),
             "root": str(root), "proposal_id": task.get("proposal_id") or "",
@@ -2985,15 +3011,33 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                           ensure_ascii=False, indent=2)
         return _cap(body + "\n--- worker log ---\n" + (log or "(пока пусто)"), 40000)
     if action == "stop":
+        prior = _read_json(d / "result.json")
+        prior_status = str((prior or {}).get("status") or "")
+        if prior_status in {"done", "error", "failed", "stalled"}:
+            # 20.09: юнит УЖЕ завершился с полным результатом (текст, трейс, дифф).
+            # Стоп обязан его сохранить: перезапись короткой записью «stopped» уничтожала
+            # готовую работу. Записываем отдельную расписку, результат не трогаем.
+            _event(task_id, "agent_stopped", agent_id=agent_id,
+                   summary=f"{agent_id}: юнит уже завершился ({prior_status}); результат сохранён")
+            return (f"{agent_id}: юнит уже завершился ({prior_status}) — готовый результат "
+                    f"сохранён, останавливать нечего. Расписка стопа записана в журнал.")
         msg = _kill_tree(int(state.get("supervisor_pid") or 0),
                          str(state.get("supervisor_started_at") or ""),
                          expect=str(d / "request.json"))
-        stopped = {"status": "stopped", "stopped": _now(), "finished": _now(), "note": msg}
-        _atomic_json(d / "result.json", stopped)
-        _event(task_id, "agent_stopped", agent_id=agent_id, summary=f"{agent_id}: {msg}")
-        emit_unit_event(task_id, agent_id, stopped,
-                        request=_read_json(d / "request.json", {}) or {})
-        return f"{agent_id}: {msg}"
+        if msg in {"остановлен", "уже завершён"}:
+            stopped = dict(prior or {})
+            stopped.update({"status": "stopped", "stopped": _now(), "finished": _now(),
+                            "note": msg})
+            _atomic_json(d / "result.json", stopped)
+            _event(task_id, "agent_stopped", agent_id=agent_id, summary=f"{agent_id}: {msg}")
+            emit_unit_event(task_id, agent_id, stopped,
+                            request=_read_json(d / "request.json", {}) or {})
+            return f"{agent_id}: {msg}"
+        # Не доказали смерть — НЕ пишем терминальный статус: «stopped» без подтверждения
+        # убивал живой процесс из вида и подменял результат. Прежний result не тронут.
+        _event(task_id, "agent_stop_failed", agent_id=agent_id, summary=f"{agent_id}: {msg}")
+        return (f"{agent_id}: {msg} — терминальный статус НЕ записан; юнит остаётся "
+                f"в прежнем состоянии, результат не тронут.")
     return "action: spawn | poll | stop | list"
 
 
@@ -3033,10 +3077,45 @@ def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "
         return "У задачи нет swarm-плана; action=plan принимает JSON nodes[]."
     if action in {"start", "tick"}:
         launched = []
+        # Восстановление после рестарта/краша между резервацией и спавном: узел в
+        # starting (или уже lost — refresh выше успел его так пометить) с agent_id,
+        # но юнита нет — возвращаем в pending, спавн повторится под ТЕМ ЖЕ
+        # идентификатором (дублей нет: agent() отказывает, если юнит существует).
+        for node in current.get("nodes") or []:
+            if node.get("status") in {"starting", "lost"} and node.get("agent_id"):
+                unit = _unit_dir(task_id, "agents", str(node["agent_id"]))
+                if not unit.is_dir():
+                    node["status"] = "pending"
+                    node["agent_id"] = ""
+                    node.pop("finished", None)
+        # Обратная половина crash-окна: спавн УСПЕЛ, но план не сохранился (краш между
+        # agent() и save). Ищем существующий юнит этого узла по request.node_id и
+        # перепривязываем его — второй спавн того же узла не появляется.
+        pending_nodes = [n for n in (current.get("nodes") or [])
+                         if not n.get("agent_id") and n.get("status") == "pending"]
+        if pending_nodes:
+            wanted = {str(n["id"]) for n in pending_nodes}
+            for unit_dir in (_task_dir(task_id) / "agents").glob("agent-*"):
+                req = _read_json(unit_dir / "request.json", {}) or {}
+                nid = str(req.get("node_id") or "")
+                if nid in wanted:
+                    for n in pending_nodes:
+                        if n["id"] == nid:
+                            n["agent_id"] = unit_dir.name
+                            n["status"] = "starting"
+                            n["started"] = req.get("created") or _now()
+                    launched.append(f"{nid}↔{unit_dir.name} (восстановлен)")
         ready = forge_swarm.ready_nodes(current)
         for node in ready:
+            # Резервация ДО спавна: устойчивый agent_id пишется в план и на диск
+            # раньше, чем рождается процесс. Краш между ними больше не порождает
+            # вторую копию узла — тик выше свяжет резервацию с тем же идентификатором.
+            reserved = _id("agent")
+            node["agent_id"] = reserved
+            node["status"] = "starting"
+            forge_swarm.save(directory, current)
             out = agent(task_id, "spawn", brief=node["brief"], role=node["role"],
-                        node_id=node["id"], owns=node.get("owns") or [])
+                        node_id=node["id"], owns=node.get("owns") or [], agent_id=reserved)
             match = re.search(r"(agent-[a-f0-9]+)", out)
             if not match:
                 node["status"] = "failed"
@@ -3131,7 +3210,7 @@ def _finish_survey(task_id: str, beat=None) -> dict:
         # ПО ПОСТРОЕНИЮ (forge_intelligence.changed_files: git-root нет → []), и платить
         # за пустоту минутами ядра незачем. Гейт именно по git-root, не по base.
         if not str(task.get("source_git") or ""):
-            notes.append("список изменённых файлов НЕ СПРАШИВАЛА: у корня задачи нет git "
+            notes.append("список изменённых файлов НЕ ЗАПРОШЕН: у корня задачи нет git "
                          "(source_git пуст) — impact вернул бы пустой список, а разбор "
                          "дерева стоит минуты ядра. Это «не знаю», а не «изменений нет».")
         else:
@@ -3357,7 +3436,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
             )
         if unknowns:
             # урок не имеет права выглядеть полнее, чем были данные
-            evidence_lesson = (evidence_lesson + "\nЧего я не знала при закрытии: "
+            evidence_lesson = (evidence_lesson + "\nЧего не было известно при закрытии: "
                                + "; ".join(unknowns)).strip()
         lesson_row = forge_learning.record(
             STATE_DIR, task=task, root=root, events=_events(task_id, 2000),
@@ -3385,7 +3464,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
         f"{task_id}: {new_status}",
         f"изменения: {stat_before.strip() or 'diffstat пуст'}",
         f"проверено: {checked or 'не указано'}",
-        ("чего я не знала при закрытии: " + "; ".join(unknowns)) if unknowns else "",
+        ("чего не было известно при закрытии: " + "; ".join(unknowns)) if unknowns else "",
         lesson_note,
         evidence_note,
         submission,

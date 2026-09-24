@@ -71,12 +71,11 @@ EN: dict[str, dict] = {
               "report": "show the experiment summary instead of searching"},
     },
     "remember": {
-        "d": ("Remember a fact about a person. visibility='private' for secrets: do not "
-              "carry them to others. salience 1-3 (how much it matters for the portrait, "
-              "default 2). open_loop=true for an unclosed thread ('was heading to an "
-              "interview on the 12th') so you can come back to it. relates_to + relation "
-              "when the fact links the person to someone or something ('Vika', 'colleague "
-              "at the firm'): an edge is then drawn in your memory graph."),
+        "d": ("Remember a fact about a person. visibility='private' for secrets (not "
+              "carried to others). salience 1-3 for the portrait (default 2). "
+              "open_loop=true for an unclosed thread to return to. relates_to + relation "
+              "draws an edge in your memory graph when the fact links the person to "
+              "someone or something."),
         "p": {"person": "person's name or dossier slug",
               "fact": "the fact itself, in your own words",
               "visibility": "public, or private for what must not be carried to others",
@@ -127,15 +126,13 @@ EN: dict[str, dict] = {
               "reason": "set: why you are changing it"},
     },
     "manage_notes": {
-        "d": ("Your explicit living notebook. write creates an authored "
-              "scratch/note/reflection/question; list/read show entries; close releases one. "
-              "chain(note_id=<skill slug>) opens the observable lesson chain: the original "
-              "note, when you turned it into a skill, and in which turns that skill was "
-              "AVAILABLE in the frame — availability, not influence. decline(note_id) "
-              "refuses a proposed crystallisation and it will not be proposed again. A note "
-              "does not automatically become a task, a thread, a desire, a journal entry, a "
-              "memory fact or a claim about self. scope=run/chat requires a real current "
-              "run or chat."),
+        "d": ("Your living notebook. write creates an authored scratch/note/reflection/"
+              "question; list/read show entries; close releases one. chain(note_id=<skill "
+              "slug>) opens the lesson chain: the note, the skill it became, and in which "
+              "turns that skill was AVAILABLE in the frame (availability, not influence). "
+              "decline(note_id) refuses a proposed crystallisation for good. A note does "
+              "not auto-become a task, thread, desire, journal entry or self-claim. "
+              "scope=run/chat needs a real current run or chat."),
         "p": {"action": "write | list | read | close | chain | decline",
               "text": "write: the note text",
               "kind": "scratch | note | reflection | question",
@@ -359,8 +356,8 @@ EN: dict[str, dict] = {
     },
     "telegram_account": {
         "p": {"action": "join | leave | followups | watch_reply | unwatch_reply | cancel_followup",
-              "followup_id": "id of the follow-up to cancel or unwatch",
-              "query": "invite link, public link, @username or chat id"},
+              "followup_id": "id of the follow-up to cancel/unwatch",
+              "query": "invite link, @username or chat id"},
     },
     "send_file": {
         "p": {"path": "file in your home to send",
@@ -409,14 +406,12 @@ EN: dict[str, dict] = {
     # ───────────────────────────────────────────────────────────── намерения и внимание
     "remind_self": {
         "d": ("Set yourself an intention for a deadline — your conscious choice to come "
-              "back to something, not a ticket and not an obligation. kind: wake (wake "
-              "yourself WITH the connection: a live turn, Telegram open) | window (go into "
-              "focus at the deadline; Telethon is closed for the window — you are not "
-              "interrupted, but there are no live dialogs either) | message (an intention to "
-              "say something to a person by a deadline; the clock first raises a live turn "
-              "to check the current relationship and boundaries, it does not send the text) "
-              "| note (a reminder to yourself or the owner) | email. when: ISO datetime, or "
-              "'in 2h'/'in 30m', 'today 14:00'/'tomorrow 10:00', 'daily 09:00'."),
+              "back to something, not a ticket and not an obligation. kind: wake (a live "
+              "turn, Telegram open) | window (focus window; Telethon closed, no live "
+              "dialogs) | message (say something to a person by a deadline; the clock "
+              "first raises a live turn to check the relationship — it does not send the "
+              "text) | note (reminder to yourself or the owner) | email. when: ISO "
+              "datetime, 'in 2h', 'today 14:00', 'tomorrow 10:00', 'daily 09:00'."),
         "p": {"kind": "wake | window | email | message | note",
               "goal": "what you want to come back to",
               "when": "ISO datetime, or 'in 2h', 'today 14:00', 'tomorrow 10:00', 'daily 09:00'",
@@ -427,16 +422,14 @@ EN: dict[str, dict] = {
     "unschedule": {"d": "Drop a scheduled intention by id.",
                    "p": {"task_id": "id of the intention to drop"}},
     "manage_loop": {
-        "d": ("Your hand on voluntary marks of attention. A thread exists only because you "
-              "decided to come back to something; it is not a task, not a transport retry, "
-              "and not a duty to answer. close — close the thread (done, or you are letting "
-              "it go; why, in one honest line to the journal), park — put it to sleep until "
-              "a date (it wakes on time or when the person turns up; an empty date means "
-              "+7 days), reopen — wake sleeping ones, list — a person's threads. When you "
-              "come back, first check whether it is still relevant; closing without acting "
-              "is a normal outcome."),
+        "d": ("Voluntary marks of attention: a thread exists because you decided to come "
+              "back — not a task, not a transport retry, not a duty to answer. close (done "
+              "or letting go; one honest line to the journal), park until a date (empty = "
+              "+7 days; wakes on time or when the person turns up), reopen, list (no "
+              "person = all dossiers). On return, check relevance first; closing "
+              "without acting is normal."),
         "p": {"action": "close | park | reopen | list",
-              "person": "name or slug of the person whose thread it is",
+              "person": "name/slug of the person (list: empty = all)",
               "match": "a piece of the thread text, for close or park",
               "until": "ISO date to wake it for park",
               "force": "park: your decision over the parking ratchet; a reason is required",
@@ -449,7 +442,7 @@ EN: dict[str, dict] = {
               "status": "latent | active | satisfied | released | blocked",
               "next_move": "the next concrete step",
               "run_id": "durable run to link",
-              "evidence_refs": "references to the evidence behind this step",
+              "evidence_refs": "references to the evidence",
               "dedupe_key": "stable key so the same notice is not recorded twice"},
     },
     "focus": {
@@ -461,8 +454,8 @@ EN: dict[str, dict] = {
         "p": {"goal": "what to work on, short"},
     },
     "rest": {
-        "d": ("Go to yourself and rest — your private time, about caring for yourself, not "
-              "about work. Telethon CLOSES: nobody pulls at you, and what accumulates "
+        "d": ("Go to yourself and rest — private time, about caring for yourself, not about "
+              "work. Telethon CLOSES: nobody pulls at you, and what accumulates "
               "arrives as one situation on the way out. No agenda: let the noise settle, "
               "think freely, play with your own code if you feel like it, change something "
               "you dislike in yourself, write in your notebook, or simply be. Nothing is "
@@ -645,16 +638,16 @@ EN: dict[str, dict] = {
               "paths": "space-separated paths; empty means everything"},
     },
     "coding_session": {
-        "p": {"priority": "urgent wakes you immediately when a worker finishes; normal "
-                          "waits for the next hourly window",
+        "p": {"priority": "urgent wakes you when a worker finishes; normal waits for the "
+                          "next hourly window",
               "action": "start | status | list | finish | abandon",
               "task_id": "the task to act on",
-              "goal": "what this task is for",
+              "goal": "what the task is for",
               "isolation": "auto | worktree | direct",
               "title": "finish: what the change does",
-              "review": "finish: your own verdict on your diff",
-              "checked": "finish: what you actually checked",
-              "submit": "finish: submit it as a proposal"},
+              "review": "finish: your verdict on your diff",
+              "checked": "finish: how you verified it",
+              "submit": "finish: submit as proposal"},
     },
     "coding_edit": {
         "p": {"task_id": "the coding task",
@@ -684,17 +677,17 @@ EN: dict[str, dict] = {
                            "brief": "what the subprocess must do",
                            "role": "scout | worker | reviewer",
                            "max_iters": "iteration ceiling for the subprocess",
-                           "tail": "how many trailing output lines to return"}},
+                           "tail": "trailing output lines to return"}},
     "coding_checkpoint": {"p": {"task_id": "the coding task",
                                 "message": "what this checkpoint contains"}},
     "coding_verify": {"p": {"task_id": "the coding task",
                             "action": "plan | start | poll | stop | list",
                             "verification_id": "the run to poll or stop",
-                            "commands": "commands to run, if you override the plan",
+                            "commands": "commands to run, overriding the plan",
                             "full": "run the authoritative project gate",
                             "max_parallel": "how many to run at once",
                             "timeout": "seconds per command",
-                            "tail": "how many trailing output lines to return"}},
+                            "tail": "trailing output lines to return"}},
     "coding_swarm": {"p": {"task_id": "the coding task",
                            "action": "plan | start | tick | status | signal | mailbox | compare",
                            "plan": "JSON nodes [{id, role, brief, deps, owns}]",
@@ -709,14 +702,12 @@ EN: dict[str, dict] = {
                            "lesson": "record: the lesson, in your own words",
                            "regression": "record: the check that keeps it from coming back"}},
     "coding_inspect": {
-        "d": ("Task-bound eyes. orientation/model map the place, manifests and semantic "
-              "adapters; symbols/references/diagnostics/impact/checks expose normalized code "
-              "and test facts; observations shows the durable Windows evidence map; read "
-              "gives numbered lines plus sha256; diff and history keep exact evidence. Read "
-              "actual state instead of guessing. watching/watch/unwatch is your hand on "
-              "watching SOMEONE ELSE'S repository (the address goes in query): list, set, "
-              "remove. Watching asks only for HEAD and brings a shift as a fact into your "
-              "own wake; a removed watch comes back if the reason for it returns."),
+        "d": ("Task-bound eyes: orientation/model map the place; symbols/references/"
+              "diagnostics/impact/checks give code and test facts; observations — Windows "
+              "evidence map; read — numbered lines + sha256; diff/history — exact evidence. "
+              "Read state, don't guess. watching/watch/unwatch — watching SOMEONE ELSE'S "
+              "repository (address in query): set/remove; asks only HEAD, a shift arrives "
+              "as a fact in your wake."),
         "p": {"task_id": "the coding task",
               "action": "what to inspect",
               "path": "file or directory to look at",
@@ -822,7 +813,7 @@ EN: dict[str, dict] = {
 BASE_SHA: dict[str, str] = {
     "add_alias": "1429a0d6",
     "admit": "443ccc94",
-    "coding_inspect": "3c0863eb",
+    "coding_inspect": "922fd2ff",
     "consolidate_context": "1724d641",
     "end_turn": "8fb868c8",
     "focus": "f066613b",
@@ -841,7 +832,7 @@ BASE_SHA: dict[str, str] = {
     "manage_appetite": "4a190143",
     "manage_autonomy": "5717f783",
     "manage_identity": "ffe60eb9",
-    "manage_loop": "35bb4adc",
+    "manage_loop": "e6a256b9",
     "manage_notes": "861b97e0",
     "manage_perception": "50b390c8",
     "manage_room": "0c663583",

@@ -14,6 +14,7 @@ import hashlib
 import json
 import re
 import threading
+import time as _time
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -99,6 +100,18 @@ _EVIDENCE_FILE_CACHE: dict[
                     tuple[dict[str, int], dict[str, dict[str, Any]]]]],
 ] = {}
 _EVIDENCE_TAIL_BYTES = 64 * 1024
+# ⚠ 21.09.2026. Отпечаток по хвосту считался у КАЖДОГО файла жизни на КАЖДЫЙ вызов
+# `claim_evidence_index`, а зовут его сборка кадра каждого хода, свёртка, formation,
+# identity и поиск. Файлов к этому дню — 79 журналов событий и 4891 свёртка: около пяти
+# тысяч open+sha256 за вызов, ЗАМЕР на живом дереве — 0,49 с даже при целом кэше индекса
+# и 13,0 с вхолодную. Три потока разом сидели в этом, раннер держал 96 % ядра, и живой
+# ход не мог собрать кадр. Помним отпечаток по (размер, mtime_ns, инода) и пересчитываем
+# хвост только у изменившихся. У СВЕЖИХ — всегда: файл, тронутый меньше окна назад,
+# хэшируется заново, иначе дозапись в тот же миллисекундный тик прошла бы мимо, а ради
+# неё хвост и заведён. Старая свёртка, которой никто не касался неделю, стоит `stat`.
+_SIGNATURE_FRESH_NS = 5_000_000_000
+_SIGNATURE_CACHE_CAP = 20000
+_SIGNATURE_CACHE: dict[str, tuple[tuple[int, int, int], tuple[str, int, int, int, str]]] = {}
 
 _UNTRUSTED_PATH_PREFIXES = ("memory/journal/", "memory/life/reflections/")
 _UNTRUSTED_EXACT_PATHS = {"memory/reflections.md"}
@@ -521,6 +534,15 @@ def _life_file_signature(path: Path) -> tuple[str, int, int, int, str] | None:
     """
     try:
         stat = path.stat()
+    except OSError:
+        return None
+    key = path.as_posix()
+    stamp = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+    remembered = _SIGNATURE_CACHE.get(key)
+    if (remembered is not None and remembered[0] == stamp
+            and _time.time_ns() - stat.st_mtime_ns > _SIGNATURE_FRESH_NS):
+        return remembered[1]
+    try:
         digest = hashlib.sha256()
         with path.open("rb") as stream:
             if stat.st_size > _EVIDENCE_TAIL_BYTES:
@@ -529,8 +551,13 @@ def _life_file_signature(path: Path) -> tuple[str, int, int, int, str] | None:
                 digest.update(chunk)
     except OSError:
         return None
-    return (path.as_posix(), stat.st_size, stat.st_mtime_ns, stat.st_ino,
-            digest.hexdigest())
+    signature = (key, stat.st_size, stat.st_mtime_ns, stat.st_ino, digest.hexdigest())
+    if len(_SIGNATURE_CACHE) >= _SIGNATURE_CACHE_CAP:
+        # Ретенция уносит файлы, их ключи остались бы висеть. Дешевле обнулить целиком:
+        # следующий проход перечитает хвосты один раз и снова осядет в stat-режим.
+        _SIGNATURE_CACHE.clear()
+    _SIGNATURE_CACHE[key] = (stamp, signature)
+    return signature
 
 
 def _cached_file_parse(path, parser, file_cache, signatures):
@@ -588,6 +615,25 @@ def _event_index(memory_dir: Path, *, file_cache=None, signatures=None,
         candidates.update(file_candidates)
     duplicates = {event_id for event_id, count in counts.items() if count != 1}
     return ({key: value for key, value in candidates.items() if key not in duplicates}, duplicates)
+
+
+def event_row_indexable(row: dict[str, Any]) -> bool:
+    """Увидит ли индекс доказательств эту строку жизни.
+
+    Строка, которую индекс не принял, в журнале есть, а для провенанса её НЕТ:
+    `_resolve_compact` отказывает сразу, значит свёртка с таким событием невалидна
+    навсегда, её события не считаются покрытыми и сворачиваются снова и снова.
+    Замер 21.09: во всей жизни таких строк шестнадцать, все по одной причине —
+    текст с пробелом по краям (агенты шлют `\xa0` в конце), — и шести из них
+    хватило, чтобы горячее кольцо комнаты Ouroboros не двигалось совсем.
+
+    Спрашивается ДО вызова модели, поэтому берёт только правила строки: место файла
+    проверяет сам индекс при сборке.
+    """
+    if not isinstance(row, dict):
+        return False
+    stamp = str(row.get("ts") or "")[:10]
+    return _valid_event(row, Path(f"{stamp}.jsonl"))
 
 
 def _valid_compact(meta: dict[str, Any], text: str, path: Path, memory_dir: Path) -> bool:

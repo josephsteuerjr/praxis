@@ -134,6 +134,18 @@ BODY_BINARIES = {"praxis-bridge": "helene-bridge", "praxis-body": "helene-body"}
 #: Что в исходнике тела считается исходником: то, из чего собирается бинарь.
 #: `target*/`, README и скрипты деплоя — не в счёт (как PATTERNS у реле).
 BODY_SRC_PATTERNS = ("Cargo.toml", "Cargo.lock", "crates/*/Cargo.toml", "crates/*/src/**/*.rs")
+
+
+def body_src_for(tree: Path | None) -> Path:
+    """Исходник тела — ОДИН на обе сборки (25.09): крейты `body/` дерева агента, которое
+    едет в поставку (`tree/`). Windows-сборка берёт их оттуда же (`build_dist.py`,
+    BODY_TARGET). Раньше Mac собирал из зеркала `praxis/body`, Windows — из `live/body`,
+    и тело расходилось по двум источникам; darwin-ветки теперь живут в дереве издания
+    (и в слое `helene/core/body`), а зеркало прода их не несёт. Дерево без крейтов
+    (старый архив выпуска) — прежний путь, зеркало."""
+    if tree is not None and (tree / "body" / "Cargo.toml").is_file():
+        return tree / "body"
+    return BODY_SRC
 #: Откуда зеркало `praxis/`: коммит прода и дата снимка (`installer/core_src.py`).
 CORE_SOURCE = ROOT / "CORE-SOURCE.json"
 
@@ -1285,10 +1297,11 @@ def body_target_dir(cache: Path) -> Path:
     return Path(cache) / "body-target"
 
 
-def build_body(cache: Path, skip_rust: bool) -> tuple[dict[str, Path], dict]:
-    """Мост и тело из `praxis/body` этого репозитория -> {имя в поставке: путь к
-    бинарю}, запись для паспорта. Клонировать нечего: исходник лежит рядом."""
-    src = BODY_SRC
+def build_body(cache: Path, skip_rust: bool, src: Path | None = None) -> tuple[dict[str, Path], dict]:
+    """Мост и тело из крейтов `body/` -> {имя в поставке: путь к бинарю}, запись для
+    паспорта. `src` — исходник тела (`body_src_for`: дерево поставки, иначе зеркало);
+    клонировать нечего: исходник лежит рядом."""
+    src = src or BODY_SRC
     if not (src / "Cargo.toml").is_file():
         raise SystemExit(f"нет исходника тела: {src / 'Cargo.toml'} — зеркало praxis/ без body/")
     for crate in BODY_CRATES:
@@ -1649,13 +1662,26 @@ def main() -> None:
         missing.append(f"{SVC_BIN} — {e}")
         print(f"  ⚠ {e}")
 
+    if not (out / "runtime" / "git" / "bin" / "git").is_file():
+        raise SystemExit("нет runtime/git/bin/git — с --skip-runtime git должен уже лежать в сборке")
+
+    print("дерево агента:")
+    if args.tree:
+        live = Path(args.tree).resolve()
+        staged_tree = stage_from_tree(out, live)
+        source_release = None
+    else:
+        staged_tree = stage_from_release(out, cache, tree_tag)
+        source_release = staged_tree
+    live = out / "tree"
+
     print("тело:")
     body_info: dict | None = None
     if args.skip_body:
         print("  ⚠ --skip-body: тела в сборке не будет — это ОТЛАДОЧНАЯ полусборка, не выпуск")
     else:
         try:
-            body_exes, body_info = build_body(cache, args.skip_rust)
+            body_exes, body_info = build_body(cache, args.skip_rust, body_src_for(live))
             for name, exe in body_exes.items():
                 shutil.copy2(exe, out / name)
                 (out / name).chmod(0o755)
@@ -1681,18 +1707,6 @@ def main() -> None:
              if line.split("==", 1)[0].strip().lower().replace("_", "-") in VOICE_PACKAGES]
     print("  голос: " + (", ".join(voice) if voice else "НИЧЕГО ИЗ VOICE_PACKAGES НЕ ВСТАЛО"))
     macos_floor = runtime_macos_floor(out)
-    if not (out / "runtime" / "git" / "bin" / "git").is_file():
-        raise SystemExit("нет runtime/git/bin/git — с --skip-runtime git должен уже лежать в сборке")
-
-    print("дерево агента:")
-    if args.tree:
-        live = Path(args.tree).resolve()
-        staged_tree = stage_from_tree(out, live)
-        source_release = None
-    else:
-        staged_tree = stage_from_release(out, cache, tree_tag)
-        source_release = staged_tree
-    live = out / "tree"
 
     print("desk:")
     flavor = getattr(deskpkg, "MACOS", None)
@@ -1736,7 +1750,7 @@ def main() -> None:
     if (relay_src_dir / "Cargo.lock").is_file():
         print(f"  лицензии крейтов реле: {collect_relay_licenses(out, relay_src_dir, args.allow_partial)}")
     if body_info is not None:
-        print(f"  лицензии крейтов тела: {collect_body_licenses(out, BODY_SRC, args.allow_partial, body_info)}")
+        print(f"  лицензии крейтов тела: {collect_body_licenses(out, body_src_for(live), args.allow_partial, body_info)}")
     (out / "helene.json").write_text(helene_json_mac(), encoding="utf-8", newline="\n")
     (out / "data").mkdir(exist_ok=True)
 

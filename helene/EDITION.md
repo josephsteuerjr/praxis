@@ -13,6 +13,26 @@ Hélène carries differently, and nothing else: everything not listed here comes
 **The declaration is checkable, and every number below came from the check rather than from
 memory.** Run `desk/installer/core_src.py --check` before trusting any of them.
 
+**2026-09-25 — the mirror re-exported, the layer honest again.** The mirror `praxis/` now
+stands at her `b440156` (585 files; her committed work logs — `rep*.txt`, `*.log`, `*.pid` —
+are junk by rule now, `core_src.JUNK_SUFFIXES`, not by hand). The working copy
+(`port/sync-2409`, worktree `port-2409`) took her 24–25.09 work: vision routing by catalog,
+memory anti-mill and refresh, the "foreign I" fence in compaction, delivery, selfdev,
+Forge custody — plus the edition's own changes (gender-free tool texts, an identity-generic
+compaction prompt, typed relay terminals, the body result truth). `core_src.py --check
+--tree ../../port-2409` reports: **layer 90 files, drifted 0, stale 0, gone 0; 38 files
+differing and NOT declared** — her work the edition still has not taken (`brain.py`,
+`frame_layout.py`, `frame_trace.py`, `group_context.py`, `memory_fts.py`, `memory_index.py`,
+`people.py`, `run_resume.py`, `runs_prune.py`, `tasks.py`, `telegram_admin.py` and 27 test
+modules), **5 only ours** (edition tests). Nothing in those 38 is an edition decision; they
+are lag, and the next port takes them file by file.
+
+⚠ **The body has one source now.** Darwin branches (`ax.rs`, `mac.rs`, the identity/process/
+runtime forks) live in the working copy's `body/` and in this layer's `body/`; the mirror does
+not carry them (her prod does not). The Mac build takes the body from the shipped `tree/body`
+(`build_mac.body_src_for`), the Windows build from `live/body` — the same crates. The mirror's
+`praxis/body` is her Windows-only body, as on prod.
+
 ⚠ The order matters and it cost a lesson. When the core was re-exported on 2026-09-10 the
 mirror moved ahead of the working copy, and forty files differed without being declared.
 Copying them into a file called "the Windows edition" would have declared a lag as a

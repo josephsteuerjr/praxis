@@ -30,7 +30,7 @@ from test_llm import Base
 
 LEVER = llm.VISION_PREPASS_LEVER
 PRIMARY = "glm-5.3"
-SIGHTED = "glm-5.3-flash"
+SIGHTED = "glm-4.6v"
 
 _PIXEL = {"type": "image", "source": {"type": "base64", "media_type": "image/png",
                                       "data": "iVBORw0KGgo="}}

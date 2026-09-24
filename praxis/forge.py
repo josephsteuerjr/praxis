@@ -2735,8 +2735,17 @@ def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
     born = started_at or _proc_started_at(pid)
     try:
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
-                           text=True, timeout=15)
+            # 20.09: returncode обязателен. taskkill молчит успехом и в случае отказа:
+            # rc=1 (доступ запрещён) или rc=128 (не найден) прежде выглядели как «остановлен».
+            proc = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                  capture_output=True, text=True, timeout=15)
+            rc = int(proc.returncode)
+            if rc == 0:
+                return "остановлен"
+            if rc == 128:
+                return "уже завершён"
+            detail = (proc.stderr or proc.stdout or "").strip()[:120]
+            return f"не остановлен: taskkill rc={rc}: {detail}".rstrip(": ")
         else:
             os.killpg(pid, signal.SIGTERM)
             deadline = time.monotonic() + 1.0
@@ -2916,13 +2925,22 @@ def verify(task_id: str, action: str = "plan", verification_id: str = "",
             logs.append(f"--- {log.name} ---\n{_tail(log, max(500, min(int(tail or 12000), 30000)))}")
         return _cap(json.dumps(result, ensure_ascii=False, indent=2) + "\n" + "\n".join(logs), 40000)
     if action == "stop":
+        prior = _read_json(d / "result.json")
+        if str((prior or {}).get("status") or "") in {"done", "error", "failed", "stalled"}:
+            _event(task_id, "verification_stopped", verification_id=verification_id,
+                   summary=f"{verification_id}: матрица уже завершилась; результат сохранён")
+            return f"{verification_id}: матрица уже завершилась — результат сохранён."
         msg = _kill_tree(int(state.get("supervisor_pid") or 0),
                          str(state.get("supervisor_started_at") or ""),
                          expect=str(d / "request.json"))
-        _atomic_json(d / "result.json", {"status": "stopped", "stopped": _now(), "note": msg})
-        _event(task_id, "verification_stopped", verification_id=verification_id,
+        if msg in {"остановлен", "уже завершён"}:
+            _atomic_json(d / "result.json", {"status": "stopped", "stopped": _now(), "note": msg})
+            _event(task_id, "verification_stopped", verification_id=verification_id,
+                   summary=f"{verification_id}: {msg}")
+            return f"{verification_id}: {msg}"
+        _event(task_id, "verification_stop_failed", verification_id=verification_id,
                summary=f"{verification_id}: {msg}")
-        return f"{verification_id}: {msg}"
+        return f"{verification_id}: {msg} — терминальный статус НЕ записан."
     return "action: plan | start | poll | stop | list"
 
 
@@ -2946,8 +2964,13 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
         brief = str(brief or "").strip()
         if not brief:
             return "Для субагента нужен brief."
-        unit_id = _id("agent")
+        # Явный agent_id — резервация swarm-узла: узел сохраняет устойчивую
+        # идентичность между резервацией и спавном (восстановление после рестарта).
+        unit_id = str(agent_id or "").strip() or _id("agent")
         d = _unit_dir(task_id, "agents", unit_id)
+        if d.exists():
+            return (f"Юнит {unit_id} уже существует (status={_unit_state(d).get('status')}); "
+                    f"повторный spawn отклонён — это была бы вторая копия того же юнита.")
         request = {
             "id": unit_id, "task_id": task_id, "goal": task.get("goal"),
             "run_context": task.get("run_context") or _task_run_context(task_id),
@@ -2992,15 +3015,33 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                           ensure_ascii=False, indent=2)
         return _cap(body + "\n--- worker log ---\n" + (log or "(пока пусто)"), 40000)
     if action == "stop":
+        prior = _read_json(d / "result.json")
+        prior_status = str((prior or {}).get("status") or "")
+        if prior_status in {"done", "error", "failed", "stalled"}:
+            # 20.09: юнит УЖЕ завершился с полным результатом (текст, трейс, дифф).
+            # Стоп обязан его сохранить: перезапись короткой записью «stopped» уничтожала
+            # готовую работу. Записываем отдельную расписку, результат не трогаем.
+            _event(task_id, "agent_stopped", agent_id=agent_id,
+                   summary=f"{agent_id}: юнит уже завершился ({prior_status}); результат сохранён")
+            return (f"{agent_id}: юнит уже завершился ({prior_status}) — готовый результат "
+                    f"сохранён, останавливать нечего. Расписка стопа записана в журнал.")
         msg = _kill_tree(int(state.get("supervisor_pid") or 0),
                          str(state.get("supervisor_started_at") or ""),
                          expect=str(d / "request.json"))
-        stopped = {"status": "stopped", "stopped": _now(), "finished": _now(), "note": msg}
-        _atomic_json(d / "result.json", stopped)
-        _event(task_id, "agent_stopped", agent_id=agent_id, summary=f"{agent_id}: {msg}")
-        emit_unit_event(task_id, agent_id, stopped,
-                        request=_read_json(d / "request.json", {}) or {})
-        return f"{agent_id}: {msg}"
+        if msg in {"остановлен", "уже завершён"}:
+            stopped = dict(prior or {})
+            stopped.update({"status": "stopped", "stopped": _now(), "finished": _now(),
+                            "note": msg})
+            _atomic_json(d / "result.json", stopped)
+            _event(task_id, "agent_stopped", agent_id=agent_id, summary=f"{agent_id}: {msg}")
+            emit_unit_event(task_id, agent_id, stopped,
+                            request=_read_json(d / "request.json", {}) or {})
+            return f"{agent_id}: {msg}"
+        # Не доказали смерть — НЕ пишем терминальный статус: «stopped» без подтверждения
+        # убивал живой процесс из вида и подменял результат. Прежний result не тронут.
+        _event(task_id, "agent_stop_failed", agent_id=agent_id, summary=f"{agent_id}: {msg}")
+        return (f"{agent_id}: {msg} — терминальный статус НЕ записан; юнит остаётся "
+                f"в прежнем состоянии, результат не тронут.")
     return "action: spawn | poll | stop | list"
 
 
@@ -3040,10 +3081,45 @@ def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "
         return "У задачи нет swarm-плана; action=plan принимает JSON nodes[]."
     if action in {"start", "tick"}:
         launched = []
+        # Восстановление после рестарта/краша между резервацией и спавном: узел в
+        # starting (или уже lost — refresh выше успел его так пометить) с agent_id,
+        # но юнита нет — возвращаем в pending, спавн повторится под ТЕМ ЖЕ
+        # идентификатором (дублей нет: agent() отказывает, если юнит существует).
+        for node in current.get("nodes") or []:
+            if node.get("status") in {"starting", "lost"} and node.get("agent_id"):
+                unit = _unit_dir(task_id, "agents", str(node["agent_id"]))
+                if not unit.is_dir():
+                    node["status"] = "pending"
+                    node["agent_id"] = ""
+                    node.pop("finished", None)
+        # Обратная половина crash-окна: спавн УСПЕЛ, но план не сохранился (краш между
+        # agent() и save). Ищем существующий юнит этого узла по request.node_id и
+        # перепривязываем его — второй спавн того же узла не появляется.
+        pending_nodes = [n for n in (current.get("nodes") or [])
+                         if not n.get("agent_id") and n.get("status") == "pending"]
+        if pending_nodes:
+            wanted = {str(n["id"]) for n in pending_nodes}
+            for unit_dir in (_task_dir(task_id) / "agents").glob("agent-*"):
+                req = _read_json(unit_dir / "request.json", {}) or {}
+                nid = str(req.get("node_id") or "")
+                if nid in wanted:
+                    for n in pending_nodes:
+                        if n["id"] == nid:
+                            n["agent_id"] = unit_dir.name
+                            n["status"] = "starting"
+                            n["started"] = req.get("created") or _now()
+                    launched.append(f"{nid}↔{unit_dir.name} (восстановлен)")
         ready = forge_swarm.ready_nodes(current)
         for node in ready:
+            # Резервация ДО спавна: устойчивый agent_id пишется в план и на диск
+            # раньше, чем рождается процесс. Краш между ними больше не порождает
+            # вторую копию узла — тик выше свяжет резервацию с тем же идентификатором.
+            reserved = _id("agent")
+            node["agent_id"] = reserved
+            node["status"] = "starting"
+            forge_swarm.save(directory, current)
             out = agent(task_id, "spawn", brief=node["brief"], role=node["role"],
-                        node_id=node["id"], owns=node.get("owns") or [])
+                        node_id=node["id"], owns=node.get("owns") or [], agent_id=reserved)
             match = re.search(r"(agent-[a-f0-9]+)", out)
             if not match:
                 node["status"] = "failed"

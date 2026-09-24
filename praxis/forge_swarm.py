@@ -117,7 +117,7 @@ def refresh(task_dir: Path, agent_state: Callable[[str], dict]) -> dict:
         state = agent_state(aid)
         status = str(state.get("status") or "lost")
         mapped = {"done": "done", "error": "failed", "failed": "failed",
-                  "stopped": "stopped", "lost": "lost"}.get(status, "running")
+                  "stopped": "stopped", "lost": "lost", "stalled": "stalled"}.get(status, "running")
         if mapped != node.get("status"):
             node["status"] = mapped
             node["finished"] = state.get("finished", "") if mapped != "running" else ""
@@ -140,7 +140,7 @@ def ready_nodes(plan: dict) -> list[dict]:
         deps = node.get("deps") or []
         if all(status.get(dep) == "done" for dep in deps):
             ready.append(node)
-        elif any(status.get(dep) in {"failed", "stopped", "lost", "blocked"} for dep in deps):
+        elif any(status.get(dep) in {"failed", "stopped", "lost", "blocked", "stalled"} for dep in deps):
             node["status"] = "blocked"
             node["finished"] = _now()
     return ready[:slots]

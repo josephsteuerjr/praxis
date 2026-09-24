@@ -37,7 +37,7 @@ class WorkerAttributionTests(unittest.TestCase):
                 forge.start('test', target=str(root), isolation='direct')
             task = saved[0]
             self.assertEqual(task['run_context']['principal_id'], '123')
-            unit = root / 'agent'; unit.mkdir()
+            unit = root / 'agent'  # каталог создаёт сам spawn (guard дублей b0ee5c2e)
             # Detached spawn after the original context has gone away.
             with mock.patch.object(forge, '_task_root', return_value=(task, root, '')), \
                  mock.patch.object(forge, '_unit_dir', return_value=unit), \

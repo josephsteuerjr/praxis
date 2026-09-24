@@ -1423,7 +1423,46 @@ pub mod live {
         fn attributes(&self) -> Result<Attributes, AxFailure> {
             let values = self.copy_multiple(&ATTRIBUTE_NAMES)?;
             let raw: Vec<Option<Raw>> = values.iter().map(|v| v.as_ref().map(raw_of)).collect();
-            Ok(Attributes::from_values(&raw))
+            let mut attributes = Attributes::from_values(&raw);
+            if [&attributes.title, &attributes.description, &attributes.label, &attributes.help]
+                .iter().all(|value| value.as_deref().is_none_or(str::is_empty))
+            {
+                // One hop only: a cyclic/stale label relationship cannot recurse.
+                // A stale optional label does not mean the source node disappeared.
+                let related = self.copy_attribute("AXTitleUIElement").or_else(|error| {
+                    if matches!(error.code, super::AX_ERROR_INVALID_UI_ELEMENT | super::AX_ERROR_CANNOT_COMPLETE) {
+                        Ok(None)
+                    } else { Err(error) }
+                })?;
+                if let Some(value) = related
+                    && value.type_of() == unsafe { AXUIElementGetTypeID() }
+                    && let Some(label) = AxElement::wrap(value.as_CFTypeRef(), self.timeout)
+                {
+                    let names = match label.copy_multiple(&[
+                        "AXRole", "AXTitle", "AXDescription", "AXLabel", "AXHelp",
+                    ]) {
+                        Ok(names) => names,
+                        Err(error) if matches!(error.code, super::AX_ERROR_INVALID_UI_ELEMENT | super::AX_ERROR_CANNOT_COMPLETE) => return Ok(attributes),
+                        Err(error) => return Err(error),
+                    };
+                    attributes.label = names.iter().skip(1)
+                        .filter_map(|value| value.as_ref()?.downcast::<CFString>())
+                        .map(|value| value.to_string()).find(|value| !value.is_empty());
+                    // A label's own static text is a name, never the input's value.
+                    // Never fetch AXValue from an input/password field through this link.
+                    let role = names.first().and_then(|value| value.as_ref())
+                        .and_then(|value| value.downcast::<CFString>())
+                        .map(|value| value.to_string());
+                    if attributes.label.is_none()
+                        && matches!(role.as_deref(), Some("AXStaticText") | Some("AXHeading"))
+                    {
+                        attributes.label = label.copy_attribute("AXValue")?
+                            .and_then(|value| value.downcast::<CFString>())
+                            .map(|value| value.to_string()).filter(|value| !value.is_empty());
+                    }
+                }
+            }
+            Ok(attributes)
         }
 
         fn actions(&self) -> Result<Vec<String>, AxFailure> {
@@ -1552,13 +1591,18 @@ pub mod live {
                 window.id, window.owner, window.pid
             ));
         }
-        // Несколько окон одной рамки (окна одного размера, сложенные стопкой): заголовок
-        // решает; равных заголовков нет — берём первое и говорим об этом словом `frame`.
-        let index = window
-            .title
-            .as_ref()
-            .and_then(|title| by_frame.iter().position(|(_, candidate)| candidate.as_ref() == Some(title)))
-            .unwrap_or(0);
+        // An unresolved frame collision must never choose an arbitrary mutation target.
+        let index = if by_frame.len() == 1 {
+            0
+        } else {
+            let matches: Vec<usize> = by_frame.iter().enumerate()
+                .filter(|(_, (_, title))| window.title.as_ref().is_some_and(|wanted| !wanted.is_empty() && title.as_ref() == Some(wanted)))
+                .map(|(index, _)| index).collect();
+            if matches.len() != 1 {
+                return Err(format!("ambiguous Accessibility window binding: {} windows match frame for 0x{:X}; no action performed", by_frame.len(), window.id));
+            }
+            matches[0]
+        };
         let (matched, title) = by_frame.swap_remove(index);
         Ok(Attached {
             window: matched,

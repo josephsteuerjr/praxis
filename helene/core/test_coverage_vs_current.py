@@ -18,13 +18,13 @@ AbstractDL: 445 ключей в составе места, 311 файлов ко
 from __future__ import annotations
 
 import contextlib
-import multiprocessing
 import os
+import multiprocessing
 import shutil
+import sys
 import tempfile
 import threading
 import unittest
-import sys
 from pathlib import Path
 
 import memory_fts
@@ -1825,6 +1825,55 @@ class TestTierFuseSeesUpperFallback(Base):
                          "дозревание ярусов без свёртки горячего молча "
                          "проходило стоп-кран")
         self.assertEqual(outcome.get("degraded_id"), "cmp-t2-fallback")
+
+
+class TestRefreshBindsBranchKeyBeforeWriting(Base):
+    """Регрессия пробки Ouroboros 21.09: мельница писала чанки, которые сама не принимала.
+
+    Правка сообщения может приехать под веточным ключом места (…__topic__N): текущей
+    ревизией становится событие с chat_id=ветка, ещё не привязанной в places.json.
+    refresh_compacts пишет новый чанк от имени корневого ключа, и без bind_place ДО
+    _write_compact провенанс не признаёт ветку родной: свежий чанк невалиден с первой
+    секунды, presentable пуст, refreshed_count не растёт, needs_refresh стоит
+    (группа e0b1e8ed: 75 целей, 0 refreshed за 10 проходов).
+    """
+
+    def test_refresh_chunk_with_branch_revision_becomes_presentable(self):
+        root, branch = f"{ROOM}", f"{ROOM}__topic__947"
+        rows = [self._msg(1, "первая реплика"), self._msg(2, "вторая реплика")]
+        stale = self._compact(rows, summary="старая сводка")
+        # Правка приезжает через топик: текущая ревизия несёт веточный ключ,
+        # message id пир-широкий — lineage тот же, событие вытесняет исходное.
+        ml.record_message(branch, "Николай: новая редакция", actor="Николай",
+                          direction="in", source_id="1:edit:1", ts=99_100.0,
+                          dedupe_key=f"telegram:{branch}:1:in")
+        ml.note_message_revision(branch, 1, "Николай: новая редакция")
+
+        debt = ml.refresh_debt(root)
+        self.assertGreaterEqual(debt["needs_refresh"], 1, debt)
+        self.assertNotIn(branch, ml.bindings())
+
+        original = ml._model_compact
+        ml._model_compact = lambda *_a, **_k: {
+            "summary": "свежий refresh", "open_threads": [], "claims": [], "episodes": []}
+        try:
+            result = ml.refresh_compacts(root, max_chunks=2)
+        finally:
+            ml._model_compact = original
+
+        self.assertTrue(result["ok"], result)
+        self.assertGreaterEqual(result["chunks_written"], 1, result)
+        self.assertIn(branch, ml.bindings(),
+                      "refresh не привязал веточный ключ места")
+        made = result.get("new_compact_ids") or []
+        self.assertTrue(made, result)
+        evidence = self._evidence()
+        for compact_id in made:
+            resolved = memory_provenance.compact_evidence(compact_id, evidence)
+            self.assertTrue(resolved["valid"],
+                            f"свежий чанк {compact_id} невалиден: {resolved}")
+        after = ml.refresh_debt(root)
+        self.assertEqual(after["needs_refresh"], 0, after)
 
 
 if __name__ == "__main__":

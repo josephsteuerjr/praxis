@@ -123,20 +123,33 @@ class SelfdevFlow(unittest.TestCase):
         self.assertEqual(t["status"], "merged")
         self.assertIn("смёржила сама", msg)
 
-    def test_timeout_is_inconclusive_and_does_not_need_override(self):
+    def test_timeout_holds_the_merge_until_a_run_finishes(self):
+        # 24.09: таймаут вливал правку непроверенной (06f33b25). Правка, вешающая тест,
+        # даёт ровно такой исход, поэтому мёрж ждёт прогона, который уложится.
         pid = self._begin_and_edit("core.py", "VALUE = 2\n")
         timeout_result = {
             "ok": False,
             "status": "timed_out",
-            "blocking": False,
-            "summary": "тесты пропущены: не уложились в 600s",
+            "blocking": True,
+            "summary": "тесты не уложились в 1200s — проверки нет",
         }
         with mock.patch.object(selfdev, "run_tests", return_value=timeout_result):
             msg = selfdev.submit(pid, "поднять VALUE", review=RV)
         item = selfdev.get(pid)
-        self.assertEqual(item["status"], "merged")
+        self.assertEqual(item["status"], "proposed")
         self.assertEqual(item["tests"]["status"], "timed_out")
-        self.assertIn("inconclusive", msg)
+        self.assertIn("НЕ смёржено", msg)
+        self.assertIn(f'submit_proposal(id="{pid}"', msg)
+        self.assertNotIn("VALUE = 2", (self.repo / "core.py").read_text(encoding="utf-8"))
+
+        # Повторный submit того же id перепрогоняет гейт и мёржит на вердикте.
+        with mock.patch.object(selfdev, "run_tests",
+                               return_value={"ok": True, "status": "passed", "blocking": False,
+                                             "summary": "1 тестов, зелёные"}):
+            msg = selfdev.submit(pid, "поднять VALUE", review=RV)
+        item = selfdev.get(pid)
+        self.assertEqual(item["status"], "merged")
+        self.assertIn("тесты зелёные", msg)
         self.assertIn("VALUE = 2", (self.repo / "core.py").read_text(encoding="utf-8"))
 
     def test_run_tests_classifies_timeout_separately(self):
@@ -146,14 +159,14 @@ class SelfdevFlow(unittest.TestCase):
             result = selfdev.run_tests(pid)
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "timed_out")
-        self.assertFalse(result["blocking"])
-        self.assertIn("пропущены", result["summary"])
+        self.assertTrue(result["blocking"])
+        self.assertIn("проверки нет", result["summary"])
 
     def test_failed_status_still_blocks_without_override(self):
         self.assertTrue(selfdev.tests_block_merge({"ok": False, "status": "failed"}))
         self.assertTrue(selfdev.tests_block_merge({"ok": False, "status": "error"}))
         self.assertTrue(selfdev.tests_block_merge({"ok": False, "status": "mystery"}))
-        self.assertFalse(selfdev.tests_block_merge({"ok": False, "status": "timed_out"}))
+        self.assertTrue(selfdev.tests_block_merge({"ok": False, "status": "timed_out"}))
         # Existing ledger rows had no status: preserve their old fail-closed meaning.
         self.assertTrue(selfdev.tests_block_merge({"ok": False, "summary": "old red"}))
 

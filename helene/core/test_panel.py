@@ -825,8 +825,8 @@ class TestRoomLeversFromPanel(unittest.TestCase):
         item = next(x for x in panel.rooms_list()["items"] if x["id"] == "-100777")
         self.assertEqual(item["disclosure_set_by"], "praxis")
         self.assertEqual(item["set_by"], "praxis")
-        self.assertIn("сама", item["author"])
-        self.assertIn("сама", item["disclosure_author"])
+        self.assertIn("собственное", item["author"])
+        self.assertIn("собственное", item["disclosure_author"])
         self.assertEqual(item["mode"], "quiet")
 
     def test_untouched_room_is_not_signed_by_anyone(self):

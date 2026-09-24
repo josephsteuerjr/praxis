@@ -82,6 +82,9 @@ class Base(unittest.TestCase):
                       "OPENAI_BASE_URL", "PRAXIS_MAX_TOOL_ITERS")}
         for k in self._env:  # детерминизм: живой env (контейнер грузит .env) не влияет
             os.environ.pop(k, None)
+        # Узкий взгляд — тоже часть детерминизма кадра: рычаг включён в живом .env,
+        # и без этого pop он молча перекрашивал исходные vision-тесты в prepass-тесты.
+        self._prepass0 = os.environ.pop(llm.VISION_PREPASS_LEVER, None)
 
     def tearDown(self):
         for mod, k, v in self._orig:
@@ -96,6 +99,8 @@ class Base(unittest.TestCase):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+        if self._prepass0 is not None:
+            os.environ[llm.VISION_PREPASS_LEVER] = self._prepass0
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _write_cfg(self, **roles_over):
@@ -145,10 +150,12 @@ class TestConfig(Base):
         cfg = llm._normalize({
             "roles": {"voice": {
                 "framework": "anthropic", "model": "glm-5.3",
-                "vision_model": "glm-5.3-flash",
+                "vision_model": "glm-4.6v",
+                "vision_models": {"openai": "gpt-5.6-terra"},
             }},
         })
-        self.assertEqual(cfg["roles"]["voice"]["vision_model"], "glm-5.3-flash")
+        self.assertEqual(cfg["roles"]["voice"]["vision_model"], "glm-4.6v")
+        self.assertEqual(cfg["roles"]["voice"]["vision_models"]["openai"], "gpt-5.6-terra")
 
     def test_stamp_distinguishes_same_size_replacement_even_when_clock_collides(self):
         """Atomic panel writes must reload even if filesystem time is coarsened.

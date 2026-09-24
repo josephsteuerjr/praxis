@@ -155,6 +155,44 @@ class ARestrictionIsTemporaryAndUndoingItIsNot(unittest.TestCase):
                                      {"user_id": 4242, "seconds": 60})
 
 
+class ABanByIdNeedsOnlyAnIdAndAPurgeIsABanPlusHistory(unittest.TestCase):
+    def test_ban_member_takes_only_a_positive_user_id(self):
+        action, subject = telegram_admin.normalize(
+            ABSTRACTDL, "ban_member", {"user_id": 1267965962})
+        self.assertEqual((action, subject),
+                         ("ban_member", {"user_id": 1267965962}))
+
+    def test_ban_member_refuses_extras_and_nonpositive_ids(self):
+        with self.assertRaises(ValueError):
+            telegram_admin.normalize(ABSTRACTDL, "ban_member",
+                                     {"user_id": 1, "seconds": 60})
+        with self.assertRaises(ValueError):
+            telegram_admin.normalize(ABSTRACTDL, "ban_member", {"user_id": 0})
+
+    def test_purge_member_takes_only_a_positive_user_id(self):
+        action, subject = telegram_admin.normalize(
+            ABSTRACTDL, "purge_member", {"user_id": 42})
+        self.assertEqual((action, subject),
+                         ("purge_member", {"user_id": 42}))
+
+    def test_purge_member_refuses_extras(self):
+        with self.assertRaises(ValueError):
+            telegram_admin.normalize(ABSTRACTDL, "purge_member",
+                                     {"user_id": 42, "reason": "spam"})
+
+    def test_ban_and_purge_and_unrestrict_share_the_member_scope(self):
+        """Один и тот же участник: его недавний бан делает старый unrestrict
+        историей, а свежий purge_member — делает историей бан. Руки по одному
+        человеку не живут в параллельных вселенных."""
+        ban = telegram_admin.operation_key(ABSTRACTDL, "ban_member",
+                                           {"user_id": 9})
+        purge = telegram_admin.operation_key(ABSTRACTDL, "purge_member",
+                                             {"user_id": 9})
+        undo = telegram_admin.operation_key(ABSTRACTDL, "unrestrict",
+                                            {"user_id": 9})
+        self.assertEqual(len({ban, purge, undo}), 3)
+
+
 class TheKeyRemembersTheWholeRequest(unittest.TestCase):
     """Durable-прогон может повторить вызов. Повтор той же меры обязан быть
     ничем, а другой срок — другой мерой, иначе ограничение молча продлевается."""

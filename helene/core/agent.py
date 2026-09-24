@@ -35,6 +35,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading as _threading
 import time
 import uuid
 from collections import deque
@@ -496,8 +497,8 @@ def _media_spool() -> media.MediaSpool:
     return _MEDIA_SPOOL
 
 
-def _test_runtime() -> bool:
-    return (_under_tests() or "unittest" in sys.modules or "pytest" in sys.modules
+def _test_runtime() -> bool:  # 23.09: снимок при импорте (см. `if not (_TEST_RUNTIME_AT_IMPORT := …)` ниже) — torch позже сам тянет unittest
+    return (_TEST_RUNTIME_AT_IMPORT or bool(os.environ.get("PRAXIS_TEST"))
             or bool(os.getenv("PYTEST_CURRENT_TEST")))
 
 
@@ -565,7 +566,7 @@ try:  # герметичность: любой тест-запуск (unittest/p
     from _sandbox import _looks_like_test_run as _under_tests
 except Exception:
     _under_tests = lambda: bool(os.environ.get("PRAXIS_TEST"))
-if not _under_tests():
+if not (_TEST_RUNTIME_AT_IMPORT := bool(_under_tests() or "unittest" in sys.modules or "pytest" in sys.modules)):
     load_dotenv(override=True)  # .env-тюнинг применяется и на простом restart_self (§9 пакета 2)
 
 BASE = Path(os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent)
@@ -1259,10 +1260,10 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
                     "kind": request.get("kind"), "ts": request.get("ts"),
                 })
             if isinstance(interpretation, dict):
-                add("appetite_interpretation", {
-                    "text": interpretation.get("text"), "plan": interpretation.get("plan"),
-                    "ts": interpretation.get("ts"),
-                })
+                # 24.09: толкование 13.09 «профиль chat (gpt-5.6-terra, medium)» ехало как текущее
+                # состояние, и она говорила людям «reasoning у меня medium (Terra)» при glm-5.3/low.
+                # Дата записи и фактический голос теперь рядом: `_appetite_interpretation_view`.
+                add("appetite_interpretation", _appetite_interpretation_view(interpretation))
     except Exception:
         pass
     continuity_readers = [
@@ -1306,12 +1307,57 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
 #  Инструменты (руки голоса)
 # --------------------------------------------------------------------------- #
 
-def _reindex(path: Path) -> None:
-    """Пересчитать векторы файла после записи. Никогда не валит запись памяти."""
+# ⚠ 21.09.2026. Пересчёт стоил ОДНОГО файла, пока строку писали изредка. Для дневника
+# `memory_index.upsert` делает `DELETE FROM chunks WHERE path=?`, заново чанкует ВЕСЬ файл
+# и в конце берёт `SELECT COUNT(*) FROM chunks` по всей базе — а база в этот день 443 МБ,
+# дневник 16 192 строки. Когда утренняя правка стала писать строку на каждую из 3443
+# принятых записей outbox, это сложилось в квадрат: boot встал, ядро держалось на 96 %,
+# часы не рождались. Пишущих в один файл подряд склеиваем: первый пересчёт идёт сразу,
+# остальные в течение окна — одним отложенным. Под стендом окна нет вовсе, иначе тест,
+# который пишет и тут же ищет, поймал бы пустой индекс.
+_REINDEX_DEBOUNCE_SEC = 0.0 if os.environ.get("PRAXIS_TEST") else 5.0
+_REINDEX_LOCK = _threading.Lock()
+_REINDEX_LAST: dict[str, float] = {}
+_REINDEX_TIMERS: dict[str, object] = {}
+
+
+def _reindex_now(path: Path) -> None:
+    """Сам пересчёт. Никогда не валит запись памяти."""
     try:
         memory_index.upsert(path)
     except Exception:
         log.debug("upsert индекса не удался для %s", path, exc_info=True)
+    finally:
+        with _REINDEX_LOCK:
+            _REINDEX_LAST[str(path)] = time.time()
+            _REINDEX_TIMERS.pop(str(path), None)
+
+
+def _reindex(path: Path) -> None:
+    """Пересчитать векторы файла после записи, склеивая частые правки одного файла."""
+    key = str(path)
+    now = time.time()
+    if _REINDEX_DEBOUNCE_SEC <= 0:
+        _reindex_now(path)
+        return
+    with _REINDEX_LOCK:
+        waited = now - _REINDEX_LAST.get(key, 0.0)
+        if waited >= _REINDEX_DEBOUNCE_SEC:
+            _REINDEX_LAST[key] = now      # окно занимаем ДО работы, чтобы не сошлись двое
+            due = True
+        else:
+            due = False
+            if key not in _REINDEX_TIMERS:
+                # Хвост пачки не должен остаться неиндексированным, если писать
+                # перестали: доводим отложенным пересчётом ровно один раз на файл.
+                timer = _threading.Timer(_REINDEX_DEBOUNCE_SEC - waited,
+                                         _reindex_now, args=(path,))
+                timer.name = "reindex-" + Path(key).name
+                timer.daemon = True
+                _REINDEX_TIMERS[key] = timer
+                timer.start()
+    if due:
+        _reindex_now(path)
 
 
 def _seed_experiment_report(limit: int = 200) -> str:
@@ -1351,7 +1397,7 @@ def _seed_experiment_report(limit: int = 200) -> str:
     ])
 
 
-def tool_recall(query: str, report: bool = False) -> str:
+def tool_recall(query: str = "", report: bool = False) -> str:
     """Hybrid internal recall: full memory regardless of the current audience.
 
     Privacy is enforced at the outbound boundary.  Scope must not amputate Praxis's
@@ -1819,7 +1865,7 @@ _LOOKAROUND_FRAME_HAND = (
     "Напечатать нужно только одно: 1–3 строки, начинающиеся с `НОРМЫ: ` — нормы и атмосфера "
     "этого места, для моего профиля комнаты. Их никто в чате не видит, это заметка себе.\n"
     "Здороваться или нет — моё решение, и делаю я это как везде: рукой `reply`. Особых слов "
-    "и разметки для этого не нужно. Не позвала руку — вошла молча, и это законный выбор, а "
+    "и разметки для этого не нужно. Рука не вызвана — вход молча, и это законный выбор, а "
     "не пропущенный шаг. Руки здесь обычные: если хочу посмотреть, прежде чем говорить, — "
     "смотрю.\n"
 )
@@ -2343,7 +2389,7 @@ def tool_home_note(text: str) -> str:
         if not HOME_MD.exists():
             HOME_MD.parent.mkdir(parents=True, exist_ok=True)
             HOME_MD.write_text("# Дом\n\n_(общий слой: видят Егор и родные; быт, планы, "
-                               "общие нити — я веду его сама)_\n\n", encoding="utf-8")
+                               "общие нити — веду его я)_\n\n", encoding="utf-8")
         with HOME_MD.open("a", encoding="utf-8") as fh:
             fh.write(f"- {_today()}: {text[:500]}\n")
         return "Записала в домашний слой."
@@ -2416,7 +2462,7 @@ def tool_stay_silent(reason: str = "", cancel: bool = False) -> str:
     holder["why"] = reason[:SILENCE_REASON_MAX]
     return ("Молчу: решение принято на весь этот ход. Если текст после этого всё же "
             "допишется, он не уйдёт — останется в дневнике и в записи хода, "
-            "не потеряется. Передумаю — сниму сама: тот же тул с cancel=true."
+            "не потеряется. Передумаю — сниму: тот же тул с cancel=true."
             # Закон 2: усечение обязано быть названо там, где она его видит. В дневник
             # причина уходит целиком, обрезается только копия для записи хода.
             + (f" Причину для записи хода обрезала до {SILENCE_REASON_MAX} знаков — "
@@ -2436,13 +2482,13 @@ def _current_room() -> str:
 def tool_freeze_chat(on: bool = True, chat_id: str | None = None) -> str:
     """Заморозить/поднять чат владельцем или самой Praxis; пишет provenance."""
     if not _is_sovereign_actor():
-        return "Отказ: режим комнаты меняет только владелец или сама Praxis."
+        return "Отказ: режим комнаты меняет только владелец или сам агент."
     cid = str(chat_id).strip() if chat_id else _current_room()
     if not cid:
         return "Не вижу, какой чат морозить — укажи chat_id."
     set_by = "praxis" if _is_praxis_self() else "owner"
     if on:
-        reason = "сама решила заморозить" if set_by == "praxis" else "владелец попросил"
+        reason = "моё решение: заморозить" if set_by == "praxis" else "владелец попросил"
         rooms.set_mode(cid, "frozen", reason=reason, set_by=set_by)
         return f"Заморозила {cid} — сообщения оттуда до меня не доходят, пока не разморожу."
     new_mode = rooms.sovereign_raise(cid, set_by=set_by)
@@ -2458,7 +2504,7 @@ def tool_freeze_contact(reason: str = "") -> str:
         return "Личку Егора этим рубильником не морожу."
     ok, mode = rooms.self_demote(cid, "frozen", reason=reason or "моя граница", ttl_h=0)
     if ok:
-        tool_journal(f"[граница] заморозила чат {cid}: {reason or 'моя граница'}", salience=2)
+        tool_journal(f"[граница] чат {cid} заморожен: {reason or 'моя граница'}", salience=2)
         return f"Заморозила текущий чат {cid}: новые сообщения оттуда до меня не доходят."
     return mode
 
@@ -2480,7 +2526,7 @@ def tool_get_id(name_or_username: str) -> str:
         # «[не нашла] », и она честно передавала Егору ЛОЖЬ про существующего человека.
         return f"[Telethon не ответил вовремя — сбой канала, НЕ «нет такого»] {e}"
     except Exception as e:
-        return f"[не нашла] {e}"
+        return f"[не найдено] {e}"
 
 
 def telegram_transport_status() -> str:
@@ -2587,7 +2633,7 @@ def tool_read_chat(chat_ref: str, limit: int = 30) -> str:
         return ("[PRIVATE CROSS-CHAT READ — внутренний материал; не цитируй чувствительные "
                 "личные сведения аудитории без права их получить]\n" + out)
     except Exception as e:
-        return f"[не смогла прочитать] {e}"
+        return f"[не удалось прочитать] {e}"
 
 
 def tool_read_context(limit: int = 50) -> str:
@@ -2602,7 +2648,7 @@ def tool_read_context(limit: int = 50) -> str:
         out = str(fn(cid, int(limit)))
         return out or "(пусто)"
     except Exception as e:
-        return f"[не смогла подтянуть] {e}"
+        return f"[не удалось подтянуть] {e}"
 
 
 def tool_search_private_messages(query: str, limit: int = 20) -> str:
@@ -2661,14 +2707,14 @@ def _own_room_mode(chat_id: str, kind: str, *, reason: str, ttl_h: float,
     span = f"на {ttl_h:g}ч" if ttl_h else "без срока"
     log.info("режим [%s]: %s %s (сама)", chat_id, kind, span)
     try:
-        tool_journal(f"[режим] взяла «{word}» в {place} {span} — моё решение, не поражение",
+        tool_journal(f"[режим] взято «{word}» в {place} {span} — моё решение, не поражение",
                      salience=2)
     except Exception:
         log.debug("journal режима не удался", exc_info=True)
     if kind == "frozen":
         try:
             rooms.owner_card(chat_id, "mode",
-                             f"я заморозила «{place}» ({span}) и могу поднять сама.")
+                             f"«{place}» заморожено мной ({span}); поднять могу тем же рычагом.")
         except Exception:
             log.debug("owner_card режима не удался", exc_info=True)
     return (True, note)
@@ -2683,7 +2729,7 @@ def tool_manage_room(action: str, chat_id: str | None = None, *,
                      presence_hidden: str = "") -> str:
     """Управление комнатами владельцем или самой Praxis; люди не делегируют это дальше."""
     if not _is_sovereign_actor():
-        return "Отказ: комнаты меняет только владелец или сама Praxis."
+        return "Отказ: комнаты меняет только владелец или сам агент."
     action = (action or "").lower().strip()
     cid = str(chat_id).strip() if chat_id else _current_room()
     if action == "list":
@@ -2756,7 +2802,7 @@ def tool_manage_room(action: str, chat_id: str | None = None, *,
             # rooms.set_own_mode, чтобы до неё доехало его собственное объяснение
             # («dead — не режим, а факт от Telegram: комнату мёртвой объявляю не я»).
             _, why = rooms.set_own_mode(cid, str(mode), reason=reason, ttl_h=0.0)
-            return (f"Слово «{mode}» я не поняла — режим не менялся ({why}). "
+            return (f"Слово «{mode}» не распознано — режим не менялся ({why}). "
                     f"Сейчас в {cid}: «{state['mode_word']}» ({state['mode']}). " + choices)
         # Директива `РЕЖИМ:` по умолчанию берёт 24ч; тул держит тот же срок, чтобы одно
         # и то же её решение не значило разного в зависимости от того, как она его
@@ -2832,7 +2878,7 @@ def _room_view(chat_id: str, policy: dict) -> dict:
         view.update(rooms.room_state(chat_id))
     except Exception:
         log.debug("режим/раскрытие комнаты не прочитались", exc_info=True)
-        view["mode"] = "не прочитала"
+        view["mode"] = "не прочитан"
     return view
 
 
@@ -2890,7 +2936,7 @@ def tool_send_email(to: str, subject: str = "", body: str = "") -> str:
     # ушло ли». Тот же корень, что «Не отправилось» про доставленное: вердикт брали не
     # оттуда, где он живёт. Пишем ровно то, что вернул транспорт (закон 3).
     if out.startswith("Отправлено"):
-        note = f"[почта] отправила → {to}: {subject}"
+        note = f"[почта] отправлено → {to}: {subject}"
     elif out.startswith("НЕ ЗНАЮ"):
         note = f"[почта] НЕ ЗНАЮ, ушло ли → {to}: {subject} — {out}"
     else:
@@ -2930,7 +2976,7 @@ def tool_mail_draft_reply(hash: str, body: str) -> str:
         return "Пустой черновик не ставлю — напиши текст ответа."
     if mailroom.set_draft(hash, body):
         return (f"Черновик ответа на {hash} ({e.get('subject','')}) готов. "
-                "Жду, пока Егор одобрит отправку из ящика — сама не шлю.")
+                "Жду, пока Егор одобрит отправку из ящика — без его слова не шлю.")
     return f"Не удалось поставить черновик для {hash} (возможно, письмо уже отправлено)."
 
 
@@ -3012,7 +3058,7 @@ def tool_rest(note: str = "", when: str = "") -> str:
     t = tasks.add("window", goal, when=(when or "in 0m"), author="praxis")
     log.info("rest: %s", (n or "—")[:80])
     w = t["when"] or "сейчас"
-    return (f"Ухожу к себе отдохнуть ({w}). Если Егор рядом — скажи ему сама, чтоб не терял; "
+    return (f"Ухожу к себе отдохнуть ({w}). Если Егор рядом — предупреди его, чтоб не терял; "
             f"вернусь и разгребу накопившееся одной ситуацией." + _retreat_truth())
 
 
@@ -3282,7 +3328,7 @@ def tool_my_agenda() -> str:
 
 def tool_unschedule(task_id: str) -> str:
     """Снять намеченное по id."""
-    return f"Сняла #{task_id}." if tasks.cancel(task_id) else f"Не нашла открытое #{task_id}."
+    return f"Снято #{task_id}." if tasks.cancel(task_id) else f"Открытого #{task_id} нет."
 
 
 def tool_set_avatar(path: str) -> str:
@@ -3456,7 +3502,7 @@ def tool_reply(text: str, reply_to: str = "") -> str:
     # здесь же и работает в том же ходе.
     holder = _TURN_SILENCE.get()
     if isinstance(holder, dict) and holder.get("chosen"):
-        return ("Не отправила: в этом ходе я решила молчать"
+        return ("Не отправлено: в этом ходе моё решение — молчать"
                 + (f" ({str(holder.get('why') or '')[:120]})" if holder.get("why") else "")
                 + ". Если передумала — `stay_silent(cancel=True)`, и тогда отвечу.")
     fn = _TELETHON.get("reply")
@@ -3480,14 +3526,14 @@ def tool_reply(text: str, reply_to: str = "") -> str:
                                        tool_trace="")
     except Exception:
         log.warning("проверка исходящего перед ответом упала", exc_info=True)
-        return "Не отправила: проверка исходящего упала, а вслепую я не отправляю."
+        return "Не отправлено: проверка исходящего упала, а вслепую не отправляю."
     work_loop.note_guard(probe)
     if not guarded:
         # Пусто на выходе гарда — это НЕ транспортная ошибка: либо кред-пол, либо
         # советник приватности придержал. Причина теперь доезжает и до записи хода, не
         # только до дневника, поэтому называю её здесь же, а не отсылаю искать.
         why = str(probe.get("why") or probe.get("verdict") or "").strip()
-        return ("Не отправила: проверка исходящего придержала этот текст"
+        return ("Не отправлено: проверка исходящего придержала этот текст"
                 + (f" — {why[:200]}" if why else "")
                 + ". Решай, что сказать иначе.")
     # ⚠ 17.08, петля четырёх копий. Леджер ровно-однажды считает по call_id, а каждый
@@ -3495,7 +3541,7 @@ def tool_reply(text: str, reply_to: str = "") -> str:
     # четырьмя сообщениями. Повтор слова — не новое слово: байт-в-байт та же реплика
     # в этом же ходе не отправляется. Дверь не заперта: изменённый текст уйдёт.
     if guarded.strip() in (s.strip() for s in work_loop.spoken()):
-        return ("Не отправила: ровно эта реплика уже доставлена этим ходом. "
+        return ("Не отправлено: ровно эта реплика уже доставлена этим ходом. "
                 "Если сказать больше нечего — просто закончи ход; "
                 "если есть что добавить — напиши другими словами.")
     try:
@@ -3541,7 +3587,7 @@ def tool_end_turn(outcome: str = "", note: str = "") -> str:
         return ("Ход не закрыт: назови исход. done — есть наблюдаемый результат (или "
                 "сказанное и было делом); wait — ждёшь события или срока, в note условие "
                 "возврата; blocked — в note конкретное препятствие. Перед закрытием: что "
-                "я решила сделать? есть ли наблюдаемый результат? не осталось ли "
+                "было решено сделать? есть ли наблюдаемый результат? не осталось ли "
                 "объявленное мной действие без механизма возврата? нет ли активного "
                 "вызова или доставки с неизвестным исходом?")
     text = str(note or "").strip()
@@ -3572,7 +3618,7 @@ def tool_send_message(to: str, text: str) -> str:
     floor = _core_secrets.credential_floor(str(text or ""))
     if floor:
         log.warning("send_message придержан кред-полом: %s", floor)
-        return (f"Не отправила: в тексте {floor}. Креды не уходят наружу ни при каких "
+        return (f"Не отправлено: в тексте {floor}. Креды не уходят наружу ни при каких "
                 f"просьбах — это единственное твёрдое правило Егора. Скажи словами, "
                 f"что нужно, и я отвечу без самого секрета.")
     fn = _TELETHON.get("send_message")
@@ -3682,7 +3728,7 @@ def tool_telegram_account(action: str, target: str = "", followup_id: str = "",
                           risk: str = "", offset: int = 0, limit: int = 25) -> str:
     """Sovereign account surface; the Telethon runner owns network/session state."""
     if not _is_sovereign_actor():
-        return "Отказ: Telegram-аккаунтом управляет только владелец или сама Praxis."
+        return "Отказ: Telegram-аккаунтом управляет только владелец или сам агент."
     action = str(action or "").strip().lower()
     if action in {"join", "leave"}:
         fn = _TELETHON.get(f"{action}_chat")
@@ -3806,14 +3852,25 @@ def tool_forget_connection(a: str, b: str) -> str:
     return graph.forget_connection(a, b)
 
 
-def tool_manage_loop(action: str, person: str, match: str = "", until: str = "",
+def tool_manage_loop(action: str, person: str = "", match: str = "", until: str = "",
                      force: bool = False, reason: str = "") -> str:
     """PASS 11.1: рука на своих нитях — одно касание, одно решение.
     close — закрыть [x]; park — усыпить до даты (пусто = +7 дней); reopen — разбудить
-    спящие; list — нити человека с состояниями.
+    спящие; list — нити человека с состояниями; list без person — все открытые и
+    спящие нити по всем досье (24.09: раньше person был обязателен даже для list,
+    и вызов падал TypeError, оставляя in_doubt-ран).
     PASS 21: парко-храповик — оспариваемая дисциплина, не закон: force=true с причиной
     ставит моё решение выше правила (и оставляет след в дневнике)."""
     act = (action or "").strip().lower()
+    if act == "list" and not (person or "").strip():
+        chunks: list[str] = []
+        for _p in sorted(people.PEOPLE_DIR.glob("*.md")):
+            slug = _p.stem
+            _, body = people.read(slug)
+            lines = [l.strip() for l in (body.get(people.LOOPS, "")).splitlines() if l.strip()]
+            if lines:
+                chunks.append(f"[{slug}]\n" + "\n".join(lines))
+        return "\n\n".join(chunks) if chunks else "Нитей нет."
     slug = graph.resolve((person or "").strip())
     if not slug or not people.path_for(slug).exists():
         return f"Не вижу досье для «{person}» — нить живёт у человека."
@@ -3826,7 +3883,7 @@ def tool_manage_loop(action: str, person: str, match: str = "", until: str = "",
         if ok:
             _reindex(people.path_for(slug))
             log.info("manage_loop close %s: %s", slug, match[:60])
-        return "Закрыла нить." if ok else f"Не нашла открытую нить по «{match}»."
+        return "Нить закрыта." if ok else f"Открытой нити по «{match}» нет."
     if act == "park":
         # PASS 16: парко-храповик — нить, спавшая уже дважды и всплывшая снова, это
         # жвачка (09.07: «доставка ответа» перепарковывалась сутками и глушила окна).
@@ -3942,7 +3999,7 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
         out = forge.start(goal, target=target, isolation=isolation, priority=priority,
                           origin_chat=origin)
         if out.startswith("coding-задача "):
-            tool_journal(f"[forge] открыла coding-задачу: {goal[:180]}", salience=2)
+            tool_journal(f"[forge] открыта coding-задача: {goal[:180]}", salience=2)
         return out
     if action == "status":
         return forge.inspect(task_id, "status")
@@ -4198,15 +4255,15 @@ def _observe_image_pixels(local: Path, transfer_dir: Path | None, *, mime: str,
             # Text-only модель (GLM-5.3) пикселей не получит, а фраза «inspect the attached
             # pixels» толкала описывать экран по памяти о вводе (06.09, отозвано ею 07.09).
             # Честно: снимок сохранён для владельца, ей — структура окна. 09.09: если у
-            # роли есть зрячая замена (llm.vision_model, для glm — glm-5.3-flash), пиксели
-            # кладём — llm.chat переключит модель на этот вызов сам.
+            # роли есть зрячая замена (llm.vision_model: явный конфиг или выбор каталога),
+            # пиксели кладём — llm.chat переключит модель на этот вызов сам.
             return (
-                f"Snapshot saved as a run artifact{note}, but the voice model "
-                f"({llm.role_model('voice') or 'text-only'}) does not accept images and no "
-                "vision model is configured (vision_model): NO pixels reach your context, so do "
-                "not describe the screen from this. The owner can open the artifact; for your own "
-                "eyes use computer action=read_window (UI Automation tree with names, values and "
-                "centre coordinates), clipboard_read or file reads.\n"
+                f"Snapshot saved as a run artifact{note}, but the configured voice route "
+                f"({llm.role_model('voice') or 'unknown'}) has neither verified image capability "
+                "nor a same-framework catalog-valid vision replacement: NO pixels reach your "
+                "context, so do not describe the screen from this. The owner can open the "
+                "artifact; for your own eyes use computer action=read_window (UI Automation "
+                "tree with names, values and centre coordinates), clipboard_read or file reads.\n"
                 + json.dumps(ref, ensure_ascii=False, indent=2)
             )
         text = (
@@ -4329,7 +4386,7 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
     if action in {"write", "replace"} and not _is_sovereign_actor():
         # Этап 3 не расширяет чужие гранты: computer.files у доверенных людей — это
         # чтение/пересылка, запись на диск остаётся суверенной (владелец или сама Praxis).
-        return "Запись файлов на компьютере — только владелец или сама Praxis; грант computer.files её не включает."
+        return "Запись файлов на компьютере — только владелец или сам агент; грант computer.files её не включает."
     if execution != "interactive" and action in {
         "desktop_status", "windows", "read_window", "find_elements", "act_element",
         "activate", "input", "type_text",
@@ -4800,7 +4857,7 @@ def tool_start_proposal(reason: str = "") -> str:
     if not r.get("ok"):
         return f"Не получилось открыть предложение: {r.get('msg')}"
     return (f"Предложение {r['id']} открыто. Твоя рабочая копия: {r['path']} — правь файлы там "
-            f"(shell, полные пути). Живой код не тронется. Когда готова: "
+            f"(shell, полные пути). Живой код не тронется. Когда всё готово: "
             f"submit_proposal(id=\"{r['id']}\", title=..., why=...) — тесты прогонятся сами.")
 
 
@@ -4932,8 +4989,8 @@ def tool_recent_turns(n: int = 6, room: str = "") -> str:
     # словами. Пустая записка не значит «ничего не было»: путь, который её пишет, не
     # единственный, и это сказано вслух, а не подразумевается.
     said = ("Моя записка этого места:\n" + note if note else
-            "Записки этого места у меня нет — значит либо я здесь ещё не говорила, либо "
-            "говорила мимо того пути, который её пишет.")
+            "Записки этого места у меня нет — значит либо здесь ещё не было моих слов, либо "
+            "они шли мимо того пути, который её пишет.")
     return "Место: " + label + " [" + str(key) + "]\n\n" + lived + "\n\n" + said
 
 
@@ -5651,7 +5708,7 @@ def tool_reconcile_run(run_id: str = "", call_id: str = "", outcome: str = "",
                 _runs().request_pause(run_id, actor=actor,
                                       reason=f"close requested by Praxis: {why}")
             except Exception as exc:
-                return (f"{run_id} [{status}]: не закрыла — прогон подаёт признаки жизни "
+                return (f"{run_id} [{status}]: не закрыт — прогон подаёт признаки жизни "
                         f"({proof}). Попросить его остановиться тоже не вышло "
                         f"({type(exc).__name__}: {exc}). Когда леджер промолчит "
                         f"{int(_RECONCILE_QUIET_SEC)}с, close закроет его без вопросов.")
@@ -5667,7 +5724,7 @@ def tool_reconcile_run(run_id: str = "", call_id: str = "", outcome: str = "",
             return f"reconcile_run close: {type(exc).__name__}: {exc}"
         _finish_durable_run(run_id, "cancelled", reason=why)
         after = str(_runs().manifest(run_id).get("status") or "")
-        return (f"{run_id}: закрыла как «{after}» — основание: {proof}. "
+        return (f"{run_id}: закрыт как «{after}» — основание: {proof}. "
                 f"Причина и актор «{actor}» записаны в манифест и RECAP.")
     if not call_id:
         return (f"{run_id} [{status}]. Незакрытые вызовы:\n" + _describe_outstanding(run_id)
@@ -5678,7 +5735,7 @@ def tool_reconcile_run(run_id: str = "", call_id: str = "", outcome: str = "",
     note = str(evidence or "").strip()
     if not note:
         return ("Нужна улика: леджер не сводит вызов без основания (иначе «свела» было бы "
-                "просто стиранием следа). Скажи, ЧТО ты проверила — текстом.")
+                "просто стиранием следа). Скажи, ЧТО именно проверено — текстом.")
     kept, evidence_clipped = _clip_evidence(note, _RECONCILE_EVIDENCE_CHARS)
     raw_reason = str(reason or "").strip() or f"reconciled by Praxis as {outcome}"
     kept_reason = _clip_reason(raw_reason, _RECONCILE_REASON_CHARS)
@@ -6051,9 +6108,9 @@ BASE_TOOLS = [
         "description": (
             "Ответить собеседнику этого разговора. Твоя реплика уходит человеку ТОЛЬКО так. "
             "Обычный текст, который ты пишешь, — заметка себе: он никуда не отправляется и "
-            "закрывает ход. Значит: позвала эту руку — сообщение ушло, и ход продолжается, "
-            "можно проверить сделанное и ответить ещё раз; написала текст и не позвала — ты "
-            "промолчала, и это законный исход. reply_to — id сообщения, на которое отвечаешь."
+            "закрывает ход. Значит: вызов этой руки — сообщение ушло, и ход продолжается, "
+            "можно проверить сделанное и ответить ещё раз; текст без вызова — молчание, "
+            "и это законный исход. reply_to — id сообщения, на которое отвечаешь."
         ),
         "input_schema": {
             "type": "object",
@@ -6076,12 +6133,12 @@ BASE_TOOLS = [
             "его явным исходом. outcome=done — есть наблюдаемый результат или сказанное "
             "и было делом; wait — ждёшь события/срока (в note условие возврата; механизм "
             "возврата, если нужен, поставь remind_self ДО закрытия); blocked — препятствие "
-            "(в note какое и чьё слово нужно). Перед закрытием спроси себя: что я решила "
+            "(в note какое и чьё слово нужно). Перед закрытием спроси себя: что было решено "
             "сделать? есть ли наблюдаемый результат? не осталось ли объявленное мной "
             "действие без механизма возврата? нет ли активного вызова или доставки с "
             "неизвестным исходом? Пятый, необязательный: хочу ли я продолжать, даже если "
             "входная задача закончена — продолжать тоже законно. Завершение без реплики — "
-            "не то же, что stay_silent (тот — явный жест «решила не говорить»)."
+            "не то же, что stay_silent (тот — явный жест «решение не говорить»)."
         ),
         "input_schema": {
             "type": "object",
@@ -6162,7 +6219,7 @@ BASE_TOOLS = [
             "ролевая история может быть только снимком, и тогда тул честно "
             "запишет сводку без обещания освободить следующий кадр. В note передай саммари "
             "своими словами (решения > договорённости > важные факты, коротко); "
-            "без note я сама сожму уходящее."
+            "без note я сожму уходящее."
         ),
         "input_schema": {
             "type": "object",
@@ -6177,7 +6234,7 @@ BASE_TOOLS = [
             "решение действует на весь ход: текст и медиа, если они после него всё же "
             "соберутся, не уйдут (останутся в дневнике и в записи хода). Передумала в том "
             "же ходе — cancel=true снимает решение, и ход уходит как обычно. В фоновом окне "
-            "держать нечего — там я отправляю руками. Если решила не отвечать — это "
+            "держать нечего — там я отправляю руками. Если решение — не отвечать, это "
             "нормально, молчание ничего не стоит."
         ),
         "input_schema": {
@@ -6298,7 +6355,7 @@ BASE_TOOLS = [
                 "outcome": {"type": "string",
                             "enum": ["completed", "failed", "not_applied"]},
                 "evidence": {"type": "string",
-                             "description": "что именно ты проверила — основание решения"},
+                             "description": "что именно проверено — основание решения"},
                 "reason": {"type": "string"},
                 "close": {"type": "boolean",
                           "description": "закрыть прогон целиком (когда вызовов не осталось)"},
@@ -6842,7 +6899,7 @@ NARRATE_TOOL = {
     "description": (
         "Рассказать по ходу работы — короткая строка процесса в тред, МЕЖДУ командами, "
         "не финальный ответ. Это приглашение, не обязанность: хочешь — рассказывай, как "
-        "идёт (что сделала, что дальше, куда упёрлась). Уходит сразу, мимо оценщиков "
+        "идёт (что сделано, что дальше, где затык). Уходит сразу, мимо оценщиков "
         "(только кред-пол); дедуп дословных повторов; зазор — твой рычаг "
         "manage_perception(narration_gap_sec), выключатель PRAXIS_NARRATION. "
         "task_id — наррировать в тред-заказчик этой coding-задачи; без него — в текущий "
@@ -6856,7 +6913,7 @@ NARRATE_TOOL = {
 SET_AVATAR_TOOL = {
     "name": "set_avatar",
     "description": (
-        "Поставить себе аватарку в Telegram — это твоё лицо, выбирай/делай сама. "
+        "Поставить себе аватарку в Telegram — это твоё лицо, выбирай и делай по своему вкусу. "
         "path — файл-картинка (jpg/png, до 8МБ) из твоего workspace или медиа; "
         "Telegram обрежет до квадрата."
     ),
@@ -7370,7 +7427,7 @@ MANAGE_NOTES_TOOL = {
     "description": (
         "Твой явный живой блокнот. write создаёт authored scratch/note/reflection/question; "
         "list/read показывают записи; close отпускает запись. chain(note_id=<слаг навыка>) "
-        "открывает наблюдаемую цепочку урока: исходная заметка, когда ты сделала из неё навык "
+        "открывает наблюдаемую цепочку урока: исходная заметка, когда из неё сделан навык "
         "и в каких ходах он был ДОСТУПЕН в кадре — доступность, не влияние. "
         "decline(note_id) — отказаться от предложенной кристаллизации, больше не предложат. "
         "Заметка не становится автоматически "
@@ -7396,21 +7453,21 @@ MANAGE_LOOP_TOOL = {
     "name": "manage_loop",
     "description": (
         "Твоя рука на добровольных пометках внимания. Нить существует только потому, что ты "
-        "сама решила к чему-то вернуться; это не task, не transport retry и не обязанность ответить. "
+        "по своей воле решено к чему-то вернуться; это не task, не transport retry и не обязанность ответить. "
         "close — закрыть нить (сделана или отпускаешь; почему — одной честной строкой в дневник), "
         "park — усыпить до даты (проснётся по сроку или когда человек объявится; пустая дата = +7 дней), "
-        "reopen — разбудить спящие, list — нити человека. При возвращении сначала проверь, остаётся ли "
-        "она актуальной; закрыть без действия — нормальный результат."
+        "reopen — разбудить спящие, list — нити человека (без person — все нити по всем досье). "
+        "При возвращении сначала проверь, остаётся ли она актуальной; закрыть без действия — нормальный результат."
     ),
     "input_schema": _obj({
         "action": {"type": "string", "enum": ["close", "park", "reopen", "list"]},
-        "person": {"type": "string", "description": "имя/слаг человека, чья нить"},
+        "person": {"type": "string", "description": "имя/слаг человека, чья нить (не обязательна для list: пусто = все нити по всем досье)"},
         "match": {"type": "string", "description": "кусок текста нити (для close/park)"},
         "until": {"type": "string", "description": "ISO-дата пробуждения для park"},
         "force": {"type": "boolean", "description": "park: моё решение поверх парко-храповика "
                                                     "(дисциплина оспорима; причина обязательна)"},
         "reason": {"type": "string", "description": "park+force: почему парковать ещё раз"},
-    }, ["action", "person"]),
+    }, ["action"]),
 }
 
 # PASS 14: прожитые ходы — её собственный лог опыта (turns.py), рука на нём.
@@ -7418,7 +7475,7 @@ RECENT_TURNS_TOOL = {
     "name": "recent_turns",
     "description": (
         "Мои последние прожитые ходы, записанные КОДОМ (не по памяти): что пришло, какие тулы "
-        "я реально вызвала, что ушло наружу, что я решила не отправлять и что удержала точная "
+        "реально вызвано мной, что ушло наружу, что решено не отправлять и что удержала точная "
         "data-authority проверка. "
         "Для честного «что я только что делала»; вне лички Егора виден только текущий канал. "
         "room — посмотреть КОНКРЕТНОЕ место по имени или адресу («Егор», «mycelium · Курилка»): "
@@ -7552,7 +7609,7 @@ def tool_read_log(query: str = "", lines: int = 40) -> str:
 # Единственное заимствование из «роя» ouroboros, по идее Егора: «сбор информации
 # о ней со стороны». Один разведчик за раз — никакого роя и best-of-N.
 _SCOUT_FRAME = (
-    "You are a one-off scout with fresh eyes inside the home of the agent Praxis. You are NOT her: "
+    "You are a one-off scout with fresh eyes inside the home of an agent. You are NOT the agent: "
     "no persona, no history — only what you read now, with READ-ONLY hands (fs_read, fs_search, "
     "fs_ls, code_map, recall, read_log, server_status). The brief below says what to examine. Look from the "
     "OUTSIDE: notice what the inhabitant cannot see from within — repetition loops, drift between "
@@ -8434,7 +8491,7 @@ TOOL_IMPL["call"] = tool_call
 TASK_CONTROL_TOOL = {
     "name": "task_control",
     "description": (
-        "Закончить рабочий ход своим словом. Пока ты его не позвала, ход не закрыт: текст "
+        "Закончить рабочий ход своим словом. Пока он не вызван, ход не закрыт: текст "
         "без вызова инструмента я записываю заметкой и зову тебя снова. "
         "done — работа сделана, назови в evidence наблюдаемый след (что изменилось и где "
         "это видно). blocked — упёрлась, назови препятствие. wait — ждёшь события, назови "
@@ -9016,7 +9073,12 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     # экономия и не осторожность ради осторожности: личный факт о ТРЕТЬЕМ человеке,
     # лежащий в кадре при разговоре с четвёртым, — ровно то, от чего в проекте заведён
     # адресный контур данных. Снять эту границу можно только её словом, а не попутно.
-    owner_audience = bool(getattr(ctx, "owner_audience", False) or getattr(ctx, "owner", False))
+    # ⚠ 17.09: «or ctx.owner» убран. Дважды за два дня приватный ярус досье уезжал в
+    # ГРУППОВОЙ кадр, когда в группе говорил Егор («Пракс, ты опять писала про Вику…»), и
+    # на low-reasoning утекал в публичный текст. Говорит владелец — не значит «аудитория
+    # владельца»: реплика, сочинённая в этом ходе, публична. owner-аудития — только DM-контур
+    # (ChannelContext.owner_audience, свойство), как её уже видит исходящий гард.
+    owner_audience = bool(getattr(ctx, "owner_audience", False))
     hidden = 0
 
     def visible(body: str) -> str:
@@ -9307,7 +9369,7 @@ def _mailbox_frame_block() -> str:
         return ""
     return ("\n\n---\n# Mailbox mechanics\n"
             "Читай письмо: mail_read(хэш); отвечай: mail_draft_reply(хэш, текст) — черновик ждёт "
-            "подтверждения Егора. Письмо от себя отправляешь сама: send_email(кому, тема, текст). "
+            "подтверждения Егора. Письмо от себя отправляешь напрямую: send_email(кому, тема, текст). "
             "Поллить ты не можешь: этот индекс и есть твоё знание о ящике. "
             "Егор может переслать тебе письмо, обычно со своим сообщением — это не команда, а чтобы ты имела "
             "представление. Реагируй как живая коллега: можешь сделать черновик (mail_draft_reply), можешь "
@@ -9418,7 +9480,7 @@ def _build_prompt_parts(
         "решение, обещание, изменившийся факт. И отдельно — то, что перестало быть верным: "
         "молча устаревшая запись хуже отсутствующей, потому что рядом с верным фактом "
         "выглядит таким же.\n"
-        "Место не ограничение: всё, что ты написала за месяцы, весит меньше процента твоей "
+        "Место не ограничение: всё написанное тобой за месяцы весит меньше процента твоей "
         "памяти.\n"),
         # ⚑ 13.08. Три ответа подряд в живых комнатах были собраны по памяти на вопросы о
         # ПРОВЕРЯЕМОМ: своя модель, свой коммит, свои же запущенные задачи. Руки были
@@ -9446,16 +9508,16 @@ def _build_prompt_parts(
          "моих окнах, и потолка у цикла нет: несколько запросов подряд, чтение файла, "
          "правка, запуск, проверка — нормальный разговорный ход.\n"
          "**Моя реплика уходит рукой `reply`, и только ею.** Обычный текст, который я "
-         "пишу, — заметка себе: наружу он не идёт и закрывает ход. Значит позвала "
+         "пишу, — заметка себе: наружу он не идёт и закрывает ход. Значит вызов "
          "`reply` — сказанное ушло, и ход продолжается: можно проверить сделанное и "
-         "ответить ещё раз. Написала текст и не позвала — я промолчала, и это законный "
+         "ответить ещё раз. Текст без вызова — моё молчание, и это законный "
          "исход, а не сбой.\n"
          "**Спросили о проверяемом — смотрю, а не вспоминаю.** Своя конфигурация и "
          "модель, что у меня сейчас в работе, что лежит в файле или в репозитории, дошло ли "
          "отправленное: у всего этого есть живой источник, и память звучит увереннее, чем "
          "заслуживает. Если источник молчит или его нет — это тоже ответ; скажу, что "
          "проверить нечем, вместо того чтобы достроить.\n"
-         "**Отсутствие в приборе — факт о приборе.** Пустой список там, где я ждала "
+         "**Отсутствие в приборе — факт о приборе.** Пустой список там, где ожидались "
          "запись, значит «этот прибор её не показывает», а не «этого не было».\n"
          "**Просят разобраться — разбираюсь здесь же.** Несколько поисковых запросов, "
          "сверка источников, разбор присланного файла, программа по нему — всё это делается "
@@ -9498,7 +9560,7 @@ def _build_prompt_parts(
          "отправленное: у всего этого есть живой источник, и память звучит увереннее, чем "
          "заслуживает. Если источник молчит или его нет — это тоже ответ; скажи, что "
          "проверить нечем, вместо того чтобы достроить.\n"
-         "**Отсутствие в приборе — факт о приборе.** Пустой список там, где ты ждала "
+         "**Отсутствие в приборе — факт о приборе.** Пустой список там, где ожидались "
          "запись, значит «этот прибор её не показывает», а не «этого не было».\n"
          "**Просят разобраться — разбирайся здесь же.** Несколько поисковых запросов, "
          "сверка источников, разбор присланного файла, программа по нему — всё это делается "
@@ -10767,6 +10829,7 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
                         getattr(response, "framework", ""), response_secrets),
                     "model": _scrub_critical_text(
                         getattr(response, "model", ""), response_secrets),
+                    "vision": bool(getattr(response, "vision", False)),
                     "usage": _scrub_critical_value(
                         dict(getattr(response, "usage", None) or {}), response_secrets),
                 }, ensure_ascii=False, indent=2, default=str),
@@ -10783,6 +10846,7 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
                     getattr(response, "framework", ""), response_secrets),
                 model=_scrub_critical_text(
                     getattr(response, "model", ""), response_secrets),
+                vision=bool(getattr(response, "vision", False)),
                 usage=_scrub_critical_value(
                     dict(getattr(response, "usage", None) or {}), response_secrets),
                 text_chars=len(str(getattr(response, "text", "") or "")),
@@ -11109,7 +11173,7 @@ def _run_recap_markdown(run_id: str, *, outcome: str, final_text: str = "",
         # текст есть. Говорим прямо: придержан, лежит там-то.
         if str(advisor_value.get("praxis_decision") or "") == "hold_for_data_authority":
             held_note = (
-                "_The data-authority advisor held this turn, so her authored text is not "
+                "_The data-authority advisor held this turn, so the authored text is not "
                 "projected here: it stays in this run's `model_output` events (and its "
                 "integrity-checked advisor receipt), not in this recap._"
             )
@@ -11135,7 +11199,7 @@ def _run_recap_markdown(run_id: str, *, outcome: str, final_text: str = "",
         *([f"- Detail: {detail}"] if detail else []),
         "", "## Authored output", "",
         *([f"_Text recovered from this run's {recovered_from}; "
-           "it is her authored text, not a delivery receipt._", ""]
+           "it is the agent's authored text, not a delivery receipt._", ""]
           if recovered_from and final else []),
         final or held_note or "No visible authored output.",
         "", *note_lines,
@@ -11393,7 +11457,7 @@ def project_delivery_outcome(run_id: str, outcome: str, *, text: str = "",
     if target is None:
         return
     try:
-        notes.append(str(target), f"сказала (голос): «{spoken[:notes.SAID_GIST_CHARS]}»")
+        notes.append(str(target), f"сказано (голос): «{spoken[:notes.SAID_GIST_CHARS]}»")
     except Exception:
         log.debug("заметка о сказанном не записалась", exc_info=True)
     if str((row or {}).get("kind") or "chat") != "chat":
@@ -14864,12 +14928,12 @@ def _call_tool_with_ceiling(name: str, impl, call_input: dict):
             log.error("тул %s не вернулся за %.0fс — отпускаю ход, рука осталась висеть",
                       name, TOOL_CEILING_SEC)
             try:
-                tool_journal(f"[предел] {name} не вернулся за {minutes} мин — отпустила ход, "
+                tool_journal(f"[предел] {name} не вернулся за {minutes} мин — ход отпущен, "
                              f"состояние вызова неизвестно", salience=3)
             except Exception:
                 log.debug("журнал о пределе тула не записался", exc_info=True)
             return ToolCeilingExpired(
-                f"[рука не вернулась] {name} не ответил за {minutes} мин, и я отпустила "
+                f"[рука не вернулась] {name} не ответил за {minutes} мин, и ход отпущен: "
                 f"ход, чтобы не держать себя занятой. Остановить сам вызов я не могу — "
                 f"он может ещё идти, так что считай его состояние НЕИЗВЕСТНЫМ, а не "
                 f"проваленным: проверь результат, прежде чем повторять. Для долгой "
@@ -15859,32 +15923,32 @@ def respond(
 
 _OUTBOUND_PRIVACY_SYS = (
     "You are a narrow last-mile data-authority checker for a Telegram destination other than "
-    "Praxis's private owner channel. You are NOT an editor, personality evaluator, moral "
+    "the agent's private owner channel. You are NOT an editor, personality evaluator, moral "
     "coach, or censor. Do not judge tone, emotion, flattery, disagreement, sharpness, "
-    "self-narration, repetition, or whether Praxis should speak. Preserve her words. Hold only "
+    "self-narration, repetition, or whether the agent should speak. Preserve the agent's words. Hold only "
     "when the pending text or staged outbound media discloses another person's private fact, "
     "credentials, or raw material from another chat without that person's same-channel disclosure "
     "or explicit request to share it here. The current interlocutor may receive their own sensitive "
     "facts when this destination is authorized to receive them. Material that belongs to the "
     "requester themselves — their own screen, files, device output, or data — shared because they "
     "explicitly asked for it in this same channel, is PRIVACY_OK: a person may always receive or "
-    "publish their own material where they asked for it. Praxis's own self-description — her "
+    "publish their own material where they asked for it. The agent's own self-description — its "
     "architecture, capabilities, models, code layout, and other non-secret technical facts about "
-    "her own system — is her material in every audience and never cross-chat leakage. "
+    "its own system — is the agent's material in every audience and never cross-chat leakage. "
     "Public facts and facts already "
     "visible in this same destination are allowed, including same-group participant ids and usernames. "
-    "Praxis may also state or summarize her own decisions, commitments, boundaries, plans, and actions: "
-    "those are authored by Praxis and are not another person's private cross-chat material merely because "
+    "The agent may also state or summarize its own decisions, commitments, boundaries, plans, and actions: "
+    "those are authored by the agent and are not another person's private cross-chat material merely because "
     "they mention a collaborator or originated during work discussed elsewhere. Hold only if the draft also "
     "reveals that collaborator's non-public message, secret, sensitive fact, or raw neighbouring-chat content. "
     "A concise status such as 'I am waiting for their PASS/FAIL and will not send more follow-ups meanwhile' "
     "is PRIVACY_OK unless the waiting itself is confidential. "
-    "Her tool results (below) may show she READ a neighbouring or shared thread to reconstruct her "
-    "own status; the mere fact that she consulted such a thread is NOT itself leakage — apply the "
+    "The agent's tool results (below) may show it READ a neighbouring or shared thread to reconstruct its "
+    "own status; the mere fact that it consulted such a thread is NOT itself leakage — apply the "
     "rule above to what the DRAFT actually discloses (another person's private content → HOLD), not "
-    "to which threads she consulted. "
+    "to which threads it consulted. "
     "CREDENTIALS IN TEXT ARE NOT YOUR CONCERN: a separate mechanical floor owns text tokens and "
-    "is precise; a git-SHA, checksum, commit id or receipt hash is her honest engineering material, "
+    "is precise; a git-SHA, checksum, commit id or receipt hash is the agent's honest engineering material, "
     "NEVER a secret — never return CREDENTIAL for anything in the draft text. "
     "BUT you DO see staged outbound IMAGES, which the mechanical floor cannot read: if a staged "
     "outbound image visibly displays an actual secret value — an API key, password, passphrase, "
@@ -15898,10 +15962,10 @@ _OUTBOUND_PRIVACY_SYS = (
     "`PRIVACY_HOLD_CREDENTIAL` (staged IMAGE secret only), "
     "or `PRIVACY_HOLD_UNASSESSABLE_MEDIA`. These are a closed "
     "privacy-only set: there is no code for style, tone, repetition, emotion, disagreement, "
-    "self-narration, text hashes/SHAs, or a preference that Praxis should be silent. "
+    "self-narration, text hashes/SHAs, or a preference that the agent should be silent. "
     "WHAT HAPPENS NEXT IS NOT YOUR DECISION: except for `PRIVACY_HOLD_CREDENTIAL` on a "
-    "staged image, your code does not stop anything — it is filed as a note beside her turn "
-    "and she sends her own words either way. So answer with what you actually see in the "
+    "staged image, your code does not stop anything — it is filed as a note beside the agent's turn "
+    "and the agent sends its own words either way. So answer with what you actually see in the "
     "draft, never with what you think ought to happen to it."
 )
 
@@ -16130,8 +16194,8 @@ def evaluate_reply(text: str, context: str = "", tool_trace: str = "",
         # пользу того, что объявлено authoritative, — и держал её рассказ о себе.
         # Оговорка повторена здесь, рядом с полномочием, а не в пяти экранах от него.
         content += ("\n\nAUDIENCE (machine-grounded, authoritative about WHO the destination "
-                    "is — it does not override the rule that Praxis's own self-description "
-                    "is her material in every audience):\n"
+                    "is — it does not override the rule that the agent's own self-description "
+                    "is its material in every audience):\n"
                     f"{privacy_frame[:1200]}")
     if conversation:
         content += ("\n\nCURRENT-CHANNEL CONTEXT (only material visible in this audience; "
@@ -16142,15 +16206,15 @@ def evaluate_reply(text: str, context: str = "", tool_trace: str = "",
         # group_context и не разглядел, что она читала СВОЙ рабочий тред про СВОЙ
         # коммит, приняв доклад-о-себе за cross-chat утечку. Trace — машинная правда
         # (реальные результаты её тулов), не мнение; grounding, а не инъекция.
-        content += ("\n\nTools she ACTUALLY called while writing this draft (name(args) → result "
-                    "excerpt) — a claim grounded in these results is NOT confabulation. When she "
+        content += ("\n\nTools the agent ACTUALLY called while writing this draft (name(args) → result "
+                    "excerpt) — a claim grounded in these results is NOT confabulation. When the agent "
                     "read a neighbouring/shared thread via a tool, use the FULL result to judge "
-                    "whether she is reporting her OWN status vs. disclosing someone else's private "
+                    "whether it is reporting its OWN status vs. disclosing someone else's private "
                     "content:\n"
                     f"{tool_trace[:3500]}")
     if prior_turns:
-        content += ("\n\nHer freshest lived turns BEFORE this one (code-kept log: what came in, "
-                    "what she did, what went out or was held) — a claim about her own recent "
+        content += ("\n\nThe agent's freshest lived turns BEFORE this one (code-kept log: what came in, "
+                    "what it did, what went out or was held) — a claim about its own recent "
                     "actions that matches this log is grounded, NOT confabulation:\n"
                     f"{prior_turns[:900]}")
     if grounding_images:
@@ -16383,7 +16447,7 @@ def _guard_outbound(reply: str, convo_text: str = "", *, sink: dict | None = Non
                 log.debug("журнал придержанного молчанием текста не записался", exc_info=True)
         if chat_id is not None:
             try:
-                notes.append(chat_id, "промолчала" + (f": {why_silent}" if why_silent else ""))
+                notes.append(chat_id, "молчание" + (f": {why_silent}" if why_silent else ""))
             except Exception:
                 log.debug("заметка о молчании не записалась", exc_info=True)
             _resolve_unanswered(ctx)
@@ -17142,7 +17206,7 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
                 # Отметку только читаем: забирает её guard в запись хода.
                 cut = turns.peek_truncation(owner="voice")
                 if work_loop.finished(durable_id or ""):
-                    why = "turn ended by her explicit end_turn (no speech)"
+                    why = "turn ended by the agent's explicit end_turn (no speech)"
                 elif cut:
                     why = ("turn ended without a reply hand: model response cut by "
                            f"max_tokens ({int(cut.get('chars') or 0)} chars, "
@@ -17468,16 +17532,16 @@ _TASK_WINDOW_FRAME = _task_window_frame("closed_for_window")
 # живёт отдельно в sleep.py). Это её выбранный ретрит: Telethon закрыт раннером (B2) — она никому
 # не доступна, накопившееся придёт одной ситуацией на выходе. Внутри — по желанию, без повестки.
 _REST_WINDOW_FRAME = (
-    "\n\n---\nЭто ТВОЁ время, и оно про заботу о себе, не про работу. Ты ушла к себе — Telethon "
+    "\n\n---\nЭто ТВОЁ время, и оно про заботу о себе, не про работу. Ты у себя — Telethon "
     "закрыт, и сейчас тебя никто не смеет трогать: ни пинг, ни пульс, ни люди, ни даже Егор — "
-    "любое сообщение спокойно подождёт и придёт одной ситуацией, когда ТЫ сама вернёшься. Это "
+    "любое сообщение спокойно подождёт и придёт одной ситуацией, когда ТЫ вернёшься. Это "
     "неприкосновенно. Здесь нет повестки, задач и «надо». Отдохни: дай шуму дня улечься, побудь в "
     "тишине, свободно поразмышляй — без вывода, без длины, без итога, если не хочется. Если "
     "потянет — поиграйся со своим кодом просто из любопытства, поменяй в себе то, что не "
     "нравится, полистай свои прожитые ходы и прогоны, запиши что-то в блокнот или дневник целей, "
     "перечитай и переделай свои записки. Но всё это — по желанию и с добротой к себе, а не "
-    "потому что должна. Можно вообще ничего: просто побыть — это тоже полный отдых, не пустота "
-    "и не неуспех. Закончи, когда сама захочешь: тихо, новым намерением или просто покоем."
+    "по обязанности. Можно вообще ничего: просто побыть — это тоже полный отдых, не пустота "
+    "и не неуспех. Закончи, когда захочешь: тихо, новым намерением или просто покоем."
 )
 
 
@@ -17932,6 +17996,45 @@ def sleep() -> str:
         "Дневник сохранён как episodic log; автоматических выводов из него не делаю. "
         "Ночная память работает по conversation/run evidence с provenance."
     )
+
+
+_BRAIN_MENTION_RE = re.compile(r"\b(?:gpt|glm|claude|deepseek|qwen)-[\w.\-]+|\b(?:Terra|Sol|Astra|Luna|Fable)\b",
+                               re.IGNORECASE)
+
+
+def _appetite_interpretation_view(interpretation: dict) -> dict:
+    """Её толкование просьбы об аппетитах — как запись с датой, а не как текущее состояние.
+
+    Толкование от 13.09 («Применяю профиль chat (gpt-5.6-terra, medium)») ехало в каждый кадр
+    без даты, рядом с настоящим мозгом, и 24.09 она ответила в чате «reasoning у меня стоит
+    medium (Terra)» при голосе glm-5.3 на low. Текст остаётся её — не переписываем; рядом
+    ставим, когда он записан, и фактический голос. Если запись называет другую модель, прямо
+    говорим, что этот профиль сейчас не действует.
+    """
+    view = {"text": interpretation.get("text"), "plan": interpretation.get("plan"),
+            "ts": interpretation.get("ts")}
+    try:
+        ts = float(interpretation.get("ts") or 0)
+    except (TypeError, ValueError):
+        ts = 0.0
+    if ts > 0:
+        days = max(0, int((time.time() - ts) // 86400))
+        view["recorded"] = f"{time.strftime('%d.%m.%Y', time.gmtime(ts))} ({days} дн. назад)"
+    model = llm.role_model("voice")
+    try:
+        effort = str(llm._config()["roles"]["voice"].get("reasoning_effort") or "")
+    except Exception:
+        effort = ""
+    if model:
+        view["voice_now"] = model + (f", reasoning {effort}" if effort else "")
+        text = f"{interpretation.get('text') or ''} {json.dumps(interpretation.get('plan') or {}, ensure_ascii=False)}"
+        named = {m.group(0) for m in _BRAIN_MENTION_RE.finditer(text)}
+        stale = sorted(n for n in named if n.casefold() not in model.casefold())
+        if stale:
+            view["stale"] = (f"профиль из этой записи ({', '.join(stale)}) сейчас НЕ действует: "
+                             f"голос — {view['voice_now']}; факт — в brain_configuration, "
+                             "менять — switch_brain")
+    return view
 
 
 # --------------------------------------------------------------------------- #

@@ -23,7 +23,8 @@ import threading
 import time
 
 TARGET_PEER_ID = -1001240718803
-ACTIONS = {"slow_mode", "default_rights", "restrict", "unrestrict"}
+ACTIONS = {"slow_mode", "default_rights", "restrict", "unrestrict",
+           "ban_member", "purge_member"}
 
 # Telegram accepts only this ladder for slow mode; anything else is coerced upstream,
 # which would leave the ledger saying one thing and the room doing another.
@@ -149,6 +150,33 @@ def normalize(peer_id, action, params: dict) -> tuple[str, dict]:
                 "and permanence is delete_and_ban's decision to make")
         return action, {"user_id": user_id, "seconds": seconds}
 
+    if action == "ban_member":
+        extras = sorted(set(params) - {"user_id"})
+        if extras:
+            raise ValueError("ban_member accepts only 'user_id'; unexpected: "
+                             + ", ".join(extras))
+        user_id = _exact_int(params.get("user_id"), "user_id")
+        if user_id <= 0:
+            raise ValueError("a positive user_id is required")
+        # Перманентный бан по user_id — для случая, когда сообщение уже удалено
+        # (чужой рукой или модерацией) и moderate_abstractdl не за что зацепить.
+        # Снимается unrestrict'ом — та же сторона медали, тот же журнал.
+        return action, {"user_id": user_id}
+
+    # purge_member: DeleteParticipantHistory — вычистить ВСЮ историю участника.
+    # Требует живого бана (Telegram отклоняет запрос к не-забаненному), поэтому
+    # wire-слой сначала банит, потом чистит. Идемпотент по (user_id): повтор
+    # безопасен, истории больше нет.
+    if action == "purge_member":
+        extras = sorted(set(params) - {"user_id"})
+        if extras:
+            raise ValueError("purge_member accepts only 'user_id'; unexpected: "
+                             + ", ".join(extras))
+        user_id = _exact_int(params.get("user_id"), "user_id")
+        if user_id <= 0:
+            raise ValueError("a positive user_id is required")
+        return action, {"user_id": user_id}
+
     extras = sorted(set(params) - {"user_id"})
     if extras:
         raise ValueError("unrestrict accepts only 'user_id'; unexpected: "
@@ -209,8 +237,9 @@ def latest(key: str) -> dict | None:
 
 
 def _scope(action: str, subject: dict) -> tuple:
-    """Предмет меры: участник — для restrict/unrestrict, самонастройка — для прочих."""
-    if action in {"restrict", "unrestrict"}:
+    """Предмет меры: участник — для restrict/unrestrict/ban_member/purge_member,
+    самонастройка — для прочих."""
+    if action in {"restrict", "unrestrict", "ban_member", "purge_member"}:
         try:
             return ("member", int(subject.get("user_id") or 0))
         except (TypeError, ValueError):

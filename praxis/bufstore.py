@@ -132,7 +132,14 @@ def missed_dm_candidates(max_age_hours: float = 48.0, now: float | None = None) 
         if not is_dm:
             continue
         lines = load(cid)
-        if not lines or lines[-1].startswith("Praxis:"):
+        # PASS 23.09: мета пишется синхронно и атомарно (meta_update), файл буфера —
+        # дебаунсом на тике часов. Рестарт внутри окна убивал строку «Praxis: …» до
+        # персиста, и отвеченное ЛС воскресало как «оборванное» после каждого рестарта
+        # (живой случай: шесть ответов на одно входящее 21–23.09). Если мета знает,
+        # что последней говорила Praxis — ЛС не кандидат, что бы ни показывал файл.
+        last_author = str(m.get("last_author", "")).strip().casefold()
+        if (not lines or lines[-1].startswith("Praxis:")
+                or last_author == "praxis"):
             continue
         try:
             last_ts = float(m.get("last_ts") or f.stat().st_mtime)

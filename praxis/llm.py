@@ -1054,11 +1054,15 @@ def _effective_effort(thinking, role_effort) -> str | None:
 # Image capability is an allowlist. Unknown/empty names fail closed: passing pixels
 # merely because a slug is unfamiliar is the dangerous direction. Keep the currently
 # deployed GPT family and established Claude vision families sighted; for GLM retain
-# only the explicitly verified v-family shape and exactly the tested 5.3-flash slug.
+# only the explicitly verified shapes. glm-5.3v is not served by the provider catalog;
+# glm-5.3-flash was verified sighted live (21.09, receipt in run d4cd73c0) and is
+# allowlisted explicitly below — not as a default, but as a validated sighted slug.
 # Keep each accepted family syntactically bounded. Prefix matching is not enough here:
 # `gpt-5-text-only` or `claude-sonnet-text-only` must remain unknown and fail closed.
 # GPT codenames are the sighted relay models actually deployed in this installation;
 # the Claude shapes cover the established dated 3.x and numbered family slugs only.
+# Established sighted families in deployment; cross-leg sighted relays are configured
+# explicitly, e.g. roles.voice.vision_models = {"openai": "gpt-5.6-terra"}.
 _SIGHTED_GPT_RE = re.compile(
     r"(?i)^gpt-(?:4o(?:-mini)?|4\.\d+(?:-(?:mini|nano))?|"
     r"(?:5|6)(?:\.\d+)?-(?:sol|terra|luna|astra))$"
@@ -1070,7 +1074,11 @@ _SIGHTED_CLAUDE_RE = re.compile(
     r")$"
 )
 _SIGHTED_GLM_V_RE = re.compile(r"(?i)^glm-\d+(?:\.\d+)?v(?:$|-flashx?$)")
-_DEFAULT_VISION_MODEL = "glm-5.3-flash"
+# Live-verified 21.09.2026 by direct z.ai /api/anthropic probe (receipt run
+# run-20260921T194915933494Z-d4cd73c0): glm-5.3-flash on this subscription DOES see
+# pixels (200, correct red-square/blue-circle answer) while glm-5.3 and glm-4.5v
+# hallucinate. flashx is NOT covered (1311, outside subscription).
+_SIGHTED_GLM_FLASH_RE = re.compile(r"(?i)^glm-(?:4\.6|5(?:\.\d)?)-flash$")
 
 
 def role_model(role: str = "voice") -> str:
@@ -1085,22 +1093,11 @@ def accepts_images(role: str = "voice", model: str | None = None) -> bool:
     """Whether a model is in a deliberately verified sighted family."""
     name = str(model if model is not None else role_model(role) or "").strip()
     return bool(
-        name == _DEFAULT_VISION_MODEL
-        or _SIGHTED_GLM_V_RE.fullmatch(name)
+        _SIGHTED_GLM_V_RE.fullmatch(name)
+        or _SIGHTED_GLM_FLASH_RE.fullmatch(name)
         or _SIGHTED_GPT_RE.match(name)
         or _SIGHTED_CLAUDE_RE.match(name)
     )
-
-
-def _is_verified_zai_route(framework: str) -> bool:
-    """The narrow default is valid only on the verified z.ai Anthropic account."""
-    if framework != "anthropic":
-        return False
-    try:
-        base = str(_config()["frameworks"][framework].get("base_url") or "").lower()
-    except Exception:
-        return False
-    return base.startswith("https://api.z.ai/")
 
 
 def _catalog_has_model(framework: str, model: str) -> bool:
@@ -1109,12 +1106,39 @@ def _catalog_has_model(framework: str, model: str) -> bool:
     return bool(available) and model in available
 
 
+def _catalog_vision_candidates(framework: str) -> list[str]:
+    """Sighted models actually served by a framework's catalog, most recent first.
+
+    A missing/unavailable catalog returns [] — an unavailable catalog is not
+    authorization (fail-closed, same rule as `_catalog_has_model`).
+    """
+    available = _available_models(framework)
+    if not available:
+        return []
+    sighted = [m for m in available if accepts_images(model=m)]
+    sighted.sort(key=_model_version_key, reverse=True)
+    return sighted
+
+
+def _model_version_key(model: str) -> tuple:
+    """Numeric (major, minor) of a slug for version ordering; unknowns sort lowest."""
+    m = re.match(r"(?i)^[a-z]+-(\d+)(?:\.(\d+))?", str(model or ""))
+    if not m:
+        return (-1, -1)
+    return (int(m.group(1)), int(m.group(2) or 0))
+
+
 def vision_model(role: str = "voice", model: str | None = None,
                  framework: str | None = None) -> str:
     """Validated sighted replacement for one effective framework/account leg.
 
     ``vision_models.<framework>`` is the cross-leg configuration. The legacy
     ``vision_model`` belongs only to the role's configured primary framework.
+    There is NO hardcoded default anymore (glm-5.3-flash is retired as a default):
+    without an explicit configuration the first sighted model of the requested
+    framework's catalog is used (catalog is authority; provider does not list
+    glm-5.3v — that mapping belongs in config, not in code), otherwise the
+    OpenAI leg's catalog, otherwise fail closed with "".
     Catalog absence, a text-only/unknown candidate, or a missing catalog fails closed.
     """
     name = str(model if model is not None else role_model(role) or "").strip()
@@ -1132,12 +1156,16 @@ def vision_model(role: str = "voice", model: str | None = None,
         configured = str(by_framework.get(fw) or "").strip()
     if not configured and fw == primary_fw:
         configured = str(rc.get("vision_model") or "").strip()
-    candidate = configured
-    if not candidate and name == "glm-5.3" and _is_verified_zai_route(fw):
-        candidate = _DEFAULT_VISION_MODEL
-    if not candidate or not accepts_images(model=candidate):
-        return ""
-    return candidate if _catalog_has_model(fw, candidate) else ""
+    if configured:
+        # An explicit choice is binding: no catalog-only substitution under it.
+        if not accepts_images(model=configured):
+            return ""
+        return configured if _catalog_has_model(fw, configured) else ""
+    # No explicit configuration: catalog-driven cross-leg pick, current framework first.
+    for leg in (fw, "openai"):
+        for candidate in _catalog_vision_candidates(leg):
+            return candidate
+    return ""
 
 
 def can_see(role: str = "voice") -> bool:
@@ -1344,6 +1372,17 @@ def _route_image_leg(role: str, framework: str, model: str, messages):
     if accepts_images(model=model):
         return model, _canonicalize_image_blocks(messages), False, False
     replacement = vision_model(role, model, framework)
+    # ⚠ 20.09.2026. Замена должна принадлежать ЭТОЙ ноге. `vision_model` умеет отдать
+    # зрячую модель СОСЕДНЕГО фреймворка — это её контракт, им пользуется кросс-нога
+    # фолбэка, где фреймворк меняется вместе с моделью. Здесь он НЕ меняется: имя
+    # `gpt-6-astra` уезжало на z.ai, та отвечала `400 [1211] Unknown Model`, и весь ход
+    # с картинкой умирал. Три картинки владельца 20.09 (19:31, 20:25, 20:47) погибли
+    # ровно так. Чужую модель снимаем и честно убираем пиксели: пусть скажет, что не
+    # видит, — это лучше, чем немота.
+    if replacement and not _catalog_has_model(framework, replacement):
+        log.warning("llm: %s — зрячая замена %s не из каталога %s; снимаю пиксели",
+                    _ROLE_RU[role], replacement, framework)
+        replacement = ""
     if replacement:
         return replacement, _canonicalize_image_blocks(messages), True, False
     return model, _omit_image_blocks(messages, model), False, True

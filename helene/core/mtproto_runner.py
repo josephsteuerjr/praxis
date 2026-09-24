@@ -15,7 +15,7 @@ room-profile может явно включить engagement=reflective: тог�
 Перед запуском нужен логин: python mtproto_login.py (см. README).
 """
 from __future__ import annotations
-import asyncio, datetime, hashlib, inspect, json, logging, mimetypes, os, re, tempfile, threading, time, types
+import asyncio, concurrent.futures, contextvars, datetime, functools, hashlib, inspect, json, logging, mimetypes, os, re, tempfile, threading, time, types
 from collections import defaultdict, deque
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -56,9 +56,25 @@ import unanswered
 import workshop
 
 try:  # герметичность: любой тест-запуск (unittest/pytest/PRAXIS_TEST) не читает боевой .env
-    from _sandbox import _looks_like_test_run as _under_tests
+    from _sandbox import _looks_like_test_run as _looks_like_test_run_now
 except Exception:
-    _under_tests = lambda: bool(os.environ.get("PRAXIS_TEST"))
+    _looks_like_test_run_now = lambda: bool(os.environ.get("PRAXIS_TEST"))
+# 23.09: вердикт «это тест» снимается ОДИН раз — при импорте раннера. `_looks_like_test_run`
+# смотрит и в `sys.modules`, а живой процесс позже сам подтягивает `unittest`: прогрев
+# whisper → faster_whisper → ctranslate2 → torch → `torch/utils/_config_module.py`
+# делает `import unittest`. С 21.09 19:19 (первый бут после pip install torch) прод
+# считал себя тестом и молча выключил запись жизни (`_buf_push`, `_persist_sent_reply`),
+# архив групп и свёртку буферов: лента ЛС замёрзла, кадр подавал старое сообщение как
+# текущее, а бут пересобирал буферы из замёрзшего слоя — и boot-sweep воскрешал
+# отвеченное. При импорте torch ещё не загружен, поэтому этот снимок и есть правда.
+# Имя `_under_tests` оставлено функцией: стенды подменяют его через patch.object.
+_UNDER_TESTS_AT_IMPORT = bool(_looks_like_test_run_now())
+
+
+def _under_tests() -> bool:
+    return _UNDER_TESTS_AT_IMPORT or bool(os.environ.get("PRAXIS_TEST"))
+
+
 if not _under_tests():
     load_dotenv(override=True)  # .env-тюнинг применяется и на простом рестарте (§9 пакета 2)
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
@@ -4597,6 +4613,103 @@ async def _run_pass(chat_id: str) -> None:
         asyncio.create_task(_maybe_compact(chat_id))  # §6: сворачивание фоном, вне пути ответа
 
 
+def _drop_folded_by_membership(chat_id: str, buf, lines: list, folded_lines: list) -> int:
+    """Срезать из буфера ветки те строки, что вошли в свёртку МЕСТА. Вернуть сколько.
+
+    Смежного совпадения у корня форума не бывает: свёртка охватывает все ветки комнаты,
+    а буфер держит одну. Поэтому совпадение ищем по принадлежности, с учётом кратности:
+    каждая строка свёрнутого блока гасит РОВНО ОДНО своё вхождение в буфере, начиная от
+    головы. Значит свежий повтор того же текста переживает срез, а строка, которой в
+    свёртке нет, не удаляется никогда.
+
+    Зеркальная очередь `_buffer_message_ids` режется теми же индексами. Если её длина
+    разошлась с буфером, не трогаем НИЧЕГО: рассинхронизировать соответствие строк и
+    message_id хуже, чем не срезать.
+    """
+    if not folded_lines:
+        return 0
+    pool: dict = {}
+    for line in folded_lines:
+        pool[line] = pool.get(line, 0) + 1
+    drop: set = set()
+    for i, line in enumerate(lines):
+        left = pool.get(line, 0)
+        if left:
+            pool[line] = left - 1
+            drop.add(i)
+    if not drop:
+        return 0
+    message_ids = _buffer_message_ids.get(chat_id)
+    ids = list(message_ids) if message_ids is not None else None
+    if ids is not None and len(ids) != len(lines):
+        log.warning("compact [%s]: буфер %d строк против %d message_id — срез по "
+                    "принадлежности отменён", chat_id, len(lines), len(ids))
+        return 0
+    buf.clear()
+    buf.extend(line for i, line in enumerate(lines) if i not in drop)
+    if ids is not None:
+        message_ids.clear()
+        message_ids.extend(m for i, m in enumerate(ids) if i not in drop)
+    return len(drop)
+
+
+_REFRESH_LAST_PAID: dict[str, float] = {}
+_REFRESH_COOLDOWN_SEC = float(os.getenv("PRAXIS_REFRESH_COOLDOWN_SEC", "600") or 600)
+# 23.09: долг платится в СВОЁМ однопоточном исполнителе, а не в общем пуле `to_thread`.
+# `claim_evidence_index` обходит тысячи файлов свёрток, а бут зовёт `_maybe_compact` на
+# все 242 буфера: 242 платежа занимали все потоки общего пула, через который идут и
+# `to_thread` обработки входящих. py-spy 23.09 09:35: шесть потоков из восьми стоят в
+# `refresh_debt → claim_evidence_index`, главный цикл свободен и ждёт очереди — «на
+# связи», но глухая. До того же самое съедало 18–20 минут бута до «на связи» (с 921ad192).
+_REFRESH_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="praxis-refresh-debt")
+
+
+async def _in_refresh_executor(fn, *args):
+    """Как `asyncio.to_thread` (с контекстом), но в исполнителе долга, а не в общем пуле."""
+    ctx = contextvars.copy_context()
+    return await asyncio.get_running_loop().run_in_executor(
+        _REFRESH_EXECUTOR, functools.partial(ctx.run, fn, *args))
+
+
+async def _maybe_pay_refresh_debt(place: str) -> None:
+    """Погасить одну группу долга обновления. Не чаще раза в `PRAXIS_REFRESH_COOLDOWN_SEC`.
+
+    Протокол погашения (`refresh_debt` / `refresh_compacts`) написан целиком и покрыт
+    тестами, но в проде его не звал НИКТО: замер 21.09 нашёл `refresh_debt` только в
+    `test_coverage_vs_current.py`. Свёртка, чьё сообщение потом правили, годна как
+    покрытие и не годна для показа, поэтому фронтир комнаты Ouroboros стоял с 08.09, а
+    долг копился месяцами. Плательщик обязан быть внутри жизни, а не в руках того, кто
+    однажды вспомнит про ручной дренаж.
+
+    Одна группа за проход и потолок по времени — чтобы это никогда не превращалось в
+    вызов модели в минуту: именно так выглядели все три мельницы этой ночи.
+    """
+    if _REFRESH_COOLDOWN_SEC <= 0:
+        return
+    now = time.time()
+    if now - _REFRESH_LAST_PAID.get(place, 0.0) < _REFRESH_COOLDOWN_SEC:
+        return
+    _REFRESH_LAST_PAID[place] = now
+    try:
+        debt = await _in_refresh_executor(memory_life.refresh_debt, place)
+    except Exception:
+        log.warning("refresh [%s]: долг не посчитался", place, exc_info=True)
+        return
+    groups = int(debt.get("unresolved_group_count") or 0)
+    if not groups:
+        return
+    log.info("refresh [%s]: групп с долгом %d, гашу одну", place, groups)
+    try:
+        out = await _in_refresh_executor(memory_life.refresh_compacts, place)
+    except Exception:
+        log.warning("refresh [%s]: погашение упало", place, exc_info=True)
+        return
+    log.info("refresh [%s]: %s, целей %s/%s, групп осталось %s", place,
+             out.get("reason"), out.get("refreshed_count"), out.get("target_count"),
+             out.get("room_unresolved_group_count"))
+
+
 async def _maybe_compact(chat_id: str) -> None:
     """PASS 19: fold only an episode-aware, provenance-backed hot prefix.
 
@@ -4640,9 +4753,27 @@ async def _maybe_compact(chat_id: str) -> None:
             # то, чего в буфере нет, нельзя — можно снести непредставленное сообщение.
             # Штатная причина расхождения одна: свёртка охватила несколько веток одной
             # комнаты, а этот буфер — только одна из них.
-            level = log.info if place != str(chat_id) else log.error
-            level("compact [%s]: свёртки места %s нет в локальном буфере — не режем",
-                  chat_id, place)
+            #
+            # ⚠ 21.09.2026. Раньше здесь был отказ, и для КОРНЯ форума он был вечным.
+            # Свёртка считается по МЕСТУ (все ветки комнаты), а режется буфер ОДНОЙ
+            # ветки — смежным куском блок в нём не лежит НИКОГДА. С 13.09 это 202 отказа
+            # подряд, корневой буфер Ouroboros AI дорос до 279 КБ и ехал в кадр каждый
+            # ход. Режем по ПРИНАДЛЕЖНОСТИ вместо смежности: выкидываем ровно те строки
+            # этого буфера, что входят в свёрнутый блок, по одной на каждое вхождение,
+            # считая от головы. Страх прежнего комментария снят по построению — строка,
+            # которой нет в `folded_lines`, не удаляется ни при каком раскладе, а счёт
+            # вхождений не даёт съесть свежий повтор того же текста.
+            dropped = _drop_folded_by_membership(chat_id, buf, lines, folded_lines)
+            if not dropped:
+                level = log.info if place != str(chat_id) else log.error
+                level("compact [%s]: свёртки места %s нет в локальном буфере — не режем",
+                      chat_id, place)
+                return
+            _buf_dirty.add(chat_id)
+            log.info("compact [%s]: %d событий → %s; из этой ветки срезано по "
+                     "принадлежности %d; hot=%s; причина=%s",
+                     place, fold, result.get("compact_id"), dropped, result.get("hot"),
+                     (result.get("plan") or {}).get("reason"))
             return
         for _ in range(min(cut, len(buf))):
             buf.popleft()
@@ -4657,6 +4788,10 @@ async def _maybe_compact(chat_id: str) -> None:
         log.exception("compact-триггер упал [%s]", chat_id)
     finally:
         _compacting.discard(place)
+        # Долг обновления платится ЗДЕСЬ: в проде плательщика не было вообще.
+        # В `finally`, а не после него, потому что у свёртки полдюжины ранних
+        # возвратов, и долг не должен зависеть от того, каким из них вышли.
+        await _maybe_pay_refresh_debt(place)
 
 
 _PULSE_RETRY_AT = 0.0  # эпоха, когда отложенное пульсовое окно просится обратно; 0 — не просится
@@ -7144,7 +7279,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
         if _floor:
             log.warning("прямая send_file придержана кред-полом [%s]: %s",
                         peer_id, _floor)
-            return (f"Не отправила: во вложении «{media_core.delivery_basename(path)}» "
+            return (f"Не отправлено: во вложении «{media_core.delivery_basename(path)}» "
                     f"механический кред-пол увидел похожее на секрет ({_floor}). "
                     f"Креды не уходят наружу — это единственный твёрдый предел. "
                     f"Если это ложное срабатывание на инженерном материале — очисти "
@@ -7783,17 +7918,29 @@ def _apply_desk_interrupt(request: dict) -> dict:
     manager = agent._runs()
     rows = manager.list_runs(statuses=tuple(agent.run_manager.NONTERMINAL_STATUSES))
     cancelled: list[str] = []
+    waiting: list[str] = []
     skipped: list[str] = []
     for row in rows:
         rid = str(row.get("run_id") or row.get("id") or "")
         if not rid or (scope != "all" and rid != scope):
             continue
         try:
-            manager.request_cancel(rid, actor=f"desk:{by}", reason=reason)
-            cancelled.append(rid)
+            manifest = manager.request_cancel(rid, actor=f"desk:{by}", reason=reason)
+            # ⚠ 21.09.2026. Здесь любой вызов без исключения шёл в «отменено», и Пульт
+            # рапортовал бодрое число. Но `request_cancel` при незакрытом вызове руки
+            # НАМЕРЕННО не терминализует ход: он пишет просьбу и ставит `paused`,
+            # возвращая манифест. То есть в счёт попадали и ходы, которые просто встали
+            # на паузу с висящим намерением, — а владелец читал это как «остановлено».
+            # Считаем раздельно: остановлено сейчас и ждёт незакрытых вызовов.
+            status = str((manifest or {}).get("status") or "")
+            if status == "cancelled":
+                cancelled.append(rid)
+            else:
+                waiting.append(f"{rid}: {status or 'unknown'}")
         except Exception as exc:
             skipped.append(f"{rid}: {type(exc).__name__}")
-    return {"cancelled": cancelled, "skipped": skipped, "scope": scope, "by": by}
+    return {"cancelled": cancelled, "waiting": waiting, "skipped": skipped,
+            "scope": scope, "by": by}
 
 
 async def _desk_interrupt_once() -> None:
@@ -7809,13 +7956,18 @@ async def _desk_interrupt_once() -> None:
     except Exception:
         log.warning("прерывание с Пульта не исполнилось", exc_info=True)
         return
-    log.warning("прерывание с Пульта (%s, scope=%s): отменено %d, пропущено %s",
+    log.warning("прерывание с Пульта (%s, scope=%s): остановлено %d, ждут незакрытых "
+                "вызовов %d %s, пропущено %s",
                 result["by"], result["scope"], len(result["cancelled"]),
+                len(result.get("waiting") or []), result.get("waiting") or "",
                 result["skipped"] or "0")
     try:
+        waiting = len(result.get("waiting") or [])
         agent.tool_journal(
             f"[прервано] живой ход остановлен с Пульта ({result['by']}): прогонов "
-            f"{len(result['cancelled'])}", salience=2)
+            f"{len(result['cancelled'])}"
+            + (f"; ещё {waiting} встали на паузу с незакрытым вызовом" if waiting else ""),
+            salience=2)
     except Exception:
         log.debug("журнал о прерывании не записался", exc_info=True)
 

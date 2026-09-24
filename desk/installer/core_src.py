@@ -46,6 +46,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -113,6 +114,21 @@ MIRROR_ONLY = {
 MIRROR_ONLY_DIRS = ("relay/",)
 
 
+#: Мусор её прода, который она коммитит сама («self-edit: rep13.txt», логи счётов графов,
+#: pid-файлы): это следы работы, а не код, и в зеркало (публикацию) им нельзя — 19.09 их
+#: не брали руками, 25.09 правило записано, чтобы `--export-core` не тащил их молча.
+JUNK_SUFFIXES = (".log", ".tmp", ".pid", ".err", ".out")
+_JUNK_TOP_RE = re.compile(r"^(rep\d*[_a-z0-9]*\.txt|gap_.*|formula_.*|mr_ifub.*|hs_ifub.*)$")
+
+
+def _junk(rel: str) -> bool:
+    parts = rel.split("/")
+    name = parts[-1]
+    if name.endswith(JUNK_SUFFIXES):
+        return True
+    return len(parts) == 1 and bool(_JUNK_TOP_RE.match(name))
+
+
 def _skip(rel: str) -> bool:
     parts = rel.split("/")
     if any(p in SKIP_DIRS for p in parts):
@@ -121,6 +137,8 @@ def _skip(rel: str) -> bool:
     if name in SKIP_NAMES:
         return True
     if name.endswith(SKIP_SUFFIXES) or name.startswith(SKIP_PREFIXES):
+        return True
+    if _junk(rel):
         return True
     # `agent.py.pre-что-то-1784583545` — снимок дерева перед правкой, не файл кода.
     return ".pre-" in name

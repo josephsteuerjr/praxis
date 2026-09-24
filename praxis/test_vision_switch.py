@@ -24,13 +24,13 @@ class VisionRoutingTests(Base):
 
     @staticmethod
     def _catalog(framework):
-        return (["glm-5.3", "glm-5.2", "glm-5.3-flash", "glm-4.6v"]
+        return (["glm-5.3", "glm-5.2", "glm-4.6v", "glm-5.3v"]
                 if framework == "anthropic" else
                 ["gpt-primary", "gpt-fallback", "gpt-5.6-sol", "gpt-5.6-terra"])
 
     def test_image_routes_glm_and_persists_actual_markers(self):
         self._write_cfg(voice={"framework": "anthropic", "model": "glm-5.3",
-                               "vision_model": "glm-5.3-flash", "reasoning_effort": "high"})
+                               "vision_model": "glm-4.6v", "reasoning_effort": "high"})
         seen = {}
         trace, usage = self.tmp / "llm_calls.jsonl", self.tmp / "usage.json"
         def call(fw, model, **kwargs):
@@ -41,20 +41,20 @@ class VisionRoutingTests(Base):
              mock.patch.object(llm, "_CALL_TRACE", trace), \
              mock.patch.object(llm, "USAGE_PATH", usage):
             response = llm.chat("voice", messages=IMAGE_MESSAGES)
-        self.assertEqual((response.model, response.vision), ("glm-5.3-flash", True))
-        self.assertEqual((seen["fw"], seen["model"]), ("anthropic", "glm-5.3-flash"))
+        self.assertEqual((response.model, response.vision), ("glm-4.6v", True))
+        self.assertEqual((seen["fw"], seen["model"]), ("anthropic", "glm-4.6v"))
         self.assertEqual(seen["kwargs"]["reasoning_effort"], "high")
         row = json.loads(trace.read_text().splitlines()[-1])
-        self.assertEqual((row["model"], row["vision"]), ("glm-5.3-flash", 1))
+        self.assertEqual((row["model"], row["vision"]), ("glm-4.6v", 1))
         day = next(iter(json.loads(usage.read_text()).values()))["voice"]
         self.assertEqual((day["last"]["model"], day["last"]["vision"]),
-                         ("glm-5.3-flash", True))
-        self.assertEqual(day["models"]["glm-5.3-flash"]["vision"], 1)
+                         ("glm-4.6v", True))
+        self.assertEqual(day["models"]["glm-4.6v"]["vision"], 1)
 
     def test_text_call_and_current_gpt_path_unchanged(self):
         for model, framework in (("glm-5.3", "anthropic"), ("gpt-5.6-sol", "openai")):
             self._write_cfg(voice={"framework": framework, "model": model,
-                                   "vision_model": "glm-5.3-flash"})
+                                   "vision_model": "glm-4.6v"})
             seen = {}
             def call(fw, sent, **kw):
                 seen["model"] = sent
@@ -67,7 +67,7 @@ class VisionRoutingTests(Base):
 
     def test_capability_policy_conservative_with_verified_families(self):
         for name in ("gpt-5.6-sol", "gpt-4o", "claude-3-7-sonnet", "claude-sonnet-4",
-                     "glm-4.6v", "glm-4.6v-flash", "glm-5.3-flash"):
+                     "glm-4.6v", "glm-4.6v-flash", "glm-5.3v"):
             self.assertTrue(llm.accepts_images(model=name), name)
         for name in ("", "mystery", "glm-5.3", "glm-999-flash", "glm-6-flash-madeup",
                      "glm-4.6v-madeup", "gpt-5-text-only",
@@ -75,7 +75,7 @@ class VisionRoutingTests(Base):
             self.assertFalse(llm.accepts_images(model=name), name)
 
     def test_missing_catalog_or_text_only_replacement_fails_closed(self):
-        for replacement, catalog in (("definitely-absent", ["glm-5.3", "glm-5.3-flash"]),
+        for replacement, catalog in (("definitely-absent", ["glm-5.3", "glm-4.6v"]),
                                      ("glm-5.2", ["glm-5.3", "glm-5.2"])):
             self._write_cfg(voice={"framework": "anthropic", "model": "glm-5.3",
                                    "vision_model": replacement})
@@ -92,16 +92,31 @@ class VisionRoutingTests(Base):
             self.assertIn("NO pixels", response.text)
             self.assertFalse(response.vision)
 
-    def test_default_only_verified_zai_anthropic_route(self):
+    def test_no_hardcodedFlash_default_and_catalog_driven_pick(self):
+        # glm-4.6v is retired: no hardcoded default may exist or mention it.
+        self.assertFalse(hasattr(llm, "_DEFAULT_VISION_MODEL"))
+        self.assertNotIn("glm-4.6v", Path(llm.__file__).read_text(encoding="utf-8"))
+        # No explicit vision config: catalog decides, cross-framework (openai) leg allowed.
         self._write_cfg(voice={"framework": "anthropic", "model": "glm-5.3"})
-        with mock.patch.object(llm, "_available_models", side_effect=self._catalog):
-            self.assertEqual(llm.vision_model("voice", "glm-5.3", "anthropic"), "glm-5.3-flash")
-            self.assertEqual(llm.vision_model("voice", "glm-5.3", "openai"), "")
-        cfg = llm._config()
-        cfg["frameworks"]["anthropic"]["base_url"] = "https://unknown.example/anthropic"
-        llm.save_config(cfg)
-        llm._CACHE.update(mtime=None, cfg=None)
-        with mock.patch.object(llm, "_available_models", side_effect=self._catalog):
+        with mock.patch.object(llm, "_available_models",
+                               side_effect=lambda fw: {"anthropic": ["glm-5.3"],
+                                                       "openai": ["gpt-5.6-sol", "gpt-5.6-terra"]}.get(fw, [])):
+            self.assertEqual(llm.vision_model("voice", "glm-5.3", "anthropic"),
+                             "gpt-5.6-sol")
+            # Non-z.ai base_url no longer matters: the catalog is the authority now.
+            self.assertEqual(llm.vision_model("voice", "glm-5.3", "openai"),
+                             "gpt-5.6-sol")
+        # Same-framework sighted catalog entry wins over the cross-leg.
+        with mock.patch.object(llm, "_available_models",
+                               side_effect=lambda fw: {"anthropic": ["glm-5.3", "glm-4.6v"],
+                                                       "openai": ["gpt-5.6-sol"]}.get(fw, [])):
+            self.assertEqual(llm.vision_model("voice", "glm-5.3", "anthropic"), "glm-4.6v")
+        # Catalog with no sighted model on either leg fails closed (no flash fallback).
+        with mock.patch.object(llm, "_available_models",
+                               return_value=["glm-5.3", "glm-5.2"]):
+            self.assertEqual(llm.vision_model("voice", "glm-5.3", "anthropic"), "")
+        # Missing catalog is not authorization.
+        with mock.patch.object(llm, "_available_models", return_value=[]):
             self.assertEqual(llm.vision_model("voice", "glm-5.3", "anthropic"), "")
 
     def test_cross_framework_does_not_reuse_primary_vision_slug(self):
@@ -132,16 +147,16 @@ class VisionRoutingTests(Base):
         cfg["frameworks"]["openai"]["api_key"] = "o"
         cfg["roles"]["voice"].update(framework="openai", model="gpt-primary",
                                       fallback_framework="anthropic", fallback_model="glm-5.3",
-                                      vision_models={"anthropic": "glm-5.3-flash"})
+                                      vision_models={"anthropic": "glm-5.3v"})
         llm.save_config(cfg)
         llm.use_test_client(object(), "openai")
         llm.use_test_client(object(), "anthropic")
         with mock.patch.object(llm, "_available_models", side_effect=self._catalog), \
              mock.patch.object(llm, "_call_retrying_empty", side_effect=RateLimitError("429")), \
-             mock.patch.object(llm, "_call", return_value=self._response("glm-5.3-flash")) as call, \
+             mock.patch.object(llm, "_call", return_value=self._response("glm-5.3v")) as call, \
              mock.patch.object(llm, "_journal"):
             response = llm.chat("voice", messages=IMAGE_MESSAGES)
-        self.assertEqual(call.call_args.args[:2], ("anthropic", "glm-5.3-flash"))
+        self.assertEqual(call.call_args.args[:2], ("anthropic", "glm-5.3v"))
         self.assertTrue(response.vision)
 
     def test_sighted_fallback_keeps_original_pixels_after_primary_omission(self):
@@ -168,7 +183,7 @@ class VisionRoutingTests(Base):
         cfg["frameworks"]["anthropic"]["api_key"] = "a"
         cfg["roles"]["voice"].update(framework="anthropic", model="glm-5.3",
                                       fallback_framework="anthropic", fallback_model="glm-5.2",
-                                      vision_model="glm-5.3-flash")
+                                      vision_model="glm-4.6v")
         llm.save_config(cfg)
         llm.use_test_client(object(), "anthropic")
         with mock.patch.object(llm, "_available_models", side_effect=self._catalog), \
@@ -240,7 +255,7 @@ class PixelGateTests(unittest.TestCase):
         stored, events = [], []
         manager = SimpleNamespace(store_result=lambda *a, **kw: stored.append((a, kw)))
         response = llm.LLMResponse(text="ok", blocks=[], stop_reason="end_turn", usage={"in": 1},
-                                   framework="anthropic", model="glm-5.3-flash", vision=True)
+                                   framework="anthropic", model="glm-4.6v", vision=True)
         current = SimpleNamespace(run_id="run-vision")
         with mock.patch.object(agent.run_context, "current_run", return_value=current), \
              mock.patch.object(agent, "_runs", return_value=manager), \
@@ -251,9 +266,34 @@ class PixelGateTests(unittest.TestCase):
             agent._model_call("system", [{"role": "user", "content": "x"}], None)
         payload = json.loads(next(a[1] for a, kw in stored if kw["name"] == "model-output"))
         completed = next(kw for kind, kw in events if kind == "model_completed")
-        self.assertEqual((payload["model"], payload["vision"]), ("glm-5.3-flash", True))
-        self.assertEqual((completed["model"], completed["vision"]), ("glm-5.3-flash", True))
+        self.assertEqual((payload["model"], payload["vision"]), ("glm-4.6v", True))
+        self.assertEqual((completed["model"], completed["vision"]), ("glm-4.6v", True))
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SightedFlashAllowlistTests(Base):
+    """21.09: glm-5.3-flash verified sighted live on z.ai /api/anthropic."""
+
+    def test_glm_flash_is_sighted(self):
+        self.assertTrue(llm.accepts_images(model="glm-5.3-flash"))
+
+    def test_glm_flashx_stays_blind(self):
+        self.assertFalse(llm.accepts_images(model="glm-5.3-flashx"))
+
+    def test_catalog_pick_prefers_flash_over_v_family(self):
+        # catalog without v-slugs: flash must be picked from the catalog itself
+        with mock.patch.object(llm, "_available_models",
+                               return_value=["glm-5.3", "glm-5.3-flash"]):
+            self.assertEqual(llm.vision_model("voice", "glm-5.3", "anthropic"),
+                             "glm-5.3-flash")
+
+    def test_flash_replacement_does_not_leave_leg(self):
+        with mock.patch.object(llm, "_available_models",
+                               return_value=["glm-5.3", "glm-5.3-flash"]):
+            with mock.patch.object(llm, "_catalog_has_model",
+                                   side_effect=lambda fw, m: m == "glm-5.3-flash"):
+                self.assertEqual(llm.vision_model("voice", "glm-5.3", "anthropic"),
+                                 "glm-5.3-flash")

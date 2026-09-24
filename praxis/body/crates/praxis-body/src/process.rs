@@ -14,9 +14,6 @@ use serde_json::{Value, json};
 
 use crate::{fsops, identity};
 
-/// Оболочка. Имена в JSON — snake_case: дерево шлёт `power_shell` всегда
-/// (`helene/core/agent.py`, `tool_computer` → `process_start(shell="power_shell")`),
-/// и на macOS это принимается и исполняется zsh — см. `shell_plan`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShellKind {
@@ -24,63 +21,6 @@ pub enum ShellKind {
     PowerShell,
     Cmd,
     Wsl,
-    /// POSIX-оболочки (порт на macOS, 19.09): `/bin/sh -c`, `/bin/zsh -lc`, `/bin/bash -lc`.
-    /// На Windows их нет — отказ словами, а не поиск git-bash по диску.
-    Sh,
-    Zsh,
-    Bash,
-}
-
-/// Что на ЭТОЙ платформе будет исполнять просьбу с такой оболочкой. Считается до захвата
-/// каталога операции, чтобы невозможная просьба не оставила после себя «стартующую»
-/// операцию, и едет в квитанцию `process.start` полем `shell_used` (+ `note`, если тело
-/// подменило просьбу: PowerShell на macOS — это zsh, и молчать об этом нельзя).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ShellPlan {
-    pub used: &'static str,
-    pub note: Option<&'static str>,
-}
-
-pub fn shell_plan(shell: ShellKind) -> Result<ShellPlan> {
-    let plain = |used| Ok(ShellPlan { used, note: None });
-    match shell {
-        ShellKind::Direct => plain("direct"),
-        ShellKind::PowerShell if cfg!(target_os = "macos") => Ok(ShellPlan {
-            used: "zsh",
-            note: Some(
-                "PowerShell requested; macOS ran the command with /bin/zsh -lc (login shell, \
-                 UTF-8): PowerShell syntax (cmdlets, $env:, Get-*) will not work here",
-            ),
-        }),
-        ShellKind::PowerShell => plain("powershell"),
-        ShellKind::Cmd if cfg!(target_os = "macos") => {
-            anyhow::bail!("shell cmd is not available on macOS: use zsh, sh, bash or direct")
-        }
-        ShellKind::Cmd => plain("cmd"),
-        ShellKind::Wsl if cfg!(target_os = "macos") => {
-            anyhow::bail!("shell wsl is not available on macOS: use zsh, sh, bash or direct")
-        }
-        ShellKind::Wsl => plain("wsl"),
-        ShellKind::Sh | ShellKind::Zsh | ShellKind::Bash if cfg!(windows) => anyhow::bail!(
-            "shell {} is not available on Windows: use power_shell, cmd or wsl",
-            shell_name(shell)
-        ),
-        ShellKind::Sh => plain("sh"),
-        ShellKind::Zsh => plain("zsh"),
-        ShellKind::Bash => plain("bash"),
-    }
-}
-
-fn shell_name(shell: ShellKind) -> &'static str {
-    match shell {
-        ShellKind::Direct => "direct",
-        ShellKind::PowerShell => "power_shell",
-        ShellKind::Cmd => "cmd",
-        ShellKind::Wsl => "wsl",
-        ShellKind::Sh => "sh",
-        ShellKind::Zsh => "zsh",
-        ShellKind::Bash => "bash",
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,10 +121,6 @@ pub fn start(state_dir: &Path, operation_id: &str, args: ProcessStartArgs) -> Re
     if matches!(args.terminal, TerminalMode::ConPty) {
         anyhow::bail!("ConPTY is reserved by the v1 contract but not enabled in this build");
     }
-    // Оболочка, которой на этой платформе нет (cmd/wsl на macOS, sh/zsh/bash на Windows),
-    // отклоняется ЗДЕСЬ, до захвата каталога операции: иначе отказ случился бы в супервизоре
-    // и снаружи выглядел бы как «стартовала и упала», а не как «так нельзя».
-    let shell = shell_plan(args.shell)?;
     // Resolve the supervisor binary before claiming the operation id. A failure here must not
     // leave behind a directory that later callers would mistake for an in-flight operation.
     let executable = std::env::current_exe().context("locate praxis-body executable")?;
@@ -245,22 +181,13 @@ pub fn start(state_dir: &Path, operation_id: &str, args: ProcessStartArgs) -> Re
         &dir.join("launcher.json"),
         &json!({"supervisor_pid": supervisor.id(), "launched_at": Utc::now()}),
     )?;
-    let mut receipt = json!({
+    Ok(json!({
         "ok": true,
         "operation_id": operation_id,
         "status": OperationStatus::Starting,
         "supervisor_pid": supervisor.id(),
         "operation_dir": dir,
-    });
-    // Windows-квитанция остаётся прежней; на macOS/Linux в ней названа оболочка, которая
-    // исполняет просьбу на самом деле, и заметка, если тело её подменило.
-    if !cfg!(windows) {
-        receipt["shell_used"] = Value::String(shell.used.into());
-        if let Some(note) = shell.note {
-            receipt["note"] = Value::String(note.into());
-        }
-    }
-    Ok(receipt)
+    }))
 }
 
 fn replay_existing_start(
@@ -393,14 +320,6 @@ fn supervise_inner(state_dir: &Path, operation_id: &str) -> Result<()> {
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW.0);
     }
-    #[cfg(unix)]
-    {
-        // Ребёнок — в своей группе процессов: отмена и таймаут бьют `killpg` по всей
-        // группе (`zsh -lc "a | b"` — это несколько процессов), а не по одному zsh,
-        // после которого сироты жили бы дальше. Замена job-объекту Windows.
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
     let mut child = command.spawn().context("spawn supervised process")?;
     state.child_pid = Some(child.id());
     write_json(&dir.join("state.json"), &state)?;
@@ -461,44 +380,6 @@ fn build_command(dir: &Path, args: &ProcessStartArgs) -> Result<Command> {
             command.args(&args.args);
             Ok(command)
         }
-        // macOS: PowerShell-просьба дерева исполняется zsh (см. `shell_plan`). Скрипт
-        // уходит аргументом `-lc`, без BOM и без PowerShell-преамбулы UTF-8: zsh их не
-        // поймёт, а кодировка вывода здесь и так UTF-8 — `LANG` подставляется, если под
-        // launchd его нет вовсе (иначе `ls` с русскими именами печатает знаки вопроса).
-        // `-l` — login shell: PATH из ~/.zprofile (Homebrew и прочее), как в Терминале.
-        ShellKind::PowerShell if cfg!(target_os = "macos") => {
-            let script = args
-                .command
-                .as_deref()
-                .context("PowerShell (run as zsh on macOS) requires command")?;
-            Ok(posix_shell("/bin/zsh", "-lc", script))
-        }
-        ShellKind::Sh => {
-            let script = args.command.as_deref().context("sh requires command")?;
-            if cfg!(windows) {
-                anyhow::bail!("shell sh is not available on Windows");
-            }
-            Ok(posix_shell("/bin/sh", "-c", script))
-        }
-        ShellKind::Zsh => {
-            let script = args.command.as_deref().context("zsh requires command")?;
-            if cfg!(windows) {
-                anyhow::bail!("shell zsh is not available on Windows");
-            }
-            Ok(posix_shell("/bin/zsh", "-lc", script))
-        }
-        ShellKind::Bash => {
-            let script = args.command.as_deref().context("bash requires command")?;
-            if cfg!(windows) {
-                anyhow::bail!("shell bash is not available on Windows");
-            }
-            Ok(posix_shell("/bin/bash", "-lc", script))
-        }
-        ShellKind::Cmd | ShellKind::Wsl if cfg!(target_os = "macos") => {
-            // Сюда не доходит: `start()` отказал раньше. Оставлено на случай, если запрос
-            // положили в каталог операции мимо `start()`.
-            anyhow::bail!("shell {} is not available on macOS", shell_name(args.shell))
-        }
         ShellKind::PowerShell => {
             let script = args
                 .command
@@ -534,18 +415,6 @@ fn build_command(dir: &Path, args: &ProcessStartArgs) -> Result<Command> {
             Ok(command)
         }
     }
-}
-
-/// POSIX-оболочка со скриптом аргументом. `LANG` — только если его нет в окружении
-/// (под launchd так и есть): выбор пользователя не перебивается, а без него вывод
-/// с не-ASCII именами и текстом идёт не в UTF-8.
-fn posix_shell(shell: &str, flag: &str, script: &str) -> Command {
-    let mut command = Command::new(shell);
-    command.args([flag, script]);
-    if std::env::var_os("LANG").is_none() && std::env::var_os("LC_ALL").is_none() {
-        command.env("LANG", "en_US.UTF-8");
-    }
-    command
 }
 
 /// Порог, после которого «стартует, но ребёнка так и нет» перестаёт быть стартом.
@@ -798,23 +667,10 @@ impl JobGuard {
         Ok(Self { pid: child.id() })
     }
 
-    /// Ребёнок посажен в свою группу (`process_group(0)` при спавне), поэтому сигнал
-    /// идёт всей группе — и конвейеру `a | b`, и тому, что оболочка породила.
-    /// TERM, полсекунды на уборку, потом KILL без права на отказ: сразу за нами стоит
-    /// `child.wait()`, и процесс, который игнорирует TERM, держал бы супервизор вечно —
-    /// «отменяется» без конца. Job-объект Windows тоже убивает, а не просит.
     fn terminate(&self, _exit_code: i32) -> Result<()> {
-        let group = self.pid as libc::pid_t;
-        if group <= 0 {
-            anyhow::bail!("supervised child has no pid to terminate");
-        }
-        unsafe {
-            libc::killpg(group, libc::SIGTERM);
-        }
-        thread::sleep(Duration::from_millis(500));
-        unsafe {
-            libc::killpg(group, libc::SIGKILL);
-        }
+        let _ = Command::new("kill")
+            .args(["-TERM", &self.pid.to_string()])
+            .status();
         Ok(())
     }
 }
@@ -824,70 +680,6 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
-    /// Дерево шлёт `shell: "power_shell"` всегда — имя обязано разбираться, и на macOS
-    /// оно обязано означать zsh с заметкой, а не отказ и не тихую подмену.
-    #[test]
-    fn power_shell_is_the_wire_name_and_maps_to_zsh_on_macos() {
-        assert_eq!(
-            serde_json::from_str::<ShellKind>("\"power_shell\"").unwrap(),
-            ShellKind::PowerShell
-        );
-        for (wire, kind) in [
-            ("\"sh\"", ShellKind::Sh),
-            ("\"zsh\"", ShellKind::Zsh),
-            ("\"bash\"", ShellKind::Bash),
-            ("\"direct\"", ShellKind::Direct),
-        ] {
-            assert_eq!(serde_json::from_str::<ShellKind>(wire).unwrap(), kind);
-        }
-        let plan = shell_plan(ShellKind::PowerShell).unwrap();
-        if cfg!(target_os = "macos") {
-            assert_eq!(plan.used, "zsh");
-            assert!(plan.note.unwrap().contains("macOS ran"), "{plan:?}");
-            assert!(shell_plan(ShellKind::Cmd).unwrap_err().to_string().contains("macOS"));
-            assert!(shell_plan(ShellKind::Wsl).unwrap_err().to_string().contains("macOS"));
-            assert_eq!(shell_plan(ShellKind::Zsh).unwrap().used, "zsh");
-        } else {
-            assert_eq!(plan.used, "powershell");
-            assert!(plan.note.is_none());
-        }
-        if cfg!(windows) {
-            assert!(shell_plan(ShellKind::Zsh).unwrap_err().to_string().contains("Windows"));
-        }
-    }
-
-    /// macOS: zsh получает скрипт как есть — без BOM, без PowerShell-преамбулы, и
-    /// с UTF-8 в окружении, если `LANG` не задан.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn on_macos_power_shell_runs_zsh_without_bom_or_preamble() {
-        let root = std::env::temp_dir().join(format!("praxis-process-zsh-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).unwrap();
-        let args = ProcessStartArgs {
-            program: None,
-            args: Vec::new(),
-            command: Some("echo 'Привет'".into()),
-            shell: ShellKind::PowerShell,
-            terminal: TerminalMode::Pipes,
-            cwd: None,
-            env: BTreeMap::new(),
-            timeout_s: 0,
-            name: None,
-        };
-        let mut command = build_command(&root, &args).unwrap();
-        assert_eq!(command.get_program(), "/bin/zsh");
-        let argv: Vec<String> = command
-            .get_args()
-            .map(|value| value.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(argv, vec!["-lc".to_string(), "echo 'Привет'".to_string()]);
-        assert!(!root.join("command.ps1").exists(), "PowerShell-файл на macOS не пишется");
-        let output = command.output().expect("zsh есть на любом macOS");
-        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "Привет");
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[cfg(not(target_os = "macos"))]
     #[test]
     fn powershell_script_forces_utf8_process_logs() {
         let root = std::env::temp_dir().join(format!("praxis-process-{}", Uuid::new_v4()));

@@ -314,5 +314,19 @@ class TestLoopsState(Base):
         self.assertIn('"fact":"loops","open":0,"parked":0', agent.build_state_block())
 
 
+class TestListWithoutPerson(Base):
+    """24.09: manage_loop(list) без person раньше падал TypeError (обязательный
+    аргумент), оставляя in_doubt-ран; теперь — все нити по всем досье."""
+
+    def test_list_without_person_returns_all(self):
+        people.add_open_loop("vasya", "Вася", "нить о маршруте")
+        out = agent.tool_manage_loop("list")
+        self.assertIn("нить о маршруте", out)
+
+    def test_list_without_person_no_crash_empty(self):
+        out = agent.tool_manage_loop("list")
+        self.assertIsInstance(out, str)
+
+
 if __name__ == "__main__":
     unittest.main()

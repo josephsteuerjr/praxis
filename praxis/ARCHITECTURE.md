@@ -285,7 +285,16 @@ Praxis сама выбирает количество адресатов, дей
 Forge — единственная инженерная state machine. Он фиксирует repository root/base, orientation,
 точные edits, detached processes, worker DAG, verification, checkpoint/finish и lessons. Selfdev-
 проверки и immune review классифицируют риск и оставляют evidence/rollback, но не блокируют решение
-Praxis; сознательное продолжение после красного результата требует durable `override_reason`.
+Praxis; `override_reason` сохраняет её объяснение, но не является разрешением на merge.
+Очередь immune сохраняет SHA при неуспешном чтении автора или диффа Git: отсутствие
+предмета не является успешным ревью пустого изменения. Внутренний selfdev-review читает
+полный дифф, тогда как карточка сохраняет свой предел отображения. Рецензия принимает
+не более `MAX_DIFF` строк и `MAX_DIFF_CHARS=24000` символов; превышение даёт явный `warn`
+до вызова оценщика, без ревью одного префикса (`test_review_integrity.py`).
+Worker `stalled` — завершённая неполная попытка: DAG освобождает слот и блокирует
+зависимые узлы, не воскрешая её при refresh/reload. Расписка v1 сохраняет `failed`
+с точной причиной `forge_status=stalled`; приглашение не называет это падением процесса
+(`test_swarm_terminal.py`).
 Задача на Windows (`scope=windows`) остаётся той же Forge-задачей: `body_client.py` лишь вызывает
 body и возвращает receipts/artifacts. С PASS 30 Этапа 3 этот прокси **deprecated**: первичный путь
 кодинга на Windows — прямые глаголы `computer.*` (read/hash/write/replace файлов, run/poll/stop,

@@ -56,7 +56,7 @@ _HASH_RE = re.compile(r"^[0-9a-f]{6,40}$")
 
 _EXPLAIN_SYS = (
     "You are the introspection assistant of the device panel of Praxis — a living Telegram agent "
-    "whose soul lives in markdown and whose memory is files. Explain the given source file to her "
+    "whose soul lives in markdown and whose memory is files. Explain the given source file to the agent "
     "owner: technical and meticulous, but not a programmer. Answer in Russian. Say what this piece "
     "is FOR in the living agent, how it works in essence, which knobs/invariants matter, and what "
     "to be careful with. Give a compact explanation grounded in the selected files. If something looks "
@@ -64,7 +64,7 @@ _EXPLAIN_SYS = (
 )
 _ASK_SYS = (
     "You are the introspection assistant of the device panel of Praxis — a living Telegram agent. "
-    "The owner (technical, meticulous, not a programmer) is looking at a specific node of her "
+    "The owner (technical, meticulous, not a programmer) is looking at a specific node of the agent's "
     "device and asks a question. Answer in Russian: honest, concrete, brief. Ground yourself in "
     "the provided source; if the answer is not derivable from it, say so and name what to check. "
     "Never invent behavior."
@@ -976,13 +976,13 @@ def room_set(chat_id: str, action: str) -> dict:
             return {"ok": True, "mode": cur}
         mode = _rooms.set_mode(cid, nxt, reason="Егор опустил", set_by="owner")
         _journal_panel(f"Егор опустил режим комнаты {cid}: {cur} → {mode} "
-                       f"(снимаю сама — режимом «обычно»)")
+                       f"(снимется режимом «обычно»)")
         return {"ok": True, "mode": mode}
     if action == "freeze":
         cur = _rooms.effective_mode(cid)
         mode = _rooms.set_mode(cid, "frozen", reason="Егор заморозил", set_by="owner")
         if mode != cur:
-            _journal_panel(f"Егор заморозил комнату {cid} (было {cur}; снимаю сама)")
+            _journal_panel(f"Егор заморозил комнату {cid} (было {cur}; снимется само)")
         return {"ok": True, "mode": mode}
     if action == "disclosure":
         nv = "open" if _rooms.disclosure_of(cid) != "open" else "standard"
@@ -992,8 +992,8 @@ def room_set(chat_id: str, action: str) -> dict:
         _journal_panel(
             f"Егор переключил раскрытие комнаты {cid}: disclosure {nv}"
             + (" — здесь к моей визитке идёт проверяемая фактура о себе; возвращаю в "
-               "standard сама" if nv == "open"
-               else " — фактура из моей визитки здесь убрана; открыть могу сама"))
+               "standard автоматически" if nv == "open"
+               else " — фактура из моей визитки здесь убрана; открыть могу тем же рычагом"))
         return {"ok": True, "disclosure": nv, "set_by": "owner", "note": note}
     return {"error": f"нет действия {action}"}
 

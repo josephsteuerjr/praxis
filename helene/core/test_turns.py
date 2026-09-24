@@ -362,9 +362,9 @@ class TestTurnsCore(TurnsBase):
         self.assertIn("своих, без собеседника 1", line)
         # Ход без адресата больше не идёт в «сказала»: суточная сводка уходит в
         # дневник, и раньше она ежедневно завышала сказанное её внутренним текстом.
-        self.assertIn("сказала наружу 3", line)
-        self.assertIn("записала себе 1", line)
-        self.assertIn("промолчала сама 1", line)
+        self.assertIn("сказано наружу 3", line)
+        self.assertIn("записано себе 1", line)
+        self.assertIn("молчание по своему решению 1", line)
         self.assertIn("удержано по data-authority 1", line)
         self.assertIn("legacy-правок 1", line)
         self.assertIn("тул-вызовов 1", line)
@@ -387,7 +387,7 @@ class TestTurnsCore(TurnsBase):
             }, ensure_ascii=False) + "\n")
         turns._reset()
         line = turns.day_line()
-        self.assertIn("сказала наружу 2", line, "легаси-строка считается сказанной")
+        self.assertIn("сказано наружу 2", line, "легаси-строка считается сказанной")
         self.assertIn("не дошло 2", line, "исход назван, а не спрятан")
 
     def test_describe_is_scope_honest(self):
@@ -404,7 +404,7 @@ class TestTurnsCore(TurnsBase):
 
     def test_format_line_outcomes(self):
         cases = {
-            "voice": "промолчала сама",
+            "voice": "молчание по своему решению",
             "evaluator": "оценщик придержал",
             "anti-repeat": "анти-повтор",
             "drift": "заморожена дрейфом",
@@ -420,14 +420,14 @@ class TestTurnsCore(TurnsBase):
         t = turns.begin(gist_in="Егор: ?")
         t.update(out="ответ", rewrote=True, why="лесть")
         line = turns.format_line(t)
-        self.assertIn("написала (доставка не подтверждена)", line)
+        self.assertIn("написано (доставка не подтверждена)", line)
         self.assertIn("правлено оценщиком: лесть", line)
 
         t["delivery"] = "accepted"
-        self.assertIn("сказала", turns.format_line(t))
-        for outcome, marker in (("superseded", "перебила себя"),
+        self.assertIn("сказано", turns.format_line(t))
+        for outcome, marker in (("superseded", "ход перебит"),
                                 ("failed", "доставка не удалась"),
-                                ("partial", "сказала частично"),
+                                ("partial", "сказано частично"),
                                 ("blocked", "застряла")):
             t["delivery"] = outcome
             self.assertIn(marker, turns.format_line(t), outcome)
@@ -435,7 +435,7 @@ class TestTurnsCore(TurnsBase):
         # Легаси-строки (поля нет вовсе) читаются по-старому: прошлое не переписываем.
         legacy = {"ts": t["ts"], "kind": "chat", "chat_id": "777", "scope": "owner",
                   "in": "Егор: ?", "out": "ответ"}
-        self.assertIn("сказала", turns.format_line(legacy))
+        self.assertIn("сказано", turns.format_line(legacy))
 
     def test_turn_without_an_addressee_is_not_recorded_as_spoken(self):
         """Её журнал не имеет права утверждать, что она сказала то, чего никто не слышал.
@@ -449,9 +449,9 @@ class TestTurnsCore(TurnsBase):
             t = turns.begin(kind=kind, gist_in="субагент закончил")
             t["out"] = "Приняла работу как свою"
             line = turns.format_line(t)
-            self.assertIn("записала себе", line, kind)
+            self.assertIn("записано себе", line, kind)
             self.assertIn("Приняла работу как свою", line, kind)
-            self.assertNotIn("сказала", line, kind)
+            self.assertNotIn("сказано", line, kind)
 
     def test_old_rows_are_healed_on_read_not_left_in_the_old_lie(self):
         """Вывод идёт по чтению, поэтому месяцы уже записанных строк перестают врать
@@ -460,7 +460,7 @@ class TestTurnsCore(TurnsBase):
         legacy = {"ts": time.time(), "kind": "forge_event", "chat_id": None,
                   "scope": "owner", "out": "старая запись себе", "held": "",
                   "tools": [], "in": "", "who": "", "title": ""}
-        self.assertIn("записала себе", turns.format_line(legacy))
+        self.assertIn("записано себе", turns.format_line(legacy))
 
     def test_it_does_not_claim_silence_when_a_tool_actually_sent(self):
         """Обратная ложь: её forge-фрейм прямо предлагает narrate, и 11 из 19 таких
@@ -470,7 +470,7 @@ class TestTurnsCore(TurnsBase):
         t["out"] = "Приняла работу как свою"
         t["tools"] = ["narrate(task_id=hcode-1, text=…) → Отправила → AbstractDL Chat"]
         line = turns.format_line(t)
-        self.assertIn("что ушло — см. «делала»", line)
+        self.assertIn("что ушло — см. «действия»", line)
         self.assertNotIn("отправок в следе нет", line)
 
     def test_a_wake_without_text_is_not_counted_as_a_note_to_self(self):
@@ -482,8 +482,8 @@ class TestTurnsCore(TurnsBase):
             self._mk(kind="forge_event", chat_id=None, out="")
         self._mk(kind="forge_event", chat_id=None, out="одна настоящая запись")
         line = turns.day_line()
-        self.assertIn("записала себе 1", line)
-        self.assertIn("сказала наружу 0", line)
+        self.assertIn("записано себе 1", line)
+        self.assertIn("сказано наружу 0", line)
 
     def test_no_contour_claims_a_connection_it_did_not_check(self):
         """Связь ЧИТАЕТСЯ ИЗ ЗАПИСИ, снятой в момент хода, а не утверждается по виду.
@@ -712,7 +712,7 @@ class TestConsumers(TurnsBase):
                          for p in (self.tmp / "memory" / "journal").glob("*.md"))
         self.assertIn("прожитый день, кодом", text)
         self.assertIn("ходов 2", text)
-        self.assertIn("промолчала сама 1", text)
+        self.assertIn("молчание по своему решению 1", text)
 
 
 if __name__ == "__main__":

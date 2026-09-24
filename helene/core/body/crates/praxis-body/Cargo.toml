@@ -1,0 +1,55 @@
+[package]
+name = "praxis-body"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Brainless Windows execution body for the server-side Praxis agent"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+http.workspace = true
+mime_guess.workspace = true
+png.workspace = true
+praxis-body-protocol = { path = "../praxis-protocol" }
+reqwest.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# Win32_System_Com и Win32_UI_Accessibility нужны ровно одному файлу — src/uia.rs, где
+# живёт чтение окна текстом. Ветки набора возможностей `windows` складываются, поэтому
+# общий список в корневом Cargo.toml трогать не пришлось: COM входит в тело здесь и
+# только здесь, и это видно прямо в манифесте зависимостей крейта.
+# Win32_UI_HiDpi — одна строка в src/dpi.rs: объявить себя осведомлённым о масштабе
+# на каждый монитор. Без этого система отвечает телу выдуманными координатами (см. там).
+windows = { workspace = true, features = ["Win32_System_Com", "Win32_UI_Accessibility", "Win32_UI_HiDpi"] }
+
+[target.'cfg(not(windows))'.dependencies]
+libc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Порт тела на macOS (19.09): снимок экрана, окна, мышь и клавиатура — CoreGraphics;
+# словари окон и строки — CoreFoundation. Дерево окна (Accessibility) — свои
+# extern "C" к ApplicationServices в src/ax.rs, без отдельного крейта.
+core-foundation = "0.10"
+# `highsierra` — только ради `CGEvent::new_scroll_event` (колесо в desktop.input.perform):
+# в крейте оно спрятано за этим флагом, других отличий флаг не включает.
+core-graphics = { version = "0.25", features = ["highsierra"] }
+# Трейт `ForeignTypeRef` — чтобы взять сырой указатель `CGImage` для двух функций
+# CoreGraphics, которых в крейте нет (`CGImageGetBitmapInfo`, `CGImageGetAlphaInfo`):
+# без них формат байтов снимка пришлось бы угадывать.
+foreign-types = "0.5"

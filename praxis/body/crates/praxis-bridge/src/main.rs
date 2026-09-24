@@ -133,41 +133,8 @@ impl AppState {
     }
 }
 
-/// Умер родитель — уходим. На Windows мост живёт в job-объекте движка Hélène и умирает
-/// вместе с ним; на macOS/Linux такого нет, и осиротевший мост продолжал бы слушать порт
-/// после выхода программы. Осиротевший процесс переезжает под init/launchd (ppid
-/// становится 1) — это и есть сигнал. Родителя нет уже сейчас (нас подняли напрямую) —
-/// сторож не ставится. Копия `mac::watch_parent` из тела: в бридже нет `mac.rs`,
-/// тащить его сюда ради одной функции незачем.
-#[cfg(unix)]
-fn watch_parent(name: &'static str) {
-    let parent = unsafe { libc::getppid() };
-    if parent <= 1 {
-        return;
-    }
-    let spawned = std::thread::Builder::new()
-        .name(format!("{name}-parent-watch"))
-        .spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_secs(1));
-                let now = unsafe { libc::getppid() };
-                if now != parent {
-                    warn!(
-                        "{name}: родитель {parent} исчез (теперь ppid {now}) — завершаюсь вместе с ним"
-                    );
-                    std::process::exit(0);
-                }
-            }
-        });
-    if let Err(error) = spawned {
-        warn!("{name}: сторож родителя не поднялся: {error}");
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
-    #[cfg(unix)]
-    watch_parent("praxis-bridge");
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

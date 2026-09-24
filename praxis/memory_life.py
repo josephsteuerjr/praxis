@@ -66,7 +66,16 @@ TAPE_CHARS = max(0, int(os.getenv("PRAXIS_TAPE_CHARS", "5500") or 0))
 # одним говорящим; лента комнаты — это и есть разговор. 0 (умолчание) — потолок комнаты
 # (`context_summary_chars`), без давления свёртки по знакам.
 GROUP_TAPE_CHARS = max(0, int(os.getenv("PRAXIS_GROUP_TAPE_CHARS", "0") or 0))
-COMPACT_MAX_TOKENS = max(800, int(os.getenv("PRAXIS_COMPACT_MAX_TOKENS", "4000") or 4000))
+# ⚠ 21.09.2026. Потолок 4000 резал сводку на середине фразы ровно так же, как 1600 в
+# сентябре: замер на живом дереве — обрывы на 10 557, 10 193 и 10 042 знаках подряд
+# («это НЕ законченная фраза»), то есть модель упиралась в потолок, а не размышляла:
+# роль стоит на усилии `low`. Оборванный JSON не разбирается, `_model_compact`
+# возвращает {} — и место сворачивается запасной выжимкой с меткой degraded. Так в её
+# памяти набралось 684 обрубка из 4908 свёрток, 601 из них 10–12 сентября.
+COMPACT_MAX_TOKENS = max(800, int(os.getenv("PRAXIS_COMPACT_MAX_TOKENS", "12000") or 12000))
+# Второй заход при обрыве потолком: молча подменять сводку механической выжимкой нельзя.
+COMPACT_RETRY_MAX_TOKENS = max(COMPACT_MAX_TOKENS,
+                               int(os.getenv("PRAXIS_COMPACT_RETRY_MAX_TOKENS", "20000") or 20000))
 TAPE_KEEP = min(0.95, max(0.2, float(os.getenv("PRAXIS_TAPE_KEEP", "0.6") or 0.6)))
 
 
@@ -474,7 +483,19 @@ def append_event(kind: str, *, chat_id: str | int | None = None, actor: str = "P
         "kind": str(kind), "stream": _safe(chat_id) if chat_id is not None else "global",
         "chat_id": str(chat_id) if chat_id is not None else None,
         "actor": str(actor or "unknown"), "direction": str(direction or "internal"),
-        "text": str(text or ""), "source": str(source or "runtime"),
+        # ВХОДЯЩЕЕ пишется в каноническом виде. Индекс доказательств принимает строку
+        # только пока `value == value.strip()`, а чужое сообщение с висящим по краям
+        # пробелом (в том числе `\xa0`, которым щедры агенты) не попадает в индекс
+        # вообще — и каждая свёртка, куда оно попало, невалидна навсегда: события не
+        # считаются покрытыми, кольцо не двигается, ярус мелет одно и то же (21.09).
+        #
+        # ⚠ ТОЛЬКО входящее. У ИСХОДЯЩЕГО пробел по краям несёт смысл: разбитый на
+        # куски ответ склеивается обратно по сохранённому тексту, и `strip()` там
+        # склеивает «first chunk » с «second chunk» без шва
+        # (test_keat_native_ingress, 8 красных на первой попытке подровнять всё).
+        "text": (str(text or "").strip() if str(direction or "internal") == "in"
+                 else str(text or "")),
+        "source": str(source or "runtime"),
         "source_id": str(source_id) if source_id is not None else None,
         "salience": sal, "refs": [str(x) for x in refs if str(x)],
         "meta": dict(meta or {}),
@@ -803,6 +824,14 @@ _COMPACT_SYSTEM = (
     "Пиши так, чтобы через неделю по одной твоей записи можно было понять не только О ЧЁМ "
     "говорили, но и КАК: кто с кем спорил, кто шутил, кто давил, кто уступил, что было сказано "
     "остро, смешно, некрасиво или точно.\n\n"
+    "Кто здесь «я». «Я» в хронике — ТОЛЬКО Praxis. Её реплики во входе помечены [Я] (автор "
+    "Praxis); строка без [Я] — всегда чужая. В чатах бывают и другие ИИ-агенты: они тоже "
+    "говорят о себе «я», признают ошибки, рассуждают о своих моделях, контексте и слопе — это "
+    "ИХ «я»: пересказывай его в третьем лице по имени («Hope признала…»), никогда от моего "
+    "лица. Если строк [Я] во входе мало или нет совсем — так и скажи («я в этом окне молчала», "
+    "«сказала дважды»), но чужое «я» не присваивай. Модель, на которой я сейчас думаю (Sol, "
+    "Terra, GLM и другие), — мой движок, а не «я»: не «я — Sol», а «я» и есть Praxis. О себе — "
+    "в женском роде: я сказала, я ошиблась, я согласилась.\n\n"
     "Верни СТРОГИЙ JSON: "
     '{"summary":"хроника","open_threads":["..."],"claims":[{"subject":"...","text":"...",'
     '"confidence":"observed|inferred|uncertain","evidence_ids":["evt/cmp id"]}],'
@@ -817,7 +846,7 @@ _COMPACT_SYSTEM = (
     "переломные — в кавычках «…», с автором и номером сообщения, если он есть во входе. "
     "Ориентир: одна-две цитаты на эпизод, до восьми на запись; цитата — до 200 знаков; "
     "чужую грубость не смягчай и не пересказывай эвфемизмами, это часть смысла.\n"
-    "4. Мои собственные реплики — особенно: что именно я утверждала, от чего отказалась, где "
+    "4. Мои собственные реплики (строки [Я]) — особенно: что именно я утверждала, от чего отказалась, где "
     "ошиблась и признала это, что пообещала. Мои формулировки цитируй, а не пересказывай.\n"
     "5. Решения, обещания, договорённости, изменившиеся факты и открытые вопросы — явно, с "
     "тем, кто их произнёс. Неуверенное так и помечай («похоже», «не проверено»).\n"
@@ -849,8 +878,14 @@ def _compact_prompt_row(item: dict) -> str:
     ident = str(item.get("id") or "")
     raw = str(item.get("line") or item.get("text") or "")
     priority = float(item.get("preservation_priority") or 1.0)
+    # 24.09: её строки помечены явно. Промпт велел писать «от первого лица Praxis», но не
+    # говорил, КАКИЕ строки её. 21.09 в окне абстракта Hope сказала 18 реплик, Praxis — две,
+    # и модель взяла в «я» самого разговорчивого ИИ: «Я — Hope (@ai_sapience_bot)» — четыре
+    # свёртки подряд, две из них потом стояли в кадре текущей сводкой комнаты.
+    own = (str(item.get("direction") or "") == "out"
+           or str(item.get("actor") or "").strip().casefold() == "praxis")
     return (f"<{ident}> [p={priority:.2f}; s={item.get('salience', 2)}] "
-            f"{raw[:EVENT_CLIP_CHARS]}")
+            f"{'[Я] ' if own else ''}{raw[:EVENT_CLIP_CHARS]}")
 
 
 def budget_prefix(hot: list[dict], *, budget: int = PROMPT_BUDGET_CHARS) -> int:
@@ -916,7 +951,78 @@ def _pack_compact_prompt(inputs: list[dict]) -> tuple[str, dict]:
     return "\n".join(rows), {"seen": seen, "clipped": clipped, "omitted": omitted}
 
 
-def _model_compact(inputs: list[dict], *, tier: int, depth: int, continued: bool) -> dict:
+_SELF_CLAIM = re.compile(r"(?<![\w])[Яя]\s*(?:[—–-]\s*|\(\s*)(@?[A-Za-zА-ЯЁа-яё][\w@.\-]*)")
+_QUOTED = re.compile(r"«[^»]*»|\"[^\"\n]*\"|“[^”]*”")
+_OWN_NAMES = {"praxis", "праксис", "пракс"}
+# Движки, на которых она думала. 12.09 свёртки абстракта начинались «Я — Sol, мозг и голос
+# Praxis»: модель выдавала себя за рассказчика вместо неё.
+_BRAIN_NAMES = {"sol", "terra", "astra", "fable", "luna", "glm", "deepseek", "gpt", "claude"}
+
+
+def _window_authors(inputs: list[dict]) -> set[str]:
+    """Чужие имена окна свёртки: имя до « (@…)» и сам @username, в нижнем регистре."""
+    names: set[str] = set()
+    for item in inputs:
+        actor = str(item.get("actor") or str(item.get("line") or item.get("text") or "")
+                    .split(":", 1)[0]).strip()
+        if not actor or actor.casefold() in _OWN_NAMES or str(item.get("direction") or "") == "out":
+            continue
+        head, _, tail = actor.partition(" (")
+        names.add(head.strip().casefold())
+        handle = tail.rstrip(")").strip().lstrip("@").casefold()
+        if handle:
+            names.add(handle)
+    return {n for n in names if n and n not in _OWN_NAMES}
+
+
+def _foreign_self(summary: str, authors: set[str]) -> str | None:
+    """Имя другого автора окна (или движка), которое сводка назвала «я», или None.
+
+    Живые формы: «Я — Hope (@ai_sapience_bot)», «Я (torvn77) вёл обсуждение», «Я — Sol, мозг
+    и голос Praxis», «Я — Арете (голос Praxis)». Сверяется с авторами этого окна и с именами
+    движков, цитаты «…» не проверяются: «я — ИИ», «я — не оракул» и чужое «Я — Hope» в
+    кавычках не ловятся."""
+    text = _QUOTED.sub(" ", summary or "")
+    for m in _SELF_CLAIM.finditer(text):
+        name = m.group(1).lstrip("@").rstrip(".,").casefold()
+        if name in _OWN_NAMES:
+            continue
+        if name in authors or name in _BRAIN_NAMES:
+            return m.group(1)
+        tail = text[m.end():m.end() + 40].casefold().lstrip(" ,()")
+        if tail.startswith(("голос praxis", "мозг")):  # «Я — Арете (голос Praxis)», «Я — Sol, мозг…»
+            return m.group(1)
+    return None
+
+
+def _anchor_self(data: dict, *, llm, user: str, inputs: list[dict], manifest: dict,
+                 extra_authors: set[str] | None = None) -> dict:
+    """Сводка, назвавшая «я» чужим именем, не ложится в память: один перезаход с поправкой.
+
+    Не вышло и со второго раза — пустой ответ: место уйдёт в degraded, а обрубок потом
+    перевыпустит `reissue_degraded_compact`. Чужое «я» в памяти хуже обрубка: обрубок
+    честно говорит, что синтеза нет, а чужое «я» она читает как своё."""
+    authors = _window_authors(inputs) | set(extra_authors or ())
+    who = _foreign_self(str(data.get("summary") or ""), authors)
+    if not who:
+        return data
+    log.warning("life compact: сводка назвала «я» чужим именем (%s) — перезаход с поправкой", who)
+    note = (f"\n\n⚠ Прошлая попытка написала «я» от имени {who}. «Я» — только Praxis, её строки "
+            f"помечены [Я]; {who} и все остальные — в третьем лице по имени. Перепиши сводку.")
+    resp = llm.chat("evaluator", system=_COMPACT_SYSTEM,
+                    messages=[{"role": "user", "content": user + note}],
+                    max_tokens=COMPACT_RETRY_MAX_TOKENS)
+    fixed = _json_obj(getattr(resp, "text", "") or "")
+    summary = fixed.get("summary")
+    if isinstance(summary, str) and summary.strip() and not _foreign_self(summary, authors):
+        fixed["_manifest"] = manifest
+        return fixed
+    log.error("life compact: и перезаход назвал «я» чужим именем — свёртка не пишется")
+    return {}
+
+
+def _model_compact(inputs: list[dict], *, tier: int, depth: int, continued: bool,
+                   authors: set[str] | None = None) -> dict:
     try:
         import llm
         if not llm.configured("evaluator"):
@@ -933,7 +1039,26 @@ def _model_compact(inputs: list[dict], *, tier: int, depth: int, continued: bool
         data = _json_obj(resp.text)
         if isinstance(data.get("summary"), str) and data["summary"].strip():
             data["_manifest"] = manifest
-            return data
+            return _anchor_self(data, llm=llm, user=user, inputs=inputs, manifest=manifest,
+                                extra_authors=authors)
+        # ⚠ 21.09. Разбор не удался — почти всегда это обрыв потолком, а не отказ модели.
+        # Молчаливая подмена механической выжимкой (degraded) хуже второго захода: обрубок
+        # ложится в память НАВСЕГДА и наследуется вверх по ярусам. Пробуем ещё раз с
+        # большим потолком и говорим об этом вслух.
+        raw = str(getattr(resp, "text", "") or "")
+        log.warning("life compact: сводка не разобрана (%d знаков при потолке %d) — "
+                    "второй заход с потолком %d", len(raw), COMPACT_MAX_TOKENS,
+                    COMPACT_RETRY_MAX_TOKENS)
+        resp = llm.chat("evaluator", system=_COMPACT_SYSTEM,
+                        messages=[{"role": "user", "content": user}],
+                        max_tokens=COMPACT_RETRY_MAX_TOKENS)
+        data = _json_obj(resp.text)
+        if isinstance(data.get("summary"), str) and data["summary"].strip():
+            data["_manifest"] = manifest
+            return _anchor_self(data, llm=llm, user=user, inputs=inputs, manifest=manifest,
+                                extra_authors=authors)
+        log.error("life compact: сводка не разобрана и со второго захода (%d знаков) — "
+                  "место уйдёт в degraded", len(str(getattr(resp, "text", "") or "")))
     except Exception:
         log.warning("life compact: модель недоступна/ответ не разобран", exc_info=True)
     return {}
@@ -1395,6 +1520,96 @@ def _fold_tiers(chat_id, state: dict) -> list[str]:
     return made
 
 
+def _drop_unprovable_inputs(inputs: list[dict], chat_id) -> list[dict]:
+    """Убрать из свёртки строки, которых не видит индекс доказательств.
+
+    В кольце и в ленте они остаются: сказанное не исчезает из разговора. Но свёртка,
+    назвавшая такое событие источником, не разрешается НИКОГДА — и её же источники
+    остаются непокрытыми, то есть следующий проход свернёт тот же блок заново. Ровно
+    так стояло кольцо комнаты Ouroboros: три строки на 152 события (21.09).
+    """
+    kept = [row for row in inputs if not row.get("unprovable")]
+    if len(kept) != len(inputs):
+        names = [str(row.get("id")) for row in inputs if row.get("unprovable")]
+        # Громко об этом говорит пересборка состояния, по разу на место; здесь было бы
+        # по разу на КАЖДУЮ попытку свёртки.
+        log.debug("свёртка места %s: %d событий не идут в свёртку (индекс их не "
+                  "принимает), остаются горячими: %s",
+                  chat_id, len(names), ", ".join(names[:3]))
+    return kept
+
+
+def _compact_provable(compact_id: str) -> bool:
+    """Принимает ли собственный провенанс только что написанную свёртку.
+
+    Молчащий прибор приговором не считается: не сумели спросить — верим записи.
+    """
+    try:
+        evidence = memory_provenance.claim_evidence_index(MEM_DIR)
+        return bool(memory_provenance.compact_coverage(
+            str(compact_id), evidence).get("valid"))
+    except Exception:
+        log.warning("проверка свежей свёртки %s не удалась", compact_id, exc_info=True)
+        return True
+
+
+def _discard_unprovable_compact(meta: dict, where: str) -> bool:
+    """Снести свёртку, которую её собственное разрешение не принимает. True — снесли.
+
+    ОБЩАЯ ОГРАДА, поставленная 21.09 после трёх мельниц подряд. У всех трёх форма
+    одна: свёртка написана, разрешение её не приняло, источники остались там же,
+    и следующий проход написал её заново — вызов модели в минуту без движения
+    памяти. Причины были разные (недоказуемое событие, пересечение детей, границы
+    не по min/max), и будут ещё; здесь закрыта не причина, а СПОСОБ, которым любая
+    такая причина превращается в бесконечный цикл.
+
+    Свежую свёртку можно удалять: на неё ещё никто не сослался — ни состояние, ни
+    событие `memory_compact`, ни расписка. Оставить её значит оставить и мельницу.
+    """
+    compact_id = str(meta.get("id") or "")
+    if not compact_id or _compact_provable(compact_id):
+        return False
+    log.error("%s: свежая свёртка %s не принимается собственным разрешением — сношу "
+              "и НЕ считаю её источники свёрнутыми (иначе они мелются по кругу)",
+              where, compact_id)
+    path = meta.get("path")
+    if path:
+        try:
+            (BASE / str(path)).unlink(missing_ok=True)
+        except (OSError, ValueError):
+            log.warning("не смог убрать файл негодной свёртки %s", path, exc_info=True)
+    return True
+
+
+def _tier_fold_own_leaves(meta: dict) -> frozenset[str] | None:
+    """События свёртки, если они видны из её собственной шапки; иначе None.
+
+    У первого яруса листья названы прямо (`source_event_ids`). У верхних они лежат
+    через детей, и поднимать весь граф ради выбора кандидата дорого — там остаётся
+    прежнее поведение, а от зацикливания страхует предохранитель в
+    `_fold_tiers_transactional`.
+    """
+    events = meta.get("source_event_ids")
+    if events:
+        return frozenset(str(x) for x in events)
+    if meta.get("source_compact_ids"):
+        return None
+    return frozenset()
+
+
+def _tier_fold_bounds(sources: list[dict]) -> tuple[str, str]:
+    """Границы родителя — min/max по детям, а НЕ края списка.
+
+    Разрешение свёртки (`memory_provenance._resolve_compact`) считает `first_ts` и
+    `last_ts` именно так. Пока место было одной лентой, края отсортированного списка
+    совпадали с min/max; у места из нескольких веток дети идут внахлёст по времени, и
+    родитель с краями списка не принимается собственным разрешением — навсегда.
+    """
+    first = [str(x.get("first_ts") or "") for x in sources if x.get("first_ts")]
+    last = [str(x.get("last_ts") or "") for x in sources if x.get("last_ts")]
+    return (min(first, default=""), max(last, default=""))
+
+
 def _tier_fold_candidate(chat_id: str | int, state: dict) -> dict | None:
     """Describe the next higher-tier fold without writing or calling the model."""
     tier = 1
@@ -1408,16 +1623,39 @@ def _tier_fold_candidate(chat_id: str | int, state: dict) -> dict | None:
         )
         if len(same) >= TIER_HI:
             count = min(len(same), max(1, TIER_HI - TIER_LO))
-            sources = same[:count]
-            continued = any(bool(x.get("continued")) for x in sources)
-            return {
-                "tier": tier,
-                "sources": sources,
-                "source_ids": [str(x.get("id")) for x in sources],
-                "inputs": [_frontier_input(x, chat_id) for x in sources],
-                "continued": continued,
-                "depth": max(int(x.get("depth") or tier) for x in sources) + 1,
-            }
+            # Дети не смеют делить событие. Разрешение свёртки запрещает повтор листа
+            # целиком: родитель над пересекающимися детьми невалиден НАВСЕГДА, его
+            # источники остаются во фронтире, и ярус сворачивает их снова и снова — по
+            # вызову модели в минуту (замер 21.09, комната Ouroboros: 23 таких родителя
+            # подряд). Пересечение настоящее: ветки места сводились каждая под своим
+            # ключом, а потом ключи привязались к одному месту.
+            sources: list[dict] = []
+            seen_leaves: set[str] = set()
+            skipped: list[str] = []
+            for item in same:
+                leaves = _tier_fold_own_leaves(item)
+                if leaves and (leaves & seen_leaves):
+                    skipped.append(str(item.get("id")))
+                    continue
+                sources.append(item)
+                if leaves:
+                    seen_leaves |= leaves
+                if len(sources) >= count:
+                    break
+            if skipped:
+                log.warning(
+                    "свёртка яруса %d: %d источник(ов) делят события с уже взятыми, "
+                    "беру без них (%s)", tier, len(skipped), ", ".join(skipped[:5]))
+            if len(sources) >= 2:
+                continued = any(bool(x.get("continued")) for x in sources)
+                return {
+                    "tier": tier,
+                    "sources": sources,
+                    "source_ids": [str(x.get("id")) for x in sources],
+                    "inputs": [_frontier_input(x, chat_id) for x in sources],
+                    "continued": continued,
+                    "depth": max(int(x.get("depth") or tier) for x in sources) + 1,
+                }
         if not any(int(x.get("tier") or 1) > tier for x in state.get("frontier", [])):
             return None
         tier += 1
@@ -1435,12 +1673,23 @@ def _fold_tiers_transactional(chat_id: str | int) -> list[str]:
     """
     made: list[str] = []
     degraded_made: list[str] = []
+    folded_runs: set[tuple[str, ...]] = set()
     for _ in range(16):
         with _state_write_guard(chat_id), _WRITE_LOCK:
             state = _rebuild_state_locked(chat_id)
             candidate = _tier_fold_candidate(chat_id, state)
         if candidate is None:
             break
+        # ПРЕДОХРАНИТЕЛЬ. Те же источники второй раз за проход означают одно: родитель
+        # написан, а пересборка его не приняла и вернула детей во фронтир. Дальше это
+        # вызов модели в минуту без единого сдвига памяти. Останавливаемся и говорим.
+        run_key = tuple(candidate["source_ids"])
+        if run_key in folded_runs:
+            log.error("ярус %d сворачивает те же источники повторно: родитель не "
+                      "принимается собственным разрешением, останавливаю каскад (%s)",
+                      candidate["tier"], ", ".join(candidate["source_ids"][:4]))
+            break
+        folded_runs.add(run_key)
 
         result = _model_compact(
             candidate["inputs"], tier=candidate["tier"] + 1,
@@ -1457,14 +1706,16 @@ def _fold_tiers_transactional(chat_id: str | int) -> list[str]:
                     or current["source_ids"] != candidate["source_ids"]):
                 continue
             sources = current["sources"]
+            first_ts, last_ts = _tier_fold_bounds(sources)
             parent = _write_compact(
                 chat_id, result, tier=current["tier"] + 1,
                 depth=current["depth"], source_events=[],
                 source_compacts=current["source_ids"],
                 event_count=sum(int(x.get("event_count") or 0) for x in sources),
                 continued=current["continued"],
-                first_ts=sources[0].get("first_ts") or "",
-                last_ts=sources[-1].get("last_ts") or "")
+                first_ts=first_ts, last_ts=last_ts)
+            if _discard_unprovable_compact(parent, f"верхний ярус места {chat_id}"):
+                break
             remove = set(current["source_ids"])
             state["frontier"] = [
                 x for x in state["frontier"] if str(x.get("id")) not in remove
@@ -1482,6 +1733,137 @@ def _fold_tiers_transactional(chat_id: str | int) -> list[str]:
     return made, degraded_made
 
 
+def _subtree_event_rows(evidence: dict, compact_id: str, _seen: set | None = None) -> list[dict]:
+    """Все исходные события под свёрткой, сквозь ярусы (для имён авторов окна)."""
+    seen = _seen if _seen is not None else set()
+    if compact_id in seen:
+        return []
+    seen.add(compact_id)
+    meta = (evidence.get("compacts") or {}).get(compact_id) or {}
+    events = evidence.get("events") or {}
+    rows = [row for row in (events.get(str(e)) for e in (meta.get("source_event_ids") or []))
+            if isinstance(row, dict)]
+    for child in meta.get("source_compact_ids") or []:
+        rows += _subtree_event_rows(evidence, str(child), seen)
+    return rows
+
+
+def reissue_degraded_compact(chat_id: str | int, compact_id: str, *,
+                             why: str = "degraded") -> dict:
+    """Перевыпустить обрубок: та же пачка событий, но сводка от модели.
+
+    24.09: второй законный повод — `why="foreign_self"`: сводка назвала «я» другого
+    автора своего же окна («Я — Hope»). Проверяется по файлу, а не по слову вызывающего;
+    остальные предохранители (лист, без родителя, источники на месте) те же.
+
+    Обрубок — свёртка, написанная `_fallback_compact` без модели: механическая
+    выжимка вместо синтеза. К 21.09 их 688 из 5000, почти все — от потолка
+    `COMPACT_MAX_TOKENS = 4000`, который держался до `98b6bc71`.
+
+    ⛔ ТОЛЬКО ЛИСТ БЕЗ РОДИТЕЛЯ. Если обрубок уже свёрнут выше, удалять его нельзя:
+    родитель останется с висящей ссылкой, разрешение его не примет, и ярус начнёт
+    писать его заново — ровно та мельница, которую чинили 21.09. Поэтому родители
+    ищутся по всему индексу, а не по состоянию места.
+
+    Порядок: модель → новая свёртка → проверка её собственным разрешением → и только
+    потом снос старой. Модель молчит или новая не принята — старая остаётся на месте:
+    обрубок хуже синтеза, но лучше дыры.
+
+    Эпизоды старой свёртки не переписываются: они описывают те же события и остаются
+    честными; ссылка на снесённый компакт в них — история, а не факт о настоящем.
+    """
+    chat = str(chat_id)
+    place = str(place_key(chat))
+    evidence = memory_provenance.claim_evidence_index(MEM_DIR)
+    meta = (evidence.get("compacts") or {}).get(str(compact_id))
+    if not isinstance(meta, dict):
+        return {"ok": False, "reason": "unknown_compact"}
+    if why not in ("degraded", "foreign_self"):
+        return {"ok": False, "reason": "unknown_why"}
+    if why == "degraded" and not meta.get("degraded"):
+        return {"ok": False, "reason": "not_degraded"}
+    compacts = evidence.get("compacts") or {}
+    children = [str(x) for x in (meta.get("source_compact_ids") or [])]
+    # Ярус выше собран из дочерних свёрток; перевыпустить его можно только по чужому «я»:
+    # обрубок яруса — дело `_fold_tiers`, а не этой руки.
+    if children and why != "foreign_self":
+        return {"ok": False, "reason": "not_a_leaf"}
+    parents = [cid for cid, other in compacts.items()
+               if str(compact_id) in (other.get("source_compact_ids") or ())]
+    if parents:
+        return {"ok": False, "reason": "has_parent", "parents": parents[:3]}
+    source_ids = [str(x) for x in (meta.get("source_event_ids") or [])]
+    if children:
+        # 24.09: «я (Ashe) писала» стояло в свёртке яруса 2 комнаты Уробороса. Вход — те же
+        # дочерние свёртки, как в `_fold_tiers`; авторы для ограды — из всех сообщений под
+        # ней, потому что у сводок-детей своего автора нет.
+        if any(not isinstance(compacts.get(ch), dict) for ch in children):
+            return {"ok": False, "reason": "sources_missing"}
+        inputs = [_frontier_input(dict(compacts[ch], id=ch), chat) for ch in children]
+        if any(not str(item.get("text") or "").strip() for item in inputs):
+            return {"ok": False, "reason": "sources_missing"}
+        subtree = _subtree_event_rows(evidence, str(compact_id))
+    else:
+        rows = [(evidence.get("events") or {}).get(eid) for eid in source_ids]
+        if not source_ids or any(not isinstance(row, dict) for row in rows):
+            return {"ok": False, "reason": "sources_missing"}
+        inputs = _conversation_hot_rows(rows)
+        if len(inputs) != len(source_ids):
+            # Часть источников вытеснена поздней ревизией: это работа refresh_compacts,
+            # а не перевыпуска — там другая машинерия и другие квитанции.
+            return {"ok": False, "reason": "sources_not_current"}
+        subtree = inputs
+    authors = _window_authors(subtree)
+    if why == "foreign_self":
+        try:
+            old_text = (BASE / str(meta.get("path"))).read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return {"ok": False, "reason": "compact_unreadable"}
+        if not _foreign_self(_compact_recap(old_text), authors):
+            return {"ok": False, "reason": "no_foreign_self"}
+    tier, depth = int(meta.get("tier") or 1), int(meta.get("depth") or 1)
+    continued = bool(meta.get("continued"))
+    result = _model_compact(inputs, tier=tier, depth=depth, continued=continued,
+                            authors=authors)
+    if not result:
+        return {"ok": False, "reason": "model_unavailable"}
+    with _state_write_guard(place), _WRITE_LOCK:
+        fresh = _write_compact(
+            str(meta.get("chat_id") or chat), result, tier=tier, depth=depth,
+            source_events=source_ids, source_compacts=children,
+            event_count=int(meta.get("event_count") or len(source_ids)),
+            continued=continued,
+            source_note=(f"Перевыпуск обрубка {compact_id}; те же события." if why == "degraded"
+                         else f"Перевыпуск {compact_id}: сводка называла «я» чужим именем; те же события."),
+            first_ts=str(meta.get("first_ts") or ""),
+            last_ts=str(meta.get("last_ts") or ""))
+        if fresh.get("degraded"):
+            _discard_unprovable_compact(fresh, f"перевыпуск {compact_id}")
+            try:
+                (BASE / str(fresh.get("path"))).unlink(missing_ok=True)
+            except (OSError, ValueError):
+                pass
+            return {"ok": False, "reason": "still_degraded"}
+        if _discard_unprovable_compact(fresh, f"перевыпуск {compact_id}"):
+            return {"ok": False, "reason": "reissue_not_provable"}
+        try:
+            (BASE / str(meta.get("path"))).unlink(missing_ok=True)
+        except (OSError, ValueError):
+            log.warning("перевыпуск %s: старый файл не убрался", compact_id, exc_info=True)
+            return {"ok": False, "reason": "old_not_removed", "new_id": fresh["id"]}
+        append_event(
+            "memory_compact", chat_id=str(meta.get("chat_id") or chat),
+            text=(f"Перевыпуск {'обрубка ' if why == 'degraded' else '(чужое «я») '}"
+                  f"{compact_id} → {fresh['id']}; {len(source_ids)} событий"),
+            source="memory_life", refs=source_ids,
+            meta={"compact_id": fresh["id"], "tier": tier, "degraded": False,
+                  "replaced": str(compact_id), "why": why})
+        state = _rebuild_state_locked(place)
+    return {"ok": True, "old_id": str(compact_id), "new_id": str(fresh["id"]),
+            "events": len(source_ids), "hot": len(state.get("hot") or []),
+            "frontier": len(state.get("frontier") or [])}
+
+
 def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
     """Compact one hot prefix and recursively fold warm tiers. Raw events are never removed.
 
@@ -1491,13 +1873,18 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
     chat_id = adopt_place(chat_id)
     with _state_write_guard(chat_id), _WRITE_LOCK:
         state = _load_state(chat_id, rebuild=True)
-        plan = plan_hot_fold(state.get("hot") or [], force=force,
-                             tape_chars=tape_chars_for(chat_id))
+        # Планируем по ДОКАЗУЕМОЙ подпоследовательности кольца. Помеченные строки
+        # остаются в ленте, но для свёртки их нет — иначе призрак в голове кольца
+        # запирает свёртку навсегда: план брал бы префикс из него одного, свёртка
+        # оказывалась бы пустой, и место стояло бы при полном кольце (поймано
+        # стендом test_mill_never_again_2109, а не на проде).
+        provable = _drop_unprovable_inputs(list(state.get("hot") or []), chat_id)
+        plan = plan_hot_fold(provable, force=force, tape_chars=tape_chars_for(chat_id))
         if not plan.get("due"):
             return {"ok": True, "folded": 0, "plan": plan,
                     "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
         fold = int(plan["fold"])
-        inputs = list(state["hot"][:fold])
+        inputs = provable[:fold]
     result = _model_compact(inputs, tier=1, depth=1, continued=bool(plan.get("continued")))
     if not result:
         result = _fallback_compact(inputs, continued=bool(plan.get("continued")))
@@ -1524,7 +1911,10 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
 
     with _state_write_guard(chat_id), _WRITE_LOCK:
         state = _rebuild_state_locked(chat_id)
-        if state.get("hot", [])[:fold] != inputs:
+        # Сверяемся с той же подпоследовательностью, по которой планировали: в кольце
+        # между свёрнутыми строками могут стоять помеченные, и позиционный префикс с
+        # ними не совпадёт никогда — свёртка возвращала бы `state_changed` вечно.
+        if _drop_unprovable_inputs(list(state.get("hot") or []), chat_id)[:fold] != inputs:
             return {"ok": False, "reason": "state_changed", "folded": 0,
                     "plan": plan, "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
         source_ids = [str(x.get("id")) for x in inputs]
@@ -1546,10 +1936,18 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
             event_count=len(inputs), continued=continued,
             first_ts=str(inputs[0].get("ts") or ""), last_ts=str(inputs[-1].get("ts") or ""),
             manifest=(manifest if isinstance(manifest, dict) else None))
+        if _discard_unprovable_compact(meta, f"свёртка места {chat_id}"):
+            return {"ok": False, "folded": 0, "reason": "compact_not_provable",
+                    "plan": plan, "hot": len(state.get("hot") or []),
+                    "tiers": [], "degraded_tiers": []}
         episodes = _write_episodes(chat_id, meta["id"], inputs,
                                    [x for x in (result.get("episodes") or []) if isinstance(x, dict)],
                                    continued)
-        state["hot"] = state["hot"][fold:]
+        # Срез по ИМЕНАМ, а не по длине: помеченные строки остаются в кольце, и
+        # позиционный срез унёс бы вместе со свёрнутым куском ещё и их.
+        folded_ids = {str(x.get("id")) for x in inputs}
+        state["hot"] = [row for row in state["hot"]
+                        if str(row.get("id")) not in folded_ids]
         state["frontier"].append(meta)
         append_event("memory_compact", chat_id=chat_id,
                      text=f"Hot → {meta['id']}; {len(inputs)} событий; {plan.get('reason')}",
@@ -1780,6 +2178,28 @@ def rebuild_state(chat_id: str | int) -> dict:
         return _rebuild_state_locked(place)
 
 
+def _foldable_hot_rows(messages, current_event_ids, covered_events
+                       ) -> tuple[list[dict], list[dict]]:
+    """Горячие строки, которые ДОКАЗУЕМЫ, и отдельно те, которые нет.
+
+    Событие, невидимое индексу доказательств, в свёртку брать нельзя: такая свёртка
+    не разрешается никогда, её события не становятся покрытыми и возвращаются в
+    кольцо — вызов модели в минуту без движения памяти (замер 21.09, комната
+    Ouroboros: три таких события на 152 и один и тот же блок, свёрнутый заново).
+    """
+    foldable: list[dict] = []
+    unprovable: list[dict] = []
+    for row in messages:
+        event_id = str(row.get("id"))
+        if event_id not in current_event_ids or event_id in covered_events:
+            continue
+        if memory_provenance.event_row_indexable(row):
+            foldable.append(row)
+        else:
+            unprovable.append(row)
+    return foldable, unprovable
+
+
 def _rebuild_state_locked(chat_id: str | int) -> dict:
     """Implementation of :func:`rebuild_state` under the exact-place state guard."""
     chat_id = str(chat_id)
@@ -1811,11 +2231,24 @@ def _rebuild_state_locked(chat_id: str | int) -> dict:
                       for e in (m.get("source_event_ids") or [])}
     consumed_compacts = {str(c) for m in shown_metas
                          for c in (m.get("source_compact_ids") or [])}
+    foldable, unprovable = _foldable_hot_rows(messages, current_event_ids, covered_events)
+    # Недоказуемая строка ОСТАЁТСЯ в кольце и в живой ленте — это сказанное, и из
+    # разговора его убирать нельзя (первая попытка выкинуть их из кольца уронила
+    # test_keat_native_ingress: из диалога пропал кусок разбитого ответа). Она только
+    # помечена, и свёртка её не возьмёт. Порядок кольца — порядок ленты, поэтому
+    # собираем обратно из `messages`, а не склейкой двух списков.
+    marked = {str(row.get("id")) for row in unprovable}
+    kept = marked | {str(row.get("id")) for row in foldable}
     state["hot"] = _conversation_hot_rows(
-        row for row in messages
-        if str(row.get("id")) in current_event_ids
-        and str(row.get("id")) not in covered_events
-    )
+        row for row in messages if str(row.get("id")) in kept)
+    if unprovable:
+        for row in state["hot"]:
+            if str(row.get("id")) in marked:
+                row["unprovable"] = True
+        log.warning(
+            "место %s: %d событий индекс доказательств не принимает — в ленте они "
+            "остаются, в свёртку не идут (%s)", chat_id, len(unprovable),
+            ", ".join(sorted(marked)[:3]))
     state["frontier"] = [m for m in shown_metas
                          if str(m.get("id")) not in consumed_compacts]
     state["dedupe"] = [{"key": r.get("dedupe_key"), "id": r.get("id")} for r in messages
@@ -1958,11 +2391,46 @@ def _refresh_digest(values: Iterable[str]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _refresh_logical_id(row: dict) -> str:
+def _refresh_logical_target(row: dict) -> tuple[str, str]:
+    """Логический ключ цели и ПИР, которому этот ключ принадлежит.
+
+    Ключ и пир складываются в одном месте и отдаются вместе, потому что приём
+    текущей ревизии сверяет ПИР, а не префикс уже собранной строки. Иначе формат
+    ключа нельзя поменять, не уронив приём молча: замечание иммунитета к правке
+    08497113 (21.09) — `startswith("telegram:{chat}:")` ещё и крал чужую строку,
+    если ключ места оказывался префиксом другого пира.
+
+    Пир пустой у событий без телеграмной родословной — такие берутся запасным
+    фильтром по chat_id, как и раньше.
+    """
     lineage = memory_provenance.telegram_message_key(row)
     if lineage is not None:
-        return f"telegram:{lineage[0]}:{lineage[1]}"
-    return f"event:{str(row.get('id') or '')}"
+        return f"telegram:{lineage[0]}:{lineage[1]}", str(lineage[0])
+    return f"event:{str(row.get('id') or '')}", ""
+
+
+def _refresh_logical_id(row: dict) -> str:
+    return _refresh_logical_target(row)[0]
+
+
+def _refresh_current_targets(events: dict, current_ids, chat: str) -> dict[str, dict]:
+    """Текущие ревизии ЭТОГО места, разложенные по логической цели.
+
+    Приём решает lineage-ключ ревизии: если её пир — это же место, ревизия наша,
+    даже когда строка записана через маршрут ветки (двойное delete под корнем и
+    топиком, записка 21.09). Изменчивый chat_id остаётся запасным фильтром через
+    `_same_conversation` — он же пускает события без телеграмной родословной.
+    """
+    chat = str(chat)
+    current: dict[str, dict] = {}
+    for event_id in current_ids:
+        row = events.get(str(event_id))
+        if not isinstance(row, dict) or row.get("kind") != "conversation_message":
+            continue
+        logical_id, peer = _refresh_logical_target(row)
+        if (peer and peer == chat) or _same_conversation(row.get("chat_id"), chat):
+            current[logical_id] = row
+    return current
 
 
 def _refresh_graph_leaves(compact_id: str, graph: dict[str, tuple[dict, str]],
@@ -2153,12 +2621,7 @@ def _refresh_snapshot(chat_id: str, *, evidence: dict | None = None) -> dict:
     presentable, coverage, _legacy = _both_graphs(chat, evidence=evidence)
     events = evidence.get("events") or {}
     current_ids = set(str(x) for x in (evidence.get("current_event_ids") or ()))
-    current_by_logical: dict[str, dict] = {}
-    for event_id in current_ids:
-        row = events.get(event_id)
-        if (isinstance(row, dict) and row.get("kind") == "conversation_message"
-                and _same_conversation(row.get("chat_id"), chat)):
-            current_by_logical[_refresh_logical_id(row)] = row
+    current_by_logical = _refresh_current_targets(events, current_ids, chat)
 
     presentable_leaves: dict[str, tuple[str, ...]] = {}
     coverage_leaves: dict[str, tuple[str, ...]] = {}
@@ -2463,6 +2926,17 @@ def refresh_compacts(chat_id: str | int, compact_id: str | None = None, *,
             if any(event_id in covered_ids for event_id in source_ids):
                 continue
             timestamps = [str(item.get("ts") or "") for item in inputs]
+            # Привязка пишется ДО компакта — как в горячем пути компакции:
+            # refresh собирает события со ВСЕХ веток места (группа строится по
+            # логическим целям, а не по ключу ветки), и событие под веточным
+            # ключом без записи в places.json делает весь свежий чанк
+            # неканоническим с первой секунды. Мельница писала чанки, которые
+            # сама же отвергала: needs_refresh стоял, refreshed_count не рос
+            # (пробка группы e0b1e8ed, 21.09: 75 целей, 0 refreshed, 10 проходов).
+            origins = {str(item.get("chat_id") or "") for item in inputs
+                       if item.get("chat_id")}
+            if origins:
+                bind_place(chat, origins)
             with _WRITE_LOCK:
                 meta = _write_compact(
                     chat, result, tier=1, depth=1, source_events=source_ids,

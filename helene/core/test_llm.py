@@ -82,6 +82,9 @@ class Base(unittest.TestCase):
                       "OPENAI_BASE_URL", "PRAXIS_MAX_TOOL_ITERS")}
         for k in self._env:  # детерминизм: живой env (контейнер грузит .env) не влияет
             os.environ.pop(k, None)
+        # Узкий взгляд — тоже часть детерминизма кадра: рычаг включён в живом .env,
+        # и без этого pop он молча перекрашивал исходные vision-тесты в prepass-тесты.
+        self._prepass0 = os.environ.pop(llm.VISION_PREPASS_LEVER, None)
 
     def tearDown(self):
         for mod, k, v in self._orig:
@@ -96,6 +99,8 @@ class Base(unittest.TestCase):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+        if self._prepass0 is not None:
+            os.environ[llm.VISION_PREPASS_LEVER] = self._prepass0
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _write_cfg(self, **roles_over):
@@ -145,10 +150,12 @@ class TestConfig(Base):
         cfg = llm._normalize({
             "roles": {"voice": {
                 "framework": "anthropic", "model": "glm-5.3",
-                "vision_model": "glm-5.3-flash",
+                "vision_model": "glm-4.6v",
+                "vision_models": {"openai": "gpt-5.6-terra"},
             }},
         })
-        self.assertEqual(cfg["roles"]["voice"]["vision_model"], "glm-5.3-flash")
+        self.assertEqual(cfg["roles"]["voice"]["vision_model"], "glm-4.6v")
+        self.assertEqual(cfg["roles"]["voice"]["vision_models"]["openai"], "gpt-5.6-terra")
 
     def test_stamp_distinguishes_same_size_replacement_even_when_clock_collides(self):
         """Atomic panel writes must reload even if filesystem time is coarsened.
@@ -487,7 +494,7 @@ class TestTranslation(Base):
         self.assertEqual(fo.calls[0]["tools"][1], {
             "type": "web_search", "search_context_size": "medium",
             "external_web_access": True, "max_uses": 5})
-        self.assertEqual(resp.usage, {"in": 7, "out": 2})
+        self.assertEqual(resp.usage, {"schema": llm.USAGE_SCHEMA, "in": 7, "out": 2})
 
     def test_openai_thinking_maps_to_reasoning_effort_tiers(self):
         # relay по умолчанию гасит reasoning (effort=none); явный thinking-бюджет
@@ -1028,7 +1035,7 @@ class TestOpenAIStreaming(Base):
         resp = llm.chat("voice", messages=[{"role": "user", "content": "hi"}])
         self.assertEqual(resp.text, "ping")
         self.assertEqual(resp.stop_reason, "end_turn")
-        self.assertEqual(resp.usage, {"in": 5, "out": 1})
+        self.assertEqual(resp.usage, {"schema": llm.USAGE_SCHEMA, "in": 5, "out": 1})
         self.assertTrue(fo.calls[0].get("stream"), "openai-путь должен просить stream")
 
     def test_stream_tool_calls_aggregated(self):
@@ -1111,7 +1118,7 @@ class TestGlmEffortDialect(Base):
     БЕЗ thinking-поля, глубину выбирал сервер (дефолт max) — 10-15с на ответ.
     Ступень роли на anthropic-пути «принималась-и-игнорировалась», и владелец
     не мог сделать reasoning low ни конфигом, ни рукой. Проекция словаря реле
-    в словарь glm (low/high/max) обязана: ехать в запрос thinking+extra_body,
+    в словарь glm (low/high/max) обязана: ехать в запрос thinking+output_config,
     уступать явному thinking-бюджету, не трогать не-glm модели и работать на
     фолбэк-плече.
     """
@@ -1125,10 +1132,6 @@ class TestGlmEffortDialect(Base):
         return llm._config()
 
     def test_role_effort_projects_into_request(self):
-        # 08.09: ступень едет полем Anthropic API `output_config.effort`. Прежнее
-        # `extra_body.reasoning_effort` Anthropic-совместимый эндпойнт z.ai молча
-        # глотал: владелец неделю видел max при low в конфиге (проба 08.09 — low/max/
-        # omitted одинаковые ~250 токенов; output_config.effort=low — 50–80).
         self._glm_cfg("low")
         fake = FakeAnthropic([FakeAnthResp("ок")])
         llm.use_test_client(fake)
@@ -1150,44 +1153,6 @@ class TestGlmEffortDialect(Base):
                 fake.calls[0].get("output_config"), {"effort": glm_step},
                 f"ступень реле {step!r} обязана проецироваться в {glm_step!r}")
 
-    def test_sent_effort_and_stop_reason_land_in_call_trace(self):
-        # Спор «max или low» неделю решался на глаз: журнал вызовов не хранил ни
-        # отправленной ступени, ни stop_reason. Теперь обе величины — в строке.
-        self._glm_cfg("low")
-        fake = FakeAnthropic([FakeAnthResp("ок")])
-        llm.use_test_client(fake)
-        rows: list[dict] = []
-        with mock.patch.object(llm, "_call_trace",
-                               side_effect=lambda *a, **k: rows.append(k)):
-            llm.chat("voice", messages=[{"role": "user", "content": "привет"}])
-        self.assertEqual(rows[0].get("effort"), "low")
-        self.assertEqual(rows[0].get("stop"), "end_turn")
-        self.assertEqual(llm._sent_effort("anthropic", "glm-5.3", None, None), "",
-                         "ступень не задана — провайдер решает сам, в след пусто")
-        self.assertEqual(llm._sent_effort("anthropic", "glm-5.3", 2048, "xhigh"), "low",
-                         "явный бюджет сильнее ступени роли и проецируется тем же словарём")
-        self.assertEqual(llm._sent_effort("anthropic", "claude-4", None, "low"), "")
-        self.assertEqual(llm._sent_effort("openai", "gpt-x", None, "medium"), "medium")
-
-    def test_text_only_models_are_known_and_unknown_ones_are_sighted(self):
-        # GLM-5.3 картинок не принимает (400 «allowed values: ['text']»), модели z.ai
-        # со зрением кончаются на «v». Неизвестные — зрячие: ослепить Claude/GPT ложной
-        # таблицей хуже, чем один раз показать GLM пустую ссылку.
-        self.assertFalse(llm.accepts_images(model="glm-5.3"))
-        # 09.09: GLM-5.3-Flash — нативно мультимодальная (docs z.ai; проба ключом владельца:
-        # описала картинку верно), старшие flash серии 5 — тоже; flash серии 4 — текст.
-        self.assertTrue(llm.accepts_images(model="GLM-5.3-Flash"))
-        self.assertTrue(llm.accepts_images(model="glm-5.4-flash"))
-        self.assertFalse(llm.accepts_images(model="glm-4.5-flash"))
-        self.assertTrue(llm.accepts_images(model="glm-4.6v-flashx"))
-        self.assertTrue(llm.accepts_images(model="glm-4.6v"))
-        self.assertTrue(llm.accepts_images(model="claude-4-sonnet"))
-        self.assertTrue(llm.accepts_images(model="gpt-5.6-sol"))
-        self.assertTrue(llm.accepts_images(model=""))
-        self._glm_cfg("low")
-        self.assertEqual(llm.role_model("voice"), "glm-5.3")
-        self.assertFalse(llm.accepts_images("voice"))
-
     def test_explicit_budget_beats_effort_step(self):
         self._glm_cfg("low")
         fake = FakeAnthropic([FakeAnthResp("ок")])
@@ -1197,11 +1162,8 @@ class TestGlmEffortDialect(Base):
         kw = fake.calls[0]
         self.assertEqual(kw.get("thinking"),
                          {"type": "enabled", "budget_tokens": 2048})
-        self.assertNotIn("extra_body", kw)
-        # z.ai бюджет budget_tokens не соблюдает (проба 08.09) — глубину задаёт только
-        # ступень, поэтому бюджет проецируется в неё тем же словарём, что на openai-пути.
-        self.assertEqual(kw.get("output_config"), {"effort": "low"},
-                         "явный бюджет 2048 → low; ступень роли не спорит с ним")
+        self.assertEqual(kw.get("output_config"), {"effort": "low"})
+        self.assertNotIn("extra_body", kw, "глухое поле больше не шлём — одна правда")
 
     def test_non_glm_model_keeps_effort_ignored(self):
         cfg = llm._from_env()
@@ -1242,6 +1204,26 @@ class TestGlmEffortDialect(Base):
         self.assertEqual(kw.get("thinking"), {"type": "enabled"},
                          "glm-5.3 как фолбэк мёртв без thinking на фолбэк-плече")
         self.assertEqual(kw.get("output_config"), {"effort": "low"})
+        self.assertNotIn("extra_body", kw, "глухое поле больше не шлём — одна правда")
+
+    def test_sent_effort_and_stop_reason_land_in_call_trace(self):
+        # Издание, 08.09: спор «max или low» неделю решался на глаз — журнал вызовов
+        # не хранил ни отправленной ступени, ни stop_reason. Теперь обе величины — в строке.
+        self._glm_cfg("low")
+        fake = FakeAnthropic([FakeAnthResp("ок")])
+        llm.use_test_client(fake)
+        rows: list[dict] = []
+        with mock.patch.object(llm, "_call_trace",
+                               side_effect=lambda *a, **k: rows.append(k)):
+            llm.chat("voice", messages=[{"role": "user", "content": "привет"}])
+        self.assertEqual(rows[0].get("effort"), "low")
+        self.assertEqual(rows[0].get("stop"), "end_turn")
+        self.assertEqual(llm._sent_effort("anthropic", "glm-5.3", None, None), "",
+                         "ступень не задана — провайдер решает сам, в след пусто")
+        self.assertEqual(llm._sent_effort("anthropic", "glm-5.3", 2048, "xhigh"), "low",
+                         "явный бюджет сильнее ступени роли и проецируется тем же словарём")
+        self.assertEqual(llm._sent_effort("anthropic", "claude-4", None, "low"), "")
+        self.assertEqual(llm._sent_effort("openai", "gpt-x", None, "medium"), "medium")
 
 
 class TheCallTraceJournalIsBounded(unittest.TestCase):

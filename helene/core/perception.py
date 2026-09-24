@@ -399,7 +399,7 @@ def skips_text(n: int = 12, *, chat_id=None, include_provenance: bool = True) ->
     if chat_id is not None:
         recs = [r for r in recs if str(r.get("chat") or "") == str(chat_id)]
     if not recs:
-        return "Журнал пропусков пуст — всё, что доходило, я видела и решала."
+        return "Журнал пропусков пуст — всё, что доходило, было увидено и решено мной."
     lines = ["Последние пропуски до голоса (класс · этап · чат · деталь):"]
     for r in recs:
         ts = _dt.datetime.fromtimestamp(float(r.get("ts") or 0)).strftime("%d.%m %H:%M")
