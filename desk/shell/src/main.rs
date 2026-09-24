@@ -1469,15 +1469,43 @@ fn relay_fingerprint(cfg: &serde_json::Value) -> String {
     format!("{}|{}|{}|{}", relay_enabled(cfg), relay_port(cfg), key, instructions)
 }
 
-/// mtime `auth.json` реле в момент подъёма СВОЕГО реле. Новый вход в подписку реле
-/// читает только при старте: изменившийся файл = реле надо поднять заново, и делает это
-/// окно само (`relay_status`), а не просит владельца перезапустить программу.
-static RELAY_AUTH_SEEN: Mutex<Option<std::time::SystemTime>> = Mutex::new(None);
+/// Маркер «новый вход в подписку»: `local_auth/login-generation` рядом с auth.json.
+/// Пишет его ОКНО (`note_relay_login`), когда помощник входа завершился и auth.json на
+/// месте. Реле читает вход только при старте, поэтому после нового входа своё реле
+/// поднимается заново (окно — здесь, служба — по тому же маркеру у себя).
+///
+/// ⚠ Сторожить сам `auth.json` нельзя: реле ПЕРЕПИСЫВАЕТ его при каждом обновлении
+/// токенов (`account_router.rs`: «CodexAuth may refresh and rewrite auth.json»), и
+/// перезапуск «по mtime файла» шёл бы примерно раз в час, роняя ход посреди ответа.
+/// Ровно так было собрано в 0.8.5 — поймано до выкладки Mac, починено в 0.8.6.
+static RELAY_LOGIN_SEEN: Mutex<Option<std::time::SystemTime>> = Mutex::new(None);
+/// Помощник входа запускался в этом сеансе и ещё не отмечен маркером.
+static LOGIN_WAS_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-fn relay_auth_mtime() -> Option<std::time::SystemTime> {
-    std::fs::metadata(relay_home().join("local_auth").join("auth.json"))
+fn relay_login_marker() -> PathBuf {
+    relay_home().join("local_auth").join("login-generation")
+}
+
+fn relay_login_generation() -> Option<std::time::SystemTime> {
+    std::fs::metadata(relay_login_marker())
         .ok()
         .and_then(|m| m.modified().ok())
+}
+
+/// Отметить новый вход: помощник входа завершился, auth.json лежит. Маркер читают
+/// окно (`relay_status`) и служба (свой тик) — оба поднимают своё реле заново.
+fn note_relay_login() {
+    let path = relay_login_marker();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos().to_string())
+        .unwrap_or_default();
+    if let Err(err) = std::fs::write(&path, stamp) {
+        log_line(&format!("маркер входа в подписку не записался: {err}"));
+    }
 }
 
 /// 25.09 (C.1). Реле применяет новые настройки без перезапуска окна: своё реле гасится
@@ -1656,8 +1684,8 @@ fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> RelaySpawn 
     match cmd.spawn() {
         Ok(child) => {
             adopt(&child);
-            if let Ok(mut seen) = RELAY_AUTH_SEEN.lock() {
-                *seen = relay_auth_mtime();
+            if let Ok(mut seen) = RELAY_LOGIN_SEEN.lock() {
+                *seen = relay_login_generation();
             }
             RelaySpawn::Started(child)
         }
@@ -2376,6 +2404,9 @@ fn relay_login_blocking() -> Result<String, String> {
     // helene-relay.exe login жить и держать порт колбэка.
     adopt(&child);
     *guard = Some(child);
+    // Вход запущен: когда помощник завершится и auth.json ляжет, `relay_status` поставит
+    // маркер нового входа (даже если экран настроек опрашивал его не каждые 3 с).
+    LOGIN_WAS_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok("сейчас откроется браузер — войди в свой аккаунт ChatGPT".into())
 }
 
@@ -2390,14 +2421,19 @@ fn relay_status(app: tauri::AppHandle) -> String {
             .unwrap_or(false)
     };
     if pending {
+        LOGIN_WAS_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
         return "pending".into();
     }
     if auth.exists() {
-        // 25.09 (C.3): реле читает вход ТОЛЬКО при старте. Файл обновился после подъёма
-        // своего реле (новый вход) — поднимаем реле заново сами, а не вешаем владельцу
-        // вечное «применится перезапуском». Чужое реле (служба) перечитает вход само.
-        let now_seen = relay_auth_mtime();
-        let seen = RELAY_AUTH_SEEN.lock().ok().and_then(|g| *g);
+        // 25.09 (C.3): реле читает вход ТОЛЬКО при старте. Помощник входа завершился и
+        // auth.json на месте — это новый вход: ставим маркер, и своё реле поднимаем
+        // заново сами, а не вешаем владельцу вечное «применится перезапуском». Чужое реле
+        // (служба) перечитает маркер на своём тике и сделает то же.
+        if LOGIN_WAS_PENDING.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            note_relay_login();
+        }
+        let now_seen = relay_login_generation();
+        let seen = RELAY_LOGIN_SEEN.lock().ok().and_then(|g| *g);
         if now_seen.is_some() && now_seen != seen {
             let state = app.state::<LocalHarness>();
             let owns = state
@@ -2409,7 +2445,7 @@ fn relay_status(app: tauri::AppHandle) -> String {
                 if let Some(cfg) = config_value() {
                     reconcile_relay(&state, &cfg, "новый вход в подписку");
                 }
-            } else if let Ok(mut g) = RELAY_AUTH_SEEN.lock() {
+            } else if let Ok(mut g) = RELAY_LOGIN_SEEN.lock() {
                 *g = now_seen;
             }
         }

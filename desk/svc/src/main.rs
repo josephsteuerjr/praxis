@@ -1365,9 +1365,17 @@ fn relay_fingerprint(plan: &Plan) -> String {
     )
 }
 
-/// Файл входа в подписку — тот, который реле читает при старте (25.09, C.3).
+/// Маркер «новый вход в подписку» — `local_auth/login-generation` рядом с auth.json.
+/// Пишет его окно (`shell::note_relay_login`), когда помощник входа завершился и
+/// auth.json лёг; реле читает вход только при старте, поэтому новый маркер = поднять
+/// реле заново (25.09, C.3).
+///
+/// ⚠ Сторожить сам `auth.json` НЕЛЬЗЯ: реле переписывает его при каждом обновлении
+/// токенов («CodexAuth may refresh and rewrite auth.json»), и перезапуск «по mtime
+/// файла» шёл бы примерно раз в час, роняя ход посреди ответа. Так было собрано в
+/// 0.8.5 (Windows-архив выложен, Mac отменён до выкладки); починено в 0.8.6.
 fn relay_auth_path(plan: &Plan) -> PathBuf {
-    plan.tree.join("relay").join("local_auth").join("auth.json")
+    plan.tree.join("relay").join("local_auth").join("login-generation")
 }
 
 /// Встроенное реле подписки. Та же семантика, что у оболочки

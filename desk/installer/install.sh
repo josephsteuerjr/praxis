@@ -2,7 +2,7 @@
 # Hélène для macOS (Apple Silicon): установка, обновление и снятие.
 #
 #   curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh
-#   sh install.sh [--from Helene-0.8.5-macos-arm64.zip] [--relaunch]
+#   sh install.sh [--from Helene-0.8.6-macos-arm64.zip] [--relaunch]
 #   sh install.sh --uninstall [--purge]
 #
 # Что делает. Скачивает архив выпуска и его сумму в ~/Library/Caches/app.helene.install,
@@ -28,7 +28,7 @@
 # скрипт идёт у человека, чьё окружение мы не знаем.
 set -eu
 
-HELENE_TAG_DEFAULT="v0.8.5"   # вписывает сборка (build_mac.stamp_install_sh); HELENE_TAG в среде — сильнее
+HELENE_TAG_DEFAULT="v0.8.6"   # вписывает сборка (build_mac.stamp_install_sh); HELENE_TAG в среде — сильнее
 HELENE_MACOS_MIN="14"         # тоже сборка: MACOS_MIN в build_mac.py (колёса голоса собраны под macOS 14)
 REPO="josephsteuerjr/praxis"
 PRODUCT="Hélène"
@@ -89,7 +89,7 @@ $PRODUCT $VERSION для macOS (Apple Silicon)
   sh install.sh --uninstall         снять программу, данные оставить
   sh install.sh --uninstall --purge снять вместе с data/ и helene.json
 
-Ставится в $HOME_DIR. Другой выпуск: HELENE_TAG=v0.8.5 sh install.sh
+Ставится в $HOME_DIR. Другой выпуск: HELENE_TAG=v0.8.6 sh install.sh
 Запускать от своего пользователя — того, кто вошёл на экран Mac, — без sudo и su:
 прав администратора установка не требует, пароль программа спросит сама, когда он понадобится.
 EOF
