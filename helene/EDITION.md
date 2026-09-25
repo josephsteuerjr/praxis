@@ -39,7 +39,7 @@ The check reports:
 | declared in vain (identical) | **0** |
 | declared, but the layer copy is stale | **0** |
 | differing but NOT declared | **0** — the lag is closed |
-| in the core, not carried here | **2** — see below |
+| in the core, not carried here | **3** — see below |
 
 ⚠ **What the edition's KEAT does differently, and why it has to.** Her production KEAT
 served owner-DM calls with ONE message: her replies go out through the `reply` hand and were
@@ -129,15 +129,18 @@ Nothing: every file of the working copy is either her file unchanged or declared
 Nothing. Every file of the working copy is her file unchanged or declared above; the check
 says "the layer matches the actual difference".
 
-### What the edition does NOT carry (2)
+### What the edition does NOT carry (3)
 
-Two tests, both for a decision of the edition: `test_frame_stats.py` checks her
-`frame_stats.py`, which the edition carries as `keat_stats.py` (covered by `test_keat_stats.py`)
-next to its own frame-cuts `frame_stats.py`; `test_tool_pointers.py` pins her Russian tool
-pointer, while the edition's pointer is English (`test_pointer_en_1809`). They are named rather
-than filtered: assembling from the core brings them along.
+Two tests and one document, each for a decision of the edition: `test_frame_stats.py` checks
+her `frame_stats.py`, which the edition carries as `keat_stats.py` (covered by
+`test_keat_stats.py`) next to its own frame-cuts `frame_stats.py`; `test_tool_pointers.py` pins
+her Russian tool pointer, while the edition's pointer is English (`test_pointer_en_1809`);
+`docs/run_retention.md` describes her server's cold run archive — the edition does not archive
+runs (`runs_prune.py`), and its JSON example (`"object_key": …`) is what the distribution's
+secret scan refuses by pattern. They are named rather than filtered: assembling from the core
+brings them along.
 
-| `test_frame_stats.py` | `test_tool_pointers.py` |  |
+| `docs/run_retention.md` | `test_frame_stats.py` | `test_tool_pointers.py` |
 
 ## How to keep this honest
 
