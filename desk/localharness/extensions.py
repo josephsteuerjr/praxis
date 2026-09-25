@@ -238,7 +238,7 @@ def _import_entry(ext_dir: Path, entry: str, *, name: str) -> Callable:
 
 _SECRET_KEY = re.compile(
     r"key|token|secret|password|passwd|pass\b|pwd|hash|phone|session|credential|auth|proxy|"
-    r"url|dsn|\bpat\b|bearer|cookie", re.I)
+    r"dsn|(?<![a-z])pat(?![a-z])|bearer|cookie", re.I)
 # userinfo в адресах: http://user:p4ss@host — пароль уезжал бы строкой под ключом `env.HTTPS_PROXY`
 _URL_USERINFO = re.compile(r"(://)([^/@\s]+)@")
 

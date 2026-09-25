@@ -38,24 +38,21 @@ class BrainReceiptUpgrade(unittest.TestCase):
             }
             cfg_path.write_text(json.dumps(with_fallback), encoding="utf-8")
             # 0.8.7: проекция была, расписка без `projected`
-            first = boot.project_brain(tree, cfg_path) if hasattr(boot, "project_brain") else None
-            receipt = tree / "memory" / "brain_projection.json"
-            if not receipt.exists():
-                candidates = list((tree / "memory").glob("*projection*"))
-                self.assertTrue(candidates, "расписка проекции не найдена")
-                receipt = candidates[0]
+            boot.project_brain(tree, json.loads(cfg_path.read_text(encoding="utf-8")))
+            receipt = tree / "memory" / ".state" / "brain_projection.json"
+            self.assertTrue(receipt.exists(), "расписка проекции не найдена")
             loaded = json.loads(receipt.read_text(encoding="utf-8"))
             loaded.pop("projected", None)
             receipt.write_text(json.dumps(loaded), encoding="utf-8")
             llm_path = tree / "memory" / "llm.json"
             self.assertIn("zai-SECRET", llm_path.read_text(encoding="utf-8"))
             # 0.8.8+: helene.json не менялся — расписка дописывается
-            boot.project_brain(tree, cfg_path)
+            boot.project_brain(tree, json.loads(cfg_path.read_text(encoding="utf-8")))
             self.assertIn("projected", json.loads(receipt.read_text(encoding="utf-8")))
             # владелец убрал запасного
             without = {"model": {"framework": "openai", "name": "gpt-x", "key": "sk-main", "base_url": "http://a"}}
             cfg_path.write_text(json.dumps(without), encoding="utf-8")
-            boot.project_brain(tree, cfg_path)
+            boot.project_brain(tree, without)
             self.assertNotIn("zai-SECRET", llm_path.read_text(encoding="utf-8"),
                              "убранный ключ запасного жил бы в llm.json вечно (V3 F3)")
 
@@ -69,7 +66,8 @@ class ScrubMasksSubtreesAndUserinfo(unittest.TestCase):
                "telegram": {"api_id": 123, "api_hash": "h", "owner_id": 5}}
         out = extensions.scrub(cfg)
         self.assertEqual(out["env"]["HTTPS_PROXY"], "•••")
-        self.assertEqual(out["env"]["DATABASE_URL"], "•••")
+        # адрес — не секрет (base_url живёт открытым), секрет в нём — userinfo, и он режется
+        self.assertEqual(out["env"]["DATABASE_URL"], "postgres://•••@h/db")
         self.assertEqual(out["env"]["IMAP_PASS"], "•••")
         self.assertEqual(out["env"]["GH_PAT"], "•••")
         self.assertEqual(out["env"]["PLAIN"], "ok")
