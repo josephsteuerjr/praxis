@@ -48,7 +48,9 @@ SCRIPT = textwrap.dedent(r'''
     desk, code = Path(sys.argv[1]), Path(sys.argv[2])
     sys.path[:0] = [str(desk), str(desk / "localharness")]
     tmp = tempfile.TemporaryDirectory()
-    tree = Path(tmp.name) / "data"; tree.mkdir()
+    # Настоящий путь: на macOS временные папки лежат под /var → /private/var, а её
+    # run_manager отказывает корню со ссылкой в пути (1.0.1, Mac-прогон 36196933373).
+    tree = Path(tmp.name).resolve() / "data"; tree.mkdir()
     import boot
     cfg = {"telegram": {"owner_id": "4242"}, "agent": {"name": "Hélène"}, "owner": {"name": "Егор"}}
     os.environ.update(boot.env_knobs(cfg, tree=tree))
