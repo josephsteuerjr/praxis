@@ -222,16 +222,29 @@ def _valid_record(row: dict, peer: str) -> bool:
     )
 
 
-def iter_records(peer_id: str | int, *, max_records: int | None = MAX_READ_RECORDS) -> Iterable[dict]:
-    """Yield valid canonical rows, ignoring (but never overwriting) a torn tail."""
+def iter_records(peer_id: str | int, *, max_records: int | None = MAX_READ_RECORDS,
+                 message_id: int | None = None) -> Iterable[dict]:
+    """Yield valid canonical rows, ignoring (but never overwriting) a torn tail.
+
+    ``message_id`` keeps only rows of that Telegram id, from the same window.  26.09 (py-spy
+    на проде): `latest_message` звучит на каждое входящее сообщение группы, правку и удаление,
+    а разбирал всё окно архива комнаты ради одного id — три потока хендлеров разом держали
+    GIL, бут и её ход ждали.  JSON-число — это его десятичные цифры, поэтому строка без них
+    этот id не несёт: разбираются только строки-кандидаты, порядок — порядок самого окна.
+    """
 
     peer = _peer(peer_id)
+    wanted = None if message_id is None else int(message_id)
+    needle = None if wanted is None else str(wanted)
     for raw in _iter_lines(archive_path(peer), max_records=max_records):
+        if needle is not None and needle not in raw:
+            continue
         try:
             row = json.loads(raw)
         except (TypeError, ValueError):
             continue
-        if isinstance(row, dict) and _valid_record(row, peer):
+        if (isinstance(row, dict) and _valid_record(row, peer)
+                and (wanted is None or row.get("message_id") == wanted)):
             yield row
 
 
@@ -344,18 +357,22 @@ def _merged_unknown_deletion(deletion: dict, message: dict) -> dict:
     return merged
 
 
-def _latest_message_states(peer_id: str | int) -> dict[tuple[int | None, int], dict]:
+def _latest_message_states(peer_id: str | int, *, message_id: int | None = None
+                           ) -> dict[tuple[int | None, int], dict]:
     """Materialise current states by Telegram revision time, not delivery order.
 
     Older edits can arrive after newer ones when async handlers finish out of order.  The
     immutable archive keeps both, while current context selects the greatest edit/delete
     timestamp.  An unknown-topic deletion still follows a later backfilled original to
     its real topic without restoring the text.
+
+    ``message_id`` narrows the pass to one id: every rule below (rank, unknown deletion,
+    edit collapse) compares rows of the same id only, so its rows alone give its answer.
     """
 
     latest: dict[tuple[int | None, int], tuple[tuple[int, float, int, int], dict]] = {}
     unknown_deletions: dict[int, tuple[tuple[int, float, int, int], dict]] = {}
-    for index, row in enumerate(iter_records(peer_id)):
+    for index, row in enumerate(iter_records(peer_id, message_id=message_id)):
         if row.get("kind") not in ("message", "deletion"):
             continue
         mid = int(row.get("message_id") or 0)
@@ -397,12 +414,20 @@ def _latest_message_states(peer_id: str | int) -> dict[tuple[int | None, int], d
     edited_messages = {
         mid for (_topic, mid), (_rank, row) in latest.items() if row.get("edited_at")
     }
+    # Копии одного id собираются одним проходом: прежде на КАЖДЫЙ правленый id
+    # перебирался весь `latest` — тысячи правок на десятки тысяч записей, секунды ЦП на
+    # вызов (py-spy 26.09: все три занятых потока стояли ровно на этой строке).
+    # Сбрасываются только проигравшие копии того же id, поэтому собрать их заранее — то же.
+    copies: dict[int, list[tuple[int | None, int]]] = {}
+    for key in latest:
+        if key[1] in edited_messages:
+            copies.setdefault(key[1], []).append(key)
     for mid in edited_messages:
-        candidates = [(key, row) for key, (_rank, row) in latest.items() if key[1] == mid]
+        candidates = copies.get(mid, [])
         if len(candidates) < 2:
             continue
-        winner_key = max(candidates, key=lambda pair: latest[pair[0]][0])[0]
-        for key, _row in candidates:
+        winner_key = max(candidates, key=lambda copy: latest[copy][0])
+        for key in candidates:
             if key != winner_key:
                 latest.pop(key, None)
     return {key: row for key, (_rank, row) in latest.items()}
@@ -412,7 +437,8 @@ def latest_message(peer_id: str | int, message_id: int) -> dict | None:
     """Return the current archived state for one Telegram message id."""
 
     wanted = _positive(message_id, optional=False)
-    candidates = [row for (_topic, mid), row in _latest_message_states(_peer(peer_id)).items()
+    candidates = [row for (_topic, mid), row
+                  in _latest_message_states(_peer(peer_id), message_id=wanted).items()
                   if mid == wanted]
     for row in reversed(candidates):
         if row.get("kind") == "deletion":

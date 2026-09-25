@@ -6094,8 +6094,13 @@ def _outstanding_rows(run_id: str) -> dict:
 
 
 def _in_doubt_run_ids() -> list[str]:
+    # 26.09 (py-spy на проде, бут после рестарта 22:37): здесь стоял `run_ids()` — замок и
+    # разбор манифеста у каждого из ~8,5 тыс. прогонов, а зовёт это `recover_durable_state`
+    # до «на связи»; бут стоял в этом цикле 35+ минут, часы (сон, расписание, пульс) не
+    # поднимались. `in_doubt` не терминален, а `live_run_ids` отбрасывает только доказанно
+    # терминальные — всякое «не знаю» остаётся в выдаче, пропущенным in_doubt не станет.
     rows = []
-    for run_id in _runs().run_ids():
+    for run_id in _runs().live_run_ids():
         try:
             if str(_runs().manifest(run_id).get("status") or "") == "in_doubt":
                 rows.append(run_id)
