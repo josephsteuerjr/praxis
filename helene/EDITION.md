@@ -18,11 +18,13 @@ that changed the layer.
 
 ## 2026-09-26 — 1.0.1: the lag behind her is closed; an adversarial review before release
 
-Mirror `praxis/`: her live master `feb6f2a` (598 files compared) — `9a0897d`, her own
-skill commit `184ea475`, and the review candidate merged into her master on 26.09 (the private
-record floor reads what really went to the model — frozen room epoch, resumed run; namesakes
-across the whole book; recall labels for direct chats; an honest epoch fallback; JSONL line
-separators; the recall refresh wedge; `flock` before the claim lease). Working copy: `port/lag-2609` — the 1.0.0 tree (her KEAT
+Mirror `praxis/`: her live master `2f14f3c` (599 files compared) — `9a0897d`, her own
+skill commit `184ea475`, and two candidates merged into her master on 26.09: the review fixes
+(the private record floor reads what really went to the model — frozen room epoch, resumed run;
+namesakes across the whole book; recall labels for direct chats; an honest epoch fallback;
+JSONL line separators; the recall refresh wedge; `flock` before the claim lease) and the record
+scan (a new message no longer walks her whole ledger asking the place of every chat key —
+measured on her ledger: 1.2 s of the main loop per message → 0.02 s; her boot and 100 % CPU). Working copy: `port/lag-2609` — the 1.0.0 tree (her KEAT
 and frame) plus everything of hers it had missed. The layer check alone showed 18 lagging
 files; a line-level pass over ALL her history since 15.08 found her edits missing from
 declared files too. Taken by her commits (3-way from her nearest version): recall v8
@@ -196,4 +198,4 @@ History of this file: 14.09 (layer regenerated from `8cb65f14`), 15.09 (bridge a
 joined), 17.09 (14→16.09 port), 25.09 (mirror at `b440156`, the layer after the review),
 26.09 (1.0.0: mirror at `ec9092f`, KEAT and her frame in the edition), 26.09 (1.0.1: mirror at
 `9a0897d`, the lag behind her closed), 26.09 (1.0.1 after the adversarial review: mirror at
-`feb6f2a`, Windows run evidence, recall care, sleep texts).
+`2f14f3c`, Windows run evidence, recall care, sleep texts, record scan).

@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 import memory_provenance
 from self_model import FileLock
@@ -696,18 +696,29 @@ def _event_copy(rec: dict) -> dict:
 
 
 def iter_events(*, chat_id: str | int | None = None, kinds: set[str] | None = None,
-                limit: int | None = None) -> list[dict]:
+                limit: int | None = None,
+                where: Callable[[dict], bool] | None = None) -> list[dict]:
     """События одного разговора.
 
     Фильтр — по МЕСТУ (`_same_place`), а не по строке ключа: событие сказано в
     ветке, но принадлежит комнате. Кэш мест на один вызов: ключей в ленте сотни, а
     вопросов к реестру должно быть столько же, сколько разных ключей.
     Разбор файлов — из кэша по файлу дня (`events_cache_enabled`), наружу — копии.
+
+    `where` — дешёвый фильтр по содержимому записи, до вопроса о месте (26.09, профиль
+    бута: на каждое новое сообщение `record_message` делал два полных обхода ленты, и
+    для каждого из сотен ключей чатов место резолвилось с чтением файла маршрутов — в
+    главном цикле, под `_WRITE_LOCK`; раннер стоял на 100 % ЦП, бут шёл 10–18 минут).
+    Смысл тот же: запись проходит, только если выполнены оба условия.
     """
     out: list[dict] = []
     belongs: dict[str, bool] = {}
     for path in sorted(EVENTS_DIR.glob("*.jsonl")) if EVENTS_DIR.exists() else []:
         for rec in _event_file_records(path):
+            if kinds and rec.get("kind") not in kinds:
+                continue
+            if where is not None and not where(rec):
+                continue
             if chat_id is not None:
                 key = str(rec.get("chat_id"))
                 hit = belongs.get(key)
@@ -716,8 +727,6 @@ def iter_events(*, chat_id: str | int | None = None, kinds: set[str] | None = No
                     belongs[key] = hit
                 if not hit:
                     continue
-            if kinds and rec.get("kind") not in kinds:
-                continue
             out.append(_event_copy(rec))
     out.sort(key=lambda r: (_epoch(r.get("ts")), str(r.get("id", ""))))
     return out[-limit:] if limit is not None else out
@@ -737,7 +746,11 @@ def _recent_duplicate(chat_id, key: str, state: dict) -> dict | None:
         if item.get("key") == key:
             return get_event(str(item.get("id") or "")) or {"id": item.get("id"), "duplicate": True}
     # Covers a crash after JSONL append but before the state cursor was replaced.
-    for rec in reversed(iter_events(chat_id=chat_id, kinds={"conversation_message"}, limit=400)):
+    # 26.09: запись с тем же ключом дедупа ищется по всей ленте места — сначала по ключу
+    # (дёшево), место спрашивается только у совпавших. Ключ дедупа — это сообщение и его
+    # ревизия, совпадение за пределами прежних 400 строк — тот же дубль, не другое.
+    for rec in reversed(iter_events(chat_id=chat_id, kinds={"conversation_message"}, limit=400,
+                                    where=lambda row: row.get("dedupe_key") == key)):
         if rec.get("dedupe_key") == key:
             return rec
     return None
@@ -782,9 +795,13 @@ def record_message(chat_id: str | int, line: str, *, actor: str = "", direction:
         lineage = []
         telegram_key = memory_provenance.telegram_message_key(rec)
         if telegram_key is not None:
+            # 26.09: только записи того же сообщения — место спрашивается у них одних.
+            native = int(telegram_key[1])
             lineage = _telegram_lineage_event_ids(
-                iter_events(chat_id=chat_id, kinds={"conversation_message"}),
-                telegram_key[1],
+                iter_events(chat_id=chat_id, kinds={"conversation_message"},
+                            where=lambda row: (memory_provenance.telegram_message_key(row)
+                                               or ("", -1))[1] == native),
+                native,
             )
         if revision_kind in {"edit", "delete"} or len(lineage) > 1:
             state = rebuild_state(chat_id)
@@ -822,7 +839,11 @@ def note_message_revision(chat_id: str | int, message_id: int, line: str, *,
     place = adopt_place(chat_id)
     with _state_write_guard(place), _WRITE_LOCK:
         chat_id = place
-        messages = iter_events(chat_id=chat_id, kinds={"conversation_message"})
+        # 26.09: только записи этого сообщения — место спрашивается у них одних.
+        wanted = int(message_id)
+        messages = iter_events(chat_id=chat_id, kinds={"conversation_message"},
+                               where=lambda row: (memory_provenance.telegram_message_key(row)
+                                                  or ("", -1))[1] == wanted)
         lineage_ids = _telegram_lineage_event_ids(messages, message_id)
         state = _load_state(chat_id, rebuild=True)
         if not lineage_ids:
