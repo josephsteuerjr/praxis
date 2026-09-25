@@ -399,6 +399,10 @@ class BotTransport:
         # первой отправкой наружу — снять пост до ответа.
         self.last_incoming: dict[str, int] = {}
         self.before_send = None
+        # 25.09 (G): крючок приёма — раннер кладёт входящее в накопитель уведомлений
+        # (core/notices) ДО хода: пока идёт ход в другом чате, это единственный путь
+        # узнать о сообщении в следующем вводе модели. Зовётся из потока приёма.
+        self.on_incoming = None
         # .strip(): id сверяется СТРОКОЙ (`ident == str(self.owner_id)`), и
         # " 111 " из руками правленного helene.json не совпал бы с "111"
         # никогда — владелец получил бы бота, молчащего лично на него.
@@ -615,6 +619,15 @@ class BotTransport:
                             "(telegram.allow_from=%s)", sender_name, sender_id,
                             self.allow_from)
             return
+        hook = self.on_incoming
+        if hook is not None:
+            try:
+                hook(chat_id=conversation, text=text, sender=sender_name,
+                     sender_id=sender_id, is_dm=is_dm, title=title,
+                     message_id=str(message.get("message_id") or ""),
+                     ts=float(message.get("date") or 0) or None)
+            except Exception:
+                log.debug("крючок приёма (уведомления) упал [%s]", conversation, exc_info=True)
         self._enqueue(conversation)
 
     def is_allowed(self, sender_id) -> bool:

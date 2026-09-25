@@ -114,9 +114,12 @@ EN: dict[str, dict] = {
     },
     "journal": {
         "d": ("Write into your journal what happened or what you felt (episodic memory). "
-              "salience 1-3."),
+              "salience 1-3. decision=true marks an agreement or decision with the owner made "
+              "in this conversation: every live window and alarm of yours will see the line."),
         "p": {"entry": "the entry, in your own words",
-              "salience": "1-3, how much this matters (default 2)"},
+              "salience": "1-3, how much this matters (default 2)",
+              "decision": "true when this is an agreement or decision with the owner; "
+                          "your live windows and alarms will see it (default false)"},
     },
     "update_self": {
         "d": ("Record a provenance-rich observation about yourself without rewriting the "
@@ -879,7 +882,7 @@ BASE_SHA: dict[str, str] = {
     "group_context": "1bc9abab",
     "inbox_list": "e2dce134",
     "inbox_read": "fa4c3f02",
-    "journal": "13bacd05",
+    "journal": "a08afab7",
     "list_active_runs": "cfa9d0b6",
     "mail_read": "bac05427",
     "manage_appetite": "4a190143",

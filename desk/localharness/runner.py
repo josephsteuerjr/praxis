@@ -354,6 +354,13 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
     history, current = _dialogue(chat_id)
     orient = _orient(chat_id)
     extra = {"media_refs": tuple(media_refs)} if media_refs else {}
+    # 25.09 (G): ход в этом чате начался — его уведомления из накопителя сняты (агент
+    # видит всю комнату сам). Слова о других комнатах остаются до их ходов.
+    try:
+        from core import notices as core_notices
+        core_notices.clear_chat(chat_id)
+    except Exception:
+        log.debug("накопитель уведомлений: снятие для [%s] не удалось", chat_id, exc_info=True)
     _ext_hook("before_turn", chat_id)
     envelope = None
     try:
@@ -366,6 +373,30 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
         return None
     finally:
         _ext_hook("after_turn", chat_id, envelope)
+
+
+def _note_incoming(*, chat_id: str, text: str, sender: str, sender_id: str, is_dm: bool,
+                   title: str = "", message_id: str = "", ts: float | None = None) -> None:
+    """Входящее из Telegram — в накопитель уведомлений дерева (25.09, G).
+
+    Зовётся из потока приёма бота/аккаунта до хода: пока идёт ход в другом чате, строка
+    покажется агенту в ближайшем вводе модели (изменчивый хвост кадра и итерации
+    тул-цикла), а ход этого чата снимет её сам (`clear_chat` в `_run_turn`). В издании
+    окон-долгожителей нет, поэтому `owner_line` не пишется: реплика владельца в ЛС и так
+    едет событием комнаты, с содержимым — аудитория владельческая.
+    """
+    try:
+        from core import notices as core_notices
+    except Exception:
+        return
+    try:
+        core_notices.note_incoming(
+            kind="dm" if is_dm else "mention", chat_id=str(chat_id),
+            chat_title=str(title or sender or ""), who=str(sender or ""),
+            message_id=str(message_id or ""), gist=str(text or ""), private=bool(is_dm),
+            ts=ts, is_owner_dm=False)
+    except Exception:
+        log.debug("накопитель уведомлений: запись [%s] не легла", chat_id, exc_info=True)
 
 
 def _ext_hook(event: str, *args) -> None:
@@ -1782,6 +1813,7 @@ def main() -> None:
         try:
             import mtproto
             _bot = mtproto.MtprotoTransport(agent, tree, memory_life, cfg)
+            _bot.on_incoming = _note_incoming
             _bot.start()
             botapi.install(agent, _desks, _bot)
         except Exception:
@@ -1792,6 +1824,7 @@ def main() -> None:
         # окно: продукт остаётся рабочим локально, а причина названа в логе.
         try:
             _bot = botapi.BotTransport(agent, tree, memory_life, cfg)
+            _bot.on_incoming = _note_incoming
             _bot.start()
             botapi.install(agent, _desks, _bot)
         except Exception:

@@ -1204,6 +1204,43 @@ NOT_HERS_LABELS = (
 )
 
 
+def _busy_label(current, ctx) -> str:
+    """Чем она занята — для шапки блока уведомлений. Только слова, без чужих цитат."""
+    kind = str(getattr(current, "kind", "") or "")
+    if kind in ("task_window", "coding_window"):
+        goal = " ".join(str(getattr(current, "goal", "") or "").split())
+        return f"окно «{goal[:48]}»" if goal else "окно"
+    if kind in ("wake", "heartbeat"):
+        return "Пробуждение"
+    title = str(getattr(ctx, "title", "") or "") if ctx is not None else ""
+    if title:
+        return f"ход в «{title[:40]}»"
+    return "ход"
+
+
+def _notices_block(*, mid_turn: bool = False) -> str:
+    """Блок уведомлений для этого ввода модели (core/notices) или ''.
+
+    Без живого run блок не строится — аудитория неизвестна (fail-closed). Владельческая
+    аудитория считается так же, как `owner_context` при сборке кадра: владелец говорит
+    или выход адресован ему; иначе содержимое личек в блоке не печатается.
+    """
+    from core import notices as core_notices
+    if not core_notices.enabled():
+        return ""
+    try:
+        current = run_context.current_run()
+    except Exception:
+        return ""
+    if current is None:
+        return ""
+    ctx = _TURN_CHANNEL.get()
+    owner_context = bool(ctx is not None and (ctx.owner or ctx.owner_audience))
+    return core_notices.block_for_input(
+        run_id=current.run_id, run_kind=current.kind, chat_id=_active_chat(),
+        owner_context=owner_context, busy_label=_busy_label(current, ctx), mid_turn=mid_turn)
+
+
 def build_state_evidence_block(*, hide_identity_load: bool = False,
                                self_only: bool = False) -> str:
     """Mutable state continuity at lower prompt priority, never SYSTEM authority.
@@ -1232,6 +1269,18 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
         pass
     try:
         add("runner_observations_now", build_frame_tail())
+    except Exception:
+        pass
+    # 25.09 (G): что случилось в других комнатах, пока она занята, и слова владельца
+    # для её живых окон. Строка о её фоновых процессах — рядом: оба про неё саму, поэтому
+    # едут в любую комнату; приватность личек блок режет сам по аудитории.
+    try:
+        add("notices_while_busy", _notices_block(mid_turn=False))
+    except Exception:
+        pass
+    try:
+        from core import processes as core_processes
+        add("background_processes", core_processes.state_line())
     except Exception:
         pass
     try:
@@ -1569,14 +1618,27 @@ def tool_remember(person: str, fact: str, visibility: str = "public",
     return f"Запомнила про {person} ({vis}).{linked}"
 
 
-def tool_journal(entry: str, salience: int = 2) -> str:
+def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
     path = JOURNAL_DIR / f"{_today()}.md"
     if not path.exists():
         path.write_text(f"# {_today()}\n\n", encoding="utf-8")
     with path.open("a", encoding="utf-8") as fh:
         fh.write(f"- {_now()} (s{_salience(salience)}) {entry.strip()}\n")
     _reindex(path)
-    return "Записала в дневник."
+    # 25.09 (G §4): её пометка «это договорённость с владельцем» — строку увидят все её
+    # живые окна и будильники и будут держать до конца окна (core/notices). Без пометки
+    # запись остаётся просто записью; классификации по словам нет.
+    if decision:
+        try:
+            from core import notices as core_notices
+            current = run_context.current_run()
+            core_notices.note_owner_decision(
+                entry.strip(), run_id=current.run_id if current is not None else "")
+        except Exception:
+            log.debug("пометка решения владельца не легла в накопитель", exc_info=True)
+            return "Записано в дневник; пометить как решение владельца не вышло."
+        return "Записано в дневник; решение владельца увидят все живые окна."
+    return "Записано в дневник."
 
 
 def tool_manage_notes(action: str, text: str = "", kind: str = "",
@@ -2119,9 +2181,17 @@ def tool_shell(command: str) -> str:
     # _autocommit_self_edit ниже. Восстановление: selfgit.list_safety_points().
     selfgit.safety_point("safety before shell")
     pre_dirt = _pre_shell_dirt()
+    # 25.09 (G §4.2): запуск в фон (`… &`) получает хвост, печатающий pid, и попадает в
+    # реестр её процессов — чтобы другое её окно видело «это запустило окно такое-то»,
+    # а не «чужой клон». Сама команда не меняется, маркер из вывода снимается ниже.
+    try:
+        from core import processes as core_processes
+        shell_command, background = core_processes.wrap_background_launch(command)
+    except Exception:
+        shell_command, background = command, False
     try:
         proc = subprocess.run(
-            ["bash", "-lc", command],
+            ["bash", "-lc", shell_command],
             cwd=_shell_workdir(),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -2137,6 +2207,17 @@ def tool_shell(command: str) -> str:
         out = f"[ошибка shell] {e}"
     # PASS 24: never destroy command output here.  The run spine stores the exact result and
     # gives the model an honest head/tail ResultRef with cursor reads for arbitrarily large logs.
+    if background:
+        try:
+            out, bg_pid = core_processes.take_pid_marker(out)
+            if bg_pid:
+                current = run_context.current_run()
+                core_processes.register(
+                    bg_pid, command,
+                    run_id=current.run_id if current is not None else "",
+                    run_kind=current.kind if current is not None else "")
+        except Exception:
+            log.debug("фоновый процесс не записался в реестр", exc_info=True)
     log.info("SHELL -> %s", out[:500].replace("\n", " ⏎ "))
     if _hardbot_read:
         # Прочитанное из хардбота запоминается не чтобы запретить читать, а чтобы потом
@@ -6040,12 +6121,15 @@ BASE_TOOLS = [
     },
     {
         "name": "journal",
-        "description": "Записать в дневник, что было или что почувствовала (эпизодическая память). salience 1-3.",
+        "description": ("Записать в дневник, что было или что почувствовала (эпизодическая память). "
+                        "salience 1-3. decision=true — договорённость или решение владельца из "
+                        "этого разговора: строку увидят все твои живые окна и будильники."),
         "input_schema": {
             "type": "object",
             "properties": {
                 "entry": {"type": "string"},
                 "salience": {"type": "integer", "enum": [1, 2, 3]},
+                "decision": {"type": "boolean"},
             },
             "required": ["entry"],
         },
@@ -15565,6 +15649,15 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 )
         if loop_notes:
             tool_results.append({"type": "text", "text": "\n".join(loop_notes)})
+        # 25.09 (G): следующая итерация тул-цикла — тоже её ввод модели. Пришедшее в
+        # другие комнаты и слова владельца едут текстовым блоком рядом с результатами рук,
+        # как и наблюдение о петле выше: новая строка ленты, кэш префикса не трогается.
+        try:
+            notice_text = _notices_block(mid_turn=True)
+        except Exception:
+            notice_text = ""
+        if notice_text:
+            tool_results.append({"type": "text", "text": notice_text})
         messages.append({"role": "assistant", "content": assistant_blocks})
         messages.append({"role": "user", "content": tool_results})
         _prune_stale_screenshots(messages)

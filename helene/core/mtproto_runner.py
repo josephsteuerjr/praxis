@@ -3184,6 +3184,25 @@ async def on_new(event) -> None:
                       "addressed_mid": (int(mid) if (addressed and mid is not None) else None),
                       "room_mode": room_mode, "room_policy": room_policy}
     log.info("MSG [%s] %s (id=%s, %s): %r", "DM" if is_private else chat_id, name, sender_id, cat, body[:60])
+    # 25.09 (G §1): обращение к ней или личка — в накопитель уведомлений. Не будильник:
+    # ход этой комнаты придёт своим порядком и сам снимет запись (`clear_chat` в
+    # `_run_pass`); пока она занята другим, строка покажется в её ближайшем вводе модели.
+    # Реплика владельца в личке — ещё и `owner_line` для её живых окон и будильников.
+    # Голый неадресованный поток группы сюда не идёт: это среда, а не событие.
+    notice_kind = ("dm" if is_private else
+                   "mention" if mentioned else "reply" if replied else
+                   "name" if named else "")
+    if notice_kind:
+        try:
+            from core import notices as core_notices
+            core_notices.note_incoming(
+                kind=notice_kind, chat_id=chat_id,
+                chat_title=str(topic_title or name or ""), who=name, message_id=mid,
+                gist=body, private=bool(is_private), ts=message_ts,
+                is_owner_dm=bool(is_private and is_owner))
+        except Exception:
+            log.debug("накопитель уведомлений: запись [%s] #%s не легла", chat_id, mid,
+                      exc_info=True)
 
     # Незнакомец остаётся самостоятельным разговором Praxis: адрес уже сохранён в книге.
     if is_private and not is_owner and cat == "unknown":
@@ -4130,6 +4149,14 @@ async def _run_pass(chat_id: str) -> None:
                 return
             meta["room_mode"] = room_mode
         _last_pass[chat_id] = time.time()
+        # 25.09 (G §3): ход в этом чате начался — его уведомления из накопителя сняты. Она
+        # зашла в комнату как обычно и видит весь контекст сама; слова владельца для окон
+        # (`owner_*`) этим не трогаются.
+        try:
+            from core import notices as core_notices
+            core_notices.clear_chat(chat_id)
+        except Exception:
+            log.debug("накопитель уведомлений: снятие для [%s] не удалось", chat_id, exc_info=True)
         # Тот же разговор, но ролями: её реплики поедут в модель как ЕЁ реплики, а не
         # строками «Praxis: …» / «[…; Praxis [id …]] …» внутри чужого текста. Сплошная
         # склейка при этом никуда не девается — на ней стоят расписки, исходящая граница
