@@ -61,6 +61,16 @@ WINDOW_TEMPLATES = ("_MAIL_COMPOSE_FRAME", "_ABSENCE_FRAME", "_HEARTBEAT_FRAME",
 #: Функции дерева, чей вывод — авторская рамка без содержимого: заворачиваем целиком.
 WRAPPED_FUNCTIONS = ("_presence_frame",)
 
+#: 1.0.0 (26.09): контракты рук и аппетита у дерева теперь КОНСТАНТЫ модуля (так их держит
+#: её прод со стабильной головой комнат), а не литералы внутри `frame_trace.mark(...)`.
+#: Обёртка метки их и так переводит на лету; правим и сами константы — производная
+#: `_ROOM_TOOLS_CONTRACT_STABLE` собрана на импорте из исходной и обёртки не ждёт.
+CONTRACT_CONSTANTS = ("_OWNER_TOOLS_CONTRACT", "_APPETITE_CONTRACT", "_ROOM_TOOLS_CONTRACT_STABLE")
+
+#: Словари дерева вне `agent` с авторскими строками про владельца: полномочия говорящего
+#: для строки «говорит» зоны «СЕЙЧАС» под стабильной головой («впустить может только Егор»).
+MODULE_DICTS = (("frame_layout", "AUTHORITY"),)
+
 #: Списки схем тулов у дерева — те же, что у `body._TOOL_LISTS`. Сверх них правятся все
 #: константы модуля `*_TOOL` (DESCRIBE_TOOL/CALL_TOOL живут вне списков).
 TOOL_LISTS = ("BASE_TOOLS", "OWNER_TOOLS", "PRAXIS_SELF_TOOLS", "SHARED_CONTEXT_TOOLS",
@@ -260,13 +270,17 @@ def install(agent_mod, cfg: dict | None, name: str | None = None) -> dict:
                   getattr(en_mod, "EN", None)):
         if isinstance(table, dict):
             report["dicts"] += _walk_strings(table, words.say, seen)
-    for attr in WINDOW_TEMPLATES:
+    for attr in WINDOW_TEMPLATES + CONTRACT_CONSTANTS:
         value = getattr(agent_mod, attr, None)
         if isinstance(value, str):
             new = words.say(value)
             if new != value:
                 setattr(agent_mod, attr, new)
                 report["templates"] += 1
+    for module_name, attr in MODULE_DICTS:
+        table = getattr(getattr(agent_mod, module_name, None), attr, None)
+        if isinstance(table, dict):
+            report["dicts"] += _walk_strings(table, words.say, seen)
     report["marks"] = _wrap_marks(agent_mod, words)
     report["functions"] = _wrap_functions(agent_mod, words)
     log.info("тексты дерева — владельцу по имени: %s", report)

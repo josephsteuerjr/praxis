@@ -1164,12 +1164,14 @@ def _lifted_source(ctx, audience: str = "other") -> tuple[str, dict | None]:
 
 
 def _render_lifted(header: str, src: dict | None,
-                   limit: int = E_LIFT_MAX) -> tuple[str, list[dict]]:
+                   limit: int = E_LIFT_MAX, *, coverage=None) -> tuple[str, list[dict]]:
     """Свёрстанное «поднятое» под потолок ГОТОВОГО блока: ограждения, provenance и
     указатель обрезки считаются внутри limit. Обрезка — только явным указателем
     с числом знаков, числом байт и способом поднять целиком; снятие приватных строк —
     отдельной строкой с числом, потому что молчаливая фильтрация есть ровно та болезнь,
     от которой блок и подписан хэшем."""
+    if coverage is not None:
+        coverage.clear()
     if src is None:
         return header, []
     path, raw, sha, body = src["path"], src["raw"], src["sha"], src["body"]
@@ -1197,6 +1199,15 @@ def _render_lifted(header: str, src: dict | None,
                 + src["foot"])
 
     block, shown = _fit_body(assemble, body, limit)
+    if coverage is not None:
+        # Identity comes from the selected file, never from mentions in its text
+        # or the rendered provenance wrapper. Export only the exact shown body.
+        try:
+            address = path.relative_to(BASE).as_posix()
+        except ValueError:
+            address = None
+        if address is not None:
+            coverage[address] = shown
     markup = {"bold": shown.count("**") // 2,
               "list_lines": sum(1 for l in shown.splitlines()
                                 if l.lstrip().startswith(("- ", "* ")))}
@@ -1251,7 +1262,7 @@ def _apply_e_ceiling(blocks: dict[str, str], *, rebuild) -> list[dict]:
 
 def _epoch_blocks(ctx, tools, now: datetime,
                   audience: str = "other",
-                  payload: dict | None = None) -> tuple[dict[str, str], list[dict],
+                  payload: dict | None = None, *, coverage=None) -> tuple[dict[str, str], list[dict],
                                                         list[dict]]:
     """Блоки E v4 в порядке частоты изменения (E_ORDER), опись поднятых тел и опись
     деградаций потолка. Шапка добавляется при заморозке — она знает номер и причину.
@@ -1273,7 +1284,9 @@ def _epoch_blocks(ctx, tools, now: datetime,
     here = str(getattr(ctx, "chat_id", "") or "")
     book = _block_address_book(ctx, audience)
     lift_header, lift_src = _lifted_source(ctx, audience)
-    lifted_block, lifted_meta = _render_lifted(lift_header, lift_src)
+    dossier_coverage = {}
+    lifted_block, lifted_meta = _render_lifted(
+        lift_header, lift_src, coverage=dossier_coverage)
     hands_meta: dict = {}
     blocks = {
         "self": _block_self(),
@@ -1302,8 +1315,13 @@ def _epoch_blocks(ctx, tools, now: datetime,
         """Пересборка одного блока под меньший потолок БЕЗ повторного чтения диска:
         списки ужимаются из уже собранного текста, тело — из уже прочитанных байт."""
         if name == "lifted":
-            text, meta = _render_lifted(lift_header, lift_src, target)
-            lifted_meta[:] = meta
+            reduced_coverage = {}
+            text, meta = _render_lifted(lift_header, lift_src, target,
+                                        coverage=reduced_coverage)
+            if len(text) < len(blocks["lifted"]):
+                dossier_coverage.clear()
+                dossier_coverage.update(reduced_coverage)
+                lifted_meta[:] = meta
             return text
         if name == "recent":
             return _shrink_rows(blocks["recent"], target, "журнал доставки")
@@ -1321,6 +1339,9 @@ def _epoch_blocks(ctx, tools, now: datetime,
     if hands_meta and hands_meta.get("chars") != len(blocks["hands"]):
         hands_meta.update({"chars": len(blocks["hands"]), "stage": "лестница E",
                            "over": max(0, len(blocks["hands"]) - HANDS_MAX)})
+    if coverage is not None:
+        coverage.update(index={"memory/INDEX.md": blocks.get("memory_index", "")},
+                        dossier=dossier_coverage)
     return blocks, lifted_meta, degraded, hands_meta
 
 
@@ -1329,12 +1350,12 @@ def _epoch_text(blocks: dict[str, str], header_line: str) -> str:
 
 
 def _zone_e_current(tools, ctx=None, now: datetime | None = None,
-                    audience: str = "other", payload: dict | None = None) -> str:
+                    audience: str = "other", payload: dict | None = None, coverage=None) -> str:
     """Э, какой она собралась бы СЕЙЧАС (без шапки — та рождается на границе).
     В кадр едет замороженный снапшот; расхождение — метрика drift по блокам."""
     now = now or datetime.now(timezone.utc)
     blocks, _meta, _degraded, _hands = _epoch_blocks(ctx, tools, now, audience,
-                                                     payload)
+                                                     payload, coverage=coverage)
     return "\n\n".join(blocks[k] for k in E_ORDER if k in blocks)
 
 

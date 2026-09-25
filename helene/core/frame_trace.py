@@ -86,7 +86,10 @@ KINDS = ("md", "text", "json", "jsonl", "frame", "marker")
 # `lever_off` (порт 18.09): секции нет, потому что рычаг выключен — это НЕ «пусто» и не
 # «ветка не выбрана». Указатель рук снимается рычагом целиком, и ноль без причины
 # читался бы как поломка сборщика.
-REASONS = ("context_budget", "empty", "branch", "cap", "lever_off")
+# `moved` (13.09, PRAXIS_FRAME_HEAD_STABLE): секции нет в ЭТОЙ зоне, потому что её содержимое
+# уехало в другую (полномочия — в строку «говорит» зоны «СЕЙЧАС», STATE — ярусом конверта).
+# Это шестой ноль, отличный от «ветка не выбрана»: ветка выбрана, место другое.
+REASONS = ("context_budget", "empty", "branch", "cap", "lever_off", "moved")
 
 # Тексты этих секций ПЕРЕЖИВАЮТ seal и едут в `sections()` полем `text`: их читает
 # теневой сборщик (её решение №8 от 21.08 — contract.*/state.* и машинные тиры едут
@@ -533,7 +536,7 @@ def note_embed(zone: str, **counts: int) -> None:
 # ------------------------------------------------------------------- опечатывание
 
 
-def _containers(system, evidence: str) -> dict:
+def _containers(system, evidence: str, epoch: str = "") -> dict:
     if isinstance(system, list):
         persona_container = "system[0].text"
         dynamic_container = "system[1].text" if len(system) > 1 else "(absent)"
@@ -544,6 +547,9 @@ def _containers(system, evidence: str) -> dict:
         "persona": persona_container,
         "dynamic": dynamic_container,
         "evidence": "messages[-1]" if str(evidence or "") else "(absent)",
+        # 15.09: эпоха комнаты — первое сообщение кадра (frame_epoch). Нет эпохи — зоны нет
+        # вовсе: строка о ней не публикуется, чтобы кадр без рычага читался как прежде.
+        "epoch": "messages[0]" if str(epoch or "") else "(absent)",
         # Зона «сейчас» живёт в том же последнем сообщении, между закрытым конвертом и
         # открытой репликой. Пустая зона — «(absent)», а не ноль без имени.
         "situation": "messages[-1] · после </praxis_context_evidence>",
@@ -551,13 +557,16 @@ def _containers(system, evidence: str) -> dict:
 
 
 def _seal_impl(trace: Trace, persona: str, dynamic: str, evidence: str, system,
-               situation: str = "") -> None:
+               situation: str = "", epoch: str = "") -> None:
     actual = {"persona": persona, "dynamic": dynamic, "evidence": evidence,
-              "situation": situation}
-    containers = _containers(system, evidence)
+              "situation": situation, "epoch": epoch}
+    containers = _containers(system, evidence, epoch)
     zones_out: list[dict] = []
     honesty: dict = {"ok": True}
-    for zone in ("persona", "dynamic", "evidence", "situation"):
+    zones = ("persona", "dynamic", "evidence", "situation")
+    if epoch or trace._by_zone.get("epoch"):
+        zones = zones + ("epoch",)
+    for zone in zones:
         included = [rec for rec in trace._by_zone.get(zone, ()) if rec.included]
         marked = "".join(rec.text if isinstance(rec.text, str) else "" for rec in included)
         real = actual[zone] if isinstance(actual[zone], str) else ""
@@ -601,7 +610,7 @@ def _seal_impl(trace: Trace, persona: str, dynamic: str, evidence: str, system,
 
 
 def seal(*, persona: str, dynamic: str, evidence: str, system,
-         situation: str = "") -> None:
+         situation: str = "", epoch: str = "") -> None:
     """Опечатать след: сверить склейку, посчитать смещения и СБРОСИТЬ ссылки на тексты.
 
     Вызывается ровно один раз, на шве сборки кадра, ПОСЛЕ `system = _system(...)`. Точка
@@ -615,7 +624,8 @@ def seal(*, persona: str, dynamic: str, evidence: str, system,
         _seal_impl(trace, persona if isinstance(persona, str) else "",
                    dynamic if isinstance(dynamic, str) else "",
                    evidence if isinstance(evidence, str) else "", system,
-                   situation if isinstance(situation, str) else "")
+                   situation if isinstance(situation, str) else "",
+                   epoch if isinstance(epoch, str) else "")
     except Exception:
         # Прибор сломался — он умолкает, а не роняет её ход.
         trace.usable = False

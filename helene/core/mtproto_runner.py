@@ -1894,16 +1894,27 @@ async def on_edited(event) -> None:
     """
 
     is_private = bool(getattr(event, "is_private", False))
-    msg = event.message
+    msg = getattr(event, "message", None)
     mid = getattr(msg, "id", None)
+    peer_id = str(getattr(event, "chat_id", None))
+    # KEAT (её прод, паритет издания 26.09): правка отзывает захваченный оригинал ДО любых
+    # эффектов ревизии. Идентичность Telegram — точный положительный int; иначе у корня
+    # комнаты отзывается всё пространство координат (fail closed), в личке — ничего.
+    if type(mid) is not int or mid <= 0:
+        if peer_id == '-1001240718803':
+            import keat_live
+            await asyncio.to_thread(keat_live.invalidate_native, peer_id, None)
+        return
+    if peer_id == '-1001240718803':
+        import keat_live
+        await asyncio.to_thread(keat_live.invalidate_native, peer_id, mid)
     edited_at = getattr(msg, "edit_date", None)
-    if mid is None or edited_at is None:
+    if edited_at is None:
         return
 
     # Корневая комната известна без маршрута; сам маршрут фиксируется НИЖЕ — после
     # допуска и той же single-flight добычи каталога, что и в on_new (её регрессия 11:
     # правка и оригинал не смеют разъехаться по ключам вокруг первой добычи).
-    peer_id = str(event.chat_id)
     room_nature = (None if is_private else
                    _known_forum(event.chat_id, msg, getattr(event, "chat", None)))
     # Capture reception order before the first await.  Telegram edit_date is only
@@ -1915,6 +1926,11 @@ async def on_edited(event) -> None:
         int(mid), edited_at, text=text, media=media,
     )
     reception_order = _revision_reception_order(peer_id, int(mid), base_source_id)
+    # Отзыв — до ЛЮБЫХ эффектов ревизии и до короткого замыкания «это моё же сообщение»: сбой
+    # отзыва всплывает, апдейт не считается безопасно спроецированным.
+    if is_private:
+        import keat_live
+        await asyncio.to_thread(keat_live.invalidate_native, peer_id, int(mid))
     sender = await event.get_sender()
     if sender is not None and getattr(sender, "is_self", False):
         return
@@ -2197,7 +2213,18 @@ async def on_deleted(event) -> None:
     """
 
     peer_raw = getattr(event, "chat_id", None)
-    if peer_raw is None or not _group_archive_enabled():
+    if peer_raw is None:
+        # KEAT (паритет её прода): безадресное удаление (личка и базовая группа выглядят
+        # одинаково) — барьеры на координаты кандидатов, без догадки о чате.
+        if getattr(event, "deleted_ids", None):
+            import keat_live
+            await asyncio.to_thread(keat_live.invalidate_peerless_deletion, event.deleted_ids)
+        return
+    # Отзыв не зависит от допуска архива комнаты и режима: известный пир обходить его не смеет.
+    import keat_live
+    for mid in (getattr(event, "deleted_ids", None) or ()):
+        await asyncio.to_thread(keat_live.invalidate_native, peer_raw, mid)
+    if not _group_archive_enabled():
         return
     peer_id = str(peer_raw)
     if not rooms.is_allowed(peer_id, False):
@@ -3955,51 +3982,14 @@ def _utf16_units(text: str) -> int:
 
 
 def _split_telegram_text(text: str, limit: int = TELEGRAM_TEXT_CHUNK_UTF16) -> tuple[str, ...]:
-    """Losslessly split text below Telegram's UTF-16 limit.
+    """Lossless shared UTF-16/Markdown boundary contract (`telegram_text.split_text`).
 
-    Prefer a paragraph, then newline, then whitespace boundary in the latter half
-    of the safe window. A pathological unbroken token falls back to the exact
-    code-point boundary; surrogate pairs are never split because Python exposes
-    a non-BMP character as one code point.
+    Её прод 16.09, паритет издания 26.09: живая отправка и durable-план режут текст ОДНОЙ
+    функцией — иначе возобновлённый план и живой раннер расходились бы по границам кусков,
+    а ссылка или код, разрезанные посередине, уезжали битыми сущностями.
     """
-    text = str(text or "")
-    if not text:
-        return ()
-    if limit < 1:
-        raise ValueError("Telegram text limit must be positive")
-    chunks: list[str] = []
-    start = 0
-    while start < len(text):
-        units = 0
-        hard_end = start
-        while hard_end < len(text):
-            width = 2 if ord(text[hard_end]) > 0xFFFF else 1
-            if units + width > limit:
-                break
-            units += width
-            hard_end += 1
-        if hard_end == start:
-            raise ValueError("one character exceeds the Telegram text limit")
-        split_at = hard_end
-        if hard_end < len(text):
-            floor = start + max(1, (hard_end - start) // 2)
-            paragraph = text.rfind("\n\n", floor, hard_end)
-            if paragraph >= floor:
-                split_at = paragraph + 2
-            else:
-                newline = text.rfind("\n", floor, hard_end)
-                if newline >= floor:
-                    split_at = newline + 1
-                else:
-                    for pos in range(hard_end - 1, floor - 1, -1):
-                        if text[pos].isspace():
-                            split_at = pos + 1
-                            break
-        chunks.append(text[start:split_at])
-        start = split_at
-    assert "".join(chunks) == text
-    assert all(_utf16_units(chunk) <= limit for chunk in chunks)
-    return tuple(chunks)
+    from telegram_text import split_text
+    return split_text(text, limit)
 
 
 async def _await_despite_cancellation(awaitable):

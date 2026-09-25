@@ -97,6 +97,14 @@ PORT_DEFAULTS: dict[str, str] = {
     "PRAXIS_AUTO_RECALL_K": "0",
     "PRAXIS_EMBEDDINGS": "0",
     "PRAXIS_WEB_SEARCH": "0",
+    # ⚠ 1.0.0 (26.09), кадр её прода. Стабильная голова КОМНАТЫ: system и набор рук не
+    # зависят от того, кто заговорил. Её замер 13.09 (40 пар соседних кадров группы): при
+    # смене говорящего system рвался на 17-й тысяче знаков, и каждое чередование стоило
+    # ~15 тыс. токенов заново. Под рычагом полномочия хода едут строкой «говорит» в зоне
+    # «СЕЙЧАС», STATE и приватное из досье — ярусами живого конверта; из кадра не исчезает
+    # ничего, меняется место. `_RUNS` — то же для её собственных ходов без комнаты.
+    "PRAXIS_FRAME_HEAD_STABLE": "1",
+    "PRAXIS_FRAME_HEAD_STABLE_RUNS": "1",
 }
 
 # Каноническая конституция продукта — ресурс рядом с кодом (resources/SOUL.md).
@@ -921,13 +929,22 @@ def public_model(cfg: dict) -> dict:
     return scrub(block) if isinstance(block, dict) else {}
 
 
-def env_knobs(cfg: dict) -> dict[str, str]:
-    """Ручки среды: порт-дефолты, поверх — `env` из helene.json (его слово последнее).
+def env_knobs(cfg: dict, tree: Path | None = None) -> dict[str, str]:
+    """Ручки среды: порт-дефолты, КЕАТ личного потока (если есть дерево и владелец в
+    Telegram), поверх — `env` из helene.json (его слово последнее).
 
     ⚠ `"env": []` (или строка, или число) в конфиге роняло руннер AttributeError
     ещё до импорта дерева. Кривой конфиг — не повод для безымянной смерти.
     """
     knobs = dict(PORT_DEFAULTS)
+    if tree is not None:
+        try:
+            knobs.update(keat_knobs(Path(tree), cfg))
+        except Exception:
+            # КЕАТ — надстройка над живым путём: без неё ход идёт прежним путём
+            # байт-в-байт, и это не повод не подняться.
+            log.warning("КЕАТ: политика захвата не собралась — поток идёт прежним путём",
+                        exc_info=True)
     extra = cfg.get("env")
     if extra and not isinstance(extra, dict):
         log.warning("helene.json: блок env должен быть объектом, а не %s — "
@@ -941,7 +958,149 @@ def env_knobs(cfg: dict) -> dict[str, str]:
     return knobs
 
 
-def safe_knobs(cfg: dict) -> dict[str, str]:
+#: Ревизия политики захвата издания. Меняется только вместе со смыслом полей записи.
+KEAT_POLICY_REVISION = "2026-09-26.helene-owner.v1"
+#: Ротация эпох КЕАТ: сколько последних эпох держать и сколько места они могут занять.
+KEAT_EPOCHS_KEEP = 24
+KEAT_EPOCHS_MAX_MB = 256
+#: Эпоха моложе этого не трогается никогда: её ход может ещё идти или возобновиться.
+KEAT_EPOCHS_MIN_AGE_SEC = 3600.0
+
+
+def keat_owner(cfg: dict) -> str:
+    """Telegram-id владельца как поток КЕАТ, или '' — точное положительное число."""
+    raw = str((cfg.get("telegram") or {}).get("owner_id") or "").strip()
+    try:
+        ok = raw.isascii() and raw.isdecimal() and str(int(raw)) == raw and int(raw) > 0
+    except ValueError:
+        ok = False
+    return raw if ok else ""
+
+
+def keat_paths(tree: Path) -> tuple[Path, Path]:
+    """(корень КЕАТ, файл политики) — абсолютные: оба сверяет приёмная `keat_readiness`."""
+    state = (Path(tree) / "memory" / ".state").resolve()
+    return state / "keat", state / "keat-capture-policy.json"
+
+
+def keat_knobs(tree: Path, cfg: dict) -> dict[str, str]:
+    """КЕАТ личного потока владельца в Telegram (1.0.0, порт её прода 12–25.09).
+
+    Что это даёт. Каждое сообщение личного потока — его слова и её ответы — получает при
+    приёме расписку в реестре захвата (`memory/.state/keat/capture/…`, дописываемый,
+    сцеплен sha256), а каждый вызов модели проверяется у границы: лента, которая уходит в
+    модель, обязана быть точной проекцией захваченных оригиналов, и тогда вызов «служится»
+    (`frame_meta.keat.served`) с записанной эпохой. Правка или удаление оригинала отзывает
+    его навсегда; всё, что не сходится, идёт прежним путём байт-в-байт — КЕАТ ничего не
+    переписывает сам.
+
+    ⚠ История не выпадает. У неё в проде 25.09 обслуженный вызов в личке нёс ОДНУ реплику:
+    её ответы не захватывались, и проекция начиналась после последнего из них. Здесь
+    захватываются обе стороны (`botapi.Rooms.record`), расписка ленты-вызовов признаётся
+    проекцией (`keat_candidate.render_receipt`), а раннер отдаёт проекцию только если
+    захвачена ВСЯ горячая лента (`runner._dialogue`), иначе — прежний путь с историей.
+
+    Выключить: `"keat": {"enabled": false}` в helene.json или любая ручка `PRAXIS_KEAT*`
+    в блоке `env` (его слово последнее). Кадр v6 (подмена system свежим E) здесь НЕ
+    поднимается: ему нужен `PRAXIS_OWNER_ID`, который в издании меняет и другие пути
+    дерева; включается осознанно ручками `PRAXIS_FRAME_V6`/`PRAXIS_FRAME_V6_STREAMS`.
+    Политика пишется файлом рядом с состоянием дерева при каждом старте движка.
+    """
+    block = cfg.get("keat") if isinstance(cfg.get("keat"), dict) else {}
+    if block.get("enabled") is False:
+        return {}
+    owner = keat_owner(cfg)
+    if not owner:
+        return {}
+    root, policy_path = keat_paths(tree)
+    policy = {
+        "schema": "keat.capture-policy.v1",
+        "namespace": f"helene-{owner}-owner-v1",
+        "root": str(root),
+        "enrollments": [{
+            "stream": owner, "mode": "owner",
+            "capture": {"issuer": "helene:self", "policy_revision": KEAT_POLICY_REVISION,
+                        "audience": ["owner"], "transfer": "closed",
+                        "presence_hidden": False},
+        }],
+    }
+    raw = (json.dumps(policy, ensure_ascii=False, indent=1, sort_keys=True) + "\n").encode("utf-8")
+    try:
+        current = policy_path.read_bytes()
+    except OSError:
+        current = b""
+    if current != raw:
+        # Байты политики сверяются на каждом захвате и вызове: переписывать файл без
+        # перемены смысла значило бы зря сбрасывать проверку идущего хода.
+        policy_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = policy_path.with_name(policy_path.name + ".tmp")
+        tmp.write_bytes(raw)
+        os.replace(tmp, policy_path)
+    root.mkdir(parents=True, exist_ok=True)
+    return {
+        "PRAXIS_KEAT": "serve",
+        "PRAXIS_KEAT_CAPTURE": "on",
+        # Канонические байты пар: `keat_runtime.staged` сверяет строку целиком.
+        "PRAXIS_KEAT_PAIRS": json.dumps([["owner", owner]], ensure_ascii=True,
+                                        allow_nan=False, separators=(",", ":")),
+        "PRAXIS_KEAT_ROOT": str(root),
+        "PRAXIS_KEAT_CAPTURE_POLICY": str(policy_path),
+    }
+
+
+def prune_keat_epochs(tree: Path, *, keep: int = KEAT_EPOCHS_KEEP,
+                      max_mb: int = KEAT_EPOCHS_MAX_MB,
+                      min_age_sec: float = KEAT_EPOCHS_MIN_AGE_SEC) -> dict:
+    """Ротация эпох КЕАТ: `memory/.state/keat/epochs/<эпоха>/` — снимки вызовов хода.
+
+    Каждый вызов модели в обслуженном ходе пишет неизменяемый снимок проекции (ленту,
+    расписки, схемы рук); у неё в проде это 4,25 МБ на снимок и 8,5 ГБ за две недели.
+    Дома этому расти некуда. Эпоха снимается ЦЕЛИКОМ (внутри неё снимки сцеплены, и
+    обрыв цепи — порча, а не экономия): держим `keep` свежих и не больше `max_mb`;
+    моложе `min_age_sec` не трогаем никогда — её ход может ещё идти. Снятая эпоха
+    значит одно: возобновление того хода пойдёт прежним путём, а не обслуженным.
+    Реестр захвата (`capture/`) не трогается: он канон, и ротация его — порча.
+    """
+    import shutil
+    root, _policy = keat_paths(tree)
+    epochs = root / "epochs"
+    report = {"kept": 0, "removed": 0, "freed_bytes": 0, "errors": []}
+    if not epochs.is_dir():
+        return report
+    rows = []
+    now = time.time()
+    for path in epochs.iterdir():
+        if not path.is_dir():
+            continue
+        try:
+            head = path / "HEAD"
+            mtime = (head if head.exists() else path).stat().st_mtime
+            size = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+        except OSError as exc:
+            report["errors"].append(f"{path.name}: {exc}")
+            continue
+        rows.append((mtime, path, size))
+    rows.sort(key=lambda row: row[0], reverse=True)
+    budget = max(0, int(max_mb)) * 1024 * 1024
+    total = kept_old = 0
+    for mtime, path, size in rows:
+        young = now - mtime < float(min_age_sec)
+        if young or (kept_old < int(keep) and total + size <= budget):
+            total += size
+            report["kept"] += 1
+            if not young:
+                kept_old += 1
+            continue
+        try:
+            shutil.rmtree(path)
+            report["removed"] += 1
+            report["freed_bytes"] += size
+        except OSError as exc:
+            report["errors"].append(f"{path.name}: {exc}")
+    return report
+
+
+def safe_knobs(cfg: dict, tree: Path | None = None) -> dict[str, str]:
     """Те же ручки, но значения секретов заменены на «задан».
 
     Прозрачность продукта — в том, чтобы владелец видел, ЧТО ручка задана, а не её
@@ -954,7 +1113,7 @@ def safe_knobs(cfg: dict) -> dict[str, str]:
     и любой ключ, положенный в ручку с безобидным именем.
     """
     return {k: ("задан" if looks_secret(k, v) else v)
-            for k, v in env_knobs(cfg).items()}
+            for k, v in env_knobs(cfg, tree).items()}
 
 
 def apply_env(knobs: dict[str, str], *, where: str) -> None:

@@ -187,6 +187,10 @@ TIER_LO = max(1, int(os.getenv("PRAXIS_COMPACT_TIER_LO", "4") or 4))
 TIER_HI = max(TIER_LO + 1, int(os.getenv("PRAXIS_COMPACT_TIER_HI", "8") or 8))
 
 _WRITE_LOCK = threading.RLock()
+# 25.09: разобранные события по файлу дня, ключ — (размер, mtime_ns, inode). См. `events_cache_enabled`.
+_EVENTS_CACHE: dict[str, tuple[tuple[int, int, int], list[dict]]] = {}
+_EVENTS_CACHE_GUARD = threading.Lock()
+_EVENTS_CACHE_LIMIT = max(0, int(os.getenv("PRAXIS_EVENTS_CACHE_MB", "512") or 512)) * 1024 * 1024
 _REFRESH_LOCKS_LOCK = threading.Lock()
 _REFRESH_LOCKS: dict[str, threading.Lock] = {}
 _STATE_LOCKS_LOCK = threading.Lock()
@@ -601,6 +605,69 @@ def append_event(kind: str, *, chat_id: str | int | None = None, actor: str = "P
     return rec
 
 
+def events_cache_enabled() -> bool:
+    """Разобранные события живут в памяти по файлу дня (25.09).
+
+    `iter_events` читал и разбирал ВСЮ ленту — 83 файла, 79 МБ, 68 тысяч записей — на
+    каждый вопрос: пересборка состояния места, родословная правки, дедуп, свёртка.
+    Одна правка сообщения в абстракте (их 45 за день) стоила четыре таких прохода
+    под общим замком записи — 30–90 с, и всё это время обработчик входящих ждал того
+    же замка: замер 25.09, `telegram_loop_probe_overdue` по 30–92 с, обработчик
+    апдейта Telegram стоял в `_state_write_guard` 90 % окна профиля.
+
+    Файл прошлого дня неизменен — его разбор хранится, ключ — размер, mtime_ns и inode;
+    сегодняшний растёт и перечитывается, когда меняется. Наружу уходят копии записей:
+    кэш — не то место, куда пишут. Потолок памяти — `PRAXIS_EVENTS_CACHE_MB` (512),
+    сверх него файл разбирается как раньше; `PRAXIS_EVENTS_CACHE=off` выключает всё.
+    """
+    raw = (os.getenv("PRAXIS_EVENTS_CACHE") or "on").strip().lower()
+    return raw not in ("off", "0", "false", "no")
+
+
+def _event_file_records(path: Path) -> list[dict]:
+    """Записи одного файла ленты — из кэша, если файл не менялся."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return []
+    signature = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+    key = str(path)
+    enabled = events_cache_enabled()
+    if enabled:
+        with _EVENTS_CACHE_GUARD:
+            hit = _EVENTS_CACHE.get(key)
+        if hit is not None and hit[0] == signature:
+            return hit[1]
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return []
+    records: list[dict] = []
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(rec, dict):
+            records.append(rec)
+    if enabled:
+        with _EVENTS_CACHE_GUARD:
+            held = sum(sig[0] for name, (sig, _rows) in _EVENTS_CACHE.items() if name != key)
+            if held + stat.st_size <= _EVENTS_CACHE_LIMIT:
+                _EVENTS_CACHE[key] = (signature, records)
+            else:
+                _EVENTS_CACHE.pop(key, None)
+    return records
+
+
+def _event_copy(rec: dict) -> dict:
+    out = dict(rec)
+    meta = out.get("meta")
+    if isinstance(meta, dict):
+        out["meta"] = dict(meta)
+    return out
+
+
 def iter_events(*, chat_id: str | int | None = None, kinds: set[str] | None = None,
                 limit: int | None = None) -> list[dict]:
     """События одного разговора.
@@ -608,19 +675,12 @@ def iter_events(*, chat_id: str | int | None = None, kinds: set[str] | None = No
     Фильтр — по МЕСТУ (`_same_place`), а не по строке ключа: событие сказано в
     ветке, но принадлежит комнате. Кэш мест на один вызов: ключей в ленте сотни, а
     вопросов к реестру должно быть столько же, сколько разных ключей.
+    Разбор файлов — из кэша по файлу дня (`events_cache_enabled`), наружу — копии.
     """
     out: list[dict] = []
     belongs: dict[str, bool] = {}
     for path in sorted(EVENTS_DIR.glob("*.jsonl")) if EVENTS_DIR.exists() else []:
-        try:
-            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
+        for rec in _event_file_records(path):
             if chat_id is not None:
                 key = str(rec.get("chat_id"))
                 hit = belongs.get(key)
@@ -631,7 +691,7 @@ def iter_events(*, chat_id: str | int | None = None, kinds: set[str] | None = No
                     continue
             if kinds and rec.get("kind") not in kinds:
                 continue
-            out.append(rec)
+            out.append(_event_copy(rec))
     out.sort(key=lambda r: (_epoch(r.get("ts")), str(r.get("id", ""))))
     return out[-limit:] if limit is not None else out
 
@@ -668,14 +728,8 @@ def record_message(chat_id: str | int, line: str, *, actor: str = "", direction:
     if source == "telegram" and source_id is not None:
         native, sep, revision = str(source_id).partition(":")
         if native.isdecimal() and sep and (revision == "delete" or revision.startswith("edit:")):
-            # Издание: модулей KEAT (`keat_live`) в дереве нет — кэша эпохи, который надо
-            # инвалидировать, тоже нет; у прода этот шаг обязателен.
-            try:
-                import keat_live
-            except ImportError:
-                keat_live = None
-            if keat_live is not None:
-                keat_live.invalidate_native(chat_id, int(native))
+            import keat_live
+            keat_live.invalidate_native(chat_id, int(native))
     place = adopt_place(chat_id)
     with _state_write_guard(place), _WRITE_LOCK:
         # Место закреплено ДО замка: один и тот же точный ключ используется для всего
@@ -735,14 +789,9 @@ def note_message_revision(chat_id: str | int, message_id: int, line: str, *,
     # Revoke capture authority independently of the derived hot projection.
     # Missing enrollment does not affect legacy edits; enrolled I/O failures are
     # surfaced rather than silently leaving an old checkpoint authorized.
+    import keat_live
     if os.getenv("PRAXIS_KEAT_CAPTURE") == "on":
-        # Издание: модулей KEAT в дереве нет; рычаг захвата здесь никто не включает.
-        try:
-            import keat_live
-        except ImportError:
-            keat_live = None
-        if keat_live is not None:
-            keat_live.invalidate_native(chat_id, message_id)
+        keat_live.invalidate_native(chat_id, message_id)
     place = adopt_place(chat_id)
     with _state_write_guard(place), _WRITE_LOCK:
         chat_id = place

@@ -103,7 +103,9 @@ def _load_tree(code_dir: Path, tree: Path, cfg: dict):
     Разбор ловушки — в шапке `boot.py`.
     """
     global _agent, _life
-    knobs = boot.env_knobs(cfg)
+    # С деревом — чтобы КЕАТ личного потока получил абсолютные пути своей политики
+    # (boot.keat_knobs); без владельца в Telegram его ручек нет вовсе.
+    knobs = boot.env_knobs(cfg, tree=tree)
     os.environ["PRAXIS_BASE"] = str(tree)
     boot.apply_env(knobs, where="до импорта")
     sys.path.insert(0, str(code_dir))
@@ -120,7 +122,7 @@ def _load_tree(code_dir: Path, tree: Path, cfg: dict):
     return agent, memory_life
 
 
-def _dialogue(chat_id: str) -> tuple[list[dict], str]:
+def _dialogue(chat_id: str, sidecar: dict | None = None) -> tuple[list[dict], str]:
     """Разговор ролями: (история, то-на-что-она-отвечает-сейчас).
 
     Правило ЕЁ раннера, дословно (`_turns_to_dialogue` в mtproto_runner): граница
@@ -128,7 +130,15 @@ def _dialogue(chat_id: str) -> tuple[list[dict], str]:
     в один блок; она здесь ещё не говорила — ролей нет, и ход идёт сплошным текстом.
     Своя копия правила здесь потому, что живой раннер тащит за собой Telethon целиком,
     а правило — двадцать строк.
+
+    `sidecar` (1.0.0, КЕАТ): сюда кладутся расписки захвата тех же записей теми же
+    группами — `history` по блокам ролей, `current` по репликам «сейчас». Только если
+    захвачена ВСЯ лента этого хода: сужать её до захваченного хвоста значило бы
+    повторить её прод 25.09, где обслуженный вызов нёс одну реплику вместо разговора.
+    Не всё захвачено — `sidecar` остаётся пустым, и ход идёт прежним путём с историей.
     """
+    if sidecar is not None:
+        sidecar.clear()
     try:
         records = _life.hot_records(chat_id, _life.HOT_HARD_HI)
         # ⚠ ПОТОЛОК ЛЕНТЫ В ЗНАКАХ (КЕАТ, 12.09). Сто двадцать пять записей — это
@@ -141,8 +151,8 @@ def _dialogue(chat_id: str) -> tuple[list[dict], str]:
         log.warning("горячий слой не прочитался [%s] — иду сплошным текстом",
                     chat_id, exc_info=True)
         return [], ""
-    rows = [(r.get("direction") == "out", str(r.get("line") or ""))
-            for r in records if str(r.get("line") or "").strip()]
+    admitted = [r for r in records if str(r.get("line") or "").strip()]
+    rows = [(r.get("direction") == "out", str(r.get("line") or "")) for r in admitted]
     if not rows:
         return [], ""
     last_self = -1
@@ -169,6 +179,18 @@ def _dialogue(chat_id: str) -> tuple[list[dict], str]:
     current = "\n".join(text for _is_self, text in rows[last_self + 1:])
     if not history or not current.strip():
         return [], ""
+    if sidecar is not None:
+        refs = [(r.get("meta") or {}).get("keat_occurrence") for r in admitted]
+        if all(isinstance(ref, dict) and ref for ref in refs):
+            groups: list[list[dict]] = []
+            role = None
+            for (is_self, _text), ref in zip(rows[:last_self + 1], refs[:last_self + 1]):
+                if is_self is not role:
+                    groups.append([])
+                    role = is_self
+                groups[-1].append(dict(ref))
+            sidecar.update(history=groups,
+                           current=[dict(ref) for ref in refs[last_self + 1:]])
     return history, current
 
 
@@ -351,9 +373,17 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
     `media_refs` — картинки из окна (0.5.0); без них вызов дерева тот же, что и
     раньше (аргумент не передаётся вовсе — стенды с заглушкой дерева его не знают).
     """
-    history, current = _dialogue(chat_id)
+    # КЕАТ (1.0.0): расписки захвата ленты — только личному потоку владельца и только
+    # когда захват поднят; остальным ходам сайдкар не нужен, дерево его не ждёт.
+    keat_stream = (os.environ.get("PRAXIS_KEAT_CAPTURE") == "on"
+                   and bool(getattr(ctx, "is_dm", False)) and bool(getattr(ctx, "owner", False)))
+    sidecar: dict | None = {} if keat_stream else None
+    history, current = (_dialogue(chat_id, sidecar) if sidecar is not None
+                        else _dialogue(chat_id))
     orient = _orient(chat_id)
     extra = {"media_refs": tuple(media_refs)} if media_refs else {}
+    if sidecar:
+        extra["occurrence_sidecar"] = sidecar
     # 25.09 (G): ход в этом чате начался — его уведомления из накопителя сняты (агент
     # видит всю комнату сам). Слова о других комнатах остаются до их ходов.
     try:
@@ -849,7 +879,7 @@ def _write_anatomy(tree: Path, cfg: dict) -> None:
             # РИСУЕТСЯ ТАБЛИЦЕЙ на экране «Система» — то есть виден на скриншоте и
             # при демонстрации экрана. Строкой выше ключ из блока model вырезался,
             # а тут печатался: закрыта была ровно половина.
-            "knobs": boot.safe_knobs(cfg),
+            "knobs": boot.safe_knobs(cfg, tree),
             "git": _git_state(tree),
             "transports": (["окно Hélène"]
                            + (["Telegram-аккаунт"] if str(telegram.get("mode") or "bot") == "account"
@@ -1037,6 +1067,30 @@ def _retention_forever() -> None:
                 log.warning("ретенция запусков: %s", err)
         except Exception:
             log.warning("ретенция запусков не прошла", exc_info=True)
+
+
+def _keat_care_forever() -> None:
+    """Ротация эпох КЕАТ (1.0.0) — раз в час, первый проход через минуту после старта.
+
+    Снимки обслуженных вызовов пишутся на КАЖДЫЙ вызов модели; суточного тика ретенции
+    прогонов им мало (у неё в проде это 8,5 ГБ за две недели). Сама ротация —
+    `boot.prune_keat_epochs`: эпоха целиком, свежие и идущие не трогаются.
+    """
+    first = True
+    while True:
+        time.sleep(60.0 if first else 3600.0)
+        first = False
+        if _tree is None:
+            continue
+        try:
+            report = boot.prune_keat_epochs(Path(_tree))
+            if report.get("removed") or report.get("errors"):
+                log.info("КЕАТ: эпох снято %d (%.1f МБ), оставлено %d%s",
+                         report.get("removed", 0), report.get("freed_bytes", 0) / 1048576,
+                         report.get("kept", 0),
+                         f"; ошибки: {report['errors'][:3]}" if report.get("errors") else "")
+        except Exception:
+            log.warning("КЕАТ: ротация эпох не прошла", exc_info=True)
 
 
 def _set_busy(on: bool, run: str = "", *, chat_id: str = "") -> None:
@@ -1950,6 +2004,7 @@ def main() -> None:
     threading.Thread(target=_heartbeat_forever, args=(inbox,), name="heartbeat",
                      daemon=True).start()
     threading.Thread(target=_retention_forever, name="retention", daemon=True).start()
+    threading.Thread(target=_keat_care_forever, name="keat-care", daemon=True).start()
     threading.Thread(target=_config_watch_forever, args=(config_path, tree),
                      name="config-watch", daemon=True).start()
     # Control must run independently: the main loop is inside the model/tool turn.

@@ -404,7 +404,18 @@ fn supervise_inner(state_dir: &Path, operation_id: &str) -> Result<()> {
     let mut child = command.spawn().context("spawn supervised process")?;
     state.child_pid = Some(child.id());
     write_json(&dir.join("state.json"), &state)?;
-    let job = JobGuard::attach(&child, operation_id)?;
+    // ⚠ 1.0.0 (26.09). Отказ привязки к Job Object больше НЕ роняет операцию. Ребёнок к
+    // этому мгновению уже запущен: прежний `?` писал «failed» с пустыми логами, пока
+    // команда на деле работала дальше сиротой, — снаружи это читалось как «принимается и
+    // умирает через мгновение». Job нужен только чтобы гасить дерево процессов по отмене
+    // и сроку; без него гасим самого ребёнка, а причину кладём заметкой в карточку.
+    let job = match JobGuard::attach(&child, operation_id) {
+        Ok(job) => Some(job),
+        Err(error) => {
+            let _ = fsops::atomic_write(&dir.join("job_note.txt"), format!("{error:#}").as_bytes());
+            None
+        }
+    };
 
     let started = Instant::now();
     let cancel_path = dir.join("cancel.requested");
@@ -420,12 +431,18 @@ fn supervise_inner(state_dir: &Path, operation_id: &str) -> Result<()> {
             );
         }
         if cancel_path.exists() {
-            job.terminate(0xC000_013A_u32 as i32)?;
+            match &job {
+                Some(job) => job.terminate(0xC000_013A_u32 as i32)?,
+                None => child.kill()?,
+            }
             let exit = child.wait()?;
             break (OperationStatus::Cancelled, exit.code());
         }
         if args.timeout_s > 0 && started.elapsed() >= Duration::from_secs(args.timeout_s) {
-            job.terminate(1460)?;
+            match &job {
+                Some(job) => job.terminate(1460)?,
+                None => child.kill()?,
+            }
             let exit = child.wait()?;
             break (OperationStatus::TimedOut, exit.code());
         }
@@ -600,8 +617,37 @@ pub fn status(state_dir: &Path, operation_id: &str, tail: u64) -> Result<Value> 
         "result": result,
         "stdout_tail": tail_file(&dir.join("stdout.log"), tail)?,
         "stderr_tail": tail_file(&dir.join("stderr.log"), tail)?,
+        "supervisor_error": supervisor_error(&dir),
+        "job_note": note_file(&dir.join("job_note.txt")),
         "operation_dir": dir,
     }))
+}
+
+/// Причина раннего отказа супервизора — в самой карточке, а не только файлом рядом.
+///
+/// ⚠ 1.0.0 (26.09). `supervise` честно записывал причину в `supervisor_error.txt`, но
+/// `status` её не отдавал: снаружи операция выглядела как «failed, логи пустые», и агент
+/// у владельца докладывал «команда принимается и умирает через мгновение» — не зная
+/// причины, которая лежала на диске в той же папке (не собралась команда, не нашёлся
+/// powershell.exe, не привязался Job, не создался лог). Знание, до которого не дотянуться
+/// рукой, — то же незнание. Хвост ограничен: причина — строка, а не журнал.
+fn supervisor_error(dir: &Path) -> Value {
+    note_file(&dir.join("supervisor_error.txt"))
+}
+
+/// Короткая текстовая заметка операции (причина отказа, отказ привязки Job) или null.
+fn note_file(path: &Path) -> Value {
+    match fs::read_to_string(path) {
+        Ok(text) => {
+            let text = text.trim();
+            if text.is_empty() {
+                Value::Null
+            } else {
+                Value::String(text.chars().take(4000).collect())
+            }
+        }
+        Err(_) => Value::Null,
+    }
 }
 
 #[cfg(windows)]
@@ -1042,6 +1088,9 @@ mod tests {
                    "это не «не знаю», это известный провал");
         let reason = fs::read_to_string(dir.join("supervisor_error.txt")).unwrap();
         assert!(reason.contains("program"), "причина обязана дожить до неё, а не умереть с процессом: {reason}");
+        // 1.0.0: причина — в самой карточке `process.status`, а не только файлом рядом.
+        let said = card["supervisor_error"].as_str().unwrap_or("");
+        assert!(said.contains("program"), "карточка обязана назвать причину: {card}");
 
         let listing = list(&root, None).unwrap();
         let rows = listing["operations"].as_array().or_else(|| listing.as_array()).unwrap();

@@ -203,6 +203,34 @@ class Contacts:
 
 
 # --------------------------------------------------------------------------- #
+#  КЕАТ: расписка захвата сообщения личного потока (1.0.0)
+# --------------------------------------------------------------------------- #
+
+def keat_capture(chat_id: str, line: str, *, actor: str, outgoing: bool,
+                 source_id: str, is_dm: bool) -> dict | None:
+    """Расписка захвата одного сообщения лички — или None (захвата нет/не положен).
+
+    Решает политика дерева (`keat_live.capture_ingress`): поток должен быть записан в
+    ней ровно один раз, а номер сообщения — точным числом Telegram. Всё остальное —
+    None, и запись в память идёт как раньше. Полезная нагрузка — ТА ЖЕ строка, что
+    ложится в память: проекция хода сверяет их байт в байт (`adopt_projection`).
+    """
+    if (os.environ.get("PRAXIS_KEAT_CAPTURE") != "on" or not is_dm
+            or not str(source_id or "").isdecimal()):
+        return None
+    try:
+        import keat_live
+        return keat_live.capture_ingress(
+            str(chat_id), is_dm=True, source_id=str(source_id),
+            direction="out" if outgoing else "in",
+            payload={"role": "assistant" if outgoing else "user",
+                     "content": str(line), "actor": str(actor)})
+    except Exception:
+        log.debug("КЕАТ: расписка захвата не выдана [%s]", chat_id, exc_info=True)
+        return None
+
+
+# --------------------------------------------------------------------------- #
 #  Комната бота: архив + события жизни, форматы её дерева
 # --------------------------------------------------------------------------- #
 
@@ -267,16 +295,23 @@ class Rooms:
         # безадресна — первая же встреча двух агентов в теме 19 это показала: реплика
         # живого агента без подписи неотличима от реплики другого агента.
         line = str(text) if (outgoing or is_dm) else f"{sender or '?'}: {text}"
+        actor = self.agent_name if outgoing else (sender or "?")
+        # КЕАТ (1.0.0): расписка захвата — ДО записи в память и ОБЕИМ сторонам лички
+        # (его словам и её ответам). У неё в проде ответы не захватывались, и обслуженный
+        # вызов нёс одну реплику вместо разговора; здесь лента захвачена целиком.
+        occurrence = keat_capture(chat_id, line, actor=actor, outgoing=outgoing,
+                                  source_id=source_id, is_dm=is_dm)
         try:
             self._life.record_message(
                 str(chat_id), line,
-                actor=(self.agent_name if outgoing else (sender or "?")),
+                actor=actor,
                 direction=("out" if outgoing else "in"), source=source,
                 source_id=source_id or None,
                 is_dm=is_dm,
                 ts=moment.timestamp(),
                 dedupe_key=(f"{source}:{chat_id}:{source_id}:"
-                            f"{'out' if outgoing else 'in'}" if source_id else ""))
+                            f"{'out' if outgoing else 'in'}" if source_id else ""),
+                **({"keat_occurrence": occurrence} if occurrence else {}))
         except Exception:
             log.exception("событие жизни не записалось [%s]", chat_id)
 

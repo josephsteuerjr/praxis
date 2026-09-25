@@ -69,7 +69,11 @@ class HandTextsHaveNoGender(unittest.TestCase):
     def test_receipts_and_notes_in_modules(self):
         hits = []
         for mod in ("agent.py", "work_loop.py", "forge.py", "rooms.py", "stewardship.py", "tool_text_en.py",
-                    "mtproto_runner.py", "memory_life.py", "frame_shadow.py", "brain.py"):   # V4 F5
+                    "mtproto_runner.py", "memory_life.py", "frame_shadow.py", "brain.py",   # V4 F5
+                    # 26.09, порт КЕАТ: тексты, которые уезжают в модель из новых модулей
+                    # (сид будильника, шапка эпохи, пометка кадра v6, заглушка экономии).
+                    "keat_live.py", "frame_epoch.py", "frame_serve.py", "keat_economy.py",
+                    "frame_layout.py"):
             for line, text in _literals(HERE / mod):
                 if any(a in text for a in ALLOW):
                     continue

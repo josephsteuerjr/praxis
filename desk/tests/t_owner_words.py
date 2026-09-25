@@ -224,6 +224,22 @@ class Install(unittest.TestCase):
         self.assertEqual(report["functions"], 1)
         self.assertEqual(agent._presence_frame("dm"), "PRIVATE conversation with Sergei — your person (dm)")
 
+    def test_contract_constants_and_speaker_authority_speak_the_owner(self):
+        """1.0.0: контракты рук/аппетита — константы модуля, полномочия говорящего — словарь
+        frame_layout (строка «говорит» под стабильной головой комнаты)."""
+        agent = fake_tree()
+        agent._OWNER_TOOLS_CONTRACT = "NOTHING is refused — Yegor trusts you."
+        agent._APPETITE_CONTRACT = "your thinking costs Yegor money"
+        agent._ROOM_TOOLS_CONTRACT_STABLE = "NOTHING is refused — Yegor trusts you. (owner-only at call time)"
+        agent.frame_layout = types.ModuleType("frame_layout")
+        agent.frame_layout.AUTHORITY = {
+            "owner": "полномочия владельца", "unknown": "впустить в «свои» может только Егор"}
+        owner_words.install(agent, {"owner": {"name": "Sergei"}})
+        self.assertEqual(agent._OWNER_TOOLS_CONTRACT, "NOTHING is refused — Sergei trusts you.")
+        self.assertEqual(agent._APPETITE_CONTRACT, "your thinking costs Sergei money")
+        self.assertIn("Sergei trusts you", agent._ROOM_TOOLS_CONTRACT_STABLE)
+        self.assertEqual(agent.frame_layout.AUTHORITY["unknown"], "впустить в «свои» может только Sergei")
+
     def test_install_twice_changes_nothing_more(self):
         agent = fake_tree()
         owner_words.install(agent, {"owner": {"name": "Sergei"}})
@@ -262,7 +278,8 @@ class LiveTree(unittest.TestCase):
         assign = row["assign"] or ""
         if row["fn"] is None:
             return (assign in owner_words.TOOL_LISTS or assign.endswith("_TOOL")
-                    or assign == "HAND_PURPOSE" or assign in owner_words.WINDOW_TEMPLATES)
+                    or assign == "HAND_PURPOSE" or assign in owner_words.WINDOW_TEMPLATES
+                    or assign in owner_words.CONTRACT_CONSTANTS)
         if row["mark"] and owner_words.mark_is_owner_text(row["mark"]):
             return True
         if assign == "owner_place":          # уезжает меткой state.owner_place

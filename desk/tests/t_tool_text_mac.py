@@ -141,6 +141,14 @@ def owner_block_text(path: Path) -> str:
     (`{trust_tool}`) в текст не входят — словарь замен их и не трогает.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    constants: dict[str, str] = {}
+    for node in ast.walk(tree):
+        # 1.0.0: у её прода (стабильная голова комнат) контракт — константа модуля
+        # `_OWNER_TOOLS_CONTRACT`, а метка зовётся с `.replace("{trust_tool}", …)` над ней.
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)):
+            constants[node.targets[0].id] = node.value.value
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "mark" and len(node.args) >= 4):
@@ -154,6 +162,12 @@ def owner_block_text(path: Path) -> str:
         if isinstance(text, ast.JoinedStr):
             return "".join(v.value for v in text.values
                            if isinstance(v, ast.Constant) and isinstance(v.value, str))
+        # `_OWNER_TOOLS_CONTRACT.replace(...)` или голое имя константы.
+        base = text.func.value if (isinstance(text, ast.Call)
+                                   and isinstance(text.func, ast.Attribute)) else text
+        if isinstance(base, ast.Name) and base.id in constants \
+                and "Windows PC" in constants[base.id]:
+            return constants[base.id]
     return ""
 
 

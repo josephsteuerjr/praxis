@@ -1202,6 +1202,81 @@ def context_rows(peer_id: str | int, *, topic_id: int | None, limit: int = 80,
     return lines
 
 
+# 15.09, эпоха комнаты (frame_epoch): все сообщения эпохи рендерятся ОДНОЙ шириной, потому
+# что строка, однажды уехавшая в модель, не имеет права стать другой на следующем ходе —
+# ни шире, ни уже. Ширина — прежний «широкий» потолок свежих строк; сообщения Telegram и так
+# не длиннее 4 096 знаков, а обрез длиннее названного помечается как всегда.
+EPOCH_TEXT_CHARS = FULL_TEXT_CHARS
+
+
+def epoch_rows(peer_id: str | int, *, since_message_id: int, topic_id: int | None,
+               whole_room: bool = False, members: frozenset | set | None = None,
+               thread_word: str | None = None) -> list[dict]:
+    """Лента ЭПОХИ: записи архива с `message_id >= якоря`, в ПОРЯДКЕ АРХИВА, каждая ревизия
+    своей строкой. Тот же вид записей, что у `context_rows` (`self`/`line`/`role_line`/`service`).
+
+    Чем отличается от `context_rows` и почему:
+    * окно не скользит: начало ленты — якорь (граница свёртки memory_life, см.
+      frame_epoch.anchor_for), конец — последняя запись архива. Ничего не выбрасывается ни
+      потолком строк, ни бюджетом знаков: физический предохранитель — у вызывающего, и он
+      называет своё срабатывание вслух;
+    * порядок — порядок прихода в архив, а не «когда сказано»: так уже отрисованная часть
+      ленты не переставляется, когда приходит запоздавшая ревизия;
+    * правка и удаление НЕ заменяют строку на месте — они приезжают НОВОЙ строкой там, где
+      пришли (с пометкой `edited=`/`deleted=`, как их и печатает `_format_message`). Ровно так
+      же горячий слой memory_life держит правки отдельными записями `<mid>:edit:…`;
+    * ширина рендера одна для всех (EPOCH_TEXT_CHARS): строка не меняется задним числом.
+
+    Служебная строка одна, головная, и она постоянна внутри эпохи: называет якорь и правило.
+    Точные числа обреза здесь не нужны — обреза нет. Корень ветки (тема) — как прежде,
+    строкой обстановки впереди, только в настоящем форуме."""
+    since = int(since_message_id)
+    wanted = _positive(topic_id) if topic_id is not None else None
+    word = str(thread_word or ("thread" if whole_room else "topic"))
+
+    def _narrow(row: dict) -> bool:
+        if row.get("topic_id") == wanted:
+            return True
+        if wanted is None:
+            return False
+        return (int(row.get("message_id") or 0) == wanted
+                or row.get("reply_to_message_id") == wanted)
+
+    def _in_branch(row: dict) -> bool:
+        if whole_room:
+            return True
+        if members is not None and row.get("topic_id") in members:
+            return True
+        return _narrow(row)
+
+    picked: list[dict] = []
+    for row in iter_records(peer_id):
+        if row.get("kind") not in ("message", "deletion"):
+            continue
+        mid = int(row.get("message_id") or 0)
+        if not mid or mid < since or not _in_branch(row):
+            continue
+        own = (row.get("outgoing") is True and row.get("kind") == "message")
+        line = _format_message(row, max_text=EPOCH_TEXT_CHARS, thread_word=word)
+        picked.append({
+            "self": own, "line": line,
+            "role_line": (_format_message(row, max_text=EPOCH_TEXT_CHARS, thread_word=word,
+                                          as_self=True) if own else line),
+        })
+    if not picked:
+        return []
+    seam = (f"…[ЛЕНТА ЭПОХИ: всё сказанное здесь с сообщения #{since}, в порядке прихода; правки "
+            f"и удаления дописаны там, где пришли; что было раньше — в сводке эпохи выше]")
+    lines = [{"self": False, "line": seam, "role_line": seam, "service": True}]
+    if wanted is not None:
+        root_row = latest_message(peer_id, wanted)
+        if root_row is not None and int(root_row.get("message_id") or 0) < since:
+            root_line = _format_message(root_row, thread_word=word)
+            lines.insert(0, {"self": False, "line": root_line, "role_line": root_line,
+                             "service": True})
+    return lines + picked
+
+
 def map_text(peer_id: str | int, *, current_topic: int | None = None,
              limit: int = 30, not_a_forum: bool = False,
              artifacts: frozenset | set | None = None) -> str:
