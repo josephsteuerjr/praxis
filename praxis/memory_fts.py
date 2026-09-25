@@ -638,6 +638,24 @@ def _simple_suffix(pattern: str) -> str | None:
 
 
 def _memory_files(memory_dir: Path, pattern: str, *, include_runs: bool) -> Iterable[Path]:
+    """`_memory_files_raw` минус `_history` (25.09, ревью V4 F4 / V1-4).
+
+    `life/compacts/_history/` хранит ПРЕЖНИЕ тексты переписанных свёрток под той же шапкой
+    и тем же id: в корпусе они были бы второй копией живой свёртки, и «переписала, чтобы
+    убрать» не убирало бы старое из recall. Индекс доказательств историю и так не видит;
+    здесь — тот же контракт для корпуса.
+    """
+    for path in _memory_files_raw(memory_dir, pattern, include_runs=include_runs):
+        try:
+            parts = path.relative_to(memory_dir).parts[:-1]
+        except ValueError:
+            parts = ()
+        if "_history" in parts:
+            continue
+        yield path
+
+
+def _memory_files_raw(memory_dir: Path, pattern: str, *, include_runs: bool) -> Iterable[Path]:
     """Walk canonical memory while allowing the automatic path to prune runs early."""
     if include_runs:
         # ⚠ ДЕРЕВО ПРОГОНОВ ОБХОДИТСЯ РАДИ ТОГО, ЧЕГО В НЁМ НЕТ. Замер на живом проде
@@ -675,11 +693,23 @@ def _memory_files(memory_dir: Path, pattern: str, *, include_runs: bool) -> Iter
             if child.match(pattern):
                 yield child
         elif child.name == "self":
+            rooms_in = index_rooms_enabled()
             for path in child.rglob(pattern):
-                if "rooms" not in path.relative_to(child).parts:
-                    yield path
+                if "rooms" in path.relative_to(child).parts and not rooms_in:
+                    continue
+                yield path
         elif child.is_dir():
             yield from child.rglob(pattern)
+
+
+def index_rooms_enabled() -> bool:
+    """25.09 (ревью V1-3): её ходы в комнатах (`self/rooms/**`, kind room_turn) — в корпусе
+    явного recall и без рычага прогонов; иначе «чужая комната называется» было пустым
+    обещанием. Цена — stat на файл при обходе (замер 12.09: 1500 файлов ≈ 1,4 с на Windows)
+    там, где корпус собирается на каждом ходе; автоматический recall вид room_turn и так не
+    берёт. PRAXIS_INDEX_ROOMS=0 — прежний обход без комнат."""
+    return str(os.getenv("PRAXIS_INDEX_ROOMS") or "1").strip().lower() not in {
+        "0", "off", "no", "false"}
 
 
 def index_runs_enabled() -> bool:

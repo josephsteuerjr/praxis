@@ -1351,7 +1351,9 @@ class FrameDidNotMove(unittest.TestCase):
         # словом 17.08, а в норму замера рычаг входит ПОЛОЖЕНИЕМ ИЗ МАНИФЕСТА
         # (_рычаг_реплики_как_в_манифесте): опускание рычага с синком манифеста —
         # заказанное изменение кадра, и этот пин обязан его заметить и перемериться.
-        self.assertEqual(self._digest(line), "267f1232ff8ccad4",
+        # 25.09: суверенных 66 -> 67 — `memory_compact` (её руки на своих свёртках: list /
+        # read / rewrite / refold); перемерено тем же кодом, который печатает строку ей.
+        self.assertEqual(self._digest(line), "9f507d747f61061d",
                          f"строка состояния изменилась: {line!r}")
 
     def test_the_rails_registry_did_not_grow(self):

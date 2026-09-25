@@ -188,7 +188,7 @@ def candidates(query: str, limit: int = 8) -> list[dict]:
         score = (lexical + (15 if row.get("contact") else 0) +
                  (10 if row.get("dialog") else 0) + min(12, int(row.get("interactions") or 0)) +
                  recency + (8 if row.get("last_outbound") else 0))
-        ranked.append((score, {**row, "score": round(score, 3)}))
+        ranked.append((score, {**row, "score": round(score, 3), "lexical": lexical}))
     ranked.sort(key=lambda item: (-item[0], -float(item[1].get("last_outbound") or 0),
                                   -float(item[1].get("last_seen") or 0), item[1].get("id", "")))
     return [row for _, row in ranked[:max(1, int(limit or 8))]]

@@ -171,6 +171,24 @@ def _key(value: object) -> str:
     return _strict_text(value, "idempotency key", maximum=512)
 
 
+def _turn_duplicate_key(run_id: object, peer_id: object, topic_id: object,
+                        text: str) -> str:
+    """Same-turn text dedupe: same run -> same destination -> same text.
+
+    The primary outbox key is per call_id, so two reply calls inside one turn
+    own two keys and both deliver (live case 24.09: AbstractDL #109156/#109159
+    left in the same second).  This derived key is content-addressed instead:
+    an identical text to the same peer/topic within the same run is the same
+    speech act, whatever call id produced it.  Byte-exact by design; a
+    deliberately repeated text should differ by at least a character.
+    """
+    digest = hashlib.sha256(str(text).encode("utf-8")).hexdigest()
+    return ("turn-dedupe:"
+            f"{_strict_text(run_id, 'run_id', maximum=256)}:"
+            f"{_telegram_id(peer_id, 'peer_id', positive=False)}:"
+            f"{_optional_message_id(topic_id, 'topic_id')}:{digest}")
+
+
 def stable_random_id(idempotency_key: str) -> int:
     """Return a deterministic, non-zero signed int64 MTProto random id."""
 
@@ -353,6 +371,11 @@ class TelegramOutbox:
         self.files_dir = self._directory("files")
         self.quarantine_dir = self._directory("quarantine")
         self.lock_path = self.root / ".lock"
+        # 25.09: кэш состояний по подписи файла (mtime_ns, size, ino). Тик outbox каждые
+        # 15 с звал pending()/accepted() — и те читали и разбирали ВСЕ 3934 журнала
+        # (18 МБ) заново: py-spy на проде показал в этом 60–90 % ЦП раннера. Журнал
+        # append-only, любое изменение меняет подпись; нетронутый файл читать незачем.
+        self._state_cache: dict[str, tuple[tuple[int, int, int], dict[str, Any] | None]] = {}
         self.max_file_bytes = _positive_int(max_file_bytes, "max_file_bytes")
         self.max_text_bytes = _positive_int(max_text_bytes, "max_text_bytes")
         if max_attempts is not None:
@@ -719,6 +742,36 @@ class TelegramOutbox:
             return None
         return self._load_state_locked(path)
 
+    # ---- same-turn text dedupe (24.09: AbstractDL double reply) ----------------
+    # Derived keys do not own their own event files: a sidecar directory maps
+    # turn-dedupe keys to the entry id of the FIRST intent that claimed them.
+    # Sidecar is advisory disk state: missing/corrupt rows only cost a lost
+    # dedupe, never a lost message (the primary per-call key still governs).
+
+    def _turn_key_path(self, turn_key: str) -> Path:
+        digest = hashlib.sha256(turn_key.encode("utf-8")).hexdigest()
+        return self.root / "turn_dedupe" / f"{digest}.json"
+
+    def _remember_turn_key_locked(self, turn_key: str, entry_id: str) -> None:
+        try:
+            path = self._turn_key_path(turn_key)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_bytes(path, json.dumps(
+                {"turn_key": turn_key, "entry_id": entry_id,
+                 "at": _iso_utc(self.clock())},
+                ensure_ascii=False).encode("utf-8"))
+        except OSError:
+            # Dedupe is best-effort by design (see comment above).
+            pass
+
+    def _turn_entry_id(self, turn_key: str) -> str | None:
+        try:
+            row = json.loads(
+                self._turn_key_path(turn_key).read_text(encoding="utf-8"))
+            return str(row.get("entry_id") or "") or None
+        except Exception:
+            return None
+
     @staticmethod
     def _visible_filename(value: object) -> str:
         if not isinstance(value, str) or not value or len(value) > 240:
@@ -835,16 +888,27 @@ class TelegramOutbox:
             reply_to=reply_to, run_id=run_id, call_id=call_id, purpose=purpose,
             payload={"text": body},
         )
+        turn_key = _turn_duplicate_key(run_id, peer_id, topic_id, body)
         with self._guard():
             state = self._state_for_key_locked(key)
             if state is not None:
                 if self._immutable_view(state) != data:
                     raise TelegramOutboxConflict("idempotency key already owns another intent")
                 return self._public(state)
+            # 24.09 (AbstractDL #109156/#109159): the same run sending the SAME
+            # text to the SAME peer/topic twice is one speech act duplicated by
+            # a retry loop, not two intents.  Return the first entry untouched;
+            # the caller's receipt stays honest (same message id, same state).
+            twin_id = self._turn_entry_id(turn_key)
+            if twin_id is not None:
+                twin = self._load_state_locked(self._event_path(twin_id))
+                if twin is not None and twin.get("state") in {"pending", "retry", "accepted"}:
+                    return self._public(twin)
             entry_id = _entry_id(key)
             row = self._new_event(entry_id, "intent", data)
             self._append_event_locked(self._event_path(entry_id), row)
             state = self._apply_event(None, row)
+            self._remember_turn_key_locked(turn_key, entry_id)
             return self._public(state)
 
     def _source_info(self, source: str | os.PathLike[str], destination: Path | None) -> tuple[str, int]:
@@ -1011,6 +1075,32 @@ class TelegramOutbox:
             state = self._state_for_key_locked(key)
             return self._public(state, verify_file=verify_file) if state else None
 
+    def _state_cached_locked(self, path: Path) -> dict[str, Any] | None:
+        """Состояние записи из кэша по подписи файла; иначе — полное чтение.
+
+        Кэшируется копия (`_apply_event` возвращает новые словари, но вызывающие
+        `_public()` их не мутируют); терминальные записи (accepted/dead_letter) меняются
+        только карантином — тогда меняется и подпись."""
+        try:
+            stat = path.stat()
+        except OSError:
+            self._state_cache.pop(path.name, None)
+            return self._load_state_locked(path)
+        signature = (int(stat.st_mtime_ns), int(stat.st_size), int(stat.st_ino))
+        cached = self._state_cache.get(path.name)
+        if cached is not None and cached[0] == signature:
+            state = cached[1]
+            return dict(state) if state is not None else None
+        state = self._load_state_locked(path)
+        try:
+            after = path.stat()
+            signature = (int(after.st_mtime_ns), int(after.st_size), int(after.st_ino))
+        except OSError:
+            self._state_cache.pop(path.name, None)
+            return state
+        self._state_cache[path.name] = (signature, dict(state) if state is not None else None)
+        return state
+
     def pending(
         self, *, due_only: bool = False, now: float | None = None,
         verify_files: bool = True,
@@ -1019,7 +1109,7 @@ class TelegramOutbox:
         with self._guard():
             states: list[dict[str, Any]] = []
             for path in sorted(self.entries_dir.glob("*.jsonl")):
-                state = self._load_state_locked(path)
+                state = self._state_cached_locked(path)
                 if state is None or state["state"] not in {"pending", "retry"}:
                     continue
                 if due_only and float(state["next_attempt_at"]) > current:
@@ -1031,7 +1121,7 @@ class TelegramOutbox:
         with self._guard():
             states = []
             for path in sorted(self.entries_dir.glob("*.jsonl")):
-                state = self._load_state_locked(path)
+                state = self._state_cached_locked(path)
                 if state is not None and state["state"] == "dead_letter":
                     states.append(self._public(state, verify_file=verify_files))
         return tuple(sorted(states, key=lambda row: (row["updated_at"], row["id"])))
@@ -1042,7 +1132,7 @@ class TelegramOutbox:
         with self._guard():
             states = []
             for path in sorted(self.entries_dir.glob("*.jsonl")):
-                state = self._load_state_locked(path)
+                state = self._state_cached_locked(path)
                 if state is not None and state["state"] == "accepted":
                     states.append(self._public(state, verify_file=verify_files))
         return tuple(sorted(states, key=lambda row: (row["updated_at"], row["id"])))

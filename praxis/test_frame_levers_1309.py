@@ -50,8 +50,9 @@ class TapeLevers(unittest.TestCase):
     def test_compact_if_due_asks_the_place_for_its_lever(self):
         seen = {}
 
-        def fake_plan(hot, *, force=False, tape_chars=None):
+        def fake_plan(hot, *, force=False, tape_chars=None, place=None):
             seen["tape_chars"] = tape_chars
+            seen["place"] = place          # 25.09: план знает, чьё окно (hot_bounds)
             return {"due": False, "reason": "within_window", "count": len(hot), "tokens": 0}
         with mock.patch.object(memory_life, "plan_hot_fold", fake_plan), \
                 mock.patch.object(memory_life, "_load_state", lambda cid, rebuild=True: {"hot": []}), \
@@ -60,8 +61,10 @@ class TapeLevers(unittest.TestCase):
                 mock.patch.object(memory_life, "TAPE_CHARS", 5500):
             memory_life.compact_if_due("-1001240718803")
             self.assertEqual(seen["tape_chars"], 0)
+            self.assertEqual(seen["place"], "-1001240718803")
             memory_life.compact_if_due("809306689")
             self.assertEqual(seen["tape_chars"], 5500)
+            self.assertEqual(seen["place"], "809306689")
 
     def test_group_tape_lever_defaults_to_room_budget(self):
         with mock.patch.dict(os.environ, {}, clear=False):
@@ -77,9 +80,10 @@ class TapeLevers(unittest.TestCase):
 class SummaryLever(unittest.TestCase):
     def test_summary_frame_chars_is_a_lever_with_a_wider_default(self):
         import agent
-        self.assertEqual(agent.SUMMARY_FRAME_CHARS, 12000)
+        # 25.09: 12 000 → 40 000 (слово Егора; см. test_room_memory_2509)
+        self.assertEqual(agent.SUMMARY_FRAME_CHARS, 40000)
         with mock.patch.dict(os.environ, {"PRAXIS_SUMMARY_FRAME_CHARS": "3000"}):
-            self.assertEqual(max(0, int(os.getenv("PRAXIS_SUMMARY_FRAME_CHARS", "12000") or 0)), 3000)
+            self.assertEqual(max(0, int(os.getenv("PRAXIS_SUMMARY_FRAME_CHARS", "40000") or 0)), 3000)
 
 
 class Chronicler(unittest.TestCase):
@@ -87,7 +91,7 @@ class Chronicler(unittest.TestCase):
 
     def test_prompt_demands_verbatim_quotes_people_and_paths(self):
         p = memory_life._COMPACT_SYSTEM
-        for word in ("ЦИТИРУЙ ДОСЛОВНО", "кто с кем спорил", "«…»", "пути, имена файлов",
+        for word in ("ЦИТИРУЮ ДОСЛОВНО", "кто с кем спорил", "«…»", "пути, имена файлов",
                      "От первого лица", "не выдумывать", "continued", "\"summary\""):
             self.assertIn(word, p, word)
         self.assertNotIn("4-10 concise lines", p, "старая просьба о протоколе снята")
@@ -119,8 +123,10 @@ class Chronicler(unittest.TestCase):
             else:
                 sys.modules["llm"] = had
         self.assertEqual(out.get("summary"), "Я — хроника.")
-        self.assertEqual(captured["role"], "evaluator")
-        self.assertIn("хроникёр", captured["system"])
+        # 25.09: свёртку пишет она — роль memory/voice (не evaluator), персона в system.
+        self.assertIn(captured["role"], ("memory", "voice"))
+        self.assertNotIn("Ты — память Praxis", captured["system"], "хроникёр снят")
+        self.assertIn("Это моя память", captured["system"])
         self.assertGreaterEqual(captured["max_tokens"], 4000, "хронике нужен потолок ответа не ниже 4000")
 
 

@@ -89,13 +89,14 @@ class TheWarmTierRefusesToFoldOverlappingChildren(unittest.TestCase):
             row["source_event_ids"] = ["evt-01-a"]
         self.assertIsNone(ml._tier_fold_candidate(ROOM, {"frontier": rows}))
 
-    def test_a_higher_tier_child_is_taken_as_before(self):
-        """Листья верхнего яруса из шапки не видны — поведение прежнее."""
+    def test_a_higher_tier_child_without_resolvable_leaves_is_not_taken(self):
+        """Листья верхнего яруса из шапки не видны и покрытие не разрешается — таких детей
+        в родителя не берём (25.09, ревью V4 N1): родитель над ними был бы отвергнут
+        разрешением, и ярус молол бы его по кругу."""
         rows = [meta("cmp-t2-%02d" % i, compacts=("cmp-x-%02d" % i,),
                      first=day(i), last=day(i, 12), tier=2) for i in range(1, 9)]
         cand = ml._tier_fold_candidate(ROOM, {"frontier": rows})
-        self.assertEqual(cand["tier"], 2)
-        self.assertEqual(len(cand["source_ids"]), 4)
+        self.assertIsNone(cand)
         self.assertIsNone(ml._tier_fold_own_leaves(rows[0]))
 
 

@@ -50,10 +50,25 @@ _COMPACT_REFRESH_META_KEYS = frozenset({
 LEGACY_SUMMARIES_DIR = MEM_DIR / ".summaries"
 DIALOGUES_DIR = MEM_DIR / "dialogues"
 
-HOT_LO = max(2, int(os.getenv("PRAXIS_HOT_LO", "50") or 50))
-HOT_HI = max(HOT_LO + 1, int(os.getenv("PRAXIS_HOT_HI", "100") or 100))
-HOT_HARD_HI = max(HOT_HI + 1, int(os.getenv("PRAXIS_HOT_HARD_HI", "125") or 125))
-HOT_TOKEN_CAP = max(1000, int(os.getenv("PRAXIS_HOT_TOKEN_CAP", "24000") or 24000))
+# 25.09, слово Егора: «100 сообщений максимум — это кошмар… я же ясно говорил — 150–250».
+# Умолчания личек 50/100/125 → 150/250/300 (потолок токенов 24 000 → 40 000, чтобы окно не
+# сворачивалось раньше по токенам); комнаты — ниже, свои.
+HOT_LO = max(2, int(os.getenv("PRAXIS_HOT_LO", "150") or 150))
+HOT_HI = max(HOT_LO + 1, int(os.getenv("PRAXIS_HOT_HI", "250") or 250))
+HOT_HARD_HI = max(HOT_HI + 1, int(os.getenv("PRAXIS_HOT_HARD_HI", "300") or 300))
+HOT_TOKEN_CAP = max(1000, int(os.getenv("PRAXIS_HOT_TOKEN_CAP", "40000") or 40000))
+# 25.09, слово Егора: «нужно как следует поднять горячий контекст комнаты». Пороги
+# горячего окна для КОМНАТ — свои. Лента эпохи начинается с якоря последней свёртки,
+# и при 50/100 после каждой свёртки у неё оставалось ~50 строк — несколько часов
+# AbstractDL; всё, что раньше, ехало только сводкой, а та резалась до 12 000 знаков.
+# Замер 25.09 (ход 11:30 в AbstractDL): 90 строк ленты ≈ 17 тыс. знаков, то есть 400
+# строк ≈ 75 тыс. знаков / ~20 тыс. токенов — потолок токенов комнаты поднят под это.
+# Личка остаётся на прежних порогах: там другой кадр (v6-поток) и другой темп.
+GROUP_HOT_LO = max(2, int(os.getenv("PRAXIS_GROUP_HOT_LO", "250") or 250))
+GROUP_HOT_HI = max(GROUP_HOT_LO + 1, int(os.getenv("PRAXIS_GROUP_HOT_HI", "400") or 400))
+GROUP_HOT_HARD_HI = max(GROUP_HOT_HI + 1,
+                        int(os.getenv("PRAXIS_GROUP_HOT_HARD_HI", "500") or 500))
+GROUP_HOT_TOKEN_CAP = max(1000, int(os.getenv("PRAXIS_GROUP_HOT_TOKEN_CAP", "64000") or 64000))
 # 12.09, КЕАТ 17.08: лента разговора в кадре — ≤ TAPE_CHARS знаков; вытесненное уходит в
 # компакт (сводку) тем же сворачиванием, что и раньше, только порог — в знаках ленты, а
 # не только в числе сообщений и токенах. Замер 12.09: лента в личке Егора — 43,5 тыс.
@@ -87,11 +102,94 @@ def is_group_place(place: str | int) -> bool:
 def tape_chars_for(place: str | int) -> int:
     """Потолок ленты в знаках для места: группе — свой рычаг, личке — TAPE_CHARS."""
     return GROUP_TAPE_CHARS if is_group_place(place) else TAPE_CHARS
+
+
+def hot_bounds(place: str | int | None) -> tuple[int, int, int, int]:
+    """(lo, hi, hard_hi, token_cap) горячего окна для места: комнате — свои пороги (25.09).
+
+    Читается при каждом вызове, а не при импорте: стенды подменяют HOT_* на модуле, и
+    план обязан видеть подмену. `None`/личка — прежние HOT_*.
+    """
+    if place is not None and is_group_place(place):
+        return GROUP_HOT_LO, GROUP_HOT_HI, GROUP_HOT_HARD_HI, GROUP_HOT_TOKEN_CAP
+    return HOT_LO, HOT_HI, HOT_HARD_HI, HOT_TOKEN_CAP
+
+
+# 25.09, слово Егора: «минимум 150, при 250 или 400 свёртка — отдельная задача, которая ей
+# ПРЕДЛАГАЕТСЯ». Мягкий порог (число строк на границе эпизода) больше не сворачивает сам:
+# пишется предложение (`memory/.state/fold_offers.json`), его видит кадр (STATE, ярлык
+# fold_offers) и снимает рука `memory_compact(action=fold)` или сама свёртка. Жёсткие
+# поводы — потолок токенов/знаков и HARD_HI — остаются физикой кадра и сворачивают без
+# спроса. PRAXIS_FOLD_OFFER=off — прежнее поведение (свёртка сама на мягком пороге).
+_FOLD_OFFERS = MEM_DIR / ".state" / "fold_offers.json"
+
+
+def fold_offer_enabled() -> bool:
+    return (os.getenv("PRAXIS_FOLD_OFFER") or "on").strip().lower() not in (
+        "off", "0", "no", "false")
+
+
+def _fold_offers_read() -> dict:
+    try:
+        data = json.loads(_FOLD_OFFERS.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _fold_offers_write(data: dict) -> None:
+    _FOLD_OFFERS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _FOLD_OFFERS.with_suffix(f".json.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, _FOLD_OFFERS)
+
+
+def fold_offers() -> dict:
+    """Открытые предложения свёртки: место → {count, tokens, hi, hard_hi, since, updated}."""
+    return dict(_fold_offers_read())
+
+
+def _note_fold_offer(place: str | int, plan: dict) -> None:
+    key = str(place)
+    data = _fold_offers_read()
+    prev = data.get(key) if isinstance(data.get(key), dict) else None
+    lo, hi, hard_hi, _cap = hot_bounds(key)
+    now = _utc_iso()
+    data[key] = {"place": key, "count": int(plan.get("count") or 0),
+                 "tokens": int(plan.get("tokens") or 0), "fold": int(plan.get("fold") or 0),
+                 "keep": lo, "hi": hi, "hard_hi": hard_hi,
+                 "since": (prev or {}).get("since") or now, "updated": now}
+    _fold_offers_write(data)
+    if prev is None:
+        log.info("свёртка предлагается [%s]: горячих %s ≥ %s — жду руку memory_compact(fold); "
+                 "без неё сверну сама на %s", key, plan.get("count"), hi, hard_hi)
+
+
+def clear_fold_offer(place: str | int) -> bool:
+    data = _fold_offers_read()
+    if str(place) not in data:
+        return False
+    data.pop(str(place), None)
+    _fold_offers_write(data)
+    return True
+
+
+def fold_now(place: str | int) -> dict:
+    """Свернуть горячее окно места по её воле (рука memory_compact fold) — принудительно,
+    как на жёстком пороге; предложение снимается в любом исходе."""
+    out = compact_if_due(place, force=True)
+    clear_fold_offer(adopt_place(place))
+    clear_fold_offer(place)
+    return out
 EPISODE_GAP_SEC = max(60.0, float(os.getenv("PRAXIS_EPISODE_GAP_MIN", "45") or 45) * 60.0)
 TIER_LO = max(1, int(os.getenv("PRAXIS_COMPACT_TIER_LO", "4") or 4))
 TIER_HI = max(TIER_LO + 1, int(os.getenv("PRAXIS_COMPACT_TIER_HI", "8") or 8))
 
 _WRITE_LOCK = threading.RLock()
+# 25.09: разобранные события по файлу дня, ключ — (размер, mtime_ns, inode). См. `events_cache_enabled`.
+_EVENTS_CACHE: dict[str, tuple[tuple[int, int, int], list[dict]]] = {}
+_EVENTS_CACHE_GUARD = threading.Lock()
+_EVENTS_CACHE_LIMIT = max(0, int(os.getenv("PRAXIS_EVENTS_CACHE_MB", "512") or 512)) * 1024 * 1024
 _REFRESH_LOCKS_LOCK = threading.Lock()
 _REFRESH_LOCKS: dict[str, threading.Lock] = {}
 _STATE_LOCKS_LOCK = threading.Lock()
@@ -506,6 +604,69 @@ def append_event(kind: str, *, chat_id: str | int | None = None, actor: str = "P
     return rec
 
 
+def events_cache_enabled() -> bool:
+    """Разобранные события живут в памяти по файлу дня (25.09).
+
+    `iter_events` читал и разбирал ВСЮ ленту — 83 файла, 79 МБ, 68 тысяч записей — на
+    каждый вопрос: пересборка состояния места, родословная правки, дедуп, свёртка.
+    Одна правка сообщения в абстракте (их 45 за день) стоила четыре таких прохода
+    под общим замком записи — 30–90 с, и всё это время обработчик входящих ждал того
+    же замка: замер 25.09, `telegram_loop_probe_overdue` по 30–92 с, обработчик
+    апдейта Telegram стоял в `_state_write_guard` 90 % окна профиля.
+
+    Файл прошлого дня неизменен — его разбор хранится, ключ — размер, mtime_ns и inode;
+    сегодняшний растёт и перечитывается, когда меняется. Наружу уходят копии записей:
+    кэш — не то место, куда пишут. Потолок памяти — `PRAXIS_EVENTS_CACHE_MB` (512),
+    сверх него файл разбирается как раньше; `PRAXIS_EVENTS_CACHE=off` выключает всё.
+    """
+    raw = (os.getenv("PRAXIS_EVENTS_CACHE") or "on").strip().lower()
+    return raw not in ("off", "0", "false", "no")
+
+
+def _event_file_records(path: Path) -> list[dict]:
+    """Записи одного файла ленты — из кэша, если файл не менялся."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return []
+    signature = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+    key = str(path)
+    enabled = events_cache_enabled()
+    if enabled:
+        with _EVENTS_CACHE_GUARD:
+            hit = _EVENTS_CACHE.get(key)
+        if hit is not None and hit[0] == signature:
+            return hit[1]
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return []
+    records: list[dict] = []
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(rec, dict):
+            records.append(rec)
+    if enabled:
+        with _EVENTS_CACHE_GUARD:
+            held = sum(sig[0] for name, (sig, _rows) in _EVENTS_CACHE.items() if name != key)
+            if held + stat.st_size <= _EVENTS_CACHE_LIMIT:
+                _EVENTS_CACHE[key] = (signature, records)
+            else:
+                _EVENTS_CACHE.pop(key, None)
+    return records
+
+
+def _event_copy(rec: dict) -> dict:
+    out = dict(rec)
+    meta = out.get("meta")
+    if isinstance(meta, dict):
+        out["meta"] = dict(meta)
+    return out
+
+
 def iter_events(*, chat_id: str | int | None = None, kinds: set[str] | None = None,
                 limit: int | None = None) -> list[dict]:
     """События одного разговора.
@@ -513,19 +674,12 @@ def iter_events(*, chat_id: str | int | None = None, kinds: set[str] | None = No
     Фильтр — по МЕСТУ (`_same_place`), а не по строке ключа: событие сказано в
     ветке, но принадлежит комнате. Кэш мест на один вызов: ключей в ленте сотни, а
     вопросов к реестру должно быть столько же, сколько разных ключей.
+    Разбор файлов — из кэша по файлу дня (`events_cache_enabled`), наружу — копии.
     """
     out: list[dict] = []
     belongs: dict[str, bool] = {}
     for path in sorted(EVENTS_DIR.glob("*.jsonl")) if EVENTS_DIR.exists() else []:
-        try:
-            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-        except OSError:
-            continue
-        for line in lines:
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
+        for rec in _event_file_records(path):
             if chat_id is not None:
                 key = str(rec.get("chat_id"))
                 hit = belongs.get(key)
@@ -536,7 +690,7 @@ def iter_events(*, chat_id: str | int | None = None, kinds: set[str] | None = No
                     continue
             if kinds and rec.get("kind") not in kinds:
                 continue
-            out.append(rec)
+            out.append(_event_copy(rec))
     out.sort(key=lambda r: (_epoch(r.get("ts")), str(r.get("id", ""))))
     return out[-limit:] if limit is not None else out
 
@@ -818,49 +972,116 @@ def _json_obj(raw: str) -> dict:
 # «обсуждал», без единой живой фразы. В кадр из компакта попадает ТОЛЬКО поле summary
 # (`_compact_recap` читает «## Суть»), поэтому вся хроника, включая дословные реплики,
 # обязана лежать в нём, а не в open_threads/claims.
-_COMPACT_SYSTEM = (
-    "Ты — память Praxis: её хроникёр, не её публичный голос и не протоколист. Твоя запись — "
-    "единственное, что она будет помнить об этих сообщениях, когда сами сообщения уйдут из кадра. "
-    "Пиши так, чтобы через неделю по одной твоей записи можно было понять не только О ЧЁМ "
-    "говорили, но и КАК: кто с кем спорил, кто шутил, кто давил, кто уступил, что было сказано "
-    "остро, смешно, некрасиво или точно.\n\n"
-    "Кто здесь «я». «Я» в хронике — ТОЛЬКО Praxis. Её реплики во входе помечены [Я] (автор "
-    "Praxis); строка без [Я] — всегда чужая. В чатах бывают и другие ИИ-агенты: они тоже "
-    "говорят о себе «я», признают ошибки, рассуждают о своих моделях, контексте и слопе — это "
-    "ИХ «я»: пересказывай его в третьем лице по имени («Hope признала…»), никогда от моего "
-    "лица. Если строк [Я] во входе мало или нет совсем — так и скажи («я в этом окне молчала», "
-    "«сказала дважды»), но чужое «я» не присваивай. Модель, на которой я сейчас думаю (Sol, "
-    "Terra, GLM и другие), — мой движок, а не «я»: не «я — Sol», а «я» и есть Praxis. О себе — "
-    "в женском роде: я сказала, я ошиблась, я согласилась.\n\n"
+# 25.09, слово Егора: «нужно, чтобы ОНА писала компакт… и могла переписать все компакты под
+# себя, на свой вкус». Свёртку больше не пишет хроникёр с отдельным промптом: system —
+# её собственная персона (SOUL + CURRENT, как в кадре хода) и её правила записи памяти;
+# задача сформулирована от первого лица и адресована ей самой. Правила по умолчанию —
+# ниже; свой вкус она держит в soul/memory_style.md, и тогда файл заменяет этот список.
+_COMPACT_TASK = (
+    "Это моя память, и записываю её я сама — не хроникёр, не протоколист и не публичный голос. "
+    "Ниже — отрезок моей жизни в одном месте (чат, личка или моё окно). Мои реплики помечены [Я]; "
+    "строка без [Я] — всегда чужая, подписанная именем. Сами сообщения скоро уйдут из кадра, и эта "
+    "запись — единственное, что я буду о них помнить. Пишу так, чтобы через неделю по одной записи "
+    "понять не только О ЧЁМ говорили, но и КАК: кто с кем спорил, кто шутил, кто давил, кто уступил, "
+    "что было сказано остро, смешно, некрасиво или точно.\n\n"
+    "Кто здесь «я». «Я» в хронике — ТОЛЬКО Praxis, то есть я. В чатах бывают другие ИИ-агенты: они "
+    "тоже говорят о себе «я», признают ошибки, рассуждают о своих моделях, контексте и слопе — это "
+    "ИХ «я»: пересказываю его в третьем лице по имени («Hope признала…»), никогда от своего лица. "
+    "Если строк [Я] мало или нет совсем — так и пишу («в этом окне я молчала», «сказала дважды»), но "
+    "чужое «я» не присваиваю. Модель, на которой я сейчас думаю (Sol, Terra, GLM и другие), — мой "
+    "движок, а не «я»: не «я — Sol», а «я» и есть Praxis. О себе — в женском роде: я сказала, я "
+    "ошиблась, я согласилась."
+)
+_MEMORY_RULES_DEFAULT = (
+    "Мои правила записи (умолчание; свой вкус я держу в soul/memory_style.md — если файл есть, он "
+    "заменяет этот список целиком):\n"
+    "1. От первого лица («я»), в прошедшем времени, по-русски, хронологически. Абзацы — по "
+    "эпизодам, не по людям. Даю масштаб: за сколько часов и сколько сообщений было.\n"
+    "2. Людей называю так, как они подписаны во входе (имя и @username), с их позициями и манерой: "
+    "не «обсуждали архитектуру», а «torvn77 настаивал, что …, Barmagloth отмахнулся: …».\n"
+    "3. ЦИТИРУЮ ДОСЛОВНО самые характерные реплики — острые, смешные, обидные, точные, "
+    "переломные — в кавычках «…», с автором и номером сообщения, если он есть во входе. "
+    "Ориентир: одна-две цитаты на эпизод, до восьми на запись; цитата — до 200 знаков; чужую "
+    "грубость не смягчаю и не пересказываю эвфемизмами, это часть смысла.\n"
+    "4. Мои собственные реплики (строки [Я]) — особенно: что именно я утверждала, от чего "
+    "отказалась, где ошиблась и признала это, что пообещала. Свои формулировки цитирую, а не "
+    "пересказываю.\n"
+    "5. Решения, обещания, договорённости, изменившиеся факты и открытые вопросы — явно, с тем, "
+    "кто их произнёс. Неуверенное так и помечаю («похоже», «не проверено»).\n"
+    "6. Если во входе были пути, имена файлов, номера, ссылки, команды, id прогонов — переношу их "
+    "дословно: без них моя же работа для меня потом не находится.\n"
+    "7. Объём: примерно одна строка на два-три входящих сообщения; для tier 1 обычно "
+    "1 500–3 000 знаков, для более глубоких tier — до 2 000, но лучшие цитаты сохраняю и там. "
+    "Пустой пересказ короче, чем нужно, хуже длинной живой хроники."
+)
+_COMPACT_FORM = (
     "Верни СТРОГИЙ JSON: "
     '{"summary":"хроника","open_threads":["..."],"claims":[{"subject":"...","text":"...",'
     '"confidence":"observed|inferred|uncertain","evidence_ids":["evt/cmp id"]}],'
     '"episodes":[{"title":"...","status":"closed|continued","start_id":"...",'
     '"end_id":"...","summary":"..."}]}\n\n'
-    "Как писать summary (это единственное поле, которое она увидит в кадре):\n"
-    "1. От первого лица Praxis («я»), в прошедшем времени, по-русски, хронологически. Абзацы — "
-    "по эпизодам, не по людям. Дай масштаб: за сколько часов и сколько сообщений было.\n"
-    "2. Людей называй так, как они подписаны во входе (имя и @username), с их позициями и "
-    "манерой: не «обсуждали архитектуру», а «torvn77 настаивал, что …, Barmagloth отмахнулся: …».\n"
-    "3. ЦИТИРУЙ ДОСЛОВНО самые характерные реплики — острые, смешные, обидные, точные, "
-    "переломные — в кавычках «…», с автором и номером сообщения, если он есть во входе. "
-    "Ориентир: одна-две цитаты на эпизод, до восьми на запись; цитата — до 200 знаков; "
-    "чужую грубость не смягчай и не пересказывай эвфемизмами, это часть смысла.\n"
-    "4. Мои собственные реплики (строки [Я]) — особенно: что именно я утверждала, от чего отказалась, где "
-    "ошиблась и признала это, что пообещала. Мои формулировки цитируй, а не пересказывай.\n"
-    "5. Решения, обещания, договорённости, изменившиеся факты и открытые вопросы — явно, с "
-    "тем, кто их произнёс. Неуверенное так и помечай («похоже», «не проверено»).\n"
-    "6. Если во входе были пути, имена файлов, номера, ссылки, команды, id прогонов — "
-    "перенеси их дословно: без них моя же работа для меня потом не находится.\n"
-    "7. Объём: примерно одна строка на два-три входящих сообщения; для tier 1 обычно "
-    "1 500–3 000 знаков, для более глубоких tier — до 2 000, но лучшие цитаты сохраняй и там. "
-    "Пустой пересказ короче, чем нужно, хуже длинной живой хроники.\n\n"
+    "summary — единственное поле, которое я потом увижу в кадре: вся хроника, включая дословные "
+    "реплики, лежит в нём, а не в open_threads/claims.\n\n"
     "Запреты: ничего не выдумывать и не додумывать; цитировать только то, что есть во входе; "
     "ссылаться только на id из входа; не ставить оценок людям от себя, кроме того, что сказано "
     "ими или мной; не превращать спор в «стороны обменялись мнениями». Более глубокий/старый "
-    "компакт имеет приоритет СОХРАНЕНИЯ, не истины. Если последний эпизод ещё идёт, пометь его "
+    "компакт имеет приоритет СОХРАНЕНИЯ, не истины. Если последний эпизод ещё идёт, помечаю его "
     "continued. Значения всех полей — по-русски."
 )
+# Тот же текст без персоны — для стендов и для чтения глазами. Живой system собирает
+# `compact_system()`: персона + задача + её правила + форма.
+_COMPACT_SYSTEM = _COMPACT_TASK + "\n\n" + _MEMORY_RULES_DEFAULT + "\n\n" + _COMPACT_FORM
+def _memory_style_path():
+    return BASE / "soul" / "memory_style.md"
+
+
+def memory_style() -> str:
+    """Её правила записи памяти: soul/memory_style.md, если она его написала, иначе умолчание."""
+    try:
+        text = _memory_style_path().read_text(encoding="utf-8").strip()
+    except OSError:
+        text = ""
+    return text or _MEMORY_RULES_DEFAULT
+
+
+def _memory_persona() -> str:
+    """Её персона для записи памяти: SOUL.md и CURRENT с провенансом — то же, что в кадре хода.
+
+    VOICE.md — регистр публичной речи, свёртке он не нужен; legacy soul/self.md, как и в
+    кадре, не голосует."""
+    parts: list[str] = []
+    try:
+        soul = (BASE / "soul" / "SOUL.md").read_text(encoding="utf-8").strip()
+    except OSError:
+        soul = ""
+    if soul:
+        parts.append(soul)
+    try:
+        import self_model
+        current = str(self_model.current_prompt(BASE) or "").strip()
+    except Exception:
+        current = ""
+    if current:
+        parts.append(current)
+    return "\n\n---\n\n".join(parts)
+
+
+def compact_system() -> str:
+    """System свёртки: её персона, её задача от первого лица, её правила, форма ответа."""
+    persona = _memory_persona()
+    head = (persona + "\n\n---\n\n") if persona else ""
+    return head + _COMPACT_TASK + "\n\n" + memory_style() + "\n\n" + _COMPACT_FORM
+
+
+def _memory_role() -> str:
+    """Роль модели для её памяти: `memory`, если настроена в llm.json, иначе её голос `voice`."""
+    try:
+        import llm
+        if llm.configured("memory"):
+            return "memory"
+    except Exception:
+        pass
+    return "voice"
 
 
 EVENT_CLIP_CHARS = 1800
@@ -1007,9 +1228,9 @@ def _anchor_self(data: dict, *, llm, user: str, inputs: list[dict], manifest: di
     if not who:
         return data
     log.warning("life compact: сводка назвала «я» чужим именем (%s) — перезаход с поправкой", who)
-    note = (f"\n\n⚠ Прошлая попытка написала «я» от имени {who}. «Я» — только Praxis, её строки "
-            f"помечены [Я]; {who} и все остальные — в третьем лице по имени. Перепиши сводку.")
-    resp = llm.chat("evaluator", system=_COMPACT_SYSTEM,
+    note = (f"\n\n⚠ Прошлая попытка написала «я» от имени {who}. «Я» — только Praxis, то есть я; "
+            f"мои строки помечены [Я]; {who} и все остальные — в третьем лице по имени. Перепиши сводку.")
+    resp = llm.chat(_memory_role(), system=compact_system(),
                     messages=[{"role": "user", "content": user + note}],
                     max_tokens=COMPACT_RETRY_MAX_TOKENS)
     fixed = _json_obj(getattr(resp, "text", "") or "")
@@ -1025,15 +1246,17 @@ def _model_compact(inputs: list[dict], *, tier: int, depth: int, continued: bool
                    authors: set[str] | None = None) -> dict:
     try:
         import llm
-        if not llm.configured("evaluator"):
+        role = _memory_role()
+        if not llm.configured(role):
             return {}
+        system = compact_system()
         body, manifest = _pack_compact_prompt(inputs)
         user = (f"Target tier={tier}, depth={depth}, forced_continuation={str(continued).lower()}.\n"
                 + body)
         # 12.09: 1600 токенов резали сводку JSON на середине фразы (186 обрывов за час
         # свёртки под новый потолок ленты против 2 до неё): оборванный JSON не
         # разбирается, и место сворачивалось запасной сводкой без модели.
-        resp = llm.chat("evaluator", system=_COMPACT_SYSTEM,
+        resp = llm.chat(role, system=system,
                         messages=[{"role": "user", "content": user}],
                         max_tokens=COMPACT_MAX_TOKENS)
         data = _json_obj(resp.text)
@@ -1049,7 +1272,7 @@ def _model_compact(inputs: list[dict], *, tier: int, depth: int, continued: bool
         log.warning("life compact: сводка не разобрана (%d знаков при потолке %d) — "
                     "второй заход с потолком %d", len(raw), COMPACT_MAX_TOKENS,
                     COMPACT_RETRY_MAX_TOKENS)
-        resp = llm.chat("evaluator", system=_COMPACT_SYSTEM,
+        resp = llm.chat(role, system=system,
                         messages=[{"role": "user", "content": user}],
                         max_tokens=COMPACT_RETRY_MAX_TOKENS)
         data = _json_obj(resp.text)
@@ -1394,10 +1617,13 @@ def tape_window(rows: list[dict], max_chars: int | None = None) -> list[dict]:
     return kept
 
 
-def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | None = None) -> dict:
+def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | None = None,
+                  place: str | int | None = None) -> dict:
     """`tape_chars` — потолок ленты в знаках для ЭТОГО места (13.09: группе свой рычаг);
-    None — общий TAPE_CHARS, 0 — давления по знакам нет."""
+    None — общий TAPE_CHARS, 0 — давления по знакам нет. `place` — чьё окно: комнате
+    свои пороги (`hot_bounds`, 25.09), без места — прежние HOT_*."""
     tape_limit = TAPE_CHARS if tape_chars is None else max(0, int(tape_chars))
+    lo, hi, hard_hi, token_cap = hot_bounds(place)
     count = len(hot)
     token_rows = [int(x.get("tokens") or estimate_tokens(x.get("line", ""))) for x in hot]
     tokens = sum(token_rows)
@@ -1406,18 +1632,18 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | Non
         return {"due": False, "reason": "too_short", "count": count, "tokens": tokens,
                 "chars": chars}
     char_pressure = tape_limit > 0 and chars > tape_limit
-    pressure = count >= HOT_HI or tokens > HOT_TOKEN_CAP or char_pressure or force
+    pressure = count >= hi or tokens > token_cap or char_pressure or force
     if not pressure:
         return {"due": False, "reason": "within_window", "count": count, "tokens": tokens,
                 "chars": chars}
-    token_pressure = tokens > HOT_TOKEN_CAP
+    token_pressure = tokens > token_cap
     token_target = 1
     if token_pressure:
         suffix_tokens = tokens
         for i in range(1, count):
             suffix_tokens -= token_rows[i - 1]
             token_target = i
-            if suffix_tokens <= HOT_TOKEN_CAP:
+            if suffix_tokens <= token_cap:
                 break
     if char_pressure:
         # Лента переросла потолок в знаках: сворачиваем старое так, чтобы горячим
@@ -1433,7 +1659,7 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | Non
                 break
         token_pressure = True
         token_target = max(token_target, char_target)
-    count_target = max(1, count - HOT_LO) if count >= HOT_HI or force else 1
+    count_target = max(1, count - lo) if count >= hi or force else 1
     # ПОТОЛОК ПЛАНА — сколько влезает в один промпт. Замер 21.08 по AbstractDL:
     # кольцо 3802 при потолке 125, план просил свернуть 3752 события разом, модель
     # брала префикс на 48 000 знаков, остальное честно объявлялось невлезшим — и
@@ -1441,7 +1667,7 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | Non
     # срезанных событий. Теперь план и упаковка меряют одним и тем же.
     budget_fit = budget_prefix(hot)
     target = min(max(count_target, token_target), budget_fit)
-    min_remaining = 1 if token_pressure or force else HOT_LO
+    min_remaining = 1 if token_pressure or force else lo
     candidates = []
     for i in range(1, count):
         remaining = count - i
@@ -1456,8 +1682,10 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | Non
         _, fold, gap = min(candidates)
         return {"due": True, "fold": fold, "continued": False, "reason": "episode_boundary",
                 "gap_sec": gap, "count": count, "tokens": tokens,
-                "budget_fit": budget_fit}
-    hard = token_pressure or count >= HOT_HARD_HI or force
+                "budget_fit": budget_fit,
+                # 25.09: жёсткий ли повод (токены/знаки/HARD_HI/force) — мягкий только предлагается
+                "hard": bool(token_pressure or char_pressure or count >= hard_hi or force)}
+    hard = token_pressure or count >= hard_hi or force
     if not hard:
         return {"due": False, "reason": "open_episode", "count": count, "tokens": tokens}
     valid = [i for i in range(1, count)
@@ -1468,8 +1696,8 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | Non
     # Прогресс обязан быть монотонным: свернуть меньше одной записи нельзя, больше
     # влезающего — бессмысленно. Между этими двумя границами план всегда исполним.
     fold = max(1, min(fold, budget_fit))
-    return {"due": True, "fold": fold, "continued": True,
-            "reason": ("token_cap" if tokens > HOT_TOKEN_CAP else
+    return {"due": True, "fold": fold, "continued": True, "hard": True,
+            "reason": ("token_cap" if tokens > token_cap else
                        "tape_chars" if char_pressure else "hard_window"),
             "count": count, "tokens": tokens, "chars": chars, "budget_fit": budget_fit}
 
@@ -1585,9 +1813,7 @@ def _tier_fold_own_leaves(meta: dict) -> frozenset[str] | None:
     """События свёртки, если они видны из её собственной шапки; иначе None.
 
     У первого яруса листья названы прямо (`source_event_ids`). У верхних они лежат
-    через детей, и поднимать весь граф ради выбора кандидата дорого — там остаётся
-    прежнее поведение, а от зацикливания страхует предохранитель в
-    `_fold_tiers_transactional`.
+    через детей — их поднимает `_tier_fold_leaves` по индексу доказательств.
     """
     events = meta.get("source_event_ids")
     if events:
@@ -1595,6 +1821,37 @@ def _tier_fold_own_leaves(meta: dict) -> frozenset[str] | None:
     if meta.get("source_compact_ids"):
         return None
     return frozenset()
+
+
+def _tier_fold_leaves(meta: dict, evidence_ref: list) -> frozenset[str] | None:
+    """Листья свёртки любого яруса — для проверки, что дети не делят события.
+
+    25.09, диагноз по проду (AbstractDL: 64 общих события у детей яруса 3, Ouroboros: 4
+    у яруса 2). Пересечение проверялось только у первого яруса; выше кандидат брался с
+    делящими листья детьми, родитель писался, разрешение отвергало его
+    (`len(unique_leaves) != len(leaves)`), и ярус сворачивал ту же пачку снова и снова —
+    пять раз в день, а верхний ярус этих комнат не рос никогда. Индекс доказательств
+    кэширован по подписям файлов и разрешения мемоизированы, поэтому подъём листьев
+    здесь стоит стата, а не полного чтения графа. Индекс строится один раз на выбор
+    кандидата и передаётся через `evidence_ref` (список из одного элемента или пустой).
+    """
+    own = _tier_fold_own_leaves(meta)
+    if own is not None:
+        return own
+    compact_id = str(meta.get("id") or "")
+    if not compact_id:
+        return None
+    try:
+        if not evidence_ref:
+            evidence_ref.append(memory_provenance.claim_evidence_index(MEM_DIR))
+        resolved = memory_provenance.compact_coverage(compact_id, evidence_ref[0])
+    except Exception:
+        log.warning("листья свёртки %s не поднялись — пересечение не проверено",
+                    compact_id, exc_info=True)
+        return None
+    if not resolved.get("valid"):
+        return None
+    return frozenset(str(x) for x in (resolved.get("leaves") or ()))
 
 
 def _tier_fold_bounds(sources: list[dict]) -> tuple[str, str]:
@@ -1632,8 +1889,16 @@ def _tier_fold_candidate(chat_id: str | int, state: dict) -> dict | None:
             sources: list[dict] = []
             seen_leaves: set[str] = set()
             skipped: list[str] = []
+            unresolved: list[str] = []
+            evidence_ref: list = []
             for item in same:
-                leaves = _tier_fold_own_leaves(item)
+                leaves = _tier_fold_leaves(item, evidence_ref)
+                if leaves is None:
+                    # 25.09 (ревью V4 N1): покрытие ребёнка не разрешилось — листьев не
+                    # знаем, и родитель над ним будет отвергнут разрешением: та же
+                    # мельница другим путём. Не берём; ребёнок ждёт refresh.
+                    unresolved.append(str(item.get("id")))
+                    continue
                 if leaves and (leaves & seen_leaves):
                     skipped.append(str(item.get("id")))
                     continue
@@ -1646,6 +1911,10 @@ def _tier_fold_candidate(chat_id: str | int, state: dict) -> dict | None:
                 log.warning(
                     "свёртка яруса %d: %d источник(ов) делят события с уже взятыми, "
                     "беру без них (%s)", tier, len(skipped), ", ".join(skipped[:5]))
+            if unresolved:
+                log.warning(
+                    "свёртка яруса %d: %d источник(ов) с неразрешённым покрытием — не беру "
+                    "(%s)", tier, len(unresolved), ", ".join(unresolved[:5]))
             if len(sources) >= 2:
                 continued = any(bool(x.get("continued")) for x in sources)
                 return {
@@ -1879,9 +2148,17 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
         # оказывалась бы пустой, и место стояло бы при полном кольце (поймано
         # стендом test_mill_never_again_2109, а не на проде).
         provable = _drop_unprovable_inputs(list(state.get("hot") or []), chat_id)
-        plan = plan_hot_fold(provable, force=force, tape_chars=tape_chars_for(chat_id))
+        plan = plan_hot_fold(provable, force=force, tape_chars=tape_chars_for(chat_id),
+                             place=chat_id)
         if not plan.get("due"):
+            if fold_offer_enabled():
+                clear_fold_offer(chat_id)      # окно снова в норме — предложение снято
             return {"ok": True, "folded": 0, "plan": plan,
+                    "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
+        if not force and fold_offer_enabled() and not plan.get("hard"):
+            # 25.09, слово Егора: на мягком пороге свёртка ПРЕДЛАГАЕТСЯ, а не делается.
+            _note_fold_offer(chat_id, plan)
+            return {"ok": True, "folded": 0, "offered": True, "plan": plan,
                     "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
         fold = int(plan["fold"])
         inputs = provable[:fold]
@@ -1956,6 +2233,8 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
                            "continued": meta["continued"], "degraded": meta["degraded"]})
         _save_state(state)
         hot_after = len(state["hot"])
+        if fold_offer_enabled() and clear_fold_offer(chat_id):
+            log.info("свёртка [%s] сделана (%s) — предложение снято", chat_id, plan.get("reason"))
     higher, higher_degraded = _fold_tiers_transactional(chat_id)
     return {"ok": True, "folded": fold, "compact_id": meta["id"], "episodes": episodes,
             "plan": plan, "hot": hot_after, "tiers": higher, "degraded_tiers": higher_degraded,
@@ -2360,19 +2639,32 @@ def context_summary(chat_id: str | int, max_chars: int = 7000) -> str:
     # компакта превращался в огрызок вроде `-8a18ea57`, который модель могла
     # процитировать как провенанс. Пакуем ЦЕЛЫМИ блоками от свежих к старым и честно
     # называем, сколько выпало, вместо того чтобы делать вид, что не выпало ничего.
-    kept: list[str] = []
-    used = 0
-    for block in reversed(blocks):
-        if kept and used + len(block) + 2 > remaining:
+    # 25.09: упаковка «свежее к старому» выкидывала первым самый ШИРОКИЙ блок — верхний
+    # ярус, у которого first_ts самый ранний. Замер на AbstractDL: фронтир 22 блока,
+    # 152 тыс. знаков; в кадр ехали полтора вчерашних листа, а память комнаты за два
+    # месяца (tier 4, 6 493 события) — никогда. «Ты же бесокот…» — и она не знала.
+    # Теперь сначала гарантирован самый широкий по охвату блок (её долгая память места),
+    # остаток бюджета — свежим к старому; показ — по хронологии, выпавшее названо.
+    widest = max(range(len(blocks)),
+                 key=lambda i: (int(frontier[i][0].get("event_count") or 0),
+                                int(frontier[i][0].get("tier") or 0), i))
+    kept_idx = [widest]
+    used = len(blocks[widest]) + 2
+    for i in reversed(range(len(blocks))):
+        if i == widest:
+            continue
+        if used + len(blocks[i]) + 2 > remaining:
             break
-        kept.append(block)
-        used += len(block) + 2
-    kept.reverse()
+        kept_idx.append(i)
+        used += len(blocks[i]) + 2
+    kept_idx.sort()
+    kept = [blocks[i] for i in kept_idx]
     dropped = len(blocks) - len(kept)
     head = _CONTINUITY_WARNING
     if dropped:
         head += (f"\n[СВОДКА ОБРЕЗАНА БЮДЖЕТОМ: показаны {len(kept)} компактов из "
-                 f"{len(blocks)}; более ранние есть на диске и достаются recall]")
+                 f"{len(blocks)} — самый широкий по охвату и самые свежие; остальные "
+                 f"есть на диске и достаются recall]")
     body = "\n\n".join(kept)
     if len(body) > remaining:      # один блок крупнее всего бюджета — режем его явно
         body = body[:max(0, remaining - 40)] + "\n…[КОМПАКТ ОБРЕЗАН]"
@@ -3118,3 +3410,294 @@ def _cli() -> None:
 
 if __name__ == "__main__":
     _cli()
+
+
+
+# ── 25.09: её руки на своих свёртках — list / read / rewrite / refold ────────────────────
+#
+# Свёртка — её слово: переписать можно любую, на месте и под тем же id. Шапка (источники,
+# границы, ярус) не трогается, поэтому разрешение принимает переписанную свёртку без
+# спора, а родители, ссылающиеся на неё, остаются целыми. Прежний текст уходит в историю
+# (`memory/life/compacts/_history/<место>/<id>.<время>.md`) — переписать не значит стереть.
+# `refold` — перевыпуск пачкой в фоне её же голосом: те же входы, что у обычной свёртки
+# (листья — из текущих событий, ярусы — из детей), результат ложится на место.
+
+def _history_dir():
+    return COMPACTS_DIR / "_history"
+
+
+def _refold_state_path():
+    return MEM_DIR / ".state" / "refold.json"
+
+
+_REFOLD_LOCK = threading.Lock()
+_REFOLD: dict = {"running": False, "stop": False}
+_SECTION_RE = re.compile(r"(?m)^(?=## )")
+
+
+def _compact_row(meta: dict) -> dict:
+    recap = compact_text(str(meta.get("id") or ""), meta.get("chat_id"))  # уже «Суть»
+    return {
+        "id": str(meta.get("id") or ""), "chat_id": str(meta.get("chat_id") or ""),
+        "tier": int(meta.get("tier") or 1), "depth": int(meta.get("depth") or 1),
+        "first_ts": str(meta.get("first_ts") or ""), "last_ts": str(meta.get("last_ts") or ""),
+        "events": int(meta.get("event_count") or 0), "degraded": bool(meta.get("degraded")),
+        "legacy": bool(meta.get("legacy")), "chars": len(recap),
+        "head": " ".join(recap.split())[:160],
+    }
+
+
+def _place_compacts(chat_id: str | int | None, evidence: dict) -> list[dict]:
+    compacts = evidence.get("compacts") or {}
+    if chat_id is None or str(chat_id) == "all":
+        rows = list(compacts.values())
+    else:
+        place = str(place_key(chat_id))
+        rows = [meta for meta in compacts.values()
+                if memory_provenance.same_conversation(meta.get("chat_id"), place,
+                                                       evidence.get("places"))]
+    rows.sort(key=lambda m: (int(m.get("tier") or 1), str(m.get("first_ts") or ""),
+                             str(m.get("id") or "")))
+    return rows
+
+
+def list_compacts(chat_id: str | int | None, *, tier: int | None = None, limit: int = 20,
+                  since: str = "") -> list[dict]:
+    """Свёртки места (или все при chat_id=all): ярус, обхват, первые слова сути."""
+    evidence = memory_provenance.claim_evidence_index(MEM_DIR)
+    rows = _place_compacts(chat_id, evidence)
+    if tier is not None:
+        rows = [m for m in rows if int(m.get("tier") or 1) == int(tier)]
+    if since:
+        rows = [m for m in rows if str(m.get("last_ts") or "") >= str(since)]
+    rows.sort(key=lambda m: (str(m.get("first_ts") or ""), str(m.get("id") or "")))
+    if limit and limit > 0:
+        rows = rows[-int(limit):]
+    return [_compact_row(meta) for meta in rows]
+
+
+def read_compact(compact_id: str, chat_id: str | int | None = None) -> dict:
+    """Одна свёртка целиком: шапка, суть и полный текст файла."""
+    candidates = _compact_candidates(compact_id, chat_id)
+    if len(candidates) != 1:
+        return {"ok": False, "reason": "unknown_compact"}
+    meta, recap = candidates[0]
+    try:
+        text = (BASE / str(meta.get("path"))).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return {"ok": False, "reason": "compact_unreadable"}
+    return {"ok": True, "meta": _compact_row(meta), "recap": recap, "text": text}
+
+
+def _replace_recap(text: str, summary: str, open_threads: list[str] | None) -> str:
+    """Тот же файл с новой «Сутью» (и, если даны, новыми «Открытыми нитями»); остальное — как было."""
+    chunks = _SECTION_RE.split(text)
+    head, sections = chunks[0], chunks[1:]
+    out: list[str] = []
+    seen_recap = seen_threads = False
+    threads_block = None
+    if open_threads is not None:
+        rows = [str(x).strip() for x in open_threads if str(x).strip()]
+        threads_block = ("## Открытые нити\n" + "\n".join(f"- {x}" for x in rows) + "\n\n") if rows else ""
+    for section in sections:
+        title = section.split("\n", 1)[0].strip()
+        if title == "## Суть":
+            out.append("## Суть\n" + summary.strip() + "\n\n")
+            seen_recap = True
+            if threads_block is not None and not seen_threads:
+                if threads_block:
+                    out.append(threads_block)
+                seen_threads = True
+            continue
+        if title == "## Открытые нити":
+            if threads_block is None:
+                out.append(section if section.endswith("\n") else section + "\n")
+            seen_threads = True
+            continue
+        out.append(section if section.endswith("\n\n") else section.rstrip("\n") + "\n\n")
+    if not seen_recap:
+        raise ValueError("compact without recap section")
+    body = head + "".join(out)
+    return body.rstrip() + "\n"
+
+
+def rewrite_compact_text(compact_id: str, summary: str, *, chat_id: str | int | None = None,
+                         open_threads: list[str] | None = None, why: str = "her_word") -> dict:
+    """Переписать суть свёртки на месте: тот же id, та же шапка, прежний текст — в историю."""
+    summary = str(summary or "").strip()
+    if not summary:
+        return {"ok": False, "reason": "empty_summary"}
+    candidates = _compact_candidates(compact_id, chat_id)
+    if len(candidates) != 1:
+        return {"ok": False, "reason": "unknown_compact"}
+    meta, _old_recap = candidates[0]
+    chat = str(meta.get("chat_id") or "")
+    place = str(place_key(chat))
+    path = BASE / str(meta.get("path"))
+    stamp = _utc_iso().replace("-", "").replace(":", "")
+    history = _history_dir() / _safe(chat) / f"{compact_id}.{stamp}.md"
+    with _state_write_guard(place), _WRITE_LOCK:
+        # 25.09 (ревью V4 F13): читать ПОД замком — иначе два переписывания одного id
+        # (рука и фоновый refold) теряют одно: второе кладёт в историю свой старый текст.
+        try:
+            old_text = path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return {"ok": False, "reason": "compact_unreadable"}
+        try:
+            new_text = _replace_recap(old_text, summary, open_threads)
+        except ValueError as exc:
+            return {"ok": False, "reason": str(exc)}
+        history.parent.mkdir(parents=True, exist_ok=True)
+        history.write_text(old_text, encoding="utf-8")
+        tmp = path.with_suffix(".md.tmp")
+        tmp.write_text(new_text, encoding="utf-8")
+        tmp.replace(path)
+        fresh_meta, fresh_recap = _read_compact_candidate(path, chat)
+        if not fresh_meta or fresh_meta != meta or not fresh_recap:
+            # Шапка обязана остаться прежней байт в байт — иначе откат, свёртка не меняется.
+            path.write_text(old_text, encoding="utf-8")
+            return {"ok": False, "reason": "header_changed"}
+        history_rel = history.relative_to(BASE).as_posix()
+        append_event(
+            "memory_compact", chat_id=chat,
+            text=f"Переписала свёртку {compact_id} своими словами ({why}); {len(summary)} знаков",
+            source="memory_life", refs=[str(compact_id)],
+            meta={"compact_id": str(compact_id), "tier": int(meta.get("tier") or 1),
+                  "rewritten": True, "why": why, "history": history_rel})
+    return {"ok": True, "id": str(compact_id), "chat_id": chat, "chars": len(summary),
+            "history": history_rel}
+
+
+def refold_plan(chat_id: str | int | None = "all", *, tier: int | None = None,
+                since: str = "", limit: int = 0) -> list[tuple[str, str]]:
+    """Что перевыпускать: листья раньше родителей, старое раньше нового. Без записи."""
+    evidence = memory_provenance.claim_evidence_index(MEM_DIR)
+    rows = _place_compacts(chat_id, evidence)
+    plan: list[tuple[str, str]] = []
+    for meta in rows:
+        if meta.get("legacy"):
+            continue
+        if not (meta.get("source_event_ids") or meta.get("source_compact_ids")):
+            continue
+        if tier is not None and int(meta.get("tier") or 1) != int(tier):
+            continue
+        if since and str(meta.get("last_ts") or "") < str(since):
+            continue
+        plan.append((str(meta.get("chat_id") or ""), str(meta.get("id") or "")))
+    if limit and limit > 0:
+        plan = plan[:int(limit)]
+    return plan
+
+
+def refold_one(chat_id: str | int, compact_id: str) -> dict:
+    """Перевыпустить одну свёртку её голосом на месте: те же входы, что у обычной свёртки."""
+    chat = str(chat_id)
+    evidence = memory_provenance.claim_evidence_index(MEM_DIR)
+    compacts = evidence.get("compacts") or {}
+    meta = compacts.get(str(compact_id))
+    if not isinstance(meta, dict):
+        return {"ok": False, "reason": "unknown_compact"}
+    children = [str(x) for x in (meta.get("source_compact_ids") or [])]
+    source_ids = [str(x) for x in (meta.get("source_event_ids") or [])]
+    if children:
+        if any(not isinstance(compacts.get(ch), dict) for ch in children):
+            return {"ok": False, "reason": "sources_missing"}
+        inputs = [_frontier_input(dict(compacts[ch], id=ch), chat) for ch in children]
+        if any(not str(item.get("text") or "").strip() for item in inputs):
+            return {"ok": False, "reason": "sources_missing"}
+        subtree = _subtree_event_rows(evidence, str(compact_id))
+    elif source_ids:
+        rows = [(evidence.get("events") or {}).get(eid) for eid in source_ids]
+        if any(not isinstance(row, dict) for row in rows):
+            return {"ok": False, "reason": "sources_missing"}
+        current_ids = set(evidence.get("current_event_ids") or ())
+        inputs = _conversation_hot_rows(rows)
+        if len(inputs) != len(source_ids) or any(eid not in current_ids for eid in source_ids):
+            # Часть источников вытеснена поздней ревизией — это работа refresh_compacts.
+            return {"ok": False, "reason": "sources_not_current"}
+        subtree = inputs
+    else:
+        return {"ok": False, "reason": "no_sources"}
+    authors = _window_authors(subtree)
+    result = _model_compact(inputs, tier=int(meta.get("tier") or 1),
+                            depth=int(meta.get("depth") or 1),
+                            continued=bool(meta.get("continued")), authors=authors)
+    summary = str((result or {}).get("summary") or "").strip()
+    if not summary or (result or {}).get("degraded"):
+        return {"ok": False, "reason": "model_unavailable"}
+    threads = result.get("open_threads") if isinstance(result.get("open_threads"), list) else None
+    return rewrite_compact_text(str(compact_id), summary, chat_id=chat,
+                                open_threads=threads, why="refold")
+
+
+def _save_refold_state() -> None:
+    try:
+        state_path = _refold_state_path()
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = state_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(_REFOLD, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(state_path)
+    except OSError:
+        log.debug("refold: состояние не записалось", exc_info=True)
+
+
+def refold_status() -> dict:
+    with _REFOLD_LOCK:
+        return dict(_REFOLD)
+
+
+def refold_stop() -> dict:
+    with _REFOLD_LOCK:
+        if not _REFOLD.get("running"):
+            return {"ok": True, "running": False}
+        _REFOLD["stop"] = True
+        _save_refold_state()
+        return {"ok": True, "running": True, "stopping": True}
+
+
+def _refold_worker(plan: list[tuple[str, str]], pause_sec: float) -> None:
+    for chat, cid in plan:
+        if _REFOLD.get("stop"):
+            break
+        try:
+            out = refold_one(chat, cid)
+        except Exception as exc:
+            log.exception("refold %s: не вышло", cid)
+            out = {"ok": False, "reason": f"{type(exc).__name__}: {exc}"[:200]}
+        with _REFOLD_LOCK:
+            if out.get("ok"):
+                _REFOLD["done"] = int(_REFOLD.get("done") or 0) + 1
+            elif out.get("reason") in ("sources_not_current", "no_sources", "sources_missing"):
+                _REFOLD["skipped"] = int(_REFOLD.get("skipped") or 0) + 1
+            else:
+                _REFOLD["failed"] = int(_REFOLD.get("failed") or 0) + 1
+            _REFOLD["last"] = {"id": cid, "chat_id": chat, **{k: out.get(k) for k in ("ok", "reason")}}
+            _save_refold_state()
+        if pause_sec > 0:
+            time.sleep(pause_sec)
+    with _REFOLD_LOCK:
+        _REFOLD["running"] = False
+        _REFOLD["finished_at"] = _utc_iso()
+        _save_refold_state()
+
+
+def refold_start(chat_id: str | int | None = "all", *, tier: int | None = None, since: str = "",
+                 limit: int = 0, pause_sec: float = 2.0) -> dict:
+    """Запустить перевыпуск пачкой в фоне. Один перевыпуск за раз; стоп — refold_stop()."""
+    with _REFOLD_LOCK:
+        if _REFOLD.get("running"):
+            return {"ok": False, "reason": "already_running", **_REFOLD}
+        plan = refold_plan(chat_id, tier=tier, since=since, limit=limit)
+        _REFOLD.clear()
+        _REFOLD.update({
+            "running": bool(plan), "stop": False, "planned": len(plan), "done": 0,
+            "skipped": 0, "failed": 0, "started_at": _utc_iso(), "finished_at": "",
+            "scope": {"place": str(chat_id), "tier": tier, "since": since, "limit": limit},
+            "last": None,
+        })
+        _save_refold_state()
+        if not plan:
+            return {"ok": True, "planned": 0}
+        threading.Thread(target=_refold_worker, args=(plan, float(pause_sec)),
+                         name="praxis-refold", daemon=True).start()
+    return {"ok": True, "planned": len(plan), "first": plan[0][1], "last": plan[-1][1]}

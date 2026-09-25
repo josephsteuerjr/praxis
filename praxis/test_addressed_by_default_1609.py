@@ -69,8 +69,9 @@ class TheDefaultIsQuiet(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop(LEVER, None)
             policy = rooms.default_policy()
-        self.assertEqual(policy["context_hot"], 200)
-        self.assertEqual(policy["context_summary_chars"], 24_000)
+        # 25.09: глубина поднята словом Егора (400 / 40 000) — см. test_room_memory_2509.
+        self.assertEqual(policy["context_hot"], 400)
+        self.assertEqual(policy["context_summary_chars"], 40_000)
         self.assertEqual(policy["cross_topics"], "map")
 
 

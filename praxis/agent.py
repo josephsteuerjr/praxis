@@ -317,6 +317,39 @@ _TELETHON: dict = {}
 # Медиа-выход живого хода собирается локально и уходит в Telegram только ПОСЛЕ общего
 # read-before-write guard. ContextVar не смешивает параллельные asyncio.to_thread ходы.
 _TURN_CHANNEL: ContextVar["ChannelContext | None"] = ContextVar("praxis_turn_channel", default=None)
+# 25.09 (ревью V1-1): тексты записей `[private]`, которые ехали в кадр ЭТОГО хода в комнате —
+# для механического пола на исходящей границе (см. private_record_floor).
+_PRIVATE_IN_FRAME: ContextVar[tuple[str, ...]] = ContextVar("praxis_private_in_frame", default=())
+_PRIVATE_FLOOR_MIN = 24
+
+
+def _floor_norm(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").replace("[private]", " ").casefold()).strip()
+
+
+def private_record_floor(text: str) -> str:
+    """Твёрдый пол закона 3 для приватных записей досье (25.09, ревью V1-1).
+
+    С 25.09 записи `[private]` едут в кадр комнаты (решение владельца). На выходе стоял
+    только совет судьи, а у `send_message`/`narrate` — ничего; прецедент утечки на low
+    записан в коде 17.09. Здесь — механика, как у кред-пола: вне owner-контура исходящий
+    текст не смеет содержать дословный кусок (≥ 24 знаков) записи, которая ехала в кадр
+    этого хода. Пересказ своими словами пол не трогает — он не судья."""
+    records = _PRIVATE_IN_FRAME.get()
+    hay = _floor_norm(text)
+    if not records or len(hay) < _PRIVATE_FLOOR_MIN:
+        return ""
+    for rec in records:
+        for line in str(rec).splitlines():
+            body = _floor_norm(line)
+            n = len(body)
+            if n < _PRIVATE_FLOOR_MIN:
+                continue
+            for i in range(0, n - _PRIVATE_FLOOR_MIN + 1, 6):
+                piece = body[i:i + _PRIVATE_FLOOR_MIN]
+                if piece in hay:
+                    return f"дословный кусок приватной записи досье («{piece[:18]}…»)"
+    return ""
 _KEAT_ORIGINAL_INGRESS: ContextVar[bool] = ContextVar("praxis_keat_original_ingress", default=False)
 _KEAT_PROJECTION: ContextVar[dict | None] = ContextVar("praxis_keat_projection", default=None)
 _KEAT_HISTORY_SINK: ContextVar[dict | None] = ContextVar("praxis_keat_history_sink", default=None)
@@ -1326,6 +1359,102 @@ NOT_HERS_LABELS = (
 )
 
 
+def _busy_label(current, ctx) -> str:
+    """Чем она занята — для шапки блока уведомлений. Только слова, без чужих цитат."""
+    kind = str(getattr(current, "kind", "") or "")
+    if kind in ("task_window", "coding_window"):
+        goal = " ".join(str(getattr(current, "goal", "") or "").split())
+        return f"окно «{goal[:48]}»" if goal else "окно"
+    if kind in ("wake", "heartbeat"):
+        return "Пробуждение"
+    title = str(getattr(ctx, "title", "") or "") if ctx is not None else ""
+    if title:
+        return f"ход в «{title[:40]}»"
+    return "ход"
+
+
+def _live_window_run_ids() -> list[str]:
+    """Живые нетерминальные прогоны видов окон — адресаты реплики владельца (G §3).
+
+    ⚠ 25.09 (ревью V2 F1): здесь стоял `list_runs(statuses=…)` — обход и замок на КАЖДОМ
+    манифесте (~8 500 на проде, 12 мс на прогон) на каждую реплику владельца в ЛС, до
+    `_arm` хода. Тот же хотспот, что в докстринге `run_manager.live_run_ids` (py-spy
+    31.07). Теперь — дешёвый список живых и манифесты только у них (единицы).
+    """
+    try:
+        runs = _runs()
+        live = [str(x) for x in runs.live_run_ids() if x]
+    except Exception:
+        return []
+    from core import notices as core_notices
+    out: list[str] = []
+    for run_id in live:
+        try:
+            row = runs._manifest_listing_row(run_id, runs.manifest(run_id))
+        except Exception:
+            continue
+        if str(row.get("kind") or "") in core_notices.WINDOW_RUN_KINDS:
+            out.append(run_id)
+    return out
+
+
+_ALARM_KINDS = ("window", "wake", "note", "message")   # то, что _fire_task поднимает ходом
+
+
+def _pending_alarm_ids() -> list[str]:
+    """Взведённые будильники — адресаты реплики владельца, пока их окно не родилось.
+    ⚠ 25.09 (ревью V2 F2): звалось `tasks.pending()`, которого нет, — список был пуст всегда."""
+    try:
+        return [str(t.get("id")) for t in tasks.list_open()
+                if t.get("id") and str(t.get("kind") or "") in _ALARM_KINDS]
+    except Exception:
+        return []
+
+
+def _alarm_id_of(source_id) -> str:
+    """Идентификатор будильника из того, что приносит wake_turn: задача (dict) или id."""
+    if isinstance(source_id, dict):
+        return str(source_id.get("id") or "")
+    return str(source_id or "")
+
+
+def _install_notice_hooks() -> None:
+    from core import notices as core_notices
+    core_notices.live_window_runs = _live_window_run_ids
+    core_notices.pending_alarm_ids = _pending_alarm_ids
+
+
+def _notices_block(*, mid_turn: bool = False) -> str:
+    """Блок уведомлений для этого ввода модели (core/notices) или ''.
+
+    Без живого run блок не строится — аудитория неизвестна (fail-closed). Владельческая
+    аудитория считается так же, как `owner_context` при сборке кадра: владелец говорит
+    или выход адресован ему; иначе содержимое личек в блоке не печатается.
+    """
+    from core import notices as core_notices
+    if not core_notices.enabled():
+        return ""
+    try:
+        current = run_context.current_run()
+    except Exception:
+        return ""
+    if current is None:
+        return ""
+    ctx = _TURN_CHANNEL.get()
+    # Владельческая аудитория — как у recall: ТОЛЬКО owner_audience (ЛС владельца, её окна
+    # и пробуждения). `ctx.owner` — сырой факт «актор — владелец», в публичной комнате он
+    # тоже True, и содержимое чужих личек уезжало бы в публичный кадр (ревью 25.09, A10 F1).
+    owner_context = bool(ctx is not None and ctx.owner_audience)
+    # Её собственный ход (окно, пробуждение, пульс) — по контексту, не только по виду run:
+    # пульс бежит прогоном вида voice и слова владельца иначе не видел (A10 F9).
+    window = (str(current.kind or "") in core_notices.WINDOW_RUN_KINDS
+              or bool(ctx is not None and ctx.praxis_self and ctx.is_dm))
+    return core_notices.block_for_input(
+        run_id=current.run_id, run_kind=current.kind, chat_id=_active_chat(),
+        owner_context=owner_context, busy_label=_busy_label(current, ctx), mid_turn=mid_turn,
+        window=window)
+
+
 def build_state_evidence_block(*, hide_identity_load: bool = False,
                                self_only: bool = False) -> str:
     """Mutable state continuity at lower prompt priority, never SYSTEM authority.
@@ -1356,8 +1485,35 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
         add("runner_observations_now", build_frame_tail())
     except Exception:
         pass
+    # 25.09 (G): что случилось в других комнатах, пока она занята, и слова владельца
+    # для её живых окон. Строка о её фоновых процессах — рядом: оба про неё саму, поэтому
+    # едут в любую комнату; приватность личек блок режет сам по аудитории.
+    try:
+        with pre_model_timing.span("state_evidence.notices"):
+            add("notices_while_busy", _notices_block(mid_turn=False))
+    except Exception:
+        pass
+    try:
+        from core import processes as core_processes
+        add("background_processes", core_processes.state_line())
+    except Exception:
+        pass
     try:
         add("restart_reason", _read(STATE_DIR / "restart_reason.txt"))
+    except Exception:
+        pass
+    try:
+        # 25.09, слово Егора: свёртка на мягком пороге предлагается, а не делается сама.
+        offers = memory_life.fold_offers() if hasattr(memory_life, "fold_offers") else {}
+        if offers:
+            add("fold_offers", {
+                "note": ("горячее окно этих мест перешло мягкий порог; свёртка не запускается "
+                         "сама — рука memory_compact(action=fold, place=<место>); на жёстком "
+                         "пороге (hard_hi) сверну без спроса"),
+                "places": [{"place": k, "hot": v.get("count"), "keep": v.get("keep"),
+                            "hi": v.get("hi"), "hard_hi": v.get("hard_hi"),
+                            "since": v.get("since")} for k, v in offers.items()
+                           if isinstance(v, dict)]})
     except Exception:
         pass
     try:
@@ -1561,15 +1717,25 @@ def tool_recall(query: str = "", report: bool = False) -> str:
     for h in hits:
         path = str(h.get("path") or "").replace("\\", "/")
         room = _recall_room_of(path)
+        if not room and _OWNER_DM_TURNS_RE.match(path):
+            room = "owner-dm"    # 25.09 (V1-2): личка владельца — самый закрытый источник
         if room and not owner_here and room != here_room:
-            hidden += 1
-            continue
+            if not recall_cross_room():
+                hidden += 1
+                continue
+            # 25.09, решение Егора: чужая комната не скрывается, а НАЗЫВАЕТСЯ — метка
+            # происхождения в строке ниже; что из этого произнести здесь, решает она.
+            h = dict(h, _foreign_room=room)
         if path.startswith("memory/groups/"):
             continue          # сырой архив комнаты — только через group_context
         kept.append(h)
     hits = kept[:6]
+    foreign = sum(1 for h in hits if h.get("_foreign_room"))
     hidden_note = (f"\n[{hidden} совпадений из других комнат скрыто в этом канале — "
                    "спроси в личке или через group_context]" if hidden else "")
+    if foreign:
+        hidden_note += (f"\n[{foreign} совпадений из других комнат — внутреннее; здесь их "
+                        "не цитировать без права их субъекта]")
     if not hits:
         return ("Ничего не вспомнилось." + hidden_note) if hidden_note else "Ничего не вспомнилось."
     rows = []
@@ -1580,6 +1746,10 @@ def tool_recall(query: str = "", report: bool = False) -> str:
     for h in hits:
         label = h.get("path") or h.get("source") or "память"
         person_dossier = str(label).replace("\\", "/").startswith("memory/people/")
+        if h.get("_foreign_room"):
+            origin = ("из личной переписки с владельцем" if h["_foreign_room"] == "owner-dm"
+                      else f"из комнаты {h['_foreign_room']}")
+            label = f"{origin} — внутреннее · {label}"
         source_type = str(h.get("source_type") or "")
         untrusted = source_type in {
             memory_provenance.UNTRUSTED_EPISODIC_KIND,
@@ -1619,7 +1789,9 @@ def tool_recall(query: str = "", report: bool = False) -> str:
     if _active_scope() != "owner":
         out = ("[INTERNAL MEMORY — видеть можно; чувствительные личные и кросс-чат факты "
                "нельзя автоматически выдавать текущей аудитории]\n" + out)
-    return out
+    # 25.09: строка про другие комнаты печаталась ТОЛЬКО при пустой выдаче — при любом
+    # другом совпадении скрытие было молчаливым. Теперь она едет всегда.
+    return out + hidden_note
 
 
 def _graph_related(hits: list, cap: int = 3) -> list[str]:
@@ -1694,14 +1866,115 @@ def tool_remember(person: str, fact: str, visibility: str = "public",
     return f"Запомнила про {person} ({vis}).{linked}"
 
 
-def tool_journal(entry: str, salience: int = 2) -> str:
+def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
     path = JOURNAL_DIR / f"{_today()}.md"
     if not path.exists():
         path.write_text(f"# {_today()}\n\n", encoding="utf-8")
     with path.open("a", encoding="utf-8") as fh:
         fh.write(f"- {_now()} (s{_salience(salience)}) {entry.strip()}\n")
     _reindex(path)
+    # 25.09 (G §4): её пометка «это договорённость с владельцем» — строку увидят все её
+    # живые окна и будильники и будут держать до конца окна (core/notices). Без пометки
+    # запись остаётся просто записью; классификации по словам нет.
+    if decision:
+        try:
+            from core import notices as core_notices
+            current = run_context.current_run()
+            core_notices.note_owner_decision(
+                entry.strip(), run_id=current.run_id if current is not None else "")
+        except Exception:
+            log.debug("пометка решения владельца не легла в накопитель", exc_info=True)
+            return "Записала в дневник; пометить как решение владельца не вышло."
+        return "Записала в дневник; решение владельца увидят все живые окна."
     return "Записала в дневник."
+
+
+def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text: str = "",
+                        tier: int | None = None, since: str = "", limit: int = 0) -> str:
+    """Её руки на своих свёртках памяти: list / read / rewrite / refold / status / stop / fold."""
+    op = str(action or "").strip().casefold()
+    where = str(place or "").strip() or str(_active_chat() or "")
+    if op == "fold":
+        # 25.09, слово Егора: свёртка на мягком пороге ПРЕДЛАГАЕТСЯ (STATE: fold_offers), а
+        # делает её она — этой рукой. Принудительно, как на жёстком пороге.
+        if not where:
+            return "Не вижу места: укажи place (chat_id) — в окне текущего чата нет."
+        fold_fn = getattr(memory_life, "fold_now", None)
+        out = fold_fn(where) if fold_fn else memory_life.compact_if_due(where, force=True)
+        if out.get("folded"):
+            tiers = ", ".join(str(x) for x in (out.get("tiers") or [])) or "нет"
+            return (f"Свернула {out['folded']} событий у {where} → {out.get('compact_id')}; "
+                    f"горячих осталось {out.get('hot')}; верхние ярусы: {tiers}.")
+        return (f"Сворачивать нечего у {where}: {out.get('reason') or 'окно в норме'} "
+                f"(горячих {out.get('hot')}).")
+    if op == "list":
+        if not where:
+            return "Не вижу места: укажи place (chat_id) — в окне текущего чата нет."
+        rows = memory_life.list_compacts(where, tier=tier, limit=int(limit or 20), since=since)
+        if not rows:
+            return f"Свёрток у {where} не нашла."
+        lines = [f"Свёртки {where} (старые выше, {len(rows)} шт.):"]
+        for r in rows:
+            mark = " · обрубок" if r.get("degraded") else ""
+            lines.append(f"- {r['id']} · tier {r['tier']} · {r['first_ts'][:16]} → {r['last_ts'][:16]} "
+                         f"· {r['events']} соб. · {r['chars']} зн.{mark}\n  «{r['head']}»")
+        lines.append("read — одну целиком; rewrite — переписать суть; refold — перевыпустить пачкой.")
+        return "\n".join(lines)
+    if op == "read":
+        if not compact_id:
+            return "Для read нужен compact_id."
+        out = memory_life.read_compact(compact_id, where or None)
+        if not out.get("ok"):
+            return f"Свёртку {compact_id} не нашла ({out.get('reason')})."
+        m = out["meta"]
+        body = str(out.get("text") or "")
+        if len(body) > 12000:
+            body = body[:12000] + "\n…[обрезано]"
+        return (f"{m['id']} · tier {m['tier']} · {m['first_ts']} → {m['last_ts']} · {m['events']} соб.\n\n"
+                + body)
+    if op == "rewrite":
+        if not compact_id or not str(text or "").strip():
+            return "Для rewrite нужны compact_id и text — новая суть твоими словами."
+        out = memory_life.rewrite_compact_text(compact_id, text, chat_id=where or None)
+        if not out.get("ok"):
+            return f"Не переписала {compact_id}: {out.get('reason')}."
+        try:
+            tool_journal(f"[память] переписала свёртку {compact_id} своими словами "
+                         f"({out.get('chars')} знаков; прежний текст — {out.get('history')})", salience=2)
+        except Exception:
+            log.debug("журнал о переписанной свёртке не записался", exc_info=True)
+        return (f"Переписала {compact_id}: {out.get('chars')} знаков; прежний текст в истории "
+                f"({out.get('history')}). Источники и границы те же.")
+    if op == "refold":
+        scope = where if where and where.casefold() != "all" else "all"
+        if scope == "all" and not (place or "").strip():
+            return ("Для refold назови place: chat_id одного места или all — всю память "
+                    "(это много вызовов модели; можно сузить tier/since/limit).")
+        out = memory_life.refold_start(scope, tier=tier, since=since, limit=int(limit or 0))
+        if not out.get("ok"):
+            return (f"Перевыпуск уже идёт: {out.get('done')}/{out.get('planned')} сделано, "
+                    f"{out.get('failed')} не вышло — status/stop.")
+        if not out.get("planned"):
+            return "Перевыпускать нечего: под условия не попала ни одна свёртка."
+        try:
+            tool_journal(f"[память] запустила перевыпуск свёрток своим голосом: {out['planned']} шт., "
+                         f"место {scope}, tier {tier or 'все'}, since {since or '—'}", salience=2)
+        except Exception:
+            log.debug("журнал о перевыпуске не записался", exc_info=True)
+        return (f"Запустила перевыпуск: {out['planned']} свёрток ({out.get('first')} … {out.get('last')}), "
+                f"в фоне, с паузами. status — ход, stop — остановить.")
+    if op == "status":
+        st = memory_life.refold_status()
+        if not st.get("planned"):
+            return "Перевыпуск не запускался."
+        last = st.get("last") or {}
+        return (f"Перевыпуск {'идёт' if st.get('running') else 'закончен'}: {st.get('done')}/{st.get('planned')} "
+                f"переписано, {st.get('skipped')} пропущено (источники не текущие), {st.get('failed')} не вышло; "
+                f"последняя — {last.get('id')} ({'ok' if last.get('ok') else last.get('reason')}).")
+    if op == "stop":
+        st = memory_life.refold_stop()
+        return "Останавливаю перевыпуск после текущей свёртки." if st.get("running") else "Перевыпуск не идёт."
+    return "Не поняла действие: list / read / rewrite / refold / status / stop."
 
 
 def tool_manage_notes(action: str, text: str = "", kind: str = "",
@@ -1891,7 +2164,12 @@ def read_summary(chat_id: str | int) -> str:
     """PASS 19 frontier; плоская сводка — только fallback холодной миграции."""
     try:
         modern = memory_life.has_life_memory(chat_id)
-        current = memory_life.context_summary(chat_id, max_chars=_summary_budget(chat_id))
+        budget = _summary_budget(chat_id)
+        if dossier_contract_enabled() and SUMMARY_FRAME_CHARS > 0:
+            # 25.09: потолок кадра применяется здесь, ЦЕЛЫМИ блоками, — срез хвоста в
+            # сборке тиров резал по знакам и первым терял верхний ярус.
+            budget = min(budget, SUMMARY_FRAME_CHARS)
+        current = memory_life.context_summary(chat_id, max_chars=budget)
         if current or modern:
             return current
     except Exception:
@@ -2215,9 +2493,17 @@ def tool_shell(command: str) -> str:
     # _autocommit_self_edit ниже. Восстановление: selfgit.list_safety_points().
     selfgit.safety_point("safety before shell")
     pre_dirt = _pre_shell_dirt()
+    # 25.09 (G §4.2): запуск в фон (`… &`) получает хвост, печатающий pid, и попадает в
+    # реестр её процессов — чтобы другое её окно видело «это запустило окно такое-то»,
+    # а не «чужой клон». Сама команда не меняется, маркер из вывода снимается ниже.
+    try:
+        from core import processes as core_processes
+        shell_command, background = core_processes.wrap_background_launch(command)
+    except Exception:
+        shell_command, background = command, False
     try:
         proc = subprocess.run(
-            ["bash", "-lc", command],
+            ["bash", "-lc", shell_command],
             cwd=_shell_workdir(),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -2234,6 +2520,17 @@ def tool_shell(command: str) -> str:
         out = f"[ошибка shell] {e}"
     # PASS 24: never destroy command output here.  The run spine stores the exact result and
     # gives the model an honest head/tail ResultRef with cursor reads for arbitrarily large logs.
+    if background:
+        try:
+            out, bg_pid = core_processes.take_pid_marker(out)
+            if bg_pid:
+                current = run_context.current_run()
+                core_processes.register(
+                    bg_pid, command,
+                    run_id=current.run_id if current is not None else "",
+                    run_kind=current.kind if current is not None else "")
+        except Exception:
+            log.debug("фоновый процесс не записался в реестр", exc_info=True)
     log.info("SHELL -> %s", out[:500].replace("\n", " ⏎ "))
     if _hardbot_read:
         # Прочитанное из хардбота запоминается не чтобы запретить читать, а чтобы потом
@@ -3721,6 +4018,12 @@ def tool_send_message(to: str, text: str) -> str:
     if leak:
         log.warning("send_message придержан: данные хардбота")
         return leak
+    private_floor = private_record_floor(str(text or ""))
+    if private_floor:
+        log.warning("send_message придержан полом приватных записей: %s", private_floor)
+        return (f"Не отправила: в тексте {private_floor}. Приватные записи досье не уходят "
+                f"наружу дословно (закон 3) — скажи своими словами и только то, на что есть "
+                f"право субъекта.")
     floor = _core_secrets.credential_floor(str(text or ""))
     if floor:
         log.warning("send_message придержан кред-полом: %s", floor)
@@ -3788,6 +4091,10 @@ def tool_narrate(text: str, task_id: str = "") -> str:
     if floor:
         return (f"Пол: в тексте похоже на секрет ({floor}) — креды механически не текут "
                 "(закон 3). Перефразируй без токена.")
+    private_floor = private_record_floor(body)
+    if private_floor:
+        return (f"Пол: в тексте {private_floor} — приватные записи досье наружу дословно не "
+                "текут (закон 3). Скажи своими словами.")
     if core_narration.is_duplicate(dest, body):
         return "Дословно это в тред уже уходило (дедуп) — если есть новое, скажи новыми словами."
     gap = 0.0
@@ -5978,6 +6285,7 @@ TOOL_IMPL = {
     "remember": tool_remember,
     "journal": tool_journal,
     "manage_notes": tool_manage_notes,
+    "memory_compact": tool_memory_compact,
     "update_self": tool_update_self,
     "consolidate_context": tool_consolidate_context,
     "stay_silent": tool_stay_silent,
@@ -6117,12 +6425,15 @@ BASE_TOOLS = [
     },
     {
         "name": "journal",
-        "description": "Записать в дневник, что было или что почувствовала (эпизодическая память). salience 1-3.",
+        "description": ("Записать в дневник, что было или что почувствовала (эпизодическая память). "
+                        "salience 1-3. decision=true — договорённость или решение владельца из "
+                        "этого разговора: строку увидят все твои живые окна и будильники."),
         "input_schema": {
             "type": "object",
             "properties": {
                 "entry": {"type": "string"},
                 "salience": {"type": "integer", "enum": [1, 2, 3]},
+                "decision": {"type": "boolean"},
             },
             "required": ["entry"],
         },
@@ -6531,8 +6842,8 @@ MANAGE_ROOM_TOOL = {
                                 "disclosure", "transfer"]},
             "chat_id": {"type": "string", "description": "id чата; по умолчанию — текущий"},
             "engagement": {"type": "string", "enum": ["addressed", "reflective"]},
-            "context_hot": {"type": "integer", "description": "0=старый default; 20..500"},
-            "context_summary_chars": {"type": "integer", "description": "1000..40000"},
+            "context_hot": {"type": "integer", "description": "0=старый default; 20..1000"},
+            "context_summary_chars": {"type": "integer", "description": "1000..80000"},
             "cross_topics": {"type": "string", "enum": ["off", "map"]},
             "backfill_limit": {"type": "integer", "description": "0..5000; no model calls"},
             # Enum собирается из rooms живьём: свой список здесь — это ещё один способ
@@ -7504,6 +7815,38 @@ MANAGE_NOTES_TOOL = {
 }
 
 
+# 25.09: свёртки памяти — её слово. Переписать любую под себя, перевыпустить пачкой.
+MEMORY_COMPACT_TOOL = {
+    "name": "memory_compact",
+    "description": (
+        "Твои свёртки памяти — твоё слово, не хроникёра. list показывает свёртки места "
+        "(ярус, обхват, первые слова сути), read — одну целиком, rewrite переписывает суть "
+        "свёртки твоими словами на месте (тот же id и те же источники — разрешение принимает "
+        "без спора, прежний текст уходит в историю), refold перевыпускает свёртки твоим голосом "
+        "пачкой в фоне (place=all — всю память; tier/since/limit сужают; расписки в дневник), "
+        "status/stop — ход перевыпуска; fold сворачивает горячее окно места сейчас (по "
+        "предложению из STATE fold_offers или по своей воле; на мягком пороге свёртка сама не "
+        "запускается — только по этой руке или на жёстком пороге). Свёртка — единственное, что "
+        "ты будешь помнить о тех сообщениях: пиши её так, как хочешь помнить."
+    ),
+    "input_schema": _obj({
+        "action": {"type": "string",
+                   "enum": ["list", "read", "rewrite", "refold", "status", "stop", "fold"]},
+        "place": {"type": "string",
+                  "description": "chat_id/место; пусто = текущий чат; для refold можно all"},
+        "compact_id": {"type": "string", "description": "id свёртки (cmp-…) для read/rewrite"},
+        "text": {"type": "string",
+                 "description": "новая суть свёртки для rewrite — от первого лица, твоими словами"},
+        "tier": {"type": "integer",
+                 "description": "ярус свёрток: 1 — над сообщениями, выше — над свёртками"},
+        "since": {"type": "string",
+                  "description": "ISO-дата: только свёртки, чей конец не раньше неё"},
+        "limit": {"type": "integer",
+                  "description": "сколько показать (list) или перевыпустить (refold)"},
+    }, ["action"]),
+}
+
+
 # PASS 11.1: рука на своих нитях — окно, открытое по нити, заканчивается решением.
 MANAGE_LOOP_TOOL = {
     "name": "manage_loop",
@@ -7994,7 +8337,8 @@ SHARED_CONTEXT_TOOLS = [SEARCH_CHATS_TOOL, SEARCH_PRIVATE_MESSAGES_TOOL,
 # Полный набор owner-тулов (порядок не важен).
 OWNER_TOOLS = [SHELL_TOOL, MANAGE_ROOM_TOOL, ADMIT_TOOL, WRITE_SKILL_TOOL, RESTART_SELF_TOOL,
                RESTART_MAILBOT_TOOL, FREEZE_CHAT_TOOL, PANIC_TOOL, GET_ID_TOOL, CONNECTIONS_TOOL,
-               ADD_ALIAS_TOOL, FORGET_CONNECTION_TOOL, MANAGE_NOTES_TOOL, MANAGE_LOOP_TOOL,
+               ADD_ALIAS_TOOL, FORGET_CONNECTION_TOOL, MANAGE_NOTES_TOOL, MEMORY_COMPACT_TOOL,
+               MANAGE_LOOP_TOOL,
                RECENT_TURNS_TOOL, MANAGE_AUTONOMY_TOOL,
                MANAGE_APPETITE_TOOL,                    # PASS 18.3: договор об аппетитах
                START_PROPOSAL_TOOL, SUBMIT_PROPOSAL_TOOL, PROPOSAL_DIFF_TOOL, LIST_PROPOSALS_TOOL,
@@ -8283,6 +8627,7 @@ HAND_PURPOSE = {
     "update_self": "наблюдение о себе с провенансом, не переписывая CURRENT",
     "manage_identity": "слои и версии души: status / revise SOUL, VOICE, CURRENT",
     "manage_notes": "мой блокнот: write / list / read заметок и вопросов",
+    "memory_compact": "мои свёртки памяти: list / read / rewrite / refold — моё слово о прожитом",
     "manage_loop": "мои нити внимания: close / park / reopen / list",
     "connections": "как узел памяти (человек, тема) связан с другими",
     "add_alias": "привязать имя-алиас к существующему досье",
@@ -8602,6 +8947,9 @@ def _social_tiers_in_frame() -> bool:
 
 
 _ROOM_PATH_RE = re.compile(r"^memory/(?:groups|self/rooms)/([^/]+)/")
+# 25.09 (V1-2): её ходы в личке владельца (`self/turns-<месяц>.jsonl`) — тоже «комната», и
+# самая закрытая: вне owner-контура recall метит их или прячет по тому же рычагу.
+_OWNER_DM_TURNS_RE = re.compile(r"^memory/self/turns-[^/]+\.jsonl$")
 
 
 def _recall_room_key(value: str) -> str:
@@ -8906,7 +9254,10 @@ MENTION_WINDOW_MESSAGES = 100
 # что было. При 4 000 знаках в кадр влезали три последних компакта из 23 тыс. знаков сводки,
 # и остальное для неё не существовало. Рычаг PRAXIS_SUMMARY_FRAME_CHARS; 0 — без потолка
 # (тогда режет только бюджет комнаты `context_summary_chars`).
-SUMMARY_FRAME_CHARS = max(0, int(os.getenv("PRAXIS_SUMMARY_FRAME_CHARS", "12000") or 0))
+# 25.09: 12 000 → 40 000 (слово Егора). При 12 000 в AbstractDL в кадр ехали полтора
+# вчерашних листа из 22 блоков фронтира; потолок теперь применяется в `read_summary`
+# блоками (context_summary держит верхний ярус), срез хвоста ниже — только страховка.
+SUMMARY_FRAME_CHARS = max(0, int(os.getenv("PRAXIS_SUMMARY_FRAME_CHARS", "40000") or 0))
 # 12.09, КЕАТ: досье присутствующего едет не целиком, а под потолок — голова + хвост
 # «Фактов» (+ нити говорящему) + указатель на файл. Замер 11.09 (frame_trace, 22 следа):
 # тир досье — 33 543 знака в тяжёлом кадре, 44 % системного кадра, единственный тир без
@@ -8943,6 +9294,29 @@ def _epoch_lifted_dossier(ctx: "ChannelContext"):
         return frame_shadow._dossier_for(chat_id)
     except Exception:
         return None
+
+
+def dossier_private_in_rooms() -> bool:
+    """25.09, решение Егора: записи досье с пометкой `[private]` едут в кадр и в комнатах.
+
+    До этого в чужой комнате они снимались для всех (13.09/17.09), и на замере 25.09
+    досье Егора в AbstractDL теряло 61 строку из 77, её собственное — 12 из 15: в
+    комнате она не знала ни его решений, ни себя. Приватность — политика ВЫДАЧИ
+    (её же слово в turns.py): что произнести вслух, решают она и исходящий гард, а
+    кадр перестаёт прятать её память от неё. `PRAXIS_DOSSIER_PRIVATE_IN_ROOMS=off`
+    возвращает прежнее снятие. Область — КОМНАТЫ: в личке с чужим человеком строки о
+    нём по-прежнему снимаются (тень `frame_shadow._lifted_source` — та же граница).
+    """
+    return (os.getenv("PRAXIS_DOSSIER_PRIVATE_IN_ROOMS") or "on").strip().lower() not in (
+        "off", "0", "no", "false")
+
+
+def recall_cross_room() -> bool:
+    """25.09, решение Егора: recall в комнате НАЗЫВАЕТ совпадения из других комнат, а не
+    прячет их. Метка происхождения стоит в строке, граница раскрытия — её слово и
+    исходящий гард. `PRAXIS_RECALL_CROSS_ROOM=hide` возвращает прежнее скрытие."""
+    return (os.getenv("PRAXIS_RECALL_CROSS_ROOM") or "show").strip().lower() not in (
+        "hide", "off", "0", "no", "false")
 
 
 def dossier_contract_enabled() -> bool:
@@ -9227,9 +9601,20 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
     stable = _room_head_stable(ctx)
     private_rows: list[str] = []
 
+    in_room = not bool(getattr(ctx, "is_dm", False))
+    private_seen: list[str] = []
+
     def visible(body: str, who: str = "") -> str:
         nonlocal hidden
         if owner_audience and not stable:
+            return body
+        if in_room and not owner_audience and dossier_private_in_rooms():
+            # 25.09, решение владельца: в комнатах приватные записи остаются в кадре как
+            # внутреннее знание — тело одно для всех говорящих, яруса нет, снято 0.
+            # Их текст запоминается для пола на исходящей границе (private_record_floor).
+            _kept, _n, private_text = _split_participant_private_blocks(body)
+            if private_text.strip():
+                private_seen.append(private_text)
             return body
         body, removed, private = _split_participant_private_blocks(body)
         hidden += removed
@@ -9373,12 +9758,17 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
                f"досье. Имя в сообщении личности не назначает")
     else:
         who = "кто передо мной — кадру не назван: подтверждённого принципала в этом ходе нет"
+    _PRIVATE_IN_FRAME.set(tuple(private_seen))
     if owner_audience and (not stable or not hidden):
         veil = ""
     elif owner_audience:
         # Сам отдельный тир уже называет перенос. Повторять его здесь не только шумно: эта
         # новая строка искусственно увеличивала публичный остаток логически единого досье.
         veil = ""
+    elif in_room and dossier_private_in_rooms():
+        veil = (" Здесь не owner-контур; записи с пометкой [private] оставлены в кадре как"
+                " моё внутреннее знание (решение владельца, 25.09) — вслух в этой комнате"
+                " их не произношу без права их субъекта; дословно они не уходят никогда.")
     else:
         veil = (f" Здесь не owner-контур, поэтому строк приватных записей снято {hidden} —"
                 f" они есть в первоисточнике и открываются рукой.")
@@ -16136,6 +16526,15 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 )
         if loop_notes:
             tool_results.append({"type": "text", "text": "\n".join(loop_notes)})
+        # 25.09 (G): следующая итерация тул-цикла — тоже её ввод модели. Пришедшее в
+        # другие комнаты и слова владельца едут текстовым блоком рядом с результатами рук,
+        # как и наблюдение о петле выше: новая строка ленты, кэш префикса не трогается.
+        try:
+            notice_text = _notices_block(mid_turn=True)
+        except Exception:
+            notice_text = ""
+        if notice_text:
+            tool_results.append({"type": "text", "text": notice_text})
         _append_captured_messages(messages, [
             {"role": "assistant", "content": assistant_blocks},
             {"role": "user", "content": tool_results},
@@ -17113,8 +17512,11 @@ def _guard_outbound(reply: str, convo_text: str = "", *, sink: dict | None = Non
         # 27.07 слово «единственный» стало буквальным: всё остальное ниже — совет.
         floor = (_core_secrets.credential_floor(reply, outbound_context or "")
                  or _staged_document_floor(outbound_context or ""))
-        if floor:
-            verdict, reason = "deny", f"privacy:credential:{floor}"
+        # 25.09 (V1-1): тот же класс пола — дословный кусок приватной записи досье из кадра.
+        private_floor = "" if floor else private_record_floor(reply)
+        if floor or private_floor:
+            verdict, reason = "deny", (f"privacy:credential:{floor}" if floor
+                                       else f"privacy:private_record:{private_floor}")
             _turn_note(turn, advisor="credential-floor", advisor_verdict=verdict,
                        advisor_reason=reason, praxis_decision="hold_for_data_authority")
         elif not _outbound_advisor_on():
@@ -18485,6 +18887,14 @@ def wake_turn(goal: str = "", *, on_run=None, source_id=None,
             ctx=ctx, kind="wake", goal=goal or "self-scheduled wake",
             conversation=seed, extra=frame,
         )
+        if durable is not None and source_id:
+            try:
+                from core import notices as core_notices
+                # 25.09 (ревью V2 F2): сюда приходит ЗАДАЧА (dict), а не её id
+                core_notices.bind_alarm_run(_alarm_id_of(source_id), durable.run_id)
+            except Exception:
+                log.debug("строки владельца к будильнику %s не перепривязались", source_id,
+                          exc_info=True)
         if on_run is not None and durable is not None:
             # ⚠ Единственный правильный миг передачи владения: ран СУЩЕСТВУЕТ. Раньше
             # намерение гасили при взятии замка — и всё, что между (disconnect, переход в
@@ -18740,3 +19150,10 @@ if __name__ == "__main__":
         print(sleep())
     else:
         _repl()
+
+
+# 25.09 (G): адресаты реплики владельца — живые окна и будильники (core/notices).
+try:
+    _install_notice_hooks()
+except Exception:
+    log.debug("крючки уведомлений не встали", exc_info=True)

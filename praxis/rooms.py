@@ -263,8 +263,10 @@ CROSS_TOPICS = ("off", "map")
 # отсутствие записи означает умолчание по типу места, и умолчание обязано быть
 # помечено умолчанием везде, где показывается.
 TRANSFER_CLASSES = ("свободно", "только источник", "учитывать", "закрыто")
-CONTEXT_HOT_MAX = 500
-CONTEXT_SUMMARY_MAX = 40_000
+# 25.09, слово Егора («как следует поднять горячий контекст комнаты»): потолки ручек
+# комнаты подняты вдвое, умолчания — 400 строк и 40 000 знаков сводки.
+CONTEXT_HOT_MAX = 1000
+CONTEXT_SUMMARY_MAX = 80_000
 BACKFILL_MAX = 5_000
 HEADER_KEYS = ("mode", "mode_reason", "mode_until", "mode_set_by",
                # disclosure меняет ЕЁ голос (визитка), поэтому у него тот же провенанс,
@@ -386,9 +388,10 @@ def default_policy() -> dict:
         cross_topics = "map"
     return {
         "engagement": engagement,
-        "context_hot": _env_int("PRAXIS_ROOM_CONTEXT_HOT", 200, 0, CONTEXT_HOT_MAX),
+        # 25.09: 200 → 400 и 24 000 → 40 000 — слово Егора, см. CONTEXT_HOT_MAX выше.
+        "context_hot": _env_int("PRAXIS_ROOM_CONTEXT_HOT", 400, 0, CONTEXT_HOT_MAX),
         "context_summary_chars": _env_int(
-            "PRAXIS_ROOM_CONTEXT_CHARS", 24_000, 1_000, CONTEXT_SUMMARY_MAX),
+            "PRAXIS_ROOM_CONTEXT_CHARS", 40_000, 1_000, CONTEXT_SUMMARY_MAX),
         "cross_topics": cross_topics,
         "backfill_limit": _env_int(
             "PRAXIS_ROOM_BACKFILL_LIMIT", 1_500, 0, BACKFILL_MAX),

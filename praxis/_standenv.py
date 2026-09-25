@@ -89,6 +89,10 @@ def _derived_pins(env) -> dict:
 
     base = Path(env.get("PRAXIS_BASE") or tempfile.gettempdir())
     return {
+        # 25.09: на проде свёртка на мягком пороге ПРЕДЛАГАЕТСЯ (PRAXIS_FOLD_OFFER=on, слово
+        # Егора); стенды свёртки проверяют саму машинерию и ждут свёртку сразу — им прежнее
+        # поведение. Новое поведение прибито отдельно (test_room_memory_2509, env=on явно).
+        "PRAXIS_FOLD_OFFER": "off",
         "PRAXIS_SERVERD_RUN": str(base / "no-serverd"),
         "TELEGRAM_SESSION": str(base / "praxis_test_session"),
     }

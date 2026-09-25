@@ -81,7 +81,7 @@ def main(argv=None) -> int:
     for place in targets:
         state = ml._load_state(place, rebuild=False)
         hot = len(state.get("hot") or [])
-        plan = ml.plan_hot_fold(state.get("hot") or [])
+        plan = ml.plan_hot_fold(state.get("hot") or [], place=place)   # 25.09: пороги места
         rows.append((place, hot, plan.get("due"), plan.get("reason")))
     print("места и их горячее:")
     for place, hot, due, reason in sorted(rows, key=lambda r: -r[1]):

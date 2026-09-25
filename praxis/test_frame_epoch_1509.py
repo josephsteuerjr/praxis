@@ -421,7 +421,9 @@ class EpochDossiers(unittest.TestCase):
         # 17.09: «or ctx.owner» убран из сборки досье. Ход владельца В ГРУППЕ получает тот же
         # отфильтрованный корпус, что гость: реплика, сочинённая в этом ходе, публична.
         # Дважды за два дня приватный ярус утекал из групповых ходов владельца в текст.
-        with mock.patch.dict(os.environ, LEVER):
+        # 25.09: снятие — под рычагом PRAXIS_DOSSIER_PRIVATE_IN_ROOMS=off (умолчание — on,
+        # см. следующий стенд): решение Егора оставить приватное в кадре комнаты.
+        with mock.patch.dict(os.environ, {**LEVER, "PRAXIS_DOSSIER_PRIVATE_IN_ROOMS": "off"}):
             _p, _d, guest = frame_for(room_ctx(owner=False, known=False, principal="42"))
             guest_epoch = frame_epoch.taken()[0]
             _p, _d, owner = frame_for(room_ctx(owner=True, principal="42"))
@@ -437,6 +439,25 @@ class EpochDossiers(unittest.TestCase):
         self.assertNotIn("ПРИВАТНОЕ ИЗ ДОСЬЕ", owner)
         self.assertNotIn("развёлся", owner)
         self.assertIn("приватных записей снято 1", owner)
+
+    def test_private_line_stays_in_the_shared_epoch_body_by_default(self):
+        # 25.09, решение Егора: в комнате приватные записи досье остаются в кадре как
+        # внутреннее знание. Инвариант эпохи тот же — гость и владелец делят ОДНО
+        # замороженное тело (reused, досье не в drift); приватного яруса нет ни у кого;
+        # строка «передо мной» называет, что строки оставлены и вслух их не произносить.
+        with mock.patch.dict(os.environ, {**LEVER, "PRAXIS_DOSSIER_PRIVATE_IN_ROOMS": "on"}):
+            _p, _d, guest = frame_for(room_ctx(owner=False, known=False, principal="42"))
+            guest_epoch = frame_epoch.taken()[0]
+            _p, _d, owner = frame_for(room_ctx(owner=True, principal="42"))
+            owner_epoch, receipt = frame_epoch.taken()
+        self.assertEqual(guest_epoch, owner_epoch)
+        self.assertEqual(receipt["reason"], "reused")
+        self.assertIn("развёлся", guest_epoch)
+        self.assertIn("[private]", guest_epoch, "пометка остаётся видимой")
+        for frame in (guest, owner):
+            self.assertNotIn("ПРИВАТНОЕ ИЗ ДОСЬЕ", frame)
+            self.assertNotIn("приватных записей снято", frame)
+            self.assertIn("оставлены в кадре", frame)
 
     def test_private_lines_travel_inline_in_owner_dm(self):
         # 17.09: в owner-DM (личка, scope=owner) приватные строки и раньше не резались —

@@ -8,6 +8,7 @@ without a capture/revocation race. This is not a hostile-writer security boundar
 """
 from contextlib import contextmanager
 import hashlib
+import os
 from pathlib import Path
 import threading
 
@@ -18,6 +19,117 @@ from keat_source import _json
 
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
+
+# 25.09: разобранное состояние реестра по (каталог, namespace). Реестр append-only и
+# сцеплен хэшами, поэтому продолжается с хвоста; см. `state_cache_enabled`.
+_STATE_CACHE = {}
+_STATE_CACHE_GUARD = threading.Lock()
+
+
+def state_cache_enabled():
+    """Инкрементальный разбор реестра захвата (25.09).
+
+    `_state()` перечитывал и перепроверял реестр ЦЕЛИКОМ на каждую операцию: выдачу
+    расписки на входящее, отзыв по удалению, снимок, канарейку перед каждым вызовом
+    модели. Реестр личного потока вырос до 19,6 МБ (12.09→25.09), и одна операция
+    стала стоить 10–110 с под GIL: замер 25.09, ход в личке владельца — 20 вызовов
+    модели, 718 с одних «канареек», а входящее сообщение в личке держало цикл
+    Telegram на те же десятки секунд (выдача расписки идёт из обработчика апдейта).
+
+    Реестр пишется только дописыванием. Разобранное состояние продолжается с хвоста,
+    но префикс не берётся на веру: файл читается целиком, sha256 уже разобранных байт
+    сверяется с запомненным (hashlib отпускает GIL, 19,6 МБ — десятки миллисекунд),
+    и только совпавший префикс не разбирается заново. Любое расхождение (файл
+    переписан, укорочен, подменён) — полный разбор с нуля, ровно как раньше, и порча
+    всплывает той же ошибкой контракта. Проверки на строку те же; меняется только
+    то, сколько строк проверяется повторно. `PRAXIS_KEAT_STATE_CACHE=off` возвращает
+    полный разбор на каждый вызов.
+    """
+    raw = (os.getenv('PRAXIS_KEAT_STATE_CACHE') or 'on').strip().lower()
+    return raw not in ('off', '0', 'false', 'no')
+
+
+def _fresh_state():
+    return dict(receipts=[], payloads={}, heads={}, current={}, events=set(),
+                parent=None, invalidations={})
+
+
+def _apply_capture_line(st, line, namespace):
+    """Одна строка реестра поверх разобранного состояния — тело прежнего цикла `_state`."""
+    receipts, payloads, heads, current, events, invalidations = (
+        st['receipts'], st['payloads'], st['heads'], st['current'], st['events'],
+        st['invalidations'])
+    obj = _json(line)
+    _keys(obj, 'schema namespace parent operation data')
+    _require(obj['schema'] == 'keat.capture.v1' and obj['namespace'] == namespace
+             and obj['parent'] == st['parent'], 'corrupt capture lineage')
+    data = obj['data']
+    if obj['operation'] == 'capture':
+        _keys(data, 'receipt payload')
+        r = data['receipt']
+        _keys(r, 'event key kind revision parent deleted payload_digest capture')
+        _text(r['event']); _text(r['key']); _capture(r['capture'])
+        _require(r['event'] not in events and r['kind'] in ('message', 'synthetic', 'tool', 'runtime'),
+                 'duplicate or invalid occurrence')
+        _require(not any(r['key'].startswith(p) for p in invalidations),
+                 'capture after invalidation')
+        old = heads.get(r['key'])
+        _require(type(r['revision']) is int and type(r['deleted']) is bool and
+                 r['revision'] == (old['revision'] + 1 if old else 0) and
+                 r['parent'] == (_digest(old) if old else None) and
+                 (not old or (not old['deleted'] and r['kind'] == old['kind'])), 'invalid capture revision')
+        _require(r['payload_digest'] == _digest(data['payload']), 'corrupt original payload')
+        grant = r['capture']['grant']
+        # A grant is occurrence-specific: edits require fresh explicit grants.
+        _require(grant not in current, 'reused capture grant')
+        current[grant] = r['capture']
+        receipts.append(r); payloads[r['event']] = data['payload']
+        heads[r['key']] = r; events.add(r['event'])
+    elif obj['operation'] == 'narrow':
+        _keys(data, 'grant capture')
+        grant, new = data['grant'], data['capture']
+        _text(grant)
+        _require(grant in current and current[grant] is not None, 'unknown or revoked grant')
+        if new is not None:
+            _capture(new)
+            old = current[grant]
+            _require(all(new[k] == old[k] for k in ('issuer', 'policy_revision', 'grant', 'transfer', 'presence_hidden'))
+                     and set(new['audience']).issubset(old['audience']), 'current authority may only narrow')
+        current[grant] = new
+    elif obj['operation'] == 'invalidate':
+        _keys(data, 'prefix done basis' if 'basis' in data else 'prefix done')
+        if 'basis' in data:
+            _require(data['basis'] == 'peerless_candidate', 'invalid barrier basis')
+        _require(type(data['prefix']) is str and type(data['done']) is bool,
+                 'invalid invalidation barrier')
+        prefix = data['prefix']
+        if data['done']:
+            _require(prefix in invalidations and all(
+                current[r['capture']['grant']] is None for r in receipts
+                if r['key'].startswith(prefix)), 'unproven revocation')
+        invalidations[prefix] = data['done']
+    else:
+        raise ContractError('unknown capture operation')
+    st['parent'] = hashlib.sha256(line).hexdigest()
+
+
+def _continue_state(base, raw, namespace):
+    """Продолжить разбор с хвоста. `base` не трогается: при ошибке контракта кэш цел."""
+    _require(not raw or raw.endswith(b'\n'), 'partial capture ledger')
+    st = dict(receipts=list(base['receipts']), payloads=dict(base['payloads']),
+              heads=dict(base['heads']), current=dict(base['current']),
+              events=set(base['events']), parent=base['parent'],
+              invalidations=dict(base['invalidations']))
+    for line in raw.splitlines():
+        _apply_capture_line(st, line, namespace)
+    return st
+
+
+def _state_view(st):
+    # Верхний уровень контейнеров — копии: читатели перебирают и фильтруют, внутрь
+    # расписок не пишут (сверено 25.09 по keat_live/keat_epoch), а кэш остаётся своим.
+    return (list(st['receipts']), dict(st['payloads']), dict(st['heads']),
+            dict(st['current']), st['parent'], dict(st['invalidations']))
 
 
 class CaptureLedger:
@@ -53,65 +165,39 @@ class CaptureLedger:
 
     def _state(self):
         path = self.directory / 'capture.jsonl'
+        key = (str(self.directory), self.namespace)
+        cached = None
+        if state_cache_enabled():
+            with _STATE_CACHE_GUARD:
+                cached = _STATE_CACHE.get(key)
         raw = path.read_bytes() if path.exists() else b''
-        _require(not raw or raw.endswith(b'\n'), 'partial capture ledger')
-        receipts, payloads, heads, current, events = [], {}, {}, {}, set()
-        parent = None
-        invalidations = {}
-        for line in raw.splitlines():
-            obj = _json(line)
-            _keys(obj, 'schema namespace parent operation data')
-            _require(obj['schema'] == 'keat.capture.v1' and obj['namespace'] == self.namespace
-                     and obj['parent'] == parent, 'corrupt capture lineage')
-            data = obj['data']
-            if obj['operation'] == 'capture':
-                _keys(data, 'receipt payload')
-                r = data['receipt']
-                _keys(r, 'event key kind revision parent deleted payload_digest capture')
-                _text(r['event']); _text(r['key']); _capture(r['capture'])
-                _require(r['event'] not in events and r['kind'] in ('message', 'synthetic', 'tool', 'runtime'),
-                         'duplicate or invalid occurrence')
-                _require(not any(r['key'].startswith(p) for p in invalidations),
-                         'capture after invalidation')
-                old = heads.get(r['key'])
-                _require(type(r['revision']) is int and type(r['deleted']) is bool and
-                         r['revision'] == (old['revision'] + 1 if old else 0) and
-                         r['parent'] == (_digest(old) if old else None) and
-                         (not old or (not old['deleted'] and r['kind'] == old['kind'])), 'invalid capture revision')
-                _require(r['payload_digest'] == _digest(data['payload']), 'corrupt original payload')
-                grant = r['capture']['grant']
-                # A grant is occurrence-specific: edits require fresh explicit grants.
-                _require(grant not in current, 'reused capture grant')
-                current[grant] = r['capture']
-                receipts.append(r); payloads[r['event']] = data['payload']
-                heads[r['key']] = r; events.add(r['event'])
-            elif obj['operation'] == 'narrow':
-                _keys(data, 'grant capture')
-                grant, new = data['grant'], data['capture']
-                _text(grant)
-                _require(grant in current and current[grant] is not None, 'unknown or revoked grant')
-                if new is not None:
-                    _capture(new)
-                    old = current[grant]
-                    _require(all(new[k] == old[k] for k in ('issuer', 'policy_revision', 'grant', 'transfer', 'presence_hidden'))
-                             and set(new['audience']).issubset(old['audience']), 'current authority may only narrow')
-                current[grant] = new
-            elif obj['operation'] == 'invalidate':
-                _keys(data, 'prefix done basis' if 'basis' in data else 'prefix done')
-                if 'basis' in data:
-                    _require(data['basis'] == 'peerless_candidate', 'invalid barrier basis')
-                _require(type(data['prefix']) is str and type(data['done']) is bool,
-                         'invalid invalidation barrier')
-                prefix = data['prefix']
-                if data['done']:
-                    _require(prefix in invalidations and all(
-                        current[r['capture']['grant']] is None for r in receipts
-                        if r['key'].startswith(prefix)), 'unproven revocation')
-                invalidations[prefix] = data['done']
-            else:
-                raise ContractError('unknown capture operation')
-            parent = hashlib.sha256(line).hexdigest()
-        return receipts, payloads, heads, current, parent, invalidations
+        consumed = cached['consumed'] if cached is not None else 0
+        # mtime и размеру не верим (подмена той же длины в один тик часов невидима):
+        # разобранным считается ровно тот префикс, чьи байты хэшируются в запомненное.
+        if 0 < consumed <= len(raw) \
+                and hashlib.sha256(raw[:consumed]).hexdigest() == cached['prefix_sha256']:
+            if consumed == len(raw):
+                return _state_view(cached)
+            # Продолжаем с хвоста. Не сцепился хвост — файл не дописан, а переписан:
+            # разбираем с нуля, и настоящая порча всплывёт той же ошибкой, что и раньше.
+            try:
+                st = _continue_state(cached, raw[consumed:], self.namespace)
+            except ContractError:
+                st = None
+            if st is not None:
+                self._remember(key, st, raw)
+                return _state_view(st)
+        st = _continue_state(_fresh_state(), raw, self.namespace)
+        self._remember(key, st, raw)
+        return _state_view(st)
+
+    @staticmethod
+    def _remember(key, st, raw):
+        if not state_cache_enabled():
+            return
+        with _STATE_CACHE_GUARD:
+            _STATE_CACHE[key] = dict(st, consumed=len(raw),
+                                     prefix_sha256=hashlib.sha256(raw).hexdigest())
 
     def _append(self, operation, data, parent):
         import os

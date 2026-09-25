@@ -864,6 +864,16 @@ def emit_unit_event(task_id: str, unit_id: str, result: dict | None,
                          dedup_key=core_subagents.event_key(task_id, unit_id))
     except Exception:
         log.debug("emit_unit_event(%s/%s) не записался", task_id, unit_id, exc_info=True)
+        return
+    # 25.09 (G §1): исход узла — ещё и уведомление в накопитель: она узнаёт о нём в
+    # ближайшем вводе модели, не дожидаясь Пробуждения. Best-effort, как и событие.
+    try:
+        from core import notices as core_notices
+        core_notices.note_node(
+            task_id=str(task_id), unit_id=str(unit_id), status=str(payload.get("status") or ""),
+            goal=str(payload.get("goal") or ""), origin_chat=str(payload.get("origin_chat") or ""))
+    except Exception:
+        log.debug("уведомление об узле %s/%s не легло", task_id, unit_id, exc_info=True)
 
 
 def _backfill_sec() -> float:

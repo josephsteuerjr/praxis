@@ -86,9 +86,12 @@ EN: dict[str, dict] = {
     },
     "journal": {
         "d": ("Write into your journal what happened or what you felt (episodic memory). "
-              "salience 1-3."),
+              "salience 1-3. decision=true marks an agreement or decision with the owner made "
+              "in this conversation: every live window and alarm of yours will see the line."),
         "p": {"entry": "the entry, in your own words",
-              "salience": "1-3, how much this matters (default 2)"},
+              "salience": "1-3, how much this matters (default 2)",
+              "decision": "true when this is an agreement or decision with the owner; "
+                          "your live windows and alarms will see it (default false)"},
     },
     "update_self": {
         "d": ("Record a provenance-rich observation about yourself without rewriting the "
@@ -421,6 +424,26 @@ EN: dict[str, dict] = {
     "my_agenda": {"d": "What you have set yourself for a deadline — your intentions, not a backlog."},
     "unschedule": {"d": "Drop a scheduled intention by id.",
                    "p": {"task_id": "id of the intention to drop"}},
+    "memory_compact": {
+        "d": ("Your memory compacts are your own words, not a chronicler's. list shows a "
+              "place's compacts (tier, span, first words of the recap), read shows one in "
+              "full, rewrite replaces a compact's recap with your words in place (same id "
+              "and sources — provenance accepts it as is, the old text goes to history), "
+              "refold re-issues compacts in your voice in batches in the background "
+              "(place=all — the whole memory; tier/since/limit narrow it; receipts to the "
+              "journal), status/stop — the refold job; fold compacts a place's hot window now "
+              "(on an offer from STATE fold_offers or of your own will; at the soft threshold "
+              "compaction no longer starts by itself — only by this hand or at the hard "
+              "threshold). A compact is all you will remember of those messages: write it "
+              "the way you want to remember."),
+        "p": {"action": "list | read | rewrite | refold | status | stop | fold",
+              "place": "chat_id/place; empty = current chat; refold accepts all",
+              "compact_id": "compact id (cmp-…) for read/rewrite",
+              "text": "the new recap for rewrite — first person, your words",
+              "tier": "compact tier: 1 over messages, higher over compacts",
+              "since": "ISO date: only compacts ending no earlier than it",
+              "limit": "how many to show (list) or re-issue (refold)"},
+    },
     "manage_loop": {
         "d": ("Voluntary marks of attention: a thread exists because you decided to come "
               "back — not a task, not a transport retry, not a duty to answer. close (done "
@@ -826,7 +849,7 @@ BASE_SHA: dict[str, str] = {
     "group_context": "1bc9abab",
     "inbox_list": "e2dce134",
     "inbox_read": "fa4c3f02",
-    "journal": "13bacd05",
+    "journal": "a08afab7",
     "list_active_runs": "cfa9d0b6",
     "mail_read": "bac05427",
     "manage_appetite": "4a190143",
@@ -834,6 +857,7 @@ BASE_SHA: dict[str, str] = {
     "manage_identity": "ffe60eb9",
     "manage_loop": "e6a256b9",
     "manage_notes": "861b97e0",
+    "memory_compact": "9c114173",
     "manage_perception": "50b390c8",
     "manage_room": "0c663583",
     "my_agenda": "7219f5cf",

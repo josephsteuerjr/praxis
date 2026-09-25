@@ -15,6 +15,8 @@
 | `reflex.py` | Детерминированный pre-model фильтр очевидного шума. |
 | `perception.py` | Живые настройки debounce/cooldown/wake и журнал причин, почему голос не был вызван. |
 | `turns.py` | Scope-aware журнал прожитых ходов и исходов отправки/удержания. |
+| `core/notices.py` | Накопитель уведомлений (25.09, G): обращения и личка из других комнат, пока она занята; слова владельца для живых окон; блок в изменчивом хвосте кадра; гаснет ходом исходного чата. |
+| `core/processes.py` | Реестр её фоновых процессов из shell (pid, команда, кто запустил): строка в хвосте кадра, чтобы окна не считали друг друга «чужим клоном». |
 | `bufstore.py`, `notes.py` | Персистентный conversation buffer и короткие заметки о недавнем сказанном. |
 | `identity.py` | Оркестрация self-authorship: активные load events, night revision, version/provenance и post-change events; legacy deformation scores остаются инертным архивом. |
 | `capabilities.py`, `rails.py` | Фактический capability snapshot и provenance/risk registry; его оценки не являются veto для sovereign self. |

@@ -283,6 +283,12 @@ class PrivateDossierLinesMoveToTheOwnerTier(unittest.TestCase):
         (self.people / "guest.md").write_text(
             "# Гость\n\ntelegram_id: 42\n\n- любит чай\n- [private] развёлся в марте\n"
             "  и просил не обсуждать\n- пишет по вечерам\n", encoding="utf-8")
+        # 25.09: решение Егора — приватные записи в комнатах ОСТАЮТСЯ в кадре
+        # (PRAXIS_DOSSIER_PRIVATE_IN_ROOMS=on по умолчанию). Этот класс проверяет
+        # прежнее снятие под рычагом «off»; новое поведение — test_room_memory_2509.
+        env_off = mock.patch.dict(os.environ, {"PRAXIS_DOSSIER_PRIVATE_IN_ROOMS": "off"})
+        env_off.start()
+        self.addCleanup(env_off.stop)
         for patch in (mock.patch.object(people, "PEOPLE_DIR", self.people),
                       mock.patch.object(agent, "_present_by_transport", return_value={"42"}),
                       mock.patch.object(agent, "_mentioned_slugs", return_value=[]),

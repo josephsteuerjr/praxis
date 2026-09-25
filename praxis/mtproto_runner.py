@@ -541,6 +541,34 @@ def _life_source_persisted(chat_id: str, source_id: str | int | None) -> bool:
     return source_id is not None and _life_source_key(chat_id, source_id) in _persisted_life_sources
 
 
+_LIFE_RECORD_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+async def _record_life_message_offloop(chat_id: str, line: str, **kwargs) -> bool:
+    """`_record_life_message` в потоке, а не в главном цикле (25.09, поток I).
+
+    `memory_life.record_message` пересобирает состояние места под замком
+    (`_load_state(rebuild=True)`); для правки или удаления сообщения в большой комнате это
+    минуты, в течение которых главный цикл стоял — не приходили сообщения, не шли часы,
+    не работал «прервать». Здесь пересборка уходит в поток; порядок записей ОДНОГО чата
+    держит asyncio-замок на чат, между чатами порядок и раньше не обещался.
+
+    ⚠ Честно о границе (ревью 25.09, A11 F1): `memory_life._WRITE_LOCK` — один на процесс и
+    берётся на всю пересборку. Пока поток пересобирает большую комнату, ЛЮБАЯ новая запись
+    памяти из главного цикла (`_buf_push` → `_record_life_message` на входящее сообщение
+    или свой ответ, синхронно) встанет за этим замком — и цикл снова стоит до конца
+    пересборки. Правки/удаления сюда уведены, но стена возвращается первым же сообщением
+    в окно пересборки. Настоящее лечение — в memory_life: не пересобирать место целиком
+    из-за одной правки (править запись на месте, пока сообщение в горячем кольце) и держать
+    `_WRITE_LOCK` только на append/save, а пересборку — под доменным `_state_write_guard`.
+    """
+    lock = _LIFE_RECORD_LOCKS.get(str(chat_id))
+    if lock is None:
+        lock = _LIFE_RECORD_LOCKS.setdefault(str(chat_id), asyncio.Lock())
+    async with lock:
+        return await asyncio.to_thread(_record_life_message, chat_id, line, **kwargs)
+
+
 def _record_life_message(chat_id: str, line: str, *, actor: str, direction: str,
                          source_id: str | int | None, is_dm: bool | None,
                          ts: float | None, dedupe_key: str,
@@ -1796,13 +1824,16 @@ def _group_context_frozen(chat_id: str, policy: dict) -> tuple[str, tuple]:
                 return archived, _fold_service_rows(rows)
         except Exception:
             log.exception("group archive context не собрался [%s]", chat_id)
-    return "\n".join(_tape_cut_lines(list(_buf[chat_id])[-(limit or memory_life.HOT_HARD_HI):])), ()
+    # 25.09: запасная лента комнаты — по порогам ЕЁ окна (hot_bounds), не личечным.
+    return "\n".join(_tape_cut_lines(
+        list(_buf[chat_id])[-(limit or memory_life.hot_bounds(chat_id)[2]):])), ()
 
 
 def _group_native_projection(chat_id: str, trigger_mid) -> tuple[list[dict], str, dict]:
     """Freeze a fully captured role projection ending at the trigger message."""
     try:
-        rows = memory_life.hot_records(chat_id, memory_life.HOT_HARD_HI)
+        # 25.09: проекция комнаты — по её горячему окну (hot_bounds), не по HOT_HARD_HI личек.
+        rows = memory_life.hot_records(chat_id, memory_life.hot_bounds(chat_id)[2])
         if not rows or str(rows[-1].get('source_id') or
                            (rows[-1].get('meta') or {}).get('source_id') or '') != str(trigger_mid):
             return [], '', {}
@@ -2372,7 +2403,7 @@ async def on_edited(event) -> None:
             return
         buffer_line = f"{name} {marker}: {body}"
         if stale_revision:
-            persisted = _record_life_message(
+            persisted = await _record_life_message_offloop(
                 chat_id, buffer_line, actor=name, direction="in",
                 source_id=source_id, is_dm=True, ts=edit_ts,
                 dedupe_key=f"telegram:{chat_id}:{source_id}:in",
@@ -2385,7 +2416,7 @@ async def on_edited(event) -> None:
                 )
             return
         _replace_buffer_message(chat_id, int(mid), buffer_line, source_id=source_id)
-        persisted = _record_life_message(
+        persisted = await _record_life_message_offloop(
             chat_id, buffer_line, actor=name, direction="in",
             source_id=source_id, is_dm=True, ts=edit_ts,
             dedupe_key=f"telegram:{chat_id}:{source_id}:in",
@@ -2492,7 +2523,7 @@ async def on_edited(event) -> None:
     if durable_seen and volatile_seen:
         return
     if stale_revision:
-        persisted = _record_life_message(
+        persisted = await _record_life_message_offloop(
             chat_id, buffer_line, actor=name, direction="in",
             source_id=source_id, is_dm=False, ts=edit_ts,
             dedupe_key=f"telegram:{chat_id}:{source_id}:in",
@@ -2510,7 +2541,7 @@ async def on_edited(event) -> None:
                 log.exception("stale edit hot projection failed [%s] #%s", chat_id, mid)
         return
     _replace_buffer_message(chat_id, int(mid), buffer_line, source_id=source_id)
-    persisted = _record_life_message(
+    persisted = await _record_life_message_offloop(
         chat_id, buffer_line, actor=name, direction="in",
         source_id=source_id, is_dm=False, ts=edit_ts,
         dedupe_key=f"telegram:{chat_id}:{source_id}:in",
@@ -2639,7 +2670,7 @@ async def on_deleted(event) -> None:
             )
             _replace_buffer_message(chat_id, mid, buffer_line, deleted=True,
                                     source_id=f"{mid}:delete")
-            persisted = _record_life_message(
+            persisted = await _record_life_message_offloop(
                 chat_id, buffer_line, actor="Telegram", direction="in",
                 source_id=f"{mid}:delete", is_dm=False, ts=deleted_ts,
                 dedupe_key=f"telegram:{chat_id}:{mid}:delete:in",
@@ -3579,6 +3610,26 @@ async def on_new(event) -> None:
                       "addressed_mid": (int(mid) if (addressed and mid is not None) else None),
                       "room_mode": room_mode, "room_policy": room_policy}
     log.info("MSG [%s] %s (id=%s, %s): %r", "DM" if is_private else chat_id, name, sender_id, cat, body[:60])
+    # 25.09 (G §1): обращение к ней или личка — в накопитель уведомлений. Не будильник:
+    # ход этой комнаты придёт своим порядком и сам снимет запись (`clear_chat` в
+    # `_run_pass`); пока она занята другим, строка покажется в её ближайшем вводе модели.
+    # Реплика владельца в личке — ещё и `owner_line` для её живых окон и будильников.
+    # Голый неадресованный поток группы сюда не идёт: это среда, а не событие.
+    notice_kind = ("dm" if is_private else
+                   "mention" if mentioned else "reply" if replied else
+                   "name" if named else "")
+    if notice_kind:
+        try:
+            from core import notices as core_notices
+            await asyncio.to_thread(
+                core_notices.note_incoming,
+                kind=notice_kind, chat_id=chat_id,
+                chat_title=str(topic_title or name or ""), who=name, message_id=mid,
+                gist=body, private=bool(is_private), ts=message_ts,
+                is_owner_dm=bool(is_private and is_owner))
+        except Exception:
+            log.debug("накопитель уведомлений: запись [%s] #%s не легла", chat_id, mid,
+                      exc_info=True)
 
     # Незнакомец остаётся самостоятельным разговором Praxis: адрес уже сохранён в книге.
     if is_private and not is_owner and cat == "unknown":
@@ -4579,6 +4630,31 @@ def _gate_group_wake_room_mode(peer_id, chat_id, wake: GroupWake, *, where: str)
     return room_mode, "closed"
 
 
+def _release_answered_wake(chat_id: str, wake: "GroupWake") -> bool:
+    """Снять wake, чей адрес этот ход уже ответил. True — снят.
+
+    25.09, AbstractDL 08:53/08:59: ход ответил на #109479 (109494, done), но пока он шёл,
+    Анатолий отредактировал сообщение — `_revise_group_wake` подменяет объект
+    (`replace(wake, …)`), тот же адрес, новый объект. Прежняя сверка «is wake» его не
+    узнавала: wake переживал свой же отвеченный ход, `_arm` взводил его снова, и тот же
+    #id получил второй ответ (109499) — «Пракс раздуплилась надвое». Отвеченный адрес —
+    это message_id, а не идентичность объекта. Новый адрес (другой message_id) остаётся:
+    им владеет свой проход.
+    """
+    live = _group_wakes.get(chat_id)
+    if live is None:
+        return False
+    same_object = live is wake
+    same_address = (wake.message_id is not None and live.message_id == wake.message_id)
+    if same_object or same_address:
+        _group_wakes.pop(chat_id, None)
+        if not same_object:
+            log.info("wake [%s] #%s: снят по адресу (объект подменила правка сообщения)",
+                     chat_id, wake.message_id)
+        return True
+    return False
+
+
 async def _run_pass(chat_id: str) -> None:
     """Ход по чату (PASS 8.1): и личка, и группа — голос. Путь: reflex (в on_new) → voice →
     audience-aware finalizer (в owner-DM без оценки речи) → send | [молчу]. Фокус-окно она открывает
@@ -4686,6 +4762,14 @@ async def _run_pass(chat_id: str) -> None:
                 return
             meta["room_mode"] = room_mode
         _last_pass[chat_id] = time.time()
+        # 25.09 (G §3): ход в этом чате начался — его уведомления из накопителя сняты. Она
+        # зашла в комнату как обычно и видит весь контекст сама; слова владельца для окон
+        # (`owner_*`) этим не трогаются.
+        try:
+            from core import notices as core_notices
+            await asyncio.to_thread(core_notices.clear_chat, chat_id)
+        except Exception:
+            log.debug("накопитель уведомлений: снятие для [%s] не удалось", chat_id, exc_info=True)
         # Тот же разговор, но ролями: её реплики поедут в модель как ЕЁ реплики, а не
         # строками «Praxis: …» / «[…; Praxis [id …]] …» внутри чужого текста. Сплошная
         # склейка при этом никуда не девается — на ней стоят расписки, исходящая граница
@@ -5167,9 +5251,8 @@ async def _run_pass(chat_id: str) -> None:
             if is_dm and chat_id in _meta:
                 _meta[chat_id]["addressed"] = False
                 _meta[chat_id]["addressed_mid"] = None
-            if (not is_dm and wake is not None
-                    and _group_wakes.get(chat_id) is wake):
-                _group_wakes.pop(chat_id, None)
+            if not is_dm and wake is not None:
+                _release_answered_wake(chat_id, wake)
         _passing.discard(chat_id)
         # Новый настоящий address мог прийти, пока голос работал в thread; или тот же
         # wake должен повториться после retry_media/ошибки. Его debounce мог уже сгореть
@@ -5790,6 +5873,60 @@ def _ent_label(ent) -> str:
     return f"{name} ({', '.join(bits)})"
 
 
+def _book_row_label(row: dict) -> str:
+    name = str(row.get("display_name") or "?").strip()
+    bits = []
+    if row.get("username"):
+        bits.append(f"@{row['username']}")
+    bits.append(f"id {row.get('id')}")
+    seen = row.get("last_seen")
+    try:
+        days = max(0, int((time.time() - float(seen or 0)) // 86400)) if seen else None
+    except (TypeError, ValueError):
+        days = None
+    when = ("сегодня" if days == 0 else f"{days} дн. назад") if days is not None else "давно"
+    return f"{name} ({', '.join(bits)}; виделись {when})"
+
+
+def _ambiguous_book(ref: str, book: list[dict]) -> str | None:
+    """Текст отказа, если по имени нашлось несколько РАВНЫХ кандидатов; иначе None.
+
+    25.09: `send_message(to="Ivan")` — «выбрала Иван (id 412244782) по адресу/свежести среди
+    8 кандидатов», и статусы по LRX три раза ушли не тому Ивану (комната к тому же
+    заморожена владельцем). Свежесть не различает людей: она различает, кто писал позже.
+    Равные — это кандидаты одного лексического яруса (точное имя / та же запись имени);
+    один точный среди частичных остаётся однозначным, как и раньше.
+    """
+    if len(book) < 2:
+        return None
+
+    def tier(row: dict):
+        lx = row.get("lexical")
+        if lx is None:
+            return None
+        # та же запись имени в другой раскладке (identity_key, 135) — тот же ярус, что 140
+        return 140 if lx in (135, 140) else lx
+
+    tiers = [tier(row) for row in book]
+    known = [x for x in tiers if x is not None]
+    if not known:
+        return None
+    # 25.09 (ревью V4 F2): равные — по ВСЕЙ книге, не по верху ранжирования. Частичное
+    # совпадение с бонусами (контакт/переписка) вставало над двумя точными тёзками, и
+    # отказа не было; а если верх ранжирования ниже точного имени — это тоже не выбор
+    # человека, а свежесть. В обоих случаях — список, не догадка.
+    top = max(known)
+    ties = [row for row, tx in zip(book, tiers) if tx == top]
+    chosen_tier = tiers[0]
+    below_exact = chosen_tier is not None and chosen_tier < top
+    if len(ties) < 2 and not below_exact:
+        return None
+    listed = ties if len(ties) >= 2 else [book[0]] + ties
+    rows = "; ".join(_book_row_label(row) for row in listed[:6])
+    return (f"«{ref}» — это несколько людей в моей адресной книге, наугад не пишу: {rows}. "
+            f"Назови адресата по id или @username.")
+
+
 async def _resolve_entity(ref):
     """Резолв entity. Видимость (07.07, вечер): ТОЧНЫЙ адрес (id/@username) — Telegram-резолв,
     как раньше; ИМЯ — только среди СВОИХ диалогов. Раньше имя проваливалось в get_entity →
@@ -5851,6 +5988,9 @@ async def _resolve_entity(ref):
     await _ensure_dialog_cache()
     q = ref_s.lower()
     book = telegram_contacts.candidates(ref_s)
+    denial = _ambiguous_book(ref_s, book)
+    if denial:
+        raise ResolveDenied(denial)
     for row in book:
         ident = str(row.get("id") or "")
         ent = _entity_cache.get(ident)
@@ -7541,6 +7681,24 @@ def _accepted_after_timeout(key: str, exc: BaseException, *, grace: float | None
         time.sleep(min(remaining, max(0.05, float(poll))))
 
 
+def _frozen_refusal(peer_id, who: str) -> str | None:
+    """Отказ для отправки в замороженный чат, иначе None.
+
+    Заморозка резала только входящие («сообщения оттуда до меня не доходят»), а исходящие
+    шли как ни в чём не бывало: 25.09 статусы по LRX уезжали в личку 412244782, которую
+    Егор заморозил. Замороженный чат — это чат, с которым она не разговаривает, в обе
+    стороны; осознанно написать туда можно после `freeze_chat(on=false)`.
+    """
+    try:
+        if not rooms.is_frozen(str(peer_id)):
+            return None
+    except Exception:
+        log.debug("frozen check failed for %s", peer_id, exc_info=True)
+        return None
+    return (f"не отправила: чат {who} заморожен — я с ним не разговариваю в обе стороны. "
+            f"Если это осознанно, сначала разморозь его (freeze_chat on=false).")
+
+
 def _sync_send_message(to, text) -> str:
     """Durable direct Telegram text send owned by the current tool call."""
 
@@ -7579,6 +7737,9 @@ def _sync_send_message(to, text) -> str:
 
     peer_id = _marked_peer_id(ent)
     who = _ent_label(ent)
+    frozen = _frozen_refusal(peer_id, who)
+    if frozen:
+        return agent.DirectSendRefusal(frozen)
     target_user_id = (getattr(ent, "id", None)
                       if _entity_kind(ent) == "user" else None)
     active_chat = str(agent._active_chat() or "")
@@ -8811,7 +8972,9 @@ async def _media_cleanup_once() -> None:
         except Exception:
             log.exception("outbox->run media reconciliation упал [%s]", queue_id)
 
-    for item in spool.pending():
+    # 25.09: перечисление спула читает журнал с диска — не в потоке цикла Telegram
+    # (профиль 25.09: часы держали цикл на `_reload_ledger_locked` каждый тик).
+    for item in await asyncio.to_thread(spool.pending):
         policy = await asyncio.to_thread(
             agent.run_delivery_media_retry_policy, item.run_id, item.queue_id,
         )

@@ -393,8 +393,8 @@ class TestRoomPolicy(unittest.TestCase):
         # `reflective` — самая свежая, то есть та, которую ещё не успели поправить руками
         # после протокола входа. Умолчание, которое всегда правят, умолчанием не было.
         self.assertEqual(rooms.room_policy("-1001"), {
-            "engagement": "addressed", "context_hot": 200,
-            "context_summary_chars": 24000, "cross_topics": "map",
+            "engagement": "addressed", "context_hot": 400,
+            "context_summary_chars": 40000, "cross_topics": "map",
             "backfill_limit": 1500,
         })
         # Явный выбор по-прежнему сильнее умолчания — ниже он и проверяется.
@@ -403,8 +403,8 @@ class TestRoomPolicy(unittest.TestCase):
             context_summary_chars=999999, cross_topics="map", backfill_limit=99999,
         )
         self.assertEqual(rooms.room_policy("-1001"), {
-            "engagement": "reflective", "context_hot": 500,
-            "context_summary_chars": 40000, "cross_topics": "map",
+            "engagement": "reflective", "context_hot": 999,
+            "context_summary_chars": 80000, "cross_topics": "map",
             "backfill_limit": 5000,
         })
         with self.assertRaises(ValueError):
