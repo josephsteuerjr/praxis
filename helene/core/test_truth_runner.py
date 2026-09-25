@@ -804,7 +804,7 @@ class DirectSendLeavesTheSameTraceAsVoiceTests(_DirectSendTraceHarness):
         # Записка — БУКВА В БУКВУ та же, что пишет голос: её читают other_rooms_digest,
         # _presence_evidence и said_recently, и они узнают только эту форму.
         scratch = notes.path_for(convo).read_text(encoding="utf-8")
-        self.assertIn(f"сказала (голос): «{self.SAID[:notes.SAID_GIST_CHARS]}»", scratch)
+        self.assertIn(f"сказано (голос): «{self.SAID[:notes.SAID_GIST_CHARS]}»", scratch)
         self.assertTrue(notes.said_recently(convo, self.SAID))
 
         rows = [row for row in self._archived(self.GROUP)
@@ -872,7 +872,7 @@ class DirectSendLeavesTheSameTraceAsVoiceTests(_DirectSendTraceHarness):
 
 
 class DirectSendTraceIdempotencyTests(unittest.TestCase):
-    """Двух записок «сказала (голос)» быть не может: иначе повтор расписки после
+    """Двух записок «сказано (голос)» быть не может: иначе повтор расписки после
     переподключения вернулся бы к ней как «я это говорила дважды»."""
 
     def setUp(self):
@@ -952,7 +952,7 @@ class DirectSendTraceIdempotencyTests(unittest.TestCase):
         self.assertTrue(agent.project_direct_outbox_acceptance(entry))
 
         scratch = notes.path_for("-1001240718803").read_text(encoding="utf-8")
-        self.assertEqual(scratch.count("сказала (голос)"), 1, scratch)
+        self.assertEqual(scratch.count("сказано (голос)"), 1, scratch)
         self.assertEqual(len(self.ledger.list()), 1)
 
 
@@ -1307,13 +1307,13 @@ class SheCanAskForTheReportHerselfTests(unittest.TestCase):
 
     def test_watch_turns_a_trace_into_an_ordered_report_and_unwatch_turns_it_back(self):
         answer = runner._sync_followups("watch", self.item["id"])
-        self.assertIn("включила", answer)
+        self.assertIn("включено", answer)
         self.ledger.observe_incoming(
             peer_id=-1001240718803, sender_id=1240, message_id=94244, text="принял",
             reply_to_message_id=94243, sender_name="Арет")
         self.assertEqual([x["id"] for x in self.ledger.pending_notifications()],
                          [self.item["id"]])
-        self.assertIn("выключила", runner._sync_followups("unwatch", self.item["id"]))
+        self.assertIn("выключено", runner._sync_followups("unwatch", self.item["id"]))
         self.assertEqual(self.ledger.pending_notifications(), [])
 
     def test_an_unknown_thread_is_named_as_such_instead_of_a_silent_ok(self):
