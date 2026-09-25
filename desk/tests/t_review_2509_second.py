@@ -108,8 +108,10 @@ class RehearsalSeesTreeAndConfig(unittest.TestCase):
 class PassportPathsAreRelative(unittest.TestCase):
     def test_core_provenance_paths_do_not_name_the_build_machine(self):
         import build_dist
-        note = build_dist.core_provenance(ROOT.parent / "port-2409") if (ROOT.parent / "port-2409").is_dir() \
-            else build_dist.core_provenance(ROOT.parent / "live")
+        tree = next((p for p in (ROOT.parents[1] / "port-2409", ROOT.parents[1] / "live") if p.is_dir()), None)
+        if tree is None:
+            self.skipTest("дерева рядом нет")
+        note = build_dist.core_provenance(tree)
         if not note:
             self.skipTest("ядро и слой не прочитались")
         for part in ("core", "layer"):
