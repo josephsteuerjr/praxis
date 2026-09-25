@@ -696,6 +696,12 @@ def run(depth: str | None = None) -> str:
         memory_catalog.rebuild()
     except Exception:
         log.exception("сон: карта памяти не пересобралась")
+    try:  # 12.09: ретенция прогонов — снимки старше недели, события старше 60 дней
+        import runs_prune
+        runs_line = runs_prune.report_line(runs_prune.prune(agent.BASE, budget_seconds=600))
+    except Exception:
+        log.exception("сон: ретенция прогонов упала")
+        runs_line = "прогоны: ретенция упала (см. журнал)"
     # Снятая фаза не может сработать. Если сработала — это событие, а не строка
     # в ряду цифр: пусть кричит, вместо того чтобы тихо слиться с нулями.
     surprises = [f"{name}: {n}" for name, n in
@@ -706,7 +712,7 @@ def run(depth: str | None = None) -> str:
               f"inbox −{swept} файлов; "
               f"снято намеренно: {', '.join(DISARMED)}; "
               f"формирование: {formation_line}; личность: {identity_line}; "
-              f"карта компьютера: {inventory_line}; "
+              f"карта компьютера: {inventory_line}; {runs_line}; "
               "durable mutations — только через formation claims")
     if surprises:
         report += "; ⚠ СНЯТАЯ ФАЗА СРАБОТАЛА — " + "; ".join(surprises)

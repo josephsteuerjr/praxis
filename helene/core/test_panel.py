@@ -438,10 +438,17 @@ class TestPass6Logic(unittest.TestCase):
             target_user_id="1", sent_message_id=7, request_text="ответь",
         )
         (state_dir / "perception_skips.jsonl").write_text(
-            json.dumps({
-                "ts": 1, "class": "отложила", "stage": "cooldown",
-                "chat": "private-chat", "detail": "raw message text", "meta": {"secret": "x"},
-            }) + "\n",
+            "\n".join([
+                json.dumps({
+                    "ts": 1, "class": "отложила", "stage": "moderation_priority",
+                    "chat": "private-chat", "detail": "raw message text", "prev_n": 1189,
+                    "meta": {"secret": "x"},
+                }),
+                json.dumps({
+                    "ts": 2, "class": "не_увидела", "stage": "allowlist",
+                    "chat": "private-chat", "detail": "other raw text", "prev_n": 4,
+                }),
+            ]) + "\n",
             encoding="utf-8",
         )
         (state_dir / "turns.jsonl").write_text(
@@ -463,13 +470,15 @@ class TestPass6Logic(unittest.TestCase):
         self.assertEqual(o["tasks"][0]["id"], "task-1")
         self.assertEqual(o["followups"][0]["target_label"], "Егор")
         self.assertEqual(followup_before, followup_after, "overview GET source must not mutate follow-ups")
-        self.assertEqual(o["skips"][0], {
-            "ts": 1, "class": "отложила", "stage": "cooldown", "repeat_count": 1,
-        })
+        self.assertEqual(o["skips"], [
+            {"ts": 2, "class": "не_увидела", "stage": "allowlist", "repeat_count": 5},
+            {"ts": 1, "class": "отложила", "stage": "moderation_priority", "repeat_count": 1},
+        ])
         self.assertEqual(o["recent_turns"][0]["praxis_decision"], "сделать обзор")
         for forbidden in ("title", "in", "out", "why", "chat", "detail", "meta"):
             self.assertNotIn(forbidden, o["recent_turns"][0])
-            self.assertNotIn(forbidden, o["skips"][0])
+            for skip in o["skips"]:
+                self.assertNotIn(forbidden, skip)
 
     def test_pulse_reads_tasks_and_summaries(self):
         (panel.BASE / "memory" / ".summaries" / "123.md").write_text("сводка", encoding="utf-8")
@@ -653,7 +662,8 @@ class TestBrainPanel(unittest.TestCase):
     def setUp(self):
         import tempfile, shutil as _sh
         self.tmp = Path(tempfile.mkdtemp(prefix="praxis_brain_"))
-        self._orig = [(llm, k, getattr(llm, k)) for k in ("CONFIG_PATH", "JOURNAL_DIR")]
+        self._orig = [(llm, k, getattr(llm, k)) for k in (
+            "CONFIG_PATH", "JOURNAL_DIR", "_available_models")]
         llm.CONFIG_PATH = self.tmp / "llm.json"
         llm.JOURNAL_DIR = self.tmp / "journal"
         self._porig = [(panel, "BASE", panel.BASE)]
@@ -695,6 +705,22 @@ class TestBrainPanel(unittest.TestCase):
                           "каждый официальный 5.6 slug должен выбираться в пульте")
         self.assertNotIn("gpt-5.6", options, "generic alias живой relay отвергает")
         self.assertEqual(len(options), len(set(options)))
+
+    def test_get_merges_live_provider_catalog_without_aliases_or_duplicates(self):
+        llm._available_models = lambda framework: (
+            [" gpt-5.3-codex-spark ", "gpt-5.6", "", "gpt-5.6-sol",
+             "gpt-5.3-codex-spark"]
+            if framework == "openai" else ["claude-live", "claude-live", None]
+        )
+        data = panel.llm_get()
+        openai = data["model_options"]["openai"]
+        anthropic = data["model_options"]["anthropic"]
+        self.assertIn("gpt-5.3-codex-spark", openai)
+        self.assertEqual(openai.count("gpt-5.3-codex-spark"), 1)
+        self.assertEqual(openai.count("gpt-5.6-sol"), 1)
+        self.assertNotIn("gpt-5.6", openai)
+        self.assertEqual(anthropic[0], "claude-live")
+        self.assertEqual(anthropic.count("claude-live"), 1)
 
     def test_retired_generic_alias_is_visible_as_current_but_not_suggested(self):
         cfg = llm._config()

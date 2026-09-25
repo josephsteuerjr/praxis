@@ -19,9 +19,11 @@ drive the state machine explicitly.
 from __future__ import annotations
 
 import base64
+import io
 import contextlib
 import datetime as dt
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -35,6 +37,9 @@ from typing import Any, Callable, Iterator
 
 from process_liveness import is_process_alive
 from run_context import RUN_STATUSES, RunContext
+from run_retention import (ArchiveLocator, ContractError, EvidenceNotFound,
+                           read_evidence_bytes, safe_evidence_stream,
+                           MAX_ARCHIVE_OBJECT_SIZE)
 
 
 SCHEMA = "praxis.run.v1"
@@ -96,6 +101,24 @@ class RunError(RuntimeError):
 
 class RunNotFound(RunError):
     pass
+
+
+class _HotResultAbsent(RunNotFound):
+    """The requested hot body is unambiguously absent and may use cold fallback."""
+
+    def __init__(self, message: str, ref: dict | None = None) -> None:
+        self.ref = dict(ref or {})
+        super().__init__(message)
+
+
+class ArchivedResultUnavailable(RunNotFound):
+    """A result has a valid durable archive address, but no readable object here."""
+
+    def __init__(self, locator: ArchiveLocator, reason: str) -> None:
+        self.locator = locator.to_dict()
+        self.reason = str(reason)
+        rendered = json.dumps(self.locator, ensure_ascii=True, sort_keys=True)
+        super().__init__(f"archived result unavailable ({self.reason}); locator={rendered}")
 
 
 class RunConflict(RunError):
@@ -242,6 +265,130 @@ def _read_json(path: Path) -> dict:
     return data
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-JSON constant: {value}")
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
+
+
+def _strict_json_loads(value: str | bytes) -> Any:
+    """Decode RFC JSON for security-sensitive durable evidence only."""
+    return json.loads(value, object_pairs_hook=_unique_json_object,
+                      parse_constant=_reject_json_constant)
+
+
+def _read_json_strict(path: Path) -> dict:
+    try:
+        data = _strict_json_loads(read_evidence_bytes(path))
+    except OSError as exc:
+        raise RunNotFound(str(path)) from exc
+    except ContractError as exc:
+        raise RunError(f"cannot safely read strict JSON in {path}: {exc}") from exc
+    except (TypeError, ValueError) as exc:
+        raise RunError(f"invalid strict JSON in {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RunError(f"expected object in {path}")
+    return data
+
+
+def _configured_root(path: str | Path, *, name: str) -> Path:
+    """Canonicalize a configured root only after rejecting symlink components."""
+    candidate = Path(path).absolute()
+    current = Path(candidate.anchor)
+    for component in candidate.parts[1:]:
+        if component == "..":
+            current = current.parent
+            continue
+        current = current / component
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            # A not-yet-created suffix is compatible with Path.resolve(strict=False).
+            continue
+        except OSError as exc:
+            raise RunError(
+                f"cannot safely validate configured {name} component {current}: {exc}"
+            ) from exc
+        if stat.S_ISLNK(info.st_mode):
+            raise RunError(f"configured {name} contains symlink component: {current}")
+    return Path(os.path.normpath(candidate))
+
+
+_SAFE_ARCHIVE_OPENAT_SUPPORTED = (
+    os.name == "posix"
+    and all(getattr(os, flag, None) is not None
+            for flag in ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK"))
+)
+
+
+def _read_json_strict_nofollow(directory: Path, name: str, *,
+                               trusted_root: Path | None = None) -> dict:
+    """Read one JSON object through a descriptor-confined, no-follow path."""
+    if not name or "/" in name or "\\" in name or name in {".", ".."}:
+        raise RunError(f"invalid strict JSON filename: {name!r}")
+    if not _SAFE_ARCHIVE_OPENAT_SUPPORTED:
+        raise RunError("safe archive locator reads are unsupported on this platform")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    if hasattr(os, "O_CLOEXEC"):
+        directory_flags |= os.O_CLOEXEC
+        file_flags |= os.O_CLOEXEC
+    if hasattr(os, "O_BINARY"):
+        file_flags |= os.O_BINARY
+    directory_fds: list[int] = []
+    file_fd: int | None = None
+    display = directory / name
+    try:
+        anchor = Path(trusted_root if trusted_root is not None else directory).absolute()
+        target = Path(directory).absolute()
+        try:
+            target.relative_to(anchor)
+        except ValueError as exc:
+            raise RunError(f"strict JSON parent escaped trusted root: {directory}") from exc
+        # The trusted root is a lexical containment boundary, not a safe
+        # pre-opened anchor: its ancestors may themselves be symlinks.
+        # Walk from the filesystem root without resolving away any component.
+        parts = target.parts
+        if ".." in anchor.parts or ".." in parts:
+            raise RunError("strict JSON path must not contain parent traversal")
+        directory_fd = os.open(parts[0], directory_flags)
+        directory_fds.append(directory_fd)
+        for component in parts[1:]:
+            child = os.open(component, directory_flags, dir_fd=directory_fd)
+            directory_fds.append(child)
+            directory_fd = child
+        file_fd = os.open(name, file_flags, dir_fd=directory_fd)
+        opened_file = os.fstat(file_fd)
+        if not stat.S_ISREG(opened_file.st_mode) or opened_file.st_nlink != 1:
+            raise RunError(f"strict JSON is not a single regular file: {display}")
+        with os.fdopen(file_fd, "r", encoding="utf-8") as handle:
+            file_fd = None
+            data = _strict_json_loads(handle.read())
+    except FileNotFoundError as exc:
+        raise RunNotFound(str(display)) from exc
+    except RunError:
+        raise
+    except (OSError, NotImplementedError) as exc:
+        raise RunError(f"cannot safely read strict JSON in {display}: {exc}") from exc
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise RunError(f"invalid strict JSON in {display}: {exc}") from exc
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        for directory_fd in reversed(directory_fds):
+            os.close(directory_fd)
+    if not isinstance(data, dict):
+        raise RunError(f"expected object in {display}")
+    return data
+
+
 def _owner_alive(pid: int) -> bool:
     return is_process_alive(pid)
 
@@ -367,9 +514,14 @@ class RunManager:
     """Create, journal, recover and close durable runs."""
 
     def __init__(self, base: str | Path | None = None, *,
-                 promotion_hook: PromotionHook | None = None) -> None:
-        self.base = Path(base or os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent).resolve()
+                 promotion_hook: PromotionHook | None = None,
+                 archive_root: str | Path | None = None) -> None:
+        configured_base = base or os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent
+        self.base = _configured_root(configured_base, name="base")
         self.root = self.base / "memory" / "runs"
+        configured_archive = archive_root or os.environ.get("PRAXIS_RUN_ARCHIVE_ROOT")
+        self.archive_root = (_configured_root(configured_archive, name="archive root")
+                             if configured_archive else None)
         self.promotion_hook = promotion_hook
         self._thread_lock = threading.RLock()
         self._paths: dict[str, Path] = {}
@@ -626,6 +778,16 @@ class RunManager:
     def manifest(self, run_id: str) -> dict:
         run_dir = self._find(run_id)
         with self._locked(run_dir):
+            # Cold retention deliberately removes old terminal WALs while keeping
+            # their atomically published manifests forever. There is no crash tail
+            # to replay when the stream is absent; the manifest is the retained
+            # control-plane record. A live manifest still requires its WAL and
+            # therefore fails closed below. The per-run lock also means a reversible
+            # guard reopen cannot create a fresh tail between this check and return.
+            raw = _read_json(run_dir / "manifest.json")
+            if (str(raw.get("status") or "") in TERMINAL_STATUSES
+                    and not (run_dir / "events.jsonl").exists()):
+                return raw
             return self._manifest_locked(run_dir)
 
     def live_run_ids(self) -> list[str]:
@@ -878,6 +1040,7 @@ class RunManager:
         ))
 
     def _iter_events(self, run_dir: Path, *, strict: bool = False,
+                     strict_json: bool = False,
                      max_events: int | None = None,
                      max_bytes: int | None = None,
                      deadline_monotonic: float | None = None) -> Iterator[dict]:
@@ -887,8 +1050,23 @@ class RunManager:
         byte_count = 0
         event_count = 0
         try:
-            with path.open(encoding="utf-8") as stream:
-                for line_no, line in enumerate(stream, 1):
+            # Only the authoritative ResultRef path requests strict_json.
+            source = (safe_evidence_stream(path) if strict_json
+                      else path.open(encoding="utf-8"))
+            with source as stream:
+                remaining = MAX_ARCHIVE_OBJECT_SIZE
+                def bounded_lines():
+                    nonlocal remaining
+                    while True:
+                        line = stream.readline(remaining + 1)
+                        if len(line) > remaining:
+                            raise RunError("event evidence byte budget exceeded")
+                        if not line:
+                            return
+                        remaining -= len(line)
+                        yield line.decode("utf-8")
+                lines = bounded_lines() if strict_json else stream
+                for line_no, line in enumerate(lines, 1):
                     if (deadline_monotonic is not None
                             and time.monotonic() > float(deadline_monotonic)):
                         raise RunError(
@@ -905,7 +1083,8 @@ class RunManager:
                             raise RunError(f"unterminated event JSON at {path}:{line_no}")
                         continue
                     try:
-                        row = json.loads(line)
+                        row = (_strict_json_loads(line) if strict_json
+                               else json.loads(line))
                     except ValueError:
                         if strict:
                             raise RunError(f"invalid event JSON at {path}:{line_no}")
@@ -918,12 +1097,35 @@ class RunManager:
                                 f"({event_count} > {event_cap})"
                             )
                         yield row
-        except OSError as exc:
+                    elif strict:
+                        raise RunError(f"event JSON is not an object at {path}:{line_no}")
+        except FileNotFoundError as exc:
+            # 13.09: у ТЕРМИНАЛЬНОГО прогона нет events.jsonl — пустой поток, не отказ.
+            # Ретенция 12.09 сняла события у 65 июльских прогонов, и на них при каждом
+            # старте падали сверка исходящих (`outstanding_tools`) и рука
+            # `list_active_runs`. Манифест такого прогона остаётся истиной о статусе.
+            # Живой прогон без событий — по-прежнему отказ (fail closed): его WAL нужен.
+            if self._events_may_be_absent(run_dir):
+                return
             raise RunError(f"cannot read event stream for {run_dir.name}: {exc}") from exc
+        except (OSError, ContractError, UnicodeError) as exc:
+            raise RunError(f"cannot read event stream for {run_dir.name}: {exc}") from exc
+
+    def _events_may_be_absent(self, run_dir: Path) -> bool:
+        """Прогон терминален по манифесту — событий у него может уже не быть (ретенция)."""
+        try:
+            raw = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        return str((raw or {}).get("status") or "") in TERMINAL_STATUSES
 
     def _iter_events_reverse(self, run_dir: Path, *, strict: bool = False) -> Iterator[dict]:
         """Yield JSONL records newest-first using bounded reverse chunks."""
         path = run_dir / "events.jsonl"
+        if not path.exists():
+            if self._events_may_be_absent(run_dir):
+                return                              # 13.09: см. _iter_events — пусто, не отказ
+            raise RunError(f"cannot read event stream for {run_dir.name}: events.jsonl is missing")
         try:
             with path.open("rb") as stream:
                 stream.seek(0, os.SEEK_END)
@@ -981,7 +1183,7 @@ class RunManager:
                                     raise RunError(f"event JSON is not an object in {path}")
                             else:
                                 yield row
-        except OSError as exc:
+        except (OSError, ContractError, UnicodeError) as exc:
             raise RunError(f"cannot read event stream for {run_dir.name}: {exc}") from exc
 
     @staticmethod
@@ -2111,26 +2313,160 @@ class RunManager:
             _atomic_json(run_dir / "manifest.json", manifest)
             return ref
 
-    def _result_path(self, run_id: str, result: str) -> Path:
+    def _result_path(self, run_id: str, result: str, *,
+                     deadline_monotonic: float | None = None,
+                     validated_ref: dict | None = None) -> tuple[Path, dict]:
         run_dir = self._find(run_id)
-        results = (run_dir / "results").resolve()
+        # Keep the lexical run-local path. Resolving it here would follow a
+        # symlinked results ancestor before the descriptor-safe open.
+        results = run_dir / "results"
         value = str(result or "").strip().replace("\\", "/")
         match = re.fullmatch(r"result-(\d{1,12})", value)
         if match:
-            hits = list(results.glob(f"{int(match.group(1)):04d}-*"))
-            if len(hits) != 1:
-                raise RunNotFound(f"{run_id}/{value}")
-            return hits[0]
+            ref = validated_ref or self._result_ref(
+                run_dir, run_id, f"result-{int(match.group(1)):04d}",
+                deadline_monotonic=deadline_monotonic,
+            )
+            return self._result_path(
+                run_id, ref["path"], deadline_monotonic=deadline_monotonic,
+                validated_ref=ref,
+            )
         if value.startswith("results/"):
             value = value[len("results/"):]
-        candidate = (results / value).resolve()
+        name = re.fullmatch(r"(\d{4,12})-[A-Za-z0-9_.-]+\.(?:log|bin)", value)
+        ref = validated_ref or {}
+        if name and validated_ref is None:
+            ref = self._result_ref(
+                run_dir, run_id, f"result-{int(name.group(1)):04d}",
+                f"results/{value}", allow_missing=True,
+                deadline_monotonic=deadline_monotonic,
+            )
+        # Opening and validating the complete path is deliberately deferred to
+        # read_result(), which keeps one descriptor pinned for fstat, hashing and
+        # cursor reads.  Path.exists/is_file/resolve here would be both racy and
+        # capable of following a replaced results ancestor.
+        return results / value, ref
+
+    def _result_ref(self, run_dir: Path, run_id: str, result_id: str,
+                    source_path: str | None = None, *, allow_missing: bool = False,
+                    deadline_monotonic: float | None = None) -> dict:
+        """Find a ResultRef in exactly the manifest-published WAL prefix."""
+        manifest = _read_json_strict(run_dir / "manifest.json")
+        published = manifest.get("event_seq")
+        if type(published) is not int or published < 0:
+            raise RunError(f"invalid published event cursor: {run_id}")
+        selected: dict | None = None
+        selected_path: str | None = None
+        count = 0
+        rows = self._iter_events(
+            run_dir, strict=True, strict_json=True,
+            deadline_monotonic=deadline_monotonic,
+        )
+        for row in itertools.islice(rows, published):
+            count += 1
+            if type(row.get("seq")) is not int or row["seq"] != count:
+                raise RunError(f"event WAL published prefix is not contiguous: {run_id}")
+            if "result" not in row:
+                continue
+            ref = row["result"]
+            if not isinstance(ref, dict) or ref.get("schema") != RESULT_SCHEMA:
+                raise RunError(f"invalid ResultRef: {run_id}")
+            rid, path = ref.get("result_id"), ref.get("path")
+            if (ref.get("run_id") != run_id
+                    or not isinstance(rid, str)
+                    or re.fullmatch(r"result-[0-9]{4,12}", rid) is None
+                    or not isinstance(path, str)
+                    or re.fullmatch(r"results/[0-9]{4,12}-[A-Za-z0-9_.-]+\.(?:log|bin)", path) is None
+                    or int(rid[7:]) < 1
+                    or int(path.split("/")[1].split("-")[0]) != int(rid[7:])
+                    or type(ref.get("size")) is not int or ref["size"] < 0
+                    or not isinstance(ref.get("sha256"), str)
+                    or re.fullmatch(r"[0-9a-f]{64}", ref["sha256"]) is None):
+                raise RunError(f"invalid ResultRef: {run_id}")
+            requested_number = int(result_id[7:])
+            source_number = (int(source_path.split("/")[1].split("-")[0])
+                             if source_path is not None else None)
+            # Treat alternate zero-padding as the same durable identity; it must
+            # not be usable to hide an id/path collision from a targeted lookup.
+            relevant = (int(rid[7:]) == requested_number
+                        or (source_number is not None
+                            and int(path.split("/")[1].split("-")[0]) == source_number))
+            if relevant:
+                identity = (rid, path, ref["sha256"], ref["size"])
+                if selected is not None:
+                    previous = (selected["result_id"], selected["path"],
+                                selected["sha256"], selected["size"])
+                    if previous != identity:
+                        raise RunConflict(f"conflicting ResultRefs: {run_id}/{rid}")
+                selected = ref
+                selected_path = path
+        if count != published:
+            raise RunError(f"event WAL is truncated before published cursor: {run_id}")
+        if allow_missing and selected_path != source_path:
+            return {}
+        if selected is None or (source_path is not None and selected["path"] != source_path):
+            raise RunError(f"result has no matching ResultRef: {run_id}/{result_id}")
+        return dict(selected)
+
+    def _archived_result_path(self, run_id: str, result: str, *,
+                              deadline_monotonic: float | None = None,
+                              validated_ref: dict | None = None,
+                              ) -> tuple[bytes, ArchiveLocator]:
+        """Resolve one absent hot body through its strict deterministic sidecar."""
+        run_dir = self._find(run_id)
+        value = str(result or "").strip().replace("\\", "/")
+        match = re.fullmatch(r"result-(\d{1,12})", value)
+        if match:
+            result_id = f"result-{int(match.group(1)):04d}"
+        else:
+            if value.startswith("results/"):
+                value = value[len("results/"):]
+            name = re.fullmatch(r"(\d{1,12})-[A-Za-z0-9_.-]+\.(?:log|bin)", value)
+            if name is None or int(name.group(1)) < 1:
+                raise RunNotFound(f"{run_id}/{result}")
+            result_id = f"result-{int(name.group(1)):04d}"
+        locator_dir = run_dir / "archive-locators"
+        sidecar = locator_dir / f"{result_id}.json"
         try:
-            candidate.relative_to(results)
+            locator = ArchiveLocator.from_dict(
+                _read_json_strict_nofollow(locator_dir, f"{result_id}.json",
+                                           trusted_root=self.root)
+            )
+        except RunNotFound:
+            raise RunNotFound(f"{run_id}/{result}") from None
+        except ContractError as exc:
+            raise RunError(f"invalid archive locator {sidecar}: {exc}") from exc
+        if locator.run_id != run_id or locator.evidence_id != result_id:
+            raise RunError("archive locator does not match requested run/result")
+        if not match and locator.source_path != f"results/{value}":
+            raise RunError("archive locator does not match requested result path")
+        ref = validated_ref or self._result_ref(
+            run_dir, run_id, result_id, locator.source_path,
+            deadline_monotonic=deadline_monotonic,
+        )
+        if ref.get("path") != locator.source_path:
+            raise RunError("archive locator does not match durable ResultRef path")
+        if ref.get("sha256") != locator.body_sha256 or ref.get("size") != locator.body_size:
+            raise RunError("archive locator does not match durable ResultRef checksum/size")
+        if self.archive_root is None:
+            raise ArchivedResultUnavailable(locator, "archive root is not configured")
+        _check_read_deadline(deadline_monotonic, "archived result evidence")
+        path = locator.resolve(self.archive_root)
+        try:
+            relative = path.relative_to(self.archive_root)
+            cursor = self.archive_root
+            for part in relative.parts:
+                cursor = cursor / part
+                if cursor.is_symlink():
+                    raise RunError("archive object path contains a symlink")
         except ValueError as exc:
-            raise ValueError("result path escaped the run") from exc
-        if not candidate.is_file():
-            raise RunNotFound(f"{run_id}/{result}")
-        return candidate
+            raise RunError("archive object escaped configured root") from exc
+        try:
+            path = locator.verify(self.archive_root)
+        except ContractError as exc:
+            raise ArchivedResultUnavailable(locator, str(exc)) from exc
+        _check_read_deadline(deadline_monotonic, "archived result evidence")
+        return path, locator
 
     def read_result(self, run_id: str, result: str, *, byte_offset: int = 0,
                     byte_limit: int = 65536, line_start: int | None = None,
@@ -2148,61 +2484,96 @@ class RunManager:
         if not isinstance(verify_sha256, bool):
             raise TypeError("verify_sha256 must be a boolean")
         _check_read_deadline(deadline_monotonic, "result evidence")
-        path = self._result_path(run_id, result)
-        size = path.stat().st_size
-        common = {
-            "run_id": run_id,
-            "path": f"results/{path.name}",
-            "size": size,
-        }
-        if verify_sha256:
-            common["sha256"] = _file_sha256(
-                path, deadline_monotonic=deadline_monotonic,
+        locator: ArchiveLocator | None = None
+        payload: bytes | None = None
+        hot_stream = None
+        stack = contextlib.ExitStack()
+        try:
+            path, hot_ref = self._result_path(
+                run_id, result, deadline_monotonic=deadline_monotonic,
             )
-        if line_start is not None:
-            start = max(1, int(line_start))
-            count = max(1, min(1000, int(line_count if line_count is not None else 200)))
-            selected: list[str] = []
-            eof = True
-            with path.open(encoding="utf-8", errors="replace") as stream:
-                iterator = enumerate(stream, 1)
-                for number, line in iterator:
-                    if number % 256 == 1:
-                        _check_read_deadline(deadline_monotonic, "result evidence")
-                    if number < start:
-                        continue
-                    if len(selected) >= count:
-                        eof = False
-                        break
-                    selected.append(line)
-            _check_read_deadline(deadline_monotonic, "result evidence")
-            next_line = start + len(selected)
-            return {
-                **common,
-                "mode": "lines",
-                "line_start": start,
-                "line_count": len(selected),
-                "next_line": next_line,
-                "eof": eof,
-                "text": "".join(selected),
+            try:
+                hot_stream = stack.enter_context(safe_evidence_stream(path))
+            except EvidenceNotFound:
+                raise _HotResultAbsent(f"{run_id}/{result}", hot_ref) from None
+            except ContractError as exc:
+                raise RunConflict(f"unsafe result body {run_id}/{result}: {exc}") from exc
+        except _HotResultAbsent as absent:
+            stack.close()
+            path, locator = self._archived_result_path(
+                run_id, result, deadline_monotonic=deadline_monotonic,
+                validated_ref=absent.ref or None,
+            )
+            payload = path
+        try:
+            size = len(payload) if payload is not None else os.fstat(hot_stream.fileno()).st_size
+            common = {
+                "run_id": run_id,
+                "path": locator.source_path if locator is not None else f"results/{path.name}",
+                "size": size,
             }
-        offset = max(0, int(byte_offset))
-        limit = max(1, min(4 * 1024 * 1024, int(byte_limit or 65536)))
-        with path.open("rb") as stream:
+            if verify_sha256:
+                if locator is not None:
+                    common["sha256"] = locator.body_sha256
+                else:
+                    digest = hashlib.sha256()
+                    hot_stream.seek(0)
+                    while True:
+                        _check_read_deadline(deadline_monotonic, "file evidence")
+                        block = hot_stream.read(1024 * 1024)
+                        if not block:
+                            break
+                        digest.update(block)
+                    common["sha256"] = digest.hexdigest()
+            if line_start is not None:
+                start = max(1, int(line_start))
+                count = max(1, min(1000, int(line_count if line_count is not None else 200)))
+                selected: list[str] = []
+                eof = True
+                if payload is not None:
+                    stream = io.TextIOWrapper(io.BytesIO(payload), encoding="utf-8", errors="replace")
+                else:
+                    hot_stream.seek(0)
+                    # Do not let TextIOWrapper close the pinned descriptor owned by
+                    # ExitStack; detach it after cursoring.
+                    stream = io.TextIOWrapper(hot_stream, encoding="utf-8", errors="replace")
+                try:
+                    for number, line in enumerate(stream, 1):
+                        if number % 256 == 1:
+                            _check_read_deadline(deadline_monotonic, "result evidence")
+                        if number < start:
+                            continue
+                        if len(selected) >= count:
+                            eof = False
+                            break
+                        selected.append(line)
+                finally:
+                    if payload is None:
+                        stream.detach()
+                    else:
+                        stream.close()
+                _check_read_deadline(deadline_monotonic, "result evidence")
+                next_line = start + len(selected)
+                return {
+                    **common, "mode": "lines", "line_start": start,
+                    "line_count": len(selected), "next_line": next_line,
+                    "eof": eof, "text": "".join(selected),
+                }
+            offset = max(0, int(byte_offset))
+            limit = max(1, min(4 * 1024 * 1024, int(byte_limit or 65536)))
+            stream = io.BytesIO(payload) if payload is not None else hot_stream
             stream.seek(min(offset, size))
             chunk = stream.read(limit)
-        _check_read_deadline(deadline_monotonic, "result evidence")
-        next_offset = offset + len(chunk)
-        return {
-            **common,
-            "mode": "bytes",
-            "offset": offset,
-            "bytes": len(chunk),
-            "next_offset": next_offset,
-            "eof": next_offset >= size,
-            "data_base64": base64.b64encode(chunk).decode("ascii"),
-            "text": chunk.decode("utf-8", "replace"),
-        }
+            _check_read_deadline(deadline_monotonic, "result evidence")
+            next_offset = offset + len(chunk)
+            return {
+                **common, "mode": "bytes", "offset": offset, "bytes": len(chunk),
+                "next_offset": next_offset, "eof": next_offset >= size,
+                "data_base64": base64.b64encode(chunk).decode("ascii"),
+                "text": chunk.decode("utf-8", "replace"),
+            }
+        finally:
+            stack.close()
 
     def store_artifact(
         self,

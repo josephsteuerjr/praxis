@@ -17,6 +17,15 @@ import unittest
 import praxis_time
 from pathlib import Path
 
+# 12.09: руки указателями — этот стенд меряет ПОЛНЫЙ манифест как список `tools`; семантика указателей — test_tool_pointers. Рычаг снимается в tearDownModule.
+def setUpModule():
+    os.environ["PRAXIS_TOOLS_POINTERS"] = "off"
+
+
+def tearDownModule():
+    os.environ.pop("PRAXIS_TOOLS_POINTERS", None)
+
+
 _fa = types.ModuleType("anthropic")
 _fa.Anthropic = lambda **kw: None
 sys.modules.setdefault("anthropic", _fa)

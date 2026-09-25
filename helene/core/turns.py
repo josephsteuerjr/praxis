@@ -634,22 +634,14 @@ def update_delivery(run_id: str, delivery: str, *, out: str | None = None) -> di
     if not rid:
         return None
     want = str(delivery or "")[:24]
-    row: dict | None = None
     with _LOCK:
-        for t in reversed(_load_ring()):          # свежие сначала: ход обычно последний
-            if str(t.get("run_id") or "") == rid:
-                if not _delivery_upgrade(t.get("delivery"), want):
-                    return None      # ничего не изменилось — см. контракт возврата
-                t["delivery"] = want
-                if out is not None:
-                    t["out"] = _clip_out(out)
-                row = t
-                break
+        ring = _load_ring()
         try:
             lines = PATH.read_text(encoding="utf-8").splitlines() if PATH.exists() else []
         except OSError:
-            lines = []
-        touched = False
+            log.warning("исход доставки не прочитан [%s]", rid, exc_info=True)
+            return None
+        row = None
         for i in range(len(lines) - 1, -1, -1):
             try:
                 disk = json.loads(lines[i])
@@ -662,20 +654,29 @@ def update_delivery(run_id: str, delivery: str, *, out: str | None = None) -> di
             disk["delivery"] = want
             if out is not None:
                 disk["out"] = _clip_out(out)
+                # Only the absence-of-speech marker is discharged by a receipt.
+                # Privacy/silence holds are not authorization to send a draft.
+                if want in {"accepted", "partial"} and out.strip() and disk.get("held") == "unspoken":
+                    disk["held"] = ""
             lines[i] = json.dumps(disk, ensure_ascii=False)
-            row = row or disk
-            touched = True
+            row = disk
             break
-        if touched:
-            try:
-                tmp = PATH.with_suffix(".jsonl.tmp")
-                tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-                tmp.replace(PATH)
-            except OSError:
-                log.warning("исход доставки не записался на диск [%s]", rid, exc_info=True)
-    if row is None:
-        log.debug("исход доставки: ход для run_id=%s не найден", rid)
-    return row
+        if row is None:
+            log.debug("исход доставки: ход для run_id=%s не найден", rid)
+            return None
+        try:
+            tmp = PATH.with_suffix(".jsonl.tmp")
+            tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            tmp.replace(PATH)
+        except OSError:
+            # Do not consume the transition in RAM: recovery must be able to retry.
+            log.warning("исход доставки не записался на диск [%s]", rid, exc_info=True)
+            return None
+        for t in reversed(ring):
+            if str(t.get("run_id") or "") == rid:
+                t.update(row)
+                break
+        return dict(row)
 
 
 def _visible(t: dict, scope: str, chat_id) -> bool:
@@ -868,7 +869,9 @@ def format_line(t: dict) -> str:
         if len(note) > OUT_SHOW_CHARS:
             note = note[: OUT_SHOW_CHARS - 1] + "…[обрезано для показа; полный текст в записи хода]"
         if not note:
-            parts.append("ничего не ушло наружу")
+            # Пустой out описывает только текст хода. След тулов может быть
+            # обрезан: даже отсутствие send-маркеров не доказывает недоставку.
+            parts.append("текст хода пуст (не свидетельствует об отсутствии отправок)")
         elif _trace_sent_out(t):
             parts.append(f"записано себе (это текст хода, не сообщение; что ушло — "
                          f"см. «действия»): «{note}»")

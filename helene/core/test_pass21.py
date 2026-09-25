@@ -7,6 +7,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 import praxis_time
 from pathlib import Path
@@ -126,6 +127,55 @@ class SkipTests(Pass21Base):
         self.assertEqual(today["не_сочла_важным"], 1)
         self.assertGreaterEqual(today["запретил_егор"], 1)
         self.assertIn("Стикер", perception.skips_text())
+
+    def test_each_coalesce_window_counts_only_its_new_events(self):
+        moments = iter([1000.0, 1001.0, 1002.0, 1700.0, 1701.0, 2400.0])
+        with mock.patch.object(perception.time, "time", side_effect=moments), \
+                mock.patch.object(
+                    praxis_time, "day_start",
+                    return_value=_dt.datetime.fromtimestamp(0, tz=_dt.timezone.utc)):
+            for _ in range(6):
+                perception.note_skip("retry", "отложила", chat_id="-100")
+
+            rows = perception.recent_skips(10)
+            self.assertEqual([row.get("prev_n") for row in rows], [None, 2, 1])
+            self.assertEqual(perception.skips_today()["отложила"], 6)
+
+    def test_mechanical_retry_is_one_episode_until_it_goes_quiet(self):
+        moments = iter([1000.0, 1500.0, 2000.0, 2701.0])
+        details = iter(["retry через 180с", "retry через 120с", "retry через 60с", "retry через 30с"])
+        with mock.patch.object(perception.time, "time", side_effect=moments), \
+                mock.patch.object(
+                    praxis_time, "day_start",
+                    return_value=_dt.datetime.fromtimestamp(0, tz=_dt.timezone.utc)):
+            for _ in range(4):
+                perception.note_skip(
+                    "moderation_priority", "отложила", chat_id="-100",
+                    detail=next(details), count_repeats=False,
+                )
+
+            rows = perception.recent_skips(10)
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row.get("count_repeats") is False for row in rows))
+            self.assertTrue(all("prev_n" not in row for row in rows))
+            self.assertEqual(perception.skips_today()["отложила"], 2)
+
+    def test_legacy_moderation_retry_rows_count_as_episodes(self):
+        perception.SKIPS_PATH.write_text(
+            "".join(json.dumps({
+                "ts": praxis_time.now().timestamp(),
+                "stage": stage,
+                "class": "отложила",
+                "detail": "механический retry",
+                "prev_n": 1189,
+            }, ensure_ascii=False) + "\n" for stage in ("moderation_priority", "cooldown")),
+            encoding="utf-8",
+        )
+        self.assertEqual(perception.skips_today()["отложила"], 2)
+        self.assertNotIn("×1190", perception.skips_text())
+        self.assertTrue(all(
+            row["repeat_count"] == 1 for row in perception.panel_state()["skips"]
+        ))
 
     def test_skip_meta_is_allowlisted_and_visible(self):
         perception.note_skip(

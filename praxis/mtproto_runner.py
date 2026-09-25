@@ -1075,6 +1075,18 @@ def _dm_dialogue(chat_id: str, *, occurrence_sidecar: dict | None = None) -> tup
                         for r, _ in admitted]
             first = 0 if all(captured) else max(
                 (i for i, present in enumerate(captured) if not present), default=-1) + 1
+            # ⚠ 26.09: СУЖАТЬ ЛЕНТУ ДО ЗАХВАЧЕННОГО ХВОСТА ЗАПРЕЩЕНО. Её ответы уходят рукой
+            # `reply` и в реестр захвата не пишутся, поэтому «хвост после последнего
+            # незахваченного» — это строки владельца после её последнего ответа. Замер
+            # 21–25.09: 21 обслуженный ход лички из 21 нёс в модель ОДНУ реплику, при том что
+            # обычная лента того же хода — 49–78 сообщений (её история выпадала целиком).
+            # Проекция КЕАТ отдаётся, только если захвачена вся лента; иначе ход идёт прежним
+            # путём — с историей. Кадр v6 владельца от этого не зависит.
+            if first:
+                log.info("KEAT личка [%s]: захвачено %d из %d строк ленты — проекция не "
+                         "отдаётся, ход идёт полной лентой", chat_id,
+                         sum(captured), len(captured))
+                return history, current
             suffix = admitted[first:]
             # A captured native suffix is a valid narrowing even while older hot
             # history predates capture.  Keep the full dialogue as the legacy

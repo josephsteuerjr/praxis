@@ -5933,10 +5933,14 @@ def tool_list_active_runs(limit: int = 20) -> str:
         # неразличимы для неё БАЙТ В БАЙТ — а это разные решения с её стороны.
         pause = ""
         try:
-            wait = resume_wait_seconds(_runs(), run_id)
-            if wait > 0:
-                pause = (f" · следующая попытка через ~{int(wait // 60)}м"
-                         if wait >= 60 else " · следующая попытка вот-вот")
+            # `blocked` remains visible as unfinished work, but it is not scheduled.
+            # Showing a backoff countdown here would contradict the scanner and her
+            # explicit task_control contract even if historical idle rows remain.
+            if str(r.get("status") or "") != "blocked":
+                wait = resume_wait_seconds(_runs(), run_id)
+                if wait > 0:
+                    pause = (f" · следующая попытка через ~{int(wait // 60)}м"
+                             if wait >= 60 else " · следующая попытка вот-вот")
         except Exception:
             pass
         out.append(f"{run_id[:28]} [{r.get('status') or '?'}] "
@@ -7457,7 +7461,7 @@ TELEGRAM_ACCOUNT_TOOL = {
             "query": {"type": "string"},
             "request": {"type": "string", "description": "exact functions.*Request name"},
             "challenge_id": {"type": "string", "description": "critical challenge selector"},
-            "params_json": {"type": "string", "description": "call parameters as one JSON object; moderate_abstractdl expects peer_id/message_id/sender_id/decision; admin_abstractdl expects peer_id/action/params, where action is slow_mode {seconds: 0|10|30|60|300|900|3600}, default_rights {allow:[...], deny:[...]}, restrict {user_id, seconds} or unrestrict {user_id} \u2014 or {history: true} to read what has already been done to the room"},
+            "params_json": {"type": "string", "description": "call parameters as one JSON object; moderate_abstractdl expects peer_id/message_id/sender_id/decision; admin_abstractdl expects peer_id/action/params, where action is slow_mode {seconds: 0|10|30|60|300|900|3600}, default_rights {allow:[...], deny:[...]}, restrict {user_id, seconds}, unrestrict {user_id}, ban_member {user_id} — permanent ban by id when the message is already gone, or purge_member {user_id} — ban plus DeleteParticipantHistory for repeat spammers \u2014 or {history: true} to read what has already been done to the room"},
             "scope": {"type": "string", "description": "optional telegram.* registry filter"},
             "namespace": {"type": "string", "description": "optional registry namespace filter"},
             "risk": {"type": "string", "description": "optional registry risk filter"},
@@ -15811,15 +15815,42 @@ def resume_durable_runs(*, limit: int = 20) -> list[dict]:
     # Возобновлять терминальные нечего — отсеиваем их без замка (py-spy 31.07).
     for run_id in manager.live_run_ids():
         try:
-            status = str(manager.manifest(run_id).get("status") or "")
+            manifest = manager.manifest(run_id)
+            status = str(manifest.get("status") or "")
         except Exception:
             continue
-        if status in {"paused", "blocked", "in_doubt"}:
-            # Lifetime evidence is checked independently of the process-local backoff epoch,
-            # otherwise precisely the old 495–982-attempt patients would restart at zero and
-            # never enter phase one after a deployment.
+        if status in {"paused", "in_doubt"}:
+            control = dict(manifest.get("control") or {})
+            if control.get("action") == "cancel":
+                # A cancellation may have been parked only because a durable tool outcome
+                # was still unknown.  Once receipts/reconciliation clear that blocker,
+                # nobody re-enters the stopped run to cross another cooperative boundary.
+                # Let the scanner finish the already-authored cancellation instead of
+                # treating it as resumable work and writing resume_attempt_idle forever.
+                try:
+                    manager.request_cancel(
+                        run_id,
+                        actor=str(control.get("requested_by") or ""),
+                        reason=str(control.get("reason") or ""),
+                    )
+                except Exception as exc:
+                    log.warning("pending run cancellation did not settle [%s]", run_id,
+                                exc_info=True)
+                    reports.append({
+                        "run_id": run_id, "plan_kind": "cancel_pending",
+                        "status": "error", "phase": "cancel_scan",
+                        "reason": f"{type(exc).__name__}: {exc}",
+                        "lease_acquired": False, "effects_started": False,
+                    })
+                continue
+            # A deliberate blocked outcome is terminal for automatic scheduling.  It can
+            # become executable only through the existing explicit authorization /
+            # reconciliation paths, which first move it back to a resumable status.
+            # Planning a blocked run is a non-executable observation; repeatedly doing so
+            # merely writes resume_attempt_idle churn and advertises a retry that must not
+            # happen.
             guard_result = (_resume_stale_guard(manager, run_id)
-                            if status in {"paused", "blocked"} else "")
+                            if status == "paused" else "")
             if guard_result in {"closed", "attention"}:
                 continue
             idle, last = _resume_idle_streak(manager, run_id)

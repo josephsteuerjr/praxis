@@ -758,6 +758,8 @@ def overview() -> dict:
         log.debug("overview followups не прочитались", exc_info=True)
 
     try:
+        import perception as _perception
+
         skip_path = BASE / "memory" / ".state" / "perception_skips.jsonl"
         rows = []
         for line in skip_path.read_text(encoding="utf-8").splitlines()[-20:]:
@@ -769,7 +771,7 @@ def overview() -> dict:
                 rows.append({
                     "ts": item.get("ts"), "class": item.get("class"),
                     "stage": item.get("stage"),
-                    "repeat_count": 1 + int(item.get("prev_n") or 0),
+                    "repeat_count": _perception.skip_record_count(item),
                 })
         out["skips"] = list(reversed(rows))
     except Exception:
@@ -1569,9 +1571,16 @@ def llm_get() -> dict:
         r = dict((cfg.get("roles") or {}).get(role) or {})
         r.update({k: snap.get(role, {}).get(k) for k in ("on_fallback", "last_error", "fallback_armed")})
         roles[role] = r
-    # Не теряем пользовательские/провайдерские имена: текущие модели тоже показываем
-    # рядом с известными вариантами, даже если каталог пульта их ещё не знает.
+    # Начинаем со стабильного короткого каталога, затем подмешиваем живой каталог
+    # провайдера. `_available_models()` сам кэширует сеть и под PRAXIS_TEST не ходит
+    # наружу, поэтому UI не получает отдельной сетевой политики.
     model_options = {fw: list(_LLM_MODEL_OPTIONS.get(fw, ())) for fw in _LLM_FRAMEWORKS}
+    for fw in _LLM_FRAMEWORKS:
+        retired = _LLM_RETIRED_MODEL_ALIASES.get(fw, set())
+        for raw_model in llm._available_models(fw):
+            model = str(raw_model or "").strip()
+            if model and model not in retired and model not in model_options[fw]:
+                model_options[fw].append(model)
     for r in roles.values():
         fw = r.get("framework")
         model = str(r.get("model") or "").strip()

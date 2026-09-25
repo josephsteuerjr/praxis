@@ -126,13 +126,19 @@ class NativeLifeTests(Base):
                     with keat_live.bind_resume(saved, 'run-chunks', 'call-chunks') as reopened:
                         self.assertIsNone(reopened)
 
-    def test_runner_shaped_legacy_prefix_ages_out_at_provider_boundary(self):
-        """Real hot history may predate capture; a complete native suffix can serve."""
+    def test_partially_captured_dialogue_is_not_narrowed_to_the_captured_tail(self):
+        """26.09: тёплая лента, чьи старые строки старше захвата, остаётся ЦЕЛИКОМ.
+
+        Прежний стенд закреплял обратное: «хвост» после последней незахваченной строки
+        обслуживался один, а `legacy answer` из вызова выпадал. В живой личке её ответы
+        не захватываются (рука `reply`), и этот хвост — всегда строки владельца после её
+        последнего ответа: замер 21–25.09 — 21 обслуженный ход из 21 нёс в модель одну
+        реплику при ленте в 49–78 сообщений. Проекция отдаётся только при полном захвате;
+        иначе ход идёт прежним путём — с историей.
+        """
         import json
         import tempfile
         from pathlib import Path
-        from types import SimpleNamespace
-        import agent
 
         with tempfile.TemporaryDirectory() as root:
             policy = Path(root) / 'policy.json'
@@ -145,88 +151,16 @@ class NativeLifeTests(Base):
                    'PRAXIS_KEAT': 'serve', 'PRAXIS_KEAT_MODES': 'owner',
                    'PRAXIS_KEAT_STREAMS': '42'}
             with patch.dict(os.environ, env):
-                # This is the real live shape after capture is enabled on a warm
-                # dialogue: old hot rows remain, then native receipts begin.
                 self.record(3948, 'Owner: legacy question', capture_live=False)
                 self.record(3949, 'Praxis: legacy answer', 'out', capture_live=False)
                 self.record(3950, 'Owner: first buffered message')
                 self.record(3951, 'Owner: second buffered message')
                 ml.rebuild_state('42')
-                sidecar = {}
+                sidecar = {'stale': True}
                 history, current = runner._dm_dialogue('42', occurrence_sidecar=sidecar)
                 self.assertEqual(history[-1], {'role': 'assistant', 'content': 'legacy answer'})
                 self.assertEqual(current, 'first buffered message\nsecond buffered message')
-                self.assertEqual(len(sidecar['current']), 2)
-                self.assertEqual(sidecar['projection_history'], [])
-
-                state = keat_live.adopt_projection(
-                    SimpleNamespace(chat_id='42'), history, current, sidecar)
-                self.assertIsNotNone(state)
-                legacy_tape = history + [dict(role='user', content=current)]
-                candidate_tape = [dict(role='user', content=current)]
-                system = [dict(type='text', text='constitution')]
-                with keat_live.bind_turn(state, legacy_tape,
-                                         candidate_messages=candidate_tape):
-                    # Candidate bytes do not appear before exact selection.
-                    self.assertEqual(legacy_tape, history + [dict(role='user', content=current)])
-                    provider = keat_live.prepare_provider_messages(system, legacy_tape, [])
-                    receipt = keat_live.select_provider(
-                        system, provider, [], 'run-native-suffix', 'call-native-suffix')
-                    self.assertTrue(keat_live.accept_provider_receipt(
-                        receipt, system=system, messages=provider, tools=[],
-                        run_id='run-native-suffix', call_id='call-native-suffix'))
-                    self.assertEqual(provider, candidate_tape)
-                    self.assertEqual(legacy_tape, history + [dict(role='user', content=current)])
-                self.assertEqual(receipt['status'], 'served')
-
-                # Exercise the production agent seam used by voice_turn_envelope:
-                # projection ContextVar -> _voice_impl -> bind_turn -> provider select.
-                seen = {}
-                production_state = keat_live.adopt_projection(
-                    agent.ChannelContext(chat_id='42', owner=True), history, current, sidecar)
-                self.assertIsNotNone(production_state)
-                projection_token = agent._KEAT_PROJECTION.set(sidecar)
-                capture_token = agent._KEAT_CAPTURE_STATE.set(production_state)
-                ingress_token = agent._KEAT_ORIGINAL_INGRESS.set(False)
-                def terminal(**kwargs):
-                    provider = keat_live.prepare_provider_messages(
-                        kwargs['system'], kwargs['messages'], kwargs['tools'])
-                    selected = keat_live.select_provider(
-                        kwargs['system'], provider, kwargs['tools'],
-                        'run-agent-suffix', 'call-agent-suffix')
-                    self.assertTrue(keat_live.accept_provider_receipt(
-                        selected, system=kwargs['system'], messages=provider,
-                        tools=kwargs['tools'], run_id='run-agent-suffix',
-                        call_id='call-agent-suffix'),
-                        (selected, keat_live.activation_reason(), provider))
-                    seen['messages'] = [dict(row) for row in provider]
-                    return 'answer'
-                try:
-                    with patch.object(agent, '_build_prompt_parts',
-                                      return_value=('persona', 'dynamic', '')), \
-                         patch.object(agent, '_terminal_tool_loop', side_effect=terminal), \
-                         patch.object(agent.frame_shadow, 'enabled', return_value=False):
-                        self.assertEqual(agent._voice_impl(
-                            current, history, None,
-                            ctx=agent.ChannelContext(chat_id='42', owner=True),
-                            no_tools=True), 'answer')
-                finally:
-                    agent._KEAT_ORIGINAL_INGRESS.reset(ingress_token)
-                    agent._KEAT_CAPTURE_STATE.reset(capture_token)
-                    agent._KEAT_PROJECTION.reset(projection_token)
-                self.assertEqual([row['role'] for row in seen['messages']], ['user'])
-                self.assertNotIn('legacy answer', str(seen['messages']))
-
-                # The same address remains byte-exact legacy on any failed check.
-                fallback = history + [dict(role='user', content=current)]
-                with keat_live.bind_turn(state, fallback,
-                                         candidate_messages=candidate_tape), \
-                     patch.object(keat_live, 'select', return_value=None):
-                    provider = keat_live.prepare_provider_messages(system, fallback, [])
-                    denied = keat_live.select_provider(
-                        system, provider, [], 'run-native-suffix', 'different-call')
-                    self.assertIsNone(denied)
-                    self.assertEqual(fallback, history + [dict(role='user', content=current)])
+                self.assertEqual(sidecar, {}, 'захваченный хвост не сужает ленту хода')
 
     def test_failed_capture_does_not_lose_live_message(self):
         with patch.object(keat_live, 'capture_ingress', side_effect=ValueError('no policy'), create=True):

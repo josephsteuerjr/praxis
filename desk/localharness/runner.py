@@ -75,6 +75,12 @@ _speaker = "владелец"
 _title = "Hélène"
 _agent_name = "Агент"
 _tree: Path | None = None
+#: Старт процесса — её `sleep.due` не будит сон раньше десяти минут после него.
+_STARTED_AT = time.time()
+#: Как часто спрашивать её `sleep.due` (тот же рычаг и умолчание, что у её часов).
+_SLEEP_CHECK_SEC = float(os.getenv("PRAXIS_SLEEP_CHECK_SEC", "1800") or 1800)
+#: Как часто обслуживать заявки на пересборку индекса памяти (`_recall_care_forever`).
+_RECALL_CARE_SEC = float(os.getenv("PRAXIS_RECALL_CARE_SEC", "900") or 900)
 #: Слышит ли этот процесс (`voice.apply` на старте): голосовое из окна расшифровывается
 #: только когда слух поднят, иначе — строка с причиной, а не тихая потеря.
 _voice_state: dict = {"ready": False, "why": "голос ещё не поднимался"}
@@ -1093,6 +1099,89 @@ def _keat_care_forever() -> None:
             log.warning("КЕАТ: ротация эпох не прошла", exc_info=True)
 
 
+def _recall_care_forever() -> None:
+    """Заявки на пересборку индекса памяти — раз в 15 минут, первый проход через 90 с.
+
+    ⚠ С 1.0.1 (её memory_fts v8, 13.09) явный recall больше НЕ пересобирает индекс сам:
+    отсутствующая, занятая или отставшая база оставляет заявку `recall_refresh.json` и
+    отвечает тем, что есть, а исполняет заявку обслуживание — `memory_index.build` под
+    замком сборщика. У неё это ночь; в издании ночь редкость (окно на ночь закрывают),
+    и без этого потока вопрос к памяти после сбоя базы отвечал бы пустотой до ближайшего
+    сна. База свежей установки строится здесь же, а не в первом вопросе к памяти.
+    Поток, а не шаг главного цикла: пересборка — минуты на большом корпусе, ходы ждать
+    её не должны; двух сборщиков не бывает — это держит замок сборщика в `memory_fts`.
+    """
+    first = True
+    while True:
+        time.sleep(90.0 if first else _RECALL_CARE_SEC)
+        first = False
+        _recall_care_once()
+
+
+def _recall_care_once() -> str:
+    """Один проход обслуживания индекса памяти. -> idle | built | busy | failed."""
+    if _agent is None:
+        return "idle"
+    try:
+        import memory_fts
+        import memory_index
+        mem = Path(memory_index.MEM_DIR)
+        database = mem / ".state" / "recall.sqlite3"
+        if database.exists() and not memory_fts.refresh_requested(memory_dir=mem):
+            return "idle"
+        started = time.monotonic()
+        built = memory_index.build()
+        fts = built.get("fts") or {}
+        if not fts:
+            log.info("память: пересборку индекса держит другой сборщик — повторю "
+                     "через %d мин", int(_RECALL_CARE_SEC // 60))
+            return "busy"
+        log.info("память: индекс пересобран по заявке за %.1f с — источников %s, "
+                 "фрагментов %s", time.monotonic() - started, fts.get("sources"),
+                 fts.get("chunks"))
+        return "built"
+    except Exception:
+        log.warning("память: заявка на пересборку индекса не обслужена (повтор через "
+                    "%d мин)", int(_RECALL_CARE_SEC // 60), exc_info=True)
+        return "failed"
+
+
+def _sleep_cycle_on() -> bool:
+    return str(os.getenv("PRAXIS_SLEEP_CYCLE", "on") or "on").strip().lower() not in {
+        "0", "off", "false", "no"}
+
+
+def _sleep_due() -> None:
+    """Её ночной цикл (`sleep.run_scheduled`) — шагом главного цикла, МЕЖДУ ходами.
+
+    ⚠ ДО 1.0.1 СНА В ИЗДАНИИ НЕ БЫЛО ВОВСЕ. В ядре его заводят часы `mtproto_runner`
+    (`_sleep_once` → `sleep.run_scheduled` под общим замком `_ONE_MIND`), а продуктовый
+    харнесс этот раннер не запускает. 17.09 отсюда достали только ретенцию прогонов
+    (`_retention_forever`); консолидация дня, формирование, ночная ревизия характера,
+    мётла inbox, сводка прожитого дня, карта памяти с её индексом и инвентаризация
+    компьютера не случались никогда — и нигде не было решения, что так надо.
+
+    Шаг главного цикла, а не поток: сон переписывает то, из чего она думает, и обязан
+    идти между ходами — ровно как у неё под `_ONE_MIND`. Когда — решает её `sleep.due`:
+    окно PRAXIS_SLEEP_WINDOW (4–6 по её часам) и не чаще раза в ~20 ч; окно издания на
+    ночь закрывают — тогда догон через 48 ч в ближайшую проверку, но не раньше десяти
+    минут после старта. Пауза фона (`appetite.background_hold`) откладывает сон её же
+    правилом внутри `run_scheduled`. Выключатель — PRAXIS_SLEEP_CYCLE=off.
+    """
+    if _agent is None or not _brain_ready() or not _sleep_cycle_on():
+        return
+    import sleep as tree_sleep
+    if not tree_sleep.due(None, _STARTED_AT):
+        return
+    log.info("сон: пора — ночной цикл начинается")
+    _set_busy(True, "sleep")
+    try:
+        summary = tree_sleep.run_scheduled()
+    finally:
+        _set_busy(False)
+    log.info("сон: %s", str(summary or "")[:1200])
+
+
 def _set_busy(on: bool, run: str = "", *, chat_id: str = "") -> None:
     _busy["busy"], _busy["run"] = bool(on), str(run or "")
     _busy["since"] = time.time() if on else 0.0
@@ -2005,6 +2094,7 @@ def main() -> None:
                      daemon=True).start()
     threading.Thread(target=_retention_forever, name="retention", daemon=True).start()
     threading.Thread(target=_keat_care_forever, name="keat-care", daemon=True).start()
+    threading.Thread(target=_recall_care_forever, name="recall-care", daemon=True).start()
     threading.Thread(target=_config_watch_forever, args=(config_path, tree),
                      name="config-watch", daemon=True).start()
     # Control must run independently: the main loop is inside the model/tool turn.
@@ -2023,6 +2113,7 @@ def main() -> None:
     _maybe_birth(tree)
     alarms_at = 0.0
     resume_at = 0.0
+    sleep_at = time.time()
     while True:
         for path in sorted(inbox.glob("*.md")):
             if path.name.startswith(".tmp-"):
@@ -2069,6 +2160,13 @@ def main() -> None:
             _forge_events_due()
         except Exception:
             log.exception("события Forge ждут следующего тика")
+        # Её сон — последним: живое слово, продолжение задач и будильники вперёд.
+        if time.time() - sleep_at > _SLEEP_CHECK_SEC:
+            sleep_at = time.time()
+            try:
+                _sleep_due()
+            except Exception:
+                log.exception("сон не прошёл (повтор при следующей проверке)")
         if time.time() - swept_at > 6 * 3600:
             swept_at = time.time()
             _sweep_processed(processed)

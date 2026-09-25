@@ -1978,6 +1978,19 @@ def task_origin(task_id: str) -> str:
         return ""
 
 
+def _task_run_context(task_id: str) -> dict:
+    """Capture the server-bound origin before detached workers lose ContextVars.
+
+    Never infer a principal from an origin chat (groups are not people). Legacy
+    tasks without a captured context stay unattributed when resumed unbound.
+    """
+    from dataclasses import replace
+    import run_context
+
+    context = run_context.current_run()
+    return replace(context, forge_task_id=task_id).to_dict() if context else {}
+
+
 def start(goal: str, target: str = "self", isolation: str = "auto",
           priority: str = "normal", origin_chat: str = "") -> str:
     """Open a durable coding task and return its factual orientation."""
@@ -2070,6 +2083,7 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
         "isolation_note": isolation_note,
         # PASS 30 Этап 2: тред-заказчик — для наррации по ходу и forge_event
         "origin_chat": str(origin_chat or ""),
+        "run_context": _task_run_context(task_id),
         "status": "active", "created": _now(), "updated": _now(),
     }
     _save_task(task)
@@ -2103,6 +2117,7 @@ def start_host(goal: str, target: str, priority: str = "normal",
         "base_commit": str(probe.get("head") or ""), "source_git": str(probe.get("git_root") or ""),
         "source_branch": "", "worktree_root": "", "priority": _norm_priority(priority),
         "origin_chat": str(origin_chat or ""),
+        "run_context": _task_run_context(task_id),
         "status": "active", "created": _now(), "updated": _now(),
     }
     _save_task(task)
@@ -2142,6 +2157,7 @@ def start_windows(goal: str, target: str, priority: str = "normal",
         "source_git": str(probe.get("git_root") or ""), "source_branch": "",
         "worktree_root": "", "priority": _norm_priority(priority),
         "origin_chat": str(origin_chat or ""),
+        "run_context": _task_run_context(task_id),
         "status": "active", "created": _now(), "updated": _now(),
     }
     _save_task(task)
@@ -2980,6 +2996,7 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                     f"повторный spawn отклонён — это была бы вторая копия того же юнита.")
         request = {
             "id": unit_id, "task_id": task_id, "goal": task.get("goal"),
+            "run_context": task.get("run_context") or _task_run_context(task_id),
             "root": str(root), "proposal_id": task.get("proposal_id") or "",
             "role": role, "brief": brief, "model": str(model or "").strip(),
             "max_iters": max(0, int(max_iters or 0)),
@@ -3421,6 +3438,19 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
         if branch:
             _run(["git", "-C", str(source_git), "branch", "-D", branch], timeout=30)
         submission = f"Интегрировано в {expected or current}: {merged}; временный worktree убран."
+        try:
+            # Манифест рельсов не должен стареть от дневных мержей: уже третий раз
+            # номер строки судьи в soul/rails.md гниёт (16855→16999→17008→17011),
+            # потому что мерж сдвигает agent.py, а файл чинит только ночной сон.
+            # Тяжёлые билдеры значений (outbound_judge_sites и родня) читают исходник
+            # с диска по mtime; живой agent в этом процессе для них только плюс
+            # (_live), не подмена. sync_md пишет только при расхождении.
+            import rails
+            if rails.sync_md():
+                _event(task_id, "rails_manifest_synced",
+                       summary="мерж сдвинул строки — манифест перевыпущен")
+        except Exception:
+            pass  # манифест — зеркало, а не рельс: отказ синка не отменяет мерж
     task["status"] = new_status
     task["finished"] = _now() if new_status == "done" else ""
     task["review"] = str(review or "").strip()

@@ -215,17 +215,28 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis") -> dict:
     target_fw = cur_fw if cur_fw in fws else fws[0]
     prev = {"framework": cur_fw, "model": cur_model,
             "fallback_model": rc.get("fallback_model"),
+            # Откат обязан вернуть и прибитый фреймворк запасной: пустая строка значит
+            # «его не было», и нормализация конфига её выбросит — то есть вернётся
+            # ровно прежнее состояние, а не «как будто он был пустой».
             "fallback_framework": rc.get("fallback_framework") or ""}
     changes: dict = {"roles": {role: {}}}
     if target_fw == cur_fw:
         changes["roles"][role]["model"] = model
     else:
         # swap-семантика: прежняя основная становится запасной на прежнем фреймворке
-        # ⚠ Прибитый `fallback_framework` смену НЕ переживает. Он указывал на провайдера
-        # прежней пары; после смены фреймворка запасная нога по нему уехала бы к тому, кто
-        # новой модели не знает, — и отвечала бы другая модель, чем написано в конфиге.
-        # Снимаем пустой строкой, а не `del`: `llm.save_config` нормализует и значение вне
-        # {openai, anthropic} в файл не попадает.
+        #
+        # ⚠ 15.09.2026, ЖИВОЙ СЛУЧАЙ. Согласовывались ТРИ поля из четырёх, и прибитый
+        # `fallback_framework` переживал смену. Голос ушёл с anthropic/glm-5.3 на
+        # openai/gpt-6-astra, запасной стала glm-5.3 — правильно, — но пин «openai»
+        # остался, и запасная нога поехала искать glm у реле, которое её не знает.
+        # Код это молча заглаживал: ротировал имя в основную модель, ловил схлопывание
+        # и брал gpt-5.6-sol. То есть конфиг обещал запас на z.ai, а запас сидел на том
+        # же реле и той же подписке — отвалилось бы реле, отвалился бы и он.
+        #
+        # `llm.swap_fallback` этот случай знает и снимает пин («прибитый
+        # fallback_framework стал бы ложью»); здесь его просто забыли. Пустая строка —
+        # способ СНЯТЬ ключ через слияние: `save_config` нормализует перед записью, и
+        # значение вне {openai, anthropic} в файл не попадает вовсе.
         changes["roles"][role] = {"framework": target_fw, "model": model,
                                   "fallback_model": cur_model or "",
                                   "fallback_framework": ""}
@@ -273,14 +284,15 @@ def apply_profile(name: str, *, why: str = "", by: str = "praxis") -> dict:
         return {"ok": False, "error": f"«{spec['model']}» нет в моём каталоге", "stage": "model"}
     before.setdefault("fallback_framework", "")
     target_fw = old_fw if old_fw in fws else fws[0]
+    before.setdefault("fallback_framework", "")  # чтобы откат вернул и отсутствие пина
     target = dict(before)
     target["framework"] = target_fw
     target["model"] = spec["model"]
     target["reasoning_effort"] = spec["effort"]
     if target_fw != old_fw:
         target["fallback_model"] = old_model
-        # Тот же корень, что в switch(): прибитый провайдер запасной ноги пережил бы
-        # смену фреймворка и увёл бы фолбэк к тому, кто новой модели не знает.
+        # Тот же случай, что в `switch`: пин на прежний фреймворк пережил бы смену и
+        # отправил бы запасную ногу к провайдеру, который этой модели не знает.
         target["fallback_framework"] = ""
     try:
         llm.update_config({"roles": {"voice": target}})
