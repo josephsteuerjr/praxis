@@ -169,7 +169,7 @@ SVC_BIN = "helene-svc"
 # проверенный прод; собирать его на Mac заново значило бы выпустить под одним
 # тегом два разных дерева.
 RELEASE_REPO = "josephsteuerjr/praxis"
-RELEASE_TAG_DEFAULT = "v0.8.8"
+RELEASE_TAG_DEFAULT = "v0.9.0"
 
 # Минимум macOS. Задуман 12.0, но колёса голоса под cp314/arm64 (numpy,
 # onnxruntime, av — проверено `pip download` 19.09.2026) собраны с тегом
@@ -1531,7 +1531,10 @@ def collect_body_licenses(out: Path, src: Path, allow_partial: bool,
         print("  ⚠ нет реестра cargo: лицензии крейтов тела не собраны")
         return 0
     index, missing = license_texts(dest, crates, registry)
-    head = body_license_head(len(set(crates, source=("tree/body" if src != BODY_SRC else "praxis/body"))), mirror_head(body) or mirror_head(core_source()), missing)
+    # ⚠ Здесь `source=` стоял внутри `set(...)` — TypeError на первом же Mac-прогоне 0.8.8
+    # (run 36137074498): стенд проверял только шапку, а не сборщик. Теперь сборщик под стендом.
+    head = body_license_head(len(set(crates)), mirror_head(body) or mirror_head(core_source()),
+                             missing, source=("tree/body" if src != BODY_SRC else "praxis/body"))
     (dest / "README.md").write_text("\n".join(head + sorted(index)) + "\n",
                                     encoding="utf-8", newline="\n")
     return len(index)

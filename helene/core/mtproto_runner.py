@@ -1498,7 +1498,8 @@ def _group_context_frozen(chat_id: str, policy: dict) -> tuple[str, tuple]:
                 return archived, _fold_service_rows(rows)
         except Exception:
             log.exception("group archive context не собрался [%s]", chat_id)
-    return "\n".join(list(_buf[chat_id])[-(limit or memory_life.HOT_HARD_HI):]), ()
+    # 25.09: запасная лента комнаты — по порогам ЕЁ окна (hot_bounds), не личечным.
+    return "\n".join(list(_buf[chat_id])[-(limit or memory_life.hot_bounds(chat_id)[2]):]), ()
 
 
 def _group_trigger_snapshot(chat_id: str, *, mid, message_ts: float,
@@ -3504,12 +3505,12 @@ def _direct_outbox_result(entry: dict, *, label: str = "") -> str:
         noun = {"photo": "фото", "audio": "голосовое" if receipt.get("voice_note")
                 or payload.get("voice_note") else "аудио"}.get(kind, "документ")
         return (
-            f"Отправила {noun} → {destination} "
+            f"Отправлено: {noun} → {destination} "
             f"(chat_id={selector}, message_id={message_id}): {filename}"
         )
     text = str((entry.get("payload") or {}).get("text") or "")
     return (
-        f"Отправила → {destination} "
+        f"Отправлено → {destination} "
         f"(chat_id={selector}, message_id={message_id}): {text[:60]}"
     )
 
@@ -5089,7 +5090,7 @@ def _sync_get_id(name_or_username: str):
         if ent is None:
             fresh = _recent_senders_hits(str(name_or_username))
             if fresh:
-                return ("В диалогах не нашла, но среди недавних отправителей: "
+                return ("В диалогах не найдено, но среди недавних отправителей: "
                         + "; ".join(fresh) + ". (кэш с рестарта; глубже — read_log)")
         return _ent_label(ent) if ent is not None else None
     return _threadsafe_result(_coro, 20)
@@ -5160,7 +5161,7 @@ def _sync_search_private_messages(query: str, limit: int = 20) -> str:
             if len(rows) >= cap:
                 break
         if not rows:
-            return "(в личках ничего не нашла)"
+            return "(в личках ничего не найдено)"
         return ("[PRIVATE CROSS-CHAT SEARCH — внутренний материал; не цитируй чувствительные "
                 "личные сведения аудитории без права их получить]\n" + "\n".join(rows))
     return _threadsafe_result(_coro, 60)
@@ -5236,7 +5237,7 @@ async def _ensure_dialog_cache() -> None:
         await asyncio.wait_for(asyncio.shield(task), timeout=DIALOG_WARMUP_WAIT_SEC)
     except asyncio.TimeoutError:
         raise TimeoutError(
-            f"кэш диалогов ещё греется (ждала {DIALOG_WARMUP_WAIT_SEC:.0f}с) — "
+            f"кэш диалогов ещё греется (ожидание {DIALOG_WARMUP_WAIT_SEC:.0f}с) — "
             "резолв по имени пока недоступен, по id/@username работает") from None
     waited = time.time() - t0
     if waited > 1:
@@ -5289,13 +5290,30 @@ def _ambiguous_book(ref: str, book: list[dict]) -> str | None:
     """
     if len(book) < 2:
         return None
-    top = book[0].get("lexical")
-    if top is None:
+
+    def tier(row: dict):
+        lx = row.get("lexical")
+        if lx is None:
+            return None
+        # та же запись имени в другой раскладке (identity_key, 135) — тот же ярус, что 140
+        return 140 if lx in (135, 140) else lx
+
+    tiers = [tier(row) for row in book]
+    known = [x for x in tiers if x is not None]
+    if not known:
         return None
-    ties = [row for row in book if row.get("lexical") == top]
-    if len(ties) < 2:
+    # 25.09 (ревью V4 F2): равные — по ВСЕЙ книге, не по верху ранжирования. Частичное
+    # совпадение с бонусами (контакт/переписка) вставало над двумя точными тёзками, и
+    # отказа не было; а если верх ранжирования ниже точного имени — это тоже не выбор
+    # человека, а свежесть. В обоих случаях — список, не догадка.
+    top = max(known)
+    ties = [row for row, tx in zip(book, tiers) if tx == top]
+    chosen_tier = tiers[0]
+    below_exact = chosen_tier is not None and chosen_tier < top
+    if len(ties) < 2 and not below_exact:
         return None
-    rows = "; ".join(_book_row_label(row) for row in ties[:6])
+    listed = ties if len(ties) >= 2 else [book[0]] + ties
+    rows = "; ".join(_book_row_label(row) for row in listed[:6])
     return (f"«{ref}» — это несколько людей в моей адресной книге, наугад не пишу: {rows}. "
             f"Назови адресата по id или @username.")
 
@@ -5376,7 +5394,7 @@ async def _resolve_entity(ref):
             _entity_cache[cache_key] = ent
             _entity_cache[ident] = ent
             if len(book) > 1:
-                log.info("резолв %r: выбрала %s по адресу/свежести среди %d кандидатов",
+                log.info("резолв %r: выбран %s по адресу/свежести среди %d кандидатов",
                          ref, _ent_label(ent), len(book))
             return ent
 
@@ -5395,7 +5413,7 @@ async def _resolve_entity(ref):
         ent = matches[0][1]
         _entity_cache[cache_key] = ent
         if len(matches) > 1:
-            log.info("резолв %r: выбрала самый свежий диалог %s среди %d",
+            log.info("резолв %r: выбран самый свежий диалог %s среди %d",
                      ref, _ent_label(ent), len(matches))
         return ent
     raise ResolveDenied(
@@ -5851,7 +5869,7 @@ async def _resolve_membership_entity(target: str):
         return ent
     ent = await _resolve_entity(value)
     if ent is None:
-        raise ValueError(f"не нашла Telegram-группу: {target}")
+        raise ValueError(f"не найдена Telegram-группа: {target}")
     return ent
 
 
@@ -6418,7 +6436,7 @@ async def _join_chat_async(target: str, *, principal_id: object = None,
         else:
             ent = await _resolve_entity(value)
             if ent is None:
-                raise ValueError(f"не нашла Telegram-группу: {target}")
+                raise ValueError(f"не найдена Telegram-группа: {target}")
             if _entity_kind(ent) not in ("channel", "chat"):
                 raise ValueError("это Telegram-пользователь, а не группа/канал")
             ledger.prepared(tx_id, _membership_entity_facts(ent))
@@ -6665,11 +6683,11 @@ async def _react_async(chat, message_id: int, emoji: str, remove: bool) -> str:
         route = _route_from_reference(current)
         ent = _meta.get(route.conversation_id, {}).get("entity") or await _resolve_entity(route.peer_id)
     if ent is None:
-        return f"(не нашла чат: {chat or 'текущий'})"
+        return f"(не найден чат: {chat or 'текущий'})"
     reaction = None if remove else [ReactionEmoji(emoticon=str(emoji))]
     await client(SendReactionRequest(peer=ent, msg_id=int(message_id), reaction=reaction))
-    return (f"Сняла реакцию с #{message_id}." if remove
-            else f"Поставила {emoji} на #{message_id}.")
+    return (f"Реакция с #{message_id} снята." if remove
+            else f"Поставлено {emoji} на #{message_id}.")
 
 
 def _sync_react(chat: str = "", message_id: int = 0, emoji: str = "", remove: bool = False) -> str:
@@ -6694,7 +6712,7 @@ def _sync_followups(action: str = "list", followup_id: str = "",
             kw["limit"] = int(limit)
         return telegram_followups.LEDGER.context(**kw)
     if action == "cancel":
-        return (f"Отменила follow-up {followup_id}." if telegram_followups.LEDGER.cancel(followup_id)
+        return (f"Отменён follow-up {followup_id}." if telegram_followups.LEDGER.cancel(followup_id)
                 else f"Не найден активный follow-up {followup_id}.")
     if action in ("watch", "unwatch"):
         # Её рука. Отчёт Егору больше не заводится автоматически (см. _sync_send_message):
@@ -6706,8 +6724,8 @@ def _sync_followups(action: str = "list", followup_id: str = "",
         if item is None:
             return f"Не найдена живая нить {followup_id}."
         return (f"Отчёт Егору по {followup_id} " + (
-            "включила — когда ответят, ему уйдёт письмо; возрастной срок с нити снят."
-            if on else "выключила — нить остаётся моим следом, Егору не уйдёт."))
+            "включено — когда ответят, ему уйдёт письмо; возрастной срок с нити снят."
+            if on else "выключено — нить остаётся моим следом, Егору не уйдёт."))
     return "action должен быть list | watch | unwatch | cancel."
 
 
@@ -6717,7 +6735,7 @@ def _sync_read_chat(chat_ref, limit: int = 30) -> str:
         route = _route_from_reference(chat_ref)
         ent = await _resolve_entity(route.peer_id)
         if ent is None:
-            return "(не нашла такой чат)"
+            return "(не найден такой чат)"
         kwargs = {"reply_to": route.topic_id} if route.topic_id is not None else {}
         msgs = await client.get_messages(ent, limit=int(limit), **kwargs)
         return "\n".join(_format_messages(reversed(list(msgs)))) or "(пусто)"
@@ -6854,7 +6872,7 @@ def _project_direct_outbox_acceptance(proof: dict, entry: dict) -> str:
         except Exception:
             log.exception(
                 "след нити не завёлся [%s] #%s — через час в пульсе я не вспомню, что "
-                "уже сказала в этой комнате", peer_id, message_id)
+                "уже сказано в этой комнате", peer_id, message_id)
     # ⚠ Её собственная реплика обязана вернуться в разговор. Обычный голос кладёт себя в
     # буфер после отправки, ответ в отсутствие — тоже, а ПРЯМАЯ отправка (send_message /
     # narrate, то есть всё, что она говорит ПО СВОЕЙ ИНИЦИАТИВЕ — из пульса, из окна, по
@@ -6899,7 +6917,7 @@ def _project_direct_outbox_acceptance(proof: dict, entry: dict) -> str:
                 # outcome), иначе записка заговорит двумя языками и ни `said_recently`,
                 # ни дайджест комнат её больше не узнают.
                 agent.notes.append(
-                    convo, f"сказала (голос): «{said[:agent.notes.SAID_GIST_CHARS]}»")
+                    convo, f"сказано (голос): «{said[:agent.notes.SAID_GIST_CHARS]}»")
             except Exception:
                 log.exception("заметка о прямой отправке не записалась [%s]", peer_id)
         if said and not is_dm and message_id is not None and _group_archive_enabled():
@@ -7044,7 +7062,7 @@ def _frozen_refusal(peer_id, who: str) -> str | None:
     except Exception:
         log.debug("frozen check failed for %s", peer_id, exc_info=True)
         return None
-    return (f"не отправила: чат {who} заморожен — я с ним не разговариваю в обе стороны. "
+    return (f"не отправлено: чат {who} заморожен — я с ним не разговариваю в обе стороны. "
             f"Если это осознанно, сначала разморозь его (freeze_chat on=false).")
 
 
@@ -7059,7 +7077,7 @@ def _sync_send_message(to, text) -> str:
     if _floor:
         log.warning("прямая отправка придержана кред-полом: %s", _floor)
         return agent.DirectSendRefusal(
-            f"не отправила: в тексте {_floor}; креды наружу не уходят")
+            f"не отправлено: в тексте {_floor}; креды наружу не уходят")
     execution = _direct_tool_execution(("send_message", "narrate"))
     key = _direct_tool_key(execution)
     target_route = _route_from_reference(to)
@@ -7078,7 +7096,7 @@ def _sync_send_message(to, text) -> str:
         raise
     took_resolve = time.time() - t0
     if ent is None:
-        return agent.DirectSendRefusal(f"(не нашла, кому: {to})")
+        return agent.DirectSendRefusal(f"(не найдено, кому: {to})")
 
     peer_id = _marked_peer_id(ent)
     who = _ent_label(ent)
@@ -7116,7 +7134,7 @@ def _sync_send_message(to, text) -> str:
         if str(pulse_reason or "").strip():
             pulse_note = f"\n· мой след по этому адресату: {pulse_reason}"
         if existing is None and not pulse_ok:
-            return agent.DirectSendRefusal(f"Не отправила из social pulse: {pulse_reason}.")
+            return agent.DirectSendRefusal(f"Не отправлено из social pulse: {pulse_reason}.")
     except Exception:
         log.debug("след по адресату не снялся [%s]", peer_id, exc_info=True)
     entry = outbox.prepare_text(
@@ -7172,12 +7190,12 @@ def _sync_send_message(to, text) -> str:
                 # ⚠ Про ФОРМУ, а не про права: 06.08 её текст не влез в лимит Telegram, и
                 # фраза «у меня нет права писать» была бы прямой неправдой о причине.
                 return agent.DirectSendRefusal(
-                    f"не отправила: Telegram отверг само сообщение — "
+                    f"не отправлено: Telegram отверг само сообщение — "
                     f"{type(exc).__name__}. Дело не в правах и не в адресе: этот текст "
                     f"не проходит по форме (чаще всего — длина). Разбей на части или "
                     f"сократи и отправь снова; повторять этот же кусок я не буду.")
             return agent.DirectSendRefusal(
-                f"не отправила: Telegram отказал навсегда — {type(exc).__name__}. "
+                f"не отправлено: Telegram отказал навсегда — {type(exc).__name__}. "
                 f"Похоже, у меня нет права писать в «{to}» (частая причина: это канал, а "
                 f"не чат обсуждения, либо меня там нет). Проверь адрес и попробуй другой; "
                 f"повторять этот я не буду.")
@@ -7237,7 +7255,7 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
     if _floor:
         log.warning("ответ придержан кред-полом: %s", _floor)
         return agent.DirectSendRefusal(
-            f"не отправила: в тексте {_floor}; креды наружу не уходят")
+            f"не отправлено: в тексте {_floor}; креды наружу не уходят")
     execution = _direct_tool_execution(("reply",))
     key = _direct_tool_key(execution)
     target_route = _route_from_reference(chat_id)
@@ -7250,7 +7268,7 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
         log.warning("ответ %r: резолв не уложился/упал", chat_id)
         raise
     if ent is None:
-        return agent.DirectSendRefusal(f"(не нашла, куда отвечать: {chat_id})")
+        return agent.DirectSendRefusal(f"(не найдено, куда отвечать: {chat_id})")
     peer_id = _marked_peer_id(ent)
     who = _ent_label(ent)
     target_user_id = (getattr(ent, "id", None)
@@ -7302,11 +7320,11 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
         if permanent:
             if agent.delivery_refusal_kind(exc) == "shape":
                 return agent.DirectSendRefusal(
-                    f"не отправила: Telegram отверг само сообщение — {type(exc).__name__}. "
+                    f"не отправлено: Telegram отверг само сообщение — {type(exc).__name__}. "
                     f"Дело не в правах: этот текст не проходит по форме (чаще всего — "
                     f"длина). Разбей на части и ответь снова; этот же кусок я не повторю.")
             return agent.DirectSendRefusal(
-                f"не отправила: Telegram отказал навсегда — {type(exc).__name__}. "
+                f"не отправлено: Telegram отказал навсегда — {type(exc).__name__}. "
                 f"Проверь, могу ли я писать в «{chat_id}»; повторять этот я не буду.")
         # Acceptance may land after the grace's last read, while retry is journalled.
         # record_retry preserves accepted rows; that receipt is still success.
@@ -7361,7 +7379,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
     if denied:
         return denied
     if target is None:
-        return f"(не нашла Telegram-адресата: {to or current_chat or OWNER_ID})"
+        return f"(не найден Telegram-адресат: {to or current_chat or OWNER_ID})"
     peer_id = (_marked_peer_id(target) if hasattr(target, "id") else int(route.peer_id))
     # Промежуточный пасс D1 (адверсарка round-1, P1): прямой путь доставки файла
     # (явный to= / проактивная отправка вне живого хода) шёл МИМО кред-пола — .env/
@@ -7488,12 +7506,12 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
             log.warning("send_file %r: постоянный отказ, повторять нечего: %s", label, exc)
             if agent.delivery_refusal_kind(exc) == "shape":
                 return agent.DirectSendRefusal(
-                    f"не отправила файл: Telegram отверг сам запрос — "
+                    f"файл не отправлен: Telegram отверг сам запрос — "
                     f"{type(exc).__name__}. Дело не в правах и не в адресе: не проходит "
                     f"форма (чаще всего — длина подписи или пустое вложение). Поправь "
                     f"подпись или файл и отправь снова; повторять этот же я не буду.")
             return agent.DirectSendRefusal(
-                f"не отправила файл: Telegram отказал навсегда — {type(exc).__name__}. "
+                f"файл не отправлен: Telegram отказал навсегда — {type(exc).__name__}. "
                 f"Похоже, у меня нет права слать в «{label}». Проверь адрес и попробуй "
                 f"другой; повторять этот я не буду.")
         # Acceptance may land after the grace's last read, while retry is journalled.
@@ -7687,7 +7705,7 @@ async def _fire_task(t: dict) -> bool | None:
             await _claim_scheduled_text(
                 t,
                 peer_id=OWNER_ID,
-                text=(f"Не нашла, кому писать — «{target}» не опознаётся.\n"
+                text=(f"Не найдено, кому писать — «{target}» не опознаётся.\n"
                       f"Я собиралась сказать: {goal}"),
                 purpose="message-target-missing",
                 entity=OWNER_ID,
@@ -7721,7 +7739,7 @@ async def _missed_dm_sweep() -> None:
         except Exception:
             ent = None
         if ent is None:
-            log.warning("boot-sweep: не нашла entity для %s — пропускаю", cid)
+            log.warning("boot-sweep: не найден entity для %s — пропускаю", cid)
             continue
         sender_id = int(cid) if cid.lstrip("-").isdigit() else None
         is_owner = OWNER_ID != 0 and sender_id == OWNER_ID
@@ -7969,7 +7987,7 @@ async def _absence_once() -> None:
             await asyncio.to_thread(unanswered.resolve, str(chat_id))
             _buf_push(str(chat_id), f"Praxis: {reply}", author="Praxis", is_dm=True)
             try:
-                agent.tool_journal(f"[отсутствие] ответила {name} (#{n} за окно): «{reply[:120]}»", salience=2)
+                agent.tool_journal(f"[отсутствие] отвечено {name} (#{n} за окно): «{reply[:120]}»", salience=2)
             except Exception:
                 log.debug("отсутствие: журнал не записался", exc_info=True)
             log.info("ОТСУТСТВИЕ [%s] %s -> %r", chat_id, name, reply[:80])
@@ -7978,9 +7996,9 @@ async def _absence_once() -> None:
                 try:
                     await client.send_message(
                         OWNER_ID,
-                        f"пока тебя нет, ответила {name} (id={chat_id}). "
+                        f"пока тебя нет, отвечено {name} (id={chat_id}). "
                         + (f"Их последнее: «{asked}». " if asked else "")
-                        + f"Я сказала: «{reply[:200]}»")
+                        + f"Мой ответ: «{reply[:200]}»")
                 except Exception:
                     log.exception("отсутствие: heads-up владельцу не ушёл")
     finally:

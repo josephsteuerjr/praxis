@@ -1324,6 +1324,18 @@ def project_brain(tree: Path, cfg: dict) -> str:
         except (OSError, ValueError):
             seen = None
         if seen == fingerprint:
+            if previously_projected is None:
+                # 25.09 (ревью V3 F3): расписка от 0.8.5–0.8.7 без `projected` — при неизменном
+                # helene.json она никогда бы не дописалась, и убранный позже ключ запасного
+                # жил бы в llm.json вечно. В этот момент `built` — ровно то, что проецировала
+                # прежняя версия: дописываем поля, сам llm.json не трогаем.
+                try:
+                    receipt.write_text(json.dumps({"fingerprint": fingerprint,
+                                                   "projected": _projected_fields(built)},
+                                                  ensure_ascii=False),
+                                       encoding="utf-8", newline="\n")
+                except OSError:
+                    log.debug("расписка мозга без projected не дописалась", exc_info=True)
             return "мозг: llm.json на месте, helene.json не менялся — не трогаю"
     # ⚠ Файл ПОДМЕШИВАЕТСЯ, а не подменяется: ядро уже чинило этот класс у себя
     # (llm.py: «пропускаем как есть, чтобы запись конфига панелью не стирала блок»),

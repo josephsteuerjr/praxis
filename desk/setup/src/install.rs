@@ -2360,6 +2360,9 @@ fn rehearse_extensions(payload: &Path, dir: &Path) -> Result<Option<(bool, Strin
         .map(|it| it.flatten().any(|e| e.path().join("extension.json").is_file()))
         .unwrap_or(false);
     if !has_any {
+        // 25.09 (ревью V3 F12): расширений нет — прежний отчёт об отказе не должен жить в
+        // карточке окна с прошлой датой.
+        let _ = std::fs::remove_file(dir.join("extensions-check.json"));
         return Ok(None);
     }
     let python = python_exe(payload);
@@ -2480,11 +2483,24 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
                     ));
                 }
             }
-            Err(e) => pre_steps.push(Step {
-                label: "Расширения".into(),
-                ok: false,
-                note: Some(format!("репетиция не удалась: {e}")),
-            }),
+            Err(e) => {
+                // 25.09 (ревью V4 F3): истечение 120 с или незапуск питона поставки — это
+                // тот же отказ, что «не грузятся»: без --force-extensions обновление не идёт,
+                // старая версия остаётся живой. Раньше здесь был красный шаг и «продолжаем».
+                pre_steps.push(Step {
+                    label: "Расширения".into(),
+                    ok: false,
+                    note: Some(format!("репетиция не удалась: {e}")),
+                });
+                if !s.force_extensions {
+                    return Err(format!(
+                        "репетиция расширений владельца не удалась: {e}. Отчёт — {}. \
+                         Поручи агенту адаптировать (карточка «Расширения» в окне) или обнови без них: \
+                         повтори с --force-extensions.",
+                        dir.join("extensions-check.json").display()
+                    ));
+                }
+            }
         }
     }
     if dir.exists() {

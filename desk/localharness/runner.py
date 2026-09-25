@@ -1714,6 +1714,11 @@ def main() -> None:
         passport = (args.host_version.strip()
                     or _read_passport(Path(__file__).resolve().parents[2])
                     or _read_passport(Path(args.config).resolve().parent if args.config else data_dir.parent))
+        # 25.09 (ревью V3 F4): та же среда, что при живой загрузке — дерево движка в sys.path
+        # (расширение вправе `import memory_life`), иначе совместимое расширение = отказ.
+        tree_dir = Path(__file__).resolve().parents[2] / "tree"
+        if tree_dir.is_dir():
+            sys.path.insert(0, str(tree_dir))
         # Код расширений печатает в stdout что хочет (отладочный print на импорте —
         # обычное дело); отчёт обязан остаться единственным JSON в stdout (A5 F2).
         with contextlib.redirect_stdout(sys.stderr):
@@ -1916,6 +1921,11 @@ def main() -> None:
     try:
         import llm
         log.info("мозг: %s", "готов" if llm.configured() else "НЕ настроен (нет ключа)")
+        # 25.09 (ревью V3 F8): удержания подписки живут в памяти процесса, а quota.json
+        # переживал перезапуск — шапка окна врала «исчерпана до …» до самого `until`.
+        # На старте память пуста — пусть и файл говорит то же.
+        if hasattr(llm, "_write_quota_state"):
+            llm._write_quota_state()
     except Exception:
         log.exception("мозг не опросился")
     _write_anatomy(tree, cfg)

@@ -283,6 +283,48 @@ class AgentSeams(unittest.TestCase):
         self.assertIn("decision=true", schema["description"])
 
 
+
+class HooksAreCheapAndReal(unittest.TestCase):
+    """Ревью V2 F1/F2 (25.09): живые окна — без обхода всех манифестов; будильники — из
+    существующего API задач; привязка — по id задачи, а не по str(dict)."""
+
+    def test_live_window_runs_read_only_live_manifests(self):
+        import agent
+        from core import notices as core_notices
+        kinds = {"r1": next(iter(core_notices.WINDOW_RUN_KINDS)), "r2": "chat_turn"}
+
+        class _Runs:
+            def live_run_ids(self):
+                return ["r1", "r2"]
+
+            def manifest(self, run_id):
+                return {"context": {"kind": kinds[run_id]}, "run_id": run_id}
+
+            def _manifest_listing_row(self, run_id, manifest):
+                return {"run_id": run_id, "kind": manifest["context"]["kind"]}
+
+            def list_runs(self, **kw):
+                raise AssertionError("обход всех манифестов запрещён (V2 F1)")
+
+        with mock.patch.object(agent, "_runs", return_value=_Runs()):
+            self.assertEqual(agent._live_window_run_ids(), ["r1"])
+
+    def test_pending_alarms_come_from_list_open_and_only_wakeable_kinds(self):
+        import agent
+        rows = [{"id": "a1", "kind": "wake", "status": "pending"},
+                {"id": "a2", "kind": "email", "status": "pending"},
+                {"id": "a3", "kind": "window", "status": "pending"},
+                {"id": "", "kind": "wake", "status": "pending"}]
+        with mock.patch.object(agent.tasks, "list_open", return_value=rows):
+            self.assertEqual(agent._pending_alarm_ids(), ["a1", "a3"])
+
+    def test_alarm_id_is_taken_from_the_task_dict(self):
+        import agent
+        self.assertEqual(agent._alarm_id_of({"id": "t-7", "kind": "wake"}), "t-7")
+        self.assertEqual(agent._alarm_id_of("t-8"), "t-8")
+        self.assertEqual(agent._alarm_id_of(None), "")
+
+
 if __name__ == "__main__":
     unittest.main()
 

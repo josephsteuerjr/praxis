@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import logging
 import threading
 import time
 import uuid
@@ -38,6 +39,7 @@ BASE = Path(os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent.par
 STATE_FILE = BASE / "memory" / ".state" / "notices.json"
 
 _LOCK = threading.Lock()
+log = logging.getLogger(__name__)
 
 # Крючки хозяина модуля (agent ставит их при импорте): кому адресована реплика владельца.
 # `live_window_runs()` — id живых нетерминальных прогонов видов окон; `pending_alarm_ids()`
@@ -89,21 +91,29 @@ class _locked:
     """Замок на накопитель: поток + файл (fcntl там, где он есть). Внутри — load-modify-save.
 
     Два процесса (раннер и воркер Forge) правили один файл целиком; проигравший
-    воскрешал снятые записи и терял чужие (A10 F5). Без fcntl (Windows, стенды) остаётся
-    только поток — там второго процесса и нет."""
+    воскрешал снятые записи и терял чужие (A10 F5). Linux — fcntl, Windows — msvcrt
+    (ревью V2 F7: воркер Forge есть и там); отказ замка — предупреждение, не тишина."""
 
     def __enter__(self):
         _LOCK.acquire()
         self._fh = None
-        try:
-            import fcntl
-        except ImportError:
-            return self
+        self._how = ""
         try:
             STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
             self._fh = open(STATE_FILE.with_suffix(".lock"), "a+")
-            fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
-        except OSError:
+            try:
+                import fcntl
+                fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
+                self._how = "fcntl"
+            except ImportError:
+                # 25.09 (ревью V2 F7): на Windows второй процесс ЕСТЬ — воркер Forge
+                # пишет тот же файл; замок — msvcrt, как у telegram_outbox.
+                import msvcrt
+                self._fh.seek(0)
+                msvcrt.locking(self._fh.fileno(), msvcrt.LK_LOCK, 1)
+                self._how = "msvcrt"
+        except (OSError, ImportError) as exc:
+            log.warning("уведомления: межпроцессный замок не взят (%s) — только поток", exc)
             if self._fh is not None:
                 self._fh.close()
             self._fh = None
@@ -113,8 +123,13 @@ class _locked:
         try:
             if self._fh is not None:
                 try:
-                    import fcntl
-                    fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+                    if self._how == "fcntl":
+                        import fcntl
+                        fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+                    elif self._how == "msvcrt":
+                        import msvcrt
+                        self._fh.seek(0)
+                        msvcrt.locking(self._fh.fileno(), msvcrt.LK_UNLCK, 1)
                 except Exception:
                     pass
                 self._fh.close()

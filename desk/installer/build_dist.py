@@ -170,6 +170,8 @@ TREE_EXCLUDE_NAMES = [
     "docker-compose*", "Dockerfile", "*.bak",
     "workspace_*.md", "*.pre-*", "moderation_shadow_corpus.json",
     "STATUS.md", "SYNC-HEAD.txt", "ПОРТ-СТАТУС-*.md",
+    # 25.09 (ревью V1-6): инструкция агентам с постурой сервера владельца — не продукт.
+    "AGENTS.md",
 ]
 
 # Формы секретов. Отдельным списком и с ГРОМКОЙ строкой в логе: чёрный список
@@ -601,7 +603,9 @@ def scan_for_secrets(out: Path, live: Path, scan_runtime: bool) -> int:
     targets: list[Path] = []
     # data/ здесь потому, что она обязана быть пустой: очистка корня её сносит,
     # сборка создаёт заново. Если однажды в ней что-то окажется — это увидят.
-    for rel in ("tree", "app", "licenses", "data"):
+    # 25.09 (ревью V1-8): `server/` — серверные конфиги и compose; правка «для себя» уезжала
+    # бы незамеченной.
+    for rel in ("tree", "app", "licenses", "data", "server"):
         d = out / rel
         if d.is_dir():
             targets += [p for p in d.rglob("*") if p.is_file()]
@@ -1069,6 +1073,16 @@ def core_provenance(live: Path) -> dict:
         print("  ⚠ ядро и слой не прочитались — паспорт о них промолчит")
         return {}
     core, layer = note["core"], note["layer"]
+    # 25.09 (ревью V1-5): в паспорте поставки лежали абсолютные пути машины сборки с именем
+    # пользователя (во всех выпусках 0.8.0–0.8.8). Пути — от корня репозитория.
+    repo = DESK.parent.resolve()
+    for part in (core, layer):
+        raw = str(part.get("path") or "")
+        if raw:
+            try:
+                part["path"] = Path(raw).resolve().relative_to(repo).as_posix()
+            except ValueError:
+                part["path"] = Path(raw).name
     print(f"  ядро {core['path']}: {core['files']} файлов, отпечаток {core['digest'][:12]}"
           f"{' @ ' + core['head'] if core['head'] else ''}"
           f"{' (грязное)' if core['dirty'] else ''}")
@@ -1618,8 +1632,10 @@ def main() -> None:
     # NOTICE. Дерево агента объявлено под Apache-2.0 в обоих документах, а
     # рядом с ним не было ни LICENSE, ни NOTICE.
     apache = (DESK / "installer" / "ЛИЦЕНЗИЯ.md").read_text(encoding="utf-8")
-    body = apache.split("\n---\n", 1)[1].strip() if "\n---\n" in apache else apache
-    (out / "tree" / "LICENSE").write_text(body + "\n", encoding="utf-8", newline="\n")
+    # ⚠ Здесь переменная звалась `body` и затирала происхождение тела из body_provenance —
+    # в паспорте 0.8.8 поле `body` оказалось текстом Apache (ревью V3 F2).
+    license_text = apache.split("\n---\n", 1)[1].strip() if "\n---\n" in apache else apache
+    (out / "tree" / "LICENSE").write_text(license_text + "\n", encoding="utf-8", newline="\n")
     copy_text_lf(DESK / "installer" / "NOTICE", out / "tree" / "NOTICE")
     copy_text_lf(DESK / "installer" / "NOTICE", out / "NOTICE")
     n_lic = collect_rust_licenses(out, args.allow_partial, live)

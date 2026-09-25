@@ -30,11 +30,11 @@ The check reports:
 
 | | files |
 |---|---:|
-| declared here and genuinely differing | **113** |
-| declared here and existing only in the edition | **11** |
+| declared here and genuinely differing | **119** |
+| existing only in the working copy and NOT declared (a build from the core would refuse) | **0** |
 | declared in vain (identical) | **0** |
 | declared, but the layer copy is stale | **0** |
-| differing but NOT declared | **22** — her lag, see below |
+| differing but NOT declared | **21** — her lag, see below |
 | in the core, not carried here | **73** — see below |
 
 ⚠ **What changed on 25.09 in the declaration itself.** Review A11 (25.09) showed that
@@ -61,58 +61,57 @@ build from `live/body` — the same crates, and since 25.09 with provenance
 `build_dist.py` like the relay's). The passport says `body.source = "tree/body"` and the
 commit of the shipped tree.
 
-### Declared here and genuinely differing (113)
+### Declared here and genuinely differing (119)
 
 | `.env.example` | `ARCHITECTURE.md` | `CODEMAP.md` |
-| `agent.py` | `appetite.py` | `body/Cargo.lock` |
-| `body/crates/praxis-body/Cargo.toml` | `body/crates/praxis-body/src/artifact.rs` | `body/crates/praxis-body/src/desktop.rs` |
-| `body/crates/praxis-body/src/dpi.rs` | `body/crates/praxis-body/src/element.rs` | `body/crates/praxis-body/src/identity.rs` |
-| `body/crates/praxis-body/src/main.rs` | `body/crates/praxis-body/src/process.rs` | `body/crates/praxis-body/src/uia.rs` |
-| `body/crates/praxis-bridge/Cargo.toml` | `body/crates/praxis-bridge/src/main.rs` | `body_client.py` |
-| `bootguard.py` | `brain.py` | `canary.py` |
-| `forge.py` | `forge_intelligence.py` | `forge_process.py` |
-| `formation.py` | `frame_layout.py` | `frame_shadow.py` |
-| `frame_stats.py` | `frame_trace.py` | `group_context.py` |
-| `llm.py` | `memory_life.py` | `moderation_shadow.py` |
+| `_standenv.py` | `agent.py` | `appetite.py` |
+| `body/Cargo.lock` | `body/crates/praxis-body/Cargo.toml` | `body/crates/praxis-body/src/artifact.rs` |
+| `body/crates/praxis-body/src/desktop.rs` | `body/crates/praxis-body/src/dpi.rs` | `body/crates/praxis-body/src/element.rs` |
+| `body/crates/praxis-body/src/identity.rs` | `body/crates/praxis-body/src/main.rs` | `body/crates/praxis-body/src/process.rs` |
+| `body/crates/praxis-body/src/uia.rs` | `body/crates/praxis-bridge/Cargo.toml` | `body/crates/praxis-bridge/src/main.rs` |
+| `body_client.py` | `bootguard.py` | `brain.py` |
+| `canary.py` | `compact_places.py` | `forge.py` |
+| `forge_intelligence.py` | `forge_process.py` | `formation.py` |
+| `frame_layout.py` | `frame_shadow.py` | `frame_stats.py` |
+| `frame_trace.py` | `group_context.py` | `llm.py` |
+| `memory_fts.py` | `memory_life.py` | `moderation_shadow.py` |
 | `mtproto_runner.py` | `panel.py` | `perception.py` |
 | `rooms.py` | `run_manager.py` | `runs_prune.py` |
 | `selfdev.py` | `selfgit.py` | `sleep.py` |
 | `stewardship.py` | `telegram_contacts.py` | `telegram_outbox.py` |
-| `test_agent_resume_runtime.py` | `test_answer_from_the_source.py` | `test_authored_notes_agent.py` |
-| `test_authority_context.py` | `test_cache_prefix_stability.py` | `test_canary.py` |
-| `test_chat_follow_through.py` | `test_claim_conflicts.py` | `test_compact_self_anchor_2409.py` |
-| `test_computer_access_agent.py` | `test_coverage_vs_current.py` | `test_deep_group_context.py` |
-| `test_delivery_truth_tail.py` | `test_fast_hand.py` | `test_forge_lean.py` |
-| `test_forge_submission_truth.py` | `test_forge_wake.py` | `test_frame_trace.py` |
-| `test_gate_hermetic.py` | `test_group_wake_snapshot.py` | `test_guard_soft.py` |
-| `test_heartbeat.py` | `test_history_scan.py` | `test_index_and_person.py` |
-| `test_invariants.py` | `test_llm.py` | `test_memory_v2.py` |
-| `test_moderation_shadow.py` | `test_multimodal_regressions.py` | `test_panel.py` |
-| `test_pass11.py` | `test_pass21.py` | `test_pass23.py` |
-| `test_pass23_2.py` | `test_pass23_complete.py` | `test_pass30.py` |
-| `test_pass30_stage1.py` | `test_pass4.py` | `test_pass9.py` |
-| `test_perceive.py` | `test_reply_hand.py` | `test_role_envelope_1509.py` |
-| `test_room_authority.py` | `test_rooms_and_admission.py` | `test_run_integration.py` |
-| `test_run_label_1509.py` | `test_run_snapshot_integrity.py` | `test_say_hand.py` |
-| `test_seam_contracts.py` | `test_self_desire_integration.py` | `test_selfdev.py` |
-| `test_shell_selfdev.py` | `test_silero_tts_client.py` | `test_silero_tts_worker.py` |
-| `test_stewardship.py` | `test_tape_hands_1609.py` | `test_tools_en_1509.py` |
+| `test_addressed_by_default_1609.py` | `test_agent_resume_runtime.py` | `test_answer_from_the_source.py` |
+| `test_authored_notes_agent.py` | `test_authority_context.py` | `test_cache_prefix_stability.py` |
+| `test_canary.py` | `test_chat_follow_through.py` | `test_claim_conflicts.py` |
+| `test_compact_self_anchor_2409.py` | `test_computer_access_agent.py` | `test_coverage_vs_current.py` |
+| `test_deep_group_context.py` | `test_delivery_truth_tail.py` | `test_fast_hand.py` |
+| `test_forge_lean.py` | `test_forge_submission_truth.py` | `test_forge_wake.py` |
+| `test_frame_trace.py` | `test_gate_hermetic.py` | `test_group_wake_snapshot.py` |
+| `test_guard_soft.py` | `test_heartbeat.py` | `test_history_scan.py` |
+| `test_index_and_person.py` | `test_invariants.py` | `test_llm.py` |
+| `test_memory_v2.py` | `test_moderation_shadow.py` | `test_multimodal_regressions.py` |
+| `test_panel.py` | `test_pass11.py` | `test_pass21.py` |
+| `test_pass23.py` | `test_pass23_2.py` | `test_pass23_complete.py` |
+| `test_pass30.py` | `test_pass30_stage1.py` | `test_pass4.py` |
+| `test_pass9.py` | `test_perceive.py` | `test_reply_hand.py` |
+| `test_role_envelope_1509.py` | `test_room_authority.py` | `test_rooms_and_admission.py` |
+| `test_run_integration.py` | `test_run_label_1509.py` | `test_run_snapshot_integrity.py` |
+| `test_runner_resolve.py` | `test_say_hand.py` | `test_seam_contracts.py` |
+| `test_self_desire_integration.py` | `test_selfdev.py` | `test_shell_selfdev.py` |
+| `test_silero_tts_client.py` | `test_silero_tts_worker.py` | `test_stewardship.py` |
+| `test_tape_hands_1609.py` | `test_tier_fold_overlap_2109.py` | `test_tools_en_1509.py` |
 | `test_truncation_owner.py` | `test_truth_agent.py` | `test_truth_runner.py` |
 | `test_turns.py` | `test_webtool.py` | `test_window_loop.py` |
 | `tool_text_en.py` | `turns.py` | `unanswered.py` |
 | `webtool.py` | `work_loop.py` |  |
 
-### Existing only here (11)
+### Existing only here (0)
 
-| `test_body_result_truth_2409.py` | `test_computer_advice_2509.py` | `test_dupfix_2509.py` |
-| `test_gender_free_texts_2509.py` | `test_her_compacts_2509.py` | `test_outbox_state_cache_2509.py` |
-| `test_pointer_en_1809.py` | `test_relay_terminal_2509.py` | `test_runs_retention_1709.py` |
-| `test_tape_chars_1709.py` | `test_tier_overlap_2509.py` |  |
+
 
 `sitecustomize.py` is imported by the engine explicitly; the rest are the edition's own
 test modules (they do not ship in the distribution).
 
-### Differing and NOT declared (22) — her work the edition has not taken
+### Differing and NOT declared (21) — her work the edition has not taken
 
 Every file here is byte-identical to some commit of hers up to `b440156` (checked by blob),
 i.e. the working copy is *behind* her, not different by design: the recall index rework,
@@ -124,14 +123,13 @@ the port, so those three need a merge, not a copy). `core_src.py --check` exits 
 while this list is not empty, and `build_dist.py --from-core` refuses to assemble — on
 purpose.
 
-| `memory_fts.py` | `memory_index.py` | `people.py` |
-| `run_resume.py` | `tasks.py` | `telegram_admin.py` |
-| `test_call_trace_k1_1309.py` | `test_direct_telegram_outbox.py` | `test_dossier_contract.py` |
-| `test_layer7.py` | `test_memory_fts.py` | `test_memory_index_adversarial.py` |
-| `test_openai_cache_usage.py` | `test_pass19.py` | `test_places_adversarial.py` |
-| `test_resume_spin.py` | `test_run_manager.py` | `test_runner_reconnect.py` |
-| `test_telegram_admin.py` | `test_transport_not_memory.py` | `test_whole_documents.py` |
-| `test_work_wait_survives.py` |  |  |
+| `memory_index.py` | `people.py` | `run_resume.py` |
+| `tasks.py` | `telegram_admin.py` | `test_call_trace_k1_1309.py` |
+| `test_direct_telegram_outbox.py` | `test_dossier_contract.py` | `test_layer7.py` |
+| `test_memory_fts.py` | `test_memory_index_adversarial.py` | `test_openai_cache_usage.py` |
+| `test_pass19.py` | `test_places_adversarial.py` | `test_resume_spin.py` |
+| `test_run_manager.py` | `test_runner_reconnect.py` | `test_telegram_admin.py` |
+| `test_transport_not_memory.py` | `test_whole_documents.py` | `test_work_wait_survives.py` |
 
 ### What the edition does NOT carry (73)
 

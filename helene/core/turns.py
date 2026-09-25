@@ -749,7 +749,7 @@ def describe_room(n: int = 6, chat_id=None) -> str:
             + chr(10).join("- " + format_line(t) for t in rows))
 
 
-_SEND_MARKERS = ("send_message(", "narrate(", "send_file(", "Отправила")
+_SEND_MARKERS = ("send_message(", "narrate(", "send_file(", "Отправила", "Отправлено")
 
 
 def _no_addressee(t: dict) -> bool:

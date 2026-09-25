@@ -46,6 +46,15 @@ def main() -> int:
     ap.add_argument("--live", default="", help="дерево агента (умолчание — layout.tree())")
     args = ap.parse_args()
     src = layout.tree(args.live or None).resolve() / "body"
+    if args.check and not args.live:
+        # 25.09 (ревью V3 F10): без --live сверяем с ТЕМ деревом, из которого собрано
+        # (BODY-BUILT.json.source), а не с соседом `live` — иначе ложное «НЕ СОВПАДАЕТ».
+        try:
+            made_src = json.loads(BUILT.read_text(encoding="utf-8")).get("source")
+            if made_src and Path(made_src).is_dir():
+                src = Path(made_src).resolve()
+        except (OSError, ValueError):
+            pass
     if not (src / "Cargo.toml").is_file():
         raise SystemExit(f"нет исходника тела: {src}")
     if args.build:

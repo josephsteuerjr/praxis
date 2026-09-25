@@ -2,7 +2,7 @@
 # Hélène для macOS (Apple Silicon): установка, обновление и снятие.
 #
 #   curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh
-#   sh install.sh [--from Helene-0.8.8-macos-arm64.zip] [--relaunch]
+#   sh install.sh [--from Helene-0.9.0-macos-arm64.zip] [--relaunch]
 #   sh install.sh --uninstall [--purge]
 #
 # Что делает. Скачивает архив выпуска и его сумму в ~/Library/Caches/app.helene.install,
@@ -28,7 +28,7 @@
 # скрипт идёт у человека, чьё окружение мы не знаем.
 set -eu
 
-HELENE_TAG_DEFAULT="v0.8.8"   # вписывает сборка (build_mac.stamp_install_sh); HELENE_TAG в среде — сильнее
+HELENE_TAG_DEFAULT="v0.9.0"   # вписывает сборка (build_mac.stamp_install_sh); HELENE_TAG в среде — сильнее
 HELENE_MACOS_MIN="14"         # тоже сборка: MACOS_MIN в build_mac.py (колёса голоса собраны под macOS 14)
 REPO="josephsteuerjr/praxis"
 PRODUCT="Hélène"
@@ -376,6 +376,20 @@ installed_version() {
 update() {
     say "$PRODUCT уже стоит в $HOME_DIR ($(installed_version)) — обновляю поверх; data/ и helene.json не трогаются"
     wait_old_shell
+    # 25.09 (ревью V3 F5): репетиция расширений владельца — ДО остановки программы. Мастер
+    # повторит её сам, но его отказ пришёл бы уже к погашенной старой версии. Здесь — ранний
+    # отказ словами, программа продолжает работать; обновить без расширений: --force-extensions.
+    if [ "$FORCE_EXT" -ne 1 ] && [ -x "$STAGING/$FOLDER/runtime/bin/python3" ] \
+        && [ -f "$STAGING/$FOLDER/app/localharness/runner.py" ] && [ -d "$HOME_DIR/data/extensions" ]; then
+        mkdir -p "$CACHE"
+        if ! "$STAGING/$FOLDER/runtime/bin/python3" -X utf8 "$STAGING/$FOLDER/app/localharness/runner.py" \
+            --check-extensions --data "$HOME_DIR/data" >"$CACHE/extensions-check.json" 2>"$CACHE/extensions-check.err"; then
+            say "расширения владельца не пройдут обновление — старая версия остаётся живой."
+            say "отчёт: $CACHE/extensions-check.json (журнал репетиции: $CACHE/extensions-check.err)"
+            say "поручи агенту адаптировать их или обнови без них: sh install.sh --from \"$ZIP\" --force-extensions"
+            exit 1
+        fi
+    fi
     stop_running
     # С этой строки любой отказ возвращает прежнюю копию (см. on_exit).
     STOPPED=1

@@ -243,9 +243,9 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis") -> dict:
             log.warning("brain.switch: откат конфига не удался", exc_info=True)
         note_call(role, target_fw, model, ok=False, error=err or "ping failed")
         _journal(f"свитч {role} → {target_fw}/{model} НЕ прошёл рукопожатие ({err[:120]}) — "
-                 "вернула как было")
+                 "возвращено как было")
         return {"ok": False, "error": f"рукопожатие с {target_fw}/{model} не прошло: {err[:200]}. "
-                                      f"Вернула {cur_fw}/{cur_model} — попробую позже или другую."}
+                                      f"Возвращено {cur_fw}/{cur_model} — попробую позже или другую."}
     note_call(role, target_fw, model, ok=True)
     _journal(f"свитч мозга ({by}): {role} {cur_fw}/{cur_model} → {target_fw}/{model} — {why[:160]}")
     _spine(f"{role}: {cur_fw}/{cur_model} → {target_fw}/{model}",

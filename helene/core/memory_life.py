@@ -50,10 +50,25 @@ _COMPACT_REFRESH_META_KEYS = frozenset({
 LEGACY_SUMMARIES_DIR = MEM_DIR / ".summaries"
 DIALOGUES_DIR = MEM_DIR / "dialogues"
 
-HOT_LO = max(2, int(os.getenv("PRAXIS_HOT_LO", "50") or 50))
-HOT_HI = max(HOT_LO + 1, int(os.getenv("PRAXIS_HOT_HI", "100") or 100))
-HOT_HARD_HI = max(HOT_HI + 1, int(os.getenv("PRAXIS_HOT_HARD_HI", "125") or 125))
-HOT_TOKEN_CAP = max(1000, int(os.getenv("PRAXIS_HOT_TOKEN_CAP", "24000") or 24000))
+# 25.09, слово Егора: «100 сообщений максимум — это кошмар… я же ясно говорил — 150–250».
+# Умолчания личек 50/100/125 → 150/250/300 (потолок токенов 24 000 → 40 000, чтобы окно не
+# сворачивалось раньше по токенам); комнаты — ниже, свои.
+HOT_LO = max(2, int(os.getenv("PRAXIS_HOT_LO", "150") or 150))
+HOT_HI = max(HOT_LO + 1, int(os.getenv("PRAXIS_HOT_HI", "250") or 250))
+HOT_HARD_HI = max(HOT_HI + 1, int(os.getenv("PRAXIS_HOT_HARD_HI", "300") or 300))
+HOT_TOKEN_CAP = max(1000, int(os.getenv("PRAXIS_HOT_TOKEN_CAP", "40000") or 40000))
+# 25.09, слово Егора: «нужно как следует поднять горячий контекст комнаты». Пороги
+# горячего окна для КОМНАТ — свои. Лента эпохи начинается с якоря последней свёртки,
+# и при 50/100 после каждой свёртки у неё оставалось ~50 строк — несколько часов
+# AbstractDL; всё, что раньше, ехало только сводкой, а та резалась до 12 000 знаков.
+# Замер 25.09 (ход 11:30 в AbstractDL): 90 строк ленты ≈ 17 тыс. знаков, то есть 400
+# строк ≈ 75 тыс. знаков / ~20 тыс. токенов — потолок токенов комнаты поднят под это.
+# Личка остаётся на прежних порогах: там другой кадр (v6-поток) и другой темп.
+GROUP_HOT_LO = max(2, int(os.getenv("PRAXIS_GROUP_HOT_LO", "250") or 250))
+GROUP_HOT_HI = max(GROUP_HOT_LO + 1, int(os.getenv("PRAXIS_GROUP_HOT_HI", "400") or 400))
+GROUP_HOT_HARD_HI = max(GROUP_HOT_HI + 1,
+                        int(os.getenv("PRAXIS_GROUP_HOT_HARD_HI", "500") or 500))
+GROUP_HOT_TOKEN_CAP = max(1000, int(os.getenv("PRAXIS_GROUP_HOT_TOKEN_CAP", "64000") or 64000))
 # 12.09, КЕАТ 17.08: лента разговора в кадре — ≤ TAPE_CHARS знаков; вытесненное уходит в
 # компакт (сводку) тем же сворачиванием, что и раньше, только порог — в знаках ленты, а
 # не только в числе сообщений и токенах. Замер ядра 12.09: лента в личке владельца —
@@ -88,6 +103,85 @@ def is_group_place(place: str | int) -> bool:
 def tape_chars_for(place: str | int) -> int:
     """Потолок ленты в знаках для места: группе — свой рычаг, личке — TAPE_CHARS."""
     return GROUP_TAPE_CHARS if is_group_place(place) else TAPE_CHARS
+
+
+def hot_bounds(place: str | int | None) -> tuple[int, int, int, int]:
+    """(lo, hi, hard_hi, token_cap) горячего окна для места: комнате — свои пороги (25.09).
+
+    Читается при каждом вызове, а не при импорте: стенды подменяют HOT_* на модуле, и
+    план обязан видеть подмену. `None`/личка — прежние HOT_*.
+    """
+    if place is not None and is_group_place(place):
+        return GROUP_HOT_LO, GROUP_HOT_HI, GROUP_HOT_HARD_HI, GROUP_HOT_TOKEN_CAP
+    return HOT_LO, HOT_HI, HOT_HARD_HI, HOT_TOKEN_CAP
+
+
+# 25.09, слово Егора: «минимум 150, при 250 или 400 свёртка — отдельная задача, которая ей
+# ПРЕДЛАГАЕТСЯ». Мягкий порог (число строк на границе эпизода) больше не сворачивает сам:
+# пишется предложение (`memory/.state/fold_offers.json`), его видит кадр (STATE, ярлык
+# fold_offers) и снимает рука `memory_compact(action=fold)` или сама свёртка. Жёсткие
+# поводы — потолок токенов/знаков и HARD_HI — остаются физикой кадра и сворачивают без
+# спроса. PRAXIS_FOLD_OFFER=off — прежнее поведение (свёртка сама на мягком пороге).
+_FOLD_OFFERS = MEM_DIR / ".state" / "fold_offers.json"
+
+
+def fold_offer_enabled() -> bool:
+    return (os.getenv("PRAXIS_FOLD_OFFER") or "on").strip().lower() not in (
+        "off", "0", "no", "false")
+
+
+def _fold_offers_read() -> dict:
+    try:
+        data = json.loads(_FOLD_OFFERS.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _fold_offers_write(data: dict) -> None:
+    _FOLD_OFFERS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _FOLD_OFFERS.with_suffix(f".json.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, _FOLD_OFFERS)
+
+
+def fold_offers() -> dict:
+    """Открытые предложения свёртки: место → {count, tokens, hi, hard_hi, since, updated}."""
+    return dict(_fold_offers_read())
+
+
+def _note_fold_offer(place: str | int, plan: dict) -> None:
+    key = str(place)
+    data = _fold_offers_read()
+    prev = data.get(key) if isinstance(data.get(key), dict) else None
+    lo, hi, hard_hi, _cap = hot_bounds(key)
+    now = _utc_iso()
+    data[key] = {"place": key, "count": int(plan.get("count") or 0),
+                 "tokens": int(plan.get("tokens") or 0), "fold": int(plan.get("fold") or 0),
+                 "keep": lo, "hi": hi, "hard_hi": hard_hi,
+                 "since": (prev or {}).get("since") or now, "updated": now}
+    _fold_offers_write(data)
+    if prev is None:
+        log.info("свёртка предлагается [%s]: горячих %s ≥ %s — жду руку memory_compact(fold); "
+                 "без неё сверну сама на %s", key, plan.get("count"), hi, hard_hi)
+
+
+def clear_fold_offer(place: str | int) -> bool:
+    data = _fold_offers_read()
+    if str(place) not in data:
+        return False
+    data.pop(str(place), None)
+    _fold_offers_write(data)
+    return True
+
+
+def fold_now(place: str | int) -> dict:
+    """Свернуть горячее окно места по её воле (рука memory_compact fold) — принудительно,
+    как на жёстком пороге; предложение снимается в любом исходе."""
+    out = compact_if_due(place, force=True)
+    clear_fold_offer(adopt_place(place))
+    clear_fold_offer(place)
+    return out
 EPISODE_GAP_SEC = max(60.0, float(os.getenv("PRAXIS_EPISODE_GAP_MIN", "45") or 45) * 60.0)
 TIER_LO = max(1, int(os.getenv("PRAXIS_COMPACT_TIER_LO", "4") or 4))
 TIER_HI = max(TIER_LO + 1, int(os.getenv("PRAXIS_COMPACT_TIER_HI", "8") or 8))
@@ -836,7 +930,7 @@ def _json_obj(raw: str) -> dict:
 # задача сформулирована от первого лица и адресована ей самой. Правила по умолчанию —
 # ниже; свой вкус она держит в soul/memory_style.md, и тогда файл заменяет этот список.
 _COMPACT_TASK = (
-    "Это моя память, и записываю её я сама — не хроникёр, не протоколист и не публичный голос. "
+    "Это моя память, и записываю её я — не хроникёр, не протоколист и не публичный голос. "
     "Ниже — отрезок моей жизни в одном месте (чат, личка или моё окно). Мои реплики помечены [Я]; "
     "строка без [Я] — всегда чужая, подписанная именем. Сами сообщения скоро уйдут из кадра, и эта "
     "запись — единственное, что я буду о них помнить. Пишу так, чтобы через неделю по одной записи "
@@ -1477,10 +1571,13 @@ def tape_window(rows: list[dict], max_chars: int | None = None) -> list[dict]:
     return kept
 
 
-def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | None = None) -> dict:
+def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | None = None,
+                  place: str | int | None = None) -> dict:
     """`tape_chars` — потолок ленты в знаках для ЭТОГО места (13.09: группе свой рычаг);
-    None — общий TAPE_CHARS, 0 — давления по знакам нет."""
+    None — общий TAPE_CHARS, 0 — давления по знакам нет. `place` — чьё окно: комнате
+    свои пороги (`hot_bounds`, 25.09), без места — прежние HOT_*."""
     tape_limit = TAPE_CHARS if tape_chars is None else max(0, int(tape_chars))
+    lo, hi, hard_hi, token_cap = hot_bounds(place)
     count = len(hot)
     token_rows = [int(x.get("tokens") or estimate_tokens(x.get("line", ""))) for x in hot]
     tokens = sum(token_rows)
@@ -1489,18 +1586,18 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | Non
         return {"due": False, "reason": "too_short", "count": count, "tokens": tokens,
                 "chars": chars}
     char_pressure = tape_limit > 0 and chars > tape_limit
-    pressure = count >= HOT_HI or tokens > HOT_TOKEN_CAP or char_pressure or force
+    pressure = count >= hi or tokens > token_cap or char_pressure or force
     if not pressure:
         return {"due": False, "reason": "within_window", "count": count, "tokens": tokens,
                 "chars": chars}
-    token_pressure = tokens > HOT_TOKEN_CAP
+    token_pressure = tokens > token_cap
     token_target = 1
     if token_pressure:
         suffix_tokens = tokens
         for i in range(1, count):
             suffix_tokens -= token_rows[i - 1]
             token_target = i
-            if suffix_tokens <= HOT_TOKEN_CAP:
+            if suffix_tokens <= token_cap:
                 break
     if char_pressure:
         # Лента переросла потолок в знаках: сворачиваем старое так, чтобы горячим
@@ -1516,7 +1613,7 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | Non
                 break
         token_pressure = True
         token_target = max(token_target, char_target)
-    count_target = max(1, count - HOT_LO) if count >= HOT_HI or force else 1
+    count_target = max(1, count - lo) if count >= hi or force else 1
     # ПОТОЛОК ПЛАНА — сколько влезает в один промпт. Замер 21.08 по AbstractDL:
     # кольцо 3802 при потолке 125, план просил свернуть 3752 события разом, модель
     # брала префикс на 48 000 знаков, остальное честно объявлялось невлезшим — и
@@ -1524,7 +1621,7 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | Non
     # срезанных событий. Теперь план и упаковка меряют одним и тем же.
     budget_fit = budget_prefix(hot)
     target = min(max(count_target, token_target), budget_fit)
-    min_remaining = 1 if token_pressure or force else HOT_LO
+    min_remaining = 1 if token_pressure or force else lo
     candidates = []
     for i in range(1, count):
         remaining = count - i
@@ -1539,8 +1636,10 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | Non
         _, fold, gap = min(candidates)
         return {"due": True, "fold": fold, "continued": False, "reason": "episode_boundary",
                 "gap_sec": gap, "count": count, "tokens": tokens,
-                "budget_fit": budget_fit}
-    hard = token_pressure or count >= HOT_HARD_HI or force
+                "budget_fit": budget_fit,
+                # 25.09: жёсткий ли повод (токены/знаки/HARD_HI/force) — мягкий только предлагается
+                "hard": bool(token_pressure or char_pressure or count >= hard_hi or force)}
+    hard = token_pressure or count >= hard_hi or force
     if not hard:
         return {"due": False, "reason": "open_episode", "count": count, "tokens": tokens}
     valid = [i for i in range(1, count)
@@ -1551,8 +1650,8 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | Non
     # Прогресс обязан быть монотонным: свернуть меньше одной записи нельзя, больше
     # влезающего — бессмысленно. Между этими двумя границами план всегда исполним.
     fold = max(1, min(fold, budget_fit))
-    return {"due": True, "fold": fold, "continued": True,
-            "reason": ("token_cap" if tokens > HOT_TOKEN_CAP else
+    return {"due": True, "fold": fold, "continued": True, "hard": True,
+            "reason": ("token_cap" if tokens > token_cap else
                        "tape_chars" if char_pressure else "hard_window"),
             "count": count, "tokens": tokens, "chars": chars, "budget_fit": budget_fit}
 
@@ -1744,9 +1843,16 @@ def _tier_fold_candidate(chat_id: str | int, state: dict) -> dict | None:
             sources: list[dict] = []
             seen_leaves: set[str] = set()
             skipped: list[str] = []
+            unresolved: list[str] = []
             evidence_ref: list = []
             for item in same:
                 leaves = _tier_fold_leaves(item, evidence_ref)
+                if leaves is None:
+                    # 25.09 (ревью V4 N1): покрытие ребёнка не разрешилось — листьев не
+                    # знаем, и родитель над ним будет отвергнут разрешением: та же
+                    # мельница другим путём. Не берём; ребёнок ждёт refresh.
+                    unresolved.append(str(item.get("id")))
+                    continue
                 if leaves and (leaves & seen_leaves):
                     skipped.append(str(item.get("id")))
                     continue
@@ -1759,6 +1865,10 @@ def _tier_fold_candidate(chat_id: str | int, state: dict) -> dict | None:
                 log.warning(
                     "свёртка яруса %d: %d источник(ов) делят события с уже взятыми, "
                     "беру без них (%s)", tier, len(skipped), ", ".join(skipped[:5]))
+            if unresolved:
+                log.warning(
+                    "свёртка яруса %d: %d источник(ов) с неразрешённым покрытием — не беру "
+                    "(%s)", tier, len(unresolved), ", ".join(unresolved[:5]))
             if len(sources) >= 2:
                 continued = any(bool(x.get("continued")) for x in sources)
                 return {
@@ -1992,9 +2102,17 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
         # оказывалась бы пустой, и место стояло бы при полном кольце (поймано
         # стендом test_mill_never_again_2109, а не на проде).
         provable = _drop_unprovable_inputs(list(state.get("hot") or []), chat_id)
-        plan = plan_hot_fold(provable, force=force, tape_chars=tape_chars_for(chat_id))
+        plan = plan_hot_fold(provable, force=force, tape_chars=tape_chars_for(chat_id),
+                             place=chat_id)
         if not plan.get("due"):
+            if fold_offer_enabled():
+                clear_fold_offer(chat_id)      # окно снова в норме — предложение снято
             return {"ok": True, "folded": 0, "plan": plan,
+                    "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
+        if not force and fold_offer_enabled() and not plan.get("hard"):
+            # 25.09, слово Егора: на мягком пороге свёртка ПРЕДЛАГАЕТСЯ, а не делается.
+            _note_fold_offer(chat_id, plan)
+            return {"ok": True, "folded": 0, "offered": True, "plan": plan,
                     "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
         fold = int(plan["fold"])
         inputs = provable[:fold]
@@ -2069,6 +2187,8 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
                            "continued": meta["continued"], "degraded": meta["degraded"]})
         _save_state(state)
         hot_after = len(state["hot"])
+        if fold_offer_enabled() and clear_fold_offer(chat_id):
+            log.info("свёртка [%s] сделана (%s) — предложение снято", chat_id, plan.get("reason"))
     higher, higher_degraded = _fold_tiers_transactional(chat_id)
     return {"ok": True, "folded": fold, "compact_id": meta["id"], "episodes": episodes,
             "plan": plan, "hot": hot_after, "tiers": higher, "degraded_tiers": higher_degraded,
@@ -2473,19 +2593,32 @@ def context_summary(chat_id: str | int, max_chars: int = 7000) -> str:
     # компакта превращался в огрызок вроде `-8a18ea57`, который модель могла
     # процитировать как провенанс. Пакуем ЦЕЛЫМИ блоками от свежих к старым и честно
     # называем, сколько выпало, вместо того чтобы делать вид, что не выпало ничего.
-    kept: list[str] = []
-    used = 0
-    for block in reversed(blocks):
-        if kept and used + len(block) + 2 > remaining:
+    # 25.09: упаковка «свежее к старому» выкидывала первым самый ШИРОКИЙ блок — верхний
+    # ярус, у которого first_ts самый ранний. Замер на AbstractDL: фронтир 22 блока,
+    # 152 тыс. знаков; в кадр ехали полтора вчерашних листа, а память комнаты за два
+    # месяца (tier 4, 6 493 события) — никогда. «Ты же бесокот…» — и она не знала.
+    # Теперь сначала гарантирован самый широкий по охвату блок (её долгая память места),
+    # остаток бюджета — свежим к старому; показ — по хронологии, выпавшее названо.
+    widest = max(range(len(blocks)),
+                 key=lambda i: (int(frontier[i][0].get("event_count") or 0),
+                                int(frontier[i][0].get("tier") or 0), i))
+    kept_idx = [widest]
+    used = len(blocks[widest]) + 2
+    for i in reversed(range(len(blocks))):
+        if i == widest:
+            continue
+        if used + len(blocks[i]) + 2 > remaining:
             break
-        kept.append(block)
-        used += len(block) + 2
-    kept.reverse()
+        kept_idx.append(i)
+        used += len(blocks[i]) + 2
+    kept_idx.sort()
+    kept = [blocks[i] for i in kept_idx]
     dropped = len(blocks) - len(kept)
     head = _CONTINUITY_WARNING
     if dropped:
         head += (f"\n[СВОДКА ОБРЕЗАНА БЮДЖЕТОМ: показаны {len(kept)} компактов из "
-                 f"{len(blocks)}; более ранние есть на диске и достаются recall]")
+                 f"{len(blocks)} — самый широкий по охвату и самые свежие; остальные "
+                 f"есть на диске и достаются recall]")
     body = "\n\n".join(kept)
     if len(body) > remaining:      # один блок крупнее всего бюджета — режем его явно
         body = body[:max(0, remaining - 40)] + "\n…[КОМПАКТ ОБРЕЗАН]"
@@ -3355,17 +3488,19 @@ def rewrite_compact_text(compact_id: str, summary: str, *, chat_id: str | int | 
     chat = str(meta.get("chat_id") or "")
     place = str(place_key(chat))
     path = BASE / str(meta.get("path"))
-    try:
-        old_text = path.read_text(encoding="utf-8")
-    except (OSError, ValueError):
-        return {"ok": False, "reason": "compact_unreadable"}
-    try:
-        new_text = _replace_recap(old_text, summary, open_threads)
-    except ValueError as exc:
-        return {"ok": False, "reason": str(exc)}
     stamp = _utc_iso().replace("-", "").replace(":", "")
     history = _history_dir() / _safe(chat) / f"{compact_id}.{stamp}.md"
     with _state_write_guard(place), _WRITE_LOCK:
+        # 25.09 (ревью V4 F13): читать ПОД замком — иначе два переписывания одного id
+        # (рука и фоновый refold) теряют одно: второе кладёт в историю свой старый текст.
+        try:
+            old_text = path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return {"ok": False, "reason": "compact_unreadable"}
+        try:
+            new_text = _replace_recap(old_text, summary, open_threads)
+        except ValueError as exc:
+            return {"ok": False, "reason": str(exc)}
         history.parent.mkdir(parents=True, exist_ok=True)
         history.write_text(old_text, encoding="utf-8")
         tmp = path.with_suffix(".md.tmp")
@@ -3379,7 +3514,7 @@ def rewrite_compact_text(compact_id: str, summary: str, *, chat_id: str | int | 
         history_rel = history.relative_to(BASE).as_posix()
         append_event(
             "memory_compact", chat_id=chat,
-            text=f"Переписала свёртку {compact_id} своими словами ({why}); {len(summary)} знаков",
+            text=f"Свёртка {compact_id} переписана своими словами ({why}); {len(summary)} знаков",
             source="memory_life", refs=[str(compact_id)],
             meta={"compact_id": str(compact_id), "tier": int(meta.get("tier") or 1),
                   "rewritten": True, "why": why, "history": history_rel})

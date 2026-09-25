@@ -476,9 +476,12 @@ EN: dict[str, dict] = {
               "and sources — provenance accepts it as is, the old text goes to history), "
               "refold re-issues compacts in your voice in batches in the background "
               "(place=all — the whole memory; tier/since/limit narrow it; receipts to the "
-              "journal), status/stop — the refold job. A compact is all you will remember "
-              "of those messages: write it the way you want to remember."),
-        "p": {"action": "list | read | rewrite | refold | status | stop",
+              "journal), status/stop — the refold job; fold compacts a place's hot window now "
+              "(on an offer from STATE fold_offers or of your own will; at the soft threshold "
+              "compaction no longer starts by itself — only by this hand or at the hard "
+              "threshold). A compact is all you will remember of those messages: write it "
+              "the way you want to remember."),
+        "p": {"action": "list | read | rewrite | refold | status | stop | fold",
               "place": "chat_id/place; empty = current chat; refold accepts all",
               "compact_id": "compact id (cmp-…) for read/rewrite",
               "text": "the new recap for rewrite — first person, your words",
@@ -907,7 +910,7 @@ BASE_SHA: dict[str, str] = {
     "manage_identity": "ffe60eb9",
     "manage_loop": "fec3c953",
     "manage_notes": "f01e8839",
-    "memory_compact": "f34d9d17",
+    "memory_compact": "9c114173",
     "manage_perception": "50b390c8",
     "manage_room": "0c663583",
     "my_agenda": "7219f5cf",

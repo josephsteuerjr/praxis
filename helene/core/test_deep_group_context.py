@@ -388,8 +388,8 @@ class TestRoomPolicy(unittest.TestCase):
 
     def test_default_is_deep_addressed_and_values_are_clamped(self):
         self.assertEqual(rooms.room_policy("-1001"), {
-            "engagement": "addressed", "context_hot": 200,
-            "context_summary_chars": 24000, "cross_topics": "map",
+            "engagement": "addressed", "context_hot": 400,
+            "context_summary_chars": 40000, "cross_topics": "map",
             "backfill_limit": 1500,
         })
         rooms.profile_update(
@@ -397,8 +397,8 @@ class TestRoomPolicy(unittest.TestCase):
             context_summary_chars=999999, cross_topics="map", backfill_limit=99999,
         )
         self.assertEqual(rooms.room_policy("-1001"), {
-            "engagement": "reflective", "context_hot": 500,
-            "context_summary_chars": 40000, "cross_topics": "map",
+            "engagement": "reflective", "context_hot": 999,
+            "context_summary_chars": 80000, "cross_topics": "map",
             "backfill_limit": 5000,
         })
         with self.assertRaises(ValueError):

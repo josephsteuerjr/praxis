@@ -1634,8 +1634,10 @@ async fn relay_account() -> Result<serde_json::Value, String> {
         .map_err(|e| e.to_string())?
 }
 
-/// Отвечает ли держатель порта как реле: `GET /v1/account` даёт 200/401/403 (JSON или
-/// требование ключа). 404 и не-HTTP — чужая программа. Loopback без прокси и редиректов.
+/// Отвечает ли держатель порта как реле: `GET /health` (без ключа) отдаёт JSON реле с
+/// `"service":"relay"`. Раньше хватало 200/401/403 на `/v1/account` — и любая программа с
+/// basic auth (nginx, чужой локальный API) сходила за реле (ревью 25.09, V4 F12); теперь
+/// нужен именно его паспорт. Loopback без прокси и редиректов.
 fn port_holder_is_relay(port: u16) -> bool {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_millis(500))
@@ -1643,11 +1645,21 @@ fn port_holder_is_relay(port: u16) -> bool {
         .redirects(0)
         .try_proxy_from_env(false)
         .build();
-    match agent.get(&format!("http://127.0.0.1:{port}/v1/account")).call() {
-        Ok(_) => true,
-        Err(ureq::Error::Status(code, _)) => matches!(code, 401 | 403),
+    match agent.get(&format!("http://127.0.0.1:{port}/health")).call() {
+        Ok(resp) => resp
+            .into_string()
+            .map(|body| relay_health_marks_relay(&body))
+            .unwrap_or(false),
         Err(_) => false,
     }
+}
+
+/// Паспорт реле в ответе `/health`: поле `service` равно `relay`.
+fn relay_health_marks_relay(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("service").and_then(|s| s.as_str()).map(|s| s == "relay"))
+        .unwrap_or(false)
 }
 
 fn relay_account_blocking() -> Result<serde_json::Value, String> {

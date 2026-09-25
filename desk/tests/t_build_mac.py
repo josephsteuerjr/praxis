@@ -654,6 +654,33 @@ class Body(unittest.TestCase):
         self.assertEqual(build_mac.mirror_head(None), "")
         self.assertEqual(build_mac.mirror_head(build_mac.core_source()), build_mac.core_source()["head"])
 
+    def test_collect_body_licenses_runs_and_names_the_tree_source(self):
+        # 25.09 (ревью V3/V4 F1): сборщик падал `TypeError` (`set(crates, source=…)`), а стенд
+        # проверял только текст вызова. Теперь — вызов с подменёнными реестром и текстами.
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            src = Path(tmp) / "tree" / "body"
+            src.mkdir(parents=True)
+            (src / "Cargo.lock").write_text("[[package]]\nname = \"a\"\n", encoding="utf-8")
+            with (mock.patch.object(build_mac.bd, "_lock_crates", return_value=["a 1.0", "b 2.0"]),
+                  mock.patch.object(build_mac.bd, "_cargo_registry_src", return_value=Path(tmp)),
+                  mock.patch.object(build_mac, "license_texts",
+                                    return_value=(["- a 1.0 — MIT"], ["b 2.0"]))):
+                n = build_mac.collect_body_licenses(out, src, False, {"commit": "267eca7abc"})
+            self.assertEqual(n, 1)
+            readme = (out / "licenses" / "body" / "README.md").read_text(encoding="utf-8")
+            self.assertIn("`tree/body`", readme)
+            self.assertIn("267eca7", readme)
+            self.assertIn("2 крейтов", readme)
+            self.assertIn("b 2.0", readme)
+            with (mock.patch.object(build_mac.bd, "_lock_crates", return_value=["a 1.0"]),
+                  mock.patch.object(build_mac.bd, "_cargo_registry_src", return_value=Path(tmp)),
+                  mock.patch.object(build_mac, "license_texts", return_value=(["- a 1.0"], []))):
+                build_mac.collect_body_licenses(out, build_mac.BODY_SRC, False, None)
+            readme = (out / "licenses" / "body" / "README.md").read_text(encoding="utf-8")
+            self.assertIn("praxis/body", readme)
+
     def test_skip_body_is_a_declared_debug_flag(self):
         parser = build_mac.arg_parser()
         self.assertFalse(parser.parse_args([]).skip_body)

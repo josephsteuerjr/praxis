@@ -991,7 +991,7 @@ def _block_recent(now: datetime, titles: dict[str, str] | None = None,
     for at, peer, msg_id in picked:
         label = (titles or {}).get(peer) or peer
         stamp = at[:16].replace("T", " ")
-        lines.append(f"- {stamp} UTC · {label}: сказала"
+        lines.append(f"- {stamp} UTC · {label}: сказано"
                      + (f" (#{msg_id})" if msg_id else ""))
     if not picked:
         lines.append("- журнал доставки пуст за горизонт" if audience == "owner"

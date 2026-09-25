@@ -236,16 +236,29 @@ def _import_entry(ext_dir: Path, entry: str, *, name: str) -> Callable:
 
 # ─────────────────────────────────────────────── API расширению
 
-_SECRET_KEY = re.compile(r"key|token|secret|password|passwd|hash|phone|session|credential", re.I)
+_SECRET_KEY = re.compile(
+    r"key|token|secret|password|passwd|pass\b|pwd|hash|phone|session|credential|auth|proxy|"
+    r"url|dsn|\bpat\b|bearer|cookie", re.I)
+# userinfo в адресах: http://user:p4ss@host — пароль уезжал бы строкой под ключом `env.HTTPS_PROXY`
+_URL_USERINFO = re.compile(r"(://)([^/@\s]+)@")
 
 
 def scrub(value: Any) -> Any:
-    """Конфиг без секретов: ключи с key/token/secret/password/hash/phone/session/credential → «•••»."""
+    """Конфиг без секретов (ревью V1-7, 25.09): под совпавшим ключом маскируется ВСЁ поддерево
+    (строка, число, список, словарь), а не только строка; словарь ключей шире (pass/pwd/auth/
+    proxy/url/dsn/pat/bearer/cookie); в любой строке режется userinfo `://user:pass@`."""
     if isinstance(value, dict):
-        return {k: ("•••" if _SECRET_KEY.search(str(k)) and isinstance(v, str) and v else scrub(v))
-                for k, v in value.items()}
+        out = {}
+        for k, v in value.items():
+            if _SECRET_KEY.search(str(k)) and v not in (None, "", [], {}):
+                out[k] = "•••"
+            else:
+                out[k] = scrub(v)
+        return out
     if isinstance(value, list):
         return [scrub(v) for v in value]
+    if isinstance(value, str):
+        return _URL_USERINFO.sub(r"\1•••@", value)
     return value
 
 
@@ -306,7 +319,8 @@ class PluginAPI:
         if self._chars + size > EXTENSION_CHARS:
             raise ExtensionError(
                 f"тул {final}: расширение уже занимает {self._chars} знаков схем, с ним было бы "
-                f"{self._chars + size} при потолке {EXTENSION_CHARS} — тул не подключён")
+                f"{self._chars + size} при потолке {EXTENSION_CHARS} — расширение "
+                f"{self._ext.name} не подключено целиком (отказ откатывает все его тулы)")
         self._chars += size
         if self._agent is not None and not self._dry:
             self._agent.BASE_TOOLS.append(full)
@@ -546,9 +560,20 @@ def check(data_dir: Path, *, host_version: str = "") -> dict:
     saved, saved_hooks = list(_LOADED), dict(_HOOKS)
     _LOADED, items = [], []
     _HOOKS.clear()
+    # 25.09 (ревью V3 F4): репетиция гоняла код без `tree()` и `config()` — совместимое по
+    # документации расширение (`api.tree() / "memory"`, `api.config()["telegram"]`) получало
+    # отказ в обновлении. Папка данных известна (data_dir), конфиг лежит рядом с ней;
+    # scrub — внутри PluginAPI. Агента на репетиции по-прежнему нет.
+    data_dir = Path(data_dir)
+    cfg: dict = {}
     try:
-        for ext_dir in discover(Path(data_dir)):
-            ext = _load_one(ext_dir, agent_mod=None, tree=None, cfg={}, host_version=host_version,
+        raw = json.loads((data_dir.parent / "helene.json").read_text(encoding="utf-8"))
+        cfg = raw if isinstance(raw, dict) else {}
+    except (OSError, ValueError):
+        cfg = {}
+    try:
+        for ext_dir in discover(data_dir):
+            ext = _load_one(ext_dir, agent_mod=None, tree=data_dir, cfg=cfg, host_version=host_version,
                             dry=True)
             items.append(ext.row())
     finally:
