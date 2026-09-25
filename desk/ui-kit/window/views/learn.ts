@@ -30,6 +30,8 @@
 import { api } from "../api";
 import { esc } from "../lib";
 import { LOCAL_AGENT, S, foreignHarness, type Run, type View } from "../state";
+import { isMacPlatform } from "../../platform";
+import { copyText } from "../../dom";
 
 // ------------------------------------------------------------------ задачки
 
@@ -255,12 +257,16 @@ function stages(): Stage[] {
     {
       id: "frame",
       title: "Кадр",
-      sub: "всё, что увидит модель",
+      sub: "из чего он исходит",
+      // Ревью 26.09 (W4 S1): «Контекст» читает тень кадра (`frame_shadow`), которая в модель
+      // не уходит, снимается раз на ход и хранится для последних ходов. Обещать здесь
+      // «ровно то, что видела модель, вызов за вызовом» — неправда.
       body:
-        "Перед каждым вызовом модели агент собирает кадр — ровно то, что модель прочитает. " +
-        "K — конституция: кто он и чего не делает. E — эпоха: слепок знаний о себе. " +
-        "A — накопитель: разговор целиком. T — текущее: кто говорит и что сейчас. " +
-        "Кадр любого хода открывается целиком.",
+        "Перед каждым вызовом модели агент собирает кадр: кто он и что обещал, что помнит о людях " +
+        "и о себе, прошлое разговора и то, что происходит сейчас. «Контекст» показывает теневую " +
+        "сборку этого кадра по слоям — K: конституция, E: эпоха, слепок знаний о себе, A: свёрнутое " +
+        "прошлое и свежие реплики, T: кто говорит и что сейчас. Это прибор: сборка снимается раз " +
+        "на ход и в модель не уходит, байты самого вызова в ней не показаны.",
       go: { view: "frame", label: "Контекст" },
     },
     {
@@ -447,10 +453,19 @@ function rhythms(): Rhythm[] {
     },
     {
       title: "Сон",
-      body:
-        "Ночью агент спит: сводит прожитый день в дневник, формулирует выводы о людях и о себе, " +
-        "пересобирает карту памяти. По умолчанию с 4 до 6 утра; если в это время окно было " +
-        "закрыто, сон случится позже, когда оно снова открыто.",
+      // Ревью 26.09 (W3 S1/S2, W4 S2/S5): окно сна — по часам машины (`boot.local_tz_name`),
+      // сон ждёт тишины владельца, и пока он идёт, агент не отвечает. Закрытое окно сну не
+      // мешает — оно уходит в трей; мешает спящий или выключенный компьютер.
+      body: LOCAL_AGENT
+        ? "Раз в сутки агент спит: сводит прожитый день в дневник, формулирует выводы о людях и " +
+          "о себе, пересобирает карту памяти. Окно сна — с 4 до 6 утра по часам этого компьютера, " +
+          "и начинается сон, только когда ты минут двадцать ничего не пишешь. Пока идёт сон — " +
+          "обычно несколько минут, — агент не отвечает: сообщения ждут его конца. Если компьютер " +
+          "в это время спал или программа была выключена, сон будет в следующую ночь, а после " +
+          "двух суток без сна — в первую тихую минуту работы."
+        : "Ночью агент спит на своём сервере: сводит прожитый день в дневник, формулирует выводы " +
+          "о людях и о себе, пересобирает карту памяти. Пока идёт сон, ответ на сообщение ждёт " +
+          "его конца; открыто это окно или закрыто — сну не важно.",
       go: { view: "files", label: "Файлы" },
       icon: '<path d="M14.8 12.6A6.2 6.2 0 0 1 7.4 5.2a6.2 6.2 0 1 0 7.4 7.4Z"/>',
     },
@@ -465,12 +480,26 @@ function rhythms(): Rhythm[] {
   ];
 }
 
+/** Полоса сна — по настоящему окну и выключателю из ручек движка (ревью 26.09, W4 S2).
+ *  Окно к серверу ручек её сна не знает — полосы там нет, а не выдуманные 4–6. */
+function sleepBand(): string {
+  const sleep = S.agentState?.sleep;
+  if (!sleep || !sleep.on) return "";
+  const m = /^\s*(\d{1,2})\s*-\s*(\d{1,2})\s*$/.exec(String(sleep.window || ""));
+  if (!m) return "";
+  const from = Math.min(24, Number(m[1]));
+  const to = Math.min(24, Number(m[2]));
+  const width = Math.min((to > from ? to - from : 24 - from + to) / 24, 1 - from / 24);
+  if (!(width > 0)) return "";
+  return `<div class="lrn-day-sleep" style="left:${(from / 24) * 100}%;width:${width * 100}%"><span>сон</span></div>`;
+}
+
 /** Сутки полосой: ночное окно сна, «сейчас» и точки — настоящие ходы за сегодня. */
 function dayStrip(): string {
   const hours = [0, 3, 6, 9, 12, 15, 18, 21, 24];
   return `<div class="lrn-day" aria-describedby="lrn-day-note">
     <div class="lrn-day-track">
-      <div class="lrn-day-sleep" style="left:${(4 / 24) * 100}%;width:${(2 / 24) * 100}%"><span>сон</span></div>
+      ${sleepBand()}
       <div class="lrn-day-dots"></div>
       <div class="lrn-day-now" hidden><span>сейчас</span></div>
       <div class="lrn-day-wake" hidden></div>
@@ -529,13 +558,15 @@ async function fillDay(root: HTMLElement): Promise<void> {
   if (dots) {
     dots.innerHTML = today
       .map(({ r, at }) => {
-        const wake = r.kind === "wake";
+        // В издании ход по будильнику — обычный chat_turn: отличить его в списке нечем, и
+        // акцентная точка здесь была бы обещанием, которого окно не держит (ревью 26.09, W4 S8).
+        const wake = !LOCAL_AGENT && r.kind === "wake";
         const label = `${hhmm(at)} — ${wake ? "пробуждение" : "ход"}${r.goal_head ? ": " + r.goal_head.slice(0, 90) : ""}`;
         return `<span class="lrn-day-dot${wake ? " is-wake" : ""}" style="left:${dayFraction(at) * 100}%" title="${esc(label)}"></span>`;
       })
       .join("");
   }
-  const wakes = today.filter(({ r }) => r.kind === "wake").length;
+  const wakes = LOCAL_AGENT ? 0 : today.filter(({ r }) => r.kind === "wake").length;
   // Канал отдаёт последние 200 прогонов: если и самый старый из них сегодняшний,
   // ходов было больше, и точное число здесь было бы неправдой.
   const capped = runs.length >= RUNS_LIMIT && today.length === runs.length;
@@ -559,17 +590,19 @@ async function fillDay(root: HTMLElement): Promise<void> {
 
 // ------------------------------------------ договорённости, экономия, границы
 //
-// Слово Егора (его письмо Антону про онбординг Уробороса, 22.09): «как работает, что
+// Слово Егора об онбординге (22.09): «как работает, что
 // умеет, как правильно обращаться — и честные ограничения/возможные неудобства; контракты
 // прямо там и объяснить с их плюсами, всё в одной вкладке». ⚠ Каждая строка ниже — правда
 // об ИЗДАНИИ, сверенная с кодом и HELENE-MAP; ни одной цифры «для примера».
 
 /** Договорённость и её плюс: правило, которое агент держит, и зачем оно владельцу. */
-const CONTRACTS: Array<{ rule: string; body: string; plus: string }> = [
+// Ревью 26.09 (W4 S5): строки с `local` — правда только об издании. У Praxis на сервере
+// граница доставки — её (мимо руки текст не уходит), а настроек компьютера в окне нет.
+const CONTRACTS: Array<{ rule: string; body: string; plus: string; local?: boolean; hereBody?: string }> = [
   {
     rule: "Слова наружу — рукой reply",
-    body: "Агент говорит, вызывая руку reply; текст, написанный мимо неё, — заметка. Если модель " +
-      "всё же ответила мимо руки, окно доставит этот текст само и пометит ход.",
+    body: "Агент говорит, вызывая руку reply; текст, написанный мимо неё, — заметка.",
+    hereBody: " Если модель всё же ответила мимо руки, окно доставит этот текст само и пометит ход.",
     plus: "несколько реплик по ходу работы и точная расписка, что именно ушло",
   },
   {
@@ -590,6 +623,7 @@ const CONTRACTS: Array<{ rule: string; body: string; plus: string }> = [
     plus: "их можно открыть, прочитать и поправить; они переживают перезапуск и обновление",
   },
   {
+    local: true,
     rule: "Права на компьютер даёшь ты",
     body: "Файлы, чтение окон, программы — отдельные права; без выданного права рука отказывает " +
       "до того, как что-то тронет.",
@@ -628,7 +662,8 @@ function economy(): Array<{ title: string; body: string; go?: { view: View; labe
   {
     title: "Фон — по твоему слову",
     body: "Пробуждения по расписанию и ночной сон тоже зовут модель. Попроси агента умерить " +
-      "фоновую работу — у него для этого своя рука, и новый фон он тогда не начинает." +
+      "фоновую работу — у него для этого своя рука: пока пауза, пробуждения по расписанию " +
+      "пропускаются, а сон откладывается; разовый будильник на сегодня срабатывает." +
       (LOCAL_AGENT ? " Сон выключается совсем строкой PRAXIS_SLEEP_CYCLE=off в env файла helene.json." : ""),
     go: { view: "wakes", label: "Пробуждения" },
   },
@@ -647,6 +682,7 @@ function limits(): Array<{ what: string; todo: string }> {
       todo: "Для работы с экраном выбери зрячую модель или пусть агент читает окно текстом (read_window).",
     },
     {
+      local: true,
       what: "Бот в Telegram — не аккаунт: в группе он отвечает на обращение, истории до своего " +
         "появления не видит и сам в группы не вступает.",
       todo: "Добавь бота в группу сам и обращайся к нему по имени.",
@@ -659,8 +695,11 @@ function limits(): Array<{ what: string; todo: string }> {
     },
     {
       local: true,
-      what: "Протухший ключ модели шапка не ловит: окно скажет «на связи», а ответов не будет.",
-      todo: "Проверь ключ в настройках; признак — строки о молчании в data/runner.log.",
+      // Ревью 26.09 (W4 S11): шапка ловит ошибку ключа — но только после первого вызова.
+      what: "Протухший ключ модели виден только после первого неудачного вызова: до него шапка " +
+        "говорит «на связи».",
+      todo: "После неудачного вызова шапка скажет «Модель отвечает ошибкой» и продержит это " +
+        "15 минут; ключ меняется в настройках.",
     },
     {
       local: true,
@@ -670,20 +709,30 @@ function limits(): Array<{ what: string; todo: string }> {
     },
     {
       local: true,
-      what: "Сон и пробуждения случаются, только пока программа запущена.",
-      todo: "Пропущенный сон догонит сам — не реже раза в двое суток, пока окно открыто.",
+      what: "Сон и пробуждения случаются, только пока программа запущена (окно при этом может " +
+        "быть свёрнуто в трей).",
+      todo: "Пропущенный сон будет в следующую ночь, а после двух суток без сна — в первую тихую " +
+        "минуту работы программы.",
     },
     {
       what: "Модель может ошибиться — и в словах, и в записях о людях.",
       todo: "Записи — файлы: открой и поправь, агент прочитает исправленное.",
     },
   ];
-  rows.splice(2, 0, {
-    local: true,
-    what: "Руки компьютера работают только в твоей сессии Windows и не достают окна, " +
-      "запущенные от администратора. До входа в систему агент не работает.",
-    todo: "Нужное окно — запускать без повышения прав.",
-  });
+  // Ревью 26.09 (W4 S7): на Mac строка своя — там нет ни сессии Windows, ни повышения прав.
+  rows.splice(2, 0, isMacPlatform(S.platform)
+    ? {
+        local: true,
+        what: "Руки компьютера работают в твоей сессии macOS и только с разрешениями «Запись " +
+          "экрана» и «Универсальный доступ» для программы. До входа в систему агент не работает.",
+        todo: "Разрешения выдаются в Системных настройках → Конфиденциальность и безопасность.",
+      }
+    : {
+        local: true,
+        what: "Руки компьютера работают только в твоей сессии Windows и не достают окна, " +
+          "запущенные от администратора. До входа в систему агент не работает.",
+        todo: "Нужное окно — запускать без повышения прав.",
+      });
   return rows.filter((r) => LOCAL_AGENT || !r.local);
 }
 
@@ -771,43 +820,53 @@ function firstSteps(): string {
   const st = S.agentState;
   const telegram = LOCAL_AGENT && !!st && !st.telegram?.enabled;
   const steps = [
-    `<li class="step">
-      <span class="step-num">1</span>
-      <div class="step-body">
+    `<li class="lrn-step">
+      <span class="lrn-step-num">1</span>
+      <div class="lrn-step-body">
         <b>Представься</b>
         <p>Расскажи, кто ты и что тебе важно, — агент запомнит это о тебе.</p>
         <div class="frame-line" data-card="intro">${sentence(INTRO, "intro")}</div>
-        <button class="btn btn-primary lrn-take" type="button" data-take="intro">В поле ввода <span aria-hidden="true">→</span></button>
+        <button class="btn btn-primary lrn-take" type="button" data-take="intro">${takeLabel()} <span aria-hidden="true">→</span></button>
       </div>
     </li>`,
-    `<li class="step">
-      <span class="step-num">2</span>
-      <div class="step-body">
+    `<li class="lrn-step">
+      <span class="lrn-step-num">2</span>
+      <div class="lrn-step-body">
         <b>Поручи первое дело</b>
         <p>Выбери рамку ниже — пропуски заполняются прямо в карточке, отправляешь ты сам.</p>
         <button class="btn btn-quiet" type="button" data-jump="lrn-tasks">К рамкам задач <span aria-hidden="true">↓</span></button>
       </div>
     </li>`,
-    `<li class="step">
-      <span class="step-num">3</span>
-      <div class="step-body">
+    `<li class="lrn-step">
+      <span class="lrn-step-num">3</span>
+      <div class="lrn-step-body">
         <b>Посмотри, как он думал</b>
-        <p>После первого хода открой «Контекст»: там ровно то, что видела модель, — вызов за вызовом.</p>
+        <p>После первого хода открой «Контекст»: там по слоям видно, из чего агент собирал кадр этого хода.</p>
         <button class="btn btn-quiet" type="button" data-go="frame">Открыть «Контекст» <span aria-hidden="true">→</span></button>
       </div>
     </li>`,
   ];
   if (telegram) {
-    steps.push(`<li class="step">
-      <span class="step-num">4</span>
-      <div class="step-body">
+    steps.push(`<li class="lrn-step">
+      <span class="lrn-step-num">4</span>
+      <div class="lrn-step-body">
         <b>Позови его в Telegram</b>
         <p>Тогда говорить с агентом можно и с телефона — в личке или в группе.</p>
         <button class="btn btn-quiet" type="button" data-go="settings">В настройки <span aria-hidden="true">→</span></button>
       </div>
     </li>`);
   }
-  return `<ol class="steps">${steps.join("")}</ol>`;
+  return `<ol class="lrn-steps">${steps.join("")}</ol>`;
+}
+
+/** Читает ли агент это окно. Окно к серверу (её харнесс) записок окна не читает:
+ *  звать туда «В поле ввода» — обещать ответ, которого не будет (ревью 26.09, W4 S5). */
+function windowIsRead(): boolean {
+  return !(foreignHarness() || S.agentState?.runner?.ever === false);
+}
+
+function takeLabel(): string {
+  return windowIsRead() ? "В поле ввода" : "Скопировать рамку";
 }
 
 function taskCard(t: Task): string {
@@ -823,7 +882,7 @@ function taskCard(t: Task): string {
     <div class="frame-line">${sentence(t.template, t.id)}</div>
     <div class="task-foot">
       ${badges}
-      <button class="task-take" type="button" data-take="${t.id}">В поле ввода <span aria-hidden="true">→</span></button>
+      <button class="task-take" type="button" data-take="${t.id}">${takeLabel()} <span aria-hidden="true">→</span></button>
     </div>
   </article>`;
 }
@@ -915,10 +974,10 @@ export async function render(container: HTMLElement): Promise<void> {
       <p class="lrn-kicker">Договорённости</p>
       <h3 class="lrn-h">Правила, которые он держит, — и что они дают тебе</h3>
       <div class="lrn-contracts">
-        ${CONTRACTS.map(
+        ${CONTRACTS.filter((c) => LOCAL_AGENT || !c.local).map(
           (c) => `<article class="lrn-contract">
             <b>${esc(c.rule)}</b>
-            <p>${esc(c.body)}</p>
+            <p>${esc(c.body + (LOCAL_AGENT && c.hereBody ? c.hereBody : ""))}</p>
             <p class="lrn-plus"><span>плюс</span>${esc(c.plus)}</p>
           </article>`,
         ).join("")}
@@ -1123,7 +1182,17 @@ export async function render(container: HTMLElement): Promise<void> {
       // Раздел не пишет в поле сам: он просит каркас открыть переписку с агентом
       // ЭТОГО окна и положить туда текст. Каркас знает и про черновик, который
       // нельзя затирать, и про то, в какую комнату это класть.
-      dispatchEvent(new CustomEvent("frame-template", { detail: assemble(tpl, root, key) }));
+      const text = assemble(tpl, root, key);
+      if (!windowIsRead()) {
+        // Окно к серверу агент не читает: рамка уходит в буфер — отправить её туда, где он
+        // слышит (Telegram), а не в поле, откуда записка ляжет в дерево без читателя.
+        void copyText(text).then((ok) => {
+          take.textContent = ok ? "Скопировано — отправь агенту в Telegram"
+            : "Не скопировалось — выдели текст рамки вручную";
+        });
+        return;
+      }
+      dispatchEvent(new CustomEvent("frame-template", { detail: text }));
       return;
     }
     // Щелчок по карточке мимо полей и кнопок — к первому пустому пропуску.

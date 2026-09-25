@@ -77,8 +77,14 @@ _agent_name = "Агент"
 _tree: Path | None = None
 #: Старт процесса — её `sleep.due` не будит сон раньше десяти минут после него.
 _STARTED_AT = time.time()
-#: Как часто спрашивать её `sleep.due` (тот же рычаг и умолчание, что у её часов).
-_SLEEP_CHECK_SEC = float(os.getenv("PRAXIS_SLEEP_CHECK_SEC", "1800") or 1800)
+#: Как часто спрашивать её `sleep.due`. У неё тик — 30 минут; в издании сон ещё ждёт
+#: тишины владельца (`_SLEEP_IDLE_SEC`), и в двухчасовом окне тишину надо успеть поймать.
+_SLEEP_CHECK_SEC = float(os.getenv("PRAXIS_SLEEP_CHECK_SEC", "300") or 300)
+#: Сон начинается, только если владелец молчит столько (ревью 26.09, W3 S1): пока идёт
+#: сон, агент не отвечает — ни в окне, ни в Telegram, записки ждут его конца.
+_SLEEP_IDLE_SEC = float(os.getenv("PRAXIS_SLEEP_IDLE_MIN", "20") or 20) * 60.0
+#: Когда владелец в последний раз был рядом: начало или конец любого хода, кроме сна.
+_LAST_ACTIVITY = [time.time()]
 #: Как часто обслуживать заявки на пересборку индекса памяти (`_recall_care_forever`).
 _RECALL_CARE_SEC = float(os.getenv("PRAXIS_RECALL_CARE_SEC", "900") or 900)
 #: Слышит ли этот процесс (`voice.apply` на старте): голосовое из окна расшифровывается
@@ -1132,6 +1138,11 @@ def _recall_care_once() -> str:
         started = time.monotonic()
         built = memory_index.build()
         fts = built.get("fts") or {}
+        if built.get("fts_error"):
+            # Ревью 26.09 (W3 S10, W2 S2): сбой пересборки — не «другой сборщик».
+            log.warning("память: пересборка индекса упала (%s) — заявка сохранена, повтор "
+                        "через %d мин", built["fts_error"], int(_RECALL_CARE_SEC // 60))
+            return "failed"
         if not fts:
             log.info("память: пересборку индекса держит другой сборщик — повторю "
                      "через %d мин", int(_RECALL_CARE_SEC // 60))
@@ -1162,16 +1173,26 @@ def _sleep_due() -> None:
     компьютера не случались никогда — и нигде не было решения, что так надо.
 
     Шаг главного цикла, а не поток: сон переписывает то, из чего она думает, и обязан
-    идти между ходами — ровно как у неё под `_ONE_MIND`. Когда — решает её `sleep.due`:
-    окно PRAXIS_SLEEP_WINDOW (4–6 по её часам) и не чаще раза в ~20 ч; окно издания на
-    ночь закрывают — тогда догон через 48 ч в ближайшую проверку, но не раньше десяти
+    идти между ходами — ровно как у неё под `_ONE_MIND`. Цена та же, что у неё: пока идёт
+    сон, ответ ждёт его конца. Когда — решает её `sleep.due`: окно PRAXIS_SLEEP_WINDOW
+    (4–6 по часам машины — `boot.local_tz_name`) и не чаще раза в ~20 ч; если компьютер в
+    это время спал или программа была выключена — догон через 48 ч, но не раньше десяти
     минут после старта. Пауза фона (`appetite.background_hold`) откладывает сон её же
     правилом внутри `run_scheduled`. Выключатель — PRAXIS_SLEEP_CYCLE=off.
+
+    ⚠ Ревью 26.09 (W3 S1): сверх её правил сон издания ждёт тишины владельца
+    (`_SLEEP_IDLE_SEC`, 20 минут без ходов) — иначе догон через 48 ч приходился на
+    середину разговора, и агент немел на время сна, пока владелец за компьютером.
     """
     if _agent is None or not _brain_ready() or not _sleep_cycle_on():
         return
     import sleep as tree_sleep
     if not tree_sleep.due(None, _STARTED_AT):
+        return
+    quiet = time.time() - _LAST_ACTIVITY[0]
+    if quiet < _SLEEP_IDLE_SEC:
+        log.info("сон: пора, но владелец был рядом %d мин назад — жду %d мин тишины",
+                 int(quiet // 60), int(_SLEEP_IDLE_SEC // 60))
         return
     log.info("сон: пора — ночной цикл начинается")
     _set_busy(True, "sleep")
@@ -1182,7 +1203,32 @@ def _sleep_due() -> None:
     log.info("сон: %s", str(summary or "")[:1200])
 
 
+def _sleep_seed_once() -> None:
+    """Отсчёт сна — с первого запуска этой установки, а не «сна не было никогда».
+
+    26.09 (ревью W3 S1): до 1.0.1 сна в издании не было, `sleep.json` нет, её `last_run_ts`
+    — ноль, и у каждого обновившегося первый сон начинался через полчаса после старта —
+    днём, посреди работы. Теперь первый сон — в ближайшее окно по часам машины."""
+    if _agent is None or not _sleep_cycle_on():
+        return
+    try:
+        import sleep as tree_sleep
+        if tree_sleep.STATE_PATH.exists():
+            return
+        now = time.time()
+        tree_sleep._state_save(last_run_ts=now, seeded_at=now,
+                               seeded_by="helene: отсчёт с первого запуска")
+        log.info("сон: отсчёт начат с этого запуска — первый сон в ближайшее окно")
+    except Exception:
+        log.warning("сон: отсчёт не засеялся — первый сон решит её умолчание", exc_info=True)
+
+
 def _set_busy(on: bool, run: str = "", *, chat_id: str = "") -> None:
+    # Тишина владельца для сна: начало любого хода и конец НАСТОЯЩЕГО хода. Холостое
+    # `_set_busy(False)` (его зовёт `_resume_due` на каждом проходе) тишину не нарушает.
+    if (on and str(run or "") != "sleep") or (
+            not on and _busy["busy"] and _busy["run"] != "sleep"):
+        _LAST_ACTIVITY[0] = time.time()
     _busy["busy"], _busy["run"] = bool(on), str(run or "")
     _busy["since"] = time.time() if on else 0.0
     _busy["chat_id"] = str(chat_id) if on else ""
@@ -1235,7 +1281,12 @@ def _tail_lines(path: Path, count: int) -> list[str]:
             raw = src.read()
     except OSError:
         return []
-    return raw.decode("utf-8", "replace").splitlines()[-max(1, int(count)):]
+    # Ревью 26.09 (W3 S6): только "\n" — U+2028 в тексте реплики не рвёт запись хода, и
+    # граница хода не берётся у прошлого хода.
+    lines = [ln.rstrip("\r") for ln in raw.decode("utf-8", "replace").split("\n")]
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines[-max(1, int(count)):]
 
 
 def _turn_record(chat_id: str) -> dict:
@@ -1474,6 +1525,25 @@ def _fire_due_tasks() -> None:
         if len(_ALARM_FIRED) >= _ALARM_HOUR_CAP:
             log.warning("будильники: достигнут прежний часовой предел; намерения ждут")
             return
+        # Ревью 26.09 (W4 S3): её правило паузы фона — и здесь. «Попроси умерить фон — новый
+        # фон не начнёт» держалось только у неё на сервере (`mtproto_runner`); в издании
+        # повторяющиеся пробуждения поднимали ход модели и на паузе. Вхождение расписания
+        # гасится без хода (сдвигается на следующее); разовое — текущее дело, пауза его не
+        # держит, как и у неё.
+        if task.get("recur"):
+            try:
+                import appetite
+                hold = appetite.background_hold()
+            except Exception:
+                hold = None
+            if hold:
+                log.info("намерение #%s [расписание] пропущено: %s", task.get("id"), hold)
+                try:
+                    tasks.mark_fired(task["id"])
+                except Exception:
+                    log.exception("пропуск намерения #%s на паузе фона не записался",
+                                  task.get("id"))
+                continue
 
         def invoke(room):
             now = _now()
@@ -1795,10 +1865,15 @@ def _adopt_stale_processed(processed: Path, older_than_sec: int = 1800) -> int:
     return adopted
 
 
-#: Replay processed-записок: при старте и дальше не чаще раза в пять минут, и не больше
-#: трёх попыток на записку (см. `_replay_unclaimed_notes`).
-_REPLAY_EVERY_SEC = 300.0
+#: Replay processed-записок: проход при старте и раз в полминуты (листинг папки — дёшево),
+#: а САМИ ПОВТОРЫ записки — по нарастающей паузе `_REPLAY_BACKOFF_SEC` и не больше трёх
+#: (см. `_replay_unclaimed_notes`). Ревью 26.09 (W3 S3): при проходе раз в пять минут
+#: первый повтор упавшей записки ждал до пяти минут, а владелец не видел ни ответа, ни
+#: плашки — исключение было выше `_turn_in_window`.
+_REPLAY_EVERY_SEC = 30.0
 _REPLAY_MAX_TRIES = 3
+#: Пауза перед повтором по числу уже сделанных повторов: сразу, через минуту, через пять.
+_REPLAY_BACKOFF_SEC = (0.0, 60.0, 300.0)
 
 
 def _note_tries(processed: Path, name: str) -> int:
@@ -1808,15 +1883,42 @@ def _note_tries(processed: Path, name: str) -> int:
         return 0
 
 
-def _note_tries_bump(processed: Path, name: str, tries: int) -> None:
+def _note_last_try(processed: Path, name: str) -> float:
     try:
-        (processed / (name + ".tries")).write_text(f"{int(tries)} {time.time():.0f}\n",
+        return float((processed / (name + ".tries")).read_text(encoding="utf-8").split()[1])
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
+def _note_gave_up(path: Path, tries: int) -> None:
+    """Сдавшаяся записка — вслух, в комнату, куда её писали (ревью 26.09, W3 S3).
+
+    Прежде оставались только `.done` с «gave-up» и строка в логе: сообщение владельца
+    пропадало без единого слова. Записка для Telegram-чата пишется окну: владелец
+    оставлял её в окне и там же ждёт ответа."""
+    target = _inbox_target(path.stem)
+    room = target if transport.is_room(target) else STREAM
+    stamp = path.stem.split("__", 1)[0]
+    try:
+        _room(room).deliver(
+            f"⚠ Записка {stamp} так и не дошла до агента: {tries} попыток хода упали. "
+            f"Текст сохранён в {path}; причина — в логе движка. Напиши ещё раз, когда "
+            f"причина уйдёт.", source_id=f"note-gave-up:{path.stem}", system=True)
+    except Exception:
+        log.exception("плашка о сдавшейся записке не легла [%s]", path.name)
+
+
+def _note_tries_bump(processed: Path, name: str, tries: int, at: float | None = None) -> None:
+    try:
+        stamp = time.time() if at is None else float(at)
+        (processed / (name + ".tries")).write_text(f"{int(tries)} {stamp:.0f}\n",
                                                    encoding="utf-8")
     except OSError:
         log.debug("счёт попыток replay не записался [%s]", name, exc_info=True)
 
 
-def _replay_unclaimed_notes(processed: Path, limit: int = 5) -> list[str]:
+def _replay_unclaimed_notes(processed: Path, limit: int = 5,
+                            now: float | None = None) -> list[str]:
     """Replay processed-записок, чей ход не дошёл до модели (срез 20.09).
 
     Записка попадает в processed ДО хода; краш в окне между ними раньше означал
@@ -1844,15 +1946,21 @@ def _replay_unclaimed_notes(processed: Path, limit: int = 5) -> list[str]:
             _mark_done(processed, path.name, f"gave-up after {tries} replays")
             log.warning("replay записки %s: %d попыток упали — больше не повторяю",
                         path.name, tries)
+            _note_gave_up(path, tries)
             continue
-        _note_tries_bump(processed, path.name, tries + 1)
+        moment = time.time() if now is None else float(now)
+        pause = _REPLAY_BACKOFF_SEC[min(tries, len(_REPLAY_BACKOFF_SEC) - 1)]
+        if tries and moment - _note_last_try(processed, path.name) < pause:
+            continue
         try:
             message = _read_message(path)
         except OSError:
-            continue
+            continue          # не прочиталась (занята) — это не попытка хода
         if not message:
             _mark_done(processed, path.name, "empty")
             continue
+        # Попытка засчитывается, когда ход действительно начинается (ревью 26.09, W3 S3).
+        _note_tries_bump(processed, path.name, tries + 1, at=moment)
         target = _inbox_target(path.stem)
         message, attached = _split_attachments(message)
         log.warning("replay записки без хода: %s [%s]", path.name, target)
@@ -2147,6 +2255,7 @@ def main() -> None:
     # Рождение — после того, как всё поднято и квитанция читателя уже пишется:
     # окно видит «думает», а не мёртвый руннер, пока идёт первый ход.
     _maybe_birth(tree)
+    _sleep_seed_once()
     alarms_at = 0.0
     resume_at = 0.0
     replay_at = 0.0          # первый проход replay — на первом же тике после старта
@@ -2164,15 +2273,16 @@ def main() -> None:
         # 20.09: replay processed-записок, чей ход не дошёл до модели (краш между
         # переносом в processed и ходом). `.done` — по факту завершения handle_desk без
         # исключения; упавшая записка ждёт следующего прохода. ⚠ 1.0.1: проход — при
-        # старте и раз в пять минут, а не каждую секунду, и не больше трёх попыток на
-        # записку: ежесекундный обход processed и вечный повтор упавшей записки грели
-        # диск в простое. Порядок — по имени файла, то есть по времени записи.
+        # старте и раз в полминуты, а не каждую секунду; повторы записки — по нарастающей
+        # паузе и не больше трёх: ежесекундный обход processed и вечный повтор упавшей
+        # записки грели диск в простое. Порядок — по имени файла, то есть по времени записи.
         if time.time() - replay_at > _REPLAY_EVERY_SEC:
             replay_at = time.time()
             try:
                 _replay_unclaimed_notes(processed)
             except Exception:
-                log.exception("восстановление processed-записок не прошло (повтор через 5 мин)")
+                log.exception("восстановление processed-записок не прошло (повтор на следующем "
+                              "проходе)")
         while _bot is not None:
             chat_id = _bot.pop_pending()
             if chat_id is None:

@@ -130,6 +130,13 @@ function turnNotice(): string {
   const r = S.agentState?.runner;
   if (!r || !r.alive || !r.busy) return "";
   const since = r.since ? ` (идёт ${fmtAge(r.since)})` : "";
+  if (r.run === "sleep") {
+    // Ревью 26.09 (W3 S1): сон — не прогон, и «Остановить ход» ему нечего отменять.
+    return `<div class="notice" data-turn-stop-box>
+    <span class="dot live"></span>
+    <span>Агент спит — ночной цикл памяти${since}. Сообщения прочтёт, когда проснётся.</span>
+  </div>`;
+  }
   if (stopReceipt && Date.now() - stopReceipt.at < 120_000) {
     return `<div class="notice" data-turn-stop-box>
     <span class="dot live"></span>

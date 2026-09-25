@@ -69,6 +69,10 @@ class Knobs(unittest.TestCase):
     def test_switch_off_and_env_wins(self):
         cfg = {"telegram": {"owner_id": OWNER}, "keat": {"enabled": False}}
         self.assertEqual(boot.keat_knobs(self.tree, cfg), {})
+        # Ревью 26.09 (W3): и короткая форма, и строка — тоже «выключено».
+        for off in (False, "off", {"enabled": "false"}, {"enabled": 0}):
+            cfg = {"telegram": {"owner_id": OWNER}, "keat": off}
+            self.assertEqual(boot.keat_knobs(self.tree, cfg), {}, off)
         cfg = {"telegram": {"owner_id": OWNER}, "env": {"PRAXIS_KEAT": "off"}}
         knobs = boot.env_knobs(cfg, tree=self.tree)
         self.assertEqual(knobs["PRAXIS_KEAT"], "off")

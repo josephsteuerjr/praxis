@@ -387,6 +387,8 @@ update() {
             say "расширения владельца не пройдут обновление — старая версия остаётся живой."
             say "отчёт: $CACHE/extensions-check.json (журнал репетиции: $CACHE/extensions-check.err)"
             say "поручи агенту адаптировать их или обнови без них: sh install.sh --from \"$ZIP\" --force-extensions"
+            # Ревью 26.09 (W4): ставившему через curl файла install.sh на диске нет.
+            say "(ставил через curl: curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | sh -s -- --force-extensions)"
             exit 1
         fi
     fi

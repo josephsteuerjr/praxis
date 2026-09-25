@@ -122,22 +122,60 @@ class ReplayProcessed(unittest.TestCase):
                          "упавший replay не помечает записку — рестарт попробует снова")
 
     def test_always_failing_note_gives_up_after_max_tries(self):
-        """1.0.1: упавшая записка не переигрывается вечно (её гоняли каждую секунду)."""
+        """1.0.1: упавшая записка не переигрывается вечно (её гоняли каждую секунду).
+        26.09 (W3 S3): повторы — по нарастающей паузе, сдача — плашкой в комнату записки."""
         processed = self._processed()
         note = processed / "20260920T2109__d.md"
         note.write_text("падает всякий раз", encoding="utf-8")
+        room = mock.Mock()
+        clock = 1_800_000_000.0
         with mock.patch.object(runner, "handle_desk",
                                side_effect=RuntimeError("детерминированная ошибка")) as hd, \
-                mock.patch.object(runner.transport, "is_room", return_value=True):
-            for _ in range(runner._REPLAY_MAX_TRIES):
-                self.assertEqual(runner._replay_unclaimed_notes(processed), [])
+                mock.patch.object(runner.transport, "is_room", return_value=True), \
+                mock.patch.object(runner, "_room", return_value=room):
+            for pause in (0.0,) + tuple(runner._REPLAY_BACKOFF_SEC[1:]):
+                clock += pause + 1
+                self.assertEqual(runner._replay_unclaimed_notes(processed, now=clock), [])
                 self.assertFalse((processed / (note.name + ".done")).exists())
             self.assertEqual(hd.call_count, runner._REPLAY_MAX_TRIES)
-            self.assertEqual(runner._replay_unclaimed_notes(processed), [])
+            clock += 10_000
+            self.assertEqual(runner._replay_unclaimed_notes(processed, now=clock), [])
             self.assertEqual(hd.call_count, runner._REPLAY_MAX_TRIES, "после предела хода нет")
         done = (processed / (note.name + ".done")).read_text(encoding="utf-8")
         self.assertIn("gave-up", done)
-        self.assertEqual(runner._REPLAY_EVERY_SEC, 300.0, "проход replay — не чаще раза в пять минут")
+        room.deliver.assert_called_once()
+        self.assertIn("не дошла до агента", room.deliver.call_args.args[0])
+        self.assertTrue(room.deliver.call_args.kwargs.get("system"), "плашка — системная")
+
+    def test_retries_wait_their_pause(self):
+        """Второй повтор не раньше минуты после первого, третий — не раньше пяти."""
+        processed = self._processed()
+        note = processed / "20260920T2110__e.md"
+        note.write_text("падает", encoding="utf-8")
+        with mock.patch.object(runner, "handle_desk", side_effect=RuntimeError("x")) as hd, \
+                mock.patch.object(runner.transport, "is_room", return_value=True):
+            runner._replay_unclaimed_notes(processed, now=1000.0)
+            runner._replay_unclaimed_notes(processed, now=1030.0)
+            self.assertEqual(hd.call_count, 1, "через 30 с второго повтора нет")
+            runner._replay_unclaimed_notes(processed, now=1061.0)
+            self.assertEqual(hd.call_count, 2)
+            runner._replay_unclaimed_notes(processed, now=1200.0)
+            self.assertEqual(hd.call_count, 2, "третий ждёт пять минут")
+            runner._replay_unclaimed_notes(processed, now=1362.0)
+            self.assertEqual(hd.call_count, 3)
+        self.assertEqual(runner._REPLAY_EVERY_SEC, 30.0, "проход — раз в полминуты, не ежесекундно")
+
+    def test_unreadable_note_is_not_a_try(self):
+        processed = self._processed()
+        note = processed / "20260920T2111__f.md"
+        note.write_text("занята антивирусом", encoding="utf-8")
+        with mock.patch.object(runner, "_read_message", side_effect=OSError("sharing violation")), \
+                mock.patch.object(runner, "handle_desk") as hd:
+            for i in range(5):
+                runner._replay_unclaimed_notes(processed, now=1000.0 + i * 400)
+        hd.assert_not_called()
+        self.assertEqual(runner._note_tries(processed, note.name), 0)
+        self.assertFalse((processed / (note.name + ".done")).exists(), "не сдана — ход не начинался")
 
     def test_telegram_target_note_goes_to_owner_path(self):
         processed = self._processed()

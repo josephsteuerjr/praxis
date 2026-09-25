@@ -3080,7 +3080,7 @@ body.first-run #state {
 
 /* ---- с чего начать: первый шаг во всю ширину, остальные рядом */
 
-.steps {
+.lrn-steps {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -3089,7 +3089,10 @@ body.first-run #state {
   gap: 14px;
 }
 
-.step {
+/* Ревью 26.09 (W4 S4): классы шагов знакомства — свои. Голый `.step` на верхнем уровне
+   перекрашивал карточки шагов хода (`ev-step step` в steps.ts) по всему окну и снимал
+   акцентную границу идущего шага. */
+.lrn-step {
   display: flex;
   gap: 16px;
   padding: 20px 20px 20px 18px;
@@ -3098,45 +3101,45 @@ body.first-run #state {
   background: var(--surface);
 }
 
-.step:first-child {
+.lrn-step:first-child {
   grid-column: 1 / -1;
   background:
     linear-gradient(100deg, var(--accent-soft), transparent 45%),
     var(--surface);
 }
 
-.step-num {
+.lrn-step-num {
   flex: none;
   display: grid;
   place-items: center;
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--lrn-ink);
   color: var(--accent-ink);
   font: 600 15px/1 var(--serif);
   box-shadow: 0 0 0 6px var(--accent-soft);
 }
 
-.step-body {
+.lrn-step-body {
   min-width: 0;
   flex: 1;
 }
 
-.step-body > b {
+.lrn-step-body > b {
   display: block;
   font: 600 15.5px/1.3 var(--sans);
   color: var(--ink);
 }
 
-.step-body > p {
+.lrn-step-body > p {
   margin: 6px 0 14px;
   font-size: 13.5px;
   line-height: 1.55;
   color: var(--ink-2);
 }
 
-.step .frame-line {
+.lrn-step .frame-line {
   margin: 0 0 14px;
   font-size: 17px;
 }
@@ -3169,7 +3172,7 @@ body.first-run #state {
 }
 
 .blank::placeholder {
-  color: var(--ink-3);
+  color: var(--ink-2);
   font-style: italic;
   opacity: 1;
 }
@@ -3329,7 +3332,7 @@ body.first-run #state {
 
 .task-take:hover,
 .flow-go:hover {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
 }
 
 .task-take span,
@@ -3546,7 +3549,7 @@ body.first-run #state {
 }
 
 .flow-step.is-lit .flow-num {
-  background: var(--accent);
+  background: var(--lrn-ink);
   color: var(--accent-ink);
 }
 
@@ -3610,6 +3613,9 @@ body.first-run #state {
 .lrn-day-sleep span {
   font: 600 12px/1 var(--sans);
   color: var(--lrn-ink);
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--surface);
 }
 
 .lrn-day-dots {

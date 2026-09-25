@@ -1347,7 +1347,10 @@ async def _say(text: str, chat: str = "", attachments=None) -> dict:
         # Квитанция читателя: её раннер (кандидат desk-midturn) пишет .reader.json
         # при старте и обновляет на ходу. Свежая квитанция = канал живой,
         # сообщение уедет mid-turn.
-        reader_alive = readers.reader_status()["alive"]
+        reader = readers.reader_status()
+        reader_alive = reader["alive"]
+        # Ревью 26.09 (W3 S1): живой раннер во сне записку не читает — она ждёт его конца.
+        sleeping = bool(reader.get("busy")) and reader.get("run") == "sleep"
         # Контракт канала (её ревью 29.08): публикация ТОЛЬКО атомарной подменой.
         # Пишем во временное имя, которого glob читателя не видит, затем
         # os.replace — под финальным именем частичный файл не существует никогда,
@@ -1368,7 +1371,8 @@ async def _say(text: str, chat: str = "", attachments=None) -> dict:
             written.append("control")
         except OSError:
             log.warning("mid-turn канал недоступен", exc_info=True)
-        return {"written": written, "stamp": stamp, "midturn": reader_alive,
+        return {"written": written, "stamp": stamp, "midturn": reader_alive and not sleeping,
+                "sleeping": sleeping,
                 "chat": chat or "window", "attachments": rel_paths}
 
     result = await asyncio.to_thread(_write)

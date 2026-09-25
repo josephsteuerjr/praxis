@@ -934,14 +934,70 @@ def public_model(cfg: dict) -> dict:
     return scrub(block) if isinstance(block, dict) else {}
 
 
+def _windows_tz_name() -> str:
+    """IANA-имя пояса Windows — у системного ICU (`icu.dll`, Windows 10 1903+).
+
+    Реестр хранит имя Windows («Russia Time Zone 3»), а дерево понимает только IANA;
+    таблица соответствий у ICU уже есть — она и отвечает за часы самой системы."""
+    try:
+        import ctypes
+        icu = ctypes.WinDLL("icu.dll")
+        fn = icu.ucal_getDefaultTimeZone
+        fn.argtypes = [ctypes.c_wchar_p, ctypes.c_int32, ctypes.POINTER(ctypes.c_int)]
+        fn.restype = ctypes.c_int32
+        buf = ctypes.create_unicode_buffer(128)
+        status = ctypes.c_int(0)
+        size = fn(buf, 128, ctypes.byref(status))
+        if status.value > 0 or size <= 0:
+            return ""
+        return buf.value[:size]
+    except Exception:
+        return ""
+
+
+def _posix_tz_name() -> str:
+    """IANA-имя пояса macOS/Linux: `TZ`, иначе цель ссылки /etc/localtime."""
+    tz = str(os.environ.get("TZ") or "").lstrip(":")
+    if tz and "/" in tz and not tz.startswith("/"):
+        return tz
+    try:
+        target = os.path.realpath("/etc/localtime")
+    except OSError:
+        return ""
+    marker = "zoneinfo/"
+    at = target.find(marker)
+    return target[at + len(marker):] if at >= 0 else ""
+
+
+def local_tz_name() -> str:
+    """Пояс этой машины именем IANA ('' — не узнали, тогда решает умолчание дерева).
+
+    26.09 (ревью W3 S2, W4 S2): издание `PRAXIS_TZ` не ставило, и дерево жило по своим
+    умолчаниям: сон «с 4 до 6» и часы кадра — по Москве, календарный день — по Самаре, а
+    будильники — по системным часам. У владельца в Новосибирске сон шёл в 8–10 утра, в
+    Нью-Йорке — в 21–23, и агент в это время молчал."""
+    name = _windows_tz_name() if os.name == "nt" else _posix_tz_name()
+    if not name:
+        return ""
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(name)
+    except Exception:
+        return ""
+    return name
+
+
 def env_knobs(cfg: dict, tree: Path | None = None) -> dict[str, str]:
-    """Ручки среды: порт-дефолты, КЕАТ личного потока (если есть дерево и владелец в
-    Telegram), поверх — `env` из helene.json (его слово последнее).
+    """Ручки среды: порт-дефолты, пояс машины, КЕАТ личного потока (если есть дерево и
+    владелец в Telegram), поверх — `env` из helene.json (его слово последнее).
 
     ⚠ `"env": []` (или строка, или число) в конфиге роняло руннер AttributeError
     ещё до импорта дерева. Кривой конфиг — не повод для безымянной смерти.
     """
     knobs = dict(PORT_DEFAULTS)
+    zone = local_tz_name()
+    if zone:
+        knobs["PRAXIS_TZ"] = zone
     if tree is not None:
         try:
             knobs.update(keat_knobs(Path(tree), cfg))
@@ -1005,14 +1061,20 @@ def keat_knobs(tree: Path, cfg: dict) -> dict[str, str]:
     проекцией (`keat_candidate.render_receipt`), а раннер отдаёт проекцию только если
     захвачена ВСЯ горячая лента (`runner._dialogue`), иначе — прежний путь с историей.
 
-    Выключить: `"keat": {"enabled": false}` в helene.json или любая ручка `PRAXIS_KEAT*`
-    в блоке `env` (его слово последнее). Кадр v6 (подмена system свежим E) здесь НЕ
+    Выключить: `"keat": false` или `"keat": {"enabled": false}` в helene.json (строки
+    "false"/"off"/"0" тоже). Ручка в блоке `env` перекрывает только саму себя — например,
+    `PRAXIS_KEAT_CAPTURE=off` гасит захват (ревью 26.09: прежде здесь было написано «любая
+    ручка PRAXIS_KEAT*», а `PRAXIS_KEAT=off` захват не гасил). Кадр v6 (подмена system свежим E) здесь НЕ
     поднимается: ему нужен `PRAXIS_OWNER_ID`, который в издании меняет и другие пути
     дерева; включается осознанно ручками `PRAXIS_FRAME_V6`/`PRAXIS_FRAME_V6_STREAMS`.
     Политика пишется файлом рядом с состоянием дерева при каждом старте движка.
     """
-    block = cfg.get("keat") if isinstance(cfg.get("keat"), dict) else {}
-    if block.get("enabled") is False:
+    raw_block = cfg.get("keat")
+    if raw_block is False or str(raw_block).strip().lower() in ("false", "off", "0", "no"):
+        return {}
+    block = raw_block if isinstance(raw_block, dict) else {}
+    enabled = block.get("enabled", True)
+    if enabled is False or str(enabled).strip().lower() in ("false", "off", "0", "no"):
         return {}
     owner = keat_owner(cfg)
     if not owner:

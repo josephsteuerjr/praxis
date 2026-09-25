@@ -80,6 +80,29 @@ class TailLines(unittest.TestCase):
         self.assertLess(len(capped), 1000, "потолок max_bytes по-прежнему держит объём")
         self.assertTrue(all(r.startswith('{"i": ') for r in capped))
 
+    def test_same_n_sees_the_append(self):
+        """26.09 (W3): прежний стенд читал с n=3 и n=1 — разные ключи кэша, и мутант,
+        отдающий кэш без сверки отпечатка, проходил. Тот же n до и после дозаписи."""
+        self.assertEqual(readers.tail_lines(self.path, 1)[0].split(",")[0], '{"i": 39999')
+        with self.path.open("a", encoding="utf-8") as fh:
+            fh.write('{"i": "new"}\n')
+        self.assertEqual(readers.tail_lines(self.path, 1), ['{"i": "new"}'])
+
+    def test_unicode_line_separators_do_not_split_a_record(self):
+        """26.09 (W3 S6): U+2028/U+2029/U+0085 внутри JSON-строки — не конец строки."""
+        with self.path.open("a", encoding="utf-8") as fh:
+            fh.write('{"i": "sep", "t": "до после и\x85конец"}\n')
+        rows = readers.tail_jsonl(self.path, 1)
+        self.assertEqual(rows[-1]["t"], "до после и\x85конец")
+
+    def test_big_reads_are_not_held_by_the_cache(self):
+        """26.09 (W3 S8): карточки прогонов читают хвосты до 16 МБ — кэш их не держит."""
+        readers.tail_lines(self.path, 15000)          # ~3 МБ
+        self.assertEqual(readers._TAIL_CACHE, {}, "запись больше потолка — мимо кэша")
+        readers.tail_lines(self.path, 5)
+        held = sum(sum(len(x) for x in rows) for _s, rows in readers._TAIL_CACHE.values())
+        self.assertLessEqual(held, readers._TAIL_CACHE_CHARS)
+
     def test_nonpositive_n_is_empty(self):
         self.assertEqual(readers.tail_lines(self.path, 0), [])
         self.assertEqual(readers.tail_lines(self.path, -1), [])

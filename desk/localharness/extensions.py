@@ -567,9 +567,16 @@ def check(data_dir: Path, *, host_version: str = "") -> dict:
     data_dir = Path(data_dir)
     cfg: dict = {}
     try:
-        raw = json.loads((data_dir.parent / "helene.json").read_text(encoding="utf-8"))
+        # Ревью 26.09 (W3 S9): тем же чтением, что у движка (BOM, UTF-16), — иначе
+        # helene.json из Блокнота/PowerShell давал репетиции пустой конфиг, и мастер
+        # отказывал в обновлении расширению, которое живьём грузится.
+        try:
+            import boot as _boot           # движок: localharness на sys.path
+        except ImportError:
+            from . import boot as _boot    # стенды: пакет localharness
+        raw = json.loads(_boot.read_config_text(data_dir.parent / "helene.json"))
         cfg = raw if isinstance(raw, dict) else {}
-    except (OSError, ValueError):
+    except (OSError, ValueError, ImportError):
         cfg = {}
     try:
         for ext_dir in discover(data_dir):

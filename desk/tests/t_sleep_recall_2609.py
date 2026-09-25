@@ -62,6 +62,8 @@ class SleepDue(unittest.TestCase):
             mock.patch.object(runner, "_brain_ready", lambda: True),
             mock.patch.object(runner, "_tree", None),
             mock.patch.dict(os.environ, {"PRAXIS_SLEEP_CYCLE": "on"}),
+            # владелец давно молчит — сон не ждёт тишины (её правило — отдельный стенд)
+            mock.patch.object(runner, "_LAST_ACTIVITY", [0.0]),
         ]
         for p in patches:
             p.start()
@@ -100,6 +102,102 @@ class SleepDue(unittest.TestCase):
     def test_edition_default_is_on(self):
         import boot
         self.assertEqual(boot.PORT_DEFAULTS.get("PRAXIS_SLEEP_CYCLE"), "on")
+
+    def test_owner_nearby_postpones_sleep(self):
+        """26.09 (W3 S1): пока идёт сон, агент не отвечает — сон ждёт тишины владельца."""
+        with mock.patch.object(runner, "_LAST_ACTIVITY", [runner.time.time() - 60]):
+            runner._sleep_due()
+        self.assertEqual(self.busy_during, [], "владелец писал минуту назад — сон ждёт")
+        with mock.patch.object(runner, "_LAST_ACTIVITY",
+                               [runner.time.time() - runner._SLEEP_IDLE_SEC - 5]):
+            runner._sleep_due()
+        self.assertEqual(self.busy_during, [(True, "sleep")])
+
+
+class OwnerQuiet(unittest.TestCase):
+    """Тишина для сна: ход начался или кончился — активность; холостой `_set_busy(False)`
+    (его зовёт `_resume_due` на каждом проходе) и сам сон — нет."""
+
+    def setUp(self):
+        for p in (mock.patch.object(runner, "_tree", None),
+                  mock.patch.object(runner, "_LAST_ACTIVITY", [0.0]),
+                  mock.patch.dict(runner._busy, {"busy": False, "run": "", "since": 0.0,
+                                                 "chat_id": ""})):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_idle_resume_calls_do_not_count(self):
+        runner._set_busy(False)
+        runner._set_busy(False)
+        self.assertEqual(runner._LAST_ACTIVITY[0], 0.0)
+
+    def test_sleep_itself_does_not_count(self):
+        runner._set_busy(True, "sleep")
+        runner._set_busy(False)
+        self.assertEqual(runner._LAST_ACTIVITY[0], 0.0)
+
+    def test_a_real_turn_counts_at_start_and_end(self):
+        runner._set_busy(True, chat_id="window")
+        self.assertGreater(runner._LAST_ACTIVITY[0], 0.0)
+        runner._LAST_ACTIVITY[0] = 0.0
+        runner._set_busy(False, "run-1")
+        self.assertGreater(runner._LAST_ACTIVITY[0], 0.0)
+
+
+class SleepSeed(unittest.TestCase):
+    """26.09 (W3 S1): первый сон после обновления — в ближайшее окно, не через полчаса."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.state = Path(tmp.name) / "sleep.json"
+        self.saved: list = []
+        fake = types.ModuleType("sleep")
+        fake.STATE_PATH = self.state
+        fake._state_save = lambda **kw: self.saved.append(kw) or self.state.write_text(
+            json.dumps(kw), encoding="utf-8")
+        for p in (mock.patch.dict(sys.modules, {"sleep": fake}),
+                  mock.patch.object(runner, "_agent", object()),
+                  mock.patch.dict(os.environ, {"PRAXIS_SLEEP_CYCLE": "on"})):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_absent_state_is_seeded_with_now(self):
+        runner._sleep_seed_once()
+        self.assertEqual(len(self.saved), 1)
+        self.assertAlmostEqual(self.saved[0]["last_run_ts"], runner.time.time(), delta=5)
+
+    def test_existing_state_is_never_overwritten(self):
+        self.state.write_text('{"last_run_ts": 1}', encoding="utf-8")
+        runner._sleep_seed_once()
+        self.assertEqual(self.saved, [])
+
+
+class LocalTimeZone(unittest.TestCase):
+    """26.09 (W3 S2, W4 S2): окно сна и часы кадра — по поясу машины, не по Москве."""
+
+    def test_knobs_carry_the_machine_zone_and_env_wins(self):
+        import boot
+        with mock.patch.object(boot, "local_tz_name", return_value="America/New_York"):
+            self.assertEqual(boot.env_knobs({}).get("PRAXIS_TZ"), "America/New_York")
+            knobs = boot.env_knobs({"env": {"PRAXIS_TZ": "Asia/Tokyo"}})
+            self.assertEqual(knobs.get("PRAXIS_TZ"), "Asia/Tokyo", "слово владельца сильнее")
+        with mock.patch.object(boot, "local_tz_name", return_value=""):
+            self.assertNotIn("PRAXIS_TZ", boot.env_knobs({}), "не узнали — решает умолчание дерева")
+
+    def test_this_machine_answers_a_valid_iana_name_or_nothing(self):
+        import boot
+        from zoneinfo import ZoneInfo
+        name = boot.local_tz_name()
+        if name:
+            ZoneInfo(name)
+        if os.name == "nt" or Path("/etc/localtime").exists():
+            self.assertTrue(name, "на Windows и macOS пояс узнаётся")
+
+    def test_invalid_names_are_refused(self):
+        import boot
+        with mock.patch.object(boot, "_windows_tz_name", return_value="Etc/Unknown"),                 mock.patch.object(boot, "_posix_tz_name", return_value="Etc/Unknown"):
+            self.assertEqual(boot.local_tz_name(), "")
 
 
 class RecallCare(unittest.TestCase):
@@ -145,9 +243,16 @@ class RecallCare(unittest.TestCase):
 
     def test_other_builder_and_failure_do_not_raise(self):
         self.requested = True
-        self.build_result = {"fts": {}}
+        self.build_result = {"fts": {}, "fts_busy": True}
         self.assertEqual(runner._recall_care_once(), "busy")
         self.build_raises = True
+        self.assertEqual(runner._recall_care_once(), "failed")
+
+    def test_swallowed_rebuild_failure_is_not_called_busy(self):
+        """26.09 (W3 S10): настоящий `memory_index.build` сбой пересборки глотает и отдаёт
+        пустой fts — это «упала», а не «держит другой сборщик»."""
+        self.requested = True
+        self.build_result = {"fts": {}, "fts_error": "PermissionError: [WinError 5]"}
         self.assertEqual(runner._recall_care_once(), "failed")
 
     def test_no_agent_is_idle(self):

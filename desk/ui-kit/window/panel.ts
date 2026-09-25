@@ -86,7 +86,8 @@ function liveRunId(): string {
     return run ? run.id : "";
   }
   const r = S.agentState?.runner;
-  if (!r || !r.alive || !r.busy || !r.run) return "";
+  // Сон — не ход (ревью 26.09): у него нет прогона, и «идущего хода» он не рисует.
+  if (!r || !r.alive || !r.busy || !r.run || r.run === "sleep") return "";
   const run = S.runs.find((x) => x.id === r.run);
   if (!run) return r.run; // манифеста в списке ещё нет — покажем как есть
   let key = String(run.chat_id ?? "");

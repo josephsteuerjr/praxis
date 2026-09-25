@@ -228,6 +228,9 @@ def compare(core: Path, layer: Path, tree: Path) -> dict:
         "stale": sorted(declared - differ - only_ours),
         # Наш файл, которого в ядре нет вовсе.
         "only_ours": sorted(only_ours - declared),
+        # Объявленный файл только издания (в ядре его нет). Ревью 26.09 (W4 S9): прибор его
+        # не считал вовсе, и EDITION.md писал «только здесь — 0» при 14 таких файлах.
+        "declared_new": sorted(declared & only_ours),
         "declared_ok": sorted(declared & differ),
         # ⚠ Объявлено, расхождение есть — а В СЛОЕ ЛЕЖИТ НЕ ТО, что в дереве.
         # Прежде прибор этого не спрашивал: он проверял только ФАКТ объявления.
@@ -289,6 +292,7 @@ def _report(res: dict) -> int:
     print(f"НЕ ОБЪЯВЛЕНО, но расходится    : {len(res['undeclared'])}")
     print(f"объявлено зря (совпадает)      : {len(res['stale'])}")
     print(f"только у нас (в ядре нет)      : {len(res['only_ours'])}")
+    print(f"   объявлено, только у нас     : {len(res.get('declared_new', []))}")
     print(f"в ядре есть, у нас нет         : {len(res['not_carried'])}   "
           f"(сборка из ядра принесёт их)")
     if res["gone"]:

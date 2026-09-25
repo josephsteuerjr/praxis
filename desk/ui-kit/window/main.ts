@@ -323,7 +323,7 @@ export function start(opts: WindowOptions): void {
     { id: "talk", label: "Чат", kicker: "", key: "2" },
     { id: "plans", label: "Задачи", kicker: "Агенда, доска, субагенты", key: "3" },
     { id: "wakes", label: "Пробуждения", kicker: "Пробуждения по расписанию", key: "4" },
-    { id: "frame", label: "Контекст", kicker: "Что видит модель", key: "5" },
+    { id: "frame", label: "Контекст", kicker: "Из чего собран кадр (тень)", key: "5" },
     { id: "files", label: "Файлы", kicker: "Память агента в файлах", key: "6" },
     { id: "journal", label: "Журнал", kicker: "Ошибки и пропуски", key: "7" },
     { id: "anatomy", label: "Система", kicker: "Как это устроено", key: "8" },
@@ -1034,7 +1034,9 @@ export function start(opts: WindowOptions): void {
   let pendSeq = 0;
 
   /** Куда делась реплика владельца — словами, по настоящему состоянию агента. */
-  function sendNote(chat: string, midturn: boolean): string {
+  function sendNote(chat: string, midturn: boolean, sleeping = false): string {
+    // Ревью 26.09 (W3 S1): сон — не ход; записка ждёт его конца, а не «читается сейчас».
+    if (sleeping) return "агент спит — прочтёт, когда проснётся";
     if (chat && !isWindowRoom(chat)) return midturn ? `ушло в «${S.roomName}»` : `ждёт хода в «${S.roomName}»`;
     if (midturn) return "агент читает сейчас";
     const st = S.agentState;
@@ -1099,7 +1101,7 @@ export function start(opts: WindowOptions): void {
       const data = await post("/api/say", payload);
       if (files.length) clearFiles();
       pending.state = "queued";
-      pending.note = sendNote(chat, !!data?.midturn);
+      pending.note = sendNote(chat, !!data?.midturn, !!data?.sleeping);
       composerNote.textContent = pending.note;
       talk.paintPending();
       talk.afterSend();

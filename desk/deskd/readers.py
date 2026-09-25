@@ -395,6 +395,11 @@ def _whole(value, default: int = 0) -> int:
 #: Хвосты, прочитанные при прежнем отпечатке файла: (путь, n, потолок) -> (отпечаток, строки).
 _TAIL_CACHE: dict[tuple[str, int, int], tuple[tuple, list[str]]] = {}
 _TAIL_CACHE_MAX = 64
+#: Бюджет кэша в знаках и потолок одной записи (ревью 26.09, W3 S8): карточки прогонов
+#: читают `events.jsonl` хвостом до 16 МБ, и восемь просмотров держали в трубе ~120 МБ.
+#: Кэш нужен опросам в простое (`/api/state`, `/api/pulse`) — там хвосты маленькие.
+_TAIL_CACHE_CHARS = 8_000_000
+_TAIL_CACHE_ENTRY_CHARS = 1_000_000
 #: Первый кусок чтения с конца; дальше — вчетверо, пока не наберётся n строк.
 _TAIL_FIRST_CHUNK = 65536
 
@@ -440,7 +445,12 @@ def tail_lines(path: Path, n: int, *, max_bytes: int = 4_000_000) -> list[str]:
             while True:
                 fh.seek(size - take)
                 raw = fh.read(take)
-                lines = raw.decode("utf-8", "replace").splitlines()
+                # Ревью 26.09 (W3 S6): только "\n". `splitlines()` режет и по U+2028/U+2029/
+                # U+0085, которые json.dumps(ensure_ascii=False) оставляет в тексте реплики,
+                # — такая реплика пропадала из окна, а граница хода бралась у прошлого хода.
+                lines = [ln.rstrip("\r") for ln in raw.decode("utf-8", "replace").split("\n")]
+                if lines and lines[-1] == "":
+                    lines.pop()
                 if take < size and lines:
                     lines = lines[1:]  # первая строка среза почти наверняка рваная
                 if len(lines) >= n or take >= limit:
@@ -449,9 +459,12 @@ def tail_lines(path: Path, n: int, *, max_bytes: int = 4_000_000) -> list[str]:
     except OSError:
         return []
     out = lines[-n:]
-    if len(_TAIL_CACHE) >= _TAIL_CACHE_MAX:
-        _TAIL_CACHE.clear()
-    _TAIL_CACHE[key] = (stamp, out)
+    weight = sum(len(line) for line in out)
+    if weight <= _TAIL_CACHE_ENTRY_CHARS:
+        held = sum(sum(len(line) for line in rows) for _stamp, rows in _TAIL_CACHE.values())
+        if len(_TAIL_CACHE) >= _TAIL_CACHE_MAX or held + weight > _TAIL_CACHE_CHARS:
+            _TAIL_CACHE.clear()
+        _TAIL_CACHE[key] = (stamp, out)
     return list(out)
 
 
@@ -1754,6 +1767,17 @@ def _receipt_run(base: Path, receipt: dict, now: float) -> str:
     return found
 
 
+def _sleep_knobs(anatomy: dict) -> dict | None:
+    """Сон движка издания по ручкам из anatomy.json: {on, window, tz} или None."""
+    knobs = anatomy.get("knobs") if isinstance(anatomy, dict) else None
+    if not isinstance(knobs, dict):
+        return None
+    cycle = str(knobs.get("PRAXIS_SLEEP_CYCLE") or "on").strip().lower()
+    return {"on": cycle not in ("0", "off", "false", "no"),
+            "window": str(knobs.get("PRAXIS_SLEEP_WINDOW") or "4-6"),
+            "tz": str(knobs.get("PRAXIS_TZ") or "")}
+
+
 def reader_status(base: Path | None = None, now: float | None = None) -> dict:
     """Квитанция читателя desk_inbox: жив ли раннер и занят ли он ходом."""
     import time as _time
@@ -2069,6 +2093,10 @@ def _state_impl() -> dict:
     elif relay_used and not relay_auth:
         level, phrase = "warn", "Подписка ChatGPT не подключена"
         action = {"label": "Войти", "target": "settings"}
+    elif busy and runner.get("run") == "sleep":
+        # Ревью 26.09 (W3 S1): сон — не ход. «Думает» и «агент читает сейчас» обещали
+        # ответ, которого до конца сна не будет; записки ждут его конца.
+        level, phrase = "live", "Спит — прочтёт сообщения, когда проснётся"
     elif busy:
         level, phrase = "live", "Думает"
     elif next_wake is not None:
@@ -2102,6 +2130,9 @@ def _state_impl() -> dict:
         "mode": mode_state(),
         "next_wake": next_wake.isoformat() if next_wake else None,
         "alarms": health().get("alarms", []),
+        # Ревью 26.09 (W4 S2): полоса сна во вкладке знакомства рисуется по НАСТОЯЩИМ ручкам
+        # движка, а не жёсткими 4–6; у чужого харнесса ручек нет — и полосы нет.
+        "sleep": _sleep_knobs(anatomy),
         # Чем поднят сам канал: версия пакета desk. На сервере это
         # единственный источник версии (оболочки там нет), а выкладка по нему
         # сверяет, что канал встал именно с тем пакетом, который положен.

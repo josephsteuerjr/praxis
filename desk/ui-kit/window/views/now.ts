@@ -19,7 +19,8 @@ let focusedRun: Run | undefined;
 export function liveRun(): Run | undefined {
   if (foreignHarness()) return S.runs.find((r) => r.status === "running" && runIsRecent(r));
   const r = S.agentState?.runner;
-  if (!r || !r.alive || !r.busy || !r.run) return undefined;
+  // Сон — не ход: выдуманного «chat_turn» с id «sleep» здесь быть не должно (ревью 26.09).
+  if (!r || !r.alive || !r.busy || !r.run || r.run === "sleep") return undefined;
   return S.runs.find((x) => x.id === r.run) || { id: r.run, kind: "chat_turn", status: "running" };
 }
 

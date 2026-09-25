@@ -22,6 +22,9 @@ export interface AgentState {
   telegram: { enabled: boolean };
   next_wake: string | null;
   alarms: Array<{ kind: string; text: string }>;
+  /** Сон движка издания: включён ли и окно часов машины (ручки из anatomy.json). Нет —
+   *  у агента свой харнесс, и окно сна ему неизвестно (ревью 26.09, W4 S2). */
+  sleep?: { on: boolean; window: string; tz: string } | null;
   /** Есть ли снимок харнесса (`memory/.state/anatomy.json`). false — дерево ведёт чужой харнесс. */
   anatomy?: boolean;
   /**
@@ -188,5 +191,6 @@ export function runIsLive(status?: string, run?: Run): boolean {
   if (!r) return true; // состояния ещё нет — верим манифесту
   // Чужой харнесс: сердцебиения нет, верим манифесту, но не старше получаса.
   if (foreignHarness()) return run ? runIsRecent(run) : true;
-  return !!r.alive && !!r.busy;
+  // Сон занимает руннер, но ход не идёт — манифест «running» во сне живым не считается.
+  return !!r.alive && !!r.busy && r.run !== "sleep";
 }
