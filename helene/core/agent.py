@@ -16057,7 +16057,17 @@ def recover_durable_state() -> list[dict]:
         reports.extend(reconcile_in_doubt_from_receipts())
     except Exception:
         log.warning("фоновой разбор in_doubt упал", exc_info=True)
+    # 26.09 (профиль бута): решённые прогоны с записанным итогом пропускаются без замка —
+    # прежде этот проход брал `manifest()` под замком у всех ~8,5 тыс. терминальных прогонов
+    # на каждом старте, и «на связи» ждало его минутами (см. `settled_without_work`).
+    try:
+        live = set(_runs().live_run_ids())
+    except Exception:
+        live = None
+    settled = getattr(_runs(), "settled_without_work", None)
     for run_id in _runs().run_ids():
+        if settled is not None and settled(run_id, live=live):
+            continue
         try:
             before = _runs().manifest(run_id)
             status = str(before.get("status") or "")

@@ -2712,14 +2712,43 @@ class RunManager:
                 break
         return flips
 
+    def settled_without_work(self, run_id: str, *, live: set[str] | None) -> bool:
+        """Прогон решён и восстанавливать у него нечего — можно пропустить без замка.
+
+        26.09 (профиль бута): `recover` и пост-восстановление на КАЖДОМ старте брали замок и
+        полностью разбирали манифест каждого из ~8,5 тыс. прогонов — все терминальные; бут
+        ждал этого десяток минут. Решённость — та же, что у `live_run_ids` (терминальность
+        поглощающая, манифест покрывает весь WAL); сверх неё смотрится сырой манифест: у
+        итога не висит продвижение (running/pending) и итог записан вместе с RECAP.md.
+        Любая осечка — «не знаю», прогон идёт прежним путём под замком."""
+        if live is None or run_id in live:
+            return False
+        try:
+            run_dir = self._find(run_id)
+            raw = _read_json(run_dir / "manifest.json")
+        except Exception:
+            return False
+        if str(raw.get("status") or "") not in TERMINAL_STATUSES:
+            return False
+        recap = raw.get("recap") or {}
+        if ((recap.get("promotion") or {}).get("status")) in ("running", "pending"):
+            return False
+        return recap.get("status") == "written" and (run_dir / "RECAP.md").is_file()
+
     def recover(self) -> list[dict]:
         """Recover interrupted manifests without replaying an uncertain side effect."""
         reports: list[dict] = []
         if not self.root.exists():
             return reports
+        try:
+            live = set(self.live_run_ids())
+        except Exception:
+            live = None       # не знаю — прежний полный обход под замками
         for manifest_path in sorted(self.root.glob("*/*/manifest.json")):
             run_id = manifest_path.parent.name
             self._paths[run_id] = manifest_path.parent
+            if self.settled_without_work(run_id, live=live):
+                continue
             try:
                 run_dir = manifest_path.parent
                 with self._locked(run_dir):
