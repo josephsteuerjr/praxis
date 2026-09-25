@@ -1134,7 +1134,7 @@ def assemble_from_core(dest: Path, core: Path, layer: Path) -> int:
 BODY_BUILT = BODY_TARGET.parent / "BODY-BUILT.json"
 
 
-def body_provenance(body_exe: Path, bridge_exe: Path, allow_partial: bool) -> dict:
+def body_provenance(body_exe: Path, bridge_exe: Path, allow_partial: bool, live: Path) -> dict:
     """Из чего собраны `helene-body.exe`/`helene-bridge.exe` в этой поставке (ревью 25.09, A9 F4).
 
     Тот же класс дефекта, что у реле 09.09: бинари тела берутся ГОТОВЫМИ из `_body_target`,
@@ -1143,7 +1143,10 @@ def body_provenance(body_exe: Path, bridge_exe: Path, allow_partial: bool) -> di
     исходника (`build_mac.body_source_digest(live/body)`) и суммы exe. Здесь — сверка.
     """
     import build_mac  # noqa: PLC0415 — сосед по installer/, тот же отпечаток, что у Mac
-    src = LIVE / "body"
+    # ⚠ Здесь стояло `LIVE / "body"` — имени LIVE в модуле нет (сборка 0.8.8 упала на
+    # первом же прогоне). Исходник тела — ТО дерево, из которого собирается поставка
+    # (`--tree`), тот же корень, что и у секрет-гарда.
+    src = live / "body"
     digest, files = build_mac.body_source_digest(src) if (src / "Cargo.toml").is_file() else ("", 0)
     info: dict = {"source": "tree/body", "digest": digest or None, "files": files,
                   "exe_sha256": {"helene-body": sha256(body_exe) if body_exe.is_file() else None,
@@ -1551,7 +1554,7 @@ def main() -> None:
         if name == "helene-relay.exe":
             relay = relay_provenance(src, args.allow_partial)
         if name == "helene-body.exe":
-            body = body_provenance(src, out / "helene-bridge.exe", args.allow_partial)
+            body = body_provenance(src, out / "helene-bridge.exe", args.allow_partial, live)
         if name == "helene-relay":
             relay_linux = relay_linux_provenance(src, args.allow_partial)
     if stale:
