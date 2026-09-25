@@ -1254,7 +1254,7 @@ def desktop_element_find(*, hwnd: str | int | None = None,
     for key, value in (("automation_id", automation_id), ("role", role), ("name", name),
                        ("name_contains", name_contains), ("value_contains", value_contains)):
         if str(value or "").strip():
-            select[key] = str(value).strip()
+            select[key] = str(value)
     payload: dict[str, Any] = {"select": select, "timeout_ms": int(timeout_ms)}
     if hwnd is not None:
         payload["hwnd"] = hwnd
@@ -1281,10 +1281,13 @@ def format_element_find(result: dict) -> str:
         return f"[windows-body] desktop.element.find не ответил: {result!r}"
     if result.get("ok") is not True:
         reason = str(result.get("reason") or result.get("error") or "?")
-        if reason in ("not_found", "max_nodes", "timeout"):
+        # Read-only отказ с распиской обхода — полноценный ответ, а не общий сбой.
+        # Сохраняем различие «нет» / «не досмотрел» и подсказку тела для всех
+        # известных пределов, включая новые причины, которые могут появиться позже.
+        if any(key in result for key in ("searched_whole_window", "nodes_scanned", "hint")):
             whole = result.get("searched_whole_window")
             said = "окно дочитано" if whole else "⚠ окно ДОЧИТАНО НЕ БЫЛО"
-            return (f"не нашлось ({said}): просмотрено {result.get('nodes_scanned')} "
+            return (f"{reason} ({said}): просмотрено {result.get('nodes_scanned')} "
                     f"элементов за {result.get('waited_ms')} мс. "
                     f"{result.get('hint') or ''}").strip()
         return f"[windows-body] отказ: {reason}"

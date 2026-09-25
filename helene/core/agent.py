@@ -3672,12 +3672,11 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
                  f"а не когда, возможно, имелось в виду. Если это про другое утро — "
                  f"скажи 'tomorrow HH:MM' или явную дату, перепоставлю.")
         if t["kind"] == "message":
-            # Той же ночи вторая половина беды: goal kind=message ушёл адресатам сырым
-            # текстом задачи — с «Написать <имя> (<имя>, @<handle>…)» и «ПРИОРИТЕТ».
-            # Тело письма = текст цели, дословно; напоминание об этом — здесь, где оно
-            # ещё можно успеть прочитать.
-            note += (" И помни: текст цели ляжет в письмо как есть — держи в нём только "
-                     "само письмо, без служебных пометок.")
+            # С 12.09 (её f84965e) текст старого намерения больше не уходит человеку по
+            # тиканью часов: срок поднимает живой ход с исходным текстом и адресатом, и
+            # решение — отправить, переписать, отложить, отпустить — принимается заново.
+            note += (" Сообщение не уйдёт автоматически: к сроку я проснусь со связью, "
+                     "перепроверю актуальность и решу заново.")
     if nothing_to_wait_for:
         note += f" Ждать нечего: {nothing_to_wait_for} — созреет на ближайшем тике."
     if crowded:
@@ -12573,7 +12572,10 @@ def project_delivery_outcome(run_id: str, outcome: str, *, text: str = "",
     if not rid:
         return
     try:
-        row = turns.update_delivery(rid, outcome)
+        # Её 07a5aba: принятый текст ложится в запись хода (`out`). Без него ход, чьё слово
+        # доставила граница, читался ей самой как «текст хода пуст».
+        row = turns.update_delivery(
+            rid, outcome, out=str(text) if outcome == _DELIVERY_SPOKEN and text else None)
     except Exception:
         row = None
         log.debug("исход доставки не спроецирован в ход [%s]", rid, exc_info=True)
@@ -12606,8 +12608,7 @@ def run_delivery_text_accepted(run_id: str, *, text: str,
     """Commit the exact visible Telegram prefix before optional media uploads."""
     if not run_id:
         return
-    project_delivery_outcome(run_id, _DELIVERY_SPOKEN, text=str(text or ""))
-    return _runs().store_result(
+    receipt = _runs().store_result(
         run_id,
         json.dumps({"text": str(text or ""), "message_ids": list(message_ids or ())},
                    ensure_ascii=False, indent=2),
@@ -12615,6 +12616,12 @@ def run_delivery_text_accepted(run_id: str, *, text: str,
         media_type="application/json; charset=utf-8",
         idempotent=True,
     )
+    # Project only committed evidence (including on an idempotent retry), never
+    # the callback argument before storage succeeds. Recovery uses the same reducer.
+    evidence = _delivery_evidence(run_id)
+    project_delivery_outcome(run_id, _DELIVERY_SPOKEN,
+                             text=str(evidence.get("final_text") or ""))
+    return receipt
 
 
 def _delivery_text_plan_from_intent(run_id: str, intent: dict | None) -> dict | None:

@@ -813,8 +813,14 @@ def index_runs_enabled() -> bool:
 
 
 def iter_sources(*, base: Path, memory_dir: Path, skills_dir: Path | None = None,
-                 include_runs: bool = True) -> list[Source]:
-    """Return a stable, explicit list of canonical sources eligible for recall."""
+                 include_runs: bool | None = None) -> list[Source]:
+    """Return a stable, explicit list of canonical sources eligible for recall.
+
+    `include_runs=None` — спросить рычаг `index_runs_enabled()`; явное значение —
+    как раньше (автоматический путь передаёт False сам).
+    """
+    if include_runs is None:
+        include_runs = index_runs_enabled()
     base, memory_dir = Path(base), Path(memory_dir)
     skills_dir = Path(skills_dir) if skills_dir is not None else None
     whole = whole_docs_enabled()

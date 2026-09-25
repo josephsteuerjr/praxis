@@ -499,7 +499,8 @@ class TestTurnsCore(TurnsBase):
                     self.assertNotIn("записала себе", line)
                     self.assertEqual(row, before)
                     if tools:
-                        self.assertIn("делала: " + "; ".join(tools), line)
+                        # ИЗДАНИЕ: подпись следа рук без рода — «действия:», у неё «делала:».
+                        self.assertIn("действия: " + "; ".join(tools), line)
 
     def test_a_wake_without_text_is_not_counted_as_a_note_to_self(self):
         """Большинство таких пробуждений текста не рождает. Считать их «записала
