@@ -30,7 +30,7 @@ The check reports:
 
 | | files |
 |---|---:|
-| declared here and genuinely differing | **119** |
+| declared here and genuinely differing | **121** |
 | existing only in the working copy and NOT declared (a build from the core would refuse) | **0** |
 | declared in vain (identical) | **0** |
 | declared, but the layer copy is stale | **0** |
@@ -61,7 +61,7 @@ build from `live/body` — the same crates, and since 25.09 with provenance
 `build_dist.py` like the relay's). The passport says `body.source = "tree/body"` and the
 commit of the shipped tree.
 
-### Declared here and genuinely differing (119)
+### Declared here and genuinely differing (121)
 
 | `.env.example` | `ARCHITECTURE.md` | `CODEMAP.md` |
 | `_standenv.py` | `agent.py` | `appetite.py` |
@@ -79,30 +79,31 @@ commit of the shipped tree.
 | `rooms.py` | `run_manager.py` | `runs_prune.py` |
 | `selfdev.py` | `selfgit.py` | `sleep.py` |
 | `stewardship.py` | `telegram_contacts.py` | `telegram_outbox.py` |
-| `test_addressed_by_default_1609.py` | `test_agent_resume_runtime.py` | `test_answer_from_the_source.py` |
-| `test_authored_notes_agent.py` | `test_authority_context.py` | `test_cache_prefix_stability.py` |
-| `test_canary.py` | `test_chat_follow_through.py` | `test_claim_conflicts.py` |
-| `test_compact_self_anchor_2409.py` | `test_computer_access_agent.py` | `test_coverage_vs_current.py` |
-| `test_deep_group_context.py` | `test_delivery_truth_tail.py` | `test_fast_hand.py` |
-| `test_forge_lean.py` | `test_forge_submission_truth.py` | `test_forge_wake.py` |
-| `test_frame_trace.py` | `test_gate_hermetic.py` | `test_group_wake_snapshot.py` |
-| `test_guard_soft.py` | `test_heartbeat.py` | `test_history_scan.py` |
-| `test_index_and_person.py` | `test_invariants.py` | `test_llm.py` |
-| `test_memory_v2.py` | `test_moderation_shadow.py` | `test_multimodal_regressions.py` |
-| `test_panel.py` | `test_pass11.py` | `test_pass21.py` |
-| `test_pass23.py` | `test_pass23_2.py` | `test_pass23_complete.py` |
-| `test_pass30.py` | `test_pass30_stage1.py` | `test_pass4.py` |
-| `test_pass9.py` | `test_perceive.py` | `test_reply_hand.py` |
-| `test_role_envelope_1509.py` | `test_room_authority.py` | `test_rooms_and_admission.py` |
-| `test_run_integration.py` | `test_run_label_1509.py` | `test_run_snapshot_integrity.py` |
-| `test_runner_resolve.py` | `test_say_hand.py` | `test_seam_contracts.py` |
-| `test_self_desire_integration.py` | `test_selfdev.py` | `test_shell_selfdev.py` |
-| `test_silero_tts_client.py` | `test_silero_tts_worker.py` | `test_stewardship.py` |
-| `test_tape_hands_1609.py` | `test_tier_fold_overlap_2109.py` | `test_tools_en_1509.py` |
-| `test_truncation_owner.py` | `test_truth_agent.py` | `test_truth_runner.py` |
-| `test_turns.py` | `test_webtool.py` | `test_window_loop.py` |
-| `tool_text_en.py` | `turns.py` | `unanswered.py` |
-| `webtool.py` | `work_loop.py` |  |
+| `test_addressed_by_default_1609.py` | `test_addressed_media.py` | `test_agent_resume_runtime.py` |
+| `test_answer_from_the_source.py` | `test_authored_notes_agent.py` | `test_authority_context.py` |
+| `test_cache_prefix_stability.py` | `test_canary.py` | `test_chat_follow_through.py` |
+| `test_claim_conflicts.py` | `test_compact_self_anchor_2409.py` | `test_computer_access_agent.py` |
+| `test_coverage_vs_current.py` | `test_deep_group_context.py` | `test_delivery_truth_tail.py` |
+| `test_fast_hand.py` | `test_forge_lean.py` | `test_forge_submission_truth.py` |
+| `test_forge_wake.py` | `test_frame_shadow.py` | `test_frame_trace.py` |
+| `test_gate_hermetic.py` | `test_group_wake_snapshot.py` | `test_guard_soft.py` |
+| `test_heartbeat.py` | `test_history_scan.py` | `test_index_and_person.py` |
+| `test_invariants.py` | `test_llm.py` | `test_memory_v2.py` |
+| `test_moderation_shadow.py` | `test_multimodal_regressions.py` | `test_panel.py` |
+| `test_pass11.py` | `test_pass21.py` | `test_pass23.py` |
+| `test_pass23_2.py` | `test_pass23_complete.py` | `test_pass30.py` |
+| `test_pass30_stage1.py` | `test_pass4.py` | `test_pass9.py` |
+| `test_perceive.py` | `test_reply_hand.py` | `test_role_envelope_1509.py` |
+| `test_room_authority.py` | `test_rooms_and_admission.py` | `test_run_integration.py` |
+| `test_run_label_1509.py` | `test_run_snapshot_integrity.py` | `test_runner_resolve.py` |
+| `test_say_hand.py` | `test_seam_contracts.py` | `test_self_desire_integration.py` |
+| `test_selfdev.py` | `test_shell_selfdev.py` | `test_silero_tts_client.py` |
+| `test_silero_tts_worker.py` | `test_stewardship.py` | `test_tape_hands_1609.py` |
+| `test_tier_fold_overlap_2109.py` | `test_tools_en_1509.py` | `test_truncation_owner.py` |
+| `test_truth_agent.py` | `test_truth_runner.py` | `test_turns.py` |
+| `test_webtool.py` | `test_window_loop.py` | `tool_text_en.py` |
+| `turns.py` | `unanswered.py` | `webtool.py` |
+| `work_loop.py` |  |  |
 
 ### Existing only here (0)
 
