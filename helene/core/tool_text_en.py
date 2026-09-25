@@ -229,7 +229,7 @@ EN: dict[str, dict] = {
               "media, if they are still assembled after it, will not go out (they stay in "
               "the journal and in the turn record). Changed your mind in the same turn — "
               "cancel=true lifts the decision and the turn goes out as usual. In a "
-              "background window there is nothing to hold: there you send by tool. If you "
+              "background window there is nothing to hold: there you send explicitly. If you "
               "decided not to answer, that is fine; silence costs nothing."),
         "p": {"reason": "why you are staying silent, for yourself",
               "cancel": "true lifts a silence decision taken earlier in this turn"},
@@ -305,7 +305,7 @@ EN: dict[str, dict] = {
     "read_chat": {
         "d": ("Look at the latest messages of a neighbouring dialog by id, @username or "
               "name, ONLY by an explicit call; neighbouring dialogs are never mixed in "
-              "automatically. The result is internal: do not tool sensitive material to the "
+              "automatically. The result is internal: do not hand sensitive material to the "
               "wrong audience."),
         "p": {"chat_ref": "id, @username, or the name of a chat or person",
               "limit": "how many recent messages (default 30)"},
@@ -448,9 +448,9 @@ EN: dict[str, dict] = {
               "back to something, not a ticket and not an obligation. kind: wake (wake "
               "yourself WITH the connection: a live turn, Telegram open) | window (go into "
               "focus at the deadline; Telethon is closed for the window — you are not "
-              "interrupted, but there are no live dialogs either) | message (a DEFERRED "
-              "DELIVERY to a person in Telegram: the text you write here is what will be "
-              "sent, on time, without another turn) | note (a reminder to yourself or the "
+              "interrupted, but there are no live dialogs either) | message (on time a live "
+              "turn opens with this text and target — you send it yourself with send_message; "
+              "the text is not delivered automatically) | note (a reminder to yourself or the "
               "owner) | email. when: ISO datetime, or 'in 2h'/'in 30m'/'in 2m', "
               "'today 14:00'/'tomorrow 10:00', 'daily 02:00' (recurring), 'every 4h'. "
               "target: recipient for email/message. Choosing between wake and window is "
@@ -469,6 +469,23 @@ EN: dict[str, dict] = {
     "my_agenda": {"d": "What you have set yourself for a deadline — your intentions, not a backlog."},
     "unschedule": {"d": "Drop a scheduled intention by id.",
                    "p": {"task_id": "id of the intention to drop"}},
+    "memory_compact": {
+        "d": ("Your memory compacts are your own words, not a chronicler's. list shows a "
+              "place's compacts (tier, span, first words of the recap), read shows one in "
+              "full, rewrite replaces a compact's recap with your words in place (same id "
+              "and sources — provenance accepts it as is, the old text goes to history), "
+              "refold re-issues compacts in your voice in batches in the background "
+              "(place=all — the whole memory; tier/since/limit narrow it; receipts to the "
+              "journal), status/stop — the refold job. A compact is all you will remember "
+              "of those messages: write it the way you want to remember."),
+        "p": {"action": "list | read | rewrite | refold | status | stop",
+              "place": "chat_id/place; empty = current chat; refold accepts all",
+              "compact_id": "compact id (cmp-…) for read/rewrite",
+              "text": "the new recap for rewrite — first person, your words",
+              "tier": "compact tier: 1 over messages, higher over compacts",
+              "since": "ISO date: only compacts ending no earlier than it",
+              "limit": "how many to show (list) or re-issue (refold)"},
+    },
     "manage_loop": {
         "d": ("Your tool on voluntary marks of attention. A thread exists only because you "
               "decided to come back to something; it is not a task, not a transport retry, "
@@ -633,7 +650,7 @@ EN: dict[str, dict] = {
 
     # ────────────────────────────────────────────────────────────── файлы, код, машина
     "shell": {
-        "d": ("Your tools in your own home. A full shell in the container. Your home is "
+        "d": ("Your hands in your own home. A full shell in the container. Your home is "
               "/app: the soul in /app/soul (SOUL.md, provenance-validated self/CURRENT.md, "
               "skills/), memory in /app/memory, your code in /app/*.py, drafts in "
               "/app/workspace. cwd defaults to /app; if a temporary configured cwd "
@@ -677,7 +694,7 @@ EN: dict[str, dict] = {
                               "why": "the grounds for the change"}},
     "proposal_diff": {"p": {"id": "the open proposal id"}},
     "git": {
-        "d": ("Your git with both tools. repo=self is the tree you live in; repo=public is "
+        "d": ("Your git, fully in your hands. repo=self is the tree you live in; repo=public is "
               "the public mirror on GitHub, what people see. To look: status, log, diff, "
               "fetch. To publish: pull, add, commit, push. push starts with a fetch itself "
               "and, if the remote has moved ahead, says so in words instead of a rejected "
@@ -874,7 +891,7 @@ BASE_SHA: dict[str, str] = {
     "end_turn": "4930be44",
     "focus": "f066613b",
     "forget_connection": "d24a9af1",
-    "freeze_chat": "34742a55",
+    "freeze_chat": "7b8a8270",
     "freeze_contact": "e5146ad0",
     "fs_ls": "ae0ad3df",
     "get_id": "73a13c0e",
@@ -888,8 +905,9 @@ BASE_SHA: dict[str, str] = {
     "manage_appetite": "4a190143",
     "manage_autonomy": "5717f783",
     "manage_identity": "ffe60eb9",
-    "manage_loop": "580d749e",
+    "manage_loop": "fec3c953",
     "manage_notes": "f01e8839",
+    "memory_compact": "f34d9d17",
     "manage_perception": "50b390c8",
     "manage_room": "0c663583",
     "my_agenda": "7219f5cf",
@@ -899,10 +917,10 @@ BASE_SHA: dict[str, str] = {
     "read_chat": "0e14893c",
     "read_context": "3ebb0cb7",
     "recall": "3f199912",
-    "recent_turns": "66393d7b",
+    "recent_turns": "463adfbb",
     "reconcile_run": "2a6cd73b",
     "remember": "bfb9cc24",
-    "remind_self": "e2e8eadf",
+    "remind_self": "3a84f1ad",
     "reply": "02b838af",
     "rest": "2b172bf9",
     "restart_mailbot": "30bf28a6",
@@ -1065,6 +1083,7 @@ POINTER_PURPOSE: dict[str, str] = {
     "manage_identity": "soul layers and versions: status / revise SOUL, VOICE, CURRENT",
     "manage_loop": "my threads of attention: close / park / reopen / list",
     "manage_notes": "my notebook: write / list / read notes and questions",
+    "memory_compact": "my memory compacts: list / read / rewrite / refold — my own word about what was lived",
     "manage_perception": "perception levers: debounce, cooldowns, noise threshold",
     "manage_room": "group admission policy: join / leave / room modes",
     "manage_service": "restart my services",
@@ -1205,6 +1224,7 @@ POINTER_SHA: dict[str, str] = {
     "manage_identity": "bd860527",
     "manage_loop": "d4d2a504",
     "manage_notes": "3f579f42",
+    "memory_compact": "316724d6",
     "manage_perception": "5acc8715",
     "manage_room": "a5445ba6",
     "manage_service": "d0c807ab",

@@ -960,7 +960,7 @@ def pulse(n: int = 300) -> dict:
         agg["in"] += _whole(row.get("in"))
         agg["cached"] += _whole(row.get("cached"))
         agg["out"] += _whole(row.get("out"))
-        agg["err"] += 1 if row.get("err") else 0
+        agg["err"] += 1 if (row.get("err") and row.get("ok") is not True) else 0
         agg["last_ts"] = max(agg["last_ts"], _num(row.get("ts")))
     # Кэш двумя честными числами (просьба владельца): среднесуточный — скользящие
     # сутки назад от СЕЙЧАС; текущий — последние 15 минут (или последний вызов).
@@ -983,7 +983,7 @@ def pulse(n: int = 300) -> dict:
 
 def errors(n: int = 2000) -> dict:
     llm_rows = tail_jsonl(tree() / "memory" / ".state" / "llm_calls.jsonl", n)
-    failed = [row for row in llm_rows if row.get("err")][-120:]
+    failed = [row for row in llm_rows if row.get("err") and row.get("ok") is not True][-120:]
     skips = tail_jsonl(tree() / "memory" / ".state" / "perception_skips.jsonl", 250)
     return {"llm": failed, "skips": skips}
 
@@ -1827,27 +1827,62 @@ def _mode_state_safe() -> dict:
         return mode_unknown("")
 
 
-def _quota_hold(path: Path, now: float) -> dict | None:
+def _endpoint_key(base_url: str) -> str:
+    """Тот же ключ эндпойнта, что у `llm._endpoint_key` дерева: адрес без хвостовых `/`,
+    в нижнем регистре; пустой адрес — пусто."""
+    return str(base_url or "").strip().rstrip("/").lower()
+
+
+def _quota_hold(path: Path, now: float, framework: str = "", base_url: str = "") -> dict | None:
     """Действующее удержание эндпойнта лимитом подписки из `quota.json` движка — или None.
 
     Файл пишет `llm._hold_endpoint` дерева (25.09): слова для владельца («подписка
     исчерпана до ЧЧ:ММ»), час восстановления и код реле. Истёкшее удержание читается
     как «нет»: движок снимет его сам при следующем вызове, а окно не пугает вчерашним.
+
+    `framework`/`base_url` — нога голоса сейчас: удержание ЧУЖОГО эндпойнта (запасной ноги,
+    или мозга, который владелец уже сменил) шапке не показывается (ревью 25.09, A7 F4 /
+    A1 F7). Без них — прежнее поведение: первое неистёкшее.
     """
     data = _load_json(path)
     holds = data.get("holds") if isinstance(data, dict) else None
     if not isinstance(holds, list):
         return None
+    want_fw = str(framework or "").strip()
+    want_ep = _endpoint_key(base_url)
     for hold in holds:
         if not isinstance(hold, dict):
             continue
         until = _num(hold.get("until"))
         if until and until <= now:
             continue
+        if want_fw and str(hold.get("framework") or "") != want_fw:
+            continue
+        if want_ep and _endpoint_key(str(hold.get("endpoint") or "")) not in ("", want_ep):
+            continue
         return {"words": str(hold.get("words") or ""), "until": until or None,
                 "code": str(hold.get("code") or ""),
                 "framework": str(hold.get("framework") or "")}
     return None
+
+
+def _fallback_elsewhere(voice: dict, frameworks: dict) -> bool:
+    """Есть ли у голоса запасная нога на ДРУГОМ эндпойнте — как это считает движок
+    (`llm._fallback_leg_elsewhere`): другой фреймворк, другой адрес, живой ключ.
+    Второе имя модели того же реле упирается в тот же счётчик — это не запасной
+    (ревью 25.09, A7 F3 / A1 F2)."""
+    model = str(voice.get("fallback_model") or "").strip()
+    if not model:
+        return False
+    voice_fw = str(voice.get("framework") or "openai").strip()
+    fb_fw = str(voice.get("fallback_framework") or "").strip()
+    if not fb_fw or fb_fw == voice_fw:
+        return False
+    main = frameworks.get(voice_fw) if isinstance(frameworks.get(voice_fw), dict) else {}
+    spare = frameworks.get(fb_fw) if isinstance(frameworks.get(fb_fw), dict) else {}
+    if not str(spare.get("api_key") or "").strip():
+        return False
+    return _endpoint_key(str(spare.get("base_url") or "")) != _endpoint_key(str(main.get("base_url") or ""))
 
 
 def state() -> dict:
@@ -1934,7 +1969,10 @@ def _state_impl() -> dict:
     last = llm_rows[-1] if llm_rows else {}
     last_ts = _num(last.get("ts"))
     last_err = str(last.get("err") or "") if last else ""
-    recent_error = bool(last_err) and (now - last_ts) < 900
+    # Строка с ok=True и err — не ошибка: так след помечает удачный фолбэк («fallback»)
+    # и конец хода после сказанного («end_after_spoken»); шапка 15 минут говорила
+    # «Модель отвечает ошибкой» про удачный ответ (ревью 25.09, A1 F9).
+    recent_error = bool(last_err) and last.get("ok") is not True and (now - last_ts) < 900
     # Реле определяется фактом, а не подстрокой. Было
     # `"127.0.0.1:50" in base_url`: любой локальный сервер модели на порту 5000
     # (text-generation-webui по умолчанию) навсегда получал жёлтое «Подписка
@@ -1967,8 +2005,9 @@ def _state_impl() -> dict:
     # 25.09 (C.4): эндпойнт основной ноги закрыт лимитом подписки — движок пишет
     # `memory/.state/quota.json` (llm._hold_endpoint) с часом восстановления словами.
     # Раньше владелец видел английскую диагностику реле как реплику агента.
-    quota = _quota_hold(st / "quota.json", now)
-    fallback_armed = bool(str(voice.get("fallback_model") or "").strip())
+    quota = _quota_hold(st / "quota.json", now, str(voice.get("framework") or "openai"),
+                        str(model_cfg.get("base_url") or ""))
+    fallback_armed = _fallback_elsewhere(voice, llm.get("frameworks") or {})
 
     action = None
     if not runner_alive:
@@ -1977,7 +2016,7 @@ def _state_impl() -> dict:
     elif quota is not None:
         words = str(quota.get("words") or "подписка исчерпана")
         level, phrase = "warn", (f"{words} — отвечает запасная модель" if fallback_armed
-                                 else f"{words} — запасной модели нет")
+                                 else f"{words} — запасной модели на другом эндпойнте нет")
         action = {"label": "Настройки", "target": "settings"}
     elif not configured:
         if named:

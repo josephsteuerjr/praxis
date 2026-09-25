@@ -129,12 +129,21 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
     b.dataset.value = value;
     b.append(el("span", "choice-title", title), el("span", "choice-text", text));
     b.addEventListener("click", () => {
+      const before = frameworkOf(provider);
       provider = value;
       syncPick();
       // Ярлык «усилия» зависит от провайдера — на подписке пустое поле значит
       // «рассуждение выключено», а не «решает модель».
       syncEffort();
-      // Запасной другого провайдера — другого протокола: подсказка зависит от основного.
+      // Запасной другого провайдера — другого протокола: смена основного меняет и
+      // протокол запасного. Адрес и ключ прежнего протокола нельзя оставлять —
+      // клиент Anthropic бился бы в OpenAI-эндпойнт (ревью 25.09, A7 F7).
+      if (spare === "other" && frameworkOf(provider) !== before) {
+        spareUrl = "";
+        spareKey = frameworkOf(provider) === "anthropic" ? keyOf("api") : keyOf("anthropic");
+        setField(spareUrlField, "");
+        setField(spareKeyField, spareKey);
+      }
       syncSpare();
     });
     pick.append(b);
@@ -437,13 +446,15 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
     });
     sparePick.append(b);
   }
-  sparePanes.same.append(field("Запасная модель", fallbackModel, (v) => (fallbackModel = v), { mono: true, placeholder: "например, gpt-5.6-luna" }));
+  // Одно значение — два поля (на разных панелях): ввод в одном отражается в другом,
+  // иначе экран показывал старое имя, а сохранялось новое (ревью 25.09, A7 F5).
+  const spareModelSame = field("Запасная модель", fallbackModel, (v) => { fallbackModel = v; setField(spareModelOther, v); }, { mono: true, placeholder: "например, gpt-5.6-luna" });
+  const spareModelOther = field("Модель запасного", fallbackModel, (v) => { fallbackModel = v; setField(spareModelSame, v); }, { mono: true, placeholder: "например, glm-5.3" });
+  sparePanes.same.append(spareModelSame);
   const spareKeyField = field("Ключ запасного", spareKey, (v) => (spareKey = v), { mono: true, type: "password", placeholder: "ключ провайдера" });
+  const spareUrlField = field("Адрес запасного", spareUrl, (v) => (spareUrl = v), { mono: true, placeholder: "https://api.z.ai/api/anthropic" });
   const spareGridOther = el("div", "form-grid two");
-  spareGridOther.append(
-    field("Адрес запасного", spareUrl, (v) => (spareUrl = v), { mono: true, placeholder: "https://api.z.ai/api/anthropic" }),
-    field("Модель запасного", fallbackModel, (v) => (fallbackModel = v), { mono: true, placeholder: "например, glm-5.3" }),
-  );
+  spareGridOther.append(spareUrlField, spareModelOther);
   sparePanes.other.append(spareGridOther, spareKeyField, spareOtherHint);
   const spareBox = el("div");
   spareBox.style.marginTop = "14px";
@@ -796,6 +807,11 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
         delete out.model.fallback_framework;
         delete out.model.fallback_base_url;
         delete out.model.fallback_key;
+        if (spare === "other" && !fallbackModel.trim()) {
+          // Адрес и ключ без имени модели раньше сохранялись молча БЕЗ запасного —
+          // введённый ключ пропадал без слова (ревью 25.09, A7 F6).
+          return "Запасному провайдеру нужно имя модели — или выбери «Нет».";
+        }
         if (spare === "none" || !fallbackModel.trim()) {
           delete out.model.fallback_model;
         } else {

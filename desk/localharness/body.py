@@ -1273,6 +1273,22 @@ def results_for_mac(agent_mod) -> bool:
     state_line._helene_mac = True
     state_line.__wrapped__ = fn
     state_line.__name__ = getattr(fn, "__name__", "state_line")
+    # Ревью 25.09 (A12 F1): отказы маршрутов («desktop недоступен из Session 0», «UI
+    # Automation tree») рождаются в `tool_computer`, не в строке состояния — оборачиваем
+    # и результат руки целиком, по имени в TOOL_IMPL (диспетчер зовёт руку оттуда).
+    impl = getattr(agent_mod, "TOOL_IMPL", None)
+    hand = impl.get("computer") if isinstance(impl, dict) else None
+    if callable(hand) and not getattr(hand, "_helene_mac", False):
+        def computer(*args, **kwargs):
+            out = hand(*args, **kwargs)
+            return mac_result_text(out) if isinstance(out, str) else out
+
+        computer._helene_mac = True
+        computer.__wrapped__ = hand
+        computer.__name__ = getattr(hand, "__name__", "tool_computer")
+        impl["computer"] = computer
+        if getattr(agent_mod, "tool_computer", None) is hand:
+            agent_mod.tool_computer = computer
     state_line.__doc__ = getattr(fn, "__doc__", "")
     client.state_line = state_line
     return True

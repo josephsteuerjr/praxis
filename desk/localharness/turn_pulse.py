@@ -86,11 +86,19 @@ class TurnPulse:
         if getattr(self.bot, "before_send", None) is self._hook:
             self.bot.before_send = None
 
-    def retire_status(self) -> None:
-        """Снять пост «думаю» — зовётся транспортом перед первой отправкой наружу."""
+    def retire_status(self, chat_id=None) -> None:
+        """Снять пост «думаю» — зовётся транспортом перед первой отправкой наружу.
+
+        Ревью 25.09 (A6 F7): отправка в ДРУГОЙ чат (send_message владельцу посреди хода в
+        группе) пост здесь не снимает; после снятия новый пост в этом ходе не рождается —
+        читатель не увидит «думаю» под уже готовым ответом.
+        """
+        if chat_id is not None and str(chat_id) != str(self.chat_id):
+            return
         with self._lock:
             status_id = self.status_id
             self.status_id = None
+            self._retired = True
         if status_id is not None:
             self._safely(self.bot.delete_status, self.chat_id, status_id)
 
@@ -115,7 +123,7 @@ class TurnPulse:
     def _status_tick(self, now: float) -> None:
         with self._lock:
             if self.status_id is None:
-                if self._stop.is_set():
+                if self._stop.is_set() or getattr(self, "_retired", False):
                     return
                 posted = self._safely(self.bot.post_status, self.chat_id,
                                       f"думаю ({_clock_words(self.started_at)})…")

@@ -1317,7 +1317,7 @@ class SheCanAskForTheReportHerselfTests(unittest.TestCase):
         self.assertEqual(self.ledger.pending_notifications(), [])
 
     def test_an_unknown_thread_is_named_as_such_instead_of_a_silent_ok(self):
-        self.assertIn("Не нашла живую нить", runner._sync_followups("watch", "tgfu_нет"))
+        self.assertIn("Не найдена живая нить", runner._sync_followups("watch", "tgfu_нет"))
 
     def test_the_help_line_names_both_new_hands(self):
         answer = runner._sync_followups("что-то")

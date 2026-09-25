@@ -109,15 +109,60 @@ function brainNotice(): string {
 /**
  * Cooperative stop requests do not restart the engine or undo completed effects.
  */
+/** Последняя квитанция остановки хода — чтобы перерисовка не возвращала «Остановить ход»
+ *  поверх записанной просьбы (ревью 25.09, A7 F8). */
+let stopReceipt: { at: number; text: string } | null = null;
+
+/** Слова квитанции движка: что отменено, что ждёт исхода тула, что не вышло. */
+export function interruptReceiptWords(receipt: Record<string, unknown> | null | undefined): string {
+  if (!receipt || typeof receipt !== "object") return "";
+  const n = (k: string) => (Array.isArray(receipt[k]) ? (receipt[k] as unknown[]).length : 0);
+  const parts: string[] = [];
+  if (n("cancelled")) parts.push(`остановлено ходов: ${n("cancelled")}`);
+  if (n("pending_tool_outcomes")) parts.push(`ждут исхода тула: ${n("pending_tool_outcomes")}`);
+  if (n("skipped")) parts.push(`пропущено (родились позже просьбы): ${n("skipped")}`);
+  if (n("failed")) parts.push(`не вышло: ${n("failed")}`);
+  if (!parts.length && n("requested") === 0) return "движок не нашёл живых ходов";
+  return parts.join("; ");
+}
+
 function turnNotice(): string {
   const r = S.agentState?.runner;
   if (!r || !r.alive || !r.busy) return "";
   const since = r.since ? ` (идёт ${fmtAge(r.since)})` : "";
+  if (stopReceipt && Date.now() - stopReceipt.at < 120_000) {
+    return `<div class="notice" data-turn-stop-box>
+    <span class="dot live"></span>
+    <span>${esc(stopReceipt.text)}</span>
+    <button class="notice-action" data-stop-turn="ask" type="button" disabled>Просьба записана</button>
+  </div>`;
+  }
   return `<div class="notice" data-turn-stop-box>
     <span class="dot live"></span>
     <span>Агент сейчас работает${since} — действия справа.</span>
     <button class="notice-action" data-stop-turn="ask" type="button">Остановить ход</button>
   </div>`;
+}
+
+/** Дождаться квитанции движка на просьбу остановить ход (до ~15 с) и показать её словами. */
+async function awaitInterruptReceipt(requestedAt: number, box: Element): Promise<void> {
+  for (let i = 0; i < 15; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const sup = await api<{ interrupt_receipt?: Record<string, unknown> | null }>("/api/supervisor");
+      const receipt = sup?.interrupt_receipt;
+      const at = receipt && typeof receipt.at === "string" ? Date.parse(receipt.at) : NaN;
+      if (receipt && Number.isFinite(at) && at >= requestedAt - 2000) {
+        const words = interruptReceiptWords(receipt);
+        stopReceipt = { at: Date.now(), text: `Просьба записана — ${words}.` };
+        const text = box.querySelector("span:not(.dot)");
+        if (text) text.textContent = stopReceipt.text;
+        return;
+      }
+    } catch {
+      /* квитанция придёт следующим опросом или не придёт — молчим, слова уже есть */
+    }
+  }
 }
 
 function stubNotice(): string {
@@ -307,11 +352,14 @@ function bindStopTurn(container: HTMLElement) {
     btn.disabled = true;
     btn.textContent = "отправляю просьбу…";
     try {
+      const requestedAt = Date.now();
       const receipt = await post<{ok: boolean; note?: string}>("/api/interrupt", {scope: "all"});
       if (!receipt.ok) throw new Error(receipt.note || "Просьба не записана");
       const text = box.querySelector("span:not(.dot)");
       if (text) text.textContent = receipt.note || "Просьба об остановке записана";
       btn.textContent = "Просьба записана";
+      stopReceipt = { at: Date.now(), text: receipt.note || "Просьба об остановке записана — жду квитанцию движка…" };
+      void awaitInterruptReceipt(requestedAt, box);
     } catch (error) {
       const text = box.querySelector("span:not(.dot)");
       const failure = humanError(error);

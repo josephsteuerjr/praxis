@@ -30,6 +30,13 @@ CONTRACT = json.loads((ROOT / "ui-kit" / "contract.json").read_text(encoding="ut
 
 
 class Contract(unittest.TestCase):
+    def test_python_room_legacy_matches_the_contract(self):
+        # Ревью 25.09 (A7 F10): TS-копии ключей комнат сверяет contract.test.mjs, питоновскую
+        # копию (`rooms.ROOM_LEGACY`) не сверял никто.
+        from deskd import rooms
+        contract = json.loads((Path(__file__).resolve().parents[1] / "ui-kit" / "contract.json").read_text(encoding="utf-8"))
+        self.assertEqual(rooms.ROOM_LEGACY, contract["rooms"]["legacy"])
+
     def test_shape(self):
         self.assertEqual(CONTRACT["v"], 1)
         for key in ("desk", "relay", "body"):

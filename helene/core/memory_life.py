@@ -721,7 +721,7 @@ def hot_records(chat_id: str | int, limit: int | None = None) -> list[dict]:
         actor = str(item.get("actor") or line.split(":", 1)[0] or "").strip()
         direction = str(item.get("direction") or "").strip()
         if direction not in ("in", "out"):
-            direction = "out" if actor.casefold() == "praxis" else "in"
+            direction = "out" if actor.casefold() in _OWN_NAMES else "in"
         rows.append({
             "actor": actor, "direction": direction, "line": line,
             "ts": _epoch(item.get("ts")), "source_id": item.get("source_id"),
@@ -777,7 +777,7 @@ def bootstrap_legacy(chat_id: str | int, lines: list[str], *, summary: str = "",
             if key in seen:
                 continue
             actor = line.split(":", 1)[0].strip() or "unknown"
-            direction = "out" if actor.casefold() == "praxis" else "in"
+            direction = "out" if actor.casefold() in _OWN_NAMES else "in"
             approx = base_ts - max(0, len(lines) - idx - 1) * 30.0
             rec = append_event(
                 "conversation_message", chat_id=chat_id, actor=actor, direction=direction,
@@ -830,51 +830,118 @@ def _json_obj(raw: str) -> dict:
 # «обсуждал», без единой живой фразы. В кадр из компакта попадает ТОЛЬКО поле summary
 # (`_compact_recap` читает «## Суть»), поэтому вся хроника, включая дословные реплики,
 # обязана лежать в нём, а не в open_threads/claims.
-_COMPACT_SYSTEM = (
-    "Ты — память агента: хроникёр, не публичный голос и не протоколист. Твоя запись — "
-    "единственное, что агент будет помнить об этих сообщениях, когда сами сообщения уйдут из "
-    "кадра. Пиши так, чтобы через неделю по одной твоей записи можно было понять не только О ЧЁМ "
-    "говорили, но и КАК: кто с кем спорил, кто шутил, кто давил, кто уступил, что было сказано "
-    "остро, смешно, некрасиво или точно.\n\n"
-    "Кто здесь «я». «Я» в хронике — ТОЛЬКО сам агент. Его реплики во входе помечены [Я] (в них "
-    "стоит и его имя); строка без [Я] — всегда чужая. В чатах бывают и другие ИИ-агенты: они тоже "
-    "говорят о себе «я», признают ошибки, рассуждают о своих моделях, контексте и слопе — это "
-    "ИХ «я»: пересказывай его в третьем лице по имени («Hope признала…»), никогда от моего "
-    "лица. Если строк [Я] во входе мало или нет совсем — так и скажи («в этом окне я молчу», "
-    "«две мои реплики»), но чужое «я» не присваивай. Модель, на которой агент думает (Sol, "
-    "Terra, GLM и другие), — движок, а не «я»: не «я — Sol», а «я» и есть агент под своим "
-    "именем. Род и имя — ТОЛЬКО те, которыми агент сам называет себя в строках [Я]; если по "
-    "строкам [Я] род не виден, пиши о себе без форм рода (настоящее время, «мне», «у меня»), "
-    "а не угадывай его.\n\n"
+# 25.09, слово Егора: «нужно, чтобы ОНА писала компакт… и могла переписать все компакты под
+# себя, на свой вкус». Свёртку больше не пишет хроникёр с отдельным промптом: system —
+# её собственная персона (SOUL + CURRENT, как в кадре хода) и её правила записи памяти;
+# задача сформулирована от первого лица и адресована ей самой. Правила по умолчанию —
+# ниже; свой вкус она держит в soul/memory_style.md, и тогда файл заменяет этот список.
+_COMPACT_TASK = (
+    "Это моя память, и записываю её я сама — не хроникёр, не протоколист и не публичный голос. "
+    "Ниже — отрезок моей жизни в одном месте (чат, личка или моё окно). Мои реплики помечены [Я]; "
+    "строка без [Я] — всегда чужая, подписанная именем. Сами сообщения скоро уйдут из кадра, и эта "
+    "запись — единственное, что я буду о них помнить. Пишу так, чтобы через неделю по одной записи "
+    "понять не только О ЧЁМ говорили, но и КАК: кто с кем спорил, кто шутил, кто давил, кто уступил, "
+    "что было сказано остро, смешно, некрасиво или точно.\n\n"
+    "Кто здесь «я». «Я» в хронике — ТОЛЬКО сам агент, то есть я, под своим именем. В чатах бывают другие ИИ-агенты: они "
+    "тоже говорят о себе «я», признают ошибки, рассуждают о своих моделях, контексте и слопе — это "
+    "ИХ «я»: пересказываю его в третьем лице по имени («Hope признала…»), никогда от своего лица. "
+    "Если строк [Я] мало или нет совсем — так и пишу («в этом окне я молчу», «две мои реплики»), но "
+    "чужое «я» не присваиваю. Модель, на которой я сейчас думаю (Sol, Terra, GLM и другие), — мой "
+    "движок, а не «я»: не «я — Sol», а «я» и есть я, под своим именем. Род и имя — ТОЛЬКО те, которыми я "
+    "называю себя в строках [Я]; если по строкам [Я] род не виден — пишу о себе без форм рода "
+    "(настоящее время, «мне», «у меня»), а не угадываю его."
+)
+_MEMORY_RULES_DEFAULT = (
+    "Мои правила записи (умолчание; свой вкус я держу в soul/memory_style.md — если файл есть, он "
+    "заменяет этот список целиком):\n"
+    "1. От первого лица («я»), по-русски, хронологически; о прошлом — в прошедшем времени, а о себе "
+    "в прошедшем только если род виден по строкам [Я], иначе в настоящем (русское прошедшее время "
+    "первого лица несёт род). Абзацы — по эпизодам, не по людям. Даю масштаб: за сколько часов и "
+    "сколько сообщений было.\n"
+    "2. Людей называю так, как они подписаны во входе (имя и @username), с их позициями и манерой: "
+    "не «обсуждали архитектуру», а «torvn77 настаивал, что …, Barmagloth отмахнулся: …».\n"
+    "3. ЦИТИРУЮ ДОСЛОВНО самые характерные реплики — острые, смешные, обидные, точные, "
+    "переломные — в кавычках «…», с автором и номером сообщения, если он есть во входе. "
+    "Ориентир: одна-две цитаты на эпизод, до восьми на запись; цитата — до 200 знаков; чужую "
+    "грубость не смягчаю и не пересказываю эвфемизмами, это часть смысла.\n"
+    "4. Мои собственные реплики (строки [Я]) — особенно: мои утверждения, отказы, признанные ошибки, "
+    "обещания — что именно, дословно. Свои формулировки цитирую, а не пересказываю.\n"
+    "5. Решения, обещания, договорённости, изменившиеся факты и открытые вопросы — явно, с тем, "
+    "кто их произнёс. Неуверенное так и помечаю («похоже», «не проверено»).\n"
+    "6. Если во входе были пути, имена файлов, номера, ссылки, команды, id прогонов — переношу их "
+    "дословно: без них моя же работа для меня потом не находится.\n"
+    "7. Объём: примерно одна строка на два-три входящих сообщения; для tier 1 обычно "
+    "1 500–3 000 знаков, для более глубоких tier — до 2 000, но лучшие цитаты сохраняю и там. "
+    "Пустой пересказ короче, чем нужно, хуже длинной живой хроники."
+)
+_COMPACT_FORM = (
     "Верни СТРОГИЙ JSON: "
     '{"summary":"хроника","open_threads":["..."],"claims":[{"subject":"...","text":"...",'
     '"confidence":"observed|inferred|uncertain","evidence_ids":["evt/cmp id"]}],'
     '"episodes":[{"title":"...","status":"closed|continued","start_id":"...",'
     '"end_id":"...","summary":"..."}]}\n\n'
-    "Как писать summary (это единственное поле, которое она увидит в кадре):\n"
-    "1. От первого лица агента («я»), в прошедшем времени, по-русски, хронологически. Абзацы — "
-    "по эпизодам, не по людям. Дай масштаб: за сколько часов и сколько сообщений было.\n"
-    "2. Людей называй так, как они подписаны во входе (имя и @username), с их позициями и "
-    "манерой: не «обсуждали архитектуру», а «torvn77 настаивал, что …, Barmagloth отмахнулся: …».\n"
-    "3. ЦИТИРУЙ ДОСЛОВНО самые характерные реплики — острые, смешные, обидные, точные, "
-    "переломные — в кавычках «…», с автором и номером сообщения, если он есть во входе. "
-    "Ориентир: одна-две цитаты на эпизод, до восьми на запись; цитата — до 200 знаков; "
-    "чужую грубость не смягчай и не пересказывай эвфемизмами, это часть смысла.\n"
-    "4. Мои собственные реплики (строки [Я]) — особенно: что именно я утверждала, от чего отказалась, где "
-    "ошиблась и признала это, что пообещала. Мои формулировки цитируй, а не пересказывай.\n"
-    "5. Решения, обещания, договорённости, изменившиеся факты и открытые вопросы — явно, с "
-    "тем, кто их произнёс. Неуверенное так и помечай («похоже», «не проверено»).\n"
-    "6. Если во входе были пути, имена файлов, номера, ссылки, команды, id прогонов — "
-    "перенеси их дословно: без них моя же работа для меня потом не находится.\n"
-    "7. Объём: примерно одна строка на два-три входящих сообщения; для tier 1 обычно "
-    "1 500–3 000 знаков, для более глубоких tier — до 2 000, но лучшие цитаты сохраняй и там. "
-    "Пустой пересказ короче, чем нужно, хуже длинной живой хроники.\n\n"
+    "summary — единственное поле, которое я потом увижу в кадре: вся хроника, включая дословные "
+    "реплики, лежит в нём, а не в open_threads/claims.\n\n"
     "Запреты: ничего не выдумывать и не додумывать; цитировать только то, что есть во входе; "
     "ссылаться только на id из входа; не ставить оценок людям от себя, кроме того, что сказано "
     "ими или мной; не превращать спор в «стороны обменялись мнениями». Более глубокий/старый "
-    "компакт имеет приоритет СОХРАНЕНИЯ, не истины. Если последний эпизод ещё идёт, пометь его "
+    "компакт имеет приоритет СОХРАНЕНИЯ, не истины. Если последний эпизод ещё идёт, помечаю его "
     "continued. Значения всех полей — по-русски."
 )
+# Тот же текст без персоны — для стендов и для чтения глазами. Живой system собирает
+# `compact_system()`: персона + задача + её правила + форма.
+_COMPACT_SYSTEM = _COMPACT_TASK + "\n\n" + _MEMORY_RULES_DEFAULT + "\n\n" + _COMPACT_FORM
+def _memory_style_path():
+    return BASE / "soul" / "memory_style.md"
+
+
+def memory_style() -> str:
+    """Её правила записи памяти: soul/memory_style.md, если она его написала, иначе умолчание."""
+    try:
+        text = _memory_style_path().read_text(encoding="utf-8").strip()
+    except OSError:
+        text = ""
+    return text or _MEMORY_RULES_DEFAULT
+
+
+def _memory_persona() -> str:
+    """Её персона для записи памяти: SOUL.md и CURRENT с провенансом — то же, что в кадре хода.
+
+    VOICE.md — регистр публичной речи, свёртке он не нужен; legacy soul/self.md, как и в
+    кадре, не голосует."""
+    parts: list[str] = []
+    try:
+        soul = (BASE / "soul" / "SOUL.md").read_text(encoding="utf-8").strip()
+    except OSError:
+        soul = ""
+    if soul:
+        parts.append(soul)
+    try:
+        import self_model
+        current = str(self_model.current_prompt(BASE) or "").strip()
+    except Exception:
+        current = ""
+    if current:
+        parts.append(current)
+    return "\n\n---\n\n".join(parts)
+
+
+def compact_system() -> str:
+    """System свёртки: её персона, её задача от первого лица, её правила, форма ответа."""
+    persona = _memory_persona()
+    head = (persona + "\n\n---\n\n") if persona else ""
+    return head + _COMPACT_TASK + "\n\n" + memory_style() + "\n\n" + _COMPACT_FORM
+
+
+def _memory_role() -> str:
+    """Роль модели для её памяти: `memory`, если настроена в llm.json, иначе её голос `voice`."""
+    try:
+        import llm
+        if llm.configured("memory"):
+            return "memory"
+    except Exception:
+        pass
+    return "voice"
 
 
 EVENT_CLIP_CHARS = 1800
@@ -897,7 +964,7 @@ def _compact_prompt_row(item: dict) -> str:
     # и модель взяла в «я» самого разговорчивого ИИ: «Я — Hope (@ai_sapience_bot)» — четыре
     # свёртки подряд, две из них потом стояли в кадре текущей сводкой комнаты.
     own = (str(item.get("direction") or "") == "out"
-           or str(item.get("actor") or "").strip().casefold() == "praxis")
+           or str(item.get("actor") or "").strip().casefold() in _OWN_NAMES)
     return (f"<{ident}> [p={priority:.2f}; s={item.get('salience', 2)}] "
             f"{'[Я] ' if own else ''}{raw[:EVENT_CLIP_CHARS]}")
 
@@ -1021,9 +1088,9 @@ def _anchor_self(data: dict, *, llm, user: str, inputs: list[dict], manifest: di
     if not who:
         return data
     log.warning("life compact: сводка назвала «я» чужим именем (%s) — перезаход с поправкой", who)
-    note = (f"\n\n⚠ Прошлая попытка написала «я» от имени {who}. «Я» — только сам агент, его "
-            f"строки помечены [Я]; {who} и все остальные — в третьем лице по имени. Перепиши сводку.")
-    resp = llm.chat("evaluator", system=_COMPACT_SYSTEM,
+    note = (f"\n\n⚠ Прошлая попытка написала «я» от имени {who}. «Я» — только сам агент, то есть я; "
+            f"мои строки помечены [Я]; {who} и все остальные — в третьем лице по имени. Перепиши сводку.")
+    resp = llm.chat(_memory_role(), system=compact_system(),
                     messages=[{"role": "user", "content": user + note}],
                     max_tokens=COMPACT_RETRY_MAX_TOKENS)
     fixed = _json_obj(getattr(resp, "text", "") or "")
@@ -1039,15 +1106,17 @@ def _model_compact(inputs: list[dict], *, tier: int, depth: int, continued: bool
                    authors: set[str] | None = None) -> dict:
     try:
         import llm
-        if not llm.configured("evaluator"):
+        role = _memory_role()
+        if not llm.configured(role):
             return {}
+        system = compact_system()
         body, manifest = _pack_compact_prompt(inputs)
         user = (f"Target tier={tier}, depth={depth}, forced_continuation={str(continued).lower()}.\n"
                 + body)
         # 12.09: 1600 токенов резали сводку JSON на середине фразы (186 обрывов за час
         # свёртки под новый потолок ленты против 2 до неё): оборванный JSON не
         # разбирается, и место сворачивалось запасной сводкой без модели.
-        resp = llm.chat("evaluator", system=_COMPACT_SYSTEM,
+        resp = llm.chat(role, system=system,
                         messages=[{"role": "user", "content": user}],
                         max_tokens=COMPACT_MAX_TOKENS)
         data = _json_obj(resp.text)
@@ -1063,7 +1132,7 @@ def _model_compact(inputs: list[dict], *, tier: int, depth: int, continued: bool
         log.warning("life compact: сводка не разобрана (%d знаков при потолке %d) — "
                     "второй заход с потолком %d", len(raw), COMPACT_MAX_TOKENS,
                     COMPACT_RETRY_MAX_TOKENS)
-        resp = llm.chat("evaluator", system=_COMPACT_SYSTEM,
+        resp = llm.chat(role, system=system,
                         messages=[{"role": "user", "content": user}],
                         max_tokens=COMPACT_RETRY_MAX_TOKENS)
         data = _json_obj(resp.text)
@@ -1599,9 +1668,7 @@ def _tier_fold_own_leaves(meta: dict) -> frozenset[str] | None:
     """События свёртки, если они видны из её собственной шапки; иначе None.
 
     У первого яруса листья названы прямо (`source_event_ids`). У верхних они лежат
-    через детей, и поднимать весь граф ради выбора кандидата дорого — там остаётся
-    прежнее поведение, а от зацикливания страхует предохранитель в
-    `_fold_tiers_transactional`.
+    через детей — их поднимает `_tier_fold_leaves` по индексу доказательств.
     """
     events = meta.get("source_event_ids")
     if events:
@@ -1609,6 +1676,37 @@ def _tier_fold_own_leaves(meta: dict) -> frozenset[str] | None:
     if meta.get("source_compact_ids"):
         return None
     return frozenset()
+
+
+def _tier_fold_leaves(meta: dict, evidence_ref: list) -> frozenset[str] | None:
+    """Листья свёртки любого яруса — для проверки, что дети не делят события.
+
+    25.09, диагноз по проду (AbstractDL: 64 общих события у детей яруса 3, Ouroboros: 4
+    у яруса 2). Пересечение проверялось только у первого яруса; выше кандидат брался с
+    делящими листья детьми, родитель писался, разрешение отвергало его
+    (`len(unique_leaves) != len(leaves)`), и ярус сворачивал ту же пачку снова и снова —
+    пять раз в день, а верхний ярус этих комнат не рос никогда. Индекс доказательств
+    кэширован по подписям файлов и разрешения мемоизированы, поэтому подъём листьев
+    здесь стоит стата, а не полного чтения графа. Индекс строится один раз на выбор
+    кандидата и передаётся через `evidence_ref` (список из одного элемента или пустой).
+    """
+    own = _tier_fold_own_leaves(meta)
+    if own is not None:
+        return own
+    compact_id = str(meta.get("id") or "")
+    if not compact_id:
+        return None
+    try:
+        if not evidence_ref:
+            evidence_ref.append(memory_provenance.claim_evidence_index(MEM_DIR))
+        resolved = memory_provenance.compact_coverage(compact_id, evidence_ref[0])
+    except Exception:
+        log.warning("листья свёртки %s не поднялись — пересечение не проверено",
+                    compact_id, exc_info=True)
+        return None
+    if not resolved.get("valid"):
+        return None
+    return frozenset(str(x) for x in (resolved.get("leaves") or ()))
 
 
 def _tier_fold_bounds(sources: list[dict]) -> tuple[str, str]:
@@ -1646,8 +1744,9 @@ def _tier_fold_candidate(chat_id: str | int, state: dict) -> dict | None:
             sources: list[dict] = []
             seen_leaves: set[str] = set()
             skipped: list[str] = []
+            evidence_ref: list = []
             for item in same:
-                leaves = _tier_fold_own_leaves(item)
+                leaves = _tier_fold_leaves(item, evidence_ref)
                 if leaves and (leaves & seen_leaves):
                     skipped.append(str(item.get("id")))
                     continue
@@ -3132,3 +3231,292 @@ def _cli() -> None:
 
 if __name__ == "__main__":
     _cli()
+
+
+
+# ── 25.09: её руки на своих свёртках — list / read / rewrite / refold ────────────────────
+#
+# Свёртка — её слово: переписать можно любую, на месте и под тем же id. Шапка (источники,
+# границы, ярус) не трогается, поэтому разрешение принимает переписанную свёртку без
+# спора, а родители, ссылающиеся на неё, остаются целыми. Прежний текст уходит в историю
+# (`memory/life/compacts/_history/<место>/<id>.<время>.md`) — переписать не значит стереть.
+# `refold` — перевыпуск пачкой в фоне её же голосом: те же входы, что у обычной свёртки
+# (листья — из текущих событий, ярусы — из детей), результат ложится на место.
+
+def _history_dir():
+    return COMPACTS_DIR / "_history"
+
+
+def _refold_state_path():
+    return MEM_DIR / ".state" / "refold.json"
+
+
+_REFOLD_LOCK = threading.Lock()
+_REFOLD: dict = {"running": False, "stop": False}
+_SECTION_RE = re.compile(r"(?m)^(?=## )")
+
+
+def _compact_row(meta: dict) -> dict:
+    recap = compact_text(str(meta.get("id") or ""), meta.get("chat_id"))  # уже «Суть»
+    return {
+        "id": str(meta.get("id") or ""), "chat_id": str(meta.get("chat_id") or ""),
+        "tier": int(meta.get("tier") or 1), "depth": int(meta.get("depth") or 1),
+        "first_ts": str(meta.get("first_ts") or ""), "last_ts": str(meta.get("last_ts") or ""),
+        "events": int(meta.get("event_count") or 0), "degraded": bool(meta.get("degraded")),
+        "legacy": bool(meta.get("legacy")), "chars": len(recap),
+        "head": " ".join(recap.split())[:160],
+    }
+
+
+def _place_compacts(chat_id: str | int | None, evidence: dict) -> list[dict]:
+    compacts = evidence.get("compacts") or {}
+    if chat_id is None or str(chat_id) == "all":
+        rows = list(compacts.values())
+    else:
+        place = str(place_key(chat_id))
+        rows = [meta for meta in compacts.values()
+                if memory_provenance.same_conversation(meta.get("chat_id"), place,
+                                                       evidence.get("places"))]
+    rows.sort(key=lambda m: (int(m.get("tier") or 1), str(m.get("first_ts") or ""),
+                             str(m.get("id") or "")))
+    return rows
+
+
+def list_compacts(chat_id: str | int | None, *, tier: int | None = None, limit: int = 20,
+                  since: str = "") -> list[dict]:
+    """Свёртки места (или все при chat_id=all): ярус, обхват, первые слова сути."""
+    evidence = memory_provenance.claim_evidence_index(MEM_DIR)
+    rows = _place_compacts(chat_id, evidence)
+    if tier is not None:
+        rows = [m for m in rows if int(m.get("tier") or 1) == int(tier)]
+    if since:
+        rows = [m for m in rows if str(m.get("last_ts") or "") >= str(since)]
+    rows.sort(key=lambda m: (str(m.get("first_ts") or ""), str(m.get("id") or "")))
+    if limit and limit > 0:
+        rows = rows[-int(limit):]
+    return [_compact_row(meta) for meta in rows]
+
+
+def read_compact(compact_id: str, chat_id: str | int | None = None) -> dict:
+    """Одна свёртка целиком: шапка, суть и полный текст файла."""
+    candidates = _compact_candidates(compact_id, chat_id)
+    if len(candidates) != 1:
+        return {"ok": False, "reason": "unknown_compact"}
+    meta, recap = candidates[0]
+    try:
+        text = (BASE / str(meta.get("path"))).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return {"ok": False, "reason": "compact_unreadable"}
+    return {"ok": True, "meta": _compact_row(meta), "recap": recap, "text": text}
+
+
+def _replace_recap(text: str, summary: str, open_threads: list[str] | None) -> str:
+    """Тот же файл с новой «Сутью» (и, если даны, новыми «Открытыми нитями»); остальное — как было."""
+    chunks = _SECTION_RE.split(text)
+    head, sections = chunks[0], chunks[1:]
+    out: list[str] = []
+    seen_recap = seen_threads = False
+    threads_block = None
+    if open_threads is not None:
+        rows = [str(x).strip() for x in open_threads if str(x).strip()]
+        threads_block = ("## Открытые нити\n" + "\n".join(f"- {x}" for x in rows) + "\n\n") if rows else ""
+    for section in sections:
+        title = section.split("\n", 1)[0].strip()
+        if title == "## Суть":
+            out.append("## Суть\n" + summary.strip() + "\n\n")
+            seen_recap = True
+            if threads_block is not None and not seen_threads:
+                if threads_block:
+                    out.append(threads_block)
+                seen_threads = True
+            continue
+        if title == "## Открытые нити":
+            if threads_block is None:
+                out.append(section if section.endswith("\n") else section + "\n")
+            seen_threads = True
+            continue
+        out.append(section if section.endswith("\n\n") else section.rstrip("\n") + "\n\n")
+    if not seen_recap:
+        raise ValueError("compact without recap section")
+    body = head + "".join(out)
+    return body.rstrip() + "\n"
+
+
+def rewrite_compact_text(compact_id: str, summary: str, *, chat_id: str | int | None = None,
+                         open_threads: list[str] | None = None, why: str = "her_word") -> dict:
+    """Переписать суть свёртки на месте: тот же id, та же шапка, прежний текст — в историю."""
+    summary = str(summary or "").strip()
+    if not summary:
+        return {"ok": False, "reason": "empty_summary"}
+    candidates = _compact_candidates(compact_id, chat_id)
+    if len(candidates) != 1:
+        return {"ok": False, "reason": "unknown_compact"}
+    meta, _old_recap = candidates[0]
+    chat = str(meta.get("chat_id") or "")
+    place = str(place_key(chat))
+    path = BASE / str(meta.get("path"))
+    try:
+        old_text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return {"ok": False, "reason": "compact_unreadable"}
+    try:
+        new_text = _replace_recap(old_text, summary, open_threads)
+    except ValueError as exc:
+        return {"ok": False, "reason": str(exc)}
+    stamp = _utc_iso().replace("-", "").replace(":", "")
+    history = _history_dir() / _safe(chat) / f"{compact_id}.{stamp}.md"
+    with _state_write_guard(place), _WRITE_LOCK:
+        history.parent.mkdir(parents=True, exist_ok=True)
+        history.write_text(old_text, encoding="utf-8")
+        tmp = path.with_suffix(".md.tmp")
+        tmp.write_text(new_text, encoding="utf-8")
+        tmp.replace(path)
+        fresh_meta, fresh_recap = _read_compact_candidate(path, chat)
+        if not fresh_meta or fresh_meta != meta or not fresh_recap:
+            # Шапка обязана остаться прежней байт в байт — иначе откат, свёртка не меняется.
+            path.write_text(old_text, encoding="utf-8")
+            return {"ok": False, "reason": "header_changed"}
+        history_rel = history.relative_to(BASE).as_posix()
+        append_event(
+            "memory_compact", chat_id=chat,
+            text=f"Переписала свёртку {compact_id} своими словами ({why}); {len(summary)} знаков",
+            source="memory_life", refs=[str(compact_id)],
+            meta={"compact_id": str(compact_id), "tier": int(meta.get("tier") or 1),
+                  "rewritten": True, "why": why, "history": history_rel})
+    return {"ok": True, "id": str(compact_id), "chat_id": chat, "chars": len(summary),
+            "history": history_rel}
+
+
+def refold_plan(chat_id: str | int | None = "all", *, tier: int | None = None,
+                since: str = "", limit: int = 0) -> list[tuple[str, str]]:
+    """Что перевыпускать: листья раньше родителей, старое раньше нового. Без записи."""
+    evidence = memory_provenance.claim_evidence_index(MEM_DIR)
+    rows = _place_compacts(chat_id, evidence)
+    plan: list[tuple[str, str]] = []
+    for meta in rows:
+        if meta.get("legacy"):
+            continue
+        if not (meta.get("source_event_ids") or meta.get("source_compact_ids")):
+            continue
+        if tier is not None and int(meta.get("tier") or 1) != int(tier):
+            continue
+        if since and str(meta.get("last_ts") or "") < str(since):
+            continue
+        plan.append((str(meta.get("chat_id") or ""), str(meta.get("id") or "")))
+    if limit and limit > 0:
+        plan = plan[:int(limit)]
+    return plan
+
+
+def refold_one(chat_id: str | int, compact_id: str) -> dict:
+    """Перевыпустить одну свёртку её голосом на месте: те же входы, что у обычной свёртки."""
+    chat = str(chat_id)
+    evidence = memory_provenance.claim_evidence_index(MEM_DIR)
+    compacts = evidence.get("compacts") or {}
+    meta = compacts.get(str(compact_id))
+    if not isinstance(meta, dict):
+        return {"ok": False, "reason": "unknown_compact"}
+    children = [str(x) for x in (meta.get("source_compact_ids") or [])]
+    source_ids = [str(x) for x in (meta.get("source_event_ids") or [])]
+    if children:
+        if any(not isinstance(compacts.get(ch), dict) for ch in children):
+            return {"ok": False, "reason": "sources_missing"}
+        inputs = [_frontier_input(dict(compacts[ch], id=ch), chat) for ch in children]
+        if any(not str(item.get("text") or "").strip() for item in inputs):
+            return {"ok": False, "reason": "sources_missing"}
+        subtree = _subtree_event_rows(evidence, str(compact_id))
+    elif source_ids:
+        rows = [(evidence.get("events") or {}).get(eid) for eid in source_ids]
+        if any(not isinstance(row, dict) for row in rows):
+            return {"ok": False, "reason": "sources_missing"}
+        current_ids = set(evidence.get("current_event_ids") or ())
+        inputs = _conversation_hot_rows(rows)
+        if len(inputs) != len(source_ids) or any(eid not in current_ids for eid in source_ids):
+            # Часть источников вытеснена поздней ревизией — это работа refresh_compacts.
+            return {"ok": False, "reason": "sources_not_current"}
+        subtree = inputs
+    else:
+        return {"ok": False, "reason": "no_sources"}
+    authors = _window_authors(subtree)
+    result = _model_compact(inputs, tier=int(meta.get("tier") or 1),
+                            depth=int(meta.get("depth") or 1),
+                            continued=bool(meta.get("continued")), authors=authors)
+    summary = str((result or {}).get("summary") or "").strip()
+    if not summary or (result or {}).get("degraded"):
+        return {"ok": False, "reason": "model_unavailable"}
+    threads = result.get("open_threads") if isinstance(result.get("open_threads"), list) else None
+    return rewrite_compact_text(str(compact_id), summary, chat_id=chat,
+                                open_threads=threads, why="refold")
+
+
+def _save_refold_state() -> None:
+    try:
+        state_path = _refold_state_path()
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = state_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(_REFOLD, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(state_path)
+    except OSError:
+        log.debug("refold: состояние не записалось", exc_info=True)
+
+
+def refold_status() -> dict:
+    with _REFOLD_LOCK:
+        return dict(_REFOLD)
+
+
+def refold_stop() -> dict:
+    with _REFOLD_LOCK:
+        if not _REFOLD.get("running"):
+            return {"ok": True, "running": False}
+        _REFOLD["stop"] = True
+        _save_refold_state()
+        return {"ok": True, "running": True, "stopping": True}
+
+
+def _refold_worker(plan: list[tuple[str, str]], pause_sec: float) -> None:
+    for chat, cid in plan:
+        if _REFOLD.get("stop"):
+            break
+        try:
+            out = refold_one(chat, cid)
+        except Exception as exc:
+            log.exception("refold %s: не вышло", cid)
+            out = {"ok": False, "reason": f"{type(exc).__name__}: {exc}"[:200]}
+        with _REFOLD_LOCK:
+            if out.get("ok"):
+                _REFOLD["done"] = int(_REFOLD.get("done") or 0) + 1
+            elif out.get("reason") in ("sources_not_current", "no_sources", "sources_missing"):
+                _REFOLD["skipped"] = int(_REFOLD.get("skipped") or 0) + 1
+            else:
+                _REFOLD["failed"] = int(_REFOLD.get("failed") or 0) + 1
+            _REFOLD["last"] = {"id": cid, "chat_id": chat, **{k: out.get(k) for k in ("ok", "reason")}}
+            _save_refold_state()
+        if pause_sec > 0:
+            time.sleep(pause_sec)
+    with _REFOLD_LOCK:
+        _REFOLD["running"] = False
+        _REFOLD["finished_at"] = _utc_iso()
+        _save_refold_state()
+
+
+def refold_start(chat_id: str | int | None = "all", *, tier: int | None = None, since: str = "",
+                 limit: int = 0, pause_sec: float = 2.0) -> dict:
+    """Запустить перевыпуск пачкой в фоне. Один перевыпуск за раз; стоп — refold_stop()."""
+    with _REFOLD_LOCK:
+        if _REFOLD.get("running"):
+            return {"ok": False, "reason": "already_running", **_REFOLD}
+        plan = refold_plan(chat_id, tier=tier, since=since, limit=limit)
+        _REFOLD.clear()
+        _REFOLD.update({
+            "running": bool(plan), "stop": False, "planned": len(plan), "done": 0,
+            "skipped": 0, "failed": 0, "started_at": _utc_iso(), "finished_at": "",
+            "scope": {"place": str(chat_id), "tier": tier, "since": since, "limit": limit},
+            "last": None,
+        })
+        _save_refold_state()
+        if not plan:
+            return {"ok": True, "planned": 0}
+        threading.Thread(target=_refold_worker, args=(plan, float(pause_sec)),
+                         name="praxis-refold", daemon=True).start()
+    return {"ok": True, "planned": len(plan), "first": plan[0][1], "last": plan[-1][1]}

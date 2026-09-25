@@ -120,7 +120,7 @@ class TestManageLoop(Base):
 
     def test_close_no_match_honest(self):
         out = agent.tool_manage_loop("close", "vasya", match="про другое")
-        self.assertIn("нет", out)
+        self.assertIn("Открытой нити по", out)
         self.assertIn("- [ ]", people.read_text("vasya"))
 
     def test_park_default_week(self):

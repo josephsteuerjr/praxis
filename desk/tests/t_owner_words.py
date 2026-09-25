@@ -30,7 +30,21 @@ sys.path.insert(0, str(HERE.parent / "localharness"))
 
 import owner_words  # noqa: E402
 
-TREE_AGENT = ROOT / "helene" / "core" / "agent.py"
+def _tree_agent() -> Path:
+    """`agent.py` дерева, которое РЕАЛЬНО едет в поставку: HELENE_TREE_SRC, дерево сборки
+    (HELENE_BODY_DIR/tree), иначе слой репозитория. Ревью 25.09 (A9 F1): стенд сверял слой
+    чекаута, а в Mac-архив 0.8.6 уехало дерево Windows-архива с прежней фразой."""
+    import os  # noqa: PLC0415
+    for var, sub in (("HELENE_TREE_SRC", ""), ("HELENE_BODY_DIR", "tree")):
+        raw = os.environ.get(var)
+        if raw:
+            candidate = (Path(raw) / sub if sub else Path(raw)) / "agent.py"
+            if candidate.is_file():
+                return candidate
+    return ROOT / "helene" / "core" / "agent.py"
+
+
+TREE_AGENT = _tree_agent()
 NAME = re.compile(r"Yegor|Егор|Egor")
 
 #: Функции дерева, где имя владельца ОСТАЁТСЯ (тексты внутри рук, механизмы, которых в

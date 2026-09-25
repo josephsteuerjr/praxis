@@ -330,7 +330,7 @@ class WiringTests(Pass21Base):
         self.assertIn("force=true", out)
         out = agent.tool_manage_loop("park", "test", match="нить", force=True,
                                      reason="жду ответа поставщика, это не жвачка")
-        self.assertIn("Запарковала", out)
+        self.assertIn("Запарковано", out)
 
     def test_tool_scope_guard(self):
         import agent

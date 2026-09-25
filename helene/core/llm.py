@@ -234,8 +234,10 @@ def _hold_words(until: float | None) -> str:
     if not until:
         return "время восстановления неизвестно"
     try:
-        return "до " + _dt.datetime.fromtimestamp(until).strftime("%H:%M")
-    except (OverflowError, OSError, ValueError):
+        # Её часы (`praxis_time`), не системный пояс: в контейнере он UTC, и «до 09:23»
+        # означало бы 13:23 по Самаре (ревью 25.09, A1 F5).
+        return "до " + praxis_time.local_from(float(until)).strftime("%H:%M")
+    except (OverflowError, OSError, ValueError, TypeError):
         return "время восстановления неизвестно"
 
 
@@ -246,9 +248,14 @@ def _hold_endpoint(framework: str, err: RelayTerminalError) -> dict:
     until = err.resets_at
     if isinstance(err, QuotaExhaustedError) and not until:
         until = _time.time() + QUOTA_HOLD_DEFAULT_SEC
+    elif isinstance(err, RelayNeedsLoginError):
+        # Вход делает владелец, и окно/служба перезапускают реле по маркеру за секунды:
+        # держать 15 минут значило бы гонять ходы на запасного после уже сделанного
+        # входа (A1 F8). Короткая пауза — и снова пробуем: реле отвечает мгновенно.
+        until = until or (_time.time() + LOGIN_HOLD_SEC)
     elif not isinstance(err, QuotaExhaustedError):
-        # Нужен вход или слоты отказали по-разному: само не восстановится — держим
-        # умеренно, чтобы не долбить реле, но и не молчать вечно.
+        # Слоты отказали по-разному: само не восстановится — держим умеренно, чтобы не
+        # долбить реле, но и не молчать вечно.
         until = until or (_time.time() + QUOTA_HOLD_DEFAULT_SEC)
     if isinstance(err, QuotaExhaustedError):
         words = "подписка исчерпана " + (
@@ -258,13 +265,37 @@ def _hold_endpoint(framework: str, err: RelayTerminalError) -> dict:
     elif isinstance(err, RelayNeedsLoginError):
         words = "подписка требует нового входа"
     else:
-        words = "подписка недоступна: " + str(err)[:120]
+        # Словами по коду, а не английской диагностикой реле (A1 F3); её текст — в message.
+        words = "подписки отказали по разным причинам (нужен вход / лимит)"
     hold = {"framework": framework, "endpoint": key, "code": err.code,
             "message": str(err)[:300], "slot": err.slot,
             "since": _time.time(), "until": until, "words": words}
     _ENDPOINT_HOLD[key] = hold
     _write_quota_state()
     return hold
+
+
+#: Сколько держать эндпойнт после «нужен вход»: владелец входит, реле перезапускается по
+#: маркеру за секунды — дальше пробуем каждую минуту.
+LOGIN_HOLD_SEC = float(os.getenv("PRAXIS_LOGIN_HOLD_SEC", "60") or 60)
+#: Без запасного на другом эндпойнте при действующем удержании в реле ходим не чаще
+#: этого (A1 F4): не 30 отказов за час, а один пробный поход раз в пять минут.
+HOLD_PROBE_EVERY_SEC = float(os.getenv("PRAXIS_HOLD_PROBE_SEC", "300") or 300)
+_HOLD_JOURNALED: dict[str, tuple[str, float]] = {}
+
+
+def _journal_hold_once(role: str, framework: str, held: dict) -> None:
+    """Строка в дневник — при смене состояния (новое удержание или другой код), не на
+    каждый ход (A1 F4: 30 ходов за час — 30 строк «подписка исчерпана»)."""
+    key = str(held.get("endpoint") or framework)
+    code = str(held.get("code") or "")
+    prev = _HOLD_JOURNALED.get(key)
+    now = _time.time()
+    if prev and prev[0] == code and now - prev[1] < 1800:
+        return
+    _HOLD_JOURNALED[key] = (code, now)
+    _journal("%s: %s (%s) — ходы идут на запасного провайдера, если он на другом "
+             "эндпойнте" % (_ROLE_RU[role], held.get("words"), framework))
 
 
 def _endpoint_hold(framework: str) -> dict | None:
@@ -2373,11 +2404,17 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         # отказом, а сразу уходим на запасного. Нет другой ноги — идём как обычно: реле
         # само скажет, если окно ещё закрыто, и снимет удержание, если уже нет.
         _hold = _endpoint_hold(fw)
-        if _hold is not None and _fallback_leg_elsewhere(rc, fw):
-            raise _RELAY_TERMINAL_CLASSES.get(str(_hold.get("code")), RelayTerminalError)(
-                str(_hold.get("words") or _hold.get("message") or "эндпойнт удержан"),
-                code=str(_hold.get("code") or ""), slot=str(_hold.get("slot") or ""),
-                resets_at=_hold.get("until"), synthetic=True)
+        if _hold is not None:
+            _probe_due = (_time.time() - float(_hold.get("probed_at") or _hold.get("since") or 0)
+                          >= HOLD_PROBE_EVERY_SEC)
+            if _fallback_leg_elsewhere(rc, fw) or not _probe_due:
+                # Есть другая нога — уходим на неё; нет — молчим синтетическим отказом и
+                # пробуем реле не чаще раза в HOLD_PROBE_EVERY_SEC (A1 F4).
+                raise _RELAY_TERMINAL_CLASSES.get(str(_hold.get("code")), RelayTerminalError)(
+                    str(_hold.get("words") or _hold.get("message") or "эндпойнт удержан"),
+                    code=str(_hold.get("code") or ""), slot=str(_hold.get("slot") or ""),
+                    resets_at=_hold.get("until"), synthetic=True)
+            _hold["probed_at"] = _time.time()
         resp, empty_retries = _call_retrying_empty(
             fw, model, retries=(1 if end_after_spoken else None), _resolved=True,
             system=system, messages=messages, tools=tools,
@@ -2417,10 +2454,17 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
                     cc=(int(_u["cache_creation"]) if "cache_creation" in _u else -1))
         return resp
     except Exception as e:
-        if end_after_spoken and isinstance(e, BrokenChannelError):
+        _synthetic = bool(getattr(e, "synthetic", False))
+        if isinstance(e, RelayTerminalError) and not _synthetic:
+            # Реле назвало лимит/вход кодом: эндпойнт закрываем до часа восстановления и
+            # говорим об этом словами — при смене состояния, не на каждый ход.
+            _journal_hold_once(role, fw, _hold_endpoint(fw, e))
+        if end_after_spoken and isinstance(e, (BrokenChannelError, RelayTerminalError)):
             # Конец хода, а не смерть канала: сказанное уже доставлено, и любая смерть
-            # продолжения закрывает ход сказанным. В след — честная строка с ok=True и
-            # нулями: вызов состоялся, продолжения не будет, мы это услышали.
+            # продолжения закрывает ход сказанным — в том числе терминал реле и
+            # синтетический отказ по удержанию (A1 F1: иначе запасная модель переисполняла
+            # уже принятое решение — «луна слала ту же реплику заново»). В след — честная
+            # строка с ok=True и нулями: вызов состоялся, продолжения не будет.
             _call_trace(role, model, ok=True, cached=0, prompt=0, out_tokens=0,
                         latency_ms=(_time.time() - t0) * 1000, error="end_after_spoken",
                         gap_sec=_gap, tools_digest=_tools, vision=vision_used,
@@ -2429,13 +2473,6 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
                                usage={}, framework=fw, model=model, vision=vision_used)
         err = f"{type(e).__name__}: {str(e)[:120]}"
         st["last_error"] = err
-        _synthetic = bool(getattr(e, "synthetic", False))
-        if isinstance(e, RelayTerminalError) and not _synthetic:
-            # Реле назвало лимит/вход кодом: эндпойнт закрываем до часа восстановления и
-            # говорим об этом один раз словами, а не английской диагностикой в чате.
-            _held = _hold_endpoint(fw, e)
-            _journal("%s: %s (%s) — ходы идут на запасного провайдера, если он на другом "
-                     "эндпойнте" % (_ROLE_RU[role], _held["words"], fw))
         if not _synthetic:
             # Счётчик `empty` в brain — это «канал вернул вырожденный ответ», и оборванный
             # стрим входит в него на равных; ЧТО именно случилось, различает имя класса.
@@ -2446,10 +2483,13 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         # кэша с обрывом» закрывается цифрой, а не сдвигом медианы на восьми случаях.
         # У упавшего вызова usage чаще всего нет — тогда `cached`/`in` останутся нулями,
         # и это честный ноль «не знаем», а не «кэша не было».
-        _call_trace(role, model, ok=False, cached=0, prompt=0, out_tokens=0,
-                    latency_ms=(_time.time() - t0) * 1000, error=err, gap_sec=_gap,
-                    tools_digest=_tools, vision=vision_used,
-                    key=_key, sys_sha8=_sys_sha, sys_len=_sys_len)
+        if not _synthetic:
+            # Синтетический отказ по удержанию — ноль походов в сеть: строка следа с
+            # ok=False считалась бы окном как ошибка модели (A1 F6). Не пишем ничего.
+            _call_trace(role, model, ok=False, cached=0, prompt=0, out_tokens=0,
+                        latency_ms=(_time.time() - t0) * 1000, error=err, gap_sec=_gap,
+                        tools_digest=_tools, vision=vision_used,
+                        key=_key, sys_sha8=_sys_sha, sys_len=_sys_len)
         if isinstance(e, TornStreamError):
             # Потеря названа вслух. Оборванный стрим — единственный случай, где мы выбрасываем
             # уже сказанное: снаружи это неотличимо от «модель ответила иначе», и без записи
@@ -2536,7 +2576,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
                         prompt=int(_fu.get("in", 0) or 0),
                         out_tokens=int(_fu.get("out", 0) or 0),
                         latency_ms=(_time.time() - t1) * 1000,
-                        error="fallback", effort=str(role_effort or ""),
+                        effort=str(role_effort or ""),
                         stop=str(getattr(resp, "stop_reason", "") or ""),
                         fallback=True, tools_digest=_tools, vision=fallback_vision_used,
                         key=(cache_address(resolved_fb_model, _sys_text) if other == "openai" else ""),

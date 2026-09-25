@@ -973,6 +973,10 @@ def _config_watch_forever(config_path: Path, tree: Path) -> None:
         _deliver_unspoken = bool((cfg.get("agent") or {}).get("deliver_unspoken", True))
         if _agent is not None and hasattr(_agent, "BOUNDARY_DELIVERS_UNSPOKEN"):
             _agent.BOUNDARY_DELIVERS_UNSPOKEN = bool(_deliver_unspoken)
+        # Ревью 25.09 (A6 F11): галочка «Пост «думаю…»» тоже читается на тике — расписка
+        # окна обещает применение без перезапуска, и движок обязан это держать.
+        global _status_message
+        _status_message = bool((cfg.get("telegram") or {}).get("status_message", False))
 
 
 def _heartbeat_forever(inbox: Path) -> None:
@@ -1423,7 +1427,7 @@ def _sweep_processed(processed: Path, days: int = 14) -> None:
     cutoff = time.time() - max(1, int(days)) * 86400
     removed = 0
     try:
-        entries = list(processed.glob("*.md"))
+        entries = list(processed.glob("*.md")) + list(processed.glob("*.md.done"))
     except OSError:
         return
     for stale in entries:
@@ -1579,6 +1583,74 @@ def _settle_mode(cfg: dict, config_path: Path) -> dict:
     return picture
 
 
+def _mark_done(processed: Path, name: str, word: str) -> None:
+    """Парная метка `.done`: записка разобрана (ход состоялся, пустая, усыновлена)."""
+    try:
+        (processed / (name + ".done")).write_text(f"{word} {time.time():.0f}\n", encoding="utf-8")
+    except OSError:
+        log.debug("метка .done не записалась [%s]", name, exc_info=True)
+
+
+def _handle_note(path: Path, message: str, processed: Path) -> None:
+    """Ход по записке окна и метка `.done` ПОСЛЕ него (ревью 25.09, A6 F1).
+
+    Раньше обычный путь метку не ставил вовсе: replay на том же тике переигрывал
+    каждую записку второй раз (два хода, два ответа в окно), а после обновления —
+    записки прошлых недель. Упавший ход метки не получает: его подберёт replay по
+    тому же ingress id (память не дублируется).
+
+    `<stamp>__to__<комната>.md` — адресная записка композера: реплика владельца в
+    telegram-комнату или в другую комнату окна (`window-<hex>`); без суффикса —
+    комната окна по умолчанию. Штамп записки — ingress id хода.
+    """
+    if not message:
+        _mark_done(processed, path.name, "empty")
+        return
+    target = _inbox_target(path.stem)
+    message, attached = _split_attachments(message)
+    ingress_id = f"note:{path.stem}"
+    try:
+        if transport.is_room(target):
+            handle_desk(message, room=target, attachments=attached,
+                        ingress_id=ingress_id)
+        else:
+            if attached:
+                # Канал отказывает таким запискам сам; если файл всё же
+                # приехал — не терять молча.
+                log.warning("вложения окна в Telegram-комнату не едут [%s]: %s",
+                            target, ", ".join(attached))
+            handle_owner_note(target, message)
+    except Exception:
+        log.exception("ход окна упал [%s] — записка без .done, replay повторит", target)
+        return
+    _mark_done(processed, path.name, "done")
+
+
+def _adopt_stale_processed(processed: Path, older_than_sec: int = 1800) -> int:
+    """На старте: записки в processed старше получаса без `.done` — усыновить, не переигрывать.
+
+    Метка `.done` на обычном пути появилась 25.09; у обновившихся установок в
+    processed лежат записки прошлых недель без метки, и replay поднял бы по каждой
+    полный ход. Свежие (моложе получаса) — настоящие кандидаты на replay после падения.
+    """
+    cutoff = time.time() - max(60, int(older_than_sec))
+    adopted = 0
+    try:
+        entries = list(processed.glob("*.md"))
+    except OSError:
+        return 0
+    for path in entries:
+        try:
+            if path.stat().st_mtime < cutoff and not (processed / (path.name + ".done")).exists():
+                _mark_done(processed, path.name, "adopted")
+                adopted += 1
+        except OSError:
+            continue
+    if adopted:
+        log.info("processed: усыновлено старых записок без метки: %d (replay их не тронет)", adopted)
+    return adopted
+
+
 def _replay_unclaimed_notes(processed: Path, limit: int = 5) -> list[str]:
     """Replay processed-записок, чей ход не дошёл до модели (срез 20.09).
 
@@ -1590,16 +1662,17 @@ def _replay_unclaimed_notes(processed: Path, limit: int = 5) -> list[str]:
     рестарта. Возвращаются имена отыгранных записок.
     """
     replayed: list[str] = []
-    for path in sorted(processed.glob("*.md"))[:max(0, int(limit or 5))]:
-        if (processed / (path.name + ".done")).exists():
-            continue
+    # Фильтр по `.done` — ДО среза: иначе пять старейших разобранных записок
+    # закрывали бы дорогу настоящим кандидатам (A6 F1г).
+    unclaimed = [path for path in sorted(processed.glob("*.md"))
+                 if not (processed / (path.name + ".done")).exists()]
+    for path in unclaimed[:max(0, int(limit or 5))]:
         try:
             message = _read_message(path)
         except OSError:
             continue
         if not message:
-            (processed / (path.name + ".done")).write_text(
-                "empty\n", encoding="utf-8")
+            _mark_done(processed, path.name, "empty")
             continue
         target = _inbox_target(path.stem)
         message, attached = _split_attachments(message)
@@ -1613,8 +1686,7 @@ def _replay_unclaimed_notes(processed: Path, limit: int = 5) -> list[str]:
         except Exception:
             log.exception("replay хода упал [%s] — записка осталась без .done", path.name)
             continue
-        (processed / (path.name + ".done")).write_text(
-            f"{time.time():.0f}\n", encoding="utf-8")
+        _mark_done(processed, path.name, "replayed")
         replayed.append(path.name)
     return replayed
 
@@ -1629,12 +1701,23 @@ def main() -> None:
     # новой поставки до подмены папок; годится и человеку из терминала.
     parser.add_argument("--check-extensions", action="store_true")
     parser.add_argument("--data", default="")
+    # Версия ПРОГРАММЫ, под которую репетируем: мастер передаёт её из паспорта ПОСТАВКИ
+    # (ревью 25.09, A5 F1: паспорт в корне установки — это старая версия, и `requires`
+    # сверялся бы не с тем). Без флага — паспорт этого движка (лежит на два уровня выше
+    # `app/localharness`), потом уже паспорт рядом с конфигом.
+    parser.add_argument("--host-version", default="")
     args = parser.parse_args()
     if args.check_extensions:
+        import contextlib
         import extensions
         data_dir = Path(args.data or (Path(args.config).resolve().parent / "data" if args.config else "data"))
-        passport = _read_passport(Path(args.config).resolve().parent if args.config else data_dir.parent)
-        report = extensions.check(data_dir, host_version=passport)
+        passport = (args.host_version.strip()
+                    or _read_passport(Path(__file__).resolve().parents[2])
+                    or _read_passport(Path(args.config).resolve().parent if args.config else data_dir.parent))
+        # Код расширений печатает в stdout что хочет (отладочный print на импорте —
+        # обычное дело); отчёт обязан остаться единственным JSON в stdout (A5 F2).
+        with contextlib.redirect_stdout(sys.stderr):
+            report = extensions.check(data_dir, host_version=passport)
         print(json.dumps(report, ensure_ascii=False, indent=1))
         raise SystemExit(0 if report.get("ok") else 2)
     if not args.config:
@@ -1849,6 +1932,7 @@ def main() -> None:
     processed = inbox / "processed"
     processed.mkdir(parents=True, exist_ok=True)
     _sweep_processed(processed)
+    _adopt_stale_processed(processed)
     swept_at = time.time()
     log.info("локальный код агента: дерево данных %s · код %s · транспорты: окно%s",
              tree, code_dir, "" if _bot is None else " + бот @" + _bot.username)
@@ -1883,30 +1967,7 @@ def main() -> None:
                 os.replace(path, processed / path.name)
             except OSError:
                 continue
-            if not message:
-                continue
-            # `<stamp>__to__<комната>.md` — адресная записка композера: реплика
-            # владельца в telegram-комнату или в другую комнату окна
-            # (`window-<hex>`). Без суффикса — комната окна по умолчанию.
-            target = _inbox_target(path.stem)
-            message, attached = _split_attachments(message)
-            # 20.09: ШТАМП записки — ingress id хода. Записка уже в processed,
-            # но между переносом и ходом есть crash-окно; replay по тому же id
-            # не дублирует ни память (dedupe_key), ни жизнь комнаты.
-            ingress_id = f"note:{path.stem}"
-            try:
-                if transport.is_room(target):
-                    handle_desk(message, room=target, attachments=attached,
-                                ingress_id=ingress_id)
-                else:
-                    if attached:
-                        # Канал отказывает таким запискам сам; если файл всё же
-                        # приехал — не терять молча.
-                        log.warning("вложения окна в Telegram-комнату не едут [%s]: %s",
-                                    target, ", ".join(attached))
-                    handle_owner_note(target, message)
-            except Exception:
-                log.exception("ход окна упал [%s]", target)
+            _handle_note(processed / path.name, message, processed)
         # 20.09: replay processed-записок, чей ход не дошёл до модели (краш между
         # переносом в processed и ходом). Одна попытка на записку: отмечаем
         # .done по факту завершения handle_desk без исключения; исключение внутри

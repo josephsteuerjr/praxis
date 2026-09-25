@@ -166,8 +166,6 @@ fn watch_parent(name: &'static str) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    #[cfg(unix)]
-    watch_parent("praxis-bridge");
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -175,6 +173,10 @@ async fn main() -> Result<()> {
         )
         .json()
         .init();
+    // Сторож родителя — после init лога: иначе предупреждение «сторож не поднялся» терялось
+    // (ревью 25.09, A8 F5).
+    #[cfg(unix)]
+    watch_parent("praxis-bridge");
     let args = Args::parse();
     validate_tokens(&args.device_token, &args.controller_token)?;
     let chunk_size = args.chunk_size.clamp(64 * 1024, 16 * 1024 * 1024);

@@ -1244,6 +1244,7 @@ fn supervise(
                     Ok(fresh) => {
                         if relay_fingerprint(&fresh) != relay_fingerprint(&plan) {
                             log.line("реле: настройки в helene.json изменились — применяю без перезапуска службы");
+                            let had_own = relay.is_some();
                             if let Some(child) = &mut relay {
                                 let _ = child.kill();
                                 let _ = child.wait();
@@ -1252,7 +1253,12 @@ fn supervise(
                             relay = None;
                             relay_backoff = 0;
                             relay_not_before = Instant::now();
-                            relay_yielded = false;
+                            // Ревью 25.09 (A5 F4): «уступила порт» сбрасывается только если реле
+                            // было своё — иначе каждое «Сохранить» печатало бы строку про чужую
+                            // копию заново, а обещано «один раз на состояние».
+                            if had_own {
+                                relay_yielded = false;
+                            }
                             relay_enabled = fresh.relay_enabled;
                             if !relay_enabled {
                                 log.line("реле: по новым настройкам выключено");

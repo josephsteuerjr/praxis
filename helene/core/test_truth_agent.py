@@ -1760,7 +1760,7 @@ class SilenceContourTests(unittest.TestCase):
             finally:
                 agent._TURN_SILENCE.reset(token)
             self.assertEqual(len(holder["why"]), min(length, cap))
-            self.assertEqual("обрезала" in out, must_say, f"длина {length}")
+            self.assertEqual("обрезана" in out, must_say, f"длина {length}")
             self.assertIn("я" * length, self.journal[-1],
                           "в дневник причина уходит целиком")
 

@@ -49,6 +49,13 @@ class Table(unittest.TestCase):
         stray = api_only - table
         self.assertFalse(stray, f"HTTP-ручки мимо таблицы: {stray}")
 
+    def test_interrupt_and_supervisor_are_in_the_table(self):
+        # Ревью 25.09 (A12 F8): кнопка «Остановить ход» шлёт POST /api/interrupt, квитанцию
+        # окно читает из GET /api/supervisor — обе ручки обязаны быть в таблице канала.
+        table = {(r.method, r.path) for r in deskapp.ROUTES}
+        self.assertIn(("POST", "/api/interrupt"), table)
+        self.assertIn(("GET", "/api/supervisor"), table)
+
     def test_tunnel_finds_every_row(self):
         for route in deskapp.ROUTES:
             sample = route.path.replace("{peer}", "-100123").replace("{stream}", "s1") \

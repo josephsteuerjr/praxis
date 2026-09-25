@@ -30,7 +30,10 @@ _MARKER_RE = re.compile(r"^\[praxis-bg-pid\]\s+(\d+)\s*$", re.M)
 
 def wrap_background_launch(command: str) -> tuple[str, bool]:
     """Команда с запуском в фон (последняя команда заканчивается на `&`) получает хвост,
-    печатающий pid последнего фонового задания. Остальные — без изменений."""
+    печатающий pid последнего фонового задания. Остальные — без изменений.
+
+    Честно о границе: учитывается ТОЛЬКО хвостовой `&`. `setsid x` без `&`, `nohup x &  # note`
+    и конвейер `a | tee log &` (pid у tee) остаются мимо реестра — она видит их через ps."""
     text = str(command or "")
     stripped = text.rstrip()
     if not stripped.endswith("&") or stripped.endswith("&&"):
@@ -63,13 +66,16 @@ def display_name(command: str) -> str:
     интерпретатора пропускаются; интерпретатор без скрипта называется сам.
     """
     text = " ".join(str(command or "").split())
-    tokens = text.replace("&&", " ").split()
+    tokens = text.replace("&&", " ").replace(";", " ").split()
     i = 0
     while i < len(tokens):
         token = tokens[i]
         low = token.lower()
         if low in _WRAPPERS or ("=" in token and not token.startswith("-")):
             i += 1
+            continue
+        if low == "cd" and i + 1 < len(tokens):
+            i += 2            # `cd <dir> && …` — обёртка, не программа (A10 F10)
             continue
         base = os.path.basename(token)
         if base.lower() in _INTERPRETERS:

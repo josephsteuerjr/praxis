@@ -136,7 +136,7 @@ BODY_BINARIES = {"praxis-bridge": "helene-bridge", "praxis-body": "helene-body"}
 BODY_SRC_PATTERNS = ("Cargo.toml", "Cargo.lock", "crates/*/Cargo.toml", "crates/*/src/**/*.rs")
 
 
-def body_src_for(tree: Path | None) -> Path:
+def body_src_for(tree: Path | None, *, strict: bool = False) -> Path:
     """Исходник тела — ОДИН на обе сборки (25.09): крейты `body/` дерева агента, которое
     едет в поставку (`tree/`). Windows-сборка берёт их оттуда же (`build_dist.py`,
     BODY_TARGET). Раньше Mac собирал из зеркала `praxis/body`, Windows — из `live/body`,
@@ -145,6 +145,12 @@ def body_src_for(tree: Path | None) -> Path:
     (старый архив выпуска) — прежний путь, зеркало."""
     if tree is not None and (tree / "body" / "Cargo.toml").is_file():
         return tree / "body"
+    if tree is not None and strict:
+        # Сборка в выпуск: дерево без крейтов — отказ, а не молчаливый откат на зеркало без
+        # darwin-веток (ревью 25.09, A8 F4); полусборка — с --allow-partial.
+        raise SystemExit(f"в дереве поставки нет body/Cargo.toml ({tree / 'body'}) — тело собирать "
+                         "не из чего; зеркало praxis/body без darwin-веток годится только с --allow-partial")
+    print(f"  ⚠ тело: в дереве нет body/ — беру зеркало {BODY_SRC} (без darwin-веток)")
     return BODY_SRC
 #: Откуда зеркало `praxis/`: коммит прода и дата снимка (`installer/core_src.py`).
 CORE_SOURCE = ROOT / "CORE-SOURCE.json"
@@ -519,13 +525,19 @@ def core_source(path: Path = CORE_SOURCE) -> dict:
 
 
 def body_summary(*, mirror: dict, crates: tuple[str, ...], digest: str, files: int,
-                 exe_sha256: dict, target_dir: str) -> dict:
-    """Поле `body` паспорта: коммит зеркала прода (`CORE-SOURCE.json`), крейты,
-    отпечаток исходника, суммы бинарей. Darwin-ветки живут в этом репозитории
-    поверх зеркала — их коммит есть в `git.desk` того же паспорта."""
+                 exe_sha256: dict, target_dir: str, source: str = "praxis/body",
+                 tree_head: str = "") -> dict:
+    """Поле `body` паспорта: откуда крейты и какой коммит, отпечаток исходника, суммы бинарей.
+
+    С 25.09 тело собирается из `tree/body` архива выпуска (darwin-ветки живут в дереве
+    издания); тогда `source="tree/body"` и `commit` — коммит ДЕРЕВА поставки
+    (`git.tree` паспорта Windows-архива). Зеркало `praxis/body` — только откат, и тогда
+    коммит — голова зеркала (`CORE-SOURCE.json`). Раньше паспорт писал «praxis/body @
+    зеркало» при любом источнике (ревью 25.09, A8 F3 / A9 F2)."""
+    from_tree = source == "tree/body"
     return {
-        "source": "praxis/body",
-        "commit": str(mirror.get("head") or ""),
+        "source": source,
+        "commit": str(tree_head or "") if from_tree else str(mirror.get("head") or ""),
         "mirror_taken_at": str(mirror.get("taken_at") or ""),
         "mirror_dirty": bool(mirror.get("dirty")),
         "crates": list(crates),
@@ -831,10 +843,11 @@ https://mirrors.edge.kernel.org/pub/software/scm/git/ (`git-__GIT_VERSION__.tar.
 
 ## Тело тула `computer` (`helene-body`, `helene-bridge`)
 
-Оба собраны из крейтов `praxis/body` репозитория Hélène (зеркало кода Праксис
-плюс ветки для macOS): `praxis-body`, `praxis-bridge`, `praxis-body-protocol`;
-коммит зеркала и отпечаток исходника записаны в паспорте сборки (`body`), сами
-исходники — в репозитории https://github.com/josephsteuerjr/praxis (`praxis/body`).
+Оба собраны из крейтов `body/` дерева агента, которое едет в поставку (`tree/body` —
+те же крейты, что в `praxis/body` зеркала кода Праксис, плюс ветки для macOS):
+`praxis-body`, `praxis-bridge`, `praxis-body-protocol`; источник, коммит и отпечаток
+исходника записаны в паспорте сборки (`body`), сами исходники — в репозитории
+https://github.com/josephsteuerjr/praxis (`praxis/body`; darwin-ветки — в `helene/core/body`).
 Их зависимости (axum, tokio, rusqlite с bundled SQLite — Public Domain,
 core-foundation и core-graphics — MIT или Apache-2.0, и остальные) перечислены
 в `licenses/body/README.md`, тексты — рядом.
@@ -1298,7 +1311,8 @@ def body_target_dir(cache: Path) -> Path:
     return Path(cache) / "body-target"
 
 
-def build_body(cache: Path, skip_rust: bool, src: Path | None = None) -> tuple[dict[str, Path], dict]:
+def build_body(cache: Path, skip_rust: bool, src: Path | None = None,
+               tree_head: str = "") -> tuple[dict[str, Path], dict]:
     """Мост и тело из крейтов `body/` -> {имя в поставке: путь к бинарю}, запись для
     паспорта. `src` — исходник тела (`body_src_for`: дерево поставки, иначе зеркало);
     клонировать нечего: исходник лежит рядом."""
@@ -1326,8 +1340,10 @@ def build_body(cache: Path, skip_rust: bool, src: Path | None = None) -> tuple[d
     mirror = core_source()
     info = body_summary(mirror=mirror, crates=BODY_CRATES, digest=digest, files=files,
                         exe_sha256={name: bd.sha256(exe) for name, exe in exes.items()},
-                        target_dir=str(target))
-    print(f"  тело из praxis/body @ зеркало {info['commit'][:7] or '(CORE-SOURCE.json нет)'}: "
+                        target_dir=str(target),
+                        source="praxis/body" if src == BODY_SRC else "tree/body",
+                        tree_head=tree_head)
+    print(f"  тело из {info['source']} @ {info['commit'][:7] or '(коммит неизвестен)'}: "
           f"{files} файлов исходника, отпечаток {digest[:12]}")
     return exes, info
 
@@ -1462,7 +1478,8 @@ def collect_relay_licenses(out: Path, src: Path, allow_partial: bool) -> int:
     return len(index)
 
 
-def body_license_head(n_crates: int, mirror_head: str, missing: list[str]) -> list[str]:
+def body_license_head(n_crates: int, mirror_head: str, missing: list[str],
+                      source: str = "praxis/body") -> list[str]:
     """Шапка `licenses/body/README.md`: чьи крейты, откуда, на каких условиях.
     Слова о лицензии тела — те же, что в ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md у Windows:
     код тела — Apache-2.0 по решению автора, поле `license` в манифесте
@@ -1470,9 +1487,13 @@ def body_license_head(n_crates: int, mirror_head: str, missing: list[str]) -> li
     return [
         "# Лицензии Rust-крейтов, влинкованных в helene-bridge и helene-body",
         "",
-        "Мост и тело тула `computer` собраны из крейтов `praxis/body` репозитория Hélène "
-        f"(зеркало кода Праксис, коммит прода {mirror_head[:7] or '?'}, плюс ветки для macOS): "
-        "`praxis-bridge`, `praxis-body`, `praxis-body-protocol`.",
+        (f"Мост и тело тула `computer` собраны из крейтов `{source}` — дерева агента, которое едет "
+         f"в поставку (коммит дерева {mirror_head[:7] or '?'}; те же крейты, что в `praxis/body` "
+         "зеркала, плюс ветки для macOS): "
+         if source == "tree/body" else
+         "Мост и тело тула `computer` собраны из крейтов `praxis/body` репозитория Hélène "
+         f"(зеркало кода Праксис, коммит прода {mirror_head[:7] or '?'}, без веток для macOS): ")
+        + "`praxis-bridge`, `praxis-body`, `praxis-body-protocol`.",
         "Условия самого кода тела — те же, что у дерева агента: Apache-2.0 (`tree/LICENSE`, "
         "`NOTICE` в корне поставки); поле `license = \"PolyForm-Noncommercial-1.0.0\"` в "
         "`praxis/body/Cargo.toml` — старая запись до открытия дерева под Apache-2.0, решение "
@@ -1510,7 +1531,7 @@ def collect_body_licenses(out: Path, src: Path, allow_partial: bool,
         print("  ⚠ нет реестра cargo: лицензии крейтов тела не собраны")
         return 0
     index, missing = license_texts(dest, crates, registry)
-    head = body_license_head(len(set(crates)), mirror_head(body) or mirror_head(core_source()), missing)
+    head = body_license_head(len(set(crates, source=("tree/body" if src != BODY_SRC else "praxis/body"))), mirror_head(body) or mirror_head(core_source()), missing)
     (dest / "README.md").write_text("\n".join(head + sorted(index)) + "\n",
                                     encoding="utf-8", newline="\n")
     return len(index)
@@ -1679,7 +1700,10 @@ def main() -> None:
         print("  ⚠ --skip-body: тела в сборке не будет — это ОТЛАДОЧНАЯ полусборка, не выпуск")
     else:
         try:
-            body_exes, body_info = build_body(cache, args.skip_rust, body_src_for(live))
+            body_exes, body_info = build_body(
+                cache, args.skip_rust,
+                body_src_for(live, strict=bool(args.from_release) and not args.allow_partial),
+                tree_head=str(((staged_tree or {}).get("passport") or {}).get("git", {}).get("tree") or ""))
             for name, exe in body_exes.items():
                 shutil.copy2(exe, out / name)
                 (out / name).chmod(0o755)

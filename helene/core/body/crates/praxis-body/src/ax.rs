@@ -1456,7 +1456,15 @@ pub mod live {
                     if attributes.label.is_none()
                         && matches!(role.as_deref(), Some("AXStaticText") | Some("AXHeading"))
                     {
-                        attributes.label = label.copy_attribute("AXValue")?
+                        // Тот же or_else, что у двух хопов выше: исчезнувшая или занятая
+                        // подпись — не отказ исходного узла и не «search incomplete»
+                        // (ревью 25.09, A8 F2).
+                        let value = match label.copy_attribute("AXValue") {
+                            Ok(value) => value,
+                            Err(error) if matches!(error.code, super::AX_ERROR_INVALID_UI_ELEMENT | super::AX_ERROR_CANNOT_COMPLETE) => return Ok(attributes),
+                            Err(error) => return Err(error),
+                        };
+                        attributes.label = value
                             .and_then(|value| value.downcast::<CFString>())
                             .map(|value| value.to_string()).filter(|value| !value.is_empty());
                     }

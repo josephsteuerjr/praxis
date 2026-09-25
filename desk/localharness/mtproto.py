@@ -204,7 +204,8 @@ class MtprotoClient:
             chat, str(params.get("text") or ""),
             reply_to=int(reply_to) if reply_to else None,
             parse_mode=self._parse_mode(params.get("parse_mode")),
-            link_preview=not bool(params.get("disable_web_page_preview")))
+            link_preview=not bool(params.get("disable_web_page_preview")),
+            silent=bool(params.get("disable_notification")))
         return {"message_id": int(msg.id), "chat": {"id": chat}}
 
     def upload(self, method: str, field: str, path: Path, *, mime: str = "",

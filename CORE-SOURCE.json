@@ -1,10 +1,11 @@
 {
  "mirror": "praxis",
- "source": "..\\..\\oro-prod-source",
+ "source": "/opt/praxis (прод) через локальный чекаут oro-prod-source @ b440156",
  "head": "b440156",
  "dirty": false,
  "taken_at": "2026-09-24T21:26:21+00:00",
  "files": 585,
  "digest": "020679170736d64f6b31763d8b50d1c1e8059f87059e08f9c949f7eba42bf3c8",
- "by": "installer/core_src.py --export-core"
+ "by": "installer/core_src.py --export-core",
+ "note": "экспорт 24.09 21:26 UTC; мусор её рабочих следов (rep*.txt, *.log, *.pid) снят правилом core_src.JUNK"
 }

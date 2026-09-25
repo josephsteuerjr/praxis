@@ -82,7 +82,8 @@ SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".vectors", ".proposals",
 #: копит рядом с файлами. Их расхождение не значит ничего.
 SKIP_SUFFIXES = (".pyc", ".pyo", ".bak", ".session-journal")
 #: `.deploy.env` — секреты выкладки; он и не в git, и изданием быть не может.
-SKIP_PREFIXES = (".env", ".deploy.env")
+# Точные имена, не префиксы: `.env.example` — часть дерева и обязан сверяться (A11 F7).
+SKIP_NAMES_ENV = (".env", ".deploy.env")
 
 #: Машинные файлы: пишет их прогон, а не человек, и расходятся они ВСЕГДА — на каждой
 #: машине свои секунды. В отчёте это шум, который топит настоящее: 10.09 замеры дали 423
@@ -118,7 +119,9 @@ MIRROR_ONLY_DIRS = ("relay/",)
 #: pid-файлы): это следы работы, а не код, и в зеркало (публикацию) им нельзя — 19.09 их
 #: не брали руками, 25.09 правило записано, чтобы `--export-core` не тащил их молча.
 JUNK_SUFFIXES = (".log", ".tmp", ".pid", ".err", ".out")
-_JUNK_TOP_RE = re.compile(r"^(rep\d*[_a-z0-9]*\.txt|gap_.*|formula_.*|mr_ifub.*|hs_ifub.*)$")
+# Узко, по именам её рабочих следов (A9 F6): `rep13.txt`, `rep12_2.txt`, `gap_*.log.tmp`,
+# `formula_*.log`, `mr_ifub*.pid`, `hs_ifub*` — а не любой `rep*.txt`/`gap_*` в корне.
+_JUNK_TOP_RE = re.compile(r"^(rep\d+(_\d+)?\.txt|gap_[^/]*\.(log|tmp|log\.tmp)|formula_[^/]*\.(log|tmp)|mr_ifub[^/]*\.(pid|log|tmp)|hs_ifub[^/]*)$")
 
 
 def _junk(rel: str) -> bool:
@@ -136,7 +139,7 @@ def _skip(rel: str) -> bool:
     name = parts[-1]
     if name in SKIP_NAMES:
         return True
-    if name.endswith(SKIP_SUFFIXES) or name.startswith(SKIP_PREFIXES):
+    if name.endswith(SKIP_SUFFIXES) or name in SKIP_NAMES_ENV:
         return True
     if _junk(rel):
         return True
@@ -390,7 +393,9 @@ def _write_stamp(core: Path, source: Path, head: str, dirty: bool, count: int) -
     total, _each = digest(core)
     (core.parent / STAMP).write_text(json.dumps({
         "mirror": core.name,
-        "source": str(source),
+        # Откуда: абсолютный путь и, если это git-чекаут, его голова — не относительный путь
+        # от неизвестной cwd (A9 F7).
+        "source": str(Path(source).resolve()),
         "head": head,
         "dirty": dirty,
         "taken_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),

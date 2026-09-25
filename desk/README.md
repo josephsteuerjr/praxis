@@ -305,7 +305,7 @@ Silicon, `.github/workflows/macos.yml`). Пока файла workflow нет в 
 Helene-0.8.0-macos-arm64.zip.sha256 install.sh --clobber`. После влития в
 `main` — по кнопке с выкладкой тем же шагом: `gh workflow run macos.yml -f
 tag=v0.8.0 -f upload=true`. Тело (`helene-body`, `helene-bridge`) сборка
-собирает из `praxis/body` этого репозитория (`--target-dir` в кэше сборки), а
+собирает из `tree/body` архива выпуска — тех же крейтов, что и Windows (`--target-dir` в кэше сборки), а
 workflow гоняет его `cargo test` на настоящем Mac и живые стенды
 (`tests/t_body.py`, `tests/t_body_macos.py`) бинарями сборки.
 На самом Mac то же руками: `python3 installer/build_mac.py --from-release v0.8.0`

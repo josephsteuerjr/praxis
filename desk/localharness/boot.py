@@ -1220,7 +1220,18 @@ _OWNED_ROLE_KEYS = ("framework", "model", "max_tokens", "fallback_model",
                     "fallback_framework", "vision_model", "reasoning_effort")
 
 
-def _merge_brain(current: dict, built: dict) -> dict:
+def _projected_fields(built: dict) -> dict[str, list[str]]:
+    """Какие поля фреймворков проекция записала непустыми — расписке, чтобы уметь их снять."""
+    out: dict[str, list[str]] = {}
+    for name, sub in (built.get("frameworks") or {}).items():
+        if isinstance(sub, dict):
+            fields = sorted(k for k, v in sub.items() if v not in (None, ""))
+            if fields:
+                out[str(name)] = fields
+    return out
+
+
+def _merge_brain(current: dict, built: dict, previously_projected: dict | None = None) -> dict:
     """Проекция ПОДМЕШИВАЕТСЯ по вложенным блокам, а не заменяет их целиком (25.09, C.2).
 
     `merged.update(built)` затирал `frameworks` и `roles` целиком: ручная правка
@@ -1232,8 +1243,14 @@ def _merge_brain(current: dict, built: dict) -> dict:
       * `roles.<role>`: ключи, которыми владеет проекция, заменяются набором (нет в
         helene.json — снято), остальные (её `vision_models`, ручные ручки) остаются;
       * всё прочее (`limits`, `pricing`) — как раньше, целиком из проекции.
+
+    Ревью 25.09 (A6 F10): «пустое не трогает записанное руками» не различало ручное и
+    своё — убранный в окне ключ запасного или очищенный адрес жили в llm.json навсегда.
+    `previously_projected` (расписка прошлой проекции: какие поля каких фреймворков
+    записала она сама) снимает ровно их, если теперь они пусты; ручное остаётся.
     """
     merged = dict(current)
+    prev = previously_projected if isinstance(previously_projected, dict) else {}
     for key, value in built.items():
         cur = merged.get(key)
         if key == "frameworks" and isinstance(cur, dict) and isinstance(value, dict):
@@ -1241,9 +1258,12 @@ def _merge_brain(current: dict, built: dict) -> dict:
             for name, sub in value.items():
                 if isinstance(sub, dict):
                     slot = block.get(name) if isinstance(block.get(name), dict) else {}
+                    mine = set(prev.get(str(name)) or ())
                     for field, val in sub.items():
                         if val not in (None, "") or field not in slot:
                             slot[field] = val
+                        elif field in mine:
+                            slot.pop(field, None)   # своё прежнее — снято владельцем в окне
                     block[name] = slot
                 else:
                     block[name] = sub
@@ -1294,10 +1314,13 @@ def project_brain(tree: Path, cfg: dict) -> str:
              "{\"model\": \"…\"} в helene.json")
     fingerprint = hashlib.sha256(
         json.dumps(built, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    previously_projected: dict | None = None
     if target.exists():
         try:
             loaded = json.loads(receipt.read_text(encoding="utf-8"))
             seen = loaded.get("fingerprint") if isinstance(loaded, dict) else None
+            if isinstance(loaded, dict) and isinstance(loaded.get("projected"), dict):
+                previously_projected = loaded["projected"]
         except (OSError, ValueError):
             seen = None
         if seen == fingerprint:
@@ -1314,7 +1337,7 @@ def project_brain(tree: Path, cfg: dict) -> str:
                 merged = current
         except (OSError, ValueError):
             merged = {}
-    merged = _merge_brain(merged, built)
+    merged = _merge_brain(merged, built, previously_projected)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(".tmp-llm.json")
     tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=1),
@@ -1322,7 +1345,8 @@ def project_brain(tree: Path, cfg: dict) -> str:
     os.replace(tmp, target)
     _own_only(target)
     receipt.parent.mkdir(parents=True, exist_ok=True)
-    receipt.write_text(json.dumps({"fingerprint": fingerprint}, ensure_ascii=False),
+    receipt.write_text(json.dumps({"fingerprint": fingerprint,
+                                   "projected": _projected_fields(built)}, ensure_ascii=False),
                        encoding="utf-8", newline="\n")
     role = built["roles"]["voice"]
     return (f"мозг: llm.json записан из helene.json — {role['model']} @ "

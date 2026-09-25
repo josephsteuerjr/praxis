@@ -36,10 +36,17 @@ class Base(unittest.TestCase):
         core_processes.STATE_FILE = self.tmp / "processes.json"
         self.env = mock.patch.dict(os.environ, {"PRAXIS_NOTICES": "on"})
         self.env.start()
+        # адресаты реплики владельца (A10 F4): живые окна и будильники — крючки хозяина
+        self._hooks = (core_notices.live_window_runs, core_notices.pending_alarm_ids)
+        self.live_windows = ["run-W1", "run-W2", "run-W", "run-O"]
+        self.alarms = []
+        core_notices.live_window_runs = lambda: list(self.live_windows)
+        core_notices.pending_alarm_ids = lambda: list(self.alarms)
 
     def tearDown(self):
         self.env.stop()
         core_notices.STATE_FILE, core_processes.STATE_FILE = self._orig
+        core_notices.live_window_runs, core_notices.pending_alarm_ids = self._hooks
 
     @staticmethod
     def block(run="run-A", kind="chat", chat="-100A", owner=False, mid=False, now=None):
@@ -52,13 +59,19 @@ class RoomEvents(Base):
         core_notices.note_incoming(kind="mention", chat_id="-100B", chat_title="абстракт",
                                    who="Hope", message_id=7, gist="а Praxis считает…",
                                    private=False, ts=time.time() - 60)
-        first = self.block()
+        first = self.block(owner=True)
         self.assertIn("НОВОЕ", first)
         self.assertIn("абстракт · Hope — упоминание", first)
         self.assertIn("«а Praxis считает…»", first)
-        second = self.block()
+        second = self.block(owner=True)
         self.assertIn("прочитано", second, "строка остаётся, но уже не как новое")
         self.assertNotIn("НОВОЕ", second)
+        other_run = self.block(run="run-B", owner=True)
+        self.assertIn("прочитано", other_run, "НОВОЕ — по записи, не по run (A10 F6)")
+        self.assertNotIn("НОВОЕ", other_run)
+        public = self.block(run="run-P", owner=False)
+        self.assertIn("абстракт · Hope — упоминание", public, "вне владельческой аудитории — кто и где")
+        self.assertNotIn("Praxis считает", public, "…но не что (A10 F2)")
 
     def test_own_room_gets_no_block(self):
         core_notices.note_incoming(kind="reply", chat_id="-100A", chat_title="доска",
@@ -96,7 +109,7 @@ class RoomEvents(Base):
         core_notices.note_incoming(kind="dm", chat_id="777", chat_title="Егор", who="Егор",
                                    message_id=3, gist="ну их, не поднимаю", private=True)
         public = self.block(owner=False)
-        self.assertIn("ЛС · Егор — новое сообщение", public)
+        self.assertIn("ЛС · Егор — написал(а) в ЛС", public)
         self.assertNotIn("не поднимаю", public, "содержимое личек — не в публичную комнату")
         owner = self.block(run="run-O", owner=True)
         self.assertIn("не поднимаю", owner)
@@ -105,7 +118,9 @@ class RoomEvents(Base):
         core_notices.note_node(task_id="t1", unit_id="agent-7c1d", status="done", goal="LRX")
         core_notices.note_node(task_id="t1", unit_id="agent-7c1d", status="done", goal="LRX")
         self.assertEqual(len(core_notices.pending()), 1)
-        self.assertIn("узел agent-7c1d задачи t1 закончил: done", self.block())
+        self.assertIn("узел agent-7c1d задачи t1 закончил: done", self.block(owner=True))
+        self.assertIn("Forge · узел agent-7c1d закончил", self.block(run="run-P", owner=False))
+        self.assertNotIn("LRX", self.block(run="run-P2", owner=False), "заказ владельца — не в чужую комнату")
 
     def test_ttl_and_cap(self):
         now = time.time()
@@ -146,8 +161,10 @@ class OwnerWords(Base):
         other = self.block(run="run-W2", kind="task_window", chat="777", owner=True)
         self.assertIn("не поднимаю", other, "другое живое окно видит свою копию")
         chat = self.block(run="run-C", kind="chat", chat="-100B", owner=False)
-        self.assertIn("ЛС · Егор — новое сообщение", chat, "ход чата видит событие комнаты…")
+        self.assertIn("ЛС · Егор — написал(а) в ЛС", chat, "ход чата видит событие комнаты…")
         self.assertNotIn("владелец в ЛС", chat, "…но не строку для окон")
+        self.assertEqual(window.count("не поднимаю"), 1,
+                         "в окне реплика владельца одна строка, не две (A10 F7)")
 
     def test_owner_line_content_hidden_when_window_is_not_owner_audience(self):
         core_notices.note_owner_line("секретное", chat_id="777", message_id=1)
@@ -174,11 +191,11 @@ class MidTurn(Base):
     def test_mid_turn_shows_only_what_this_run_has_not_seen(self):
         core_notices.note_incoming(kind="mention", chat_id="-100B", chat_title="B", who="a",
                                    message_id=1, gist="first", private=False, ts=time.time() - 20)
-        self.assertIn("first", self.block(run="run-A"))
-        self.assertEqual(self.block(run="run-A", mid=True), "", "посреди хода нового нет")
+        self.assertIn("first", self.block(run="run-A", owner=True))
+        self.assertEqual(self.block(run="run-A", mid=True, owner=True), "", "посреди хода нового нет")
         core_notices.note_incoming(kind="mention", chat_id="-100B", chat_title="B", who="a",
                                    message_id=2, gist="second", private=False, ts=time.time() - 10)
-        mid = self.block(run="run-A", mid=True)
+        mid = self.block(run="run-A", mid=True, owner=True)
         self.assertIn("Пока шла работа, пришло:", mid)
         self.assertIn("second", mid)
         self.assertNotIn("first", mid)
@@ -211,6 +228,9 @@ class Processes(Base):
         self.assertEqual(core_processes.display_name("FOO=1 setsid ./run.sh &"), "run.sh")
         self.assertEqual(core_processes.display_name("python -m http.server 8000 &"), "http.server")
         self.assertEqual(core_processes.display_name("python3 &"), "python3")
+        self.assertEqual(core_processes.display_name("cd /srv && python -u a.py > log 2>&1 &"), "a.py",
+                         "cd — обёртка, не программа (A10 F10)")
+        self.assertEqual(core_processes.display_name("cd /x; ./mr_ifub2 7 7 &"), "mr_ifub2")
 
 
 class AgentSeams(unittest.TestCase):
@@ -265,3 +285,83 @@ class AgentSeams(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReviewA10(Base):
+    def test_fresh_owner_line_is_not_buried_behind_old_rows(self):
+        now = time.time()
+        for i in range(8):
+            core_notices.note_owner_decision(f"старая пометка {i}", run_id="run-DM", ts=now - 3600 + i)
+        # окно уже видело их: они «прочитано»
+        self.block(run="run-W", kind="task_window", chat="777", owner=True)
+        core_notices.note_incoming(kind="dm", chat_id="777", chat_title="Егор", who="Егор",
+                                   message_id=99, gist="mr_ifub больше не поднимаю",
+                                   private=True, is_owner_dm=True, ts=now)
+        text = self.block(run="run-W", kind="task_window", chat="777", owner=True)
+        self.assertIn("не поднимаю", text, "свежее — впереди прочитанного (A10 F3)")
+        self.assertTrue(text.splitlines()[1].startswith("• НОВОЕ"), text)
+
+    def test_owner_line_reaches_only_windows_alive_at_that_moment(self):
+        self.live_windows = ["run-W1"]
+        core_notices.note_owner_line("ну их", chat_id="777", message_id=1)
+        self.assertIn("ну их", self.block(run="run-W1", kind="task_window", chat="777", owner=True))
+        self.assertEqual(self.block(run="run-W2", kind="task_window", chat="777", owner=True), "",
+                         "окно, рождённое позже, реплику не получает — оно читает дневник (A10 F4)")
+
+    def test_alarm_born_run_inherits_the_owner_line(self):
+        self.live_windows = []
+        self.alarms = ["alarm-1"]
+        core_notices.note_owner_line("не считай графы", chat_id="777", message_id=2)
+        self.assertEqual(self.block(run="run-X", kind="wake", chat="777", owner=True), "")
+        self.assertEqual(core_notices.bind_alarm_run("alarm-1", "run-X"), 1)
+        self.assertIn("не считай графы", self.block(run="run-X", kind="wake", chat="777", owner=True))
+        self.assertEqual(core_notices.bind_alarm_run("alarm-9", "run-Y"), 0)
+
+    def test_owner_line_without_addressees_is_not_stored(self):
+        self.live_windows = []
+        self.alarms = []
+        self.assertIsNone(core_notices.note_owner_line("в пустоту", chat_id="777", message_id=3))
+        self.assertEqual(core_notices.pending(), [])
+
+    def test_window_flag_beats_run_kind(self):
+        core_notices.note_owner_decision("решено", run_id="run-DM")
+        self.assertEqual(self.block(run="run-V", kind="voice", chat="777", owner=True), "")
+        text = core_notices.block_for_input(run_id="run-V", run_kind="voice", chat_id="777",
+                                            owner_context=True, window=True)
+        self.assertIn("решено", text, "пульс — её ход по контексту, а не по виду run (A10 F9)")
+
+    def test_save_leaves_no_shared_tmp_and_no_stray_files(self):
+        core_notices.note_incoming(kind="mention", chat_id="-1", chat_title="B", who="a",
+                                   message_id=1, gist="x", private=False)
+        names = sorted(p.name for p in self.tmp.iterdir())
+        self.assertNotIn("notices.json.tmp", names)
+        self.assertTrue(all(not n.endswith(".tmp") for n in names), names)
+
+
+class Seams(unittest.TestCase):
+    def test_notices_block_uses_owner_audience_and_context_window(self):
+        import agent
+        seen = {}
+
+        def fake_block(**kw):
+            seen.update(kw)
+            return "блок"
+        run = mock.Mock(run_id="run-1", kind="voice")
+        ctx = mock.Mock(owner=True, owner_audience=False, praxis_self=True, is_dm=True)
+        token = agent._TURN_CHANNEL.set(ctx)
+        try:
+            with mock.patch.object(agent.run_context, "current_run", return_value=run), \
+                 mock.patch.object(agent, "_active_chat", return_value="-100"), \
+                 mock.patch("core.notices.block_for_input", side_effect=fake_block), \
+                 mock.patch("core.notices.enabled", return_value=True):
+                self.assertEqual(agent._notices_block(), "блок")
+        finally:
+            agent._TURN_CHANNEL.reset(token)
+        self.assertFalse(seen["owner_context"], "владелец в публичной комнате — не владельческая аудитория (A10 F1)")
+        self.assertTrue(seen["window"], "её собственный ход по контексту (A10 F9)")
+
+    def test_hooks_are_installed_on_agent(self):
+        import agent
+        from core import notices as core_notices
+        self.assertIs(core_notices.live_window_runs, agent._live_window_run_ids)
+        self.assertIs(core_notices.pending_alarm_ids, agent._pending_alarm_ids)

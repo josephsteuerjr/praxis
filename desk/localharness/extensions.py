@@ -55,8 +55,14 @@ API_VERSION = f"{API_MAJOR}.{API_MINOR}"
 
 HOOKS = ("on_boot", "before_turn", "after_turn", "on_delivery")
 CAPABILITIES = ("fs.read", "fs.write", "http", "shell", "journal", "agent")
-TOOL_BUDGET_CHARS = 30_000          # бюджет схем рук — тот же, что у дерева (18.09)
+# Бюджет — на ПРИБАВКУ расширения, а не на сумму схем дерева: у дерева схемы всех
+# рук весят ~125 000 знаков (ревью 25.09, A6 F2), и потолок «30 000 на всё» не давал
+# подключиться ни одному тулу. Один тул — до TOOL_CHARS, одно расширение — до
+# EXTENSION_CHARS; считается одинаково при загрузке и на репетиции.
+TOOL_CHARS = 4_000
+EXTENSION_CHARS = 12_000
 NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
+TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")   # то, что принимают Anthropic/OpenAI
 STATE_REL = ("memory", ".state", "extensions.json")
 
 #: Поверхность API `helene.ext/1` — имена и сигнатуры методов PluginAPI, доступных
@@ -230,11 +236,11 @@ def _import_entry(ext_dir: Path, entry: str, *, name: str) -> Callable:
 
 # ─────────────────────────────────────────────── API расширению
 
-_SECRET_KEY = re.compile(r"key|token|secret|password|passwd", re.I)
+_SECRET_KEY = re.compile(r"key|token|secret|password|passwd|hash|phone|session|credential", re.I)
 
 
 def scrub(value: Any) -> Any:
-    """Конфиг без секретов: ключи с key/token/secret/password → «•••»."""
+    """Конфиг без секретов: ключи с key/token/secret/password/hash/phone/session/credential → «•••»."""
     if isinstance(value, dict):
         return {k: ("•••" if _SECRET_KEY.search(str(k)) and isinstance(v, str) and v else scrub(v))
                 for k, v in value.items()}
@@ -255,6 +261,8 @@ class PluginAPI:
         self._dry = dry
         self._open = True
         self._host_version = host_version
+        self._chars = 0                  # схемы тулов этого расширения, знаков
+        self._registered: list[str] = []  # что вставлено в агент — для отката при отказе
 
     # --- поверхность (SURFACE); менять сигнатуры = поднимать API_MINOR/API_MAJOR
 
@@ -281,24 +289,32 @@ class PluginAPI:
                 if isinstance(row, dict):
                     taken.add(str(row.get("name") or ""))
             if final in taken:
-                final = f"ext.{self._ext.name}.{name}".replace("-", "_")
+                # Разделитель — подчёркивание: имена с точками провайдеры отвергают
+                # (^[A-Za-z0-9_-]{1,64}$), и один такой тул ронял бы каждый ход (A6 F5).
+                final = f"ext_{self._ext.name}_{name}".replace("-", "_")[:64]
                 if final in taken:
                     raise ExtensionError(f"имя тула {name} занято штатной рукой, и {final} тоже")
         full = dict(schema)
         full["name"] = final
+        if not TOOL_NAME_RE.match(final):
+            raise ExtensionError(f"имя тула {final!r} не пройдёт у провайдера (нужно ^[A-Za-z0-9_-]{{1,64}}$)")
         desc = str(full.get("description") or "").strip()
         full["description"] = (desc + f" (расширение {self._ext.name} {self._ext.version})").strip()
+        size = len(json.dumps(full, ensure_ascii=False))
+        if size > TOOL_CHARS:
+            raise ExtensionError(f"тул {final}: схема {size} знаков, потолок {TOOL_CHARS} — тул не подключён")
+        if self._chars + size > EXTENSION_CHARS:
+            raise ExtensionError(
+                f"тул {final}: расширение уже занимает {self._chars} знаков схем, с ним было бы "
+                f"{self._chars + size} при потолке {EXTENSION_CHARS} — тул не подключён")
+        self._chars += size
         if self._agent is not None and not self._dry:
-            budget = _schemas_chars(self._agent) + len(json.dumps(full, ensure_ascii=False))
-            if budget > TOOL_BUDGET_CHARS:
-                raise ExtensionError(
-                    f"тул {final}: бюджет схем рук {TOOL_BUDGET_CHARS} знаков переполнен "
-                    f"({budget}) — тул не подключён")
             self._agent.BASE_TOOLS.append(full)
             self._agent.TOOL_IMPL[final] = fn
             purposes = getattr(self._agent, "HAND_PURPOSE", None)
             if isinstance(purposes, dict):
                 purposes[final] = (purpose or desc or f"тул расширения {self._ext.name}")[:120]
+            self._registered.append(final)
         self._ext.tools.append(final)
         return final
 
@@ -349,21 +365,31 @@ class PluginAPI:
     def close(self) -> None:
         self._open = False
 
-
-def _schemas_chars(agent_mod) -> int:
-    rows = []
-    for attr in ("BASE_TOOLS", "SHARED_CONTEXT_TOOLS", "OWNER_TOOLS", "PRAXIS_SELF_TOOLS"):
-        rows.extend(getattr(agent_mod, attr, []) or [])
-    try:
-        return len(json.dumps(rows, ensure_ascii=False))
-    except Exception:
-        return 0
+    def rollback(self) -> None:
+        """Отказ ПОСЛЕ register() (acceptance, поздняя ошибка): снять всё, что вставили в
+        агент, — иначе расширение помечено error, а его тул живёт и зовётся (A6 F6)."""
+        if self._agent is None:
+            return
+        names = set(self._registered)
+        self._registered = []
+        try:
+            self._agent.BASE_TOOLS[:] = [row for row in self._agent.BASE_TOOLS
+                                         if not (isinstance(row, dict) and row.get("name") in names)]
+        except Exception:
+            pass
+        for name in names:
+            getattr(self._agent, "TOOL_IMPL", {}).pop(name, None)
+            purposes = getattr(self._agent, "HAND_PURPOSE", None)
+            if isinstance(purposes, dict):
+                purposes.pop(name, None)
+        self._ext.tools = [n for n in self._ext.tools if n not in names]
 
 
 # ─────────────────────────────────────────────── загрузка и крючки
 
 _LOADED: list[Extension] = []
 _HOOKS: dict[str, list] = {}
+_APIS: dict[str, PluginAPI] = {}      # живой api каждого загруженного расширения (on_boot)
 _STATE_PATH: Path | None = None
 
 
@@ -373,6 +399,7 @@ _IMPORTED: dict[str, Any] = {}
 def _load_one(ext_dir: Path, *, agent_mod, tree, cfg, host_version: str, dry: bool) -> Extension:
     ext = Extension(name=Path(ext_dir).name, version="", dir=str(ext_dir), checked_at=time.time())
     _IMPORTED.clear()
+    api: PluginAPI | None = None
     try:
         manifest = read_manifest(ext_dir)
         ext.version = manifest["version"]
@@ -401,14 +428,19 @@ def _load_one(ext_dir: Path, *, agent_mod, tree, cfg, host_version: str, dry: bo
                 raise ExtensionError(f"acceptance: {verdict}")
         ext.state = "loaded"
         ext.reason = note or ""
+        _APIS[ext.name] = api
     except ExtensionError as exc:
         ext.state, ext.reason = ("error" if ext.state == "pending" else ext.state), str(exc)
         _forget_hooks(ext.name)
+        if api is not None:
+            api.rollback()
     except Exception as exc:
         ext.state = "error"
         ext.reason = f"{type(exc).__name__}: {exc}"
         ext.last_error = traceback.format_exc()[-1500:]
         _forget_hooks(ext.name)
+        if api is not None:
+            api.rollback()
     return ext
 
 
@@ -425,6 +457,7 @@ def install(agent_mod, tree: Path, cfg: dict, *, data_dir: Path | None = None,
     _STATE_PATH = Path(tree).joinpath(*STATE_REL)
     _LOADED = []
     _HOOKS.clear()
+    _APIS.clear()
     for ext_dir in discover(data_dir):
         ext = _load_one(ext_dir, agent_mod=agent_mod, tree=tree, cfg=cfg,
                         host_version=host_version, dry=False)
@@ -466,12 +499,9 @@ def run_hook(event: str, *args, **kwargs) -> list[tuple[str, bool, str]]:
 
 
 def _api_for(name: str) -> PluginAPI | None:
-    for ext in _LOADED:
-        if ext.name == name:
-            api = PluginAPI(ext, dry=True)
-            api.close()
-            return api
-    return None
+    """Живой api расширения (агент, дерево, конфиг) с закрытой регистрацией — для on_boot
+    (A6 F8: «сухой» api без дерева ронял крючок, читающий свой файл)."""
+    return _APIS.get(name)
 
 
 def write_state() -> None:

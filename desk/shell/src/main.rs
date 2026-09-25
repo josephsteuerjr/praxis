@@ -1481,6 +1481,24 @@ fn relay_fingerprint(cfg: &serde_json::Value) -> String {
 static RELAY_LOGIN_SEEN: Mutex<Option<std::time::SystemTime>> = Mutex::new(None);
 /// Помощник входа запускался в этом сеансе и ещё не отмечен маркером.
 static LOGIN_WAS_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Подпись auth.json (mtime, длина) в момент запуска помощника входа: маркер ставится
+/// только если помощник ВЫШЕЛ УСПЕШНО и файл после него другой. Отменённый или упавший
+/// вход при старом auth.json перезапускал реле посреди хода (ревью 25.09, A4 F6).
+static LOGIN_AUTH_BEFORE: Mutex<Option<(Option<std::time::SystemTime>, u64)>> = Mutex::new(None);
+
+fn auth_signature(path: &Path) -> Option<(Option<std::time::SystemTime>, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok(), meta.len()))
+}
+
+/// Решение «ставить ли маркер нового входа» — чистая функция для стенда.
+fn login_marks_new_generation(
+    helper_ok: bool,
+    before: Option<(Option<std::time::SystemTime>, u64)>,
+    after: Option<(Option<std::time::SystemTime>, u64)>,
+) -> bool {
+    helper_ok && after.is_some() && before != after
+}
 
 fn relay_login_marker() -> PathBuf {
     relay_home().join("local_auth").join("login-generation")
@@ -1514,18 +1532,28 @@ fn note_relay_login() {
 /// его хозяин: служба перечитывает helene.json и auth.json сама.
 fn reconcile_relay(state: &tauri::State<LocalHarness>, cfg: &serde_json::Value, why: &str) -> String {
     let base_config = install_root().join(CONFIG_NAME);
+    // Ревью 25.09 (A4 F3/F4). Записи детей НЕ удаляются и не переставляются: надзор
+    // (`watch_children`) держит индексы записей между двумя захватами замка, и `remove`
+    // здесь подсовывал ему чужую запись под старым индексом. Реле гасится НА МЕСТЕ, а
+    // новая запись заводится только если у окна есть свои дети: окно-клиент под службой
+    // своего реле не держит (реле службы перечитает настройки само), а фантомная запись
+    // `child: None` прятала бы от надзора «харнесс пропал» до перезапуска окна.
     let mut had_own = false;
+    let mut relay_idx: Option<usize> = None;
+    let mut has_script_children = false;
     if let Ok(mut guard) = state.children.lock() {
-        let mut i = 0;
-        while i < guard.len() {
-            if matches!(guard[i].spec, ChildSpec::Relay { .. }) {
-                if let Some(child) = guard[i].child.as_mut() {
+        for (i, m) in guard.iter_mut().enumerate() {
+            if matches!(m.spec, ChildSpec::Relay { .. }) {
+                if let Some(child) = m.child.as_mut() {
                     stop_child(child);
                     had_own = true;
                 }
-                guard.remove(i);
+                m.child = None;
+                m.waiting = false;
+                m.retry_at = None;
+                relay_idx = Some(i);
             } else {
-                i += 1;
+                has_script_children = true;
             }
         }
     }
@@ -1548,8 +1576,20 @@ fn reconcile_relay(state: &tauri::State<LocalHarness>, cfg: &serde_json::Value, 
             if had_own { "своё реле погашено: по новым настройкам оно выключено" } else { "своего реле не было и не нужно" }
         );
         log_line(&line);
+        // Выключенное реле: запись снимаем — это единственное место, где вектор
+        // укорачивается, и делается это под замком одним `remove`, без подъёма между.
+        if let (Some(i), Ok(mut guard)) = (relay_idx, state.children.lock()) {
+            if i < guard.len() && matches!(guard[i].spec, ChildSpec::Relay { .. }) {
+                guard.remove(i);
+            }
+        }
         return line;
     };
+    if !had_own && relay_idx.is_none() && !has_script_children {
+        let line = format!("реле: {why} — окно ходит к харнессу службы, реле держит она и перечитает настройки сама");
+        log_line(&line);
+        return line;
+    }
     // Подъём — вне замка: CreateProcess под замком детей держал бы выход из трея.
     let outcome = spec.spawn();
     let (child, waiting, line) = match outcome {
@@ -1558,15 +1598,27 @@ fn reconcile_relay(state: &tauri::State<LocalHarness>, cfg: &serde_json::Value, 
         SpawnOutcome::Failed => (None, false, format!("реле: {why} — не поднялось сразу, надзор попробует через 30 с")),
     };
     if let Ok(mut guard) = state.children.lock() {
-        guard.push(Managed {
-            agent: agent_id,
-            spec,
-            retry_at: child.is_none().then(|| Instant::now() + Duration::from_secs(30)),
-            child,
-            falls: Vec::new(),
-            halted: false,
-            waiting,
-        });
+        let retry_at = child.is_none().then(|| Instant::now() + Duration::from_secs(30));
+        let slot = relay_idx
+            .filter(|&i| i < guard.len() && matches!(guard[i].spec, ChildSpec::Relay { .. }));
+        match slot {
+            Some(i) => {
+                let m = &mut guard[i];
+                m.spec = spec;
+                m.child = child;
+                m.waiting = waiting;
+                m.retry_at = retry_at;
+            }
+            None => guard.push(Managed {
+                agent: agent_id,
+                spec,
+                retry_at,
+                child,
+                falls: Vec::new(),
+                halted: false,
+                waiting,
+            }),
+        }
     }
     log_line(&line);
     line
@@ -1582,6 +1634,22 @@ async fn relay_account() -> Result<serde_json::Value, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Отвечает ли держатель порта как реле: `GET /v1/account` даёт 200/401/403 (JSON или
+/// требование ключа). 404 и не-HTTP — чужая программа. Loopback без прокси и редиректов.
+fn port_holder_is_relay(port: u16) -> bool {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_millis(500))
+        .timeout_read(Duration::from_secs(2))
+        .redirects(0)
+        .try_proxy_from_env(false)
+        .build();
+    match agent.get(&format!("http://127.0.0.1:{port}/v1/account")).call() {
+        Ok(_) => true,
+        Err(ureq::Error::Status(code, _)) => matches!(code, 401 | 403),
+        Err(_) => false,
+    }
+}
+
 fn relay_account_blocking() -> Result<serde_json::Value, String> {
     let cfg = config_value().ok_or_else(|| "helene.json не прочитан".to_string())?;
     let port = relay_port(&cfg);
@@ -1594,9 +1662,14 @@ fn relay_account_blocking() -> Result<serde_json::Value, String> {
     if !harness_alive(port) {
         return Ok(serde_json::json!({ "reachable": false, "port": port }));
     }
+    // Ревью 25.09 (A4 F5): loopback без прокси из среды и без редиректов — иначе за
+    // HTTPS_PROXY запрос к своему реле уходит на прокси вместе с Bearer ключом мозга, а
+    // расписка врёт «реле не отвечает» (тот же билдер, что у `home_probe`).
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_millis(700))
         .timeout_read(Duration::from_secs(3))
+        .redirects(0)
+        .try_proxy_from_env(false)
         .build();
     let mut req = agent.get(&format!("http://127.0.0.1:{port}/v1/account"));
     if !key.trim().is_empty() {
@@ -1633,6 +1706,14 @@ fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> RelaySpawn 
     // мозг молча шёл в ЧУЖОЕ реле — то есть в чужую подписку и чужую сессию.
     // Это ожидание, не падение: слово о нём говорит надзор один раз на состояние.
     if harness_alive(port) {
+        // Ревью 25.09 (A4 F7): «другая копия» утверждалось без пробы держателя. Чужая
+        // программа на порту — не ожидание, а отказ словами: подсказка «смени relay.port»
+        // и тост, иначе мозг молча стучится в чужой процесс.
+        if !port_holder_is_relay(port) {
+            return RelaySpawn::Unavailable(format!(
+                "порт реле {port} держит не реле (чужая программа): освободи порт или смени relay.port в настройках — своё реле не поднимаю"
+            ));
+        }
         return RelaySpawn::WaitingPort(port);
     }
     let home = tree.join("relay");
@@ -1935,10 +2016,16 @@ fn config_save(app: tauri::AppHandle, config: String, mtime_ns: Option<String>) 
     let saved = out.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     if saved && target == install_root().join(CONFIG_NAME) {
         if let Ok(after) = serde_json::from_str::<serde_json::Value>(&config) {
-            let changed = before
-                .as_ref()
-                .map(|b| relay_fingerprint(b) != relay_fingerprint(&after))
-                .unwrap_or(true);
+            // Ревью 25.09 (A4 F8): отпечаток сравнивается только когда реле было или стало
+            // включено — владелец без реле, сменивший ключ GLM, не получает в расписке
+            // «настройки реле изменились — своего реле не было и не нужно».
+            let relay_involved = relay_enabled(&after)
+                || before.as_ref().map(relay_enabled).unwrap_or(false);
+            let changed = relay_involved
+                && before
+                    .as_ref()
+                    .map(|b| relay_fingerprint(b) != relay_fingerprint(&after))
+                    .unwrap_or(true);
             if changed {
                 let state = app.state::<LocalHarness>();
                 let said = reconcile_relay(&state, &after, "настройки реле изменились");
@@ -2399,13 +2486,17 @@ fn relay_login_blocking() -> Result<String, String> {
     cmd.creation_flags(CREATE_NO_WINDOW);
     #[cfg(unix)]
     cmd.process_group(0);
+    if let Ok(mut before) = LOGIN_AUTH_BEFORE.lock() {
+        *before = auth_signature(&home.join("local_auth").join("auth.json"));
+    }
     let child = cmd.spawn().map_err(|e| format!("логин не запустился: {e}"))?;
     // В job-объект окна: выход из трея с незавершённым входом оставлял
     // helene-relay.exe login жить и держать порт колбэка.
     adopt(&child);
     *guard = Some(child);
-    // Вход запущен: когда помощник завершится и auth.json ляжет, `relay_status` поставит
-    // маркер нового входа (даже если экран настроек опрашивал его не каждые 3 с).
+    // Вход запущен: когда помощник завершится успехом и auth.json станет другим,
+    // `relay_status` поставит маркер нового входа (даже если экран настроек опрашивал его
+    // не каждые 3 с).
     LOGIN_WAS_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok("сейчас откроется браузер — войди в свой аккаунт ChatGPT".into())
 }
@@ -2413,24 +2504,39 @@ fn relay_login_blocking() -> Result<String, String> {
 #[tauri::command]
 fn relay_status(app: tauri::AppHandle) -> String {
     let auth = relay_home().join("local_auth").join("auth.json");
-    let pending = {
+    // (жив ли помощник, вышел ли успехом)
+    let (pending, helper_ok) = {
         let mut guard = login_lock();
-        guard
-            .as_mut()
-            .map(|child| child.try_wait().ok().flatten().is_none())
-            .unwrap_or(false)
+        match guard.as_mut() {
+            Some(child) => match child.try_wait() {
+                Ok(None) => (true, false),
+                Ok(Some(status)) => (false, status.success()),
+                Err(_) => (false, false),
+            },
+            None => (false, false),
+        }
     };
     if pending {
         LOGIN_WAS_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
         return "pending".into();
     }
     if auth.exists() {
-        // 25.09 (C.3): реле читает вход ТОЛЬКО при старте. Помощник входа завершился и
-        // auth.json на месте — это новый вход: ставим маркер, и своё реле поднимаем
-        // заново сами, а не вешаем владельцу вечное «применится перезапуском». Чужое реле
-        // (служба) перечитает маркер на своём тике и сделает то же.
+        // 25.09 (C.3): реле читает вход ТОЛЬКО при старте. Помощник входа завершился
+        // успехом и auth.json стал другим — это новый вход: ставим маркер, и своё реле
+        // поднимаем заново сами, а не вешаем владельцу вечное «применится перезапуском».
+        // Чужое реле (служба) перечитает маркер на своём тике и сделает то же.
+        // Отменённый/упавший вход при старом auth.json маркера не ставит (A4 F6).
         if LOGIN_WAS_PENDING.swap(false, std::sync::atomic::Ordering::Relaxed) {
-            note_relay_login();
+            let before = LOGIN_AUTH_BEFORE.lock().ok().and_then(|g| *g);
+            let after = auth_signature(&auth);
+            if login_marks_new_generation(helper_ok, before, after) {
+                note_relay_login();
+            } else {
+                log_line(&format!(
+                    "вход в подписку не дал нового auth.json (помощник {}), реле не перезапускаю",
+                    if helper_ok { "вышел успехом, файл прежний" } else { "не завершился успехом" }
+                ));
+            }
         }
         let now_seen = relay_login_generation();
         let seen = RELAY_LOGIN_SEEN.lock().ok().and_then(|g| *g);
@@ -7048,7 +7154,7 @@ async fn update_install(app: tauri::AppHandle, path: String, force_extensions: O
         }
         #[cfg(not(windows))]
         {
-            update_install_posix(app, &archive)
+            update_install_posix(app, &archive, force_extensions)
         }
     })
     .await
@@ -7140,7 +7246,7 @@ fn install_script_entry(listing: &str) -> Option<String> {
 /// потом install.sh распаковывал zip второй раз. Смысл Windows-ветки тот же:
 /// архив рядом с собой → установщик из него → оболочка отдаёт дело и выходит.
 #[cfg(not(windows))]
-fn update_install_posix(app: tauri::AppHandle, archive: &Path) -> Result<serde_json::Value, String> {
+fn update_install_posix(app: tauri::AppHandle, archive: &Path, force_extensions: bool) -> Result<serde_json::Value, String> {
     let unzip = posix_tool("unzip");
     let mut list = Command::new(&unzip);
     list.arg("-Z1").arg(archive);
@@ -7183,7 +7289,13 @@ fn update_install_posix(app: tauri::AppHandle, archive: &Path) -> Result<serde_j
     cmd.arg(&script)
         .arg("--from")
         .arg(archive)
-        .arg("--relaunch")
+        .arg("--relaunch");
+    // Ревью 25.09 (A4 F2): галочка «обновлять, даже если расширения не пройдут» на macOS
+    // едет в install.sh → decisions JSON → Setup.force_extensions; раньше терялась.
+    if force_extensions {
+        cmd.arg("--force-extensions");
+    }
+    cmd
         // install.sh ждёт нашей смерти по этому pid (до ~10 с), прежде чем
         // менять файлы; поэтому ниже выход обязан состояться, а не «быть запрошен».
         .env("HELENE_OLD_PID", std::process::id().to_string())
@@ -7573,6 +7685,20 @@ fn logs_bundle_blocking(tree: PathBuf) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn login_marker_needs_success_and_a_changed_auth_json() {
+        use std::time::{Duration, SystemTime};
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let t1 = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000);
+        let old = Some((Some(t0), 10u64));
+        let new = Some((Some(t1), 12u64));
+        assert!(super::login_marks_new_generation(true, old, new), "успех + новый файл");
+        assert!(super::login_marks_new_generation(true, None, new), "успех + файл появился");
+        assert!(!super::login_marks_new_generation(true, old, old), "успех, но файл прежний");
+        assert!(!super::login_marks_new_generation(false, old, new), "помощник упал/отменён");
+        assert!(!super::login_marks_new_generation(true, old, None), "файла нет");
+    }
+
     /// Константы окна — те же, что в `ui-kit/contract.json` (одно место для
     /// трёх языков; задача A п. 1.12).
     #[test]

@@ -594,6 +594,11 @@ class Body(unittest.TestCase):
                                       target_dir="/x/cache/body-target")
         self.assertEqual(info["source"], "praxis/body")
         self.assertEqual(info["commit"], "3c6b8e35")
+        # 25.09: из дерева поставки — источник и коммит дерева, не зеркала (A8 F3 / A9 F2)
+        tree_info = build_mac.body_summary(mirror={"head": "3c6b8e35"}, crates=build_mac.BODY_CRATES,
+                                           digest="ab" * 32, files=41, exe_sha256={},
+                                           target_dir="/x", source="tree/body", tree_head="267eca7")
+        self.assertEqual((tree_info["source"], tree_info["commit"]), ("tree/body", "267eca7"))
         self.assertEqual(info["crates"], ["praxis-body", "praxis-bridge"])
         self.assertEqual(info["binaries"], build_mac.BODY_BINARIES)
         self.assertEqual(info["files"], 41)
@@ -637,6 +642,10 @@ class Body(unittest.TestCase):
                      "Apache-2.0", "PolyForm-Noncommercial-1.0.0", "27.08.2026", "87 крейтов",
                      "ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md", "x 1.0"):
             self.assertIn(word, head, word)
+        tree_head = "\n".join(build_mac.body_license_head(87, "267eca7abc", [], source="tree/body"))
+        self.assertIn("`tree/body`", tree_head)
+        self.assertIn("коммит дерева 267eca7", tree_head)
+        self.assertNotIn("зеркало кода Праксис, коммит прода", tree_head)
         self.assertIn("?", "\n".join(build_mac.body_license_head(1, "", [])))
         # Коммит для шапки — из записи паспорта тела (`commit`), из CORE-SOURCE.json
         # (`head`) или пусто: сборка передаёт сюда запись build_body, не зеркало.
@@ -909,6 +918,19 @@ class InstallShSession(unittest.TestCase):
         self.assertIn("без sudo и su", self.text[self.text.index("usage() {"):self.text.index("while [ $# -gt 0 ]")])
         readme = (DESK.parent / "README.md").read_text(encoding="utf-8")
         self.assertIn("no `su`", readme)
+
+
+class BodySourceIsStrictForReleases(unittest.TestCase):
+    def test_a_tree_without_body_is_refused_when_strict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp) / "tree"
+            tree.mkdir()
+            self.assertEqual(build_mac.body_src_for(tree), build_mac.BODY_SRC, "откат на зеркало — только не строго")
+            with self.assertRaises(SystemExit):
+                build_mac.body_src_for(tree, strict=True)
+            (tree / "body").mkdir()
+            (tree / "body" / "Cargo.toml").write_text("[workspace]\n", encoding="utf-8")
+            self.assertEqual(build_mac.body_src_for(tree, strict=True), tree / "body")
 
 
 if __name__ == "__main__":

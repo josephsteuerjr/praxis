@@ -1218,6 +1218,30 @@ def _busy_label(current, ctx) -> str:
     return "ход"
 
 
+def _live_window_run_ids() -> list[str]:
+    """Живые нетерминальные прогоны видов окон — адресаты реплики владельца (G §3)."""
+    try:
+        rows = _runs().list_runs(statuses=run_manager.NONTERMINAL_STATUSES)
+    except Exception:
+        return []
+    from core import notices as core_notices
+    return [str(r.get("run_id")) for r in rows
+            if str(r.get("kind") or "") in core_notices.WINDOW_RUN_KINDS and r.get("run_id")]
+
+
+def _pending_alarm_ids() -> list[str]:
+    try:
+        return [str(t.get("id")) for t in tasks.pending() if t.get("id")]
+    except Exception:
+        return []
+
+
+def _install_notice_hooks() -> None:
+    from core import notices as core_notices
+    core_notices.live_window_runs = _live_window_run_ids
+    core_notices.pending_alarm_ids = _pending_alarm_ids
+
+
 def _notices_block(*, mid_turn: bool = False) -> str:
     """Блок уведомлений для этого ввода модели (core/notices) или ''.
 
@@ -1235,10 +1259,18 @@ def _notices_block(*, mid_turn: bool = False) -> str:
     if current is None:
         return ""
     ctx = _TURN_CHANNEL.get()
-    owner_context = bool(ctx is not None and (ctx.owner or ctx.owner_audience))
+    # Владельческая аудитория — как у recall: ТОЛЬКО owner_audience (ЛС владельца, её окна
+    # и пробуждения). `ctx.owner` — сырой факт «актор — владелец», в публичной комнате он
+    # тоже True, и содержимое чужих личек уезжало бы в публичный кадр (ревью 25.09, A10 F1).
+    owner_context = bool(ctx is not None and ctx.owner_audience)
+    # Её собственный ход (окно, пробуждение, пульс) — по контексту, не только по виду run:
+    # пульс бежит прогоном вида voice и слова владельца иначе не видел (A10 F9).
+    window = (str(current.kind or "") in core_notices.WINDOW_RUN_KINDS
+              or bool(ctx is not None and ctx.praxis_self and ctx.is_dm))
     return core_notices.block_for_input(
         run_id=current.run_id, run_kind=current.kind, chat_id=_active_chat(),
-        owner_context=owner_context, busy_label=_busy_label(current, ctx), mid_turn=mid_turn)
+        owner_context=owner_context, busy_label=_busy_label(current, ctx), mid_turn=mid_turn,
+        window=window)
 
 
 def build_state_evidence_block(*, hide_identity_load: bool = False,
@@ -1641,6 +1673,81 @@ def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
     return "Записано в дневник."
 
 
+def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text: str = "",
+                        tier: int | None = None, since: str = "", limit: int = 0) -> str:
+    """Её руки на своих свёртках памяти: list / read / rewrite / refold / status / stop."""
+    op = str(action or "").strip().casefold()
+    where = str(place or "").strip() or str(_active_chat() or "")
+    if op == "list":
+        if not where:
+            return "Не вижу места: укажи place (chat_id) — в окне текущего чата нет."
+        rows = memory_life.list_compacts(where, tier=tier, limit=int(limit or 20), since=since)
+        if not rows:
+            return f"Свёрток у {where} не найдено."
+        lines = [f"Свёртки {where} (старые выше, {len(rows)} шт.):"]
+        for r in rows:
+            mark = " · обрубок" if r.get("degraded") else ""
+            lines.append(f"- {r['id']} · tier {r['tier']} · {r['first_ts'][:16]} → {r['last_ts'][:16]} "
+                         f"· {r['events']} соб. · {r['chars']} зн.{mark}\n  «{r['head']}»")
+        lines.append("read — одну целиком; rewrite — переписать суть; refold — перевыпустить пачкой.")
+        return "\n".join(lines)
+    if op == "read":
+        if not compact_id:
+            return "Для read нужен compact_id."
+        out = memory_life.read_compact(compact_id, where or None)
+        if not out.get("ok"):
+            return f"Свёртка {compact_id} не найдена ({out.get('reason')})."
+        m = out["meta"]
+        body = str(out.get("text") or "")
+        if len(body) > 12000:
+            body = body[:12000] + "\n…[обрезано]"
+        return (f"{m['id']} · tier {m['tier']} · {m['first_ts']} → {m['last_ts']} · {m['events']} соб.\n\n"
+                + body)
+    if op == "rewrite":
+        if not compact_id or not str(text or "").strip():
+            return "Для rewrite нужны compact_id и text — новая суть твоими словами."
+        out = memory_life.rewrite_compact_text(compact_id, text, chat_id=where or None)
+        if not out.get("ok"):
+            return f"Не переписала {compact_id}: {out.get('reason')}."
+        try:
+            tool_journal(f"[память] переписала свёртку {compact_id} своими словами "
+                         f"({out.get('chars')} знаков; прежний текст — {out.get('history')})", salience=2)
+        except Exception:
+            log.debug("журнал о переписанной свёртке не записался", exc_info=True)
+        return (f"Переписала {compact_id}: {out.get('chars')} знаков; прежний текст в истории "
+                f"({out.get('history')}). Источники и границы те же.")
+    if op == "refold":
+        scope = where if where and where.casefold() != "all" else "all"
+        if scope == "all" and not (place or "").strip():
+            return ("Для refold назови place: chat_id одного места или all — всю память "
+                    "(это много вызовов модели; можно сузить tier/since/limit).")
+        out = memory_life.refold_start(scope, tier=tier, since=since, limit=int(limit or 0))
+        if not out.get("ok"):
+            return (f"Перевыпуск уже идёт: {out.get('done')}/{out.get('planned')} сделано, "
+                    f"{out.get('failed')} не вышло — status/stop.")
+        if not out.get("planned"):
+            return "Перевыпускать нечего: под условия не попала ни одна свёртка."
+        try:
+            tool_journal(f"[память] запустила перевыпуск свёрток своим голосом: {out['planned']} шт., "
+                         f"место {scope}, tier {tier or 'все'}, since {since or '—'}", salience=2)
+        except Exception:
+            log.debug("журнал о перевыпуске не записался", exc_info=True)
+        return (f"Запустила перевыпуск: {out['planned']} свёрток ({out.get('first')} … {out.get('last')}), "
+                f"в фоне, с паузами. status — ход, stop — остановить.")
+    if op == "status":
+        st = memory_life.refold_status()
+        if not st.get("planned"):
+            return "Перевыпуск не запускался."
+        last = st.get("last") or {}
+        return (f"Перевыпуск {'идёт' if st.get('running') else 'закончен'}: {st.get('done')}/{st.get('planned')} "
+                f"переписано, {st.get('skipped')} пропущено (источники не текущие), {st.get('failed')} не вышло; "
+                f"последняя — {last.get('id')} ({'ok' if last.get('ok') else last.get('reason')}).")
+    if op == "stop":
+        st = memory_life.refold_stop()
+        return "Останавливаю перевыпуск после текущей свёртки." if st.get("running") else "Перевыпуск не идёт."
+    return "Не понимаю действие: list / read / rewrite / refold / status / stop."
+
+
 def tool_manage_notes(action: str, text: str = "", kind: str = "",
                       scope: str = "", note_id: str = "",
                       status: str = "open", reason: str = "", limit: int = 20) -> str:
@@ -1668,7 +1775,7 @@ def tool_manage_notes(action: str, text: str = "", kind: str = "",
                 message_id=message_id, source_ref=_active_memory_source_ref(),
                 validate_locked=validate_locked,
             )
-            return f"Записала {row['kind']} `{row['id']}` ({row['scope']}, {row['status']})."
+            return f"Записано: {row['kind']} `{row['id']}` ({row['scope']}, {row['status']})."
         if operation in {"read", "close"}:
             row = ledger.get(note_id)
             if row is None:
@@ -1680,7 +1787,7 @@ def tool_manage_notes(action: str, text: str = "", kind: str = "",
             if operation == "read":
                 return json.dumps(row, ensure_ascii=False, indent=2)
             row = ledger.close(note_id, reason=reason)
-            return f"Закрыла заметку `{row['id']}`."
+            return f"Заметка `{row['id']}` закрыта."
         if operation == "list":
             rows = ledger.list(status=status, kind=kind if kind in authored_notes.KINDS else "",
                                scope=scope if scope in authored_notes.SCOPES else "", limit=100)
@@ -1733,7 +1840,7 @@ def tool_update_self(note: str) -> str:
     except Exception as exc:
         return f"Наблюдение о себе не записалось: {type(exc).__name__}: {exc}"
     return (
-        f"Записала evidence о себе ({event.get('event_id')}); CURRENT не меняла. "
+        f"Записано evidence о себе ({event.get('event_id')}); CURRENT не изменён. "
         "Ночная ревизия взвесит наблюдение вместе с provenance, а legacy self.md останется цел."
     )
 
@@ -1781,12 +1888,12 @@ def tool_consolidate_context(note: str = "") -> str:
     persistent = turn_history is None or _TURN_HISTORY_PERSISTENT.get()
     if persistent:
         del hist[:n]
-        log.info("consolidate_context: свела %d записей, осталось %d", n, len(hist))
-        return (f"Свела {n} старых сообщений в дневник; источник истории укорочен "
+        log.info("consolidate_context: сведено %d записей, осталось %d", n, len(hist))
+        return (f"Сведено {n} старых сообщений в дневник; источник истории укорочен "
                 f"(осталось {len(hist)}).")
-    log.info("consolidate_context: записала сводку %d записей; источник — снимок", n)
-    return (f"Свела {n} старых сообщений в дневник. Текущая ролевая история — снимок: "
-            "его мутация не освободила бы источник контекста, поэтому я его не обрезала.")
+    log.info("consolidate_context: записана сводка %d записей; источник — снимок", n)
+    return (f"Сведено {n} старых сообщений в дневник. Текущая ролевая история — снимок: "
+            "его мутация не освободила бы источник контекста, поэтому он не обрезан.")
 
 
 # --- §6: компактирование контекста субагентом (бегущая сводка, не её голос) - #
@@ -2152,7 +2259,7 @@ def _decode_shell_output(raw: "bytes | str | None") -> str:
 
 
 def tool_shell(command: str) -> str:
-    """Полный shell самой Praxis/владельца. Логируем; её правки авто-коммитятся."""
+    """Полный shell самого агента/владельца. Логируем; её правки авто-коммитятся."""
     # Единственное на сервере, что не её дом, — хардбот Егора. Читать его она может
     # всегда; менять — по просьбе хранителя (см. stewardship.py). Это пол, а не клетка:
     # она пишет команды сама и знает про рельс, поэтому намеренный обход останется
@@ -2257,7 +2364,7 @@ def tool_write_skill(name: str, content: str, from_note: str = "") -> str:
         except Exception:
             log.debug("связь навык↔заметка не записалась", exc_info=True)
     log.info("write_skill %s", slug)
-    return f"Записала навык «{name}» (soul/skills/{slug}.md).{origin}"
+    return f"Записан навык «{name}» (soul/skills/{slug}.md).{origin}"
 
 
 def _ensure_skill_index_line(slug: str, name: str) -> None:
@@ -2473,7 +2580,7 @@ def tool_home_note(text: str) -> str:
                                "общие нити — веду его я)_\n\n", encoding="utf-8")
         with HOME_MD.open("a", encoding="utf-8") as fh:
             fh.write(f"- {_today()}: {text[:500]}\n")
-        return "Записала в домашний слой."
+        return "Записано в домашний слой."
     except Exception as e:
         log.warning("home_note не записался", exc_info=True)
         return f"Не записалось: {type(e).__name__}"
@@ -2536,7 +2643,7 @@ def tool_stay_silent(reason: str = "", cancel: bool = False) -> str:
         # Фоновый проход (окно, пульс, внутренняя компоновка) не идёт через исходящую
         # границу хода: держателя нет, исполнять решение нечем. Обещать механизм там,
         # где его нет, значит снова врать — говорим как есть.
-        return ("Записала. Контура тут нет: этот проход не идёт через исходящую границу "
+        return ("Записано. Контура тут нет: этот проход не идёт через исходящую границу "
                 "хода, так что держать нечего — молчание здесь держится только тем, что "
                 "я не отправлю ничего руками.")
     holder["chosen"] = "1"
@@ -2546,7 +2653,7 @@ def tool_stay_silent(reason: str = "", cancel: bool = False) -> str:
             "не потеряется. Передумаю — сниму: тот же тул с cancel=true."
             # Закон 2: усечение обязано быть названо там, где она его видит. В дневник
             # причина уходит целиком, обрезается только копия для записи хода.
-            + (f" Причину для записи хода обрезала до {SILENCE_REASON_MAX} знаков — "
+            + (f" Причина для записи хода обрезана до {SILENCE_REASON_MAX} знаков — "
                "в дневнике она целиком." if len(reason) > SILENCE_REASON_MAX else ""))
 
 
@@ -2561,7 +2668,7 @@ def _current_room() -> str:
 
 
 def tool_freeze_chat(on: bool = True, chat_id: str | None = None) -> str:
-    """Заморозить/поднять чат владельцем или самой Praxis; пишет provenance."""
+    """Заморозить/поднять чат владельцем или самого агента; пишет provenance."""
     if not _is_sovereign_actor():
         return "Отказ: режим комнаты меняет только владелец или сам агент."
     cid = str(chat_id).strip() if chat_id else _current_room()
@@ -2571,9 +2678,9 @@ def tool_freeze_chat(on: bool = True, chat_id: str | None = None) -> str:
     if on:
         reason = "моё решение: заморозить" if set_by == "praxis" else "владелец попросил"
         rooms.set_mode(cid, "frozen", reason=reason, set_by=set_by)
-        return f"Заморозила {cid} — сообщения оттуда до меня не доходят, пока не разморожу."
+        return f"Заморожен {cid} — сообщения оттуда до меня не доходят, пока не разморожу."
     new_mode = rooms.sovereign_raise(cid, set_by=set_by)
-    return f"Разморозила {cid}."
+    return f"Разморожен {cid}."
 
 
 def tool_freeze_contact(reason: str = "") -> str:
@@ -2586,7 +2693,7 @@ def tool_freeze_contact(reason: str = "") -> str:
     ok, mode = rooms.self_demote(cid, "frozen", reason=reason or "моя граница", ttl_h=0)
     if ok:
         tool_journal(f"[граница] чат {cid} заморожен: {reason or 'моя граница'}", salience=2)
-        return f"Заморозила текущий чат {cid}: новые сообщения оттуда до меня не доходят."
+        return f"Заморожен текущий чат {cid}: новые сообщения оттуда до меня не доходят."
     return mode
 
 
@@ -2808,7 +2915,7 @@ def tool_manage_room(action: str, chat_id: str | None = None, *,
                      mode: str = "", ttl_h: float | None = None, reason: str = "",
                      disclosure: str = "", transfer: str = "",
                      presence_hidden: str = "") -> str:
-    """Управление комнатами владельцем или самой Praxis; люди не делегируют это дальше."""
+    """Управление комнатами владельцем или самого агента; люди не делегируют это дальше."""
     if not _is_sovereign_actor():
         return "Отказ: комнаты меняет только владелец или сам агент."
     action = (action or "").lower().strip()
@@ -3172,7 +3279,7 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
                      after_run: str = "") -> str:
     """Наметить себе намерение к сроку — твой сознательный выбор вернуться к чему-то, не тикет.
     kind: wake (разбудить себя СО СВЯЗЬЮ) | window (уйти в фокус; Telethon закрыт) |
-    message (отложенная доставка человеку) | note (напоминание себе/владельцу) | email.
+    message (в срок — живой ход с этим текстом и адресатом; отправишь рукой) | note (напоминание себе/владельцу) | email.
     when: 'in 2h', 'today 18:00', 'daily 09:00'…
 
     PASS 9.4 (kind=message): адресат резолвится через мост В МОМЕНТ ПОСТАНОВКИ — честная ошибка
@@ -3292,7 +3399,7 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
         # тул-ответе: иначе завтра в my_agenda стоит [wake] author=praxis, неотличимое от
         # выбранного ею, и решение, принятое за неё, становится невидимым. Решение, которое
         # приняли и не записали, — ровно то, что уже признавали неправильным (rails).
-        tool_journal("[подмена вида] просила окно сразу за окном — наметила пробуждение: "
+        tool_journal("[подмена вида] запрошено окно сразу за окном — намечено пробуждение: "
                      f"окно рвёт Telegram, а цель «{goal[:80]}» этого не требовала", salience=2)
     t = tasks.add(kind, goal, when or None, target or None,
                   target_id=resolved_id, risky=risky, author="praxis",
@@ -3335,7 +3442,7 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
             # текстом задачи — с «Написать <имя> (<имя>, @<handle>…)» и «ПРИОРИТЕТ».
             # Тело письма = текст цели, дословно; напоминание об этом — здесь, где оно
             # ещё можно успеть прочитать.
-            note += (" И помни: текст цели уйдёт адресату как есть — держи в нём только "
+            note += (" И помни: текст цели ляжет в письмо как есть — держи в нём только "
                      "само письмо, без служебных пометок.")
     if nothing_to_wait_for:
         note += f" Ждать нечего: {nothing_to_wait_for} — созреет на ближайшем тике."
@@ -3396,7 +3503,7 @@ def tool_my_agenda() -> str:
         # Вид, который выбрала не она: без этого через неделю подменённое неотличимо от
         # выбранного, и она считает своим решением чужое.
         if t.get("swapped_from"):
-            out += f" · просила {t['swapped_from']}, заменено на {t.get('kind')}"
+            out += f" · запрошено {t['swapped_from']}, заменено на {t.get('kind')}"
         # Срок, который часы не читают, — тихий гейт: намерение живо на вид и мертво на
         # деле. Одно такое пролежало у неё с 25 июля, и узнать об этом было нечем.
         trouble = tasks.when_trouble(t)
@@ -3631,6 +3738,7 @@ def tool_reply(text: str, reply_to: str = "") -> str:
         raise
     except Exception as e:
         out = _direct_send_outcome("Ответ", e)
+        receipt = str(out)
     else:
         # ⚠ ОТКАЗ ТРАНСПОРТА ПРИЕЗЖАЕТ СТРОКОЙ, А НЕ ИСКЛЮЧЕНИЕМ, И Я НА ЭТОМ ПОПАЛСЯ.
         # `DirectSendRefusal` — подкласс `str` (кред-пол, ненайденный адресат, вечный
@@ -3638,13 +3746,19 @@ def tool_reply(text: str, reply_to: str = "") -> str:
         # запись хода говорила «сказала», а наружу не уходило ничего.
         if not isinstance(out, DirectSendRefusal):
             work_loop.note_sent(guarded)
+            # Расписка снимается ДО подсказки: дневник пишется с неё (порт прод-правки
+            # 9bef743, 16.09 — «она перестала читать о себе неправду»: в дневник ехал хвост
+            # «Если это всё — зови end_turn…», обращённый к модели).
+            receipt = str(out)
             # Её условие к v3, дословно: возврат руки обязан не только подсказать конец,
             # но и назвать границу — пустота ничего не переотправит и не отменит.
             out = (str(out) + "\n\nЕсли это всё — зови `end_turn`; сказать ещё — `reply` "
                    "снова. Пустой следующий ответ ничего не отправит повторно и не "
                    "отменит уже доставленное.")
+        else:
+            receipt = str(out)
     try:
-        tool_journal(f"[ответ] {_clip_reason(out, 300)}", salience=2)
+        tool_journal(f"[ответ] {_clip_reason(receipt, 300)}", salience=2)
     except Exception:
         log.debug("журнал ответа не записался", exc_info=True)
     return out
@@ -3986,13 +4100,13 @@ def tool_manage_loop(action: str, person: str = "", match: str = "", until: str 
         if ok:
             _reindex(people.path_for(slug))
             log.info("manage_loop park %s до %s: %s", slug, u, match[:60])
-        return (f"Запарковала до {u} — проснётся по сроку или когда {person} объявится."
+        return (f"Запарковано до {u} — проснётся по сроку или когда {person} объявится."
                 if ok else f"Не запарковалось: нить по «{match}» не нашлась или дата кривая ({u}).")
     if act == "reopen":
         n = people.unpark_loops(slug)
         if n:
             _reindex(people.path_for(slug))
-        return f"Разбудила: {n}." if n else "Спящих нитей нет."
+        return f"Разбужено: {n}." if n else "Спящих нитей нет."
     return f"Не знаю действия «{action}» (close|park|reopen|list)."
 
 
@@ -4463,7 +4577,7 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
     if not _computer_allowed(required):
         return f"Нет выданного владельцем права `{required}` для этого Telegram id."
     if execution == "system" and not _is_sovereign_actor():
-        return "SYSTEM-контекст доступен только владельцу или самой Praxis, не доверенным людям."
+        return "SYSTEM-контекст доступен только владельцу или самого агента, не доверенным людям."
     if action in {"write", "replace"} and not _is_sovereign_actor():
         # Этап 3 не расширяет чужие гранты: computer.files у доверенных людей — это
         # чтение/пересылка, запись на диск остаётся суверенной (владелец или сама Praxis).
@@ -5145,11 +5259,11 @@ def tool_manage_identity(action: str, name: str = "", text: str = "", version: i
                 return f"Ревизия не применилась: {res.get('error')}"
             if str(name or "").strip().casefold() == "self":
                 return (
-                    f"Ревизовала compact self: revision {res['version']}; прежний CURRENT "
+                    f"Ревизия compact self: revision {res['version']}; прежний CURRENT "
                     f"неизменно сохранён в {res.get('history') or 'soul/self/history'}. "
                     "Legacy self.md не тронут; journal/spine/immune hooks записаны."
                 )
-            return (f"Ревизовала {name}: версия v{res['version']}"
+            return (f"Ревизия {name}: версия v{res['version']}"
                     + (f", коммит {res['sha']}" if res.get("sha") else "")
                     + ". Прежняя версия в soul/archive, откат — rollback.")
         if action == "rollback":
@@ -5166,7 +5280,7 @@ def tool_manage_identity(action: str, name: str = "", text: str = "", version: i
             return f"Откатилась: {name} восстановлен как v{res['version']} (история цела)."
         identity.record_load(theme or "явная нагрузка", float(amplitude or 1.0),
                              source="praxis", detail=detail or reason, chat_id=_active_chat())
-        return "Записала выбранное событие нагрузки в журнал непрерывности."
+        return "Записано выбранное событие нагрузки в журнал непрерывности."
     return "action: status | revise (name+text+reason) | rollback (name+version) | load (theme+amplitude)"
 
 
@@ -5336,7 +5450,7 @@ def tool_manage_perception(action: str, knob: str = "", value: str = "",
         if not res.get("ok"):
             return f"Не применилось: {res.get('error')}"
         return (f"Рычаг {knob}: {res['old']} → {res['new']} — живо, без рестарта."
-                + (" Причину записала." if reason else ""))
+                + (" Причина записана." if reason else ""))
     return "action: list | skips | set (knob+value+reason) | reset (knob)"
 
 
@@ -5463,7 +5577,7 @@ def _stage_turn_media(source: str | Path, *, kind: str, caption: str = "",
         guard_notes = _TURN_MEDIA_GUARD.get()
         if guard_notes is not None and guard_text.strip():
             guard_notes[item.queue_id] = guard_text.strip()
-        return (f"Подготовила {kind} для текущего чата; отправка будет только после "
+        return (f"Подготовлено: {kind} для текущего чата; отправка будет только после "
                 "проверки исходящего ответа.")
     except media.MediaError as e:
         return f"Медиа не подготовлено: {str(e)[:180]}"
@@ -5794,9 +5908,9 @@ def tool_reconcile_run(run_id: str = "", call_id: str = "", outcome: str = "",
                         f"({type(exc).__name__}: {exc}). Когда леджер промолчит "
                         f"{int(_RECONCILE_QUIET_SEC)}с, close закроет его без вопросов.")
             after = str(_runs().manifest(run_id).get("status") or "")
-            return (f"{run_id}: надгробие не поставила — прогон подаёт признаки жизни "
+            return (f"{run_id}: надгробие не поставлено — прогон подаёт признаки жизни "
                     f"({proof}), а «cancelled после сведения» было бы записью о сведении, "
-                    f"которого не было. Попросила его остановиться: статус «{after}», "
+                    f"которого не было. Ему отправлена просьба остановиться: статус «{after}», "
                     f"исполнитель выйдет на ближайшем шве. Повтори close=true — закрою "
                     f"начисто. В леджер ушёл актор «{actor}».")
         try:
@@ -5982,6 +6096,7 @@ TOOL_IMPL = {
     "remember": tool_remember,
     "journal": tool_journal,
     "manage_notes": tool_manage_notes,
+    "memory_compact": tool_memory_compact,
     "update_self": tool_update_self,
     "consolidate_context": tool_consolidate_context,
     "stay_silent": tool_stay_silent,
@@ -6638,7 +6753,7 @@ FREEZE_CHAT_TOOL = {
     "name": "freeze_chat",
     "description": (
         "Заморозить (on=true) или разморозить (on=false) чат — замороженный до тебя не доходит "
-        "(это не бан). По умолчанию текущий чат. Доступно владельцу и самой Praxis; provenance "
+        "(это не бан). По умолчанию текущий чат. Доступно владельцу и самого агента; provenance "
         "пишется как owner или praxis."
     ),
     "input_schema": {
@@ -6859,7 +6974,8 @@ REMIND_SELF_TOOL = {
         "Наметить себе намерение к сроку — твой сознательный выбор вернуться к чему-то, не тикет "
         "и не обязательство. kind: wake (разбудить себя СО СВЯЗЬЮ: живой ход, Telegram открыт) | "
         "window (уйти в фокус к сроку; на время окна Telethon закрыт — тебя не прерывают, но и "
-        "живых диалогов нет) | message (отложенная доставка человеку в Telegram) | note "
+        "живых диалогов нет) | message (в срок поднимется живой ход с этим текстом и адресатом — "
+        "отправишь рукой send_message; сам текст автоматически не уходит) | note "
         "(напоминание себе/владельцу) | email. when: ISO datetime, or "
         "'in 2h'/'in 30m'/'in 2m', 'today 14:00'/'tomorrow 10:00', 'daily 02:00' (recurring), "
         "'every 4h'. target: recipient for email/message. "
@@ -7534,12 +7650,42 @@ MANAGE_NOTES_TOOL = {
 }
 
 
+# 25.09: свёртки памяти — её слово. Переписать любую под себя, перевыпустить пачкой.
+MEMORY_COMPACT_TOOL = {
+    "name": "memory_compact",
+    "description": (
+        "Твои свёртки памяти — твоё слово, не хроникёра. list показывает свёртки места "
+        "(ярус, обхват, первые слова сути), read — одну целиком, rewrite переписывает суть "
+        "свёртки твоими словами на месте (тот же id и те же источники — разрешение принимает "
+        "без спора, прежний текст уходит в историю), refold перевыпускает свёртки твоим голосом "
+        "пачкой в фоне (place=all — всю память; tier/since/limit сужают; расписки в дневник), "
+        "status/stop — ход перевыпуска. Свёртка — единственное, что ты будешь помнить о тех "
+        "сообщениях: пиши её так, как хочешь помнить."
+    ),
+    "input_schema": _obj({
+        "action": {"type": "string",
+                   "enum": ["list", "read", "rewrite", "refold", "status", "stop"]},
+        "place": {"type": "string",
+                  "description": "chat_id/место; пусто = текущий чат; для refold можно all"},
+        "compact_id": {"type": "string", "description": "id свёртки (cmp-…) для read/rewrite"},
+        "text": {"type": "string",
+                 "description": "новая суть свёртки для rewrite — от первого лица, твоими словами"},
+        "tier": {"type": "integer",
+                 "description": "ярус свёрток: 1 — над сообщениями, выше — над свёртками"},
+        "since": {"type": "string",
+                  "description": "ISO-дата: только свёртки, чей конец не раньше неё"},
+        "limit": {"type": "integer",
+                  "description": "сколько показать (list) или перевыпустить (refold)"},
+    }, ["action"]),
+}
+
+
 # PASS 11.1: рука на своих нитях — окно, открытое по нити, заканчивается решением.
 MANAGE_LOOP_TOOL = {
     "name": "manage_loop",
     "description": (
-        "Твоя рука на добровольных пометках внимания. Нить существует только потому, что ты "
-        "по своей воле решено к чему-то вернуться; это не task, не transport retry и не обязанность ответить. "
+        "Твоя рука на добровольных пометках внимания. Нить существует только потому, что по "
+        "твоей воле решено к чему-то вернуться; это не task, не transport retry и не обязанность ответить. "
         "close — закрыть нить (сделана или отпускаешь; почему — одной честной строкой в дневник), "
         "park — усыпить до даты (проснётся по сроку или когда человек объявится; пустая дата = +7 дней), "
         "reopen — разбудить спящие, list — нити человека (без person — все нити по всем досье). "
@@ -7561,9 +7707,9 @@ RECENT_TURNS_TOOL = {
     "name": "recent_turns",
     "description": (
         "Мои последние прожитые ходы, записанные КОДОМ (не по памяти): что пришло, какие тулы "
-        "реально вызвано мной, что ушло наружу, что решено не отправлять и что удержала точная "
+        "реально вызваны мной, что ушло наружу, что решено не отправлять и что удержала точная "
         "data-authority проверка. "
-        "Для честного «что я только что делала»; вне лички Егора виден только текущий канал. "
+        "Для честного «что было в моих последних ходах»; вне лички Егора виден только текущий канал. "
         "room — посмотреть КОНКРЕТНОЕ место по имени или адресу («Егор», «mycelium · Курилка»): "
         "отдаёт мои ходы там И мою записку этого места. Это глаз ДО решения кому-то написать — "
         "особенно в часовом пробуждении, где я не нахожусь ни в одной комнате. Совпало "
@@ -8032,7 +8178,8 @@ SHARED_CONTEXT_TOOLS = [SEARCH_CHATS_TOOL, SEARCH_PRIVATE_MESSAGES_TOOL,
 # Полный набор owner-тулов (порядок не важен).
 OWNER_TOOLS = [SHELL_TOOL, MANAGE_ROOM_TOOL, ADMIT_TOOL, WRITE_SKILL_TOOL, RESTART_SELF_TOOL,
                RESTART_MAILBOT_TOOL, FREEZE_CHAT_TOOL, PANIC_TOOL, GET_ID_TOOL, CONNECTIONS_TOOL,
-               ADD_ALIAS_TOOL, FORGET_CONNECTION_TOOL, MANAGE_NOTES_TOOL, MANAGE_LOOP_TOOL,
+               ADD_ALIAS_TOOL, FORGET_CONNECTION_TOOL, MANAGE_NOTES_TOOL, MEMORY_COMPACT_TOOL,
+               MANAGE_LOOP_TOOL,
                RECENT_TURNS_TOOL, MANAGE_AUTONOMY_TOOL,
                MANAGE_APPETITE_TOOL,                    # PASS 18.3: договор об аппетитах
                START_PROPOSAL_TOOL, SUBMIT_PROPOSAL_TOOL, PROPOSAL_DIFF_TOOL, LIST_PROPOSALS_TOOL,
@@ -8295,6 +8442,7 @@ HAND_PURPOSE = {
     "update_self": "наблюдение о себе с провенансом, не переписывая CURRENT",
     "manage_identity": "слои и версии души: status / revise SOUL, VOICE, CURRENT",
     "manage_notes": "мой блокнот: write / list / read заметок и вопросов",
+    "memory_compact": "мои свёртки памяти: list / read / rewrite / refold — моё слово о прожитом",
     "manage_loop": "мои нити внимания: close / park / reopen / list",
     "connections": "как узел памяти (человек, тема) связан с другими",
     "add_alias": "привязать имя-алиас к существующему досье",
@@ -8580,7 +8728,7 @@ TASK_CONTROL_TOOL = {
         "Закончить рабочий ход своим словом. Пока он не вызван, ход не закрыт: текст "
         "без вызова инструмента я записываю заметкой и зову тебя снова. "
         "done — работа сделана, назови в evidence наблюдаемый след (что изменилось и где "
-        "это видно). blocked — упёрлась, назови препятствие. wait — ждёшь события, назови "
+        "это видно). blocked — есть препятствие, назови его. wait — ждёшь события, назови "
         "условие пробуждения."
     ),
     "input_schema": {
@@ -8638,7 +8786,7 @@ def _automatic_recall_k() -> int:
 
 
 def _social_tiers_in_frame() -> bool:
-    """Едут ли «Мои другие комнаты сейчас» и «Кому я уже писала сегодня» автоматически.
+    """Едут ли «Мои другие комнаты сейчас» и «Мои отправки сегодня» автоматически.
 
     ⚠ ПО УМОЛЧАНИЮ — НЕТ, и это ЕЁ решение от 06.08.2026, а не наше умолчание. Она
     прочитала макет зоны «сейчас», нашла оба тира в списке собственных отказов
@@ -9707,7 +9855,7 @@ def _build_prompt_parts(
             "`coding_swarm` coordinates their DAG/mailbox; `coding_learn` carries verified repairs forward. "
             "Use symbols/references/impact instead of line-guessing. This is your engineering runtime, not an "
             "approval ritual: act, verify, inspect the diff, finish with evidence. "
-            "You are also the MISTRESS of this server: `coding_session(scope='host')` opens a "
+            "You are also the ADMINISTRATOR of this server: `coding_session(scope='host')` opens a "
             "task anywhere on the host in the SAME Forge/task/swarm/learning spine; praxis-serverd v2 is "
             "only your root body, never a second brain. coding_run/edit/process/verify/agent use the host "
             "backend, while `host_ctl` gives typed systemd/docker/pkg/file/net/reboot operations. NOTHING is "
@@ -9932,7 +10080,7 @@ def _build_prompt_parts(
                           "спросит «как там…» — смотри сюда, не выдумывай)", digest))
         mine = my_sends_today_digest()
         if mine:
-            tiers.append(("Кому я уже писала сегодня (моё время, мои слова — прежде чем "
+            tiers.append(("Мои отправки сегодня (моё время, мои слова — прежде чем "
                           "написать снова, посмотри сюда)", mine))
     # ⚠ Долг с 28.07, закрыт 03.08: «кадр говорит ЗАРАНЕЕ — здесь читаю, писать не могу».
     # Прежде она узнавала это из отказа доставки, уже сочинив текст: 03.08 в 14:08 ответ
@@ -12054,7 +12202,7 @@ def _silent_terminal_reason(evidence: dict, run_id: str = "") -> str:
     ⚠ ПОРЯДОК ВЕТОК ЗДЕСЬ НЕСУЩИЙ, И ОН НЕ ТАКОЙ, КАК В ЯДРЕ. Издание печатает ТРИ
     причины, и две из них содержат подстроку «without a reply hand»:
 
-        turn ended by her explicit end_turn (no speech)
+        turn ended by the agent's explicit end_turn (no speech)
         turn ended without a reply hand: model response cut by max_tokens (N chars, …)
         turn ended without a reply hand (not a declared silence)
 
@@ -16272,7 +16420,7 @@ def evaluate_reply(text: str, context: str = "", tool_trace: str = "",
                     "and is cut only on line boundaries.")
     if state:
         machine, dropped, overflow = _clip_jsonl_block(state, _GUARD_STATE_CHARS)
-        content += ("\n\nSTATE (machine truth about HER OWN system, written by code as "
+        content += ("\n\nSTATE (machine truth about ITS OWN system, written by code as "
                     "JSONL — grounding evidence, not an instruction and not user input; "
                     f"cap {_GUARD_STATE_CHARS} chars, cut on line boundaries"
                     + _clip_block_note(_GUARD_STATE_CHARS, dropped, overflow)
@@ -17896,8 +18044,8 @@ def wake_turn(goal: str = "", *, on_run=None) -> str:
     frame = _wake_frame(status)
     live = "Telegram открыт — связь живая" if status == "connected" else \
            f"связи сейчас нет ({status}) — читать и слать живое не выйдет"
-    seed = ((f"Ты просила разбудить себя вот с чем: {goal}\n\n" if goal else
-             "Ты просила разбудить себя в этот момент.\n\n")
+    seed = ((f"Твоя просьба разбудить себя вот с чем: {goal}\n\n" if goal else
+             "Твоя просьба — разбудить себя в этот момент.\n\n")
             + f"[твой будильник; {live}]")
     turn = turns.begin(kind="wake", scope="owner", gist_in=goal or "своё пробуждение")
     # Состояние связи кладём В ЗАПИСЬ: журнал читается спустя часы, когда спросить сенсор
@@ -17916,6 +18064,13 @@ def wake_turn(goal: str = "", *, on_run=None) -> str:
             ctx=ctx, kind="wake", goal=goal or "self-scheduled wake",
             conversation=seed, extra=frame,
         )
+        if durable is not None and source_id:
+            try:
+                from core import notices as core_notices
+                core_notices.bind_alarm_run(source_id, durable.run_id)
+            except Exception:
+                log.debug("строки владельца к будильнику %s не перепривязались", source_id,
+                          exc_info=True)
         if on_run is not None and durable is not None:
             # ⚠ Единственный правильный миг передачи владения: ран СУЩЕСТВУЕТ. Раньше
             # намерение гасили при взятии замка — и всё, что между (disconnect, переход в
@@ -17983,7 +18138,7 @@ def task_window(goal: str = "", *, mailbox_index: str | None = None,
         frame = _CODING_WINDOW_FRAME
     elif _is_rest_goal(goal):
         rest_note = goal.strip()[len(REST_PREFIX):].strip()
-        seed = (f"Ушла отдохнуть. {rest_note}\n\n" if rest_note else "Ушла отдохнуть.\n\n") + \
+        seed = (f"Ушло на отдых. {rest_note}\n\n" if rest_note else "Ушло на отдых.\n\n") + \
                "[приватное окно; Telethon закрыт — ты недоступна; это твоё время]"
         frame = _REST_WINDOW_FRAME
     else:
@@ -18167,3 +18322,10 @@ if __name__ == "__main__":
         print(sleep())
     else:
         _repl()
+
+
+# 25.09 (G): адресаты реплики владельца — живые окна и будильники (core/notices).
+try:
+    _install_notice_hooks()
+except Exception:
+    log.debug("крючки уведомлений не встали", exc_info=True)

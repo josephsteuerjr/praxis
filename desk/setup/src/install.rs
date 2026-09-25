@@ -2371,6 +2371,11 @@ fn rehearse_extensions(payload: &Path, dir: &Path) -> Result<Option<(bool, Strin
             runner.display()
         ));
     }
+    // Версия ПОСТАВКИ — из её паспорта: `requires.helene` расширений сверяется с тем, что
+    // ставим, а не с тем, что стоит (ревью 25.09, A5 F1).
+    let host_version = read_json(&payload.join("helene-build.json"))
+        .and_then(|p| p.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .unwrap_or_default();
     let mut cmd = Command::new(&python);
     cmd.arg("-X")
         .arg("utf8")
@@ -2378,15 +2383,37 @@ fn rehearse_extensions(payload: &Path, dir: &Path) -> Result<Option<(bool, Strin
         .arg("--check-extensions")
         .arg("--data")
         .arg(&data)
+        .arg("--host-version")
+        .arg(&host_version)
         .current_dir(runner.parent().unwrap_or(payload))
         .env("PYTHONIOENCODING", "utf-8");
-    let out = run_hidden(&mut cmd)?;
+    // Предел по времени (A5 F3): код владельца может завести не-daemon поток или ждать
+    // сеть — мастер без окна висел бы молча. Истечение — отказ словами, не «идём дальше».
+    let out = run_hidden_for(&mut cmd, std::time::Duration::from_secs(120))
+        .map_err(|e| format!("репетиция расширений не уложилась или не запустилась: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let report: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-        let err = String::from_utf8_lossy(&out.stderr);
-        format!("отчёт репетиции не разобрать ({e}): {}", err.trim().chars().take(300).collect::<String>())
-    })?;
-    let _ = write_atomic(&dir.join("extensions-check.json"), &text);
+    let report_path = dir.join("extensions-check.json");
+    let report: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            // Не разобрали — это НЕ повод обновляться (A5 F2): отчёт с сырым выводом
+            // кладём для карточки и отвечаем отказом; «обновить всё равно» — только флагом.
+            let err = String::from_utf8_lossy(&out.stderr);
+            let raw = serde_json::json!({
+                "ok": false,
+                "summary": format!("репетиция не дала отчёта ({e})"),
+                "items": [],
+                "raw_stdout": text.chars().take(2000).collect::<String>(),
+                "raw_stderr": err.chars().take(2000).collect::<String>(),
+            });
+            let _ = write_atomic(&report_path, &raw.to_string());
+            return Ok(Some((false, format!(
+                "отчёт репетиции не разобрать ({e}); вывод: {}",
+                err.trim().chars().take(300).collect::<String>()
+            ))));
+        }
+    };
+    let _ = write_atomic(&report_path, &text);
     let ok = report.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     let summary = report
         .get("summary")

@@ -1104,13 +1104,17 @@ def assemble_from_core(dest: Path, core: Path, layer: Path) -> int:
     # ⚠ Объявить файл и положить в слой вчерашнюю его редакцию — по
     # последствиям то же, что не объявить вовсе: поставка соберётся не из
     # этого дерева. Проверялось только объявление, содержимое — нет (11.09).
-    if drift["undeclared"] or drift["stale"] or drift["drifted"]:
+    # `only_ours` тоже отказ (ревью 25.09, A11 F5): необъявленный новый модуль издания молча
+    # выпал бы из сборки «ядро + слой» — sitecustomize.py спасало только то, что он объявлен.
+    if drift["undeclared"] or drift["stale"] or drift["drifted"] or drift.get("only_ours"):
         raise SystemExit(
             f"из ядра собрать нельзя: слой не описывает издание.\n"
             f"  не объявлено, но расходится: {len(drift['undeclared'])}\n"
             f"  объявлено зря (совпадает):   {len(drift['stale'])}\n"
             f"  объявлено, но слой отстал:   {len(drift['drifted'])}"
             f" ({', '.join(drift['drifted'][:6])})\n"
+            f"  только у нас, не объявлено:  {len(drift.get('only_ours') or [])}"
+            f" ({', '.join((drift.get('only_ours') or [])[:6])})\n"
             "Подробно — python installer/core_src.py --check\n"
             "Расходиться могут обе стороны, и отказ не знает какая: либо выложенное "
             "ядро отстало от живого (свежий экспорт зеркала — её сторона), либо от "
@@ -1125,6 +1129,52 @@ def assemble_from_core(dest: Path, core: Path, layer: Path) -> int:
             shutil.copy2(path, target)
             n += 1
     return n
+
+
+BODY_BUILT = BODY_TARGET.parent / "BODY-BUILT.json"
+
+
+def body_provenance(body_exe: Path, bridge_exe: Path, allow_partial: bool) -> dict:
+    """Из чего собраны `helene-body.exe`/`helene-bridge.exe` в этой поставке (ревью 25.09, A9 F4).
+
+    Тот же класс дефекта, что у реле 09.09: бинари тела берутся ГОТОВЫМИ из `_body_target`,
+    и правка `body/crates/*.rs` без пересборки уезжала бы вчерашним exe при `complete: true`.
+    Сборка тела (`installer/body_src.py --build`) пишет рядом `BODY-BUILT.json`: отпечаток
+    исходника (`build_mac.body_source_digest(live/body)`) и суммы exe. Здесь — сверка.
+    """
+    import build_mac  # noqa: PLC0415 — сосед по installer/, тот же отпечаток, что у Mac
+    src = LIVE / "body"
+    digest, files = build_mac.body_source_digest(src) if (src / "Cargo.toml").is_file() else ("", 0)
+    info: dict = {"source": "tree/body", "digest": digest or None, "files": files,
+                  "exe_sha256": {"helene-body": sha256(body_exe) if body_exe.is_file() else None,
+                                 "helene-bridge": sha256(bridge_exe) if bridge_exe.is_file() else None}}
+    print(f"  исходник тела: {files} файлов, отпечаток {digest[:12] or '?'}")
+    try:
+        made = json.loads(BODY_BUILT.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        made = None
+    if not isinstance(made, dict):
+        line = (f"чем собрано тело — неизвестно ({BODY_BUILT} нет): "
+                "installer/body_src.py --build")
+        if not allow_partial:
+            raise SystemExit(line)
+        print(f"  ⚠ {line}")
+        info["stale"] = True
+        return info
+    same = (made.get("source_digest") == digest
+            and made.get("exe_sha256", {}).get("praxis-body") == info["exe_sha256"]["helene-body"]
+            and made.get("exe_sha256", {}).get("praxis-bridge") == info["exe_sha256"]["helene-bridge"])
+    if not same:
+        line = ("тело собрано не из этого исходника — пересобрать: installer/body_src.py --build "
+                f"(отпечаток бинаря {str(made.get('source_digest', ''))[:12]}, исходника {digest[:12]})")
+        if not allow_partial:
+            raise SystemExit(line)
+        print(f"  ⚠ {line}")
+        info["stale"] = True
+    else:
+        info["built_utc"] = made.get("built_utc")
+        print(f"  тело собрано из него же ({made.get('built_utc')})")
+    return info
 
 
 def relay_provenance(exe: Path, allow_partial: bool) -> dict:
@@ -1467,6 +1517,7 @@ def main() -> None:
     missing = []
     stale = []
     relay: dict = {}
+    body: dict | None = None
     relay_linux: dict = {}
     for src, name, how, decl in binaries:
         if not src.is_file():
@@ -1499,6 +1550,8 @@ def main() -> None:
         print(f"  {name}: положен")
         if name == "helene-relay.exe":
             relay = relay_provenance(src, args.allow_partial)
+        if name == "helene-body.exe":
+            body = body_provenance(src, out / "helene-bridge.exe", args.allow_partial)
         if name == "helene-relay":
             relay_linux = relay_linux_provenance(src, args.allow_partial)
     if stale:
@@ -1604,6 +1657,8 @@ def main() -> None:
         # он и есть главный. Плюс расхождение объявленного слоя с делом, чтобы
         # его нельзя было не заметить (см. core_provenance).
         "core": core or None,
+        # Тело: из каких крейтов и тем ли исходником собрано (см. body_provenance).
+        "body": body or None,
         "desk": {"version": staged["desk"]["version"],
                  "flavor": staged["desk"]["flavor"],
                  "digest": staged["desk"]["digest"],

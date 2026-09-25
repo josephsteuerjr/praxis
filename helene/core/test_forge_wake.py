@@ -1351,7 +1351,7 @@ class TestUpstreamEye(unittest.TestCase):
         self.assertIn("papertrade-lab", listed)
         self.assertIn("PRAXIS_FORGE_UPSTREAM_KEEP", listed, "потолок назван ей, а не логу")
         gone = forge.upstream_lever("unwatch", arg="https://github.com/AreteLimen/papertrade-lab")
-        self.assertIn("Сняла наблюдение", gone)
+        self.assertIn("Наблюдение снято", gone)
         self.assertNotIn(self.KEY, forge._load_upstreams())
         # …и обход не поднимает снятое обратно из той же старой цели.
         with self._remote(self.NEW_HEAD):

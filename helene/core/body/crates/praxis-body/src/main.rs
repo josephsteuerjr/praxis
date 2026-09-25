@@ -101,10 +101,6 @@ impl From<ExecutionArg> for ExecutionKind {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Первой строкой: на macOS тело живёт под движком Hélène без job-объекта Windows,
-    // и без сторожа осиротевшее тело пережило бы выход программы (см. `mac::watch_parent`).
-    #[cfg(target_os = "macos")]
-    mac::watch_parent("praxis-body");
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -113,6 +109,15 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .with_writer(std::io::stderr)
         .init();
+    // Сразу после лога (ревью 25.09, A8 F5: предупреждение сторожа до init терялось): на
+    // macOS тело живёт под движком без job-объекта Windows, и без сторожа осиротевшее тело
+    // пережило бы выход программы (см. `mac::watch_parent`). Супервизор `process.start`
+    // по замыслу ОТВЯЗАН от тела (переживает его рестарт и дописывает result.json) — сторож
+    // на нём делал ребёнка сиротой, а операцию in_doubt (A8 F1).
+    #[cfg(target_os = "macos")]
+    if !std::env::args().any(|a| a == "supervise") {
+        mac::watch_parent("praxis-body");
+    }
     // ⚠ ПЕРЕД первым обращением к экрану, окнам и вводу. Windows отвечает
     // неосведомлённому о масштабе процессу ВЫДУМАННЫМИ числами: `GetWindowRect`,
     // метрики экрана и координаты `SendInput` пересчитываются к вымыслу «96 точек на

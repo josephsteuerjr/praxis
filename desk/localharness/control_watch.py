@@ -32,8 +32,15 @@ def delivery(runs, run_id: str):
             yield True  # legacy envelope has no durable identity to cancel
             return
         state = runs().status(run_id)
-        cancelled = state.get("status") in {"cancelled", "paused", "blocked", "in_doubt"}
-        cancelled = cancelled or (state.get("control") or {}).get("action") == "cancel"
+        # Ревью 25.09 (A6 F3): гасить границу только по ОТМЕНЕ. `paused`/`in_doubt`/
+        # `blocked` — живой ход на чекпойнте, и его плашку («ход приостановлен и ждёт…»)
+        # владелец обязан увидеть; прежний набор делал эту ветку недостижимой. Ключ
+        # просьбы у run_manager — `requested_control` (старый `control` оставлен на всякий).
+        cancelled = state.get("status") == "cancelled"
+        for key in ("requested_control", "control"):
+            request = state.get(key)
+            if isinstance(request, dict) and request.get("action") == "cancel":
+                cancelled = True
         yield not cancelled
 
 
@@ -93,9 +100,17 @@ def consume(tree: Path, manager, statuses) -> dict | None:
     result["at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     receipt_path = folder / "interrupt-receipt.json"
     temp = folder / ".tmp-interrupt-receipt.json"
-    temp.write_text(json.dumps(result, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
-    os.replace(temp, receipt_path)
-    claimed.unlink()
+    try:
+        temp.write_text(json.dumps(result, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+        os.replace(temp, receipt_path)
+    except OSError:
+        # Квитанция не записалась — просьба всё равно исполнена: повторять request_cancel
+        # каждые 0,5 с по тем же прогонам было бы петлёй (ревью 25.09, A6 F12).
+        log.exception("interrupt receipt: квитанция не записалась — просьба снята, повтора не будет")
+    try:
+        claimed.unlink()
+    except OSError:
+        log.debug("interrupt: claimed request already gone", exc_info=True)
     log.warning("interrupt receipt: %s", result)
     return result
 

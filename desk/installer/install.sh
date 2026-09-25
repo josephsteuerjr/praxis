@@ -51,6 +51,7 @@ TMP="${TMPDIR:-/tmp}"
 
 FROM=""
 RELAUNCH=0
+FORCE_EXT=0
 UNINSTALL=0
 PURGE=0
 ZIP=""
@@ -89,7 +90,7 @@ $PRODUCT $VERSION для macOS (Apple Silicon)
   sh install.sh --uninstall         снять программу, данные оставить
   sh install.sh --uninstall --purge снять вместе с data/ и helene.json
 
-Ставится в $HOME_DIR. Другой выпуск: HELENE_TAG=v0.8.7 sh install.sh
+Ставится в $HOME_DIR. Другой выпуск: HELENE_TAG=v0.8.3 sh install.sh (сейчас: $TAG)
 Запускать от своего пользователя — того, кто вошёл на экран Mac, — без sudo и su:
 прав администратора установка не требует, пароль программа спросит сама, когда он понадобится.
 EOF
@@ -102,6 +103,7 @@ while [ $# -gt 0 ]; do
             FROM="$2"; shift 2 ;;
         --from=*) FROM="${1#--from=}"; shift ;;
         --relaunch) RELAUNCH=1; shift ;;
+        --force-extensions) FORCE_EXT=1; shift ;;
         --uninstall) UNINSTALL=1; shift ;;
         --purge) PURGE=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -297,7 +299,7 @@ stop_running() {
 decisions_json() {
     py="$STAGING/$FOLDER/runtime/bin/python3"
     [ -x "$py" ] || return 1
-    "$py" - "$HOME_DIR" "$1" <<'PY'
+    "$py" - "$HOME_DIR" "$1" "${FORCE_EXT:-0}" <<'PY'
 import json
 import pathlib
 import sys
@@ -352,6 +354,9 @@ setup = {
     # Нулевой сессии на macOS нет как механизма — и записать её отсюда нельзя.
     "session0": False,
     "computer": bool((cfg.get("computer") or {}).get("enabled")),
+    # 25.09 (K): «обновлять, даже если мои расширения не пройдут проверку» — из аргумента
+    # --force-extensions; иначе мастер отказывает словами и старая версия остаётся живой.
+    "force_extensions": sys.argv[3] == "1",
     "dir": str(home),
 }
 out.write_text(json.dumps(setup, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")

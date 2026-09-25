@@ -201,7 +201,7 @@ class TestHerModeLever(RoomsHarness):
 
         ok, note = rooms.set_own_mode("-206", "normal", ttl_h=5)
         self.assertTrue(ok)
-        self.assertIn("не записала", note,
+        self.assertIn("не записан", note,
                       "отброшенный срок у «обычно» тоже обязан быть назван вслух")
         self.assertFalse(rooms.profile_read("-206")["mode_until"].strip())
 

@@ -661,17 +661,24 @@ class BotTransport:
         return str(replied.get("id") or "") == str(self.me.get("id") or "")
 
     # ----------------------------------------------------------- доставка
-    def _before_send(self) -> None:
-        """Крючок пульса хода: снять пост «думаю» ровно перед первым словом наружу."""
+    def _before_send(self, chat_id: str = "") -> None:
+        """Крючок пульса хода: снять пост «думаю» ровно перед первым словом наружу.
+
+        `chat_id` — куда идёт отправка: пульс снимает пост только в своём чате
+        (ревью 25.09, A6 F7). Старый крючок без параметра тоже принимается.
+        """
         hook = self.before_send
         if callable(hook):
             try:
-                hook()
+                try:
+                    hook(chat_id)
+                except TypeError:
+                    hook()
             except Exception:
                 log.debug("крючок before_send отказал", exc_info=True)
 
     def deliver_text(self, chat_id: str, text: str, reply_to: str = "") -> str:
-        self._before_send()
+        self._before_send(chat_id)
         peer, thread = peer_thread(chat_id)
         parts = _chunks(text)
         first_id = None
@@ -710,7 +717,7 @@ class BotTransport:
 
     def deliver_file(self, path: Path, *, chat_id: str, caption: str = "",
                      media_kind: str = "document", voice_note: bool = False) -> str:
-        self._before_send()
+        self._before_send(chat_id)
         peer, thread = peer_thread(chat_id)
         method, field = {"photo": ("sendPhoto", "photo"),
                          "audio": ("sendAudio", "audio"),

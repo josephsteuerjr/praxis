@@ -28,6 +28,34 @@ import { PRODUCT_NAME, S } from "../state";
 import { hostInfo, type HostInfo } from "../host";
 import { isMacPlatform, platformOf } from "../../platform";
 
+/** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
+export const RESTART_BLOCKS: Array<[string, string]> = [
+  ["telegram", "Telegram"],
+  ["computer", "тело"],
+  ["voice", "голос"],
+  ["agents", "агенты"],
+  ["sandbox", "ограда"],
+];
+
+/** Какие из RESTART_BLOCKS изменились между сохранённым и новым конфигом (стабильный JSON). */
+export function blocksNeedingRestart(before: unknown, after: unknown): string[] {
+  const stable = (v: unknown): string => JSON.stringify(v ?? null, Object.keys((v && typeof v === "object") ? (v as object) : {}).sort());
+  const deep = (v: unknown): string => {
+    if (!v || typeof v !== "object") return JSON.stringify(v ?? null);
+    if (Array.isArray(v)) return "[" + v.map(deep).join(",") + "]";
+    const o = v as Record<string, unknown>;
+    return "{" + Object.keys(o).sort().map((k) => JSON.stringify(k) + ":" + deep(o[k])).join(",") + "}";
+  };
+  void stable;
+  const b = (before && typeof before === "object") ? (before as Record<string, unknown>) : {};
+  const a = (after && typeof after === "object") ? (after as Record<string, unknown>) : {};
+  const out: string[] = [];
+  for (const [key, title] of RESTART_BLOCKS) {
+    if (deep(b[key]) !== deep(a[key])) out.push(title);
+  }
+  return out;
+}
+
 export interface Config {
   agent?: { name?: string };
   phone?: { enabled?: boolean };
@@ -307,7 +335,9 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       updOut.textContent = `Скачано (${checked}). Установщик запущен — программа закроется сама и откроется новой.`;
       // 25.09 (K): установщик сначала репетирует расширения владельца под новой
       // версией и без явного слова не подменяет папки, если хоть одно не грузится.
-      await shell("update_install", { path: got.path, force_extensions: forceExt });
+      // ⚠ Имена аргументов команд Tauri — camelCase (как `mtimeNs` у config_save):
+      // `force_extensions` молча превращался бы в None (ревью 25.09, A4/A7 F1).
+      await shell("update_install", { path: got.path, forceExtensions: forceExt });
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e ?? "");
       if (/not found|неизвестн|unknown|command/i.test(text)) {
@@ -346,7 +376,6 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
           updUrl = "";
           updSha = "";
           dlBtn.hidden = true;
-        forceToggle.hidden = true;
           forceToggle.hidden = true;
         }
       } catch (e) {
@@ -429,10 +458,17 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         // Telegram-аккаунт) — говорит хвост расписки от издания (`built.note()`).
         const modeNote = built.note();
         const relayWords = relayNote ? ` ${relayNote}.` : "";
+        // Ревью 25.09 (A7 F2): движок на тике перечитывает мозг и пару галочек агента —
+        // Telegram, тело, голос, агентов и ограду он читает один раз на старте. Если эти
+        // блоки изменились, расписка обязана сказать «перезапуском» и показать кнопку.
+        const restartBlocks = blocksNeedingRestart(c, out);
+        const restartNote = restartBlocks.length
+          ? ` ${restartBlocks.join(", ")} — применится перезапуском движка (кнопка ниже).`
+          : "";
         saveOut.textContent =
           "Сохранено. Модель и ключ движок применит сам через несколько секунд, реле — сразу." +
-          relayWords + modeNote;
-        restartBtn.hidden = !modeNote;
+          relayWords + restartNote + modeNote;
+        restartBtn.hidden = !(modeNote || restartNote);
         S.agent = String(out.agent?.name || S.agent);
       } catch (e) {
         if (e instanceof StaleConfig) {

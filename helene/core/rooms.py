@@ -1049,11 +1049,11 @@ def _own_mode_note(chat_id, mode: str, *, set_by: str, ttl_h, applied_ttl,
     elif keeps_ttl:
         parts.append("Срок не задан — держится, пока не сниму.")
     elif ttl_h:
-        parts.append(f"Срок {ttl_h:g} ч не записала: «обычно» — покой, а не режим на время.")
+        parts.append(f"Срок {ttl_h:g} ч не записан: «обычно» — покой, а не режим на время.")
     if mode != "normal":
         parts.append("Снимается тем же рычагом с «обычно»: это моя дисциплина, не наказание.")
     if clipped:
-        parts.append(f"Причину обрезала до {MODE_REASON_MAX} знаков.")
+        parts.append(f"Причина обрезана до {MODE_REASON_MAX} знаков.")
     return " ".join(parts)
 
 

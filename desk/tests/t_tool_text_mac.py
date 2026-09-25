@@ -38,7 +38,21 @@ sys.path.insert(0, str(HERE.parent / "localharness"))
 import body  # noqa: E402  — только импорт: файл тела правит агент тела
 
 #: Дерево агента, как оно уезжает в поставку Mac (`tree/` в архиве — это оно).
-TREE_AGENT = ROOT / "helene" / "core" / "agent.py"
+def _tree_agent() -> Path:
+    """`agent.py` дерева, которое РЕАЛЬНО едет в поставку: HELENE_TREE_SRC, дерево сборки
+    (HELENE_BODY_DIR/tree), иначе слой репозитория. Ревью 25.09 (A9 F1): стенд сверял слой
+    чекаута, а в Mac-архив 0.8.6 уехало дерево Windows-архива с прежней фразой."""
+    import os  # noqa: PLC0415
+    for var, sub in (("HELENE_TREE_SRC", ""), ("HELENE_BODY_DIR", "tree")):
+        raw = os.environ.get(var)
+        if raw:
+            candidate = (Path(raw) / sub if sub else Path(raw)) / "agent.py"
+            if candidate.is_file():
+                return candidate
+    return ROOT / "helene" / "core" / "agent.py"
+
+
+TREE_AGENT = _tree_agent()
 
 #: Слова Windows, которых в описании для macOS быть не должно. `.exe` здесь же:
 #: имён с расширением на Mac не бывает ни у одного файла поставки.

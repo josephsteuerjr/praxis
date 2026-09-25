@@ -13,7 +13,7 @@ This repository holds four things, and the licence above covers all of them:
   praxis/   the core of the agent
   helene/   the Windows edition of that core, declared as a layer
   desk/     the Hélène application around it
-  pult/     the Pult application
+  desk/remote/  the Praxis remote (web front for the server agent)
 
 Components under a different licence, carried here rather than relicensed:
 

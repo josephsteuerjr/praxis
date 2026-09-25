@@ -111,10 +111,13 @@ class Versions(unittest.TestCase):
         self.assertIn("не проверено", note)
 
     def test_scrub_hides_secrets(self):
-        out = extensions.scrub({"model": {"key": "abc", "base_url": "http://x"}, "relay": {"token": "t"}})
+        out = extensions.scrub({"model": {"key": "abc", "base_url": "http://x"}, "relay": {"token": "t"},
+                                "telegram": {"api_hash": "h", "phone": "+7", "owner_id": "1"}})
         self.assertEqual(out["model"]["key"], "•••")
         self.assertEqual(out["model"]["base_url"], "http://x")
         self.assertEqual(out["relay"]["token"], "•••")
+        self.assertEqual((out["telegram"]["api_hash"], out["telegram"]["phone"]), ("•••", "•••"))
+        self.assertEqual(out["telegram"]["owner_id"], "1")
 
 
 class Loading(Base):
@@ -137,14 +140,41 @@ class Loading(Base):
         self.assertEqual(snap["items"][0]["state"], "loaded")
         self.assertIn("quota 1.2 — подключено", extensions.state_line())
 
-    def test_name_conflict_gets_namespace(self):
+    def test_name_conflict_gets_namespace_without_dots(self):
         code = GOOD_CODE.replace('api.register_tool("quota"', 'api.register_tool("reply"')
         write_ext(self.tree, "quota", GOOD, code)
         loaded = self.install()
         self.assertEqual(loaded[0].state, "loaded", loaded[0].reason)
-        self.assertEqual(loaded[0].tools, ["ext.quota.reply"])
-        self.assertIn("ext.quota.reply", self.agent.TOOL_IMPL)
+        self.assertEqual(loaded[0].tools, ["ext_quota_reply"])
+        self.assertRegex(loaded[0].tools[0], extensions.TOOL_NAME_RE, "имя годится провайдеру")
+        self.assertIn("ext_quota_reply", self.agent.TOOL_IMPL)
         self.assertEqual(self.agent.TOOL_IMPL["reply"](), "ok", "штатная рука не подменена")
+
+    def test_budget_is_about_the_extension_not_the_tree(self):
+        # У дерева схемы всех рук ~125 000 знаков: расширение обязано подключаться и рядом с ними.
+        self.agent.OWNER_TOOLS = [{"name": f"big{i}", "description": "x" * 2000,
+                                   "input_schema": {"type": "object"}} for i in range(60)]
+        write_ext(self.tree, "quota", GOOD, GOOD_CODE)
+        loaded = self.install()
+        self.assertEqual(loaded[0].state, "loaded", loaded[0].reason)
+        self.assertIn("quota", self.agent.TOOL_IMPL)
+
+    def test_failed_acceptance_rolls_the_tool_back(self):
+        code = GOOD_CODE.replace("def check(api):\n        return True", "def check(api):\n        return 'самопроверка не прошла'")
+        write_ext(self.tree, "quota", GOOD, code)
+        loaded = self.install()
+        self.assertEqual(loaded[0].state, "error")
+        self.assertIn("самопроверка", loaded[0].reason)
+        self.assertNotIn("quota", self.agent.TOOL_IMPL, "тул отказавшего расширения снят")
+        self.assertFalse([t for t in self.agent.BASE_TOOLS if t["name"] == "quota"])
+        self.assertEqual(loaded[0].tools, [])
+
+    def test_on_boot_gets_the_live_api(self):
+        code = GOOD_CODE.replace('CALLS.append(("boot", api_.version()["api"]))',
+                                 'CALLS.append(("boot", api_.tree() is not None, api_.agent() is not None, bool(api_.config())))')
+        write_ext(self.tree, "quota", GOOD, code)
+        self.install()
+        self.assertIn(("boot", True, True, True), sys.modules["helene_ext_quota__quota"].CALLS)
 
     def test_incompatible_major_is_named_not_silent(self):
         write_ext(self.tree, "quota", dict(GOOD, api="helene.ext/2.0"), GOOD_CODE)
@@ -188,8 +218,11 @@ class Loading(Base):
         write_ext(self.tree, "quota", GOOD, big)
         loaded = self.install()
         self.assertEqual(loaded[0].state, "error")
-        self.assertIn("бюджет схем рук", loaded[0].reason)
+        self.assertIn("потолок", loaded[0].reason)
         self.assertNotIn("quota", self.agent.TOOL_IMPL)
+        # и на репетиции тот же потолок — отчёт не скажет «ok» тому, что не подключится
+        report = extensions.check(self.tree, host_version="0.8.7")
+        self.assertFalse(report["ok"])
 
     def test_one_broken_extension_does_not_sink_the_other(self):
         write_ext(self.tree, "quota", GOOD, GOOD_CODE)

@@ -3195,7 +3195,8 @@ async def on_new(event) -> None:
     if notice_kind:
         try:
             from core import notices as core_notices
-            core_notices.note_incoming(
+            await asyncio.to_thread(
+                core_notices.note_incoming,
                 kind=notice_kind, chat_id=chat_id,
                 chat_title=str(topic_title or name or ""), who=name, message_id=mid,
                 gist=body, private=bool(is_private), ts=message_ts,
@@ -4044,6 +4045,31 @@ def _gate_group_wake_room_mode(peer_id, chat_id, wake: GroupWake, *, where: str)
     return room_mode, "closed"
 
 
+def _release_answered_wake(chat_id: str, wake: "GroupWake") -> bool:
+    """Снять wake, чей адрес этот ход уже ответил. True — снят.
+
+    25.09, AbstractDL 08:53/08:59: ход ответил на #109479 (109494, done), но пока он шёл,
+    Анатолий отредактировал сообщение — `_revise_group_wake` подменяет объект
+    (`replace(wake, …)`), тот же адрес, новый объект. Прежняя сверка «is wake» его не
+    узнавала: wake переживал свой же отвеченный ход, `_arm` взводил его снова, и тот же
+    #id получил второй ответ (109499) — «Пракс раздуплилась надвое». Отвеченный адрес —
+    это message_id, а не идентичность объекта. Новый адрес (другой message_id) остаётся:
+    им владеет свой проход.
+    """
+    live = _group_wakes.get(chat_id)
+    if live is None:
+        return False
+    same_object = live is wake
+    same_address = (wake.message_id is not None and live.message_id == wake.message_id)
+    if same_object or same_address:
+        _group_wakes.pop(chat_id, None)
+        if not same_object:
+            log.info("wake [%s] #%s: снят по адресу (объект подменила правка сообщения)",
+                     chat_id, wake.message_id)
+        return True
+    return False
+
+
 async def _run_pass(chat_id: str) -> None:
     """Ход по чату (PASS 8.1): и личка, и группа — голос. Путь: reflex (в on_new) → voice →
     audience-aware finalizer (в owner-DM без оценки речи) → send | [молчу]. Фокус-окно она открывает
@@ -4154,7 +4180,7 @@ async def _run_pass(chat_id: str) -> None:
         # (`owner_*`) этим не трогаются.
         try:
             from core import notices as core_notices
-            core_notices.clear_chat(chat_id)
+            await asyncio.to_thread(core_notices.clear_chat, chat_id)
         except Exception:
             log.debug("накопитель уведомлений: снятие для [%s] не удалось", chat_id, exc_info=True)
         # Тот же разговор, но ролями: её реплики поедут в модель как ЕЁ реплики, а не
@@ -4622,9 +4648,8 @@ async def _run_pass(chat_id: str) -> None:
             if is_dm and chat_id in _meta:
                 _meta[chat_id]["addressed"] = False
                 _meta[chat_id]["addressed_mid"] = None
-            if (not is_dm and wake is not None
-                    and _group_wakes.get(chat_id) is wake):
-                _group_wakes.pop(chat_id, None)
+            if not is_dm and wake is not None:
+                _release_answered_wake(chat_id, wake)
         _passing.discard(chat_id)
         # Новый настоящий address мог прийти, пока голос работал в thread; или тот же
         # wake должен повториться после retry_media/ошибки. Его debounce мог уже сгореть
@@ -5238,6 +5263,43 @@ def _ent_label(ent) -> str:
     return f"{name} ({', '.join(bits)})"
 
 
+def _book_row_label(row: dict) -> str:
+    name = str(row.get("display_name") or "?").strip()
+    bits = []
+    if row.get("username"):
+        bits.append(f"@{row['username']}")
+    bits.append(f"id {row.get('id')}")
+    seen = row.get("last_seen")
+    try:
+        days = max(0, int((time.time() - float(seen or 0)) // 86400)) if seen else None
+    except (TypeError, ValueError):
+        days = None
+    when = ("сегодня" if days == 0 else f"{days} дн. назад") if days is not None else "давно"
+    return f"{name} ({', '.join(bits)}; виделись {when})"
+
+
+def _ambiguous_book(ref: str, book: list[dict]) -> str | None:
+    """Текст отказа, если по имени нашлось несколько РАВНЫХ кандидатов; иначе None.
+
+    25.09: `send_message(to="Ivan")` — «выбрала Иван (id 412244782) по адресу/свежести среди
+    8 кандидатов», и статусы по LRX три раза ушли не тому Ивану (комната к тому же
+    заморожена владельцем). Свежесть не различает людей: она различает, кто писал позже.
+    Равные — это кандидаты одного лексического яруса (точное имя / та же запись имени);
+    один точный среди частичных остаётся однозначным, как и раньше.
+    """
+    if len(book) < 2:
+        return None
+    top = book[0].get("lexical")
+    if top is None:
+        return None
+    ties = [row for row in book if row.get("lexical") == top]
+    if len(ties) < 2:
+        return None
+    rows = "; ".join(_book_row_label(row) for row in ties[:6])
+    return (f"«{ref}» — это несколько людей в моей адресной книге, наугад не пишу: {rows}. "
+            f"Назови адресата по id или @username.")
+
+
 async def _resolve_entity(ref):
     """Резолв entity. Видимость (07.07, вечер): ТОЧНЫЙ адрес (id/@username) — Telegram-резолв,
     как раньше; ИМЯ — только среди СВОИХ диалогов. Раньше имя проваливалось в get_entity →
@@ -5299,6 +5361,9 @@ async def _resolve_entity(ref):
     await _ensure_dialog_cache()
     q = ref_s.lower()
     book = telegram_contacts.candidates(ref_s)
+    denial = _ambiguous_book(ref_s, book)
+    if denial:
+        raise ResolveDenied(denial)
     for row in book:
         ident = str(row.get("id") or "")
         ent = _entity_cache.get(ident)
@@ -6630,7 +6695,7 @@ def _sync_followups(action: str = "list", followup_id: str = "",
         return telegram_followups.LEDGER.context(**kw)
     if action == "cancel":
         return (f"Отменила follow-up {followup_id}." if telegram_followups.LEDGER.cancel(followup_id)
-                else f"Не нашла активный follow-up {followup_id}.")
+                else f"Не найден активный follow-up {followup_id}.")
     if action in ("watch", "unwatch"):
         # Её рука. Отчёт Егору больше не заводится автоматически (см. _sync_send_message):
         # раз так, у неё обязана остаться возможность его ПОПРОСИТЬ — иначе снятие
@@ -6639,7 +6704,7 @@ def _sync_followups(action: str = "list", followup_id: str = "",
         on = action == "watch"
         item = telegram_followups.LEDGER.set_notice(followup_id, on, source="praxis")
         if item is None:
-            return f"Не нашла живую нить {followup_id}."
+            return f"Не найдена живая нить {followup_id}."
         return (f"Отчёт Егору по {followup_id} " + (
             "включила — когда ответят, ему уйдёт письмо; возрастной срок с нити снят."
             if on else "выключила — нить остаётся моим следом, Егору не уйдёт."))
@@ -6965,6 +7030,24 @@ def _accepted_after_timeout(key: str, exc: BaseException, *, grace: float | None
         time.sleep(min(remaining, max(0.05, float(poll))))
 
 
+def _frozen_refusal(peer_id, who: str) -> str | None:
+    """Отказ для отправки в замороженный чат, иначе None.
+
+    Заморозка резала только входящие («сообщения оттуда до меня не доходят»), а исходящие
+    шли как ни в чём не бывало: 25.09 статусы по LRX уезжали в личку 412244782, которую
+    Егор заморозил. Замороженный чат — это чат, с которым она не разговаривает, в обе
+    стороны; осознанно написать туда можно после `freeze_chat(on=false)`.
+    """
+    try:
+        if not rooms.is_frozen(str(peer_id)):
+            return None
+    except Exception:
+        log.debug("frozen check failed for %s", peer_id, exc_info=True)
+        return None
+    return (f"не отправила: чат {who} заморожен — я с ним не разговариваю в обе стороны. "
+            f"Если это осознанно, сначала разморозь его (freeze_chat on=false).")
+
+
 def _sync_send_message(to, text) -> str:
     """Durable direct Telegram text send owned by the current tool call."""
 
@@ -6999,6 +7082,9 @@ def _sync_send_message(to, text) -> str:
 
     peer_id = _marked_peer_id(ent)
     who = _ent_label(ent)
+    frozen = _frozen_refusal(peer_id, who)
+    if frozen:
+        return agent.DirectSendRefusal(frozen)
     target_user_id = (getattr(ent, "id", None)
                       if _entity_kind(ent) == "user" else None)
     active_chat = str(agent._active_chat() or "")

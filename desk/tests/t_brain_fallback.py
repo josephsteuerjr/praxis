@@ -78,6 +78,28 @@ class ProjectionMerge(unittest.TestCase):
         self.assertEqual(voice["fallback_model"], "")
         self.assertIn("pricing", merged, "верхний pricing из проекции переезжает как раньше")
 
+    def test_previously_projected_fields_are_unset_when_dropped(self):
+        # Прошлая проекция сама записала ключ и адрес запасного во второй фреймворк;
+        # владелец убрал запасного — они снимаются. Ручной ключ, которого проекция не
+        # писала, остаётся (ревью 25.09, A6 F10).
+        current = {
+            "frameworks": {"openai": {"base_url": "http://old", "api_key": "old"},
+                           "anthropic": {"base_url": "https://z", "api_key": "spare-key",
+                                         "organization": "manual-org"}},
+            "roles": {"voice": {"framework": "openai", "model": "gpt-old"}},
+        }
+        built = boot._brain_config(_cfg(model="gpt-new"))
+        merged = boot._merge_brain(current, built,
+                                   {"anthropic": ["api_key", "base_url"], "openai": ["api_key", "base_url"]})
+        self.assertNotIn("api_key", merged["frameworks"]["anthropic"], "своё прежнее снято")
+        self.assertNotIn("base_url", merged["frameworks"]["anthropic"])
+        self.assertEqual(merged["frameworks"]["anthropic"]["organization"], "manual-org",
+                         "ручное поле проекция не трогает")
+        # без расписки — прежнее поведение: пустое не затирает
+        kept = boot._merge_brain(current, built)
+        self.assertEqual(kept["frameworks"]["anthropic"]["api_key"], "spare-key")
+        self.assertEqual(boot._projected_fields(built)["openai"], ["api_key", "base_url"])
+
     def test_project_brain_is_idempotent_and_keeps_manual_role_knobs(self):
         with tempfile.TemporaryDirectory() as tmp:
             tree = Path(tmp)
@@ -96,6 +118,25 @@ class ProjectionMerge(unittest.TestCase):
             self.assertEqual(data["roles"]["voice"]["vision_models"], {"openai": "gpt-5.6-terra"})
 
 
+class FallbackElsewhere(unittest.TestCase):
+    FW = {"openai": {"base_url": "http://127.0.0.1:5011", "api_key": "k1"},
+          "anthropic": {"base_url": "https://api.z.ai/api/anthropic", "api_key": "k2"}}
+
+    def test_same_relay_second_name_is_not_a_fallback(self):
+        voice = {"framework": "openai", "fallback_framework": "openai", "fallback_model": "gpt-5.6-luna"}
+        self.assertFalse(readers._fallback_elsewhere(voice, self.FW), "второе имя того же реле (A7 F3 / A1 F2)")
+        voice = {"framework": "openai", "fallback_model": "gpt-5.6-luna"}
+        self.assertFalse(readers._fallback_elsewhere(voice, self.FW), "без fallback_framework — тот же")
+
+    def test_other_framework_with_key_and_other_endpoint_is_armed(self):
+        voice = {"framework": "openai", "fallback_framework": "anthropic", "fallback_model": "glm-5.3"}
+        self.assertTrue(readers._fallback_elsewhere(voice, self.FW))
+        no_key = {"openai": self.FW["openai"], "anthropic": {"base_url": "https://api.z.ai/api/anthropic"}}
+        self.assertFalse(readers._fallback_elsewhere(voice, no_key), "без ключа клиента нет")
+        same_url = {"openai": self.FW["openai"], "anthropic": {"base_url": "http://127.0.0.1:5011/", "api_key": "k"}}
+        self.assertFalse(readers._fallback_elsewhere(voice, same_url), "тот же эндпойнт — тот же счётчик")
+
+
 class QuotaWords(unittest.TestCase):
     def test_active_hold_is_read_and_expired_is_not(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -108,6 +149,15 @@ class QuotaWords(unittest.TestCase):
             hold = readers._quota_hold(path, now)
             self.assertEqual(hold["words"], "подписка исчерпана до 14:35")
             self.assertEqual(hold["framework"], "openai")
+            # удержание чужой ноги шапке не показывается (A7 F4 / A1 F7)
+            self.assertIsNone(readers._quota_hold(path, now, "anthropic", "https://api.z.ai/api/anthropic"))
+            self.assertIsNotNone(readers._quota_hold(path, now, "openai", ""))
+            path.write_text(json.dumps({"holds": [
+                {"framework": "openai", "endpoint": "http://127.0.0.1:5011", "code": "x",
+                 "words": "подписка исчерпана до 14:35", "until": now + 600}]}), encoding="utf-8")
+            self.assertIsNotNone(readers._quota_hold(path, now, "openai", "http://127.0.0.1:5011/"))
+            self.assertIsNone(readers._quota_hold(path, now, "openai", "http://127.0.0.1:5012"),
+                              "мозг уже сменили — старое удержание не пугает")
             path.write_text(json.dumps({"holds": [
                 {"framework": "openai", "words": "вчера", "until": now - 1}]}), encoding="utf-8")
             self.assertIsNone(readers._quota_hold(path, now))
