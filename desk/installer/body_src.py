@@ -43,9 +43,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--build", action="store_true")
     ap.add_argument("--check", action="store_true")
-    ap.add_argument("--live", default=str(layout.live()))
+    ap.add_argument("--live", default="", help="дерево агента (умолчание — layout.tree())")
     args = ap.parse_args()
-    src = Path(args.live).resolve() / "body"
+    src = layout.tree(args.live or None).resolve() / "body"
     if not (src / "Cargo.toml").is_file():
         raise SystemExit(f"нет исходника тела: {src}")
     if args.build:

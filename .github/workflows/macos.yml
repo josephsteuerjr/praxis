@@ -31,7 +31,7 @@
 #     совпасть с `version`.
 # Выкладка — ТОЛЬКО кнопкой и только после влития в `main` (`workflow_dispatch`
 # GitHub видит только с ветки по умолчанию):
-#       gh workflow run macos.yml -f tag=v0.8.7 -f upload=true
+#       gh workflow run macos.yml -f tag=v0.8.8 -f upload=true
 #       — тот же прогон, плюс шаг «Выложить в выпуск» (--clobber в тот же тег;
 #       Windows-архив не трогается).
 # Прогон от push в port/macos или port/macos-body — проверочный: inputs на push
@@ -46,7 +46,7 @@ on:
       tag:
         description: "Выпуск: чьё дерево агента берём и куда выкладываем"
         type: string
-        default: v0.8.7
+        default: v0.8.8
         required: true
       upload:
         description: "Выложить архив, .sha256 и install.sh в этот выпуск (--clobber)"
@@ -65,12 +65,12 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       # На push inputs пусты — тег по умолчанию тот же, что у build_mac.py.
-      TAG: ${{ inputs.tag || 'v0.8.7' }}
+      TAG: ${{ inputs.tag || 'v0.8.8' }}
       # Откуда дерево агента: Windows-архив ЭТОГО выпуска. На push (проверочный
       # прогон) выпуска новой версии ещё нет — дерево берётся из последнего
       # существующего (тот же снимок прода), а сборка называется по TAG.
       # Выкладка (кнопка) требует TREE_TAG == TAG — см. шаг «Выложить в выпуск».
-      TREE_TAG: ${{ inputs.tag || 'v0.8.7' }}
+      TREE_TAG: ${{ inputs.tag || 'v0.8.8' }}
       HOME_DIR: /Users/runner/Applications/Helene
     steps:
       - uses: actions/checkout@v4
@@ -88,8 +88,8 @@ jobs:
       #
       # Когда дерево агента приехало из ДРУГОГО выпуска (TREE_TAG != TAG —
       # так на каждом push, пока выпуска новой версии ещё нет), имя артефакта
-      # говорит это вслух. Скачавший `Helene-v0.8.7-macos-arm64` вправе считать,
-      # что держит сборку выпуска v0.8.7; `…-tree-v0.8.3` такого не обещает.
+      # говорит это вслух. Скачавший `Helene-v0.8.8-macos-arm64` вправе считать,
+      # что держит сборку выпуска v0.8.8; `…-tree-v0.8.3` такого не обещает.
       - name: Имя артефакта
         run: |
           if [ "$TREE_TAG" = "$TAG" ]; then
