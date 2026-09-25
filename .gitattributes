@@ -1,0 +1,3 @@
+# Слой издания сверяется с деревом байт в байт (core_src --check): на Windows с core.autocrlf=true
+# перевыдача превратила бы его файлы в CRLF, и сверка покраснела бы на пустом месте.
+helene/core/** text=auto eol=lf
