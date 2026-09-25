@@ -7017,7 +7017,8 @@ async fn update_download_inner(url: String, sha256: Option<String>) -> Result<se
 /// `HELENE_OLD_PID`, чтобы он мог дождаться нашей смерти, прежде чем менять
 /// файлы под ногами.
 #[tauri::command]
-async fn update_install(app: tauri::AppHandle, path: String) -> Result<serde_json::Value, String> {
+async fn update_install(app: tauri::AppHandle, path: String, force_extensions: Option<bool>) -> Result<serde_json::Value, String> {
+    let force_extensions = force_extensions.unwrap_or(false);
     let archive = PathBuf::from(path.trim())
         .canonicalize()
         .map_err(|_| "архива нет по этому пути".to_string())?;
@@ -7043,7 +7044,7 @@ async fn update_install(app: tauri::AppHandle, path: String) -> Result<serde_jso
             if dest.exists() {
                 std::fs::remove_dir_all(&dest).map_err(|e| format!("не очистилась папка распаковки: {e}"))?;
             }
-            update_install_windows(&archive, &dest)
+            update_install_windows(&archive, &dest, force_extensions)
         }
         #[cfg(not(windows))]
         {
@@ -7057,7 +7058,7 @@ async fn update_install(app: tauri::AppHandle, path: String) -> Result<serde_jso
 /// Windows-половина `update_install`: Expand-Archive и `helene-setup.exe`
 /// из распакованного. Текст тот же, что был в теле команды до порта.
 #[cfg(windows)]
-fn update_install_windows(archive: &Path, dest: &Path) -> Result<serde_json::Value, String> {
+fn update_install_windows(archive: &Path, dest: &Path, force_extensions: bool) -> Result<serde_json::Value, String> {
     let script = format!(
         "$ProgressPreference='SilentlyContinue'; Expand-Archive -LiteralPath {} -DestinationPath {} -Force; exit $LASTEXITCODE",
         ps_quote(&plain_path(archive).to_string_lossy()),
@@ -7099,6 +7100,10 @@ fn update_install_windows(archive: &Path, dest: &Path) -> Result<serde_json::Val
     let root = install_root();
     let mut cmd = Command::new(&setup);
     cmd.current_dir(&workdir).arg("--update").arg("--dir").arg(&root);
+    // 25.09 (K): «обновить без несовместимых расширений» — только явным словом владельца.
+    if force_extensions {
+        cmd.arg("--force-extensions");
+    }
     cmd.spawn().map_err(|e| format!("установщик не запустился: {e}"))?;
     log_line(&format!(
         "обновление: запущен установщик {} (--update --dir {})",

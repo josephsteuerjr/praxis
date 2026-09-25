@@ -316,7 +316,10 @@ fn main() {
         let dir = asked.or_else(|| install::installed_info().map(|i| std::path::PathBuf::from(i.dir)));
         let log_path = install::exe_dir().join("install.log");
         match dir.as_deref().and_then(install::setup_from_dir) {
-            Some(setup) => {
+            Some(mut setup) => {
+                // 25.09 (K): «обновить без расширений» — только явным словом; без него
+                // несовместимое расширение владельца останавливает обновление до подмены.
+                setup.force_extensions = args.iter().any(|a| a == "--force-extensions");
                 let mut log = format!("обновление поверх {}\n", setup.dir);
                 let result = install::install(&setup, |p| {
                     log.push_str(&format!("[{}/{}] {}\n", p.step, p.total, p.label));

@@ -24,6 +24,7 @@ import { modeCard } from "./modecard";
 import { mountsCard, type LiveSandbox } from "./mounts";
 import { voiceCard } from "./voicecard";
 import { agentsCard } from "./agentscard";
+import { extensionsCard } from "./extensionscard";
 import { RELAY_PORT, relayBaseUrl, relayProbeUrl, newRelayKey } from "./relay";
 import type { Config, Edition, EditionContext } from "../../ui-kit/window/views/settings-frame";
 import { GROUP, inGroup } from "../../ui-kit/window/views/settings-frame";
@@ -687,6 +688,9 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
   // Карточка стоит перед «Данными агента» намеренно: сразу за ней идёт папка
   // ЭТОГО агента, и владелец видит, чей дом ему показывают.
   cards.push(inGroup(agentsCard(mac).el, GROUP.agent));
+
+  // --- расширения владельца (25.09, K): модули с манифестом, не патчи дерева
+  cards.push(inGroup(extensionsCard(modeLive, loaded.tree).el, GROUP.agent));
 
   // --- данные
   const data = el("div", "actions");

@@ -180,7 +180,36 @@ export interface ModeState {
   /** Живые просьбы агента о папках (КОНТРАКТ A→B §2): `memory/.state/mounts.json`
    *  как он лежит сейчас, а не снимок анатомии со старта. Старый харнесс поля не шлёт. */
   mounts_live?: { updated_at: string | null; requests: Array<{ path?: string; real?: string; access?: string; why?: string; at?: string; asked?: number }> };
+  /** Расширения владельца (25.09, K): снимок раннера `memory/.state/extensions.json`
+   *  и отчёт репетиции обновления `extensions-check.json` из корня установки.
+   *  Старый харнесс полей не шлёт. */
+  extensions_live?: ExtensionsSnapshot;
+  extensions_check?: ExtensionsSnapshot;
   config: string;
+}
+
+export interface ExtensionRow {
+  name: string;
+  version: string;
+  dir?: string;
+  api?: string;
+  state: "loaded" | "disabled" | "incompatible" | "error" | "pending" | string;
+  reason?: string;
+  tools?: string[];
+  hooks?: Record<string, string>;
+  capabilities?: string[];
+  checked_at?: number;
+  last_error?: string;
+}
+
+export interface ExtensionsSnapshot {
+  api?: string;
+  helene?: string;
+  updated_at?: number;
+  checked_at?: number;
+  items?: ExtensionRow[];
+  ok?: boolean;
+  summary?: string;
 }
 
 /**

@@ -222,6 +222,11 @@ pub struct Setup {
     /// службы не действует: исполнять некому.
     #[serde(default)]
     pub session0: bool,
+    /// 25.09 (K): обновлять, даже если репетиция показала, что расширение владельца не
+    /// загрузится под новой версией (`--force-extensions`). По умолчанию — отказ словами,
+    /// старая версия остаётся живой.
+    #[serde(default)]
+    pub force_extensions: bool,
     /// Вторая галочка опции: ставит ли служба правило брандмауэра для кнопки
     /// «Телефон» (`service.firewall`). Экрана у неё нет — умолчание приезжает
     /// от визарда из modes.FIREWALL_DEFAULT; старый визард её не шлёт вовсе,
@@ -1469,6 +1474,7 @@ pub fn setup_from_installed(cfg: &serde_json::Value, soul: &str, dir: &str) -> O
         // прежнюю перед копированием и ставит обратно только по этому полю).
         service: flag("installed", "service"),
         session0: flag("service", "session0"),
+        force_extensions: false,
         firewall: cfg
             .get("service")
             .and_then(|s| s.get("firewall"))
@@ -2335,6 +2341,61 @@ fn validate_setup(s: &Setup) -> Result<(), String> {
 }
 
 /// Сама установка. `progress` зовётся перед каждым шагом.
+/// 25.09 (K): репетиция расширений владельца под НОВЫМ движком из поставки.
+///
+/// Зовёт `runner.py --check-extensions --data <папка данных>` питоном ПОСТАВКИ (не
+/// установленной версии): манифесты, версия API, импорт кода и регистрация вхолостую —
+/// без агента и без замка дерева. Отчёт JSON кладётся в `<dir>/extensions-check.json`
+/// (его читает труба, показывает карточка «Расширения»). `Ok(None)` — расширений нет.
+fn rehearse_extensions(payload: &Path, dir: &Path) -> Result<Option<(bool, String)>, String> {
+    let data = read_json(&dir.join("helene.json"))
+        .and_then(|c| c.get("tree").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .map(|t| {
+            let p = PathBuf::from(&t);
+            if p.is_absolute() { p } else { dir.join(p) }
+        })
+        .unwrap_or_else(|| dir.join("data"));
+    let root = data.join("extensions");
+    let has_any = std::fs::read_dir(&root)
+        .map(|it| it.flatten().any(|e| e.path().join("extension.json").is_file()))
+        .unwrap_or(false);
+    if !has_any {
+        return Ok(None);
+    }
+    let python = python_exe(payload);
+    let runner = payload.join("app").join("localharness").join("runner.py");
+    if !python.is_file() || !runner.is_file() {
+        return Err(format!(
+            "в поставке нет питона или движка ({}, {})",
+            python.display(),
+            runner.display()
+        ));
+    }
+    let mut cmd = Command::new(&python);
+    cmd.arg("-X")
+        .arg("utf8")
+        .arg(&runner)
+        .arg("--check-extensions")
+        .arg("--data")
+        .arg(&data)
+        .current_dir(runner.parent().unwrap_or(payload))
+        .env("PYTHONIOENCODING", "utf-8");
+    let out = run_hidden(&mut cmd)?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let report: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        let err = String::from_utf8_lossy(&out.stderr);
+        format!("отчёт репетиции не разобрать ({e}): {}", err.trim().chars().take(300).collect::<String>())
+    })?;
+    let _ = write_atomic(&dir.join("extensions-check.json"), &text);
+    let ok = report.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let summary = report
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("без итога")
+        .to_string();
+    Ok(Some((ok, summary)))
+}
+
 pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt, String> {
     validate_setup(s)?;
     // Имена в отказе — этой системы: на Mac оболочка зовётся `Helene.app`.
@@ -2371,6 +2432,34 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
 
     let service_before = service_state();
     let mut pre_steps: Vec<Step> = Vec::new();
+    // 25.09 (K): репетиция расширений владельца под НОВЫМ движком — ДО снятия службы и
+    // подмены папок. Не грузятся и не сказано «--force-extensions» — отказ словами,
+    // старая версия остаётся живой; отчёт лежит в корне установки для карточки окна.
+    if dir.exists() {
+        match rehearse_extensions(&payload, &dir) {
+            Ok(None) => {}
+            Ok(Some((ok, summary))) => {
+                pre_steps.push(Step {
+                    label: "Расширения".into(),
+                    ok,
+                    note: Some(summary.clone()),
+                });
+                if !ok && !s.force_extensions {
+                    return Err(format!(
+                        "расширения владельца не пройдут обновление: {summary}. Отчёт — {}. \
+                         Поручи агенту адаптировать (карточка «Расширения» в окне) или обнови без них: \
+                         повтори с --force-extensions.",
+                        dir.join("extensions-check.json").display()
+                    ));
+                }
+            }
+            Err(e) => pre_steps.push(Step {
+                label: "Расширения".into(),
+                ok: false,
+                note: Some(format!("репетиция не удалась: {e}")),
+            }),
+        }
+    }
     if dir.exists() {
         // Служба работает от LocalSystem: Stop-Process из-под обычного
         // пользователя её не убьёт, а её exe лежит в этой же папке и будет занят.
@@ -3353,6 +3442,7 @@ mod tests {
             agent_mode: "sandbox".into(),
             service: false,
             session0: false,
+            force_extensions: false,
             firewall: default_firewall(),
             computer: false,
             dir: String::new(),

@@ -324,7 +324,25 @@ def _orient(chat_id: str) -> str:
     bits = [_WINDOW_ORIENT] if transport.is_room(chat_id) else []
     if _ORIENT_EXTRA:
         bits.append(_ORIENT_EXTRA)
+    # Расширения владельца (25.09, K): что подключено и что не загрузилось и почему —
+    # агент видит выключенное расширение как строку, а не как исчезновение тула.
+    try:
+        import extensions
+        line = extensions.state_line()
+        if line:
+            bits.append(line)
+    except Exception:
+        pass
     return " ".join(bits)
+
+
+def _read_passport(home: Path) -> str:
+    """Версия программы из паспорта поставки (`helene-build.json` в корне) или ''."""
+    try:
+        data = json.loads((Path(home) / "helene-build.json").read_text(encoding="utf-8-sig"))
+        return str(data.get("version") or "")
+    except Exception:
+        return ""
 
 
 def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = ()) -> "object | None":
@@ -336,13 +354,27 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
     history, current = _dialogue(chat_id)
     orient = _orient(chat_id)
     extra = {"media_refs": tuple(media_refs)} if media_refs else {}
+    _ext_hook("before_turn", chat_id)
+    envelope = None
     try:
-        return _agent.voice_turn_envelope(
+        envelope = _agent.voice_turn_envelope(
             chat_id, convo, speaker, ctx=ctx, history=history, current_text=current,
             orient=orient, **extra)
+        return envelope
     except Exception:
         log.exception("ход упал в дереве [%s]", chat_id)
         return None
+    finally:
+        _ext_hook("after_turn", chat_id, envelope)
+
+
+def _ext_hook(event: str, *args) -> None:
+    """Крючки расширений владельца (25.09, K): сбой — в журнал, ход не рвётся."""
+    try:
+        import extensions
+        extensions.run_hook(event, *args)
+    except Exception:
+        log.debug("крючки расширений (%s) не отработали", event, exc_info=True)
 
 
 def _compact(chat_id: str) -> None:
@@ -446,6 +478,7 @@ def _deliver_outbound(envelope, chat_id: str) -> int:
             receipt = deliver_one_media(item, chat_id)
             delivered += 1
             log.info("медиа хода доставлено: %s", str(receipt)[:120])
+            _ext_hook("on_delivery", chat_id, item, receipt)
         except Exception:
             log.exception("медиа хода не доставилось [%s]", target)
     return delivered
@@ -1558,8 +1591,23 @@ def _replay_unclaimed_notes(processed: Path, limit: int = 5) -> list[str]:
 def main() -> None:
     global _desk, _desks, _bot, _speaker, _title, _agent_name, _tree, _deliver_unspoken, _mode, _continuity, _alarms, _forge_events
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
+    parser.add_argument("--config")
+    # Репетиция обновления (25.09, K): `--check-extensions --data <папка данных>` —
+    # манифесты расширений владельца под ЭТИМ движком, без агента, без замка дерева.
+    # Отчёт JSON в stdout; код 0 — грузятся все, 2 — хоть одно нет. Зовёт мастер из
+    # новой поставки до подмены папок; годится и человеку из терминала.
+    parser.add_argument("--check-extensions", action="store_true")
+    parser.add_argument("--data", default="")
     args = parser.parse_args()
+    if args.check_extensions:
+        import extensions
+        data_dir = Path(args.data or (Path(args.config).resolve().parent / "data" if args.config else "data"))
+        passport = _read_passport(Path(args.config).resolve().parent if args.config else data_dir.parent)
+        report = extensions.check(data_dir, host_version=passport)
+        print(json.dumps(report, ensure_ascii=False, indent=1))
+        raise SystemExit(0 if report.get("ok") else 2)
+    if not args.config:
+        parser.error("--config обязателен (кроме --check-extensions)")
     config_path = Path(args.config).resolve()
     # POSIX: SIGTERM — мягкий выход (atexit, замок дерева), и сторож родителя:
     # умерла оболочка — уходим вслед, а не живём сиротой с замком на дереве.
@@ -1710,6 +1758,15 @@ def main() -> None:
             _memory_life._OWN_NAMES.add(own)
     except Exception:
         log.debug("имя агента не легло в ограду свёртки", exc_info=True)
+    # Расширения владельца (25.09, K): свои тулы и крючки из data/extensions/<имя>/ —
+    # модули с манифестом и версией API, а не патчи дерева. ПОСЛЕ тела и имён: тул
+    # расширения встаёт в тот же список рук, что и штатные, и видит уже собранный
+    # агент. Сбой одного — причина в журнал и в снимок, остальное живёт.
+    try:
+        import extensions
+        extensions.install(agent, tree, cfg, host_version=_read_passport(config_path.parent))
+    except Exception:
+        log.exception("расширения не поднялись — агент без своих тулов владельца")
     # Рука брокера — ПОСЛЕ ограды: она закрывает свои файлы обмена от контейнера,
     # а поднят он или нет, решает предыдущий шаг. Без этой руки тексты продукта
     # обещали агенту брокера, которого у него не было.

@@ -286,6 +286,11 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // ряд, и она оставалась висеть даже рядом с «Это последняя версия».
   let updUrl = "";
   let updSha = "";
+  // 25.09 (K): «обновить, даже если моё расширение не пройдёт» — явное слово
+  // владельца. Без него установщик остановится до подмены папок и назовёт причину;
+  // отчёт репетиции — в карточке «Расширения».
+  let forceExt = false;
+  const forceToggle = toggle("Обновлять, даже если мои расширения не пройдут проверку", false, (v) => { forceExt = v; });
   // Скачать и поставить — оболочка (КОНТРАКТ A→B §5: update_download →
   // update_install). Несовпадение суммы оболочка отвергает сама (throw, файл
   // удалён); `sha_ok: null` — сверять было не с чем. Установщик гасит
@@ -300,7 +305,9 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       const got = await shell<{ path: string; bytes?: number; sha256?: string; sha_ok: boolean | null }>("update_download", { url: updUrl, sha256: updSha });
       const checked = got.sha_ok === true ? "отпечаток сошёлся" : got.sha_ok === null ? "отпечатка в выпуске нет, сверить было не с чем" : "отпечаток проверен";
       updOut.textContent = `Скачано (${checked}). Установщик запущен — программа закроется сама и откроется новой.`;
-      await shell("update_install", { path: got.path });
+      // 25.09 (K): установщик сначала репетирует расширения владельца под новой
+      // версией и без явного слова не подменяет папки, если хоть одно не грузится.
+      await shell("update_install", { path: got.path, force_extensions: forceExt });
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e ?? "");
       if (/not found|неизвестн|unknown|command/i.test(text)) {
@@ -317,6 +324,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     }
   });
   dlBtn.hidden = true;
+  forceToggle.hidden = true;
   aboutRow.append(
     ver,
     button("Проверить обновления", "quiet", async () => {
@@ -332,20 +340,25 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
           updUrl = r.url || "";
           updSha = r.sha256 || "";
           dlBtn.hidden = !updUrl;
+          forceToggle.hidden = !updUrl;
         } else {
           updOut.textContent = `Это последняя версия (${r.current}).`;
           updUrl = "";
           updSha = "";
           dlBtn.hidden = true;
+        forceToggle.hidden = true;
+          forceToggle.hidden = true;
         }
       } catch (e) {
         updOut.className = "receipt err";
         updOut.textContent = humanError(e).text;
         updUrl = "";
         dlBtn.hidden = true;
+        forceToggle.hidden = true;
       }
     }),
     dlBtn,
+    forceToggle,
     updOut,
   );
   const logsRow = el("div", "actions");

@@ -257,6 +257,7 @@ REQUIRED_ROOT = (
     "tree", "data", "server", "licenses/rust/README.md", "licenses/body/README.md",
     "helene.json", "helene-build.json", "install.sh", "requirements.txt",
     "ПЕРВЫЙ-ЗАПУСК.md", "ОБНОВЛЕНИЕ.md", "КАК-УСТРОЕН-HELENE.md", "ЛИЦЕНЗИЯ.md",
+    "РАСШИРЕНИЯ.md",
     "ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md", "NOTICE",
 )
 
@@ -1736,6 +1737,7 @@ def main() -> None:
     print("документы:")
     (out / "ПЕРВЫЙ-ЗАПУСК.md").write_text(FIRST_RUN_MAC, encoding="utf-8", newline="\n")
     bd.copy_text_lf(DESK / "resources" / "ОБНОВЛЕНИЕ.md", out / "ОБНОВЛЕНИЕ.md")
+    bd.copy_text_lf(DESK / "resources" / "РАСШИРЕНИЯ.md", out / "РАСШИРЕНИЯ.md")
     bd.copy_text_lf(DESK / "resources" / "HELENE-MAP.md", out / "КАК-УСТРОЕН-HELENE.md")
     bd.copy_text_lf(DESK / "installer" / "ЛИЦЕНЗИЯ.md", out / "ЛИЦЕНЗИЯ.md")
     bd.copy_text_lf(DESK / "installer" / "NOTICE", out / "NOTICE")

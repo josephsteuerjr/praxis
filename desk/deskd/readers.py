@@ -295,6 +295,12 @@ def mode_state() -> dict:
         picture["computer_option"] = None
     picture["computer_live"] = (_load_json(tree() / "memory" / ".state" / "body.json")
                                 if has_body else {})
+    # Расширения владельца (25.09, K): снимок раннера (что загружено, что нет и почему)
+    # и отчёт репетиции обновления, который мастер кладёт в корень установки до
+    # подмены папок. Старый харнесс полей не шлёт — окно рисует «нет данных».
+    picture["extensions_live"] = _load_json(tree() / "memory" / ".state" / "extensions.json")
+    _home = config_path().parent if config_path() else tree().parent
+    picture["extensions_check"] = _load_json(_home / "extensions-check.json")
     # Просьбы агента о папках — живьём, а не через анатомию (ревью 06.09, §5:
     # анатомия пишется один раз на старте, и просьба `mount_request` доходила до
     # карточки только после перезапуска). Файл пишет ограда (`fence.Mounts.
