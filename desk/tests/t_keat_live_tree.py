@@ -45,6 +45,9 @@ SCRIPT = textwrap.dedent(r'''
     import json, os, sys, tempfile
     from pathlib import Path
     from unittest import mock
+    # macOS: временные папки лежат под /var → /private/var, а её run_manager отказывает корню
+    # со ссылкой в пути; в режиме стенда `agent._runs()` кладёт прогоны в gettempdir().
+    tempfile.tempdir = str(Path(tempfile.gettempdir()).resolve())
     desk, code = Path(sys.argv[1]), Path(sys.argv[2])
     sys.path[:0] = [str(desk), str(desk / "localharness")]
     tmp = tempfile.TemporaryDirectory()
