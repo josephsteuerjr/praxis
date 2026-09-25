@@ -157,10 +157,20 @@ def anchor_for(chat_id) -> int | None:
 
 
 @contextlib.contextmanager
-def bind(chat_id, anchor):
+def bind(chat_id, anchor, *, refused: bool = False):
     """Привязать якорь, с которого раннер собрал ленту, к ходу: сборщик кадра читает его
-    отсюда, а не считает заново (между снимком и ходом могла пройти свёртка)."""
-    token = _BOUND.set((str(chat_id), int(anchor)) if anchor is not None else None)
+    отсюда, а не считает заново (между снимком и ходом могла пройти свёртка).
+
+    `refused=True` — раннер собрал ленту ПРЕЖНИМ окном (якоря нет, лента пуста или
+    превысила предохранитель). 26.09 (ревью W1 S6): прежде это было неотличимо от «якорь
+    не передали», сборщик считал якорь сам и подавал эпоху со справкой «лента с сообщения
+    #якорь», хотя лента хода начиналась много позже, а между ними не было ни сводки, ни
+    ленты."""
+    if refused:
+        value = (str(chat_id), None)
+    else:
+        value = (str(chat_id), int(anchor)) if anchor is not None else None
+    token = _BOUND.set(value)
     try:
         yield
     finally:
@@ -169,9 +179,15 @@ def bind(chat_id, anchor):
 
 def bound_anchor(chat_id) -> int | None:
     value = _BOUND.get()
-    if value is None or value[0] != str(chat_id):
+    if value is None or value[0] != str(chat_id) or value[1] is None:
         return None
     return int(value[1])
+
+
+def refused(chat_id) -> bool:
+    """Раннер собрал ленту этого хода прежним окном — эпоху подавать нельзя."""
+    value = _BOUND.get()
+    return value is not None and value[0] == str(chat_id) and value[1] is None
 
 
 # ------------------------------------------------------------------------------ хранение

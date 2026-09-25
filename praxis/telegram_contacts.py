@@ -151,7 +151,11 @@ def mark_outbound(ident: str | int, *, idempotency_key: str = "",
     save()
 
 
-def candidates(query: str, limit: int = 8) -> list[dict]:
+def candidates(query: str, limit: int | None = 8) -> list[dict]:
+    """Ранжированные кандидаты по имени; `limit=None` — вся подходящая часть книги.
+
+    26.09 (ревью W1 S3): проверка тёзок обязана видеть всю книгу — второй точный тёзка,
+    давно молчавший, выпадал за восьмёрку лучших по очкам свежести и переписки."""
     q = _norm(query)
     if not q:
         return []
@@ -191,6 +195,8 @@ def candidates(query: str, limit: int = 8) -> list[dict]:
         ranked.append((score, {**row, "score": round(score, 3), "lexical": lexical}))
     ranked.sort(key=lambda item: (-item[0], -float(item[1].get("last_outbound") or 0),
                                   -float(item[1].get("last_seen") or 0), item[1].get("id", "")))
+    if limit is None:
+        return [row for _, row in ranked]
     return [row for _, row in ranked[:max(1, int(limit or 8))]]
 
 

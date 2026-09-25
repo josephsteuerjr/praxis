@@ -334,6 +334,11 @@ def _read_json_strict_nofollow(directory: Path, name: str, *,
     if not name or "/" in name or "\\" in name or name in {".", ".."}:
         raise RunError(f"invalid strict JSON filename: {name!r}")
     if not _SAFE_ARCHIVE_OPENAT_SUPPORTED:
+        # ⚠ Отличие издания (ревью W2 S1, 26.09): на Windows локаторов холодного архива не
+        # бывает — издание не архивирует, а снимает старые результаты ретенцией. Нет файла —
+        # это «нет результата», как на POSIX, а не отказ платформы на каждом снятом теле.
+        if not os.path.lexists(os.path.join(str(directory), name)):
+            raise RunNotFound(str(Path(directory) / name))
         raise RunError("safe archive locator reads are unsupported on this platform")
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     file_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK

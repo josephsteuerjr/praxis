@@ -301,7 +301,10 @@ class HooksAreCheapAndReal(unittest.TestCase):
                 return {"context": {"kind": kinds[run_id]}, "run_id": run_id}
 
             def _manifest_listing_row(self, run_id, manifest):
-                return {"run_id": run_id, "kind": manifest["context"]["kind"]}
+                # 26.09 (ревью W1 S9): настоящая строка листинга всегда несёт статус,
+                # и мёртвые окна адресатами не становятся.
+                return {"run_id": run_id, "kind": manifest["context"]["kind"],
+                        "status": "running"}
 
             def list_runs(self, **kw):
                 raise AssertionError("обход всех манифестов запрещён (V2 F1)")

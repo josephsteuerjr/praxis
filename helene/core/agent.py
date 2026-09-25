@@ -324,7 +324,14 @@ _PRIVATE_FLOOR_MIN = 24
 
 
 def _floor_norm(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "").replace("[private]", " ").casefold()).strip()
+    """Текст для сравнения полом: без пометки, регистра, «ё», пунктуации и маркеров списка.
+
+    26.09 (ревью W1 S2): прежде нормализация трогала только пробелы и регистр, а окна шли
+    с шагом 6 — запятая, сменённая на тире или точку, и маркер «- » в начале записи давали
+    пропуск дословных кусков до 28 знаков. Дословность — это слова в том же порядке, а не
+    знаки препинания между ними."""
+    text = str(text or "").replace("[private]", " ").casefold().replace("ё", "е")
+    return re.sub(r"\s+", " ", re.sub(r"[\W_]+", " ", text)).strip()
 
 
 def private_record_floor(text: str) -> str:
@@ -333,23 +340,84 @@ def private_record_floor(text: str) -> str:
     С 25.09 записи `[private]` едут в кадр комнаты (решение владельца). На выходе стоял
     только совет судьи, а у `send_message`/`narrate` — ничего; прецедент утечки на low
     записан в коде 17.09. Здесь — механика, как у кред-пола: вне owner-контура исходящий
-    текст не смеет содержать дословный кусок (≥ 24 знаков) записи, которая ехала в кадр
-    этого хода. Пересказ своими словами пол не трогает — он не судья."""
+    текст не смеет содержать дословный кусок (≥ 24 знаков после нормализации) записи,
+    которая ехала в кадр этого хода. Пересказ своими словами пол не трогает — он не судья.
+
+    Что «ехало в кадр» — с 26.09 (ревью W1 S1) это собирает ещё и `_arm_private_floor`
+    из того, что реально ушло в модель: замороженная эпоха комнаты, досье, поправленное
+    после заморозки, возобновлённый после рестарта ход и прочитанное руками."""
     records = _PRIVATE_IN_FRAME.get()
     hay = _floor_norm(text)
-    if not records or len(hay) < _PRIVATE_FLOOR_MIN:
+    size = _PRIVATE_FLOOR_MIN
+    if not records or len(hay) < size:
         return ""
+    grams = {hay[i:i + size] for i in range(len(hay) - size + 1)}
     for rec in records:
-        for line in str(rec).splitlines():
-            body = _floor_norm(line)
-            n = len(body)
-            if n < _PRIVATE_FLOOR_MIN:
-                continue
-            for i in range(0, n - _PRIVATE_FLOOR_MIN + 1, 6):
-                piece = body[i:i + _PRIVATE_FLOOR_MIN]
-                if piece in hay:
-                    return f"дословный кусок приватной записи досье («{piece[:18]}…»)"
+        body = _floor_norm(rec)
+        for i in range(len(body) - size + 1):
+            piece = body[i:i + size]
+            if piece in grams:
+                return f"дословный кусок приватной записи досье («{piece[:18]}…»)"
     return ""
+
+
+def _frame_private_records(text: str) -> str:
+    """Записи `[private]` из текста кадра — тем же правилом, что режет их из досье.
+
+    Записью считается строка, где перед пометкой нет слов (маркер списка, дата, отступ):
+    так пишет она сама. Упоминание пометки в прозе («записи с пометкой [private] оставлены
+    в кадре…», подпись о снятых строках) записью не является и в пол не идёт."""
+    if "[private]" not in text:
+        return ""
+    lines = []
+    for line in text.split("\n"):
+        at = line.find("[private]")
+        if at >= 0 and re.search(r"[^\W\d_]", line[:at]):
+            line = line.replace("[private]", "(private)")
+        lines.append(line)
+    return _split_participant_private_blocks("\n".join(lines))[2]
+
+
+def _frame_texts(value) -> list[str]:
+    """Весь текст system/messages, как он уходит в модель: строки, блоки, результаты рук."""
+    out: list[str] = []
+    if isinstance(value, str):
+        out.append(value)
+    elif isinstance(value, dict):
+        for key in ("text", "content"):
+            if key in value:
+                out.extend(_frame_texts(value[key]))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            out.extend(_frame_texts(item))
+    return out
+
+
+def _arm_private_floor(system, messages: list, start: int = 0) -> int:
+    """Пополнить записи пола тем, что реально ушло в модель в этом ходе. -> len(messages).
+
+    26.09 (ревью W1 S1): до этого запись для пола была одна — `_participant_memory_block`
+    по ТЕКУЩЕМУ составу присутствующих. Под эпохой комнаты досье едут замороженными
+    «составом на момент заморозки», и приватная строка человека, выпавшего из окна
+    присутствия, стояла в кадре при пустом поле; возобновлённый после рестарта ход кадр
+    не пересобирает вовсе. Граница та же: только комната и не owner-аудитория — в личке
+    с чужим приватное снимается до кадра, владельцу пол не нужен."""
+    ctx = _TURN_CHANNEL.get()
+    if (ctx is None or bool(getattr(ctx, "is_dm", True))
+            or bool(getattr(ctx, "owner_audience", False)) or not dossier_private_in_rooms()):
+        return len(messages)
+    found: list[str] = []
+    if start <= 0:
+        for text in _frame_texts(system):
+            found.append(_frame_private_records(text))
+    for message in messages[max(0, start):]:
+        for text in _frame_texts(message):
+            found.append(_frame_private_records(text))
+    found = [block for block in found if block.strip()]
+    if found:
+        seen = _PRIVATE_IN_FRAME.get()
+        _PRIVATE_IN_FRAME.set(tuple(seen) + tuple(b for b in found if b not in seen))
+    return len(messages)
 _KEAT_ORIGINAL_INGRESS: ContextVar[bool] = ContextVar("praxis_keat_original_ingress", default=False)
 _KEAT_PROJECTION: ContextVar[dict | None] = ContextVar("praxis_keat_projection", default=None)
 _KEAT_HISTORY_SINK: ContextVar[dict | None] = ContextVar("praxis_keat_history_sink", default=None)
@@ -1393,6 +1461,11 @@ def _live_window_run_ids() -> list[str]:
             row = runs._manifest_listing_row(run_id, runs.manifest(run_id))
         except Exception:
             continue
+        # 26.09 (ревью W1 S9): `live_run_ids` ошибается в сторону лишней работы и может
+        # отдать уже терминальный прогон (сменилась подпись, WAL впереди манифеста) —
+        # реплика владельца мёртвому окну только занимала место в CAP накопителя.
+        if str(row.get("status") or "") not in run_manager.NONTERMINAL_STATUSES:
+            continue
         if str(row.get("kind") or "") in core_notices.WINDOW_RUN_KINDS:
             out.append(run_id)
     return out
@@ -1747,8 +1820,7 @@ def tool_recall(query: str = "", report: bool = False) -> str:
         label = h.get("path") or h.get("source") or "память"
         person_dossier = str(label).replace("\\", "/").startswith("memory/people/")
         if h.get("_foreign_room"):
-            origin = ("из личной переписки с владельцем" if h["_foreign_room"] == "owner-dm"
-                      else f"из комнаты {h['_foreign_room']}")
+            origin = _recall_room_label(h["_foreign_room"])
             label = f"{origin} — внутреннее · {label}"
         source_type = str(h.get("source_type") or "")
         untrusted = source_type in {
@@ -1905,6 +1977,10 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
             tiers = ", ".join(str(x) for x in (out.get("tiers") or [])) or "нет"
             return (f"Свёрнуто {out['folded']} событий у {where} → {out.get('compact_id')}; "
                     f"горячих осталось {out.get('hot')}; верхние ярусы: {tiers}.")
+        if str(out.get("reason") or "") == "state_changed":
+            # 26.09 (ревью W1 S7): это не «нечего», а окно, сдвинувшееся под рукой.
+            return (f"Не свернулось у {where}: окно сдвинулось, пока шла свёртка "
+                    f"(горячих {out.get('hot')}). Предложение осталось — повтори руку.")
         return (f"Сворачивать нечего у {where}: {out.get('reason') or 'окно в норме'} "
                 f"(горячих {out.get('hot')}).")
     if op == "list":
@@ -9111,7 +9187,30 @@ def _recall_origin(hit: dict, path: str) -> str:
     # обесценил бы саму метку. Сравниваем канонические идентичности, а не строки.
     if room == _recall_room_key(str(_active_chat() or "")):
         return source
-    return f"из комнаты {room} · {source}"
+    return f"{_recall_room_label(room)} · {source}"
+
+
+def _recall_room_label(room: str) -> str:
+    """Откуда всплыло совпадение recall — словами, которые не путают личку с комнатой.
+
+    26.09 (ревью W1 S4): `self/rooms/<peer>` держит и её ходы в ЛИЧКАХ с третьими людьми
+    (`turns._archive_bucket`: scope ≠ owner → rooms/<peer>), а метка называла их «из комнаты
+    5550001» — чужую личку в публичной комнате она видела как ещё одну группу. Комната — это
+    отрицательный id (группа, тема форума); положительный — переписка с человеком."""
+    key = str(room or "")
+    if key == "owner-dm":
+        return "из личной переписки с владельцем"
+    if key and not key.startswith("-"):
+        who = ""
+        try:
+            import telegram_contacts
+            row = telegram_contacts._load().get(key) or {}
+            who = str(row.get("display_name") or row.get("username") or "").strip()
+        except Exception:
+            who = ""
+        return (f"из личной переписки с {who} (tg {key})" if who
+                else f"из личной переписки с tg {key}")
+    return f"из комнаты {key}"
 
 
 def _trace_lessons_in_frame(hits: list[dict], query: str | None) -> None:
@@ -10443,6 +10542,12 @@ def _build_prompt_parts(
     frame_epoch.reset()
     room_epoch = frame_epoch.applies(ctx)
     epoch_anchor = None
+    if room_epoch and frame_epoch.refused(chat_id):
+        # 26.09 (ревью W1 S6): раннер собрал ленту прежним окном — эпоха с её «лентой с
+        # сообщения #якорь» была бы неправдой о том, что стоит в кадре.
+        room_epoch = False
+        log.info("эпоха [%s]: лента хода собрана прежним окном — конверт прежним порядком",
+                 chat_id)
     if room_epoch:
         epoch_anchor = frame_epoch.bound_anchor(chat_id)
         if epoch_anchor is None:
@@ -14056,10 +14161,17 @@ class _AgentResumeRuntime:
         history_token = _TURN_HISTORY.set(list(self.snapshot.get("history") or ()))
         outbound_token = _TURN_OUTBOUND.set(self.outbound)
         guard_token = _TURN_MEDIA_GUARD.set(self.guard_notes)
+        # 26.09 (ревью W1 S1): пол приватных записей возобновлённого хода собирается из ЕГО
+        # сохранённого кадра (`_arm_private_floor` в цикле), а не из чужого хода этого потока.
+        # Цикл и гард доставки идут в РАЗНЫХ bind(), поэтому собранное живёт на самом
+        # подъёме: гард доставки видит то, что цикл нашёл в кадре.
+        private_token = _PRIVATE_IN_FRAME.set(tuple(getattr(self, "_private_floor", ()) or ()))
         try:
             with run_context.bind_run(current):
                 yield current
         finally:
+            self._private_floor = _PRIVATE_IN_FRAME.get()
+            _PRIVATE_IN_FRAME.reset(private_token)
             _TURN_MEDIA_GUARD.reset(guard_token)
             _TURN_OUTBOUND.reset(outbound_token)
             _TURN_HISTORY.reset(history_token)
@@ -14668,6 +14780,12 @@ class _AgentResumeRuntime:
         # Набор рук берём из той же расписки, из которой взят текст: план `authored_output`
         # для заметки чата планировщик больше не рождает, но защита обязана стоять и здесь —
         # план мог быть записан ДО правки и подняться уже после неё.
+        # 26.09 (ревью W1 S1): цикла здесь нет — пол приватных записей узнаёт кадр этого
+        # ответа из той же расписки входа модели, иначе гард доставки шёл бы с пустым полом.
+        if isinstance(getattr(request, "model_input", None), dict):
+            with self.bind():
+                _arm_private_floor(request.model_input.get("system"),
+                                   list(request.model_input.get("messages") or []))
         return self._prepare_authored_delivery(
             str(output["text"]), offered=(request.model_input or {}).get("tools")
             if isinstance(getattr(request, "model_input", None), dict) else None)
@@ -16508,9 +16626,13 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
     # смешивает руки с нашими же пометками, и «позвала ли она хоть что-то» по ней не
     # восстанавливается без разбора строк.
     hands = 0
+    armed = 0      # сколько сообщений кадра уже прочитал пол приватных записей
     while max_iters is None or iteration < max(0, int(max_iters)):
         _run_status_gate(phase="before model step")
         iteration += 1
+        # 26.09 (ревью W1 S1): пол приватных записей знает то, что РЕАЛЬНО уходит в
+        # модель — и в свежем ходе, и в возобновлённом, и после чтения руками.
+        armed = _arm_private_floor(system, messages, armed)
         # Номер поворота — в след вызова. Внутри цикла префикс растёт монотонно, значит
         # каждая следующая итерация обязана попадать в кэш сильнее предыдущей; провал на
         # k-й — то самое редкое событие, которое ломает префикс посреди хода.

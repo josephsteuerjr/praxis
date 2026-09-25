@@ -510,7 +510,7 @@ def run(depth: str = "full", *, force: bool = False, reason: str = "сон") -> 
                 ent = unseen or entities[(pass_no - 1) % len(entities)]
                 name = str(ent.get("name") or "").strip()
             else:
-                name = "Праксис/текущий поток"
+                name = "я/текущий поток"
             covered.add(name)
             operation = operations[(pass_no - 1) % len(operations)]
             dig_user = (f"# OPERATION\n{operation}\n\n# ENTITY\n{name}\n\n"

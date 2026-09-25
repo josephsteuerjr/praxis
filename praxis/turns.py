@@ -623,7 +623,13 @@ def update_delivery(run_id: str, delivery: str, *, out: str | None = None) -> di
     with _LOCK:
         ring = _load_ring()
         try:
-            lines = PATH.read_text(encoding="utf-8").splitlines() if PATH.exists() else []
+            # 26.09 (ревью W3 S6): строки JSONL режутся только по "\n". `splitlines()` режет
+            # и по U+2028/U+2029/U+0085, которые json.dumps(ensure_ascii=False) оставляет в
+            # тексте как есть, — и эта перезапись навсегда рвала такой ход на две битые строки.
+            raw = PATH.read_text(encoding="utf-8") if PATH.exists() else ""
+            lines = [ln.rstrip("\r") for ln in raw.split("\n")]
+            if lines and lines[-1] == "":
+                lines.pop()
         except OSError:
             log.warning("исход доставки не прочитан [%s]", rid, exc_info=True)
             return None

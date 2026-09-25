@@ -139,7 +139,11 @@ def _recover_stale_refresh_claims(*, memory_dir: Path) -> None:
     """
     request = _refresh_request_path(Path(memory_dir))
     for claim in request.parent.glob("recall_refresh.claim.*.json"):
-        if str(claim) in _CLAIM_FDS or not _claim_is_stale(claim):
+        # 26.09 (ревью W3 S7): flock — власть над живостью, и спрашивается ПЕРВЫМ. Прежде
+        # аренда проверялась раньше замка, и заявку убитого сборщика (flock отпущен ядром
+        # при его смерти) никто не подбирал шесть часов. Зовут нас под замком сборщика —
+        # живую чужую заявку взять нельзя: её держит flock её владельца.
+        if str(claim) in _CLAIM_FDS:
             continue
         try:
             fd = os.open(claim, os.O_RDWR)
@@ -184,7 +188,14 @@ def refresh_requested(*, memory_dir: Path) -> bool:
     request = _refresh_request_path(Path(memory_dir))
     for path in [request, *request.parent.glob("recall_refresh.claim.*.json")]:
         try: data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError): continue
+        except FileNotFoundError: continue
+        except (OSError, ValueError, TypeError):
+            # 26.09 (ревью W2 S4): пустая или нечитаемая заявка — всё равно заявка. Обрыв
+            # между O_EXCL и записью оставлял пустой файл: `request_refresh` отвечал «уже
+            # есть», а здесь его не признавали — и пересборку не просил никто, навсегда.
+            # Захват такую заявку и так принимает (`_claim_refresh_request_locked`).
+            if path == request: return True
+            continue
         if isinstance(data, dict) and data.get("schema") == "praxis.recall-refresh.v1": return True
     return False
 
@@ -2287,6 +2298,10 @@ def search(query: str, *, base: Path, memory_dir: Path, skills_dir: Path | None 
     """
     selected: list[dict] = []
     try:
+        if not path.exists():
+            # 26.09 (ревью W2 S4): `sqlite3.connect` САМ создаёт пустой файл базы — и
+            # дальше «база есть», хотя в ней нет ни таблицы. Нет базы — это заявка.
+            raise FileNotFoundError(str(path))
         with contextlib.closing(sqlite3.connect(path, timeout=0)) as db:
             db.row_factory = sqlite3.Row
             cached = [dict(row) for row in db.execute(

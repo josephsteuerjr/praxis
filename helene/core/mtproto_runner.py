@@ -1111,11 +1111,9 @@ def _dm_dialogue(chat_id: str, *, occurrence_sidecar: dict | None = None) -> tup
                         groups[-1].append(row["meta"]["keat_occurrence"])
                     occurrence_sidecar.update(history=groups, current=[
                         row["meta"]["keat_occurrence"] for row, _ in suffix[last_self + 1:]])
-                    if first:
-                        occurrence_sidecar.update(
-                            projection_history=candidate_history,
-                            projection_current=candidate_current,
-                        )
+                    # 26.09 (ревью W1 S8): ветки `projection_history` здесь больше нет — сюда
+                    # доходит только полностью захваченная лента (`first == 0`, см. выше), и
+                    # сужать проекции нечего.
     return history, current
 
 
@@ -4952,7 +4950,10 @@ async def _run_pass(chat_id: str) -> None:
                 # в группе без «печатает…»: тишина ([молчу]) — частый честный исход, не изображаем набор
                 # Якорь эпохи привязывается к ходу здесь: сборщик кадра (agent) читает его из
                 # контекста и не считает заново — между снимком и ходом могла пройти свёртка.
-                with frame_epoch.bind(chat_id, _EPOCH_ANCHORS.get(chat_id)):
+                # 26.09 (ревью W1 S6): нет якоря у раннера — лента собрана прежним окном,
+                # и сборщик кадра не смеет подать эпоху, посчитав якорь сам.
+                with frame_epoch.bind(chat_id, _EPOCH_ANCHORS.get(chat_id),
+                                      refused=_EPOCH_ANCHORS.get(chat_id) is None):
                     envelope, cancellation_seen = await _await_despite_cancellation(
                         _voice_turn_offloaded(
                             chat_id, last_n, speaker,
@@ -5999,10 +6000,14 @@ async def _resolve_entity(ref):
     # 3. Имя — постоянная адресная книга (contacts + dialogs + seen senders + known aliases).
     await _ensure_dialog_cache()
     q = ref_s.lower()
-    book = telegram_contacts.candidates(ref_s)
-    denial = _ambiguous_book(ref_s, book)
+    # 26.09 (ревью W1 S3): тёзки — по ВСЕЙ подходящей части книги. Восьмёрка лучших по
+    # очкам (свежесть, переписка, контакт) теряла давно молчавшего точного тёзку, и
+    # «несколько Иванов» снова решалось свежестью. Резолв по-прежнему идёт по восьмёрке.
+    full = telegram_contacts.candidates(ref_s, limit=None)
+    denial = _ambiguous_book(ref_s, full)
     if denial:
         raise ResolveDenied(denial)
+    book = full[:8]
     for row in book:
         ident = str(row.get("id") or "")
         ent = _entity_cache.get(ident)

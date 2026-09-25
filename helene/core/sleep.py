@@ -284,7 +284,7 @@ def svs_dossier_pass(*, allow_merge: bool = True) -> tuple[int, int]:
                 "ночной scheduler сам не сольёт: изменение — через formation claim или явные руки."
             )
             _journal(f"предлагаю слить {c['keep']}.md ← {c['absorb']}.md ({c['why']}): "
-                     f"общих фактов {common}, своих у {c['absorb']} — {uniq}. Согласна — "
+                     f"общих фактов {common}, своих у {c['absorb']} — {uniq}. Если согласие есть — "
                      f"сливай руками (fs-руки/add_alias); {next_step}", salience=2)
             proposed += 1
         state[key] = {"seen": (prev or {}).get("seen", 0) + 1,
@@ -349,7 +349,7 @@ def prune_duplicate_edges() -> int:
 # --------------------------------------------------------------------------- #
 
 REM_SYS = (
-    "Night association pass over your memory graph — you are Praxis, half-asleep, free-associating. "
+    "Night association pass over your memory graph — you are half-asleep, free-associating. "
     "You see a handful of graph nodes and their 1-hop neighbors. Raw journal text is deliberately "
     "absent because it is untrusted episodic material, not association authority. "
     "Offer AT MOST 3 new possible connections or patterns — hypotheses, not claims; returning "
@@ -466,8 +466,8 @@ RUMINATION_JACCARD = 0.5
 _JOURNAL_LINE = re.compile(r"^- (\d{2}:\d{2}) \(s([123])\) (.+)$")
 
 RUMINATION_SYS = (
-    "Ты — Praxis во сне. Ниже несколько твоих дневниковых записей об одном и том же — "
-    "жвачка, которую ты пережёвывала в разные дни. Сведи их в ОДНУ строку-вывод по-русски: "
+    "Ты во сне. Ниже несколько твоих дневниковых записей об одном и том же — "
+    "жвачка, пережёванная в разные дни. Сведи их в ОДНУ строку-вывод по-русски: "
     "суть + итог/решение, если оно видно. Без вступлений и кавычек — просто строка."
 )
 
@@ -717,7 +717,7 @@ def run(depth: str | None = None) -> str:
     if surprises:
         report += "; ⚠ СНЯТАЯ ФАЗА СРАБОТАЛА — " + "; ".join(surprises)
     if depth == "light":  # 18.4: причина остановки — мой план, не тихий пропуск
-        report += "; лёгкий сон — РЕМ и жвачку пропустила (мой план аппетита)"
+        report += "; лёгкий сон — РЕМ и жвачка пропущены (мой план аппетита)"
     try:  # 18.4: фактический расход сна — честная цена ночи в отчёте
         if spent0 is not None:
             report += f"; расход {appetite.usage_delta(spent0)}"

@@ -137,9 +137,15 @@ def _fold_offers_read() -> dict:
         return {}
 
 
+#: 26.09 (ревью W1 S7): чтение-правка-запись файла предложений — под своим замком. Рука
+#: `fold_now` снимала предложение мимо `_WRITE_LOCK` свёртки, а tmp был один на процесс:
+#: два потока теряли чужое предложение и ловили FileNotFoundError на replace.
+_FOLD_OFFERS_LOCK = threading.RLock()
+
+
 def _fold_offers_write(data: dict) -> None:
     _FOLD_OFFERS.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _FOLD_OFFERS.with_suffix(f".json.{os.getpid()}.tmp")
+    tmp = _FOLD_OFFERS.with_suffix(f".json.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, _FOLD_OFFERS)
 
@@ -151,35 +157,39 @@ def fold_offers() -> dict:
 
 def _note_fold_offer(place: str | int, plan: dict) -> None:
     key = str(place)
-    data = _fold_offers_read()
-    prev = data.get(key) if isinstance(data.get(key), dict) else None
     lo, hi, hard_hi, _cap = hot_bounds(key)
-    now = _utc_iso()
-    data[key] = {"place": key, "count": int(plan.get("count") or 0),
-                 "tokens": int(plan.get("tokens") or 0), "fold": int(plan.get("fold") or 0),
-                 "keep": lo, "hi": hi, "hard_hi": hard_hi,
-                 "since": (prev or {}).get("since") or now, "updated": now}
-    _fold_offers_write(data)
+    with _FOLD_OFFERS_LOCK:
+        data = _fold_offers_read()
+        prev = data.get(key) if isinstance(data.get(key), dict) else None
+        now = _utc_iso()
+        data[key] = {"place": key, "count": int(plan.get("count") or 0),
+                     "tokens": int(plan.get("tokens") or 0), "fold": int(plan.get("fold") or 0),
+                     "keep": lo, "hi": hi, "hard_hi": hard_hi,
+                     "since": (prev or {}).get("since") or now, "updated": now}
+        _fold_offers_write(data)
     if prev is None:
         log.info("свёртка предлагается [%s]: горячих %s ≥ %s — жду руку memory_compact(fold); "
                  "без неё сверну сама на %s", key, plan.get("count"), hi, hard_hi)
 
 
 def clear_fold_offer(place: str | int) -> bool:
-    data = _fold_offers_read()
-    if str(place) not in data:
-        return False
-    data.pop(str(place), None)
-    _fold_offers_write(data)
-    return True
+    with _FOLD_OFFERS_LOCK:
+        data = _fold_offers_read()
+        if str(place) not in data:
+            return False
+        data.pop(str(place), None)
+        _fold_offers_write(data)
+        return True
 
 
 def fold_now(place: str | int) -> dict:
     """Свернуть горячее окно места по её воле (рука memory_compact fold) — принудительно,
-    как на жёстком пороге; предложение снимается в любом исходе."""
+    как на жёстком пороге. Предложение снимается, если свёртка случилась или сворачивать
+    нечего; при `state_changed` (окно сдвинулось под рукой) оно остаётся — повод не исчез."""
     out = compact_if_due(place, force=True)
-    clear_fold_offer(adopt_place(place))
-    clear_fold_offer(place)
+    if str(out.get("reason") or "") != "state_changed":
+        clear_fold_offer(adopt_place(place))
+        clear_fold_offer(place)
     return out
 EPISODE_GAP_SEC = max(60.0, float(os.getenv("PRAXIS_EPISODE_GAP_MIN", "45") or 45) * 60.0)
 TIER_LO = max(1, int(os.getenv("PRAXIS_COMPACT_TIER_LO", "4") or 4))
@@ -189,7 +199,10 @@ _WRITE_LOCK = threading.RLock()
 # 25.09: разобранные события по файлу дня, ключ — (размер, mtime_ns, inode). См. `events_cache_enabled`.
 _EVENTS_CACHE: dict[str, tuple[tuple[int, int, int], list[dict]]] = {}
 _EVENTS_CACHE_GUARD = threading.Lock()
-_EVENTS_CACHE_LIMIT = max(0, int(os.getenv("PRAXIS_EVENTS_CACHE_MB", "512") or 512)) * 1024 * 1024
+# ⚠ Потолок считает БАЙТЫ ФАЙЛОВ, а в памяти разобранные записи весят в 2,5–3 раза больше
+# (ревью W1 S5, 26.09: 8 МБ ленты держат 22,9 МБ). Умолчание 128 МБ файлов — это ~350 МБ
+# памяти процесса; прежние 512 МБ означали до ~1,4 ГБ на коробке, которая уже свопит.
+_EVENTS_CACHE_LIMIT = max(0, int(os.getenv("PRAXIS_EVENTS_CACHE_MB", "128") or 128)) * 1024 * 1024
 _REFRESH_LOCKS_LOCK = threading.Lock()
 _REFRESH_LOCKS: dict[str, threading.Lock] = {}
 _STATE_LOCKS_LOCK = threading.Lock()
@@ -550,11 +563,22 @@ def _telegram_lineage_event_ids(rows: Iterable[dict], message_id: int) -> list[s
     ]
 
 
+def _jsonl_line(text: str) -> str:
+    """Строка JSONL без разделителей строк Юникода внутри (26.09, ревью W3 S6).
+
+    json.dumps(ensure_ascii=False) оставляет U+2028/U+2029/U+0085 в строках как есть, а
+    `str.splitlines()` у читателей режет по ним запись надвое. Внутри JSON они бывают только
+    в строках, где экранирование \\uXXXX значит то же самое."""
+    return (text.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+            .replace("\x85", "\\u0085"))
+
+
 def _append_record(record: dict) -> None:
     """Single O_APPEND write: short records do not interleave across praxis/mailbot."""
     path = _event_file(_epoch(record.get("ts")) or None)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    payload = (_jsonl_line(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+               + "\n").encode("utf-8")
     flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
@@ -616,8 +640,9 @@ def events_cache_enabled() -> bool:
 
     Файл прошлого дня неизменен — его разбор хранится, ключ — размер, mtime_ns и inode;
     сегодняшний растёт и перечитывается, когда меняется. Наружу уходят копии записей:
-    кэш — не то место, куда пишут. Потолок памяти — `PRAXIS_EVENTS_CACHE_MB` (512),
-    сверх него файл разбирается как раньше; `PRAXIS_EVENTS_CACHE=off` выключает всё.
+    кэш — не то место, куда пишут. Потолок — `PRAXIS_EVENTS_CACHE_MB` (128) МБ ФАЙЛОВ
+    (в памяти это ~×2,8), сверх него файл разбирается как раньше;
+    `PRAXIS_EVENTS_CACHE=off` выключает всё.
     """
     raw = (os.getenv("PRAXIS_EVENTS_CACHE") or "on").strip().lower()
     return raw not in ("off", "0", "false", "no")
@@ -638,11 +663,14 @@ def _event_file_records(path: Path) -> list[dict]:
         if hit is not None and hit[0] == signature:
             return hit[1]
     try:
-        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        # 26.09 (ревью W3 S6): только "\n" — U+2028 внутри текста реплики не режет запись.
+        lines = path.read_text(encoding="utf-8", errors="ignore").split("\n")
     except OSError:
         return []
     records: list[dict] = []
     for line in lines:
+        if not line.strip():
+            continue
         try:
             rec = json.loads(line)
         except Exception:

@@ -188,7 +188,11 @@ def _recover_stale_refresh_claims(*, memory_dir: Path) -> None:
                 continue
         return
     for claim in request.parent.glob("recall_refresh.claim.*.json"):
-        if str(claim) in _CLAIM_FDS or not _claim_is_stale(claim):
+        # 26.09 (ревью W3 S7): flock — власть над живостью, и спрашивается ПЕРВЫМ. Прежде
+        # аренда проверялась раньше замка, и заявку убитого сборщика (flock отпущен ядром
+        # при его смерти) никто не подбирал шесть часов. Зовут нас под замком сборщика —
+        # живую чужую заявку взять нельзя: её держит flock её владельца.
+        if str(claim) in _CLAIM_FDS:
             continue
         try:
             fd = os.open(claim, os.O_RDWR)
@@ -233,7 +237,14 @@ def refresh_requested(*, memory_dir: Path) -> bool:
     request = _refresh_request_path(Path(memory_dir))
     for path in [request, *request.parent.glob("recall_refresh.claim.*.json")]:
         try: data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError): continue
+        except FileNotFoundError: continue
+        except (OSError, ValueError, TypeError):
+            # 26.09 (ревью W2 S4): пустая или нечитаемая заявка — всё равно заявка. Обрыв
+            # между O_EXCL и записью оставлял пустой файл: `request_refresh` отвечал «уже
+            # есть», а здесь его не признавали — и пересборку не просил никто, навсегда.
+            # Захват такую заявку и так принимает (`_claim_refresh_request_locked`).
+            if path == request: return True
+            continue
         if isinstance(data, dict) and data.get("schema") == "praxis.recall-refresh.v1": return True
     return False
 
@@ -1564,40 +1575,143 @@ def rebuild(*, base: Path, memory_dir: Path, skills_dir: Path | None = None,
     snapshots = _snapshots(sources)
     fingerprint = _fingerprint_from(snapshots)
     tmp = path.with_name(path.name + f".{os.getpid()}.{uuid.uuid4().hex}.tmp")
-    chunks = corrupt = 0
-    with _LOCK:
+    _sweep_orphan_builds(path)
+    _REBUILDING.set()
+    try:
+        with _LOCK:
+            return _rebuild_locked(base=base, path=path, tmp=tmp, sources=sources,
+                                   snapshots=snapshots, fingerprint=fingerprint,
+                                   memory_dir=memory_dir)
+    finally:
+        _REBUILDING.clear()
+        _drain_deferred_upserts()
+
+
+# ⚠ Отличия издания (ревью 26.09, W2 S2/S3, W3 S4/S7). У неё пересборка — ночь под общим
+# замком хода; в издании её ведёт ещё и поток ухода за recall в любое время суток.
+#: Идёт полная пересборка: `upsert` хода не ждёт её конца, а откладывает свой путь.
+_REBUILDING = threading.Event()
+#: Отложенные на время пересборки `upsert` — догоняются сразу после неё (новая база
+#: собрана из снимка источников на её старте и свежих правок хода не знает).
+_DEFERRED: list[tuple[str, dict]] = []
+_DEFERRED_LOCK = threading.Lock()
+#: Сколько ждать, пока читатель отпустит базу перед заменой (SQLite на Windows открывает
+#: файл без FILE_SHARE_DELETE: `os.replace` поверх открытого соединения — отказ доступа).
+_REPLACE_TRIES = 40
+_REPLACE_PAUSE_SEC = 0.25
+
+
+def _replace_db(tmp: Path, path: Path) -> None:
+    for attempt in range(_REPLACE_TRIES):
         try:
-            with contextlib.closing(sqlite3.connect(tmp)) as db:
-                _create_schema(db)
-                for source in sources:
-                    count, broken = _insert_source(db, source, memory_dir,
-                                                   snapshot=snapshots.get(source.rel, ""))
-                    chunks += count
-                    corrupt += broken
-                db.executemany(
-                    "INSERT INTO meta(key, value) VALUES (?, ?)",
-                    (("schema", SCHEMA_VERSION), ("fingerprint", fingerprint),
-                     ("sources", str(len(sources))), ("chunks", str(chunks)),
-                     ("corrupt_lines", str(corrupt))),
-                )
-                db.commit()
-                check = db.execute("PRAGMA integrity_check").fetchone()
-                if not check or check[0] != "ok":
-                    raise sqlite3.DatabaseError(f"integrity_check: {check}")
             os.replace(tmp, path)
-            # A full rebuild establishes a new canonical generation. Automatic
-            # recall's in-process projection must not be reused across a changed
-            # temporary base (or after this replacement).
-            global _CANON_GEN
-            _CANON_CACHE.clear()
-            _INDEX_CACHE.clear()
-            _CANON_GEN += 1
-            for suffix in ("-wal", "-shm"):
-                with contextlib.suppress(FileNotFoundError):
-                    Path(str(path) + suffix).unlink()
-        finally:
+            return
+        except PermissionError:
+            if not _WINDOWS or attempt == _REPLACE_TRIES - 1:
+                raise
+            time.sleep(_REPLACE_PAUSE_SEC)
+
+
+def _sweep_orphan_builds(path: Path) -> None:
+    """Недостроенные базы мёртвых сборщиков (`<база>.<pid>.<uuid>.tmp[-journal]`).
+
+    Закрытое посреди пересборки окно (TerminateProcess на Windows, SIGTERM на Mac)
+    оставляло файл размером с индекс, и никто его не убирал — каждое прерывание ещё одна
+    сирота. Живой процесс, даже чужой, не трогается: живость — `process_liveness`."""
+    try:
+        import process_liveness
+        candidates = list(path.parent.glob(path.name + ".*.tmp*"))
+    except Exception:
+        return
+    for leftover in candidates:
+        parts = leftover.name[len(path.name) + 1:].split(".")
+        if not parts or not parts[0].isdigit():
+            continue
+        pid = int(parts[0])
+        if pid == os.getpid():
+            continue
+        try:
+            alive = process_liveness.is_process_alive(pid)
+        except Exception:
+            continue
+        if not alive:
+            with contextlib.suppress(OSError):
+                leftover.unlink()
+
+
+@contextlib.contextmanager
+def _held(lock):
+    """Отпустить замок, уже взятый `_lock_or_defer`, на выходе из блока."""
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+def _lock_or_defer(path, kwargs: dict) -> bool:
+    """Взять `_LOCK` для правки базы — или отложить правку, пока идёт пересборка."""
+    while True:
+        if _LOCK.acquire(timeout=0.2):
+            return True
+        if _REBUILDING.is_set():
+            with _DEFERRED_LOCK:
+                _DEFERRED.append((str(path), dict(kwargs)))
+            return False
+
+
+def _drain_deferred_upserts() -> None:
+    with _DEFERRED_LOCK:
+        pending = list(_DEFERRED)
+        _DEFERRED.clear()
+    seen: set[tuple] = set()
+    for path, kwargs in pending:
+        key = (path, tuple(sorted((k, str(v)) for k, v in kwargs.items())))
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            upsert(path, **kwargs)
+        except Exception:
+            import logging
+            logging.getLogger("praxis.memory_fts").warning(
+                "memory_fts: отложенная правка %s не догнала пересборку", path, exc_info=True)
+
+
+def _rebuild_locked(*, base: Path, path: Path, tmp: Path, sources, snapshots,
+                    fingerprint: str, memory_dir: Path) -> dict:
+    chunks = corrupt = 0
+    try:
+        with contextlib.closing(sqlite3.connect(tmp)) as db:
+            _create_schema(db)
+            for source in sources:
+                count, broken = _insert_source(db, source, memory_dir,
+                                               snapshot=snapshots.get(source.rel, ""))
+                chunks += count
+                corrupt += broken
+            db.executemany(
+                "INSERT INTO meta(key, value) VALUES (?, ?)",
+                (("schema", SCHEMA_VERSION), ("fingerprint", fingerprint),
+                 ("sources", str(len(sources))), ("chunks", str(chunks)),
+                 ("corrupt_lines", str(corrupt))),
+            )
+            db.commit()
+            check = db.execute("PRAGMA integrity_check").fetchone()
+            if not check or check[0] != "ok":
+                raise sqlite3.DatabaseError(f"integrity_check: {check}")
+        _replace_db(tmp, path)
+        # A full rebuild establishes a new canonical generation. Automatic
+        # recall's in-process projection must not be reused across a changed
+        # temporary base (or after this replacement).
+        global _CANON_GEN
+        _CANON_CACHE.clear()
+        _INDEX_CACHE.clear()
+        _CANON_GEN += 1
+        for suffix in ("-wal", "-shm"):
             with contextlib.suppress(FileNotFoundError):
-                tmp.unlink()
+                Path(str(path) + suffix).unlink()
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            tmp.unlink()
     return {
         "ok": True, "schema": SCHEMA_VERSION, "database": _rel(path, base),
         "sources": len(sources), "chunks": chunks, "corrupt_lines": corrupt,
@@ -2373,6 +2487,10 @@ def search(query: str, *, base: Path, memory_dir: Path, skills_dir: Path | None 
     """
     selected: list[dict] = []
     try:
+        if not path.exists():
+            # 26.09 (ревью W2 S4): `sqlite3.connect` САМ создаёт пустой файл базы — и
+            # дальше «база есть», хотя в ней нет ни таблицы. Нет базы — это заявка.
+            raise FileNotFoundError(str(path))
         with contextlib.closing(sqlite3.connect(path, timeout=0)) as db:
             db.row_factory = sqlite3.Row
             cached = [dict(row) for row in db.execute(
@@ -2478,10 +2596,14 @@ def upsert(path: str | Path, *, base: Path, memory_dir: Path,
     current = _meta(database)
     if current.get("schema") != SCHEMA_VERSION:
         return rebuild(base=base, memory_dir=memory_dir, skills_dir=skills_dir, db_path=database)
+    deferral = {"base": base, "memory_dir": memory_dir, "skills_dir": skills_dir,
+                "db_path": db_path}
     journal = _canonical_journal_upsert_source(path, base=base, memory_dir=memory_dir)
     if journal is not None:
         rel, source = journal
-        with _LOCK, contextlib.closing(sqlite3.connect(database, timeout=15)) as db:
+        if not _lock_or_defer(path, deferral):
+            return {"ok": True, "path": rel, "deferred": True, "indexed": source is not None}
+        with _held(_LOCK), contextlib.closing(sqlite3.connect(database, timeout=15)) as db:
             db.execute("PRAGMA busy_timeout=15000")
             db.execute("DELETE FROM chunks WHERE path = ?", (rel,))
             db.execute("DELETE FROM source_state WHERE path = ?", (rel,))
@@ -2506,7 +2628,9 @@ def upsert(path: str | Path, *, base: Path, memory_dir: Path,
     sources = iter_sources(base=base, memory_dir=memory_dir, skills_dir=skills_dir)
     source = next((item for item in sources if item.path.resolve() == target), None)
     rel = _rel(target, base)
-    with _LOCK, contextlib.closing(sqlite3.connect(database, timeout=15)) as db:
+    if not _lock_or_defer(path, deferral):
+        return {"ok": True, "path": rel, "deferred": True, "indexed": source is not None}
+    with _held(_LOCK), contextlib.closing(sqlite3.connect(database, timeout=15)) as db:
         db.execute("PRAGMA busy_timeout=15000")
         db.execute("DELETE FROM chunks WHERE path = ?", (rel,))
         db.execute("DELETE FROM source_state WHERE path = ?", (rel,))

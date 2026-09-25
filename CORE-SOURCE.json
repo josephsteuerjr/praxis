@@ -1,11 +1,11 @@
 {
  "mirror": "praxis",
- "source": "/opt/praxis (прод) через локальный чекаут её дерева @ 9a0897d",
- "head": "9a0897d",
+ "source": "/opt/praxis (прод) через локальный чекаут её дерева @ feb6f2a",
+ "head": "feb6f2a",
  "dirty": false,
- "taken_at": "2026-09-25T19:05:20+00:00",
- "files": 597,
- "digest": "e2ac1112f2b8f9836db8b687e443acb14b932ac46aaf1fddcf15581433aa467e",
+ "taken_at": "2026-09-25T21:48:59+00:00",
+ "files": 598,
+ "digest": "1fc760e24ea546b83339d0916d4730f40c61c22b54f231a7c15accee961a9b21",
  "by": "installer/core_src.py --export-core",
- "note": "экспорт 25.09 19:05 UTC к выпуску 1.0.1: её живой master 9a0897d (ec9092f2 + её правки памяти и навыков в workspace/soul + влитый кандидат keat-dm-history ce890352); путь чекаута на машине сборки снят из записи"
+ "note": "экспорт 26.09 21:49 UTC к выпуску 1.0.1 после адверсарного ревью: её живой master feb6f2a (9a0897d + её навык 184ea475 + влитый кандидат review-fixes-2609); путь чекаута на машине сборки снят из записи"
 }
