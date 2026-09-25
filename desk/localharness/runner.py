@@ -1570,7 +1570,8 @@ def _sweep_processed(processed: Path, days: int = 14) -> None:
     cutoff = time.time() - max(1, int(days)) * 86400
     removed = 0
     try:
-        entries = list(processed.glob("*.md")) + list(processed.glob("*.md.done"))
+        entries = (list(processed.glob("*.md")) + list(processed.glob("*.md.done"))
+                   + list(processed.glob("*.md.tries")))
     except OSError:
         return
     for stale in entries:
@@ -1794,6 +1795,27 @@ def _adopt_stale_processed(processed: Path, older_than_sec: int = 1800) -> int:
     return adopted
 
 
+#: Replay processed-записок: при старте и дальше не чаще раза в пять минут, и не больше
+#: трёх попыток на записку (см. `_replay_unclaimed_notes`).
+_REPLAY_EVERY_SEC = 300.0
+_REPLAY_MAX_TRIES = 3
+
+
+def _note_tries(processed: Path, name: str) -> int:
+    try:
+        return int((processed / (name + ".tries")).read_text(encoding="utf-8").split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def _note_tries_bump(processed: Path, name: str, tries: int) -> None:
+    try:
+        (processed / (name + ".tries")).write_text(f"{int(tries)} {time.time():.0f}\n",
+                                                   encoding="utf-8")
+    except OSError:
+        log.debug("счёт попыток replay не записался [%s]", name, exc_info=True)
+
+
 def _replay_unclaimed_notes(processed: Path, limit: int = 5) -> list[str]:
     """Replay processed-записок, чей ход не дошёл до модели (срез 20.09).
 
@@ -1801,8 +1823,9 @@ def _replay_unclaimed_notes(processed: Path, limit: int = 5) -> list[str]:
     молчаливую потерю — стартовый цикл processed не возвращал. Здесь: у каждой
     записки без парной `.done`-метки ход повторяется ПО ТОМУ ЖЕ ingress id
     (штампу имени), поэтому память не дублируется. Успешный ход (handle_desk
-    вернулся без исключения) ставит `.done`; упавший остаётся для следующего
-    рестарта. Возвращаются имена отыгранных записок.
+    вернулся без исключения) ставит `.done`; упавший ждёт следующего прохода (при
+    старте и раз в пять минут), но не больше `_REPLAY_MAX_TRIES` раз — потом записка
+    помечается сдавшейся. Возвращаются имена отыгранных записок.
     """
     replayed: list[str] = []
     # Фильтр по `.done` — ДО среза: иначе пять старейших разобранных записок
@@ -1810,6 +1833,19 @@ def _replay_unclaimed_notes(processed: Path, limit: int = 5) -> list[str]:
     unclaimed = [path for path in sorted(processed.glob("*.md"))
                  if not (processed / (path.name + ".done")).exists()]
     for path in unclaimed[:max(0, int(limit or 5))]:
+        # ⚠ 1.0.1: попыток не больше _REPLAY_MAX_TRIES. Записка, чей ход падает всякий
+        # раз (детерминированная ошибка), переигрывалась бы вечно — а replay звался
+        # КАЖДУЮ СЕКУНДУ главного цикла: каждая попытка — полный ход, новый прогон на
+        # диске и снимок запроса, иногда вызов модели. Жалоба тестера на Windows «Элен
+        # в простое грузит диск» — ровно этот класс. Счёт попыток — файлом рядом, чтобы
+        # переживал рестарт; сдавшаяся записка помечается честно и остаётся в processed.
+        tries = _note_tries(processed, path.name)
+        if tries >= _REPLAY_MAX_TRIES:
+            _mark_done(processed, path.name, f"gave-up after {tries} replays")
+            log.warning("replay записки %s: %d попыток упали — больше не повторяю",
+                        path.name, tries)
+            continue
+        _note_tries_bump(processed, path.name, tries + 1)
         try:
             message = _read_message(path)
         except OSError:
@@ -2113,6 +2149,7 @@ def main() -> None:
     _maybe_birth(tree)
     alarms_at = 0.0
     resume_at = 0.0
+    replay_at = 0.0          # первый проход replay — на первом же тике после старта
     sleep_at = time.time()
     while True:
         for path in sorted(inbox.glob("*.md")):
@@ -2125,14 +2162,17 @@ def main() -> None:
                 continue
             _handle_note(processed / path.name, message, processed)
         # 20.09: replay processed-записок, чей ход не дошёл до модели (краш между
-        # переносом в processed и ходом). Одна попытка на записку: отмечаем
-        # .done по факту завершения handle_desk без исключения; исключение внутри
-        # handle_desk уже залогировано и записка НЕ помечается — следующий рестарт
-        # попробует снова. Порядок — по имени файла, то есть по времени записи.
-        try:
-            _replay_unclaimed_notes(processed)
-        except Exception:
-            log.exception("восстановление processed-записок не прошло (повтор на следующем тике)")
+        # переносом в processed и ходом). `.done` — по факту завершения handle_desk без
+        # исключения; упавшая записка ждёт следующего прохода. ⚠ 1.0.1: проход — при
+        # старте и раз в пять минут, а не каждую секунду, и не больше трёх попыток на
+        # записку: ежесекундный обход processed и вечный повтор упавшей записки грели
+        # диск в простое. Порядок — по имени файла, то есть по времени записи.
+        if time.time() - replay_at > _REPLAY_EVERY_SEC:
+            replay_at = time.time()
+            try:
+                _replay_unclaimed_notes(processed)
+            except Exception:
+                log.exception("восстановление processed-записок не прошло (повтор через 5 мин)")
         while _bot is not None:
             chat_id = _bot.pop_pending()
             if chat_id is None:

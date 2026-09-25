@@ -392,12 +392,29 @@ def _whole(value, default: int = 0) -> int:
     return int(_num(value, default))
 
 
+#: Хвосты, прочитанные при прежнем отпечатке файла: (путь, n, потолок) -> (отпечаток, строки).
+_TAIL_CACHE: dict[tuple[str, int, int], tuple[tuple, list[str]]] = {}
+_TAIL_CACHE_MAX = 64
+#: Первый кусок чтения с конца; дальше — вчетверо, пока не наберётся n строк.
+_TAIL_FIRST_CHUNK = 65536
+
+
 def tail_lines(path: Path, n: int, *, max_bytes: int = 4_000_000) -> list[str]:
     """Последние n строк файла без чтения его целиком.
 
     n нормализуется здесь: `lines[-n:]` при n<=0 отдаёт ВЕСЬ буфер (при n=-1 —
     `lines[1:]`), и объявленный вызывающими потолок (600 реплик) обходился
     одним `?n=-1`, вывозя до max_bytes переписки владельца.
+
+    ⚠ 1.0.1, жалоба тестера на Windows «Элен в простое грузит диск». Хвост читался
+    ВСЕГДА на весь потолок — 4 МБ, даже ради пяти строк: `/api/state` (окно спрашивает
+    раз в 8 с) тянул так 12 и 5 последних вызовов модели — 8 МБ на опрос, `/api/pulse`
+    (раз в 20 с) — ещё 8, сторож канала (раз в 30 с) — 4. Замер на дереве «пары недель»:
+    ~130 ГБ чтения в сутки, пока окно открыто или свёрнуто в трей, — и больше с каждым
+    днём журнала. Теперь: (1) отпечаток файла (mtime, размер, inode) не менялся —
+    тот же ответ без чтения; в простое журналы не меняются, опросы не трогают диск;
+    (2) файл менялся — читаем с конца кусками от 64 КБ, пока не наберётся n строк,
+    и не дальше прежнего потолка.
     """
     try:
         n = int(n)
@@ -406,21 +423,36 @@ def tail_lines(path: Path, n: int, *, max_bytes: int = 4_000_000) -> list[str]:
     if n <= 0:
         return []
     try:
-        size = path.stat().st_size
+        st = path.stat()
     except OSError:
         return []
-    take = min(size, max_bytes)
+    size = st.st_size
+    stamp = (st.st_mtime_ns, size, getattr(st, "st_ino", 0))
+    key = (str(path), n, int(max_bytes))
+    hit = _TAIL_CACHE.get(key)
+    if hit is not None and hit[0] == stamp:
+        return list(hit[1])
+    limit = min(size, max(0, int(max_bytes)))
+    take = min(limit, max(_TAIL_FIRST_CHUNK, n * 512))
+    lines: list[str] = []
     try:
         with path.open("rb") as fh:
-            fh.seek(size - take)
-            raw = fh.read(take)
+            while True:
+                fh.seek(size - take)
+                raw = fh.read(take)
+                lines = raw.decode("utf-8", "replace").splitlines()
+                if take < size and lines:
+                    lines = lines[1:]  # первая строка среза почти наверняка рваная
+                if len(lines) >= n or take >= limit:
+                    break
+                take = min(limit, take * 4)
     except OSError:
         return []
-    text = raw.decode("utf-8", "replace")
-    lines = text.splitlines()
-    if take < size and lines:
-        lines = lines[1:]  # первая строка среза почти наверняка рваная
-    return lines[-n:]
+    out = lines[-n:]
+    if len(_TAIL_CACHE) >= _TAIL_CACHE_MAX:
+        _TAIL_CACHE.clear()
+    _TAIL_CACHE[key] = (stamp, out)
+    return list(out)
 
 
 def tail_jsonl(path: Path, n: int) -> list[dict]:

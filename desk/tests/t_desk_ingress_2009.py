@@ -121,6 +121,24 @@ class ReplayProcessed(unittest.TestCase):
         self.assertFalse((processed / (note.name + ".done")).exists(),
                          "упавший replay не помечает записку — рестарт попробует снова")
 
+    def test_always_failing_note_gives_up_after_max_tries(self):
+        """1.0.1: упавшая записка не переигрывается вечно (её гоняли каждую секунду)."""
+        processed = self._processed()
+        note = processed / "20260920T2109__d.md"
+        note.write_text("падает всякий раз", encoding="utf-8")
+        with mock.patch.object(runner, "handle_desk",
+                               side_effect=RuntimeError("детерминированная ошибка")) as hd, \
+                mock.patch.object(runner.transport, "is_room", return_value=True):
+            for _ in range(runner._REPLAY_MAX_TRIES):
+                self.assertEqual(runner._replay_unclaimed_notes(processed), [])
+                self.assertFalse((processed / (note.name + ".done")).exists())
+            self.assertEqual(hd.call_count, runner._REPLAY_MAX_TRIES)
+            self.assertEqual(runner._replay_unclaimed_notes(processed), [])
+            self.assertEqual(hd.call_count, runner._REPLAY_MAX_TRIES, "после предела хода нет")
+        done = (processed / (note.name + ".done")).read_text(encoding="utf-8")
+        self.assertIn("gave-up", done)
+        self.assertEqual(runner._REPLAY_EVERY_SEC, 300.0, "проход replay — не чаще раза в пять минут")
+
     def test_telegram_target_note_goes_to_owner_path(self):
         processed = self._processed()
         note = processed / "20260920T2108__to__12345.md"
