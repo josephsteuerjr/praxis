@@ -10,11 +10,13 @@
 //   * Обещания «перезапускаю…» без надзора. Просьба, положенная в дерево, где
 //     надзора нет, пролежит вечно; канал это знает и отвечает отказом с
 //     причиной, а окно показывает причину, а не крутилку.
-//   * Кнопки «обновить ядро». Контейнер не пересобирает сам себя, и притворяться
-//     тут нечем: обновление — это новая поставка и `docker compose up --build`
-//     на хосте. Команды названы словами, а кнопки нет.
+//   * Кнопки «обновить ядро» у самого контейнера. Контейнер не пересобирает сам
+//     себя. Обновляет исполнитель РЯДОМ (`server/updater`, 27.09) — его раздел
+//     рисует `update-card.ts`, и там «Подтвердить» есть только у плана, который он
+//     уже сверил и показал. Нет исполнителя — команды названы словами.
 import { api, post } from "../api";
 import { esc, fmtTime } from "../lib";
+import { updateActive, updateCardHTML, type UpdateState } from "./update-card";
 
 export interface SupervisorChild {
   id: string;
@@ -111,15 +113,38 @@ export function supervisorHTML(s: Supervisor | null): string {
   const pending = s.pending
     ? `<p class="receipt">Просьба лежит и ещё не взята: ${esc(String(s.pending.target || ""))}</p>`
     : "";
-  // Кнопки «обновить ядро» здесь нет и не будет: контейнер не пересобирает сам
-  // себя, а канал с доступом к докеру хоста — это не обновление, а отмычка.
-  // Поэтому — словами, что и где сделать.
-  const update = s.in_container
-    ? `<p class="muted">Обновление ядра — дело хоста, а не контейнера: распакуй новую поставку в ту же папку и
-       <code>docker compose -f server/docker-compose.yml up -d --build</code>. Данные агента (<code>data/</code>) и
-       <code>helene.json</code> лежат рядом с контейнером и переживают пересборку.</p>`
-    : "";
-  return head + table + buttons + pending + receipt + update;
+  // Обновление — отдельный раздел ниже (`update-card.ts`): канал с доступом к докеру
+  // хоста был бы не обновлением, а отмычкой, поэтому обновляет сосед снаружи.
+  return head + table + buttons + pending + receipt;
+}
+
+/** Что уже нарисовано в коробке обновления — чтобы опрос не менял её без нужды. */
+const drawnUpdate = new WeakMap<HTMLElement, string>();
+
+/**
+ * Раздел «Обновление» в свою коробку: её опрос перерисовывает только её.
+ *
+ * ⚠ И только когда ответ ИЗМЕНИЛСЯ. Пока план ждёт «да», опрос идёт каждые четыре
+ * секунды, и перерисовка того же самого подменяла кнопку под курсором новой: нажатие
+ * посреди подмены терялось, а строка ответа под кнопками стиралась (найдено на
+ * стенде 27.09 — «Подтвердить» оказывался устаревшим элементом).
+ */
+async function drawUpdate(box: HTMLElement, inContainer: boolean): Promise<UpdateState | null> {
+  const slot = box.querySelector<HTMLElement>("#update-box");
+  let state: UpdateState | null = null;
+  try {
+    state = await api<UpdateState>("/api/update");
+  } catch {
+    // Канал старше 1.1.1 (ручки нет) или связь пропала на время подмены контейнера:
+    // кнопок не рисуем — только то, что верно без исполнителя; следующий опрос дорисует.
+    state = null;
+  }
+  const html = updateCardHTML(state, { inContainer, fmt: fmtTime });
+  if (slot && drawnUpdate.get(slot) !== html) {
+    slot.innerHTML = html;
+    drawnUpdate.set(slot, html);
+  }
+  return state;
 }
 
 export interface ContainerRow {
@@ -286,7 +311,9 @@ async function draw(box: HTMLElement): Promise<void> {
   // Контейнеры и мозг рисуются, только когда служба рядом объявлена: у окна
   // Элен её нет, и пустой раздел там был бы обещанием без исполнителя.
   const extra = boxes?.available ? containersHTML(boxes) + brainHTML(brain, models) : "";
-  box.innerHTML = `<h3 class="section-title">Управление</h3>${interruptHTML()}${supervisorHTML(state)}${extra}${logsHTML(logs)}`;
+  box.innerHTML = `<h3 class="section-title">Управление</h3>${interruptHTML()}${supervisorHTML(state)}<div id="update-box"></div>${extra}${logsHTML(logs)}`;
+  box.dataset.inContainer = state?.in_container ? "1" : "";
+  await drawUpdate(box, Boolean(state?.in_container));
 }
 
 /**
@@ -299,6 +326,29 @@ async function draw(box: HTMLElement): Promise<void> {
  */
 export async function mountSupervisor(box: HTMLElement): Promise<void> {
   await draw(box);
+
+  // Обновление: пока оно идёт (сверка, ожидание «да», подмена), раздел перерисовывается
+  // сам раз в четыре секунды; кончилось — опрос засыпает до следующей кнопки. Пропавшая
+  // связь посреди подмены — ожидаема (канал живёт в том самом контейнере): ждём дальше.
+  // `grace` — сколько опросов сделать даже без активного плана: после кнопки исполнитель
+  // берёт файл не мгновенно, и первый ответ ещё может показывать прежний итог.
+  let polling = false;
+  const pollUpdate = async (grace = 0) => {
+    if (polling) return;
+    polling = true;
+    let wasActive = false;
+    try {
+      while (box.isConnected) {
+        const u = await drawUpdate(box, box.dataset.inContainer === "1");
+        if (u) wasActive = updateActive(u);
+        if (!wasActive && grace-- <= 0) break;
+        await new Promise((done) => setTimeout(done, 4000));
+      }
+    } finally {
+      polling = false;
+    }
+  };
+  void pollUpdate();
 
   let shown = "";
 
@@ -341,6 +391,43 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
   };
 
   box.addEventListener("click", async (ev) => {
+    const upd = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-update-plan],[data-update-confirm]");
+    if (upd) {
+      const version = upd.getAttribute("data-update-plan");
+      const note = box.querySelector<HTMLElement>(version ? "#update-plan-note" : "#update-note");
+      const say = (cls: string, text: string) => {
+        if (note) {
+          note.className = cls;
+          note.textContent = text;
+        }
+      };
+      upd.disabled = true;
+      say("receipt", version ? "кладу план…" : "передаю ответ…");
+      try {
+        const answer = version
+          ? await post<{ ok: boolean; note: string }>("/api/update/plan", {
+              version,
+              backup: upd.getAttribute("data-backup") || "full",
+            })
+          : await post<{ ok: boolean; note: string }>("/api/update/confirm", {
+              id: upd.getAttribute("data-id") || "",
+              nonce: upd.getAttribute("data-nonce") || "",
+              decision: upd.getAttribute("data-update-confirm") || "",
+            });
+        say(answer.ok ? "receipt ok" : "receipt err", answer.note);
+        if (answer.ok) {
+          // Исполнитель берёт файл раз в три секунды — даём ему взять и перерисовываем.
+          await new Promise((done) => setTimeout(done, 3500));
+          void pollUpdate(4);
+        } else {
+          upd.disabled = false;
+        }
+      } catch (e) {
+        say("receipt err", "не дошло: " + String(e));
+        upd.disabled = false;
+      }
+      return;
+    }
     const spot = (ev.target as HTMLElement).closest<HTMLElement>(
       "[data-clog],[data-restart-container],[data-brain-apply],[data-interrupt]");
     if (spot) {

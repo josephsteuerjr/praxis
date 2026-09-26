@@ -48,6 +48,7 @@ import continuity
 import voice
 import alarm_clock
 import forge_events
+import updates
 
 # Уровень лога — ручкой, а не константой: две главные глухоты продукта (квитанция
 # читателя не пишется; сторож живых файлов сдох) диагностировались строками
@@ -95,6 +96,8 @@ _voice_state: dict = {"ready": False, "why": "голос ещё не подни�
 #: `shell/src/main.rs` и `svc/src/main.rs`.
 RESTART_EXIT_CODE = 42
 _restart_wanted = [False]
+#: Ход начал сам владелец своими словами (27.09) — см. `_run_turn` и руку update_request.
+_owner_words = [False]
 _STARTED_UTC = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 _continuity = None
 _alarms = None
@@ -422,6 +425,10 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
     _ext_hook("before_turn", chat_id)
     envelope = None
     try:
+        # 27.09: «ход начал владелец своими словами» — для руки update_request, которая
+        # передаёт его «да» исполнителю обновлений. Служебные ходы (рождение, будильник,
+        # отчёт об обновлении) тоже идут с owner=True в окне, но их повод пишет «Hélène».
+        _owner_words[0] = bool(getattr(ctx, "owner", False)) and speaker != updates.SYSTEM_SPEAKER
         envelope = _agent.voice_turn_envelope(
             chat_id, convo, speaker, ctx=ctx, history=history, current_text=current,
             orient=orient, **extra)
@@ -430,6 +437,7 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
         log.exception("ход упал в дереве [%s]", chat_id)
         return None
     finally:
+        _owner_words[0] = False
         _ext_hook("after_turn", chat_id, envelope)
 
 
@@ -1163,6 +1171,23 @@ def _supervisor_forever(tree: Path) -> None:
         time.sleep(2.0)
 
 
+def _start_supervisor(tree: Path) -> bool:
+    """Поднять поток надзора — если надзор не кто-то другой. -> поднят ли.
+
+    На сервере надзор — serverboot (метка HELENE_SUPERVISOR), и просьбы окна берёт он:
+    реле и канал держит тоже он. Вторая рука на том же столе (1.1.0) брала «перезапусти
+    реле» и отвечала «реле держит не движок», а записку надзора перебивала своей каждые
+    две секунды — окно видело то его детей, то одного движка.
+    """
+    if os.environ.get("HELENE_SUPERVISOR") == "serverboot":
+        log.info("надзор: serverboot — просьбы окна берёт он, движок стол не трогает")
+        return False
+    import threading
+    threading.Thread(target=_supervisor_forever, args=(tree,), name="supervisor",
+                     daemon=True).start()
+    return True
+
+
 def _supervisor_tick(tree: Path, control) -> bool:
     """Один тик: записка о себе, просьба со стола, расписка. -> взведён ли перезапуск."""
     control.beat(tree, "engine", _STARTED_UTC,
@@ -1533,6 +1558,36 @@ def boundary_word(row: dict) -> tuple[str, str]:
     elif label == "blocked":
         note = "Препятствие: " + note
     return WORD, note
+
+
+def _update_report_due() -> None:
+    """Итог обновления на сервере — записка в окно и ход агента, как при рождении (27.09).
+
+    Отметка «рассказано» ставится ДО хода: упавший ход не должен повторяться на каждом
+    тике, а записка всё равно лежит в окне — владелец увидит итог и без слова агента.
+    """
+    if _tree is None or _desk is None:
+        return
+    receipt = updates.pending_report(_tree)
+    if receipt is None:
+        return
+    updates.mark_reported(_tree, receipt)
+    note = updates.report_note(receipt, owner=_speaker or "владелец")
+    now = _now()
+    source_id = f"update-{receipt.get('id') or int(now.timestamp())}"
+    _desk.archive(note, outgoing=False, now=now, sender="Hélène")
+    _desk.life(note, direction="in", actor="Hélène", source_id=source_id, now=now)
+    log.info("обновление: итог %s (%s → %s) — записка в окне", receipt.get("state"),
+             receipt.get("from_version"), receipt.get("to_version"))
+    try:
+        import llm
+        if not llm.configured():
+            log.info("обновление: мозг не настроен — итог только запиской")
+            return
+    except Exception:
+        return
+    outcome = _turn_in_window(source_id, speaker=updates.SYSTEM_SPEAKER, origin_text=note)
+    log.info("обновление: отчёт агента — %s", outcome)
 
 
 _BIRTH_TRIES = 5           # столько попыток первого хода, дальше — словами владельцу
@@ -2360,6 +2415,12 @@ def main() -> None:
         broker.install(agent, tree, cfg)
     except Exception:
         log.exception("рука брокера не выдана — просить права агенту нечем")
+    # Обновление на сервере (27.09): план исполнителю снаружи контейнера, «да» — у
+    # владельца. Только под serverboot: на Windows и Mac обновляет кнопка окна.
+    try:
+        updates.install(agent, tree, cfg, owner_spoke=lambda: _owner_words[0])
+    except Exception:
+        log.exception("рука обновления не выдана")
     tg = dict(cfg.get("telegram") or {})
     global _status_message
     _status_message = bool(tg.get("status_message", False))
@@ -2432,8 +2493,7 @@ def main() -> None:
     _refresh_care = refresh_care.RefreshCare(
         memory_life, cooldown=float(os.getenv("PRAXIS_REFRESH_COOLDOWN_SEC", "600") or 600)).start()
     atexit.register(_refresh_care.stop)
-    threading.Thread(target=_supervisor_forever, args=(tree,), name="supervisor",
-                     daemon=True).start()
+    _start_supervisor(tree)
     _warm_voice_models(cfg)
     # Рождение — после того, как всё поднято и квитанция читателя уже пишется:
     # окно видит «думает», а не мёртвый руннер, пока идёт первый ход.
@@ -2442,6 +2502,7 @@ def main() -> None:
     alarms_at = 0.0
     resume_at = 0.0
     replay_at = 0.0          # первый проход replay — на первом же тике после старта
+    update_at = 0.0
     sleep_at = time.time()
     while True:
         if _restart_wanted[0]:
@@ -2499,6 +2560,15 @@ def main() -> None:
             _forge_events_due()
         except Exception:
             log.exception("события Forge ждут следующего тика")
+        # Итог обновления на сервере (27.09): исполнитель пишет его ПОСЛЕ проверок, а
+        # проверки ждут, что движок уже поднят, — поэтому смотрим не раз на старте, а
+        # раз в полминуты.
+        if time.time() - update_at > 30:
+            update_at = time.time()
+            try:
+                _update_report_due()
+            except Exception:
+                log.exception("отчёт об обновлении не прошёл (повтор не делается)")
         # Её сон — последним: живое слово, продолжение задач и будильники вперёд.
         if time.time() - sleep_at > _SLEEP_CHECK_SEC:
             sleep_at = time.time()
