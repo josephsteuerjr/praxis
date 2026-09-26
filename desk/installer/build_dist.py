@@ -1367,6 +1367,8 @@ def build_praxis_app(args) -> None:
         f"{digest} *{zip_path.name}\n", encoding="utf-8", newline="\n")
     print(f"готово: {zip_path} ({zip_path.stat().st_size / 1e6:.1f} МБ)")
     print(f"sha256: {digest}")
+    if not args.skip_setup_exe:
+        build_setup_exe(out, version, product=PRAXIS_PRODUCT)
 
 
 def run_stands(skip: bool) -> None:
@@ -1739,22 +1741,25 @@ def find_makensis() -> Path | None:
     return None
 
 
-def build_setup_exe(out: Path, version: str) -> Path:
-    """Один установочный файл `Helene-<версия>-setup.exe` (1.1.0, 26.09).
+def build_setup_exe(out: Path, version: str, *, product: str = "Helene") -> Path:
+    """Один установочный файл `<Продукт>-<версия>-setup.exe` (1.1.0, 26.09).
 
     Живой случай: мама Егора распаковала архив и увидела два exe — «Элен» и «Элен
     сетап» — и не поняла, что запускать. Установщик NSIS (`windows/helene-setup.nsi`)
     распаковывает поставку во временную папку и открывает тот же мастер; запись в
     «Приложениях» Windows и удаление — по-прежнему за мастером. Архив остаётся: его
     качает кнопка обновления в окне (она берёт из выпуска только .zip).
+
+    Praxis (`windows/praxis-setup.nsi`) — мастера нет, и установщик сам: папка, ярлыки,
+    запись в «Приложениях», удаление; поверх стоящей — обновление без потери helene.json.
     """
     makensis = find_makensis()
     if makensis is None:
         raise SystemExit("makensis не найден: нужен NSIS (его ставит Tauri в "
                          "%LocalAppData%\\tauri\\NSIS) — или --skip-setup-exe для отладки")
-    script = DESK / "installer" / "windows" / "helene-setup.nsi"
-    target = out.parent / f"Helene-{version}-setup.exe"
-    icon = DESK / "shell" / "icons" / "icon.ico"
+    script = DESK / "installer" / "windows" / f"{product.lower()}-setup.nsi"
+    target = out.parent / f"{product}-{version}-setup.exe"
+    icon = DESK / "shell" / ("icons" if product == "Helene" else "icons-praxis") / "icon.ico"
     print("setup exe (NSIS)…")
     done = subprocess.run(
         [str(makensis), "/V2", f"/DVERSION={version}", f"/DPAYLOAD={out}",

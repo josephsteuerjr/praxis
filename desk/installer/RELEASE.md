@@ -184,7 +184,8 @@
 1. Влить ветку в `main` — иначе кнопки `workflow_dispatch` у workflow не будет
    (GitHub показывает её только с ветки по умолчанию).
 2. Windows: `python installer/build_dist.py --skip-runtime` и он же
-   `--variant praxis` → `Helene-0.8.0.zip` и `Praxis-0.8.0.zip`.
+   `--variant praxis` → `Helene-0.8.0.zip` и `Praxis-0.8.0.zip` (с 1.1.0 рядом с каждым —
+   `<Продукт>-<версия>-setup.exe` из `installer/windows/*.nsi`).
 3. `gh release create v0.8.0` — в выпуск сразу кладутся Windows-архив,
    Praxis-архив и **`install.sh` ПРЕЖНЕЙ версии**.
 4. `gh workflow run macos.yml -f tag=v0.8.0 -f upload=true` — раннер соберёт
