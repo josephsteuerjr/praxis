@@ -47,6 +47,21 @@ fn defaults() -> install::Defaults {
 /// Решения уже стоящей установки (26.09, сцена «уже установлена»): те же, что
 /// читает `--update`. Нет решений (имена, конституция) — None, и мастер идёт
 /// обычным маршрутом, а не подставляет умолчания поверх выбора владельца.
+/// «Удалить» из мастера на месте — это `uninstall.exe` установщика NSIS: он снимает
+/// службу и файлы через `helene-setup.exe --uninstall --quiet`, потом свою запись и ярлыки.
+#[tauri::command]
+fn uninstall_launch(app: tauri::AppHandle) -> Result<(), String> {
+    let exe = install::exe_dir().join("uninstall.exe");
+    if !exe.is_file() {
+        return Err("рядом нет uninstall.exe установщика".into());
+    }
+    let mut cmd = Command::new(&exe);
+    cmd.current_dir(std::env::temp_dir());
+    cmd.spawn().map_err(|e| format!("uninstall.exe не запустился: {e}"))?;
+    app.exit(0);
+    Ok(())
+}
+
 #[tauri::command]
 fn installed_setup(dir: String) -> Option<install::Setup> {
     install::setup_from_dir(std::path::Path::new(&dir))
@@ -263,6 +278,65 @@ fn message_box(text: &str) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // 26.09 (1.1.0): рядом с exe лежит uninstall.exe установщика NSIS или сказано
+    // `--configure` — мастер работает «на месте»: файлы уже здесь, он их не копирует.
+    if args.iter().any(|a| a == "--configure") || install::nsis_root().is_some() {
+        install::IN_PLACE.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    // Перед обновлением поверх: установщик NSIS зовёт старую копию мастера, чтобы та
+    // сняла службу и погасила окно. Ход — в stop.log рядом.
+    if args.iter().any(|a| a == "--stop") {
+        let result = install::stop_for_update();
+        let _ = std::fs::write(
+            install::exe_dir().join("stop.log"),
+            match &result {
+                Ok(note) => format!("OK {note}\n"),
+                Err(e) => format!("FAIL {e}\n"),
+            },
+        );
+        if let Err(e) = result {
+            if !args.iter().any(|a| a == "--quiet") {
+                message_box(&format!("Не удалось остановить Hélène перед обновлением: {e}"));
+            }
+            std::process::exit(1);
+        }
+        return;
+    }
+    // `--configure` поверх уже настроенной установки — обновление без вопросов:
+    // решения из самой установки, конфиг сливается, потом открывается Hélène.
+    // Настроенной ещё нет (первая установка) — дальше обычный мастер, на месте.
+    if args.iter().any(|a| a == "--configure") {
+        let dir = install::exe_dir();
+        if let Some(mut setup) = install::setup_from_dir(&dir) {
+            setup.force_extensions = true;
+            let mut log = format!("настройка на месте поверх {}\n", dir.display());
+            let result = install::install(&setup, |p| {
+                log.push_str(&format!("[{}/{}] {}\n", p.step, p.total, p.label));
+            });
+            match &result {
+                Ok(r) => log.push_str(&format!("OK {}\n", serde_json::to_string(r).unwrap_or_default())),
+                Err(e) => log.push_str(&format!("FAIL {e}\n")),
+            }
+            let _ = std::fs::write(dir.join("install.log"), &log);
+            match result {
+                Ok(r) => {
+                    let exe = std::path::PathBuf::from(&r.exe);
+                    let mut cmd = Command::new(&exe);
+                    if let Some(parent) = exe.parent() {
+                        cmd.current_dir(parent);
+                    }
+                    if let Err(e) = cmd.spawn() {
+                        message_box(&format!("Hélène обновлена ({}), но не запустилась сама: {e}. Открой её ярлыком.", r.dir));
+                    }
+                }
+                Err(e) => {
+                    message_box(&format!("Обновление не удалось: {e}\n\nЖурнал: {}", dir.join("install.log").display()));
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+    }
     // Безоконная установка по готовому JSON решений: для проверок и тихой
     // установки. Ход и итог — в install.log рядом с установщиком.
     if let Some(i) = args.iter().position(|a| a == "--install") {
@@ -414,7 +488,7 @@ fn main() {
                 });
             }
         }))
-        .invoke_handler(tauri::generate_handler![defaults, installed_setup, install, open_frame, probe_model, relay_login, relay_status, relay_models, uninstall_run, legacy_services, remove_service, admin_rights])
+        .invoke_handler(tauri::generate_handler![defaults, installed_setup, uninstall_launch, install, open_frame, probe_model, relay_login, relay_status, relay_models, uninstall_run, legacy_services, remove_service, admin_rights])
         .setup(|app| {
             // Учётные данные ChatGPT прошлого запуска установщика: пока они
             // лежали в %TEMP%, протухшая учётка от другого аккаунта показывалась

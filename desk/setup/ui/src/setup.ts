@@ -70,6 +70,8 @@ export interface Installed {
 
 export interface Defaults {
   dir: string;
+  /** Мастер на месте (папка установки NSIS): папка фиксирована, «Удалить» — uninstall.exe. */
+  in_place?: boolean;
   payload: string | null; // папка поставки рядом с установщиком, если она есть
   version: string;
   installed: Installed | null; // что уже стоит на машине: это обновление, а не первая установка
@@ -131,7 +133,7 @@ export const setup: Setup = {
 /** Что уже установлено на машине: заполняется на старте ответом `defaults`.
  *  Установщик не читал существующую установку вовсе, и обновление выглядело
  *  как первое учреждение продукта. `platform` — оттуда же (см. `Defaults`). */
-export const machine: { installed: Installed | null; platform: string } = { installed: null, platform: "" };
+export const machine: { installed: Installed | null; platform: string; inPlace: boolean } = { installed: null, platform: "", inPlace: false };
 
 /** Визард открыт на macOS. Службы Windows, тела тула `computer` и правила
  *  брандмауэра там нет по построению — их опции, строки сводки и слова про
@@ -167,6 +169,12 @@ export async function loadDefaults(): Promise<Defaults> {
     return { dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Hélène", payload: null, version: "превью", installed: null, platform: "windows" };
   }
   return invoke<Defaults>("defaults");
+}
+
+/** «Удалить» на месте: uninstall.exe установщика NSIS; мастер закрывается сам. */
+export async function uninstallLaunch(): Promise<void> {
+  if (!inTauri) return;
+  await invoke("uninstall_launch");
 }
 
 /** Решения уже стоящей установки — для «Обновить» поверх (те же, что у `--update`).

@@ -384,6 +384,9 @@ pub struct Installed {
 #[derive(Serialize)]
 pub struct Defaults {
     pub dir: String,
+    /// Мастер работает «на месте» (папка установки NSIS): папка фиксирована,
+    /// «Удалить» — через `uninstall.exe` установщика.
+    pub in_place: bool,
     pub payload: Option<String>,
     pub version: String,
     pub installed: Option<Installed>,
@@ -540,6 +543,50 @@ const NO_DEFAULT_DIR: &str = "Windows не сказала, где %LOCALAPPDATA%
 const NO_DEFAULT_DIR: &str = "система не сказала, где домашняя папка ($HOME): укажи папку установки явно";
 
 /// Папка поставки: рядом с установщиком лежат helene.exe, app/ и runtime/.
+/// 26.09 (1.1.0): мастер «на месте» — файлы уже положены установщиком NSIS в эту же
+/// папку, и мастер только настраивает: без копирования, ярлыков и записи в
+/// «Приложениях» (всё это за установщиком и его `uninstall.exe`). Взводится ключом
+/// `--configure` или тем, что рядом с exe лежит `uninstall.exe` установщика.
+pub static IN_PLACE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn in_place() -> bool {
+    IN_PLACE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Папка установки NSIS — та, где установщик оставил свой `uninstall.exe`.
+pub fn nsis_root() -> Option<PathBuf> {
+    let here = exe_dir();
+    here.join("uninstall.exe").is_file().then_some(here)
+}
+
+/// Перед обновлением поверх (установщик NSIS зовёт `helene-setup.exe --stop --quiet`
+/// у СТАРОЙ установки до подмены файлов): снять службу, погасить окно и детей.
+/// Отказ — список того, что всё ещё держит файлы.
+pub fn stop_for_update() -> Result<String, String> {
+    let dir = exe_dir();
+    let mut notes: Vec<String> = Vec::new();
+    if service_state() != "absent" {
+        let script = dir.join("uninstall-service.ps1");
+        let script = if script.exists() { Some(script) } else { None };
+        match service_op("uninstall", PRODUCT, script.as_deref()) {
+            Ok(()) => notes.push("служба снята на время обновления".into()),
+            Err(e) => {
+                if service_state() == "running" {
+                    return Err(format!("служба «{PRODUCT}» продолжает работать и держит файлы ({e})"));
+                }
+                notes.push(format!("служба: {e}"));
+            }
+        }
+    }
+    if !stop_running(&dir) {
+        let busy = locked_files(&dir);
+        if !busy.is_empty() {
+            return Err(format!("часть программы ещё работает и держит файлы: {}", busy.join(", ")));
+        }
+    }
+    Ok(notes.join("; "))
+}
+
 pub fn payload_dir() -> Option<PathBuf> {
     let here = exe_dir();
     if PAYLOAD_MARKERS.iter().all(|m| here.join(m).exists()) {
@@ -551,7 +598,12 @@ pub fn payload_dir() -> Option<PathBuf> {
 
 pub fn defaults() -> Defaults {
     Defaults {
-        dir: default_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+        dir: if in_place() {
+            exe_dir().to_string_lossy().into_owned()
+        } else {
+            default_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+        },
+        in_place: in_place(),
         payload: payload_dir().map(|p| p.to_string_lossy().into_owned()),
         version: VERSION.to_string(),
         installed: installed_info(),
@@ -1392,13 +1444,23 @@ fn installed_agent_name(dir: &Path) -> Option<String> {
 /// Папка установленной программы по записи в «Приложениях».
 #[cfg(windows)]
 fn registered_dir() -> Option<PathBuf> {
-    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
     use winreg::RegKey;
-    let key = RegKey::predef(HKEY_CURRENT_USER)
-        .open_subkey(format!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{PRODUCT}"))
-        .ok()?;
-    let path: String = key.get_value("InstallLocation").ok()?;
-    if path.trim().is_empty() { None } else { Some(PathBuf::from(path)) }
+    // Сначала «для меня» (HKCU), потом «для всех» (HKLM — установщик NSIS в Program Files).
+    for hive in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        let Ok(key) = RegKey::predef(hive)
+            .open_subkey(format!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{PRODUCT}"))
+        else {
+            continue;
+        };
+        let Ok(path) = key.get_value::<String, _>("InstallLocation") else {
+            continue;
+        };
+        if !path.trim().is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
+    None
 }
 
 #[cfg(not(windows))]
@@ -1494,7 +1556,9 @@ pub fn setup_from_dir(dir: &Path) -> Option<Setup> {
 }
 
 pub fn installed_info() -> Option<Installed> {
-    let dir = registered_dir().or_else(default_dir)?;
+    // На месте (папка установки NSIS) установленное — эта же папка: запись в реестре
+    // может быть в HKLM («для всех») или ещё не сделана.
+    let dir = if in_place() { exe_dir() } else { registered_dir().or_else(default_dir)? };
     let cfg = read_json(&dir.join("helene.json"))?;
     if cfg.get("setup_complete").and_then(|v| v.as_bool()) != Some(true) {
         return None;
@@ -2428,14 +2492,21 @@ fn rehearse_extensions(payload: &Path, dir: &Path) -> Result<Option<(bool, Strin
 
 pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt, String> {
     validate_setup(s)?;
-    // Имена в отказе — этой системы: на Mac оболочка зовётся `Helene.app`.
-    let payload = payload_dir().ok_or_else(|| {
-        format!(
-            "рядом с установщиком нет поставки ({}, app/, runtime/) — запусти его из папки Hélène",
-            PAYLOAD_MARKERS[0]
-        )
-    })?;
-    let dir = if s.dir.trim().is_empty() {
+    // «На месте» (установщик NSIS): поставка — эта же папка, копировать нечего.
+    let payload = if in_place() {
+        exe_dir()
+    } else {
+        // Имена в отказе — этой системы: на Mac оболочка зовётся `Helene.app`.
+        payload_dir().ok_or_else(|| {
+            format!(
+                "рядом с установщиком нет поставки ({}, app/, runtime/) — запусти его из папки Hélène",
+                PAYLOAD_MARKERS[0]
+            )
+        })?
+    };
+    let dir = if in_place() {
+        exe_dir()
+    } else if s.dir.trim().is_empty() {
         default_dir().ok_or(NO_DEFAULT_DIR)?
     } else {
         PathBuf::from(s.dir.trim())
@@ -2444,7 +2515,7 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
     // src уводил копирование в бесконечную матрёшку (переполнение стека, гигабайты
     // мусора), а dir == payload гасил живого агента и падал на первом же файле.
     let (np, nd) = (norm_path(&payload), norm_path(&dir));
-    if inside_or_same(&nd, &np) || inside_or_same(&np, &nd) {
+    if !in_place() && (inside_or_same(&nd, &np) || inside_or_same(&np, &nd)) {
         // На Mac поставку могли распаковать прямо в ~/Applications/Helene:
         // говорим, как выйти, а не только что нельзя.
         let how = if cfg!(windows) {
@@ -2465,7 +2536,9 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
     // 25.09 (K): репетиция расширений владельца под НОВЫМ движком — ДО снятия службы и
     // подмены папок. Не грузятся и не сказано «--force-extensions» — отказ словами,
     // старая версия остаётся живой; отчёт лежит в корне установки для карточки окна.
-    if dir.exists() {
+    // На месте файлы уже подменены установщиком — репетировать расширения не на чем;
+    // их проверит движок при старте (карточка «Расширения» в окне).
+    if dir.exists() && !in_place() {
         match rehearse_extensions(&payload, &dir) {
             Ok(None) => {}
             Ok(Some((ok, summary))) => {
@@ -2594,7 +2667,7 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
     // снять прежнюю. Снятие перед копированием шага не занимает: оно уже позади.
     // На macOS шагов три: ярлыков и записи в «Приложениях» там нет — и в
     // расписке их нет тоже, а не «пропущено».
-    let base_steps = if cfg!(windows) { 5 } else { 3 };
+    let base_steps = if in_place() { 1 } else if cfg!(windows) { 5 } else { 3 };
     let total = if s.wants_service() || service_before != "absent" { base_steps + 1 } else { base_steps };
     let mut steps = pre_steps;
     let mut n = 0;
@@ -2603,14 +2676,24 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
         progress(Progress { step: n, total, label: label.to_string() });
     };
 
+    // На месте: копирование, интерфейс и рантайм — уже дело установщика; в расписке
+    // это одна строка, а не три «пропущено».
+    let plan = if in_place() { StaticPlan::Keep } else { static_plan(&payload, &dir) };
+    let runtime_kept = !in_place() && runtime_same(&payload, &dir);
+    if in_place() {
+        steps.push(Step {
+            label: "Файлы программы".into(),
+            ok: true,
+            note: Some("положены установщиком".into()),
+        });
+    }
+    if !in_place() {
     tick("Копирую файлы программы", &mut progress);
     // Что заменяется, а что нет (resources/ОБНОВЛЕНИЕ.md): exe, app/, tree/,
     // server/, документы — всегда; data/ и helene.json — никогда (конфиг
     // сливается ниже); app/static — по тому, менял ли её ВЫПУСК; runtime/ —
     // только если сменился состав. Решения принимаются ДО копирования: паспорт
     // и манифест старой установки копия перепишет.
-    let plan = static_plan(&payload, &dir);
-    let runtime_kept = runtime_same(&payload, &dir);
     let mut skip_rel: Vec<&str> = Vec::new();
     if plan == StaticPlan::Keep {
         skip_rel.push("app/static");
@@ -2651,6 +2734,7 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
     });
     if runtime_kept {
         steps.push(Step { label: "Рантайм".into(), ok: true, note: Some("состав не менялся — не копировался".into()) });
+    }
     }
 
     tick("Записываю настройки и конституцию", &mut progress);
@@ -2732,8 +2816,12 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
     let exe = shell_exe(&dir);
     // Ярлыки и запись в «Приложениях» — Windows. На macOS программа — бандл в
     // ~/Applications, Finder и Launchpad видят его сами; шагов нет вовсе.
+    // На месте ярлыки и запись в «Приложениях» — уже сделаны установщиком NSIS
+    // (и снимаются его `uninstall.exe`); вторая запись дала бы две строки в «Приложениях».
+    // То же — при обновлении из окна поверх установки NSIS (`--update` из распакованного
+    // архива): её `uninstall.exe` лежит в папке, и запись остаётся за ним.
     #[cfg(windows)]
-    {
+    if !in_place() && !dir.join("uninstall.exe").is_file() {
         tick("Создаю ярлыки", &mut progress);
         // Ярлыки и значок — продукта, не агента (слово владельца).
         let name = PRODUCT.to_string();

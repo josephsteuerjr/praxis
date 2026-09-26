@@ -1,19 +1,20 @@
-; Установщик Praxis (окно к своему серверу) для Windows — 1.1.0, 26.09.
+﻿; Установщик Praxis (окно к своему серверу) для Windows — 1.1.0, 26.09.
 ;
 ; У варианта Praxis мастера нет: поставка — exe окна, статика, заготовка helene.json,
 ; документ подключения. Раньше «распакуйте архив в любую папку» — по слову Егора
-; это не программа. Теперь обычный установщик: папка (по умолчанию
-; %LocalAppData%\Programs\Praxis), ярлыки в «Пуске» и на Рабочем столе, запись в
-; «Параметры → Приложения» с удалением оттуда. Поверх стоящей — обновление:
-; helene.json (адрес сервера и ключ канала) не перезаписывается.
+; это не программа. Теперь обычный установщик: для меня (%LocalAppData%\Programs\Praxis)
+; или для всех (Program Files\Praxis, права администратора), ярлыки в «Пуске» и на
+; Рабочем столе, запись в «Параметры → Приложения» с удалением оттуда. Поверх
+; стоящего — обновление: helene.json (адрес сервера и ключ канала) не перезаписывается.
 ;
-;   makensis /DVERSION=1.1.0 /DPAYLOAD=<папка поставки> /DOUTFILE=<итог> /DICON=<ico> praxis-setup.nsi
+;   makensis /INPUTCHARSET UTF8 /DVERSION=1.1.0 /DPAYLOAD=<папка поставки> /DOUTFILE=<итог> /DICON=<ico> praxis-setup.nsi
 ;
-; Тихо: /S (и /D=<папка>); удаление тихо: uninstall.exe /S — helene.json остаётся.
+; Тихо: /S [/D=<папка>] [/AllUsers | /CurrentUser]; удаление тихо: uninstall.exe /S —
+; helene.json остаётся.
 
 Unicode true
-!include "MUI2.nsh"
-!include "FileFunc.nsh"
+!define PRODUCT "Praxis"
+!define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT}"
 
 !ifndef VERSION
   !error "VERSION не задана: makensis /DVERSION=<версия> …"
@@ -24,16 +25,24 @@ Unicode true
 !ifndef OUTFILE
   !define OUTFILE "Praxis-${VERSION}-setup.exe"
 !endif
-!define PRODUCT "Praxis"
-!define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT}"
+
+!define MULTIUSER_EXECUTIONLEVEL Highest
+!define MULTIUSER_MUI
+!define MULTIUSER_INSTALLMODE_COMMANDLINE
+!define MULTIUSER_USE_PROGRAMFILES64
+!define MULTIUSER_INSTALLMODE_INSTDIR "${PRODUCT}"
+!define MULTIUSER_INSTALLMODE_INSTDIR_REGISTRY_KEY "${UNINST_KEY}"
+!define MULTIUSER_INSTALLMODE_INSTDIR_REGISTRY_VALUENAME "InstallLocation"
+!define MULTIUSER_INSTALLMODE_DEFAULT_CURRENTUSER
+!include "MultiUser.nsh"
+!include "MUI2.nsh"
+!include "FileFunc.nsh"
+!include "LogicLib.nsh"
 
 Name "${PRODUCT} ${VERSION}"
 OutFile "${OUTFILE}"
 BrandingText "${PRODUCT} ${VERSION}"
-RequestExecutionLevel user
 SetCompressor /SOLID lzma
-InstallDir "$LOCALAPPDATA\Programs\${PRODUCT}"
-InstallDirRegKey HKCU "${UNINST_KEY}" "InstallLocation"
 
 !ifdef ICON
   !define MUI_ICON "${ICON}"
@@ -42,9 +51,13 @@ InstallDirRegKey HKCU "${UNINST_KEY}" "InstallLocation"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "${PRODUCT} ${VERSION}"
 !define MUI_WELCOMEPAGE_TEXT "Окно к агенту на своём сервере.$\r$\n$\r$\nУстановщик положит программу, создаст ярлыки и запись в «Приложениях». Адрес сервера и ключ канала спрашиваются при первом запуске; при обновлении поверх они сохраняются."
+!define MULTIUSER_INSTALLMODEPAGE_TEXT_TOP "Для кого поставить ${PRODUCT}?"
+!define MULTIUSER_INSTALLMODEPAGE_TEXT_ALLUSERS "Для всех пользователей этого компьютера (в Program Files; Windows спросит права администратора)"
+!define MULTIUSER_INSTALLMODEPAGE_TEXT_CURRENTUSER "Только для меня (в моей папке программ, без прав администратора)"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\praxis.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Открыть ${PRODUCT}"
 !insertmacro MUI_PAGE_WELCOME
+!insertmacro MULTIUSER_PAGE_INSTALLMODE
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -58,6 +71,14 @@ VIAddVersionKey /LANG=1049 "ProductVersion" "${VERSION}"
 VIAddVersionKey /LANG=1049 "FileVersion" "${VERSION}"
 VIAddVersionKey /LANG=1049 "FileDescription" "Установщик ${PRODUCT}"
 VIAddVersionKey /LANG=1049 "LegalCopyright" "${PRODUCT}"
+
+Function .onInit
+  !insertmacro MULTIUSER_INIT
+FunctionEnd
+
+Function un.onInit
+  !insertmacro MULTIUSER_UNINIT
+FunctionEnd
 
 Section "-install"
   SetDetailsPrint textonly
@@ -77,23 +98,30 @@ Section "-install"
     File "/oname=helene.json" "${PAYLOAD}\helene.json"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
+  ; Для всех: окно пишет helene.json и helene.log рядом с собой — права на папку
+  ; пользователям этого компьютера.
+  ${If} $MultiUser.InstallMode == "AllUsers"
+    nsExec::ExecToLog 'icacls "$INSTDIR" /grant *S-1-5-32-545:(OI)(CI)M /Q'
+    Pop $0
+  ${EndIf}
+
   SetDetailsPrint textonly
   DetailPrint "Ярлыки и запись в «Приложениях»…"
   SetDetailsPrint none
   CreateShortcut "$SMPROGRAMS\${PRODUCT}.lnk" "$INSTDIR\praxis.exe" "" "$INSTDIR\praxis.ico"
   CreateShortcut "$DESKTOP\${PRODUCT}.lnk" "$INSTDIR\praxis.exe" "" "$INSTDIR\praxis.ico"
-  WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${PRODUCT}"
-  WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
-  WriteRegStr HKCU "${UNINST_KEY}" "Publisher" "${PRODUCT}"
-  WriteRegStr HKCU "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\praxis.ico"
-  WriteRegStr HKCU "${UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
-  WriteRegStr HKCU "${UNINST_KEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
-  WriteRegDWORD HKCU "${UNINST_KEY}" "NoModify" 1
-  WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
+  WriteRegStr SHCTX "${UNINST_KEY}" "DisplayName" "${PRODUCT}"
+  WriteRegStr SHCTX "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
+  WriteRegStr SHCTX "${UNINST_KEY}" "Publisher" "${PRODUCT}"
+  WriteRegStr SHCTX "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr SHCTX "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\praxis.ico"
+  WriteRegStr SHCTX "${UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
+  WriteRegStr SHCTX "${UNINST_KEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
+  WriteRegDWORD SHCTX "${UNINST_KEY}" "NoModify" 1
+  WriteRegDWORD SHCTX "${UNINST_KEY}" "NoRepair" 1
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   IntFmt $0 "0x%08X" $0
-  WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" "$0"
+  WriteRegDWORD SHCTX "${UNINST_KEY}" "EstimatedSize" "$0"
   SetDetailsPrint textonly
   DetailPrint "Готово."
 SectionEnd
@@ -122,5 +150,5 @@ Section "Uninstall"
   RMDir "$INSTDIR"
   Delete "$SMPROGRAMS\${PRODUCT}.lnk"
   Delete "$DESKTOP\${PRODUCT}.lnk"
-  DeleteRegKey HKCU "${UNINST_KEY}"
+  DeleteRegKey SHCTX "${UNINST_KEY}"
 SectionEnd

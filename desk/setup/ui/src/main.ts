@@ -18,7 +18,7 @@ import { NameScene } from "./scenes/name";
 import { ModeScene } from "./scenes/mode";
 import { TypewriterScene } from "./scenes/typewriter";
 import { WordmarkScene } from "./scenes/wordmark";
-import { installedSetup, isMac, loadDefaults, machine, setup, type Setup } from "./setup";
+import { installedSetup, isMac, loadDefaults, machine, setup, uninstallLaunch, type Setup } from "./setup";
 import { T, sleep, type Dir } from "./wind";
 
 // Сорвался модуль — окно не должно остаться пустым: оно рождается невидимым и
@@ -379,6 +379,7 @@ async function start() {
     if (d.dir) setup.dir = d.dir;
     // Если что-то уже стоит — это обновление, и сводка перед кнопкой скажет об этом.
     machine.installed = d.installed ?? null;
+    machine.inPlace = !!d.in_place;
     if (d.installed?.dir) setup.dir = d.installed.dir;
     // Система — по слову оболочки: по нему сцены прячут службу, тело и брандмауэр.
     machine.platform = String(d.platform || "").trim().toLowerCase();
@@ -391,7 +392,11 @@ async function start() {
     insertScene(installed, about, "installed");
     installed.bind({
       update: () => void updateInstalled(),
-      remove: () => void removeInstalled(),
+      // На месте (установка NSIS) удаление — его uninstall.exe: он снимет службу,
+      // файлы, ярлыки и запись в «Приложениях» и спросит про данные.
+      remove: () => void (machine.inPlace
+        ? uninstallLaunch().catch((e) => showHint("Не запустился uninstall.exe: " + String(e), 0))
+        : removeInstalled()),
       fresh: () => void go(1),
     }, shipped);
   }

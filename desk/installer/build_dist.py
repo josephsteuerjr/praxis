@@ -1762,7 +1762,7 @@ def build_setup_exe(out: Path, version: str, *, product: str = "Helene") -> Path
     icon = DESK / "shell" / ("icons" if product == "Helene" else "icons-praxis") / "icon.ico"
     print("setup exe (NSIS)…")
     done = subprocess.run(
-        [str(makensis), "/V2", f"/DVERSION={version}", f"/DPAYLOAD={out}",
+        [str(makensis), "/V2", "/INPUTCHARSET", "UTF8", f"/DVERSION={version}", f"/DPAYLOAD={out}",
          f"/DOUTFILE={target}", f"/DICON={icon}", str(script)],
         capture_output=True, text=True, encoding="utf-8", errors="replace")
     if done.returncode != 0 or not target.is_file():
