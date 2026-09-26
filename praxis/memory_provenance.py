@@ -886,6 +886,20 @@ def _invalid_resolution() -> dict[str, Any]:
     }
 
 
+def current_ids_view(evidence: Any) -> frozenset[str] | set[str]:
+    """`current_event_ids` индекса — для проверки членства, без копии.
+
+    26.09 (py-spy на проде после рестарта): здесь по месту стояло
+    `set(evidence.get("current_event_ids") or ())` — копия ~60 тыс. id (4,2 мс) на КАЖДОЕ
+    разрешение свёртки, включая каждого предка в рекурсии. Родословные её AbstractDL —
+    44 731 узел за проход, то есть 186 с одной только копии на режим; `refresh_debt` этого
+    места — 529 с, и плательщик долга зовёт его на каждое из 242 мест после старта. Индекс
+    отдаёт frozenset; членство в нём — то же самое, что в копии. Звать только для `in`.
+    """
+    value = evidence.get("current_event_ids") or frozenset()
+    return value if isinstance(value, (set, frozenset)) else frozenset(value)
+
+
 def _resolve_compact(compact_id: str, evidence: dict[str, Any], stack: set[str],
                      *, require_current: bool = True) -> dict[str, Any]:
     """Разрешение свёртки. Два режима, и различие между ними — её слово 21.08.
@@ -918,7 +932,7 @@ def _resolve_compact(compact_id: str, evidence: dict[str, Any], stack: set[str],
     leaves: list[str] = []
     timestamps: list[str] = []
     superseded: list[str] = []
-    current_ids = set(evidence.get("current_event_ids") or ())
+    current_ids = current_ids_view(evidence)
     lineages: set[tuple[str, int]] = set()
     automatic = not bool(meta.get("legacy") or meta.get("degraded"))
     direct = True
@@ -1010,12 +1024,13 @@ def _resolve_compact(compact_id: str, evidence: dict[str, Any], stack: set[str],
 def _resolve_claim_evidence(meta: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
     leaves: list[str] = []
     automatic, direct = True, True
+    current_ids = current_ids_view(evidence)
     for ref in meta.get("evidence_ids") or []:
         ref = str(ref)
         if _EVENT_ID_RE.fullmatch(ref):
             row = (evidence.get("events") or {}).get(ref)
             if (not isinstance(row, dict)
-                    or ref not in set(evidence.get("current_event_ids") or ())):
+                    or ref not in current_ids):
                 return _invalid_resolution()
             leaves.append(ref)
             event_automatic, event_direct = _event_evidence_class(row)

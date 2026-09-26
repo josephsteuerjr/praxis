@@ -552,7 +552,8 @@ def _compact_markdown_current(path: Path, memory_dir: Path,
     # stale Telegram revision.
     sources = [str(value) for value in (meta.get("source_event_ids") or []) if str(value)]
     if sources:
-        current = set(evidence.get("current_event_ids") or ())
+        # Без копии ~60 тыс. id на каждый файл (см. `current_ids_view`).
+        current = memory_provenance.current_ids_view(evidence)
         return all(value in current for value in sources)
     return not bool(meta.get("source_compact_ids"))
 
@@ -575,7 +576,7 @@ def _episode_markdown_current(path: Path, memory_dir: Path,
     sources = [str(value) for value in (meta.get("source_event_ids") or []) if str(value)]
     if not sources:
         return False
-    current = set(evidence.get("current_event_ids") or ())
+    current = memory_provenance.current_ids_view(evidence)
     return all(value in current for value in sources)
 
 
