@@ -1,11 +1,11 @@
 {
  "mirror": "praxis",
- "source": "/opt/praxis (прод) через локальный чекаут её дерева @ ea0ba38",
- "head": "ea0ba38",
+ "source": "/opt/praxis (прод) через локальный чекаут её дерева @ 0c88f77",
+ "head": "0c88f77",
  "dirty": false,
- "taken_at": "2026-09-26T00:41:47+00:00",
- "files": 602,
- "digest": "2efc8d71aeafeb0bbf297726d6e4b62520ee1e671201fdbb999c5ba7126fbb77",
+ "taken_at": "2026-09-26T01:03:13+00:00",
+ "files": 603,
+ "digest": "a121b1a4cb624c24ee31cfbd172445c58ed311ae777b79e3ee7dfb10c44ef126",
  "by": "installer/core_src.py --export-core",
- "note": "после выпуска 1.0.2 (26.09): её живой master ea0ba38 = её навык same-numbers-are-copies + кандидат resolve-copy-2609 (разрешение свёртки без копии 60 тыс. id на каждого предка); выпуск 1.0.2 собран на зеркале 3a7e1fa; путь чекаута на машине сборки снят из записи"
+ "note": "выпуск 1.0.3 (26.09): её живой master 0c88f77 = ea0ba38 + кандидат memory-role-2609 (свёртку памяти пишет её голос; роль memory только из llm.ROLES); путь чекаута на машине сборки снят из записи"
 }

@@ -1123,10 +1123,18 @@ def compact_system() -> str:
 
 
 def _memory_role() -> str:
-    """Роль модели для её памяти: `memory`, если настроена в llm.json, иначе её голос `voice`."""
+    """Роль модели для её памяти: `memory`, если такая роль есть в llm и настроена, иначе её голос `voice`.
+
+    ⚠ 26.09. Здесь стояло одно `llm.configured("memory")`, а оно отвечает «да» и БЕЗ роли
+    `memory`: пустой конфиг роли берёт фреймворк по умолчанию, а ключ anthropic у неё есть.
+    `llm.chat("memory")` при этом падал «неизвестная роль» (в `llm.ROLES` только voice и
+    evaluator), и с 25.09 15:06 каждая свёртка уходила в запасную сводку без модели
+    (degraded: «опорные строки, не синтез») — 8 штук, 7 в Ouroboros AI, где ярус 2 пытался
+    снова каждые 20–40 с. Роль сверяется с `llm.ROLES` — так же, как её сверяет сам `chat`.
+    """
     try:
         import llm
-        if llm.configured("memory"):
+        if "memory" in getattr(llm, "ROLES", ()) and llm.configured("memory"):
             return "memory"
     except Exception:
         pass

@@ -22,7 +22,13 @@ import memory_provenance
 from test_coverage_vs_current import Base, ROOM
 
 
-def _fake_llm(role_ok=("voice", "memory"), summary="я записала это сама"):
+def _fake_llm(role_ok=("voice", "memory"), summary="я записала это сама",
+              roles=("voice", "evaluator", "memory")):
+    """Фейк `llm` с контрактом живого: объявленные роли (`ROLES`) и отказ `chat` на чужой.
+
+    ⚠ 26.09: прежний фейк принимал в `chat` ЛЮБУЮ роль и не знал `ROLES` — поэтому стенд не
+    увидел, что живой `llm` роли `memory` не знает: с 25.09 15:06 каждая свёртка у неё
+    уходила в запасную сводку без модели. `roles` — роли, которые этот мир объявил."""
     captured = {}
 
     class _Resp:
@@ -30,12 +36,16 @@ def _fake_llm(role_ok=("voice", "memory"), summary="я записала это �
                            "episodes": []}, ensure_ascii=False)
 
     class _LLM:
+        ROLES = tuple(roles)
+
         @staticmethod
         def configured(role):
             return role in role_ok
 
         @staticmethod
         def chat(role, system, messages, max_tokens):
+            if role not in _LLM.ROLES:
+                raise ValueError(f"llm: неизвестная роль {role!r}")
             captured.update(role=role, system=system, user=messages[0]["content"],
                             max_tokens=max_tokens)
             captured["calls"] = captured.get("calls", 0) + 1
@@ -100,6 +110,12 @@ class TheModelCallIsHers(Base):
         self._with_llm(fake2)
         ml._model_compact(rows, tier=1, depth=1, continued=False)
         self.assertEqual(captured2["role"], "voice")
+        # Прод 26.09: роли `memory` в llm нет, а `configured("memory")` отвечает «да».
+        fake3, captured3 = _fake_llm(role_ok=("memory", "voice"), roles=("voice", "evaluator"))
+        self._with_llm(fake3)
+        out3 = ml._model_compact(rows, tier=1, depth=1, continued=False)
+        self.assertEqual(captured3.get("role"), "voice")
+        self.assertEqual(out3.get("summary"), "я записала это сама")
 
     def test_evaluator_alone_is_not_enough_anymore(self):
         fake, captured = _fake_llm(role_ok=("evaluator",))
