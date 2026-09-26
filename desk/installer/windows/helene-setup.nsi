@@ -87,15 +87,18 @@ Function un.onInit
 FunctionEnd
 
 Section "-install"
-  ; Поверх стоящей: старая копия мастера снимает службу и гасит окно — иначе файлы
-  ; заняты, а служба под LocalSystem пережила бы подмену своего exe.
-  IfFileExists "$INSTDIR\helene-setup.exe" 0 fresh
+  ; Поверх стоящей: снять службу и погасить окно — иначе файлы заняты, а служба под
+  ; LocalSystem пережила бы подмену своего exe. Делает это НОВЫЙ мастер из временной
+  ; папки установщика: прежняя копия ключа --stop может не знать (до 1.1.0 — не знала).
+  IfFileExists "$INSTDIR\helene.exe" 0 fresh
     SetDetailsPrint textonly
     DetailPrint "Останавливаю прежнюю ${PRODUCT_UI}…"
     SetDetailsPrint none
-    ExecWait '"$INSTDIR\helene-setup.exe" --stop --quiet' $0
+    InitPluginsDir
+    File "/oname=$PLUGINSDIR\helene-setup.exe" "${PAYLOAD}\helene-setup.exe"
+    ExecWait '"$PLUGINSDIR\helene-setup.exe" --stop --quiet --dir "$INSTDIR"' $0
     ${If} $0 != 0
-      MessageBox MB_OK|MB_ICONSTOP "Не удалось остановить прежнюю ${PRODUCT_UI}: закрой её окно (полностью, включая значок у часов) и повтори установку. Подробности — $INSTDIR\stop.log"
+      MessageBox MB_OK|MB_ICONSTOP "Не удалось остановить прежнюю ${PRODUCT_UI}: закрой её окно (полностью, включая значок у часов) и повтори установку. Подробности — $PLUGINSDIR\stop.log"
       Abort
     ${EndIf}
 fresh:

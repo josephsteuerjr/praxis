@@ -562,8 +562,7 @@ pub fn nsis_root() -> Option<PathBuf> {
 /// Перед обновлением поверх (установщик NSIS зовёт `helene-setup.exe --stop --quiet`
 /// у СТАРОЙ установки до подмены файлов): снять службу, погасить окно и детей.
 /// Отказ — список того, что всё ещё держит файлы.
-pub fn stop_for_update() -> Result<String, String> {
-    let dir = exe_dir();
+pub fn stop_for_update(dir: &Path) -> Result<String, String> {
     let mut notes: Vec<String> = Vec::new();
     if service_state() != "absent" {
         let script = dir.join("uninstall-service.ps1");
@@ -578,13 +577,29 @@ pub fn stop_for_update() -> Result<String, String> {
             }
         }
     }
-    if !stop_running(&dir) {
-        let busy = locked_files(&dir);
+    if !stop_running(dir) {
+        let busy = locked_files(dir);
         if !busy.is_empty() {
             return Err(format!("часть программы ещё работает и держит файлы: {}", busy.join(", ")));
         }
     }
     Ok(notes.join("; "))
+}
+
+/// Обновление из окна поверх установки NSIS: запись в «Приложениях» — её, но версию в
+/// ней надо обновить, иначе «Приложения» показывают прежнюю. HKLM без прав — молча.
+#[cfg(windows)]
+pub fn refresh_registered_version() {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_SET_VALUE, KEY_READ};
+    use winreg::RegKey;
+    for hive in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        if let Ok(key) = RegKey::predef(hive).open_subkey_with_flags(
+            format!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{PRODUCT}"),
+            KEY_READ | KEY_SET_VALUE,
+        ) {
+            let _ = key.set_value("DisplayVersion", &VERSION.to_string());
+        }
+    }
 }
 
 pub fn payload_dir() -> Option<PathBuf> {
@@ -2820,6 +2835,10 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
     // (и снимаются его `uninstall.exe`); вторая запись дала бы две строки в «Приложениях».
     // То же — при обновлении из окна поверх установки NSIS (`--update` из распакованного
     // архива): её `uninstall.exe` лежит в папке, и запись остаётся за ним.
+    #[cfg(windows)]
+    if in_place() || dir.join("uninstall.exe").is_file() {
+        refresh_registered_version();
+    }
     #[cfg(windows)]
     if !in_place() && !dir.join("uninstall.exe").is_file() {
         tick("Создаю ярлыки", &mut progress);

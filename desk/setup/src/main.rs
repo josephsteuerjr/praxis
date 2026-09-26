@@ -286,7 +286,15 @@ fn main() {
     // Перед обновлением поверх: установщик NSIS зовёт старую копию мастера, чтобы та
     // сняла службу и погасила окно. Ход — в stop.log рядом.
     if args.iter().any(|a| a == "--stop") {
-        let result = install::stop_for_update();
+        // `--dir` — папка СТАРОЙ установки: установщик NSIS зовёт новый мастер из своей
+        // временной папки, потому что старая копия этого ключа может не знать.
+        let dir = args
+            .iter()
+            .position(|a| a == "--dir")
+            .and_then(|i| args.get(i + 1))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(install::exe_dir);
+        let result = install::stop_for_update(&dir);
         let _ = std::fs::write(
             install::exe_dir().join("stop.log"),
             match &result {
