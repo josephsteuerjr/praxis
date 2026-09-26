@@ -123,7 +123,11 @@ class WhatTreeGets(Ground):
         self.assertEqual(env["PRAXIS_AUDIO_MODEL_DIR"], str(self.tree / "models"))
         self.assertEqual(env["PRAXIS_STT_LOCAL_FILES_ONLY"], "1",
                          "скачивать модель посреди хода нельзя: это минуты молчания")
-        self.assertEqual(env["PRAXIS_STT_CPU_THREADS"], "6")
+        # 26.09 (1.1.0): потоков — не больше «ядер минус одно»: окну и владельцу остаётся
+        # ядро (на трёхъядерном Mac-раннере из 6 запрошенных выйдет 2).
+        import os
+        self.assertEqual(env["PRAXIS_STT_CPU_THREADS"],
+                         str(max(1, min(6, (os.cpu_count() or 4) - 1))))
         self.assertEqual(env["PRAXIS_STT_LANGUAGE"], "ru")
         self.assertEqual(env["PRAXIS_STT_KEEP_LOADED"], "0",
                          "дома модель в памяти не держим: 1,5 ГБ за несколько "
