@@ -18,6 +18,9 @@ WORKDIR /opt/helene
 COPY requirements.txt server/requirements-server.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-server.txt
 
+# Код в образе — запасной: compose монтирует поверх `app/` и `tree/` с диска сервера
+# (там их правит агент, и правки переживают пересборку). Здесь он нужен, чтобы образ
+# был целым сам по себе: репетиция расширений исполнителя гоняет его без монтирования.
 COPY app/ ./app/
 COPY tree/ ./tree/
 COPY server/serverboot.py ./server/serverboot.py

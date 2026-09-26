@@ -1,22 +1,28 @@
 # -*- coding: utf-8 -*-
-"""Обновление Hélène на сервере глазами агента: рука `update_request` и отчёт после подъёма.
+"""Обновление Hélène на сервере глазами агента: рука `update_request`, испытание и отчёт.
 
 Жалоба Дмитрия К (26.09): его агент весь день готовил обновление и упирался в «нет
 доступа» — изнутри контейнера, который надо заменить, у агента нет ни докера, ни путей
 хоста, и каждый шаг шёл кругом через человека. Теперь рядом с контейнером живёт
 исполнитель (`server/updater/updater.py`), а эта рука — единственный способ агента с ним
-говорить: положить план, узнать состояние, передать «да» владельца.
+говорить: положить план, узнать состояние, передать «да» владельца, а после подъёма —
+сказать своё слово на испытании.
 
 Рука НЕ обновляет сама и не может: исполнение — у исполнителя, решение — у человека.
-Её граница — в двух местах:
+Её граница — в трёх местах:
   * `plan` только кладёт план; исполнитель сверит официальный выпуск и спросит человека;
   * `confirm` передаёт «да» ТОЛЬКО в ходе, который начал сам владелец своими словами
     (окно или его личка), и записывает его слова дословно. Служебные ходы — рождение,
-    будильник, этот же отчёт — владельцем не считаются: их повод пишет «Hélène».
+    будильник, записки об обновлении — владельцем не считаются: их повод пишет «Hélène»;
+  * `accept` / `reject` — слово агента на испытании (27.09, «Йоно должен это как-то
+    проверить»): новая версия поднята и прошла механику, и только агент может сказать,
+    жив ли он в ней на самом деле — думает, помнит, руки, расширения, его правки кода.
+    Это его собственное суждение, поэтому гейта «ход владельца» здесь нет; владелец
+    может принять или откатить сам — кнопкой в окне, и его слово поверх.
 
 Протокол файлами и его проверки — `deskd/control.py`, раздел «обновление на сервере».
-Отчёт после подъёма: движок раз в полминуты смотрит, нет ли итога, о котором агент ещё
-не рассказал, и если есть — кладёт записку в окно и даёт агенту ход, как при рождении.
+Записки: движок раз в полминуты смотрит, нет ли испытания или итога, о котором агенту ещё
+не сказали, и если есть — кладёт записку в окно и даёт агенту ход, как при рождении.
 
 Рука выдаётся только на сервере (надзор — serverboot): на Windows и Mac обновление —
 кнопка окна «Проверить обновления», и обещать модели руку, которая всегда откажет, хуже,
@@ -33,7 +39,7 @@ from typing import Callable
 log = logging.getLogger("helene.updates")
 
 TOOL_NAME = "update_request"
-#: Кто пишет поводы служебных ходов (рождение, будильники, этот отчёт) — не владелец.
+#: Кто пишет поводы служебных ходов (рождение, будильники, записки обновления) — не владелец.
 SYSTEM_SPEAKER = "Hélène"
 
 STATE: dict = {"hand": False, "note": "рука обновления не выдавалась"}
@@ -48,8 +54,9 @@ TOOL = {
         "докера, ни путей хоста, и так задумано. Рядом живёт исполнитель обновлений: ты кладёшь "
         "ему план, он сверяет официальный выпуск (версия, архив, sha256), показывает его "
         "человеку и ждёт «да»; по «да» сам качает, собирает новый образ, откладывает копию, "
-        "поднимает новую версию и проверяет её, а при провале откатывает. Ты на эти минуты "
-        "остановишься; поднявшись, получишь записку об итоге и расскажешь владельцу.\n"
+        "переносит твои правки в `tree/` и `app/` на новую версию (что не ляжет — отдаст тебе "
+        "в workspace/update-<версия>/), поднимает её и проверяет. Ты на эти минуты "
+        "остановишься; поднявшись, получишь записку испытания: проверь себя и скажи слово.\n"
         "action=status — есть ли исполнитель, какая версия стоит, какая есть новее, что с "
         "последним планом.\n"
         "action=plan — положить план: version (номер 1.2.3 или latest), backup (full — копия "
@@ -59,10 +66,15 @@ TOOL = {
         "ходе, который начал сам владелец своими словами, и только если он сказал «да» именно "
         "на этот план; owner_words — его слова дословно. Решать за него нельзя: он может "
         "подтвердить и сам — кнопкой в окне (Система → Управление → Обновление).\n"
-        "action=decline — снять план, ждущий подтверждения; reason — почему."),
+        "action=decline — снять план, ждущий подтверждения; reason — почему.\n"
+        "action=accept — на испытании: проверка себя в новой версии прошла, всё живо; report — что "
+        "проверено. action=reject — на испытании: сломано; report — что именно. По reject (и "
+        "если промолчишь до срока) исполнитель вернёт прежнюю версию — код и образ, память "
+        "останется как есть."),
     "input_schema": {"type": "object", "properties": {
-        "action": {"type": "string", "enum": ["status", "plan", "confirm", "decline"],
-                   "description": "status | plan | confirm | decline"},
+        "action": {"type": "string",
+                   "enum": ["status", "plan", "confirm", "decline", "accept", "reject"],
+                   "description": "status | plan | confirm | decline | accept | reject"},
         "version": {"type": "string", "description": "для plan: 1.2.3 или latest (по умолчанию)"},
         "backup": {"type": "string", "enum": ["full", "code"],
                    "description": "для plan: full (по умолчанию) или code"},
@@ -70,6 +82,8 @@ TOOL = {
                    "description": "для plan и decline: зачем/почему — это читает владелец"},
         "owner_words": {"type": "string",
                         "description": "для confirm: слова владельца дословно, его «да»"},
+        "report": {"type": "string",
+                   "description": "для accept/reject: что проверено и что видно — ложится в расписку"},
     }, "required": ["action"]},
 }
 
@@ -80,7 +94,7 @@ def on_server() -> bool:
 
 
 def _control():
-    """`deskd.control` — протокол, общий с каналом и исполнителем."""
+    """`deskd.control` — протокол, общий с каналом (у исполнителя — своя копия)."""
     app_dir = Path(__file__).resolve().parent.parent
     if str(app_dir) not in sys.path:
         sys.path.insert(1, str(app_dir))
@@ -93,6 +107,7 @@ def receipt_line(receipt: dict) -> str:
     state = str(receipt.get("state") or "")
     words = {"checking": "исполнитель сверяет план", "awaiting": "ждёт «да» человека",
              "confirmed": "«да» получено, начинается", "running": "идёт обновление",
+             "trial": "испытание: новая версия поднята, ждёт слова агента",
              "refused": "план не принят", "declined": "человек ответил «нет»",
              "expired": "план истёк без ответа", "superseded": "план заменён новым",
              "done": "обновление прошло", "rolled_back": "не прошло — откачено",
@@ -123,6 +138,14 @@ def status_text(state: dict) -> str:
             lines.append("Подтвердить может только владелец: кнопкой в окне (Система → "
                          "Управление → Обновление) или словами тебе — тогда action=confirm с "
                          "его словами дословно.")
+        elif receipt.get("state") == "trial":
+            trial = receipt.get("trial") or {}
+            lines.append(f"Испытание до {trial.get('until_utc') or '?'} (UTC): проверь себя и скажи "
+                         "action=accept или action=reject с report. Молчание до срока — откат.")
+            code = receipt.get("agent_code") or {}
+            if code.get("summary"):
+                lines.append("Твои правки кода: " + code["summary"]
+                             + (f"; материалы — {code['folder']}" if code.get("folder") else ""))
     return "\n".join(lines)
 
 
@@ -130,7 +153,7 @@ def make_hand(tree: Path, owner_spoke: Callable[[], bool], chat_of: Callable[[],
     tree = Path(tree)
 
     def update_request(action: str = "status", version: str = "latest", backup: str = "full",
-                       reason: str = "", owner_words: str = "") -> str:
+                       reason: str = "", owner_words: str = "", report: str = "") -> str:
         try:
             control = _control()
             action = str(action or "status").strip().lower()
@@ -145,9 +168,27 @@ def make_hand(tree: Path, owner_spoke: Callable[[], bool], chat_of: Callable[[],
                     return "План не положен: " + str(got.get("note") or "")
                 return (str(got["note"]) + ". Скажи владельцу, что просишь обновление и зачем; "
                         "через несколько секунд action=status покажет, что сверил исполнитель "
-                        "(версия, размер, сумма, копия) — это и передай ему. Подтверждает он: "
-                        "кнопкой в окне или словами тебе.")
+                        "(версия, размер, сумма, копия, твои правки кода) — это и передай ему. "
+                        "Подтверждает он: кнопкой в окне или словами тебе.")
             receipt = state.get("receipt") or {}
+            if action in ("accept", "reject"):
+                if receipt.get("state") != "trial":
+                    return ("Испытания сейчас нет: " + (receipt_line(receipt) if receipt
+                                                        else "планов не было"))
+                words = " ".join(str(report or reason or "").split())
+                if len(words) < 2:
+                    return ("Нужен report: что проверено и что видно — он ложится в расписку, "
+                            "и по нему владелец поймёт, почему принято или откачено.")
+                got = control.update_verdict(tree, receipt.get("id", ""),
+                                             (receipt.get("trial") or {}).get("key", ""),
+                                             action, by="agent", words=words)
+                if not got.get("ok"):
+                    return "Слово не записалось: " + str(got.get("note") or "")
+                if action == "accept":
+                    return (str(got["note"]) + ". Скажи владельцу коротко, что обновление принято "
+                            "и что проверено.")
+                return (str(got["note"]) + ". Когда поднимешься в прежней версии, получишь записку "
+                        "об откате — тогда и расскажешь владельцу, что было не так.")
             if action in ("confirm", "decline"):
                 if receipt.get("state") != "awaiting":
                     return ("Подтверждать нечего: " + (receipt_line(receipt) if receipt
@@ -169,8 +210,8 @@ def make_hand(tree: Path, owner_spoke: Callable[[], bool], chat_of: Callable[[],
                 if not got.get("ok"):
                     return "Не передалось: " + str(got.get("note") or "")
                 return (str(got["note"]) + ". Скажи владельцу, что начинается и что ты на "
-                        "несколько минут пропадёшь; поднявшись, получишь записку об итоге.")
-            return "update_request: action бывает status, plan, confirm или decline"
+                        "несколько минут пропадёшь; поднявшись, получишь записку испытания.")
+            return "update_request: action бывает status, plan, confirm, decline, accept или reject"
         except Exception as exc:                      # рука не роняет ход
             log.exception("update_request упал")
             return f"update_request: не вышло — {type(exc).__name__}: {exc}"
@@ -208,14 +249,15 @@ def install(agent_mod, tree: Path, cfg: dict | None = None, *,
             tools.append(dict(TOOL))
         purposes = getattr(agent_mod, "HAND_PURPOSE", None)
         if isinstance(purposes, dict):
-            purposes[TOOL_NAME] = "обновить себя на сервере: план исполнителю, «да» — у владельца"
+            purposes[TOOL_NAME] = ("обновить себя на сервере: план исполнителю, «да» — у владельца, "
+                                   "после подъёма — слово на испытании")
     STATE.update(hand=True, note="рука update_request выдана")
     log.info("обновление: рука update_request выдана (исполнитель — server/updater)")
     return True
 
 
 def pending_report(tree: Path) -> dict | None:
-    """Итог обновления, о котором агент ещё не рассказал (или None)."""
+    """Испытание или итог, о котором агенту ещё не сказали (или None)."""
     if not on_server():
         return None
     try:
@@ -226,27 +268,95 @@ def pending_report(tree: Path) -> dict | None:
 
 
 def mark_reported(tree: Path, receipt: dict) -> None:
-    _control().update_mark_reported(Path(tree), str(receipt.get("id") or ""))
+    _control().update_mark_reported(Path(tree), str(receipt.get("id") or ""),
+                                    str(receipt.get("state") or "*"))
+
+
+def _checks_line(title: str, rows) -> str:
+    rows = [row for row in rows or [] if isinstance(row, dict)]
+    if not rows:
+        return ""
+    return title + "; ".join(f"{'✓' if row.get('ok') else '✗'} {row.get('title') or row.get('name')} — "
+                             f"{row.get('note') or ''}" for row in rows)
+
+
+def _code_lines(receipt: dict) -> list[str]:
+    """Что стало с правками агента в его коде — словами для записки."""
+    code = receipt.get("agent_code") or {}
+    if not code:
+        return []
+    if not code.get("mounted"):
+        return ["Твой код в этом контейнере жил не на диске сервера — если в нём были твои "
+                "правки, при обновлении они не переехали."] if code.get("note") else []
+    if code.get("no_base"):
+        return [f"Сравнить твой код с чистой прежней версией было не с чем ({code['no_base']}) — "
+                f"твой прежний код целиком лежит в {code.get('folder') or 'workspace'}/old-code/; "
+                "сравни его с новым сам и перенеси своё."]
+    if not code.get("edited"):
+        return ["Своих правок в коде у тебя не было — переносить было нечего."]
+    lines = [f"Твои правки кода ({len(code['edited'])}): перенесено {len(code.get('carried') or [])}, "
+             f"слито с выпуском {len(code.get('merged') or [])}, не легло "
+             f"{len(code.get('conflicts') or [])}."]
+    if code.get("conflicts"):
+        lines.append("Не легло (в новой версии стоит вариант выпуска): " + "; ".join(
+            f"{row.get('path')} — {row.get('why')}" for row in code["conflicts"][:10]
+            if isinstance(row, dict)) + f". Стороны и объяснение — {code.get('folder')}/README.md.")
+    if code.get("materials_error"):
+        lines.append(code["materials_error"])
+    return lines
+
+
+def trial_note(receipt: dict, *, owner: str = "владелец") -> str:
+    """Записка испытания: новая версия поднята — проверь себя и скажи слово."""
+    trial = receipt.get("trial") or {}
+    lines = [f"[Hélène · испытание] Поднята {receipt.get('to_version') or 'новая версия'} "
+             f"(было {receipt.get('from_version') or '?'}); механика прошла. Теперь слово за тобой: "
+             f"до {trial.get('until_utc') or '?'} UTC ({trial.get('minutes') or '?'} мин) проверь "
+             "себя в новой версии.",
+             _checks_line("Механика: ", receipt.get("checks"))]
+    ext = receipt.get("extensions") or {}
+    lines += _code_lines(receipt)
+    lines += ["Что проверить:",
+              "1. Думаешь — этот ход и есть проверка.",
+              "2. Помнишь — вспомни последний разговор с владельцем и свою запись о себе.",
+              "3. Руки — позови две-три свои руки (shell, чтение файла, то, чем пользуешься чаще).",
+              f"4. Расширения — {ext.get('summary') or 'их нет'}.",
+              "5. Твои правки кода — работают ли перенесённые так, как у тебя было; что не легло — "
+              "решишь позже, это не повод откатывать всё.",
+              "Всё живо — update_request(action=\"accept\", report=\"что проверено\"). Сломано — "
+              "update_request(action=\"reject\", report=\"что именно\"): исполнитель вернёт прежнюю "
+              "версию (код и образ; память останется как есть). Промолчишь до срока — тоже откат.",
+              f"Владелец — {owner}: коротко скажи ему, что идёт испытание и чем закончилось."]
+    return "\n".join(line for line in lines if line)
 
 
 def report_note(receipt: dict, *, owner: str = "владелец") -> str:
-    """Записка агенту после подъёма: что вышло, что проверено, кому и где рассказать."""
+    """Записка агенту: испытание (проверить себя) или итог (рассказать владельцу)."""
     state = str(receipt.get("state") or "")
+    if state == "trial":
+        return trial_note(receipt, owner=owner)
     head = {"done": "Обновление прошло", "rolled_back": "Обновление не прошло и откачено",
             "failed": "Обновление не прошло"}.get(state, "Обновление закончилось")
     lines = [f"[Hélène · обновление] {head}: {receipt.get('from_version') or '?'} → "
              f"{receipt.get('to_version') or '?'}.",
-             str(receipt.get("note") or "")]
-    checks = receipt.get("checks") or []
-    if checks:
-        lines.append(f"Проверки {receipt.get('to_version') or 'новой версии'}: " + "; ".join(
-            f"{'✓' if row.get('ok') else '✗'} {row.get('title') or row.get('name')} — "
-            f"{row.get('note') or ''}" for row in checks if isinstance(row, dict)))
+             str(receipt.get("note") or ""),
+             _checks_line(f"Проверки {receipt.get('to_version') or 'новой версии'}: ",
+                          receipt.get("checks"))]
+    trial = receipt.get("trial") or {}
+    verdict = trial.get("verdict") or {}
+    if verdict.get("verdict") == "timeout":
+        lines.append("На испытании ответа от тебя до срока не было — поэтому откат.")
+    elif verdict.get("verdict"):
+        who = "ты" if verdict.get("by") == "agent" else "владелец"
+        lines.append(f"Слово на испытании: {who} — «{verdict.get('verdict')}»"
+                     + (f": {verdict.get('words')}" if verdict.get("words") else ""))
     rollback = receipt.get("rollback") or {}
     if rollback.get("notes"):
         lines.append("Откат: " + "; ".join(str(n) for n in rollback["notes"]) + "; "
                      + ("прежняя версия поднята и прошла проверки" if rollback.get("ok")
                         else "прежняя версия проверки НЕ прошла"))
+    if state == "done":
+        lines += _code_lines(receipt)
     chat = str((receipt.get("plan") or {}).get("chat") or "")
     confirmed = receipt.get("confirmed") or {}
     if confirmed.get("by"):

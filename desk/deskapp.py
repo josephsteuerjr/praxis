@@ -1020,6 +1020,15 @@ async def _r_update_confirm(c: Call):
                                    str(body.get("decision") or ""), "window")
 
 
+async def _r_update_verdict(c: Call):
+    """Слово владельца на испытании: «принять» или «откатить» — поверх слова агента."""
+    body = c.body or {}
+    return await asyncio.to_thread(control.update_verdict, readers.tree(),
+                                   str(body.get("id") or ""), str(body.get("key") or ""),
+                                   str(body.get("verdict") or ""), "window",
+                                   str(body.get("words") or ""))
+
+
 async def _r_logs(c: Call):
     return await asyncio.to_thread(control.log_names, readers.tree())
 
@@ -1162,6 +1171,7 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/update", _r_update),
     Route("POST", "/api/update/plan", _r_update_plan),
     Route("POST", "/api/update/confirm", _r_update_confirm),
+    Route("POST", "/api/update/verdict", _r_update_verdict),
     Route("GET", "/api/logs", _r_logs),
     Route("GET", "/api/log/{name}", _r_log),
     # Комнаты окна (задача A §3): создать, переименовать, убрать в архив.

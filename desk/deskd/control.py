@@ -347,6 +347,7 @@ def brain_set(role: str, fields: dict) -> dict:
 #     memory/.control/update-plan.json          план: агент (рука update_request) или окно
 #     memory/.control/update-plan.receipt.json  исполнитель: сверил / ждёт «да» / идёт / итог
 #     memory/.control/update-plan.confirm.json  «да» или «нет» человека
+#     memory/.control/update-plan.verdict.json  слово агента (или владельца) на испытании
 #     memory/.control/update-plan.reported.json агент рассказал владельцу об итоге
 #     memory/.control/updater.json              исполнитель о себе, каждые ~5 с
 #     memory/.control/update-history.jsonl      итоги прошлых обновлений
@@ -357,14 +358,25 @@ def brain_set(role: str, fields: dict) -> dict:
 # поставить ОФИЦИАЛЬНЫЙ выпуск новее текущего, с копией и откатом; адрес выпусков он
 # берёт из своей среды, а не из helene.json — тот правит агент.
 #
+# После подъёма и механических проверок — ИСПЫТАНИЕ (27.09, слово Егора «Йоно должен
+# это как-то проверить»): агент сам проверяет себя — думает ли, помнит ли, работают ли
+# руки, расширения и его собственные правки кода, которые исполнитель перенёс на новую
+# версию, — и отвечает «принимаю» или «сломано». «Сломано» или молчание до срока — откат.
+# Откат возвращает код и образ, но НЕ память: «откат кода не откатывает память — это её
+# жизнь, а не версия продукта» (Егор, 25.09). Данные из копии возвращаются, только если
+# прежняя версия на новых данных не поднимается.
+#
 # ⚠ Все поля плана — из закрытого списка (`validate_plan`), и ни одно не становится
-# путём, командой или адресом. Эту проверку делят канал, рука агента и сам исполнитель:
-# разнесённая по трём местам, она разъехалась бы молча.
+# путём, командой или адресом. Канал и рука агента берут проверку отсюда; у исполнителя
+# ЕЁ КОПИЯ — `server/updater/protocol.py`: `app/` с 27.09 смонтирован в контейнер агента
+# на запись, и импорт отсюда дал бы агенту код в процессе с правами root. Что копии не
+# разъехались, держит стенд `t_updater_2709` (DriftFromControl).
 
 UPDATE_SCHEMA = "helene.update.v1"
 UPDATE_PLAN = "update-plan.json"
 UPDATE_RECEIPT = "update-plan.receipt.json"
 UPDATE_CONFIRM = "update-plan.confirm.json"
+UPDATE_VERDICT = "update-plan.verdict.json"
 UPDATE_REPORTED = "update-plan.reported.json"
 UPDATER_BEAT = "updater.json"
 UPDATE_HISTORY = "update-history.jsonl"
@@ -387,21 +399,28 @@ UPDATE_CHECKS = {
     "supervisor": "надзор serverboot бьётся в своей записке",
     "runner": "агент (раннер) жив",
     "config": "адрес, порт, имена хостов и модели перенесены с прежнего контейнера",
+    "code": "код агента — с диска сервера (tree/, app/): его правки переживают пересборку",
     "brain": "мозг настроен: модель и ключ на месте",
 }
 #: Эти идут всегда — план может только ДОБАВИТЬ к ним, не убрать: провал любой = откат.
-UPDATE_MANDATORY = ("running", "channel", "version", "supervisor", "runner", "config")
+UPDATE_MANDATORY = ("running", "channel", "version", "supervisor", "runner", "config", "code")
 
-UPDATE_ACTIVE = ("checking", "awaiting", "confirmed", "running")
+UPDATE_ACTIVE = ("checking", "awaiting", "confirmed", "running", "trial")
 UPDATE_FINAL = ("refused", "declined", "expired", "superseded", "done", "rolled_back", "failed")
-#: Итоги, о которых агент рассказывает владельцу сам, поднявшись.
-UPDATE_REPORTABLE = ("done", "rolled_back", "failed")
+#: Что агенту рассказывают запиской и ходом: испытание — ему самому проверить себя,
+#: итоги — рассказать владельцу.
+UPDATE_REPORTABLE = ("trial", "done", "rolled_back", "failed")
+UPDATE_VERDICTS = ("accept", "reject")
 
 #: Сколько расписка ждёт «да», прежде чем план истечёт.
 UPDATE_AWAIT_HOURS = 24
 #: Сколько минут исполнитель ждёт проверок после подъёма (раннер поднимается минуты).
 UPDATE_WAIT_MIN = (2, 30)
 UPDATE_WAIT_DEFAULT = 10
+#: Сколько минут агенту на испытание себя. Молчание до срока — откат (занятому ходом
+#: агенту исполнитель срок продлевает, но не больше чем вдвое).
+UPDATE_TRIAL_MIN = (10, 120)
+UPDATE_TRIAL_DEFAULT = 30
 
 #: Как поднять исполнителя, если его нет. Из корня установки на хосте.
 UPDATER_COMMAND = "docker compose -f server/updater/docker-compose.yml up -d --build"
@@ -453,6 +472,11 @@ def validate_plan(raw) -> tuple[dict | None, str]:
     except (TypeError, ValueError):
         return None, "wait_min — число минут"
     wait_min = max(UPDATE_WAIT_MIN[0], min(UPDATE_WAIT_MIN[1], wait_min))
+    try:
+        trial_min = int(raw.get("trial_min") or UPDATE_TRIAL_DEFAULT)
+    except (TypeError, ValueError):
+        return None, "trial_min — число минут"
+    trial_min = max(UPDATE_TRIAL_MIN[0], min(UPDATE_TRIAL_MIN[1], trial_min))
     return {
         "schema": UPDATE_SCHEMA,
         "id": plan_id,
@@ -460,6 +484,7 @@ def validate_plan(raw) -> tuple[dict | None, str]:
         "backup": backup,
         "checks": list(dict.fromkeys(checks)),
         "wait_min": wait_min,
+        "trial_min": trial_min,
         "force_extensions": bool(raw.get("force_extensions")),
         "reason": " ".join(str(raw.get("reason") or "").split())[:500],
         "asked_by": str(raw.get("asked_by") or "agent")[:40],
@@ -540,7 +565,7 @@ def update_state(tree: Path) -> dict:
 
 def update_plan(tree: Path, version: str = "latest", backup: str = "full", reason: str = "",
                 by: str = "owner", chat: str = "", checks=None, wait_min=None,
-                force_extensions: bool = False) -> dict:
+                force_extensions: bool = False, trial_min=None) -> dict:
     """Положить план обновления. Исполнитель сверит его и попросит «да» у человека.
 
     Отказы — обычные ответы с причиной: исполнителя нет (и как его поднять), идёт
@@ -551,12 +576,12 @@ def update_plan(tree: Path, version: str = "latest", backup: str = "full", reaso
     if not state["ok"]:
         return {"ok": False, "note": state["why"], "updater": state}
     receipt = _read(_control_dir(tree) / UPDATE_RECEIPT)
-    if str(receipt.get("state") or "") in ("checking", "confirmed", "running"):
+    if str(receipt.get("state") or "") in ("checking", "confirmed", "running", "trial"):
         return {"ok": False, "note": f"идёт другое обновление ({receipt.get('state')}: "
                                      f"{receipt.get('note') or receipt.get('step') or '…'}) — "
                                      "новый план положу, когда оно закончится"}
     raw = {"id": secrets.token_hex(8), "version": version, "backup": backup,
-           "checks": list(checks or []), "wait_min": wait_min,
+           "checks": list(checks or []), "wait_min": wait_min, "trial_min": trial_min,
            "force_extensions": force_extensions, "reason": reason, "asked_by": by,
            "asked_utc": _utc(), "chat": chat}
     plan, why = validate_plan(raw)
@@ -602,23 +627,68 @@ def update_confirm(tree: Path, plan_id: str, nonce: str, decision: str, by: str 
                      "он будет недоступен")}
 
 
+def update_verdict(tree: Path, plan_id: str, key: str, verdict: str, by: str = "agent",
+                   words: str = "") -> dict:
+    """Слово на испытании: «принимаю» — обновление закрывается, «сломано» — откат.
+
+    Говорит агент (рука update_request) или владелец кнопкой в окне; первое слово берёт
+    исполнитель. Ключ — из расписки «испытание»: слово относится ровно к этой версии.
+    """
+    verdict = str(verdict or "").strip().lower()
+    if verdict not in UPDATE_VERDICTS:
+        return {"ok": False, "note": "слово бывает accept (принимаю) или reject (сломано — откат)"}
+    receipt = _read(_control_dir(tree) / UPDATE_RECEIPT)
+    trial = receipt.get("trial") if isinstance(receipt.get("trial"), dict) else {}
+    if str(receipt.get("state") or "") != "trial":
+        return {"ok": False, "note": f"испытания сейчас нет ({receipt.get('state') or 'расписки нет'})"}
+    if str(plan_id or "") != str(receipt.get("id") or ""):
+        return {"ok": False, "note": "испытывается другой план — перечитай расписку"}
+    if not key or str(key) != str(trial.get("key") or ""):
+        return {"ok": False, "note": "ключ испытания не тот — перечитай расписку"}
+    row = {"schema": UPDATE_SCHEMA, "id": str(plan_id), "key": str(key), "verdict": verdict,
+           "by": str(by or "agent")[:40], "words": " ".join(str(words or "").split())[:1500],
+           "at_utc": _utc(), "at_epoch": time.time()}
+    _write(_control_dir(tree) / UPDATE_VERDICT, row)
+    if verdict == "accept":
+        return {"ok": True, "verdict": row,
+                "note": f"слово записано: {receipt.get('to_version') or 'новая версия'} принята. "
+                        "Исполнитель закроет обновление и уберёт старые копии"}
+    return {"ok": True, "verdict": row,
+            "note": f"слово записано: сломано — исполнитель вернёт "
+                    f"{receipt.get('from_version') or 'прежнюю версию'} (код и образ; память "
+                    "остаётся как есть). Агент на минуту пропадёт"}
+
+
 def update_unreported(tree: Path, max_age_days: float = 3.0) -> dict | None:
-    """Итог обновления, о котором агент ещё не рассказал владельцу (или None)."""
+    """Испытание или итог, о котором агенту ещё не сказали (или None).
+
+    Отметка «сказано» — по паре (план, состояние): у одного плана их бывает две —
+    испытание (агенту проверить себя) и итог (рассказать владельцу). Итог «принято»
+    после слова самого агента не повторяется: он его сам и сказал.
+    """
     ctl = _control_dir(tree)
     receipt = _read(ctl / UPDATE_RECEIPT)
-    if str(receipt.get("state") or "") not in UPDATE_REPORTABLE:
+    state = str(receipt.get("state") or "")
+    if state not in UPDATE_REPORTABLE:
         return None
-    if str(_read(ctl / UPDATE_REPORTED).get("id") or "") == str(receipt.get("id") or ""):
+    reported = _read(ctl / UPDATE_REPORTED)
+    if (str(reported.get("id") or "") == str(receipt.get("id") or "")
+            and str(reported.get("state") or "*") in (state, "*")):
         return None
-    finished = float(receipt.get("finished_epoch") or 0.0)
-    if not finished or time.time() - finished > max_age_days * 86400:
+    trial = receipt.get("trial") if isinstance(receipt.get("trial"), dict) else {}
+    verdict = trial.get("verdict") if isinstance(trial.get("verdict"), dict) else {}
+    if state == "done" and verdict.get("by") == "agent" and verdict.get("verdict") == "accept":
+        return None
+    moment = float((trial.get("since_epoch") if state == "trial" else receipt.get("finished_epoch"))
+                   or 0.0)
+    if not moment or time.time() - moment > max_age_days * 86400:
         return None
     return receipt
 
 
-def update_mark_reported(tree: Path, plan_id: str) -> None:
+def update_mark_reported(tree: Path, plan_id: str, state: str = "*") -> None:
     _write(_control_dir(tree) / UPDATE_REPORTED, {"schema": UPDATE_SCHEMA, "id": str(plan_id),
-                                                   "at_utc": _utc()})
+                                                   "state": str(state or "*"), "at_utc": _utc()})
 
 
 # --- сторона надзора ---------------------------------------------------------

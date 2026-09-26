@@ -391,9 +391,11 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
   };
 
   box.addEventListener("click", async (ev) => {
-    const upd = (ev.target as HTMLElement).closest<HTMLButtonElement>("[data-update-plan],[data-update-confirm]");
+    const upd = (ev.target as HTMLElement).closest<HTMLButtonElement>(
+      "[data-update-plan],[data-update-confirm],[data-update-verdict]");
     if (upd) {
       const version = upd.getAttribute("data-update-plan");
+      const verdict = upd.getAttribute("data-update-verdict");
       const note = box.querySelector<HTMLElement>(version ? "#update-plan-note" : "#update-note");
       const say = (cls: string, text: string) => {
         if (note) {
@@ -409,11 +411,17 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
               version,
               backup: upd.getAttribute("data-backup") || "full",
             })
-          : await post<{ ok: boolean; note: string }>("/api/update/confirm", {
-              id: upd.getAttribute("data-id") || "",
-              nonce: upd.getAttribute("data-nonce") || "",
-              decision: upd.getAttribute("data-update-confirm") || "",
-            });
+          : verdict
+            ? await post<{ ok: boolean; note: string }>("/api/update/verdict", {
+                id: upd.getAttribute("data-id") || "",
+                key: upd.getAttribute("data-key") || "",
+                verdict,
+              })
+            : await post<{ ok: boolean; note: string }>("/api/update/confirm", {
+                id: upd.getAttribute("data-id") || "",
+                nonce: upd.getAttribute("data-nonce") || "",
+                decision: upd.getAttribute("data-update-confirm") || "",
+              });
         say(answer.ok ? "receipt ok" : "receipt err", answer.note);
         if (answer.ok) {
           // Исполнитель берёт файл раз в три секунды — даём ему взять и перерисовываем.

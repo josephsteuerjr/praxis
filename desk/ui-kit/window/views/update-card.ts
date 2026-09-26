@@ -11,6 +11,10 @@
 // ⚠ Чего здесь нет намеренно. Кнопки «обновить сейчас» без показа: «Подготовить»
 // только кладёт план, а «Подтвердить» появляется, когда исполнитель уже сверил выпуск и
 // выдал расписке одноразовый ключ, — «да» относится к показанному, а не к плану вообще.
+//
+// Испытание (27.09): новая версия поднята и прошла механику, и теперь агент сам проверяет
+// себя в ней. Владельцу здесь видно, что стало с правками агента в его коде, и есть два
+// слова поверх агентского — «Принять» и «Откатить».
 
 export interface UpdateCheck {
   name: string;
@@ -36,6 +40,26 @@ export interface UpdateReceipt {
   plan?: { reason?: string; asked_by?: string; chat?: string; version?: string; backup?: string };
   finished_utc?: string;
   rollback?: { ok?: boolean; notes?: string[] };
+  code_preview?: { mounted?: boolean; base?: boolean; edited?: number; files?: string[]; note?: string };
+  agent_code?: {
+    mounted?: boolean;
+    edited?: string[];
+    carried?: string[];
+    merged?: string[];
+    conflicts?: Array<{ path: string; why: string }>;
+    skipped?: Array<{ path: string; why: string }>;
+    folder?: string;
+    summary?: string;
+    no_base?: string;
+    note?: string;
+  };
+  trial?: {
+    key?: string;
+    until_utc?: string;
+    minutes?: number;
+    extended?: number;
+    verdict?: { verdict?: string; by?: string; words?: string };
+  };
 }
 
 export interface UpdaterBeat {
@@ -56,13 +80,14 @@ export interface UpdateState {
   history?: Array<{ id?: string; state?: string; from_version?: string; to_version?: string; finished_utc?: string; note?: string }>;
 }
 
-const ACTIVE = ["checking", "awaiting", "confirmed", "running"];
+const ACTIVE = ["checking", "awaiting", "confirmed", "running", "trial"];
 
 const STATE_WORDS: Record<string, string> = {
   checking: "исполнитель сверяет план",
   awaiting: "ждёт твоего «да»",
   confirmed: "«да» получено — начинается",
   running: "идёт обновление",
+  trial: "испытание: агент проверяет себя в новой версии",
   refused: "план не принят",
   declined: "отклонено",
   expired: "истёк без ответа",
@@ -83,6 +108,15 @@ function esc(text: unknown): string {
   return String(text ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string,
   );
+}
+
+/** Сколько ещё до срока — словами («через 24 ч», «через 18 мин»), не часами без даты. */
+function inTime(until: string | undefined, now: number): string {
+  const at = Date.parse(until || "");
+  if (!Number.isFinite(at)) return "";
+  const minutes = Math.round((at - now) / 60_000);
+  if (minutes >= 90) return `через ${Math.round(minutes / 60)} ч`;
+  return minutes >= 1 ? `через ${minutes} мин` : "вот-вот";
 }
 
 /** Сколько ещё план ждёт ответа — словами, а не часами без даты (истекает через сутки). */
@@ -133,6 +167,7 @@ function awaitingHTML(r: UpdateReceipt, now: number): string {
     `<p class="muted">Просит: ${esc(who)}${plan.reason ? ` — «${esc(plan.reason)}»` : ""}${
       left ? ` · ${esc(left)}` : ""
     }</p>`,
+    codePreviewHTML(r),
   ];
   return `<div class="card" style="border-color:var(--accent)">
     <h4>Обновление ждёт твоего подтверждения</h4>${rows.join("")}
@@ -141,6 +176,54 @@ function awaitingHTML(r: UpdateReceipt, now: number): string {
       <button class="btn quiet" data-update-confirm="no" data-id="${esc(r.id)}" data-nonce="${esc(r.nonce || "")}">Отклонить</button>
       <span class="receipt" id="update-note"></span>
     </div></div>`;
+}
+
+/** До «да»: правил ли агент свой код и что с этим будет. */
+function codePreviewHTML(r: UpdateReceipt): string {
+  const code = r.code_preview;
+  if (!code) return "";
+  const bad = code.mounted === false || code.base === false;
+  const files = (code.files || []).length
+    ? `: <span class="mono">${esc((code.files || []).join(", "))}${(code.edited || 0) > (code.files || []).length ? " …" : ""}</span>`
+    : "";
+  return `<p class="${bad ? "receipt err" : "muted"}">Код агента: ${esc(code.note || "")}${code.edited ? files : ""}.</p>`;
+}
+
+/** Что стало с правками агента в его коде — строкой, для испытания и итога. */
+function agentCodeHTML(r: UpdateReceipt): string {
+  const code = r.agent_code;
+  if (!code) return "";
+  if (code.mounted === false) return code.note ? `<p class="receipt err">Код агента: ${esc(code.note)}</p>` : "";
+  if (code.no_base) {
+    return `<p class="receipt err">Правки агента не с чем было сравнить (${esc(code.no_base)}) — его прежний код
+      целиком лежит у него: <span class="mono">${esc(code.folder || "workspace")}/old-code/</span>.</p>`;
+  }
+  if (!code.edited || !code.edited.length) return `<p class="muted">Своих правок в коде у агента не было.</p>`;
+  const conflicts = code.conflicts || [];
+  return `<p class="${conflicts.length ? "receipt err" : "muted"}">Правки агента в коде: ${esc(code.summary || "")}${
+    conflicts.length
+      ? `. Не легло: ${esc(conflicts.slice(0, 6).map((c) => c.path).join(", "))}${conflicts.length > 6 ? " …" : ""} — стороны
+         и объяснение у агента в <span class="mono">${esc(code.folder || "")}</span>`
+      : ""
+  }.</p>`;
+}
+
+function trialHTML(r: UpdateReceipt, now: number): string {
+  const trial = r.trial || {};
+  const left = inTime(trial.until_utc, now);
+  return `<div class="card" style="border-color:var(--accent)">
+    <h4>Испытание: ${esc(r.to_version || "новая версия")} поднята, агент проверяет себя</h4>
+    <p class="muted">Механика прошла (${esc((r.checks || []).filter((c) => c.ok).map((c) => c.name).join(", "))}). Теперь агент
+      проверяет, думает ли, помнит ли, живы ли его руки и перенесённые правки, — и говорит «принимаю» или «сломано».
+      «Сломано» или молчание ${left ? `(срок — ${esc(left)})` : "до срока"} — откат на ${esc(r.from_version || "прежнюю")}:
+      код и образ; память агента остаётся.</p>
+    ${agentCodeHTML(r)}
+    <div class="actions" style="margin-top:10px">
+      <button class="btn quiet" data-update-verdict="accept" data-id="${esc(r.id)}" data-key="${esc(trial.key || "")}">Принять</button>
+      <button class="btn quiet" data-update-verdict="reject" data-id="${esc(r.id)}" data-key="${esc(trial.key || "")}">Откатить</button>
+      <span class="receipt" id="update-note"></span>
+    </div>
+    <p class="muted">Твоё слово — поверх слова агента: не дожидаясь его, можно принять или откатить сразу.</p></div>`;
 }
 
 function runningHTML(r: UpdateReceipt): string {
@@ -168,9 +251,21 @@ function finalHTML(r: UpdateReceipt, fmt: (s: string) => string): string {
         r.rollback.ok ? "прежняя версия поднята и прошла проверки" : "прежняя версия проверки не прошла"
       }.</p>`
     : "";
+  const verdict = r.trial?.verdict;
+  const said = verdict?.verdict
+    ? `<p class="muted">Испытание: ${
+        verdict.verdict === "timeout"
+          ? "агент не ответил до срока"
+          : `${verdict.by === "agent" ? "агент" : "ты"} — ${verdict.verdict === "accept" ? "«принимаю»" : "«сломано»"}${
+              verdict.words ? `: ${esc(verdict.words)}` : ""
+            }`
+      }.</p>`
+    : "";
   return `<p class="${good ? "receipt ok" : bad ? "receipt err" : "receipt"}">Последний план${span}${
     r.finished_utc ? ` (${esc(fmt(r.finished_utc))})` : ""
-  }: ${esc(STATE_WORDS[r.state] || r.state)}. ${esc(r.note || "")}</p>${checksHTML(r.checks)}${back}`;
+  }: ${esc(STATE_WORDS[r.state] || r.state)}. ${esc(r.note || "")}</p>${checksHTML(r.checks)}${said}${
+    good ? agentCodeHTML(r) : ""
+  }${back}`;
 }
 
 /**
@@ -190,7 +285,8 @@ export function updateCardHTML(
     return `<h3 class="section-title">Обновление</h3>
       <p class="muted">Исполнителя обновлений рядом с агентом нет — обновление пока руками на хосте: распакуй
       новую поставку в ту же папку и <code>docker compose -f server/docker-compose.yml up -d --build</code>
-      (<code>data/</code> и <code>helene.json</code> переживают пересборку).</p>
+      (<code>data/</code> и <code>helene.json</code> переживают пересборку; правки агента в его коде —
+      <code>tree/</code>, <code>app/</code> — распаковка поверх затрёт).</p>
       <p class="muted">Чтобы дальше обновлял агент — с твоего «да», копией и откатом, — подними исполнителя
       один раз, из той же папки: <code>${esc(up?.command || "docker compose -f server/updater/docker-compose.yml up -d --build")}</code>.</p>`;
   }
@@ -205,6 +301,7 @@ export function updateCardHTML(
   const r = u?.receipt || null;
   let body = "";
   if (r && r.state === "awaiting") body = awaitingHTML(r, now);
+  else if (r && r.state === "trial") body = trialHTML(r, now);
   else if (r && ACTIVE.includes(r.state)) body = runningHTML(r);
   else if (r) body = finalHTML(r, fmt);
   const canPlan = up.ok && up.newer && latest && !(r && ACTIVE.includes(r.state));

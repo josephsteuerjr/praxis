@@ -1,21 +1,29 @@
 # -*- coding: utf-8 -*-
 """Стенд исполнителя обновлений на сервере (27.09): `server/updater/updater.py`.
 
-Запуск (только Linux — O_NOFOLLOW, dir_fd; на Windows стенд пропускается):
-    python tests/t_updater_2709.py
+Запуск:  python tests/t_updater_2709.py
+Весь ход исполнителя — только на Linux (O_NOFOLLOW, dir_fd); чистые разборы, перенос
+правок агента и сверка копии протокола — и на Windows. Слияние правок требует `git`.
 
 Докер и сеть подменены целиком: докер — объектом, который помнит контейнер, образы и
-теги и отвечает на те же команды (`inspect`, `compose build/stop/up`, `tag`, `exec`,
-`run`); сеть — ответами GitHub Releases и архивом, собранным здесь же. Файлы — настоящие:
-папка установки, `data/`, копии, распаковка. Проверяется то, что может соврать:
+теги, монтирования кода и жизнь контейнера и отвечает на те же команды (`inspect`,
+`compose build/stop/up`, `tag`, `exec`, `run`); сеть — ответами GitHub Releases и
+архивами, собранными здесь же. Файлы — настоящие: папка установки, `data/`, `tree/`,
+`app/`, копии, распаковка. Проверяется то, что может соврать:
   * без «да» с ключом расписки ничего не начинается; чужой ключ — не «да»;
   * счастливый путь: новый код на месте, прежний и data/ — в копии, helene.json не тронут,
-    переменные прежнего контейнера перенесены, образ отложен тегом отката;
-  * новая версия не прошла проверки — откат: прежний код, данные, образ, подъём, расписка;
-  * сборка упала или сумма не сошлась — живой агент не останавливался, папки не менялись;
-  * не новее, мало места, истёк, отклонён, заменён — отказы словами;
-  * подложенная агентом ссылка или FIFO в `data/` не уводят исполнителя наружу;
-  * сбой посреди подготовки — всё возвращается; посреди подмены — проверка или откат.
+    переменные прежнего контейнера перенесены, образ отложен тегом отката, runtime/ не тронут;
+  * ПРАВКИ АГЕНТА в его коде: видны до «да»; не тронутое выпуском — переезжает как есть,
+    тронутое обоими — сливается, не слившееся — вариант выпуска + материалы агенту;
+    нет чистой базы — прежний код целиком агенту;
+  * ИСПЫТАНИЕ: «принимаю» закрывает, «сломано» и молчание — откат, занятому агенту срок
+    продлевается, но не больше чем вдвое; без мозга испытание пропускается словами;
+  * ОТКАТ не трогает память агента; копия data/ — только если прежняя версия на новых
+    данных не поднимается;
+  * сборка упала, сумма не сошлась, расширения не грузятся — живой агент не тронут;
+  * квитанции прежнего контейнера — не живость нового;
+  * подложенная агентом ссылка или FIFO не уводят исполнителя наружу;
+  * копия протокола у исполнителя не разъехалась с оригиналом и не импортирует код агента.
 """
 from __future__ import annotations
 
@@ -23,9 +31,11 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -37,10 +47,21 @@ from deskd import control  # noqa: E402
 import updater as up  # noqa: E402
 
 LINUX = os.name == "posix" and hasattr(os, "O_NOFOLLOW")
+GIT = shutil.which("git") is not None
 OLD, NEW = "1.1.1", "1.1.2"
 
 
-def dist_files(version: str) -> dict[str, bytes]:
+def agent_py(version: str, *, hello: str = "hi", helper: str = "1") -> bytes:
+    """`tree/agent.py` в миниатюре: версия сверху, две функции далеко друг от друга —
+    чтобы правка агента в одной и правка выпуска в другой сливались чисто."""
+    return (f"# agent\nVERSION = {version!r}\n\n\n"
+            f"def hello():\n    return {hello!r}\n\n\n"
+            "def middle_one():\n    return 'm1'\n\n\n"
+            "def middle_two():\n    return 'm2'\n\n\n"
+            f"def helper():\n    return {helper}\n").encode()
+
+
+def dist_files(version: str, **agent) -> dict[str, bytes]:
     """Поставка в миниатюре: всё, что исполнитель требует от распакованного."""
     return {
         "helene-build.json": json.dumps({"product": "Hélène", "version": version,
@@ -51,19 +72,22 @@ def dist_files(version: str) -> dict[str, bytes]:
         "app/desk.json": json.dumps({"product": "desk", "version": version}).encode(),
         "app/localharness/runner.py": b"# runner\n",
         "app/deskd/control.py": b"# control\n",
-        "tree/agent.py": f"VERSION = {version!r}\n".encode(),
+        "tree/agent.py": agent_py(version, **agent),
+        "tree/memory_life.py": b"# memory\nKEEP = 3\n",
         "server/Dockerfile": b"FROM python:3.12-slim\n",
         "server/docker-compose.yml": b"name: helene\nservices:\n  helene: {}\n",
         "server/serverboot.py": b"# serverboot\n",
         "server/updater/updater.py": f"# updater {version}\n".encode(),
+        "runtime/python.exe": f"windows python for {version}".encode(),
         "helene.json": b'{"mode": "local"}\n',
     }
 
 
-def make_zip(version: str, extra: dict[str, bytes] | None = None, root: str = "Helene") -> bytes:
+def make_zip(version: str, extra: dict[str, bytes] | None = None, root: str = "Helene",
+             **agent) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        for rel, blob in {**dist_files(version), **(extra or {})}.items():
+        for rel, blob in {**dist_files(version, **agent), **(extra or {})}.items():
             zf.writestr(f"{root}/{rel}", blob)
         zf.writestr(f"{root}/data/", b"")
     return buf.getvalue()
@@ -75,7 +99,7 @@ class FakeNet:
         self.pages: dict[str, dict] = {}
         self.texts: dict[str, str] = {}
         self.blobs: dict[str, bytes] = {}
-        self.downloads = 0
+        self.downloads: list[str] = []
 
     def publish(self, version: str, blob: bytes, *, digest: bool = True, latest: bool = True):
         name = f"Helene-{version}.zip"
@@ -102,7 +126,7 @@ class FakeNet:
         return self.texts[url]
 
     def download(self, url, dest, limit, progress=None):
-        self.downloads += 1
+        self.downloads.append(url)
         blob = self.blobs[url]
         Path(dest).write_bytes(blob)
         return hashlib.sha256(blob).hexdigest()
@@ -128,6 +152,11 @@ class FakeDocker:
         self.versions = {"sha256:old": OLD, "sha256:new": NEW}
         self.extensions_report = {"ok": True, "summary": "все 1 расширений грузятся"}
         self.falls = {"sha256:old": 0, "sha256:new": 0}   # падения раннера в записке надзора
+        self.brain = False                                 # мозг настроен? (испытание — только с ним)
+        #: Код с диска (compose с 27.09) — у какого образа какой compose.
+        self.code_mounts = {"sha256:old": True, "sha256:new": True}
+        #: Прежняя версия не поднимается на данных, которые тронула новая (метка в data/).
+        self.data_breaks_old = False
         self.on_up = None           # что «новая версия» делает с data/ при подъёме
         # Жизнь контейнера. Квитанция раннера и записка надзора лежат в data/ и ПЕРЕЖИВАЮТ
         # замену контейнера: мёртвый новый раннер оставляет свежей квитанцию прежнего —
@@ -138,13 +167,20 @@ class FakeDocker:
         self.sup_falls = 0
         self.channel_says_alive = None     # канал верит свежей чужой квитанции (как в жизни)
 
+    def _alive_now(self) -> bool:
+        if (self.data_breaks_old and self.image == "sha256:old"
+                and (self.install / "data" / "memory" / "migrated.flag").exists()):
+            return False
+        return self.alive[self.image]
+
     def _start(self):
         self.started += 100
-        if self.alive[self.image]:
+        alive = self._alive_now()
+        if alive:
             self.reader_at = self.started + 2
         # надзор нового контейнера пишет свою записку всегда — он жив, даже когда раннер нет
         self.sup_started = self.started
-        self.sup_falls = self.falls[self.image]
+        self.sup_falls = self.falls[self.image] if alive or not self.data_breaks_old else 3
 
     @staticmethod
     def _iso(epoch: float) -> str:
@@ -155,13 +191,17 @@ class FakeDocker:
                   "com.docker.compose.service": "helene",
                   "com.docker.compose.project.working_dir": self.working_dir,
                   "com.docker.compose.project.config_files": self.working_dir + "/docker-compose.yml"}
+        mounts = [{"Destination": "/opt/helene/data", "Source": str(self.install / "data")},
+                  {"Destination": "/opt/helene/helene.json", "Source": str(self.install / "helene.json")},
+                  {"Destination": "/models", "Source": self.models}]
+        if self.code_mounts.get(self.image, True):
+            mounts += [{"Destination": "/opt/helene/tree", "Source": str(self.install / "tree")},
+                       {"Destination": "/opt/helene/app", "Source": str(self.install / "app")}]
         return {"Name": "/helene", "Image": self.image, "RestartCount": self.restarts,
                 "Config": {"Image": "helene-helene", "Labels": labels,
                            "Env": [f"{k}={v}" for k, v in self.env.items()]},
                 "HostConfig": {"PortBindings": {"8094/tcp": [{"HostIp": "127.0.0.1", "HostPort": self.port}]}},
-                "Mounts": [{"Destination": "/opt/helene/data", "Source": str(self.install / "data")},
-                           {"Destination": "/opt/helene/helene.json", "Source": str(self.install / "helene.json")},
-                           {"Destination": "/models", "Source": self.models}],
+                "Mounts": mounts,
                 "State": {"Running": self.running, "Restarting": False,
                           "Status": "running" if self.running else "exited",
                           "StartedAt": self._iso(self.started)}}
@@ -180,17 +220,17 @@ class FakeDocker:
             return 0, "", ""
         if args[0] == "exec":
             now = self.started + 5
-            alive = (self.alive[self.image] if self.channel_says_alive is None
-                     else self.channel_says_alive)
+            alive = self._alive_now()
+            said = alive if self.channel_says_alive is None else self.channel_says_alive
             probe = {"now": now,
                      "health": {"code": 200, "body": {}},
                      "state": {"code": 200, "body": {
                          "desk": {"version": self.versions[self.image]},
-                         "runner": {"alive": alive, "age_s": round(now - self.reader_at)},
-                         "brain": {"configured": True, "model": "glm"}}},
+                         "runner": {"alive": said, "age_s": round(now - self.reader_at)},
+                         "brain": {"configured": self.brain, "model": "glm" if self.brain else ""}}},
                      "supervisor": {"kind": "serverboot", "beat_epoch": now - 2,
                                     "started_utc": up.utc(self.sup_started), "children": [
-                                        {"id": "runner", "alive": self.alive[self.image],
+                                        {"id": "runner", "alive": alive,
                                          "falls": self.sup_falls, "halted": ""}]},
                      "reader": {"at": self.reader_at, "pid": 8, "busy": False}}
             return 0, "ignored line\n" + json.dumps(probe), ""
@@ -217,9 +257,9 @@ class FakeDocker:
                             "PRAXIS_STT_KEEP_LOADED": env.get("HELENE_STT_KEEP_LOADED", "0")}
                 self.port = env.get("HELENE_PORT", "8094")
                 self.models = env.get("HELENE_MODELS", "./models")
-                self._start()
                 if self.on_up:
                     self.on_up(self.image)
+                self._start()
                 return 0, "", ""
         return 0, "", ""
 
@@ -227,8 +267,11 @@ class FakeDocker:
         return any(all(w in call for w in words) for call in self.calls)
 
 
-@unittest.skipUnless(LINUX, "исполнитель живёт на Linux: O_NOFOLLOW и dir_fd")
-class UpdaterFlow(unittest.TestCase):
+class Base(unittest.TestCase):
+    """Установка 1.1.1 на диске, выпуски 1.1.1 и 1.1.2 на «GitHub», агент жив."""
+
+    new_agent: dict = {}
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="helene-updater-")
         self.addCleanup(self._tmp.cleanup)
@@ -244,21 +287,29 @@ class UpdaterFlow(unittest.TestCase):
         memory = self.install / "data" / "memory"
         (memory / "journal").mkdir(parents=True)
         (memory / "journal" / "2026-09-27.md").write_text("- 10:00 жива\n", encoding="utf-8")
+        (self.install / "data" / "workspace").mkdir()
         self.cfg = up.Config(self.install, releases="https://api.example.test/releases")
         self.net = FakeNet(self.cfg.releases)
-        self.sha = self.net.publish(NEW, make_zip(NEW))
+        self.net.publish(OLD, make_zip(OLD), latest=False)
+        self.sha = self.net.publish(NEW, make_zip(NEW, **self.new_agent))
         self.docker = FakeDocker(self.install)
-        self.now = [1_000_000.0]
+        # часы исполнителя — настоящие по величине: «давний» итог записки не получает
+        self.now = [time.time()]
         self.u = up.Updater(self.cfg, docker=self.docker, net=self.net,
                             clock=lambda: self.now[0], sleep=self.tick_clock)
 
     def tick_clock(self, seconds):
         self.now[0] += seconds
 
+    def again(self) -> up.Updater:
+        """Тот же исполнитель после перезапуска: состояние — с диска."""
+        return up.Updater(self.cfg, docker=self.docker, net=self.net,
+                          clock=lambda: self.now[0], sleep=self.tick_clock)
+
     def plan(self, **fields) -> str:
         """Положить план так, как это делает канал или рука (через протокол)."""
         up.Shared(self.install / "data").write(*up.CTL, control.UPDATER_BEAT,
-                                              {"beat_epoch": __import__("time").time(), "ok": True})
+                                              {"beat_epoch": time.time(), "ok": True})
         got = control.update_plan(self.install / "data", **fields)
         self.assertTrue(got["ok"], got)
         return got["plan"]["id"]
@@ -273,6 +324,34 @@ class UpdaterFlow(unittest.TestCase):
                                      by="window", words="да")
         self.assertTrue(got["ok"], got)
 
+    def verdict(self, word: str, by: str = "agent", words: str = "проверено: думаю, помню, руки живы"):
+        r = self.receipt()
+        got = control.update_verdict(self.install / "data", r["id"], r["trial"]["key"], word,
+                                     by=by, words=words)
+        self.assertTrue(got["ok"], got)
+
+    def run_update(self, **plan):
+        self.plan(version=NEW, **plan)
+        self.u.tick()
+        self.yes()
+        self.u.tick()
+        return self.receipt()
+
+    def code(self, rel: str) -> str:
+        return (self.install / rel).read_text("utf-8")
+
+    def edit_agent(self, rel: str, blob: bytes | None):
+        """Агент правит свой код — на диске сервера (tree/ и app/ смонтированы)."""
+        path = self.install / rel
+        if blob is None:
+            path.unlink()
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(blob)
+
+
+@unittest.skipUnless(LINUX, "исполнитель живёт на Linux: O_NOFOLLOW и dir_fd")
+class UpdaterFlow(Base):
     # --- путь до «да» -------------------------------------------------------
 
     def test_план_сверяется_и_ждёт_да_без_единого_касания(self):
@@ -285,11 +364,12 @@ class UpdaterFlow(unittest.TestCase):
         self.assertTrue(r["nonce"])
         self.assertGreater(r["backup"]["data_bytes"], 0)
         self.assertIn("жду подтверждения", r["note"])
-        # ничего не качалось, не собиралось, не останавливалось
-        self.assertEqual(self.net.downloads, 0)
+        self.assertEqual(r["code_preview"]["edited"], 0)
+        # новый архив не качался, ничего не собиралось и не останавливалось; скачан
+        # только исходник стоящей версии — база для правок агента
+        self.assertEqual(self.net.downloads, [f"https://example.test/Helene-{OLD}.zip"])
         self.assertFalse(self.docker.did("build"))
         self.assertFalse(self.docker.did("stop"))
-        # повторный тик без «да» — то же ожидание
         self.u.tick()
         self.assertEqual(self.receipt()["state"], "awaiting")
 
@@ -301,7 +381,7 @@ class UpdaterFlow(unittest.TestCase):
                                               {"id": r["id"], "nonce": "подобран", "decision": "yes"})
         self.u.tick()
         self.assertEqual(self.receipt()["state"], "awaiting")
-        self.assertEqual(self.net.downloads, 0)
+        self.assertFalse(self.docker.did("build"))
 
     def test_счастливый_путь(self):
         (self.install / "data" / "extensions" / "quota").mkdir(parents=True)
@@ -312,39 +392,254 @@ class UpdaterFlow(unittest.TestCase):
         self.u.tick()
         r = self.receipt()
         self.assertEqual(r["state"], "done", r.get("note"))
+        self.assertIn("испытание агентом пропущено: мозг не настроен", r["note"])
         self.assertNotIn("nonce", r)
-        # новый код на месте, прежний — в копии; данные и конфиг — те же
-        desk = json.loads((self.install / "app" / "desk.json").read_text("utf-8"))
+        desk = json.loads(self.code("app/desk.json"))
         self.assertEqual(desk["version"], NEW)
         bdir = Path(self.u.state["backup_dir"])
         old = json.loads((bdir / "code" / "app" / "desk.json").read_text("utf-8"))
         self.assertEqual(old["version"], OLD)
         self.assertTrue((bdir / "data" / "memory" / "journal" / "2026-09-27.md").is_file())
-        self.assertIn("sk-secret", (self.install / "helene.json").read_text("utf-8"))
-        self.assertTrue((self.install / "data" / "memory" / "journal" / "2026-09-27.md").is_file())
-        # поставочный шаблон helene.json и пустая data/ из архива не легли поверх
+        self.assertIn("sk-secret", self.code("helene.json"))
         self.assertFalse((bdir / "code" / "helene.json").exists())
-        # переменные прежнего контейнера — у нового
+        # runtime/ для Windows не распаковывался и не трогался
+        self.assertEqual(self.code("runtime/python.exe"), f"windows python for {OLD}")
+        self.assertFalse((bdir / "code" / "runtime").exists())
+        # переменные прежнего контейнера — у нового; код — с диска
         self.assertEqual(self.docker.env["HELENE_HOSTS"], "helene.example.com")
         self.assertEqual(self.docker.models, "/opt/praxis-models")
-        # образ отложен, расширения прорепетированы, проверки все
+        checks = {c["name"]: c for c in r["checks"]}
+        self.assertEqual(set(checks), set(control.UPDATE_MANDATORY))
+        self.assertTrue(all(c["ok"] for c in r["checks"]), r["checks"])
         self.assertIn(f"helene-helene:{self.u.state['rollback_tag']}", self.docker.tags)
         self.assertTrue(self.docker.did("run", "--check-extensions"))
-        self.assertTrue(all(c["ok"] for c in r["checks"]))
-        self.assertEqual({c["name"] for c in r["checks"]}, set(control.UPDATE_MANDATORY))
-        # сборка шла ИЗ распакованного, до остановки агента
         build = next(i for i, c in enumerate(self.docker.calls) if "build" in c)
         stop = next(i for i, c in enumerate(self.docker.calls) if "stop" in c)
         self.assertLess(build, stop)
         self.assertIn("stage", " ".join(self.docker.calls[build]))
-        # за собой убрано, история легла, исполнитель перезапустится новым кодом
+        # чистые исходники обеих версий запомнены — база следующего обновления
+        self.assertIsNotNone(self.u.pristine(NEW))
+        self.assertIsNotNone(self.u.pristine(OLD))
+        self.assertEqual((self.u.pristine(NEW) / "tree" / "agent.py").read_bytes(), agent_py(NEW))
         self.assertFalse(Path(self.u.state["stage_dir"]).exists())
         self.assertTrue(self.u.reexec)
+        self.assertEqual(r["agent_code"]["edited"], [])
         hist = control.update_history(self.install / "data")
-        self.assertEqual(hist[-1]["state"], "done")
-        self.assertEqual(hist[-1]["confirmed_by"], "window")
+        self.assertEqual((hist[-1]["state"], hist[-1]["confirmed_by"]), ("done", "window"))
 
-    def test_новая_версия_не_прошла_проверки_откат(self):
+    # --- правки агента в его коде -------------------------------------------
+
+    def test_правки_агента_видны_до_да(self):
+        self.edit_agent("tree/agent.py", agent_py(OLD, hello="привет от Йоно"))
+        self.edit_agent("tree/yono_tool.py", b"def tool():\n    return 42\n")
+        self.plan(version=NEW)
+        self.u.tick()
+        preview = self.receipt()["code_preview"]
+        self.assertEqual(preview["edited"], 2)
+        self.assertEqual(sorted(preview["files"]), ["tree/agent.py", "tree/yono_tool.py"])
+        self.assertIn("агент правил свой код", self.receipt()["note"])
+
+    def test_правки_агента_переезжают_и_сливаются(self):
+        if not GIT:
+            self.skipTest("нет git — слияние не проверить")
+        self.edit_agent("tree/agent.py", agent_py(OLD, hello="привет от Йоно"))      # выпуск меняет VERSION
+        self.edit_agent("tree/memory_life.py", "# memory\nKEEP = 7  # Йоно\n".encode())      # выпуск не трогал
+        self.edit_agent("tree/yono_tool.py", b"def tool():\n    return 42\n")        # добавил
+        self.edit_agent("app/deskd/control.py", None)                                 # удалил (выпуск не трогал)
+        (self.install / "tree" / "__pycache__").mkdir()
+        (self.install / "tree" / "__pycache__" / "agent.cpython-312.pyc").write_bytes(b"\x00junk")
+        r = self.run_update()
+        self.assertEqual(r["state"], "done", r.get("note"))
+        merged = self.code("tree/agent.py")
+        self.assertIn(f"VERSION = {NEW!r}", merged)          # правка выпуска
+        self.assertIn("привет от Йоно", merged)              # правка агента
+        self.assertEqual(self.code("tree/memory_life.py"), "# memory\nKEEP = 7  # Йоно\n")
+        self.assertEqual(self.code("tree/yono_tool.py"), "def tool():\n    return 42\n")
+        self.assertFalse((self.install / "app" / "deskd" / "control.py").exists())
+        code = r["agent_code"]
+        self.assertEqual(code["merged"], ["tree/agent.py"])
+        self.assertEqual(sorted(code["carried"]), ["app/deskd/control.py", "tree/memory_life.py",
+                                                   "tree/yono_tool.py"])
+        self.assertEqual(code["conflicts"], [])
+        self.assertNotIn("tree/__pycache__/agent.cpython-312.pyc", code["edited"])
+        folder = self.install / "data" / code["folder"]
+        self.assertTrue((folder / "README.md").is_file())
+        diff = (folder / "edits.diff").read_text("utf-8")
+        self.assertIn("+    return 'привет от Йоно'", diff)
+        self.assertIn("правок агента в коде: 4", r["note"])
+        # база нетронута: чистый исходник новой версии — без правок агента
+        self.assertEqual((self.u.pristine(NEW) / "tree" / "agent.py").read_bytes(), agent_py(NEW))
+
+    def test_правки_агента_на_откате_возвращаются_как_были(self):
+        self.edit_agent("tree/memory_life.py", "# memory\nKEEP = 7  # Йоно\n".encode())
+        self.docker.alive["sha256:new"] = False
+        self.docker.falls["sha256:new"] = 3
+        r = self.run_update()
+        self.assertEqual(r["state"], "rolled_back", r.get("note"))
+        self.assertEqual(self.code("tree/memory_life.py"), "# memory\nKEEP = 7  # Йоно\n")
+        self.assertIn(f"VERSION = {OLD!r}", self.code("tree/agent.py"))
+        self.assertIn("правки агента в коде — как были до обновления", r["note"])
+
+
+class ConflictBase(Base):
+    new_agent = {"helper": "3"}          # выпуск меняет helper()
+
+
+@unittest.skipUnless(LINUX, "исполнитель живёт на Linux: O_NOFOLLOW и dir_fd")
+class AgentCodeConflicts(ConflictBase):
+    def test_не_слившееся_уходит_агенту_материалом(self):
+        if not GIT:
+            self.skipTest("нет git — слияние не проверить")
+        self.edit_agent("tree/agent.py", agent_py(OLD, helper="2"))      # агент тоже меняет helper()
+        r = self.run_update()
+        self.assertEqual(r["state"], "done", r.get("note"))
+        self.assertEqual(self.code("tree/agent.py").encode(), agent_py(NEW, helper="3"))   # вариант выпуска
+        code = r["agent_code"]
+        self.assertEqual([c["path"] for c in code["conflicts"]], ["tree/agent.py"])
+        self.assertIn("одни и те же строки", code["conflicts"][0]["why"])
+        folder = self.install / "data" / code["folder"]
+        self.assertEqual((folder / "tree" / "agent.py.mine").read_bytes(), agent_py(OLD, helper="2"))
+        self.assertEqual((folder / "tree" / "agent.py.base").read_bytes(), agent_py(OLD))
+        self.assertEqual((folder / "tree" / "agent.py.theirs").read_bytes(), agent_py(NEW, helper="3"))
+        marked = (folder / "tree" / "agent.py.merged").read_text("utf-8")
+        self.assertIn("<<<<<<<", marked)
+        self.assertIn("агент (1.1.1)", marked)
+        readme = (folder / "README.md").read_text("utf-8")
+        self.assertIn("НЕ легло", readme)
+        self.assertIn("`tree/agent.py`", readme)
+        self.assertIn("не легло 1", r["note"])
+
+    def test_нет_чистой_базы_прежний_код_агенту_целиком(self):
+        del self.net.pages[f"{self.cfg.releases}/tags/v{OLD}"]
+        self.edit_agent("tree/yono_tool.py", b"def tool():\n    return 42\n")
+        self.plan(version=NEW)
+        self.u.tick()
+        self.assertIn("сравнить не с чем", self.receipt()["note"])
+        self.yes()
+        self.u.tick()
+        r = self.receipt()
+        self.assertEqual(r["state"], "done", r.get("note"))
+        code = r["agent_code"]
+        self.assertTrue(code["no_base"])
+        folder = self.install / "data" / code["folder"]
+        self.assertEqual((folder / "old-code" / "tree" / "yono_tool.py").read_text("utf-8"),
+                         "def tool():\n    return 42\n")
+        self.assertIn("не с чем", (folder / "README.md").read_text("utf-8"))
+        self.assertFalse((self.install / "tree" / "yono_tool.py").exists())   # не переносил вслепую
+
+    def test_папка_материалов_занята_берётся_новая(self):
+        if not GIT:
+            self.skipTest("нет git — слияние не проверить")
+        (self.install / "data" / "workspace" / f"update-{NEW}").mkdir()
+        self.edit_agent("tree/agent.py", agent_py(OLD, helper="2"))
+        r = self.run_update()
+        self.assertRegex(r["agent_code"]["folder"], rf"workspace/update-{re.escape(NEW)}-\d{{8}}T")
+
+    def test_workspace_ссылкой_не_валит_обновление(self):
+        if not GIT:
+            self.skipTest("нет git — слияние не проверить")
+        outside = Path(self._tmp.name) / "outside"
+        outside.mkdir()
+        shutil.rmtree(self.install / "data" / "workspace")
+        os.symlink(outside, self.install / "data" / "workspace")
+        self.edit_agent("tree/agent.py", agent_py(OLD, helper="2"))
+        r = self.run_update()
+        self.assertEqual(r["state"], "done", r.get("note"))
+        self.assertIn("материалы не легли", r["agent_code"]["materials_error"])
+        self.assertEqual(list(outside.iterdir()), [])
+
+
+@unittest.skipUnless(LINUX, "исполнитель живёт на Linux: O_NOFOLLOW и dir_fd")
+class Trial(Base):
+    def setUp(self):
+        super().setUp()
+        self.docker.brain = True
+
+    def test_испытание_и_слово_агента_принимаю(self):
+        r = self.run_update()
+        self.assertEqual(r["state"], "trial", r.get("note"))
+        self.assertTrue(r["trial"]["key"])
+        self.assertEqual(r["trial"]["minutes"], control.UPDATE_TRIAL_DEFAULT)
+        self.assertIn("агент проверяет себя", r["note"])
+        self.assertFalse(self.u.reexec)
+        # чужой ключ — не слово
+        up.Shared(self.install / "data").write(*up.CTL, control.UPDATE_VERDICT,
+                                              {"id": r["id"], "key": "чужой", "verdict": "accept"})
+        self.u.tick()
+        self.assertEqual(self.receipt()["state"], "trial")
+        self.verdict("accept")
+        self.u.tick()
+        r = self.receipt()
+        self.assertEqual(r["state"], "done", r.get("note"))
+        self.assertIn("агент принял на испытании", r["note"])
+        self.assertEqual(r["trial"]["verdict"]["by"], "agent")
+        self.assertTrue(self.u.reexec)
+        # об итоге, принятом самим агентом, записки второй раз не будет
+        self.assertIsNone(control.update_unreported(self.install / "data"))
+
+    def test_сломано_откат_память_цела(self):
+        self.run_update()
+        life = self.install / "data" / "memory" / "journal" / "2026-09-27-trial.md"
+        life.write_text("- 10:30 испытание: владелец спросил, как я\n", encoding="utf-8")
+        self.verdict("reject", words="не вызывается рука shell")
+        self.u.tick()
+        r = self.receipt()
+        self.assertEqual(r["state"], "rolled_back", r.get("note"))
+        self.assertIn("не вызывается рука shell", r["note"])
+        self.assertIn(f"VERSION = {OLD!r}", self.code("tree/agent.py"))
+        self.assertEqual(self.docker.image, "sha256:old")
+        self.assertTrue(life.is_file(), "откат стёр жизнь агента за время испытания")
+        self.assertNotIn("data_restored", r)
+        self.assertIn("данные агента не трогал", r["note"])
+        self.assertTrue(all(c["ok"] for c in r["rollback_checks"]))
+
+    def test_владелец_поверх_агента(self):
+        self.run_update()
+        self.verdict("reject", by="window", words="")
+        self.u.tick()
+        r = self.receipt()
+        self.assertEqual(r["state"], "rolled_back")
+        self.assertIn("владелец на испытании сказал «сломано»", r["note"])
+
+    def test_молчание_до_срока_откат(self):
+        self.run_update()
+        self.now[0] += control.UPDATE_TRIAL_DEFAULT * 60 + 1
+        self.u.tick()
+        r = self.receipt()
+        self.assertEqual(r["state"], "rolled_back", r.get("note"))
+        self.assertIn("не ответил на испытании", r["note"])
+        self.assertEqual(r["trial"]["verdict"]["verdict"], "timeout")
+        # старая версия получит записку об откате
+        self.assertEqual(control.update_unreported(self.install / "data")["state"], "rolled_back")
+
+    def test_занятому_агенту_срок_продлевается_но_не_бесконечно(self):
+        self.run_update(trial_min=10)
+        busy = self.install / "data" / "memory" / ".control" / "desk_inbox"
+        busy.mkdir(parents=True)
+        (busy / ".reader.json").write_text(json.dumps({"busy": True, "at": time.time()}))
+        self.now[0] += 10 * 60 + 1
+        self.u.tick()
+        r = self.receipt()
+        self.assertEqual(r["state"], "trial")
+        self.assertEqual(r["trial"]["extended"], up.TRIAL_EXTEND)
+        self.now[0] += up.TRIAL_EXTEND + 1
+        self.u.tick()
+        self.assertEqual(self.receipt()["state"], "rolled_back")
+        self.assertIn("с продлением", self.receipt()["note"])
+
+    def test_испытание_переживает_перезапуск_исполнителя(self):
+        self.run_update()
+        again = self.again()
+        again.recover()
+        self.assertEqual(self.receipt()["state"], "trial")
+        self.verdict("accept")
+        again.tick()                     # compose нужен для уборки — health спросит себя сам
+        self.assertEqual(self.receipt()["state"], "done")
+
+
+@unittest.skipUnless(LINUX, "исполнитель живёт на Linux: O_NOFOLLOW и dir_fd")
+class RollbackAndFailures(Base):
+    def test_новая_версия_не_прошла_откат_без_касания_данных(self):
         self.docker.alive["sha256:new"] = False
 
         def new_version_writes(image):
@@ -352,68 +647,60 @@ class UpdaterFlow(unittest.TestCase):
                 (self.install / "data" / "memory" / "migrated.flag").write_text("x")
 
         self.docker.on_up = new_version_writes
-        self.plan(version=NEW, wait_min=2)
-        self.u.tick()
-        self.yes()
-        self.u.tick()
-        r = self.receipt()
+        r = self.run_update(wait_min=2)
         self.assertEqual(r["state"], "rolled_back", r.get("note"))
         self.assertIn("агент (раннер) жив", r["note"])
-        desk = json.loads((self.install / "app" / "desk.json").read_text("utf-8"))
-        self.assertEqual(desk["version"], OLD)
-        # данные — из копии; то, что записала новая версия, — рядом, не потеряно
-        self.assertFalse((self.install / "data" / "memory" / "migrated.flag").exists())
+        self.assertEqual(json.loads(self.code("app/desk.json"))["version"], OLD)
+        # память — жизнь агента: откат её не трогает
+        self.assertTrue((self.install / "data" / "memory" / "migrated.flag").exists())
+        self.assertNotIn("data_restored", r)
         bdir = Path(self.u.state["backup_dir"])
-        self.assertTrue((bdir / "data-after-failed" / "memory" / "migrated.flag").exists())
+        self.assertTrue((bdir / "data").is_dir(), "копия data/ должна лежать для ручного случая")
         self.assertTrue((bdir / "failed-new" / "app" / "desk.json").exists())
-        # прежний образ вернулся под рабочий тег и поднят
         self.assertEqual(self.docker.tags["helene-helene:latest"], "sha256:old")
         self.assertEqual(self.docker.image, "sha256:old")
-        self.assertTrue(r["rollback"]["ok"])
-        # проверки в расписке — НОВОЙ версии (красные), проверки отката — отдельно (зелёные)
         runner = {c["name"]: c for c in r["checks"]}["runner"]
         self.assertFalse(runner["ok"])
         self.assertTrue(all(c["ok"] for c in r["rollback_checks"]))
 
+    def test_прежняя_не_поднимается_на_новых_данных_данные_из_копии(self):
+        self.docker.alive["sha256:new"] = False
+        self.docker.data_breaks_old = True
+
+        def new_version_migrates(image):
+            if image == "sha256:new":
+                (self.install / "data" / "memory" / "migrated.flag").write_text("x")
+
+        self.docker.on_up = new_version_migrates
+        r = self.run_update(wait_min=2)
+        self.assertEqual(r["state"], "rolled_back", r.get("note"))
+        self.assertTrue(r["data_restored"])
+        self.assertFalse((self.install / "data" / "memory" / "migrated.flag").exists())
+        bdir = Path(self.u.state["backup_dir"])
+        self.assertTrue((bdir / "data-after-failed" / "memory" / "migrated.flag").exists())
+        self.assertIn("на данных новой не поднялась", " ".join(r["rollback"]["notes"]))
+
     def test_квитанция_прежнего_контейнера_не_живость(self):
-        # Живой прогон 27.09: новый раннер мёртв, но квитанцию в data/ свежей оставил
-        # прежний контейнер, и канал честно говорит «жив». Это не живость нового.
         self.docker.alive["sha256:new"] = False
         self.docker.channel_says_alive = True
-        self.plan(version=NEW, wait_min=2)
-        self.u.tick()
-        self.yes()
-        self.u.tick()
-        r = self.receipt()
+        r = self.run_update(wait_min=2)
         self.assertEqual(r["state"], "rolled_back", r.get("note"))
         self.assertIn("от прежнего контейнера", r["note"])
-        self.assertEqual(self.docker.image, "sha256:old")
-        self.assertTrue(r["rollback"]["ok"])
 
     def test_раннер_падает_раз_за_разом_откат_без_ожидания(self):
         self.docker.alive["sha256:new"] = False
         self.docker.falls["sha256:new"] = 3
-        self.plan(version=NEW, wait_min=30)
-        self.u.tick()
-        self.yes()
         started = self.now[0]
-        self.u.tick()
-        r = self.receipt()
+        r = self.run_update(wait_min=30)
         self.assertEqual(r["state"], "rolled_back", r.get("note"))
         self.assertIn("падает раз за разом", r["note"])
-        self.assertLess(self.now[0] - started, 60, "ждал полчаса вместо отката сразу")
-        self.assertEqual(self.docker.image, "sha256:old")
+        self.assertLess(self.now[0] - started, 60)
 
     def test_сборка_упала_живой_агент_не_тронут(self):
         self.docker.fail_build = True
         before = (self.install / "app" / "desk.json").read_bytes()
-        self.plan(version=NEW)
-        self.u.tick()
-        self.yes()
-        self.u.tick()
-        r = self.receipt()
+        r = self.run_update()
         self.assertEqual(r["state"], "failed")
-        self.assertIn("не начато", r["note"])
         self.assertIn("pip: resolution failed", r["note"])
         self.assertFalse(self.docker.did("stop"))
         self.assertEqual((self.install / "app" / "desk.json").read_bytes(), before)
@@ -434,25 +721,16 @@ class UpdaterFlow(unittest.TestCase):
         (self.install / "data" / "extensions" / "quota").mkdir(parents=True)
         (self.install / "data" / "extensions" / "quota" / "extension.json").write_text("{}")
         self.docker.extensions_report = {"ok": False, "summary": "не грузятся: quota — api 2.0"}
-        self.plan(version=NEW)
-        self.u.tick()
-        self.yes()
-        self.u.tick()
-        r = self.receipt()
+        r = self.run_update()
         self.assertEqual(r["state"], "failed")
         self.assertIn("quota", r["note"])
         self.assertFalse(self.docker.did("stop"))
-        self.assertEqual(json.loads((self.install / "app" / "desk.json").read_text())["version"], OLD)
-
-    # --- отказы -------------------------------------------------------------
 
     def test_не_новее(self):
-        self.net.publish(OLD, make_zip(OLD))
         self.plan(version=OLD)
         self.u.tick()
-        r = self.receipt()
-        self.assertEqual(r["state"], "refused")
-        self.assertIn("не новее", r["note"])
+        self.assertEqual(self.receipt()["state"], "refused")
+        self.assertIn("не новее", self.receipt()["note"])
 
     def test_мало_места_и_подсказка(self):
         with mock.patch.object(up.shutil, "disk_usage", return_value=mock.Mock(free=10 * 1024 ** 2)):
@@ -460,7 +738,6 @@ class UpdaterFlow(unittest.TestCase):
             self.u.tick()
         r = self.receipt()
         self.assertEqual(r["state"], "refused")
-        self.assertIn("мало места", r["note"])
         self.assertIn("backup: code", r["note"])
 
     def test_истёк_отклонён_заменён(self):
@@ -477,7 +754,6 @@ class UpdaterFlow(unittest.TestCase):
         hist = control.update_history(self.install / "data")
         self.assertIn({"id": first, "state": "superseded"},
                       [{"id": h["id"], "state": h["state"]} for h in hist])
-        self.assertEqual(self.receipt()["state"], "awaiting")
         self.now[0] += control.UPDATE_AWAIT_HOURS * 3600 + 1
         self.u.tick()
         self.assertEqual(self.receipt()["state"], "expired")
@@ -486,18 +762,29 @@ class UpdaterFlow(unittest.TestCase):
         self.docker.working_dir = "/srv/helene/server"
         self.plan(version=NEW)
         self.u.tick()
+        self.assertIn("HELENE_DIR", self.receipt()["note"])
+
+    def test_контейнер_без_кода_с_диска_предупреждение(self):
+        self.docker.code_mounts["sha256:old"] = False
+        self.plan(version=NEW)
+        self.u.tick()
         r = self.receipt()
-        self.assertEqual(r["state"], "refused")
-        self.assertIn("HELENE_DIR", r["note"])
+        self.assertEqual(r["state"], "awaiting")
+        self.assertFalse(r["code_preview"]["mounted"])
+        self.assertIn("пропадут", r["note"])
+        self.yes()
+        self.u.tick()
+        r = self.receipt()
+        self.assertEqual(r["state"], "done", r.get("note"))
+        self.assertFalse(r["agent_code"]["mounted"])
+        self.assertTrue({c["name"]: c for c in r["checks"]}["code"]["ok"])
 
     def test_чужой_сбой_сверки_не_оставляет_вечное_сверяю(self):
         self.u.release_for = lambda version: {}["нет такого ключа"]
         self.plan(version=NEW)
         self.u.tick()
-        r = self.receipt()
-        self.assertEqual(r["state"], "refused")
-        self.assertIn("KeyError", r["note"])
-        # и новый план после этого ложится (а не «идёт другое обновление»)
+        self.assertEqual(self.receipt()["state"], "refused")
+        self.assertIn("KeyError", self.receipt()["note"])
         self.assertTrue(control.update_plan(self.install / "data", NEW)["ok"])
 
     def test_чужой_сбой_посреди_подмены_откатывает(self):
@@ -508,34 +795,22 @@ class UpdaterFlow(unittest.TestCase):
         def broken():
             raise KeyError("carried_before")
 
-        self.u._wait_idle = broken        # папки уже подменены
+        self.u._wait_idle = broken
         self.u.tick()
         r = self.receipt()
         self.assertEqual(r["state"], "rolled_back", r.get("note"))
         self.assertIn("KeyError", r["note"])
-        self.assertEqual(json.loads((self.install / "app" / "desk.json").read_text())["version"], OLD)
-
-    def test_мусорный_план(self):
-        up.Shared(self.install / "data").write(*up.CTL, control.UPDATE_PLAN,
-                                              {"id": "abcdef12", "version": "1.2.3; rm -rf /"})
-        self.u.tick()
-        self.assertEqual(self.receipt()["state"], "refused")
-
-    # --- сбой посреди -------------------------------------------------------
+        self.assertEqual(json.loads(self.code("app/desk.json"))["version"], OLD)
 
     def test_сбой_на_сборке_всё_возвращается(self):
         self.plan(version=NEW)
         self.u.tick()
         self.yes()
-        orig = self.u._rehearse_extensions
         self.u._rehearse_extensions = lambda: (_ for _ in ()).throw(SystemExit("убит после сборки"))
         with self.assertRaises(SystemExit):
             self.u.tick()
-        self.u._rehearse_extensions = orig
-        self.assertEqual(self.docker.tags["helene-helene:latest"], "sha256:new")   # собран
-        again = up.Updater(self.cfg, docker=self.docker, net=self.net,
-                           clock=lambda: self.now[0], sleep=self.tick_clock)
-        self.assertEqual((again.state["state"], again.state["phase"]), ("running", "prepare"))
+        self.assertEqual(self.docker.tags["helene-helene:latest"], "sha256:new")
+        again = self.again()
         again.recover()
         r = self.receipt()
         self.assertEqual(r["state"], "failed")
@@ -551,21 +826,15 @@ class UpdaterFlow(unittest.TestCase):
         def die():
             raise SystemExit("убит посреди подмены")
 
-        # папки уже подменены, агент ещё не остановлен — и тут исполнитель умер
         self.u._wait_idle = die
         with self.assertRaises(SystemExit):
             self.u.tick()
-        self.assertEqual(json.loads((self.install / "app" / "desk.json").read_text())["version"], NEW)
-        again = up.Updater(self.cfg, docker=self.docker, net=self.net,
-                           clock=lambda: self.now[0], sleep=self.tick_clock)
+        again = self.again()
         again.recover()
         r = self.receipt()
         self.assertEqual(r["state"], "failed")
         self.assertIn("агента не останавливал", r["note"])
-        self.assertEqual(json.loads((self.install / "app" / "desk.json").read_text())["version"], OLD)
-        self.assertEqual((self.install / "tree" / "agent.py").read_text(), f"VERSION = {OLD!r}\n")
-        self.assertEqual(self.docker.tags["helene-helene:latest"], "sha256:old")
-        self.assertFalse(self.docker.did("stop"))
+        self.assertEqual(json.loads(self.code("app/desk.json"))["version"], OLD)
         self.assertTrue(self.docker.running)
 
     def test_сбой_после_подъёма_проверка_доводит(self):
@@ -577,10 +846,23 @@ class UpdaterFlow(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.u.tick()
         self.u._verify = orig
-        again = up.Updater(self.cfg, docker=self.docker, net=self.net,
-                           clock=lambda: self.now[0], sleep=self.tick_clock)
+        again = self.again()
         again.recover()
         self.assertEqual(self.receipt()["state"], "done")
+
+    def test_мусорный_план(self):
+        up.Shared(self.install / "data").write(*up.CTL, control.UPDATE_PLAN,
+                                              {"id": "abcdef12", "version": "1.2.3; rm -rf /"})
+        self.u.tick()
+        self.assertEqual(self.receipt()["state"], "refused")
+
+    def test_версия_только_из_паспорта(self):
+        # app/desk.json теперь на диске агента: назвать там «9.9.9» — не способ запретить
+        # или разрешить обновление
+        (self.install / "app" / "desk.json").write_text(json.dumps({"version": "9.9.9"}))
+        self.assertEqual(self.u.current_version(), OLD)
+        (self.install / "helene-build.json").unlink()
+        self.assertEqual(self.u.current_version(), "")
 
 
 @unittest.skipUnless(LINUX, "O_NOFOLLOW и dir_fd — Linux")
@@ -601,7 +883,9 @@ class SharedNoFollow(unittest.TestCase):
         self.assertEqual(self.shared.read(*up.CTL, control.UPDATE_PLAN), {})
         with self.assertRaises(OSError):
             self.shared.write(*up.CTL, control.UPDATE_RECEIPT, {"state": "x"})
-        self.assertFalse((self.outside / control.UPDATE_RECEIPT).exists())
+        with self.assertRaises(OSError):
+            self.shared.put(("memory", ".control", "x.txt"), b"x")
+        self.assertEqual(sorted(p.name for p in self.outside.iterdir()), [control.UPDATE_PLAN])
 
     def test_файл_ссылкой_заменяется_а_не_пишется_насквозь(self):
         ctl = self.data / "memory" / ".control"
@@ -612,7 +896,10 @@ class SharedNoFollow(unittest.TestCase):
         self.assertEqual(self.shared.read(*up.CTL, control.UPDATE_RECEIPT), {})
         self.shared.write(*up.CTL, control.UPDATE_RECEIPT, {"state": "done"})
         self.assertEqual(target.read_text(), "# код исполнителя")
-        self.assertFalse((ctl / control.UPDATE_RECEIPT).is_symlink())
+        os.symlink(target, ctl / "planted.mine")
+        with self.assertRaises(OSError):
+            self.shared.put(("memory", ".control", "planted.mine"), b"root writes here?")
+        self.assertEqual(target.read_text(), "# код исполнителя")
 
     def test_fifo_и_большой_файл(self):
         ctl = self.data / "memory" / ".control"
@@ -621,6 +908,133 @@ class SharedNoFollow(unittest.TestCase):
         self.assertEqual(self.shared.read(*up.CTL, control.UPDATE_PLAN), {})   # не зависает
         (ctl / control.UPDATE_CONFIRM).write_text('{"a": "' + "x" * (up.MAX_SHARED + 10) + '"}')
         self.assertEqual(self.shared.read(*up.CTL, control.UPDATE_CONFIRM), {})
+
+
+class CarryCode(unittest.TestCase):
+    """Перенос правок агента на чистых папках — без докера, и на Windows тоже."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="helene-carry-")
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        self.base, self.mine, self.new = root / "base", root / "mine", root / "new"
+        self.work = root / "work"
+        files = {"a.py": b"a = 1\n", "b.py": agent_py(OLD), "c.py": agent_py(OLD),
+                 "e.py": b"e = 1\n", "f.py": b"f = 1\n", "g.bin": b"\x00\x01base"}
+        for folder in (self.base, self.mine, self.new):
+            for rel, blob in files.items():
+                (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+                (folder / rel).write_bytes(blob)
+        # агент
+        (self.mine / "a.py").write_bytes("a = 2  # агент\n".encode())                  # выпуск не трогал
+        (self.mine / "b.py").write_bytes(agent_py(OLD, hello="йо"))            # выпуск — VERSION
+        (self.mine / "c.py").write_bytes(agent_py(OLD, helper="2"))            # выпуск — тот же helper
+        (self.mine / "d.py").write_bytes("d = 'новое'\n".encode())                     # добавил
+        (self.mine / "e.py").unlink()                                          # удалил, выпуск не трогал
+        (self.mine / "f.py").unlink()                                          # удалил, выпуск менял
+        (self.mine / "g.bin").write_bytes(b"\x00\x01mine")
+        (self.mine / "__pycache__").mkdir()
+        (self.mine / "__pycache__" / "a.cpython-312.pyc").write_bytes(b"\x00")
+        # выпуск
+        (self.new / "b.py").write_bytes(agent_py(NEW))
+        (self.new / "c.py").write_bytes(agent_py(NEW, helper="3"))
+        (self.new / "f.py").write_bytes("f = 2  # выпуск\n".encode())
+        (self.new / "g.bin").write_bytes(b"\x00\x01theirs")
+
+    def carry(self):
+        return up.carry_code(self.base, self.mine, self.new, work=self.work,
+                             labels=("агент", "база", "выпуск"), prefix="tree")
+
+    def test_правила_переноса(self):
+        if not GIT:
+            self.skipTest("нет git — слияние не проверить")
+        rep = self.carry()
+        self.assertEqual(sorted(rep["edited"]), [f"tree/{n}" for n in
+                                                 ("a.py", "b.py", "c.py", "d.py", "e.py", "f.py", "g.bin")])
+        self.assertEqual(sorted(rep["carried"]), ["tree/a.py", "tree/d.py", "tree/e.py"])
+        self.assertEqual(rep["merged"], ["tree/b.py"])
+        self.assertEqual(sorted(c["path"] for c in rep["conflicts"]), ["tree/c.py", "tree/f.py", "tree/g.bin"])
+        self.assertEqual((self.new / "a.py").read_bytes(), "a = 2  # агент\n".encode())
+        self.assertIn(b"'\xd0\xb9\xd0\xbe'", (self.new / "b.py").read_bytes())      # «йо»
+        self.assertIn(f"VERSION = {NEW!r}".encode(), (self.new / "b.py").read_bytes())
+        self.assertEqual((self.new / "c.py").read_bytes(), agent_py(NEW, helper="3"))
+        self.assertEqual((self.new / "d.py").read_bytes(), "d = 'новое'\n".encode())
+        self.assertFalse((self.new / "e.py").exists())
+        self.assertEqual((self.new / "f.py").read_bytes(), "f = 2  # выпуск\n".encode())
+        self.assertEqual((self.new / "g.bin").read_bytes(), b"\x00\x01theirs")
+        by = {m["path"]: m for m in rep["materials"]}
+        self.assertIn(b"<<<<<<<", by["tree/c.py"]["merged"])
+        self.assertIsNone(by["tree/f.py"]["mine"])
+        self.assertEqual(by["tree/g.bin"]["mine"], b"\x00\x01mine")
+        self.assertIn("Binary files a/tree/g.bin", "".join(rep["diff"]))
+        self.assertNotIn("tree/__pycache__/a.cpython-312.pyc", rep["edited"])
+
+    def test_без_git_тронутое_обоими_уходит_агенту(self):
+        with mock.patch.object(up.subprocess, "run", side_effect=FileNotFoundError("git")):
+            rep = self.carry()
+        paths = {c["path"]: c["why"] for c in rep["conflicts"]}
+        self.assertIn("tree/b.py", paths)
+        self.assertIn("слить не вышло", paths["tree/b.py"])
+        self.assertEqual((self.new / "b.py").read_bytes(), agent_py(NEW))     # вариант выпуска
+        self.assertEqual((self.new / "a.py").read_bytes(), "a = 2  # агент\n".encode())  # нетронутое — всё равно
+
+    @unittest.skipUnless(LINUX, "ссылки — Linux")
+    def test_ссылки_агента_не_переносятся_и_не_читаются(self):
+        secret = Path(self._tmp.name) / "state.json"
+        secret.write_text('{"nonce": "секрет исполнителя"}')
+        os.symlink(secret, self.mine / "leak.py")
+        os.symlink(Path(self._tmp.name), self.mine / "dirlink")
+        rep = self.carry()
+        skipped = {s["path"] for s in rep["skipped"]}
+        self.assertEqual(skipped, {"tree/leak.py", "tree/dirlink"})
+        self.assertFalse((self.new / "leak.py").exists())
+        self.assertNotIn("секрет", "".join(rep["diff"]))
+
+    def test_снимок_и_записка(self):
+        snap = up.snapshot(self.mine)
+        self.assertNotIn("__pycache__/a.cpython-312.pyc", snap)
+        self.assertEqual(snap["a.py"][0], "file")
+        self.assertEqual(up.snapshot(None), {})
+        text = up.materials_readme({"carried": ["tree/a.py"], "merged": [], "skipped": [],
+                                    "conflicts": [{"path": "tree/c.py", "why": "одни строки"}]},
+                                   OLD, NEW)
+        self.assertIn("`tree/c.py` — одни строки", text)
+        self.assertIn("*.mine", text)
+
+
+class DriftFromControl(unittest.TestCase):
+    """Копия протокола у исполнителя (`server/updater/protocol.py`) не разъехалась с каналом."""
+
+    NAMES = ("UPDATE_SCHEMA", "UPDATE_PLAN", "UPDATE_RECEIPT", "UPDATE_CONFIRM", "UPDATE_VERDICT",
+             "UPDATE_REPORTED", "UPDATER_BEAT", "UPDATE_HISTORY", "UPDATE_BACKUPS", "UPDATE_CHECKS",
+             "UPDATE_MANDATORY", "UPDATE_VERDICTS", "UPDATE_AWAIT_HOURS", "UPDATE_WAIT_MIN",
+             "UPDATE_WAIT_DEFAULT", "UPDATE_TRIAL_MIN", "UPDATE_TRIAL_DEFAULT")
+
+    def test_константы(self):
+        for name in self.NAMES:
+            self.assertEqual(getattr(up.protocol, name), getattr(control, name), name)
+        self.assertEqual(up.protocol.BEAT_STALE, control.BEAT_STALE)
+
+    def test_разбор_плана_одинаков(self):
+        corpus = [None, [], {}, {"id": "ABCDEF12"}, {"id": "abcdef12"},
+                  {"id": "abcdef12", "version": "v1.2.3", "backup": "CODE", "checks": ["brain"],
+                   "wait_min": "99", "trial_min": 1, "reason": "  зачем \n  так ", "junk": 1},
+                  {"id": "abcdef12", "checks": ["docker exec"]}, {"id": "abcdef12", "checks": "x"},
+                  {"id": "abcdef12", "wait_min": "ten"}, {"id": "abcdef12", "trial_min": "ten"},
+                  {"id": "abcdef12", "version": "1.2"}, {"id": "abcdef12", "force_extensions": 1,
+                                                          "asked_by": "x" * 99, "chat": "c" * 999}]
+        for raw in corpus:
+            self.assertEqual(up.protocol.validate_plan(raw), control.validate_plan(raw), raw)
+        for text in ("1.2.3", "v1.10.0", "latest", "", None, "1.2"):
+            self.assertEqual(up.protocol.version_tuple(text), control.version_tuple(text), text)
+
+    def test_исполнитель_не_исполняет_код_агента(self):
+        # app/ и tree/ с 27.09 — на диске агента: импорт оттуда дал бы агенту root на хосте
+        src = (DESK / "server" / "updater" / "updater.py").read_text("utf-8")
+        self.assertNotRegex(src, r"(?m)^\s*(from|import)\s+deskd\b")
+        self.assertNotIn('"app")', src.split("SCHEMA =")[0])
+        proto = (DESK / "server" / "updater" / "protocol.py").read_text("utf-8")
+        self.assertNotRegex(proto, r"(?m)^\s*(from|import)\s+(?!__future__|re\b)")
 
 
 class PureParts(unittest.TestCase):
@@ -632,12 +1046,10 @@ class PureParts(unittest.TestCase):
         got = up.pick_release(rel, "Helene")
         self.assertEqual((got["version"], got["sha256"], got["notes"]), ("1.2.0", "a" * 64, "Чинит голос"))
         self.assertEqual(got["sha_from_notes"], "b" * 64)
-        with self.assertRaises(up.UpdateError):
-            up.pick_release({**rel, "assets": rel["assets"][1:]}, "Helene")
-        with self.assertRaises(up.UpdateError):
-            up.pick_release({**rel, "draft": True}, "Helene")
-        with self.assertRaises(up.UpdateError):
-            up.pick_release({**rel, "tag_name": "nightly"}, "Helene")
+        for broken in ({**rel, "assets": rel["assets"][1:]}, {**rel, "draft": True},
+                       {**rel, "tag_name": "nightly"}):
+            with self.assertRaises(up.UpdateError):
+                up.pick_release(broken, "Helene")
 
     def test_сумма_из_текста(self):
         self.assertEqual(up.sha_in_text(("c" * 64) + "  Helene-1.2.0.zip\n", "Helene-1.2.0.zip"), "c" * 64)
@@ -646,22 +1058,24 @@ class PureParts(unittest.TestCase):
         self.assertEqual(up.sha_in_text("ничего"), "")
 
     def test_перенос_переменных_и_тег(self):
-        docker = FakeDocker(Path("/opt/helene"))
-        info = up.describe(docker.row())
+        info = up.describe(FakeDocker(Path("/opt/helene")).row())
         self.assertEqual((info["project"], info["service"]), ("helene", "helene"))
-        carried = up.carried(info)
-        self.assertEqual(carried, {"HELENE_PUBLIC_URL": "https://helene.example.com",
-                                   "HELENE_HOSTS": "helene.example.com", "HELENE_STT_THREADS": "3",
-                                   "HELENE_STT_KEEP_LOADED": "0", "HELENE_PORT": "8094",
-                                   "HELENE_MODELS": "/opt/praxis-models"})
+        self.assertTrue(up.code_mounted(info))
+        self.assertEqual(up.carried(info), {"HELENE_PUBLIC_URL": "https://helene.example.com",
+                                            "HELENE_HOSTS": "helene.example.com", "HELENE_STT_THREADS": "3",
+                                            "HELENE_STT_KEEP_LOADED": "0", "HELENE_PORT": "8094",
+                                            "HELENE_MODELS": "/opt/praxis-models"})
         self.assertEqual(up.image_repo("helene-helene"), ("helene-helene", "latest"))
         self.assertEqual(up.image_repo("localhost:5000/a/b:1.2"), ("localhost:5000/a/b", "1.2"))
 
-    def test_архив_без_путей_наружу(self):
+    def test_архив_без_путей_наружу_и_без_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:
             good = Path(tmp) / "good.zip"
             good.write_bytes(make_zip(NEW))
-            self.assertGreater(up.check_zip(good), 0)
+            runtime = len(f"windows python for {NEW}".encode())
+            with zipfile.ZipFile(good) as zf:
+                total = sum(i.file_size for i in zf.infolist())
+            self.assertEqual(up.check_zip(good), total - runtime)
             for bad in (make_zip(NEW, {"../../etc/cron.d/x": b"x"}), make_zip(NEW, root="Praxis")):
                 path = Path(tmp) / "bad.zip"
                 path.write_bytes(bad)
@@ -693,22 +1107,25 @@ class PureParts(unittest.TestCase):
         info = up.describe(FakeDocker(Path("/opt/helene")).row())
         before = up.carried(info)
         before["__data"] = info["mounts"]["/opt/helene/data"]
+        for name in up.CODE_DIRS:
+            before[f"__{name}"] = info["mounts"][up.IN_CONTAINER_CODE[name]]
         probe = {"now": 100.0, "health": {"code": 200},
                  "state": {"body": {"desk": {"version": "1.1.2"}, "runner": {"alive": False, "age_s": 99}}},
                  "supervisor": {"kind": "serverboot", "beat_epoch": 99.0}}
         rows = {r["name"]: r for r in up.evaluate(probe, info, list(control.UPDATE_MANDATORY), "1.1.2", before)}
         self.assertTrue(rows["version"]["ok"])
         self.assertTrue(rows["config"]["ok"], rows["config"])
+        self.assertTrue(rows["code"]["ok"], rows["code"])
         self.assertFalse(rows["runner"]["ok"])
-        self.assertIn("99", rows["runner"]["note"])
         before["HELENE_HOSTS"] = "другой.example.com"
-        rows = {r["name"]: r for r in up.evaluate(probe, info, ["config"], "1.1.2", before)}
-        self.assertFalse(rows["config"]["ok"])
+        before["__tree"] = "/somewhere/else"
+        rows = {r["name"]: r for r in up.evaluate(probe, info, ["config", "code"], "1.1.2", before)}
         self.assertIn("HELENE_HOSTS", rows["config"]["note"])
+        self.assertFalse(rows["code"]["ok"])
+        self.assertIn("tree/", rows["code"]["note"])
 
     def test_записки_прежнего_контейнера_не_засчитываются(self):
         docker = FakeDocker(Path("/opt/helene"))
-        docker.started = 1_000_000.0
         info = up.describe(docker.row())
         born = docker.started
         fresh = {"now": born + 5, "state": {"body": {"runner": {"alive": True}}},
@@ -724,7 +1141,6 @@ class PureParts(unittest.TestCase):
         self.assertFalse(rows["runner"]["ok"])
         self.assertIn("прежнего контейнера", rows["runner"]["note"])
         self.assertFalse(rows["supervisor"]["ok"])
-        # и «быстрый провал» не верит падениям из записки сломанного прежнего контейнера
         stale["supervisor"]["children"] = [{"id": "runner", "falls": 5, "halted": ""}]
         self.assertEqual(up.doomed(stale, info), "")
         fresh["supervisor"]["children"] = [{"id": "runner", "falls": 5, "halted": ""}]

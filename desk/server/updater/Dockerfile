@@ -7,6 +7,8 @@
 ARG DOCKER_CLI=27-cli
 FROM docker:${DOCKER_CLI}
 
-RUN apk add --no-cache python3 ca-certificates
+# git — только ради `git merge-file`: трёхстороннее слияние правок агента в его коде
+# с новой версией (без него правку, которую тронул и выпуск, я бы только отдал агенту).
+RUN apk add --no-cache python3 ca-certificates git
 
 ENV PYTHONUNBUFFERED=1 PYTHONUTF8=1 PYTHONDONTWRITEBYTECODE=1

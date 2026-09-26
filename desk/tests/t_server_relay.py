@@ -33,12 +33,23 @@ sys.path.insert(0, str(HERE.parent / "server"))
 import serverboot  # noqa: E402
 
 
+def _free_port() -> int:
+    """Свободный порт петли. Стенд не должен зависеть от того, свободен ли 5011: на машине
+    разработчика там живёт его собственное реле Hélène (27.09 так и краснело)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+PORT = _free_port()
+
+
 def cfg(**over) -> dict:
     """Конфиг агента с подпиской ChatGPT — такой приезжает с архивом переноса."""
     base = {
         "tree": "data",
-        "model": {"base_url": "http://127.0.0.1:5011", "key": "sk-frame-abc", "model": "gpt-5.6-sol"},
-        "relay": {"enabled": True, "port": 5011},
+        "model": {"base_url": f"http://127.0.0.1:{PORT}", "key": "sk-frame-abc", "model": "gpt-5.6-sol"},
+        "relay": {"enabled": True, "port": PORT},
     }
     base.update(over)
     return base
@@ -79,13 +90,13 @@ class RelayChild(unittest.TestCase):
         self.assertEqual(child.log_path, self.tree / "relay.log")
 
     def test_ключ_петли_едет_только_когда_он_есть(self):
-        child, _ = self.make(cfg(model={"base_url": "http://127.0.0.1:5011", "key": "  "}))
+        child, _ = self.make(cfg(model={"base_url": f"http://127.0.0.1:{PORT}", "key": "  "}))
         self.assertNotIn("RELAY_API_KEY", child.env,
                          "пустой ключ мозга не должен превращаться в пустой ключ петли: "
                          "реле тогда отвергало бы КАЖДЫЙ вызов")
 
     def test_инструкции_из_конфига(self):
-        child, _ = self.make(cfg(relay={"enabled": True, "port": 5011, "instructions": "full"}))
+        child, _ = self.make(cfg(relay={"enabled": True, "port": PORT, "instructions": "full"}))
         self.assertEqual(child.env["RELAY_INSTRUCTIONS"], "full")
 
     def test_выключенное_реле_молчит(self):
@@ -95,7 +106,7 @@ class RelayChild(unittest.TestCase):
         self.assertEqual(said.strip(), "", "агенту с чужим мозгом реле не нужно — и слов о нём тоже")
 
     def test_мозг_смотрит_в_реле_а_реле_выключено(self):
-        child, said = self.make(cfg(relay={"enabled": False, "port": 5011}))
+        child, said = self.make(cfg(relay={"enabled": False, "port": PORT}))
         self.assertIsNone(child)
         self.assertIn("не будет", said,
                       "адрес мозга на петле при выключенном реле — это немой агент, "
@@ -133,7 +144,7 @@ class LocalRelayUrl(unittest.TestCase):
     def test_петля_с_портом_реле(self):
         self.assertTrue(serverboot.looks_like_local_relay(cfg()))
         self.assertTrue(serverboot.looks_like_local_relay(
-            cfg(model={"base_url": "http://localhost:5011/v1"})))
+            cfg(model={"base_url": f"http://localhost:{PORT}/v1"})))
 
     def test_чужой_адрес_и_чужой_порт(self):
         self.assertFalse(serverboot.looks_like_local_relay(

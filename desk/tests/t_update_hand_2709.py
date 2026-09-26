@@ -120,6 +120,47 @@ class Hand(unittest.TestCase):
         self.assertIn("Подтверждать нечего", hand(action="confirm", owner_words="да"))
         self.assertIn("action бывает", hand(action="обнови"))
 
+    def test_слово_агента_на_испытании(self):
+        _, hand = self.hand()
+        self.assertIn("Испытания сейчас нет", hand(action="accept", report="всё живо"))
+        self.put(control.UPDATE_RECEIPT, {"id": "aaaa1111", "state": "trial", "from_version": "1.1.1",
+                                          "to_version": "1.1.2", "trial": {"key": "k3y",
+                                                                           "until_utc": "2026-09-27T12:00:00Z"}})
+        self.assertIn("Испытание до 2026-09-27T12:00:00Z", hand(action="status"))
+        self.assertIn("Нужен report", hand(action="accept"))
+        # гейта «ход владельца» нет: проверка себя — суждение самого агента
+        self.owner[0] = False
+        text = hand(action="reject", report="рука shell не отвечает")
+        self.assertIn("сломано", text)
+        row = json.loads(self.ctl(control.UPDATE_VERDICT).read_text("utf-8"))
+        self.assertEqual((row["verdict"], row["by"], row["words"], row["key"]),
+                         ("reject", "agent", "рука shell не отвечает", "k3y"))
+
+    def test_записка_испытания(self):
+        receipt = {"id": "aaaa1111", "state": "trial", "from_version": "1.1.1", "to_version": "1.1.2",
+                   "checks": [{"name": "runner", "title": "агент (раннер) жив", "ok": True, "note": "жив"}],
+                   "extensions": {"summary": "все 1 расширений грузятся"},
+                   "trial": {"key": "k", "until_utc": "2026-09-27T12:00:00Z", "minutes": 30},
+                   "agent_code": {"mounted": True, "edited": ["tree/agent.py", "tree/x.py"],
+                                  "carried": ["tree/x.py"], "merged": [],
+                                  "conflicts": [{"path": "tree/agent.py", "why": "одни строки"}],
+                                  "folder": "workspace/update-1.1.2", "summary": "…"}}
+        note = updates.report_note(receipt, owner="Дмитрий")
+        for piece in ("[Hélène · испытание]", "до 2026-09-27T12:00:00Z UTC", "✓ агент (раннер) жив",
+                      "все 1 расширений грузятся", "не легло 1", "tree/agent.py — одни строки",
+                      "workspace/update-1.1.2/README.md", 'action=\\"accept\\"'.replace("\\", ""),
+                      "action=\"reject\"", "Промолчишь до срока — тоже откат", "Владелец — Дмитрий"):
+            self.assertIn(piece, note)
+        # после отката по молчанию — итоговая записка говорит почему
+        receipt.update(state="rolled_back", note="откат", trial={"verdict": {"verdict": "timeout"}},
+                       rollback={"ok": True, "notes": ["прежний код на месте",
+                                                      "данные агента не трогал"]})
+        note = updates.report_note(receipt, owner="Дмитрий")
+        self.assertIn("ответа от тебя до срока не было", note)
+        self.assertIn("данные агента не трогал", note)
+        for word in ("проверил", "ответил", "клала", "сама "):
+            self.assertNotIn(word, note + updates.TOOL["description"])
+
     def test_записка_об_итоге(self):
         receipt = {"id": "aaaa1111", "state": "rolled_back", "from_version": "1.1.1",
                    "to_version": "1.1.2", "note": "1.1.2 не прошла — вернул 1.1.1",
@@ -175,6 +216,29 @@ class EngineWiring(unittest.TestCase):
         self.assertIn("Обновление прошло: 1.1.1 → 1.1.2", archived[0])
         self.assertIsNone(control.update_unreported(self.tree))
 
+    def test_испытание_и_итог_двумя_записками(self):
+        ctl = self.tree / "memory" / ".control"
+        ctl.mkdir(parents=True)
+        receipt = {"id": "aaaa1111", "state": "trial", "from_version": "1.1.1", "to_version": "1.1.2",
+                   "trial": {"key": "k", "since_epoch": time.time(), "until_utc": "2026-09-27T12:00:00Z",
+                             "minutes": 30}}
+        (ctl / control.UPDATE_RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
+        archived = []
+        desk = types.SimpleNamespace(archive=lambda text, **k: archived.append(text),
+                                     life=lambda *a, **k: None)
+        with mock.patch.dict(os.environ, ON_SERVER), \
+                mock.patch.multiple(runner, _tree=self.tree, _desk=desk, _speaker="Дмитрий",
+                                    _turn_in_window=lambda *a, **k: "spoken"):
+            runner._update_report_due()
+            runner._update_report_due()
+            receipt.update(state="rolled_back", note="откат", finished_epoch=time.time(),
+                           trial={"verdict": {"verdict": "reject", "by": "agent", "words": "сломано"}})
+            (ctl / control.UPDATE_RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
+            runner._update_report_due()
+        self.assertEqual(len(archived), 2)
+        self.assertIn("[Hélène · испытание]", archived[0])
+        self.assertIn("не прошло и откачено", archived[1])
+
     def test_под_serverboot_движок_не_берёт_стол_надзора(self):
         with mock.patch.dict(os.environ, ON_SERVER):
             self.assertFalse(runner._start_supervisor(self.tree))
@@ -185,7 +249,7 @@ class EngineWiring(unittest.TestCase):
 
     def test_ручки_обновления_только_ключу_окна(self):
         import deskapp  # noqa: PLC0415 — тяжёлый импорт только здесь
-        for path in ("/api/update", "/api/update/plan", "/api/update/confirm"):
+        for path in ("/api/update", "/api/update/plan", "/api/update/confirm", "/api/update/verdict"):
             self.assertTrue(deskapp._scope_ok("owner", path), path)
             self.assertFalse(deskapp._scope_ok("device", path), f"телефону нельзя: {path}")
             route, _ = deskapp.match_route("POST" if path != "/api/update" else "GET", path)

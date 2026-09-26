@@ -166,6 +166,54 @@ class PlanAndConfirm(unittest.TestCase):
                                                 "finished_epoch": time.time()})
         self.assertIsNone(control.update_unreported(self.tree))
 
+    def test_срок_испытания(self):
+        plan, _ = control.validate_plan({"id": "ab12cd34ef"})
+        self.assertEqual(plan["trial_min"], control.UPDATE_TRIAL_DEFAULT)
+        plan, _ = control.validate_plan({"id": "ab12cd34ef", "trial_min": 1})
+        self.assertEqual(plan["trial_min"], control.UPDATE_TRIAL_MIN[0])
+        beat(self.tree)
+        self.assertEqual(control.update_plan(self.tree, trial_min=45)["plan"]["trial_min"], 45)
+
+    def test_слово_на_испытании(self):
+        self.assertIn("испытания сейчас нет",
+                      control.update_verdict(self.tree, "aaaa1111", "k", "accept")["note"])
+        put(self.tree, control.UPDATE_RECEIPT, {"id": "aaaa1111", "state": "trial",
+                                                "trial": {"key": "k3y"}, "from_version": "1.1.1",
+                                                "to_version": "1.1.2"})
+        self.assertFalse(control.update_verdict(self.tree, "aaaa1111", "k3y", "может быть")["ok"])
+        self.assertIn("другой план", control.update_verdict(self.tree, "bbbb2222", "k3y", "accept")["note"])
+        self.assertIn("ключ", control.update_verdict(self.tree, "aaaa1111", "чужой", "accept")["note"])
+        self.assertFalse((ctl(self.tree) / control.UPDATE_VERDICT).exists())
+        got = control.update_verdict(self.tree, "aaaa1111", "k3y", "reject", by="agent",
+                                     words="  рука shell  молчит ")
+        self.assertTrue(got["ok"])
+        self.assertIn("1.1.1", got["note"])
+        self.assertIn("память", got["note"])
+        row = json.loads((ctl(self.tree) / control.UPDATE_VERDICT).read_text("utf-8"))
+        self.assertEqual((row["verdict"], row["by"], row["words"]), ("reject", "agent", "рука shell молчит"))
+        # во время испытания второй план не ложится
+        beat(self.tree)
+        self.assertIn("идёт другое обновление", control.update_plan(self.tree)["note"])
+
+    def test_испытание_и_итог_рассказываются_по_отдельности(self):
+        now = time.time()
+        put(self.tree, control.UPDATE_RECEIPT, {"id": "aaaa1111", "state": "trial",
+                                                "trial": {"key": "k", "since_epoch": now}})
+        self.assertEqual(control.update_unreported(self.tree)["state"], "trial")
+        control.update_mark_reported(self.tree, "aaaa1111", "trial")
+        self.assertIsNone(control.update_unreported(self.tree))
+        put(self.tree, control.UPDATE_RECEIPT, {"id": "aaaa1111", "state": "rolled_back",
+                                                "finished_epoch": now,
+                                                "trial": {"verdict": {"verdict": "timeout"}}})
+        self.assertEqual(control.update_unreported(self.tree)["state"], "rolled_back")
+        # итог «принято», сказанный самим агентом, второй раз не рассказывается
+        put(self.tree, control.UPDATE_RECEIPT, {"id": "cccc3333", "state": "done", "finished_epoch": now,
+                                                "trial": {"verdict": {"verdict": "accept", "by": "agent"}}})
+        self.assertIsNone(control.update_unreported(self.tree))
+        put(self.tree, control.UPDATE_RECEIPT, {"id": "dddd4444", "state": "done", "finished_epoch": now,
+                                                "trial": {"verdict": {"verdict": "accept", "by": "window"}}})
+        self.assertEqual(control.update_unreported(self.tree)["id"], "dddd4444")
+
     def test_история_читается_с_хвоста(self):
         path = ctl(self.tree) / control.UPDATE_HISTORY
         path.parent.mkdir(parents=True)

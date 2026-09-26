@@ -103,6 +103,54 @@ assert.equal(updateCardHTML({ updater: { present: false }, receipt: null }, { in
   assert.doesNotMatch(html, /<button/);
 }
 
+// До «да»: правки агента в его коде видны владельцу.
+{
+  const receipt = { id: "a", state: "awaiting", nonce: "n", from_version: "1.1.1", to_version: "1.1.2",
+    code_preview: { mounted: true, base: true, edited: 2, files: ["tree/agent.py", "tree/yono.py"],
+      note: "агент правил свой код: 2 файл(ов) — перенесу правки на новую версию, что не ляжет — отдам ему" } };
+  const html = updateCardHTML({ updater: beat, receipt }, { inContainer: true });
+  assert.match(html, /Код агента: агент правил свой код/);
+  assert.match(html, /tree\/agent\.py, tree\/yono\.py/);
+  const lost = updateCardHTML({ updater: beat, receipt: { ...receipt, code_preview: { mounted: false, note: "правки пропадут" } } },
+    { inContainer: true });
+  assert.match(lost, /class="receipt err">Код агента: правки пропадут/);
+}
+
+// Испытание: механика прошла, агент проверяет себя; у владельца — слово поверх.
+{
+  const receipt = { id: "aaaa1111", state: "trial", from_version: "1.1.1", to_version: "1.1.2",
+    checks: [{ name: "running", ok: true }, { name: "runner", ok: true }],
+    trial: { key: "k3y", until_utc: "2026-09-27T10:30:00Z", minutes: 30 },
+    agent_code: { mounted: true, edited: ["tree/agent.py", "tree/x.py"], carried: ["tree/x.py"], merged: [],
+      conflicts: [{ path: "tree/agent.py", why: "одни строки" }], folder: "workspace/update-1.1.2",
+      summary: "правок агента в коде: 2; перенесено 1, слито 0, не легло 1" } };
+  const u = { updater: beat, receipt };
+  const html = updateCardHTML(u, { inContainer: true, now: Date.parse("2026-09-27T10:12:00Z") });
+  assert.match(html, /Испытание: 1\.1\.2 поднята, агент проверяет себя/);
+  assert.match(html, /срок — через 18 мин/);
+  assert.match(html, /data-update-verdict="accept" data-id="aaaa1111" data-key="k3y"/);
+  assert.match(html, /data-update-verdict="reject" data-id="aaaa1111" data-key="k3y"/);
+  assert.match(html, /Не легло: tree\/agent\.py/);
+  assert.match(html, /workspace\/update-1\.1\.2/);
+  assert.match(html, /память агента остаётся/);
+  assert.doesNotMatch(html, /data-update-plan/);
+  assert.equal(updateActive(u), true);
+}
+
+// Итог: слово на испытании и судьба правок.
+{
+  const receipt = { id: "a", state: "done", from_version: "1.1.1", to_version: "1.1.2", note: "принято",
+    trial: { verdict: { verdict: "accept", by: "agent", words: "руки живы" } },
+    agent_code: { mounted: true, edited: ["tree/x.py"], carried: ["tree/x.py"], conflicts: [],
+      summary: "правок агента в коде: 1; перенесено 1, слито 0, не легло 0" } };
+  const html = updateCardHTML({ updater: { ...beat, newer: false }, receipt }, { inContainer: true });
+  assert.match(html, /Испытание: агент — «принимаю»: руки живы/);
+  assert.match(html, /Правки агента в коде: правок агента в коде: 1/);
+  const quiet = updateCardHTML({ updater: beat, receipt: { ...receipt, state: "rolled_back",
+    trial: { verdict: { verdict: "timeout" } } } }, { inContainer: true });
+  assert.match(quiet, /агент не ответил до срока/);
+}
+
 // Текст из расписки — не разметка.
 {
   const receipt = { id: "\"><img src=x>", state: "awaiting", nonce: "<b>", plan: { reason: "<script>alert(1)</script>" } };
