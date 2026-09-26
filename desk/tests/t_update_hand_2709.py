@@ -183,6 +183,14 @@ class EngineWiring(unittest.TestCase):
         self.assertNotIn("PRAXIS_DESK_TOKEN", env)
         self.assertEqual(env["HELENE_TOKEN"], "tok")
 
+    def test_ручки_обновления_только_ключу_окна(self):
+        import deskapp  # noqa: PLC0415 — тяжёлый импорт только здесь
+        for path in ("/api/update", "/api/update/plan", "/api/update/confirm"):
+            self.assertTrue(deskapp._scope_ok("owner", path), path)
+            self.assertFalse(deskapp._scope_ok("device", path), f"телефону нельзя: {path}")
+            route, _ = deskapp.match_route("POST" if path != "/api/update" else "GET", path)
+            self.assertIsNotNone(route, path)
+
     def test_код_42_не_падение(self):
         def child(code, key="runner"):
             one = serverboot.Child(key, "раннер" if key == "runner" else "реле", [], {}, self.tree,
