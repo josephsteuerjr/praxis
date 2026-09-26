@@ -200,7 +200,10 @@ function agentCodeHTML(r: UpdateReceipt): string {
   }
   if (!code.edited || !code.edited.length) return `<p class="muted">Своих правок в коде у агента не было.</p>`;
   const conflicts = code.conflicts || [];
-  return `<p class="${conflicts.length ? "receipt err" : "muted"}">Правки агента в коде: ${esc(code.summary || "")}${
+  const counts = `${code.edited.length} файл(ов): перенесено ${(code.carried || []).length}, слито ${
+    (code.merged || []).length
+  }, не легло ${conflicts.length}`;
+  return `<p class="${conflicts.length ? "receipt err" : "muted"}">Правки агента в коде — ${esc(counts)}${
     conflicts.length
       ? `. Не легло: ${esc(conflicts.slice(0, 6).map((c) => c.path).join(", "))}${conflicts.length > 6 ? " …" : ""} — стороны
          и объяснение у агента в <span class="mono">${esc(code.folder || "")}</span>`

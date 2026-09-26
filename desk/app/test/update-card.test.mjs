@@ -145,7 +145,7 @@ assert.equal(updateCardHTML({ updater: { present: false }, receipt: null }, { in
       summary: "правок агента в коде: 1; перенесено 1, слито 0, не легло 0" } };
   const html = updateCardHTML({ updater: { ...beat, newer: false }, receipt }, { inContainer: true });
   assert.match(html, /Испытание: агент — «принимаю»: руки живы/);
-  assert.match(html, /Правки агента в коде: правок агента в коде: 1/);
+  assert.match(html, /Правки агента в коде — 1 файл\(ов\): перенесено 1, слито 0, не легло 0/);
   const quiet = updateCardHTML({ updater: beat, receipt: { ...receipt, state: "rolled_back",
     trial: { verdict: { verdict: "timeout" } } } }, { inContainer: true });
   assert.match(quiet, /агент не ответил до срока/);

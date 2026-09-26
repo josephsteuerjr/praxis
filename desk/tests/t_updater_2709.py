@@ -392,7 +392,7 @@ class UpdaterFlow(Base):
         self.u.tick()
         r = self.receipt()
         self.assertEqual(r["state"], "done", r.get("note"))
-        self.assertIn("испытание агентом пропущено: мозг не настроен", r["note"])
+        self.assertIn("Испытание агентом пропущено: мозг не настроен", r["note"])
         self.assertNotIn("nonce", r)
         desk = json.loads(self.code("app/desk.json"))
         self.assertEqual(desk["version"], NEW)
@@ -466,7 +466,7 @@ class UpdaterFlow(Base):
         self.assertTrue((folder / "README.md").is_file())
         diff = (folder / "edits.diff").read_text("utf-8")
         self.assertIn("+    return 'привет от Йоно'", diff)
-        self.assertIn("правок агента в коде: 4", r["note"])
+        self.assertIn("Правок агента в коде: 4", r["note"])
         # база нетронута: чистый исходник новой версии — без правок агента
         self.assertEqual((self.u.pristine(NEW) / "tree" / "agent.py").read_bytes(), agent_py(NEW))
 
@@ -571,7 +571,7 @@ class Trial(Base):
         self.u.tick()
         r = self.receipt()
         self.assertEqual(r["state"], "done", r.get("note"))
-        self.assertIn("агент принял на испытании", r["note"])
+        self.assertIn("Агент принял на испытании", r["note"])
         self.assertEqual(r["trial"]["verdict"]["by"], "agent")
         self.assertTrue(self.u.reexec)
         # об итоге, принятом самим агентом, записки второй раз не будет

@@ -1864,7 +1864,7 @@ class Updater:
             parts.append(f"правки агента не с чем было сравнить — его прежний код в {code.get('folder')}")
         parts.append(f"прежняя версия отложена ({st['backup_dir']}), образ "
                      f"{st['image_repo']}:{st['rollback_tag']}")
-        self.finish("done", ". ".join(parts))
+        self.finish("done", ". ".join(part[:1].upper() + part[1:] for part in parts))
         # Мой код тоже обновился вместе с поставкой: перезапускаюсь им.
         self.reexec = True
 
