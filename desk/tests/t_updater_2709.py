@@ -127,7 +127,28 @@ class FakeDocker:
         self.alive = {"sha256:old": True, "sha256:new": True}
         self.versions = {"sha256:old": OLD, "sha256:new": NEW}
         self.extensions_report = {"ok": True, "summary": "все 1 расширений грузятся"}
+        self.falls = {"sha256:old": 0, "sha256:new": 0}   # падения раннера в записке надзора
         self.on_up = None           # что «новая версия» делает с data/ при подъёме
+        # Жизнь контейнера. Квитанция раннера и записка надзора лежат в data/ и ПЕРЕЖИВАЮТ
+        # замену контейнера: мёртвый новый раннер оставляет свежей квитанцию прежнего —
+        # живой прогон 27.09 на этом и поймал «агент жив» у сломанного выпуска.
+        self.started = 1_000_000.0
+        self.reader_at = self.started + 2
+        self.sup_started = self.started
+        self.sup_falls = 0
+        self.channel_says_alive = None     # канал верит свежей чужой квитанции (как в жизни)
+
+    def _start(self):
+        self.started += 100
+        if self.alive[self.image]:
+            self.reader_at = self.started + 2
+        # надзор нового контейнера пишет свою записку всегда — он жив, даже когда раннер нет
+        self.sup_started = self.started
+        self.sup_falls = self.falls[self.image]
+
+    @staticmethod
+    def _iso(epoch: float) -> str:
+        return up.utc(epoch).replace("Z", ".123456789Z")
 
     def row(self) -> dict:
         labels = {"com.docker.compose.project": "helene",
@@ -142,7 +163,8 @@ class FakeDocker:
                            {"Destination": "/opt/helene/helene.json", "Source": str(self.install / "helene.json")},
                            {"Destination": "/models", "Source": self.models}],
                 "State": {"Running": self.running, "Restarting": False,
-                          "Status": "running" if self.running else "exited"}}
+                          "Status": "running" if self.running else "exited",
+                          "StartedAt": self._iso(self.started)}}
 
     def run(self, args, *, env=None, timeout=600):
         self.calls.append(list(args))
@@ -157,13 +179,20 @@ class FakeDocker:
             self.tags.pop(args[1], None)
             return 0, "", ""
         if args[0] == "exec":
-            probe = {"now": 1000.0,
+            now = self.started + 5
+            alive = (self.alive[self.image] if self.channel_says_alive is None
+                     else self.channel_says_alive)
+            probe = {"now": now,
                      "health": {"code": 200, "body": {}},
                      "state": {"code": 200, "body": {
                          "desk": {"version": self.versions[self.image]},
-                         "runner": {"alive": self.alive[self.image], "age_s": 1},
+                         "runner": {"alive": alive, "age_s": round(now - self.reader_at)},
                          "brain": {"configured": True, "model": "glm"}}},
-                     "supervisor": {"kind": "serverboot", "beat_epoch": 998.0}}
+                     "supervisor": {"kind": "serverboot", "beat_epoch": now - 2,
+                                    "started_utc": up.utc(self.sup_started), "children": [
+                                        {"id": "runner", "alive": self.alive[self.image],
+                                         "falls": self.sup_falls, "halted": ""}]},
+                     "reader": {"at": self.reader_at, "pid": 8, "busy": False}}
             return 0, "ignored line\n" + json.dumps(probe), ""
         if args[0] == "run":
             return (0 if self.extensions_report.get("ok") else 2), json.dumps(self.extensions_report), ""
@@ -188,6 +217,7 @@ class FakeDocker:
                             "PRAXIS_STT_KEEP_LOADED": env.get("HELENE_STT_KEEP_LOADED", "0")}
                 self.port = env.get("HELENE_PORT", "8094")
                 self.models = env.get("HELENE_MODELS", "./models")
+                self._start()
                 if self.on_up:
                     self.on_up(self.image)
                 return 0, "", ""
@@ -340,6 +370,39 @@ class UpdaterFlow(unittest.TestCase):
         self.assertEqual(self.docker.tags["helene-helene:latest"], "sha256:old")
         self.assertEqual(self.docker.image, "sha256:old")
         self.assertTrue(r["rollback"]["ok"])
+        # проверки в расписке — НОВОЙ версии (красные), проверки отката — отдельно (зелёные)
+        runner = {c["name"]: c for c in r["checks"]}["runner"]
+        self.assertFalse(runner["ok"])
+        self.assertTrue(all(c["ok"] for c in r["rollback_checks"]))
+
+    def test_квитанция_прежнего_контейнера_не_живость(self):
+        # Живой прогон 27.09: новый раннер мёртв, но квитанцию в data/ свежей оставил
+        # прежний контейнер, и канал честно говорит «жив». Это не живость нового.
+        self.docker.alive["sha256:new"] = False
+        self.docker.channel_says_alive = True
+        self.plan(version=NEW, wait_min=2)
+        self.u.tick()
+        self.yes()
+        self.u.tick()
+        r = self.receipt()
+        self.assertEqual(r["state"], "rolled_back", r.get("note"))
+        self.assertIn("от прежнего контейнера", r["note"])
+        self.assertEqual(self.docker.image, "sha256:old")
+        self.assertTrue(r["rollback"]["ok"])
+
+    def test_раннер_падает_раз_за_разом_откат_без_ожидания(self):
+        self.docker.alive["sha256:new"] = False
+        self.docker.falls["sha256:new"] = 3
+        self.plan(version=NEW, wait_min=30)
+        self.u.tick()
+        self.yes()
+        started = self.now[0]
+        self.u.tick()
+        r = self.receipt()
+        self.assertEqual(r["state"], "rolled_back", r.get("note"))
+        self.assertIn("падает раз за разом", r["note"])
+        self.assertLess(self.now[0] - started, 60, "ждал полчаса вместо отката сразу")
+        self.assertEqual(self.docker.image, "sha256:old")
 
     def test_сборка_упала_живой_агент_не_тронут(self):
         self.docker.fail_build = True
@@ -617,6 +680,31 @@ class PureParts(unittest.TestCase):
         rows = {r["name"]: r for r in up.evaluate(probe, info, ["config"], "1.1.2", before)}
         self.assertFalse(rows["config"]["ok"])
         self.assertIn("HELENE_HOSTS", rows["config"]["note"])
+
+    def test_записки_прежнего_контейнера_не_засчитываются(self):
+        docker = FakeDocker(Path("/opt/helene"))
+        docker.started = 1_000_000.0
+        info = up.describe(docker.row())
+        born = docker.started
+        fresh = {"now": born + 5, "state": {"body": {"runner": {"alive": True}}},
+                 "supervisor": {"kind": "serverboot", "beat_epoch": born + 3,
+                                "started_utc": up.utc(born + 1)},
+                 "reader": {"at": born + 4}}
+        rows = {r["name"]: r["ok"] for r in up.evaluate(fresh, info, ["runner", "supervisor"], "", {})}
+        self.assertEqual(rows, {"runner": True, "supervisor": True})
+        stale = json.loads(json.dumps(fresh))
+        stale["supervisor"]["started_utc"] = up.utc(born - 600)
+        stale["reader"]["at"] = born - 3
+        rows = {r["name"]: r for r in up.evaluate(stale, info, ["runner", "supervisor"], "", {})}
+        self.assertFalse(rows["runner"]["ok"])
+        self.assertIn("прежнего контейнера", rows["runner"]["note"])
+        self.assertFalse(rows["supervisor"]["ok"])
+        # и «быстрый провал» не верит падениям из записки сломанного прежнего контейнера
+        stale["supervisor"]["children"] = [{"id": "runner", "falls": 5, "halted": ""}]
+        self.assertEqual(up.doomed(stale, info), "")
+        fresh["supervisor"]["children"] = [{"id": "runner", "falls": 5, "halted": ""}]
+        self.assertIn("падений подряд: 5", up.doomed(fresh, info))
+        self.assertEqual(up.iso_epoch("1970-01-12T13:46:40.123456789Z"), 1_000_000.0)
 
 
 if __name__ == "__main__":

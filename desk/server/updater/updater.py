@@ -422,10 +422,26 @@ def image_repo(image: str) -> tuple[str, str]:
     return repo, (tag if sep else "latest")
 
 
+def iso_epoch(text: str) -> float:
+    """«2026-09-27T10:00:05.123456789Z» (докер, наносекунды) -> эпоха, с точностью до секунды."""
+    try:
+        return dt.datetime.strptime(str(text)[:19], "%Y-%m-%dT%H:%M:%S").replace(
+            tzinfo=dt.UTC).timestamp()
+    except ValueError:
+        return 0.0
+
+
 def evaluate(probe: dict, info: dict, checks: list[str], version: str, before: dict) -> list[dict]:
-    """Проверки после подъёма. Каждая — по имени из закрытого списка протокола."""
+    """Проверки после подъёма. Каждая — по имени из закрытого списка протокола.
+
+    ⚠ Живой прогон 27.09: сломанный выпуск (раннер падал на старте) прошёл «агент жив».
+    Квитанцию раннера и записку надзора пишут в `data/` — а её переживает замена
+    контейнера, и свежими их оставил ПРЕЖНИЙ контейнер за секунды до остановки. Поэтому
+    обе засчитываются, только если написаны после старта нового контейнера.
+    """
     state = ((probe.get("state") or {}).get("body") or {}) if isinstance(probe, dict) else {}
     health = (probe.get("health") or {}) if isinstance(probe, dict) else {}
+    born = iso_epoch(info.get("started_at", "")) - 1.0     # старт контейнера, запас на округление
     out = []
     for name in checks:
         ok, note = False, ""
@@ -442,13 +458,20 @@ def evaluate(probe: dict, info: dict, checks: list[str], version: str, before: d
         elif name == "supervisor":
             sup = probe.get("supervisor") or {}
             age = float(probe.get("now") or 0) - float(sup.get("beat_epoch") or 0)
-            ok = sup.get("kind") == "serverboot" and 0 <= age <= control.BEAT_STALE
-            note = (f"{sup.get('kind') or 'записки нет'}, бился {age:.0f} с назад"
+            ours = iso_epoch(sup.get("started_utc", "")) >= born
+            ok = sup.get("kind") == "serverboot" and 0 <= age <= control.BEAT_STALE and ours
+            note = ((f"{sup.get('kind') or 'записки нет'}, бился {age:.0f} с назад"
+                     + ("" if ours else " — но это записка прежнего контейнера"))
                     if sup.get("beat_epoch") else str(sup.get("why") or "записки надзора нет"))
         elif name == "runner":
             runner = state.get("runner") or {}
-            ok = bool(runner.get("alive"))
-            note = "жив" if ok else f"не отвечает (возраст квитанции {runner.get('age_s')})"
+            at = float((probe.get("reader") or {}).get("at") or 0)
+            ours = at >= born
+            ok = bool(runner.get("alive")) and ours
+            note = ("жив" if ok else
+                    "квитанция раннера — от прежнего контейнера, новый ещё не отметился"
+                    if runner.get("alive") else
+                    f"не отвечает (возраст квитанции {runner.get('age_s')})")
         elif name == "config":
             now = carried(info)
             keys = sorted(k for k in set(before) | set(now) if not k.startswith("__"))
@@ -464,6 +487,33 @@ def evaluate(probe: dict, info: dict, checks: list[str], version: str, before: d
         out.append({"name": name, "title": control.UPDATE_CHECKS.get(name, name),
                     "ok": bool(ok), "note": note})
     return out
+
+
+#: Столько падений раннера подряд (по записке надзора) — и ждать дальше незачем.
+FALLS_DOOMED = 3
+
+
+def doomed(probe: dict, info: dict) -> str:
+    """Новая версия уже не поднимется — по словам самого надзора. -> причина или "".
+
+    Раннер, который падает на старте, serverboot поднимает с растущей паузой, а код 2/3
+    («нет дерева», «кривой конфиг») помечает остановленным. Ждать все минуты проверок
+    в этих случаях — значит держать агента лежачим зря: откат нужен сейчас.
+
+    Записка надзора — только ЭТОГО контейнера: при откате в `data/` ещё лежит записка
+    сломанной версии с её падениями, и по ней откат счёлся бы несостоявшимся.
+    """
+    sup = (probe.get("supervisor") or {}) if isinstance(probe, dict) else {}
+    if iso_epoch(sup.get("started_utc", "")) < iso_epoch(info.get("started_at", "")) - 1.0:
+        return ""
+    for child in sup.get("children") or []:
+        if not isinstance(child, dict) or child.get("id") != "runner":
+            continue
+        if child.get("halted"):
+            return f"надзор остановил раннер: {child['halted']}"
+        if int(child.get("falls") or 0) >= FALLS_DOOMED:
+            return f"раннер падает раз за разом (падений подряд: {child['falls']})"
+    return ""
 
 
 def check_zip(path: Path, root_name: str = "Helene") -> int:
@@ -564,6 +614,11 @@ try:
     out["supervisor"] = json.loads((tree / "memory" / ".state" / "supervisor.json").read_text("utf-8"))
 except Exception as exc:
     out["supervisor"] = {"why": f"{type(exc).__name__}: {exc}"[:200]}
+try:
+    reader = json.loads((tree / "memory" / ".control" / "desk_inbox" / ".reader.json").read_text("utf-8"))
+    out["reader"] = {"at": reader.get("at"), "pid": reader.get("pid"), "busy": reader.get("busy")}
+except Exception as exc:
+    out["reader"] = {"why": f"{type(exc).__name__}: {exc}"[:200]}
 print(json.dumps(out, ensure_ascii=False))
 '''
 
@@ -641,7 +696,7 @@ class Updater:
     def receipt(self) -> dict:
         """Что видят окно и агент. Внутренние пути отката — только в моей папке."""
         keys = ("id", "state", "note", "step", "steps", "plan", "from_version", "to_version",
-                "release", "backup", "extensions", "checks", "carried", "confirmed", "created_utc",
+                "release", "backup", "extensions", "checks", "rollback_checks", "carried", "confirmed", "created_utc",
                 "updated_utc", "awaiting_until_utc", "awaiting_since_epoch", "finished_utc",
                 "finished_epoch", "rollback", "phase")
         out = {"schema": control.UPDATE_SCHEMA}
@@ -663,7 +718,9 @@ class Updater:
     def finish(self, state: str, note: str) -> None:
         now = self.clock()
         with self.lock:
-            self.state.update(state=state, note=note, finished_utc=utc(now), finished_epoch=now)
+            # «Шаг» у итога — пустой: у отклонённого плана там осталось бы «жду «да»».
+            self.state.update(state=state, note=note, step="", finished_utc=utc(now),
+                              finished_epoch=now)
             self.state.pop("nonce", None)
             self.busy = ""
             # «Последняя версия» в записке — сразу заново: после обновления она иначе
@@ -1054,7 +1111,10 @@ class Updater:
             self.sleep(3)
         self.step("агент не закончил ход за 3 минуты — останавливаю всё равно", ok=False)
 
-    def _verify(self, version: str, checks: list[str], wait_min: int) -> list[dict]:
+    def _verify(self, version: str, checks: list[str], wait_min: int,
+                key: str = "checks") -> list[dict]:
+        """Ждать проверок. `key` — куда в расписку: проверки отката не затирают проверки
+        новой версии — иначе «не прошло» читалось бы рядом с зелёным списком."""
         st = self.state
         self.step(f"проверяю: {', '.join(checks)} (жду до {wait_min} мин)")
         deadline = self.clock() + wait_min * 60
@@ -1075,10 +1135,18 @@ class Updater:
                 except (ValueError, IndexError):
                     probe = {}
             results = evaluate(probe, info, checks, version, st.get("carried_before") or {})
-            st["checks"] = results
+            st[key] = results
             self.save()
             if all(r["ok"] for r in results):
                 self.step("проверки прошли: " + ", ".join(r["name"] for r in results))
+                return results
+            lost = doomed(probe, info)
+            if lost:
+                for row in results:
+                    if row["name"] == "runner" and not row["ok"]:
+                        row["note"] = lost
+                st[key] = results
+                self.step("дальше ждать незачем", ok=False, note=lost)
                 return results
             down = 0 if info.get("running") else down + 1
             if down >= 6:
@@ -1144,13 +1212,18 @@ class Updater:
                 shutil.copyfile(saved, self.install / "helene.json")
                 notes.append("helene.json возвращён")
             notes.append(self._restore_data())
+            try:
+                # Из копии вернулась и моя прежняя записка о себе — окно сочло бы, что я молчу.
+                self.beat()
+            except OSError:
+                pass
             self._retag_old()
             self._must(self.compose("up", "-d", "--no-build", "--force-recreate", "--no-deps",
                                     st["service"], timeout=300), "прежняя версия не поднялась")
             checks = [c for c in control.UPDATE_MANDATORY
                       if c != "version" or st.get("from_version")]
             results = self._verify(st.get("from_version") or "", checks,
-                                   min(int(st["plan"]["wait_min"]), 10))
+                                   min(int(st["plan"]["wait_min"]), 10), key="rollback_checks")
         except (UpdateError, OSError) as exc:
             st["rollback"] = {"ok": False, "notes": notes, "why": str(exc)[:600]}
             self._cleanup_stage()

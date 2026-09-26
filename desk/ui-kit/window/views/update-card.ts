@@ -162,9 +162,15 @@ function finalHTML(r: UpdateReceipt, fmt: (s: string) => string): string {
   const good = r.state === "done";
   const bad = ["failed", "rolled_back", "refused"].includes(r.state);
   const span = r.from_version || r.to_version ? ` ${esc(r.from_version || "?")} → ${esc(r.to_version || "?")}` : "";
+  // Проверки — новой версии; при откате отдельной строкой сказано, поднялась ли прежняя.
+  const back = r.rollback?.notes?.length
+    ? `<p class="muted">Откат: ${esc(r.rollback.notes.join("; "))}; ${
+        r.rollback.ok ? "прежняя версия поднята и прошла проверки" : "прежняя версия проверки не прошла"
+      }.</p>`
+    : "";
   return `<p class="${good ? "receipt ok" : bad ? "receipt err" : "receipt"}">Последний план${span}${
     r.finished_utc ? ` (${esc(fmt(r.finished_utc))})` : ""
-  }: ${esc(STATE_WORDS[r.state] || r.state)}. ${esc(r.note || "")}</p>${checksHTML(r.checks)}`;
+  }: ${esc(STATE_WORDS[r.state] || r.state)}. ${esc(r.note || "")}</p>${checksHTML(r.checks)}${back}`;
 }
 
 /**

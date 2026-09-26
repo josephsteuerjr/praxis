@@ -38,6 +38,9 @@ SYSTEM_SPEAKER = "Hélène"
 
 STATE: dict = {"hand": False, "note": "рука обновления не выдавалась"}
 
+#: Кто сказал «да» — словами для записки агенту (в расписке это коды протокола).
+CONFIRMED_BY = {"window": "владелец кнопкой в окне", "owner-words": "владелец словами тебе"}
+
 TOOL = {
     "name": TOOL_NAME,
     "description": (
@@ -236,16 +239,19 @@ def report_note(receipt: dict, *, owner: str = "владелец") -> str:
              str(receipt.get("note") or "")]
     checks = receipt.get("checks") or []
     if checks:
-        lines.append("Проверки: " + "; ".join(
+        lines.append(f"Проверки {receipt.get('to_version') or 'новой версии'}: " + "; ".join(
             f"{'✓' if row.get('ok') else '✗'} {row.get('title') or row.get('name')} — "
             f"{row.get('note') or ''}" for row in checks if isinstance(row, dict)))
     rollback = receipt.get("rollback") or {}
     if rollback.get("notes"):
-        lines.append("Откат: " + "; ".join(str(n) for n in rollback["notes"]))
+        lines.append("Откат: " + "; ".join(str(n) for n in rollback["notes"]) + "; "
+                     + ("прежняя версия поднята и прошла проверки" if rollback.get("ok")
+                        else "прежняя версия проверки НЕ прошла"))
     chat = str((receipt.get("plan") or {}).get("chat") or "")
     confirmed = receipt.get("confirmed") or {}
     if confirmed.get("by"):
-        lines.append(f"«Да» было: {confirmed.get('by')}"
+        who = CONFIRMED_BY.get(str(confirmed.get("by")), str(confirmed.get("by")))
+        lines.append(f"«Да» дал {who}"
                      + (f" — «{confirmed.get('words')}»" if confirmed.get("words") else ""))
     where = f" — план был положен из «{chat}», туда и напиши" if chat else ""
     lines.append(f"Владелец — {owner}: расскажи об итоге коротко, своими словами{where}. Если не прошло — "

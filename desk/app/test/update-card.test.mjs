@@ -80,10 +80,12 @@ assert.equal(updateCardHTML({ updater: { present: false }, receipt: null }, { in
 // Откат — итог и проверки словами.
 {
   const receipt = { id: "a", state: "rolled_back", from_version: "1.1.1", to_version: "1.1.2", note: "вернул 1.1.1",
-    checks: [{ name: "runner", title: "агент (раннер) жив", ok: false, note: "не отвечает" }] };
+    checks: [{ name: "runner", title: "агент (раннер) жив", ok: false, note: "не отвечает" }],
+    rollback: { ok: true, notes: ["прежний код на месте", "data/ возвращена из копии"] } };
   const html = updateCardHTML({ updater: { ...beat, newer: false }, receipt }, { inContainer: true });
   assert.match(html, /не прошло — откачено/);
   assert.match(html, /✗<\/span> агент \(раннер\) жив — не отвечает/);
+  assert.match(html, /Откат: прежний код на месте; data\/ возвращена из копии; прежняя версия поднята и прошла проверки/);
 }
 
 // Мало места — та же кнопка предлагает план без копии data/.
