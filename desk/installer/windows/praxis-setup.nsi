@@ -134,7 +134,9 @@ Section "Uninstall"
   ; Настройки — только по явному «да»; тихое снятие их оставляет.
   StrCpy $1 "keep"
   IfSilent +3 0
-  MessageBox MB_YESNO|MB_ICONQUESTION "Удалить и настройки — helene.json с адресом сервера и ключом канала?$\r$\n«Нет» оставит файл в папке." IDNO +2
+  ; Файл настроек у Praxis зовётся helene.json (общая с Hélène оболочка), но человеку
+  ; это имя ни о чём — в вопросе только суть: адрес сервера и ключ канала.
+  MessageBox MB_YESNO|MB_ICONQUESTION "Удалить и настройки подключения — адрес сервера и ключ канала?$\r$\n«Нет» оставит их в папке: следующая установка ${PRODUCT} подхватит их сама." IDNO +2
     StrCpy $1 "purge"
   Delete "$INSTDIR\praxis.exe"
   Delete "$INSTDIR\praxis.ico"

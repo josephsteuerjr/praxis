@@ -161,7 +161,11 @@ Section "Uninstall"
   RMDir /r "$INSTDIR\server"
   RMDir /r "$INSTDIR\licenses"
   Delete "$INSTDIR\*.exe"
+  ; Записку «что здесь осталось» пишет мастер при «оставить данные» — её нельзя унести
+  ; вместе с документами поставки (при «удалить всё» папка снимается целиком ниже).
+  Rename "$INSTDIR\КАК-ВЕРНУТЬСЯ.md" "$INSTDIR\КАК-ВЕРНУТЬСЯ.keep"
   Delete "$INSTDIR\*.md"
+  Rename "$INSTDIR\КАК-ВЕРНУТЬСЯ.keep" "$INSTDIR\КАК-ВЕРНУТЬСЯ.md"
   Delete "$INSTDIR\*.ico"
   Delete "$INSTDIR\*.ps1"
   Delete "$INSTDIR\*.log"
