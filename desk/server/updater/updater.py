@@ -117,6 +117,11 @@ class UpdateError(RuntimeError):
     """Отказ шага с причиной словами — она уходит в расписку как есть."""
 
 
+def said(exc: BaseException) -> str:
+    """Причина словами: своя ошибка — как есть, чужая — с именем типа («KeyError: 'x'»)."""
+    return str(exc) if isinstance(exc, UpdateError) else f"{type(exc).__name__}: {exc}"
+
+
 def utc(epoch: float | None = None) -> str:
     moment = dt.datetime.fromtimestamp(epoch, dt.UTC) if epoch else dt.datetime.now(dt.UTC)
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -869,7 +874,17 @@ class Updater:
             self.consider(plan)
 
     def consider(self, raw: dict) -> None:
-        """Новый план: сверить с выпусками и местом, показать человеку и ждать «да»."""
+        """Новый план: сверить с выпусками и местом, показать человеку и ждать «да».
+
+        Любой сбой сверки — отказ словами: застрявшая «сверяю» держала бы окно в вечном
+        процессе, а новый план не ложился бы вовсе («идёт другое обновление»).
+        """
+        try:
+            self._consider(raw)
+        except Exception as exc:  # noqa: BLE001 — причина обязана доехать до расписки
+            self.finish("refused", f"сверка плана упала: {said(exc)}")
+
+    def _consider(self, raw: dict) -> None:
         now = self.clock()
         plan, why = control.validate_plan(raw)
         self.state = {"id": str(raw.get("id") or "")[:40], "plan": plan, "steps": [],
@@ -935,8 +950,8 @@ class Updater:
                   swapped=[], note=f"«да» получено ({who.get('by') or '?'}) — начинаю")
         st.pop("nonce", None)
         self.save()
-        self.check_self()
         try:
+            self.check_self()
             if not self.health["ok"]:
                 raise UpdateError(f"исполнитель не может работать: {self.health['why']}")
             info = self.health["info"]
@@ -950,9 +965,9 @@ class Updater:
                       rollback_tag=f"helene-rollback-{bdir.name}")
             self.save()
             self._prepare(bdir)
-        except (UpdateError, OSError) as exc:
+        except Exception as exc:  # noqa: BLE001 — любой сбой: вернуть или откатить, не застрять
             left = self._undo_prepare()
-            self.finish("failed", f"не начато: {exc} — агент не останавливался, "
+            self.finish("failed", f"не начато: {said(exc)} — агент не останавливался, "
                                   + (f"но вернулось не всё: {left}" if left else "всё как было"))
             return
         st["phase"] = "switch"
@@ -962,9 +977,9 @@ class Updater:
             st["phase"] = "verify"
             self.save()
             results = self._verify(st["to_version"], plan["checks"], plan["wait_min"])
-        except (UpdateError, OSError) as exc:
-            self.step("подмена не удалась", ok=False, note=str(exc))
-            self._rollback(str(exc))
+        except Exception as exc:  # noqa: BLE001 — любой сбой: вернуть или откатить, не застрять
+            self.step("подмена не удалась", ok=False, note=said(exc))
+            self._rollback(said(exc))
             return
         if all(r["ok"] for r in results):
             self._success()
@@ -1186,7 +1201,9 @@ class Updater:
         bdir = Path(st["backup_dir"])
         saved, after = bdir / "data", bdir / "data-after-failed"
         if not saved.is_dir():
-            return "копии data/ не делалось — данные остались как их оставила новая версия"
+            if not st.get("stopped"):
+                return "до остановки агента не дошло — data/ не трогалась"
+            return "копии data/ не делалось (план без неё) — данные остались как их оставила новая версия"
         try:
             if self.data.exists() and not after.exists():
                 os.rename(self.data, after)
@@ -1224,10 +1241,10 @@ class Updater:
                       if c != "version" or st.get("from_version")]
             results = self._verify(st.get("from_version") or "", checks,
                                    min(int(st["plan"]["wait_min"]), 10), key="rollback_checks")
-        except (UpdateError, OSError) as exc:
-            st["rollback"] = {"ok": False, "notes": notes, "why": str(exc)[:600]}
+        except Exception as exc:  # noqa: BLE001 — любой сбой: вернуть или откатить, не застрять
+            st["rollback"] = {"ok": False, "notes": notes, "why": said(exc)[:600]}
             self._cleanup_stage()
-            self.finish("failed", f"обновление не прошло ({why[:300]}), и откат НЕ поднялся: {exc}. "
+            self.finish("failed", f"обновление не прошло ({why[:300]}), и откат НЕ поднялся: {said(exc)}. "
                                   f"Копии — {st['backup_dir']}; нужен человек на хосте")
             return
         ok = all(r["ok"] for r in results)
@@ -1337,6 +1354,13 @@ def main() -> int:
             updater.tick()
         except Exception as exc:  # noqa: BLE001 — один сбой тика не должен ронять исполнителя
             log(f"тик упал: {type(exc).__name__}: {exc}")
+            # Сбой посреди исполнения не должен оставить расписку навсегда в «идёт»:
+            # довести или откатить тем же путём, что после перезапуска исполнителя.
+            if updater.state.get("state") in ("confirmed", "running"):
+                try:
+                    updater.recover()
+                except Exception as again:  # noqa: BLE001
+                    log(f"восстановление тоже упало: {type(again).__name__}: {again}")
         if updater.reexec:
             log("перезапускаюсь новым кодом")
             os.execv(sys.executable, [sys.executable, str(cfg.install / "server" / "updater" / "updater.py")])

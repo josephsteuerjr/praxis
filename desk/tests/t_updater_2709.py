@@ -490,6 +490,31 @@ class UpdaterFlow(unittest.TestCase):
         self.assertEqual(r["state"], "refused")
         self.assertIn("HELENE_DIR", r["note"])
 
+    def test_чужой_сбой_сверки_не_оставляет_вечное_сверяю(self):
+        self.u.release_for = lambda version: {}["нет такого ключа"]
+        self.plan(version=NEW)
+        self.u.tick()
+        r = self.receipt()
+        self.assertEqual(r["state"], "refused")
+        self.assertIn("KeyError", r["note"])
+        # и новый план после этого ложится (а не «идёт другое обновление»)
+        self.assertTrue(control.update_plan(self.install / "data", NEW)["ok"])
+
+    def test_чужой_сбой_посреди_подмены_откатывает(self):
+        self.plan(version=NEW)
+        self.u.tick()
+        self.yes()
+
+        def broken():
+            raise KeyError("carried_before")
+
+        self.u._wait_idle = broken        # папки уже подменены
+        self.u.tick()
+        r = self.receipt()
+        self.assertEqual(r["state"], "rolled_back", r.get("note"))
+        self.assertIn("KeyError", r["note"])
+        self.assertEqual(json.loads((self.install / "app" / "desk.json").read_text())["version"], OLD)
+
     def test_мусорный_план(self):
         up.Shared(self.install / "data").write(*up.CTL, control.UPDATE_PLAN,
                                               {"id": "abcdef12", "version": "1.2.3; rm -rf /"})
