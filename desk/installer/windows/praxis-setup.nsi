@@ -51,8 +51,8 @@ SetCompressor /SOLID lzma
 !define MUI_WELCOMEPAGE_TITLE "${PRODUCT} ${VERSION}"
 !define MUI_WELCOMEPAGE_TEXT "Окно к агенту на своём сервере.$\r$\n$\r$\nУстановщик положит программу, создаст ярлыки и запись в «Приложениях». Адрес сервера и ключ канала спрашиваются при первом запуске; при обновлении поверх они сохраняются."
 !define MULTIUSER_INSTALLMODEPAGE_TEXT_TOP "Для кого поставить ${PRODUCT}?"
-!define MULTIUSER_INSTALLMODEPAGE_TEXT_ALLUSERS "Для всех пользователей этого компьютера (в Program Files; Windows спросит права администратора)"
-!define MULTIUSER_INSTALLMODEPAGE_TEXT_CURRENTUSER "Только для меня (в моей папке программ, без прав администратора)"
+!define MULTIUSER_INSTALLMODEPAGE_TEXT_ALLUSERS "Для всех пользователей (Program Files, нужны права администратора)"
+!define MULTIUSER_INSTALLMODEPAGE_TEXT_CURRENTUSER "Только для меня (моя папка программ, без прав администратора)"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\praxis.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Открыть ${PRODUCT}"
 !insertmacro MUI_PAGE_WELCOME
