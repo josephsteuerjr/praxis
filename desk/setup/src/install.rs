@@ -2682,7 +2682,8 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
     // снять прежнюю. Снятие перед копированием шага не занимает: оно уже позади.
     // На macOS шагов три: ярлыков и записи в «Приложениях» там нет — и в
     // расписке их нет тоже, а не «пропущено».
-    let base_steps = if in_place() { 1 } else if cfg!(windows) { 5 } else { 3 };
+    // На месте: «настройки и конституция» и «готово» — два тика (в install.log было «[2/1]»).
+    let base_steps = if in_place() { 2 } else if cfg!(windows) { 5 } else { 3 };
     let total = if s.wants_service() || service_before != "absent" { base_steps + 1 } else { base_steps };
     let mut steps = pre_steps;
     let mut n = 0;
