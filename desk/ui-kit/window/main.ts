@@ -1282,12 +1282,21 @@ export function start(opts: WindowOptions): void {
   if (opts.firstRun?.(view)) return;
   connect();
   void refreshState();
-  loadRooms()
+  // 26.09: окно, открытое мастером сразу после установки, заставало канал ещё не
+  // поднятым и оставалось на этом экране до клика владельца — а обещало «продолжит
+  // попытки само». Держим слово: пробуем снова, пока на экране этот же экран.
+  const openFirst = (): void => {
+    loadRooms()
       .then(() => show("now"))
       .catch(() => {
-        view.innerHTML = `<div class="empty"><b>${esc(S.agent)} сейчас не на связи</b>Окно продолжит попытки само. Можно оставить его открытым.</div>`;
+        view.innerHTML = `<div class="empty" data-first-wait><b>${esc(S.agent)} сейчас не на связи</b>Окно продолжит попытки само. Можно оставить его открытым.</div>`;
         renderState(null, false);
-    });
+        window.setTimeout(() => {
+          if (view.querySelector("[data-first-wait]")) openFirst();
+        }, 4000);
+      });
+  };
+  openFirst();
   void refreshPulse();
   setInterval(() => void refreshState(), 8000);
   setInterval(() => void refreshPulse(), 20000);
