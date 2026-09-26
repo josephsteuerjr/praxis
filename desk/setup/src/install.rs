@@ -3022,6 +3022,31 @@ fn installed_port(dir: &Path) -> u16 {
         .unwrap_or(8094) as u16
 }
 
+/// Служба поставлена — дождаться, пока она поднимет канал (до `secs` секунд).
+///
+/// Мастер открывал окно сразу после установки, а служба поднимается секунд десять
+/// (выравнивание прав, дети): окно заставало пустой порт, поднимало СВОИХ детей,
+/// и два движка спорили за замок дерева — движок окна выходил, служба гасила
+/// своего, агент оставался без движка (27.09, проба Егора «для всех» со службой).
+/// Без службы отвечает сразу `true`; `false` — служба за это время канал не подняла.
+pub fn wait_for_channel(dir: &Path, secs: u64) -> bool {
+    let service = read_json(&dir.join("helene.json"))
+        .and_then(|c| c.get("installed").and_then(|i| i.get("service")).and_then(|v| v.as_bool()))
+        .unwrap_or(false);
+    if !service {
+        return true;
+    }
+    let port = installed_port(dir);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    while std::time::Instant::now() < until {
+        if port_busy(port) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    false
+}
+
 /// Похоже ли на распакованный архив, а не на установленную программу.
 fn looks_like_payload(dir: &Path) -> bool {
     if !PAYLOAD_MARKERS.iter().all(|m| dir.join(m).exists()) {
@@ -3132,7 +3157,10 @@ fn fence_revoke(dir: &Path) -> Option<Result<String, String>> {
 #[cfg(windows)]
 fn fence_call(python: &Path, script: &Path, root: &Path, also: &[String]) -> Result<usize, String> {
     let mut cmd = Command::new(python);
-    cmd.arg(script).arg("--revoke").arg(root);
+    // `-X utf8`: отчёт fence.py читается ниже как UTF-8, а Python в трубе на русской
+    // Windows печатает в cp1251 — «профиль … удалён» приходил кашей, и снятие врало
+    // «fence.py не понимает --revoke» при исправном fence (27.09, проба Егора).
+    cmd.arg("-X").arg("utf8").arg(script).arg("--revoke").arg(root);
     if !also.is_empty() {
         cmd.arg("--also");
         for name in also {
@@ -4363,4 +4391,36 @@ mod tests {
         assert!(validate_setup(&s).is_err());
     }
 
+    /// Без службы мастер окно не задерживает; со службой — ждёт её канал, но не
+    /// дольше отведённого (27.09: окно, открытое раньше службы, плодило второй движок).
+    #[test]
+    fn wait_for_channel_only_waits_for_an_installed_service() {
+        let dir = std::env::temp_dir().join(format!("helene-wait-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Порт, который точно никто не слушает: занимаем и тут же отпускаем.
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let write = |service: bool| {
+            std::fs::write(
+                dir.join("helene.json"),
+                format!(r#"{{"port": {port}, "installed": {{"service": {service}}}}}"#),
+            )
+            .unwrap();
+        };
+        write(false);
+        let t0 = std::time::Instant::now();
+        assert!(wait_for_channel(&dir, 5), "без службы — сразу true");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(1));
+        write(true);
+        let t0 = std::time::Instant::now();
+        assert!(!wait_for_channel(&dir, 1), "служба есть, канала нет — false по таймауту");
+        assert!(t0.elapsed() >= std::time::Duration::from_secs(1));
+        // Канал появился — ответ true, ждать до конца не нужно.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+        assert!(wait_for_channel(&dir, 5));
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

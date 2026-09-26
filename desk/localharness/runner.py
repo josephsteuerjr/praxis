@@ -94,6 +94,11 @@ _voice_state: dict = {"ready": False, "why": "голос ещё не подни�
 #: сразу и с перечитанными настройками, без лестницы пауз. Тот же номер знают
 #: `shell/src/main.rs` и `svc/src/main.rs`.
 RESTART_EXIT_CODE = 42
+# Дерево занято другой живой копией кода агента (замок harness.lock). Свой код,
+# не 3: для оболочки 3 — «конфиг/раскладка, перезапуск не поможет», а здесь
+# помогает — надо подождать и попробовать снова (shell/main.rs::watch_children).
+TREE_BUSY_EXIT_CODE = 4
+TREE_BUSY_WAIT_SEC = 20
 _restart_wanted = [False]
 _STARTED_UTC = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 _continuity = None
@@ -2239,11 +2244,26 @@ def main() -> None:
     # `role` — подпись в замке для диагностики. Стояло `cfg["mode"]`, то есть
     # местожительство харнесса ("local"): в замке всегда было одно и то же
     # слово. Режим агента здесь говорит больше — видно, чей замок нашли.
-    busy = boot.claim_tree(tree, agent=boot.agent_name(cfg),
-                           role=str(_mode.get("name") or cfg.get("mode") or "окно"))
+    _role = str(_mode.get("name") or cfg.get("mode") or "окно")
+    busy = boot.claim_tree(tree, agent=boot.agent_name(cfg), role=_role)
+    if busy:
+        # 27.09 (проба Егора, «для всех» со службой): два движка стартуют вместе —
+        # службу только что поставили, окно открыл мастер. Замок берёт тот, что
+        # быстрее, а через секунды его гасит собственный надзор (порт держит другой).
+        # Проигравший раньше выходил кодом 3 («конфиг») — навсегда, и агент оставался
+        # без движка. Ждём: копия, которой велено уступить, уступит.
+        log.warning("дерево %s занято другой копией (pid %s) — жду до %d с, вдруг уступит",
+                    tree, busy.get("pid"), TREE_BUSY_WAIT_SEC)
+        waited = 0.0
+        while busy and waited < TREE_BUSY_WAIT_SEC:
+            time.sleep(2.0)
+            waited += 2.0
+            busy = boot.claim_tree(tree, agent=boot.agent_name(cfg), role=_role)
+        if not busy:
+            log.info("дерево освободилось через %.0f с — поднимаюсь", waited)
     if busy:
         _say_tree_is_busy(tree, cfg, busy)
-        raise SystemExit(3)
+        raise SystemExit(TREE_BUSY_EXIT_CODE)
 
     code_raw = str(cfg.get("code") or "../../live")
     code_dir = Path(code_raw)

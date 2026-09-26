@@ -153,11 +153,6 @@ async fn install(app: tauri::AppHandle, setup: install::Setup) -> Result<install
 #[tauri::command]
 fn open_frame(app: tauri::AppHandle, exe: String) -> Result<(), String> {
     let path = std::path::PathBuf::from(&exe);
-    let mut cmd = Command::new(&path);
-    if let Some(dir) = path.parent() {
-        cmd.current_dir(dir);
-    }
-    cmd.spawn().map_err(|e| format!("Hélène не запустилась: {e}"))?;
     // Окно установщика прячем сразу, а процесс держим ещё несколько секунд:
     // Windows отдаёт передний план новому окну, только пока запустивший его
     // процесс жив. Иначе Hélène открывалась позади других окон, и казалось,
@@ -166,6 +161,18 @@ fn open_frame(app: tauri::AppHandle, exe: String) -> Result<(), String> {
         let _ = window.hide();
     }
     std::thread::spawn(move || {
+        // Под службой — сначала её канал (до 45 с): окно, открытое раньше службы,
+        // поднимало своих детей, и два движка сходились на одном дереве (27.09).
+        if let Some(dir) = path.parent() {
+            install::wait_for_channel(dir, 45);
+        }
+        let mut cmd = Command::new(&path);
+        if let Some(dir) = path.parent() {
+            cmd.current_dir(dir);
+        }
+        if let Err(e) = cmd.spawn() {
+            message_box(&format!("Hélène не запустилась: {e}. Открой её ярлыком."));
+        }
         std::thread::sleep(Duration::from_secs(10));
         install::relay_abort();
         app.exit(0);
@@ -324,6 +331,17 @@ fn main() {
             match &result {
                 Ok(r) => log.push_str(&format!("OK {}\n", serde_json::to_string(r).unwrap_or_default())),
                 Err(e) => log.push_str(&format!("FAIL {e}\n")),
+            }
+            // Под службой окно открываем, когда её канал уже отвечает: иначе окно
+            // поднимает своих детей, и два движка сходятся на одном дереве (27.09).
+            if result.is_ok() {
+                let t0 = std::time::Instant::now();
+                let up = install::wait_for_channel(&dir, 45);
+                log.push_str(&format!(
+                    "служба: канал {} ({} с)\n",
+                    if up { "ответил" } else { "не ответил — открываю окно всё равно" },
+                    t0.elapsed().as_secs()
+                ));
             }
             let _ = std::fs::write(dir.join("install.log"), &log);
             match result {
