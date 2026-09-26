@@ -37,6 +37,11 @@ Unicode true
 !define MULTIUSER_INSTALLMODE_INSTDIR_REGISTRY_KEY "${UNINST_KEY}"
 !define MULTIUSER_INSTALLMODE_INSTDIR_REGISTRY_VALUENAME "InstallLocation"
 !define MULTIUSER_INSTALLMODE_DEFAULT_CURRENTUSER
+; Режим — по записи прежней установки: без этого uninstall.exe установки «для всех»
+; шёл в режиме «для меня» (SHCTX=HKCU) и оставлял запись в HKLM и ярлыки для всех
+; (27.09, проба Егора: «иконка после удаления не пропадает»).
+!define MULTIUSER_INSTALLMODE_DEFAULT_REGISTRY_KEY "${UNINST_KEY}"
+!define MULTIUSER_INSTALLMODE_DEFAULT_REGISTRY_VALUENAME "InstallLocation"
 !include "MultiUser.nsh"
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -153,8 +158,15 @@ Section "Uninstall"
   MessageBox MB_YESNO|MB_ICONQUESTION "Удалить и данные агента — папку data (память, дневник, конституция) и helene.json с ключами?$\r$\n«Нет» оставит их в папке." IDNO +2
     StrCpy $1 "--purge"
   ; Служба, песочница (AppContainer), процессы, запись оболочки — снимает сам мастер.
+  ; Это до минуты, и полоса на это время стоит: хотя бы сказать, чего ждём.
+  SetDetailsPrint textonly
+  DetailPrint "Снимаю службу, песочницу и процессы ${PRODUCT_UI} — до минуты…"
+  SetDetailsPrint none
   IfFileExists "$INSTDIR\helene-setup.exe" 0 +2
     ExecWait '"$INSTDIR\helene-setup.exe" --uninstall --quiet $1' $0
+  SetDetailsPrint textonly
+  DetailPrint "Убираю файлы программы…"
+  SetDetailsPrint none
   RMDir /r "$INSTDIR\app"
   RMDir /r "$INSTDIR\runtime"
   RMDir /r "$INSTDIR\tree"

@@ -34,6 +34,10 @@ Unicode true
 !define MULTIUSER_INSTALLMODE_INSTDIR_REGISTRY_KEY "${UNINST_KEY}"
 !define MULTIUSER_INSTALLMODE_INSTDIR_REGISTRY_VALUENAME "InstallLocation"
 !define MULTIUSER_INSTALLMODE_DEFAULT_CURRENTUSER
+; Режим — по записи прежней установки: иначе uninstall.exe установки «для всех» шёл
+; в режиме «для меня» и оставлял запись в HKLM и ярлыки для всех (27.09).
+!define MULTIUSER_INSTALLMODE_DEFAULT_REGISTRY_KEY "${UNINST_KEY}"
+!define MULTIUSER_INSTALLMODE_DEFAULT_REGISTRY_VALUENAME "InstallLocation"
 !include "MultiUser.nsh"
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
