@@ -1406,6 +1406,8 @@ def main() -> None:
     parser.add_argument("--variant", choices=("helene", "praxis"), default="helene",
                         help="helene — полная поставка Hélène (по умолчанию); praxis — издание "
                              "к серверу: то же окно в режиме remote, без ядра, рантайма и тела")
+    parser.add_argument("--skip-setup-exe", action="store_true",
+                        help="не собирать Helene-<версия>-setup.exe (отладка без NSIS)")
     parser.add_argument("--skip-tests", action="store_true",
                         help="не гонять стенды перед сборкой (отладка); в выпуске — никогда")
     parser.add_argument("--from-core", action="store_true",
@@ -1718,6 +1720,55 @@ def main() -> None:
         f"{digest} *{zip_path.name}\n", encoding="utf-8", newline="\n")
     print(f"готово: {zip_path} ({size / 1e6:.1f} МБ)")
     print(f"sha256: {digest}")
+    if not args.skip_setup_exe:
+        build_setup_exe(out, version)
+
+
+def find_makensis() -> Path | None:
+    """makensis: из PATH, из NSIS Tauri (%LocalAppData%\\tauri\\NSIS) или обычной установки."""
+    found = shutil.which("makensis")
+    if found:
+        return Path(found)
+    homes = [Path(os.environ.get("LOCALAPPDATA") or "") / "tauri" / "NSIS",
+             Path(os.environ.get("ProgramFiles(x86)") or "") / "NSIS",
+             Path(os.environ.get("ProgramFiles") or "") / "NSIS"]
+    for home in homes:
+        exe = home / "makensis.exe"
+        if exe.is_file():
+            return exe
+    return None
+
+
+def build_setup_exe(out: Path, version: str) -> Path:
+    """Один установочный файл `Helene-<версия>-setup.exe` (1.1.0, 26.09).
+
+    Живой случай: мама Егора распаковала архив и увидела два exe — «Элен» и «Элен
+    сетап» — и не поняла, что запускать. Установщик NSIS (`windows/helene-setup.nsi`)
+    распаковывает поставку во временную папку и открывает тот же мастер; запись в
+    «Приложениях» Windows и удаление — по-прежнему за мастером. Архив остаётся: его
+    качает кнопка обновления в окне (она берёт из выпуска только .zip).
+    """
+    makensis = find_makensis()
+    if makensis is None:
+        raise SystemExit("makensis не найден: нужен NSIS (его ставит Tauri в "
+                         "%LocalAppData%\\tauri\\NSIS) — или --skip-setup-exe для отладки")
+    script = DESK / "installer" / "windows" / "helene-setup.nsi"
+    target = out.parent / f"Helene-{version}-setup.exe"
+    icon = DESK / "shell" / "icons" / "icon.ico"
+    print("setup exe (NSIS)…")
+    done = subprocess.run(
+        [str(makensis), "/V2", f"/DVERSION={version}", f"/DPAYLOAD={out}",
+         f"/DOUTFILE={target}", f"/DICON={icon}", str(script)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if done.returncode != 0 or not target.is_file():
+        tail = ((done.stdout or "") + (done.stderr or "")).strip().splitlines()[-15:]
+        raise SystemExit("makensis не собрал установщик:\n" + "\n".join(tail))
+    digest = sha256(target)
+    target.with_name(target.name + ".sha256").write_text(
+        f"{digest} *{target.name}\n", encoding="utf-8", newline="\n")
+    print(f"готово: {target} ({target.stat().st_size / 1e6:.1f} МБ)")
+    print(f"sha256: {digest}")
+    return target
 
 
 if __name__ == "__main__":

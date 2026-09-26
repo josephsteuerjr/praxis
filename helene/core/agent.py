@@ -2531,6 +2531,17 @@ def _autocommit_self_edit(pre_dirt: dict[str, float] | None = None) -> None:
         log.debug("immune.enqueue не удался", exc_info=True)
 
 
+def _shell_at_home(command: str, workdir: Path) -> str:
+    """Команда руки shell, начинающаяся дома: `cd '<workdir>' && <command>`.
+
+    Путь — POSIX-слэшами в одинарных кавычках (свои кавычки экранированы): так его
+    читают и busybox из поставки, и git-bash, и bash на Mac. Многострочная команда
+    остаётся многострочной — cd стоит перед первой строкой.
+    """
+    quoted = "'" + workdir.as_posix().replace("'", "'\\''") + "'"
+    return f"cd {quoted} && {command}"
+
+
 def _shell_workdir() -> Path:
     """Return a live shell cwd even if a transient configured directory vanished."""
     configured = Path(WORKDIR)
@@ -2606,10 +2617,16 @@ def tool_shell(command: str) -> str:
         shell_command, background = core_processes.wrap_background_launch(command)
     except Exception:
         shell_command, background = command, False
+    # ⚠ 26.09, живой случай («даже дом свой еле нашёл»): busybox из поставки на `bash -l`
+    # уходит в $HOME владельца, и `cwd=` ниже ему не указ — первый ход агента ушёл на
+    # поиски своей папки по чужому профилю (135 с, семь команд). Дом называем самой
+    # командой: cd в рабочую папку — первым словом, до всего остального.
+    workdir = _shell_workdir()
+    shell_command = _shell_at_home(shell_command, workdir)
     try:
         proc = subprocess.run(
             ["bash", "-lc", shell_command],
-            cwd=_shell_workdir(),
+            cwd=workdir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=SHELL_TIMEOUT,
@@ -16190,6 +16207,24 @@ MALFORMED_JSON_REPAIR = (
 )
 
 
+def _tool_args_mismatch(impl, call_input: dict) -> str:
+    """Чего не хватает вызову руки по её сигнатуре — словами; пусто, если всё сходится.
+
+    Сигнатура не читается (встроенная функция, обёртка без метаданных) — не судим:
+    вызов идёт как раньше, и отказ, если он будет, скажет сам тул.
+    """
+    import inspect
+    try:
+        signature = inspect.signature(impl)
+    except (TypeError, ValueError):
+        return ""
+    try:
+        signature.bind(**dict(call_input or {}))
+    except TypeError as exc:
+        return str(exc)
+    return ""
+
+
 def _call_tool_with_ceiling(name: str, impl, call_input: dict):
     """Выполнить тул с пределом времени. -> результат или ToolCeilingExpired об истечении."""
     # Единственная воронка исполнения рук: сюда же приходит ВОЗОБНОВЛЁННЫЙ вызов из
@@ -16198,6 +16233,13 @@ def _call_tool_with_ceiling(name: str, impl, call_input: dict):
     # что и живой цикл, и рука не зовётся.
     if llm.is_malformed_json_input(call_input):
         return MALFORMED_JSON_REPAIR.format(name=name)
+    # 26.09, живой случай: `fs_search` без `pattern` — TypeError из потока, трейс в
+    # журнал и «[tool_error TypeError] …» модели. Аргументы сверяем с сигнатурой ДО
+    # вызова: несходство — это слово руки о том, чего не хватает, а не падение.
+    mismatch = _tool_args_mismatch(impl, call_input)
+    if mismatch:
+        return (f"[рука {name} не позвана] {mismatch}. Позови её снова, назвав "
+                f"обязательные аргументы по схеме.")
     if TOOL_CEILING_SEC <= 0:
         return impl(**call_input)
     # Копия контекста обязательна: тулы читают текущий ран, канал хода и запись

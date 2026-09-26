@@ -70,6 +70,11 @@ const PRODUCT_UI: &str = "Hélène";
 /// порты соседей, и служба берёт оттуда же — двух умолчаний быть не должно.
 const RELAY_PORT: u16 = 5011;
 const CONFIG_NAME: &str = "helene.json";
+/// Код выхода движка «перезапусти меня» (26.09): просьба владельца из окна или с
+/// телефона (`/api/supervisor/restart`) — движок выходит между ходами этим кодом, а
+/// надзор поднимает пару детей агента заново, с перечитанными настройками и без
+/// лестницы пауз. Тот же номер — `localharness/runner.py::RESTART_EXIT_CODE` и `svc`.
+const RESTART_EXIT: i32 = 42;
 /// Паспорт сборки (`installer/build_dist.py`): лежит в корне установки, и по
 /// нему корень и находится — см. `install_root`.
 const BUILD_PASSPORT: &str = "helene-build.json";
@@ -6327,6 +6332,8 @@ fn watch_children(app: tauri::AppHandle) {
         }
         // 1) Осмотр под замком: только try_wait и учёт падений.
         let mut acts: Vec<(usize, Act)> = Vec::new();
+        // Агенты, чей движок вышел кодом RESTART_EXIT: пара поднимается заново вне замка.
+        let mut restarts: Vec<String> = Vec::new();
         let logs: Vec<PathBuf>;
         // Чьих детей нет НИ ОДНОГО — по каждому агенту отдельно.
         let missing: Vec<String>;
@@ -6365,6 +6372,15 @@ fn watch_children(app: tauri::AppHandle) {
                 }
                 let Ok(Some(status)) = m.child.as_mut().unwrap().try_wait() else { continue };
                 m.child = None;
+                // 26.09: движок просит поднять себя заново с перечитанными настройками.
+                // Не падение — ни в счётчик, ни в лестницу пауз; пара этого агента
+                // поднимается целиком, потому что адрес канала (телефон) решается при спавне.
+                if status.code() == Some(RESTART_EXIT) {
+                    if !restarts.contains(&m.agent) {
+                        restarts.push(m.agent.clone());
+                    }
+                    continue;
+                }
                 // Код выхода — это слово ребёнка о причине, и его надо слышать.
                 // Руннер выходит 3, когда виноват helene.json или раскладка
                 // папки данных, и 2, когда рядом нет папки с кодом агента.
@@ -6428,7 +6444,14 @@ fn watch_children(app: tauri::AppHandle) {
                 log_line(&format!("{} обрезан по размеру", path.display()));
             }
         }
-        // 2) Действия — без замка.
+        // 2) Действия — без замка. Сначала — просьбы движка о перезапуске: они
+        // заменяют детей агента целиком, и индексы `acts` ниже их не касаются.
+        for agent in &restarts {
+            restart_agent_children(&state, agent);
+        }
+        if !restarts.is_empty() {
+            continue;
+        }
         for (i, act) in acts {
             match act {
                 Act::Report(line, human) => {
@@ -6527,6 +6550,71 @@ fn watch_children(app: tauri::AppHandle) {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Пара детей агента — заново, по просьбе движка (код RESTART_EXIT).
+///
+/// План пересобирается из helene.json: адрес канала (телефон), руннер — всё, что
+/// решается при спавне. Реле не трогаем: оно одно на установку, свои настройки
+/// применяет на лету, а его перезапуск ронял бы вход в подписку посреди хода.
+/// Старые дети гасятся, порт ждём до трёх секунд, потом `start_children`, как при
+/// старте окна.
+fn restart_agent_children(state: &tauri::State<LocalHarness>, agent: &str) {
+    use std::sync::atomic::Ordering;
+    let base = install_root();
+    let Some(full) = build_plans(&base).into_iter().find(|p| p.agent == agent) else {
+        log_line(&format!(
+            "движок просил перезапуск, но план агента «{agent}» не собрался — поднимет надзор по обычной лестнице"
+        ));
+        return;
+    };
+    let mut plan = full.clone();
+    plan.specs.retain(|s| !matches!(s, ChildSpec::Relay { .. }));
+    if let Ok(mut guard) = state.children.lock() {
+        let mut keep = Vec::new();
+        for mut m in guard.drain(..) {
+            if m.agent == agent && !matches!(m.spec, ChildSpec::Relay { .. }) {
+                if let Some(child) = m.child.as_mut() {
+                    stop_child(child);
+                }
+            } else {
+                keep.push(m);
+            }
+        }
+        *guard = keep;
+    }
+    for _ in 0..30 {
+        if !harness_alive(plan.port) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let (mut lifted, _) = start_children(&plan, false);
+    let mut installed = false;
+    if let Ok(mut guard) = state.children.lock() {
+        if !state.stopping.load(Ordering::Relaxed) {
+            guard.append(&mut lifted);
+            installed = true;
+        }
+    }
+    if let Ok(mut plans) = state.plans.lock() {
+        match plans.iter_mut().find(|p| p.agent == agent) {
+            Some(slot) => *slot = full.clone(),
+            None => plans.push(full.clone()),
+        }
+    }
+    if installed {
+        log_line(&format!(
+            "движок{} просил перезапуск — пара поднята заново с перечитанными настройками",
+            full.whose()
+        ));
+    } else {
+        for m in lifted.iter_mut() {
+            if let Some(child) = m.child.as_mut() {
+                stop_child(child);
             }
         }
     }

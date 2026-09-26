@@ -89,6 +89,10 @@ const SERVICE_DISPLAY: &str = "Hélène · агент";
 const SERVICE_DESCRIPTION: &str =
     "Держит агента Hélène живым в сессии владельца без открытого окна и стережёт права на папку установки. Снять: uninstall-service.ps1.";
 const CONFIG_NAME: &str = "helene.json";
+/// Код выхода движка «перезапусти меня» (26.09): пара детей агента поднимается
+/// заново сразу, с перечитанным helene.json, без лестницы пауз. Тот же номер —
+/// `localharness/runner.py::RESTART_EXIT_CODE` и `shell/src/main.rs`.
+const RESTART_EXIT: i32 = 42;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Журнал службы и журналы детей режутся на этом размере — служба может
 /// прожить месяцы, а перезапуск упавшего ребёнка пишет строку каждую минуту.
@@ -1102,9 +1106,28 @@ fn supervise(
 
     while !stop.load(Ordering::Relaxed) {
         let now = Instant::now();
+        // Агенты, чей движок вышел кодом RESTART_EXIT: канал гасится и пара
+        // поднимается заново ниже, в том же проходе.
+        let mut restarts: Vec<String> = Vec::new();
         for kid in kids.iter_mut() {
             let Some(child) = kid.child.as_mut() else { continue };
             match child.try_wait() {
+                Ok(Some(status)) if kid.role == Role::Runner && status.code() == Some(RESTART_EXIT) => {
+                    // 26.09: просьба владельца перезапустить движок (окно, телефон) — не
+                    // падение: без паузы, и канал этого агента тоже заново, потому что
+                    // его адрес (телефон) решается при спавне.
+                    let _ = child.wait();
+                    forget_child(child);
+                    kid.child = None;
+                    kid.started = None;
+                    kid.backoff = 0;
+                    kid.not_before = now;
+                    log.line(&format!(
+                        "{}: просит перезапуск — поднимаю пару заново с перечитанными настройками",
+                        kid.said()
+                    ));
+                    restarts.push(kid.agent.clone());
+                }
                 Ok(Some(status)) => {
                     // Ребёнок, проживший больше двух минут, «по кругу» не падает:
                     // счётчик паузы сбрасывается. Иначе после пяти падений за всю
@@ -1129,6 +1152,25 @@ fn supervise(
                 // живого, а старый Child дропался без wait() и становился
                 // неуправляемым навсегда. У окна эта строка написана безопасно.
                 Err(_) => {}
+            }
+        }
+
+        for agent in &restarts {
+            for kid in kids.iter_mut().filter(|k| &k.agent == agent && k.role == Role::Trube) {
+                if let Some(child) = &mut kid.child {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    forget_child(child);
+                }
+                kid.child = None;
+                kid.started = None;
+                kid.backoff = 0;
+                kid.not_before = now;
+                kid.phone = agent_config(&kid.config)
+                    .get("phone")
+                    .and_then(|p| p.get("enabled"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
             }
         }
 

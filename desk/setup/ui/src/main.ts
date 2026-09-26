@@ -10,6 +10,7 @@ import { COPY, MIN_SCALE, PRODUCT_NAME, STAGE } from "./config";
 import { AboutScene } from "./scenes/about";
 import { ConstitutionScene } from "./scenes/constitution";
 import { InstallScene } from "./scenes/install";
+import { InstalledScene } from "./scenes/installed";
 import { UninstallScene } from "./scenes/uninstall";
 import { KeysScene } from "./scenes/keys";
 import { LegacyScene } from "./scenes/legacy";
@@ -17,7 +18,7 @@ import { NameScene } from "./scenes/name";
 import { ModeScene } from "./scenes/mode";
 import { TypewriterScene } from "./scenes/typewriter";
 import { WordmarkScene } from "./scenes/wordmark";
-import { isMac, loadDefaults, machine, setup } from "./setup";
+import { installedSetup, isMac, loadDefaults, machine, setup, type Setup } from "./setup";
 import { T, sleep, type Dir } from "./wind";
 
 // Сорвался модуль — окно не должно остаться пустым: оно рождается невидимым и
@@ -134,7 +135,8 @@ const mode_ = new ModeScene(q<HTMLElement>(".scene-mode"));
 const legacy = new LegacyScene(q<HTMLElement>(".scene-legacy"));
 const install = new InstallScene(q<HTMLElement>(".scene-install"));
 const uninstall = new UninstallScene(q<HTMLElement>(".scene-uninstall"));
-type Scene = WordmarkScene | AboutScene | TypewriterScene | NameScene | ConstitutionScene | KeysScene | ModeScene | LegacyScene | InstallScene | UninstallScene;
+const installed = new InstalledScene(q<HTMLElement>(".scene-installed"));
+type Scene = WordmarkScene | AboutScene | TypewriterScene | NameScene | ConstitutionScene | KeysScene | ModeScene | LegacyScene | InstallScene | UninstallScene | InstalledScene;
 // Режим окна задаёт оболочка: установка — все сцены, снятие — одна.
 const uninstallMode = (window as Window & { SETUP_MODE?: string }).SETUP_MODE === "uninstall" || new URLSearchParams(location.search).get("mode") === "uninstall";
 // Сцена «прежняя версия» в маршрут не входит: её вставляет start(), и только
@@ -157,7 +159,7 @@ function insertScene(scene: Scene, before: Scene, key: string) {
 
 function byNameScene(key: string): Scene {
   const table: Record<string, Scene> = {
-    about, typewriter, name, constitution, keys, mode: mode_, install, uninstall, legacy,
+    about, typewriter, name, constitution, keys, mode: mode_, install, uninstall, legacy, installed,
   };
   return table[key];
 }
@@ -235,6 +237,53 @@ async function go(dir: Dir): Promise<void> {
   busy = false;
   refreshEdge();
   if (to === about && !edgeSeen) showHint(COPY.hint, 1800);
+}
+
+/** Прыжок к сцене не по соседству — тем же ветром, что `go`. */
+async function jumpTo(to: Scene): Promise<void> {
+  const at = scenes.indexOf(to);
+  if (at < 0 || busy) return;
+  busy = true;
+  touched = true;
+  hideHint();
+  const from = scenes[index];
+  index = at;
+  refreshEdge();
+  const leaving = from.leave(1);
+  await sleep(0.35 * T * 1000);
+  await Promise.all([leaving, to.enter(1)]);
+  busy = false;
+  refreshEdge();
+}
+
+/** «Обновить» поверх стоящей установки: решения — из неё самой, как у `--update`. */
+async function updateInstalled(): Promise<void> {
+  const inst = machine.installed;
+  if (!inst) return;
+  let decided: Setup | null = null;
+  try {
+    decided = await installedSetup(inst.dir);
+  } catch {
+    decided = null;
+  }
+  if (!decided) {
+    // Решений в установке нет (имя, конституция) — обычный мастер, как у `--update`.
+    showHint("В установке не хватает решений — пройдём мастер, это тоже установка поверх.", 0);
+    void go(1);
+    return;
+  }
+  Object.assign(setup, decided, { dir: inst.dir });
+  await jumpTo(install);
+  install.start();
+}
+
+/** «Удалить» со сцены «уже установлена»: та же сцена снятия, что у `--uninstall`. */
+async function removeInstalled(): Promise<void> {
+  if (!scenes.includes(uninstall)) {
+    scenes.push(uninstall);
+    byName = { ...byName, uninstall: scenes.length - 1 };
+  }
+  await jumpTo(uninstall);
 }
 
 // ---------------------------------------------------------------- навигация
@@ -323,8 +372,10 @@ async function start() {
   if (freeze > 0) {
     setTimeout(() => document.getAnimations().forEach((a) => a.pause()), freeze);
   }
+  let shipped = "";
   try {
     const d = await loadDefaults();
+    shipped = String(d.version || "");
     if (d.dir) setup.dir = d.dir;
     // Если что-то уже стоит — это обновление, и сводка перед кнопкой скажет об этом.
     machine.installed = d.installed ?? null;
@@ -333,6 +384,16 @@ async function start() {
     machine.platform = String(d.platform || "").trim().toLowerCase();
   } catch {
     // без оболочки папка останется примером
+  }
+  // 26.09: Hélène уже стоит — первой сценой «уже установлена» (обновить / удалить /
+  // настроить заново), а не мастер с именем и конституцией, как при первой установке.
+  if (!uninstallMode && machine.installed) {
+    insertScene(installed, about, "installed");
+    installed.bind({
+      update: () => void updateInstalled(),
+      remove: () => void removeInstalled(),
+      fresh: () => void go(1),
+    }, shipped);
   }
   // Прежние поколения продукта. Спрашиваем SCM ДО всех решений: если на машине
   // живёт служба Vera/Frame (снятие прошлой версии сносило файлы, а службу

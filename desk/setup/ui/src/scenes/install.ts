@@ -32,6 +32,11 @@ export class InstallScene extends FormScene {
     return this.started;
   }
 
+  /** Запустить установку без кнопки — «Обновить» со сцены «уже установлена». */
+  start() {
+    void this.run();
+  }
+
   private row(term: string, value: string) {
     const dt = el("dt", "", term);
     const dd = el("dd", "", value);

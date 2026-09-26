@@ -286,7 +286,10 @@ def env_for(tree: Path, cfg: dict) -> dict:
         return {}
     have = said["installed"]
     voice = block(cfg)
-    threads = str(voice.get("threads") or 4)
+    # 26.09: окну и владельцу — хотя бы одно ядро. Четыре потока на четырёх ядрах
+    # забирали процессор целиком, и окно дёргалось, пока шла расшифровка.
+    wanted = int(voice.get("threads") or 4)
+    threads = str(max(1, min(wanted, (os.cpu_count() or 4) - 1)))
     return {
         "PRAXIS_AUDIO_MODEL_DIR": str(Path(tree) / "models"),
         # Путь, а не имя: имя разрешается через кэш Hugging Face и молча

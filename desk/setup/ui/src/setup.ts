@@ -169,6 +169,13 @@ export async function loadDefaults(): Promise<Defaults> {
   return invoke<Defaults>("defaults");
 }
 
+/** Решения уже стоящей установки — для «Обновить» поверх (те же, что у `--update`).
+ *  null — решений нет (имена, конституция): мастер идёт обычным маршрутом. */
+export async function installedSetup(dir: string): Promise<Setup | null> {
+  if (!inTauri) return null;
+  return (await invoke<Setup | null>("installed_setup", { dir })) ?? null;
+}
+
 /** Установка: оболочка копирует поставку, пишет конфиг и конституцию, ставит ярлыки. */
 export async function runInstall(onProgress: (p: Progress) => void): Promise<Receipt> {
   if (!inTauri) {

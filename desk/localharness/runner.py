@@ -90,6 +90,12 @@ _RECALL_CARE_SEC = float(os.getenv("PRAXIS_RECALL_CARE_SEC", "900") or 900)
 #: Слышит ли этот процесс (`voice.apply` на старте): голосовое из окна расшифровывается
 #: только когда слух поднят, иначе — строка с причиной, а не тихая потеря.
 _voice_state: dict = {"ready": False, "why": "голос ещё не поднимался"}
+#: Код выхода «перезапусти меня» (26.09): надзор — окно или служба — поднимает движок
+#: сразу и с перечитанными настройками, без лестницы пауз. Тот же номер знают
+#: `shell/src/main.rs` и `svc/src/main.rs`.
+RESTART_EXIT_CODE = 42
+_restart_wanted = [False]
+_STARTED_UTC = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 _continuity = None
 _alarms = None
 _forge_events = None
@@ -119,6 +125,15 @@ def _load_tree(code_dir: Path, tree: Path, cfg: dict):
     # (boot.keat_knobs); без владельца в Telegram его ручек нет вовсе.
     knobs = boot.env_knobs(cfg, tree=tree)
     os.environ["PRAXIS_BASE"] = str(tree)
+    # 26.09: рабочая папка руки shell — `workspace/` дома, как и обещает навык
+    # home-map. Без этой переменной дерево брало корень дома, а busybox из поставки
+    # на `bash -l` и вовсе уходил в профиль владельца (см. agent.tool_shell).
+    workspace = Path(tree) / "workspace"
+    try:
+        workspace.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        log.debug("workspace не завёлся — shell пойдёт из корня дома", exc_info=True)
+    os.environ.setdefault("PRAXIS_WORKDIR", str(workspace))
     boot.apply_env(knobs, where="до импорта")
     sys.path.insert(0, str(code_dir))
     try:
@@ -307,7 +322,8 @@ def _transcribe_note(rel: str) -> str:
         return f"[голосовое не расшифровано: {_voice_state.get('why') or 'слух не поднят'} — Настройки → Голос]"
     try:
         import importlib
-        text = str(importlib.import_module("media_audio").transcribe(src) or "").strip()
+        with _low_priority():
+            text = str(importlib.import_module("media_audio").transcribe(src) or "").strip()
     except Exception as exc:  # noqa: BLE001 — любая причина называется словами
         log.warning("голосовое из окна не расшифровалось [%s]", rel, exc_info=True)
         return f"[голосовое не расшифровано: {type(exc).__name__}: {str(exc)[:160]}]"
@@ -1021,6 +1037,157 @@ def _config_watch_forever(config_path: Path, tree: Path) -> None:
         _status_message = bool((cfg.get("telegram") or {}).get("status_message", False))
 
 
+_LOW_PRIORITY = {"depth": 0, "before": 0}
+_LOW_PRIORITY_LOCK = None
+
+
+def _low_priority():
+    """На время тяжёлой работы процессора (расшифровка, прогрев модели) — ниже обычного.
+
+    26.09, у мамы Егора: четыре потока whisper на домашней машине забирали процессор
+    целиком, и окно дёргалось. Ниже обычного — значит окно и всё, что делает человек,
+    идут первыми, а расшифровка берёт остаток; на её длине это почти не сказывается.
+    Только Windows: на POSIX nice обратно не поднять. Вложенные входы считаются —
+    восстанавливает приоритет последний вышедший.
+    """
+    import contextlib
+    import threading
+    global _LOW_PRIORITY_LOCK
+    if _LOW_PRIORITY_LOCK is None:
+        _LOW_PRIORITY_LOCK = threading.Lock()
+
+    @contextlib.contextmanager
+    def scope():
+        if os.name != "nt":
+            yield
+            return
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        # Псевдо-хендл процесса — 64-битный (-1): без явных типов ctypes режет его до
+        # 32 бит, и Get/SetPriorityClass молча отвечают 0.
+        kernel.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel.GetPriorityClass.argtypes = [ctypes.c_void_p]
+        kernel.GetPriorityClass.restype = ctypes.c_uint32
+        kernel.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        kernel.SetPriorityClass.restype = ctypes.c_int
+        handle = kernel.GetCurrentProcess()
+        below_normal = 0x4000
+        with _LOW_PRIORITY_LOCK:
+            _LOW_PRIORITY["depth"] += 1
+            if _LOW_PRIORITY["depth"] == 1:
+                before = int(kernel.GetPriorityClass(handle) or 0)
+                _LOW_PRIORITY["before"] = before if before and before != below_normal else 0
+                if _LOW_PRIORITY["before"]:
+                    kernel.SetPriorityClass(handle, below_normal)
+        try:
+            yield
+        finally:
+            with _LOW_PRIORITY_LOCK:
+                _LOW_PRIORITY["depth"] -= 1
+                if _LOW_PRIORITY["depth"] == 0 and _LOW_PRIORITY["before"]:
+                    kernel.SetPriorityClass(handle, _LOW_PRIORITY["before"])
+                    _LOW_PRIORITY["before"] = 0
+    return scope()
+
+
+def _warm_voice_models(cfg: dict) -> None:
+    """Модели голоса — в память со старта, если владелец велел держать слух между голосовыми.
+
+    Иначе первое голосовое дня ждало загрузки полутора гигабайт (у мамы Егора 26.09 —
+    14 с на семь секунд речи). Ниже обычного приоритета и в своём потоке: старт движка
+    и первый ход этого не ждут. Голос ответа (piper) греется там же, если включён, —
+    через загрузчик голоса, а не через синтез: пробный файл в media/tts не нужен.
+    """
+    import threading
+    voice_cfg = dict(cfg.get("voice") or {})
+    stt = bool(_voice_state.get("ready")) and bool(voice_cfg.get("keep_loaded"))
+    tts = bool(os.environ.get("PRAXIS_PIPER_MODEL"))
+    if not (stt or tts):
+        return
+
+    def run() -> None:
+        said: dict = {}
+        try:
+            import importlib
+            media_audio = importlib.import_module("media_audio")
+            with _low_priority():
+                if stt:
+                    said.update(media_audio.warm(stt=True, tts=False))
+                if tts:
+                    speaker = media_audio.get_default_backend().tts
+                    loader = getattr(speaker, "_get_voice", None) or getattr(
+                        getattr(speaker, "primary", None), "_get_voice", None)
+                    if callable(loader):
+                        loader()
+                        said["tts"] = "loaded"
+                    else:
+                        said["tts"] = "no-loader"
+        except Exception:
+            log.debug("прогрев голоса не прошёл — загрузится при первом голосовом", exc_info=True)
+            return
+        log.info("голос: прогрев со старта — %s",
+                 ", ".join(f"{k}: {v}" for k, v in said.items()) or "нечего греть")
+
+    threading.Thread(target=run, name="voice-warm", daemon=True).start()
+
+
+def _desk_control():
+    """`deskd.control` — файловый протокол надзора, общий с каналом и serverboot."""
+    app_dir = Path(__file__).resolve().parent.parent
+    if str(app_dir) not in sys.path:
+        sys.path.insert(1, str(app_dir))
+    from deskd import control  # noqa: PLC0415
+    return control
+
+
+def _supervisor_forever(tree: Path) -> None:
+    """Движок — исполнитель просьбы «перезапустить» на этой машине (26.09).
+
+    До этого просьба из окна (`/api/supervisor/restart`) на Windows и Mac получала отказ
+    «надзора нет — перезапуск делается кнопкой окна», а кнопка окна под службой была
+    нулевым действием: окно детей службы не держит. Теперь движок сам бьётся в записке
+    надзора, берёт просьбу и выходит кодом RESTART_EXIT_CODE между ходами; поднимает
+    его тот, кто держит, — окно или служба, — с перечитанными настройками. Реле движок
+    не держит: его оболочка и служба перечитывают на лету сами.
+    """
+    try:
+        control = _desk_control()
+    except Exception:
+        log.exception("протокол надзора не загрузился — просьбы о перезапуске не читаются")
+        return
+    while True:
+        try:
+            _supervisor_tick(tree, control)
+        except Exception:
+            log.debug("тик надзора не прошёл", exc_info=True)
+        time.sleep(2.0)
+
+
+def _supervisor_tick(tree: Path, control) -> bool:
+    """Один тик: записка о себе, просьба со стола, расписка. -> взведён ли перезапуск."""
+    control.beat(tree, "engine", _STARTED_UTC,
+                 [{"role": "runner", "pid": os.getpid(), "busy": bool(_busy["busy"])}])
+    request = control.take_request(tree)
+    if not request or str(request.get("action") or "") != "restart":
+        return False
+    target = str(request.get("target") or "")
+    if target in ("runner", "all"):
+        _restart_wanted[0] = True
+        control.receipt(tree, request, True,
+                        "движок выйдет между ходами и поднимется заново с перечитанными "
+                        "настройками")
+        log.warning("надзор: просьба перезапустить (%s, от %s) — выйду между ходами",
+                    target, request.get("by") or "owner")
+        return True
+    if target == "relay":
+        control.receipt(tree, request, False,
+                        "реле держит не движок: оболочка и служба применяют его настройки "
+                        "на лету сами")
+    else:
+        control.receipt(tree, request, False, f"так перезапускать нечего: {target}")
+    return False
+
+
 def _heartbeat_forever(inbox: Path) -> None:
     """Квитанция читателя — фоном и с занятостью.
 
@@ -1257,8 +1424,16 @@ def _resume_due() -> None:
 
 
 _BIRTH_NOTE = (
-    "Это твой первый запуск {where}. Тебе предлагается осмотреться "
-    "и познакомиться.")
+    "Это твой первый запуск {where}. Ты — {agent}, твой владелец — {owner}, "
+    "и {owner} говорит с тобой в этом окне.\n\n"
+    "Где ты: твой дом — папка {home}. В ней soul/ (конституция и навыки), memory/ "
+    "(память: пока пустая), workspace/ (рабочая папка; здесь начинается рука shell). "
+    "Рядом — tree/ (твой код) и app/ (программа, которая тебя поднимает). Сервера, "
+    "докера и папки /app здесь нет: если описание руки или навык говорят о них — это "
+    "наследство твоего кода, а не этот компьютер.\n\n"
+    "Осматриваться командами не нужно: карта уже перед тобой, а подробности — в "
+    "навыке home-map и в КАК-УСТРОЕН-HELENE.md. Поздоровайся с {owner} в двух-трёх "
+    "фразах: кто ты, что умеешь здесь, — и спроси, с чего начать.")
 # Исходы `end_turn` (done | wait | blocked) — машинная строка конца хода, а не речь.
 _OUTCOME_PREFIXES = ("done", "wait", "blocked")
 
@@ -1381,8 +1556,13 @@ def _birth_note(*, note_written: bool = False) -> str:
         # Предлог — внутри подстановки: при пустом platform.node() шаблон
         # «на устройстве {device}» давал «на устройстве этот компьютер».
         device = platform.node()
+        # 26.09: паспорт вместо «осмотрись». Первый ход у мамы Егора ушёл на поиски
+        # своей папки по чужим адресам (135 с, семь команд, `/app`): агент офигевал,
+        # кто он и где. Теперь дом, имена и границы названы в самой записке.
         note = _BIRTH_NOTE.format(where=f"на устройстве {device}" if device
-                                  else "на этом компьютере")
+                                  else "на этом компьютере",
+                                  agent=_agent_name, owner=_speaker,
+                                  home=str(_tree) if _tree else "рядом с программой")
         _desk.archive(note, outgoing=False, now=now, sender="Hélène")
         _desk.life(note, direction="in", actor="Hélène", source_id=source_id, now=now)
     return source_id
@@ -2252,6 +2432,9 @@ def main() -> None:
     _refresh_care = refresh_care.RefreshCare(
         memory_life, cooldown=float(os.getenv("PRAXIS_REFRESH_COOLDOWN_SEC", "600") or 600)).start()
     atexit.register(_refresh_care.stop)
+    threading.Thread(target=_supervisor_forever, args=(tree,), name="supervisor",
+                     daemon=True).start()
+    _warm_voice_models(cfg)
     # Рождение — после того, как всё поднято и квитанция читателя уже пишется:
     # окно видит «думает», а не мёртвый руннер, пока идёт первый ход.
     _maybe_birth(tree)
@@ -2261,6 +2444,12 @@ def main() -> None:
     replay_at = 0.0          # первый проход replay — на первом же тике после старта
     sleep_at = time.time()
     while True:
+        if _restart_wanted[0]:
+            # Между ходами: текущий ход дошёл до конца, новый не начат. Дальше — надзор.
+            log.warning("перезапуск по просьбе владельца: выхожу кодом %d, надзор поднимет "
+                        "движок заново", RESTART_EXIT_CODE)
+            _set_busy(False)
+            sys.exit(RESTART_EXIT_CODE)
         for path in sorted(inbox.glob("*.md")):
             if path.name.startswith(".tmp-"):
                 continue

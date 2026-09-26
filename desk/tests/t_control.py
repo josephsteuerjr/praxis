@@ -53,8 +53,10 @@ class SupervisorState(Ground):
     def test_записки_нет_управления_нет_и_сказано_почему(self):
         state = control.supervisor_state(self.tree)
         self.assertFalse(state["control"]["available"])
-        self.assertIn("Windows", state["control"]["why"],
-                      "на Windows надзор — оболочка, и окно обязано сказать это словами")
+        # 26.09 (1.1.0): записку надзора на Windows и Mac пишет сам движок; её нет —
+        # значит движок не отвечает, и окно обязано сказать это словами.
+        self.assertIn("движок не отвечает", state["control"]["why"])
+        self.assertIn("поднимут", state["control"]["why"])
         self.assertFalse(state["alive"])
 
     def test_свежая_записка_даёт_управление(self):

@@ -44,6 +44,14 @@ fn defaults() -> install::Defaults {
     install::defaults()
 }
 
+/// Решения уже стоящей установки (26.09, сцена «уже установлена»): те же, что
+/// читает `--update`. Нет решений (имена, конституция) — None, и мастер идёт
+/// обычным маршрутом, а не подставляет умолчания поверх выбора владельца.
+#[tauri::command]
+fn installed_setup(dir: String) -> Option<install::Setup> {
+    install::setup_from_dir(std::path::Path::new(&dir))
+}
+
 #[tauri::command]
 async fn probe_model(base_url: String, key: String, framework: String) -> serde_json::Value {
     let (ok, note, models) = tauri::async_runtime::spawn_blocking(move || install::probe_model(&base_url, &key, &framework))
@@ -406,7 +414,7 @@ fn main() {
                 });
             }
         }))
-        .invoke_handler(tauri::generate_handler![defaults, install, open_frame, probe_model, relay_login, relay_status, relay_models, uninstall_run, legacy_services, remove_service, admin_rights])
+        .invoke_handler(tauri::generate_handler![defaults, installed_setup, install, open_frame, probe_model, relay_login, relay_status, relay_models, uninstall_run, legacy_services, remove_service, admin_rights])
         .setup(|app| {
             // Учётные данные ChatGPT прошлого запуска установщика: пока они
             // лежали в %TEMP%, протухшая учётка от другого аккаунта показывалась

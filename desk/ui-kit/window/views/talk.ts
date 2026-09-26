@@ -5,6 +5,7 @@ import { api, mediaURL, post } from "../api";
 import { STARTERS } from "./learn";
 import { bindFail, esc, failHTML, fmtAge, fmtDay, fmtTime, humanError, md, q } from "../lib";
 import * as panel from "../panel";
+import { confirmedByFeed } from "../pending";
 import { LEGACY_WINDOW_KEY, PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, type Run } from "../state";
 
 interface Msg {
@@ -251,8 +252,10 @@ export async function render(container: HTMLElement): Promise<void> {
   }
   // Подтверждённые лентой пузыри «отправляется…» снимаем.
   if (S.pending.length) {
-    const seen = new Set(rows.filter((m) => !m.outgoing).map((m) => (m.text || "").trim()));
-    S.pending = S.pending.filter((p) => !(p.room === peer && seen.has(p.text)));
+    // Голосовое и картинка лентой несут не заглушку пузыря, а «[голосовое]: расшифровка»
+    // — правило сверки в ui-kit/window/pending.ts (26.09, пузыри висели до перезапуска).
+    const own = rows.filter((m) => !m.outgoing);
+    S.pending = S.pending.filter((p) => p.room !== peer || !confirmedByFeed(p, own));
   }
   const feed: string[] = [];
   let day = "";

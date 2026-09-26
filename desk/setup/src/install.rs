@@ -186,7 +186,7 @@ const SKIP_FROM_PAYLOAD: [&str; 6] = [
     "helene-service-op.ps1",
 ];
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Setup {
     pub agent: String,
     pub owner: String,
@@ -324,20 +324,20 @@ fn default_anthropic() -> Endpoint {
     Endpoint { base_url: "https://api.z.ai/api/anthropic".into(), model: "glm-5.3".into(), key: String::new() }
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Endpoint {
     pub base_url: String,
     pub model: String,
     pub key: String,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct LocalEndpoint {
     pub base_url: String,
     pub model: String,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Telegram {
     pub bot_token: String,
     pub owner_id: String,
