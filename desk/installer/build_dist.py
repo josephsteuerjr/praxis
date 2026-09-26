@@ -1761,8 +1761,10 @@ def build_setup_exe(out: Path, version: str, *, product: str = "Helene") -> Path
     target = out.parent / f"{product}-{version}-setup.exe"
     icon = DESK / "shell" / ("icons" if product == "Helene" else "icons-praxis") / "icon.ico"
     print("setup exe (NSIS)…")
+    size_kb = sum(f.stat().st_size for f in out.rglob("*") if f.is_file()) // 1024
     done = subprocess.run(
         [str(makensis), "/V2", "/INPUTCHARSET", "UTF8", f"/DVERSION={version}", f"/DPAYLOAD={out}",
+         f"/DSIZE_KB={size_kb}",
          f"/DOUTFILE={target}", f"/DICON={icon}", str(script)],
         capture_output=True, text=True, encoding="utf-8", errors="replace")
     if done.returncode != 0 or not target.is_file():

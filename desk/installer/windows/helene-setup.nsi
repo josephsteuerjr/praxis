@@ -39,7 +39,6 @@ Unicode true
 !define MULTIUSER_INSTALLMODE_DEFAULT_CURRENTUSER
 !include "MultiUser.nsh"
 !include "MUI2.nsh"
-!include "FileFunc.nsh"
 !include "LogicLib.nsh"
 
 Name "${PRODUCT_UI} ${VERSION}"
@@ -138,9 +137,11 @@ fresh:
   WriteRegStr SHCTX "${UNINST_KEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
   WriteRegDWORD SHCTX "${UNINST_KEY}" "NoModify" 1
   WriteRegDWORD SHCTX "${UNINST_KEY}" "NoRepair" 1
-  ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
-  IntFmt $0 "0x%08X" $0
-  WriteRegDWORD SHCTX "${UNINST_KEY}" "EstimatedSize" "$0"
+  ; Размер — из поставки при сборке (/DSIZE_KB), а не обходом папки: обход считал и data/
+  ; агента (десятки тысяч файлов) и держал экран «копирование» минуту после копирования.
+  !ifdef SIZE_KB
+    WriteRegDWORD SHCTX "${UNINST_KEY}" "EstimatedSize" ${SIZE_KB}
+  !endif
   SetDetailsPrint textonly
   DetailPrint "Готово."
 SectionEnd
