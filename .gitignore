@@ -5,3 +5,7 @@ _hold-0.6.0/
 # darwin-типовая проверка тела на Windows (см. desk-notes/ТЕЛО-МАК-19.09-ПЛАН.md)
 praxis/body/target-mac-check/
 praxis/body/target/
+
+# сборка тела (installer/body_src.py --build) и байткод проверок — не исходники
+_body_target/
+__pycache__/
