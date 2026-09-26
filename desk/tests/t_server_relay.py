@@ -33,12 +33,25 @@ sys.path.insert(0, str(HERE.parent / "server"))
 import serverboot  # noqa: E402
 
 
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+# Порт реле — свободный, а не 5011: на машине разработчика 5011 держит живое реле
+# открытого окна Hélène, и надзор честно отвечает «порт занят — своё не поднимаю»
+# (27.09: стенд падал на ПК Егора при запущенном Джарвисе).
+PORT = _free_port()
+PORT2 = _free_port()
+
+
 def cfg(**over) -> dict:
     """Конфиг агента с подпиской ChatGPT — такой приезжает с архивом переноса."""
     base = {
         "tree": "data",
-        "model": {"base_url": "http://127.0.0.1:5011", "key": "sk-frame-abc", "model": "gpt-5.6-sol"},
-        "relay": {"enabled": True, "port": 5011},
+        "model": {"base_url": f"http://127.0.0.1:{PORT}", "key": "sk-frame-abc", "model": "gpt-5.6-sol"},
+        "relay": {"enabled": True, "port": PORT},
     }
     base.update(over)
     return base
@@ -65,14 +78,14 @@ class RelayChild(unittest.TestCase):
         return child, out.getvalue()
 
     def test_поднимает_с_домом_портом_и_ключом(self):
-        child, said = self.make(cfg(relay={"enabled": True, "port": 5111}))
+        child, said = self.make(cfg(relay={"enabled": True, "port": PORT2}))
         self.assertIsNotNone(child, "реле включено и лежит рядом — надзор обязан его поднять")
         self.assertEqual(child.argv, [str(self.exe), "serve"])
         # Дом реле — data/relay: туда архив переноса кладёт local_auth, и там же
         # реле ищет его при старте (текущая папка процесса).
         self.assertEqual(child.cwd, self.tree / "relay")
         self.assertTrue((self.tree / "relay").is_dir())
-        self.assertEqual(child.env["RELAY_PORT"], "5111")
+        self.assertEqual(child.env["RELAY_PORT"], str(PORT2))
         self.assertEqual(child.env["RELAY_API_KEY"], "sk-frame-abc")
         self.assertEqual(child.env["RELAY_INSTRUCTIONS"], "minimal")
         self.assertEqual(child.env["RELAY_LOG_DIR"], str(self.tree / "relay" / "logs"))
@@ -85,7 +98,7 @@ class RelayChild(unittest.TestCase):
                          "реле тогда отвергало бы КАЖДЫЙ вызов")
 
     def test_инструкции_из_конфига(self):
-        child, _ = self.make(cfg(relay={"enabled": True, "port": 5011, "instructions": "full"}))
+        child, _ = self.make(cfg(relay={"enabled": True, "port": PORT, "instructions": "full"}))
         self.assertEqual(child.env["RELAY_INSTRUCTIONS"], "full")
 
     def test_выключенное_реле_молчит(self):
@@ -95,7 +108,7 @@ class RelayChild(unittest.TestCase):
         self.assertEqual(said.strip(), "", "агенту с чужим мозгом реле не нужно — и слов о нём тоже")
 
     def test_мозг_смотрит_в_реле_а_реле_выключено(self):
-        child, said = self.make(cfg(relay={"enabled": False, "port": 5011}))
+        child, said = self.make(cfg(relay={"enabled": False, "port": PORT}))
         self.assertIsNone(child)
         self.assertIn("не будет", said,
                       "адрес мозга на петле при выключенном реле — это немой агент, "
