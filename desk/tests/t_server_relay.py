@@ -146,7 +146,7 @@ class LocalRelayUrl(unittest.TestCase):
     def test_петля_с_портом_реле(self):
         self.assertTrue(serverboot.looks_like_local_relay(cfg()))
         self.assertTrue(serverboot.looks_like_local_relay(
-            cfg(model={"base_url": "http://localhost:5011/v1"})))
+            cfg(model={"base_url": f"http://localhost:{PORT}/v1"})))
 
     def test_чужой_адрес_и_чужой_порт(self):
         self.assertFalse(serverboot.looks_like_local_relay(
