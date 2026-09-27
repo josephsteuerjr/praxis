@@ -31,7 +31,17 @@ class ShellWordsTest(unittest.TestCase):
             OWNER_TOOLS=[{"name": "shell", "description": SERVER}],
         )
         tree = Path("C:/Program Files/Helene/data")
-        n = shell_words.install(mod, tree, Path("C:/Program Files/Helene"))
+        # Накладка дерева — своя, без руки shell: на Mac-стенде дерево импортируется по-
+        # настоящему, и правка его EN прибавляла единицу к счёту (28.09).
+        saved = sys.modules.get("tool_text_en")
+        sys.modules["tool_text_en"] = types.ModuleType("tool_text_en")
+        try:
+            n = shell_words.install(mod, tree, Path("C:/Program Files/Helene"))
+        finally:
+            if saved is None:
+                del sys.modules["tool_text_en"]
+            else:
+                sys.modules["tool_text_en"] = saved
         self.assertEqual(n, 2)  # общий словарь — один раз, копия владельца — второй
         for tool in (mod.BASE_TOOLS[0], mod.OWNER_TOOLS[0], mod.SHELL_TOOL):
             words = tool["description"]
@@ -45,6 +55,7 @@ class ShellWordsTest(unittest.TestCase):
         fake = types.ModuleType("tool_text_en")
         fake.EN = {"shell": {"d": "Your hands in your own home. A full shell in the container.",
                              "p": {"command": "the shell command"}}}
+        saved = sys.modules.get("tool_text_en")
         sys.modules["tool_text_en"] = fake
         try:
             mod = types.SimpleNamespace(BASE_TOOLS=[{"name": "shell", "description": SERVER}])
@@ -54,7 +65,10 @@ class ShellWordsTest(unittest.TestCase):
             self.assertIn("C:/H/data/workspace", words)
             self.assertEqual(fake.EN["shell"]["p"], {"command": "the shell command"})
         finally:
-            del sys.modules["tool_text_en"]
+            if saved is None:
+                del sys.modules["tool_text_en"]
+            else:
+                sys.modules["tool_text_en"] = saved
 
     def test_windows_words_explain_busybox_root(self):
         words = shell_words.text(Path("C:/H/data"), Path("C:/H"), platform="win32")

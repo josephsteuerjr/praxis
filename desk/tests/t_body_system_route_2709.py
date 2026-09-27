@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 import types
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 DESK = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(DESK))
@@ -35,13 +35,18 @@ class SystemRouteTest(unittest.TestCase):
                                                           "command": "whoami /user", "timeout_ms": 45000})
         self.assertEqual(seen["op"], "exec")
         self.assertEqual(seen["action"], "ask")
-        self.assertTrue(seen["cmd"].lower().endswith("powershell.exe"))
-        self.assertTrue(Path(seen["cmd"]).is_absolute())
-        self.assertEqual(seen["args"][-2:], ["-Command", "whoami /user"])
+        self.assertEqual((seen["cmd"], seen["args"]), body._system_shell("whoami /user"))
         self.assertEqual(seen["timeout_sec"], 45)
         self.assertTrue(seen["why"])
         self.assertIn("квитанция: код 0", out)
         self.assertNotIn("PraxisBodySystem", out)
+
+    def test_shell_per_platform(self):
+        win_cmd, win_args = body._system_shell("whoami /user", platform="win32")
+        self.assertTrue(win_cmd.lower().endswith("powershell.exe"))
+        self.assertTrue(PureWindowsPath(win_cmd).is_absolute())
+        self.assertEqual(win_args[-2:], ["-Command", "whoami /user"])
+        self.assertEqual(body._system_shell("id -u", platform="darwin"), ("/bin/sh", ["-c", "id -u"]))
 
     def test_without_broker_says_so_in_words(self):
         out = body._system_via_broker(self._agent(None), {"command": "whoami"})

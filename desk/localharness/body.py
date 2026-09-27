@@ -1091,6 +1091,25 @@ SYSTEM_ROUTE_NOTE = (
     "выполняет её правами СИСТЕМЫ и отдаёт квитанцию. Нужна служба и включённая нулевая сессия.")
 
 
+def _rights() -> str:
+    """Чьими правами брокер исполняет поручение на этой платформе."""
+    return "правами СИСТЕМЫ" if sys.platform == "win32" else "правами администратора"
+
+
+def _system_shell(command: str, platform: str | None = None) -> tuple[str, list[str]]:
+    """Интерпретатор поручения полным путём и аргументы массивом — как требует брокер.
+
+    Windows — PowerShell (им говорит маршрут тела); Mac — `/bin/sh -c`: там брокер
+    исполняет поручение правами администратора, и PowerShell-пути у него нет (стенд на
+    Mac 28.09 поймал именно это: собранный путь был `C:/Windows/…`).
+    """
+    if (platform or sys.platform) == "win32":
+        shell = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" /
+                    "WindowsPowerShell" / "v1.0" / "powershell.exe")
+        return shell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command]
+    return "/bin/sh", ["-c", command]
+
+
 def _system_via_broker(agent_mod, kwargs: dict) -> str:
     """`computer run execution=system` — поручением брокеру службы (1.2.3).
 
@@ -1111,16 +1130,14 @@ def _system_via_broker(agent_mod, kwargs: dict) -> str:
     command = str(kwargs.get("command") or "").strip()
     if not command:
         return "run execution=system: пустая команда — нечего поручать службе"
-    shell = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" /
-                "WindowsPowerShell" / "v1.0" / "powershell.exe")
+    shell, args = _system_shell(command)
     try:
         timeout_sec = max(1, int(kwargs.get("timeout_ms") or 0) // 1000) or None
     except (TypeError, ValueError):
         timeout_sec = None
-    ask = {"action": "ask", "op": "exec", "cmd": shell,
-           "args": ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+    ask = {"action": "ask", "op": "exec", "cmd": shell, "args": args,
            "why": str(kwargs.get("goal") or kwargs.get("why") or
-                      "команда агента правами СИСТЕМЫ (рука computer, execution=system)")[:300]}
+                      f"команда агента {_rights()} (рука computer, execution=system)")[:300]}
     if timeout_sec:
         ask["timeout_sec"] = timeout_sec
     receipt = hand(**ask)
