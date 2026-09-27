@@ -59,11 +59,17 @@ mod tests {
         assert_eq!(p.every_days, DEFAULT_EVERY_DAYS);
         assert_eq!(p.keep, DEFAULT_KEEP);
         assert!(p.dir.ends_with("backups"));
-        let cfg = serde_json::json!({"backup": {"every_days": 0, "keep": 3, "dir": "D:/копии"}});
+        // Абсолютная папка — своя на каждой системе: на macOS `D:/…` не абсолютна, и
+        // прогон macos.yml 27.09 честно пристегнул её к папке программы — врал стенд.
+        let abs = if cfg!(windows) { "D:/копии" } else { "/Volumes/копии" };
+        let cfg = serde_json::json!({"backup": {"every_days": 0, "keep": 3, "dir": abs}});
         let p = policy(root, Some(&cfg));
         assert_eq!(p.every_days, 0);
         assert_eq!(p.keep, 3);
-        assert_eq!(p.dir, PathBuf::from("D:/копии"));
+        assert_eq!(p.dir, PathBuf::from(abs));
+        // Относительная — от папки программы.
+        let cfg = serde_json::json!({"backup": {"dir": "мои-копии"}});
+        assert_eq!(policy(root, Some(&cfg)).dir, root.join("мои-копии"));
         let week = 7 * 86_400;
         assert!(due(7, None, 1_000_000), "снимков ещё не было — пора");
         assert!(!due(7, Some(1_000_000), 1_000_000 + week - 1));
