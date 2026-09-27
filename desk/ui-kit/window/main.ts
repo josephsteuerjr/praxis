@@ -9,8 +9,11 @@
 // общее, а издание приносит своё — экран настроек и, если нужно, перехват
 // первого запуска. Веток про удалённый харнесс здесь нет ни одной.
 import "./styles/app.css";
+// Облик «Почерк» (28.09) — слоем поверх: токены, линии, почерк, лента в em.
+import "./styles/paper.css";
 import { api, cfg, connect, electron, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
 import { applyTheme } from "../../ui-kit/dom";
+import * as scroll from "./scroll";
 import { watchShellVersion } from "../../ui-kit/version";
 import { setResultFetcher } from "../../ui-kit/steps";
 import { bindFail, esc, failHTML, fmtAge, fmtDur, fmtK, fmtTs, humanError, q, toast } from "../../ui-kit/window/lib";
@@ -71,6 +74,12 @@ export function start(opts: WindowOptions): void {
   setResultFetcher((run, rid) => api(`/api/run/${encodeURIComponent(run)}/result/${encodeURIComponent(rid)}`));
 
   const view = q<HTMLElement>("#view");
+  // Страницы разделов живут в постоянном узле внутри #view: на нём физика прокрутки
+  // (ui-kit/feed, 28.09) рисует перетяг края, а #view остаётся нативной прокруткой.
+  const viewInner = document.createElement("div");
+  viewInner.id = "view-inner";
+  view.replaceChildren(viewInner);
+  scroll.mountView(view, viewInner);
   const app = q<HTMLElement>("#app");
   const railNav = q<HTMLElement>("#rail-nav");
   const railBottom = q<HTMLElement>("#rail-bottom");
@@ -547,7 +556,7 @@ export function start(opts: WindowOptions): void {
     const from = S.view;
     // Прокрутку помним, только если в #view правда лежит узел ТОГО раздела: в него умеет
     // писать напрямую ветка отказа загрузки комнат, и чужая прокрутка уехала бы в память.
-    if (from !== id && pages.get(from)?.parentNode === view) scrolls.set(from, view.scrollTop);
+    if (from !== id && pages.get(from)?.parentNode === viewInner) scrolls.set(from, view.scrollTop);
     S.view = id;
     syncRail();
     const section = SECTIONS.find((s) => s.id === id) ?? FOOT.find((s) => s.id === id);
@@ -568,7 +577,10 @@ export function start(opts: WindowOptions): void {
     const wasAtEnd = view.scrollHeight - view.scrollTop - view.clientHeight < 80;
     // Смена вкладки — мгновенная: движение владелец просил у панелей, а не здесь.
     app.classList.add("no-anim");
-    if (view.firstChild !== page) view.replaceChildren(page);
+    if (viewInner.firstChild !== page) viewInner.replaceChildren(page);
+    // Лента чата липнет к низу и масштабируется; её узел масштаба ставит сама talk.render.
+    if (!talking) scroll.sectionShown(false, null);
+    else scroll.sectionShown(true, page.querySelector<HTMLElement>(".talk-zoom"));
     if (blank) page.classList.add("page-in");
     view.scrollTop = opts.quiet ? view.scrollTop : homeScroll(id);
     // Начатую правку фоновое перечитывание не сносит: у «Файлов» это открытый редактор,
@@ -1297,10 +1309,10 @@ export function start(opts: WindowOptions): void {
     loadRooms()
       .then(() => show("now"))
       .catch(() => {
-        view.innerHTML = `<div class="empty" data-first-wait><b>${esc(S.agent)} сейчас не на связи</b>Окно продолжит попытки само. Можно оставить его открытым.</div>`;
+        viewInner.innerHTML = `<div class="empty" data-first-wait><b>${esc(S.agent)} сейчас не на связи</b>Окно продолжит попытки само. Можно оставить его открытым.</div>`;
         renderState(null, false);
         window.setTimeout(() => {
-          if (view.querySelector("[data-first-wait]")) openFirst();
+          if (viewInner.querySelector("[data-first-wait]")) openFirst();
         }, 4000);
       });
   };

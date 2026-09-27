@@ -37,11 +37,14 @@ export class Zoom {
    * `box` — узел, который масштабируется: ему ставится --zoom и трансформ жеста. Он должен
    * лежать ВНУТРИ `scroller.inner` (тот носит свой трансформ — перетяг края).
    */
+  private box: HTMLElement | null;
+
   constructor(
     private readonly scroller: Scroller,
-    private readonly box: HTMLElement,
+    box: HTMLElement | null,
     opts: ZoomOptions = {},
   ) {
+    this.box = box;
     this.min = opts.min ?? 0.7;
     this.max = opts.max ?? 2.2;
     this.key = opts.storageKey;
@@ -52,7 +55,7 @@ export class Zoom {
         if (saved >= this.min && saved <= this.max) this.committed = this.z = this.goal = saved;
       } catch { /* нет хранилища — начинаем со 100% */ }
     }
-    box.style.setProperty("--zoom", this.committed.toFixed(4));
+    box?.style.setProperty("--zoom", this.committed.toFixed(4));
     this.onChange?.(this.committed);
     scroller.el.addEventListener("wheel", this.onWheel, { passive: false });
     window.addEventListener("keydown", this.onKey);
@@ -60,6 +63,21 @@ export class Zoom {
 
   get value(): number {
     return this.goal;
+  }
+
+  /**
+   * Что масштабируется сейчас. Окно меняет это при смене раздела: масштаб у ленты чата
+   * (всё внутри в em), у остальных разделов — null, и Ctrl+колесо там ничего не делает
+   * (а не дёргает масштаб всей страницы движка).
+   */
+  setBox(box: HTMLElement | null) {
+    if (this.box === box) return;
+    if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; }
+    if (this.box) { this.box.style.transform = ""; this.box.style.transformOrigin = ""; this.box.style.willChange = ""; }
+    this.origin = null;
+    this.z = this.goal = this.committed;
+    this.box = box;
+    box?.style.setProperty("--zoom", this.committed.toFixed(4));
   }
 
   set(z: number, clientY?: number) {
@@ -70,6 +88,7 @@ export class Zoom {
   private onWheel = (e: WheelEvent) => {
     if (!e.ctrlKey) return;
     e.preventDefault(); // иначе движок масштабирует всю страницу рывком
+    if (!this.box) return;
     let dy = e.deltaY;
     if (e.deltaMode === 1) dy *= 40;
     // Щелчок колеса — шаг 10%; щипок тачпада — мелкие дельты, плавно.
@@ -78,7 +97,7 @@ export class Zoom {
   };
 
   private onKey = (e: KeyboardEvent) => {
-    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || !this.box) return;
     const box = this.scroller.el.getBoundingClientRect();
     const x = box.left + box.width / 2, y = box.top + box.height / 2;
     if (e.key === "=" || e.key === "+") { e.preventDefault(); this.aim(this.goal * 1.1, x, y); }
@@ -91,15 +110,17 @@ export class Zoom {
     // Привязать к 100%, если прошли рядом: щипком ровно в 1.0 не попасть.
     this.goal = Math.abs(next - 1) < 0.03 ? 1 : next;
     this.lastInput = performance.now();
+    const box = this.box;
+    if (!box) return;
     if (!this.origin) {
       // Опора жеста — точка под курсором в координатах узла (трансформа ещё нет).
-      const r = this.box.getBoundingClientRect();
+      const r = box.getBoundingClientRect();
       const bottom = this.scroller.pinned;
       const view = this.scroller.el.getBoundingClientRect();
       const y = bottom ? Math.min(r.height, view.bottom - r.top) : clientY - r.top;
       this.origin = { x: clientX - r.left, y, clientY: bottom ? view.bottom : clientY, bottom };
-      this.box.style.transformOrigin = `${this.origin.x.toFixed(1)}px ${this.origin.y.toFixed(1)}px`;
-      this.box.style.willChange = "transform";
+      box.style.transformOrigin = `${this.origin.x.toFixed(1)}px ${this.origin.y.toFixed(1)}px`;
+      box.style.willChange = "transform";
     }
     if (!this.raf) {
       this.last = performance.now();
@@ -109,11 +130,13 @@ export class Zoom {
 
   private frame = (now: number) => {
     this.raf = 0;
+    const box = this.box;
+    if (!box) return;
     const dt = Math.min(48, now - this.last);
     this.last = now;
     this.z += (this.goal - this.z) * (1 - Math.exp(-dt / Math.max(1, this.tau)));
     if (Math.abs(this.goal - this.z) < 0.001) this.z = this.goal;
-    this.box.style.transform = `scale(${(this.z / this.committed).toFixed(4)})`;
+    box.style.transform = `scale(${(this.z / this.committed).toFixed(4)})`;
     this.onChange?.(this.z);
     if (this.z === this.goal && now - this.lastInput >= SETTLE_MS) {
       this.commit();
@@ -124,21 +147,23 @@ export class Zoom {
 
   /** Жест затих: разложить текст под новый масштаб и снять трансформ без сдвига. */
   private commit() {
+    const box = this.box;
+    if (!box) return;
     const o = this.origin;
     this.origin = null;
     // Что сейчас под опорой: элемент-строка и доля его высоты.
     let pin: { el: Element; frac: number } | null = null;
     if (o && !o.bottom) {
-      for (const el of Array.from(this.box.children)) {
+      for (const el of Array.from(box.querySelectorAll("[data-key]"))) {
         const r = el.getBoundingClientRect();
         if (r.height && r.top <= o.clientY && r.bottom >= o.clientY) { pin = { el, frac: (o.clientY - r.top) / r.height }; break; }
       }
     }
     this.committed = this.goal;
-    this.box.style.setProperty("--zoom", this.committed.toFixed(4));
-    this.box.style.transform = "";
-    this.box.style.transformOrigin = "";
-    this.box.style.willChange = "";
+    box.style.setProperty("--zoom", this.committed.toFixed(4));
+    box.style.transform = "";
+    box.style.transformOrigin = "";
+    box.style.willChange = "";
     if (o?.bottom) this.scroller.toBottom(false);
     else if (pin && o) {
       const r = pin.el.getBoundingClientRect();

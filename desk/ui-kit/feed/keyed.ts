@@ -15,6 +15,8 @@ export interface KeyedSpec<T> {
 export interface SetOptions {
   /** Новые элементы вырастают плавно (первая отрисовка — без анимации). */
   animate?: boolean;
+  /** Точечно: этот новый элемент — без роста (он встаёт на место уже видимого). */
+  still?(el: HTMLElement): boolean;
   /** Сколько новых появилось — для «новые ↓». */
   onAdded?(els: HTMLElement[]): void;
 }
@@ -70,7 +72,7 @@ export class KeyedList<T> {
       else this.container.insertBefore(el, cur);
     }
     this.nodes = next;
-    if (opts.animate && added.length) for (const el of added) grow(el);
+    if (opts.animate && added.length) for (const el of added) if (!opts.still?.(el)) grow(el);
     if (added.length) opts.onAdded?.(added);
   }
 }

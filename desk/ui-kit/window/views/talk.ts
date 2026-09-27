@@ -1,12 +1,20 @@
 // Чат: переписка комнаты в центре — слово агента текстом, как документ, слово
 // владельца пузырём справа; ошибки хода на месте, человеческим словом и с
 // действием. Ход агента — в панели справа (../panel).
+//
+// 28.09 (поток «окно»): лента — ключевой список (ui-kit/feed/keyed): каждое сообщение
+// создаётся один раз и дальше правится на месте, новое вырастает плавно, прокрутку ведёт
+// физика окна (../scroll). Раньше страница перерисовывалась `innerHTML` целиком на каждое
+// событие хода — отсюда прыжки и «сообщение уходит вниз» (слово Егора 28.09). Плашки хода
+// и ошибок стоят ВНИЗУ, у поля ввода: наверху 250 сообщений их никто не видел.
+import { KeyedList } from "../../feed/keyed";
 import { api, mediaURL, post } from "../api";
 import { STARTERS } from "./learn";
 import { bindFail, esc, failHTML, fmtAge, fmtDay, fmtTime, humanError, md, q } from "../lib";
 import * as panel from "../panel";
 import { confirmedByFeed } from "../pending";
-import { LEGACY_WINDOW_KEY, PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, type Run } from "../state";
+import * as scroll from "../scroll";
+import { LEGACY_WINDOW_KEY, PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, type Pending, type Run } from "../state";
 
 interface Msg {
   timestamp?: string;
@@ -30,10 +38,28 @@ interface Msg {
   edited_at?: string;
 }
 
+/** Строка ленты: день или сообщение. `html` — и содержимое, и подпись «изменилось ли». */
+type Row =
+  | { kind: "day"; key: string; label: string }
+  | { kind: "msg"; key: string; cls: string; at: string; html: string; own: string };
+
+/** Узлы страницы чата — создаются один раз на страницу (комната сменилась — страница новая). */
+interface Dom {
+  page: HTMLElement;
+  peer: string;
+  zoom: HTMLElement;
+  feed: KeyedList<Row>;
+  pending: KeyedList<Pending>;
+  empty: HTMLElement;
+  notices: HTMLElement;
+  painted: boolean;
+  noticesHTML: string;
+  emptyHTML: string;
+}
+
 let refreshTimer = 0;
 let root: HTMLElement | null = null;
-// Последняя удачно прочитанная лента по комнатам (не больше трёх).
-const lastFeed = new Map<string, string>();
+const doms = new WeakMap<HTMLElement, Dom>();
 
 function roomRuns(): Run[] {
   const key = S.room;
@@ -182,21 +208,6 @@ function stubNotice(): string {
   </div>`;
 }
 
-/** Пузыри отправленного, которое лента ещё не подтвердила. */
-function pendingHTML(): string {
-  return S.pending
-    .filter((p) => p.room === S.room)
-    .map(
-      (p) => `<div class="msg own pending" data-pending="${p.id}">
-      <div class="msg-head"><span>${fmtTime(p.at)}</span></div>
-      <div class="msg-body">${md(p.text)}</div>
-      <div class="msg-note">${esc(p.note)}</div>
-    </div>`,
-    )
-    .join("");
-}
-
-/** Перерисовать только пузыри отправляемого, не трогая ленту. */
 /**
  * Вложение строки ленты — проигрывателем или картинкой.
  *
@@ -221,48 +232,18 @@ function mediaBlock(m: { media_path?: string; media_kind?: string }): string {
   return `<div class="msg-media"><a href="${esc(src)}" target="_blank" rel="noreferrer">${esc(name)}</a></div>`;
 }
 
-export function paintPending() {
-  if (!root || S.view !== "talk") return;
-  const box = root.querySelector<HTMLElement>(".pending-box");
-  if (box) box.innerHTML = pendingHTML();
-}
+// ---------------------------------------------------------------- строки ленты
 
-export async function render(container: HTMLElement): Promise<void> {
-  root = container;
-  const title = q<HTMLElement>("#head-title");
-  title.textContent = S.roomName;
-  // Над своей комнатой агент подписан своим почерком; чужие комнаты — нет.
-  title.classList.toggle("hand", S.room === WINDOW_ROOM);
-  dispatchEvent(new Event("frame-room"));
-  const peer = S.room;
+/** Строки ленты: дни и сообщения с устойчивыми ключами (время + кто + номер дубля). */
+function buildRows(rows: Msg[], peer: string): Row[] {
   const windowish = isWindowRoom(peer);
-  // Сорванное чтение и пустая комната давали ОДИН результат [] — и обрыв связи
-  // стирал всю переписку. Теперь пусто — только после успешного ответа.
-  let rows: Msg[];
-  try {
-    rows = await readArchive(peer);
-  } catch (e) {
-    const kept = lastFeed.get(peer);
-    const bar = `<div class="notice err read-fail"><span class="dot failed"></span>
-      <span>${esc(humanError(e).text)} Показано последнее прочитанное.</span>
-      <button class="notice-action" data-fail-retry type="button">Повторить</button></div>`;
-    container.innerHTML = kept ? `<div class="center">${bar}<div class="feed">${kept}</div></div>` : `<div class="center">${failHTML(e)}</div>`;
-    bindFail(container, () => void render(container));
-    return;
-  }
-  // Подтверждённые лентой пузыри «отправляется…» снимаем.
-  if (S.pending.length) {
-    // Голосовое и картинка лентой несут не заглушку пузыря, а «[голосовое]: расшифровка»
-    // — правило сверки в ui-kit/window/pending.ts (26.09, пузыри висели до перезапуска).
-    const own = rows.filter((m) => !m.outgoing);
-    S.pending = S.pending.filter((p) => p.room !== peer || !confirmedByFeed(p, own));
-  }
-  const feed: string[] = [];
+  const out: Row[] = [];
+  const seen = new Map<string, number>();
   let day = "";
   for (const m of rows) {
     const d = fmtDay(m.timestamp);
     if (d !== day) {
-      feed.push(`<div class="day">${esc(d)}</div>`);
+      out.push({ kind: "day", key: "day:" + (m.timestamp || "").slice(0, 10) + ":" + d, label: d });
       day = d;
     }
     // Плашка продукта — по ФЛАГУ харнесса, а не по имени отправителя: имя
@@ -293,18 +274,107 @@ export async function render(container: HTMLElement): Promise<void> {
     const head = m.outgoing
       ? `<span class="who-hand">${esc(S.agent)}</span><span>${fmtTime(m.timestamp)}${edited}</span>`
       : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}${edited}</span>`;
-    feed.push(`<div class="msg ${cls}" data-at="${esc(m.timestamp || "")}">
-      <div class="msg-head">${head}</div>
-      <div class="msg-body">${birth
-        ? `<details><summary>Первый запуск: ${esc(PRODUCT_NAME)} рассказала агенту, кто он, где его дом и кто владелец</summary>${md(m.text || "")}</details>`
-        : md(m.text || "")}${media}</div>
-    </div>`);
+    const body = birth
+      ? `<details><summary>Первый запуск: ${esc(PRODUCT_NAME)} рассказала агенту, кто он, где его дом и кто владелец</summary>${md(m.text || "")}</details>`
+      : md(m.text || "");
+    const base = `${m.timestamp || ""}|${m.outgoing ? "a" : system ? "s" : "o"}|${m.sender_id ?? ""}`;
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    out.push({
+      kind: "msg",
+      key: n ? `${base}#${n}` : base,
+      cls,
+      at: m.timestamp || "",
+      html: `<div class="msg-head">${head}</div><div class="msg-body">${body}${media}</div>`,
+      own: own ? (m.text || "").trim() : "",
+    });
   }
-  const feedHTML = feed.join("");
-  lastFeed.set(peer, feedHTML);
-  while (lastFeed.size > 3) lastFeed.delete(lastFeed.keys().next().value as string);
-  const notices = stubNotice() + brainNotice() + turnNotice() + failedNotices();
-  const pend = pendingHTML();
+  return out;
+}
+
+function makeRow(r: Row): HTMLElement {
+  const el = document.createElement("div");
+  if (r.kind === "day") {
+    el.className = "day";
+    el.textContent = r.label;
+  } else {
+    el.className = `msg ${r.cls}`;
+    el.dataset.at = r.at;
+    el.innerHTML = r.html;
+  }
+  return el;
+}
+
+function pendingEl(p: Pending): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "msg own pending";
+  el.dataset.pending = String(p.id);
+  el.innerHTML = `<div class="msg-head"><span>${fmtTime(p.at)}</span></div>
+      <div class="msg-body">${md(p.text)}</div>
+      <div class="msg-note">${esc(p.note)}</div>`;
+  return el;
+}
+
+function skeleton(page: HTMLElement, peer: string): Dom {
+  page.innerHTML = `<div class="center talk">
+    <div class="talk-zoom">
+      <div class="feed" role="log" aria-label="Переписка"></div>
+      <div class="pending-box"></div>
+      <div class="talk-empty" hidden></div>
+      <div class="talk-foot"><div data-fold-box></div><div class="talk-notices"></div></div>
+    </div>
+  </div>`;
+  const zoom = page.querySelector<HTMLElement>(".talk-zoom")!;
+  const dom: Dom = {
+    page,
+    peer,
+    zoom,
+    feed: new KeyedList<Row>(page.querySelector<HTMLElement>(".feed")!, {
+      key: (r) => r.key,
+      create: makeRow,
+      same: (a, b) => (a.kind === "day" ? b.kind === "day" && a.label === b.label : b.kind === "msg" && a.html === b.html && a.cls === b.cls),
+      update(el, r) {
+        if (r.kind === "day") { el.textContent = r.label; return; }
+        el.className = `msg ${r.cls}`;
+        el.innerHTML = r.html;
+      },
+    }),
+    pending: new KeyedList<Pending>(page.querySelector<HTMLElement>(".pending-box")!, {
+      key: (p) => "p" + p.id,
+      create: pendingEl,
+      same: (a, b) => a.note === b.note && a.state === b.state,
+      update(el, p) {
+        const note = el.querySelector(".msg-note");
+        if (note) note.textContent = p.note;
+      },
+    }),
+    empty: page.querySelector<HTMLElement>(".talk-empty")!,
+    notices: page.querySelector<HTMLElement>(".talk-notices")!,
+    painted: false,
+    noticesHTML: "",
+    emptyHTML: "",
+  };
+  doms.set(page, dom);
+  return dom;
+}
+
+// ---------------------------------------------------------------- отрисовка
+
+/** Перерисовать только пузыри отправляемого, не трогая ленту. */
+export function paintPending() {
+  if (!root || S.view !== "talk") return;
+  const dom = doms.get(root);
+  if (!dom) return;
+  scroll.preserve(() => dom.pending.set(S.pending.filter((p) => p.room === S.room), { animate: true }));
+  paintEmpty(dom, dom.feed.size > 0);
+}
+
+function paintEmpty(dom: Dom, hasRows: boolean) {
+  const pend = S.pending.some((p) => p.room === S.room);
+  const show = !hasRows && !pend;
+  dom.empty.hidden = !show;
+  if (!show) return;
+  const windowish = isWindowRoom(dom.peer);
   const emptyText = windowish ? "Напиши первое сообщение внизу." : "Архива этой комнаты ещё нет.";
   // Четыре начала — только в пустой переписке с агентом этого окна, и только
   // пока она пуста: с первым же сообщением полоска уходит навсегда. Тому, кто
@@ -314,10 +384,27 @@ export async function render(container: HTMLElement): Promise<void> {
     ? `<div class="starters">${STARTERS.map((st, i) =>
         `<button class="starter" type="button" data-starter="${i}">${esc(st.label)}</button>`).join("")}</div>`
     : "";
-  container.innerHTML = `<div class="center">${notices}<div data-fold-box></div><div class="feed">${
-    feedHTML || (pend ? "" : `<div class="empty"><b>Здесь пока тихо</b>${emptyText}${starters}</div>`)
-  }<div class="pending-box">${pend}</div></div></div>`;
-  for (const b of container.querySelectorAll<HTMLButtonElement>("[data-go]")) {
+  const html = `<div class="empty"><b>Здесь пока тихо</b>${emptyText}${starters}</div>`;
+  if (html === dom.emptyHTML) return;
+  dom.emptyHTML = html;
+  dom.empty.innerHTML = html;
+  for (const b of dom.empty.querySelectorAll<HTMLButtonElement>("[data-starter]")) {
+    b.addEventListener("click", () => {
+      const st = STARTERS[Number(b.dataset.starter)];
+      if (st) dispatchEvent(new CustomEvent("frame-template", { detail: st.template }));
+    });
+  }
+}
+
+/** Плашки внизу ленты: переписываются, только если слова изменились, и не посреди «прервать?». */
+function paintNotices(dom: Dom, html: string) {
+  if (html === dom.noticesHTML) return;
+  // Владелец уже нажал «Остановить ход» и читает цену — не сносить вопрос у него из-под руки.
+  const asking = dom.notices.querySelector('[data-stop-turn="do"], [data-stop-turn][disabled]:not([data-stop-turn="ask"])');
+  if (asking) return;
+  dom.noticesHTML = html;
+  scroll.preserve(() => { dom.notices.innerHTML = html; });
+  for (const b of dom.notices.querySelectorAll<HTMLButtonElement>("[data-go]")) {
     b.addEventListener("click", () => dispatchEvent(new CustomEvent("frame-go", { detail: b.dataset.go })));
   }
   // ⚠ ЖИВОЙ СЛУЧАЙ 17.09. Кнопка плашки состояния несёт ЦЕЛЬ ДЕЙСТВИЯ, а не имя раздела:
@@ -325,22 +412,74 @@ export async function render(container: HTMLElement): Promise<void> {
   // в переписке открывало раздел «restart», которого нет: вместо перезапуска агента —
   // пустой экран с «Не получилось» и `reading 'render'` в подробностях. Кнопка состояния
   // в шапке разбирала те же цели правильно — расходились ровно здесь.
-  for (const b of container.querySelectorAll<HTMLButtonElement>("[data-starter]")) {
-    b.addEventListener("click", () => {
-      const st = STARTERS[Number(b.dataset.starter)];
-      if (st) dispatchEvent(new CustomEvent("frame-template", { detail: st.template }));
-    });
-  }
-  for (const b of container.querySelectorAll<HTMLButtonElement>("[data-act]")) {
+  for (const b of dom.notices.querySelectorAll<HTMLButtonElement>("[data-act]")) {
     b.addEventListener("click", () => {
       if (b.dataset.act === "restart") dispatchEvent(new Event("frame-restart"));
       else dispatchEvent(new CustomEvent("frame-go", { detail: b.dataset.act }));
     });
   }
-  bindStopTurn(container);
+  bindFail(dom.notices, () => { if (root) void render(root); });
+  bindStopTurn(dom.notices);
+}
+
+export async function render(container: HTMLElement): Promise<void> {
+  root = container;
+  const title = q<HTMLElement>("#head-title");
+  title.textContent = S.roomName;
+  // Над своей комнатой агент подписан своим почерком; чужие комнаты — нет.
+  title.classList.toggle("hand", S.room === WINDOW_ROOM);
+  dispatchEvent(new Event("frame-room"));
+  const peer = S.room;
+  let dom = doms.get(container);
+  if (!dom || dom.peer !== peer) dom = skeleton(container, peer);
+  if (S.view === "talk") scroll.sectionShown(true, dom.zoom);
+  // Сорванное чтение и пустая комната давали ОДИН результат [] — и обрыв связи
+  // стирал всю переписку. Теперь пусто — только после успешного ответа, а при обрыве
+  // лента остаётся той, что была (её узлы никуда не деваются).
+  let rows: Msg[];
+  try {
+    rows = await readArchive(peer);
+  } catch (e) {
+    if (!dom.painted) {
+      dom.empty.hidden = false;
+      dom.emptyHTML = "";
+      dom.empty.innerHTML = failHTML(e);
+      bindFail(dom.empty, () => void render(container));
+      return;
+    }
+    paintNotices(dom, `<div class="notice err read-fail"><span class="dot failed"></span>
+      <span>${esc(humanError(e).text)} Показано последнее прочитанное.</span>
+      <button class="notice-action" data-fail-retry type="button">Повторить</button></div>`);
+    return;
+  }
+  if (doms.get(container) !== dom || S.room !== peer) return; // комната сменилась, пока читали
+  // Подтверждённые лентой пузыри «отправляется…» снимаем — и их строки ленты встают
+  // на место пузыря без роста: подмена одного на другое не должна мигать.
+  const own = rows.filter((m) => !m.outgoing);
+  const confirmed = new Set<string>();
+  if (S.pending.length) {
+    // Голосовое и картинка лентой несут не заглушку пузыря, а «[голосовое]: расшифровка»
+    // — правило сверки в ui-kit/window/pending.ts (26.09, пузыри висели до перезапуска).
+    S.pending = S.pending.filter((p) => {
+      if (p.room !== peer || !confirmedByFeed(p, own)) return true;
+      confirmed.add(p.text.trim());
+      return false;
+    });
+  }
+  const list = buildRows(rows, peer);
+  const d = dom;
+  scroll.preserve(() => {
+    d.feed.set(list, {
+      animate: d.painted,
+      still: (el) => confirmed.size > 0 && el.classList.contains("own") && confirmed.has((el.querySelector(".msg-body")?.textContent || "").trim()),
+    });
+    d.pending.set(S.pending.filter((p) => p.room === peer), { animate: d.painted });
+  });
+  d.painted = true;
+  paintEmpty(d, list.length > 0);
+  paintNotices(d, stubNotice() + brainNotice() + turnNotice() + failedNotices());
   void paintFold(container, peer);
-  // Прокрутку ведёт каркас (`homeScroll`): прокручивается общий `#view`, а не наш узел,
-  // и просьба «в конец» отсюда была бы записью в поле, которое никто не читает.
+  // Прокрутку ведёт каркас (`homeScroll`) и физика окна: прилипшая лента сама едет к новому.
   await panel.render();
 }
 
@@ -361,7 +500,7 @@ interface FoldState {
 let foldTimer = 0;
 
 /**
- * Строка «память чата» над лентой (Егор 27.09: «компактирование… неплохо бы по нажатию»).
+ * Строка «память чата» у низа ленты (Егор 27.09: «компактирование… неплохо бы по нажатию»).
  * Свёртка — ЕЁ (`memory_life.fold_now`, та же, что у её руки): старое сверх горячего хвоста
  * уходит в сводку её словами, переписка остаётся. Строка видна, только когда есть что
  * свернуть, идёт свёртка или есть свежая расписка: пустое место в ленте не занимает.
@@ -379,28 +518,27 @@ async function paintFold(container: HTMLElement, room: string): Promise<void> {
   const receiptAge = st.receipt?.at ? Date.now() - Date.parse(st.receipt.at) : Infinity;
   const running = !!st.pending || st.receipt?.state === "running";
   clearTimeout(foldTimer);
+  let html = "";
   if (running) {
-    box.innerHTML = `<div class="notice"><span class="dot live"></span>
+    html = `<div class="notice"><span class="dot live"></span>
       <span>Сворачиваю память чата — она пишет сводку своими словами. Переписка остаётся на месте.</span></div>`;
     foldTimer = window.setTimeout(() => void paintFold(container, room), 3000);
-    return;
-  }
-  if (st.receipt && receiptAge < 120_000) {
+  } else if (st.receipt && receiptAge < 120_000) {
     const again = st.receipt.state === "retry" || st.receipt.state === "failed";
-    box.innerHTML = `<div class="notice${st.receipt.state === "failed" ? " err" : ""}">
+    html = `<div class="notice${st.receipt.state === "failed" ? " err" : ""}">
       <span class="dot ${st.receipt.state === "failed" ? "failed" : "ok"}"></span>
       <span>${esc(st.receipt.note || "")}</span>
       ${again ? `<button class="notice-action" data-fold type="button">Свернуть ещё раз</button>` : ""}</div>`;
   } else if (st.hot !== null && st.hot > st.keep + 10) {
     const offered = st.offer ? " Ей уже предложено свернуть." : "";
-    box.innerHTML = `<div class="notice"><span class="dot"></span>
+    html = `<div class="notice"><span class="dot"></span>
       <span>В горячей памяти чата ${st.hot} сообщений. Она держит ${st.keep} последних, на ${st.offer_at}
       предлагает себе свернуть, на ${st.hard_at} сворачивает сама.${offered}</span>
       <button class="notice-action" data-fold type="button">Свернуть сейчас</button></div>`;
-  } else {
-    box.innerHTML = "";
-    return;
   }
+  if (box.dataset.html === html) return;
+  box.dataset.html = html;
+  scroll.preserve(() => { box.innerHTML = html; });
   const btn = box.querySelector<HTMLButtonElement>("[data-fold]");
   btn?.addEventListener("click", async () => {
     btn.disabled = true;
@@ -475,6 +613,8 @@ export function onRunEvent(runId: string) {
 
 export function afterSend() {
   clearTimeout(refreshTimer);
+  // Своё отправленное — всегда к низу: ответ придёт туда.
+  scroll.view()?.toBottom(true);
   refreshTimer = window.setTimeout(() => {
     if (root && S.view === "talk") void render(root);
   }, 1500);
@@ -494,7 +634,12 @@ export function jumpTo(at: string): boolean {
     if (d < gap) { gap = d; best = el; }
   }
   if (!best || gap > 5 * 60_000) return false;
-  best.scrollIntoView({ block: "center" });
+  const sc = scroll.view();
+  if (sc) {
+    const r = best.getBoundingClientRect();
+    const v = sc.el.getBoundingClientRect();
+    sc.scrollTo(sc.el.scrollTop + r.top - v.top - (v.height - r.height) / 2);
+  } else best.scrollIntoView({ block: "center" });
   best.classList.add("flash");
   window.setTimeout(() => best?.classList.remove("flash"), 2400);
   return true;

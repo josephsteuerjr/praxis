@@ -38,16 +38,35 @@ export interface ScrollerOptions {
   /** Как выглядит перетяг за край: резинка (iOS), растяжка (Android 12+) или никак. */
   overscroll?: Overscroll;
   feel?: FeelName;
-  /** Можно ли начать «тянуть» с этого места. По умолчанию — не с текста и не с управления. */
-  canGrab?: (target: Element) => boolean;
+  /** Можно ли начать «тянуть» с этого места. По умолчанию — не с управления и не с текста. */
+  canGrab?: (target: Element, x: number, y: number) => boolean;
+  /** Ехать за низом, когда прилипли (лента чата). У остальных разделов — нет. */
+  stick?: boolean;
   /** Ближе к низу, чем это, — лента прилипает и сама едет за новыми сообщениями. */
   pinSlack?: number;
   onPinnedChange?: (pinned: boolean) => void;
 }
 
-/** С текста и управления не тянем: там выделение, клик и своё поведение. */
+/** С управления не тянем: там клик и своё поведение. */
 export const NO_GRAB =
-  "a,button,input,textarea,select,summary,audio,video,label,img,[contenteditable],[data-nograb],.msg-body,pre,code";
+  "a,button,input,textarea,select,option,summary,audio,video,label,img,canvas,iframe,[contenteditable],[draggable=true],[data-nograb],pre,code";
+
+/**
+ * Под указателем — сами буквы текста (а не поле между строками и абзацами)?
+ * С текста тянуть нельзя: там выделение. Тянется всё остальное — поля, промежутки, пустое.
+ */
+export function overText(x: number, y: number): boolean {
+  const doc = document as Document & { caretRangeFromPoint?(x: number, y: number): Range | null };
+  const hit = doc.caretRangeFromPoint?.(x, y);
+  const node = hit?.startContainer;
+  if (!node || node.nodeType !== Node.TEXT_NODE || !(node.textContent || "").trim()) return false;
+  const r = document.createRange();
+  r.selectNodeContents(node);
+  for (const box of Array.from(r.getClientRects())) {
+    if (x >= box.left - 2 && x <= box.right + 2 && y >= box.top && y <= box.bottom) return true;
+  }
+  return false;
+}
 
 type Mode = "idle" | "wheel" | "drag" | "fling";
 
@@ -74,7 +93,9 @@ export class Scroller {
   readonly inner: HTMLElement;
   overscroll: Overscroll;
   feel: Feel;
-  private readonly canGrab: (t: Element) => boolean;
+  private readonly canGrab: (t: Element, x: number, y: number) => boolean;
+  /** Ехать за низом, когда прилипли. Окно включает это только в чате. */
+  stick: boolean;
   private readonly pinSlack: number;
   private readonly onPinnedChange?: (p: boolean) => void;
 
@@ -113,7 +134,8 @@ export class Scroller {
     this.inner = inner;
     this.overscroll = opts.overscroll ?? "rubber";
     this.feel = { ...FEELS[opts.feel ?? "syrup"] };
-    this.canGrab = opts.canGrab ?? ((t) => !t.closest(NO_GRAB));
+    this.canGrab = opts.canGrab ?? ((t, x, y) => !t.closest(NO_GRAB) && !overText(x, y));
+    this.stick = opts.stick ?? true;
     this.pinSlack = opts.pinSlack ?? 28;
     this.onPinnedChange = opts.onPinnedChange;
     // Своя привязка прокрутки (preserve) — нативная в Chromium дёргала бы второй раз,
@@ -257,7 +279,7 @@ export class Scroller {
 
   private contentChanged() {
     const max = this.max;
-    if (this.pinnedState && this.follow && this.mode !== "drag") {
+    if (this.stick && this.pinnedState && this.follow && this.mode !== "drag") {
       // Ехать за низом плавно: новое сообщение вырастает, лента едет вслед.
       if (this.mode === "idle" || this.mode === "wheel") {
         this.mode = "wheel";
@@ -398,7 +420,7 @@ export class Scroller {
     const middle = e.button === 1;
     if (e.button !== 0 && !middle) return;
     const t = e.target as Element;
-    if (!middle && !e.altKey && !this.canGrab(t)) return;
+    if (!middle && !e.altKey && !this.canGrab(t, e.clientX, e.clientY)) return;
     // Полоса прокрутки: клик правее содержимого.
     if (e.clientX > this.el.getBoundingClientRect().left + this.el.clientWidth) return;
     e.preventDefault(); // не начинать выделение и не уводить фокус
@@ -484,7 +506,7 @@ export class Scroller {
     let busy = false;
 
     if (this.mode === "wheel") {
-      if (this.follow && this.pinnedState) this.target = max;
+      if (this.stick && this.follow && this.pinnedState) this.target = max;
       const k = 1 - Math.exp(-dt / Math.max(1, this.tau));
       this.pos += (this.target - this.pos) * k;
       if (Math.abs(this.target - this.pos) < 0.35) {
