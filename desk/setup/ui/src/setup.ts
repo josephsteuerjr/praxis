@@ -346,6 +346,18 @@ export async function relayStatus(): Promise<"authorized" | "pending" | "no-auth
   return invoke("relay_status");
 }
 
+/** Ссылка входа, которую напечатал помощник реле (1.2.3): null — входа нет или ссылки ещё нет. */
+export async function relayLoginUrl(): Promise<string | null> {
+  if (!inTauri) return null;
+  return invoke("relay_login_url");
+}
+
+/** Открыть страницу входа рукой самого мастера. */
+export async function openLoginPage(): Promise<void> {
+  if (!inTauri) return;
+  return invoke("open_login_page");
+}
+
 /** Служба прежнего поколения продукта, найденная в SCM. */
 export interface LegacyService {
   name: string;

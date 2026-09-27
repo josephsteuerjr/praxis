@@ -17,7 +17,7 @@ import { api, shell } from "../../ui-kit/window/api";
 import { ANTHROPIC_PRESETS, BILLING_LABEL, clampEffort, effortPlan } from "../../ui-kit/providers";
 import { keepBlock } from "../../ui-kit/window/config";
 import { el, humanError, toast } from "../../ui-kit/window/lib";
-import { button, card, chips, field, setField, toggle } from "../../ui-kit/dom";
+import { button, card, chips, copyText, field, setField, toggle } from "../../ui-kit/dom";
 import { computerCard, storedComputer } from "./computer";
 import { MODE_KEY, loadMode, type ModeState } from "../../ui-kit/window/mode";
 import { modeCard } from "./modecard";
@@ -239,6 +239,27 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
   relayRow.style.marginTop = "14px";
   const relayOut = el("span", "receipt");
   let relayAuthorized = false;
+  // Ссылка входа (1.2.3): 27.09 у Егора помощник реле не открыл браузер, и экран
+  // висел на «Ждём вход в браузере» без выхода. Помощник печатает ссылку — окно её
+  // показывает: открыть своей рукой или скопировать.
+  let relayLinkUrl = "";
+  const relayLinkRow = el("div", "actions");
+  relayLinkRow.hidden = true;
+  relayLinkRow.append(
+    button("Открыть страницу входа", "quiet", async () => {
+      try {
+        await shell("open_login_page");
+      } catch (e) {
+        toast("Страница не открылась: " + humanError(e).text + " — скопируй ссылку и открой её в браузере сам.");
+      }
+    }),
+    button("Скопировать ссылку", "quiet", async () => {
+      toast((await copyText(relayLinkUrl))
+        ? "Ссылка скопирована — вставь её в адресную строку браузера"
+        : "Скопировать не вышло — нажми «Открыть страницу входа»");
+    }),
+    el("span", "field-hint", "если вкладка со входом не появилась сама"),
+  );
   const relayRefresh = async () => {
     try {
       const st = await shell<string>("relay_status");
@@ -267,8 +288,10 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
       relayOut.textContent =
         relayAuthorized
           ? `Вход выполнен${applied}`
-          : st === "pending" ? "Ждём вход в браузере. Повторное нажатие отменит прежнюю попытку." : "Вход ещё не выполнен";
+          : st === "pending" ? "Ждём вход в браузере. «Начать вход заново» отменит эту попытку." : "Вход ещё не выполнен";
       loginBtn.textContent = st === "pending" ? "Начать вход заново" : "Войти в ChatGPT";
+      relayLinkUrl = st === "pending" ? (await shell<string | null>("relay_login_url").catch(() => null)) || "" : "";
+      relayLinkRow.hidden = !relayLinkUrl;
       relayRestart.hidden = !relayAuthorized || applied.includes("применён");
     } catch (e) {
       relayOut.className = "receipt err";
@@ -282,6 +305,9 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
     try {
       toast(await shell<string>("relay_login"));
       window.clearInterval(relayPoll);
+      // Первый опрос — сразу: ссылка входа появляется через секунду, и кнопки под ней
+      // не должны ждать трёхсекундного тика.
+      window.setTimeout(() => void relayRefresh(), 1200);
       let tries = 0;
       relayPoll = window.setInterval(() => {
         void relayRefresh();
@@ -317,12 +343,20 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
         // аккаунт, ни остаток лимита он не проверяет. Зелёное «моделей 6» при
         // невыполненном входе и было механизмом «всё зелёное, агент молчит».
         await relayRefresh();
-        chatgptProbeOut.className = "receipt " + (r.ok && relayAuthorized ? "ok" : r.ok ? "" : "err");
+        // Реле не ответило. 27.09 здесь стоял сырой «Connection Failed … конечный
+        // компьютер отверг» красным — у человека, который просто ещё не сохранил выбор
+        // подписки: реле поднимается ТОЛЬКО когда подписка — сохранённый провайдер
+        // (служба и окно применяют это сами, без перезапуска). Сырой текст — в подсказке.
+        const relayDown = savedProvider !== "chatgpt"
+          ? "Реле подписки ещё не запущено — сейчас агент работает через другого провайдера. Войди в ChatGPT и нажми «Сохранить»: реле поднимется само, перезапуск не нужен, и список моделей появится здесь."
+          : `Реле подписки не отвечает на порту ${Number(draft.relay?.port) || RELAY_PORT}. Оно поднимается само — подожди несколько секунд и нажми ещё раз; если не поднялось, причина — в «Журнале».`;
+        chatgptProbeOut.className = "receipt " + (r.ok && relayAuthorized ? "ok" : r.ok || savedProvider !== "chatgpt" ? "" : "err");
+        chatgptProbeOut.title = r.ok ? "" : r.note;
         chatgptProbeOut.textContent = r.ok
           ? relayAuthorized
             ? `Реле живо, вход в ChatGPT выполнен. ${r.note}`
             : `Реле живо, но вход в ChatGPT НЕ выполнен — агент будет молчать. Нажми «Войти в ChatGPT» выше. (${r.note})`
-          : `${r.note}. Реле поднимается вместе с программой после сохранения и перезапуска.`;
+          : relayDown;
         renderModels(chatgptModels, r.models || [], chatgptDraft.model, (id) => {
           chatgptDraft.model = id;
           setField(chatgptModelField, id);
@@ -334,7 +368,7 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
     }),
     chatgptProbeOut,
   );
-  panes.chatgpt.append(el("p", "field-hint", "Реле поднимается вместе с программой и ходит в ChatGPT по подписке. Вход открывает браузер; после входа ключ не нужен."), relayRow, chatgptGrid, chatgptProbeRow, chatgptModels);
+  panes.chatgpt.append(el("p", "field-hint", "Реле ходит в ChatGPT по подписке и поднимается само, когда подписка сохранена основным провайдером. Вход открывает браузер; после входа ключ не нужен."), relayRow, relayLinkRow, chatgptGrid, chatgptProbeRow, chatgptModels);
   void relayRefresh();
 
   const localGrid = el("div", "form-grid two");

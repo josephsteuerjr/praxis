@@ -95,6 +95,10 @@ include!("../../common/service_op.rs");
 include!("../../common/mac_service.rs");
 include!("../../common/random_hex.rs");
 include!("../../common/run_hidden.rs");
+// Ярлыки — через COM из самого мастера (1.2.3): PowerShell с Add-Type у Егора не смог.
+include!("../../common/shortcut_win.rs");
+// Ссылка входа в подписку — из вывода помощника реле (1.2.3).
+include!("../../common/login_url.rs");
 
 /// Имя правила брандмауэра — из того же файла, что у оболочки и службы
 /// (`common/firewall_rule.rs`): установщик снимает правило при удалении, и
@@ -1764,57 +1768,38 @@ pub fn installed_info() -> Option<Installed> {
 /// Путь к настоящей папке рабочего стола: на Windows 11 с резервным копированием
 /// папок OneDrive это %USERPROFILE%\OneDrive\Рабочий стол, а не %USERPROFILE%\Desktop.
 /// Ярлык создавался по известной папке, а удалялся склейкой из USERPROFILE — и
-/// переживал удаление программы.
+/// переживал удаление программы. С 1.2.3 — у самой Windows (SHGetKnownFolderPath), без
+/// PowerShell.
 #[cfg(windows)]
 fn desktop_dir() -> Option<PathBuf> {
-    let out = powershell("[Environment]::GetFolderPath('Desktop')").ok()?;
-    let path = console_text(&out.stdout).trim().to_string();
-    if path.is_empty() {
-        return std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Desktop"));
+    shortcut_folder(ShortcutPlace::Desktop)
+        .or_else(|| std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Desktop")))
+}
+
+/// Ярлыки «Пуска» (с AUMID — без него Windows молча выбрасывает уведомления) и Рабочего
+/// стола, свои или общие. «Пуск» не лёг — шаг НЕ ok: 27.09 у Егора расписка «Ярлыки: ok»
+/// стояла над текстом ошибки, а программы в «Пуске» не было. Рабочий стол — примечание:
+/// без него программа живёт, а человек его мог и сам убрать.
+#[cfg(windows)]
+fn shortcuts_at(exe: &Path, name: &str, icon: Option<&Path>, start: Option<PathBuf>, desktop: Option<PathBuf>, whose: &str) -> Result<String, String> {
+    let start = start.ok_or_else(|| format!("Windows не сказала, где {whose}«Пуск»"))?;
+    let lnk = start.join(format!("{name}.lnk"));
+    create_shortcut(&lnk, exe, Some(AUMID), name, icon).map_err(|e| format!("{whose}«Пуск»: {e}"))?;
+    let mut note = format!("{whose}«Пуск» ok");
+    match desktop {
+        Some(dir) => match create_shortcut(&dir.join(format!("{name}.lnk")), exe, None, name, icon) {
+            Ok(()) => note.push_str(&format!("; {whose}Рабочий стол ok")),
+            Err(e) => note.push_str(&format!("; {whose}Рабочий стол: ярлык не создан: {e}")),
+        },
+        None => note.push_str(&format!("; Windows не сказала, где {whose}Рабочий стол")),
     }
-    Some(PathBuf::from(path))
+    Ok(note)
 }
 
 #[cfg(windows)]
 fn shortcuts(exe: &Path, name: &str, icon: Option<&Path>) -> Result<String, String> {
-    let script = std::env::temp_dir().join("helene-start-menu-shortcut.ps1");
-    std::fs::write(&script, include_str!("../../shell/resources/start-menu-shortcut.ps1"))
-        .map_err(|e| e.to_string())?;
-    let mut cmd = Command::new(powershell_exe());
-    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(&script)
-        .arg("-Exe")
-        .arg(exe)
-        .arg("-Aumid")
-        .arg(AUMID)
-        .arg("-Name")
-        .arg(name);
-    if let Some(icon) = icon {
-        cmd.arg("-Icon").arg(icon);
-    }
-    let out = run_hidden(&mut cmd)?;
-    if !out.status.success() {
-        return Err(console_text(&out.stderr).trim().to_string());
-    }
-    let mut note = console_text(&out.stdout).trim().to_string();
-    // Рабочий стол — обычный ярлык, без свойств. Результат читаем: раньше он
-    // выбрасывался, и расписка «Ярлыки: ok» относилась только к меню «Пуск».
-    let desktop = powershell(&format!(
-        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop')+'\\{}.lnk'); $s.TargetPath='{}'; $s.WorkingDirectory='{}'; {} $s.Save()",
-        ps_escape(name),
-        ps_escape(&exe.display().to_string()),
-        ps_escape(&exe.parent().map(|p| p.display().to_string()).unwrap_or_default()),
-        icon.map(|i| format!("$s.IconLocation='{},0';", ps_escape(&i.display().to_string()))).unwrap_or_default()
-    ));
-    match desktop {
-        Ok(out) if out.status.success() => note.push_str("; ярлык рабочего стола ok"),
-        Ok(out) => {
-            let err = console_text(&out.stderr).trim().to_string();
-            note.push_str(&format!("; ярлык рабочего стола не создан: {err}"));
-        }
-        Err(e) => note.push_str(&format!("; ярлык рабочего стола не создан: {e}")),
-    }
-    Ok(note)
+    let start = shortcut_folder(ShortcutPlace::Start).or_else(|| crate::win::shell_folder(false, false));
+    shortcuts_at(exe, name, icon, start, desktop_dir(), "")
 }
 
 /// Запись в «Приложениях» Windows: удаление через тот же установщик.
@@ -2066,7 +2051,12 @@ pub fn relay_login() -> Result<String, String> {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
+    // Вывод — трубами (1.2.3): в нём ссылка входа, если браузер не откроется сам.
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("логин не запустился: {e}"))?;
+    watch_login_output(&mut child, &LOGIN_URL);
     // Обещать браузер по факту создания процесса нельзя: реле падало на старте
     // (занятый порт 1455, нет сети), а владелец видел «сейчас откроется».
     std::thread::sleep(std::time::Duration::from_millis(1200));
@@ -2079,7 +2069,43 @@ pub fn relay_login() -> Result<String, String> {
     if let Ok(mut guard) = LOGIN.lock() {
         *guard = Some(child);
     }
-    Ok("Открываю браузер: заверши вход в свой аккаунт ChatGPT там".into())
+    Ok("Открываю браузер: заверши вход в свой аккаунт ChatGPT там. Если вкладка не появилась — «Открыть страницу входа».".into())
+}
+
+/// Ссылка входа, которую напечатал помощник (1.2.3), — пока вход не завершён.
+static LOGIN_URL: Mutex<Option<String>> = Mutex::new(None);
+
+/// Открыть страницу входа рукой самого мастера — только ту ссылку, что напечатал помощник.
+pub fn open_login_page() -> Result<(), String> {
+    let url = relay_login_url().ok_or("вход не идёт или ссылки ещё нет — нажми «Войти» ещё раз")?;
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new(sys_exe("explorer.exe"));
+        cmd.arg(&url);
+        crate::win::spawn_outside(&mut cmd).map(|_| ()).map_err(|e| format!("браузер не открылся: {e}"))
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("open")
+            .arg(&url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("браузер не открылся: {e}"))
+    }
+}
+
+pub fn relay_login_url() -> Option<String> {
+    let pending = LOGIN
+        .lock()
+        .ok()
+        .is_some_and(|mut g| g.as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None))));
+    if !pending {
+        return None;
+    }
+    LOGIN_URL.lock().ok().and_then(|g| g.clone())
 }
 
 /// Последние строки журнала реле: причина падения вместо молчания.
@@ -3856,53 +3882,16 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     })
 }
 
-/// Ярлыки «Пуска» и Рабочего стола — свои или общие («для всех»).
+/// Ярлыки «Пуска» и Рабочего стола — свои или общие («для всех»). Общий «Пуск» — тоже с
+/// AUMID: оболочка, найдя общий ярлык, своего не заводит.
 #[cfg(windows)]
 fn shortcuts_for(exe: &Path, name: &str, icon: Option<&Path>, all_users: bool) -> Result<String, String> {
     if !all_users {
         return shortcuts(exe, name, icon);
     }
-    let mut notes: Vec<String> = Vec::new();
-    let start = crate::win::shell_folder(true, false).ok_or("Windows не сказала, где общий «Пуск»")?;
-    let desk = crate::win::shell_folder(true, true).ok_or("Windows не сказала, где общий Рабочий стол")?;
-    // Общий «Пуск» — тем же скриптом, что у «для меня», с AUMID: без него Windows
-    // молча выбрасывает уведомления. Оболочка, найдя общий ярлык, своего не заводит.
-    let script = std::env::temp_dir().join(format!("helene-start-menu-shortcut-{}.ps1", std::process::id()));
-    std::fs::write(&script, include_str!("../../shell/resources/start-menu-shortcut.ps1")).map_err(|e| e.to_string())?;
-    let mut cmd = Command::new(powershell_exe());
-    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(&script)
-        .arg("-Exe")
-        .arg(exe)
-        .arg("-Aumid")
-        .arg(AUMID)
-        .arg("-Name")
-        .arg(name)
-        .arg("-Folder")
-        .arg(&start);
-    if let Some(icon) = icon {
-        cmd.arg("-Icon").arg(icon);
-    }
-    match run_hidden(&mut cmd) {
-        Ok(out) if out.status.success() => notes.push("«Пуск» для всех ok".into()),
-        Ok(out) => notes.push(format!("«Пуск» для всех: {}", console_text(&out.stderr).trim())),
-        Err(e) => notes.push(format!("«Пуск» для всех: {e}")),
-    }
-    let _ = std::fs::remove_file(&script);
-    let lnk = desk.join(format!("{name}.lnk"));
-    let ps = format!(
-        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}'); $s.TargetPath='{}'; $s.WorkingDirectory='{}'; {} $s.Save()",
-        ps_escape(&lnk.display().to_string()),
-        ps_escape(&exe.display().to_string()),
-        ps_escape(&exe.parent().map(|p| p.display().to_string()).unwrap_or_default()),
-        icon.map(|i| format!("$s.IconLocation='{},0';", ps_escape(&i.display().to_string()))).unwrap_or_default()
-    );
-    match powershell(&ps) {
-        Ok(out) if out.status.success() => notes.push("Рабочий стол для всех ok".into()),
-        Ok(out) => notes.push(format!("Рабочий стол для всех: {}", console_text(&out.stderr).trim())),
-        Err(e) => notes.push(format!("Рабочий стол для всех: {e}")),
-    }
-    Ok(notes.join("; "))
+    let start = shortcut_folder(ShortcutPlace::CommonStart).or_else(|| crate::win::shell_folder(true, false));
+    let desk = shortcut_folder(ShortcutPlace::CommonDesktop).or_else(|| crate::win::shell_folder(true, true));
+    shortcuts_at(exe, name, icon, start, desk, "общий ")
 }
 
 /// Запись в «Приложениях»: HKCU («для меня») или HKLM («для всех», 64-битный вид).

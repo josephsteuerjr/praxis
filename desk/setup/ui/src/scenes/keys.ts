@@ -2,8 +2,9 @@
 // полем — зачем оно, человеческими словами.
 import { FormScene } from "./base";
 import { button, choice, el, explain, field } from "./form";
-import { probeModel, relayLogin, relayModels, relayStatus, setup, type Effort, type Provider } from "../setup";
+import { openLoginPage, probeModel, relayLogin, relayLoginUrl, relayModels, relayStatus, setup, type Effort, type Provider } from "../setup";
 import { ANTHROPIC_PRESETS, BILLING_LABEL, clampEffort, effortPlan } from "../../../../ui-kit/providers";
+import { copyText } from "../../../../ui-kit/dom";
 
 export class KeysScene extends FormScene {
   private panes: Record<Provider, HTMLElement>;
@@ -122,6 +123,24 @@ export class KeysScene extends FormScene {
     const chatgpt = el("div", "pane");
     const relayRow = el("div", "actions");
     const relayOut = el("span", "receipt");
+    // Ссылка входа (1.2.3): помощник реле может не открыть браузер (27.09 у Егора так и
+    // было) — тогда страницу открывает сам мастер или человек вставляет ссылку сам.
+    let linkUrl = "";
+    const linkRow = el("div", "actions");
+    linkRow.hidden = true;
+    const linkOut = el("span", "receipt");
+    linkRow.append(
+      button("Открыть страницу входа", "quiet", async () => {
+        linkOut.textContent = "";
+        await openLoginPage().catch((e) => (linkOut.textContent = String(e)));
+      }),
+      button("Скопировать ссылку", "quiet", async () => {
+        linkOut.textContent = (await copyText(linkUrl))
+          ? "Ссылка скопирована — вставь её в адресную строку браузера"
+          : "Скопировать не вышло — нажми «Открыть страницу входа»";
+      }),
+      linkOut,
+    );
     const relayRefresh = async () => {
       const st = await relayStatus().catch(() => "no-auth" as const);
       this.relay = st;
@@ -130,15 +149,18 @@ export class KeysScene extends FormScene {
         st === "authorized"
           ? "Вход выполнен, он переедет вместе с установкой"
           : st === "pending"
-            ? "Ждём вход в браузере. Если вкладка закрылась, нажми ещё раз: прежняя попытка отменится."
+            ? "Ждём вход в браузере. Вкладка не появилась — «Открыть страницу входа» ниже; «Начать вход заново» отменит эту попытку."
             : "Вход ещё не выполнен";
       loginBtn.textContent = st === "pending" ? "Начать вход заново" : "Войти в ChatGPT";
+      linkUrl = st === "pending" ? (await relayLoginUrl().catch(() => null)) || "" : "";
+      linkRow.hidden = !linkUrl;
     };
     let poll = 0;
     const loginBtn = button("Войти в ChatGPT", "quiet", async () => {
       relayOut.className = "receipt";
       relayOut.textContent = await relayLogin().catch((e) => String(e));
       window.clearInterval(poll);
+      window.setTimeout(() => void relayRefresh(), 1200);
       let tries = 0;
       poll = window.setInterval(() => {
         void relayRefresh();
@@ -173,7 +195,7 @@ export class KeysScene extends FormScene {
       }),
       relayModelsOut,
     );
-    chatgpt.append(chatgptGrid, relayModelsRow, relayModelsBox, relayRow, explain("Как это работает",
+    chatgpt.append(chatgptGrid, relayModelsRow, relayModelsBox, relayRow, linkRow, explain("Как это работает",
       "Встроенное реле ходит в ChatGPT по твоей подписке. Вход откроет браузер; учётные данные переедут в установленную программу. Ключ не нужен. Войти можно и позже, в настройках; там же после входа виден список моделей подписки, и модель можно сменить."));
 
     const local = el("div", "pane");

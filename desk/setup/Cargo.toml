@@ -1,6 +1,6 @@
 [package]
 name = "helene-setup"
-version = "1.2.2"
+version = "1.2.3"
 edition = "2021"
 description = "Установщик Hélène: motion-сцена первого запуска, имя агента, конституция, ключи, служба и установка в папку пользователя. Отдельный процесс от основной программы: одно окно, один экземпляр, закрыл окно = вышел."
 
@@ -23,6 +23,8 @@ winreg = "0.55"
 # BCryptGenRandom для ключа реле (common/random_hex.rs) — как в shell и svc.
 # 1.2: job-объект на детей мастера, поднятый исполнитель «для всех» (ShellExecuteExW runas).
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Security_Isolation", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# 1.2.3: ярлыки .lnk с AUMID — прямо через COM (common/shortcut_win.rs), без PowerShell и csc.
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem"] }
 # 1.2: поставка в хвосте установщика — tar, сжатый zstd (172 МБ против 261 МБ zip,
 # распаковка ~2 с). Только Windows: на macOS установщик живёт в бандле рядом с поставкой.
 zstd = { version = "0.13", default-features = false }

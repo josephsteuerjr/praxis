@@ -354,6 +354,17 @@ fn relay_status() -> String {
     install::relay_status()
 }
 
+/// Ссылка входа для кнопки «Открыть страницу входа» (1.2.3).
+#[tauri::command]
+fn relay_login_url() -> Option<String> {
+    install::relay_login_url()
+}
+
+#[tauri::command]
+fn open_login_page() -> Result<(), String> {
+    install::open_login_page()
+}
+
 /// Службы прежних поколений продукта (Vera, Frame, Praxis) и своя, если она
 /// живёт не в той папке, куда сейчас ставят. Опрос SCM — WMI, без прав.
 /// `home` — папка установки или снятия: своя служба из списка выпадает.
@@ -851,7 +862,7 @@ fn main() {
                 });
             }
         }))
-        .invoke_handler(tauri::generate_handler![defaults, installed_setup, uninstall_launch, install, cancel_install, found, open_frame, probe_model, relay_login, relay_status, relay_models, uninstall_run, legacy_services, remove_service, admin_rights])
+        .invoke_handler(tauri::generate_handler![defaults, installed_setup, uninstall_launch, install, cancel_install, found, open_frame, probe_model, relay_login, relay_status, relay_login_url, open_login_page, relay_models, uninstall_run, legacy_services, remove_service, admin_rights])
         .setup(|app| {
             // Учётные данные ChatGPT прошлого запуска установщика: пока они
             // лежали в %TEMP%, протухшая учётка от другого аккаунта показывалась

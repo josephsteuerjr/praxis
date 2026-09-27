@@ -2586,10 +2586,14 @@ fn relay_login_blocking() -> Result<String, String> {
     cmd.creation_flags(CREATE_NO_WINDOW);
     #[cfg(unix)]
     cmd.process_group(0);
+    // Вывод — трубами (1.2.3): в нём ссылка входа, если браузер не откроется сам.
+    // Заодно у помощника появляются настоящие потоки вместо пустых окна.
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if let Ok(mut before) = LOGIN_AUTH_BEFORE.lock() {
         *before = auth_signature(&home.join("local_auth").join("auth.json"));
     }
-    let child = cmd.spawn().map_err(|e| format!("логин не запустился: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("логин не запустился: {e}"))?;
+    watch_login_output(&mut child, &LOGIN_URL);
     // В job-объект окна: выход из трея с незавершённым входом оставлял
     // helene-relay.exe login жить и держать порт колбэка.
     adopt(&child);
@@ -2598,7 +2602,27 @@ fn relay_login_blocking() -> Result<String, String> {
     // `relay_status` поставит маркер нового входа (даже если экран настроек опрашивал его
     // не каждые 3 с).
     LOGIN_WAS_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
-    Ok("сейчас откроется браузер — войди в свой аккаунт ChatGPT".into())
+    Ok("Открываю браузер: войди в свой аккаунт ChatGPT. Если вкладка не появилась — «Открыть страницу входа» ниже.".into())
+}
+
+/// Ссылка входа, которую напечатал помощник (1.2.3): окно показывает её рядом с
+/// «Ждём вход в браузере» — открыть своей рукой или скопировать. Пока помощник жив.
+static LOGIN_URL: Mutex<Option<String>> = Mutex::new(None);
+
+#[tauri::command]
+fn relay_login_url() -> Option<String> {
+    let pending = login_lock().as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None)));
+    if !pending {
+        return None;
+    }
+    LOGIN_URL.lock().ok().and_then(|g| g.clone())
+}
+
+/// Открыть страницу входа рукой самого окна — только ту ссылку, что напечатал помощник.
+#[tauri::command]
+fn open_login_page() -> Result<(), String> {
+    let url = relay_login_url().ok_or("вход не идёт или ссылки ещё нет — нажми «Войти в ChatGPT» ещё раз")?;
+    open_path(url)
 }
 
 #[tauri::command]
@@ -3392,6 +3416,10 @@ include!("../../common/mac_service.rs");
 include!("../../common/stamp.rs");
 include!("../../common/random_hex.rs");
 include!("../../common/run_hidden.rs");
+// Ярлык «Пуска» с AUMID — через COM, без PowerShell (1.2.3).
+include!("../../common/shortcut_win.rs");
+// Ссылка входа в подписку — из вывода помощника реле (1.2.3).
+include!("../../common/login_url.rs");
 
 // Клиентская сторона брокера прав — тоже ОДИН текст на обе стороны трубы, см.
 // common/broker.rs. Отсюда нужны имя трубы (`broker_pipe_name`), секрет
@@ -5559,62 +5587,28 @@ fn register_toast_identity(_identifier: &str, _name: &str, _icon: Option<&Path>)
 fn ensure_start_menu_shortcut(identifier: &str, name: &str, icon: Option<&Path>) {
     // Папку меню «Пуск» спрашиваем у Windows, а не склеиваем из %APPDATA%:
     // при перенаправлении папок политикой склейка промахивалась молча.
-    let Some(programs) = programs_dir() else { return };
+    let Some(programs) = shortcut_folder(ShortcutPlace::Start).or_else(programs_dir) else { return };
     if programs.join(format!("{name}.lnk")).exists() || programs.join(format!("{}.lnk", product_fs())).exists() {
         return;
     }
     // Установка «для всех» (1.2) кладёт ярлык с AUMID в общий «Пуск» — второй, свой,
     // дал бы две строки в меню.
-    if let Some(common) = std::env::var_os("ProgramData")
-        .map(|p| PathBuf::from(p).join("Microsoft").join("Windows").join("Start Menu").join("Programs"))
-    {
+    if let Some(common) = shortcut_folder(ShortcutPlace::CommonStart).or_else(|| {
+        std::env::var_os("ProgramData")
+            .map(|p| PathBuf::from(p).join("Microsoft").join("Windows").join("Start Menu").join("Programs"))
+    }) {
         if common.join(format!("{name}.lnk")).exists() || common.join(format!("{}.lnk", product_fs())).exists() {
             return;
         }
     }
     let Ok(exe) = std::env::current_exe() else { return };
-    // Имя с pid: установщик пишет скрипт по тому же пути в %TEMP%, и общий
-    // файл, исполняемый с -ExecutionPolicy Bypass, — TOCTOU по построению.
-    let script = std::env::temp_dir().join(format!(
-        "helene-start-menu-shortcut-{}.ps1",
-        std::process::id()
-    ));
-    if std::fs::write(&script, include_str!("../resources/start-menu-shortcut.ps1")).is_err() {
-        log_line("ярлык меню «Пуск»: не записался скрипт");
-        return;
-    }
-    let mut cmd = Command::new(powershell_exe());
-    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(&script)
-        .arg("-Exe")
-        .arg(&exe)
-        .arg("-Aumid")
-        .arg(identifier)
-        .arg("-Name")
-        .arg(name);
-    if let Some(icon) = icon {
-        cmd.arg("-Icon").arg(icon);
-    }
-    let result = run_hidden_for(&mut cmd, Duration::from_secs(60));
-    let _ = std::fs::remove_file(&script);
-    match result {
-        // Успех скрипта — ещё не ярлык: раньше в журнал уходила расписка
-        // «ярлык создан», даже если файла по этому пути не появлялось.
-        Ok(out) if out.status.success() => {
-            if programs.join(format!("{name}.lnk")).exists() {
-                log_line("ярлык меню «Пуск» создан (уведомления)");
-            } else {
-                log_line(&format!(
-                    "ярлык меню «Пуск»: скрипт отчитался, а файла в {} нет — уведомлений может не быть",
-                    programs.display()
-                ));
-            }
-        }
-        Ok(out) => log_line(&format!(
-            "ярлык меню «Пуск» не создался: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )),
-        Err(err) => log_line(&format!("ярлык меню «Пуск»: powershell не отработал: {err}")),
+    // 1.2.3: прямо через COM (common/shortcut_win.rs). Скрипт PowerShell собирал C#
+    // через Add-Type, и 27.09 у Егора компилятор из окна не запустился (1314) — ярлыка
+    // не было ни от установщика, ни отсюда.
+    let lnk = programs.join(format!("{name}.lnk"));
+    match create_shortcut(&lnk, &exe, Some(identifier), name, icon) {
+        Ok(()) => log_line("ярлык меню «Пуск» создан (уведомления)"),
+        Err(err) => log_line(&format!("ярлык меню «Пуск» не создался: {err}")),
     }
 }
 
@@ -6058,7 +6052,7 @@ fn main() {
             firewall_allow,
             firewall_clear,
             admin_state,
-            relay_login,
+            relay_login, relay_login_url, open_login_page,
             relay_status,
             relay_account,
             notify,
@@ -6232,8 +6226,12 @@ fn main() {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
                     HIDDEN_BY_OWNER.store(true, std::sync::atomic::Ordering::Relaxed);
+                    // Молча (1.2.3): уведомление «окно закрыто, агент работает» Егору
+                    // мешало — закрыть в трей должно выглядеть как закрыть в
+                    // трей. У «для всех» отметка «уже показывали» в Program Files ещё и
+                    // не писалась у обычной учётки — уведомление выскакивало на КАЖДОЕ
+                    // закрытие. Где агент — говорит подсказка значка в трее.
                     let _ = window.hide();
-                    close_hint();
                 }
                 // Настоящая смерть окна (выход) — дети не остаются сиротами.
                 // Кроме переключения агента: там окно сносится нарочно, а
@@ -6343,23 +6341,6 @@ fn webview2_present() -> bool {
 #[cfg(not(windows))]
 fn webview2_present() -> bool {
     true
-}
-
-/// Первое закрытие окна: сказать, что агент жив и где его найти. Один раз —
-/// отметка рядом с exe, чтобы не повторять очевидное.
-fn close_hint() {
-    let flag = install_root().join(".close-hint-shown");
-    if flag.exists() {
-        return;
-    }
-    let _ = std::fs::write(&flag, "1");
-    // Где значок: у часов на Windows, в строке меню (и в Dock) на macOS.
-    let place = if cfg!(target_os = "macos") { "значок в строке меню" } else { "значок у часов" };
-    let body = format!(
-        "Окно закрыто, {} продолжает работать. Открыть снова — {place}.",
-        with_current("агент".to_string(), |c| c.name.clone())
-    );
-    toast(product_ui(), &body);
 }
 
 /// Есть ли уже запомненный размер окна.
