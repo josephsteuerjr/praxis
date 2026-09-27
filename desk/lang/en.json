@@ -83,7 +83,7 @@
   "setup.mode.install_note.interactive.macos": "No administrator rights needed: the agent works with your rights — no more, no less.",
   "setup.mode.service.note": "Windows will ask for administrator rights once: only an administrator can register a service.",
   "setup.mode.service.no_admin": "This account has no administrator rights, and only an administrator can register a Windows service. Ask an administrator to run the installer — or install without the service: both fences work without it, and the service can be added later, in settings.",
-  "setup.mode.session0.off": "Off for now: the agent lives in your session and sees the desktop. If you turn it on, they get system rights but stop seeing the desktop, and a weak model may not understand what it is doing.",
+  "setup.mode.session0.off": "Off for now: the service does not carry out errands with system rights. If you turn it on, the agent still lives in your session with the desktop, and the service runs one-off commands with system rights at its request; a weak model may not understand what it is asking for.",
   "setup.mode.computer.note": "No administrator rights are needed. All four rights are granted at once; you can narrow them in settings.",
   "setup.mode.computer.off": "Off for now: the `computer` tool exists, but there is no body under it — it refuses in words.",
   "setup.mode.computer_note.macos": "No administrator rights needed. All four permissions are granted at once; narrow them later in Settings. macOS will ask for two system permissions — Screen Recording and Accessibility; after the program updates they have to be granted again.",

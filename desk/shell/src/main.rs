@@ -1258,6 +1258,76 @@ fn rotate_child_log(path: &Path) -> bool {
     }
 }
 
+/// Служба держит агента (27.09): служба стоит (`installed.service`) и SCM говорит, что
+/// она запущена. Тогда окно — только смотрит: своих детей не поднимает ни при старте, ни
+/// надзором, а просьбы о перезапуске кладёт движку. Ответ живёт 10 с — надзор спрашивает
+/// каждые 5 с, и sc.exe на каждый его тик был бы лишним процессом.
+#[cfg(windows)]
+fn service_owns_harness() -> bool {
+    static SEEN: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+    if let Ok(seen) = SEEN.lock() {
+        if let Some((at, owns)) = *seen {
+            if at.elapsed() < Duration::from_secs(10) {
+                return owns;
+            }
+        }
+    }
+    let installed = match read_config(&install_root().join(CONFIG_NAME)) {
+        ConfigRead::Ok(cfg) => cfg
+            .get("installed")
+            .and_then(|i| i.get("service"))
+            .and_then(|s| s.as_bool())
+            .unwrap_or(false),
+        _ => false,
+    };
+    let owns = installed && service_state_blocking() == "running";
+    if let Ok(mut seen) = SEEN.lock() {
+        *seen = Some((Instant::now(), owns));
+    }
+    owns
+}
+
+/// Вне Windows служба устроена иначе (launchd поднимает движок сам) — правило не нужно.
+#[cfg(not(windows))]
+fn service_owns_harness() -> bool {
+    false
+}
+
+/// Попросить движок выйти между ходами и подняться заново — тем же файлом, что кнопка
+/// «Перезапустить агента» (`deskd.control.ask`). Под службой поднимает его её надзор.
+fn ask_engine_restart(tree: &Path, by: &str) -> bool {
+    let since = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let request = serde_json::json!({
+        "schema": "helene.supervisor.v1",
+        "id": format!("{:08x}{:08x}", since.subsec_nanos(), std::process::id()),
+        "action": "restart",
+        "target": "all",
+        "asked_utc": utc_iso(since.as_secs()),
+        "by": by,
+    });
+    let path = tree.join("memory").join(".state").join("supervisor-request.json");
+    let _ = std::fs::create_dir_all(path.parent().unwrap_or(tree));
+    std::fs::write(&path, serde_json::to_string_pretty(&request).unwrap_or_default()).is_ok()
+}
+
+/// Секунды эпохи → `ГГГГ-ММ-ДДTчч:мм:ссZ` (гражданский календарь, Хиннант).
+fn utc_iso(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
 /// Харнесс уже жив на этом порту? (служба или другое окно.)
 /// Проба — только коннект: держатель порта и есть харнесс по построению,
 /// а поднимать второго на занятый порт бессмысленно в любом случае.
@@ -2098,6 +2168,11 @@ fn restart_self(app: tauri::AppHandle) {
     };
     let dir = exe.parent().map(Path::to_path_buf).unwrap_or_else(exe_dir);
     let state = app.state::<LocalHarness>();
+    // Под службой детей у окна нет: настройки движку применяет его перезапуск, а поднимет
+    // движок надзор службы (27.09).
+    if service_owns_harness() && !ask_engine_restart(&current_tree(), "window") {
+        log_line("перезапуск: просьба движку под службой не записалась");
+    }
     kill_children(&state);
     relay_abort();
     #[cfg(windows)]
@@ -5879,11 +5954,20 @@ fn main() {
                 // живёт (служба или другое окно) либо порт занят; надзор
                 // попробует снова, когда порт освободится.
                 let mut verdict = None;
-                for plan in &plans {
-                    let (kids, said) = start_children(plan, true);
-                    children.extend(kids);
-                    if plan.agent == here {
-                        verdict = said;
+                // 27.09 (слово Егора): при запущенной службе у агента ОДИН хозяин —
+                // служба. Окно своих детей не поднимает: иначе кто стартовал первым,
+                // тот и держал порт (реле 5011 спорило со службой), а закрытое окно
+                // уносило реле с собой. Не поднимет служба за минуту — надзор окна
+                // поднимет сам (watch_children, запасной ход).
+                if service_owns_harness() {
+                    log_line("служба запущена — агента держит она; окно своих детей не поднимает, только смотрит в канал");
+                } else {
+                    for plan in &plans {
+                        let (kids, said) = start_children(plan, true);
+                        children.extend(kids);
+                        if plan.agent == here {
+                            verdict = said;
+                        }
                     }
                 }
                 tree = mine.as_ref().map(|p| p.tree.clone())
@@ -6056,7 +6140,7 @@ fn main() {
             let quit = MenuItem::with_id(
                 app,
                 "quit",
-                "Выход (остановить агентов)",
+                if service_owns_harness() { "Выход (агент остаётся под службой)" } else { "Выход (остановить агентов)" },
                 true,
                 None::<&str>,
             )?;
@@ -6420,6 +6504,9 @@ fn watch_children(app: tauri::AppHandle) {
         Halt(String, String),
     }
     let mut last_lift = Instant::now();
+    // С какого момента агента нет на порту при запущенной службе (по агенту): служба
+    // поднимает его сама, окно ждёт минуту и только потом берёт на себя (27.09).
+    let mut svc_gap: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
     loop {
         std::thread::sleep(Duration::from_secs(5));
         let state = app.state::<LocalHarness>();
@@ -6650,7 +6737,25 @@ fn watch_children(app: tauri::AppHandle) {
                 .lock()
                 .map(|p| p.iter().filter(|p| missing.contains(&p.agent)).cloned().collect())
                 .unwrap_or_default();
+            let owned = service_owns_harness();
             for plan in plans {
+                if owned {
+                    // Служба держит агента: окно не поднимает. Не отвечает он на порту уже
+                    // минуту (задача сессии сломана, служба зависла) — берёт на себя.
+                    if harness_alive(plan.port) {
+                        svc_gap.remove(&plan.agent);
+                        continue;
+                    }
+                    let since = *svc_gap.entry(plan.agent.clone()).or_insert_with(Instant::now);
+                    if since.elapsed() < Duration::from_secs(60) {
+                        continue;
+                    }
+                    log_line(&format!(
+                        "служба запущена, но код агента{} не отвечает уже минуту — поднимаю окном (запасной ход)",
+                        plan.whose()
+                    ));
+                    svc_gap.remove(&plan.agent);
+                }
                 let (mut lifted, _) = start_children(&plan, false);
                 if !lifted.is_empty() {
                     let mut installed = false;
@@ -9269,5 +9374,32 @@ mod tests {
             agent_name(Some(&json!({"agent": {"name": ""}, "telegram": {"agent_name": ""}}))),
             "Агент"
         );
+    }
+
+    /// 27.09: время просьбы движку — ISO в UTC, как у канала (`deskd.control._utc`).
+    #[test]
+    fn utc_iso_is_the_civil_calendar() {
+        assert_eq!(super::utc_iso(0), "1970-01-01T00:00:00Z");
+        assert_eq!(super::utc_iso(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(super::utc_iso(1_790_470_000), "2026-09-27T00:46:40Z");
+    }
+
+    /// 27.09: под службой «Перезапустить сейчас» просит движок выйти между ходами — тем же
+    /// файлом и теми же полями, что кнопка «Перезапустить агента» (`deskd.control.ask`), —
+    /// а поднимает его надзор службы. Окно своих детей при службе не держит.
+    #[test]
+    fn engine_restart_request_speaks_the_channel_format() {
+        let tree = std::env::temp_dir().join(format!("helene-ask-restart-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tree);
+        assert!(super::ask_engine_restart(&tree, "window"));
+        let raw = std::fs::read_to_string(tree.join("memory/.state/supervisor-request.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["schema"], "helene.supervisor.v1");
+        assert_eq!(v["action"], "restart");
+        assert_eq!(v["target"], "all");
+        assert_eq!(v["by"], "window");
+        assert!(v["id"].as_str().is_some_and(|s| s.len() == 16));
+        assert!(v["asked_utc"].as_str().is_some_and(|s| s.ends_with('Z')));
+        let _ = std::fs::remove_dir_all(&tree);
     }
 }
