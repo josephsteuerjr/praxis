@@ -407,12 +407,31 @@ button:focus-visible {
 /* Сцены с вводом: поля, объяснения, выбор, переключатель, кнопки.      */
 /* ------------------------------------------------------------------ */
 
+/* ⚠ 27.09. Кадр — ровно 1920×1080, а сцена ключей выше него почти вдвое: блок Telegram
+   и подсказки под «Усилием» уезжали за нижний край, и колесо их не доставало (живой
+   проклик 1.2.0 на экране 1080p с панелью задач). Длинная сцена листается колесом;
+   полоса тонкая, щелчок по ней не листает сцену (main.ts: onScrollbar). */
 .scene-form {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
   gap: 36px;
-  padding: 120px 240px 56px 240px;
+  /* Низ 40, не 56: сцена режима выходила бы за кадр на 16px одного поля, и ради них
+     появлялась бы полоса прокрутки. */
+  padding: 120px 240px 40px 240px;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+  /* Край листа растворяет текст, а не режет: сверху — под полосой окна, снизу —
+     знак, что ниже есть ещё. Короткие сцены до растворённых краёв не достают. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 72px, #000 calc(100% - 32px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 72px, #000 calc(100% - 32px), transparent 100%);
+}
+
+/* flex-колонка иначе сжимает блоки по высоте, чтобы влезть в кадр, вместо прокрутки. */
+.scene-form > * {
+  flex-shrink: 0;
 }
 
 .form-head {
@@ -578,6 +597,17 @@ button:focus-visible {
 
 .pane[hidden] {
   display: none;
+}
+
+/* Что значит выбранная ступень у этого провайдера. Раньше здесь стоял `.form-lead`:
+   его отрицательный верхний отступ заводил строку на ряд кнопок, а 22px кричали
+   громче заголовка. */
+.effort-hint {
+  margin: 12px 0 18px;
+  max-width: 900px;
+  font-size: 16.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
 }
 
 .tg {

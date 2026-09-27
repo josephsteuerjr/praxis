@@ -298,6 +298,7 @@ export class InstallScene extends FormScene {
     const lines = el("p", "", machine.installed ? text : "Ничего не установлено: новая версия убрана, на диске её не осталось.");
     const again = button("Начать снова", "primary", () => this.reset());
     this.result.append(lines, again);
+    this.reveal(this.result);
   }
 
   private showFailure(text: string) {
@@ -320,6 +321,7 @@ export class InstallScene extends FormScene {
     const actions = el("div", "install-actions");
     actions.append(again, copy);
     this.result.append(p, actions);
+    this.reveal(this.result);
   }
 
   private reset() {
@@ -378,5 +380,6 @@ export class InstallScene extends FormScene {
       });
     });
     this.result.append(open);
+    this.reveal(this.result);
   }
 }

@@ -730,7 +730,11 @@ function backupCard(draft: Config): HTMLElement {
           const when = it.when ? new Date(it.when * 1000).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : it.name;
           listBox.append(el("li", "", `${when}${kind ? " · " + kind : ""} · ${(it.bytes / 1048576).toFixed(1)} МБ`));
         }
-        if (!r.items.length) listBox.append(el("li", "muted", "Копий ещё нет — первая снимется сама, в течение получаса после запуска."));
+        // Период 0 — расписание выключено: обещать «снимется сама» было бы неправдой.
+        if (!r.items.length)
+          listBox.append(el("li", "muted", (b.every_days ?? 7) === 0
+            ? "Копий ещё нет, а по расписанию они выключены (0 дней): снимет кнопка выше и установщик перед обновлением."
+            : "Копий ещё нет — первая снимется сама, в течение получаса после запуска."));
       })
       .catch(() => {
         // Окно без оболочки (браузер, Praxis): копии снимает сервер, здесь смотреть нечего.

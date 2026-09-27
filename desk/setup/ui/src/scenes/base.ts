@@ -1,7 +1,7 @@
 // Общая механика сцен с вводом: блоки приходят и уходят по ветру, у сцены
 // есть проверка перед шагом вперёд и мягкий толчок, когда идти нельзя.
 import { animate } from "motion";
-import { EASE, T, enterWithWind, leaveWithWind, settle, type Dir } from "../wind";
+import { EASE, T, enterWithWind, leaveWithWind, reduced, settle, type Dir } from "../wind";
 
 export abstract class FormScene {
   readonly root: HTMLElement;
@@ -27,6 +27,8 @@ export abstract class FormScene {
 
   async enter(dir: Dir): Promise<void> {
     this.root.hidden = false;
+    // Длинная сцена листается (styles.css, .scene-form): приходит всегда с начала.
+    this.root.scrollTop = 0;
     for (const b of this.blocks) settle(b, false);
     this.beforeEnter();
     await enterWithWind(this.blocks, dir, { step: 0.11 }).finished;
@@ -41,6 +43,20 @@ export abstract class FormScene {
     await leaveWithWind(this.blocks, dir, { step: 0.05 }).finished;
     for (const b of this.blocks) settle(b, false);
     this.root.hidden = true;
+  }
+
+  /** Итог появился ниже края листа — подвести лист к нему. Живой проклик 1.2.0: «Снято»
+   *  и «Закрыть» вставали под нижний край 1080p-экрана, и человек видел одни галочки.
+   *  Листаем только сцену: scrollIntoView прокрутил бы и #viewport, а кадр стоит в нём
+   *  по центру через transform. */
+  protected reveal(target: HTMLElement) {
+    const scene = this.root;
+    requestAnimationFrame(() => {
+      const box = scene.getBoundingClientRect();
+      const k = box.height / (scene.clientHeight || box.height) || 1;
+      const below = (target.getBoundingClientRect().bottom - box.bottom) / k + 48;
+      if (below > 0) scene.scrollBy({ top: below, behavior: reduced ? "auto" : "smooth" });
+    });
   }
 
   async nudge(): Promise<void> {

@@ -216,7 +216,7 @@ export class KeysScene extends FormScene {
     const effortBox = el("div", "effort");
     effortBox.append(el("h3", "form-sub", "Усилие рассуждения"));
     const effortRow = el("div", "models");
-    const effortHint = el("p", "form-lead muted");
+    const effortHint = el("p", "effort-hint");
     const modelForEffort = () =>
       setup.provider === "anthropic" ? setup.anthropic.model
         : setup.provider === "api" ? setup.api.model

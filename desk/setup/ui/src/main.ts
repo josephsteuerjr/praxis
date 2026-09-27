@@ -346,6 +346,15 @@ function isControl(target: EventTarget | null): boolean {
     : false;
 }
 
+/** Курсор на полосе прокрутки длинной сцены: полоса стоит в правой четверти, и
+ *  щелчок по ней иначе листал бы сцену вперёд. Кадр масштабирован — сравниваем доли. */
+function onScrollbar(e: MouseEvent): boolean {
+  const t = e.target;
+  if (!(t instanceof HTMLElement) || t.scrollHeight <= t.clientHeight || !t.offsetWidth) return false;
+  const r = t.getBoundingClientRect();
+  return (e.clientX - r.left) / r.width > t.clientWidth / t.offsetWidth;
+}
+
 function refreshEdge(overControl = false) {
   let edge = "";
   if (lastX >= 0 && !overControl && !busy) {
@@ -363,14 +372,14 @@ function refreshEdge(overControl = false) {
 
 viewport.addEventListener("mousemove", (e) => {
   lastX = e.clientX;
-  refreshEdge(isControl(e.target));
+  refreshEdge(isControl(e.target) || onScrollbar(e));
 });
 viewport.addEventListener("mouseleave", () => {
   lastX = -1;
   refreshEdge();
 });
 viewport.addEventListener("click", (e) => {
-  if (isControl(e.target)) return;
+  if (isControl(e.target) || onScrollbar(e)) return;
   const x = e.clientX / innerWidth;
   if (x < 0.25) void go(-1);
   else if (x > 0.75) void go(1);

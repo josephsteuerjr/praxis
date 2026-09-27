@@ -287,12 +287,15 @@ fn uninstall_any(dir: &std::path::Path, purge: bool, on_progress: &mut dyn FnMut
 
 /// Журнал установки: при удаче — в папке установки, при отказе — во временной папке
 /// (папки установки после отката может не быть) и путь уходит в текст отказа.
+/// 1.2: «для всех» журнал пишет сам мастер, без поднятых прав, а Program Files ему
+/// закрыт на запись — тогда тоже во временную папку, а не никуда.
 fn write_install_log(result: &Result<install::Receipt, String>, log: &str) -> Option<std::path::PathBuf> {
-    let path = match result {
+    let temp = std::env::temp_dir().join(format!("{}-install.log", install::PRODUCT));
+    let first = match result {
         Ok(r) => std::path::PathBuf::from(&r.dir).join("install.log"),
-        Err(_) => std::env::temp_dir().join("Helene-install.log"),
+        Err(_) => temp.clone(),
     };
-    std::fs::write(&path, log).ok().map(|_| path)
+    [first, temp].into_iter().find(|path| std::fs::write(path, log).is_ok())
 }
 
 #[tauri::command]

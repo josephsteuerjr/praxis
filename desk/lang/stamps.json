@@ -765,14 +765,14 @@
     "zh": "26e302f4"
   },
   "setup.uninstall.purge_body": {
-    "en": "27378f5f",
-    "fr": "27378f5f",
-    "zh": "27378f5f"
+    "en": "bc0049b7",
+    "fr": "bc0049b7",
+    "zh": "bc0049b7"
   },
   "setup.uninstall.purge_body.macos": {
-    "en": "efb5f359",
-    "fr": "efb5f359",
-    "zh": "efb5f359"
+    "en": "34645d11",
+    "fr": "34645d11",
+    "zh": "34645d11"
   },
   "settings.service.title.macos": {
     "en": "de3e0607",

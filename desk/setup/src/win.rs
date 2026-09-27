@@ -13,8 +13,9 @@ use std::process::Command;
 
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation,
+    QueryInformationJobObject, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, OpenProcessToken, WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB,
@@ -33,6 +34,25 @@ fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
 /// Хендл job намеренно не закрывается: он живёт ровно столько, сколько процесс.
 pub fn adopt_self_into_job() -> bool {
     unsafe {
+        // Ревью 27.09: мастер родился в чужом job, который детей не отпускает (нет
+        // BREAKAWAY_OK). Свой job тогда вложился бы в него, запуск Hélène «вне job»
+        // откатился бы в НАШ job с KILL_ON_JOB_CLOSE — и программа умирала бы вместе с
+        // мастером. В таком редком запуске уборка при падении уступает живой программе.
+        let mut inside = 0;
+        if IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut inside) != 0 && inside != 0 {
+            let mut cur: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            let ok = QueryInformationJobObject(
+                std::ptr::null_mut(),
+                JobObjectExtendedLimitInformation,
+                &mut cur as *mut _ as *mut core::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                std::ptr::null_mut(),
+            );
+            let lets_go = JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+            if ok == 0 || cur.BasicLimitInformation.LimitFlags & lets_go == 0 {
+                return false;
+            }
+        }
         let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
         if job.is_null() {
             return false;
@@ -49,18 +69,44 @@ pub fn adopt_self_into_job() -> bool {
             CloseHandle(job);
             return false;
         }
+        OUR_JOB.store(job, std::sync::atomic::Ordering::SeqCst);
         true
+    }
+}
+
+/// Свой job мастера: `spawn_outside` снимает с него KILL_ON_JOB_CLOSE, если выйти из
+/// job всё же не вышло.
+static OUR_JOB: std::sync::atomic::AtomicPtr<core::ffi::c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// Выход из job отказан (чужой job выше не отпускает): наш job перестаёт гасить детей
+/// при закрытии — иначе программа, запущенная «вне мастера», умерла бы вместе с ним.
+fn release_our_job() {
+    let job = OUR_JOB.load(std::sync::atomic::Ordering::SeqCst);
+    if job.is_null() {
+        return;
+    }
+    unsafe {
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
     }
 }
 
 /// Запуск, который переживает мастер: вне его job-объекта. Если job, в котором
 /// родился сам мастер (чужой), выход не разрешает — обычный запуск: лучше живой
-/// процесс в чужом job, чем никакого.
+/// процесс в чужом job, чем никакого. Наш job при этом перестаёт гасить детей —
+/// ребёнок остаётся и в нём (`release_our_job`).
 pub fn spawn_outside(cmd: &mut Command) -> std::io::Result<std::process::Child> {
     cmd.creation_flags(CREATE_BREAKAWAY_FROM_JOB);
     match cmd.spawn() {
         Ok(child) => Ok(child),
         Err(e) if e.raw_os_error() == Some(5) => {
+            release_our_job();
             cmd.creation_flags(0);
             cmd.spawn()
         }
@@ -74,6 +120,7 @@ pub fn spawn_outside_hidden(cmd: &mut Command) -> std::io::Result<std::process::
     match cmd.spawn() {
         Ok(child) => Ok(child),
         Err(e) if e.raw_os_error() == Some(5) => {
+            release_our_job();
             cmd.creation_flags(CREATE_NO_WINDOW);
             cmd.spawn()
         }
