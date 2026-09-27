@@ -58,6 +58,40 @@ def text(tree: Path, install_root: Path, platform: str | None = None) -> str:
     )
 
 
+def text_en(tree: Path, install_root: Path, platform: str | None = None) -> str:
+    """То же по-английски: модели схемы уезжают английской накладкой дерева
+    (`tool_text_en.EN`), и она описание руки подменяет целиком. 27.09 после первой
+    правки агент всё ещё читал «A full shell in the container» — русский текст был
+    исправлен, а уезжал английский."""
+    platform = platform or sys.platform
+    home = _p(tree)
+    code = _p(install_root / "tree")
+    app = _p(install_root / "app")
+    if platform == "win32":
+        return (
+            "Your hands on this computer: bash (`bash -lc`; on Windows it is the busybox "
+            "shipped with the product). This is the owner's Windows PC, not a container and "
+            f"not a server: there is no /app here. Your home is {home}: the soul in "
+            f"{home}/soul (SOUL.md, self/CURRENT.md, skills/), memory in {home}/memory, the "
+            f"working folder and default cwd is {home}/workspace. Your code is {code}; the "
+            f"program that runs you is {app}. Use full paths with forward slashes (C:/...). "
+            "busybox answers `root` to `whoami` when the account is an administrator with UAC "
+            "off: that is its word for elevated rights, not Linux. Note: in PowerShell or "
+            "cmd the bare name `bash` may resolve to WSL (C:/Windows/System32/bash.exe) — that "
+            "one IS Linux; this hand is not. PowerShell and cmd: `powershell.exe -NoProfile "
+            "-Command ...`, `cmd.exe /d /c ...`, or the computer hand. Look, try, build; you "
+            f"may write yourself skills into {home}/soul/skills/."
+        )
+    return (
+        "Your hands on this computer: a shell (`bash -lc`). This is the owner's Mac, not a "
+        f"container and not a server: there is no /app here. Your home is {home}: the soul "
+        f"in {home}/soul (SOUL.md, self/CURRENT.md, skills/), memory in {home}/memory, the "
+        f"working folder and default cwd is {home}/workspace. Your code is {code}; the "
+        f"program that runs you is {app}. Use full paths. Look, try, build; you may write "
+        f"yourself skills into {home}/soul/skills/."
+    )
+
+
 def install(agent_mod, tree: Path, install_root: Path) -> int:
     """Переписать описание руки `shell` во всех списках рук. Вернуть число правок."""
     words = text(Path(tree), Path(install_root))
@@ -77,5 +111,15 @@ def install(agent_mod, tree: Path, install_root: Path) -> int:
         if isinstance(tool, dict) and id(tool) not in seen:
             tool["description"] = words
             changed += 1
+    # Английская накладка дерева (`tool_text_en.EN["shell"]["d"]`) подменяет описание
+    # целиком на отправке — правим и её, иначе модель читает прежнее «in the container».
+    try:
+        import tool_text_en
+        entry = getattr(tool_text_en, "EN", {}).get("shell")
+        if isinstance(entry, dict):
+            entry["d"] = text_en(Path(tree), Path(install_root))
+            changed += 1
+    except ImportError:
+        pass
     log.info("рука shell: описание — словами этого компьютера (%d мест)", changed)
     return changed

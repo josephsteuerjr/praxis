@@ -41,6 +41,21 @@ class ShellWordsTest(unittest.TestCase):
         self.assertEqual(mod.BASE_TOOLS[1]["description"], "x")
         self.assertEqual(shared["input_schema"], {"type": "object"})
 
+    def test_english_overlay_is_rewritten_too(self):
+        fake = types.ModuleType("tool_text_en")
+        fake.EN = {"shell": {"d": "Your hands in your own home. A full shell in the container.",
+                             "p": {"command": "the shell command"}}}
+        sys.modules["tool_text_en"] = fake
+        try:
+            mod = types.SimpleNamespace(BASE_TOOLS=[{"name": "shell", "description": SERVER}])
+            shell_words.install(mod, Path("C:/H/data"), Path("C:/H"))
+            words = fake.EN["shell"]["d"]
+            self.assertNotIn("in the container", words)
+            self.assertIn("C:/H/data/workspace", words)
+            self.assertEqual(fake.EN["shell"]["p"], {"command": "the shell command"})
+        finally:
+            del sys.modules["tool_text_en"]
+
     def test_windows_words_explain_busybox_root(self):
         words = shell_words.text(Path("C:/H/data"), Path("C:/H"), platform="win32")
         self.assertIn("busybox", words)
