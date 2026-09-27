@@ -1,0 +1,8 @@
+{
+  "name": "helene-window-lab-electron",
+  "private": true,
+  "version": "0.0.0",
+  "main": "main.cjs",
+  "scripts": { "start": "electron ." },
+  "devDependencies": { "electron": "44.4.5" }
+}

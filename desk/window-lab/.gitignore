@@ -1,0 +1,7 @@
+node_modules/
+dist/
+electron/node_modules/
+electron/linux/
+tauri/target/
+tauri/gen/
+*.log

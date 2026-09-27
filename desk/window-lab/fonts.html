@@ -1,0 +1,22 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Почерк — кандидаты</title>
+<link rel="stylesheet" href="candidates.css">
+<style>
+@font-face { font-family: 'Shantell Sans'; font-weight: 300 800; src: url('./fonts/ShantellSans-cyrillic.woff2') format('woff2'); unicode-range: U+0400-045F; }
+@font-face { font-family: 'Shantell Sans'; font-weight: 300 800; src: url('./fonts/ShantellSans-latin.woff2') format('woff2'); unicode-range: U+0000-00FF; }
+body { margin: 0; background: #f4e4cf; color: #1d1a17; font: 14px system-ui; padding: 24px 32px; }
+.ref { display:block; width: 640px; margin-bottom: 18px; border-radius: 10px }
+.row { display: grid; grid-template-columns: 150px 1fr 1fr 150px; gap: 18px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid rgba(0,0,0,.08) }
+.n { color: #7a6a58; font-size: 12px }
+.a { font-size: 34px; letter-spacing: .03em }
+.b { font-size: 30px }
+.c { font-size: 20px }
+</style></head><body>
+<img class="ref" src="../../../desk-notes/design-refs-2809/hello-handsome.jpg" onerror="this.src='file:///C:/Users/yegor/Downloads/Praxis/desk-notes/design-refs-2809/hello-handsome.jpg'">
+<div id="rows"></div>
+<script>
+const F = ["Klee One","Zen Kurenaido","Yomogi","Pangolin","Neucha","Balsamiq Sans","Caveat","Comfortaa","Marmelad","Kurale","Shantell Sans"];
+document.getElementById("rows").innerHTML = F.map(f => `<div class="row"><div class="n">${f}</div>
+<div class="a" style="font-family:'${f}'">Hello, handsome</div>
+<div class="b" style="font-family:'${f}'">Привет, Мира · Чат</div>
+<div class="c" style="font-family:'${f}'">Мира 0123 ходы</div></div>`).join("");
+</script></body></html>

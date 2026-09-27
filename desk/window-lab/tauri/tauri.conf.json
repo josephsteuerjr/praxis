@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "HeleneWindowLab",
+  "version": "0.0.0",
+  "identifier": "app.helene.windowlab",
+  "build": { "frontendDist": "../dist" },
+  "app": { "withGlobalTauri": false, "windows": [] },
+  "bundle": { "active": false, "icon": ["icons/icon.ico", "icons/icon.png"] }
+}
