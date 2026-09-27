@@ -285,13 +285,19 @@ export async function render(container: HTMLElement): Promise<void> {
     // `kind: "silence"` — серая плашка (КОНТРАКТ A→B §3): молчание по
     // решению или ход без реплики; не слово агента и не тревога.
     const silence = system && m.kind === "silence";
-    const cls = own ? "own" : system ? "system" + (silence ? " silence" : "") : m.outgoing ? "agent" : "";
+    // Записка первого запуска (1.2.3): агенту она нужна целиком, человеку — нет. Серой
+    // плашкой одной строкой, полный текст — по щелчку. Старые установки клали её без
+    // `kind`: узнаём по началу текста.
+    const birth = system && (m.kind === "birth" || (m.text || "").startsWith("Это твой первый запуск"));
+    const cls = own ? "own" : system ? "system" + (silence || birth ? " silence" : "") : m.outgoing ? "agent" : "";
     const head = m.outgoing
       ? `<span class="who-hand">${esc(S.agent)}</span><span>${fmtTime(m.timestamp)}${edited}</span>`
       : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}${edited}</span>`;
     feed.push(`<div class="msg ${cls}" data-at="${esc(m.timestamp || "")}">
       <div class="msg-head">${head}</div>
-      <div class="msg-body">${md(m.text || "")}${media}</div>
+      <div class="msg-body">${birth
+        ? `<details><summary>Первый запуск: ${esc(PRODUCT_NAME)} рассказала агенту, кто он, где его дом и кто владелец</summary>${md(m.text || "")}</details>`
+        : md(m.text || "")}${media}</div>
     </div>`);
   }
   const feedHTML = feed.join("");

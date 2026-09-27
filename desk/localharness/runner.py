@@ -1731,6 +1731,29 @@ def _birth_note(*, note_written: bool = False) -> str:
     return source_id
 
 
+#: Начало записки рождения — по нему `retire_birth_note` узнаёт её строку в ленте.
+_BIRTH_PREFIX = "Это твой первый запуск"
+
+
+def _retire_birth_note(marker: Path, state: dict) -> None:
+    """Записка первого запуска — в служебную плашку окна (1.2.3), один раз.
+
+    Первый ход читает её из ленты; дальше она висела в чате длинным «паспортом» и
+    приходила агенту в ленте каждого хода. Отметка `note_retired` в born.json — чтобы
+    не перечитывать архив на каждом старте.
+    """
+    if state.get("note_retired"):
+        return
+    try:
+        changed = _desk.retire_birth_note("Hélène", _BIRTH_PREFIX)
+        _write_json(marker, {**state, "note_retired": True})
+        if changed:
+            log.info("рождение: записка первого запуска стала плашкой окна (%d)", changed)
+    except Exception:
+        log.warning("записка первого запуска осталась в ленте — попробую на следующем старте",
+                    exc_info=True)
+
+
 def _maybe_birth(tree: Path) -> None:
     """Рождение — ровно один РАЗ и ровно по факту состоявшегося хода.
 
@@ -1757,6 +1780,8 @@ def _maybe_birth(tree: Path) -> None:
             state = {}
         # Старая отметка (без поля state) — рождение состоялось по прежним правилам.
         if str(state.get("state") or "done") in ("done", "gave_up"):
+            if str(state.get("state") or "done") == "done":
+                _retire_birth_note(marker, state)
             return
     try:
         import llm
@@ -1782,14 +1807,18 @@ def _maybe_birth(tree: Path) -> None:
     except Exception:
         log.exception("первый ход при рождении упал")
     if outcome in ("spoken", "silent", "deferred"):
+        done = {"state": "done", "tries": tries, "at": _now().isoformat(timespec="seconds"),
+                "agent": _agent_name, "owner": _speaker}
         try:
-            _write_json(marker, {"state": "done", "tries": tries,
-                                 "at": _now().isoformat(timespec="seconds"),
-                                 "agent": _agent_name, "owner": _speaker})
+            _write_json(marker, done)
         except Exception:
             # Ход СОСТОЯЛСЯ (деньги потрачены, слово сказано) — отметка не легла.
             # Повтор рождения на следующем старте дешевле, чем падение руннера.
             log.exception("отметка рождения не записалась")
+        # Отложенный ход ещё продолжится по своему снимку — записку в плашку
+        # переводит следующий старт, а не этот.
+        if outcome != "deferred":
+            _retire_birth_note(marker, done)
         log.info("рождение: первый ход состоялся (%s)", outcome)
         if outcome == "silent":
             # Ход был, слова не было (агент закрыл его `end_turn` без реплики —
@@ -2503,6 +2532,13 @@ def main() -> None:
         body.install(agent, tree, cfg, config_path=config_path)
     except Exception:
         log.exception("рука computer не подключена к телу")
+    # Рука shell — словами этого компьютера (1.2.3): описание дерева говорит «контейнер,
+    # /app», и агент на чистой установке решил, что живёт в Linux.
+    try:
+        import shell_words
+        shell_words.install(agent, tree, config_path.parent)
+    except Exception:
+        log.exception("описание руки shell осталось серверным")
     # Имя владельца в текстах дерева: дерево говорит с Егором, издание — с тем, кого
     # назвал мастер. Правятся только авторские тексты (схемы, указатели, окна,
     # контракты кадра); память и реплики не трогаются.

@@ -1084,6 +1084,50 @@ def _install_absent(agent_mod) -> None:
     log.info("тело: тул computer снят из набора — в этой сборке тела нет")
 
 
+#: Что сказать агенту про маршрут `execution=system` рядом со строкой тела.
+SYSTEM_ROUTE_NOTE = (
+    "system в Hélène — не маршрут тела: `run` с execution=system уходит поручением службе "
+    "(broker_request op=exec) — владелец видит команду в окне и говорит «да», служба "
+    "выполняет её правами СИСТЕМЫ и отдаёт квитанцию. Нужна служба и включённая нулевая сессия.")
+
+
+def _system_via_broker(agent_mod, kwargs: dict) -> str:
+    """`computer run execution=system` — поручением брокеру службы (1.2.3).
+
+    Рука дерева знает второй маршрут тела — «system» через трубу `PraxisBodySystem`:
+    так было у Праксис, где рядом жила отдельная служба тела с правами СИСТЕМЫ. В Hélène
+    её нет, права системы — у брокера службы (`broker_request op=exec`, «да» владельца в
+    окне). 27.09 агент Егора позвал `execution=system`, получил «open local router
+    \\\\.\\pipe\\PraxisBodySystem» и доложил, что права системы недоступны, — хотя они
+    включены. Теперь тот же вызов идёт туда, где права есть, и агенту не нужно знать про
+    два пути.
+    """
+    impl = getattr(agent_mod, "TOOL_IMPL", None)
+    hand = impl.get("broker_request") if isinstance(impl, dict) else None
+    if not callable(hand):
+        return ("Права СИСТЕМЫ в Hélène — поручением службе (broker_request op=exec), а "
+                "брокера сейчас нет: служба не установлена. Команду правами владельца — "
+                "execution=interactive.")
+    command = str(kwargs.get("command") or "").strip()
+    if not command:
+        return "run execution=system: пустая команда — нечего поручать службе"
+    shell = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" /
+                "WindowsPowerShell" / "v1.0" / "powershell.exe")
+    try:
+        timeout_sec = max(1, int(kwargs.get("timeout_ms") or 0) // 1000) or None
+    except (TypeError, ValueError):
+        timeout_sec = None
+    ask = {"action": "ask", "op": "exec", "cmd": shell,
+           "args": ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+           "why": str(kwargs.get("goal") or kwargs.get("why") or
+                      "команда агента правами СИСТЕМЫ (рука computer, execution=system)")[:300]}
+    if timeout_sec:
+        ask["timeout_sec"] = timeout_sec
+    receipt = hand(**ask)
+    return ("execution=system ушёл поручением службе (брокер, «да» владельца в окне, "
+            "исполняет служба правами СИСТЕМЫ):\n" + str(receipt))
+
+
 def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -> None:
     """Подключить руку `computer` к телу и к разрешению владельца.
 
@@ -1148,6 +1192,8 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
             return (f"Владелец не выдал право `{required}` — {SCOPE_WORDS.get(required, required)}. "
                     f"Выдано: {given}. Галочки — в Настройках, карточка «Управление "
                     f"компьютером»; уговаривать меня бесполезно, решает он.")
+        if action == "run" and str(kwargs.get("execution") or "").strip().lower() == "system":
+            return _system_via_broker(agent_mod, kwargs)
         if not STATE.get("available") or _BODY is None:
             logs = ", ".join(STATE.get("logs") or []) or "нет"
             return (f"Опция включена, но тело не поднялось: {STATE.get('reason')}. "
@@ -1162,6 +1208,8 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
                         + ", ".join(STATE.get("logs") or []) + ". Повтори через несколько "
                         "секунд или спроси `action=status`.")
         out = original(*args, **kwargs)
+        if action == "status" and isinstance(out, str) and sys.platform == "win32":
+            out += "\n" + SYSTEM_ROUTE_NOTE
         # 25.09 (D2): результаты руки на Mac — словами Mac. Строка состояния и отказы
         # маршрутов у дерева написаны под Windows («Windows body», «Session 0», «UI
         # Automation tree»); отсюда у людей «на Mac UIA не реализовано» — AX реализован,

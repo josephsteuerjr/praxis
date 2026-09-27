@@ -241,6 +241,58 @@ class Desk:
         except Exception:
             log.exception("событие жизни не записалось (ход продолжается)")
 
+    def retire_birth_note(self, sender: str, prefix: str) -> int:
+        """Записка первого запуска — в служебную плашку, когда первый ход состоялся (1.2.3).
+
+        Записку кладут обычной строкой от `sender`: первый ход читает её из ленты
+        (`lines`). Дальше она там не нужна — и мешала: 27.09 у Егора длинный «паспорт»
+        висел в чате окна первым сообщением, а агент на каждом ходу видел его в ленте
+        как свежий. Здесь строка получает `system` и `kind="birth"`: лента модели её
+        пропускает (память жизни её хранит), окно рисует короткой серой плашкой.
+        -> сколько строк переписано.
+        """
+        archive = self.tree / "memory" / "groups" / (self.stream + ".jsonl")
+        if not archive.exists():
+            return 0
+        with _path_lock(archive):
+            try:
+                raw = archive.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                return 0
+            out: list[str] = []
+            changed = 0
+            for line in raw:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    out.append(line)
+                    continue
+                if (isinstance(row, dict) and not row.get("outgoing") and not row.get("system")
+                        and str(row.get("sender_name") or "") == sender
+                        and str(row.get("text") or "").startswith(prefix)):
+                    row["system"] = True
+                    row["kind"] = "birth"
+                    out.append(json.dumps(row, ensure_ascii=False))
+                    changed += 1
+                else:
+                    out.append(line)
+            if not changed:
+                return 0
+            tmp = archive.with_name(f"{archive.name}.birth-{os.getpid()}.tmp")
+            tmp.write_text("\n".join(out) + "\n", encoding="utf-8", newline="\n")
+            # Окно читает этот файл из своего процесса: на Windows подмена может
+            # наткнуться на открытый дескриптор — несколько коротких повторов.
+            for attempt in range(10):
+                try:
+                    os.replace(tmp, archive)
+                    break
+                except PermissionError:
+                    if attempt == 9:
+                        tmp.unlink(missing_ok=True)
+                        raise
+                    time.sleep(0.2)
+        return changed
+
     # ------------------------------------------------------------- чтение
     def rows(self, limit: int = 200) -> list[dict]:
         archive = self.tree / "memory" / "groups" / (self.stream + ".jsonl")
