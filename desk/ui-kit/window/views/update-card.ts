@@ -272,16 +272,48 @@ function finalHTML(r: UpdateReceipt, fmt: (s: string) => string): string {
 }
 
 /**
+ * Канал не отвечает: последнее известное — словами, без кнопок. Посреди подмены это
+ * ожидаемо (канал живёт в остановленном контейнере), и совет «обнови руками» в это время
+ * ломал бы идущую подмену.
+ */
+function offlineHTML(u: UpdateState | null, fmt: (s: string) => string): string {
+  const r = u?.receipt || null;
+  const active = updateActive(u);
+  const line = `<p class="receipt err">Канал не отвечает${
+    active
+      ? " — посреди обновления это ожидаемо: агент остановлен на несколько минут. Окно ждёт и дорисует само; руками ничего делать не нужно."
+      : " — раздел дорисуется, когда он вернётся."
+  }</p>`;
+  if (!r) return line;
+  if (!active) return line + finalHTML(r, fmt);
+  const steps = (r.steps || []).slice(-6);
+  return `${line}<p class="muted">Последнее, что сказал исполнитель: ${esc(STATE_WORDS[r.state] || r.state)}${
+    r.step ? ` — ${esc(r.step)}` : ""
+  }.</p>${
+    steps.length
+      ? `<ol class="muted" style="margin:6px 0 0;padding-left:18px">${steps
+          .map((s) => `<li${s.ok ? "" : ' class="receipt err"'}>${esc(s.step)}${s.note ? ` — ${esc(s.note)}` : ""}</li>`)
+          .join("")}</ol>`
+      : ""
+  }`;
+}
+
+/**
  * Раздел «Обновление». `inContainer` — надзор сервера в контейнере: только там без
  * исполнителя имеет смысл говорить, как обновиться руками. На Windows и Mac окно
- * обновляет себя кнопкой в Настройках, и этот раздел пуст.
+ * обновляет себя кнопкой в Настройках, и этот раздел пуст. `offline` — канал не ответил:
+ * `u` тогда — последний ответ, какой был (или null).
  */
 export function updateCardHTML(
   u: UpdateState | null,
-  opts: { inContainer: boolean; fmt?: (s: string) => string; now?: number },
+  opts: { inContainer: boolean; fmt?: (s: string) => string; now?: number; offline?: boolean },
 ): string {
   const fmt = opts.fmt || ((s: string) => s);
   const now = opts.now ?? Date.now();
+  if (opts.offline) {
+    if (!opts.inContainer && !u?.updater?.present) return "";
+    return `<h3 class="section-title">Обновление</h3>${offlineHTML(u, fmt)}`;
+  }
   const up = u?.updater;
   if (!up || !up.present) {
     if (!opts.inContainer) return "";

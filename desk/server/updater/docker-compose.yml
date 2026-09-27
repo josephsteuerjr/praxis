@@ -22,7 +22,16 @@ services:
       context: .
     container_name: helene-updater
     restart: unless-stopped
-    command: ["python3", "${HELENE_DIR:-/opt/helene}/server/updater/updater.py"]
+    # Код — из установки; запасной вход — копия, которую исполнитель держит у себя
+    # (.updater/self): подмена кладёт новую поставку двумя переименованиями, и
+    # перезапуск ровно между ними (хост перезагрузился) без запаса не нашёл бы себя.
+    command:
+      - sh
+      - -c
+      - >-
+        for f in "$$HELENE_DIR/server/updater/updater.py" "$$HELENE_DIR/.updater/self/updater.py";
+        do [ -f "$$f" ] && exec python3 "$$f"; done;
+        echo "updater.py нет ни в server/updater, ни в .updater/self"; exec sleep 3600
     environment:
       - HELENE_DIR=${HELENE_DIR:-/opt/helene}
       # Контейнер агента, которого он обновляет (container_name в server/docker-compose.yml).

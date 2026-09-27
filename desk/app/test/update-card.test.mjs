@@ -151,6 +151,28 @@ assert.equal(updateCardHTML({ updater: { present: false }, receipt: null }, { in
   assert.match(quiet, /агент не ответил до срока/);
 }
 
+// Канал молчит посреди подмены — это не «исполнителя нет» (ревью 27.09): прежняя карточка
+// советовала распаковать поставку руками ровно тогда, когда это ломает идущую подмену.
+{
+  const receipt = { id: "a", state: "running", from_version: "1.1.1", to_version: "1.1.2",
+    step: "останавливаю агента", steps: [{ at: "t", step: "останавливаю агента", ok: true }] };
+  const html = updateCardHTML({ updater: beat, receipt }, { inContainer: true, offline: true });
+  assert.match(html, /Канал не отвечает/);
+  assert.match(html, /посреди обновления это ожидаемо/);
+  assert.match(html, /останавливаю агента/);
+  assert.doesNotMatch(html, /<button/);
+  assert.doesNotMatch(html, /распакуй|up -d --build/);
+  // ответа не было вовсе — всё равно не «исполнителя нет»
+  const blank = updateCardHTML(null, { inContainer: true, offline: true });
+  assert.match(blank, /Канал не отвечает/);
+  assert.doesNotMatch(blank, /Исполнителя обновлений рядом с агентом нет/);
+  assert.equal(updateCardHTML(null, { inContainer: false, offline: true }), "");
+  // план ждал «да» — кнопок без связи нет
+  const waiting = updateCardHTML({ updater: beat, receipt: { id: "a", state: "awaiting", nonce: "n" } },
+    { inContainer: true, offline: true });
+  assert.doesNotMatch(waiting, /data-update-confirm/);
+}
+
 // Текст из расписки — не разметка.
 {
   const receipt = { id: "\"><img src=x>", state: "awaiting", nonce: "<b>", plan: { reason: "<script>alert(1)</script>" } };

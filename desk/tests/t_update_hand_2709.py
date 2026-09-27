@@ -239,6 +239,59 @@ class EngineWiring(unittest.TestCase):
         self.assertIn("[Hélène · испытание]", archived[0])
         self.assertIn("не прошло и откачено", archived[1])
 
+    def report_run(self, receipt: dict, outcomes: list[str]):
+        """Прогнать `_update_report_due` с мозгом: -> (записки в окне, source_id в памяти, ходы)."""
+        ctl = self.tree / "memory" / ".control"
+        ctl.mkdir(parents=True, exist_ok=True)
+        (ctl / control.UPDATE_RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
+        archived, lives, turns = [], [], []
+        desk = types.SimpleNamespace(archive=lambda text, **k: archived.append(text),
+                                     life=lambda *a, **k: lives.append(k.get("source_id")))
+
+        def turn(source_id, **k):
+            turns.append(source_id)
+            return outcomes.pop(0) if outcomes else "spoken"
+
+        brain = types.SimpleNamespace(configured=lambda: True)
+        with mock.patch.dict(os.environ, ON_SERVER), mock.patch.dict(sys.modules, {"llm": brain}), \
+                mock.patch.multiple(runner, _tree=self.tree, _desk=desk, _speaker="Дмитрий",
+                                    _turn_in_window=turn):
+            for _ in range(5):
+                runner._update_report_due()
+                mark = control.update_report_mark(self.tree)
+                if mark and not mark.get("done"):
+                    # пауза между попытками прошла
+                    control.update_mark_reported(self.tree, mark["id"], mark["state"], done=False,
+                                                 tries=mark["tries"], noted=True, retry_at=0.0)
+        return archived, lives, turns
+
+    def test_упавший_ход_по_записке_испытания_повторяется_записка_одна(self):
+        receipt = {"id": "aaaa1111", "state": "trial", "from_version": "1.1.1", "to_version": "1.1.2",
+                   "trial": {"key": "k", "since_epoch": time.time(), "until_utc": "2026-09-27T12:00:00Z",
+                             "minutes": 30}}
+        archived, lives, turns = self.report_run(receipt, ["failed", "spoken"])
+        self.assertEqual(len(archived), 1)                 # записка — одна
+        self.assertEqual(turns, ["update-aaaa1111-trial"] * 2)
+        self.assertEqual(lives, ["update-aaaa1111-trial"])
+        self.assertIsNone(control.update_unreported(self.tree))
+
+    def test_три_неудачи_и_хватит(self):
+        receipt = {"id": "bbbb2222", "state": "rolled_back", "from_version": "1.1.1",
+                   "to_version": "1.1.2", "note": "откат", "finished_epoch": time.time()}
+        archived, _lives, turns = self.report_run(receipt, ["failed"] * 9)
+        self.assertEqual(len(turns), runner._UPDATE_TRIES)
+        self.assertEqual(len(archived), 1)
+        self.assertIsNone(control.update_unreported(self.tree))
+
+    def test_испытание_и_итог_в_памяти_под_разными_именами(self):
+        receipt = {"id": "cccc3333", "state": "trial", "from_version": "1.1.1", "to_version": "1.1.2",
+                   "trial": {"key": "k", "since_epoch": time.time(), "until_utc": "2026-09-27T12:00:00Z",
+                             "minutes": 30}}
+        _a, first, _t = self.report_run(receipt, [])
+        receipt.update(state="rolled_back", note="откат", finished_epoch=time.time())
+        _a, second, _t = self.report_run(receipt, [])
+        self.assertEqual(first + second, ["update-cccc3333-trial", "update-cccc3333-rolled_back"])
+
     def test_под_serverboot_движок_не_берёт_стол_надзора(self):
         with mock.patch.dict(os.environ, ON_SERVER):
             self.assertFalse(runner._start_supervisor(self.tree))

@@ -195,6 +195,32 @@ class PlanAndConfirm(unittest.TestCase):
         beat(self.tree)
         self.assertIn("идёт другое обновление", control.update_plan(self.tree)["note"])
 
+    def test_слово_сказано_испытания_больше_нет(self):
+        # исполнитель взял слово: расписка уходит из испытания ДО отката (ревью 27.09) —
+        # «Принять» посреди отката записалось бы ложным «прошло»
+        put(self.tree, control.UPDATE_RECEIPT, {"id": "aaaa1111", "state": "running", "phase": "rollback",
+                                                "step": "откатываю", "trial": {"key": "k3y"}})
+        got = control.update_verdict(self.tree, "aaaa1111", "k3y", "accept", by="window")
+        self.assertFalse(got["ok"])
+        self.assertIn("откатываю", got["note"])
+        # расписка исполнителя прежней версии: «trial», но фаза уже не испытание
+        put(self.tree, control.UPDATE_RECEIPT, {"id": "aaaa1111", "state": "trial", "phase": "rollback",
+                                                "trial": {"key": "k3y"}})
+        self.assertFalse(control.update_verdict(self.tree, "aaaa1111", "k3y", "accept")["ok"])
+        self.assertFalse((ctl(self.tree) / control.UPDATE_VERDICT).exists())
+
+    def test_несостоявшийся_ход_по_записке_повторяется(self):
+        put(self.tree, control.UPDATE_RECEIPT, {"id": "aaaa1111", "state": "done",
+                                                "finished_epoch": time.time()})
+        control.update_mark_reported(self.tree, "aaaa1111", "done", done=False, tries=1, noted=True)
+        self.assertEqual(control.update_unreported(self.tree)["id"], "aaaa1111")
+        self.assertEqual(control.update_report_mark(self.tree)["tries"], 1)
+        control.update_mark_reported(self.tree, "aaaa1111", "done", done=True, tries=2)
+        self.assertIsNone(control.update_unreported(self.tree))
+        # отметка прежнего вида (без done) — «рассказано»
+        put(self.tree, control.UPDATE_REPORTED, {"id": "aaaa1111", "state": "done"})
+        self.assertIsNone(control.update_unreported(self.tree))
+
     def test_испытание_и_итог_рассказываются_по_отдельности(self):
         now = time.time()
         put(self.tree, control.UPDATE_RECEIPT, {"id": "aaaa1111", "state": "trial",

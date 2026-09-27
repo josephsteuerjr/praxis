@@ -120,6 +120,9 @@ export function supervisorHTML(s: Supervisor | null): string {
 
 /** Что уже нарисовано в коробке обновления — чтобы опрос не менял её без нужды. */
 const drawnUpdate = new WeakMap<HTMLElement, string>();
+/** Последний ответ канала — его и показываем, пока канал молчит (по панели: коробку
+ *  раздела перерисовка панели заменяет). */
+const lastUpdate = new WeakMap<HTMLElement, UpdateState>();
 
 /**
  * Раздел «Обновление» в свою коробку: её опрос перерисовывает только её.
@@ -128,23 +131,34 @@ const drawnUpdate = new WeakMap<HTMLElement, string>();
  * секунды, и перерисовка того же самого подменяла кнопку под курсором новой: нажатие
  * посреди подмены терялось, а строка ответа под кнопками стиралась (найдено на
  * стенде 27.09 — «Подтвердить» оказывался устаревшим элементом).
+ *
+ * ⚠ Канал молчит — это не «исполнителя нет». Посреди подмены агент остановлен, и канал
+ * (он живёт в том же контейнере) не отвечает минуты; прежде карточка в это время
+ * советовала распаковать поставку руками и поднять исполнителя — ровно то, что ломает
+ * идущую подмену (ревью 27.09). Теперь остаётся последнее, что было известно, с
+ * пометкой, без кнопок; ветка «исполнителя нет» — только по ответу канала.
+ * -> ответ канала и молчит ли он.
  */
-async function drawUpdate(box: HTMLElement, inContainer: boolean): Promise<UpdateState | null> {
+async function drawUpdate(
+  box: HTMLElement,
+  inContainer: boolean,
+): Promise<{ state: UpdateState | null; offline: boolean }> {
   const slot = box.querySelector<HTMLElement>("#update-box");
   let state: UpdateState | null = null;
+  let offline = false;
   try {
     state = await api<UpdateState>("/api/update");
+    lastUpdate.set(box, state);
   } catch {
-    // Канал старше 1.1.1 (ручки нет) или связь пропала на время подмены контейнера:
-    // кнопок не рисуем — только то, что верно без исполнителя; следующий опрос дорисует.
-    state = null;
+    offline = true;
+    state = lastUpdate.get(box) || null;
   }
-  const html = updateCardHTML(state, { inContainer, fmt: fmtTime });
+  const html = updateCardHTML(state, { inContainer, fmt: fmtTime, offline });
   if (slot && drawnUpdate.get(slot) !== html) {
     slot.innerHTML = html;
     drawnUpdate.set(slot, html);
   }
-  return state;
+  return { state, offline };
 }
 
 export interface ContainerRow {
@@ -312,8 +326,10 @@ async function draw(box: HTMLElement): Promise<void> {
   // Элен её нет, и пустой раздел там был бы обещанием без исполнителя.
   const extra = boxes?.available ? containersHTML(boxes) + brainHTML(brain, models) : "";
   box.innerHTML = `<h3 class="section-title">Управление</h3>${interruptHTML()}${supervisorHTML(state)}<div id="update-box"></div>${extra}${logsHTML(logs)}`;
-  box.dataset.inContainer = state?.in_container ? "1" : "";
-  await drawUpdate(box, Boolean(state?.in_container));
+  // Канал молчит — «в контейнере ли мы» помним с прошлого ответа: иначе посреди подмены
+  // раздел обновления пропал бы целиком.
+  if (state) box.dataset.inContainer = state.in_container ? "1" : "";
+  await drawUpdate(box, box.dataset.inContainer === "1");
 }
 
 /**
@@ -339,8 +355,9 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
     let wasActive = false;
     try {
       while (box.isConnected) {
-        const u = await drawUpdate(box, box.dataset.inContainer === "1");
-        if (u) wasActive = updateActive(u);
+        const got = await drawUpdate(box, box.dataset.inContainer === "1");
+        // Молчащий канал — ждём его дальше: раздел дорисуется, когда он вернётся.
+        wasActive = got.offline || updateActive(got.state);
         if (!wasActive && grace-- <= 0) break;
         await new Promise((done) => setTimeout(done, 4000));
       }

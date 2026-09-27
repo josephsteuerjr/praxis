@@ -29,7 +29,9 @@
   2. откладываю прежний образ тегом отката и собираю новый ИЗ РАСПАКОВАННОГО — агент
      работает;
   3. репетирую расширения владельца под новым образом (как мастер на Windows);
-  4. откладываю прежнюю поставку в копию и кладу новую; `data/` и `helene.json` не трогаю;
+  4. откладываю прежнюю поставку в копию и кладу новую; `data/` и `helene.json` не трогаю,
+     а своё владельца в папках поставки (модели в `server/models`, `server/.env`, его
+     override) переношу в новые папки;
   5. жду конца хода агента, останавливаю его контейнер, копирую `data/` (если план
      просит полную копию), ПЕРЕНОШУ ПРАВКИ АГЕНТА: его код против чистой прежней версии
      — это его правки; каждую кладу на новую версию: файл, который выпуск не трогал, —
@@ -43,12 +45,20 @@
      расширения и его перенесённые правки — и отвечает «принимаю» или «сломано».
      «Сломано» или молчание до срока — откат. Мозга нет — испытание пропускается словами.
 
-Откат возвращает код и образ, но НЕ память: «откат кода не откатывает память — это её
-жизнь, а не версия продукта» (Егор, 25.09). Копия `data/` лежит рядом, и в дело идёт,
-только если прежняя версия на новых данных не поднимается.
+Откат возвращает код и образ, но НЕ память и не `helene.json`: «откат кода не откатывает
+память — это её жизнь, а не версия продукта» (Егор, 25.09). Копии `data/` и `helene.json`
+лежат рядом и идут в дело, только если прежняя версия на данных новой не поднимается.
+Правки, которые агент успел сделать в коде новой версии, откат отдаёт ему в workspace.
+
+Прерванное (перезапуск посреди любого шага) я довожу сам: состояние пишется ДО каждого
+шага, который трудно отменить, и восстановление смотрит, что сделано на самом деле.
 
 Чего я не делаю по построению:
-  * без «да» человека — ничего; «да» привязано к одноразовому ключу моей расписки;
+  * без «да» — ничего; «да» привязано к одноразовому ключу моей расписки: подтверждается
+    ровно показанная версия и сумма. Честно о границе: «да» — файл в дереве агента, и
+    агент своим shell может положить его сам (рука `update_request` передаёт «да» только
+    в ходе, начатом словами владельца, но shell — не рука). Поэтому я и умею ровно одно:
+    официальный выпуск новее текущего, с копией, переносом правок и откатом;
   * ставлю только официальный выпуск и только версию НОВЕЕ текущей. Адрес выпусков —
     из МОЕЙ среды, не из helene.json: тот правит агент;
   * не исполняю ничего из того, что агент может переписать: `app/` и `tree/` теперь на
@@ -69,6 +79,7 @@ import datetime as dt
 import difflib
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -104,8 +115,15 @@ IN_CONTAINER_CODE = {"tree": "/opt/helene/tree", "app": "/opt/helene/app"}
 CODE_IGNORE_DIRS = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
 CODE_IGNORE_SUFFIXES = (".pyc", ".pyo")
 CODE_IGNORE_NAMES = frozenset({".DS_Store"})
-MAX_CODE_FILE = 32 * 1024 ** 2
+#: Файл кода больше этого — не правка, а груз: не переношу и не сравниваю по байтам.
+MAX_CODE_FILE = 8 * 1024 ** 2
+#: Дифф правок агента одним файлом — не больше; дальше — «обрезан».
 MAX_DIFF = 2 * 1024 ** 2
+#: Файл больше этого в дифф не идёт (difflib на мегабайтах — минуты процессора).
+MAX_DIFF_FILE = 512 * 1024
+#: Материалы агенту (стороны того, что не легло, прежний код без базы) — всего не больше.
+#: Размер правок задаёт агент: без потолка тысяча больших файлов забила бы диск и память.
+MAX_MATERIALS = 256 * 1024 ** 2
 
 #: Что остаётся на месте при подмене: данные агента, его конфиг и моя папка. Остальное —
 #: поставка, её меняем целиком (как «распаковать поверх» в README-СЕРВЕР).
@@ -114,10 +132,13 @@ KEEP_IN_PLACE = frozenset({"data", "helene.json", ".updater"})
 #: Его не распаковываю и не трогаю — на сервере Python свой, в образе.
 SERVER_SKIP = frozenset({"runtime"})
 
-#: Без чего распакованная поставка — не поставка сервера.
+#: Без чего распакованная поставка — не поставка сервера. Исполнитель — тоже: после
+#: успеха я перезапускаюсь кодом новой поставки, и выпуск без него оставил бы сервер
+#: без исполнителя (docker поднимал бы пустое место по кругу).
 REQUIRED = ("helene-build.json", "requirements.txt", "app/deskapp.py", "app/desk.json",
             "app/localharness/runner.py", "app/deskd/control.py", "tree",
-            "server/Dockerfile", "server/docker-compose.yml", "server/serverboot.py")
+            "server/Dockerfile", "server/docker-compose.yml", "server/serverboot.py",
+            "server/updater/updater.py", "server/updater/protocol.py")
 
 #: Переменные compose-файла агента -> откуда взять их значение в ЖИВОМ контейнере.
 #: Владелец задаёт их в командной строке (`HELENE_HOSTS=… docker compose up`), и нигде
@@ -132,6 +153,8 @@ CARRY_ENV = {
 
 MAX_SHARED = 64 * 1024            # файл обмена больше этого — не наш файл
 MAX_ARCHIVE = 2 * 1024 ** 3       # архив выпуска больше 2 ГБ — не наш архив
+MAX_CONFIG = 4 * 1024 ** 2        # helene.json больше этого — в копию не беру (его пишет агент)
+PROBE_LIMIT = 1024 ** 2           # ответ пробы больше мегабайта — мусор, а не ответ
 SPACE_MARGIN = 512 * 1024 ** 2
 BEAT_EVERY = 5.0
 LATEST_EVERY = 6 * 3600
@@ -167,8 +190,22 @@ def mb(size: int | float) -> str:
     return f"{size / 1024 ** 2:.0f} МБ" if size < 1024 ** 3 else f"{size / 1024 ** 3:.1f} ГБ"
 
 
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def clean(text: str) -> str:
+    """Строка для журнала: без управляющих символов терминала, продолжения — с отступом.
+
+    В журнал попадают и слова агента (вердикт, заметки пробы, имена его файлов), а
+    `docker logs helene-updater` владелец читает в своём терминале: ESC-последовательность
+    оттуда перекрасила бы или стёрла ему экран, а перевод строки нарисовал бы поддельную
+    строку «[updater …] готов».
+    """
+    return _CONTROL.sub(lambda m: f"\\x{ord(m.group(0)):02x}", str(text)).replace("\n", "\n    ")
+
+
 def log(text: str) -> None:
-    print(f"[updater {utc()}] {text}", flush=True)
+    print(f"[updater {utc()}] {clean(text)}", flush=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -268,12 +305,14 @@ class Shared:
             os.close(dfd)
 
     def append(self, *path_and_row) -> None:
+        """Строка в конец журнала. FIFO на его месте — ENXIO, а не вечное ожидание
+        читателя (без O_NONBLOCK любой итог вешал бы исполнителя навсегда)."""
         *path, row = path_and_row
         *parts, name = path
         dfd = self._dir_fd(tuple(parts), create=True)
         try:
-            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o644,
-                         dir_fd=dfd)
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK,
+                         0o644, dir_fd=dfd)
             with os.fdopen(fd, "ab") as fh:
                 if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
                     return
@@ -303,21 +342,58 @@ CTL = ("memory", ".control")
 # --------------------------------------------------------------------------- #
 
 class Docker:
-    """Клиент `docker` (с плагином compose) из образа исполнителя, по сокету хоста."""
+    """Клиент `docker` (с плагином compose) из образа исполнителя, по сокету хоста.
 
-    def run(self, args: list[str], *, env: dict | None = None,
-            timeout: float = 600) -> tuple[int, str, str]:
+    Вывод читается с пределом: stdout — с начала (inspect отдаёт JSON), stderr — хвост
+    (ошибка сборки — в конце). Вывод пробы (`docker exec`) пишет агент — его python в
+    его контейнере, — и без предела гигабайт мусора раздул бы память исполнителя.
+    Больше предела — команда прерывается: такой ответ всё равно не разобрать.
+    """
+
+    OUT_LIMIT = 8 * 1024 ** 2
+    ERR_TAIL = 256 * 1024
+
+    def run(self, args: list[str], *, env: dict | None = None, timeout: float = 600,
+            limit: int = OUT_LIMIT) -> tuple[int, str, str]:
         full = dict(os.environ)
         full.update({k: str(v) for k, v in (env or {}).items()})
         try:
-            done = subprocess.run(["docker", *args], capture_output=True, env=full,
-                                  timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return 124, "", f"docker {' '.join(args[:3])}: не уложился в {timeout:.0f} с"
+            proc = subprocess.Popen(["docker", *args], stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=full)
         except OSError as exc:
             return 127, "", f"docker не запускается: {exc}"
-        return (done.returncode, done.stdout.decode("utf-8", "replace"),
-                done.stderr.decode("utf-8", "replace"))
+        out, err, over = bytearray(), bytearray(), threading.Event()
+
+        def pump_out() -> None:
+            for chunk in iter(lambda: proc.stdout.read(65536), b""):
+                if len(out) + len(chunk) > limit:
+                    over.set()
+                    proc.kill()
+                    return
+                out.extend(chunk)
+
+        def pump_err() -> None:
+            for chunk in iter(lambda: proc.stderr.read(65536), b""):
+                err.extend(chunk)
+                del err[:-self.ERR_TAIL]
+
+        pumps = [threading.Thread(target=pump_out, daemon=True),
+                 threading.Thread(target=pump_err, daemon=True)]
+        for pump in pumps:
+            pump.start()
+        try:
+            code = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            code = 124
+            err.extend(f"\ndocker {' '.join(args[:3])}: не уложился в {timeout:.0f} с".encode())
+        for pump in pumps:
+            pump.join(5)
+        if over.is_set():
+            code = 125
+            err.extend(f"\ndocker {' '.join(args[:3])}: вывод больше {mb(limit)} — прерван".encode())
+        return code, bytes(out).decode("utf-8", "replace"), bytes(err).decode("utf-8", "replace")
 
 
 class Net:
@@ -497,6 +573,29 @@ def iso_epoch(text: str) -> float:
         return 0.0
 
 
+# Записки надзора и раннера, как и весь вывод пробы, пишет агент: его `data/` и его python
+# в его контейнере. Разбор — без доверия к виду: не словарь — пусто, не число — ноль, а
+# ноль нигде не засчитывается «свежим». Мусор даёт «не прошло», а не падение исполнителя
+# (прежде `float("abc")` на проверке заклинивал обновление навсегда).
+
+def _dict(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _num(value) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        got = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return got if math.isfinite(got) else 0.0
+
+
+def _text(value, limit: int = 200) -> str:
+    return clean(str(value if value is not None else ""))[:limit]
+
+
 def evaluate(probe: dict, info: dict, checks: list[str], version: str, before: dict) -> list[dict]:
     """Проверки после подъёма. Каждая — по имени из закрытого списка протокола.
 
@@ -505,8 +604,9 @@ def evaluate(probe: dict, info: dict, checks: list[str], version: str, before: d
     контейнера, и свежими их оставил ПРЕЖНИЙ контейнер за секунды до остановки. Поэтому
     обе засчитываются, только если написаны после старта нового контейнера.
     """
-    state = ((probe.get("state") or {}).get("body") or {}) if isinstance(probe, dict) else {}
-    health = (probe.get("health") or {}) if isinstance(probe, dict) else {}
+    probe = _dict(probe)
+    state = _dict(_dict(probe.get("state")).get("body"))
+    health = _dict(probe.get("health"))
     born = iso_epoch(info.get("started_at", "")) - 1.0     # старт контейнера, запас на округление
     mounts = info.get("mounts") or {}
     out = []
@@ -517,36 +617,41 @@ def evaluate(probe: dict, info: dict, checks: list[str], version: str, before: d
             note = f"{info.get('status') or '?'}, перезапусков {info.get('restart_count', 0)}"
         elif name == "channel":
             ok = health.get("code") == 200
-            note = "отвечает" if ok else (health.get("why") or f"код {health.get('code')}")
+            note = "отвечает" if ok else _text(health.get("why") or f"код {_text(health.get('code'), 20)}")
         elif name == "version":
-            got = str((state.get("desk") or {}).get("version") or "")
+            got = _text(_dict(state.get("desk")).get("version") or "", 40)
             ok = bool(version) and got == version
             note = f"канал говорит {got or '—'}, ждём {version or '—'}"
         elif name == "supervisor":
-            sup = probe.get("supervisor") or {}
-            age = float(probe.get("now") or 0) - float(sup.get("beat_epoch") or 0)
-            ours = iso_epoch(sup.get("started_utc", "")) >= born
-            ok = sup.get("kind") == "serverboot" and 0 <= age <= protocol.BEAT_STALE and ours
-            note = ((f"{sup.get('kind') or 'записки нет'}, бился {age:.0f} с назад"
+            sup = _dict(probe.get("supervisor"))
+            beat = _num(sup.get("beat_epoch"))
+            age = _num(probe.get("now")) - beat
+            ours = born > 0 and iso_epoch(sup.get("started_utc", "")) >= born
+            ok = sup.get("kind") == "serverboot" and beat > 0 and 0 <= age <= protocol.BEAT_STALE and ours
+            note = ((f"{_text(sup.get('kind') or 'записки нет', 40)}, бился {age:.0f} с назад"
                      + ("" if ours else " — но это записка прежнего контейнера"))
-                    if sup.get("beat_epoch") else str(sup.get("why") or "записки надзора нет"))
+                    if beat else _text(sup.get("why") or "записки надзора нет"))
         elif name == "runner":
-            runner = state.get("runner") or {}
-            at = float((probe.get("reader") or {}).get("at") or 0)
-            ours = at >= born
-            ok = bool(runner.get("alive")) and ours
+            runner = _dict(state.get("runner"))
+            at = _num(_dict(probe.get("reader")).get("at"))
+            ours = born > 0 and at >= born
+            ok = runner.get("alive") is True and ours
             note = ("жив" if ok else
                     "квитанция раннера — от прежнего контейнера, новый ещё не отметился"
-                    if runner.get("alive") else
-                    f"не отвечает (возраст квитанции {runner.get('age_s')})")
+                    if runner.get("alive") is True else
+                    f"не отвечает (возраст квитанции {_text(runner.get('age_s'), 20)})")
         elif name == "config":
             now = carried(info)
             keys = sorted(k for k in set(before) | set(now) if not k.startswith("__"))
             lost = [k for k in keys if before.get(k) != now.get(k)]
             same_data = mounts.get(IN_CONTAINER_DATA) == before.get("__data")
-            ok = not lost and same_data
+            # Тот же путь к моделям — ещё не те же модели: папка в установке (по умолчанию
+            # server/models) могла уехать с подменой, и голос онемел бы молча.
+            models_gone = bool(before.get("__models_seen")) and info.get("models_seen") == 0
+            ok = not lost and same_data and not models_gone
             note = ("перенесено: " + (", ".join(k for k in keys) or "переменных не было") + "; data/ та же"
-                    if ok else "разошлось: " + ", ".join(lost + ([] if same_data else ["data/"])))
+                    if ok else "разошлось: " + ", ".join(lost + ([] if same_data else ["data/"])
+                                                         + (["папка моделей пуста"] if models_gone else [])))
         elif name == "code":
             wrong = [d for d in CODE_DIRS
                      if not before.get(f"__{d}") or mounts.get(IN_CONTAINER_CODE[d]) != before.get(f"__{d}")]
@@ -555,9 +660,9 @@ def evaluate(probe: dict, info: dict, checks: list[str], version: str, before: d
                     "не с диска сервера: " + ", ".join(f"{d}/" for d in wrong)
                     + " — правки агента пропадали бы при каждой пересборке")
         elif name == "brain":
-            brain = state.get("brain") or {}
-            ok = bool(brain.get("configured"))
-            note = str(brain.get("model") or "") if ok else "мозг не настроен"
+            brain = _dict(state.get("brain"))
+            ok = brain.get("configured") is True
+            note = _text(brain.get("model") or "", 80) if ok else "мозг не настроен"
         out.append({"name": name, "title": protocol.UPDATE_CHECKS.get(name, name),
                     "ok": bool(ok), "note": note})
     return out
@@ -577,16 +682,18 @@ def doomed(probe: dict, info: dict) -> str:
     Записка надзора — только ЭТОГО контейнера: при откате в `data/` ещё лежит записка
     сломанной версии с её падениями, и по ней откат счёлся бы несостоявшимся.
     """
-    sup = (probe.get("supervisor") or {}) if isinstance(probe, dict) else {}
+    sup = _dict(_dict(probe).get("supervisor"))
     if iso_epoch(sup.get("started_utc", "")) < iso_epoch(info.get("started_at", "")) - 1.0:
         return ""
-    for child in sup.get("children") or []:
+    children = sup.get("children")
+    for child in children if isinstance(children, list) else []:
         if not isinstance(child, dict) or child.get("id") != "runner":
             continue
         if child.get("halted"):
-            return f"надзор остановил раннер: {child['halted']}"
-        if int(child.get("falls") or 0) >= FALLS_DOOMED:
-            return f"раннер падает раз за разом (падений подряд: {child['falls']})"
+            return f"надзор остановил раннер: {_text(child['halted'])}"
+        falls = _num(child.get("falls"))
+        if falls >= FALLS_DOOMED:
+            return f"раннер падает раз за разом (падений подряд: {falls:.0f})"
     return ""
 
 
@@ -637,16 +744,116 @@ def check_layout(root: Path, version: str) -> dict:
 
 
 def dir_size(root: Path) -> int:
-    total = 0
+    """Сколько места займёт копия папки: обычные файлы по их размеру, ссылки не в счёт."""
+    return sum(st.st_size for _rel, st, _dfd, _name in members(root, ignore=False)
+               if stat.S_ISREG(st.st_mode))
+
+
+#: Обход через дескрипторы есть только на Linux (там исполнитель и живёт).
+FWALK = hasattr(os, "fwalk") and bool(NOFOLLOW)
+
+
+def members(root: Path, *, ignore: bool = True):
+    """Члены папки без следования ссылкам: -> (путь от корня, lstat, dir_fd, имя).
+
+    Папки обходятся, но не выдаются; ссылка на папку выдаётся членом, а не обходится.
+    На Linux — `os.fwalk`: каждая папка открывается относительно родителя, и открытой
+    оказывается ровно та, что была в листинге, — ссылка, которую живой агент подложил
+    между листингом и открытием, обход наружу не уводит (с `os.walk` это окно было).
+    `dir_fd` действителен, пока идёт обход. На Windows (стенды) — `os.walk`, `dir_fd` —
+    None, имя — полный путь. `ignore` — не заходить в кэши и не брать байткод.
+    """
+    root = str(root)
+    if FWALK:
+        for base, dirs, files, dfd in os.fwalk(root, follow_symlinks=False):
+            head = os.path.relpath(base, root)
+            head = "" if head == "." else head.replace(os.sep, "/") + "/"
+            keep = []
+            for name in dirs:
+                if ignore and name in CODE_IGNORE_DIRS:
+                    continue
+                try:
+                    st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                except OSError:
+                    continue
+                if stat.S_ISDIR(st.st_mode):
+                    keep.append(name)
+                else:
+                    yield head + name, st, dfd, name
+            dirs[:] = keep
+            for name in files:
+                if ignore and (name in CODE_IGNORE_NAMES or name.endswith(CODE_IGNORE_SUFFIXES)):
+                    continue
+                try:
+                    st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                except OSError:
+                    continue
+                yield head + name, st, dfd, name
+        return
     for base, dirs, files in os.walk(root, followlinks=False):
-        for name in files:
+        keep = []
+        for name in dirs:
+            full = os.path.join(base, name)
+            if ignore and name in CODE_IGNORE_DIRS:
+                continue
             try:
-                info = os.lstat(os.path.join(base, name))
+                st = os.lstat(full)
             except OSError:
                 continue
-            if stat.S_ISREG(info.st_mode):
-                total += info.st_size
-    return total
+            if stat.S_ISDIR(st.st_mode):
+                keep.append(name)
+            else:
+                yield os.path.relpath(full, root).replace(os.sep, "/"), st, None, full
+        dirs[:] = keep
+        for name in files:
+            if ignore and (name in CODE_IGNORE_NAMES or name.endswith(CODE_IGNORE_SUFFIXES)):
+                continue
+            full = os.path.join(base, name)
+            try:
+                st = os.lstat(full)
+            except OSError:
+                continue
+            yield os.path.relpath(full, root).replace(os.sep, "/"), st, None, full
+
+
+def read_member(dfd: int | None, name: str, limit: int = MAX_CODE_FILE) -> bytes | None:
+    """Содержимое обычного файла без следования ссылке (относительно `dfd`, если он есть)."""
+    try:
+        fd = os.open(name, os.O_RDONLY | NOFOLLOW | NONBLOCK | BINARY,
+                     **({"dir_fd": dfd} if dfd is not None else {}))
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as fh:
+        info = os.fstat(fh.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            return None
+        blob = fh.read(limit + 1)
+    return blob if len(blob) <= limit else None
+
+
+def link_target(dfd: int | None, name: str) -> str:
+    try:
+        return os.readlink(name, **({"dir_fd": dfd} if dfd is not None else {}))
+    except OSError:
+        return "?"
+
+
+def executable(mode: int) -> bool:
+    return bool(mode & 0o111)
+
+
+def extract(zf: zipfile.ZipFile, infos, dest: Path) -> None:
+    """Распаковать члены архива и вернуть файлам бит исполнения из архива — как `unzip`.
+
+    `zipfile` режимов не ставит: без этого чистый исходник версии расходился бы с
+    установкой, распакованной владельцем руками, на каждом исполняемом файле, и такие
+    файлы читались бы «правками агента».
+    """
+    for info in infos:
+        path = Path(zf.extract(info, dest))
+        mode = info.external_attr >> 16
+        if not info.is_dir() and executable(mode) and not stat.S_ISLNK(mode):
+            path.chmod(0o755)
 
 
 def _only_plain(base: str, names: list[str]) -> list[str]:
@@ -669,63 +876,46 @@ def _only_plain(base: str, names: list[str]) -> list[str]:
 
 def read_plain(path: Path, limit: int = MAX_CODE_FILE) -> bytes | None:
     """Содержимое обычного файла без следования ссылке. Не файл или больше предела — None."""
-    try:
-        fd = os.open(path, os.O_RDONLY | NOFOLLOW | NONBLOCK | BINARY)
-    except OSError:
-        return None
-    with os.fdopen(fd, "rb") as fh:
-        info = os.fstat(fh.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
-            return None
-        return fh.read(limit + 1)
+    return read_member(None, str(path), limit)
 
 
-def snapshot(root: Path | None) -> dict[str, tuple[str, str]]:
-    """Папка кода -> {путь: (вид, отпечаток)}; ссылки не разыменовываются, кэши не в счёт.
+def snapshot(root: Path | None) -> dict[str, tuple[str, str, bool]]:
+    """Папка кода -> {путь: (вид, отпечаток, исполняемый)}; ссылки не разыменовываются.
 
     Вид: «file» (отпечаток — sha256), «link» (куда ведёт), «big» (файл больше предела —
     отпечаток по размеру), «other» (FIFO, сокет, устройство). Корень-ссылка — пусто:
-    папку кода, подменённую ссылкой, я не читаю вовсе.
+    папку кода, подменённую ссылкой, я не читаю вовсе. Кэши и байткод — не в счёт.
     """
-    out: dict[str, tuple[str, str]] = {}
+    out: dict[str, tuple[str, str, bool]] = {}
     if root is None or not os.path.isdir(root) or os.path.islink(root):
         return out
-    for base, dirs, files in os.walk(root, followlinks=False):
-        keep = []
-        for name in dirs:
-            full = os.path.join(base, name)
-            rel = os.path.relpath(full, root).replace(os.sep, "/")
-            if name in CODE_IGNORE_DIRS:
-                continue
-            if os.path.islink(full):
-                out[rel] = ("link", os.readlink(full))
-                continue
-            keep.append(name)
-        dirs[:] = keep
-        for name in files:
-            if name in CODE_IGNORE_NAMES or name.endswith(CODE_IGNORE_SUFFIXES):
-                continue
-            full = os.path.join(base, name)
-            rel = os.path.relpath(full, root).replace(os.sep, "/")
-            try:
-                info = os.lstat(full)
-            except OSError:
-                continue
-            if stat.S_ISLNK(info.st_mode):
-                out[rel] = ("link", os.readlink(full))
-            elif stat.S_ISREG(info.st_mode):
-                blob = read_plain(Path(full))
-                out[rel] = (("file", hashlib.sha256(blob).hexdigest()) if blob is not None
-                            else ("big", str(info.st_size)))
-            else:
-                out[rel] = ("other", "")
+    for rel, st, dfd, name in members(root):
+        if stat.S_ISLNK(st.st_mode):
+            out[rel] = ("link", link_target(dfd, name), False)
+        elif stat.S_ISREG(st.st_mode):
+            blob = read_member(dfd, name)
+            out[rel] = (("file", hashlib.sha256(blob).hexdigest(), executable(st.st_mode))
+                        if blob is not None else ("big", str(st.st_size), False))
+        else:
+            out[rel] = ("other", "", False)
     return out
+
+
+def differs(was: tuple | None, now: tuple | None) -> bool:
+    """Правка ли это агента: другое содержимое, другой вид — или бит исполнения, который
+    агент ПОСТАВИЛ. Снятый бит правкой не считается: его «снимает» и распаковка без
+    режимов (7-Zip, zipfile), и я не отличил бы её от агента."""
+    if was is None or now is None:
+        return was is not now
+    if was[:2] != now[:2]:
+        return True
+    return was[0] == "file" and now[2] and not was[2]
 
 
 def code_edits(base: Path | None, mine: Path | None) -> list[str]:
     """Что в `mine` отличается от чистой `base` — это и есть правки агента."""
     left, right = snapshot(base), snapshot(mine)
-    return sorted(rel for rel in set(left) | set(right) if left.get(rel) != right.get(rel))
+    return sorted(rel for rel in set(left) | set(right) if differs(left.get(rel), right.get(rel)))
 
 
 def is_binary(*blobs: bytes | None) -> bool:
@@ -781,8 +971,38 @@ def unified(name: str, before: bytes | None, after: bytes | None) -> str:
                                         tofile=f"b/{name}" if after is not None else "/dev/null"))
 
 
+def _skip_why(was: tuple | None, now: tuple | None) -> str:
+    """Почему правку не переношу — словами, с тем, что у агента на этом месте."""
+    kind = (now or was or ("?",))[0]
+    if now and now[0] == "link":
+        what = f"у тебя здесь ссылка → {now[1][:200]}"
+    elif now and now[0] == "big":
+        what = f"файл больше {MAX_CODE_FILE // 1024 ** 2} МБ"
+    elif now and now[0] == "other":
+        what = "особый файл (FIFO, сокет, устройство)"
+    elif was and was[0] != "file":
+        what = f"в чистой версии здесь не обычный файл ({kind})"
+    else:
+        what = "не обычный файл"
+    return what + " — такие не переношу; оригинал остался в прежней версии"
+
+
+def _blocked(new: Path, rel: str) -> str:
+    """Где-то выше файла в новой версии стоит не папка (файл или ссылка) -> её путь, иначе ""."""
+    cur = new
+    for part in rel.split("/")[:-1]:
+        cur = cur / part
+        try:
+            mode = os.lstat(cur).st_mode
+        except FileNotFoundError:
+            return ""
+        if not stat.S_ISDIR(mode):
+            return cur.relative_to(new).as_posix()
+    return ""
+
+
 def carry_code(base: Path, mine: Path, new: Path, *, work: Path, labels: tuple[str, str, str],
-               prefix: str) -> dict:
+               prefix: str, budget: list[int] | None = None) -> dict:
     """Перенести правки агента (`mine` против чистой `base`) на новую версию `new` — на месте.
 
     Правило одно на все случаи: новая версия, где она не спорит с агентом, получает его
@@ -792,86 +1012,125 @@ def carry_code(base: Path, mine: Path, new: Path, *, work: Path, labels: tuple[s
       * правили оба, не слилось / двоичный файл    -> вариант выпуска + материал агенту;
       * агент добавил файл                         -> файл агента (если выпуск не добавил свой);
       * агент удалил файл, выпуск его не трогал    -> удалён и в новой;
+      * там, где у агента файл, в новой версии папка (или наоборот) -> как у выпуска + материал;
       * ссылки, огромные и особые файлы            -> не переношу, называю.
+    Бит исполнения агента переезжает вместе с файлом (снятый — нет, см. `differs`).
+    Сбой на одном файле — конфликт этого файла, а не отказ всего обновления.
+    `budget` — сколько байт сторон конфликтов ещё можно держать (общий на tree/ и app/):
+    сверх него конфликт остаётся в списке, а стороны — нет.
     -> отчёт: edited, carried, merged, conflicts, skipped, materials (байты), diff.
     """
+    budget = budget if budget is not None else [MAX_MATERIALS]
     rep: dict = {"edited": [], "carried": [], "merged": [], "conflicts": [], "skipped": [],
                  "materials": [], "diff": []}
+    diff_left = [MAX_DIFF]
     left, right = snapshot(base), snapshot(mine)
+
+    def conflict(name: str, why: str, sides: dict) -> None:
+        size = sum(len(blob) for blob in sides.values() if blob is not None)
+        if size > budget[0]:
+            sides, why = {}, why + " (стороны не поместились в материалы)"
+        else:
+            budget[0] -= size
+        rep["conflicts"].append({"path": name, "why": why})
+        rep["materials"].append({"path": name, "why": why, **sides})
+
+    def add_diff(name: str, before: bytes | None, after: bytes | None) -> None:
+        if diff_left[0] <= 0:
+            return
+        if max(len(before or b""), len(after or b"")) > MAX_DIFF_FILE:
+            text = f"--- a/{name}\n+++ b/{name}\n@@ файл больше {MAX_DIFF_FILE // 1024} КБ — дифф не строю @@\n"
+        else:
+            text = unified(name, before, after)
+        diff_left[0] -= len(text)
+        rep["diff"].append(text if diff_left[0] > 0 else text + "\n… дифф обрезан: правок больше, чем помещается\n")
+
     for rel in sorted(set(left) | set(right)):
         was, now = left.get(rel), right.get(rel)
-        if was == now:
+        if not differs(was, now):
             continue
         name = f"{prefix}/{rel}"
         rep["edited"].append(name)
         if (now and now[0] != "file") or (was and was[0] != "file"):
-            rep["skipped"].append({"path": name, "why": "ссылка, огромный или особый файл — "
-                                                        "такие не переношу"})
+            rep["skipped"].append({"path": name, "why": _skip_why(was, now)})
             continue
-        target = new / rel
-        present = target.exists() or target.is_symlink()
-        theirs = read_plain(target) if present else None
-        if present and theirs is None:
-            rep["conflicts"].append({"path": name, "why": "в новой версии на этом месте не файл"})
-            rep["materials"].append({"path": name, "mine": read_plain(mine / rel) if now else None,
-                                     "why": "в новой версии на этом месте не файл"})
-            continue
-        mine_blob = read_plain(mine / rel) if now else None
-        base_blob = read_plain(base / rel) if was else None
-        if (now and mine_blob is None) or (was and base_blob is None):
-            rep["skipped"].append({"path": name, "why": "файл изменился или пропал, пока я его читал"})
-            continue
-        rep["diff"].append(unified(name, base_blob, mine_blob))
-
-        def conflict(why: str, merged: bytes | None = None) -> None:
-            rep["conflicts"].append({"path": name, "why": why})
-            rep["materials"].append({"path": name, "why": why, "mine": mine_blob, "base": base_blob,
-                                     "theirs": theirs, "merged": merged})
-
-        if now and was:                                          # агент правил
-            if theirs is None:
-                conflict("в новой версии этого файла нет")
-            elif theirs == base_blob:
-                _write_code(target, mine_blob)
-                rep["carried"].append(name)
-            elif theirs == mine_blob:
-                rep["carried"].append(name)
-            elif is_binary(mine_blob, base_blob, theirs):
-                conflict("двоичный файл, и выпуск его тоже менял")
-            else:
-                merged, count, why = merge_text(mine_blob, base_blob, theirs, labels, work)
-                if merged is not None and count == 0:
-                    _write_code(target, merged)
-                    rep["merged"].append(name)
-                elif merged is not None:
-                    conflict(f"ты и выпуск меняли одни и те же строки (конфликтов: {count})", merged)
+        sides: dict = {}
+        try:
+            mine_blob = read_plain(mine / rel) if now else None
+            base_blob = read_plain(base / rel) if was else None
+            if (now and mine_blob is None) or (was and base_blob is None):
+                rep["skipped"].append({"path": name, "why": "файл изменился или пропал, пока я его читал"})
+                continue
+            sides = {"mine": mine_blob, "base": base_blob}
+            target = new / rel
+            wall = _blocked(new, rel) if now else ""
+            if wall:
+                conflict(name, f"в новой версии `{prefix}/{wall}` — файл, а у тебя там папка", sides)
+                continue
+            present = target.exists() or target.is_symlink()
+            theirs = read_plain(target) if present else None
+            if present and theirs is None:
+                conflict(name, "в новой версии на этом месте не файл (папка или ссылка)", sides)
+                continue
+            sides["theirs"] = theirs
+            add_diff(name, base_blob, mine_blob)
+            mine_x = bool(now and now[2])
+            theirs_x = bool(theirs is not None and executable(os.lstat(target).st_mode))
+            if now and was:                                          # агент правил
+                if theirs is None:
+                    conflict(name, "в новой версии этого файла нет", sides)
+                elif theirs == base_blob:
+                    _write_code(target, mine_blob, mine_x or theirs_x)
+                    rep["carried"].append(name)
+                elif theirs == mine_blob:
+                    _write_code(target, mine_blob, mine_x or theirs_x)
+                    rep["carried"].append(name)
+                elif is_binary(mine_blob, base_blob, theirs):
+                    conflict(name, "двоичный файл, и выпуск его тоже менял", sides)
                 else:
-                    conflict(f"слить не вышло: {why}")
-        elif now:                                                # агент добавил
-            if theirs is None:
-                _write_code(target, mine_blob)
-                rep["carried"].append(name)
-            elif theirs == mine_blob:
-                rep["carried"].append(name)
-            else:
-                conflict("выпуск добавил свой файл с тем же именем")
-        else:                                                    # агент удалил
-            if theirs is None:
-                rep["carried"].append(name)
-            elif theirs == base_blob:
-                target.unlink()
-                rep["carried"].append(name)
-            else:
-                conflict("ты этот файл удалил, а выпуск его изменил — в новой версии он есть")
+                    merged, count, why = merge_text(mine_blob, base_blob, theirs, labels, work)
+                    if merged is not None and count == 0:
+                        _write_code(target, merged, mine_x or theirs_x)
+                        rep["merged"].append(name)
+                    elif merged is not None:
+                        conflict(name, f"ты и выпуск меняли одни и те же строки (конфликтов: {count})",
+                                 {**sides, "merged": merged})
+                    else:
+                        conflict(name, f"слить не вышло: {why}", sides)
+            elif now:                                                # агент добавил
+                if theirs is None or theirs == mine_blob:
+                    _write_code(target, mine_blob, mine_x or theirs_x)
+                    rep["carried"].append(name)
+                else:
+                    conflict(name, "выпуск добавил свой файл с тем же именем", sides)
+            else:                                                    # агент удалил
+                if theirs is None:
+                    rep["carried"].append(name)
+                elif theirs == base_blob:
+                    target.unlink()
+                    rep["carried"].append(name)
+                else:
+                    conflict(name, "ты этот файл удалил, а выпуск его изменил — в новой версии он есть",
+                             sides)
+        except OSError as exc:
+            conflict(name, f"не перенёсся: {exc}", sides)
     return rep
 
 
-def _write_code(target: Path, blob: bytes) -> None:
+def _write_code(target: Path, blob: bytes, exec_bit: bool = False) -> None:
     """Запись в НОВУЮ поставку: она распакована мной и агенту ещё не видна."""
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".tmp-{target.name}-{secrets.token_hex(4)}")
-    tmp.write_bytes(blob)
-    os.replace(tmp, target)
+    try:
+        tmp.write_bytes(blob)
+        tmp.chmod(0o755 if exec_bit else 0o644)
+        os.replace(tmp, target)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def materials_readme(report: dict, from_version: str, to_version: str, *, no_base: str = "") -> str:
@@ -965,12 +1224,22 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         env = os.environ
+        try:
+            keep = int(env.get("HELENE_UPDATE_KEEP") or 2)
+        except ValueError:
+            keep = 2
         return cls(Path(env.get("HELENE_DIR") or IN_CONTAINER_ROOT),
                    container=(env.get("HELENE_CONTAINER") or "helene").strip(),
                    releases=(env.get("HELENE_UPDATE_RELEASES") or DEFAULT_RELEASES).strip(),
                    asset=(env.get("HELENE_UPDATE_ASSET") or "Helene").strip(),
-                   keep=int(env.get("HELENE_UPDATE_KEEP") or 2),
-                   insecure=(env.get("HELENE_UPDATE_INSECURE") or "") == "1")
+                   keep=keep, insecure=(env.get("HELENE_UPDATE_INSECURE") or "") == "1")
+
+
+#: Прерванное обновление довожу не чаще раза в минуту: сбой, который повторяется (демон
+#: докера перезапускается, диск полон), не должен крутить откат каждые три секунды.
+RECOVER_EVERY = 60.0
+#: Столько попыток откат делает сам; дальше — итог «нужен человек».
+ROLLBACK_TRIES = 3
 
 
 class Updater:
@@ -992,6 +1261,9 @@ class Updater:
         self.busy = ""
         self.started_utc = utc()
         self.reexec = False
+        self.recover_at = 0.0
+        self.recover_said = ""
+        self.save_error = ""
         self._last_probe: dict = {}
         self.state: dict = self._load()
 
@@ -1008,12 +1280,28 @@ class Updater:
         return data if isinstance(data, dict) else {}
 
     def save(self) -> None:
+        """Состояние — на диск, расписка — агенту и окну.
+
+        Не бросает: на полном диске обновление, идущее прямо сейчас (или его откат), важнее
+        записи о нём. Состояние тогда живёт в памяти, пока я жив, а почему — в журнале и в
+        записке о себе.
+        """
         with self.lock:
             self.state["updated_utc"] = utc(self.clock())
-            self.home.mkdir(parents=True, exist_ok=True)
             tmp = self.home / f".state-{secrets.token_hex(4)}.json"
-            tmp.write_text(json.dumps(self.state, ensure_ascii=False, indent=1), "utf-8")
-            os.replace(tmp, self._state_path())
+            try:
+                self.home.mkdir(parents=True, exist_ok=True)
+                tmp.write_text(json.dumps(self.state, ensure_ascii=False, indent=1), "utf-8")
+                os.replace(tmp, self._state_path())
+                self.save_error = ""
+            except OSError as exc:
+                if not self.save_error:
+                    log(f"состояние не записалось: {exc}")
+                self.save_error = f"состояние исполнителя не записывается: {exc}"
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
             try:
                 self.shared.write(*CTL, protocol.UPDATE_RECEIPT, self.receipt())
             except OSError as exc:
@@ -1025,7 +1313,7 @@ class Updater:
                 "release", "backup", "extensions", "checks", "rollback_checks", "carried",
                 "confirmed", "created_utc", "updated_utc", "awaiting_until_utc",
                 "awaiting_since_epoch", "finished_utc", "finished_epoch", "rollback", "phase",
-                "code_preview", "agent_code", "trial", "data_restored")
+                "code_preview", "agent_code", "trial", "data_restored", "owner_files")
         out = {"schema": protocol.UPDATE_SCHEMA}
         out.update({k: self.state[k] for k in keys if k in self.state})
         if self.state.get("state") == "awaiting":
@@ -1092,7 +1380,7 @@ class Updater:
             rows = json.loads(out)
         except ValueError as exc:
             raise UpdateError(f"docker inspect ответил не JSON: {exc}") from exc
-        if not rows:
+        if not rows or not isinstance(rows[0], dict):
             raise UpdateError(f"контейнер {self.cfg.container} не найден")
         return describe(rows[0])
 
@@ -1127,10 +1415,35 @@ class Updater:
         self.health = {"ok": not problems, "why": "; ".join(problems), "info": info}
         return self.health
 
+    def compose_files(self, info: dict) -> list[Path]:
+        """Файлы compose, с которыми поднят контейнер агента: основной — из установки, и
+        свои файлы владельца (override с его портами, томами, сетями), если лежат в `server/`.
+
+        Поднять новую версию без них — молча потерять его настройки; файл вне установки
+        мне не виден — тогда отказ словами, а не подъём «примерно как было».
+        """
+        main = self.install / "server" / "docker-compose.yml"
+        listed = [Path(os.path.normpath(raw)) for raw in info.get("config_files") or []]
+        if listed and main not in listed:
+            raise UpdateError(f"агент поднят не из server/docker-compose.yml, а из "
+                              f"{', '.join(map(str, listed))} — такой контейнер я не обновляю")
+        extra = []
+        for path in listed:
+            if path == main:
+                continue
+            if self.install / "server" not in path.parents:
+                raise UpdateError(f"агент поднят ещё и с {path} — вне server/ установки я этот файл не "
+                                  "вижу; положи его в server/ и подними агента с ним оттуда")
+            if not path.is_file():
+                raise UpdateError(f"агент поднят ещё и с {path}, а файла нет")
+            extra.append(path)
+        return [main, *extra]
+
     def beat(self) -> None:
         row = {"schema": SCHEMA, "pid": os.getpid(), "started_utc": self.started_utc,
                "beat_utc": utc(self.clock()), "beat_epoch": self.clock(),
-               "ok": bool(self.health.get("ok")), "why": self.health.get("why", ""),
+               "ok": bool(self.health.get("ok")),
+               "why": self.health.get("why", "") or self.save_error,
                "busy": self.busy, "install": str(self.install), "container": self.cfg.container,
                "current_version": self.current_version(), "latest": self.latest,
                "state": self.state.get("state", ""), "plan_id": self.state.get("id", "")}
@@ -1172,6 +1485,14 @@ class Updater:
         root = self.pristine_root / version
         return root if all((root / name).is_dir() for name in CODE_DIRS) else None
 
+    def shipped(self, version: str) -> set[str] | None:
+        """Список файлов выпуска версии (лежит рядом с её чистым исходником), если он есть."""
+        try:
+            rows = json.loads((self.pristine_root / version / "manifest.json").read_text("utf-8"))
+        except (OSError, ValueError):
+            return None
+        return {str(row) for row in rows} if version and isinstance(rows, list) else None
+
     def ensure_pristine(self, version: str) -> tuple[Path | None, str]:
         """Чистый исходник версии: из кэша или скачав её выпуск. -> (папка, почему нет)."""
         if not version:
@@ -1185,19 +1506,21 @@ class Updater:
             return None, f"исходника {version} нет в выпусках ({exc})"
         self.step(f"качаю исходник {version} — чистую версию, против которой видны правки агента")
         downloads = self.home / "downloads"
-        downloads.mkdir(parents=True, exist_ok=True)
-        archive = downloads / f"base-{rel['asset']}"
         tmp = self.pristine_root / f".tmp-{version}-{secrets.token_hex(4)}"
+        archive = downloads / f"base-{rel['asset']}"
         try:
+            downloads.mkdir(parents=True, exist_ok=True)
             got = self.net.download(rel["url"], archive, MAX_ARCHIVE)
             if got != rel["sha256"]:
                 return None, f"сумма исходника {version} не сошлась"
             check_zip(archive)
             with zipfile.ZipFile(archive) as zf:
-                for info in zf.infolist():
-                    parts = Path(info.filename).parts
-                    if len(parts) >= 2 and parts[1] in CODE_DIRS:
-                        zf.extract(info, tmp)
+                extract(zf, [info for info in zf.infolist()
+                             if len(Path(info.filename).parts) >= 2
+                             and Path(info.filename).parts[1] in CODE_DIRS], tmp)
+                shipped = sorted("/".join(Path(info.filename).parts[1:]) for info in zf.infolist()
+                                 if not info.is_dir() and len(Path(info.filename).parts) >= 2)
+            (tmp / "Helene" / "manifest.json").write_text(json.dumps(shipped), "utf-8")
             dest = self.pristine_root / version
             if dest.exists():
                 shutil.rmtree(dest)
@@ -1217,12 +1540,18 @@ class Updater:
         if self.pristine(version) is not None:
             return
         tmp = self.pristine_root / f".tmp-{version}-{secrets.token_hex(4)}"
-        for name in CODE_DIRS:
-            shutil.copytree(root / name, tmp / name, symlinks=True)
-        dest = self.pristine_root / version
-        if dest.exists():
-            shutil.rmtree(dest)
-        os.rename(tmp, dest)
+        try:
+            for name in CODE_DIRS:
+                shutil.copytree(root / name, tmp / name, symlinks=True)
+            shipped = sorted(rel for rel, st, _dfd, _name in members(root, ignore=False)
+                             if not stat.S_ISDIR(st.st_mode))
+            (tmp / "manifest.json").write_text(json.dumps(shipped), "utf-8")
+            dest = self.pristine_root / version
+            if dest.exists():
+                shutil.rmtree(dest)
+            os.rename(tmp, dest)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def code_preview(self) -> dict:
         """До «да»: правил ли агент свой код и переедут ли его правки. Для карточки."""
@@ -1248,11 +1577,15 @@ class Updater:
     # --- ход --------------------------------------------------------------------
 
     def tick(self) -> None:
-        """Один шаг цикла: истечение, «да»/«нет», испытание, новый план."""
+        """Один шаг цикла: прерванное — довести, истечение, «да»/«нет», испытание, новый план."""
         st = self.state
         current = st.get("state")
-        if current in ("confirmed", "running"):
-            return                       # исполнение идёт синхронно; сюда — только после сбоя
+        if current in ("checking", "confirmed", "running") or (
+                current == "trial" and st.get("phase") not in (None, "trial")):
+            # Сюда попадаю только после сбоя: сверка и исполнение идут синхронно внутри
+            # тика. Довожу прерванное — повторяя, пока не выйдет, но не чаще раза в минуту.
+            self.recover_due()
+            return
         if current == "trial":
             self.trial_tick()
             return
@@ -1277,10 +1610,27 @@ class Updater:
                         self.execute(who)
                     else:
                         self.state["confirmed"] = who
-                        self.finish("declined", "человек ответил «нет» — ничего не тронуто")
+                        self.finish("declined", ("агент отозвал план" if who["by"] == "agent"
+                                                 else "владелец ответил «нет»") + " — ничего не тронуто")
                 return
         if fresh:
             self.consider(plan)
+
+    def recover_due(self) -> None:
+        """Довести прерванное — с паузой между попытками; неудача — словами в расписку."""
+        now = self.clock()
+        if now < self.recover_at:
+            return
+        self.recover_at = now + RECOVER_EVERY
+        try:
+            self.recover()
+            self.recover_said = ""
+        except Exception as exc:  # noqa: BLE001 — повторю через минуту, но не молча
+            why = said(exc)[:600]
+            log(f"довести прерванное обновление не вышло: {why} — повторю через {RECOVER_EVERY:.0f} с")
+            if why != self.recover_said:
+                self.recover_said = why
+                self.step("довести прерванное не вышло — повторяю раз в минуту", ok=False, note=why)
 
     def consider(self, raw: dict) -> None:
         """Новый план: сверить с выпусками и местом, показать человеку и ждать «да».
@@ -1305,15 +1655,27 @@ class Updater:
         if not self.health["ok"]:
             self.finish("refused", f"исполнитель не может работать: {self.health['why']}")
             return
-        self.step("сверяю план с выпусками")
+        try:
+            self.compose_files(self.health["info"])
+        except UpdateError as exc:
+            self.finish("refused", str(exc))
+            return
         current = self.current_version()
+        if not current:
+            # Без паспорта «только новее» не проверить: пропусти я эту проверку — план
+            # поставил бы любую версию из выпусков, в том числе старую.
+            self.finish("refused", "не знаю, какая версия стоит: паспорта helene-build.json в корне "
+                                   "установки нет или он не читается. Без него «только новее» не "
+                                   "проверить — обнови руками (README-СЕРВЕР, §3.2)")
+            return
+        self.step("сверяю план с выпусками")
         try:
             rel = self.release_for(plan["version"])
         except UpdateError as exc:
             self.finish("refused", str(exc))
             return
         target = rel["version"]
-        if current and protocol.version_tuple(target) <= protocol.version_tuple(current):
+        if protocol.version_tuple(target) <= protocol.version_tuple(current):
             self.finish("refused", f"стоит {current}, а {target} не новее — ставить нечего")
             return
         data_bytes = dir_size(self.data) if plan["backup"] == "full" else 0
@@ -1333,7 +1695,7 @@ class Updater:
             state="awaiting", nonce=secrets.token_hex(12), awaiting_since_epoch=now,
             awaiting_until_epoch=now + protocol.UPDATE_AWAIT_HOURS * 3600,
             awaiting_until_utc=utc(now + protocol.UPDATE_AWAIT_HOURS * 3600),
-            note=(f"жду подтверждения: {current or '?'} → {target}; архив {mb(rel['size'])}, "
+            note=(f"жду подтверждения: {current} → {target}; архив {mb(rel['size'])}, "
                   f"sha256 {rel['sha256'][:12]}…; копия — {backup['words']}"
                   + (f" ({mb(data_bytes)})" if data_bytes else "") + f"; {preview['note']}"))
         self.step("жду «да» человека")
@@ -1341,16 +1703,26 @@ class Updater:
     # --- исполнение -------------------------------------------------------------
 
     def compose(self, *args: str, file: Path | None = None, timeout: float = 600):
-        info = self.health.get("info") or {}
-        if not info.get("project"):
-            # Перезапуск посреди испытания: о себе я ещё не спрашивал — спрашиваю сейчас.
-            info = self.check_self().get("info") or {}
-        if not info.get("project"):
+        """`docker compose` проекта агента.
+
+        Проект и файлы — из моего состояния, записанные при «да»: контейнера агента в этот
+        момент может и не быть (упал посреди пересоздания, владелец сделал `rm`), а
+        поднимать его обратно всё равно надо.
+        """
+        st = self.state
+        project = st.get("project") or (self.health.get("info") or {}).get("project")
+        if not project:
+            # Перезапуск без записанного проекта (состояние прежней версии): спрашиваю себя.
+            project = (self.check_self().get("info") or {}).get("project")
+        if not project:
             raise UpdateError(f"compose-проект контейнера {self.cfg.container} не виден: "
                               f"{self.health.get('why') or 'нет меток'}")
-        compose_file = file or (self.install / "server" / "docker-compose.yml")
-        return self.docker.run(["compose", "-p", info["project"], "-f", str(compose_file), *args],
-                               env=self.state.get("carried") or {}, timeout=timeout)
+        files = [file] if file else [Path(p) for p in st.get("compose_files") or []] or [
+            self.install / "server" / "docker-compose.yml"]
+        cmd = ["compose", "-p", project]
+        for path in files:
+            cmd += ["-f", str(path)]
+        return self.docker.run([*cmd, *args], env=st.get("carried") or {}, timeout=timeout)
 
     def _must(self, done: tuple[int, str, str], what: str) -> str:
         code, out, err = done
@@ -1363,6 +1735,8 @@ class Updater:
         st = self.state
         plan = st["plan"]
         bdir = self.home / "backups" / stamp()
+        while bdir.exists():                    # два обновления в одну секунду — не одна папка
+            bdir = bdir.with_name(f"{bdir.name[:16]}-{secrets.token_hex(2)}")
         st.update(state="confirmed", confirmed=who, backup_dir=str(bdir), phase="prepare",
                   swapped=[], note=f"«да» получено ({who.get('by') or '?'}) — начинаю")
         st.pop("nonce", None)
@@ -1372,15 +1746,18 @@ class Updater:
             if not self.health["ok"]:
                 raise UpdateError(f"исполнитель не может работать: {self.health['why']}")
             info = self.health["info"]
+            files = self.compose_files(info)
             before = carried(info)
             before["__data"] = info["mounts"].get(IN_CONTAINER_DATA, "")
             for name in CODE_DIRS:
                 before[f"__{name}"] = str(self.install / name)
+            before["__models_seen"] = self.models_seen(info["mounts"].get("/models"))
             repo, tag = image_repo(info["image"])
             st.update(state="running", carried={k: v for k, v in before.items()
                                                 if not k.startswith("__")},
                       carried_before=before, image_repo=repo, image_tag=tag,
-                      old_image_id=info["image_id"], service=info["service"],
+                      old_image_id=info["image_id"], project=info["project"],
+                      service=info["service"], compose_files=[str(p) for p in files],
                       code_mounted=code_mounted(info),
                       rollback_tag=f"helene-rollback-{bdir.name}")
             self.save()
@@ -1399,13 +1776,23 @@ class Updater:
             results = self._verify(st["to_version"], plan["checks"], plan["wait_min"])
         except Exception as exc:  # noqa: BLE001 — любой сбой: вернуть или откатить, не застрять
             self.step("подмена не удалась", ok=False, note=said(exc))
-            self._rollback(said(exc))
+            if st.get("stopped"):
+                self._rollback(said(exc))
+            else:
+                self._abort_unstopped(said(exc))
             return
-        if all(r["ok"] for r in results):
-            self._after_checks()
-        else:
+        self._settle(results)
+
+    def _settle(self, results: list[dict]) -> None:
+        """Проверки новой версии прошли — испытание (или успех без мозга); нет — откат."""
+        if not all(r["ok"] for r in results):
             bad = "; ".join(f"{r['title']}: {r['note']}" for r in results if not r["ok"])
             self._rollback(f"проверки не прошли — {bad}")
+            return
+        try:
+            self._after_checks()
+        except Exception as exc:  # noqa: BLE001 — зелёные проверки не должны кончаться «идёт» навсегда
+            self._rollback(f"после проверок: {said(exc)}")
 
     def _prepare(self, bdir: Path) -> None:
         """Всё, что можно сделать, не трогая живого агента."""
@@ -1435,7 +1822,7 @@ class Updater:
                               f"{mb(unpacked + data_bytes + SPACE_MARGIN)}, свободно {mb(free)}")
         self.step(f"распаковываю ({mb(unpacked)}; runtime/ для Windows серверу не нужен)")
         with zipfile.ZipFile(archive) as zf:
-            zf.extractall(stage, members=[m for m in zf.infolist() if not server_skips(m.filename)])
+            extract(zf, [m for m in zf.infolist() if not server_skips(m.filename)], stage)
         root = stage / "Helene"
         passport = check_layout(root, st["to_version"])
         relay = root / "helene-relay"
@@ -1459,10 +1846,21 @@ class Updater:
         st["built"] = True
         self._must(self.compose("build", st["service"], file=root / "server" / "docker-compose.yml",
                                 timeout=45 * 60), "образ не собрался")
-        self.step("образ собран")
+        code, out, _err = self.docker.run(["image", "inspect", "-f", "{{.Id}}",
+                                           f"{st['image_repo']}:{st['image_tag']}"], timeout=60)
+        if code == 0 and out.strip().startswith("sha256:"):
+            st["new_image_id"] = out.strip()
+        self.step("образ собран", note=st.get("new_image_id", ""))
         self._rehearse_extensions()
 
     def _rehearse_extensions(self) -> None:
+        """Расширения владельца — под новым образом, до подмены.
+
+        Репетиция исполняет код расширений из `data/` агента, поэтому она заперта: без
+        сети, без прав, только на чтение, с потолком памяти, процессов и процессора, и под
+        своим именем — чтобы убрать контейнер наверняка: по таймауту `subprocess` убивает
+        только клиента docker, а контейнер с кодом агента жил бы дальше вне всякого проекта.
+        """
         st = self.state
         found = sorted(p.parent.name for p in (self.data / "extensions").glob("*/extension.json")
                        if not p.is_symlink())
@@ -1470,22 +1868,32 @@ class Updater:
             st["extensions"] = {"ok": True, "summary": "расширений нет"}
             return
         self.step(f"репетирую расширения под новой версией: {', '.join(found)}")
-        code, out, err = self.docker.run([
-            "run", "--rm", "--network", "none",
-            "-v", f"{self.data}:{IN_CONTAINER_DATA}:ro",
-            "-v", f"{self.install / 'helene.json'}:{IN_CONTAINER_CONFIG}:ro",
-            f"{st['image_repo']}:{st['image_tag']}",
-            "python", "app/localharness/runner.py", "--check-extensions",
-            "--data", IN_CONTAINER_DATA, "--host-version", st["to_version"]], timeout=300)
+        name = f"helene-rehearsal-{stamp().lower()}"
         try:
-            report = json.loads(out[out.index("{"):])
-        except ValueError:
-            report = {"ok": False, "summary": f"репетиция не ответила: {(err or out).strip()[-300:]}"}
-        st["extensions"] = {"ok": bool(report.get("ok")), "summary": str(report.get("summary") or "")}
-        if not report.get("ok") and not st["plan"].get("force_extensions"):
+            code, out, err = self.docker.run([
+                "run", "--rm", "--name", name, "--network", "none",
+                "--memory", "1g", "--cpus", "1", "--pids-limit", "256",
+                "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+                "--read-only", "--tmpfs", "/tmp:rw,size=64m",
+                "-e", "PYTHONDONTWRITEBYTECODE=1", "-e", "HOME=/tmp",
+                "-v", f"{self.data}:{IN_CONTAINER_DATA}:ro",
+                "-v", f"{self.install / 'helene.json'}:{IN_CONTAINER_CONFIG}:ro",
+                f"{st['image_repo']}:{st['image_tag']}",
+                "python", "app/localharness/runner.py", "--check-extensions",
+                "--data", IN_CONTAINER_DATA, "--host-version", st["to_version"]],
+                timeout=300, limit=PROBE_LIMIT)
+        finally:
+            self.docker.run(["rm", "-f", name], timeout=60)
+        try:
+            report = _dict(json.loads(out[out.index("{"):]))
+        except (ValueError, RecursionError):
+            report = {"ok": False, "summary": f"репетиция не ответила: {_text((err or out).strip()[-300:], 300)}"}
+        summary = _text(report.get("summary") or "", 600)
+        st["extensions"] = {"ok": report.get("ok") is True, "summary": summary}
+        if report.get("ok") is not True and not st["plan"].get("force_extensions"):
             raise UpdateError(f"расширения владельца не грузятся под {st['to_version']}: "
-                              f"{report.get('summary')} — план с force_extensions обновит всё равно")
-        self.step("расширения", ok=bool(report.get("ok")), note=str(report.get("summary") or ""))
+                              f"{summary} — план с force_extensions обновит всё равно")
+        self.step("расширения", ok=report.get("ok") is True, note=summary)
 
     def _undo_prepare(self) -> str:
         """Вернуть всё, что успела подготовка. Не бросает: -> что не вернулось (или "")."""
@@ -1501,17 +1909,102 @@ class Updater:
                 self._retag_old()
         except UpdateError as exc:
             problems.append(str(exc))
+        else:
+            self._drop_images(tag=True)
         self._cleanup_stage()
         return "; ".join(problems)
+
+    def _abort_unstopped(self, why: str) -> None:
+        """Сбой до остановки агента: папки, тег и образ — назад; контейнер не трогаю.
+
+        Пересоздавать работающего агента незачем: пока его не остановили, он жил прежним
+        образом и прежними папками (подменённые папки монтирование держит по самой папке,
+        а не по пути). Проверяю только, что он на ногах."""
+        left = self._undo_prepare()
+        down = self._ensure_running()
+        self.finish("failed", f"не вышло: {why[:600]} — агента не останавливал, "
+                              + (f"вернулось не всё: {left}" if left else "прежний код и образ на месте")
+                              + (f"; {down}" if down else ""))
+
+    def _ensure_running(self) -> str:
+        """Агент на ногах? Нет — поднять прежним образом. -> что не вышло (или "")."""
+        try:
+            if self.inspect().get("running"):
+                return ""
+        except UpdateError:
+            pass
+        try:
+            code, out, err = self.compose("up", "-d", "--no-build", "--no-deps",
+                                          self.state.get("service") or "helene", timeout=300)
+        except UpdateError as exc:
+            return f"агент стоит и не поднялся: {exc}"
+        return "" if code == 0 else f"агент стоит и не поднялся: {(err or out).strip()[-300:]}"
+
+    def _space_for_data(self, when: str) -> None:
+        """Место под копию data/ — по её размеру СЕЙЧАС: сборка образа ест тот же диск, а
+        агент пишет, пока не остановлен. Сервер общий: забить его диск доверху нельзя."""
+        size = dir_size(self.data)
+        free = shutil.disk_usage(self.install).free
+        self.state.setdefault("backup", {})["data_bytes"] = size
+        if free < size + SPACE_MARGIN:
+            raise UpdateError(f"{when}: под копию data/ места не хватает — нужно около "
+                              f"{mb(size + SPACE_MARGIN)}, свободно {mb(free)}. План с копией только "
+                              "кода (backup: code) займёт меньше")
+
+    def _backup_config(self, bdir: Path) -> None:
+        """Копия helene.json — для ручного случая и для возврата вместе с данными."""
+        src = self.install / "helene.json"
+        try:
+            size = os.stat(src).st_size
+        except OSError:
+            return
+        if size > MAX_CONFIG:
+            # Его пишет агент: гигабайтный helene.json забил бы копией диск.
+            self.step(f"helene.json больше {mb(MAX_CONFIG)} — в копию не беру", ok=False)
+            return
+        shutil.copy2(src, bdir / "helene.json")
+
+    def _backup_data(self, bdir: Path) -> None:
+        """Копия data/ — рядом, с меткой завершения: годной считается только законченная.
+
+        Частичная копия (диск кончился посреди) удаляется: вернуть её «из копии» значило бы
+        заменить живую память агента обрывком."""
+        st = self.state
+        partial, dest = bdir / "data.partial", bdir / "data"
+        self.step(f"копирую data/ ({mb(st['backup'].get('data_bytes') or 0)})")
+        shutil.rmtree(partial, ignore_errors=True)
+        try:
+            shutil.copytree(self.data, partial, symlinks=True, ignore=_only_plain)
+        except BaseException:
+            shutil.rmtree(partial, ignore_errors=True)
+            raise
+        os.rename(partial, dest)
+        st["data_backup"] = str(dest)
+        self.step("копия data/ готова")
+
+    def models_seen(self, source: str | None) -> int | None:
+        """Сколько записей в папке моделей, если она лежит в установке (мне видна), иначе None."""
+        if not source:
+            return None
+        path = Path(os.path.normpath(source))
+        if self.install not in path.parents:
+            return None
+        try:
+            return len(os.listdir(path))
+        except OSError:
+            return 0
 
     def _switch(self, bdir: Path) -> None:
         """Подмена: прежняя поставка в копию, новая на место; остановка, копия data/,
         перенос правок агента, подъём."""
         st = self.state
         root = Path(st["stage_dir"]) / "Helene"
+        full = st["plan"]["backup"] == "full"
+        if full:
+            self._space_for_data("после сборки")
         code_dir = bdir / "code"
         code_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(self.install / "helene.json", bdir / "helene.json")
+        self._backup_config(bdir)
         # Чистый исходник новой версии — база следующего обновления: запомнить ДО того,
         # как в него лягут правки агента.
         self.save_pristine(root, st["to_version"])
@@ -1520,25 +2013,47 @@ class Updater:
             if entry.name in KEEP_IN_PLACE:
                 continue
             target = self.install / entry.name
-            # Запись — ДО переноса: упади я между двумя rename, откат знает, что вернуть.
+            # Запись — ДО переноса: упади я между двумя rename, откат знает, что было
+            # (а `_undo_code` смотрит, где что лежит на самом деле, а не верит записи).
             st["swapped"].append({"name": entry.name, "had_old": target.exists() or target.is_symlink()})
             self.save()
-            if target.exists() or target.is_symlink():
+            if st["swapped"][-1]["had_old"]:
                 os.rename(target, code_dir / entry.name)
             os.rename(entry, target)
+        self._carry_owner_files(code_dir)
         self._wait_idle()
         self.step("останавливаю агента")
-        self._must(self.compose("stop", "-t", "60", st["service"], timeout=180), "агент не остановился")
+        # «Остановлен» — ДО команды: упади я посреди неё, восстановление поднимет агента,
+        # а не решит, что он работает, и не оставит его лежать со словами «всё как было».
         st["stopped"] = True
-        if st["plan"]["backup"] == "full":
-            self.step(f"копирую data/ ({mb(st['backup'].get('data_bytes') or 0)})")
-            shutil.copytree(self.data, bdir / "data", symlinks=True, ignore=_only_plain)
-            st["data_backup"] = str(bdir / "data")
-            self.step("копия data/ готова")
+        self.save()
+        self._must(self.compose("stop", "-t", "60", st["service"], timeout=180), "агент не остановился")
+        if full:
+            self._space_for_data("после остановки агента")
+            self._backup_data(bdir)
         self._carry_agent_code(bdir)
         self.step(f"поднимаю {st['to_version']}")
+        st["new_started"] = True
+        self.save()
         self._must(self.compose("up", "-d", "--no-build", "--force-recreate", "--no-deps",
                                 st["service"], timeout=300), "новая версия не поднялась")
+
+    def _carry_owner_files(self, code_dir: Path) -> None:
+        """Своё владельца в папках поставки (модели в `server/models`, `server/.env`, его
+        override) — в новые папки. Код агента (`tree/`, `app/`) переносит `_carry_agent_code`."""
+        st = self.state
+        moved: list[str] = []
+        shipped = self.shipped(st.get("from_version") or "")
+        for row in st.get("swapped") or []:
+            name = row["name"]
+            if name in CODE_DIRS or not row.get("had_old"):
+                continue
+            old, new = code_dir / name, self.install / name
+            if old.is_dir() and not old.is_symlink() and new.is_dir() and not new.is_symlink():
+                moved += carry_owner_files(old, new, name, shipped)
+        st["owner_files"] = moved
+        if moved:
+            self.step("своё владельца в папках поставки — в новую", note=", ".join(moved[:20]))
 
     def _carry_agent_code(self, bdir: Path) -> None:
         """Правки агента в `tree/` и `app/` — на новую версию; что не легло — ему материалом.
@@ -1553,36 +2068,19 @@ class Updater:
         base_root = self.pristine(from_version)
         report: dict = {"mounted": True, "edited": [], "carried": [], "merged": [], "conflicts": [],
                         "skipped": [], "folder": ""}
-        materials: list[dict] = []
-        diffs: list[str] = []
         if base_root is None:
-            why = st.get("base_why") or "чистого исходника прежней версии нет"
-            report["no_base"] = why
-            old = [(name, rel) for name in CODE_DIRS for rel in snapshot(bdir / "code" / name)]
-            self.step("правки агента не с чем сравнить — отдаю ему прежний код целиком", ok=False,
-                      note=why)
-            folder = self._materials_folder(to_version)
-            written = 0
-            try:
-                for name, rel in old:
-                    blob = read_plain(bdir / "code" / name / rel)
-                    if blob is not None:
-                        self.shared.put(("workspace", folder, "old-code", name, *rel.split("/")), blob)
-                        written += 1
-                self.shared.put(("workspace", folder, "README.md"),
-                                materials_readme(report, from_version, to_version,
-                                                 no_base=why).encode("utf-8"))
-                report["folder"] = f"workspace/{folder}"
-            except OSError as exc:
-                report["materials_error"] = f"прежний код не лёг в workspace/{folder}: {exc}"
-            report["old_code_files"] = written
+            self._give_old_code(bdir, report, st.get("base_why") or "чистого исходника прежней версии нет")
             st["agent_code"] = report
+            self._remember_carried(bdir)
             return
         self.step("переношу правки агента на новую версию")
         labels = (f"агент ({from_version})", f"чистая {from_version}", f"выпуск {to_version}")
+        materials: list[dict] = []
+        diffs: list[str] = []
+        budget = [MAX_MATERIALS]
         for name in CODE_DIRS:
             rep = carry_code(base_root / name, bdir / "code" / name, self.install / name,
-                             work=self.home / "tmp", labels=labels, prefix=name)
+                             work=self.home / "tmp", labels=labels, prefix=name, budget=budget)
             for key in ("edited", "carried", "merged", "conflicts", "skipped"):
                 report[key].extend(rep[key])
             materials.extend(rep["materials"])
@@ -1611,7 +2109,43 @@ class Updater:
                    + (f", не переносил {len(report['skipped'])}" if report["skipped"] else ""))
         report["summary"] = summary
         st["agent_code"] = report
+        self._remember_carried(bdir)
         self.step("правки агента", ok=not report["conflicts"], note=summary)
+
+    def _give_old_code(self, bdir: Path, report: dict, why: str) -> None:
+        """Без чистой базы правок не видно: прежний код агента — ему целиком, с потолком."""
+        st = self.state
+        from_version, to_version = st.get("from_version") or "", st["to_version"]
+        report["no_base"] = why
+        self.step("правки агента не с чем сравнить — отдаю ему прежний код целиком", ok=False, note=why)
+        folder = self._materials_folder(to_version)
+        written, left = 0, MAX_MATERIALS
+        try:
+            for name in CODE_DIRS:
+                for rel, kind in snapshot(bdir / "code" / name).items():
+                    if kind[0] != "file":
+                        continue
+                    blob = read_plain(bdir / "code" / name / rel)
+                    if blob is None or len(blob) > left:
+                        continue
+                    left -= len(blob)
+                    self.shared.put(("workspace", folder, "old-code", name, *rel.split("/")), blob)
+                    written += 1
+            self.shared.put(("workspace", folder, "README.md"),
+                            materials_readme(report, from_version, to_version, no_base=why).encode("utf-8"))
+            report["folder"] = f"workspace/{folder}"
+        except OSError as exc:
+            report["materials_error"] = f"прежний код не лёг в workspace/{folder}: {exc}"
+        report["old_code_files"] = written
+
+    def _remember_carried(self, bdir: Path) -> None:
+        """Снимок кода новой версии сразу после переноса: по нему откат увидит, что агент
+        правил уже В НОВОЙ версии (на испытании), и отдаст ему эти правки."""
+        try:
+            snap = {name: snapshot(self.install / name) for name in CODE_DIRS}
+            (bdir / "code-after-carry.json").write_text(json.dumps(snap), "utf-8")
+        except (OSError, ValueError) as exc:
+            log(f"снимок кода после переноса не записался: {exc}")
 
     def _materials_folder(self, version: str) -> str:
         """Свежая папка материалов в доме агента: `update-<версия>`, занята — с меткой времени."""
@@ -1635,8 +2169,7 @@ class Updater:
 
     def _agent_busy(self) -> bool:
         reader = self.shared.read(*CTL, "desk_inbox", ".reader.json")
-        fresh = time.time() - float(reader.get("at") or 0) < 60
-        return bool(reader.get("busy")) and fresh
+        return reader.get("busy") is True and self.clock() - _num(reader.get("at")) < 60
 
     def _verify(self, version: str, checks: list[str], wait_min: int,
                 key: str = "checks") -> list[dict]:
@@ -1655,12 +2188,13 @@ class Updater:
                         "restart_count": 0, "env": {}, "ports": {}, "mounts": {}}
             probe: dict = {}
             if info.get("running"):
-                code, out, err = self.docker.run(["exec", self.cfg.container, "python", "-c", PROBE],
-                                                 timeout=60)
+                code, out, _err = self.docker.run(["exec", self.cfg.container, "python", "-c", PROBE],
+                                                  timeout=60, limit=PROBE_LIMIT)
                 try:
-                    probe = json.loads(out.strip().splitlines()[-1]) if code == 0 else {}
-                except (ValueError, IndexError):
+                    probe = _dict(json.loads(out.strip().splitlines()[-1])) if code == 0 else {}
+                except (ValueError, IndexError, RecursionError):
                     probe = {}
+            info["models_seen"] = self.models_seen((info.get("mounts") or {}).get("/models"))
             self._last_probe = probe
             results = evaluate(probe, info, checks, version, st.get("carried_before") or {})
             st[key] = results
@@ -1689,9 +2223,8 @@ class Updater:
     def _after_checks(self) -> None:
         """Механика прошла — дальше слово агента. Мозга нет — спросить некого, так и сказать."""
         st = self.state
-        brain = ((((self._last_probe or {}).get("state") or {}).get("body") or {})
-                 .get("brain") or {}).get("configured")
-        if not brain:
+        body = _dict(_dict(_dict(self._last_probe).get("state")).get("body"))
+        if _dict(body.get("brain")).get("configured") is not True:
             self._success(extra="испытание агентом пропущено: мозг не настроен — проверь его сам")
             return
         now = self.clock()
@@ -1706,60 +2239,87 @@ class Updater:
         self.step("испытание: агент проверяет себя")
 
     def trial_tick(self) -> None:
-        """Слово на испытании или истёкший срок."""
+        """Слово на испытании или истёкший срок.
+
+        Исход — слово и что из него следует («принимаю» / «откат») — записывается ДО любых
+        действий, и расписка сразу уходит из «испытания»: упади я посреди отката или
+        уборки, перезапуск доводит начатое, а не ждёт срока испытания с остановленным
+        агентом; и кнопка «Принять» во время отката не находит испытания, которого нет.
+        """
         st = self.state
-        trial = st.get("trial") or {}
+        trial = _dict(st.get("trial"))
         verdict = self.shared.read(*CTL, protocol.UPDATE_VERDICT)
         if (verdict.get("id") == st.get("id") and trial.get("key")
                 and verdict.get("key") == trial.get("key")
                 and verdict.get("verdict") in protocol.UPDATE_VERDICTS):
-            self.shared.remove(*CTL, protocol.UPDATE_VERDICT)
             trial["verdict"] = {"verdict": verdict["verdict"], "by": str(verdict.get("by") or "")[:40],
                                 "words": str(verdict.get("words") or "")[:1500],
                                 "at_utc": str(verdict.get("at_utc") or "")[:40]}
-            st["trial"] = trial
             who = "агент" if trial["verdict"]["by"] == "agent" else "владелец"
             words = trial["verdict"]["words"]
             if verdict["verdict"] == "accept":
-                self._success(extra=f"{who} принял на испытании" + (f": «{words[:300]}»" if words else ""))
+                extra = f"{who} принял на испытании" + (f": «{words[:300]}»" if words else "")
+                st.update(trial=trial, state="running", phase="accepting", success_extra=extra)
+                self.save()
+                self.shared.remove(*CTL, protocol.UPDATE_VERDICT)
+                self._success(extra=extra)
             else:
-                self._rollback(f"{who} на испытании сказал «сломано»" + (f": «{words[:300]}»" if words else ""))
+                why = f"{who} на испытании сказал «сломано»" + (f": «{words[:300]}»" if words else "")
+                st.update(trial=trial, state="running", phase="rollback", rollback_why=why)
+                self.save()
+                self.shared.remove(*CTL, protocol.UPDATE_VERDICT)
+                self._rollback(why)
             return
-        if self.clock() < float(trial.get("until_epoch") or 0):
+        if self.clock() < _num(trial.get("until_epoch")):
             return
         allowance = int(trial.get("minutes") or protocol.UPDATE_TRIAL_DEFAULT) * 60
-        if self._agent_busy() and float(trial.get("extended") or 0) + TRIAL_EXTEND <= allowance:
-            trial["extended"] = float(trial.get("extended") or 0) + TRIAL_EXTEND
-            trial["until_epoch"] = float(trial["until_epoch"]) + TRIAL_EXTEND
+        if self._agent_busy() and _num(trial.get("extended")) + TRIAL_EXTEND <= allowance:
+            trial["extended"] = _num(trial.get("extended")) + TRIAL_EXTEND
+            trial["until_epoch"] = _num(trial.get("until_epoch")) + TRIAL_EXTEND
             trial["until_utc"] = utc(trial["until_epoch"])
             st["trial"] = trial
             self.step("агент в ходе — продлеваю испытание на 10 минут")
             return
         trial["verdict"] = {"verdict": "timeout", "by": "", "words": "", "at_utc": utc(self.clock())}
-        st["trial"] = trial
-        self._rollback(f"агент не ответил на испытании за {trial.get('minutes')} мин"
-                       + (" (с продлением)" if trial.get("extended") else ""))
+        why = (f"агент не ответил на испытании за {trial.get('minutes')} мин"
+               + (" (с продлением)" if trial.get("extended") else ""))
+        st.update(trial=trial, state="running", phase="rollback", rollback_why=why)
+        self.save()
+        self._rollback(why)
 
     # --- откат и итог -----------------------------------------------------------
 
     def _undo_code(self) -> list[str]:
+        """Вернуть прежнюю поставку на место. -> что вернулось.
+
+        Смотрит, где что лежит на самом деле, а не верит записи: строка «перенесено»
+        пишется ДО переименований, и упади я между записью и первым rename, прежняя папка
+        так и стоит на месте — унести её в `failed-new` значило бы оставить агента без кода.
+        Повторный вход (после сбоя посреди отката) ничего не ломает.
+        """
         st = self.state
         bdir = Path(st["backup_dir"])
         failed = bdir / "failed-new"
-        failed.mkdir(parents=True, exist_ok=True)
-        notes = []
+        back = []
         for row in reversed(st.get("swapped") or []):
             name = row["name"]
             target = self.install / name
-            if (target.exists() or target.is_symlink()) and not (failed / name).exists():
-                os.rename(target, failed / name)
             old = bdir / "code" / name
-            if row.get("had_old") and (old.exists() or old.is_symlink()):
+            old_there = old.exists() or old.is_symlink()
+            if row.get("had_old") and not old_there:
+                continue                  # прежнее не уезжало (или уже вернулось) — оно на месте
+            if target.exists() or target.is_symlink():
+                failed.mkdir(parents=True, exist_ok=True)
+                dest = failed / name
+                if dest.exists() or dest.is_symlink():
+                    dest = failed / f"{name}.{secrets.token_hex(3)}"
+                os.rename(target, dest)
+            if row.get("had_old"):
                 os.rename(old, target)
-                notes.append(name)
+                back.append(name)
         st["swapped"] = []
         self.save()
-        return notes
+        return back
 
     def _retag_old(self) -> None:
         st = self.state
@@ -1767,12 +2327,25 @@ class Updater:
                                     f"{st['image_repo']}:{st['image_tag']}"], timeout=60),
                    "прежний образ не вернулся на место")
 
+    def _drop_images(self, *, tag: bool) -> None:
+        """После возврата — свои лишние образы: собранный мной новый (по id; контейнер им уже
+        не живёт — докер без -f иначе и не удалит) и, если просили, тег отката (копии, к
+        которой он относится, нет — ретеншн его никогда бы не снял)."""
+        st = self.state
+        new_id = st.get("new_image_id")
+        if new_id and new_id != st.get("old_image_id"):
+            self.docker.run(["rmi", new_id], timeout=120)
+        if tag and st.get("tagged"):
+            self.docker.run(["rmi", f"{st['image_repo']}:{st['rollback_tag']}"], timeout=120)
+
     def _restore_data(self) -> str:
+        """Данные (и helene.json) — из копии: только законченной и только когда прежняя версия
+        на данных новой не поднимается."""
         st = self.state
         bdir = Path(st["backup_dir"])
         saved, after = bdir / "data", bdir / "data-after-failed"
-        if not saved.is_dir():
-            return "копии data/ нет (план был без неё) — вернуть данные нечем"
+        if not st.get("data_backup") or not saved.is_dir():
+            return "законченной копии data/ нет — вернуть данные нечем"
         try:
             if self.data.exists() and not after.exists():
                 os.rename(self.data, after)
@@ -1781,31 +2354,48 @@ class Updater:
         except OSError as exc:
             return f"data/ не возвращена ({exc}); копия до обновления — {saved}"
         st["data_restored"] = True
-        return f"data/ возвращена из копии; то, что успела записать новая версия, — в {after}"
+        words = f"data/ возвращена из копии; то, что успела записать новая версия, — в {after}"
+        config = bdir / "helene.json"
+        try:
+            if config.is_file():
+                live = self.install / "helene.json"
+                shutil.copyfile(live, bdir / "helene.json.after-failed")
+                shutil.copyfile(config, live)          # тот же inode: он смонтирован файлом
+                words += "; helene.json тоже из копии (нынешний — рядом, .after-failed)"
+        except OSError as exc:
+            words += f"; helene.json не вернулся: {exc}"
+        return words
 
     def _rollback(self, why: str) -> None:
         """Откат: прежние код и образ. Память агента — нет, пока без этого можно.
 
         «Откат кода не откатывает память — это её жизнь, а не версия продукта» (Егор,
-        25.09): переписка и дневник за время новой версии — такая же жизнь агента. Копия
-        `data/` идёт в дело, только если прежняя версия на новых данных не поднимается.
+        25.09): переписка и дневник за время новой версии — такая же жизнь агента, и
+        `helene.json` (настройки, которые владелец или агент поменяли за это время) — тоже.
+        Копия `data/` и `helene.json` идёт в дело, только если прежняя версия на данных
+        новой не поднимается.
+
+        Повторный вход (после сбоя посреди отката) идёт тем же путём: каждый шаг смотрит,
+        что уже сделано. Сбой — ещё попытка через минуту; после трёх — итог «нужен человек».
         """
         st = self.state
-        st["phase"] = "rollback"
+        if not (st.get("state") == "running" and st.get("phase") == "rollback"):
+            st.update(state="running", phase="rollback", rollback_why=why)
+        why = st.get("rollback_why") or why
         self.step("откатываю", ok=False, note=why)
+        if not st.get("stopped"):
+            self._abort_unstopped(why)
+            return
+        bdir = Path(st["backup_dir"])
         notes: list[str] = []
-        if st.get("stopped") or st.get("swapped"):
-            self.compose("stop", "-t", "30", st["service"], timeout=120)
+        results: list[dict] = []
         try:
+            shutil.rmtree(bdir / "data.partial", ignore_errors=True)
+            self._must(self.compose("stop", "-t", "30", st["service"], timeout=120), "агент не остановился")
             back = self._undo_code()
             notes.append("прежний код на месте" + (f" ({len(back)} частей)" if back else "")
                          + ("; правки агента в коде — как были до обновления"
                             if st.get("code_mounted") else ""))
-            saved = Path(st["backup_dir"]) / "helene.json"
-            if saved.is_file() and saved.read_bytes() != (self.install / "helene.json").read_bytes():
-                # Тот же inode: helene.json смонтирован в контейнер файлом.
-                shutil.copyfile(saved, self.install / "helene.json")
-                notes.append("helene.json возвращён")
             self._retag_old()
             self._must(self.compose("up", "-d", "--no-build", "--force-recreate", "--no-deps",
                                     st["service"], timeout=300), "прежняя версия не поднялась")
@@ -1814,11 +2404,11 @@ class Updater:
                       and (c != "code" or st.get("code_mounted"))]
             wait = min(int(st["plan"]["wait_min"]), 10)
             results = self._verify(st.get("from_version") or "", checks, wait, key="rollback_checks")
-            if not all(r["ok"] for r in results) and not st.get("data_restored") \
-                    and (Path(st["backup_dir"]) / "data").is_dir():
-                self.step("прежняя версия на новых данных не поднялась — возвращаю и данные",
-                          ok=False)
-                self.compose("stop", "-t", "30", st["service"], timeout=120)
+            if (not all(r["ok"] for r in results) and st.get("new_started") and st.get("data_backup")
+                    and not st.get("data_restored")):
+                self.step("прежняя версия на данных новой не поднялась — возвращаю и данные", ok=False)
+                self._must(self.compose("stop", "-t", "30", st["service"], timeout=120),
+                           "агент не остановился")
                 notes.append("прежняя версия на данных новой не поднялась — " + self._restore_data())
                 try:
                     self.beat()      # из копии вернулась и моя прежняя записка о себе
@@ -1830,15 +2420,33 @@ class Updater:
                                        key="rollback_checks")
             elif not st.get("data_restored"):
                 notes.append("данные агента не трогал — это его жизнь, а не версия продукта"
-                             + (f"; копия до обновления — {st['backup_dir']}/data"
-                                if (Path(st["backup_dir"]) / "data").is_dir() else ""))
-        except Exception as exc:  # noqa: BLE001 — любой сбой: вернуть или откатить, не застрять
+                             + (f"; копия до обновления — {st['data_backup']}"
+                                if st.get("data_backup") else ""))
+        except Exception as exc:  # noqa: BLE001 — любой сбой: ещё попытка, потом — человек
+            tries = int(st.get("rollback_tries") or 0) + 1
+            st["rollback_tries"] = tries
+            if tries < ROLLBACK_TRIES:
+                self.recover_at = self.clock() + RECOVER_EVERY
+                self.step(f"откат не удался (попытка {tries} из {ROLLBACK_TRIES}) — повторю через минуту",
+                          ok=False, note=said(exc))
+                raise
             st["rollback"] = {"ok": False, "notes": notes, "why": said(exc)[:600]}
             self._cleanup_stage()
             self.finish("failed", f"обновление не прошло ({why[:300]}), и откат НЕ поднялся: {said(exc)}. "
                                   f"Копии — {st['backup_dir']}; нужен человек на хосте")
             return
         ok = all(r["ok"] for r in results)
+        if ok:
+            self._drop_images(tag=False)
+        try:
+            after = self._after_update_edits(bdir)
+            if after.get("count"):
+                notes.append(f"правки кода, сделанные агентом в {st['to_version']} после подъёма "
+                             f"({after['count']}), — ему в {after.get('folder') or 'workspace'}"
+                             + (f" ({after['error']})" if after.get("error") else ""))
+            self._rollback_note(why, after)
+        except Exception as exc:  # noqa: BLE001 — подсказка агенту, не условие отката
+            log(f"правки агента после подъёма не отдались: {said(exc)}")
         st["rollback"] = {"ok": ok, "notes": notes, "checks": results}
         self._cleanup_stage()
         if ok:
@@ -1848,11 +2456,88 @@ class Updater:
             bad = "; ".join(f"{r['title']}: {r['note']}" for r in results if not r["ok"])
             self.finish("failed", f"обновление не прошло ({why[:300]}), откат поднят, но не "
                                   f"проверился: {bad}. Копии — {st['backup_dir']}")
+        # Мой код вернулся вместе с прежней поставкой: перезапускаюсь им.
+        self.reexec = True
+
+    def _after_update_edits(self, bdir: Path) -> dict:
+        """Правки агента в коде НОВОЙ версии, сделанные после её подъёма (на испытании), — ему.
+
+        Откат уносит новую версию в копию (`failed-new/`), куда агенту хода нет. Что он успел
+        в ней поправить, видно против снимка сразу после переноса его прежних правок."""
+        st = self.state
+        try:
+            saved = _dict(json.loads((bdir / "code-after-carry.json").read_text("utf-8")))
+        except (OSError, ValueError):
+            return {}
+        failed = bdir / "failed-new"
+        changed = []
+        for name in CODE_DIRS:
+            before = {rel: tuple(v) for rel, v in _dict(saved.get(name)).items() if isinstance(v, list)}
+            now = snapshot(failed / name)
+            changed += [(name, rel, now.get(rel)) for rel in sorted(set(before) | set(now))
+                        if differs(before.get(rel), now.get(rel))]
+        if not changed:
+            return {}
+        folder = (str((st.get("agent_code") or {}).get("folder") or "").removeprefix("workspace/")
+                  or self._materials_folder(st["to_version"]))
+        sub = "after-update" if not self.shared.exists("workspace", folder, "after-update") \
+            else f"after-update-{stamp()}"
+        out = {"count": len(changed), "files": [f"{n}/{r}" for n, r, _ in changed][:50],
+               "folder": f"workspace/{folder}/{sub}", "gone": [], "written": 0}
+        left = MAX_MATERIALS
+        try:
+            for name, rel, now in changed:
+                blob = read_plain(failed / name / rel) if now and now[0] == "file" else None
+                if blob is None or len(blob) > left:
+                    out["gone"].append(f"{name}/{rel}")
+                    continue
+                left -= len(blob)
+                self.shared.put(("workspace", folder, sub, name, *rel.split("/")), blob)
+                out["written"] += 1
+        except OSError as exc:
+            out["error"] = f"легли не все: {exc}"
+        return out
+
+    def _rollback_note(self, why: str, after: dict) -> None:
+        """В папке материалов обновления — что переход не состоялся: README там описывает
+        перенос правок на версию, которой у агента теперь нет."""
+        st = self.state
+        folder = str((st.get("agent_code") or {}).get("folder") or "").removeprefix("workspace/")
+        if not folder and after.get("folder"):
+            folder = after["folder"].removeprefix("workspace/").split("/")[0]
+        if not folder:
+            return
+        was = st.get("from_version") or "прежней версии"
+        lines = [f"# Обновление {st.get('from_version') or '?'} → {st['to_version']} откачено", "",
+                 f"Почему: {why}", "",
+                 f"Ты снова на {was}: твой код — как был до обновления. README.md рядом описывает "
+                 f"перенос твоих правок на {st['to_version']} — сейчас он не о том, что у тебя стоит.", ""]
+        if after.get("count"):
+            sub = after["folder"].rsplit("/", 1)[-1]
+            lines += [f"Правки кода, сделанные тобой в {st['to_version']} после подъёма "
+                      f"({after['count']}), — в `{sub}/`: в {was} их нет. Нужны — перенеси сам.", ""]
+        if after.get("gone"):
+            lines.append("Удалённое или не обычные файлы (не копировал): "
+                         + ", ".join(f"`{p}`" for p in after["gone"][:20]))
+        try:
+            self.shared.put(("workspace", folder, f"ROLLBACK-{stamp()}.md"),
+                            ("\n".join(lines) + "\n").encode("utf-8"))
+        except OSError as exc:
+            log(f"записка об откате не легла: {exc}")
 
     def _success(self, extra: str = "") -> None:
+        """Итог «прошло». Сначала — метка «принимаю» в состоянии: упади я посреди уборки,
+        перезапуск доведёт итог, а не забудет слово и не откатит принятое по сроку."""
         st = self.state
+        if not (st.get("state") == "running" and st.get("phase") == "accepting"):
+            st.update(state="running", phase="accepting", success_extra=extra)
+            self.save()
+        extra = st.get("success_extra") or extra
         self._cleanup_stage()
-        self._retention()
+        try:
+            self._retention()
+        except Exception as exc:  # noqa: BLE001 — уборка старого не отменяет принятого
+            log(f"уборка старых копий не удалась: {said(exc)}")
         checked = ", ".join(r["name"] for r in st.get("checks") or [])
         parts = [f"{st.get('from_version') or '?'} → {st['to_version']}: проверено {checked}"]
         if extra:
@@ -1862,6 +2547,8 @@ class Updater:
             parts.append(code["summary"] + (f" (материалы — {code['folder']})" if code.get("conflicts") else ""))
         elif code.get("no_base"):
             parts.append(f"правки агента не с чем было сравнить — его прежний код в {code.get('folder')}")
+        if st.get("owner_files"):
+            parts.append("своё владельца в папках поставки перенесено: " + ", ".join(st["owner_files"][:10]))
         parts.append(f"прежняя версия отложена ({st['backup_dir']}), образ "
                      f"{st['image_repo']}:{st['rollback_tag']}")
         self.finish("done", ". ".join(part[:1].upper() + part[1:] for part in parts))
@@ -1880,55 +2567,136 @@ class Updater:
                 path.unlink()
 
     def _retention(self) -> None:
-        """Держу последние N копий (и их образы) и исходники двух последних версий."""
+        """Держу последние N копий (и их образы) и исходники двух последних версий; остатки
+        прерванных распаковок и слияний — прочь."""
         root = self.home / "backups"
-        dirs = sorted((p for p in root.iterdir() if p.is_dir() and re.fullmatch(r"\d{8}T\d{6}Z", p.name)),
+        dirs = sorted((p for p in root.iterdir()
+                       if p.is_dir() and re.fullmatch(r"\d{8}T\d{6}Z(-[0-9a-f]{4})?", p.name)),
                       key=lambda p: p.name) if root.is_dir() else []
         for old in dirs[:-self.cfg.keep]:
             shutil.rmtree(old, ignore_errors=True)
             self.docker.run(["rmi", f"{self.state['image_repo']}:helene-rollback-{old.name}"], timeout=120)
             log(f"старая копия убрана: {old.name}")
         if self.pristine_root.is_dir():
+            for junk in self.pristine_root.glob(".tmp-*"):
+                shutil.rmtree(junk, ignore_errors=True)
             versions = sorted((p for p in self.pristine_root.iterdir()
                                if p.is_dir() and protocol.version_tuple(p.name)),
                               key=lambda p: protocol.version_tuple(p.name))
             for old in versions[:-2]:
                 shutil.rmtree(old, ignore_errors=True)
+        for transient in ("stage", "tmp"):
+            shutil.rmtree(self.home / transient, ignore_errors=True)
 
     def recover(self) -> None:
-        """Старт после сбоя посреди обновления: довести или откатить, но не бросить."""
+        """Прерванное обновление (перезапуск исполнителя или сбой тика): довести или
+        откатить, но не бросить. Бросает — тогда `recover_due` повторит через минуту."""
         st = self.state
-        if st.get("state") == "confirmed":
+        current, phase = st.get("state"), st.get("phase")
+        if current == "checking":
+            self.finish("refused", "исполнитель перезапустился посреди сверки плана — ничего не "
+                                   "тронуто; положи план снова")
+            return
+        if current == "confirmed":
             self.finish("failed", "исполнитель перезапустился сразу после «да» — ничего не тронуто; "
                                   "положи план снова")
             return
-        if st.get("state") != "running":
+        if current == "trial" and phase in ("rollback", "accepting"):
+            st["state"] = current = "running"      # расписка прежнего исполнителя: слово уже сказано
+        if current != "running":
             return                        # испытание, ожидание «да», итоги — идут своим ходом
         self.check_self()
-        phase = st.get("phase")
-        log(f"после сбоя: обновление {st.get('id')} было на шаге «{st.get('step')}» ({phase})")
+        log(f"довожу обновление {st.get('id')}: шаг «{st.get('step')}» ({phase})")
         if phase == "prepare":
             left = self._undo_prepare()
+            down = self._ensure_running()
             self.finish("failed", "исполнитель перезапустился посреди подготовки; агент не "
                                   "останавливался, " + (f"но вернулось не всё: {left}" if left
-                                                        else "всё возвращено как было"))
+                                                        else "всё возвращено как было")
+                        + (f"; {down}" if down else ""))
             return
         if phase in ("switch", "verify"):
             if not st.get("stopped"):
-                # Агента я ещё не останавливал: он работает прежним образом, и вернуть
-                # надо только папки и тег — без перезапуска его контейнера.
-                left = self._undo_prepare()
-                self.finish("failed", "исполнитель перезапустился посреди подмены папок, агента "
-                                      "не останавливал — " + (f"вернулось не всё: {left}" if left
-                                                              else "прежний код и образ на месте"))
+                self._abort_unstopped("исполнитель перезапустился посреди подмены папок")
+                return
+            if not st.get("new_started"):
+                self._rollback("исполнитель перезапустился посреди подмены, новая версия не поднималась")
                 return
             results = self._verify(st["to_version"], st["plan"]["checks"], 5)
             if all(r["ok"] for r in results):
-                self._after_checks()
-                return
-            self._rollback("исполнитель перезапустился посреди подмены, новая версия не проверилась")
+                self._settle(results)
+            else:
+                self._rollback("исполнитель перезапустился посреди подмены, новая версия не проверилась")
             return
-        self._rollback("исполнитель перезапустился посреди отката — довожу откат")
+        if phase == "accepting":
+            self._success(extra=st.get("success_extra") or "")
+            return
+        self._rollback(st.get("rollback_why") or "исполнитель перезапустился посреди отката — довожу откат")
+
+
+def carry_owner_files(old: Path, new: Path, prefix: str, shipped: set[str] | None = None) -> list[str]:
+    """То, что владелец положил в папку поставки сам, — в новую папку той же поставки.
+
+    Модели по умолчанию живут в `server/models` (compose: `${HELENE_MODELS:-./models}`),
+    рядом — его `server/.env` и свой override. Выпуск их не несёт, и подмена папки целиком
+    унесла бы их в копию: голос молча онемел бы, а ретеншн потом удалил бы модели вместе с
+    копией. Жёсткими ссылками, где можно: гигабайты не копируются, а прежняя папка в копии
+    остаётся целой для отката.
+
+    Что есть в новом выпуске — за выпуском. Что было в ПРЕЖНЕМ выпуске (`shipped` — его
+    список файлов), а новый убрал, — не воскрешаю: это не владельца. Списка нет (прежняя
+    версия ставилась без меня и её исходника не нашлось) — переношу всё, чего нет в новом.
+    -> перенесённое, по верхним именам («server/models», «server/.env»).
+    """
+    out: list[str] = []
+    for rel, st, _dfd, _name in members(old):
+        path = f"{prefix}/{rel}"
+        src, dst = old / rel, new / rel
+        if dst.exists() or dst.is_symlink() or (shipped is not None and path in shipped):
+            continue
+        if _blocked(new, rel):
+            continue                          # в новом выпуске на месте папки — файл
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if stat.S_ISLNK(st.st_mode):
+            os.symlink(os.readlink(src), dst)
+        elif stat.S_ISREG(st.st_mode):
+            _link_or_copy(src, dst)
+        else:
+            continue
+        top = f"{prefix}/{rel.split('/')[0]}"
+        if top not in out:
+            out.append(top)
+    return out
+
+
+def _link_or_copy(src, dst):
+    try:
+        os.link(src, dst, follow_symlinks=False)
+    except OSError:
+        shutil.copy2(src, dst, follow_symlinks=False)
+    return dst
+
+
+def keep_self_copy(install: Path) -> None:
+    """Копия своего кода в `.updater/self/` — запасной вход compose исполнителя.
+
+    Подмена кладёт новую поставку двумя переименованиями, и между ними `server/updater/`
+    нет. Перезапуск контейнера исполнителя ровно в этот миг (хост перезагрузился) без
+    запасного входа крутил бы пустое место вечно, а довести подмену могу только я сам.
+    """
+    here = Path(__file__).resolve().parent
+    dest = install / ".updater" / "self"
+    if here == dest.resolve():
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in ("updater.py", "protocol.py"):
+        blob = (here / name).read_bytes()
+        target = dest / name
+        if target.is_file() and target.read_bytes() == blob:
+            continue
+        tmp = dest / f".{name}.{secrets.token_hex(3)}"
+        tmp.write_bytes(blob)
+        os.replace(tmp, target)
 
 
 def main() -> int:
@@ -1936,6 +2704,10 @@ def main() -> int:
     updater = Updater(cfg)
     log(f"исполнитель обновлений: установка {cfg.install}, контейнер {cfg.container}, "
         f"выпуски {cfg.releases}")
+    try:
+        keep_self_copy(cfg.install)
+    except OSError as exc:
+        log(f"запасная копия своего кода не легла: {exc}")
     health = updater.check_self()
     log("готов" if health["ok"] else f"работать не могу: {health['why']}")
 
@@ -1948,7 +2720,6 @@ def main() -> int:
             time.sleep(BEAT_EVERY)
 
     threading.Thread(target=beating, name="beat", daemon=True).start()
-    updater.recover()
     last_self = time.monotonic()
     while True:
         try:
@@ -1956,19 +2727,19 @@ def main() -> int:
                 updater.check_self()
                 last_self = time.monotonic()
             updater.refresh_latest()
+            # Прерванное обновление (перезапуск посреди него) тик доводит сам: `recover_due`.
             updater.tick()
         except Exception as exc:  # noqa: BLE001 — один сбой тика не должен ронять исполнителя
             log(f"тик упал: {type(exc).__name__}: {exc}")
-            # Сбой посреди исполнения не должен оставить расписку навсегда в «идёт»:
-            # довести или откатить тем же путём, что после перезапуска исполнителя.
-            if updater.state.get("state") in ("confirmed", "running"):
-                try:
-                    updater.recover()
-                except Exception as again:  # noqa: BLE001
-                    log(f"восстановление тоже упало: {type(again).__name__}: {again}")
         if updater.reexec:
-            log("перезапускаюсь новым кодом")
-            os.execv(sys.executable, [sys.executable, str(cfg.install / "server" / "updater" / "updater.py")])
+            updater.reexec = False
+            target = cfg.install / "server" / "updater" / "updater.py"
+            if target.is_file():
+                log("перезапускаюсь кодом установки")
+                try:
+                    os.execv(sys.executable, [sys.executable, str(target)])
+                except OSError as exc:
+                    log(f"перезапуск не удался ({exc}) — работаю прежним кодом")
         time.sleep(3)
 
 

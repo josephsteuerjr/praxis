@@ -1560,34 +1560,61 @@ def boundary_word(row: dict) -> tuple[str, str]:
     return WORD, note
 
 
-def _update_report_due() -> None:
-    """Итог обновления на сервере — записка в окно и ход агента, как при рождении (27.09).
+_UPDATE_TRIES = 3          # столько ходов по записке обновления, дальше — только записка
+_UPDATE_RETRY_SEC = 120.0  # пауза между ними: мозг, упавший на минуту, успевает подняться
 
-    Отметка «рассказано» ставится ДО хода: упавший ход не должен повторяться на каждом
-    тике, а записка всё равно лежит в окне — владелец увидит итог и без слова агента.
+
+def _update_report_due() -> None:
+    """Испытание или итог обновления на сервере — записка в окно и ход агента (27.09).
+
+    Как при рождении: записка ложится в память ОДИН раз, а «рассказано» ставится только
+    по факту состоявшегося хода. Упавший ход (мозг недоступен, раннер убит посреди)
+    повторяется — до трёх раз с паузой: на испытании молчание агента значит откат, и
+    потерять записку «проверь себя» из-за одной ошибки модели — значит откатить рабочую
+    версию. У испытания и итога одного плана — разные `source_id`: с одинаковым память
+    жизни сочла бы итог повтором испытания и не записала бы его.
     """
     if _tree is None or _desk is None:
         return
     receipt = updates.pending_report(_tree)
     if receipt is None:
         return
-    updates.mark_reported(_tree, receipt)
+    plan_id, state = str(receipt.get("id") or ""), str(receipt.get("state") or "")
+    mark = updates.report_mark(_tree)
+    same = mark.get("id") == plan_id and mark.get("state") == state
+    tries = int(mark.get("tries") or 0) if same else 0
+    if same and time.time() < float(mark.get("retry_at") or 0.0):
+        return
     note = updates.report_note(receipt, owner=_speaker or "владелец")
     now = _now()
-    source_id = f"update-{receipt.get('id') or int(now.timestamp())}"
-    _desk.archive(note, outgoing=False, now=now, sender="Hélène")
-    _desk.life(note, direction="in", actor="Hélène", source_id=source_id, now=now)
-    log.info("обновление: итог %s (%s → %s) — записка в окне", receipt.get("state"),
-             receipt.get("from_version"), receipt.get("to_version"))
+    source_id = f"update-{plan_id or int(now.timestamp())}-{state}"
+    if not (same and mark.get("noted")):
+        _desk.archive(note, outgoing=False, now=now, sender="Hélène")
+        _desk.life(note, direction="in", actor="Hélène", source_id=source_id, now=now)
+        log.info("обновление: %s (%s → %s) — записка в окне", state,
+                 receipt.get("from_version"), receipt.get("to_version"))
     try:
         import llm
-        if not llm.configured():
-            log.info("обновление: мозг не настроен — итог только запиской")
-            return
+        brain = bool(llm.configured())
     except Exception:
+        brain = False
+    if not brain:
+        updates.mark_reported(_tree, receipt, done=True, tries=tries, noted=True)
+        log.info("обновление: мозг не настроен — только запиской")
         return
-    outcome = _turn_in_window(source_id, speaker=updates.SYSTEM_SPEAKER, origin_text=note)
-    log.info("обновление: отчёт агента — %s", outcome)
+    tries += 1
+    # До хода — «записка лежит, попытка N»: убитый посреди хода раннер не положит её
+    # второй раз, а последняя попытка закрывает отметку и без удачи.
+    updates.mark_reported(_tree, receipt, done=tries >= _UPDATE_TRIES, tries=tries, noted=True,
+                          retry_at=time.time() + _UPDATE_RETRY_SEC)
+    outcome = "failed"
+    try:
+        outcome = _turn_in_window(source_id, speaker=updates.SYSTEM_SPEAKER, origin_text=note)
+    except Exception:
+        log.exception("обновление: ход по записке упал")
+    if outcome in ("spoken", "silent", "deferred"):
+        updates.mark_reported(_tree, receipt, done=True, tries=tries, noted=True)
+    log.info("обновление: ход агента по записке — %s (попытка %d из %d)", outcome, tries, _UPDATE_TRIES)
 
 
 _BIRTH_TRIES = 5           # столько попыток первого хода, дальше — словами владельцу

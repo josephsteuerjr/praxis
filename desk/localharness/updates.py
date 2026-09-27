@@ -267,9 +267,20 @@ def pending_report(tree: Path) -> dict | None:
         return None
 
 
-def mark_reported(tree: Path, receipt: dict) -> None:
+def mark_reported(tree: Path, receipt: dict, **how) -> None:
+    """Отметка по паре (план, состояние): done — рассказано; tries/noted/retry_at — ход ещё
+    повторится (записка уже лежит, второй раз её не класть)."""
     _control().update_mark_reported(Path(tree), str(receipt.get("id") or ""),
-                                    str(receipt.get("state") or "*"))
+                                    str(receipt.get("state") or "*"), **how)
+
+
+def report_mark(tree: Path) -> dict:
+    """Нынешняя отметка «рассказано» (пусто, если её нет или не читается)."""
+    try:
+        return _control().update_report_mark(Path(tree))
+    except Exception:
+        log.debug("отметка итога обновления не прочиталась", exc_info=True)
+        return {}
 
 
 def _checks_line(title: str, rows) -> str:

@@ -639,8 +639,11 @@ def update_verdict(tree: Path, plan_id: str, key: str, verdict: str, by: str = "
         return {"ok": False, "note": "слово бывает accept (принимаю) или reject (сломано — откат)"}
     receipt = _read(_control_dir(tree) / UPDATE_RECEIPT)
     trial = receipt.get("trial") if isinstance(receipt.get("trial"), dict) else {}
-    if str(receipt.get("state") or "") != "trial":
-        return {"ok": False, "note": f"испытания сейчас нет ({receipt.get('state') or 'расписки нет'})"}
+    # Испытание открыто, только пока исполнитель в нём: слово уже сказано (идёт откат или
+    # приём) — второе «принять» посреди отката записалось бы как ложное «прошло».
+    if str(receipt.get("state") or "") != "trial" or str(receipt.get("phase") or "trial") != "trial":
+        what = receipt.get("step") or receipt.get("state") or "расписки нет"
+        return {"ok": False, "note": f"испытания сейчас нет ({what})"}
     if str(plan_id or "") != str(receipt.get("id") or ""):
         return {"ok": False, "note": "испытывается другой план — перечитай расписку"}
     if not key or str(key) != str(trial.get("key") or ""):
@@ -672,8 +675,10 @@ def update_unreported(tree: Path, max_age_days: float = 3.0) -> dict | None:
     if state not in UPDATE_REPORTABLE:
         return None
     reported = _read(ctl / UPDATE_REPORTED)
+    # `done: false` — записка лежит, но ход по ней не состоялся: раннер повторит его.
     if (str(reported.get("id") or "") == str(receipt.get("id") or "")
-            and str(reported.get("state") or "*") in (state, "*")):
+            and str(reported.get("state") or "*") in (state, "*")
+            and reported.get("done") is not False):
         return None
     trial = receipt.get("trial") if isinstance(receipt.get("trial"), dict) else {}
     verdict = trial.get("verdict") if isinstance(trial.get("verdict"), dict) else {}
@@ -686,9 +691,16 @@ def update_unreported(tree: Path, max_age_days: float = 3.0) -> dict | None:
     return receipt
 
 
-def update_mark_reported(tree: Path, plan_id: str, state: str = "*") -> None:
-    _write(_control_dir(tree) / UPDATE_REPORTED, {"schema": UPDATE_SCHEMA, "id": str(plan_id),
-                                                   "state": str(state or "*"), "at_utc": _utc()})
+def update_mark_reported(tree: Path, plan_id: str, state: str = "*", *, done: bool = True,
+                         tries: int = 0, noted: bool = True, retry_at: float = 0.0) -> None:
+    _write(_control_dir(tree) / UPDATE_REPORTED, {
+        "schema": UPDATE_SCHEMA, "id": str(plan_id), "state": str(state or "*"),
+        "done": bool(done), "tries": int(tries), "noted": bool(noted),
+        "retry_at": float(retry_at), "at_utc": _utc()})
+
+
+def update_report_mark(tree: Path) -> dict:
+    return _read(_control_dir(tree) / UPDATE_REPORTED)
 
 
 # --- сторона надзора ---------------------------------------------------------
