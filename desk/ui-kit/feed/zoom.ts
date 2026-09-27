@@ -19,6 +19,8 @@ export interface ZoomOptions {
 const SETTLE_MS = 160; // тишина жеста, после которой раскладка пересчитывается
 
 export class Zoom {
+  /** мс: плавность масштаба (кастомизация окна). */
+  tau = 95;
   private committed = 1; // масштаб, под который разложен текст
   private z = 1; // показанный сейчас
   private goal = 1;
@@ -109,7 +111,7 @@ export class Zoom {
     this.raf = 0;
     const dt = Math.min(48, now - this.last);
     this.last = now;
-    this.z += (this.goal - this.z) * (1 - Math.exp(-dt / 95));
+    this.z += (this.goal - this.z) * (1 - Math.exp(-dt / Math.max(1, this.tau)));
     if (Math.abs(this.goal - this.z) < 0.001) this.z = this.goal;
     this.box.style.transform = `scale(${(this.z / this.committed).toFixed(4)})`;
     this.onChange?.(this.z);

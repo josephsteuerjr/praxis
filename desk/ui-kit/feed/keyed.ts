@@ -19,6 +19,9 @@ export interface SetOptions {
   onAdded?(els: HTMLElement[]): void;
 }
 
+/** Время появления нового элемента — настраивается (кастомизация окна, 28.09). */
+export const growTiming = { ms: 560 };
+
 const reduced = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export class KeyedList<T> {
@@ -73,8 +76,8 @@ export class KeyedList<T> {
 }
 
 /** Вырасти из нуля: высота, прозрачность, лёгкий подъём. Соседи сверху едут плавно. */
-export function grow(el: HTMLElement, ms = 560) {
-  if (reduced() || typeof el.animate !== "function") return;
+export function grow(el: HTMLElement, ms = growTiming.ms) {
+  if (ms <= 0 || reduced() || typeof el.animate !== "function") return;
   const h = el.offsetHeight;
   if (!h) return;
   el.style.overflow = "clip";

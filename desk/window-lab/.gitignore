@@ -5,3 +5,6 @@ electron/linux/
 tauri/target/
 tauri/gen/
 *.log
+prefs.json
+wheel.log
+wheel.log.old

@@ -21,14 +21,17 @@ export interface Feel {
   flingTau: number; // мс: затухание броска — чем больше, тем дальше катится
   maxFling: number; // px/мс
   springW: number; // 1/мс: пружина возврата с края (меньше — мягче и дольше)
-  rubberC: number; // тягучесть резины: сколько перетяга отдаёт рука
+  rubberC: number; // сколько перетяга отдаёт рука (меньше — туже)
   rubberD: number; // предел перетяга, доля высоты окна
+  holdMs: number; // сколько оттяжка тачпадом держится после последнего движения пальцев
 }
 
+// Пропорции перетяга — «бережно» (Егор 28.09): предел ~четверть-треть окна, а обычная
+// оттяжка пальцами — 60–120 px. Тягучесть — во времени (долгий мягкий возврат), не в размахе.
 export const FEELS: Record<"brisk" | "smooth" | "syrup", Feel> = {
-  brisk: { wheelTau: 95, padTau: 18, followTau: 110, flingTau: 325, maxFling: 7, springW: 0.012, rubberC: 0.55, rubberD: 0.5 },
-  smooth: { wheelTau: 150, padTau: 30, followTau: 170, flingTau: 460, maxFling: 9, springW: 0.0078, rubberC: 0.75, rubberD: 0.62 },
-  syrup: { wheelTau: 210, padTau: 45, followTau: 240, flingTau: 620, maxFling: 10, springW: 0.0056, rubberC: 0.9, rubberD: 0.75 },
+  brisk: { wheelTau: 95, padTau: 18, followTau: 110, flingTau: 325, maxFling: 7, springW: 0.012, rubberC: 0.5, rubberD: 0.24, holdMs: 140 },
+  smooth: { wheelTau: 150, padTau: 30, followTau: 170, flingTau: 460, maxFling: 9, springW: 0.0078, rubberC: 0.5, rubberD: 0.28, holdMs: 200 },
+  syrup: { wheelTau: 210, padTau: 45, followTau: 240, flingTau: 620, maxFling: 10, springW: 0.0056, rubberC: 0.5, rubberD: 0.32, holdMs: 260 },
 };
 export type FeelName = keyof typeof FEELS;
 
@@ -49,6 +52,17 @@ export const NO_GRAB =
 
 
 type Mode = "idle" | "wheel" | "drag" | "fling";
+
+const STREAM_GAP = 140; // мс тишины колеса — новый жест
+const DEAD_ZONE = 6; // px: столько за край не считается оттяжкой
+
+/** Инерция тачпада: пять последних дельт ровно убывают (каждая ≤ 0.985 предыдущей). */
+function looksLikeInertia(xs: number[]): boolean {
+  if (xs.length < 5) return false;
+  const tail = xs.slice(-5);
+  for (let i = 1; i < tail.length; i++) if (!(tail[i] <= tail[i - 1] * 0.985)) return false;
+  return tail[0] > 2;
+}
 
 export class Scroller {
   readonly el: HTMLElement;
@@ -72,6 +86,17 @@ export class Scroller {
   private written = -1;
   private lastWheel = 0;
   private wheelGap = 1000;
+  /**
+   * Поток колеса тачпада — события без паузы дольше STREAM_GAP, пальцы и инерция вместе
+   * (Windows присылает инерцию теми же событиями wheel, без признака фазы).
+   *  edge    — край, у которого поток НАЧАЛСЯ (−1 верх, +1 низ, 0 — не у края): тянуть за край
+   *            можно только так — «оттягивание держится»;
+   *  release — оттяжка отпущена (пальцы сняли — пошла инерция): дальше пружина, а остаток
+   *            потока наружу глотается;
+   *  recent  — последние |dy| для узнавания инерции (ровное геометрическое затухание).
+   * Смахивание, которое ДОЕХАЛО до края посреди потока, упирается: перетяга нет.
+   */
+  private stream = { edge: 0, release: false, dead: 0, recent: [] as number[] };
   private pinnedState = true;
   private follow = true; // ехать за низом, пока прилипли
   private drag: null | {
@@ -118,6 +143,11 @@ export class Scroller {
     this.el.removeEventListener("pointerup", this.onUp);
     this.el.removeEventListener("pointercancel", this.onUp);
     this.el.removeEventListener("keydown", this.onKey);
+  }
+
+  /** Состояние для журнала жестов лаборатории. */
+  debug(): { pos: number; max: number; raw: number; edge: number; release: boolean; notch: boolean } {
+    return { pos: Math.round(this.pos), max: Math.round(this.max), raw: Math.round(this.raw * 10) / 10, edge: this.stream.edge, release: this.stream.release, notch: this.notch };
   }
 
   get pinned(): boolean {
@@ -261,6 +291,21 @@ export class Scroller {
     this.mode = "wheel";
     this.vel = 0;
     const max = this.max;
+
+    if (this.wheelGap > STREAM_GAP) {
+      const edge = this.target <= 0.5 ? -1 : this.target >= max - 0.5 ? 1 : 0;
+      this.stream = { edge, release: false, dead: 0, recent: [] };
+    }
+    const st = this.stream;
+
+    // Оттяжка уже есть, а пальцы повели обратно — сначала съесть её, потом прокручивать.
+    if (this.raw && Math.sign(dy) === -Math.sign(this.raw)) {
+      const r = this.raw + dy;
+      if (Math.sign(r) === Math.sign(this.raw)) { this.raw = r; dy = 0; }
+      else { dy = r; this.raw = 0; }
+      this.rawVel = 0;
+    }
+
     const want = this.target + dy;
     const t = clamp(want, 0, max);
     const excess = want - t;
@@ -269,10 +314,29 @@ export class Scroller {
       if (max - t > this.pinSlack) this.setPinned(false);
     }
     this.target = t;
-    // За край: тачпад тянет резину непрерывно, щелчок мыши даёт толчок.
-    if (excess && this.overscroll !== "none" && Math.abs(this.pos - t) < 2) {
-      if (notch) this.rawVel += Math.sign(excess) * 1.3;
-      else this.raw += excess;
+    // Ушли от края внутрь — этот поток больше за край не тянет.
+    if (t > 0.5 && t < max - 0.5) st.edge = 0;
+
+    if (excess && this.overscroll !== "none") {
+      const dir = Math.sign(excess);
+      if (notch) {
+        // Щелчок мыши в край — едва заметный мягкий толчок, не прыжок.
+        if (Math.abs(this.raw) < 4) this.rawVel += dir * 0.35;
+      } else if (st.edge === dir && !st.release) {
+        // Оттягивание тачпадом от края: держится, пока идут пальцы.
+        const a = Math.abs(excess);
+        st.recent.push(a);
+        if (st.recent.length > 6) st.recent.shift();
+        if (looksLikeInertia(st.recent)) {
+          st.release = true; // пальцы сняли — дальше инерция, её не тянем
+        } else if (st.dead < DEAD_ZONE) {
+          st.dead += a; // хвост прошлой инерции и дрожь пальцев — не оттяжка
+        } else {
+          this.raw += excess;
+          this.rawVel = 0;
+        }
+      }
+      // Иначе смахивание доехало до края: упирается — остаток потока глотаем.
     }
     this.kick();
   };
@@ -410,8 +474,8 @@ export class Scroller {
       this.pos += this.vel * dt;
       this.vel *= Math.exp(-dt / this.feel.flingTau);
       if (this.pos < 0 || this.pos > max) {
-        // Удар о край: остаток скорости уходит в пружину — отскок.
-        if (this.overscroll !== "none") this.rawVel = this.vel;
+        // Бросок доехал до края — упирается (Егор 28.09); лишь мягкая подушка, не отскок.
+        if (this.overscroll !== "none") this.rawVel = this.vel * 0.12;
         this.pos = clamp(this.pos, 0, max);
         this.vel = 0;
         this.mode = "idle";
@@ -425,7 +489,9 @@ export class Scroller {
     }
 
     // Пружина перетяга — когда не держат рукой и колесо затихло.
-    const holding = this.mode === "drag" || (this.mode === "wheel" && now - this.lastWheel < 90 && !this.notch);
+    const holding =
+      this.mode === "drag" ||
+      (!this.notch && !this.stream.release && this.raw !== 0 && now - this.lastWheel < this.feel.holdMs);
     if (!holding && (this.raw || this.rawVel)) {
       let t = dt;
       while (t > 0) {
