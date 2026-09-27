@@ -1020,6 +1020,10 @@ SHELL_PRAXIS_EXE = DESK / "shell" / "target-praxis" / "release" / "helene.exe"
 PRAXIS_PRODUCT = "Praxis"
 PRAXIS_IDENTIFIER = "app.praxis.desk"
 PRAXIS_BUILD_HINT = "собери вариант: pwsh -File shell/build-praxis.ps1"
+# 1.2: мастер Praxis — тот же helene-setup с фичей `praxis` (setup/build-praxis.ps1), в
+# поставке — praxis-setup.exe; к нему пришивается хвост, как у Hélène.
+SETUP_PRAXIS_EXE = DESK / "setup" / "target-praxis" / "release" / "helene-setup.exe"
+SETUP_PRAXIS_HINT = "собери мастер варианта: pwsh -File setup/build-praxis.ps1"
 
 # Конфиг варианта Praxis: режим remote, адрес и ключ впишет человек
 # (installer/PRAXIS.md). `setup_complete` стоит, чтобы оболочка не искала
@@ -1303,6 +1307,20 @@ def build_praxis_app(args) -> None:
                          f"«{PRAXIS_PRODUCT}»: это оболочка Hélène, не вариант ({PRAXIS_BUILD_HINT})")
     shutil.copy2(SHELL_PRAXIS_EXE, out / "praxis.exe")
     print(f"  praxis.exe: положен (productName={product_inside}, версия {inside or '?'})")
+    # Мастер варианта (1.2): им ставится и снимается Praxis — вместо страниц NSIS.
+    if not SETUP_PRAXIS_EXE.is_file():
+        raise SystemExit(f"нет {SETUP_PRAXIS_EXE}\n{SETUP_PRAXIS_HINT}")
+    setup_inside = _exe_version(SETUP_PRAXIS_EXE)
+    setup_want = declared.get("setup/Cargo.toml", "")
+    if setup_inside and setup_want and setup_inside != setup_want:
+        raise SystemExit(f"мастер Praxis: внутри {setup_inside}, а setup/Cargo.toml объявляет {setup_want} — "
+                         f"не пересобран после подъёма версии ({SETUP_PRAXIS_HINT})")
+    setup_product = _exe_product_name(SETUP_PRAXIS_EXE)
+    if setup_product != "Praxis Setup":
+        raise SystemExit(f"в {SETUP_PRAXIS_EXE} productName «{setup_product or '?'}», а нужен «Praxis Setup»: "
+                         f"это мастер Hélène, не вариант ({SETUP_PRAXIS_HINT})")
+    shutil.copy2(SETUP_PRAXIS_EXE, out / "praxis-setup.exe")
+    print(f"  praxis-setup.exe: положен (мастер варианта, версия {setup_inside or '?'})")
     icon = DESK / "shell" / "icons-praxis" / "icon.ico"
     if not icon.is_file():
         raise SystemExit(f"нет значка варианта: {icon}")
@@ -1356,6 +1374,7 @@ def build_praxis_app(args) -> None:
         raise SystemExit(f"секрет-гарду нужен кред-пол из дерева агента, а его нет: {live}\n"
                          "укажи --tree PATH или HELENE_TREE_SRC (для отладки: --allow-partial)")
 
+    write_payload_manifest(out, version, PRAXIS_PRODUCT)
     total = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())
     print(f"итого: {total / 1e6:.1f} МБ до сжатия")
     archive = out.parent / f"{PRAXIS_PRODUCT}-{version}"
@@ -1409,7 +1428,7 @@ def main() -> None:
                         help="helene — полная поставка Hélène (по умолчанию); praxis — издание "
                              "к серверу: то же окно в режиме remote, без ядра, рантайма и тела")
     parser.add_argument("--skip-setup-exe", action="store_true",
-                        help="не собирать Helene-<версия>-setup.exe (отладка без NSIS)")
+                        help="не собирать <Продукт>-<версия>-setup.exe (отладка)")
     parser.add_argument("--skip-tests", action="store_true",
                         help="не гонять стенды перед сборкой (отладка); в выпуске — никогда")
     parser.add_argument("--from-core", action="store_true",
@@ -1705,6 +1724,9 @@ def main() -> None:
     scanned = scan_for_secrets(out, live, scan_runtime=not args.skip_runtime)
     print(f"  просканировано файлов: {scanned} — чисто")
 
+    # Опись поставки (1.2) — в корень: едет и в zip (кнопка «Обновить»), и в хвост
+    # установщика; по ней мастер ведёт ход и отличает поставку от владельческого.
+    write_payload_manifest(out, version, "Helene")
     total = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())
     print(f"итого: {total / 1e6:.1f} МБ до сжатия")
     # Имя архива с версией: две скачанные поставки в «Загрузках» раньше были
@@ -1726,55 +1748,162 @@ def main() -> None:
         build_setup_exe(out, version)
 
 
-def find_makensis() -> Path | None:
-    """makensis: из PATH, из NSIS Tauri (%LocalAppData%\\tauri\\NSIS) или обычной установки."""
-    found = shutil.which("makensis")
-    if found:
-        return Path(found)
-    homes = [Path(os.environ.get("LOCALAPPDATA") or "") / "tauri" / "NSIS",
-             Path(os.environ.get("ProgramFiles(x86)") or "") / "NSIS",
-             Path(os.environ.get("ProgramFiles") or "") / "NSIS"]
-    for home in homes:
-        exe = home / "makensis.exe"
-        if exe.is_file():
-            return exe
-    return None
+# --- 1.2: поставка в хвосте мастера ---------------------------------------------
+#
+# Слово Егора 27.09: «без серых страниц NSIS — одно лицо от первого клика до
+# открытого окна». Установщик для людей — один файл `Helene-<v>-setup.exe`: это сам
+# мастер (`helene-setup.exe`), за ним архив поставки (tar, сжатый zstd) и 32 байта
+# хвоста. Мастер читает собственный файл и раскладывает поставку рядом с целевой
+# папкой (`<папка>.new`), без %TEMP%. Формат хвоста — `setup/src/payload.rs`, один
+# и тот же здесь и там: `HLNPAYLD`, смещение архива (u64 LE), длина (u64 LE), первые
+# 8 байт sha256 архива.
+#
+# Почему не тот же zip: 261 МБ против 172 МБ (zstd 19 с дальними совпадениями —
+# рантайм питона полон повторов), а раскладка разжимает 650 МБ за пару секунд.
+# Архив для кнопки «Обновить» в окне остаётся zip — его читает питон и Проводник.
+
+TAIL_MAGIC = b"HLNPAYLD"
+PAYLOAD_MANIFEST = ".helene-payload.json"
+# Что мастер читает до раскладки — вперёд архива.
+PAYLOAD_HEAD = ("helene-build.json", "app/static/.helene-static.json")
+# Набор входа в ChatGPT до установки: реле и ядро питона рантайма без пакетов
+# (вход поднимает на питоне сервер обратного вызова — `RELAY_PYTHON`).
+KIT_TOP = ("helene-relay.exe",)
+KIT_RUNTIME_SUFFIXES = (".exe", ".dll", ".pyd", ".zip", "._pth", ".cat")
+# Имена верхнего уровня, которые после установки принадлежат владельцу, а не поставке.
+OWNER_TOP = ("helene.json", "data")
+
+
+def _payload_files(out: Path) -> list[str]:
+    return sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
+
+
+def write_payload_manifest(out: Path, version: str, product: str) -> dict:
+    """Опись поставки `.helene-payload.json` — в корень поставки (едет и в zip, и в хвост).
+
+    По ней мастер знает ход раскладки (файлов и байт), набор входа в ChatGPT и имена
+    верхнего уровня: при следующем обновлении то, что было поставкой и выпуском убрано,
+    не переносится как «владельческое»."""
+    files = [f for f in _payload_files(out) if f != PAYLOAD_MANIFEST]
+    kit = [f for f in files
+           if f in KIT_TOP
+           or (f.startswith("runtime/") and f.count("/") == 1 and f.endswith(KIT_RUNTIME_SUFFIXES))]
+    top = sorted({f.split("/", 1)[0] for f in files} - set(OWNER_TOP))
+    total = sum((out / f).stat().st_size for f in files)
+    manifest = {
+        "product": product,
+        "version": version,
+        "files": len(files),
+        "bytes": total,
+        "kit": kit,
+        "top": top,
+    }
+    (out / PAYLOAD_MANIFEST).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                                        encoding="utf-8", newline="\n")
+    return manifest
+
+
+def _payload_order(out: Path, manifest: dict) -> list[str]:
+    files = _payload_files(out)
+    head = [PAYLOAD_MANIFEST] + [f for f in PAYLOAD_HEAD if f in files]
+    kit = [f for f in manifest.get("kit", []) if f in files and f not in head]
+    rest = [f for f in files if f not in head and f not in kit]
+    return head + kit + rest
+
+
+def pack_payload(out: Path, dest: Path, manifest: dict, *, level: int = 19) -> tuple[int, str]:
+    """tar поставки в порядке «опись → паспорт → набор входа → остальное», сжатый zstd.
+    -> (длина, sha256 hex)."""
+    import tarfile
+    from compression import zstd
+    order = _payload_order(out, manifest)
+    opts = {
+        zstd.CompressionParameter.compression_level: level,
+        zstd.CompressionParameter.enable_long_distance_matching: 1,
+        zstd.CompressionParameter.window_log: 27,
+        zstd.CompressionParameter.nb_workers: max(1, (os.cpu_count() or 2) - 2),
+    }
+    with open(dest, "wb") as raw:
+        with zstd.ZstdFile(raw, "w", options=opts) as zf:
+            # PAX: длинные и кириллические имена («ПЕРВЫЙ-ЗАПУСК.md») без усечения.
+            with tarfile.open(fileobj=zf, mode="w|", format=tarfile.PAX_FORMAT) as tar:
+                for rel in order:
+                    info = tar.gettarinfo(str(out / rel), arcname=rel)
+                    info.uid = info.gid = 0
+                    info.uname = info.gname = ""
+                    info.mode = 0o755 if rel.endswith(".exe") else 0o644
+                    with open(out / rel, "rb") as fh:
+                        tar.addfile(info, fh)
+    return dest.stat().st_size, sha256(dest)
+
+
+def stitch_setup_exe(wizard: Path, packed: Path, digest_hex: str, target: Path) -> Path:
+    """exe мастера + архив + 32 байта хвоста — одним файлом."""
+    offset = wizard.stat().st_size
+    length = packed.stat().st_size
+    tmp = target.with_name(target.name + ".tmp")
+    with open(tmp, "wb") as dst:
+        with open(wizard, "rb") as src:
+            shutil.copyfileobj(src, dst, 1 << 20)
+        with open(packed, "rb") as src:
+            shutil.copyfileobj(src, dst, 1 << 20)
+        dst.write(TAIL_MAGIC + offset.to_bytes(8, "little") + length.to_bytes(8, "little")
+                  + bytes.fromhex(digest_hex)[:8])
+    os.replace(tmp, target)
+    return target
+
+
+def check_tail(exe: Path) -> dict:
+    """Прочитать хвост готового установщика и сверить сумму — тем же правилом, что мастер."""
+    size = exe.stat().st_size
+    with open(exe, "rb") as fh:
+        fh.seek(size - 32)
+        raw = fh.read(32)
+        if raw[:8] != TAIL_MAGIC:
+            raise SystemExit(f"{exe.name}: хвоста HLNPAYLD нет")
+        offset = int.from_bytes(raw[8:16], "little")
+        length = int.from_bytes(raw[16:24], "little")
+        if offset + length + 32 != size:
+            raise SystemExit(f"{exe.name}: хвост врёт о границах архива")
+        fh.seek(offset)
+        h = hashlib.sha256()
+        left = length
+        while left:
+            chunk = fh.read(min(left, 1 << 20))
+            if not chunk:
+                break
+            h.update(chunk)
+            left -= len(chunk)
+    if h.digest()[:8] != raw[24:32]:
+        raise SystemExit(f"{exe.name}: сумма архива в хвосте не сходится")
+    return {"offset": offset, "length": length}
 
 
 def build_setup_exe(out: Path, version: str, *, product: str = "Helene") -> Path:
-    """Один установочный файл `<Продукт>-<версия>-setup.exe` (1.1.0, 26.09).
+    """Один установочный файл `<Продукт>-<версия>-setup.exe`.
 
-    Живой случай: мама Егора распаковала архив и увидела два exe — «Элен» и «Элен
-    сетап» — и не поняла, что запускать. Установщик NSIS (`windows/helene-setup.nsi`)
-    распаковывает поставку во временную папку и открывает тот же мастер; запись в
-    «Приложениях» Windows и удаление — по-прежнему за мастером. Архив остаётся: его
-    качает кнопка обновления в окне (она берёт из выпуска только .zip).
-
-    Praxis (`windows/praxis-setup.nsi`) — мастера нет, и установщик сам: папка, ярлыки,
-    запись в «Приложениях», удаление; поверх стоящей — обновление без потери helene.json.
+    Мастер с поставкой в хвосте (1.2) — без NSIS, без распаковки в %TEMP%, с отменой и
+    откатом (`setup/src/tx.rs`). Hélène — `helene-setup.exe`, Praxis — тот же мастер с
+    фичей `praxis` (`praxis-setup.exe`, `setup/build-praxis.ps1`).
     """
-    makensis = find_makensis()
-    if makensis is None:
-        raise SystemExit("makensis не найден: нужен NSIS (его ставит Tauri в "
-                         "%LocalAppData%\\tauri\\NSIS) — или --skip-setup-exe для отладки")
-    script = DESK / "installer" / "windows" / f"{product.lower()}-setup.nsi"
+    wizard = out / ("helene-setup.exe" if product == "Helene" else "praxis-setup.exe")
+    if not wizard.is_file():
+        raise SystemExit(f"нет {wizard}: мастер должен лежать в поставке до пришивания хвоста")
+    manifest = json.loads((out / PAYLOAD_MANIFEST).read_text(encoding="utf-8"))
     target = out.parent / f"{product}-{version}-setup.exe"
-    icon = DESK / "shell" / ("icons" if product == "Helene" else "icons-praxis") / "icon.ico"
-    print("setup exe (NSIS)…")
-    size_kb = sum(f.stat().st_size for f in out.rglob("*") if f.is_file()) // 1024
-    done = subprocess.run(
-        [str(makensis), "/V2", "/INPUTCHARSET", "UTF8", f"/DVERSION={version}", f"/DPAYLOAD={out}",
-         f"/DSIZE_KB={size_kb}",
-         f"/DOUTFILE={target}", f"/DICON={icon}", str(script)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if done.returncode != 0 or not target.is_file():
-        tail = ((done.stdout or "") + (done.stderr or "")).strip().splitlines()[-15:]
-        raise SystemExit("makensis не собрал установщик:\n" + "\n".join(tail))
-    digest = sha256(target)
-    target.with_name(target.name + ".sha256").write_text(
-        f"{digest} *{target.name}\n", encoding="utf-8", newline="\n")
+    packed = out.parent / f".{product}-{version}.tar.zst"
+    print("setup exe (мастер + поставка в хвосте)…")
+    t0 = _dt.datetime.now()
+    length, digest = pack_payload(out, packed, manifest)
+    print(f"  архив: {length / 1e6:.1f} МБ ({manifest['files']} файлов, {manifest['bytes'] / 1e6:.0f} МБ до сжатия) "
+          f"за {(_dt.datetime.now() - t0).total_seconds():.0f} с")
+    stitch_setup_exe(wizard, packed, digest, target)
+    packed.unlink(missing_ok=True)
+    check_tail(target)
+    full = sha256(target)
+    target.with_name(target.name + ".sha256").write_text(f"{full} *{target.name}\n", encoding="utf-8", newline="\n")
     print(f"готово: {target} ({target.stat().st_size / 1e6:.1f} МБ)")
-    print(f"sha256: {digest}")
+    print(f"sha256: {full}")
     return target
 
 

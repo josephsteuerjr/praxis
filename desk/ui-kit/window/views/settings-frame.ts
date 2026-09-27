@@ -60,6 +60,9 @@ export interface Config {
   agent?: { name?: string };
   phone?: { enabled?: boolean };
   update?: { url?: string };
+  // 1.2: копии памяти по расписанию (common/backup.rs): раз в `every_days` дней (0 —
+  // выключено), хранить `keep` снимков, папка `dir` (пусто — backups рядом с программой).
+  backup?: { every_days?: number; keep?: number; dir?: string };
   owner?: { name?: string; room?: string };
   model?: { framework?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string; fallback_model?: string; fallback_framework?: string; fallback_base_url?: string; fallback_key?: string; vision_model?: string };
   // `instructions` экран не показывает, но обязан сохранить: этой ручкой
@@ -270,6 +273,9 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
 
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
   center.append(inGroup(transferCard(draft, mac), GROUP.app));
+
+  // --- копии памяти (1.2): расписание, «сейчас», последние снимки
+  center.append(inGroup(backupCard(draft), GROUP.app));
 
   // --- автозапуск
   const auto = el("div");
@@ -685,6 +691,89 @@ function mountSettings(container: HTMLElement, center: HTMLElement, groups: Sett
  * `key`. Пишутся общей кнопкой «Сохранить», применяются перезапуском: с
  * `remote` оболочка своих детей не поднимает и ходит в чужую трубу.
  */
+/** «Копии памяти» (1.2, 27.09). Требование Егора: периодически — по умолчанию раз
+ *  в неделю, настраиваемо (период, сколько хранить, папка), прежние не
+ *  перезатирать. Снимает оболочка (агент живёт из окна) или служба — тем же
+ *  правилом, что и установщик перед обновлением (`common/backup.rs`). Настройки
+ *  уходят в helene.json кнопкой «Сохранить» вместе с остальными и применяются без
+ *  перезапуска: расписание перечитывает файл на каждом тике. */
+function backupCard(draft: Config): HTMLElement {
+  draft.backup = draft.backup || {};
+  const b = draft.backup;
+  const box = el("div");
+  const grid = el("div", "form-grid three");
+  const every = field("Раз в сколько дней", String(b.every_days ?? 7), (v) => {
+    const n = Math.max(0, Math.min(365, Math.floor(Number(v))));
+    b.every_days = Number.isFinite(n) ? n : 7;
+  }, { hint: "0 — не снимать по расписанию" });
+  const keep = field("Сколько хранить", String(b.keep ?? 8), (v) => {
+    const n = Math.max(1, Math.min(1000, Math.floor(Number(v))));
+    b.keep = Number.isFinite(n) ? n : 8;
+  }, { hint: "старые снимки по расписанию уходят, твои «сейчас» — никогда" });
+  const dir = field("Папка", String(b.dir ?? ""), (v) => (b.dir = v.trim()), {
+    mono: true,
+    placeholder: "backups рядом с программой",
+    hint: "пусто — рядом с программой, вне папки агента",
+  });
+  grid.append(every, keep, dir);
+  const out = el("span", "receipt");
+  const listBox = el("ul", "backup-list");
+  let where = "";
+  const refresh = () => {
+    shell<{ dir: string; items: Array<{ name: string; bytes: number; when: number }> }>("backup_list")
+      .then((r) => {
+        where = r.dir;
+        listBox.replaceChildren();
+        const kinds: Record<string, string> = { auto: "по расписанию", manual: "по кнопке", before: "перед обновлением" };
+        for (const it of r.items.slice(0, 6)) {
+          const kind = it.name.includes("-auto") ? kinds.auto : it.name.includes("-manual") ? kinds.manual : it.name.includes("-before-") ? kinds.before : "";
+          const when = it.when ? new Date(it.when * 1000).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : it.name;
+          listBox.append(el("li", "", `${when}${kind ? " · " + kind : ""} · ${(it.bytes / 1048576).toFixed(1)} МБ`));
+        }
+        if (!r.items.length) listBox.append(el("li", "muted", "Копий ещё нет — первая снимется сама, в течение получаса после запуска."));
+      })
+      .catch(() => {
+        // Окно без оболочки (браузер, Praxis): копии снимает сервер, здесь смотреть нечего.
+        listBox.replaceChildren(el("li", "muted", "Список копий виден в окне программы на компьютере агента."));
+      });
+  };
+  const now = button("Сделать копию сейчас", "quiet", async () => {
+    now.disabled = true;
+    out.className = "receipt";
+    out.textContent = "Снимаю…";
+    try {
+      const r = await shell<{ path: string; files: number }>("backup_now");
+      out.className = "receipt ok";
+      out.textContent = `Готово: ${r.files} файлов — ${r.path}`;
+      refresh();
+    } catch (e) {
+      out.className = "receipt err";
+      out.textContent = humanError(e).text;
+    } finally {
+      now.disabled = false;
+    }
+  });
+  const open = button("Открыть папку копий", "quiet", () => {
+    if (where) void shell("reveal_path", { path: where }).catch((e) => toast(humanError(e).text));
+  });
+  const row = el("div", "actions");
+  row.append(now, open, out);
+  box.append(
+    grid,
+    row,
+    listBox,
+    el(
+      "p",
+      "field-hint",
+      "Копия — один zip: память, конституция, рабочая папка агента, расширения, настройки и соседние агенты. " +
+        "Вход в ChatGPT, журналы и голосовые модели в копию не идут. Перед каждым обновлением установщик снимает свою копию сам. " +
+        "Вернуть — распаковать нужное из zip на место при закрытой программе.",
+    ),
+  );
+  refresh();
+  return card("Копии памяти", box);
+}
+
 function transferCard(draft: Config, mac = false): HTMLElement {
   const box = el("div");
   // Команда обратного импорта — путём питона ЭТОЙ системы (runtime/python.exe

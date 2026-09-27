@@ -34,10 +34,29 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Имя в файловой системе (папка, ярлык, ключ реестра) — латиницей;
 /// на экране и в «Приложениях» — по-французски.
+#[cfg(not(feature = "praxis"))]
 pub const PRODUCT: &str = "Helene";
+#[cfg(not(feature = "praxis"))]
 pub const PRODUCT_UI: &str = "Hélène";
+#[cfg(not(feature = "praxis"))]
 pub const AUMID: &str = "app.helene.desk";
+#[cfg(not(feature = "praxis"))]
 pub const SETUP_AUMID: &str = "app.helene.setup";
+/// 1.2: мастер, собранный с фичей `praxis`, ставит Praxis — окно к агенту на своём
+/// сервере (см. `praxis.rs`): свои имя, identifier окна, exe и значок.
+#[cfg(feature = "praxis")]
+pub const PRODUCT: &str = "Praxis";
+#[cfg(feature = "praxis")]
+pub const PRODUCT_UI: &str = "Praxis";
+#[cfg(feature = "praxis")]
+pub const AUMID: &str = "app.praxis.desk";
+#[cfg(feature = "praxis")]
+pub const SETUP_AUMID: &str = "app.praxis.setup";
+/// Значок программы в корне установки.
+#[cfg(not(feature = "praxis"))]
+pub const ICON_FILE: &str = "helene.ico";
+#[cfg(feature = "praxis")]
+pub const ICON_FILE: &str = "praxis.ico";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Порт встроенного реле в установленной программе по умолчанию
@@ -92,8 +111,10 @@ mod firewall_rule {
 }
 
 /// Файлы поставки, по которым мы узнаём её папку.
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "praxis")))]
 const PAYLOAD_MARKERS: [&str; 3] = ["helene.exe", "app", "runtime"];
+#[cfg(all(windows, feature = "praxis"))]
+const PAYLOAD_MARKERS: [&str; 3] = ["praxis.exe", "app", "helene.json"];
 /// На macOS оболочка — бандл `Helene.app`, а не exe рядом.
 #[cfg(not(windows))]
 const PAYLOAD_MARKERS: [&str; 3] = [SHELL_APP, "app", "runtime"];
@@ -107,10 +128,12 @@ pub const SETUP_APP: &str = "Helene Setup.app";
 
 /// Что в корне установки — сам установщик: при снятии его пропускает цикл
 /// удаления (он занят/работает), доудаляет хвост `uninstall_finish`.
-#[cfg(windows)]
-const SETUP_ENTRY: &str = "helene-setup.exe";
+#[cfg(all(windows, not(feature = "praxis")))]
+pub const SETUP_ENTRY: &str = "helene-setup.exe";
+#[cfg(all(windows, feature = "praxis"))]
+pub const SETUP_ENTRY: &str = "praxis-setup.exe";
 #[cfg(not(windows))]
-const SETUP_ENTRY: &str = SETUP_APP;
+pub const SETUP_ENTRY: &str = SETUP_APP;
 
 /// Как позвать установщик из командной строки — для записок владельцу.
 #[cfg(windows)]
@@ -153,9 +176,13 @@ const TRAY_WORD: &str = "значок в строке меню";
 /// Оболочка установленной программы: `helene.exe` рядом с остальным или бандл
 /// `Helene.app`. Путь уезжает в расписку (`Receipt.exe`) и дальше в `open_frame`.
 pub fn shell_exe(dir: &Path) -> PathBuf {
-    #[cfg(windows)]
+    #[cfg(all(windows, not(feature = "praxis")))]
     {
         dir.join("helene.exe")
+    }
+    #[cfg(all(windows, feature = "praxis"))]
+    {
+        dir.join("praxis.exe")
     }
     #[cfg(not(windows))]
     {
@@ -1301,9 +1328,10 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
 #[cfg(windows)]
 fn procs_under(dir: &Path) -> Option<usize> {
     let script = format!(
-        "$d='{}'; @(Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -and $_.ExecutablePath.StartsWith($d,'OrdinalIgnoreCase') -and $_.ProcessId -ne {} }}).Count",
+        "$d='{}'; @(Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -and $_.ExecutablePath.StartsWith($d,'OrdinalIgnoreCase') -and $_.ProcessId -ne {} -and $_.Name -ne '{}' }}).Count",
         ps_escape(&format!("{}\\", dir.display())),
-        std::process::id()
+        std::process::id(),
+        SETUP_ENTRY
     );
     let out = powershell(&script).ok()?;
     if !out.status.success() {
@@ -1313,14 +1341,18 @@ fn procs_under(dir: &Path) -> Option<usize> {
 }
 
 /// Остановить всё, что запущено из папки установки: окно, детей харнесса, реле.
+/// Кроме экземпляров самого мастера (1.2, живая проба 27.09): снятие «для всех» идёт
+/// поднятым исполнителем — это тот же `helene-setup.exe` из той же папки, — и исполнитель
+/// убивал своего родителя, а с ним по job-объекту и себя: снятие обрывалось молча.
 /// Возвращает true, когда после этого из папки не работает НИЧЕГО: раньше здесь
 /// стояли глухие 600 мс, и копирование начиналось поверх ещё живых файлов.
 #[cfg(windows)]
 pub fn stop_running(dir: &Path) -> bool {
     let script = format!(
-        "$d='{}'; Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -and $_.ExecutablePath.StartsWith($d,'OrdinalIgnoreCase') -and $_.ProcessId -ne {} }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+        "$d='{}'; Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -and $_.ExecutablePath.StartsWith($d,'OrdinalIgnoreCase') -and $_.ProcessId -ne {} -and $_.Name -ne '{}' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
         ps_escape(&format!("{}\\", dir.display())),
-        std::process::id()
+        std::process::id(),
+        SETUP_ENTRY
     );
     let _ = powershell(&script);
     for _ in 0..20 {
@@ -1696,6 +1728,12 @@ pub fn installed_info() -> Option<Installed> {
     } else {
         registered_dir().or_else(default_dir)?
     };
+    // 1.2: установлена — это программа на месте. Папка, где после снятия с «оставить
+    // данные» лежат только память и helene.json, — находка «память» (сцена «Нашлась
+    // память»), а не «уже установлена»: живая проба 27.09 показала второе.
+    if !in_place() && !shell_exe(&dir).exists() {
+        return None;
+    }
     let cfg = read_json(&dir.join("helene.json"))?;
     if cfg.get("setup_complete").and_then(|v| v.as_bool()) != Some(true) {
         return None;
@@ -3078,6 +3116,11 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
 
 /// Установка с отменой (экран мастера, поднятый исполнитель).
 pub fn install_run(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)) -> Result<Receipt, String> {
+    #[cfg(all(windows, feature = "praxis"))]
+    {
+        return crate::praxis::install_praxis(s, cancel, progress);
+    }
+    #[allow(unreachable_code)]
     if cfg!(not(windows)) || in_place() {
         return install_legacy(s, |p| progress(p));
     }
@@ -3123,7 +3166,7 @@ pub fn target_dir(s: &Setup) -> Result<PathBuf, String> {
 /// Режим установки: стоящая — её режим (раскладку сама не меняем, требование 7);
 /// новая — выбор владельца, по умолчанию «для меня».
 pub fn effective_scope(s: &Setup, dir: &Path) -> String {
-    if dir.join("helene.exe").exists() || dir.join(INSTALL_MARKER).exists() {
+    if shell_exe(dir).exists() || dir.join(INSTALL_MARKER).exists() {
         return crate::probe::scope_of_dir(dir);
     }
     match s.scope.as_str() {
@@ -3137,7 +3180,11 @@ pub fn effective_scope(s: &Setup, dir: &Path) -> String {
 pub fn needs_elevation(scope: &str) -> bool {
     #[cfg(windows)]
     {
-        scope == "machine" && !crate::win::is_elevated()
+        // Проверка пути исполнителя на машине с выключенным UAC (там любой процесс
+        // администратора уже поднят): `HELENE_SETUP_FORCE_WORKER=1` ведёт «для всех»
+        // через исполнителя всё равно.
+        let forced = std::env::var("HELENE_SETUP_FORCE_WORKER").map(|v| v == "1").unwrap_or(false);
+        scope == "machine" && (forced || !crate::win::is_elevated())
     }
     #[cfg(not(windows))]
     {
@@ -3275,7 +3322,8 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     let had_install = dir.join("helene.exe").exists() || dir.join("helene.json").exists();
     // Проверка, раскладка, подмена, настройка, регистрация, служба, готово; стоящая —
     // ещё снимок и остановка.
-    let total = if had_install { 9usize } else { 7usize };
+    let service_step = s.wants_service() || service_state() != "absent";
+    let total = 6 + if had_install { 2 } else { 0 } + usize::from(service_step);
     let mut n = 0usize;
     let mut say = |phase: &str, label: &str, frac: Option<f64>, detail: Option<String>, cancellable: bool, bump: bool, progress: &mut dyn FnMut(Progress)| {
         if bump {
@@ -3642,7 +3690,7 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     say("register", "Ярлыки и запись в «Приложениях»", None, None, false, true, progress);
     let exe = shell_exe(&dir);
     let all_users = scope == "machine";
-    let ico = dir.join("helene.ico");
+    let ico = dir.join(ICON_FILE);
     match shortcuts_for(&exe, PRODUCT, Some(ico.as_path()).filter(|p| p.is_file()), all_users) {
         Ok(note) => steps.push(Step { label: "Ярлыки".into(), ok: true, note: Some(note) }),
         Err(err) => steps.push(Step { label: "Ярлыки".into(), ok: false, note: Some(err) }),
@@ -3768,9 +3816,9 @@ fn register_uninstall_for(dir: &Path, size_kb: u32, version: &str, all_users: bo
     let (key, _) = hive
         .create_subkey_with_flags(&path, KEY_ALL_ACCESS | if all_users { KEY_WOW64_64KEY } else { 0 })
         .map_err(|e| format!("запись в «Приложениях» не создалась: {e}"))?;
-    let setup = dir.join("helene-setup.exe");
-    let exe = dir.join("helene.exe");
-    let icon = dir.join("helene.ico");
+    let setup = dir.join(SETUP_ENTRY);
+    let exe = shell_exe(dir);
+    let icon = dir.join(ICON_FILE);
     let set = |name: &str, value: String| key.set_value(name, &value).map_err(|e| e.to_string());
     set("DisplayName", PRODUCT_UI.to_string())?;
     set("DisplayVersion", version.to_string())?;
@@ -3863,6 +3911,78 @@ fn rehearse_extensions_with(python: &Path, runner: &Path, host_version: &str, di
     Ok(Some((ok, summary)))
 }
 
+// ------------------------------------------------- для варианта Praxis (praxis.rs)
+
+#[cfg(all(windows, feature = "praxis"))]
+pub(crate) fn icacls_users_modify_pub(dir: &Path) -> Result<(), String> {
+    icacls_users_modify(dir)
+}
+
+#[cfg(all(windows, feature = "praxis"))]
+pub(crate) fn write_marker_pub(dir: &Path, scope: &str, version: &str) -> Result<(), String> {
+    write_marker(dir, scope, version)
+}
+
+#[cfg(all(windows, feature = "praxis"))]
+pub(crate) fn shortcuts_for_pub(exe: &Path, name: &str, icon: Option<&Path>, all_users: bool) -> Result<String, String> {
+    shortcuts_for(exe, name, icon, all_users)
+}
+
+#[cfg(all(windows, feature = "praxis"))]
+pub(crate) fn register_uninstall_for_pub(dir: &Path, size_kb: u32, version: &str, all_users: bool) -> Result<Option<String>, String> {
+    register_uninstall_for(dir, size_kb, version, all_users)
+}
+
+#[cfg(all(windows, feature = "praxis"))]
+pub(crate) fn push_cleanup(h: std::thread::JoinHandle<()>) {
+    if let Ok(mut v) = CLEANUP.lock() {
+        v.push(h);
+    }
+}
+
+#[cfg(all(windows, feature = "praxis"))]
+pub(crate) fn keep_setup_exe(keep: bool) {
+    KEEP_SETUP_EXE.store(keep, Ordering::Relaxed);
+}
+
+/// Снять запись в «Приложениях», AUMID и ярлыки этого продукта (свои и — «для
+/// всех» — общие).
+#[cfg(all(windows, feature = "praxis"))]
+pub(crate) fn unregister_pub(all_users: bool, problems: &mut Vec<String>) {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
+    use winreg::RegKey;
+    let base = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let _ = hkcu.delete_subkey_all(format!("{base}\\{PRODUCT}"));
+    let _ = hkcu.delete_subkey_all(format!("Software\\Classes\\AppUserModelId\\{AUMID}"));
+    if all_users {
+        for view in [KEY_WOW64_64KEY, KEY_WOW64_32KEY] {
+            if let Ok(k) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(base, KEY_ALL_ACCESS | view) {
+                if k.open_subkey(PRODUCT).is_ok() && k.delete_subkey_all(PRODUCT).is_err() {
+                    problems.push("запись «для всех» в «Приложениях» не снялась (нужны права администратора)".into());
+                }
+            }
+        }
+    }
+    let mut folders: Vec<PathBuf> = Vec::new();
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        let programs = PathBuf::from(&appdata).join("Microsoft\\Windows\\Start Menu\\Programs");
+        folders.push(programs.join("Startup"));
+        folders.push(programs);
+    }
+    if let Some(d) = desktop_dir() {
+        folders.push(d);
+    }
+    for desk in [false, true] {
+        if let Some(f) = crate::win::shell_folder(true, desk) {
+            folders.push(f);
+        }
+    }
+    for f in &folders {
+        let _ = std::fs::remove_file(f.join(format!("{PRODUCT}.lnk")));
+    }
+}
+
 // ---------------------------------------------------------------- снятие
 
 /// Уносить ли хвосту сам мастер. По умолчанию — нет (1.2): снятие из «Загрузок» или
@@ -3895,7 +4015,7 @@ pub fn uninstall_finish() {
         // Повтором, а не одним `del`: мастер «для всех» снимает поднятый исполнитель, а
         // сам exe держит ещё и окно, показывающее итог. Пробуем раз в секунду до двух
         // минут; удалился — убираем и папку (только пустую).
-        let exe = dir.join("helene-setup.exe");
+        let exe = dir.join(SETUP_ENTRY);
         parts.push(format!(
             "for /l %i in (1,1,120) do @(del /q \"{exe}\" >nul 2>&1 & if not exist \"{exe}\" (rmdir \"{dir}\" >nul 2>&1 & exit /b 0) & ping 127.0.0.1 -n 2 >nul)",
             exe = exe.display(),
@@ -4046,12 +4166,29 @@ const KEPT_ON_UNINSTALL: [&str; 6] = ["data", "helene.json", "helene.json.bak", 
 /// Быстро (требование 8): ограда снимается только с того, что ОСТАЁТСЯ (`data/`), а не
 /// `icacls /T` по всей папке; файлы программы не удаляются по одному, а переезжают в
 /// `<папка>.removing` одним переименованием и дочищаются в фоне отложенной командой.
+/// Замеры фаз последнего снятия — для журнала (`helene-uninstall.log`): «удаление
+/// долгое» проверяется числами, а не на глаз.
+pub static UNINSTALL_TIMING: Mutex<String> = Mutex::new(String::new());
+
 pub fn uninstall_dir(dir: &Path, purge: bool, progress: &mut dyn FnMut(Progress)) -> Result<String, String> {
+    #[cfg(all(windows, feature = "praxis"))]
+    {
+        return crate::praxis::uninstall_praxis(dir, purge, progress);
+    }
+    #[allow(unreachable_code)]
     let dir = dir.to_path_buf();
     let mut n = 0usize;
     let total = 5usize;
+    let started = std::time::Instant::now();
+    let mut lap = std::time::Instant::now();
+    let mut laps: Vec<String> = Vec::new();
     let mut say = |phase: &str, label: &str, progress: &mut dyn FnMut(Progress)| {
+        if n > 0 {
+            laps.push(format!("{:.1} с", lap.elapsed().as_secs_f64()));
+        }
+        lap = std::time::Instant::now();
         n += 1;
+        laps.push(phase.to_string());
         progress(Progress { step: n, total, label: label.to_string(), phase: phase.to_string(), ..Default::default() });
     };
     // `--uninstall` работал по папке, где лежит exe, без единой проверки: команда из
@@ -4212,7 +4349,9 @@ pub fn uninstall_dir(dir: &Path, purge: bool, progress: &mut dyn FnMut(Progress)
             continue;
         }
         let path = entry.path();
-        if trash.is_dir() && std::fs::rename(&path, trash.join(&name)).is_ok() {
+        // С повтором: только что поставленные файлы антивирус держит долю секунды, а
+        // упасть в удаление по одному — это минута на 18 тысяч файлов.
+        if trash.is_dir() && crate::tx::rename_retry(&path, &trash.join(&name), 5).is_ok() {
             moved_any = true;
             continue;
         }
@@ -4256,6 +4395,9 @@ pub fn uninstall_dir(dir: &Path, purge: bool, progress: &mut dyn FnMut(Progress)
     }
 
     say("done", "Готово", progress);
+    if let Ok(mut t) = UNINSTALL_TIMING.lock() {
+        *t = format!("замеры снятия: {} · всего {:.1} с", laps.join(" "), started.elapsed().as_secs_f64());
+    }
     let mut text = if purge {
         if data.exists() {
             format!("{PRODUCT_UI} удалена, но папка данных осталась: {}", data.display())

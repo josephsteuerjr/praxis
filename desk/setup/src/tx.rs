@@ -187,7 +187,8 @@ impl Tx {
         // `.new` и `.old` без журнала — хвосты законченной или отменённой транзакции,
         // которые не успели удалиться. Владельческого в них нет: оно переезжает только
         // под журналом.
-        for stale in [&new, &old] {
+        let removing = sibling(dir, ".removing");
+        for stale in [&new, &old, &removing] {
             if stale.exists() {
                 remove_tree(stale).map_err(|e| format!("не убирается прежний хвост {}: {e}", stale.display()))?;
             }

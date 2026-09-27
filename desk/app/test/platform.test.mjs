@@ -178,7 +178,8 @@ const setupMain = read(setupUi, "main.ts");
 assert.match(setupTs, /platform\?: string;/, "Defaults установщика без platform");
 assert.match(setupTs, /export function isMac\(\)/, "в setup.ts нет isMac()");
 assert.match(setupMain, /machine\.platform = String\(d\.platform \|\| ""\)/, "main.ts установщика не берёт platform из defaults");
-assert.match(setupMain, /!isMac\(\) && \(await legacy\.look\(home\)\)/, "сцена прежних служб вставляется и на macOS");
+// 1.2: у варианта Praxis сцены прежних служб нет тоже (`!isPraxis()`), macOS — по-прежнему.
+assert.match(setupMain, /!isMac\(\) &&( !isPraxis\(\) &&)? \(await legacy\.look\(home\)\)/, "сцена прежних служб вставляется и на macOS");
 // Опция службы — на обеих системах, своими словами; ряд из одной карточки
 // больше не нужен (их снова две).
 assert.ok(!/serviceBoxEl\.hidden = mac/.test(modeScene), "опция службы снова спрятана на macOS — а служба там есть");

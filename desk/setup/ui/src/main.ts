@@ -6,9 +6,10 @@
 // ручное переопределение — кнопкой в верхней полосе.
 import "./styles.css";
 import { animate } from "motion";
-import { COPY, MIN_SCALE, PRODUCT_NAME, STAGE } from "./config";
+import { COPY, MIN_SCALE, PRODUCT_NAME, STAGE, isPraxis } from "./config";
 import { AboutScene } from "./scenes/about";
 import { ConstitutionScene } from "./scenes/constitution";
+import { FoundScene, resumable } from "./scenes/found";
 import { InstallScene } from "./scenes/install";
 import { InstalledScene } from "./scenes/installed";
 import { UninstallScene } from "./scenes/uninstall";
@@ -17,8 +18,9 @@ import { LegacyScene } from "./scenes/legacy";
 import { NameScene } from "./scenes/name";
 import { ModeScene } from "./scenes/mode";
 import { TypewriterScene } from "./scenes/typewriter";
+import { WhereScene } from "./scenes/where";
 import { WordmarkScene } from "./scenes/wordmark";
-import { installedSetup, isMac, loadDefaults, machine, setup, uninstallLaunch, type Setup } from "./setup";
+import { installedSetup, isMac, loadDefaults, machine, setup, uninstallLaunch, type Found, type Setup } from "./setup";
 import { T, sleep, type Dir } from "./wind";
 
 // Сорвался модуль — окно не должно остаться пустым: оно рождается невидимым и
@@ -136,14 +138,28 @@ const legacy = new LegacyScene(q<HTMLElement>(".scene-legacy"));
 const install = new InstallScene(q<HTMLElement>(".scene-install"));
 const uninstall = new UninstallScene(q<HTMLElement>(".scene-uninstall"));
 const installed = new InstalledScene(q<HTMLElement>(".scene-installed"));
-type Scene = WordmarkScene | AboutScene | TypewriterScene | NameScene | ConstitutionScene | KeysScene | ModeScene | LegacyScene | InstallScene | UninstallScene | InstalledScene;
+const found = new FoundScene(q<HTMLElement>(".scene-found"));
+const where = new WhereScene(q<HTMLElement>(".scene-where"));
+type Scene = WordmarkScene | AboutScene | TypewriterScene | NameScene | ConstitutionScene | KeysScene | WhereScene | ModeScene | LegacyScene | InstallScene | UninstallScene | InstalledScene | FoundScene;
 // Режим окна задаёт оболочка: установка — все сцены, снятие — одна.
 const uninstallMode = (window as Window & { SETUP_MODE?: string }).SETUP_MODE === "uninstall" || new URLSearchParams(location.search).get("mode") === "uninstall";
 // Сцена «прежняя версия» в маршрут не входит: её вставляет start(), и только
 // если SCM действительно ответила, что служба прежнего поколения жива. Чистая
 // машина и машина с живой Vera дают два разных маршрута.
-const scenes: Scene[] = uninstallMode ? [wordmark, uninstall] : [wordmark, about, typewriter, name, constitution, keys, mode_, install];
-let byName: Record<string, number> = uninstallMode ? { uninstall: 1 } : { about: 1, typewriter: 2, name: 3, constitution: 4, keys: 5, mode: 6, install: 7 };
+// 1.2: «Для кого» (для меня / для всех) — перед экраном режима: сначала где агенту
+// жить, потом что ему можно.
+// Praxis (окно к своему серверу) — короче: ни имени, ни конституции, ни модели — это
+// всё живёт на сервере; адрес и ключ канала окно спросит само при первом запуске.
+const scenes: Scene[] = uninstallMode
+  ? [wordmark, uninstall]
+  : isPraxis()
+    ? [wordmark, where, install]
+    : [wordmark, about, typewriter, name, constitution, keys, where, mode_, install];
+let byName: Record<string, number> = uninstallMode
+  ? { uninstall: 1 }
+  : isPraxis()
+    ? { where: 1, install: 2 }
+    : { about: 1, typewriter: 2, name: 3, constitution: 4, keys: 5, where: 6, mode: 7, install: 8 };
 
 /** Вставить сцену в маршрут и пересобрать имена для `?scene=`. */
 function insertScene(scene: Scene, before: Scene, key: string) {
@@ -159,7 +175,7 @@ function insertScene(scene: Scene, before: Scene, key: string) {
 
 function byNameScene(key: string): Scene {
   const table: Record<string, Scene> = {
-    about, typewriter, name, constitution, keys, mode: mode_, install, uninstall, legacy, installed,
+    about, typewriter, name, constitution, keys, where, mode: mode_, install, uninstall, legacy, installed, found,
   };
   return table[key];
 }
@@ -266,19 +282,52 @@ async function updateInstalled(): Promise<void> {
   } catch {
     decided = null;
   }
+  if (!decided && isPraxis()) {
+    // Praxis: решать нечего — только папка и режим стоящего.
+    Object.assign(setup, { dir: inst.dir, scope: machine.installedFound?.scope || "" });
+    await jumpTo(install);
+    install.start();
+    return;
+  }
   if (!decided) {
     // Решений в установке нет (имя, конституция) — обычный мастер, как у `--update`.
     showHint("В установке не хватает решений — пройдём мастер, это тоже установка поверх.", 0);
     void go(1);
     return;
   }
-  Object.assign(setup, decided, { dir: inst.dir });
+  Object.assign(setup, decided, { dir: inst.dir, scope: machine.installedFound?.scope || "" });
   await jumpTo(install);
   install.start();
 }
 
+/** «Продолжить с <имя>» (1.2): решения — из найденной памяти, сама память уходит в
+ *  установку копией; дальше — «для кого» и установка. Решений не хватает (нет имени
+ *  или конституции) — обычный маршрут, но с найденной памятью. */
+async function resumeFound(f: Found): Promise<void> {
+  let decided: Setup | null = null;
+  if (f.decisions) {
+    try {
+      decided = await installedSetup(f.dir);
+    } catch {
+      decided = null;
+    }
+  }
+  if (decided) Object.assign(setup, decided);
+  setup.carry_from = f.dir;
+  setup.dir = "";
+  if (f.scope) setup.scope = f.scope;
+  if (!scenes.includes(where)) return;
+  if (decided) {
+    await jumpTo(where);
+  } else {
+    showHint("В найденной памяти не хватает решений — пройдём имя, конституцию и модель.", 0);
+    await jumpTo(name);
+  }
+}
+
 /** «Удалить» со сцены «уже установлена»: та же сцена снятия, что у `--uninstall`. */
 async function removeInstalled(): Promise<void> {
+  uninstall.setDir(machine.installedFound?.dir || machine.installed?.dir || "");
   if (!scenes.includes(uninstall)) {
     scenes.push(uninstall);
     byName = { ...byName, uninstall: scenes.length - 1 };
@@ -380,6 +429,12 @@ async function start() {
     // Если что-то уже стоит — это обновление, и сводка перед кнопкой скажет об этом.
     machine.installed = d.installed ?? null;
     machine.inPlace = !!d.in_place;
+    machine.found = d.found ?? [];
+    machine.installedFound = machine.found.find((f) => f.kind === "installed" && (!d.installed || f.dir.toLowerCase() === d.installed.dir.toLowerCase())) ?? machine.found.find((f) => f.kind === "installed") ?? null;
+    machine.elevated = !!d.elevated;
+    machine.userDir = d.user_dir || d.dir || "";
+    machine.machineDir = d.machine_dir || "";
+    machine.nsis = !!d.nsis;
     if (d.installed?.dir) setup.dir = d.installed.dir;
     // Система — по слову оболочки: по нему сцены прячут службу, тело и брандмауэр.
     machine.platform = String(d.platform || "").trim().toLowerCase();
@@ -389,16 +444,24 @@ async function start() {
   // 26.09: Hélène уже стоит — первой сценой «уже установлена» (обновить / удалить /
   // настроить заново), а не мастер с именем и конституцией, как при первой установке.
   if (!uninstallMode && machine.installed) {
-    insertScene(installed, about, "installed");
+    insertScene(installed, isPraxis() ? where : about, "installed");
     installed.bind({
       update: () => void updateInstalled(),
       // На месте (установка NSIS) удаление — его uninstall.exe: он снимет службу,
       // файлы, ярлыки и запись в «Приложениях» и спросит про данные.
-      remove: () => void (machine.inPlace
+      // 1.2: uninstall.exe есть только у установок NSIS 1.1.x; остальное снимает сам мастер.
+      remove: () => void (machine.inPlace && machine.nsis
         ? uninstallLaunch().catch((e) => showHint("Не запустился uninstall.exe: " + String(e), 0))
         : removeInstalled()),
       fresh: () => void go(1),
     }, shipped);
+  } else if (!uninstallMode && !isPraxis() && resumable(machine.found).length) {
+    // 1.2: программы нет, а память агента нашлась — предложить продолжить с ней.
+    insertScene(found, name, "found");
+    found.bind({
+      resume: (f) => void resumeFound(f),
+      fresh: () => void go(1),
+    });
   }
   // Прежние поколения продукта. Спрашиваем SCM ДО всех решений: если на машине
   // живёт служба Vera/Frame (снятие прошлой версии сносило файлы, а службу
@@ -408,7 +471,7 @@ async function start() {
   // списком, а сюда — вторая страховка, чтобы сцену не вставить и по ошибке.
   try {
     const home = machine.installed?.dir || setup.dir;
-    if (!isMac() && (await legacy.look(home))) insertScene(legacy, uninstallMode ? uninstall : mode_, "legacy");
+    if (!isMac() && !isPraxis() && (await legacy.look(home))) insertScene(legacy, uninstallMode ? uninstall : mode_, "legacy");
   } catch {
     // SCM не ответила — маршрут остаётся прежним, молча ничего не снимаем
   }

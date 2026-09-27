@@ -3338,6 +3338,81 @@ fn firewall_rule_name(port: u16) -> String {
 #[cfg(windows)]
 include!("../../common/console_text.rs");
 
+// Копии памяти агента (1.2): снимок по расписанию и по кнопке — общий текст с
+// мастером и службой.
+mod backup {
+    #![allow(dead_code)]
+    include!("../../common/backup.rs");
+}
+
+/// Расписание копий памяти, когда агент живёт ИЗ ОКНА. Со службой снимает она
+/// (`installed.service` в helene.json), у окна Praxis (`mode: remote`) агента здесь нет.
+/// Первая проверка — через три минуты после старта (агенту дать подняться), дальше
+/// раз в полчаса; сам снимок — раз в `backup.every_days` (по умолчанию неделя).
+fn backup_ticker() {
+    std::thread::sleep(Duration::from_secs(180));
+    loop {
+        let root = install_root();
+        let cfg = match read_config(&root.join(CONFIG_NAME)) {
+            ConfigRead::Ok(v) => Some(v),
+            _ => None,
+        };
+        let remote = cfg.as_ref().and_then(|c| c.get("mode")).and_then(|v| v.as_str()) == Some("remote");
+        let service = cfg
+            .as_ref()
+            .and_then(|c| c.get("installed"))
+            .and_then(|i| i.get("service"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !remote && !service {
+            if let Some(line) = backup::tick(&root, cfg.as_ref()) {
+                log_line(&line);
+            }
+        }
+        std::thread::sleep(Duration::from_secs(1800));
+    }
+}
+
+/// «Сделать копию сейчас» в настройках. -> путь к снимку.
+#[tauri::command]
+async fn backup_now() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let root = install_root();
+        let cfg = match read_config(&root.join(CONFIG_NAME)) {
+            ConfigRead::Ok(v) => Some(v),
+            _ => None,
+        };
+        let p = backup::policy(&root, cfg.as_ref());
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let (path, files) = backup::snapshot(&root, &p.dir, "manual", &never)?;
+        log_line(&format!("копия памяти по кнопке: {} ({files} файлов)", path.display()));
+        Ok(serde_json::json!({ "path": path.display().to_string(), "files": files }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Снимки в папке копий — для карточки «Копии памяти».
+#[tauri::command]
+fn backup_list() -> serde_json::Value {
+    let root = install_root();
+    let cfg = match read_config(&root.join(CONFIG_NAME)) {
+        ConfigRead::Ok(v) => Some(v),
+        _ => None,
+    };
+    let p = backup::policy(&root, cfg.as_ref());
+    let items: Vec<serde_json::Value> = backup::list(&p.dir)
+        .into_iter()
+        .map(|(name, bytes, when)| serde_json::json!({ "name": name, "bytes": bytes, "when": when }))
+        .collect();
+    serde_json::json!({
+        "dir": p.dir.display().to_string(),
+        "every_days": p.every_days,
+        "keep": p.keep,
+        "items": items,
+    })
+}
+
 // ─────────────────────────────────────────────── что именно просим у netsh
 //
 // Правило ставится ПАЧКОЙ: сначала снос старого, потом добавление своего.
@@ -5907,6 +5982,8 @@ fn main() {
             update_check,
             update_download,
             update_install,
+            backup_now,
+            backup_list,
             logs_bundle,
             reveal_path,
             open_privacy_pane,
@@ -5968,6 +6045,8 @@ fn main() {
             }
             // Раз в сутки — есть ли версия новее; только уведомление.
             std::thread::spawn(update_autocheck);
+            // Копии памяти по расписанию (1.2): раз в неделю по умолчанию.
+            std::thread::spawn(backup_ticker);
 
             // Трей: закрытие окна прячет его, харнесс-дети живут дальше;
             // настоящий выход — только из меню трея.

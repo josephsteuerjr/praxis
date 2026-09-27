@@ -60,6 +60,27 @@ export interface Setup {
    *  установщик не спрашивает — все четыре, сузить можно в Настройках. */
   computer: boolean;
   dir: string;
+  /** 1.2: «для меня» (`user`) или «для всех» (`machine`, Program Files, один запрос прав). */
+  scope?: "" | "user" | "machine";
+  /** 1.2: продолжить с найденной памятью из другой папки — её data/ и helene.json
+   *  КОПИРУЮТСЯ в новую установку, источник не трогается. */
+  carry_from?: string;
+}
+
+/** Находка на машине (1.2): установка, остаток памяти после снятия, копия владельца. */
+export interface Found {
+  kind: "installed" | "unconfigured" | "leftover" | "backup";
+  dir: string;
+  agent: string;
+  owner: string;
+  version: string;
+  scope: "" | "user" | "machine";
+  program: boolean;
+  complete: boolean;
+  decisions: boolean;
+  data_mb: number;
+  last: string;
+  agents: string[];
 }
 
 export interface Installed {
@@ -80,6 +101,15 @@ export interface Defaults {
    *  Старая оболочка поля не шлёт — тогда пусто, и не прячется ничего. */
   platform?: string;
   arch?: string;
+  /** 1.2: что лежит на машине. */
+  found?: Found[];
+  elevated?: boolean;
+  user_dir?: string;
+  machine_dir?: string;
+  /** Поставка — хвост установщика (один файл setup.exe). */
+  tail?: boolean;
+  /** Рядом uninstall.exe установщика NSIS 1.1.x. */
+  nsis?: boolean;
 }
 
 export interface Receipt {
@@ -88,6 +118,10 @@ export interface Receipt {
   // running | stopped | absent (нет прав) | missing (нет службы в поставке) |
   // skipped | failed: <причина>
   service: string;
+  /** 1.2: `user` | `machine`. */
+  scope?: string;
+  /** 1.2: снимок памяти перед обновлением (путь к zip). */
+  backup?: string;
   // Предупреждение службы: она работает как СИСТЕМА и запускает код из папки,
   // куда пишет обычный пользователь. Приходит от helene-svc через файл рядом с
   // конфигом; на экране расписки его показывают отдельной строкой.
@@ -99,6 +133,14 @@ export interface Progress {
   step: number;
   total: number;
   label: string;
+  /** 1.2: `check` | `backup` | `lay` | `rehearse` | `stop` | `swap` | `configure` |
+   *  `register` | `service` | `done`; у снятия — `service` | `stop` | `fence` | `files` | `done`. */
+  phase?: string;
+  /** Доля внутри фазы 0..1 (раскладка). */
+  frac?: number;
+  detail?: string;
+  /** Можно ли сейчас отменить — до подмены. */
+  cancellable?: boolean;
 }
 
 export const setup: Setup = {
@@ -128,12 +170,25 @@ export const setup: Setup = {
   // прочитав оговорку. Значение приезжает из COMPUTER_OPTION на сцене режима.
   computer: false,
   dir: "",
+  scope: "",
+  carry_from: "",
 };
 
 /** Что уже установлено на машине: заполняется на старте ответом `defaults`.
  *  Установщик не читал существующую установку вовсе, и обновление выглядело
  *  как первое учреждение продукта. `platform` — оттуда же (см. `Defaults`). */
-export const machine: { installed: Installed | null; platform: string; inPlace: boolean } = { installed: null, platform: "", inPlace: false };
+export const machine: {
+  installed: Installed | null;
+  platform: string;
+  inPlace: boolean;
+  /** 1.2: находки, установленная (с режимом), права, папки по умолчанию. */
+  found: Found[];
+  installedFound: Found | null;
+  elevated: boolean;
+  userDir: string;
+  machineDir: string;
+  nsis: boolean;
+} = { installed: null, platform: "", inPlace: false, found: [], installedFound: null, elevated: false, userDir: "", machineDir: "", nsis: false };
 
 /** Визард открыт на macOS. Службы Windows, тела тула `computer` и правила
  *  брандмауэра там нет по построению — их опции, строки сводки и слова про
@@ -166,7 +221,24 @@ export async function loadDefaults(): Promise<Defaults> {
     if (new URLSearchParams(location.search).get("platform") === "macos") {
       return { dir: "/Users/…/Applications/Helene", payload: null, version: "превью", installed: null, platform: "macos", arch: "aarch64" };
     }
-    return { dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Hélène", payload: null, version: "превью", installed: null, platform: "windows" };
+    const q = new URLSearchParams(location.search);
+    const found: Found[] = q.has("found")
+      ? [
+          { kind: "leftover", dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Helene", agent: "Мира", owner: "Егор", version: "1.1.1", scope: "user", program: false, complete: true, decisions: true, data_mb: 71, last: "2026-09-27", agents: [] },
+          { kind: "backup", dir: "C:\\Users\\…\\AppData\\Local\\Helene-backup-20260926", agent: "Мира", owner: "Егор", version: "1.0.3", scope: "", program: false, complete: true, decisions: true, data_mb: 72, last: "2026-09-26", agents: ["Джарвис"] },
+        ]
+      : [];
+    return {
+      dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Helene",
+      payload: null,
+      version: "превью",
+      installed: null,
+      platform: "windows",
+      found,
+      user_dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Helene",
+      machine_dir: "C:\\Program Files\\Helene",
+      tail: true,
+    };
   }
   return invoke<Defaults>("defaults");
 }
@@ -187,18 +259,27 @@ export async function installedSetup(dir: string): Promise<Setup | null> {
 /** Установка: оболочка копирует поставку, пишет конфиг и конституцию, ставит ярлыки. */
 export async function runInstall(onProgress: (p: Progress) => void): Promise<Receipt> {
   if (!inTauri) {
-    // На Mac ярлыков и записи в «Приложениях» нет — как и шагов про них (install.rs).
-    const labels = isMac()
-      ? ["Копирую файлы программы", "Записываю настройки и конституцию", "Готово"]
-      : [
-        "Копирую файлы программы",
-        "Записываю настройки и конституцию",
-        "Создаю ярлыки",
-        "Регистрирую удаление",
-        "Готово",
-      ];
-    for (const [i, label] of labels.entries()) {
-      onProgress({ step: i + 1, total: labels.length, label });
+    previewCancel = false;
+    const plan: Array<[string, string, boolean]> = [
+      ["check", "Проверяю установщик", true],
+      ["lay", "Раскладываю новую версию рядом", true],
+      ["swap", "Меняю версии местами", false],
+      ["configure", "Записываю настройки и конституцию", false],
+      ["register", "Ярлыки и запись в «Приложениях»", false],
+      ["done", "Готово", false],
+    ];
+    const labels = plan.map((p) => p[1]);
+    for (const [i, [phase, label, cancellable]] of plan.entries()) {
+      if (phase === "lay") {
+        for (let f = 0; f <= 1.0001; f += 0.05) {
+          if (previewCancel) throw "Отменено — прежняя версия на месте, ничего не изменилось";
+          onProgress({ step: i + 1, total: plan.length, label, phase, frac: f, detail: `${Math.round(f * 15342)} файлов · ${Math.round(f * 649)} МБ`, cancellable });
+          await new Promise((r) => setTimeout(r, 160));
+        }
+        continue;
+      }
+      if (previewCancel && cancellable) throw "Отменено — прежняя версия на месте, ничего не изменилось";
+      onProgress({ step: i + 1, total: plan.length, label, phase, cancellable });
       await new Promise((r) => setTimeout(r, 650));
     }
     return {
@@ -301,10 +382,36 @@ export async function removeService(name: string): Promise<string> {
   return invoke("remove_service", { name });
 }
 
-/** Снятие из визарда; в превью — заглушка. */
-export async function runUninstall(purge: boolean): Promise<string> {
-  if (!inTauri) return "Превью: снятие доступно в установщике";
-  return invoke("uninstall_run", { purge });
+/** Снятие из визарда; `dir` — какая установка (1.2: снимать можно и из нового
+ *  установщика, не только мастером в папке программы). Ход — событиями. */
+export async function runUninstall(purge: boolean, dir: string, onProgress?: (p: Progress) => void): Promise<string> {
+  if (!inTauri) {
+    const phases = ["service", "stop", "fence", "files", "done"];
+    const labels = ["Снимаю службу", "Останавливаю программу", "Снимаю ограду песочницы", "Убираю файлы программы", "Готово"];
+    for (const [i, label] of labels.entries()) {
+      onProgress?.({ step: i + 1, total: labels.length, label, phase: phases[i] });
+      await new Promise((r) => setTimeout(r, 450));
+    }
+    return "Превью: снятие доступно в установщике";
+  }
+  const { listen } = await import("@tauri-apps/api/event");
+  const stop = await listen<Progress>("uninstall-progress", (e) => onProgress?.(e.payload));
+  try {
+    return await invoke<string>("uninstall_run", { purge, dir: dir || null });
+  } finally {
+    stop();
+  }
+}
+
+let previewCancel = false;
+
+/** «Отмена» установки: до подмены — откат, прежняя версия цела. */
+export async function cancelInstall(): Promise<void> {
+  if (!inTauri) {
+    previewCancel = true;
+    return;
+  }
+  await invoke("cancel_install");
 }
 
 export async function openFrame(exe: string): Promise<void> {

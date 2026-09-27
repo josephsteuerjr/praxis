@@ -189,35 +189,51 @@ fn join_rel(root: &Path, rel: &str) -> PathBuf {
     p
 }
 
+/// Папки, уже созданные этой раскладкой: 17 тысяч файлов лежат в паре тысяч папок, и
+/// спрашивать систему о каждой родительской папке на каждый файл незачем.
+#[derive(Default)]
+struct Made(std::collections::HashSet<PathBuf>);
+
+impl Made {
+    fn parent_of(&mut self, to: &Path) -> Result<(), Stop> {
+        if let Some(parent) = to.parent() {
+            if !self.0.contains(parent) {
+                std::fs::create_dir_all(parent).map_err(|e| Stop::Failed(format!("{}: {e}", parent.display())))?;
+                self.0.insert(parent.to_path_buf());
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Копирование потока в файл кусками — с проверкой отмены между кусками: файл в
-/// сотню мегабайт (onnxruntime, av) иначе держал бы «Отмену» секунды.
+/// сотню мегабайт (onnxruntime, av) иначе держал бы «Отмену» секунды. Буфер — один
+/// на всю раскладку (живая проба 27.09: по два мегабайта на каждый из 17 830 файлов
+/// растягивали раскладку на минуты).
 fn pour(
     reader: &mut dyn std::io::Read,
     to: &Path,
     cancel: &AtomicBool,
+    buf: &mut [u8],
+    made: &mut Made,
     on_bytes: &mut dyn FnMut(u64),
 ) -> Result<u64, Stop> {
     use std::io::Write;
-    if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| Stop::Failed(format!("{}: {e}", parent.display())))?;
-    }
-    let file = std::fs::File::create(to).map_err(|e| Stop::Failed(format!("{}: {e}", to.display())))?;
-    let mut out = std::io::BufWriter::with_capacity(1 << 20, file);
-    let mut buf = vec![0u8; 1 << 20];
+    made.parent_of(to)?;
+    let mut file = std::fs::File::create(to).map_err(|e| Stop::Failed(format!("{}: {e}", to.display())))?;
     let mut total = 0u64;
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err(Stop::Cancelled);
         }
-        let n = reader.read(&mut buf).map_err(|e| Stop::Failed(format!("чтение поставки: {e}")))?;
+        let n = reader.read(buf).map_err(|e| Stop::Failed(format!("чтение поставки: {e}")))?;
         if n == 0 {
             break;
         }
-        out.write_all(&buf[..n]).map_err(|e| Stop::Failed(format!("{}: {e}", to.display())))?;
+        file.write_all(&buf[..n]).map_err(|e| Stop::Failed(format!("{}: {e}", to.display())))?;
         total += n as u64;
         on_bytes(n as u64);
     }
-    out.flush().map_err(|e| Stop::Failed(format!("{}: {e}", to.display())))?;
     Ok(total)
 }
 
@@ -378,13 +394,18 @@ fn copy_dir(
     let mut done = 0u64;
     let mut count = 0u64;
     std::fs::create_dir_all(dst).map_err(|e| Stop::Failed(format!("{}: {e}", dst.display())))?;
-    for (rel, _) in &files {
+    let mut made = Made::default();
+    // Распакованная поставка лежит на диске — копирует система (CopyFileEx), отмена —
+    // между файлами: самый большой файл поставки копируется за доли секунды.
+    for (rel, size) in &files {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(Stop::Cancelled);
+        }
         let from = join_rel(src, rel);
         let to = join_rel(dst, rel);
-        let mut reader = std::fs::File::open(&from).map_err(|e| Stop::Failed(format!("{}: {e}", from.display())))?;
-        pour(&mut reader, &to, cancel, &mut |n| {
-            done += n;
-        })?;
+        made.parent_of(&to)?;
+        std::fs::copy(&from, &to).map_err(|e| Stop::Failed(format!("{}: {e}", to.display())))?;
+        done += size;
         count += 1;
         progress(done, total, count);
     }
@@ -442,6 +463,8 @@ fn tar_extract(
     std::fs::create_dir_all(dst).map_err(|e| Stop::Failed(format!("{}: {e}", dst.display())))?;
     let mut done = 0u64;
     let mut count = 0u64;
+    let mut buf = vec![0u8; 1 << 20];
+    let mut made = Made::default();
     let mut wanted_left = only.map(|l| l.len()).unwrap_or(usize::MAX);
     let entries = archive.entries().map_err(|e| Stop::Failed(format!("архив поставки не читается: {e}")))?;
     for entry in entries {
@@ -462,6 +485,7 @@ fn tar_extract(
             if wanted && only.is_none() {
                 let to = join_rel(dst, &rel);
                 std::fs::create_dir_all(&to).map_err(|e| Stop::Failed(format!("{}: {e}", to.display())))?;
+                made.0.insert(to);
             }
             continue;
         }
@@ -480,7 +504,7 @@ fn tar_extract(
             continue;
         }
         let to = join_rel(dst, &rel);
-        pour(&mut entry, &to, cancel, &mut |n| {
+        pour(&mut entry, &to, cancel, &mut buf, &mut made, &mut |n| {
             done += n;
         })?;
         count += 1;

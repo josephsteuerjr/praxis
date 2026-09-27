@@ -27,6 +27,8 @@ compile_error!(
 mod backup;
 mod install;
 mod payload;
+#[cfg(feature = "praxis")]
+mod praxis;
 mod probe;
 mod tx;
 #[cfg(windows)]
@@ -180,6 +182,8 @@ fn run_worker(xdir: &std::path::Path) -> i32 {
             }
             match install::uninstall_dir(&dir, plan.purge, &mut emit) {
                 Ok(text) => {
+                    let timing = install::UNINSTALL_TIMING.lock().map(|t| t.clone()).unwrap_or_default();
+                    let _ = std::fs::write(xdir.join("..").join("helene-uninstall-worker.log"), format!("{text}\n{timing}\n"));
                     // Поднятый исполнитель может убрать мастер из Program Files — окно
                     // без прав не может.
                     install::uninstall_finish();
@@ -484,7 +488,8 @@ async fn uninstall_run(app: tauri::AppHandle, purge: bool, dir: Option<String>) 
     })
     .await
     .map_err(|e| e.to_string())??;
-    let _ = std::fs::write(std::env::temp_dir().join("helene-uninstall.log"), &text);
+    let timing = install::UNINSTALL_TIMING.lock().map(|t| t.clone()).unwrap_or_default();
+    let _ = std::fs::write(std::env::temp_dir().join("helene-uninstall.log"), format!("{text}\n{timing}\n"));
     UNINSTALL_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(text)
 }
@@ -565,6 +570,19 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     // 26.09 (1.1.0): рядом с exe лежит uninstall.exe установщика NSIS или сказано
     // `--configure` — мастер работает «на месте»: файлы уже здесь, он их не копирует.
+    // Что видит мастер (установки, найденная память, режимы, папки) — JSON в файл:
+    // для разбора «почему он не нашёл мою копию» без окна.
+    if let Some(i) = args.iter().position(|a| a == "--probe") {
+        let d = install::defaults();
+        let text = serde_json::to_string_pretty(&d).unwrap_or_default();
+        match args.get(i + 1) {
+            Some(path) => {
+                let _ = std::fs::write(path, text);
+            }
+            None => println!("{text}"),
+        }
+        return;
+    }
     // Поднятый исполнитель «для всех»: без окна, по заданию из папки обмена.
     if let Some(i) = args.iter().position(|a| a == "--worker") {
         #[cfg(windows)]
@@ -671,6 +689,9 @@ fn main() {
             .and_then(|raw| serde_json::from_str::<install::Setup>(&raw).map_err(|e| e.to_string()))
             .and_then(|setup| {
                 install_any(&setup, &mut |p| {
+                    if p.frac.is_some() && p.phase != "done" {
+                        return;
+                    }
                     log.push_str(&format!("[{}/{}] {}
 ", p.step, p.total, p.label));
                 })
@@ -682,6 +703,7 @@ fn main() {
 ")),
         }
         let _ = std::fs::write(&log_path, &log);
+        install::join_cleanup(30);
         let failed = result.is_err();
         if !args.iter().any(|a| a == "--quiet") {
             message_box(&match result {
@@ -796,7 +818,8 @@ fn main() {
             Ok(text) => text,
             Err(err) => format!("Удаление не удалось: {err}"),
         };
-        let _ = std::fs::write(std::env::temp_dir().join("helene-uninstall.log"), &text);
+        let timing = install::UNINSTALL_TIMING.lock().map(|t| t.clone()).unwrap_or_default();
+        let _ = std::fs::write(std::env::temp_dir().join("helene-uninstall.log"), format!("{text}\n{timing}\n"));
         // Хвост самоудаления — ТОЛЬКО когда снятие состоялось. Раньше он бежал
         // всегда и уносил helene-setup.exe даже из папки, которую снимать отказались.
         if ok {
@@ -838,12 +861,16 @@ fn main() {
                 "main",
                 tauri::WebviewUrl::App("index.html".into()),
             )
-            .title(if UNINSTALL_MODE.load(std::sync::atomic::Ordering::Relaxed) { "Снятие Hélène" } else { "Установка Hélène" })
-            .initialization_script(if UNINSTALL_MODE.load(std::sync::atomic::Ordering::Relaxed) {
-                "window.SETUP_MODE = 'uninstall';"
+            .title(&if UNINSTALL_MODE.load(std::sync::atomic::Ordering::Relaxed) {
+                format!("Снятие {}", install::PRODUCT_UI)
             } else {
-                "window.SETUP_MODE = 'install';"
+                format!("Установка {}", install::PRODUCT_UI)
             })
+            .initialization_script(&format!(
+                "window.SETUP_MODE = '{}'; window.SETUP_VARIANT = '{}';",
+                if UNINSTALL_MODE.load(std::sync::atomic::Ordering::Relaxed) { "uninstall" } else { "install" },
+                if cfg!(feature = "praxis") { "praxis" } else { "helene" }
+            ))
             .inner_size(1600.0, 900.0)
             .min_inner_size(960.0, 600.0)
             .center()
@@ -882,6 +909,9 @@ fn main() {
         .run(|_app, event| {
             if let tauri::RunEvent::Exit = event {
                 install::relay_abort();
+                // Прежняя версия (`.old`) удаляется в фоне после удачной установки —
+                // окно закрыли раньше, чем она ушла: дождаться (не дольше 20 с).
+                install::join_cleanup(20);
                 // Временный дом реле с живым refresh_token к аккаунту ChatGPT не
                 // должен пережить установщик: раньше он оставался в %TEMP% навсегда.
                 install::relay_cleanup();

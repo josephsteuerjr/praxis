@@ -85,10 +85,12 @@
    того, что выложил PyPI, — «рантайм не менялся» проверить нечем.
 
    Итог — `installer/build/Helene-<версия>.zip` и рядом
-   `Helene-<версия>.zip.sha256`; с 1.1.0 — ещё `Helene-<версия>-setup.exe`
-   (установщик NSIS из `installer/windows/helene-setup.nsi`: распаковывает
-   поставку и открывает мастер; makensis берётся из PATH или из NSIS Tauri в
-   `%LocalAppData%\tauri\NSIS`) и его `.sha256`. Для людей в выпуске — setup.exe,
+   `Helene-<версия>.zip.sha256`; с 1.2 — ещё `Helene-<версия>-setup.exe`:
+   сам мастер (`helene-setup.exe` из поставки) с поставкой в хвосте — tar, сжатый
+   zstd 19 с дальними совпадениями (~180 МБ, сборка хвоста — минута-полторы), и
+   32 байта хвоста `HLNPAYLD` (формат — `build_dist.py` и `setup/src/payload.rs`,
+   один на двоих; сборка сверяет хвост сама, `check_tail`). NSIS больше нет. Для
+   людей в выпуске — setup.exe,
    архив — для кнопки обновления в окне (она берёт из выпуска только .zip).
 
 4. **Что сборка проверяет сама** (падает, а не предупреждает): версии трёх
@@ -184,8 +186,9 @@
 1. Влить ветку в `main` — иначе кнопки `workflow_dispatch` у workflow не будет
    (GitHub показывает её только с ветки по умолчанию).
 2. Windows: `python installer/build_dist.py --skip-runtime` и он же
-   `--variant praxis` → `Helene-0.8.0.zip` и `Praxis-0.8.0.zip` (с 1.1.0 рядом с каждым —
-   `<Продукт>-<версия>-setup.exe` из `installer/windows/*.nsi`).
+   `--variant praxis` → `Helene-0.8.0.zip` и `Praxis-0.8.0.zip` (с 1.2 рядом с каждым —
+   `<Продукт>-<версия>-setup.exe`: мастер с хвостом; мастер Praxis — `pwsh -File
+   setup/build-praxis.ps1`, в поставке `praxis-setup.exe`).
 3. `gh release create v0.8.0` — в выпуск сразу кладутся Windows-архив,
    Praxis-архив и **`install.sh` ПРЕЖНЕЙ версии**.
 4. `gh workflow run macos.yml -f tag=v0.8.0 -f upload=true` — раннер соберёт

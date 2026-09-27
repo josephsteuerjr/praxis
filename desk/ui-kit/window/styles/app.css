@@ -4085,3 +4085,19 @@ body.first-run #state {
   color: var(--ink);
   border-color: var(--accent);
 }
+
+/* Копии памяти (1.2): последние снимки — тихим списком под кнопками. */
+.backup-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.backup-list .muted {
+  color: var(--ink-3);
+}

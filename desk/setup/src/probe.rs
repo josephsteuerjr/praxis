@@ -127,7 +127,7 @@ pub fn look(root: &Path, kind_hint: &str, scope: &str) -> Option<Found> {
     let cfg = read_json(&root.join("helene.json"));
     let has_soul = root.join("data").join("soul").join("SOUL.md").is_file();
     let has_memory = root.join("data").join("memory").is_dir();
-    let program = root.join(if cfg!(windows) { "helene.exe" } else { "Helene.app" }).exists();
+    let program = crate::install::shell_exe(root).exists();
     let complete = cfg
         .as_ref()
         .and_then(|c| c.get("setup_complete").and_then(|v| v.as_bool()))
@@ -135,8 +135,10 @@ pub fn look(root: &Path, kind_hint: &str, scope: &str) -> Option<Found> {
     if !program && !has_soul && !has_memory && !complete {
         return None;
     }
-    // Praxis (окно к серверу) пишет свой helene.json с `mode: remote` — это не агент.
-    if cfg.as_ref().and_then(|c| c.get("mode").and_then(|v| v.as_str())) == Some("remote") {
+    // Praxis (окно к серверу) пишет свой helene.json с `mode: remote` — для мастера
+    // Hélène это не агент; мастеру Praxis — как раз его установка.
+    let remote = cfg.as_ref().and_then(|c| c.get("mode").and_then(|v| v.as_str())) == Some("remote");
+    if remote != cfg!(feature = "praxis") {
         return None;
     }
     let agent = cfg.as_ref().map(|c| text_at(c, "agent", "name")).unwrap_or_default();
@@ -341,6 +343,18 @@ mod tests {
         std::fs::write(r.join("helene.exe"), "x").unwrap();
         assert!(look(&r, "", "user").is_none(), "Praxis — окно к серверу, не агент");
         let _ = std::fs::remove_dir_all(&r);
+    }
+
+    /// Живой поиск на машине разработчика — руками: `cargo test probe_live -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn probe_live() {
+        for f in probe() {
+            println!("{} | {} | {} | {} MB | {}", f.kind, f.agent, f.dir, f.data_mb, f.last);
+        }
+        for b in manual_backups() {
+            println!("backup dir: {}", b.display());
+        }
     }
 
     #[test]

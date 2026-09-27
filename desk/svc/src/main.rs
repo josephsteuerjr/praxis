@@ -806,6 +806,40 @@ include!("../../common/random_hex.rs");
 // оболочка показывает в трее, и берёт оттуда же порт по умолчанию.
 include!("../../common/agents.rs");
 
+// Копии памяти агента (1.2): под службой снимает она — раз в `backup.every_days`
+// (по умолчанию неделя); итог — строкой в `backups.log` рядом со снимками.
+mod backup {
+    #![allow(dead_code)]
+    include!("../../common/backup.rs");
+}
+
+fn backup_ticker(config: PathBuf, stop: Arc<AtomicBool>) {
+    let mut waited = 0u64;
+    // Первая проверка — через три минуты (агенту дать подняться), дальше раз в полчаса.
+    let mut next = 180u64;
+    while !stop.load(Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_secs(5));
+        waited += 5;
+        if waited < next {
+            continue;
+        }
+        waited = 0;
+        next = 1800;
+        let root = config.parent().map(Path::to_path_buf).unwrap_or_default();
+        let cfg = std::fs::read(&config)
+            .ok()
+            .and_then(|b| decode_config(&b).ok())
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+        if let Some(line) = backup::tick(&root, cfg.as_ref()) {
+            let dir = backup::policy(&root, cfg.as_ref()).dir;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("backups.log")) {
+                use std::io::Write as _;
+                let _ = writeln!(f, "{} {line}", backup::stamp_now());
+            }
+        }
+    }
+}
+
 /// Правило брандмауэра для трубы, когда разрешён телефон.
 ///
 /// У окна это делает кнопка «Показать QR» (shell/main.rs::firewall_allow), но
@@ -951,6 +985,11 @@ fn supervise(
     // (смена ключа/порта/выключателя реле применяется без снятия службы).
     let mut plan: Plan = plan.clone();
     let now = Instant::now();
+    {
+        let config = plan.config.clone();
+        let stop = stop.clone();
+        std::thread::spawn(move || backup_ticker(config, stop));
+    }
     // Секрет трубы заводится до подъёма детей: он уходит им в окружение, и его
     // же читает окно, чтобы говорить с харнессом службы. У каждого агента он
     // свой и лежит в его дереве.

@@ -1152,3 +1152,290 @@ button:focus-visible {
   border-left: 2px solid var(--err);
   padding-left: 12px;
 }
+
+/* ------------------------------------------------------------------ */
+/* 1.2 (27.09): найденная память, «для кого», лист фаз установки.       */
+/* ------------------------------------------------------------------ */
+
+/* Карточка выбора, спрятанная по системе (на macOS «для всех» нет). */
+.mode-card[hidden] {
+  display: none;
+}
+
+/* Нашлась память: карточка на агента — имя его почерком, как над его комнатой. */
+.found-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
+  gap: 20px;
+  max-width: 1240px;
+}
+
+.found-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 22px 28px 24px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: transparent;
+  text-align: left;
+  transition: border-color var(--dur-2) var(--ease-std), background-color var(--dur-2) var(--ease-std);
+}
+
+.found-card:hover {
+  border-color: var(--ink-3);
+}
+
+.found-card[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.found-name {
+  font: 300 44px/1.15 var(--hand);
+  color: var(--ink);
+}
+
+.found-meta {
+  font-size: 17px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.found-kind {
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.found-path {
+  margin-top: 4px;
+  font: 400 13.5px/1.4 var(--mono);
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+/* Для кого: папка под выбранной карточкой — моноширинно, спокойно. */
+.where-path {
+  margin: -8px 0 0;
+  font: 400 16px/1.4 var(--mono);
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.where-path[hidden],
+.where-fixed[hidden],
+.modes[hidden] {
+  display: none;
+}
+
+/* Лист установки: нить с узлами. Узел — состояние фазы, нить — путь целиком,
+   видимый с первой секунды. Живая полоса — только у раскладки и снимка. */
+.sheet {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 980px;
+}
+
+.sheet[hidden],
+.sheet-foot[hidden] {
+  display: none;
+}
+
+.sheet::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 14px;
+  bottom: 14px;
+  width: 1px;
+  background: var(--line-strong);
+}
+
+.sheet-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  column-gap: 22px;
+  row-gap: 10px;
+  align-items: center;
+  font-size: 21px;
+  line-height: 1.35;
+  color: var(--muted);
+  transition: color var(--dur-3) var(--ease-std), opacity var(--dur-3) var(--ease-std);
+}
+
+.sheet-dot {
+  position: relative;
+  z-index: 1;
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-strong);
+  background: var(--ground);
+  transition: background-color var(--dur-3) var(--ease-std), border-color var(--dur-3) var(--ease-std);
+}
+
+.sheet-label {
+  min-width: 0;
+}
+
+.sheet-detail {
+  font: 400 15px/1.3 var(--mono);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.sheet-bar {
+  grid-column: 2 / span 2;
+  display: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.sheet-bar i {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.18s linear;
+}
+
+.sheet-row[data-state="active"] {
+  color: var(--ink);
+}
+
+.sheet-row[data-state="active"] .sheet-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 6px var(--accent-soft);
+  animation: sheet-breathe 1.8s var(--ease-std) infinite;
+}
+
+.sheet-row[data-state="active"] .sheet-bar,
+.sheet-row[data-state="done"] .sheet-bar {
+  display: block;
+}
+
+.sheet-row[data-state="done"] {
+  color: var(--ink-3);
+}
+
+.sheet-row[data-state="done"] .sheet-dot {
+  border-color: var(--ink-3);
+  background: var(--ink-3);
+  /* галочка — вырезом в узле, без картинок */
+  -webkit-mask: radial-gradient(circle, #000 64%, transparent 66%);
+}
+
+.sheet-row[data-state="done"] .sheet-dot::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 3px;
+  width: 5px;
+  height: 10px;
+  border: solid var(--ground);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.sheet-row[data-state="done"] .sheet-bar i {
+  background: var(--ink-3);
+}
+
+.sheet-row.skipped {
+  opacity: 0.45;
+}
+
+.sheet-row[data-state="failed"] {
+  color: var(--err);
+}
+
+.sheet-row[data-state="failed"] .sheet-dot {
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+
+@keyframes sheet-breathe {
+  50% {
+    box-shadow: 0 0 0 10px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet-row[data-state="active"] .sheet-dot {
+    animation: none;
+  }
+  .sheet-bar i {
+    transition: none;
+  }
+}
+
+.sheet-foot {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  max-width: 980px;
+}
+
+.sheet-why {
+  font-size: 15.5px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+}
+
+.install-result .muted {
+  font-size: 16px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.result-notes {
+  margin: -8px 0 24px;
+  padding-left: 22px;
+  max-width: 900px;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--warn);
+}
+
+/* Ряд кнопок сцены: до 1.2 у него не было своего правила, и кнопки «Обновить /
+   Удалить / Настроить заново» стояли вплотную друг к другу. */
+.install-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+/* Карточки «для кого» читаются как текст, а не как кнопки: выключка влево. */
+.where-cards .mode-card {
+  text-align: left;
+}
+
+/* Сводка уходит, когда пошла установка: `display: grid` иначе перебивал hidden. */
+.summary[hidden] {
+  display: none;
+}
+
+/* Отменённая фаза — не авария: спокойный полый узел, полоса убрана. */
+.sheet-row[data-state="cancelled"] {
+  color: var(--ink-3);
+}
+
+.sheet-row[data-state="cancelled"] .sheet-bar {
+  display: none;
+}

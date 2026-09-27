@@ -20,6 +20,8 @@ ureq = { version = "2", features = ["tls", "native-certs", "proxy-from-env", "so
 # sha256 скачанного архива обновления (update_download): подписи кода у
 # поставки нет, сумма из релиза — единственная проверка, что файл тот.
 sha2 = "0.10"
+# 1.2: копии памяти по расписанию (common/backup.rs) — zip, открывается Проводником.
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
 # libc — ради двух вещей, которых нет в std: `localtime_r` (штамп времени в

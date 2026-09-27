@@ -10,7 +10,7 @@
 // имя или модель; он и раньше был обновлением поверх, а не второй копией.
 import { FormScene } from "./base";
 import { button, el, explain } from "./form";
-import { PRODUCT_NAME } from "../config";
+import { PRODUCT_NAME, isPraxis } from "../config";
 import { machine, type Installed } from "../setup";
 
 export interface InstalledActions {
@@ -31,21 +31,22 @@ export class InstalledScene extends FormScene {
   constructor(root: HTMLElement) {
     super(root);
     const head = el("h2", "form-head");
-    head.append(el("span", "line", `${PRODUCT_NAME} уже установлена`));
+    head.append(el("span", "line", `${PRODUCT_NAME} уже ${isPraxis() ? "установлен" : "установлена"}`));
     this.lead = el("p", "form-lead", "");
     const buttons = el("div", "install-actions");
     this.updateButton = button("Обновить", "primary", () => this.actions?.update());
-    buttons.append(
-      this.updateButton,
-      button("Удалить", "quiet", () => this.actions?.remove()),
-      button("Настроить заново", "quiet", () => this.actions?.fresh()),
-    );
+    buttons.append(this.updateButton, button("Удалить", "quiet", () => this.actions?.remove()));
+    if (!isPraxis()) buttons.append(button("Настроить заново", "quiet", () => this.actions?.fresh()));
     const why = explain(
       "Что будет",
-      "«Обновить» ставит новую версию поверх: память, дневник, конституция, ключ модели и "
-        + "настройки остаются, вопросов не будет. «Удалить» снимает программу и спрашивает, "
-        + "что делать с данными. «Настроить заново» — прежний мастер: имя, конституция, "
-        + "модель; это тоже установка поверх, а не вторая копия.",
+      isPraxis()
+        ? "«Обновить» ставит новую версию поверх: адрес сервера и ключ канала остаются, вопросов не будет. "
+          + "«Удалить» снимает программу и спрашивает, оставить ли настройки подключения."
+        : "«Обновить» ставит новую версию поверх: перед этим снимается копия памяти, новая версия ложится "
+          + "рядом и встаёт на место одним движением — память, дневник, конституция, ключ модели и "
+          + "настройки остаются, вопросов не будет. «Удалить» снимает программу и спрашивает, "
+          + "что делать с данными. «Настроить заново» — прежний мастер: имя, конституция, "
+          + "модель; это тоже установка поверх, а не вторая копия.",
     );
     this.mount(head, this.lead, buttons, why);
   }
