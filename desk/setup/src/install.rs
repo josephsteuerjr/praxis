@@ -114,8 +114,10 @@ const SETUP_ENTRY: &str = SETUP_APP;
 
 /// Как позвать установщик из командной строки — для записок владельцу.
 #[cfg(windows)]
+#[allow(dead_code)]
 const SETUP_CMD: &str = "helene-setup.exe";
 #[cfg(not(windows))]
+#[allow(dead_code)]
 const SETUP_CMD: &str = "\"Helene Setup.app/Contents/MacOS/helene-setup\"";
 
 /// Питон рантайма относительно корня — тот же путь уезжает в helene.json
@@ -242,6 +244,15 @@ pub struct Setup {
     #[serde(default)]
     pub computer: bool,
     pub dir: String,
+    /// 1.2: «для меня» (`user`, %LocalAppData%\Programs) или «для всех» (`machine`,
+    /// Program Files, один запрос прав). Пусто — по стоящей установке или «для меня».
+    #[serde(default)]
+    pub scope: String,
+    /// 1.2: продолжить с найденной памятью из ДРУГОЙ папки (копия владельца
+    /// `Helene-backup-*`, остаток прежней установки): её `data/` и `helene.json`
+    /// КОПИРУЮТСЯ в новую установку, источник не трогается. Пусто — не нужно.
+    #[serde(default)]
+    pub carry_from: String,
 }
 
 /// Четыре права руки `computer` — те же строки, что проверяет дерево
@@ -343,7 +354,7 @@ pub struct Telegram {
     pub owner_id: String,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Step {
     pub label: String,
     pub ok: bool,
@@ -351,11 +362,17 @@ pub struct Step {
     pub note: Option<String>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Receipt {
     pub dir: String,
     pub exe: String,
     pub service: String,
+    /// 1.2: `user` | `machine`.
+    #[serde(default)]
+    pub scope: String,
+    /// 1.2: снимок памяти перед обновлением (путь к zip), если снимался.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup: Option<String>,
     /// Предупреждение службы (СИСТЕМА запускает код из папки, куда пишет
     /// пользователь). Пришло файлом от `helene-svc install` — на экран расписки
     /// его выводит `setup/ui/src/scenes/install.ts`. Отдельным полем, а не
@@ -366,11 +383,23 @@ pub struct Receipt {
     pub steps: Vec<Step>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Progress {
     pub step: usize,
     pub total: usize,
     pub label: String,
+    /// 1.2: фаза — `check`, `backup`, `lay`, `rehearse`, `stop`, `swap`, `configure`,
+    /// `register`, `service`, `done`; по ней экран установки ведёт свой лист.
+    #[serde(default)]
+    pub phase: String,
+    /// Доля внутри фазы (0..1) — раскладка и снимок идут долго, у них живая полоса.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frac: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Можно ли сейчас отменить: до подмены — да, прежняя версия цела.
+    #[serde(default)]
+    pub cancellable: bool,
 }
 
 /// Что уже стоит на машине — чтобы визард не делал вид, будто ставит впервые.
@@ -394,6 +423,17 @@ pub struct Defaults {
     /// системе нет (служба, тело, брандмауэр), не спрашивая оболочку.
     pub platform: String,
     pub arch: String,
+    /// 1.2: что лежит на машине — установки, остатки памяти, копии владельца.
+    pub found: Vec<crate::probe::Found>,
+    /// 1.2: мастер уже с правами администратора (UAC выключен или «от имени…»).
+    pub elevated: bool,
+    /// 1.2: папки по умолчанию для «для меня» и «для всех».
+    pub user_dir: String,
+    pub machine_dir: String,
+    /// 1.2: поставка — хвост установщика (`true`) или папка рядом.
+    pub tail: bool,
+    /// Рядом `uninstall.exe` установщика NSIS 1.1.x — снимать через него.
+    pub nsis: bool,
 }
 
 /// Корень поставки или установки: папка, где лежат helene.json, app/, runtime/.
@@ -611,6 +651,54 @@ pub fn payload_dir() -> Option<PathBuf> {
     }
 }
 
+/// 1.2: поставка — хвост собственного exe (`Helene-<v>-setup.exe`) или папка рядом
+/// (распакованный архив, установленная программа). Считается один раз за процесс:
+/// сверка хвоста — это чтение самого exe.
+#[cfg(windows)]
+pub fn source() -> Option<crate::payload::Source> {
+    static SRC: std::sync::OnceLock<Option<crate::payload::Source>> = std::sync::OnceLock::new();
+    SRC.get_or_init(|| {
+        let exe = std::env::current_exe().ok()?;
+        crate::payload::Source::locate(&exe, |d| PAYLOAD_MARKERS.iter().all(|m| d.join(m).exists()))
+    })
+    .clone()
+}
+
+/// macOS: мастер живёт в бандле рядом с поставкой — только папка.
+#[cfg(not(windows))]
+pub fn source() -> Option<crate::payload::Source> {
+    payload_dir().map(crate::payload::Source::Dir)
+}
+
+/// Версия того, что мастер поставит: опись поставки, паспорт, иначе своя.
+pub fn source_version() -> String {
+    let Some(src) = source() else { return VERSION.to_string() };
+    let m = src.manifest();
+    if !m.version.is_empty() {
+        return m.version;
+    }
+    src.read("helene-build.json")
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get("version").and_then(|x| x.as_str()).map(str::to_string))
+        .unwrap_or_else(|| VERSION.to_string())
+}
+
+/// Набор входа в ChatGPT (реле и ядро питона) — там, где его можно запустить ДО
+/// установки: папка поставки, если она распакована, иначе выложенный из хвоста в
+/// дом реле (`%TEMP%\helene-setup-relay\kit`, убирается вместе с домом).
+fn relay_kit() -> Result<PathBuf, String> {
+    let src = source().ok_or("рядом с установщиком нет поставки")?;
+    if let Some(dir) = src.dir() {
+        return Ok(dir.to_path_buf());
+    }
+    let kit = relay_home().join("kit");
+    if relay_exe(&kit).is_file() && python_exe(&kit).is_file() {
+        return Ok(kit);
+    }
+    src.extract_kit(&kit).map_err(|e| format!("реле не достаётся из установщика: {e}"))?;
+    Ok(kit)
+}
+
 pub fn defaults() -> Defaults {
     Defaults {
         dir: if in_place() {
@@ -619,11 +707,26 @@ pub fn defaults() -> Defaults {
             default_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
         },
         in_place: in_place(),
-        payload: payload_dir().map(|p| p.to_string_lossy().into_owned()),
-        version: VERSION.to_string(),
+        payload: source().map(|s| s.path().to_string_lossy().into_owned()),
+        version: source_version(),
         installed: installed_info(),
         platform: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
+        found: crate::probe::probe(),
+        elevated: {
+            #[cfg(windows)]
+            {
+                crate::win::is_elevated()
+            }
+            #[cfg(not(windows))]
+            {
+                false
+            }
+        },
+        user_dir: default_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+        machine_dir: crate::probe::machine_dir().to_string_lossy().into_owned(),
+        tail: source().map(|s| s.is_tail()).unwrap_or(false),
+        nsis: nsis_root().is_some(),
     }
 }
 
@@ -1163,6 +1266,16 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_str(&decode_config(&raw)?).ok()
 }
 
+/// Тот же читатель для соседних модулей мастера (probe, backup).
+pub(crate) fn read_json_pub(path: &Path) -> Option<serde_json::Value> {
+    read_json(path)
+}
+
+/// Метка установки 1.2 — `helene-install.json` в корне: кто и как ставил (`scope`,
+/// версия, время). По ней снятие знает режим, мастер — что он «на месте», а поиск —
+/// что это установка, а не распакованный архив.
+pub const INSTALL_MARKER: &str = "helene-install.json";
+
 fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| io_note(parent, &e))?;
@@ -1559,6 +1672,8 @@ pub fn setup_from_installed(cfg: &serde_json::Value, soul: &str, dir: &str) -> O
             .unwrap_or(true),
         computer: flag("computer", "enabled"),
         dir: dir.to_string(),
+        scope: String::new(),
+        carry_from: String::new(),
     })
 }
 
@@ -1572,8 +1687,15 @@ pub fn setup_from_dir(dir: &Path) -> Option<Setup> {
 
 pub fn installed_info() -> Option<Installed> {
     // На месте (папка установки NSIS) установленное — эта же папка: запись в реестре
-    // может быть в HKLM («для всех») или ещё не сделана.
-    let dir = if in_place() { exe_dir() } else { registered_dir().or_else(default_dir)? };
+    // может быть в HKLM («для всех») или ещё не сделана. Иначе — первая настоящая
+    // установка из находок (1.2: HKCU, HKLM обоих видов, папки по умолчанию).
+    let dir = if in_place() {
+        exe_dir()
+    } else if let Some(f) = crate::probe::probe().into_iter().find(|f| f.kind == "installed") {
+        PathBuf::from(f.dir)
+    } else {
+        registered_dir().or_else(default_dir)?
+    };
     let cfg = read_json(&dir.join("helene.json"))?;
     if cfg.get("setup_complete").and_then(|v| v.as_bool()) != Some(true) {
         return None;
@@ -1719,6 +1841,10 @@ fn install_date() -> String {
 
 /// Секунды от эпохи Unix → `yyyyMMdd` по UTC (алгоритм Хиннанта). Без crate
 /// chrono: одна дата в году не стоит зависимости.
+pub(crate) fn civil_yyyymmdd_pub(secs: u64) -> String {
+    civil_yyyymmdd(secs)
+}
+
 #[cfg_attr(windows, allow(dead_code))]
 fn civil_yyyymmdd(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
@@ -1825,7 +1951,7 @@ pub fn relay_abort() {
 /// Список моделей самого реле: поднять реле из поставки на временном порту, спросить
 /// /v1/models, погасить. Без захардкоженного списка — что реле отдаёт, то и выбор.
 pub fn relay_models() -> Result<Vec<String>, String> {
-    let payload = payload_dir().ok_or("рядом с установщиком нет поставки")?;
+    let payload = relay_kit()?;
     let exe = relay_exe(&payload);
     if !exe.exists() {
         return Err(format!("в этой сборке нет {RELAY_NAME}"));
@@ -1877,7 +2003,7 @@ pub fn relay_models() -> Result<Vec<String>, String> {
 /// Логин реле в подписку ChatGPT: реле лежит в поставке, браузер откроется сам.
 pub fn relay_login() -> Result<String, String> {
     relay_abort();
-    let payload = payload_dir().ok_or("рядом с установщиком нет поставки")?;
+    let payload = relay_kit()?;
     let exe = relay_exe(&payload);
     if !exe.exists() {
         return Err(format!("в этой сборке нет {RELAY_NAME}"));
@@ -2505,7 +2631,9 @@ fn rehearse_extensions(payload: &Path, dir: &Path) -> Result<Option<(bool, Strin
     Ok(Some((ok, summary)))
 }
 
-pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt, String> {
+/// До 1.2 — вся установка; с 1.2 — путь «на месте» (установщик NSIS 1.1.x, программа
+/// без настройки) и macOS. Остальное — `install_tx`.
+fn install_legacy(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt, String> {
     validate_setup(s)?;
     // «На месте» (установщик NSIS): поставка — эта же папка, копировать нечего.
     let payload = if in_place() {
@@ -2689,7 +2817,7 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
     let mut n = 0;
     let mut tick = |label: &str, progress: &mut dyn FnMut(Progress)| {
         n += 1;
-        progress(Progress { step: n, total, label: label.to_string() });
+        progress(Progress { step: n, total, label: label.to_string(), ..Default::default() });
     };
 
     // На месте: копирование, интерфейс и рантайм — уже дело установщика; в расписке
@@ -2930,16 +3058,817 @@ pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt,
         dir: dir.display().to_string(),
         exe: exe.display().to_string(),
         service,
+        scope: String::new(),
+        backup: None,
         warning,
         steps,
     })
 }
 
+// ------------------------------------------------- установка 1.2: транзакцией
+
+/// Слова отмены — экран отличает их от поломки по началу.
+pub const CANCELLED: &str = "Отменено — прежняя версия на месте, ничего не изменилось";
+
+/// Установка без отмены — для `--install`, `--update`, `--configure`.
+pub fn install(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Receipt, String> {
+    let never = AtomicBool::new(false);
+    install_run(s, &never, &mut progress)
+}
+
+/// Установка с отменой (экран мастера, поднятый исполнитель).
+pub fn install_run(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)) -> Result<Receipt, String> {
+    if cfg!(not(windows)) || in_place() {
+        return install_legacy(s, |p| progress(p));
+    }
+    #[cfg(windows)]
+    {
+        install_tx(s, cancel, progress)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cancel;
+        unreachable!()
+    }
+}
+
+/// Потоки уборки `.old` после удачной установки: мастер ждёт их на выходе.
+static CLEANUP: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::new());
+
+/// Дождаться уборки (не дольше `secs`); не успела — доделает отложенная команда.
+pub fn join_cleanup(secs: u64) {
+    let handles: Vec<_> = CLEANUP.lock().map(|mut v| v.drain(..).collect()).unwrap_or_default();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    for h in handles {
+        while !h.is_finished() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if h.is_finished() {
+            let _ = h.join();
+        }
+    }
+}
+
+/// Куда ставить: сказанное, иначе по режиму.
+pub fn target_dir(s: &Setup) -> Result<PathBuf, String> {
+    if !s.dir.trim().is_empty() {
+        return Ok(PathBuf::from(s.dir.trim()));
+    }
+    if s.scope == "machine" {
+        return Ok(crate::probe::machine_dir());
+    }
+    default_dir().ok_or_else(|| NO_DEFAULT_DIR.to_string())
+}
+
+/// Режим установки: стоящая — её режим (раскладку сама не меняем, требование 7);
+/// новая — выбор владельца, по умолчанию «для меня».
+pub fn effective_scope(s: &Setup, dir: &Path) -> String {
+    if dir.join("helene.exe").exists() || dir.join(INSTALL_MARKER).exists() {
+        return crate::probe::scope_of_dir(dir);
+    }
+    match s.scope.as_str() {
+        "machine" => "machine".into(),
+        "user" => "user".into(),
+        _ => crate::probe::scope_of_dir(dir),
+    }
+}
+
+/// Нужны ли права администратора для установки в `dir` этим режимом.
+pub fn needs_elevation(scope: &str) -> bool {
+    #[cfg(windows)]
+    {
+        scope == "machine" && !crate::win::is_elevated()
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = scope;
+        false
+    }
+}
+
+/// Решение о статике окна по двум манифестам: новой поставки (строкой-отпечатком) и
+/// стоящей установки. Правило то же, что у `static_plan`.
+fn static_plan_from(new_digest: Option<String>, dir: &Path) -> StaticPlan {
+    if !dir.join("app").join("static").join("index.html").exists() {
+        return StaticPlan::Fresh;
+    }
+    match (new_digest, static_digest(dir)) {
+        (Some(new), Some(old)) if new == old => StaticPlan::Keep,
+        _ => StaticPlan::Replace,
+    }
+}
+
+/// Рантайм одинаков — по паспортам (то же правило, что `runtime_same`).
+fn runtime_same_from(new_passport: Option<&serde_json::Value>, dir: &Path) -> bool {
+    if !python_exe(dir).exists() {
+        return false;
+    }
+    let (Some(new), Some(old)) = (new_passport, read_json(&dir.join("helene-build.json"))) else {
+        return false;
+    };
+    ["python", "downloads", "packages"].iter().all(|k| new.get(k).is_some() && new.get(k) == old.get(k))
+}
+
+/// Метка установки (`helene-install.json`).
+fn write_marker(dir: &Path, scope: &str, version: &str) -> Result<(), String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let marker = serde_json::json!({
+        "product": PRODUCT,
+        "scope": scope,
+        "version": version,
+        "installed_utc": now,
+        "by": format!("helene-setup {VERSION}"),
+    });
+    write_atomic(&dir.join(INSTALL_MARKER), &(serde_json::to_string_pretty(&marker).unwrap_or_default() + "\n"))
+}
+
+/// Копировать папку целиком (продолжить с найденной памятью) — с отменой.
+fn copy_all(src: &Path, dst: &Path, cancel: &AtomicBool) -> Result<u64, crate::payload::Stop> {
+    let source = crate::payload::Source::Dir(src.to_path_buf());
+    let skip = crate::payload::Skip { top: &[], rel: &[] };
+    source.extract(dst, &skip, cancel, &mut |_, _, _| {}).map(|s| s.files)
+}
+
+/// Что было до установки — чтобы отмена после остановки вернула всё как было.
+struct Before {
+    service: bool,
+    running: bool,
+}
+
+/// Вернуть прежнюю версию в строй после отмены или отказа ПОСЛЕ остановки: служба
+/// (если стояла) ставится обратно, окно (если было открыто) открывается снова.
+#[cfg(windows)]
+fn restore_after_abort(dir: &Path, before: &Before) -> Option<String> {
+    let mut notes: Vec<String> = Vec::new();
+    if before.service && service_state() == "absent" {
+        let state = install_service(dir);
+        notes.push(if state == "running" {
+            "служба возвращена".to_string()
+        } else {
+            format!("служба не вернулась ({state}) — поставь её в настройках окна")
+        });
+    }
+    if before.running && !before.service {
+        match crate::win::launch_app(&shell_exe(dir)) {
+            Ok(()) => notes.push("окно открыто снова".into()),
+            Err(e) => notes.push(format!("окно не открылось само: {e}")),
+        }
+    }
+    (!notes.is_empty()).then(|| notes.join("; "))
+}
+
+#[cfg(windows)]
+fn icacls_users_modify(dir: &Path) -> Result<(), String> {
+    let mut cmd = Command::new(sys_exe("icacls.exe"));
+    cmd.arg(dir).args(["/grant", "*S-1-5-32-545:(OI)(CI)M", "/Q"]);
+    let out = run_hidden(&mut cmd)?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(console_text(&out.stderr).trim().to_string())
+    }
+}
+
+/// Установка 1.2: раскладка рядом, подмена, настройка — с отменой до подмены и
+/// откатом после. Фазы и их слова — для листа на экране установки.
+#[cfg(windows)]
+fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)) -> Result<Receipt, String> {
+    use crate::payload::{Skip, Stop};
+    use crate::tx::{Carry, StaticCarry, Tx};
+    validate_setup(s)?;
+    let source = source().ok_or_else(|| {
+        "в установщике нет поставки — файл скачался не целиком? Скачай Helene-<версия>-setup.exe заново".to_string()
+    })?;
+    let dir = target_dir(s)?;
+    let scope = effective_scope(s, &dir);
+    if let Some(src_dir) = source.dir() {
+        let (np, nd) = (norm_path(src_dir), norm_path(&dir));
+        if inside_or_same(&nd, &np) || inside_or_same(&np, &nd) {
+            return Err(format!(
+                "папка установки ({}) и папка поставки ({}) не должны совпадать или лежать одна в другой. \
+                 Если {PRODUCT_UI} уже установлена здесь, настройки меняются в окне программы, а не установщиком.",
+                dir.display(),
+                src_dir.display()
+            ));
+        }
+    }
+    let carry_from = s.carry_from.trim();
+    if !carry_from.is_empty() && dir.join("data").join("soul").exists() {
+        let same = norm_path(Path::new(carry_from)) == norm_path(&dir);
+        if !same {
+            return Err(format!(
+                "в папке установки {} уже живёт память агента — продолжить с другой памятью поверх неё нельзя. \
+                 Выбери эту память или другую папку.",
+                dir.display()
+            ));
+        }
+    }
+
+    let mut steps: Vec<Step> = Vec::new();
+    // Прерванная прошлая установка — вернуть прежнюю ДО всего остального.
+    if let Some(note) = crate::tx::recover(&dir) {
+        steps.push(Step { label: "Прерванная установка".into(), ok: true, note: Some(note) });
+    }
+    let had_install = dir.join("helene.exe").exists() || dir.join("helene.json").exists();
+    // Проверка, раскладка, подмена, настройка, регистрация, служба, готово; стоящая —
+    // ещё снимок и остановка.
+    let total = if had_install { 9usize } else { 7usize };
+    let mut n = 0usize;
+    let mut say = |phase: &str, label: &str, frac: Option<f64>, detail: Option<String>, cancellable: bool, bump: bool, progress: &mut dyn FnMut(Progress)| {
+        if bump {
+            n += 1;
+        }
+        progress(Progress {
+            step: n,
+            total,
+            label: label.to_string(),
+            phase: phase.to_string(),
+            frac,
+            detail,
+            cancellable,
+        });
+    };
+
+    // 1. Проверка поставки.
+    say("check", "Проверяю установщик", None, None, true, true, progress);
+    source.verify()?;
+    let manifest = source.manifest();
+    let version = if manifest.version.is_empty() { source_version() } else { manifest.version.clone() };
+    let new_passport = source
+        .read("helene-build.json")
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    let new_static = source
+        .read(&format!("app/static/{STATIC_MANIFEST}"))
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get("digest").and_then(|d| d.as_str()).map(str::to_string));
+    let plan = static_plan_from(new_static, &dir);
+    let runtime_kept = runtime_same_from(new_passport.as_ref(), &dir);
+    if cancel.load(Ordering::Relaxed) {
+        return Err(CANCELLED.into());
+    }
+
+    // 2. Снимок памяти перед обновлением.
+    let mut backup: Option<String> = None;
+    if had_install && dir.join("data").is_dir() {
+        say("backup", "Снимок памяти агента", None, None, true, true, progress);
+        match crate::backup::snapshot(&dir, &dir.join("backups"), &format!("before-{version}"), cancel) {
+            Ok((path, files)) => {
+                let gone = crate::backup::prune(&dir.join("backups"), "-before-", 10);
+                steps.push(Step {
+                    label: "Снимок памяти".into(),
+                    ok: true,
+                    note: Some(format!(
+                        "{} ({files} файлов){}",
+                        path.display(),
+                        if gone.is_empty() { String::new() } else { format!("; старых убрано: {}", gone.len()) }
+                    )),
+                });
+                backup = Some(path.display().to_string());
+            }
+            Err(e) if cancel.load(Ordering::Relaxed) => {
+                let _ = e;
+                return Err(CANCELLED.into());
+            }
+            Err(e) => {
+                return Err(format!("снимок памяти перед обновлением не снялся: {e}. Обновление не начато — прежняя версия цела."));
+            }
+        }
+    }
+
+    // 3. Раскладка рядом: `<папка>.new`. Прежняя всё это время работает.
+    say("lay", "Раскладываю новую версию рядом", Some(0.0), None, true, true, progress);
+    let mut tx = Tx::begin(&dir, &version)?;
+    if scope == "machine" {
+        // Права пользователям — на пустую папку ДО файлов: всё положенное унаследует их
+        // сразу, без прохода icacls по 15 тысячам файлов после.
+        if let Err(e) = icacls_users_modify(&tx.new) {
+            steps.push(Step { label: "Права на папку".into(), ok: false, note: Some(e) });
+        }
+    }
+    let mut skip_rel: Vec<String> = Vec::new();
+    if plan == StaticPlan::Keep {
+        skip_rel.push("app/static".into());
+    }
+    if runtime_kept {
+        skip_rel.push("runtime".into());
+    }
+    let skip = Skip { top: &SKIP_FROM_PAYLOAD, rel: &skip_rel };
+    let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    let laid = {
+        let mut on = |done: u64, all: u64, files: u64| {
+            if last_emit.elapsed() < std::time::Duration::from_millis(120) {
+                return;
+            }
+            last_emit = std::time::Instant::now();
+            let frac = if all > 0 { (done as f64 / all as f64).min(1.0) } else { 0.0 };
+            say("lay", "Раскладываю новую версию рядом", Some(frac), Some(format!("{files} файлов · {} МБ", done / 1_048_576)), true, false, progress);
+        };
+        source.extract(&tx.new, &skip, cancel, &mut on)
+    };
+    let laid = match laid {
+        Ok(stats) => stats,
+        Err(Stop::Cancelled) => {
+            let _ = tx.rollback();
+            return Err(CANCELLED.into());
+        }
+        Err(Stop::Failed(e)) => {
+            let back = tx.rollback();
+            return Err(format!("новая версия не разложилась: {e}{}", if back.is_empty() { " — прежняя версия цела".into() } else { format!("; уборка: {}", back.join("; ")) }));
+        }
+    };
+    // Продолжить с найденной памятью из другой папки — копией.
+    if !carry_from.is_empty() && norm_path(Path::new(carry_from)) != norm_path(&dir) {
+        let from = PathBuf::from(carry_from);
+        say("lay", "Переношу память найденного агента (копией)", Some(1.0), None, true, false, progress);
+        if from.join("data").is_dir() {
+            if let Err(e) = copy_all(&from.join("data"), &tx.new.join("data"), cancel) {
+                let _ = tx.rollback();
+                return Err(match e {
+                    Stop::Cancelled => CANCELLED.into(),
+                    Stop::Failed(e) => format!("память из {} не скопировалась: {e}", from.display()),
+                });
+            }
+        }
+        for cfg in ["helene.json", "helene.json.bak"] {
+            if from.join(cfg).is_file() {
+                let _ = std::fs::copy(from.join(cfg), tx.new.join(cfg));
+            }
+        }
+        steps.push(Step { label: "Память агента".into(), ok: true, note: Some(format!("скопирована из {} (источник не тронут)", from.display())) });
+    }
+    steps.push(Step {
+        label: "Файлы программы".into(),
+        ok: true,
+        note: Some(format!("{} файлов разложено рядом и поставлено одной подменой", laid.files)),
+    });
+    steps.push(Step {
+        label: "Интерфейс окна".into(),
+        ok: true,
+        note: Some(match plan {
+            StaticPlan::Fresh => "положен из поставки".to_string(),
+            StaticPlan::Keep => format!("выпуск его не менял — оставлен твой ({STATIC_REL} не тронута)"),
+            StaticPlan::Replace => format!("обновлён; прежняя версия лежит рядом — {STATIC_REL}.prev"),
+        }),
+    });
+    if runtime_kept {
+        steps.push(Step { label: "Рантайм".into(), ok: true, note: Some("состав не менялся — оставлен как стоял".into()) });
+    }
+
+    // 4. Репетиция расширений владельца под НОВЫМ движком — уже с диска `.new`.
+    if had_install && !cancel.load(Ordering::Relaxed) {
+        let python = if python_exe(&tx.new).is_file() { python_exe(&tx.new) } else { python_exe(&dir) };
+        let runner = tx.new.join("app").join("localharness").join("runner.py");
+        if python.is_file() && runner.is_file() {
+            match rehearse_extensions_with(&python, &runner, &version, &dir) {
+                Ok(None) => {}
+                Ok(Some((ok, summary))) => {
+                    say("rehearse", "Проверяю расширения под новой версией", None, None, true, true, progress);
+                    steps.push(Step { label: "Расширения".into(), ok, note: Some(summary.clone()) });
+                    if !ok && !s.force_extensions {
+                        let _ = tx.rollback();
+                        return Err(format!(
+                            "расширения владельца не пройдут обновление: {summary}. Отчёт — {}. \
+                             Поручи агенту адаптировать (карточка «Расширения» в окне) или обнови без них: \
+                             повтори с --force-extensions.",
+                            dir.join("extensions-check.json").display()
+                        ));
+                    }
+                }
+                Err(e) => {
+                    steps.push(Step { label: "Расширения".into(), ok: false, note: Some(format!("репетиция не удалась: {e}")) });
+                    if !s.force_extensions {
+                        let _ = tx.rollback();
+                        return Err(format!(
+                            "репетиция расширений владельца не удалась: {e}. Поручи агенту адаптировать \
+                             (карточка «Расширения» в окне) или обнови без них: повтори с --force-extensions."
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if cancel.load(Ordering::Relaxed) {
+        let _ = tx.rollback();
+        return Err(CANCELLED.into());
+    }
+
+    // 5. Остановить прежнюю: служба (права администратора), окно и дети.
+    let mut before = Before { service: false, running: false };
+    let service_before = service_state();
+    if had_install {
+        say("stop", "Останавливаю прежнюю версию", None, None, true, true, progress);
+        before.running = procs_under(&dir).map(|n| n > 0).unwrap_or(false);
+        if service_before != "absent" {
+            before.service = true;
+            match service_op("uninstall", PRODUCT, Some(&dir.join("uninstall-service.ps1"))) {
+                Ok(()) => steps.push(Step { label: "Прежняя служба снята на время подмены".into(), ok: true, note: None }),
+                Err(e) => {
+                    if service_state() == "running" {
+                        let _ = tx.rollback();
+                        return Err(format!(
+                            "служба Windows «{PRODUCT}» продолжает работать и держит файлы программы ({e}). \
+                             Обновление не начато — прежняя версия работает как работала."
+                        ));
+                    }
+                    steps.push(Step { label: "Прежняя служба".into(), ok: false, note: Some(e) });
+                }
+            }
+        }
+        if !stop_running(&dir) {
+            let busy = locked_files(&dir);
+            if !busy.is_empty() {
+                let _ = tx.rollback();
+                let back = restore_after_abort(&dir, &before);
+                return Err(format!(
+                    "часть программы ещё работает и держит файлы: {}. Закрой окно {PRODUCT_UI} \
+                     (полностью, включая {TRAY_WORD}) и повтори.{}",
+                    busy.join(", "),
+                    back.map(|b| format!(" ({b})")).unwrap_or_default()
+                ));
+            }
+        }
+        if cancel.load(Ordering::Relaxed) {
+            let _ = tx.rollback();
+            let back = restore_after_abort(&dir, &before);
+            return Err(format!("{CANCELLED}{}", back.map(|b| format!(" ({b})")).unwrap_or_default()));
+        }
+    }
+
+    // Порт реле — после остановки своих (своё реле препятствием не считается).
+    let mut relay_port = read_json(&dir.join("helene.json"))
+        .or_else(|| {
+            (!carry_from.is_empty()).then(|| read_json(&Path::new(carry_from).join("helene.json"))).flatten()
+        })
+        .and_then(|c| c.get("relay").and_then(|r| r.get("port")).and_then(|v| v.as_u64()))
+        .filter(|p| *p > 0 && *p <= u16::MAX as u64)
+        .map(|p| p as u16)
+        .unwrap_or(RELAY_PORT);
+    if s.provider == "chatgpt" && port_busy(relay_port) {
+        let holder = port_holder(relay_port);
+        let who = if holder.is_empty() { String::new() } else { format!(" ({holder})") };
+        match free_relay_port(relay_port) {
+            Some(free) => {
+                steps.push(Step {
+                    label: "Порт реле".into(),
+                    ok: true,
+                    note: Some(format!("порт {relay_port} занят другой программой{who} — реле и адрес мозга настроены на {free}")),
+                });
+                relay_port = free;
+            }
+            None => {
+                let _ = tx.rollback();
+                let back = restore_after_abort(&dir, &before);
+                return Err(format!(
+                    "порт {relay_port} занят другой программой{who}, и свободного порта рядом ({}–{}) нет.{}",
+                    RELAY_PORT,
+                    RELAY_PORT + 19,
+                    back.map(|b| format!(" ({b})")).unwrap_or_default()
+                ));
+            }
+        }
+    }
+
+    // Имена верхнего уровня прежней ПОСТАВКИ (её опись в установке): чего из них нет
+    // в новой — выпуск убрал, переносить незачем. Настройки и память — всегда владельца.
+    let old_top: Vec<String> = read_json(&dir.join(crate::payload::MANIFEST))
+        .and_then(|m| m.get("top").and_then(|t| t.as_array()).cloned())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect::<Vec<String>>())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|n: &String| !["helene.json", "helene.json.bak", "data", "backups", "agents"].contains(&n.as_str()))
+        .collect();
+
+    // 6. Подмена — два переименования. Отмены здесь нет: это доли секунды.
+    say("swap", "Меняю версии местами", None, None, false, true, progress);
+    let carry = Carry {
+        drop: &["uninstall.exe", "install.log", "stop.log", INSTALL_MARKER],
+        old_payload_top: &old_top,
+        static_carry: match plan {
+            StaticPlan::Fresh => StaticCarry::None,
+            StaticPlan::Keep => StaticCarry::Keep,
+            StaticPlan::Replace => StaticCarry::ToPrev,
+        },
+        keep_runtime: runtime_kept,
+    };
+    if let Err(e) = tx.swap(&carry) {
+        let _ = tx.rollback();
+        let back = restore_after_abort(&dir, &before);
+        return Err(format!("{e}{}", back.map(|b| format!(" ({b})")).unwrap_or_default()));
+    }
+
+    // 7. Настройки и конституция — в уже подменённой папке; отказ = откат.
+    say("configure", "Записываю настройки и конституцию", None, None, false, true, progress);
+    let configured = (|| -> Result<Vec<Step>, String> {
+        let mut out: Vec<Step> = Vec::new();
+        let cfg_path = dir.join("helene.json");
+        let existing = read_json(&cfg_path);
+        let prev_relay_key = existing
+            .as_ref()
+            .and_then(|c| c.get("model"))
+            .and_then(|m| m.get("key"))
+            .and_then(|k| k.as_str())
+            .filter(|k| k.starts_with("sk-frame-"))
+            .map(|k| k.to_string());
+        let mut local = s.clone();
+        local.dir = dir.display().to_string();
+        let mut merged = merge_config(existing.clone(), config_json(&local, prev_relay_key, relay_port), &local);
+        if let Some(installed) = merged.get_mut("installed").and_then(|v| v.as_object_mut()) {
+            installed.insert("version".into(), version.clone().into());
+            installed.insert("scope".into(), scope.clone().into());
+            if dir.join("app").join("static.prev").exists() {
+                installed.insert("static_prev".into(), "app/static.prev".into());
+            } else {
+                installed.remove("static_prev");
+            }
+        }
+        let cfg = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
+        write_atomic(&cfg_path, &(cfg + "\n"))?;
+        let soul_path = dir.join("data").join("soul").join("SOUL.md");
+        let soul_exists = std::fs::read_to_string(&soul_path).map(|t| !t.trim().is_empty()).unwrap_or(false);
+        let mut note = existing.as_ref().map(|_| "настройки обновлены, прежние решения сохранены".to_string());
+        if let Some(runner) = merged.get("runner").and_then(|v| v.as_str()) {
+            if runner.trim() != DEFAULT_RUNNER_REL {
+                note = Some(match note {
+                    Some(n) => format!("{n}; движок оставлен твой ({runner})"),
+                    None => format!("движок оставлен твой ({runner})"),
+                });
+            }
+        }
+        if soul_exists {
+            note = Some(match note {
+                Some(n) => format!("{n}; конституция оставлена как есть"),
+                None => "конституция оставлена как есть".to_string(),
+            });
+        } else {
+            write_atomic(&soul_path, &s.constitution.replace("\r\n", "\n"))?;
+        }
+        out.push(Step { label: "Настройки и конституция".into(), ok: true, note });
+        if s.provider == "chatgpt" {
+            out.push(match move_relay_auth(&dir) {
+                Some(Ok(note)) => Step { label: "Подписка ChatGPT".into(), ok: true, note: Some(note) },
+                Some(Err(note)) => Step { label: "Подписка ChatGPT".into(), ok: false, note: Some(note) },
+                None if dir.join("data").join("relay").join("local_auth").join("auth.json").is_file() => Step {
+                    label: "Подписка ChatGPT".into(),
+                    ok: true,
+                    note: Some("вход в ChatGPT уже выполнен в этой установке — оставлен как есть".into()),
+                },
+                None => Step {
+                    label: "Подписка ChatGPT".into(),
+                    ok: false,
+                    note: Some("вход не выполнен — агент не сможет обратиться к модели, пока не войдёшь в настройках".into()),
+                },
+            });
+        }
+        write_marker(&dir, &scope, &version)?;
+        Ok(out)
+    })();
+    match configured {
+        Ok(more) => steps.extend(more),
+        Err(e) => {
+            let back = tx.rollback();
+            let restored = restore_after_abort(&dir, &before);
+            return Err(format!(
+                "настройки не записались: {e}. {}{}",
+                if back.is_empty() { "Прежняя версия возвращена на место".to_string() } else { format!("Вернулось не всё: {}", back.join("; ")) },
+                restored.map(|b| format!(" ({b})")).unwrap_or_default()
+            ));
+        }
+    }
+
+    // 8. Ярлыки и запись в «Приложениях» — по режиму.
+    say("register", "Ярлыки и запись в «Приложениях»", None, None, false, true, progress);
+    let exe = shell_exe(&dir);
+    let all_users = scope == "machine";
+    let ico = dir.join("helene.ico");
+    match shortcuts_for(&exe, PRODUCT, Some(ico.as_path()).filter(|p| p.is_file()), all_users) {
+        Ok(note) => steps.push(Step { label: "Ярлыки".into(), ok: true, note: Some(note) }),
+        Err(err) => steps.push(Step { label: "Ярлыки".into(), ok: false, note: Some(err) }),
+    }
+    let size_kb = (manifest.bytes / 1024).min(u32::MAX as u64) as u32;
+    let size_kb = if size_kb == 0 { dir_size_kb(&dir.join("app")).saturating_add(dir_size_kb(&dir.join("runtime"))) } else { size_kb };
+    match register_uninstall_for(&dir, size_kb, &version, all_users) {
+        Ok(note) => steps.push(Step { label: "Запись об удалении".into(), ok: true, note }),
+        Err(err) => steps.push(Step { label: "Запись об удалении".into(), ok: false, note: Some(err) }),
+    }
+
+    // 9. Служба — по решению владельца; снятая на время подмены ставится обратно.
+    let mut warning: Option<String> = None;
+    let service = if s.wants_service() {
+        say("service", "Ставлю службу Windows", None, None, false, true, progress);
+        let state = install_service(&dir);
+        let note = match state.as_str() {
+            "missing" => format!("в этой сборке нет службы ({})", exe_name("helene-svc")),
+            "absent" => "служба не установлена: права администратора не были даны".to_string(),
+            "unknown" => "служба поставлена; спросить систему о её состоянии не вышло — что происходит, видно в data/service.log".to_string(),
+            other => other.to_string(),
+        };
+        let note = match service_warning(&dir) {
+            Some(warn) if state == "running" || state == "stopped" => {
+                warning = Some(warn.clone());
+                format!("{note} · {warn}")
+            }
+            _ => note,
+        };
+        steps.push(Step { label: "Служба".into(), ok: state == "running", note: Some(note) });
+        state
+    } else {
+        let now = if service_before == "absent" { "absent".to_string() } else { service_state() };
+        if now != "absent" {
+            say("service", "Снимаю прежнюю службу Windows", None, None, false, true, progress);
+            match service_op("uninstall", PRODUCT, Some(&dir.join("uninstall-service.ps1"))) {
+                Ok(()) => steps.push(Step { label: "Прежняя служба снята".into(), ok: true, note: None }),
+                Err(e) => steps.push(Step {
+                    label: "Прежняя служба".into(),
+                    ok: false,
+                    note: Some(format!("осталась на машине: {e}. {}", service_hand_removal())),
+                }),
+            }
+        }
+        "skipped".to_string()
+    };
+
+    // 10. Готово: прежняя версия уходит в фоне.
+    let cleanup = tx.commit();
+    if let Ok(mut v) = CLEANUP.lock() {
+        v.push(cleanup);
+    }
+    say("done", "Готово", Some(1.0), None, false, true, progress);
+    Ok(Receipt {
+        dir: dir.display().to_string(),
+        exe: exe.display().to_string(),
+        service,
+        scope,
+        backup,
+        warning,
+        steps,
+    })
+}
+
+/// Ярлыки «Пуска» и Рабочего стола — свои или общие («для всех»).
+#[cfg(windows)]
+fn shortcuts_for(exe: &Path, name: &str, icon: Option<&Path>, all_users: bool) -> Result<String, String> {
+    if !all_users {
+        return shortcuts(exe, name, icon);
+    }
+    let mut notes: Vec<String> = Vec::new();
+    let start = crate::win::shell_folder(true, false).ok_or("Windows не сказала, где общий «Пуск»")?;
+    let desk = crate::win::shell_folder(true, true).ok_or("Windows не сказала, где общий Рабочий стол")?;
+    // Общий «Пуск» — тем же скриптом, что у «для меня», с AUMID: без него Windows
+    // молча выбрасывает уведомления. Оболочка, найдя общий ярлык, своего не заводит.
+    let script = std::env::temp_dir().join(format!("helene-start-menu-shortcut-{}.ps1", std::process::id()));
+    std::fs::write(&script, include_str!("../../shell/resources/start-menu-shortcut.ps1")).map_err(|e| e.to_string())?;
+    let mut cmd = Command::new(powershell_exe());
+    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-Exe")
+        .arg(exe)
+        .arg("-Aumid")
+        .arg(AUMID)
+        .arg("-Name")
+        .arg(name)
+        .arg("-Folder")
+        .arg(&start);
+    if let Some(icon) = icon {
+        cmd.arg("-Icon").arg(icon);
+    }
+    match run_hidden(&mut cmd) {
+        Ok(out) if out.status.success() => notes.push("«Пуск» для всех ok".into()),
+        Ok(out) => notes.push(format!("«Пуск» для всех: {}", console_text(&out.stderr).trim())),
+        Err(e) => notes.push(format!("«Пуск» для всех: {e}")),
+    }
+    let _ = std::fs::remove_file(&script);
+    let lnk = desk.join(format!("{name}.lnk"));
+    let ps = format!(
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}'); $s.TargetPath='{}'; $s.WorkingDirectory='{}'; {} $s.Save()",
+        ps_escape(&lnk.display().to_string()),
+        ps_escape(&exe.display().to_string()),
+        ps_escape(&exe.parent().map(|p| p.display().to_string()).unwrap_or_default()),
+        icon.map(|i| format!("$s.IconLocation='{},0';", ps_escape(&i.display().to_string()))).unwrap_or_default()
+    );
+    match powershell(&ps) {
+        Ok(out) if out.status.success() => notes.push("Рабочий стол для всех ok".into()),
+        Ok(out) => notes.push(format!("Рабочий стол для всех: {}", console_text(&out.stderr).trim())),
+        Err(e) => notes.push(format!("Рабочий стол для всех: {e}")),
+    }
+    Ok(notes.join("; "))
+}
+
+/// Запись в «Приложениях»: HKCU («для меня») или HKLM («для всех», 64-битный вид).
+/// Снятие — самим мастером: `helene-setup.exe --uninstall`. Прежняя запись NSIS 1.1.x
+/// («для всех» — в WOW6432Node) убирается, иначе в «Приложениях» было бы две строки.
+#[cfg(windows)]
+fn register_uninstall_for(dir: &Path, size_kb: u32, version: &str, all_users: bool) -> Result<Option<String>, String> {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
+    use winreg::RegKey;
+    let path = format!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{PRODUCT}");
+    let hive = RegKey::predef(if all_users { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER });
+    let (key, _) = hive
+        .create_subkey_with_flags(&path, KEY_ALL_ACCESS | if all_users { KEY_WOW64_64KEY } else { 0 })
+        .map_err(|e| format!("запись в «Приложениях» не создалась: {e}"))?;
+    let setup = dir.join("helene-setup.exe");
+    let exe = dir.join("helene.exe");
+    let icon = dir.join("helene.ico");
+    let set = |name: &str, value: String| key.set_value(name, &value).map_err(|e| e.to_string());
+    set("DisplayName", PRODUCT_UI.to_string())?;
+    set("DisplayVersion", version.to_string())?;
+    set("Publisher", PRODUCT_UI.to_string())?;
+    set("InstallLocation", dir.display().to_string())?;
+    set("DisplayIcon", if icon.is_file() { icon.display().to_string() } else { exe.display().to_string() })?;
+    set("UninstallString", format!("\"{}\" --uninstall", setup.display()))?;
+    set("QuietUninstallString", format!("\"{}\" --uninstall --quiet", setup.display()))?;
+    let _ = key.set_value("EstimatedSize", &size_kb);
+    let _ = set("InstallDate", install_date());
+    key.set_value("NoModify", &1u32).map_err(|e| e.to_string())?;
+    key.set_value("NoRepair", &1u32).map_err(|e| e.to_string())?;
+    let mut notes: Vec<String> = Vec::new();
+    // Прежние записи: NSIS «для всех» (32-битный вид) и запись другого режима.
+    if all_users {
+        if RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey_with_flags(&path, KEY_ALL_ACCESS | KEY_WOW64_32KEY)
+            .is_ok()
+        {
+            let base = RegKey::predef(HKEY_LOCAL_MACHINE)
+                .open_subkey_with_flags("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall", KEY_ALL_ACCESS | KEY_WOW64_32KEY);
+            if let Ok(base) = base {
+                if base.delete_subkey_all(PRODUCT).is_ok() {
+                    notes.push("прежняя запись установщика NSIS убрана".into());
+                }
+            }
+        }
+    }
+    // Имя и значок для центра уведомлений — как делает оболочка.
+    if let Ok((toast, _)) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(format!("Software\\Classes\\AppUserModelId\\{AUMID}")) {
+        let _ = toast.set_value("DisplayName", &PRODUCT_UI);
+        let png = dir.join("data").join("icon.png");
+        let icon_uri = if png.exists() { png } else { dir.join("helene.ico") };
+        let _ = toast.set_value("IconUri", &icon_uri.display().to_string());
+    }
+    Ok((!notes.is_empty()).then(|| notes.join("; ")))
+}
+
+/// Репетиция расширений — питоном и движком, названными явно (1.2: движок уже лежит в
+/// `.new`, питон — там же или прежний, если рантайм не менялся).
+fn rehearse_extensions_with(python: &Path, runner: &Path, host_version: &str, dir: &Path) -> Result<Option<(bool, String)>, String> {
+    let data = read_json(&dir.join("helene.json"))
+        .and_then(|c| c.get("tree").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .map(|t| {
+            let p = PathBuf::from(&t);
+            if p.is_absolute() { p } else { dir.join(p) }
+        })
+        .unwrap_or_else(|| dir.join("data"));
+    let root = data.join("extensions");
+    let has_any = std::fs::read_dir(&root)
+        .map(|it| it.flatten().any(|e| e.path().join("extension.json").is_file()))
+        .unwrap_or(false);
+    if !has_any {
+        let _ = std::fs::remove_file(dir.join("extensions-check.json"));
+        return Ok(None);
+    }
+    let mut cmd = Command::new(python);
+    cmd.arg("-X")
+        .arg("utf8")
+        .arg(runner)
+        .arg("--check-extensions")
+        .arg("--data")
+        .arg(&data)
+        .arg("--host-version")
+        .arg(host_version)
+        .current_dir(runner.parent().unwrap_or(dir))
+        .env("PYTHONIOENCODING", "utf-8");
+    let out = run_hidden_for(&mut cmd, std::time::Duration::from_secs(120))
+        .map_err(|e| format!("репетиция расширений не уложилась или не запустилась: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let report_path = dir.join("extensions-check.json");
+    let report: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            let raw = serde_json::json!({
+                "ok": false,
+                "summary": format!("репетиция не дала отчёта ({e})"),
+                "items": [],
+                "raw_stdout": text.chars().take(2000).collect::<String>(),
+                "raw_stderr": err.chars().take(2000).collect::<String>(),
+            });
+            let _ = write_atomic(&report_path, &raw.to_string());
+            return Ok(Some((false, format!("отчёт репетиции не разобрать ({e}); вывод: {}", err.trim().chars().take(300).collect::<String>()))));
+        }
+    };
+    let _ = write_atomic(&report_path, &text);
+    let ok = report.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let summary = report.get("summary").and_then(|v| v.as_str()).unwrap_or("без итога").to_string();
+    Ok(Some((ok, summary)))
+}
+
 // ---------------------------------------------------------------- снятие
 
-/// Снятие оставило данные — тогда хвост не должен уносить установщик: без него
-/// и без записи в «Приложениях» доснять папку средствами продукта было бы нечем.
-static KEEP_SETUP_EXE: AtomicBool = AtomicBool::new(false);
+/// Уносить ли хвосту сам мастер. По умолчанию — нет (1.2): снятие из «Загрузок» или
+/// поднятым исполнителем не должно удалять `helene-setup.exe` в чужой папке; уносит
+/// только снятие, которое само убедилось, что мастер живёт в снимаемой папке.
+static KEEP_SETUP_EXE: AtomicBool = AtomicBool::new(true);
 
 /// Хвост снятия: сам установщик занят, пока работает, поэтому его и папку
 /// доудаляет отложенная команда. Зовётся ПОСЛЕ окна с сообщением: пока окно
@@ -2963,8 +3892,15 @@ pub fn uninstall_finish() {
         }
     }
     if !KEEP_SETUP_EXE.load(Ordering::Relaxed) {
-        parts.push(format!("del /q \"{}\"", dir.join("helene-setup.exe").display()));
-        parts.push(format!("rmdir \"{}\"", dir.display()));
+        // Повтором, а не одним `del`: мастер «для всех» снимает поднятый исполнитель, а
+        // сам exe держит ещё и окно, показывающее итог. Пробуем раз в секунду до двух
+        // минут; удалился — убираем и папку (только пустую).
+        let exe = dir.join("helene-setup.exe");
+        parts.push(format!(
+            "for /l %i in (1,1,120) do @(del /q \"{exe}\" >nul 2>&1 & if not exist \"{exe}\" (rmdir \"{dir}\" >nul 2>&1 & exit /b 0) & ping 127.0.0.1 -n 2 >nul)",
+            exe = exe.display(),
+            dir = dir.display()
+        ));
     }
     let mut cmd = Command::new(sys_exe("cmd.exe"));
     // Рабочая папка хвоста — не наша: из-под неё rmdir не срабатывал, когда
@@ -2972,8 +3908,8 @@ pub fn uninstall_finish() {
     cmd.current_dir(std::env::temp_dir());
     cmd.arg("/C");
     cmd.raw_arg(parts.join(" & "));
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    let _ = cmd.spawn();
+    // Вне job мастера: хвост обязан пережить его выход.
+    let _ = crate::win::spawn_outside_hidden(&mut cmd);
 }
 
 /// Слово в одинарных кавычках для /bin/sh: апостроф внутри — `'\''`. Пути
@@ -3101,106 +4037,33 @@ fn fence_profiles() -> Vec<String> {
     out
 }
 
-/// Снять права песочницы и удалить её профили — ДО удаления файлов, пока рядом
-/// ещё лежат `runtime/python.exe` и `app/localharness/fence.py`.
+/// Что остаётся владельцу при «оставить данные»: память, настройки, снимки памяти,
+/// соседние агенты и записка о том, что здесь лежит.
+const KEPT_ON_UNINSTALL: [&str; 6] = ["data", "helene.json", "helene.json.bak", "backups", "agents", "КАК-ВЕРНУТЬСЯ.md"];
+
+/// Снятие установки `dir` (1.2: с ходом для экрана и с режимом «для всех»).
 ///
-/// `fence.revoke()` написан и проверен инженером харнесса, но снятие продукта
-/// его не звало ни разу: профили копились, а ACE мёртвых контейнеров оставались
-/// на папке `data`, которую снятие оставляет владельцу. Заодно передаём имена
-/// профилей прежних поколений (`vera.shell.*`) — они уже накоплены.
-/// Папку `data` обходит сам `fence.revoke` (root и root/data), поэтому
-/// отдельного прохода для `--purge` не нужно.
-#[cfg(windows)]
-fn fence_revoke(dir: &Path) -> Option<Result<String, String>> {
-    let python = dir.join("runtime").join("python.exe");
-    let script = dir.join("app").join("localharness").join("fence.py");
-    if !python.exists() || !script.exists() {
-        return None;
-    }
-    // Свой контейнер: имя считается из ПУТИ УСТАНОВКИ, поэтому корень передаём
-    // как есть. Здесь же снимаются ACE с папки data — той единственной, что
-    // переживает снятие, если владелец выбрал «оставить данные».
-    let own = fence_call(&python, &script, dir, &[]);
-    // Профили прежних поколений — отдельным вызовом и по МАЛЕНЬКОЙ папке.
-    // `fence.revoke` для каждого имени гонит icacls /T по всему дереву, а в
-    // установленной программе это 12 тысяч файлов: живой замер — 18 секунд на
-    // один проход, то есть пятнадцать имён превратили бы снятие в пять минут
-    // немого ожидания. Чистить корень их именами и не нужно: он всё равно
-    // удаляется через секунду, а на переживающей папке data проход дешёвый.
-    let also = fence_profiles();
-    let legacy = if also.is_empty() {
-        None
-    } else {
-        Some(fence_call(&python, &script, &dir.join("data"), &also))
+/// Быстро (требование 8): ограда снимается только с того, что ОСТАЁТСЯ (`data/`), а не
+/// `icacls /T` по всей папке; файлы программы не удаляются по одному, а переезжают в
+/// `<папка>.removing` одним переименованием и дочищаются в фоне отложенной командой.
+pub fn uninstall_dir(dir: &Path, purge: bool, progress: &mut dyn FnMut(Progress)) -> Result<String, String> {
+    let dir = dir.to_path_buf();
+    let mut n = 0usize;
+    let total = 5usize;
+    let mut say = |phase: &str, label: &str, progress: &mut dyn FnMut(Progress)| {
+        n += 1;
+        progress(Progress { step: n, total, label: label.to_string(), phase: phase.to_string(), ..Default::default() });
     };
-    let mut removed = 0usize;
-    let mut trouble: Vec<String> = Vec::new();
-    for r in [Some(own), legacy].into_iter().flatten() {
-        match r {
-            Ok(n) => removed += n,
-            Err(e) => trouble.push(e),
-        }
-    }
-    // Оба вызова спотыкаются об одно и то же (старый fence.py, нет питона) —
-    // повторять владельцу одну причину дважды незачем.
-    trouble.dedup();
-    if !trouble.is_empty() {
-        return Some(Err(format!("песочница: {}", trouble.join("; "))));
-    }
-    Some(Ok(format!(
-        "профилей AppContainer снято: {removed} (искали {})",
-        also.len() + 1
-    )))
-}
-
-/// Один вызов `fence.py --revoke <root> [--also …]`. -> сколько профилей снято.
-#[cfg(windows)]
-fn fence_call(python: &Path, script: &Path, root: &Path, also: &[String]) -> Result<usize, String> {
-    let mut cmd = Command::new(python);
-    // `-X utf8`: отчёт fence.py читается ниже как UTF-8, а Python в трубе на русской
-    // Windows печатает в cp1251 — «профиль … удалён» приходил кашей, и снятие врало
-    // «fence.py не понимает --revoke» при исправном fence (27.09, проба Егора).
-    cmd.arg("-X").arg("utf8").arg(script).arg("--revoke").arg(root);
-    if !also.is_empty() {
-        cmd.arg("--also");
-        for name in also {
-            cmd.arg(name);
-        }
-    }
-    let out = run_hidden(&mut cmd).map_err(|e| format!("не удалось позвать fence.py: {e}"))?;
-    let text = console_text(&out.stdout);
-    if !out.status.success() {
-        let err = console_text(&out.stderr);
-        return Err(format!(
-            "fence.py вернул ошибку: {}",
-            err.trim().lines().last().unwrap_or("").chars().take(200).collect::<String>()
-        ));
-    }
-    // fence.py печатает по строке на профиль; «удалён» — успех, hr=0x… — нет.
-    // Молчание при нулевом коде — это НЕ успех: у поставки, собранной до того,
-    // как `revoke` появился, в fence.py нет блока `__main__` вовсе, и такой
-    // вызов тихо ничего не делает. Считать это снятием значило бы врать.
-    if !text.contains("профиль") {
-        return Err(
-            "fence.py этой поставки не понимает --revoke (собран до того, как снятие появилось) — профили AppContainer остались"
-                .into(),
-        );
-    }
-    Ok(text.matches("удалён").count())
-}
-
-/// Удаление: программа, ярлыки, запись — данные остаются, если не попросили иначе.
-pub fn uninstall(purge: bool) -> Result<String, String> {
-    let dir = exe_dir();
-    // `--uninstall` работал по папке, где лежит exe, без единой проверки: команда
-    // из README, выполненная в распакованном архиве, уничтожала архив и при этом
-    // сносила запись, ярлыки и службу НАСТОЯЩЕЙ установки.
-    if let Some(registered) = registered_dir() {
-        if norm_path(&registered) != norm_path(&dir) {
+    // `--uninstall` работал по папке, где лежит exe, без единой проверки: команда из
+    // README, выполненная в распакованном архиве, уничтожала архив и при этом сносила
+    // запись, ярлыки и службу НАСТОЯЩЕЙ установки.
+    let registered: Vec<PathBuf> = crate::probe::registered().into_iter().map(|(p, _)| p).collect();
+    if !registered.is_empty() {
+        if !registered.iter().any(|r| norm_path(r) == norm_path(&dir)) {
             return Err(format!(
                 "это не папка установки: {PRODUCT_UI} установлена в {}. Сними её оттуда \
                  (или через «Приложения» Windows) — здесь удалять нечего.",
-                registered.display()
+                registered[0].display()
             ));
         }
     } else if looks_like_payload(&dir) {
@@ -3210,91 +4073,99 @@ pub fn uninstall(purge: bool) -> Result<String, String> {
             dir.display()
         ));
     }
+    let scope = crate::probe::scope_of_dir(&dir);
+    let all_users = scope == "machine";
 
     let port = installed_port(&dir);
     let mut problems: Vec<String> = Vec::new();
     let mut service_left = false;
 
+    say("service", "Снимаю службу", progress);
     if service_state() != "absent" {
         let script = dir.join("uninstall-service.ps1");
         let script = if script.exists() { Some(script) } else { None };
         if let Err(e) = service_op("uninstall", PRODUCT, script.as_deref()) {
             problems.push(format!("служба не снялась: {e}"));
         }
-        // Верим системе, а не коду возврата: живая служба с автозапуском — та
-        // самая мина, из-за которой следующая установка получала чужого агента.
-        // На macOS то же самое: оставленный `app.helene.svc` поднимал бы движок
-        // из удалённой папки при каждой загрузке.
+        // Верим системе, а не коду возврата: живая служба с автозапуском — та самая
+        // мина, из-за которой следующая установка получала чужого агента.
         if service_state() != "absent" {
             service_left = true;
             if !problems.iter().any(|p| p.starts_with("служба")) {
-                problems.push(format!(
-                    "служба осталась зарегистрированной. {}",
-                    service_hand_removal()
-                ));
+                problems.push(format!("служба осталась зарегистрированной. {}", service_hand_removal()));
             }
         }
     }
 
+    say("stop", "Останавливаю программу", progress);
     if !stop_running(&dir) && !locked_files(&dir).is_empty() {
         problems.push(format!("часть программы ещё работает: {}", locked_files(&dir).join(", ")));
     }
 
-    // Песочница — ДО удаления файлов: fence.py и рантайм, которым его звать,
-    // лежат в этой же папке и через минуту их не станет. Только Windows: у
-    // seatbelt на macOS профилей в системе нет, снимать нечего.
+    // Ограда (AppContainer) — ДО удаления файлов. Только Windows: у seatbelt на macOS
+    // профилей в системе нет.
+    say("fence", "Снимаю ограду песочницы", progress);
     #[cfg(windows)]
     {
-        let fence = fence_revoke(&dir);
-        match &fence {
-            Some(Err(e)) => problems.push(e.clone()),
-            None => problems.push(
-                "песочница: рантайма рядом нет — профили AppContainer не сняты (сними их вручную: \
-                 runtime\\python.exe app\\localharness\\fence.py --revoke <папка>)"
-                    .into(),
-            ),
-            Some(Ok(_)) => {}
-        }
+        let legacy = fence_profiles();
+        let (_removed, _report) = crate::win::fence_revoke_fast(&dir, !purge, &legacy);
     }
 
     #[cfg(windows)]
     {
-        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS, KEY_WOW64_32KEY, KEY_WOW64_64KEY};
         use winreg::RegKey;
+        let base = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let _ = hkcu.delete_subkey_all(format!(
-            "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{PRODUCT}"
-        ));
+        if !all_users {
+            let _ = hkcu.delete_subkey_all(format!("{base}\\{PRODUCT}"));
+        }
         let _ = hkcu.delete_subkey_all(format!("Software\\Classes\\AppUserModelId\\{AUMID}"));
+        if all_users {
+            // «Для всех»: запись 1.2 (64-битный вид) и NSIS 1.1.x (32-битный).
+            for view in [KEY_WOW64_64KEY, KEY_WOW64_32KEY] {
+                if let Ok(k) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(base, KEY_ALL_ACCESS | view) {
+                    if k.open_subkey(PRODUCT).is_ok() && k.delete_subkey_all(PRODUCT).is_err() {
+                        problems.push("запись «для всех» в «Приложениях» не снялась (нужны права администратора)".into());
+                    }
+                }
+            }
+        }
     }
     #[cfg(windows)]
     {
-        // Ярлыки: с именем продукта и с именем агента (после установки они его).
+        // Ярлыки: с именем продукта и с именем агента (после установки они его);
+        // свои и — у установки «для всех» — общие.
         let mut names = vec![PRODUCT.to_string()];
         if let Some(agent) = installed_agent_name(&dir) {
             names.push(agent);
         }
         let desktop = desktop_dir();
-        for name in &names {
-            if let Some(appdata) = std::env::var_os("APPDATA") {
-                let programs = PathBuf::from(&appdata).join("Microsoft\\Windows\\Start Menu\\Programs");
-                let _ = std::fs::remove_file(programs.join(format!("{name}.lnk")));
-                // Автозапуск ставит сама программа (shell: Startup\Helene.lnk) —
-                // без этого Windows при каждом входе пыталась бы запустить удалённый exe.
-                let _ = std::fs::remove_file(programs.join("Startup").join(format!("{name}.lnk")));
-            }
-            // Ярлык рабочего стола удаляем по ТОЙ ЖЕ известной папке, по которой
-            // создавали: при переносе папок в OneDrive %USERPROFILE%\Desktop — не она.
-            if let Some(d) = &desktop {
-                let _ = std::fs::remove_file(d.join(format!("{name}.lnk")));
-            }
-            if let Some(profile) = std::env::var_os("USERPROFILE") {
-                let _ = std::fs::remove_file(PathBuf::from(profile).join("Desktop").join(format!("{name}.lnk")));
+        let mut folders: Vec<PathBuf> = Vec::new();
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            let programs = PathBuf::from(&appdata).join("Microsoft\\Windows\\Start Menu\\Programs");
+            folders.push(programs.join("Startup"));
+            folders.push(programs);
+        }
+        if let Some(d) = &desktop {
+            folders.push(d.clone());
+        }
+        if let Some(profile) = std::env::var_os("USERPROFILE") {
+            folders.push(PathBuf::from(profile).join("Desktop"));
+        }
+        if all_users {
+            for desk in [false, true] {
+                if let Some(f) = crate::win::shell_folder(true, desk) {
+                    folders.push(f);
+                }
             }
         }
-        // Правило брандмауэра заводит сама программа («Открыть порт телефону») и
-        // никогда не убирала: разрешающее входящее правило на путь внутри удалённой
-        // папки оставалось навсегда.
+        for name in &names {
+            for f in &folders {
+                let _ = std::fs::remove_file(f.join(format!("{name}.lnk")));
+            }
+        }
+        // Правило брандмауэра заводит сама программа («Открыть порт телефону»).
         let mut fw = Command::new(sys_exe("netsh.exe"));
         fw.args([
             "advfirewall", "firewall", "delete", "rule",
@@ -3302,18 +4173,11 @@ pub fn uninstall(purge: bool) -> Result<String, String> {
         ]);
         let _ = run_hidden(&mut fw);
     }
-    // macOS: автозапуск — LaunchAgent, который заводит оболочка
-    // (`~/Library/LaunchAgents/app.helene.desk.plist`, «Запускать при входе»).
-    // Без снятия launchd при каждом входе пытался бы поднять удалённый бандл.
-    // Плюс staging install.sh — распакованный архив в кэше, он больше не нужен.
     #[cfg(not(windows))]
     {
-        let _ = port; // имя правила брандмауэра здесь не нужно
+        let _ = (port, all_users);
         macos_remove_autostart();
         if let Some(home) = home_dir() {
-            // Кэш самого бандла (Library/Caches/<AUMID>) сносится выше вместе с
-            // WebKit; staging install.sh живёт под своим именем, чтобы чистка
-            // кэшей программы не унесла распакованный архив посреди установки.
             let _ = std::fs::remove_dir_all(home.join("Library").join("Caches").join("app.helene.install"));
         }
     }
@@ -3321,44 +4185,77 @@ pub fn uninstall(purge: bool) -> Result<String, String> {
     // Учётные данные ChatGPT во временной папке установщика — тоже наши.
     relay_cleanup();
 
-    // Файлы программы: всё, кроме data/ и самого установщика (он занят) — их
-    // доудалит отложенная команда после выхода. Ошибки удаления собираем: раньше
-    // они выбрасывались, и расписка была положительной всегда.
+    say("files", "Убираю файлы программы", progress);
+    // Файлы программы уезжают одним переименованием в `<папка>.removing` (мгновенно) и
+    // дочищаются в фоне; не переехало — удаляем на месте. Сам установщик (он занят) и
+    // живая служба (её exe — последний способ её снять) остаются.
+    let trash = {
+        let mut name = dir.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        name.push(".removing");
+        dir.with_file_name(name)
+    };
+    let _ = crate::tx::remove_tree(&trash);
+    let _ = std::fs::create_dir_all(&trash);
     let mut left: Vec<String> = Vec::new();
+    let mut moved_any = false;
     for entry in std::fs::read_dir(&dir).map_err(|e| io_note(&dir, &e))? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name();
-        if name == "data" && !purge {
-            continue;
-        }
-        // «Оставить данные» — это и настройки: ключи модели, Telegram, песочница, служба
-        // живут в helene.json, и установщик обещает, что при «Нет» они останутся (27.09,
-        // проба Егора: данные остались, а ключи пропали). Установка поверх в ту же папку
-        // подхватывает их без вопросов.
-        if !purge && (name == "helene.json" || name == "helene.json.bak") {
+        let name_s = name.to_string_lossy().to_string();
+        if !purge && KEPT_ON_UNINSTALL.iter().any(|k| *k == name_s) {
             continue;
         }
         if name == SETUP_ENTRY {
             continue;
         }
-        // Служба осталась жива — её exe и скрипт снятия единственное, чем её
-        // потом можно убрать. Удалить их значило бы отрезать последний способ.
-        if service_left && (name == "helene-svc.exe" || name == "uninstall-service.ps1") {
+        if service_left && (name_s == "helene-svc.exe" || name_s == "uninstall-service.ps1") {
             continue;
         }
         let path = entry.path();
-        let res = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
-        if res.is_err() {
-            left.push(name.to_string_lossy().into_owned());
+        if trash.is_dir() && std::fs::rename(&path, trash.join(&name)).is_ok() {
+            moved_any = true;
+            continue;
         }
+        let res = if path.is_dir() { crate::tx::remove_tree(&path) } else { std::fs::remove_file(&path) };
+        if res.is_err() {
+            left.push(name_s);
+        }
+    }
+    if moved_any {
+        #[cfg(windows)]
+        {
+            let mut cmd = Command::new(sys_exe("cmd.exe"));
+            cmd.current_dir(std::env::temp_dir());
+            cmd.arg("/C");
+            cmd.raw_arg(format!("rmdir /s /q \"{}\"", trash.display()));
+            let _ = crate::win::spawn_outside_hidden(&mut cmd);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = crate::tx::remove_tree(&trash);
+        }
+    } else {
+        let _ = std::fs::remove_dir(&trash);
     }
     if !left.is_empty() {
         problems.push(format!("не удалось удалить: {}", left.join(", ")));
     }
 
     let data = dir.join("data");
-    KEEP_SETUP_EXE.store(!purge, Ordering::Relaxed);
+    // Хвост (самоудаление мастера) — только если мастер живёт в этой папке: снятие из
+    // «Загрузок» (кнопка «Удалить» нового установщика) чужую папку не трогает. Мастер в
+    // папке с оставленными данными тоже уходит: вернуться — установщиком, он найдёт память.
+    let exe_here = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| norm_path(p) == norm_path(&dir)))
+        .unwrap_or(false);
+    KEEP_SETUP_EXE.store(!exe_here, Ordering::Relaxed);
+    if purge {
+        // Папка пуста (кроме самого мастера) — хвост уберёт и её.
+        let _ = std::fs::remove_dir(&dir);
+    }
 
+    say("done", "Готово", progress);
     let mut text = if purge {
         if data.exists() {
             format!("{PRODUCT_UI} удалена, но папка данных осталась: {}", data.display())
@@ -3366,16 +4263,12 @@ pub fn uninstall(purge: bool) -> Result<String, String> {
             format!("{PRODUCT_UI} удалена вместе с данными")
         }
     } else {
-        // Владелец читает «данные агента» как память и записи. На деле там же
-        // лежат ключ модели, вход в ChatGPT и сессия его Telegram-аккаунта.
-        // Под установщиком Windows (uninstall.exe рядом) мастер после снятия удаляется
-        // сам — «установщик оставлен рядом» там было бы неправдой.
         format!(
             "{PRODUCT_UI} удалена. Данные агента остались в {} — там же ключ модели, вход в ChatGPT \
-             и сессия Telegram; настройки (helene.json) тоже оставлены. Удали папку целиком, \
-             если отдаёшь компьютер.{}",
+             и сессия Telegram; настройки (helene.json) и снимки памяти (backups) тоже оставлены. \
+             Поставишь {PRODUCT_UI} снова — установщик найдёт эту память и предложит продолжить с ней. \
+             Удали папку целиком, если отдаёшь компьютер.",
             data.display(),
-            if in_place() { "" } else { " Установщик оставлен рядом: им можно доснять данные позже." }
         )
     };
     if service_left {
@@ -3396,17 +4289,12 @@ pub fn uninstall(purge: bool) -> Result<String, String> {
                  - **ключ модели** (`memory/llm.json`);\n\
                  - **вход в аккаунт ChatGPT** (`relay/local_auth/auth.json`), если он был;\n\
                  - **сессия твоего Telegram-аккаунта** (`telegram/`), если он был подключён.\n\n\
+                 Рядом — `helene.json` (настройки программы) и `backups/` (снимки памяти перед обновлениями).\n\n\
                  Это секреты. Если отдаёшь или продаёшь компьютер — удали папку целиком.\n\n\
-                 ## Вернуться\n\nПоставь {PRODUCT_UI} в эту же папку ({}) — агент подхватит свою память, \
-                 а настройки программы (`helene.json`: ключ модели, Telegram, песочница, служба) \
-                 оставлены рядом и подхватятся вместе с ней.\n\n\
-                 ## Доснять\n\n{}\n",
+                 ## Вернуться\n\nЗапусти установщик {PRODUCT_UI}: он найдёт эту память ({}) и предложит \
+                 продолжить с ней — агент подхватит память, настройки и ключи.\n\n\
+                 ## Доснять\n\nПросто удали эту папку целиком.\n",
                 dir.display(),
-                if in_place() {
-                    "Просто удали эту папку целиком.".to_string()
-                } else {
-                    format!("Запусти рядом `{SETUP_CMD} --uninstall --purge --quiet` или просто удали эту папку.")
-                }
             ),
         );
     }
@@ -3637,6 +4525,8 @@ mod tests {
             firewall: default_firewall(),
             computer: false,
             dir: String::new(),
+            scope: String::new(),
+            carry_from: String::new(),
         }
     }
 

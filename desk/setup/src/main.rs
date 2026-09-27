@@ -24,7 +24,13 @@ compile_error!(
      собирай `cargo build --release --features custom-protocol` или `tauri build`"
 );
 
+mod backup;
 mod install;
+mod payload;
+mod probe;
+mod tx;
+#[cfg(windows)]
+mod win;
 
 use std::process::Command;
 use std::time::Duration;
@@ -37,6 +43,252 @@ fn focus_main(app: &tauri::AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+// ------------------------------------------------- 1.2: отмена и поднятый исполнитель
+
+/// Отмена установки, начатой с экрана: кнопка «Отмена» ставит флаг, фазы проверяют
+/// его между файлами; поднятому исполнителю флаг уходит файлом `cancel`.
+static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Задание поднятому исполнителю (`--worker <папка обмена>`): что сделать и с чем.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WorkerPlan {
+    /// `install` | `uninstall`
+    op: String,
+    #[serde(default)]
+    setup: Option<install::Setup>,
+    #[serde(default)]
+    dir: Option<String>,
+    #[serde(default)]
+    purge: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct WorkerResult {
+    ok: bool,
+    #[serde(default)]
+    receipt: Option<install::Receipt>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// Куда поднятому исполнителю можно: только папка продукта (`…\Helene`) — в Program
+/// Files, по записи «для всех» в реестре или уже установка Hélène. Задание лежит во
+/// временной папке пользователя, и поднятый процесс не должен по нему переименовывать
+/// или удалять чужие папки (`C:\Windows` → `.old`).
+fn worker_dir_allowed(dir: &std::path::Path) -> bool {
+    let name_ok = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().eq_ignore_ascii_case(install::PRODUCT))
+        .unwrap_or(false);
+    if !name_ok || !dir.is_absolute() {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        let norm = |p: &std::path::Path| {
+            let s = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()).display().to_string();
+            s.strip_prefix(r"\\?\").unwrap_or(&s).to_lowercase()
+        };
+        let d = norm(dir);
+        let under_pf = dir.parent().map(|p| norm(p) == norm(&win::program_files())).unwrap_or(false);
+        let registered = probe::registered().iter().any(|(p, _)| norm(p) == d);
+        let ours = dir.join("helene-build.json").is_file() || dir.join(install::INSTALL_MARKER).is_file();
+        under_pf || registered || ours
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Тело поднятого исполнителя. Ход — строками JSON в `progress.jsonl`, итог — в
+/// `result.json`; отмена — появление файла `cancel`. -> код выхода.
+fn run_worker(xdir: &std::path::Path) -> i32 {
+    use std::io::Write;
+    let write_result = |r: &WorkerResult| {
+        let _ = std::fs::write(xdir.join("result.json"), serde_json::to_string(r).unwrap_or_default());
+    };
+    let plan: WorkerPlan = match std::fs::read(xdir.join("plan.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+    {
+        Some(p) => p,
+        None => {
+            write_result(&WorkerResult { error: Some("задание исполнителю не читается".into()), ..Default::default() });
+            return 2;
+        }
+    };
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let cancel = cancel.clone();
+        let flag = xdir.join("cancel");
+        std::thread::spawn(move || loop {
+            if flag.exists() {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        });
+    }
+    let mut out = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(xdir.join("progress.jsonl"))
+        .ok();
+    let mut emit = |p: install::Progress| {
+        if let Some(f) = out.as_mut() {
+            let _ = writeln!(f, "{}", serde_json::to_string(&p).unwrap_or_default());
+            let _ = f.flush();
+        }
+    };
+    let result = match plan.op.as_str() {
+        "install" => match plan.setup {
+            Some(setup) => {
+                let dir = match install::target_dir(&setup) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        write_result(&WorkerResult { error: Some(e), ..Default::default() });
+                        return 1;
+                    }
+                };
+                if !worker_dir_allowed(&dir) {
+                    write_result(&WorkerResult {
+                        error: Some(format!("поднятый исполнитель не ставит в {} — это не папка {}", dir.display(), install::PRODUCT)),
+                        ..Default::default()
+                    });
+                    return 1;
+                }
+                match install::install_run(&setup, &cancel, &mut emit) {
+                    Ok(r) => WorkerResult { ok: true, receipt: Some(r), ..Default::default() },
+                    Err(e) => WorkerResult { error: Some(e), ..Default::default() },
+                }
+            }
+            None => WorkerResult { error: Some("в задании нет решений установки".into()), ..Default::default() },
+        },
+        "uninstall" => {
+            let dir = plan.dir.map(std::path::PathBuf::from).unwrap_or_else(install::exe_dir);
+            if !worker_dir_allowed(&dir) {
+                write_result(&WorkerResult {
+                    error: Some(format!("поднятый исполнитель не снимает {} — это не папка {}", dir.display(), install::PRODUCT)),
+                    ..Default::default()
+                });
+                return 1;
+            }
+            match install::uninstall_dir(&dir, plan.purge, &mut emit) {
+                Ok(text) => {
+                    // Поднятый исполнитель может убрать мастер из Program Files — окно
+                    // без прав не может.
+                    install::uninstall_finish();
+                    WorkerResult { ok: true, text: Some(text), ..Default::default() }
+                }
+                Err(e) => WorkerResult { error: Some(e), ..Default::default() },
+            }
+        }
+        other => WorkerResult { error: Some(format!("незнакомое задание: {other}")), ..Default::default() },
+    };
+    write_result(&result);
+    install::join_cleanup(30);
+    if result.ok { 0 } else { 1 }
+}
+
+/// Сделать `plan` поднятым исполнителем (один запрос прав) и вести его ход сюда.
+#[cfg(windows)]
+fn run_elevated(plan: &WorkerPlan, on_progress: &mut dyn FnMut(install::Progress)) -> Result<WorkerResult, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let xdir = std::env::temp_dir().join(format!(
+        "helene-setup-x-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&xdir).map_err(|e| format!("{}: {e}", xdir.display()))?;
+    std::fs::write(xdir.join("plan.json"), serde_json::to_string(plan).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("задание не записалось: {e}"))?;
+    let child = match win::Elevated::start(&exe, &format!("--worker \"{}\"", xdir.display())) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&xdir);
+            return Err(e);
+        }
+    };
+    let mut offset = 0usize;
+    let mut cancel_sent = false;
+    let mut pump = |offset: &mut usize| {
+        if let Ok(bytes) = std::fs::read(xdir.join("progress.jsonl")) {
+            if bytes.len() > *offset {
+                let fresh = &bytes[*offset..];
+                // Только целые строки: хвост без перевода строки дочитаем в следующий раз.
+                if let Some(last_nl) = fresh.iter().rposition(|b| *b == b'\n') {
+                    for line in fresh[..=last_nl].split(|b| *b == b'\n') {
+                        if let Ok(p) = serde_json::from_slice::<install::Progress>(line) {
+                            on_progress(p);
+                        }
+                    }
+                    *offset += last_nl + 1;
+                }
+            }
+        }
+    };
+    let code = loop {
+        if CANCEL.load(std::sync::atomic::Ordering::Relaxed) && !cancel_sent {
+            let _ = std::fs::write(xdir.join("cancel"), b"1");
+            cancel_sent = true;
+        }
+        pump(&mut offset);
+        if let Some(code) = child.wait(150) {
+            break code;
+        }
+    };
+    pump(&mut offset);
+    let result = std::fs::read(xdir.join("result.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<WorkerResult>(&b).ok());
+    let _ = std::fs::remove_dir_all(&xdir);
+    result.ok_or_else(|| format!("поднятый исполнитель вышел без итога (код {code}) — прежняя версия на месте, если журнал подмены не говорит иного"))
+}
+
+#[cfg(not(windows))]
+fn run_elevated(_plan: &WorkerPlan, _on_progress: &mut dyn FnMut(install::Progress)) -> Result<WorkerResult, String> {
+    Err("поднятый исполнитель есть только на Windows".into())
+}
+
+/// Установка по решениям — сама или поднятым исполнителем, если режим «для всех».
+fn install_any(setup: &install::Setup, on_progress: &mut dyn FnMut(install::Progress)) -> Result<install::Receipt, String> {
+    let dir = install::target_dir(setup)?;
+    let scope = install::effective_scope(setup, &dir);
+    if !install::in_place() && install::needs_elevation(&scope) {
+        let plan = WorkerPlan { op: "install".into(), setup: Some(setup.clone()), dir: None, purge: false };
+        let r = run_elevated(&plan, on_progress)?;
+        return match (r.ok, r.receipt) {
+            (true, Some(rec)) => Ok(rec),
+            _ => Err(r.error.unwrap_or_else(|| "установка не удалась".into())),
+        };
+    }
+    install::install_run(setup, &CANCEL, on_progress)
+}
+
+/// Снятие установки `dir` — само или поднятым исполнителем («для всех»).
+fn uninstall_any(dir: &std::path::Path, purge: bool, on_progress: &mut dyn FnMut(install::Progress)) -> Result<String, String> {
+    let scope = probe::scope_of_dir(dir);
+    if install::needs_elevation(&scope) {
+        let plan = WorkerPlan { op: "uninstall".into(), setup: None, dir: Some(dir.display().to_string()), purge };
+        let r = run_elevated(&plan, on_progress)?;
+        return if r.ok { Ok(r.text.unwrap_or_default()) } else { Err(r.error.unwrap_or_else(|| "снятие не удалось".into())) };
+    }
+    install::uninstall_dir(dir, purge, on_progress)
+}
+
+/// Журнал установки: при удаче — в папке установки, при отказе — во временной папке
+/// (папки установки после отката может не быть) и путь уходит в текст отказа.
+fn write_install_log(result: &Result<install::Receipt, String>, log: &str) -> Option<std::path::PathBuf> {
+    let path = match result {
+        Ok(r) => std::path::PathBuf::from(&r.dir).join("install.log"),
+        Err(_) => std::env::temp_dir().join("Helene-install.log"),
+    };
+    std::fs::write(&path, log).ok().map(|_| path)
 }
 
 #[tauri::command]
@@ -57,6 +309,9 @@ fn uninstall_launch(app: tauri::AppHandle) -> Result<(), String> {
     }
     let mut cmd = Command::new(&exe);
     cmd.current_dir(std::env::temp_dir());
+    #[cfg(windows)]
+    win::spawn_outside(&mut cmd).map_err(|e| format!("uninstall.exe не запустился: {e}"))?;
+    #[cfg(not(windows))]
     cmd.spawn().map_err(|e| format!("uninstall.exe не запустился: {e}"))?;
     app.exit(0);
     Ok(())
@@ -126,26 +381,45 @@ async fn remove_service(name: String) -> Result<String, String> {
 
 /// Установка целиком; ход — событиями `install-progress`, итог — распиской.
 ///
-/// Журнал пишем ВСЕГДА, а не только в безоконном `--install`: раньше при отказе
-/// владелец видел одну красную строку в окне, и она исчезала навсегда вместе с окном.
+/// 1.2: «для всех» — поднятым исполнителем (один запрос прав), ход от него идёт
+/// сюда же; «Отмена» до подмены — откат (`cancel_install`). Журнал пишется ВСЕГДА:
+/// при удаче — в папке установки, при отказе — во временной папке.
 #[tauri::command]
 async fn install(app: tauri::AppHandle, setup: install::Setup) -> Result<install::Receipt, String> {
+    CANCEL.store(false, std::sync::atomic::Ordering::Relaxed);
     let result = tauri::async_runtime::spawn_blocking(move || {
         let mut log = String::new();
-        let r = install::install(&setup, |p| {
-            log.push_str(&format!("[{}/{}] {}\n", p.step, p.total, p.label));
+        let r = install_any(&setup, &mut |p| {
+            if p.frac.is_none() || p.phase == "done" {
+                log.push_str(&format!("[{}/{}] {}\n", p.step, p.total, p.label));
+            }
             let _ = app.emit("install-progress", p);
         });
         match &r {
             Ok(rec) => log.push_str(&format!("OK {}\n", serde_json::to_string(rec).unwrap_or_default())),
             Err(e) => log.push_str(&format!("FAIL {e}\n")),
         }
-        let _ = std::fs::write(install::exe_dir().join("install.log"), &log);
-        r
+        let where_ = write_install_log(&r, &log);
+        r.map_err(|e| match where_ {
+            Some(p) if !e.starts_with("Отменено") => format!("{e}\n\nЖурнал: {}", p.display()),
+            _ => e,
+        })
     })
     .await
     .map_err(|e| e.to_string())?;
     result
+}
+
+/// «Отмена» на экране установки: до подмены — откат, прежняя версия цела.
+#[tauri::command]
+fn cancel_install() {
+    CANCEL.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Что лежит на машине: установки, остатки, копии (сцена «найдена память»).
+#[tauri::command]
+async fn found() -> Vec<probe::Found> {
+    tauri::async_runtime::spawn_blocking(probe::probe).await.unwrap_or_default()
 }
 
 /// Открыть установленный Hélène и закрыть установщик.
@@ -166,15 +440,14 @@ fn open_frame(app: tauri::AppHandle, exe: String) -> Result<(), String> {
         if let Some(dir) = path.parent() {
             install::wait_for_channel(dir, 45);
         }
-        let mut cmd = Command::new(&path);
-        if let Some(dir) = path.parent() {
-            cmd.current_dir(dir);
-        }
-        if let Err(e) = cmd.spawn() {
+        // Вне job мастера (иначе программа умерла бы вместе с ним) и без прав
+        // администратора, даже если мастер поднят.
+        if let Err(e) = win::launch_app(&path) {
             message_box(&format!("Hélène не запустилась: {e}. Открой её ярлыком."));
         }
         std::thread::sleep(Duration::from_secs(10));
         install::relay_abort();
+        install::join_cleanup(20);
         app.exit(0);
     });
     Ok(())
@@ -202,10 +475,15 @@ static UNINSTALL_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 
 /// Снятие из визарда: результат — текст расписки; хвост (самоудаление) — на выходе.
 #[tauri::command]
-async fn uninstall_run(purge: bool) -> Result<String, String> {
-    let text = tauri::async_runtime::spawn_blocking(move || install::uninstall(purge))
-        .await
-        .map_err(|e| e.to_string())??;
+async fn uninstall_run(app: tauri::AppHandle, purge: bool, dir: Option<String>) -> Result<String, String> {
+    let text = tauri::async_runtime::spawn_blocking(move || {
+        let dir = dir.filter(|d| !d.trim().is_empty()).map(std::path::PathBuf::from).unwrap_or_else(install::exe_dir);
+        uninstall_any(&dir, purge, &mut |p| {
+            let _ = app.emit("uninstall-progress", p);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let _ = std::fs::write(std::env::temp_dir().join("helene-uninstall.log"), &text);
     UNINSTALL_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(text)
@@ -287,7 +565,23 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     // 26.09 (1.1.0): рядом с exe лежит uninstall.exe установщика NSIS или сказано
     // `--configure` — мастер работает «на месте»: файлы уже здесь, он их не копирует.
-    if args.iter().any(|a| a == "--configure") || install::nsis_root().is_some() {
+    // Поднятый исполнитель «для всех»: без окна, по заданию из папки обмена.
+    if let Some(i) = args.iter().position(|a| a == "--worker") {
+        #[cfg(windows)]
+        let _ = win::adopt_self_into_job();
+        let code = match args.get(i + 1) {
+            Some(x) => run_worker(std::path::Path::new(x)),
+            None => 2,
+        };
+        std::process::exit(code);
+    }
+    // Мастер и всё, что он породит, — в одном job: вышел или упал — дети умирают с ним.
+    #[cfg(windows)]
+    let _ = win::adopt_self_into_job();
+    if args.iter().any(|a| a == "--configure")
+        || install::nsis_root().is_some()
+        || install::exe_dir().join(install::INSTALL_MARKER).is_file()
+    {
         install::IN_PLACE.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     // Перед обновлением поверх: установщик NSIS зовёт старую копию мастера, чтобы та
@@ -347,11 +641,11 @@ fn main() {
             match result {
                 Ok(r) => {
                     let exe = std::path::PathBuf::from(&r.exe);
-                    let mut cmd = Command::new(&exe);
-                    if let Some(parent) = exe.parent() {
-                        cmd.current_dir(parent);
-                    }
-                    if let Err(e) = cmd.spawn() {
+                    #[cfg(windows)]
+                    let started = win::launch_app(&exe);
+                    #[cfg(not(windows))]
+                    let started = install::launch_installed(&exe);
+                    if let Err(e) = started {
                         message_box(&format!("Hélène обновлена ({}), но не запустилась сама: {e}. Открой её ярлыком.", r.dir));
                     }
                 }
@@ -376,7 +670,7 @@ fn main() {
             .map_err(|e| format!("{path}: {e}"))
             .and_then(|raw| serde_json::from_str::<install::Setup>(&raw).map_err(|e| e.to_string()))
             .and_then(|setup| {
-                install::install(&setup, |p| {
+                install_any(&setup, &mut |p| {
                     log.push_str(&format!("[{}/{}] {}
 ", p.step, p.total, p.label));
                 })
@@ -429,19 +723,36 @@ fn main() {
                 // несовместимое расширение владельца останавливает обновление до подмены.
                 setup.force_extensions = args.iter().any(|a| a == "--force-extensions");
                 let mut log = format!("обновление поверх {}\n", setup.dir);
-                let result = install::install(&setup, |p| {
-                    log.push_str(&format!("[{}/{}] {}\n", p.step, p.total, p.label));
+                let result = install_any(&setup, &mut |p| {
+                    if p.frac.is_none() {
+                        log.push_str(&format!("[{}/{}] {}\n", p.step, p.total, p.label));
+                    }
                 });
                 match &result {
                     Ok(r) => log.push_str(&format!("OK {}\n", serde_json::to_string(r).unwrap_or_default())),
                     Err(e) => log.push_str(&format!("FAIL {e}\n")),
                 }
                 let _ = std::fs::write(&log_path, &log);
-                if let Err(e) = result {
-                    if !args.iter().any(|a| a == "--quiet") {
-                        message_box(&format!("Обновление не удалось: {e}"));
+                match result {
+                    Err(e) => {
+                        if !args.iter().any(|a| a == "--quiet") {
+                            message_box(&format!("Обновление не удалось: {e}"));
+                        }
+                        std::process::exit(1);
                     }
-                    std::process::exit(1);
+                    Ok(r) => {
+                        // Кнопка «Обновить» в окне: окно закрылось ради подмены — открыть
+                        // обновлённое (под службой — когда её канал ответит).
+                        if !args.iter().any(|a| a == "--no-launch") {
+                            let exe = std::path::PathBuf::from(&r.exe);
+                            install::wait_for_channel(std::path::Path::new(&r.dir), 45);
+                            #[cfg(windows)]
+                            let _ = win::launch_app(&exe);
+                            #[cfg(not(windows))]
+                            let _ = exe;
+                        }
+                        install::join_cleanup(30);
+                    }
                 }
                 return;
             }
@@ -479,7 +790,7 @@ fn main() {
     if uninstall_mode && args.iter().any(|a| a == "--quiet") {
         // Тихое снятие из командной строки; с окном — та же сцена, что у установки.
         let purge = args.iter().any(|a| a == "--purge");
-        let result = install::uninstall(purge);
+        let result = uninstall_any(&install::exe_dir(), purge, &mut |_| {});
         let ok = result.is_ok();
         let text = match result {
             Ok(text) => text,
@@ -514,7 +825,7 @@ fn main() {
                 });
             }
         }))
-        .invoke_handler(tauri::generate_handler![defaults, installed_setup, uninstall_launch, install, open_frame, probe_model, relay_login, relay_status, relay_models, uninstall_run, legacy_services, remove_service, admin_rights])
+        .invoke_handler(tauri::generate_handler![defaults, installed_setup, uninstall_launch, install, cancel_install, found, open_frame, probe_model, relay_login, relay_status, relay_models, uninstall_run, legacy_services, remove_service, admin_rights])
         .setup(|app| {
             // Учётные данные ChatGPT прошлого запуска установщика: пока они
             // лежали в %TEMP%, протухшая учётка от другого аккаунта показывалась

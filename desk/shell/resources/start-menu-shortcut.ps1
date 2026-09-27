@@ -12,7 +12,9 @@ param(
     [Parameter(Mandatory = $true)][string] $Exe,
     [Parameter(Mandatory = $true)][string] $Aumid,
     [string] $Name = "Helene",   # имя файла ярлыка — латиницей
-    [string] $Icon = ""
+    [string] $Icon = "",
+    # Папка ярлыка: пусто — свой «Пуск» пользователя; установка «для всех» (1.2) даёт общий «Пуск».
+    [string] $Folder = ""
 )
 $ErrorActionPreference = "Stop"
 
@@ -99,7 +101,7 @@ Add-Type -TypeDefinition $code -Language CSharp
 # папок» уводит её с %APPDATA% (в домене — на сетевой диск), и склейка руками
 # молча создавала ярлык не там, где Windows ищет AUMID, — уведомления при
 # этом пропадали без единой ошибки.
-$dir = [Environment]::GetFolderPath('Programs')
+$dir = if ([string]::IsNullOrWhiteSpace($Folder)) { [Environment]::GetFolderPath('Programs') } else { $Folder }
 if ([string]::IsNullOrWhiteSpace($dir)) {
     $dir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
 }

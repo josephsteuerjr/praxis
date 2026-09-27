@@ -5413,6 +5413,15 @@ fn ensure_start_menu_shortcut(identifier: &str, name: &str, icon: Option<&Path>)
     if programs.join(format!("{name}.lnk")).exists() || programs.join(format!("{}.lnk", product_fs())).exists() {
         return;
     }
+    // Установка «для всех» (1.2) кладёт ярлык с AUMID в общий «Пуск» — второй, свой,
+    // дал бы две строки в меню.
+    if let Some(common) = std::env::var_os("ProgramData")
+        .map(|p| PathBuf::from(p).join("Microsoft").join("Windows").join("Start Menu").join("Programs"))
+    {
+        if common.join(format!("{name}.lnk")).exists() || common.join(format!("{}.lnk", product_fs())).exists() {
+            return;
+        }
+    }
     let Ok(exe) = std::env::current_exe() else { return };
     // Имя с pid: установщик пишет скрипт по тому же пути в %TEMP%, и общий
     // файл, исполняемый с -ExecutionPolicy Bypass, — TOCTOU по построению.
