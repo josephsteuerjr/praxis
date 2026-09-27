@@ -43,9 +43,14 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import hashlib
+import importlib
 import json
 import os
+import re
+import shutil
 import sys
 import threading
 import time
@@ -151,15 +156,170 @@ def manifest(tree: Path) -> dict:
     return _read(models_dir(tree) / INSTALLED)
 
 
+# --- движок голоса (1.2.1) ----------------------------------------------------
+#
+# Егор 27.09: «почему установщик так много весит?» — больше половины был голос. С 1.2.1
+# на Windows движок (faster-whisper, piper, ctranslate2, onnxruntime, av, numpy — ~315 МБ,
+# ~94 МБ сжатыми) не едет в установщике, а докачивается ВМЕСТЕ с моделью или голосом:
+# один архив выпуска `Helene-voice-<версия>-windows.tar.zst`, сверенный по сумме из
+# паспорта сборки (`helene-build.json` → `voice_pack`), а не по слову сети. Ложится в
+# `<установка>/voice/site-packages`; `.pth` рантайма (build_dist: VOICE_PTH) добавляет
+# папку в путь каждого процесса при старте, уже живым — `ensure_engine_path()`. Папки
+# `voice/` нет в поставке, поэтому обновление переносит её как владельческую.
+# На Mac и в сборках, где голос едет в рантайме, качать нечего: библиотека уже есть.
+
+DEFAULT_RELEASES = "josephsteuerjr/praxis"
+
+
+def install_root() -> Path:
+    """Корень установки: `app/localharness/voice.py` → два уровня вверх."""
+    env = os.environ.get("HELENE_ROOT")
+    return Path(env) if env else Path(__file__).resolve().parents[2]
+
+
+def engine_home(root: Path | None = None) -> Path:
+    return Path(root or install_root()) / "voice"
+
+
+def engine_site(root: Path | None = None) -> Path:
+    return engine_home(root) / "site-packages"
+
+
+def engine_installed(root: Path | None = None) -> dict:
+    return _read(engine_home(root) / INSTALLED)
+
+
+def _same_python(recorded: str) -> bool:
+    parts = str(recorded or "").split(".")
+    return len(parts) >= 2 and parts[:2] == [str(sys.version_info.major), str(sys.version_info.minor)]
+
+
+def _norm(path: str) -> str:
+    return os.path.normcase(os.path.abspath(path))
+
+
+def ensure_engine_path(root: Path | None = None) -> bool:
+    """Скачанный после старта процесса движок — в путь, кэш импорта — заново. Движок от
+    другого питона в путь не ставится (и убирается, если его добавил `.pth`): его .pyd
+    всё равно не загрузятся, а find_spec соврал бы «есть». -> папка движка в пути."""
+    site_dir = engine_site(root)
+    mine = _norm(str(site_dir))
+    have = engine_installed(root)
+    if not site_dir.is_dir() or (have.get("python") and not _same_python(str(have["python"]))):
+        sys.path[:] = [p for p in sys.path if _norm(p) != mine]
+        return False
+    if all(_norm(p) != mine for p in sys.path):
+        sys.path.append(str(site_dir))
+    importlib.invalidate_caches()
+    return True
+
+
+def pack_record(root: Path | None = None) -> dict:
+    """Что паспорт этой установки говорит об архиве движка. Пусто — движок в рантайме."""
+    passport = _read(Path(root or install_root()) / "helene-build.json")
+    rec = passport.get("voice_pack")
+    return dict(rec, version=str(passport.get("version") or "")) if isinstance(rec, dict) else {}
+
+
+def _engine_missing(what: str, fallback: str) -> dict:
+    rec = pack_record()
+    if rec.get("name") and rec.get("sha256"):
+        have = engine_installed()
+        size = round(int(rec.get("bytes") or 0) / 1024 / 1024)
+        stale = have.get("python") and not _same_python(str(have["python"]))
+        why = (f"движок голоса стоит от другого питона ({have.get('python')}) — скачается заново"
+               if stale else f"движок голоса ещё не скачан (~{size} МБ)")
+        return {"present": False, "downloadable": True, "size_mb": size, "why": why}
+    return {"present": False, "downloadable": False, "why": f"в рантайме нет {what} — {fallback}"}
+
+
+def _pack_url(root: Path, rec: dict) -> str:
+    override = os.environ.get("HELENE_VOICE_PACK_URL", "").strip()
+    if override:
+        return override
+    api = str((_read(root / "helene.json").get("update") or {}).get("url") or "")
+    m = re.search(r"repos/([^/\s]+)/([^/\s]+)/releases", api)
+    repo = f"{m.group(1)}/{m.group(2)}" if m else DEFAULT_RELEASES
+    return f"https://github.com/{repo}/releases/download/v{rec['version']}/{rec['name']}"
+
+
+def fetch_engine(root: Path | None = None, on_bytes=None) -> dict:
+    """Скачать и поставить движок голоса. Стоит и годен — ничего не делает.
+
+    ⚠ Порядок против полуустановки: архив качается в `.part`, сверяется по сумме из
+    паспорта, распаковывается в `.new` (фильтр `data`: ни абсолютных путей, ни `..`), и
+    только потом `.new` встаёт на место прежнего. Оборванная закачка или чужой файл не
+    оставляют движка, который выглядит поставленным.
+    """
+    import tarfile  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+    import importlib.util  # noqa: PLC0415
+
+    root = Path(root or install_root())
+    if ensure_engine_path(root) and importlib.util.find_spec("faster_whisper") is not None:
+        return {"state": "present"}
+    rec = pack_record(root)
+    if not rec.get("name") or not rec.get("sha256"):
+        raise SystemExit("в этой сборке движок голоса едет в рантайме — качать нечего")
+    home = engine_home(root)
+    home.mkdir(parents=True, exist_ok=True)
+    tag = f"{os.getpid()}-{int(time.time())}"
+    part, fresh, old = home / f".part-{tag}", home / f".new-{tag}", home / f".old-{tag}"
+    total = int(rec.get("bytes") or 0)
+    url = _pack_url(root, rec)
+    digest = hashlib.sha256()
+    got = 0
+    try:
+        with urllib.request.urlopen(url, timeout=300) as src, part.open("wb") as sink:
+            while True:
+                chunk = src.read(1 << 20)
+                if not chunk:
+                    break
+                sink.write(chunk)
+                digest.update(chunk)
+                got += len(chunk)
+                if on_bytes:
+                    on_bytes(got, total)
+        if digest.hexdigest() != str(rec["sha256"]).lower():
+            raise SystemExit("архив движка голоса не сошёлся по сумме с паспортом — скачанное удалено")
+        with tarfile.open(part, mode="r:zst") as tar:
+            tar.extractall(fresh, filter="data")
+        meta = _read(fresh / "voice-pack.json")
+        if not (fresh / "site-packages").is_dir():
+            raise SystemExit("в архиве движка нет site-packages")
+        if meta.get("python") and not _same_python(str(meta["python"])):
+            raise SystemExit(f"движок собран под питон {meta['python']}, а здесь "
+                             f"{sys.version_info.major}.{sys.version_info.minor}")
+        site_dir = engine_site(root)
+        if site_dir.exists():
+            os.replace(site_dir, old)
+        os.replace(fresh / "site-packages", site_dir)
+        result = {"schema": SCHEMA, "source": "download", "version": rec.get("version", ""),
+                  "python": str(meta.get("python") or rec.get("python") or ""),
+                  "sha256": rec["sha256"], "bytes": got, "dists": meta.get("dists") or {},
+                  "got_utc": _utc()}
+        _write(home / INSTALLED, result)
+    finally:
+        for leftover in (part, fresh, old):
+            if leftover.is_dir():
+                shutil.rmtree(leftover, ignore_errors=True)
+            elif leftover.exists():
+                with contextlib.suppress(OSError):
+                    leftover.unlink()
+    ensure_engine_path(root)
+    return result
+
+
 def library() -> dict:
-    """Есть ли в рантайме то, чем расшифровывать. Импорта модели здесь нет:
-    он тянет за собой десятки мегабайт и полсекунды на каждый вызов."""
+    """Есть ли чем расшифровывать. Импорта модели здесь нет: он тянет за собой
+    десятки мегабайт и полсекунды на каждый вызов. С 1.2.1 «нет» бывает двух видов:
+    движок можно докачать (`downloadable`) или сборка вовсе без голоса."""
     import importlib.util  # noqa: PLC0415 — нужен только здесь
 
-    found = importlib.util.find_spec("faster_whisper") is not None
-    return {"present": found,
-            "why": "" if found else "в рантайме нет faster-whisper — "
-                                    "поставка собрана без голоса"}
+    ensure_engine_path()
+    if importlib.util.find_spec("faster_whisper") is not None:
+        return {"present": True, "why": ""}
+    return _engine_missing("faster-whisper", "поставка собрана без голоса")
 
 
 def dir_size(path: Path) -> int:
@@ -188,10 +348,10 @@ def speech_library() -> dict:
     """Есть ли чем говорить. Импорта нет: он тянет onnxruntime на полсекунды."""
     import importlib.util  # noqa: PLC0415 — нужен только здесь
 
-    found = importlib.util.find_spec("piper") is not None
-    return {"present": found,
-            "why": "" if found else "в рантайме нет piper-tts — "
-                                    "поставка собрана без голоса наружу"}
+    ensure_engine_path()
+    if importlib.util.find_spec("piper") is not None:
+        return {"present": True, "why": ""}
+    return _engine_missing("piper-tts", "поставка собрана без голоса наружу")
 
 
 def speech_state(tree: Path, cfg: dict) -> dict:
@@ -227,7 +387,7 @@ def speech_state(tree: Path, cfg: dict) -> dict:
         out["why"] = "голос агента выключен владельцем"
     elif not lib["present"]:
         out["ready"] = False
-        out["why"] = lib["why"]
+        out["why"] = lib["why"] + (" — скачается вместе с голосом" if lib.get("downloadable") else "")
     elif not ready_voice:
         out["ready"] = False
         out["why"] = "голос не скачан — агент отвечает текстом"
@@ -261,7 +421,7 @@ def state(tree: Path, cfg: dict) -> dict:
         out["why"] = "голос выключен владельцем"
     elif not lib["present"]:
         out["ready"] = False
-        out["why"] = lib["why"]
+        out["why"] = lib["why"] + (" — скачается вместе с моделью" if lib.get("downloadable") else "")
     elif not ready_model:
         out["ready"] = False
         out["why"] = "модель не скачана — голосовые не расшифровываются"
@@ -359,13 +519,33 @@ def fetch(tree: Path, model: str, *, quiet: bool = False) -> dict:
     total = int(spec["size_mb"]) * 1024 * 1024
     started = _utc()
 
-    def say(state_name: str, note: str, got: int) -> None:
+    def say(state_name: str, note: str, got: int, *, of: int | None = None, what: str = "") -> None:
         _write(progress_path, {
-            "schema": SCHEMA, "model": model, "repo": spec["repo"],
+            "schema": SCHEMA, "model": what or model, "repo": spec["repo"],
             "state": state_name, "note": note,
-            "got_bytes": got, "total_bytes": total,
+            "got_bytes": got, "total_bytes": total if of is None else of,
             "started_utc": started, "updated_utc": _utc(),
         })
+
+    # 1.2.1: движок голоса — первым, той же полосой: владелец нажал одну кнопку.
+    lib = library()
+    if not lib["present"]:
+        if not lib.get("downloadable"):
+            say("failed", lib["why"], 0)
+            raise SystemExit(lib["why"])
+        say("running", "качаю движок голоса…", 0, of=0, what="движок голоса")
+        if not quiet:
+            print(f"сначала движок голоса (~{lib.get('size_mb')} МБ)", flush=True)
+        try:
+            fetch_engine(on_bytes=lambda got, of: say(
+                "running", "качаю движок голоса…", got, of=of, what="движок голоса"))
+        except SystemExit as exc:
+            say("failed", f"движок голоса не встал: {exc}", 0, what="движок голоса")
+            raise
+        except Exception as exc:  # noqa: BLE001 — причина обязана доехать до окна
+            say("failed", f"движок голоса не скачался: {type(exc).__name__}: {exc}"[:400], 0,
+                what="движок голоса")
+            raise SystemExit(f"движок голоса не скачался: {exc}")
 
     base = dir_size(dest)
     say("running", "качаю…", 0)
@@ -437,6 +617,20 @@ def fetch_voice(tree: Path, voice_id: str, *, quiet: bool = False) -> dict:
             print(json.dumps(got, ensure_ascii=False), flush=True)
         return got
 
+    # 1.2.1: без движка голос не заговорит — он первым, той же строкой хода.
+    lib = speech_library()
+    if not lib["present"]:
+        if not lib.get("downloadable"):
+            return note(state="failed", error=lib["why"])
+        note(state="running", voice="движок голоса", done_mb=0, size_mb=lib.get("size_mb"))
+        try:
+            fetch_engine(on_bytes=lambda got, of: note(
+                state="running", voice="движок голоса", done_mb=round(got / 1024 / 1024, 1),
+                size_mb=round(of / 1024 / 1024) if of else lib.get("size_mb")))
+        except SystemExit as exc:
+            return note(state="failed", error=f"движок голоса не встал: {exc}"[:300])
+        except Exception as exc:  # noqa: BLE001 — причина уезжает владельцу
+            return note(state="failed", error=f"движок голоса не скачался: {type(exc).__name__}: {exc}"[:300])
     note(state="running", done_mb=0)
     got_bytes = 0
     try:
@@ -467,9 +661,14 @@ def main() -> int:
     ap.add_argument("--get", metavar="МОДЕЛЬ", help=f"скачать модель слуха ({', '.join(CATALOG)})")
     ap.add_argument("--get-voice", metavar="ГОЛОС",
                     help=f"скачать голос синтеза ({', '.join(VOICES)})")
+    ap.add_argument("--get-engine", action="store_true",
+                    help="скачать только движок голоса (Windows, 1.2.1+)")
     ap.add_argument("--config", default="", help="helene.json — для состояния")
     args = ap.parse_args()
     tree = Path(args.tree).resolve()
+    if args.get_engine:
+        print(json.dumps(fetch_engine(), ensure_ascii=False))
+        return 0
     if args.get:
         fetch(tree, args.get)
         return 0

@@ -76,6 +76,10 @@ pub struct Carry<'a> {
     pub static_carry: StaticCarry,
     /// Рантайм не менялся — не раскладывался, прежний переезжает целиком.
     pub keep_runtime: bool,
+    /// Отдельные переезды «путь в прежней → путь в новой» после общих (1.2.1: пакеты
+    /// голоса из прежнего рантайма — в `voice/site-packages`). Каждый — под журналом,
+    /// то есть откат возвращает и их.
+    pub extra: &'a [(String, String)],
 }
 
 pub struct Tx {
@@ -315,6 +319,11 @@ impl Tx {
             }
             self.mv(&name, &name)?;
         }
+        for (from, to) in carry.extra {
+            if join_rel(&self.old, from).exists() && !join_rel(&self.new, to).exists() {
+                self.mv(from, to)?;
+            }
+        }
         Ok(())
     }
 
@@ -482,6 +491,7 @@ mod tests {
             old_payload_top: &["ПЕРВЫЙ-ЗАПУСК.md".to_string()],
             static_carry: StaticCarry::Keep,
             keep_runtime: true,
+            extra: &[],
         };
         tx.swap(&carry).unwrap();
         assert_eq!(tx.phase(), Phase::Swapped);
@@ -510,7 +520,7 @@ mod tests {
         lay_new(&tx.new);
         put(&tx.new.join("app").join("static").join("index.html"), "new-ui");
         put(&tx.new.join("runtime").join("python.exe"), "new-py");
-        let carry = Carry { drop: &[], old_payload_top: &[], static_carry: StaticCarry::ToPrev, keep_runtime: false };
+        let carry = Carry { drop: &[], old_payload_top: &[], static_carry: StaticCarry::ToPrev, keep_runtime: false, extra: &[] };
         tx.swap(&carry).unwrap();
         assert_eq!(read(&dir.join("app").join("static").join("index.html")), "new-ui");
         assert_eq!(read(&dir.join("app").join("static.prev").join("index.html")), "old-ui");
@@ -526,7 +536,7 @@ mod tests {
         old_install(&dir);
         let mut tx = Tx::begin(&dir, "1.2.0").unwrap();
         lay_new(&tx.new);
-        let carry = Carry { drop: &["uninstall.exe"], old_payload_top: &[], static_carry: StaticCarry::Keep, keep_runtime: true };
+        let carry = Carry { drop: &["uninstall.exe"], old_payload_top: &[], static_carry: StaticCarry::Keep, keep_runtime: true, extra: &[] };
         tx.swap(&carry).unwrap();
         let trouble = tx.rollback();
         assert!(trouble.is_empty(), "{trouble:?}");
@@ -560,7 +570,7 @@ mod tests {
         let dir = r.join("Programs").join("Helene");
         let mut tx = Tx::begin(&dir, "1.2.0").unwrap();
         lay_new(&tx.new);
-        let carry = Carry { drop: &[], old_payload_top: &[], static_carry: StaticCarry::None, keep_runtime: false };
+        let carry = Carry { drop: &[], old_payload_top: &[], static_carry: StaticCarry::None, keep_runtime: false, extra: &[] };
         tx.swap(&carry).unwrap();
         assert_eq!(read(&dir.join("helene.exe")), "new-exe");
         tx.commit().join().unwrap();
@@ -623,13 +633,45 @@ mod tests {
         let res = std::panic::catch_unwind(move || {
             let mut tx = Tx::begin(&d2, "1.2.0").unwrap();
             lay_new(&tx.new);
-            let carry = Carry { drop: &[], old_payload_top: &[], static_carry: StaticCarry::Keep, keep_runtime: true };
+            let carry = Carry { drop: &[], old_payload_top: &[], static_carry: StaticCarry::Keep, keep_runtime: true, extra: &[] };
             tx.swap(&carry).unwrap();
             panic!("посреди настройки");
         });
         assert!(res.is_err());
         assert_eq!(read(&dir.join("helene.exe")), "old-exe");
         assert!(!journal_path(&dir).exists());
+        let _ = remove_tree(&r);
+    }
+
+    /// 1.2.1: пакеты голоса уезжают из прежнего рантайма в `voice/` под журналом — и
+    /// откат возвращает их на место, а не оставляет в удаляемой `.new`.
+    #[test]
+    fn extra_moves_travel_under_the_journal_and_come_back() {
+        let r = root("extra");
+        let dir = r.join("Helene");
+        old_install(&dir);
+        put(&dir.join("runtime/Lib/site-packages/numpy/__init__.py"), "np");
+        put(&dir.join("runtime/Lib/site-packages/numpy-2.3.4.dist-info/METADATA"), "Name: numpy");
+        let mut tx = Tx::begin(&dir, "1.2.1").unwrap();
+        lay_new(&tx.new);
+        put(&tx.new.join("runtime/python.exe"), "new-py");
+        let extra = vec![
+            ("runtime/Lib/site-packages/numpy".to_string(), "voice/site-packages/numpy".to_string()),
+            (
+                "runtime/Lib/site-packages/numpy-2.3.4.dist-info".to_string(),
+                "voice/site-packages/numpy-2.3.4.dist-info".to_string(),
+            ),
+        ];
+        let carry = Carry { drop: &[], old_payload_top: &[], static_carry: StaticCarry::None, keep_runtime: false, extra: &extra };
+        tx.swap(&carry).unwrap();
+        assert_eq!(read(&dir.join("voice/site-packages/numpy/__init__.py")), "np");
+        assert!(dir.join("voice/site-packages/numpy-2.3.4.dist-info/METADATA").is_file());
+        assert_eq!(read(&dir.join("runtime/python.exe")), "new-py", "рантайм — новый");
+        let trouble = tx.rollback();
+        assert!(trouble.is_empty(), "{trouble:?}");
+        assert_eq!(read(&dir.join("runtime/Lib/site-packages/numpy/__init__.py")), "np", "пакет вернулся");
+        assert_eq!(read(&dir.join("runtime/python.exe")), "old-py");
+        assert!(!dir.join("voice").exists(), "откат не оставил voice/");
         let _ = remove_tree(&r);
     }
 }

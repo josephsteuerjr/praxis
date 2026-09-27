@@ -93,6 +93,7 @@ pub fn install_praxis(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(P
         old_payload_top: &old_top,
         static_carry: StaticCarry::None,
         keep_runtime: false,
+        extra: &[],
     };
     tx.swap(&carry)?;
 

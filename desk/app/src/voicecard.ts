@@ -28,7 +28,7 @@ interface VoiceState {
   ready: boolean;
   why: string;
   dir: string;
-  library: { present: boolean; why: string };
+  library: EngineState;
   installed: { model?: string; path?: string; bytes?: number };
   catalog: VoiceModel[];
   speech?: SpeechState;
@@ -42,6 +42,15 @@ interface VoiceState {
   } | null;
 }
 
+/** Чем слушать и говорить. С 1.2.1 на Windows движок голоса не едет в установщике: его
+ *  можно докачать (`downloadable`) — одной кнопкой вместе с моделью или голосом. */
+interface EngineState {
+  present: boolean;
+  why: string;
+  downloadable?: boolean;
+  size_mb?: number;
+}
+
 /** Голос агента наружу — вторая половина того же ответа канала. */
 interface SpeechState {
   enabled: boolean;
@@ -50,7 +59,7 @@ interface SpeechState {
   why: string;
   dir: string;
   model: string;
-  library: { present: boolean; why: string };
+  library: EngineState;
   catalog: Array<{ id: string; title: string; note: string; size_mb: number; installed: boolean }>;
   download: { state: string; voice: string; done_mb?: number; size_mb?: number; at?: string; error?: string } | null;
 }
@@ -140,6 +149,13 @@ export function voiceCard(draft: Config): VoiceCard {
       note.textContent = `модель на месте, ${mb(state.installed.bytes)}`;
     }
     if (!state.library.present) {
+      if (state.library.downloadable) {
+        // 1.2.1: движок не в установщике — он приедет той же кнопкой, первым.
+        status.textContent =
+          `Агент не слышит: движок голоса ещё не скачан. «Скачать модель» сначала скачает его ` +
+          `(~${state.library.size_mb ?? "?"} МБ, один раз на обе половины голоса), потом модель.`;
+        return;
+      }
       status.textContent = state.library.why + ". Голос в этой сборке не поднимется.";
       fetchBtn.disabled = true;
       return;
@@ -256,6 +272,12 @@ export function voiceCard(draft: Config): VoiceCard {
       speechNote.textContent = "голос на месте";
     }
     if (!state.library.present) {
+      if (state.library.downloadable) {
+        speechStatus.textContent =
+          `Агент отвечает текстом: движок голоса ещё не скачан. «Скачать голос» сначала скачает его ` +
+          `(~${state.library.size_mb ?? "?"} МБ, один раз на обе половины голоса), потом голос.`;
+        return;
+      }
       speechStatus.textContent = state.library.why + ". Говорить в этой сборке нечем.";
       speechBtn.disabled = true;
       return;
@@ -295,7 +317,7 @@ export function voiceCard(draft: Config): VoiceCard {
 
   return {
     el: card("Голос", box,
-      "Обе половины — ЗДЕСЬ, на процессоре: ни запись, ни текст ответа никуда не отправляются. Библиотеки едут в сборке, модель и голос качаются один раз."),
+      "Обе половины — ЗДЕСЬ, на процессоре: ни запись, ни текст ответа никуда не отправляются. Движок, модель и голос качаются один раз, когда нужны."),
     enabled: () => enabled,
     model: () => model,
     keepLoaded: () => keep,

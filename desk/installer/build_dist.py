@@ -34,6 +34,7 @@ exe из папки прошлой сборки. Отладочные полус
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import fnmatch
 import hashlib
@@ -444,11 +445,12 @@ def _run_timed(args: list[str], *, check: bool, timeout: int):
             "скорее всего недоступен индекс PyPI — сборка остановлена") from None
 
 
-def smoke_runtime(out: Path) -> str:
+def smoke_runtime(out: Path, imports: list[str] | tuple[str, ...] = SMOKE_IMPORTS) -> str:
     """Рантайм обязан импортировать то, ради чего он собран.
 
     Раньше это не проверялось никогда: добавили зависимость, собрали с
     --skip-runtime — и падение случалось на машине владельца, при первом импорте.
+    С 1.2.1 голос проверяется отдельно (`smoke_voice`): рантайм — без него.
     """
     py = out / "runtime" / "python.exe"
     if not py.is_file():
@@ -456,7 +458,7 @@ def smoke_runtime(out: Path) -> str:
             f"нет рантайма: {py}\n"
             "с --skip-runtime рантайм должен уже лежать в папке сборки; "
             "для выпуска собирай без флага")
-    code = "import " + ", ".join(SMOKE_IMPORTS)
+    code = "import " + ", ".join(imports)
     r = subprocess.run([str(py), "-c", code], capture_output=True, text=True,
                        timeout=300, encoding="utf-8", errors="replace")
     if r.returncode != 0:
@@ -464,6 +466,193 @@ def smoke_runtime(out: Path) -> str:
     r = subprocess.run([str(py), "-m", "pip", "freeze"], capture_output=True, text=True,
                        timeout=300, encoding="utf-8", errors="replace")
     return (r.stdout or "").strip()
+
+
+# --- 1.2.1: голосовой движок — отдельным набором ------------------------------
+#
+# Егор 27.09: «почему установщик так много весит?» — больше половины (94 из 180 МБ
+# сжатыми) был голос: ctranslate2, onnxruntime, FFmpeg из av, numpy, piper. Модель слуха
+# и голос синтеза и так качаются из окна (0,5–1,6 ГБ), поэтому движок едет туда же:
+# отдельным архивом выпуска, докачивается вместе с моделью (`localharness/voice.py`),
+# ложится в `<установка>/voice/site-packages`, а `.pth` в рантайме добавляет эту папку
+# в путь каждого процесса. Граница — по метаданным пакетов, не списком руками:
+# «только голосу» = замыкание VOICE_DEPS минус замыкание всего остального. Наш код и
+# дерево агента этих пакетов не импортируют (проверено грепом 27.09).
+#
+# ⚠ Имя архива — НЕ .zip: окна 1.1.x/1.2.0 берут из выпуска первый «helene-*.zip»
+# (shell::pick_update_zip), и голосовой набор перехватил бы у них кнопку «Обновить».
+
+VOICE_IMPORTS = ("faster_whisper", "piper")
+# Чем ещё голос должен импортироваться из набора (дымовой тест): тяжёлые двоичные части.
+VOICE_SMOKE_EXTRA = ("ctranslate2", "onnxruntime", "av", "numpy")
+VOICE_PTH = "helene-voice.pth"
+# Путь из runtime/Lib/site-packages к <установка>/voice/site-packages: `site` читает
+# .pth при старте любого процесса рантайма и добавляет строку, только если папка есть.
+VOICE_PTH_LINE = "../../../voice/site-packages"
+VOICE_PACK_MANIFEST = "voice-pack.json"
+
+
+def _norm_dist(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _req_name(spec: str) -> str:
+    m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", spec)
+    return _norm_dist(m.group(1)) if m else ""
+
+
+def _site_dists(site: Path) -> dict[str, dict]:
+    """Пакеты папки site-packages: имя → версия, зависимости (без extra) и файлы RECORD
+    (только внутри папки: `../../Scripts/*` остаются рантайму)."""
+    import csv
+    out: dict[str, dict] = {}
+    if not site.is_dir():
+        return out
+    for info in sorted(site.glob("*.dist-info")):
+        meta_path = info / "METADATA"
+        if not meta_path.is_file():
+            continue
+        meta = meta_path.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r"^Name:\s*(.+)$", meta, re.M)
+        if not m:
+            continue
+        ver = re.search(r"^Version:\s*(.+)$", meta, re.M)
+        reqs = []
+        for line in re.findall(r"^Requires-Dist:\s*(.+)$", meta, re.M):
+            spec, _, marker = line.partition(";")
+            if "extra" not in marker and _req_name(spec):
+                reqs.append(_req_name(spec))
+        files: list[str] = []
+        rec = info / "RECORD"
+        if rec.is_file():
+            with rec.open(encoding="utf-8", errors="replace", newline="") as fh:
+                for row in csv.reader(fh):
+                    path = (row[0] if row else "").strip().replace("\\", "/")
+                    if path and not path.startswith(("..", "/")):
+                        files.append(path)
+        out[_norm_dist(m.group(1).strip())] = {
+            "version": ver.group(1).strip() if ver else "", "requires": reqs, "files": files}
+    return out
+
+
+def _dist_closure(roots: list[str], dists: dict[str, dict]) -> set[str]:
+    seen: set[str] = set()
+    stack = [r for r in roots if r]
+    while stack:
+        name = stack.pop()
+        if name in seen or name not in dists:
+            continue
+        seen.add(name)
+        stack.extend(dists[name]["requires"])
+    return seen
+
+
+def _move_file(src: Path, dst: Path) -> bool:
+    if not src.is_file() or dst.exists():
+        return False
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(src, dst)
+    return True
+
+
+def _prune_empty(root: Path) -> None:
+    for dirpath, _dirs, _files in sorted(os.walk(root), key=lambda t: -len(t[0])):
+        p = Path(dirpath)
+        if p != root:
+            with contextlib.suppress(OSError):
+                p.rmdir()
+
+
+def split_voice(site: Path, stage: Path) -> dict:
+    """Развести пакеты: только голосовые — в `stage`, остальные — в рантайм. Идемпотентно:
+    повторная сборка с --skip-runtime застаёт уже разведённое и ничего не двигает.
+    -> {"dists": {имя: версия}, "tops": [...], "moved": n}."""
+    here, there = _site_dists(site), _site_dists(stage)
+    both = {**there, **here}
+    base_roots = [_req_name(d) for d in TREE_DEPS + deskpkg.requirements(deskpkg.WINDOWS)] + ["pip"]
+    base = _dist_closure(base_roots, both)
+    voice_roots = [_req_name(d) for d in VOICE_DEPS]
+    missing = [d for d in voice_roots if d not in both]
+    if missing:
+        raise SystemExit(f"голосовых пакетов нет ни в рантайме, ни в наборе: {missing} — "
+                         "рантайм собран без голоса; пересобери без --skip-runtime")
+    voice = _dist_closure(voice_roots, both) - base
+    owners: dict[str, set[str]] = {}
+    for name, d in both.items():
+        for f in d["files"]:
+            owners.setdefault(f.split("/", 1)[0], set()).add(name)
+    moved = 0
+    stage.mkdir(parents=True, exist_ok=True)
+    for name, d in both.items():
+        src, dst = (site, stage) if name in voice else (stage, site)
+        for f in d["files"]:
+            moved += _move_file(src / f, dst / f)
+    # Остатки внутри папок, которыми владеет только голос (скомпилированный __pycache__,
+    # файлы, появившиеся после установки), — туда же, целиком.
+    tops = sorted(t for t, who in owners.items()
+                  if who <= voice and t != "__pycache__" and not t.endswith(".dist-info"))
+    for top in tops:
+        left = site / top
+        if left.is_dir():
+            for p in sorted(left.rglob("*")):
+                if p.is_file():
+                    moved += _move_file(p, stage / p.relative_to(site))
+            _prune_empty(left)
+            with contextlib.suppress(OSError):
+                left.rmdir()
+    _prune_empty(site)
+    (site / VOICE_PTH).write_text(VOICE_PTH_LINE + "\n", encoding="utf-8", newline="\n")
+    return {"dists": {n: both[n]["version"] for n in sorted(voice)}, "tops": tops, "moved": moved}
+
+
+def smoke_voice(out: Path, stage: Path) -> None:
+    """База живёт БЕЗ голосового набора, а голос — с ним: оба утверждения проверяются."""
+    py = out / "runtime" / "python.exe"
+    code = f"import sys; sys.path.insert(0, {str(stage)!r}); import " + ", ".join(
+        VOICE_IMPORTS + VOICE_SMOKE_EXTRA)
+    r = subprocess.run([str(py), "-c", code], capture_output=True, text=True,
+                       timeout=300, encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        raise SystemExit("голосовой набор не импортируется рантаймом:\n" + (r.stderr or "").strip())
+
+
+def pack_voice(stage: Path, dest: Path, meta: dict, *, level: int = 19) -> dict:
+    """Набор голоса одним архивом: tar (опись `voice-pack.json` первой, дальше
+    `site-packages/…`), сжатый zstd. Рядом — `.sha256`. -> запись для паспорта."""
+    import io
+    import tarfile
+    from compression import zstd
+    files = sorted(p.relative_to(stage).as_posix() for p in stage.rglob("*") if p.is_file())
+    unpacked = sum((stage / f).stat().st_size for f in files)
+    manifest = {**meta, "files": len(files), "unpacked_bytes": unpacked}
+    opts = {
+        zstd.CompressionParameter.compression_level: level,
+        zstd.CompressionParameter.enable_long_distance_matching: 1,
+        zstd.CompressionParameter.window_log: 27,
+        zstd.CompressionParameter.nb_workers: max(1, (os.cpu_count() or 2) - 2),
+    }
+    tmp = dest.with_name(dest.name + ".tmp")
+    with open(tmp, "wb") as raw:
+        with zstd.ZstdFile(raw, "w", options=opts) as zf:
+            with tarfile.open(fileobj=zf, mode="w|", format=tarfile.PAX_FORMAT) as tar:
+                data = (json.dumps(manifest, ensure_ascii=False, indent=1) + "\n").encode("utf-8")
+                info = tarfile.TarInfo(VOICE_PACK_MANIFEST)
+                info.size, info.mode, info.mtime = len(data), 0o644, int(_dt.datetime.now().timestamp())
+                tar.addfile(info, io.BytesIO(data))
+                for rel in files:
+                    info = tar.gettarinfo(str(stage / rel), arcname="site-packages/" + rel)
+                    info.uid = info.gid = 0
+                    info.uname = info.gname = ""
+                    info.mode = 0o644
+                    with open(stage / rel, "rb") as fh:
+                        tar.addfile(info, fh)
+    os.replace(tmp, dest)
+    digest = sha256(dest)
+    dest.with_name(dest.name + ".sha256").write_text(
+        f"{digest} *{dest.name}\n", encoding="utf-8", newline="\n")
+    return {"name": dest.name, "sha256": digest, "bytes": dest.stat().st_size,
+            "unpacked_bytes": unpacked, "files": len(files),
+            "python": meta.get("python", ""), "dists": meta.get("dists", {})}
 
 
 # --- секрет-гард --------------------------------------------------------------
@@ -1489,14 +1678,23 @@ def main() -> None:
     # MinGit — тоже до рантайма и по той же причине: сеть падает до долгой работы.
     fetch(MINGIT_URL, cache / Path(MINGIT_URL).name)
 
+    # 1.2.1: голосовой движок живёт рядом с рантаймом, отдельным набором (split_voice).
+    voice_stage = Path(args.out).resolve() / "voice-stage" / "site-packages"
     if args.skip_runtime:
         print("runtime: пропущен (--skip-runtime)")
     else:
         print("runtime:")
+        # Набор — производное рантайма: пересобрали рантайм — прежний набор устарел.
+        shutil.rmtree(voice_stage.parent, ignore_errors=True)
         build_runtime(out, cache)
-    print("  дымовой тест рантайма…")
-    freeze = smoke_runtime(out)
+    print("  голосовой набор — отдельно от рантайма…")
+    voice_split = split_voice(out / "runtime" / "Lib" / "site-packages", voice_stage)
+    print(f"  голосу — {len(voice_split['dists'])} пакетов, передвинуто файлов: {voice_split['moved']}")
+    print("  дымовой тест рантайма (без голоса)…")
+    freeze = smoke_runtime(out, [m for m in SMOKE_IMPORTS if m not in VOICE_IMPORTS])
     print(f"  импорты живы, пакетов: {len(freeze.splitlines())}")
+    smoke_voice(out, voice_stage)
+    print("  голос импортируется из набора")
 
     # busybox лежит ПРЯМО РЯДОМ с python.exe, не в подпапке и не в PATH:
     # CreateProcess ищет команду в каталоге приложения и System32 РАНЬШЕ PATH,
@@ -1667,6 +1865,15 @@ def main() -> None:
     (out / "helene.json").write_text(HELENE_JSON, encoding="utf-8", newline="\n")
     (out / "data").mkdir(exist_ok=True)
 
+    # Голосовой набор — до паспорта: его имя и сумма едут в паспорт, по ним окно на
+    # машине владельца качает и сверяет движок (localharness/voice.py).
+    print("голосовой набор…")
+    voice_pack = pack_voice(voice_stage, out.parent / f"Helene-voice-{version}-windows.tar.zst",
+                            {"product": "Hélène", "version": version, "python": PY_VERSION,
+                             "dists": voice_split["dists"]})
+    print(f"  {voice_pack['name']}: {voice_pack['bytes'] / 1e6:.1f} МБ "
+          f"({voice_pack['unpacked_bytes'] / 1e6:.0f} МБ распакованным), sha256 {voice_pack['sha256']}")
+
     print("паспорт сборки:")
     desk_head, desk_dirty = _git_field(DESK, "desk")
     tree_head, tree_dirty = _git_field(live, "дерево агента")
@@ -1712,6 +1919,9 @@ def main() -> None:
         # сопоставить ни с чем.
         "downloads": {Path(url).name: SHA256.get(url, "") for url in SHA256},
         "packages": freeze.splitlines(),
+        # 1.2.1: движок голоса — отдельный актив выпуска рядом с zip; окно качает его
+        # вместе с моделью и сверяет по этой сумме (не по чужому слову сети).
+        "voice_pack": voice_pack,
     }
     (out / "helene-build.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
@@ -1726,7 +1936,10 @@ def main() -> None:
 
     # Опись поставки (1.2) — в корень: едет и в zip (кнопка «Обновить»), и в хвост
     # установщика; по ней мастер ведёт ход и отличает поставку от владельческого.
-    write_payload_manifest(out, version, "Helene")
+    # Голос в описи — для установщика: при обновлении с поставки, где движок жил в
+    # рантайме (≤ 1.2.0), он переносит эти пакеты в voice/, а не выбрасывает.
+    write_payload_manifest(out, version, "Helene", voice={
+        "dists": sorted(voice_split["dists"]), "tops": voice_split["tops"], "python": PY_VERSION})
     total = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())
     print(f"итого: {total / 1e6:.1f} МБ до сжатия")
     # Имя архива с версией: две скачанные поставки в «Загрузках» раньше были
@@ -1778,7 +1991,7 @@ def _payload_files(out: Path) -> list[str]:
     return sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
 
 
-def write_payload_manifest(out: Path, version: str, product: str) -> dict:
+def write_payload_manifest(out: Path, version: str, product: str, *, voice: dict | None = None) -> dict:
     """Опись поставки `.helene-payload.json` — в корень поставки (едет и в zip, и в хвост).
 
     По ней мастер знает ход раскладки (файлов и байт), набор входа в ChatGPT и имена
@@ -1798,6 +2011,8 @@ def write_payload_manifest(out: Path, version: str, product: str) -> dict:
         "kit": kit,
         "top": top,
     }
+    if voice:
+        manifest["voice"] = voice
     (out / PAYLOAD_MANIFEST).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
                                         encoding="utf-8", newline="\n")
     return manifest

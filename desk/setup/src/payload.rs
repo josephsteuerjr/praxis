@@ -101,6 +101,25 @@ pub struct Manifest {
     /// поставки от того, что владелец положил в папку сам.
     #[serde(default)]
     pub top: Vec<String>,
+    /// 1.2.1: голос вынесен из рантайма в отдельный набор (`voice/site-packages`). По
+    /// этой записи обновление с поставки, где движок жил в рантайме (≤ 1.2.0), переносит
+    /// его пакеты в `voice/`, а не выбрасывает вместе с прежним рантаймом.
+    #[serde(default)]
+    pub voice: Option<VoiceInfo>,
+}
+
+/// Голосовой набор в описи поставки.
+#[derive(Deserialize, Default, Clone, Debug)]
+pub struct VoiceInfo {
+    /// Имена пакетов набора, нормализованные (`faster-whisper`, `hf-xet`).
+    #[serde(default)]
+    pub dists: Vec<String>,
+    /// Папки и файлы верхнего уровня site-packages, которые принадлежат только голосу.
+    #[serde(default)]
+    pub tops: Vec<String>,
+    /// Питон, под который собран набор (`3.14.5`): переносить можно только в тот же.
+    #[serde(default)]
+    pub python: String,
 }
 
 #[derive(Clone, Debug)]

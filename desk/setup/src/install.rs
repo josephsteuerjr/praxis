@@ -3216,6 +3216,73 @@ fn runtime_same_from(new_passport: Option<&serde_json::Value>, dir: &Path) -> bo
     ["python", "downloads", "packages"].iter().all(|k| new.get(k).is_some() && new.get(k) == old.get(k))
 }
 
+/// Имя пакета, нормализованное (PEP 503): `faster_whisper` → `faster-whisper`.
+fn norm_dist(name: &str) -> String {
+    let mut out = String::new();
+    let mut dash = false;
+    for ch in name.chars() {
+        if matches!(ch, '-' | '_' | '.') {
+            dash = true;
+        } else {
+            if dash && !out.is_empty() {
+                out.push('-');
+            }
+            dash = false;
+            out.extend(ch.to_lowercase());
+        }
+    }
+    out
+}
+
+/// Питон «тот же» — совпадают первые два числа (`3.14.5` и `3.14.6`: колёса cp314 одни).
+fn same_python(a: &str, b: &str) -> bool {
+    let two = |s: &str| s.split('.').take(2).map(str::to_string).collect::<Vec<_>>();
+    let (x, y) = (two(a), two(b));
+    x.len() == 2 && x == y
+}
+
+/// 1.2.1: пакеты голоса из прежнего рантайма (≤ 1.2.0, где движок жил в рантайме) —
+/// в `voice/site-packages` новой установки, а не в корзину вместе с прежним рантаймом.
+/// У кого голос был, тому не качать ~94 МБ заново. Пусто, если переносить нечего или
+/// нельзя: рантайм не меняется (тогда голос едет в нём), `voice/` уже есть (её перенесёт
+/// общий перенос), питон другой (колёса не загрузятся) или голоса в прежнем рантайме нет.
+/// -> пары «путь в прежней → путь в новой» для `Carry::extra`.
+fn voice_carry(dir: &Path, voice: Option<&crate::payload::VoiceInfo>, runtime_kept: bool) -> Vec<(String, String)> {
+    let Some(voice) = voice else {
+        return Vec::new();
+    };
+    if runtime_kept || dir.join("voice").exists() || voice.dists.is_empty() {
+        return Vec::new();
+    }
+    let old_python = read_json(&dir.join("helene-build.json"))
+        .and_then(|p| p.get("python").and_then(|v| v.as_str()).map(str::to_string))
+        .unwrap_or_default();
+    if !same_python(&old_python, &voice.python) {
+        return Vec::new();
+    }
+    let site = dir.join("runtime").join("Lib").join("site-packages");
+    if !site.join("faster_whisper").is_dir() {
+        return Vec::new();
+    }
+    let Ok(rd) = std::fs::read_dir(&site) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = rd.flatten().filter_map(|e| e.file_name().to_str().map(str::to_string)).collect();
+    names.sort();
+    names
+        .into_iter()
+        .filter(|name| {
+            if let Some(stem) = name.strip_suffix(".dist-info") {
+                let dist = stem.split('-').next().unwrap_or("");
+                voice.dists.iter().any(|d| norm_dist(d) == norm_dist(dist))
+            } else {
+                voice.tops.iter().any(|t| t == name)
+            }
+        })
+        .map(|name| (format!("runtime/Lib/site-packages/{name}"), format!("voice/site-packages/{name}")))
+        .collect()
+}
+
 /// Метка установки (`helene-install.json`).
 fn write_marker(dir: &Path, scope: &str, version: &str) -> Result<(), String> {
     let now = std::time::SystemTime::now()
@@ -3589,6 +3656,15 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
         .filter(|n: &String| !["helene.json", "helene.json.bak", "data", "backups", "agents"].contains(&n.as_str()))
         .collect();
 
+    // 1.2.1: движок голоса прежней поставки — в voice/, если он жил в её рантайме.
+    let old_python = read_json(&dir.join("helene-build.json"))
+        .and_then(|p| p.get("python").and_then(|v| v.as_str()).map(str::to_string))
+        .unwrap_or_default();
+    let old_version = read_json(&dir.join("helene-build.json"))
+        .and_then(|p| p.get("version").and_then(|v| v.as_str()).map(str::to_string))
+        .unwrap_or_default();
+    let voice_moves = voice_carry(&dir, manifest.voice.as_ref(), runtime_kept);
+
     // 6. Подмена — два переименования. Отмены здесь нет: это доли секунды.
     say("swap", "Меняю версии местами", None, None, false, true, progress);
     let carry = Carry {
@@ -3602,11 +3678,31 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
             StaticPlan::Replace => StaticCarry::ToPrev,
         },
         keep_runtime: runtime_kept,
+        extra: &voice_moves,
     };
     if let Err(e) = tx.swap(&carry) {
         let _ = tx.rollback();
         let back = restore_after_abort(&dir, &before);
         return Err(format!("{e}{}", back.map(|b| format!(" ({b})")).unwrap_or_default()));
+    }
+    if !voice_moves.is_empty() && dir.join("voice").join("site-packages").is_dir() {
+        // Расписка переезда — её читает voice.py (питон набора сверяется с рантаймом).
+        let receipt = serde_json::json!({
+            "schema": "helene.voice.v1",
+            "source": "migrated",
+            "version": old_version,
+            "python": old_python,
+            "entries": voice_moves.len(),
+        });
+        let _ = write_atomic(
+            &dir.join("voice").join("installed.json"),
+            &(serde_json::to_string_pretty(&receipt).unwrap_or_default() + "\n"),
+        );
+        steps.push(Step {
+            label: "Движок голоса".into(),
+            ok: true,
+            note: Some(format!("перенесён из прежнего рантайма ({} частей) — качать заново не нужно", voice_moves.len())),
+        });
     }
 
     // 7. Настройки и конституция — в уже подменённой папке; отказ = откат.
@@ -5455,6 +5551,44 @@ mod tests {
         let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
         assert!(wait_for_channel(&dir, 5));
         drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 1.2.1: из прежнего рантайма в `voice/` уезжает ровно голос — и только когда можно.
+    #[test]
+    fn voice_leaves_the_old_runtime_only_when_it_may() {
+        let dir = std::env::temp_dir().join(format!("helene-voice-carry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let site = dir.join("runtime").join("Lib").join("site-packages");
+        for d in [
+            "faster_whisper", "numpy", "numpy.libs", "anthropic",
+            "faster_whisper-1.2.1.dist-info", "numpy-2.3.4.dist-info", "anthropic-0.70.0.dist-info",
+        ] {
+            std::fs::create_dir_all(site.join(d)).unwrap();
+        }
+        std::fs::write(dir.join("helene-build.json"), r#"{"python":"3.14.5","version":"1.2.0"}"#).unwrap();
+        let voice = crate::payload::VoiceInfo {
+            dists: vec!["faster-whisper".into(), "numpy".into()],
+            tops: vec!["faster_whisper".into(), "numpy".into(), "numpy.libs".into()],
+            python: "3.14.6".into(),
+        };
+        let moves = voice_carry(&dir, Some(&voice), false);
+        let names: Vec<&str> = moves.iter().map(|(f, _)| f.rsplit('/').next().unwrap()).collect();
+        assert_eq!(
+            names,
+            ["faster_whisper", "faster_whisper-1.2.1.dist-info", "numpy", "numpy-2.3.4.dist-info", "numpy.libs"],
+            "anthropic — не голос"
+        );
+        assert!(moves.iter().all(|(_, to)| to.starts_with("voice/site-packages/")));
+        assert!(voice_carry(&dir, Some(&voice), true).is_empty(), "рантайм не меняется — голос едет в нём");
+        assert!(voice_carry(&dir, None, false).is_empty(), "поставка без голосовой описи");
+        let other = crate::payload::VoiceInfo { python: "3.15.0".into(), ..voice.clone() };
+        assert!(voice_carry(&dir, Some(&other), false).is_empty(), "другой питон — не переносим");
+        std::fs::create_dir_all(dir.join("voice")).unwrap();
+        assert!(voice_carry(&dir, Some(&voice), false).is_empty(), "voice/ уже есть — её везёт общий перенос");
+        assert_eq!(norm_dist("Faster_Whisper"), "faster-whisper");
+        assert_eq!(norm_dist("hf.xet"), "hf-xet");
+        assert!(same_python("3.14.5", "3.14.6") && !same_python("3.14.5", "3.15.0") && !same_python("", "3.14"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
