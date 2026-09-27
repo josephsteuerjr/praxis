@@ -1,0 +1,373 @@
+/* Колонка ходов (panel.ts, 28.09): лента со временем, тонкая линия с точками состояния,
+   шаги строками со значками. Облик «Почерк»: бумага, линия, терракота, почерк в заголовке. */
+
+#panel {
+  background: transparent;
+  border-left: var(--lw) solid var(--line-ink);
+  padding: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+#panel.grabbing,
+#panel.grabbing * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.turns-inner {
+  padding: 18px 14px 28px 16px;
+  min-height: 100%;
+}
+
+.turns-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 4px 10px;
+}
+.turns-title {
+  font: 400 26px/1 var(--hand);
+  letter-spacing: 0.03em;
+  color: var(--ink);
+  -webkit-text-stroke: 0.3px currentColor;
+}
+.turns-room {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.turns-n {
+  font: 400 12px/1 var(--mono);
+  color: var(--muted);
+}
+
+/* Полоса кадра над лентой — тонко, без карточки. */
+.turns-strip .frame-strip {
+  margin: 0 4px 12px;
+  padding: 10px 12px;
+  border: var(--lw) solid var(--line);
+  border-radius: 14px;
+  background: transparent;
+}
+.turns-strip:empty {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- лента ходов */
+
+.turns {
+  position: relative;
+}
+/* Линия времени: одна на всю ленту, точки ходов садятся на неё. */
+.turns::before {
+  content: "";
+  position: absolute;
+  left: 57px;
+  top: 14px;
+  bottom: 14px;
+  width: var(--lw);
+  background: var(--line);
+}
+
+.turn {
+  position: relative;
+  padding: 2px 0;
+}
+.turn-head {
+  display: grid;
+  grid-template-columns: 40px 16px 1fr;
+  gap: 0 8px;
+  align-items: start;
+  width: 100%;
+  padding: 9px 8px 9px 4px;
+  border: var(--lw) solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+.turn-head:hover {
+  background: var(--ctrl-hover);
+}
+.turn.open > .turn-head {
+  border-color: var(--line-ink);
+  background: var(--surface);
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+.turn-time {
+  padding-top: 2px;
+  font: 400 11.5px/1.2 var(--mono);
+  color: var(--muted);
+  text-align: right;
+}
+.turn-dot {
+  justify-self: center;
+  margin-top: 5px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: var(--lw) solid var(--line-ink);
+  background: var(--paper);
+  position: relative;
+  z-index: 1;
+}
+.turn[data-status="failed"] .turn-dot {
+  background: var(--err);
+  border-color: var(--err);
+}
+.turn[data-status="silent"] .turn-dot {
+  border-style: dashed;
+  border-color: var(--ink-3);
+}
+.turn[data-status="live"] .turn-dot {
+  background: var(--terra);
+  border-color: var(--line-ink);
+  animation: turn-pulse 1.6s var(--ease-out) infinite;
+}
+@keyframes turn-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--terra) 70%, transparent); }
+  100% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--terra) 0%, transparent); }
+}
+
+.turn-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.turn-title {
+  font: 500 13.5px/1.4 var(--sans);
+  color: var(--ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.turn[data-status="silent"] .turn-title {
+  color: var(--ink-3);
+  font-style: italic;
+}
+.turn-cause {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.turn-meta {
+  font: 400 11px/1.3 var(--mono);
+  color: var(--muted);
+}
+.turn-meta:empty {
+  display: none;
+}
+.turn[data-status="live"] .turn-meta {
+  color: var(--accent);
+}
+
+/* ---------------------------------------------------------------- шаги внутри хода */
+
+.turn-body {
+  margin: 0 0 8px 0;
+  padding: 8px 10px 12px 10px;
+  border: var(--lw) solid var(--line-ink);
+  border-top: 0;
+  border-radius: 0 0 14px 14px;
+  background: var(--surface);
+}
+.turn-body.loading::after {
+  content: "читаю шаги…";
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 6px;
+}
+
+.st {
+  position: relative;
+  padding: 2px 0;
+}
+.st-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-2);
+  font: 400 12.5px/1.4 var(--sans);
+  text-align: left;
+}
+button.st-line {
+  cursor: pointer;
+}
+button.st-line:hover {
+  background: var(--ctrl-hover);
+}
+.st .ico {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  align-self: flex-start;
+  margin-top: 2px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--ink-2);
+}
+.st-label {
+  flex: none;
+  font-weight: 600;
+  color: var(--ink);
+}
+.st-what {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+.st-meta {
+  margin-left: auto;
+  font: 400 11px/1 var(--mono);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.st-state {
+  flex: none;
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--accent);
+}
+
+/* Шаг (итерация модели) — разделитель: мельче и тише, с отступом сверху. */
+.st-think {
+  margin-top: 6px;
+}
+.st-think:first-child,
+.st-origin + .st-think {
+  margin-top: 2px;
+}
+.st-think .st-label {
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.st-think .ico {
+  color: var(--ink-3);
+}
+/* Руки — под своим шагом, с тонкой направляющей слева. */
+.st-hand {
+  margin-left: 13px;
+  padding-left: 10px;
+  border-left: var(--lw) solid var(--line);
+}
+/* Слово (рука reply) — читается, а не сворачивается в одну строку. */
+.st-word .st-what {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  color: var(--ink);
+}
+.st-word .ico,
+.st-end .ico {
+  color: var(--accent);
+}
+.st-end {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: var(--lw) dashed var(--line);
+}
+.st-origin .st-what {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.st-open {
+  display: inline-block;
+  margin: 0 0 4px 28px;
+  font-size: 12px;
+}
+
+.st.is-live .ico {
+  color: var(--terra);
+  animation: st-breathe 1.4s ease-in-out infinite;
+}
+@keyframes st-breathe {
+  50% { opacity: 0.35; }
+}
+.st.is-failed .ico,
+.st.is-failed .st-label {
+  color: var(--err);
+}
+.st-err {
+  margin: 2px 6px 4px 28px;
+  font-size: 12px;
+  color: var(--err);
+}
+
+.st-detail {
+  margin: 2px 0 6px 28px;
+}
+.st-k {
+  margin: 8px 0 3px;
+  font: 500 11px/1 var(--sans);
+  color: var(--muted);
+}
+.st-pre,
+.st .run-text-body {
+  margin: 0;
+  max-height: 22em;
+  overflow: auto;
+  padding: 8px 10px;
+  border: var(--lw) solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  font: 400 11.5px/1.45 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink-2);
+}
+.st-word > .run-text {
+  margin: 2px 6px 4px 28px;
+}
+.st-frame .frame-strip {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: var(--lw) solid var(--line);
+  border-radius: 12px;
+}
+.st-none {
+  padding: 6px;
+  font-size: 12px;
+}
+
+.turns-empty .empty {
+  padding: 32px 0;
+  font: 400 20px/1.3 var(--hand);
+  color: var(--ink-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turn[data-status="live"] .turn-dot,
+  .st.is-live .ico {
+    animation: none;
+  }
+}

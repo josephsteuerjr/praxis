@@ -75,6 +75,9 @@ const ctx: Ctx = {
 };
 
 function start() {
+  // Проверка темы глазами: HELENE_THEME=dark|light (в поставке — как в системе).
+  const theme = process.env.HELENE_THEME;
+  if (theme === "dark" || theme === "light") nativeTheme.themeSource = theme;
   log(`старт ${PRODUCT_UI} ${app.getVersion()} · Electron ${process.versions.electron} · установка ${ROOT} · статика ${UI}`);
   protocol.handle("helene", (req) => serveStatic(req.url));
   ipcMain.on("helene:config", (e) => {

@@ -11,6 +11,8 @@
 import "./styles/app.css";
 // Облик «Почерк» (28.09) — слоем поверх: токены, линии, почерк, лента в em.
 import "./styles/paper.css";
+// Колонка ходов справа (28.09, переделана целиком).
+import "./styles/turns.css";
 import { api, cfg, connect, electron, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
 import { applyTheme } from "../../ui-kit/dom";
 import * as scroll from "./scroll";
