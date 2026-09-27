@@ -28,4 +28,8 @@ ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.94.1 \
     && rustc --version
 
+# Свидетель буфера обмена (xclip) — отдельным слоем, чтобы тяжёлый слой выше не пересобирался.
+RUN apt-get update && apt-get install -y --no-install-recommends xclip \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /src
