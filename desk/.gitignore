@@ -17,6 +17,8 @@ shell/target/
 # сборка варианта Praxis (shell/build-praxis.ps1) — свой каталог, чтобы
 # helene.exe и praxis.exe не затирали друг друга
 shell/target-praxis/
+# 1.2: мастер в варианте Praxis (setup/build-praxis.ps1)
+setup/target-praxis/
 svc/target/
 app/dist/
 app/node_modules/
