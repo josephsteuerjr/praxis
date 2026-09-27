@@ -38,6 +38,17 @@ assert.equal(updateCardHTML({ updater: { present: false }, receipt: null }, { in
   assert.doesNotMatch(html, /docker compose/);
 }
 
+// Пульт на ПК новее сервера (Hélène до 1.1.1: ручки /api/update нет) — не «канал молчит»,
+// а как обновить сервер один раз: команда из НОВОЙ поставки, без кнопок.
+{
+  const html = updateCardHTML({ updater: { present: false, old: true }, receipt: null }, { inContainer: true });
+  assert.match(html, /sh Helene\/server\/install\.sh/);
+  assert.match(html, /ещё не умеет обновляться отсюда/);
+  assert.doesNotMatch(html, /Канал не отвечает/);
+  assert.doesNotMatch(html, /<button/);
+  assert.equal(updateCardHTML({ updater: { present: false, old: true }, receipt: null }, { inContainer: false }), "");
+}
+
 // Есть новее и ничего не идёт — одна кнопка «Обновить до X», подтверждения нет.
 {
   const html = updateCardHTML({ updater: beat, receipt: null }, { inContainer: true });

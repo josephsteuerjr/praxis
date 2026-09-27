@@ -120,6 +120,12 @@ export function supervisorHTML(s: Supervisor | null): string {
 
 /** Что уже нарисовано в коробке обновления — чтобы опрос не менял её без нужды. */
 const drawnUpdate = new WeakMap<HTMLElement, string>();
+/** Канал ответил, что такой ручки у него нет (404 — туннелем или по HTTP): сервер старый. */
+function routeMissing(e: unknown): boolean {
+  const status = (e as { status?: unknown } | null)?.status;
+  return status === 404 || /: 404$/.test(String((e as Error | null)?.message ?? ""));
+}
+
 /** Последний ответ канала — его и показываем, пока канал молчит (по панели: коробку
  *  раздела перерисовка панели заменяет). */
 const lastUpdate = new WeakMap<HTMLElement, UpdateState>();
@@ -149,9 +155,16 @@ async function drawUpdate(
   try {
     state = await api<UpdateState>("/api/update");
     lastUpdate.set(box, state);
-  } catch {
-    offline = true;
-    state = lastUpdate.get(box) || null;
+  } catch (e) {
+    if (routeMissing(e)) {
+      // Окно новее сервера: пульт на ПК обновился, а на сервере Hélène до 1.1.1 — канал
+      // жив и отвечает «нет такого пути». Это не «канал молчит» (так карточка и висела бы
+      // вечно, опрашивая раз в 4 с): сервер надо один раз обновить командой.
+      state = { updater: { present: false, alive: false, ok: false, why: "", old: true }, receipt: null };
+    } else {
+      offline = true;
+      state = lastUpdate.get(box) || null;
+    }
   }
   const html = updateCardHTML(state, { inContainer, fmt: fmtTime, offline });
   if (slot && drawnUpdate.get(slot) !== html) {

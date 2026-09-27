@@ -73,6 +73,8 @@ export interface UpdaterBeat {
   latest?: { version?: string; checked_utc?: string; why?: string };
   newer?: boolean;
   command?: string;
+  /** Окно новее сервера: у сервера (Hélène до 1.1.1) ручки обновления нет вовсе. */
+  old?: boolean;
 }
 
 export interface UpdateState {
@@ -331,6 +333,14 @@ export function updateCardHTML(
   const up = u?.updater;
   if (!up || !up.present) {
     if (!opts.inContainer) return "";
+    if (up?.old) {
+      // Пульт на ПК обновился раньше сервера. Обновить сервер отсюда нечем — у него нет
+      // исполнителя; команда из НОВОЙ поставки (в старой установке её ещё нет).
+      return section(`<p class="muted">На сервере стоит Hélène, которая ещё не умеет обновляться отсюда. Один раз
+        нужна одна команда на сервере — её выполняет тот, кто ставил Hélène (или его помощник): скачать
+        <code>Helene-&lt;версия&gt;.zip</code>, распаковать и <code>sh Helene/server/install.sh</code>. Правки агента
+        в его коде она перенесёт сама; дальше обновления — здесь, одной кнопкой.</p>`);
+    }
     return section(`<p class="muted">Чтобы обновлять Hélène отсюда одной кнопкой, на сервере один раз нужна одна
       команда — её выполняет тот, кто ставил Hélène (или его помощник), в папке установки:
       <code>${esc(up?.command || "sh server/install.sh")}</code></p>`);
