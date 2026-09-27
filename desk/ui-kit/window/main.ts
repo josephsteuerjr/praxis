@@ -9,7 +9,7 @@
 // общее, а издание приносит своё — экран настроек и, если нужно, перехват
 // первого запуска. Веток про удалённый харнесс здесь нет ни одной.
 import "./styles/app.css";
-import { api, cfg, connect, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
+import { api, cfg, connect, electron, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
 import { applyTheme } from "../../ui-kit/dom";
 import { watchShellVersion } from "../../ui-kit/version";
 import { setResultFetcher } from "../../ui-kit/steps";
@@ -288,7 +288,15 @@ export function start(opts: WindowOptions): void {
 
   // ---------------------------------------------------------------- окно
 
-  if (inTauri) {
+  if (electron) {
+    // Electron: шапка тянет окно через -webkit-app-region (app.css, html.electron).
+    const bridge = electron;
+    document.documentElement.classList.add("native", "electron");
+    for (const b of document.querySelectorAll<HTMLButtonElement>(".win")) {
+      const action = b.dataset.win as "minimize" | "maximize" | "close";
+      b.addEventListener("click", () => bridge.win(action));
+    }
+  } else if (inTauri) {
     document.documentElement.classList.add("native");
     import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
       const w = getCurrentWindow();

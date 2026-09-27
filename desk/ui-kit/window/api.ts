@@ -45,7 +45,19 @@ const shellCfg = window.DESK_CONFIG_OVERRIDE || window.DESK_CONFIG;
 export const cfg: Cfg = shellCfg
   ? { ...shellCfg, key: shellCfg.key || keyFromUrl() }
   : { base: "", key: keyFromUrl() };
-export const inTauri = "__TAURI_INTERNALS__" in window;
+/** Мост оболочки на Electron (28.09, desk/electron/src/preload.ts). */
+export interface ElectronBridge {
+  shell: "electron";
+  platform: string;
+  invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
+  win(action: "minimize" | "maximize" | "close"): void;
+}
+export const electron: ElectronBridge | undefined = (window as unknown as { __HELENE__?: ElectronBridge }).__HELENE__;
+/**
+ * Окно — в оболочке программы, а не веб-версия за каналом. Имя историческое: с 28.09
+ * оболочка — Electron (`electron`), прежние выпуски — Tauri; для окна разницы нет.
+ */
+export const inTauri = "__TAURI_INTERNALS__" in window || !!electron;
 
 function url(path: string): string {
   const full = (cfg.base || "") + path;
@@ -211,6 +223,7 @@ async function request<T>(method: string, path: string, body: unknown): Promise<
 /** Команда оболочки; вне Tauri — честная ошибка, а не тишина. */
 export async function shell<T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (!inTauri) throw new Error("доступно только в приложении Hélène");
+  if (electron) return electron.invoke(cmd, args) as Promise<T>;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(cmd, args);
 }
