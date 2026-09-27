@@ -3217,6 +3217,7 @@ fn runtime_same_from(new_passport: Option<&serde_json::Value>, dir: &Path) -> bo
 }
 
 /// Имя пакета, нормализованное (PEP 503): `faster_whisper` → `faster-whisper`.
+#[cfg_attr(not(windows), allow(dead_code))] // зовёт только install_tx (Windows)
 fn norm_dist(name: &str) -> String {
     let mut out = String::new();
     let mut dash = false;
@@ -3235,6 +3236,7 @@ fn norm_dist(name: &str) -> String {
 }
 
 /// Питон «тот же» — совпадают первые два числа (`3.14.5` и `3.14.6`: колёса cp314 одни).
+#[cfg_attr(not(windows), allow(dead_code))] // зовёт только install_tx (Windows)
 fn same_python(a: &str, b: &str) -> bool {
     let two = |s: &str| s.split('.').take(2).map(str::to_string).collect::<Vec<_>>();
     let (x, y) = (two(a), two(b));
@@ -3247,6 +3249,7 @@ fn same_python(a: &str, b: &str) -> bool {
 /// нельзя: рантайм не меняется (тогда голос едет в нём), `voice/` уже есть (её перенесёт
 /// общий перенос), питон другой (колёса не загрузятся) или голоса в прежнем рантайме нет.
 /// -> пары «путь в прежней → путь в новой» для `Carry::extra`.
+#[cfg_attr(not(windows), allow(dead_code))] // зовёт только install_tx (Windows)
 fn voice_carry(dir: &Path, voice: Option<&crate::payload::VoiceInfo>, runtime_kept: bool) -> Vec<(String, String)> {
     let Some(voice) = voice else {
         return Vec::new();
