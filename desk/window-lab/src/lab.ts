@@ -5,7 +5,6 @@ import { FEELS, Scroller, type FeelName, type Overscroll } from "../../ui-kit/fe
 import { Zoom } from "../../ui-kit/feed/zoom";
 import { KeyedList } from "../../ui-kit/feed/keyed";
 import { md, esc } from "./md";
-import { mountTuning, reportPrefs } from "./custom";
 import { LONG_REPLY, agentLine, nextId, ownerLine, seed, type Msg } from "./data";
 
 // ------------------------------------------------------------------ движок
@@ -78,7 +77,6 @@ document.getElementById("app")!.innerHTML = `
       <div class="seg" data-seg="hand"><span>Почерк (заголовки, имя)</span><button data-v="Zen Kurenaido">Zen Kurenaido</button><button data-v="Neucha">Neucha</button><button data-v="Pangolin">Pangolin</button><button data-v="Klee One">Klee One</button><button data-v="Shantell Sans">Shantell (сейчас)</button></div>
       <div class="seg" data-seg="text"><span>Текст ленты</span><button data-v="Golos Text">Golos</button><button data-v="Source Serif 4">Source Serif</button></div>
       <div class="hint" id="zoom-hint">Масштаб 100% · Ctrl+колесо, щипок, Ctrl+= / Ctrl+− / Ctrl+0</div>
-      <div id="tune"></div>
       <div class="result" id="result"></div>
     </div>
   </aside>`;
@@ -224,12 +222,11 @@ function store(k: string, v?: string): string | null {
 
 const SEG: Record<string, (v: string) => void> = {
   over: (v) => { scroller.overscroll = v as Overscroll; },
-  feel: (v) => { scroller.feel = { ...(FEELS[v as FeelName] ?? FEELS.syrup) }; tuning?.presetChanged(); },
+  feel: (v) => { scroller.feel = { ...(FEELS[v as FeelName] ?? FEELS.syrup) }; },
   theme: (v) => { if (v === "system") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = v; },
   hand: (v) => document.documentElement.style.setProperty("--hand", `"${v}", "Neucha", cursive`),
   text: (v) => document.documentElement.style.setProperty("--text", `"${v}", "Segoe UI", system-ui, sans-serif`),
 };
-let tuning: ReturnType<typeof mountTuning> | undefined;
 const DEF: Record<string, string> = { over: "rubber", feel: "syrup", theme: "system", hand: "Zen Kurenaido", text: "Golos Text" };
 // Прежние выборы лаборатории (до слова Егора 28.09 «резинка нравится») — не держим.
 if (store("lab.v") !== "2") { for (const k of ["over", "feel", "hand", "text"]) { try { localStorage.removeItem("lab." + k); } catch { /* */ } } store("lab.v", "2"); }
@@ -239,13 +236,10 @@ for (const seg of document.querySelectorAll<HTMLElement>("[data-seg]")) {
     for (const b of seg.querySelectorAll<HTMLButtonElement>("button")) b.classList.toggle("on", b.dataset.v === v);
     SEG[name](v);
     store("lab." + name, v);
-    if (tuning) reportPrefs();
   };
   for (const b of seg.querySelectorAll<HTMLButtonElement>("button")) b.addEventListener("click", () => pick(b.dataset.v!));
   pick(new URLSearchParams(location.search).get(name) || store("lab." + name) || DEF[name]);
 }
-
-tuning = mountTuning(document.getElementById("tune")!, scroller, zoom, () => (store("lab.feel") || "syrup") as FeelName);
 
 // Журнал жестов: как приходят события колеса/тачпада на этой машине (Windows не говорит,
 // где пальцы, а где инерция — пороги подбираются по живым записям). Пишется в wheel.log.
@@ -256,7 +250,7 @@ tuning = mountTuning(document.getElementById("tune")!, scroller, zoom, () => (st
     const now = performance.now();
     if (!t0 || now - t0 > 2000) buf.push("---");
     const d = scroller.debug();
-    buf.push([Math.round(now - (t0 || now)), e.deltaY.toFixed(2), e.deltaMode, e.ctrlKey ? "ctrl" : "", `pos=${d.pos}/${d.max}`, `raw=${d.raw}`, `edge=${d.edge}`, `rel=${d.release ? 1 : 0}`, d.notch ? "notch" : "pad"].join("\t"));
+    buf.push([Math.round(now - (t0 || now)), e.deltaY.toFixed(2), e.deltaMode, e.ctrlKey ? "ctrl" : "", `pos=${d.pos}/${d.max}`, `raw=${d.raw}`, `pull=${d.pull}`, d.pad, d.notch ? "notch" : "pad"].join("\t"));
     t0 = now;
   }, { passive: true });
   setInterval(() => { if (buf.length) { console.log("WHEEL\n" + buf.join("\n")); buf = []; } }, 700);
@@ -345,30 +339,51 @@ void zoom;
 // Самопроверка края (?selftest=1): синтетические жесты тачпада, как их шлёт Windows.
 async function selftest() {
   const pad = (dy: number) => feedEl.dispatchEvent(new WheelEvent("wheel", { deltaY: dy, deltaMode: 0, bubbles: true, cancelable: true }));
-  const tick = () => wait(8);
+  const lift = () => pad(0); // так Chromium на Windows говорит «пальцы поднялись»
+  const tick = () => wait(16);
+  const raw = () => scroller.debug().raw;
   const out: Record<string, unknown> = {};
   msgs = seed(60); ver.clear(); paint(false); scroller.toBottom(false);
   await wait(400);
-  // 1) смахивание вверх от низа, потом инерция вниз до самого низа — должно упереться
+  // 1) пальцами вверх от низа, подняли
   for (let i = 0; i < 30; i++) { pad(-40); await tick(); }
-  await wait(800);
-  let v = 40;
-  let peakRaw = 0;
-  for (let i = 0; i < 220; i++) { pad(v); v = Math.max(1, v * 0.985); peakRaw = Math.max(peakRaw, Math.abs(scroller.debug().raw)); await tick(); }
-  out.swipeArrivesPeakRaw = peakRaw;
+  lift();
+  await wait(900);
+  // 2) взмах вниз: пальцы коротко, подняли, инерция доезжает до низа — должна упереться
+  for (let i = 0; i < 5; i++) { pad(40); await tick(); }
+  lift();
+  let v = 40, peak = 0;
+  for (let i = 0; i < 160; i++) { pad(Math.round(v)); v = Math.max(1, v * 0.97); peak = Math.max(peak, Math.abs(raw())); await tick(); }
+  out.swipeArrivesPeakRaw = peak;
+  out.parkedAtBottom = scroller.debug().pos === scroller.debug().max;
+  // 3) инерция ещё капает (1–2), а пальцы уже тянут — оттяжка сразу, без «глухоты»
+  for (let i = 0; i < 6; i++) { pad(1); await tick(); }
+  for (let i = 0; i < 20; i++) { pad(5 + (i % 3)); await tick(); }
+  await wait(200);
+  out.pullRightAfterPark = raw();
+  // 4) пальцы замерли на полторы секунды — оттяжка держится, не сбрасывается
   await wait(1500);
-  // 2) новый жест у низа: пальцы тянут ровно — оттяжка держится
-  for (let i = 0; i < 25; i++) { pad(6 + (i % 3)); await tick(); }
-  out.pullHeldRaw = scroller.debug().raw;
-  await wait(120);
-  out.pullAfter120msRaw = scroller.debug().raw;
-  // 3) пальцы сняли — пошла инерция: отпускает и возвращается
-  let m = 7;
-  for (let i = 0; i < 30; i++) { pad(m); m *= 0.95; await tick(); }
-  out.releasedFlag = scroller.debug().release;
-  await wait(2500);
-  out.finalRaw = scroller.debug().raw;
-  const ok = (out.swipeArrivesPeakRaw as number) === 0 && (out.pullHeldRaw as number) > 20 && (out.pullAfter120msRaw as number) > 20 && out.releasedFlag === true && out.finalRaw === 0;
+  out.pullAfterHold1500 = raw();
+  // 5) подняли — возврат плавный: перетяг только убывает, без рывков и перелёта
+  lift();
+  let prev = raw(), jerk = 0, overshoot = 0;
+  const steps: number[] = [];
+  for (let i = 0; i < 90; i++) {
+    await tick();
+    const r = raw();
+    steps.push(prev - r);
+    if (r > prev + 0.01) jerk++;
+    if (r < -0.5) overshoot++;
+    prev = r;
+  }
+  // Первый шаг возврата не больше соседних: пружина трогается мягко, не срывается.
+  const firstStep = steps[0] ?? 0;
+  const maxStep = Math.max(...steps);
+  out.releaseMonotonic = jerk === 0 && overshoot === 0;
+  out.releaseSoftStart = firstStep <= maxStep * 0.6;
+  out.finalRaw = raw();
+  const ok = out.swipeArrivesPeakRaw === 0 && out.parkedAtBottom === true && (out.pullRightAfterPark as number) > 20 &&
+    Math.abs((out.pullAfterHold1500 as number) - (out.pullRightAfterPark as number)) < 1 && out.releaseMonotonic === true && out.finalRaw === 0;
   console.log("SELFTEST " + JSON.stringify({ ok, ...out }));
 }
 if (new URLSearchParams(location.search).get("selftest") === "1") setTimeout(() => void selftest(), 800);

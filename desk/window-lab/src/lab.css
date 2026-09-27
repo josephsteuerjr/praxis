@@ -289,18 +289,3 @@ button { font: inherit; color: inherit; }
   * { transition: none !important; animation: none !important; }
 }
 
-/* ------------------------------------------------------------ тонкая настройка */
-.tune { border-top: var(--lw) solid var(--line-soft); padding-top: 10px; }
-.tune > summary { cursor: pointer; font-family: var(--hand); font-size: 19px; color: var(--ink); list-style: none; display: flex; align-items: center; gap: 8px; }
-.tune > summary::after { content: "›"; margin-left: auto; transition: transform 0.25s var(--ease-out); color: var(--ink-3); }
-.tune[open] > summary::after { transform: rotate(90deg); }
-.tune-body { display: grid; gap: 9px; padding-top: 10px; }
-.knob { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; }
-.knob label { font-size: 12.5px; color: var(--ink-2); }
-.knob output { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
-.knob input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--terra); height: 18px; margin: 0; }
-.swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.swatches > span { width: 100%; font-size: 12.5px; color: var(--ink-2); }
-.swatch { width: 26px; height: 26px; border-radius: 50%; border: var(--lw) solid var(--line); cursor: pointer; padding: 0; }
-.swatch.on { outline: 2px solid var(--ink); outline-offset: 2px; }
-.tune-reset { justify-self: start; border: var(--lw) solid var(--line); background: var(--paper); border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
