@@ -113,8 +113,10 @@ KEY = "agent_mode"
 #: не рисует (прячет по `app_info.platform`), а журнал говорит одной строкой.
 #: Две константы, а не одна: механизмы разные и платформы у них разные. Стенды
 #: подменяют их, чтобы разобрать обе картины на любой машине.
-HAS_SERVICE = os.name == "nt" or sys.platform == "darwin"
-HAS_COMPUTER = os.name == "nt" or sys.platform == "darwin"
+#: Linux (порт 28.09): служба — шаблон systemd `helene@<владелец>.service`
+#: (`common/linux_service.rs`), тело — X11 и AT-SPI.
+HAS_SERVICE = os.name == "nt" or sys.platform == "darwin" or sys.platform.startswith("linux")
+HAS_COMPUTER = os.name == "nt" or sys.platform == "darwin" or sys.platform.startswith("linux")
 
 #: Есть ли у службы галочки. Обе — механизмы Windows: нулевая сессия (служба под
 #: LocalSystem) и правило брандмауэра (netsh). На macOS демон launchd и так идёт
@@ -131,6 +133,18 @@ MACOS_TEXTS: bool | None = None
 
 def _mac_texts() -> bool:
     return MACOS_TEXTS if MACOS_TEXTS is not None else sys.platform == "darwin"
+
+
+#: То же для Linux. Стенд, подменивший `MACOS_TEXTS` (картина Windows или Mac на
+#: чужой машине), Linux-текстов не получает: подмена одного флага — это выбор
+#: платформы целиком, а не «Mac нет — значит Linux».
+LINUX_TEXTS: bool | None = None
+
+
+def _linux_texts() -> bool:
+    if LINUX_TEXTS is not None:
+        return LINUX_TEXTS
+    return MACOS_TEXTS is None and sys.platform.startswith("linux")
 
 #: Имя службы в SCM (svc/src/main.rs::SERVICE_NAME). Латиницей.
 SERVICE_NAME = "Helene"
@@ -198,13 +212,34 @@ TEXTS_MACOS: dict[str, str] = {
 }
 
 
+#: Те же две ограды словами Linux: ограда — bubblewrap (`fence_posix`), права
+#: администратора — окном пароля системы (polkit), а не окном Windows.
+TEXTS_LINUX: dict[str, str] = {
+    "sandbox": ("Агент заперт в своей папке: файлы и команды дальше дома не "
+                "идут, наружу — только те папки, что ты смонтировал. Команды "
+                "идут под оградой bubblewrap, ключи и файл настроек закрыты от "
+                "них. Снаружи ограды — Forge: он работает в worktree задачи, а "
+                "тот лежит там, куда ты его завёл. Поимённо, какой тул накрыт, "
+                "а какой нет, — на экране «Система»."),
+    "interactive": ("Агент работает с твоими правами: файлы и процессы — те же, "
+                    "что доступны тебе самому, не больше. Файловые тулы видят "
+                    "то же, что и shell, монтировать ничего не нужно. Если "
+                    "учётка ограничена, агент ограничен так же. Права "
+                    "администратора он просит отдельно — пароль спросит сама "
+                    "система своим окном."),
+}
+
+
 def texts() -> dict[str, str]:
-    """Тексты оград для ЭТОЙ платформы: macOS — TEXTS_MACOS, иначе TEXTS.
+    """Тексты оград для ЭТОЙ платформы: macOS — TEXTS_MACOS, Linux — TEXTS_LINUX,
+    иначе TEXTS.
 
     Одна точка выбора на `resolve`, `describe` и `catalogue`: то, что уезжает в
     `/api/mode`, в анатомию и в карточки, обязано быть одним и тем же текстом.
     """
-    return TEXTS_MACOS if _mac_texts() else TEXTS
+    if _mac_texts():
+        return TEXTS_MACOS
+    return TEXTS_LINUX if _linux_texts() else TEXTS
 
 # --------------------------------------------------------------------------- #
 #  Служба: тексты опции, а не режима
@@ -252,6 +287,21 @@ SERVICE_WARNING_MACOS = ("Окон и экрана у такого агента 
                          "когда ты откроешь окно Helene — тело поднимает оно.")
 
 
+#: Та же опция словами Linux: служба systemd от имени владельца (шаблон
+#: `helene@.service` из пакета). ⚠ Форма — та же, что у `*_MACOS`.
+SERVICE_TITLE_LINUX = "Работать без входа в систему"
+
+SERVICE_TEXT_LINUX = ("Ставится один раз, система спросит пароль администратора. "
+                      "Код агента поднимает systemd от твоего имени: Telegram и "
+                      "телефон отвечают, когда окно не открыто и даже когда ты не "
+                      "вошёл в систему. Упавшее — поднимается само. Ограду это не "
+                      "меняет: режим ты выбираешь отдельно, и он работает так же.")
+
+SERVICE_WARNING_LINUX = ("Окон и экрана у такого агента нет: процесс вне твоего "
+                         "сеанса не видит рабочего стола. Тул `computer` оживает, "
+                         "когда ты откроешь окно Helene — тело поднимает оно.")
+
+
 def service_texts() -> tuple[str, str, str]:
     """Заголовок, описание и оговорка опции службы для ЭТОЙ платформы.
 
@@ -261,6 +311,8 @@ def service_texts() -> tuple[str, str, str]:
     """
     if _mac_texts():
         return SERVICE_TITLE_MACOS, SERVICE_TEXT_MACOS, SERVICE_WARNING_MACOS
+    if _linux_texts():
+        return SERVICE_TITLE_LINUX, SERVICE_TEXT_LINUX, SERVICE_WARNING_LINUX
     return SERVICE_TITLE, SERVICE_TEXT, ""
 
 
@@ -372,12 +424,38 @@ COMPUTER_SCOPE_TEXTS_MACOS = {
 }
 
 
+#: Та же опция словами Linux: тело водит окнами через X-сервер (XTest, EWMH), дерево
+#: окна читает через AT-SPI. Разрешений, как на Mac, система не спрашивает; под
+#: Wayland тело видит только X-программы — это сказано прямо.
+COMPUTER_TEXT_LINUX = ("Тул `computer`: окна, экран, клавиатура и мышь, файлы и "
+                       "процессы на этой машине. Работает через отдельное тело "
+                       "(helene-body), которое код агента поднимает рядом с собой в "
+                       "твоей сессии — снаружи ограды, поэтому в песочнице оно тоже "
+                       "работает. Окна, ввод и снимки идут через X-сервер, дерево "
+                       "окна — через доступность (AT-SPI). В сеансе Wayland тело "
+                       "видит и водит только X-программы; полное управление — в "
+                       "сеансе X11 («на Xorg» при входе). Что именно разрешено, "
+                       "решают четыре права ниже; от режима опция не зависит.")
+
+COMPUTER_SCOPE_TEXTS_LINUX = {
+    "computer.read": COMPUTER_SCOPE_TEXTS["computer.read"],
+    "computer.files": COMPUTER_SCOPE_TEXTS["computer.files"],
+    "computer.process": ("Запускать команды bash в твоей сессии и следить за ними. "
+                         "Тоже мимо ограды."),
+    "computer.apps": ("Список окон, активация, клавиатура и мышь, снимки экрана, "
+                      "чтение окна как текста, буфер обмена. Через X-сервер; под "
+                      "Wayland — только X-программы."),
+}
+
+
 def computer_texts() -> tuple[str, dict[str, str]]:
     """Текст опции и тексты прав для ЭТОЙ платформы: macOS — `*_MACOS`, иначе
     общие. Одна точка выбора на `computer_option()`: то, что уезжает в
     `/api/mode` и в карточку, обязано быть одним и тем же текстом."""
     if _mac_texts():
         return COMPUTER_TEXT_MACOS, COMPUTER_SCOPE_TEXTS_MACOS
+    if _linux_texts():
+        return COMPUTER_TEXT_LINUX, COMPUTER_SCOPE_TEXTS_LINUX
     return COMPUTER_TEXT, COMPUTER_SCOPE_TEXTS
 
 
@@ -544,6 +622,9 @@ def service_installed(cfg: dict | None = None, *, probe: bool = True) -> bool | 
     if probe and sys.platform == "darwin":
         found = _launchd_has_daemon()
         return hint if found is None else found
+    if probe and sys.platform.startswith("linux"):
+        found = _systemd_has_service()
+        return hint if found is None else found
     if not probe or os.name != "nt":
         return hint
     now = time.time()
@@ -570,6 +651,29 @@ def _launchd_has_daemon() -> bool | None:
     except OSError:
         log.debug("launchd не опросился", exc_info=True)
         return None
+
+
+def _systemd_has_service() -> bool | None:
+    """Включена ли служба владельца `helene@<имя>.service`. None — «спросить не у кого».
+
+    Ответ systemd, а не след установщика: `systemctl is-enabled` печатает `enabled`,
+    `disabled`, `not-found`… и кодом говорит «да/нет». Прав не нужно — это чтение.
+    """
+    try:
+        import pwd
+        import subprocess
+        owner = pwd.getpwuid(os.geteuid()).pw_name
+        done = subprocess.run(["systemctl", "is-enabled", f"helene@{owner}.service"],
+                              capture_output=True, text=True, timeout=5)
+    except Exception:
+        log.debug("systemd не опросился", exc_info=True)
+        return None
+    word = (done.stdout or "").strip().splitlines()[-1:] or [""]
+    if word[0] in ("enabled", "enabled-runtime", "linked", "linked-runtime"):
+        return True
+    if word[0] in ("disabled", "not-found", "masked", "static", "indirect", "generated"):
+        return False
+    return None
 
 
 def _scm_has_service(name: str) -> bool | None:

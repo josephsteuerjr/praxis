@@ -40,7 +40,7 @@
 // пары детей): SCM, задача планировщика, права папки и труба брокера там не
 // значат ничего и в бинарь не попадают. Их вспомогательные функции остаются
 // в исходнике непозванными — это осознанно, а не забытый код.
-#![cfg_attr(target_os = "macos", allow(dead_code))]
+#![cfg_attr(any(target_os = "macos", target_os = "linux"), allow(dead_code))]
 
 /// Тип аргументов `service_main` — вход SCM и больше ничей.
 #[cfg(windows)]
@@ -71,11 +71,16 @@ use windows_service::{define_windows_service, service_dispatcher};
 /// присмотром launchd и без единой строки Win32. Отдельным модулем, а не
 /// ветками в этом файле: монолит службы Windows — проверенный код, и
 /// переписывать его ради второй платформы значит рисковать первой.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod daemon;
 
 #[cfg(not(target_os = "macos"))]
 mod resume;
+
+/// Linux (порт 28.09): служба systemd и дом владельца. Супервизор пары детей — тот же
+/// `daemon::run`, что под launchd; своё у Linux — только CLI и рецепт юнита.
+#[cfg(target_os = "linux")]
+mod linux;
 
 const SERVICE_NAME: &str = "Helene";  // идентификатор в SCM — латиницей
 /// Порт встроенного реле по умолчанию — как в `ui-kit/contract.json`.
@@ -3777,7 +3782,9 @@ fn main() {
     // ничего, и предлагать их в подсказке значило бы обещать несуществующее.
     #[cfg(target_os = "macos")]
     daemon::main();
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    linux::main();
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     cli();
 }
 
@@ -3854,7 +3861,7 @@ fn resume_agent(config: &Path) -> Result<(), String> {
 /// Разбор командной строки на Windows (и на прочих не-macOS, где собирается
 /// только каркас). Вынесено из `main` ради платформенной развилки — тело
 /// функции то же, что было.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn cli() {
     let mode = std::env::args().nth(1).unwrap_or_default();
     match mode.as_str() {

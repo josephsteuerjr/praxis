@@ -46,12 +46,17 @@ class Composition(unittest.TestCase):
         self.assertEqual(macos, windows)
         self.assertEqual([p.src for p in deskpkg.parts(deskpkg.MACOS)],
                          [p.src for p in deskpkg.parts(deskpkg.WINDOWS)])
-        self.assertEqual(deskpkg.FLAVORS, (deskpkg.SERVER, deskpkg.WINDOWS, deskpkg.MACOS))
+        # Linux (порт 28.09) — тот же состав, что у двух настольных.
+        self.assertEqual([p.src for p in deskpkg.parts(deskpkg.LINUX)],
+                         [p.src for p in deskpkg.parts(deskpkg.WINDOWS)])
+        self.assertEqual(deskpkg.FLAVORS,
+                         (deskpkg.SERVER, deskpkg.WINDOWS, deskpkg.MACOS, deskpkg.LINUX))
         self.assertEqual(deskpkg.MACOS, "macos")
+        self.assertEqual(deskpkg.LINUX, "linux")
 
     def test_unknown_flavor_is_refused(self):
         with self.assertRaises(ValueError):
-            deskpkg.parts("linux")
+            deskpkg.parts("freebsd")
 
     def test_requirements_follow_the_parts(self):
         self.assertEqual(deskpkg.requirements(deskpkg.SERVER), deskpkg.DEPS_CHANNEL)
