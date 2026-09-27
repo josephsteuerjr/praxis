@@ -27,6 +27,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
@@ -175,6 +176,39 @@ class FakeDocker:
         self.removed: list[str] = []       # что снято rmi
         self.config_files = [self.working_dir + "/docker-compose.yml"]
         self.garbage = {}                  # образ -> что его «python» печатает вместо пробы
+        # Установка до 27.09: код агента жил в самом контейнере — в образе и слое поверх него.
+        self.fs: dict[str, Path] = {}      # образ -> его /opt/helene (tree/, app/)
+        self.layer: Path | None = None     # /opt/helene живого контейнера: образ + правки агента
+        self.created: dict[str, str] = {}  # временные контейнеры: имя -> образ
+        self.fail_commit = False
+
+    def _layer_diff(self) -> str:
+        """`docker diff`: чем слой контейнера отличается от его образа (папки — строкой «C»)."""
+        base = self.fs.get(self.image)
+        if self.layer is None or base is None:
+            return ""
+        rows = []
+        for name in up.CODE_DIRS:
+            mine = {p.relative_to(self.layer).as_posix(): p.read_bytes()
+                    for p in (self.layer / name).rglob("*") if p.is_file()}
+            was = {p.relative_to(base).as_posix(): p.read_bytes()
+                   for p in (base / name).rglob("*") if p.is_file()}
+            touched = False
+            for rel in sorted(set(mine) | set(was)):
+                kind = "A" if rel not in was else "D" if rel not in mine else "C" if mine[rel] != was[rel] else ""
+                if kind:
+                    rows.append(f"{kind} /opt/helene/{rel}")
+                    touched = True
+            if touched:
+                rows.insert(0, f"C /opt/helene/{name}")
+        return "\n".join(rows) + "\n"
+
+    def _box_root(self, box: str) -> Path:
+        if box == "helene":
+            if self.layer is None:
+                raise FileNotFoundError("у контейнера нет своего кода")
+            return self.layer
+        return self.fs[self.created[box]]
 
     def _alive_now(self) -> bool:
         if (self.data_breaks_old and self.image == "sha256:old"
@@ -221,7 +255,32 @@ class FakeDocker:
         if args[0] == "inspect":
             if self.missing:
                 return 1, "[]", "Error: No such object: helene"
+            if "--size" in args:
+                size = sum(p.stat().st_size for p in self.layer.rglob("*") if p.is_file()) if self.layer else 0
+                return 0, f"{size}\n", ""
             return 0, json.dumps([self.row()]), ""
+        if args[0] == "diff":
+            return 0, self._layer_diff(), ""
+        if args[0] == "commit":
+            if self.fail_commit:
+                return 1, "", "Error response from daemon: commit failed"
+            snap = self.install.parent / f"commit-{len(self.images)}"
+            shutil.copytree(self.layer, snap)
+            ident = f"sha256:commit{len(self.images)}"
+            self.images.add(ident)
+            self.fs[ident] = snap
+            for table in (self.alive, self.versions, self.falls, self.code_mounts):
+                table[ident] = table[self.image]
+            self.tags[args[-1]] = ident
+            return 0, ident + "\n", ""
+        if args[0] == "create":
+            self.created[args[args.index("--name") + 1]] = args[-1]
+            return 0, "", ""
+        if args[0] == "cp":
+            box, _, inner = args[1].partition(":")
+            src = self._box_root(box) / inner.removeprefix("/opt/helene/")
+            shutil.copytree(src, args[2], symlinks=True)
+            return 0, "", ""
         if args[:2] == ["image", "inspect"]:
             ref = args[-1]
             return (0, self.tags[ref] + "\n", "") if ref in self.tags else (1, "", "No such image")
@@ -249,6 +308,7 @@ class FakeDocker:
             self.removed.append(ref)
             return 0, "", ""
         if args[0] == "rm":
+            self.created.pop(args[-1], None)
             return 0, "", ""
         if args[0] == "exec":
             if self.image in self.garbage:
@@ -286,7 +346,15 @@ class FakeDocker:
                     self.fail_up -= 1
                     return 1, "", "Error response from daemon: port is already allocated"
                 self.missing = False
-                self.image = self.tags["helene-helene:latest"]
+                image = self.tags["helene-helene:latest"]
+                if "--force-recreate" in args or image != self.image:
+                    # пересоздание: слой прежнего контейнера пропадает, новый — из образа
+                    fresh = self.fs.get(image)
+                    self.layer = None
+                    if fresh is not None:
+                        self.layer = self.install.parent / f"layer-{len(self.calls)}"
+                        shutil.copytree(fresh, self.layer)
+                self.image = image
                 self.running = True
                 self.restarts = 0
                 self.env = {"HELENE_HOSTS": env.get("HELENE_HOSTS", ""),
@@ -386,6 +454,27 @@ class Base(unittest.TestCase):
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(blob)
+
+    def old_style(self, edits: dict[str, bytes | None] | None = None):
+        """Установка до 27.09 (как у Дмитрия): код агента — в образе, его правки — в слое
+        контейнера, на диске сервера — нетронутая поставка. `edits`: путь -> содержимое в
+        слое (None — агент файл удалил)."""
+        self.docker.code_mounts["sha256:old"] = False
+        image = Path(self._tmp.name) / "image-old"
+        for rel, blob in dist_files(OLD).items():
+            if rel.startswith(("tree/", "app/")):
+                (image / rel).parent.mkdir(parents=True, exist_ok=True)
+                (image / rel).write_bytes(blob)
+        self.docker.fs["sha256:old"] = image
+        self.docker.layer = Path(self._tmp.name) / "layer-old"
+        shutil.copytree(image, self.docker.layer)
+        for rel, blob in (edits or {}).items():
+            path = self.docker.layer / rel
+            if blob is None:
+                path.unlink()
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(blob)
 
 
 @unittest.skipUnless(LINUX, "исполнитель живёт на Linux: O_NOFOLLOW и dir_fd")
@@ -818,20 +907,63 @@ class RollbackAndFailures(Base):
         self.u.tick()
         self.assertIn("HELENE_DIR", self.receipt()["note"])
 
-    def test_контейнер_без_кода_с_диска_предупреждение(self):
-        self.docker.code_mounts["sha256:old"] = False
+    def test_старая_установка_правки_из_контейнера_переезжают(self):
+        if not GIT:
+            self.skipTest("нет git — слияние не проверить")
+        # Как у Дмитрия: 1.1.0-style, код в контейнере, Йоно правил его там
+        self.old_style({"tree/agent.py": agent_py(OLD, hello="привет от Йоно"),
+                        "tree/yono_tool.py": b"def tool():\n    return 42\n"})
         self.plan(version=NEW)
         self.u.tick()
         r = self.receipt()
         self.assertEqual(r["state"], "awaiting")
-        self.assertFalse(r["code_preview"]["mounted"])
-        self.assertIn("пропадут", r["note"])
+        preview = r["code_preview"]
+        self.assertTrue(preview["layer"])
+        self.assertEqual(sorted(preview["files"]), ["tree/agent.py", "tree/yono_tool.py"])
+        self.assertIn("жил внутри контейнера", r["note"])
+        self.assertEqual(self.net.downloads, [])            # база — из прежнего образа, не с GitHub
         self.yes()
         self.u.tick()
         r = self.receipt()
         self.assertEqual(r["state"], "done", r.get("note"))
-        self.assertFalse(r["agent_code"]["mounted"])
+        merged = self.code("tree/agent.py")
+        self.assertIn(f"VERSION = {NEW!r}", merged)
+        self.assertIn("привет от Йоно", merged)
+        self.assertEqual(self.code("tree/yono_tool.py"), "def tool():\n    return 42\n")
+        code = r["agent_code"]
+        self.assertTrue(code["from_layer"])
+        self.assertEqual(code["merged"], ["tree/agent.py"])
+        self.assertEqual(code["carried"], ["tree/yono_tool.py"])
+        # снимок контейнера — образ отката: с ним откат вернул бы агента вместе с правками
+        self.assertTrue(self.docker.tags[f"helene-helene:{self.u.state['rollback_tag']}"].startswith("sha256:commit"))
+        self.assertTrue(self.docker.did("commit", "--pause=false"))
+        self.assertEqual(self.docker.created, {})           # временный контейнер базы убран
         self.assertTrue({c["name"]: c for c in r["checks"]}["code"]["ok"])
+
+    def test_старая_установка_откат_возвращает_правки_из_снимка(self):
+        self.old_style({"tree/yono_tool.py": b"def tool():\n    return 42\n"})
+        self.docker.alive["sha256:new"] = False
+        self.docker.falls["sha256:new"] = 3
+        r = self.run_update()
+        self.assertEqual(r["state"], "rolled_back", r.get("note"))
+        self.assertTrue(self.docker.image.startswith("sha256:commit"))
+        self.assertEqual((self.docker.layer / "tree" / "yono_tool.py").read_bytes(),
+                         b"def tool():\n    return 42\n")
+        self.assertIn("правки агента в коде — как были до обновления", r["note"])
+
+    def test_старая_установка_снимок_не_сделался_контейнер_не_пересоздан(self):
+        self.old_style({"tree/yono_tool.py": b"def tool():\n    return 42\n"})
+        self.docker.fail_commit = True
+        r = self.run_update()
+        self.assertEqual(r["state"], "rolled_back", r.get("note"))
+        self.assertIn("снимок контейнера агента не сделался", r["note"])
+        # пересоздать контейнер значило бы стереть слой с правками агента
+        rollback_up = [c for c in self.docker.calls if c[0] == "compose" and "up" in c][-1]
+        self.assertNotIn("--force-recreate", rollback_up)
+        self.assertEqual(self.docker.image, "sha256:old")
+        self.assertEqual((self.docker.layer / "tree" / "yono_tool.py").read_bytes(),
+                         b"def tool():\n    return 42\n")
+        self.assertTrue(self.docker.running)
 
     def test_чужой_сбой_сверки_не_оставляет_вечное_сверяю(self):
         self.u.release_for = lambda version: {}["нет такого ключа"]
@@ -1141,6 +1273,77 @@ class Recovery(Base):
 
 
 @unittest.skipUnless(LINUX, "исполнитель живёт на Linux: O_NOFOLLOW и dir_fd")
+class Simple(Base):
+    """«Всё максимально просто» (Егор, 27.09): одна кнопка, одно слово, одна команда."""
+
+    def test_кнопка_окна_одним_нажатием(self):
+        up.Shared(self.install / "data").write(*up.CTL, control.UPDATER_BEAT,
+                                              {"beat_epoch": time.time(), "ok": True})
+        got = control.update_plan(self.install / "data", NEW, consent="window")   # так зовёт окно
+        self.assertTrue(got["ok"], got)
+        self.assertIn("начнёт сам", got["note"])
+        self.u.tick()
+        r = self.receipt()
+        self.assertEqual(r["state"], "done", r.get("note"))       # без «жду да»
+        self.assertEqual(r["confirmed"]["by"], "window")
+        self.assertIn("выпуск на месте — начинаю", [s["step"] for s in r["steps"]])
+        self.assertTrue(r["summary"].startswith(f"Готово: теперь стоит {NEW}."), r["summary"])
+
+    def test_слово_владельца_агенту_и_есть_да(self):
+        up.Shared(self.install / "data").write(*up.CTL, control.UPDATER_BEAT,
+                                              {"beat_epoch": time.time(), "ok": True})
+        control.update_plan(self.install / "data", NEW, by="agent", consent="owner-words",
+                            consent_words="Йоно, обновись")
+        self.u.tick()
+        r = self.receipt()
+        self.assertEqual(r["state"], "done", r.get("note"))
+        self.assertEqual((r["confirmed"]["by"], r["confirmed"]["words"]), ("owner-words", "Йоно, обновись"))
+
+    def test_придуманное_согласие_не_согласие(self):
+        self.plan(version=NEW, reason="сам решил")
+        raw = json.loads((self.install / "data" / "memory" / ".control" / control.UPDATE_PLAN).read_text("utf-8"))
+        raw.update(id="abcdef1234", consent="agent")                  # не из закрытого списка
+        up.Shared(self.install / "data").write(*up.CTL, control.UPDATE_PLAN, raw)
+        self.u.tick()
+        self.assertEqual(self.receipt()["state"], "awaiting")
+        self.assertFalse(self.docker.did("build"))
+
+    def test_команда_на_сервере(self):
+        up.Shared(self.install / "data").write(*up.CTL, control.UPDATER_BEAT,
+                                              {"beat_epoch": time.time(), "ok": True, "current_version": OLD})
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"HELENE_DIR": str(self.install)}), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(up.cli(["status"]), 0)
+            self.assertEqual(up.cli(["plan", NEW]), 0)
+        plan_id = out.getvalue().split()[-1]
+        plan = json.loads((self.install / "data" / "memory" / ".control" / control.UPDATE_PLAN).read_text("utf-8"))
+        self.assertEqual((plan["id"], plan["consent"], plan["asked_by"]), (plan_id, "host", "host"))
+        self.u.tick()
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"HELENE_DIR": str(self.install)}), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(up.cli(["watch", plan_id]), 0)
+            # идёт обновление — второе командой не положить
+            self.u.state["state"] = "running"
+            self.u.save()
+            self.assertEqual(up.cli(["plan", NEW]), 3)
+        text = out.getvalue()
+        self.assertIn("· архив скачался целым", text)
+        self.assertIn(f"Готово: теперь стоит {NEW}.", text)
+
+    def test_итоги_простыми_словами(self):
+        self.docker.alive["sha256:new"] = False
+        self.docker.falls["sha256:new"] = 3
+        r = self.run_update()
+        self.assertEqual(r["state"], "rolled_back")
+        self.assertEqual(r["summary"], f"Не получилось — вернул прежнюю версию {OLD}. Почему: новая "
+                                       "версия не заработала: агент не отвечает. Память и настройки агента целы.")
+        for word in ("раннер", "sha256", "compose", "data/"):
+            self.assertNotIn(word, r["summary"])
+
+
+@unittest.skipUnless(LINUX, "исполнитель живёт на Linux: O_NOFOLLOW и dir_fd")
 class OwnerFiles(Base):
     """Своё владельца в папках поставки переживает подмену (ревью 27.09)."""
 
@@ -1391,7 +1594,7 @@ class DriftFromControl(unittest.TestCase):
     NAMES = ("UPDATE_SCHEMA", "UPDATE_PLAN", "UPDATE_RECEIPT", "UPDATE_CONFIRM", "UPDATE_VERDICT",
              "UPDATE_REPORTED", "UPDATER_BEAT", "UPDATE_HISTORY", "UPDATE_BACKUPS", "UPDATE_CHECKS",
              "UPDATE_MANDATORY", "UPDATE_VERDICTS", "UPDATE_AWAIT_HOURS", "UPDATE_WAIT_MIN",
-             "UPDATE_WAIT_DEFAULT", "UPDATE_TRIAL_MIN", "UPDATE_TRIAL_DEFAULT")
+             "UPDATE_WAIT_DEFAULT", "UPDATE_TRIAL_MIN", "UPDATE_TRIAL_DEFAULT", "UPDATE_CONSENTS")
 
     def test_константы(self):
         for name in self.NAMES:
@@ -1405,7 +1608,10 @@ class DriftFromControl(unittest.TestCase):
                   {"id": "abcdef12", "checks": ["docker exec"]}, {"id": "abcdef12", "checks": "x"},
                   {"id": "abcdef12", "wait_min": "ten"}, {"id": "abcdef12", "trial_min": "ten"},
                   {"id": "abcdef12", "version": "1.2"}, {"id": "abcdef12", "force_extensions": 1,
-                                                          "asked_by": "x" * 99, "chat": "c" * 999}]
+                                                          "asked_by": "x" * 99, "chat": "c" * 999},
+                  {"id": "abcdef12", "consent": "window"}, {"id": "abcdef12", "consent": "agent"},
+                  {"id": "abcdef12", "consent": " Owner-Words ", "consent_words": "да " * 300},
+                  {"id": "abcdef12", "consent_words": "без согласия"}]
         for raw in corpus:
             self.assertEqual(up.protocol.validate_plan(raw), control.validate_plan(raw), raw)
         for text in ("1.2.3", "v1.10.0", "latest", "", None, "1.2"):
@@ -1520,6 +1726,26 @@ class PureParts(unittest.TestCase):
             self.assertFalse(any(r["ok"] for r in rows if r["name"] not in ("running", "config", "code")),
                              probe)
             self.assertEqual(up.doomed(probe, info), "", probe)
+
+    def test_правки_из_docker_diff(self):
+        diff = ("C /opt/helene\nC /opt/helene/tree\nA /opt/helene/tree/yono_tool.py\n"
+                "C /opt/helene/tree/agent.py\nC /opt/helene/tree/__pycache__\n"
+                "A /opt/helene/tree/__pycache__/agent.cpython-312.pyc\nA /opt/helene/tree/new_pkg\n"
+                "A /opt/helene/tree/new_pkg/mod.py\nD /opt/helene/app/deskd/old.py\nC /opt/helene/app\n"
+                "C /opt/helene/app/deskd\nA /opt/helene/data/memory/x.md\nC /tmp\nA /opt/helene/tree/empty_dir\n"
+                # живой прогон 27.09: папка «изменена» только кэшем внутри — не правка агента
+                "C /opt/helene/tree/core\nC /opt/helene/tree/core/__pycache__\n"
+                "A /opt/helene/tree/core/__pycache__/goals.cpython-312.pyc\n")
+        self.assertEqual(up.layer_paths(diff), ["app/deskd/old.py", "tree/agent.py", "tree/empty_dir",
+                                                "tree/new_pkg/mod.py", "tree/yono_tool.py"])
+        self.assertEqual(up.layer_paths(""), [])
+
+    def test_причина_словами(self):
+        rows = [{"name": "runner", "ok": False}, {"name": "channel", "ok": False}, {"name": "code", "ok": True},
+                {"name": "нечто", "title": "своя проверка", "ok": False}]
+        self.assertEqual(up.plain_checks(rows), "новая версия не заработала: агент не отвечает, окно не может "
+                                                "достучаться до агента, своя проверка")
+        self.assertEqual(up.plain_checks([]), "новая версия не заработала")
 
     def test_модели_пропали_проверка_config(self):
         info = up.describe(FakeDocker(Path("/opt/helene")).row())

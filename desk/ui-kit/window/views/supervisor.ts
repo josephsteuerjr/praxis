@@ -421,7 +421,7 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
         }
       };
       upd.disabled = true;
-      say("receipt", version ? "кладу план…" : "передаю ответ…");
+      say("receipt", version ? "начинаю…" : "передаю…");
       try {
         const answer = version
           ? await post<{ ok: boolean; note: string }>("/api/update/plan", {

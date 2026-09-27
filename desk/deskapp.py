@@ -1004,12 +1004,14 @@ async def _r_update(c: Call):
 
 
 async def _r_update_plan(c: Call):
-    """Владелец сам просит обновление из окна. Исполнитель сверит и спросит «да» отдельно."""
+    """Владелец нажал «Обновить» в окне. Нажатие и есть его «да» (27.09, «всё максимально
+    просто»): исполнитель сверит выпуск и начнёт сам, второй кнопки нет."""
     body = c.body or {}
     return await asyncio.to_thread(control.update_plan, readers.tree(),
                                    str(body.get("version") or "latest"),
                                    str(body.get("backup") or "full"),
-                                   str(body.get("reason") or ""), "owner-window")
+                                   str(body.get("reason") or ""), "owner-window",
+                                   consent="window")
 
 
 async def _r_update_confirm(c: Call):

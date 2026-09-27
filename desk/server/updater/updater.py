@@ -697,6 +697,61 @@ def doomed(probe: dict, info: dict) -> str:
     return ""
 
 
+#: Что сломалось — словами для владельца, по имени проверки.
+PLAIN_CHECKS = {
+    "running": "новая версия падает",
+    "channel": "окно не может достучаться до агента",
+    "version": "запустилась не та версия",
+    "supervisor": "не запустилась служба внутри",
+    "runner": "агент не отвечает",
+    "config": "не перенеслись адрес, модели или настройки",
+    "code": "код агента не подключился",
+    "brain": "мозг агента не настроен",
+}
+
+
+def plain_failures(results: list[dict]) -> str:
+    """Проваленные проверки -> словами для человека («агент не отвечает, …»)."""
+    bad = [PLAIN_CHECKS.get(r.get("name"), r.get("title") or r.get("name")) for r in results
+           if isinstance(r, dict) and not r.get("ok")]
+    return ", ".join(dict.fromkeys(str(b) for b in bad))
+
+
+def plain_checks(results: list[dict]) -> str:
+    bad = plain_failures(results)
+    return "новая версия не заработала" + (f": {bad}" if bad else "")
+
+
+def layer_paths(diff: str) -> list[str]:
+    """Вывод `docker diff` -> правки агента в его коде: пути вида `tree/…`, `app/…`.
+
+    Считает их демон — агенту этот список не подвластен. Строка «C <папка>» значит лишь,
+    что внутри что-то поменялось, — папка с изменёнными детьми правкой не считается;
+    кэши и байткод — тоже.
+    """
+    rows: list[tuple[str, str, bool]] = []
+    for line in str(diff or "").splitlines():
+        kind, _, path = line.strip().partition(" ")
+        if kind not in ("A", "C", "D"):
+            continue
+        for name in CODE_DIRS:
+            head = IN_CONTAINER_CODE[name] + "/"
+            if not path.startswith(head):
+                continue
+            rel = path[len(head):].strip("/")
+            parts = rel.split("/")
+            if rel:
+                ignored = (any(p in CODE_IGNORE_DIRS for p in parts)
+                           or parts[-1] in CODE_IGNORE_NAMES or rel.endswith(CODE_IGNORE_SUFFIXES))
+                rows.append((kind, f"{name}/{rel}", ignored))
+            break
+    # Папка с детьми — не правка, даже если дети — одни кэши (`tree/core` из-за `__pycache__`).
+    every = {path for _kind, path, _ignored in rows}
+    return sorted({path for kind, path, ignored in rows
+                   if not ignored
+                   and not (kind in ("A", "C") and any(other.startswith(path + "/") for other in every))})
+
+
 def check_zip(path: Path, root_name: str = "Helene") -> int:
     """Архив выпуска: один корень, никаких путей наружу и ссылок. -> размер нужного серверу."""
     total = 0
@@ -1235,6 +1290,12 @@ class Config:
                    keep=keep, insecure=(env.get("HELENE_UPDATE_INSECURE") or "") == "1")
 
 
+#: Как «да» пришло вместе с планом — словами для расписки и итога (слово владельца агенту
+#: едет в плане дословно, `consent_words`).
+CONSENT_WORDS = {"window": "нажато «Обновить» в окне",
+                 "host": "обновление запущено командой на сервере",
+                 "owner-words": "владелец попросил агента обновиться"}
+
 #: Прерванное обновление довожу не чаще раза в минуту: сбой, который повторяется (демон
 #: докера перезапускается, диск полон), не должен крутить откат каждые три секунды.
 RECOVER_EVERY = 60.0
@@ -1309,9 +1370,9 @@ class Updater:
 
     def receipt(self) -> dict:
         """Что видят окно и агент. Внутренние пути отката — только в моей папке."""
-        keys = ("id", "state", "note", "step", "steps", "plan", "from_version", "to_version",
-                "release", "backup", "extensions", "checks", "rollback_checks", "carried",
-                "confirmed", "created_utc", "updated_utc", "awaiting_until_utc",
+        keys = ("id", "state", "note", "summary", "step", "steps", "plan", "from_version",
+                "to_version", "release", "backup", "extensions", "checks", "rollback_checks",
+                "carried", "confirmed", "created_utc", "updated_utc", "awaiting_until_utc",
                 "awaiting_since_epoch", "finished_utc", "finished_epoch", "rollback", "phase",
                 "code_preview", "agent_code", "trial", "data_restored", "owner_files")
         out = {"schema": protocol.UPDATE_SCHEMA}
@@ -1330,12 +1391,14 @@ class Updater:
         log(f"{'·' if ok else '✗'} {text}{' — ' + note if note else ''}")
         self.save()
 
-    def finish(self, state: str, note: str) -> None:
+    def finish(self, state: str, note: str, summary: str = "") -> None:
+        """Итог. `note` — подробно (агенту, в журнал, под «Подробнее»); `summary` — одной
+        фразой простыми словами: её первой видит владелец, который не айтишник."""
         now = self.clock()
         with self.lock:
             # «Шаг» у итога — пустой: у отклонённого плана там осталось бы «жду «да»».
             self.state.update(state=state, note=note, step="", finished_utc=utc(now),
-                              finished_epoch=now)
+                              finished_epoch=now, summary=summary or note)
             self.state.pop("nonce", None)
             self.busy = ""
             # «Последняя версия» в записке — сразу заново: после обновления она иначе
@@ -1343,8 +1406,8 @@ class Updater:
             self.latest_at = 0.0
         log(f"итог: {state} — {note}")
         self.save()
-        row = {k: self.state.get(k) for k in ("id", "state", "note", "from_version", "to_version",
-                                              "finished_utc")}
+        row = {k: self.state.get(k) for k in ("id", "state", "summary", "note", "from_version",
+                                              "to_version", "finished_utc")}
         row["asked_by"] = (self.state.get("plan") or {}).get("asked_by", "")
         row["confirmed_by"] = (self.state.get("confirmed") or {}).get("by", "")
         try:
@@ -1504,7 +1567,7 @@ class Updater:
             rel = self.release_for(version)
         except UpdateError as exc:
             return None, f"исходника {version} нет в выпусках ({exc})"
-        self.step(f"качаю исходник {version} — чистую версию, против которой видны правки агента")
+        self.step(f"скачиваю прежнюю версию {version} — сравнить с ней код агента и найти его правки")
         downloads = self.home / "downloads"
         tmp = self.pristine_root / f".tmp-{version}-{secrets.token_hex(4)}"
         archive = downloads / f"base-{rel['asset']}"
@@ -1553,15 +1616,28 @@ class Updater:
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def layer_edits(self) -> list[str] | None:
+        """Правки агента в коде, живущем внутри контейнера (установка до 27.09): по
+        `docker diff`. -> пути `tree/…`, `app/…` (None — узнать не вышло)."""
+        code, out, _err = self.docker.run(["diff", self.cfg.container], timeout=300)
+        return layer_paths(out) if code == 0 else None
+
     def code_preview(self) -> dict:
         """До «да»: правил ли агент свой код и переедут ли его правки. Для карточки."""
         info = self.health.get("info") or {}
         if not code_mounted(info):
-            return {"mounted": False,
-                    "note": "контейнер поднят без кода с диска (compose старше 27.09): если агент "
-                            "правил свой код, эти правки живут в слое контейнера и при обновлении "
-                            "пропадут. Сохранить заранее: docker cp helene:/opt/helene/tree "
-                            "data/workspace/old-tree"}
+            # Установка до 27.09: код агента жил в самом контейнере. Его правки видны по
+            # `docker diff` (список считает демон, агенту он не подвластен) — и переедут:
+            # перед подменой я сниму их из контейнера (`_capture_layer`).
+            edited = self.layer_edits()
+            if edited is None:
+                return {"mounted": False, "layer": True, "edited": 0, "files": [],
+                        "note": "код агента живёт внутри контейнера; при обновлении я сниму его "
+                                "оттуда и перенесу правки агента на новую версию"}
+            return {"mounted": False, "layer": True, "edited": len(edited), "files": edited[:12],
+                    "note": (f"агент правил свой код (он жил внутри контейнера): {len(edited)} "
+                             "файл(ов) — сниму их оттуда и перенесу на новую версию, что не ляжет — "
+                             "отдам ему" if edited else "своих правок в коде у агента нет")}
         base, why = self.ensure_pristine(self.current_version())
         if base is None:
             return {"mounted": True, "base": False,
@@ -1593,10 +1669,12 @@ class Updater:
         fresh = bool(plan.get("id")) and plan.get("id") != st.get("id")
         if current == "awaiting":
             if fresh:
-                self.finish("superseded", "план заменён новым — этот не исполнялся")
+                self.finish("superseded", "план заменён новым — этот не исполнялся",
+                            "Эта просьба заменена новой.")
             elif self.clock() > float(st.get("awaiting_until_epoch") or 0):
                 self.finish("expired", f"«да» не пришло за {protocol.UPDATE_AWAIT_HOURS} ч — "
-                                       "план истёк, ничего не тронуто")
+                                       "план истёк, ничего не тронуто",
+                            "Согласия не было сутки — обновление не начиналось, ничего не менялось.")
                 return
             else:
                 confirm = self.shared.read(*CTL, protocol.UPDATE_CONFIRM)
@@ -1610,8 +1688,11 @@ class Updater:
                         self.execute(who)
                     else:
                         self.state["confirmed"] = who
-                        self.finish("declined", ("агент отозвал план" if who["by"] == "agent"
-                                                 else "владелец ответил «нет»") + " — ничего не тронуто")
+                        by_agent = who["by"] == "agent"
+                        self.finish("declined", ("агент отозвал план" if by_agent
+                                                 else "владелец ответил «нет»") + " — ничего не тронуто",
+                                    "Агент передумал обновляться — ничего не менялось." if by_agent
+                                    else "Обновление отменено — ничего не менялось.")
                 return
         if fresh:
             self.consider(plan)
@@ -1641,7 +1722,9 @@ class Updater:
         try:
             self._consider(raw)
         except Exception as exc:  # noqa: BLE001 — причина обязана доехать до расписки
-            self.finish("refused", f"сверка плана упала: {said(exc)}")
+            self.finish("refused", f"сверка плана упала: {said(exc)}",
+                        "Проверка новой версии сорвалась — ничего не менялось. Можно попробовать "
+                        "ещё раз; подробности ниже.")
 
     def _consider(self, raw: dict) -> None:
         now = self.clock()
@@ -1649,16 +1732,20 @@ class Updater:
         self.state = {"id": str(raw.get("id") or "")[:40], "plan": plan, "steps": [],
                       "created_utc": utc(now), "state": "checking"}
         if plan is None:
-            self.finish("refused", f"план не принят: {why}")
+            self.finish("refused", f"план не принят: {why}", f"Просьба об обновлении не подошла: {why}.")
             return
         self.check_self()
         if not self.health["ok"]:
-            self.finish("refused", f"исполнитель не может работать: {self.health['why']}")
+            self.finish("refused", f"исполнитель не может работать: {self.health['why']}",
+                        "Исполнитель обновлений настроен неверно — обновить не могу. Помогает одна "
+                        "команда на сервере, из папки установки: sh server/install.sh")
             return
         try:
             self.compose_files(self.health["info"])
         except UpdateError as exc:
-            self.finish("refused", str(exc))
+            self.finish("refused", str(exc),
+                        "Агент запущен на сервере необычным способом, и обновить его сам я не могу. "
+                        "Подробности ниже — их стоит показать тому, кто ставил Hélène.")
             return
         current = self.current_version()
         if not current:
@@ -1666,17 +1753,22 @@ class Updater:
             # поставил бы любую версию из выпусков, в том числе старую.
             self.finish("refused", "не знаю, какая версия стоит: паспорта helene-build.json в корне "
                                    "установки нет или он не читается. Без него «только новее» не "
-                                   "проверить — обнови руками (README-СЕРВЕР, §3.2)")
+                                   "проверить — обнови командой на сервере (README-СЕРВЕР)",
+                        "Не могу понять, какая версия стоит сейчас, — обновить отсюда не выйдет. "
+                        "Помогает одна команда на сервере: sh Helene/server/install.sh из свежей поставки.")
             return
-        self.step("сверяю план с выпусками")
+        self.step("проверяю, есть ли такая версия")
         try:
             rel = self.release_for(plan["version"])
         except UpdateError as exc:
-            self.finish("refused", str(exc))
+            self.finish("refused", str(exc),
+                        "Не нашёл новую версию (или нет связи с GitHub) — ничего не менялось. "
+                        "Подробности ниже.")
             return
         target = rel["version"]
         if protocol.version_tuple(target) <= protocol.version_tuple(current):
-            self.finish("refused", f"стоит {current}, а {target} не новее — ставить нечего")
+            self.finish("refused", f"стоит {current}, а {target} не новее — ставить нечего",
+                        f"Уже стоит {current} — обновлять нечего.")
             return
         data_bytes = dir_size(self.data) if plan["backup"] == "full" else 0
         free = shutil.disk_usage(self.install).free
@@ -1687,18 +1779,31 @@ class Updater:
         if free < need:
             hint = (" План с копией только кода (backup: code) займёт меньше."
                     if plan["backup"] == "full" else "")
-            self.finish("refused", f"мало места: нужно около {mb(need)}, свободно {mb(free)}.{hint}")
+            self.finish("refused", f"мало места: нужно около {mb(need)}, свободно {mb(free)}.{hint}",
+                        f"На диске сервера мало места: нужно около {mb(need)}, свободно {mb(free)}."
+                        + (" Можно обновиться без копии памяти агента — кнопка ниже."
+                           if plan["backup"] == "full" else ""))
             return
         preview = self.code_preview()
         self.state["code_preview"] = preview
+        details = (f"{current} → {target}; архив {mb(rel['size'])}, sha256 {rel['sha256'][:12]}…; "
+                   f"копия — {backup['words']}" + (f" ({mb(data_bytes)})" if data_bytes else "")
+                   + f"; {preview['note']}")
+        consent = plan.get("consent") or ""
+        if consent:
+            # «Да» пришло вместе с планом: кнопка «Обновить» в окне или команда на сервере.
+            self.state.update(note=f"начинаю: {details}")
+            self.step("выпуск на месте — начинаю")
+            self.execute({"by": consent,
+                          "words": plan.get("consent_words") or CONSENT_WORDS.get(consent, ""),
+                          "at_utc": str(plan.get("asked_utc") or utc(now))})
+            return
         self.state.update(
             state="awaiting", nonce=secrets.token_hex(12), awaiting_since_epoch=now,
             awaiting_until_epoch=now + protocol.UPDATE_AWAIT_HOURS * 3600,
             awaiting_until_utc=utc(now + protocol.UPDATE_AWAIT_HOURS * 3600),
-            note=(f"жду подтверждения: {current} → {target}; архив {mb(rel['size'])}, "
-                  f"sha256 {rel['sha256'][:12]}…; копия — {backup['words']}"
-                  + (f" ({mb(data_bytes)})" if data_bytes else "") + f"; {preview['note']}"))
-        self.step("жду «да» человека")
+            note=f"жду подтверждения: {details}")
+        self.step("жду согласия владельца")
 
     # --- исполнение -------------------------------------------------------------
 
@@ -1765,7 +1870,10 @@ class Updater:
         except Exception as exc:  # noqa: BLE001 — любой сбой: вернуть или откатить, не застрять
             left = self._undo_prepare()
             self.finish("failed", f"не начато: {said(exc)} — агент не останавливался, "
-                                  + (f"но вернулось не всё: {left}" if left else "всё как было"))
+                                  + (f"но вернулось не всё: {left}" if left else "всё как было"),
+                        "Обновление не началось — агент работал всё время, ничего не менялось."
+                        + (" Подробности ниже." if not left else
+                           " Но вернулось не всё — подробности ниже, их стоит показать тому, кто ставил Hélène."))
             return
         st["phase"] = "switch"
         self.save()
@@ -1775,9 +1883,9 @@ class Updater:
             self.save()
             results = self._verify(st["to_version"], plan["checks"], plan["wait_min"])
         except Exception as exc:  # noqa: BLE001 — любой сбой: вернуть или откатить, не застрять
-            self.step("подмена не удалась", ok=False, note=said(exc))
+            self.step("новая версия не встала на место", ok=False, note=said(exc))
             if st.get("stopped"):
-                self._rollback(said(exc))
+                self._rollback(said(exc), plain="сбой при установке новой версии")
             else:
                 self._abort_unstopped(said(exc))
             return
@@ -1787,12 +1895,12 @@ class Updater:
         """Проверки новой версии прошли — испытание (или успех без мозга); нет — откат."""
         if not all(r["ok"] for r in results):
             bad = "; ".join(f"{r['title']}: {r['note']}" for r in results if not r["ok"])
-            self._rollback(f"проверки не прошли — {bad}")
+            self._rollback(f"проверки не прошли — {bad}", plain=plain_checks(results))
             return
         try:
             self._after_checks()
         except Exception as exc:  # noqa: BLE001 — зелёные проверки не должны кончаться «идёт» навсегда
-            self._rollback(f"после проверок: {said(exc)}")
+            self._rollback(f"после проверок: {said(exc)}", plain="сбой после проверок")
 
     def _prepare(self, bdir: Path) -> None:
         """Всё, что можно сделать, не трогая живого агента."""
@@ -1809,28 +1917,32 @@ class Updater:
             st["base_ready"] = base is not None
         archive = downloads / rel["asset"]
         st["archive"] = str(archive)
-        self.step(f"качаю {rel['asset']} ({mb(rel['size'])})")
+        self.step(f"скачиваю {st['to_version']} ({mb(rel['size'])})", note=rel["asset"])
         got = self.net.download(rel["url"], archive, MAX_ARCHIVE)
         if got != rel["sha256"]:
             raise UpdateError(f"сумма архива не сошлась: {got[:16]}… вместо {rel['sha256'][:16]}…")
-        self.step("сумма sha256 сошлась", note=got)
+        self.step("архив скачался целым", note=f"sha256 {got}")
         unpacked = check_zip(archive)
         free = shutil.disk_usage(self.install).free
         data_bytes = dir_size(self.data) if st["plan"]["backup"] == "full" else 0
         if free < unpacked + data_bytes + SPACE_MARGIN:
             raise UpdateError(f"мало места для распаковки и копии: нужно около "
                               f"{mb(unpacked + data_bytes + SPACE_MARGIN)}, свободно {mb(free)}")
-        self.step(f"распаковываю ({mb(unpacked)}; runtime/ для Windows серверу не нужен)")
+        self.step("распаковываю", note=f"{mb(unpacked)}; runtime/ для Windows серверу не нужен")
         with zipfile.ZipFile(archive) as zf:
             extract(zf, [m for m in zf.infolist() if not server_skips(m.filename)], stage)
-        root = stage / "Helene"
+        self._staged(stage / "Helene")
+
+    def _staged(self, root: Path) -> None:
+        """Новая поставка распакована в `root`: сверить, отложить прежний образ, собрать новый,
+        прорепетировать расширения — всё, пока агент работает."""
+        st = self.state
         passport = check_layout(root, st["to_version"])
         relay = root / "helene-relay"
         if relay.is_file():
             relay.chmod(0o755)
         st["passport"] = passport
-        self.step("поставка на месте, паспорт сходится",
-                  note=f"{passport['version']}, собрана {passport['built_utc']}")
+        self.step("новая версия на месте", note=f"паспорт {passport['version']}, собрана {passport['built_utc']}")
         code, out, err = self.docker.run(["compose", "-f", str(root / "server" / "docker-compose.yml"),
                                           "config", "--services"], timeout=120)
         services = out.split()
@@ -1841,8 +1953,9 @@ class Updater:
                                     f"{st['image_repo']}:{st['rollback_tag']}"], timeout=60),
                    "прежний образ не отложился")
         st["tagged"] = True
-        self.step("прежний образ отложен", note=f"{st['image_repo']}:{st['rollback_tag']}")
-        self.step("собираю новый образ — это минуты")
+        self.step("прежнюю версию откладываю — на случай отката",
+                  note=f"образ {st['image_repo']}:{st['rollback_tag']}")
+        self.step("готовлю новую версию — это несколько минут", note="сборка образа")
         st["built"] = True
         self._must(self.compose("build", st["service"], file=root / "server" / "docker-compose.yml",
                                 timeout=45 * 60), "образ не собрался")
@@ -1850,7 +1963,7 @@ class Updater:
                                            f"{st['image_repo']}:{st['image_tag']}"], timeout=60)
         if code == 0 and out.strip().startswith("sha256:"):
             st["new_image_id"] = out.strip()
-        self.step("образ собран", note=st.get("new_image_id", ""))
+        self.step("новая версия готова", note=st.get("new_image_id", ""))
         self._rehearse_extensions()
 
     def _rehearse_extensions(self) -> None:
@@ -1867,7 +1980,7 @@ class Updater:
         if not found:
             st["extensions"] = {"ok": True, "summary": "расширений нет"}
             return
-        self.step(f"репетирую расширения под новой версией: {', '.join(found)}")
+        self.step(f"проверяю расширения владельца на новой версии: {', '.join(found)}")
         name = f"helene-rehearsal-{stamp().lower()}"
         try:
             code, out, err = self.docker.run([
@@ -1893,7 +2006,8 @@ class Updater:
         if report.get("ok") is not True and not st["plan"].get("force_extensions"):
             raise UpdateError(f"расширения владельца не грузятся под {st['to_version']}: "
                               f"{summary} — план с force_extensions обновит всё равно")
-        self.step("расширения", ok=report.get("ok") is True, note=summary)
+        self.step("расширения грузятся" if report.get("ok") is True else "расширения не грузятся",
+                  ok=report.get("ok") is True, note=summary)
 
     def _undo_prepare(self) -> str:
         """Вернуть всё, что успела подготовка. Не бросает: -> что не вернулось (или "")."""
@@ -1924,7 +2038,11 @@ class Updater:
         down = self._ensure_running()
         self.finish("failed", f"не вышло: {why[:600]} — агента не останавливал, "
                               + (f"вернулось не всё: {left}" if left else "прежний код и образ на месте")
-                              + (f"; {down}" if down else ""))
+                              + (f"; {down}" if down else ""),
+                    "Обновление не удалось ещё до остановки агента — всё осталось как было."
+                    if not (left or down) else
+                    "Обновление не удалось, и вернулось не всё — подробности ниже, их стоит показать "
+                    "тому, кто ставил Hélène.")
 
     def _ensure_running(self) -> str:
         """Агент на ногах? Нет — поднять прежним образом. -> что не вышло (или "")."""
@@ -1971,7 +2089,7 @@ class Updater:
         заменить живую память агента обрывком."""
         st = self.state
         partial, dest = bdir / "data.partial", bdir / "data"
-        self.step(f"копирую data/ ({mb(st['backup'].get('data_bytes') or 0)})")
+        self.step(f"делаю копию памяти агента ({mb(st['backup'].get('data_bytes') or 0)})", note="data/")
         shutil.rmtree(partial, ignore_errors=True)
         try:
             shutil.copytree(self.data, partial, symlinks=True, ignore=_only_plain)
@@ -1980,7 +2098,7 @@ class Updater:
             raise
         os.rename(partial, dest)
         st["data_backup"] = str(dest)
-        self.step("копия data/ готова")
+        self.step("копия памяти готова")
 
     def models_seen(self, source: str | None) -> int | None:
         """Сколько записей в папке моделей, если она лежит в установке (мне видна), иначе None."""
@@ -2008,7 +2126,7 @@ class Updater:
         # Чистый исходник новой версии — база следующего обновления: запомнить ДО того,
         # как в него лягут правки агента.
         self.save_pristine(root, st["to_version"])
-        self.step("откладываю прежнюю поставку и кладу новую")
+        self.step("кладу новую версию на место прежней", note="прежняя — в копии")
         for entry in sorted(root.iterdir(), key=lambda p: p.name):
             if entry.name in KEEP_IN_PLACE:
                 continue
@@ -2021,18 +2139,22 @@ class Updater:
                 os.rename(target, code_dir / entry.name)
             os.rename(entry, target)
         self._carry_owner_files(code_dir)
+        if not st.get("code_mounted"):
+            self._layer_fits()
         self._wait_idle()
-        self.step("останавливаю агента")
+        self.step("останавливаю агента на несколько минут")
         # «Остановлен» — ДО команды: упади я посреди неё, восстановление поднимет агента,
         # а не решит, что он работает, и не оставит его лежать со словами «всё как было».
         st["stopped"] = True
         self.save()
         self._must(self.compose("stop", "-t", "60", st["service"], timeout=180), "агент не остановился")
+        if not st.get("code_mounted"):
+            self._capture_layer(bdir)
         if full:
             self._space_for_data("после остановки агента")
             self._backup_data(bdir)
         self._carry_agent_code(bdir)
-        self.step(f"поднимаю {st['to_version']}")
+        self.step(f"запускаю {st['to_version']}")
         st["new_started"] = True
         self.save()
         self._must(self.compose("up", "-d", "--no-build", "--force-recreate", "--no-deps",
@@ -2053,23 +2175,76 @@ class Updater:
                 moved += carry_owner_files(old, new, name, shipped)
         st["owner_files"] = moved
         if moved:
-            self.step("своё владельца в папках поставки — в новую", note=", ".join(moved[:20]))
+            self.step("переношу файлы владельца (модели, настройки)", note=", ".join(moved[:20]))
+
+    def _layer_fits(self) -> None:
+        """Код агента живёт в слое контейнера: снимок слоя и копия кода займут место — хватит ли.
+
+        Размер слоя считает демон (`SizeRw`), агенту он не подвластен. Проверка — ДО остановки
+        агента: не хватит — отказ, пока он ещё работает."""
+        code, out, _err = self.docker.run(["inspect", "--size", "-f", "{{.SizeRw}}", self.cfg.container],
+                                          timeout=300)
+        size = int(_num(out.strip())) if code == 0 else 0
+        free = shutil.disk_usage(self.install).free
+        if free < 2 * size + SPACE_MARGIN:
+            raise UpdateError(f"код агента живёт в контейнере, и его слой — {mb(size)}: снимок и "
+                              f"копия займут около {mb(2 * size + SPACE_MARGIN)}, свободно {mb(free)}")
+
+    def _capture_layer(self, bdir: Path) -> None:
+        """Код агента из слоя контейнера (установка до 27.09) — пока контейнер ещё тот же.
+
+        Первым делом — снимок всего контейнера образом отката: пересоздай его кто угодно, и слой
+        с правками агента пропал бы, а со снимком откат вернёт агента вместе с ними. Потом — сам
+        код: из контейнера (сторона агента для переноса) и из прежнего образа (база — каким код
+        был до его правок). Всё — через докер: ссылки агента у меня не разыменовываются.
+        """
+        st = self.state
+        box = self.cfg.container
+        self.step("сохраняю код агента из контейнера — в нём его правки")
+        self._must(self.docker.run(["commit", "--pause=false", box,
+                                    f"{st['image_repo']}:{st['rollback_tag']}"], timeout=900),
+                   "снимок контейнера агента не сделался")
+        st["layer_committed"] = True
+        self.save()
+        layer, image = bdir / "layer", bdir / "image"
+        for root in (layer, image):
+            shutil.rmtree(root, ignore_errors=True)
+            root.mkdir(parents=True)
+        for name in CODE_DIRS:
+            self._must(self.docker.run(["cp", f"{box}:{IN_CONTAINER_CODE[name]}", str(layer / name)],
+                                       timeout=900), f"код агента ({name}/) не скопировался из контейнера")
+        temp = f"helene-base-{secrets.token_hex(4)}"
+        self._must(self.docker.run(["create", "--name", temp, st["old_image_id"]], timeout=120),
+                   "прежний образ не открылся")
+        try:
+            for name in CODE_DIRS:
+                self._must(self.docker.run(["cp", f"{temp}:{IN_CONTAINER_CODE[name]}", str(image / name)],
+                                           timeout=900), f"чистый код ({name}/) не скопировался из образа")
+        finally:
+            self.docker.run(["rm", "-f", temp], timeout=120)
+        st["layer_captured"] = True
 
     def _carry_agent_code(self, bdir: Path) -> None:
         """Правки агента в `tree/` и `app/` — на новую версию; что не легло — ему материалом.
 
-        Агент уже остановлен: его прежний код (в копии) больше не меняется под руками.
+        Агент уже остановлен: его прежний код (в копии) больше не меняется под руками. База —
+        чистый исходник прежней версии; у установки до 27.09 (код в слое контейнера) база —
+        прежний образ, а код агента — снятый из контейнера (`_capture_layer`).
         """
         st = self.state
-        if not st.get("code_mounted"):
-            st["agent_code"] = {"mounted": False, "note": (st.get("code_preview") or {}).get("note", "")}
-            return
         from_version, to_version = st.get("from_version") or "", st["to_version"]
-        base_root = self.pristine(from_version)
         report: dict = {"mounted": True, "edited": [], "carried": [], "merged": [], "conflicts": [],
                         "skipped": [], "folder": ""}
+        if st.get("code_mounted"):
+            base_root, mine_root = self.pristine(from_version), bdir / "code"
+            why = st.get("base_why") or "чистого исходника прежней версии нет"
+        else:
+            report["from_layer"] = True
+            mine_root = bdir / "layer"
+            base_root = bdir / "image" if all((bdir / "image" / n).is_dir() for n in CODE_DIRS) else None
+            why = "чистый код прежней версии из образа не достался"
         if base_root is None:
-            self._give_old_code(bdir, report, st.get("base_why") or "чистого исходника прежней версии нет")
+            self._give_old_code(mine_root, report, why)
             st["agent_code"] = report
             self._remember_carried(bdir)
             return
@@ -2079,7 +2254,7 @@ class Updater:
         diffs: list[str] = []
         budget = [MAX_MATERIALS]
         for name in CODE_DIRS:
-            rep = carry_code(base_root / name, bdir / "code" / name, self.install / name,
+            rep = carry_code(base_root / name, mine_root / name, self.install / name,
                              work=self.home / "tmp", labels=labels, prefix=name, budget=budget)
             for key in ("edited", "carried", "merged", "conflicts", "skipped"):
                 report[key].extend(rep[key])
@@ -2110,9 +2285,10 @@ class Updater:
         report["summary"] = summary
         st["agent_code"] = report
         self._remember_carried(bdir)
-        self.step("правки агента", ok=not report["conflicts"], note=summary)
+        self.step("правки агента перенесены" if not report["conflicts"] else "правки агента перенесены не все",
+                  ok=not report["conflicts"], note=summary)
 
-    def _give_old_code(self, bdir: Path, report: dict, why: str) -> None:
+    def _give_old_code(self, mine_root: Path, report: dict, why: str) -> None:
         """Без чистой базы правок не видно: прежний код агента — ему целиком, с потолком."""
         st = self.state
         from_version, to_version = st.get("from_version") or "", st["to_version"]
@@ -2122,10 +2298,10 @@ class Updater:
         written, left = 0, MAX_MATERIALS
         try:
             for name in CODE_DIRS:
-                for rel, kind in snapshot(bdir / "code" / name).items():
+                for rel, kind in snapshot(mine_root / name).items():
                     if kind[0] != "file":
                         continue
-                    blob = read_plain(bdir / "code" / name / rel)
+                    blob = read_plain(mine_root / name / rel)
                     if blob is None or len(blob) > left:
                         continue
                     left -= len(blob)
@@ -2162,10 +2338,10 @@ class Updater:
             if not self._agent_busy():
                 return
             if not said_once:
-                self.step("агент в ходе — жду его конца (до 3 минут)")
+                self.step("агент сейчас отвечает — жду, пока закончит (до 3 минут)")
                 said_once = True
             self.sleep(3)
-        self.step("агент не закончил ход за 3 минуты — останавливаю всё равно", ok=False)
+        self.step("агент не закончил за 3 минуты — останавливаю всё равно", ok=False)
 
     def _agent_busy(self) -> bool:
         reader = self.shared.read(*CTL, "desk_inbox", ".reader.json")
@@ -2176,7 +2352,7 @@ class Updater:
         """Ждать проверок. `key` — куда в расписку: проверки отката не затирают проверки
         новой версии — иначе «не прошло» читалось бы рядом с зелёным списком."""
         st = self.state
-        self.step(f"проверяю: {', '.join(checks)} (жду до {wait_min} мин)")
+        self.step(f"проверяю, что всё работает (до {wait_min} мин)", note=", ".join(checks))
         deadline = self.clock() + wait_min * 60
         results: list[dict] = []
         down = 0
@@ -2200,7 +2376,7 @@ class Updater:
             st[key] = results
             self.save()
             if all(r["ok"] for r in results):
-                self.step("проверки прошли: " + ", ".join(r["name"] for r in results))
+                self.step("всё работает", note=", ".join(r["name"] for r in results))
                 return results
             lost = doomed(probe, info)
             if lost:
@@ -2208,11 +2384,11 @@ class Updater:
                     if row["name"] == "runner" and not row["ok"]:
                         row["note"] = lost
                 st[key] = results
-                self.step("дальше ждать незачем", ok=False, note=lost)
+                self.step("новая версия не запускается — ждать дальше незачем", ok=False, note=lost)
                 return results
             down = 0 if info.get("running") else down + 1
             if down >= 6:
-                self.step("контейнер не держится на ногах", ok=False, note=str(info.get("status")))
+                self.step("новая версия не держится — падает", ok=False, note=str(info.get("status")))
                 return results
             if self.clock() >= deadline:
                 return results
@@ -2236,7 +2412,7 @@ class Updater:
                          "extended": 0},
                   note=(f"{st['to_version']} поднята и прошла проверки; теперь агент проверяет себя "
                         f"(до {utc(until)}). «Сломано» или молчание до срока — откат"))
-        self.step("испытание: агент проверяет себя")
+        self.step("агент проверяет себя в новой версии")
 
     def trial_tick(self) -> None:
         """Слово на испытании или истёкший срок.
@@ -2255,7 +2431,8 @@ class Updater:
             trial["verdict"] = {"verdict": verdict["verdict"], "by": str(verdict.get("by") or "")[:40],
                                 "words": str(verdict.get("words") or "")[:1500],
                                 "at_utc": str(verdict.get("at_utc") or "")[:40]}
-            who = "агент" if trial["verdict"]["by"] == "agent" else "владелец"
+            by_agent = trial["verdict"]["by"] == "agent"
+            who = "агент" if by_agent else "владелец"
             words = trial["verdict"]["words"]
             if verdict["verdict"] == "accept":
                 extra = f"{who} принял на испытании" + (f": «{words[:300]}»" if words else "")
@@ -2265,10 +2442,14 @@ class Updater:
                 self._success(extra=extra)
             else:
                 why = f"{who} на испытании сказал «сломано»" + (f": «{words[:300]}»" if words else "")
-                st.update(trial=trial, state="running", phase="rollback", rollback_why=why)
+                plain = (("агент сказал, что в новой версии не всё работает"
+                          + (f": «{words[:200]}»" if words else "")) if by_agent
+                         else "ты попросил вернуть прежнюю версию")
+                st.update(trial=trial, state="running", phase="rollback", rollback_why=why,
+                          rollback_plain=plain)
                 self.save()
                 self.shared.remove(*CTL, protocol.UPDATE_VERDICT)
-                self._rollback(why)
+                self._rollback(why, plain=plain)
             return
         if self.clock() < _num(trial.get("until_epoch")):
             return
@@ -2278,14 +2459,15 @@ class Updater:
             trial["until_epoch"] = _num(trial.get("until_epoch")) + TRIAL_EXTEND
             trial["until_utc"] = utc(trial["until_epoch"])
             st["trial"] = trial
-            self.step("агент в ходе — продлеваю испытание на 10 минут")
+            self.step("агент ещё отвечает — даю ему на проверку ещё 10 минут")
             return
         trial["verdict"] = {"verdict": "timeout", "by": "", "words": "", "at_utc": utc(self.clock())}
         why = (f"агент не ответил на испытании за {trial.get('minutes')} мин"
                + (" (с продлением)" if trial.get("extended") else ""))
-        st.update(trial=trial, state="running", phase="rollback", rollback_why=why)
+        plain = f"агент не подтвердил за {trial.get('minutes')} мин, что в новой версии всё работает"
+        st.update(trial=trial, state="running", phase="rollback", rollback_why=why, rollback_plain=plain)
         self.save()
-        self._rollback(why)
+        self._rollback(why, plain=plain)
 
     # --- откат и итог -----------------------------------------------------------
 
@@ -2366,7 +2548,16 @@ class Updater:
             words += f"; helene.json не вернулся: {exc}"
         return words
 
-    def _rollback(self, why: str) -> None:
+    def _up_old(self) -> tuple[int, str, str]:
+        """Поднять прежнюю версию. Обычно — пересоздав контейнер. Но у установки до 27.09 код
+        агента живёт в слое контейнера, и пока снимок слоя не сделан (`_capture_layer`),
+        пересоздать — значит стереть его правки: тогда только поднять тот же контейнер."""
+        st = self.state
+        keep = not st.get("code_mounted") and not st.get("layer_committed")
+        return self.compose("up", "-d", "--no-build", "--no-deps",
+                            *([] if keep else ["--force-recreate"]), st["service"], timeout=300)
+
+    def _rollback(self, why: str, plain: str = "") -> None:
         """Откат: прежние код и образ. Память агента — нет, пока без этого можно.
 
         «Откат кода не откатывает память — это её жизнь, а не версия продукта» (Егор,
@@ -2375,14 +2566,17 @@ class Updater:
         Копия `data/` и `helene.json` идёт в дело, только если прежняя версия на данных
         новой не поднимается.
 
+        `plain` — почему, простыми словами: из этого складывается итог для владельца.
+
         Повторный вход (после сбоя посреди отката) идёт тем же путём: каждый шаг смотрит,
         что уже сделано. Сбой — ещё попытка через минуту; после трёх — итог «нужен человек».
         """
         st = self.state
         if not (st.get("state") == "running" and st.get("phase") == "rollback"):
-            st.update(state="running", phase="rollback", rollback_why=why)
+            st.update(state="running", phase="rollback", rollback_why=why, rollback_plain=plain)
         why = st.get("rollback_why") or why
-        self.step("откатываю", ok=False, note=why)
+        plain = st.get("rollback_plain") or plain or "что-то пошло не так"
+        self.step("возвращаю прежнюю версию", ok=False, note=why)
         if not st.get("stopped"):
             self._abort_unstopped(why)
             return
@@ -2395,10 +2589,9 @@ class Updater:
             back = self._undo_code()
             notes.append("прежний код на месте" + (f" ({len(back)} частей)" if back else "")
                          + ("; правки агента в коде — как были до обновления"
-                            if st.get("code_mounted") else ""))
+                            if st.get("code_mounted") or st.get("layer_committed") else ""))
             self._retag_old()
-            self._must(self.compose("up", "-d", "--no-build", "--force-recreate", "--no-deps",
-                                    st["service"], timeout=300), "прежняя версия не поднялась")
+            self._must(self._up_old(), "прежняя версия не поднялась")
             checks = [c for c in protocol.UPDATE_MANDATORY
                       if (c != "version" or st.get("from_version"))
                       and (c != "code" or st.get("code_mounted"))]
@@ -2406,7 +2599,7 @@ class Updater:
             results = self._verify(st.get("from_version") or "", checks, wait, key="rollback_checks")
             if (not all(r["ok"] for r in results) and st.get("new_started") and st.get("data_backup")
                     and not st.get("data_restored")):
-                self.step("прежняя версия на данных новой не поднялась — возвращаю и данные", ok=False)
+                self.step("прежняя версия не запускается на новых данных — возвращаю и память из копии", ok=False)
                 self._must(self.compose("stop", "-t", "30", st["service"], timeout=120),
                            "агент не остановился")
                 notes.append("прежняя версия на данных новой не поднялась — " + self._restore_data())
@@ -2414,8 +2607,7 @@ class Updater:
                     self.beat()      # из копии вернулась и моя прежняя записка о себе
                 except OSError:
                     pass
-                self._must(self.compose("up", "-d", "--no-build", "--force-recreate", "--no-deps",
-                                        st["service"], timeout=300), "прежняя версия не поднялась")
+                self._must(self._up_old(), "прежняя версия не поднялась")
                 results = self._verify(st.get("from_version") or "", checks, wait,
                                        key="rollback_checks")
             elif not st.get("data_restored"):
@@ -2433,7 +2625,10 @@ class Updater:
             st["rollback"] = {"ok": False, "notes": notes, "why": said(exc)[:600]}
             self._cleanup_stage()
             self.finish("failed", f"обновление не прошло ({why[:300]}), и откат НЕ поднялся: {said(exc)}. "
-                                  f"Копии — {st['backup_dir']}; нужен человек на хосте")
+                                  f"Копии — {st['backup_dir']}; нужен человек на хосте",
+                        f"Обновление не прошло ({plain}), и прежняя версия сама не запустилась. "
+                        "Нужна помощь того, кто ставил Hélène на сервер: подробности ниже, память "
+                        "агента и копии целы.")
             return
         ok = all(r["ok"] for r in results)
         if ok:
@@ -2449,13 +2644,19 @@ class Updater:
             log(f"правки агента после подъёма не отдались: {said(exc)}")
         st["rollback"] = {"ok": ok, "notes": notes, "checks": results}
         self._cleanup_stage()
+        was = st.get("from_version") or "прежнюю"
         if ok:
             self.finish("rolled_back", f"{st.get('to_version')} не прошла ({why[:400]}) — вернул "
-                                       f"{st.get('from_version') or 'прежнюю'}: " + "; ".join(notes))
+                                       f"{was}: " + "; ".join(notes),
+                        f"Не получилось — вернул прежнюю версию {was}. Почему: {plain}. "
+                        "Память и настройки агента целы.")
         else:
             bad = "; ".join(f"{r['title']}: {r['note']}" for r in results if not r["ok"])
             self.finish("failed", f"обновление не прошло ({why[:300]}), откат поднят, но не "
-                                  f"проверился: {bad}. Копии — {st['backup_dir']}")
+                                  f"проверился: {bad}. Копии — {st['backup_dir']}",
+                        f"Обновление не прошло ({plain}); прежняя версия {was} запущена, но работает "
+                        f"не полностью: {plain_failures(results) or 'проверки не прошли'}. Нужна помощь "
+                        "того, кто ставил Hélène на сервер.")
         # Мой код вернулся вместе с прежней поставкой: перезапускаюсь им.
         self.reexec = True
 
@@ -2551,7 +2752,16 @@ class Updater:
             parts.append("своё владельца в папках поставки перенесено: " + ", ".join(st["owner_files"][:10]))
         parts.append(f"прежняя версия отложена ({st['backup_dir']}), образ "
                      f"{st['image_repo']}:{st['rollback_tag']}")
-        self.finish("done", ". ".join(part[:1].upper() + part[1:] for part in parts))
+        verdict = _dict(_dict(st.get("trial")).get("verdict"))
+        plain = f"Готово: теперь стоит {st['to_version']}."
+        if verdict.get("verdict") == "accept":
+            plain += (" Агент проверил себя в новой версии — всё работает." if verdict.get("by") == "agent"
+                      else " Ты подтвердил, что всё работает.")
+        elif "мозг не настроен" in extra:
+            plain += (" Сам агент проверить себя не мог — мозг не настроен; загляни, отвечает ли он.")
+        if code.get("conflicts"):
+            plain += " Часть правок агента в его собственном коде не легла на новую версию — он знает, где они."
+        self.finish("done", ". ".join(part[:1].upper() + part[1:] for part in parts), plain)
         # Мой код тоже обновился вместе с поставкой: перезапускаюсь им.
         self.reexec = True
 
@@ -2593,13 +2803,15 @@ class Updater:
         откатить, но не бросить. Бросает — тогда `recover_due` повторит через минуту."""
         st = self.state
         current, phase = st.get("state"), st.get("phase")
+        again = ("Исполнитель обновлений перезапустился, пока проверял новую версию, — ничего не "
+                 "менялось. Можно попросить обновление ещё раз.")
         if current == "checking":
             self.finish("refused", "исполнитель перезапустился посреди сверки плана — ничего не "
-                                   "тронуто; положи план снова")
+                                   "тронуто; положи план снова", again)
             return
         if current == "confirmed":
             self.finish("failed", "исполнитель перезапустился сразу после «да» — ничего не тронуто; "
-                                  "положи план снова")
+                                  "положи план снова", again)
             return
         if current == "trial" and phase in ("rollback", "accepting"):
             st["state"] = current = "running"      # расписка прежнего исполнителя: слово уже сказано
@@ -2613,25 +2825,33 @@ class Updater:
             self.finish("failed", "исполнитель перезапустился посреди подготовки; агент не "
                                   "останавливался, " + (f"но вернулось не всё: {left}" if left
                                                         else "всё возвращено как было")
-                        + (f"; {down}" if down else ""))
+                        + (f"; {down}" if down else ""),
+                        "Исполнитель обновлений перезапустился, пока готовил новую версию, — агент "
+                        "работал всё время, ничего не менялось. Можно попросить обновление ещё раз."
+                        if not (left or down) else
+                        "Исполнитель обновлений перезапустился посреди подготовки, и вернулось не всё — "
+                        "подробности ниже, их стоит показать тому, кто ставил Hélène.")
             return
         if phase in ("switch", "verify"):
             if not st.get("stopped"):
                 self._abort_unstopped("исполнитель перезапустился посреди подмены папок")
                 return
             if not st.get("new_started"):
-                self._rollback("исполнитель перезапустился посреди подмены, новая версия не поднималась")
+                self._rollback("исполнитель перезапустился посреди подмены, новая версия не поднималась",
+                               plain="исполнитель обновлений перезапустился посреди установки")
                 return
             results = self._verify(st["to_version"], st["plan"]["checks"], 5)
             if all(r["ok"] for r in results):
                 self._settle(results)
             else:
-                self._rollback("исполнитель перезапустился посреди подмены, новая версия не проверилась")
+                self._rollback("исполнитель перезапустился посреди подмены, новая версия не проверилась",
+                               plain=plain_checks(results))
             return
         if phase == "accepting":
             self._success(extra=st.get("success_extra") or "")
             return
-        self._rollback(st.get("rollback_why") or "исполнитель перезапустился посреди отката — довожу откат")
+        self._rollback(st.get("rollback_why") or "исполнитель перезапустился посреди отката — довожу откат",
+                       plain=st.get("rollback_plain") or "")
 
 
 def carry_owner_files(old: Path, new: Path, prefix: str, shipped: set[str] | None = None) -> list[str]:
@@ -2699,7 +2919,85 @@ def keep_self_copy(install: Path) -> None:
         os.replace(tmp, target)
 
 
+#: Итоги, после которых `watch` заканчивает.
+FINAL = ("refused", "declined", "expired", "superseded", "done", "rolled_back", "failed")
+
+
+def cli(argv: list[str]) -> int:
+    """Команды для `server/install.sh` — внутри контейнера исполнителя (там его python):
+
+        updater.py status                  готов ли исполнитель (код 0) — или почему нет
+        updater.py plan <версия|latest>    обновить: план с согласием хоста (команду на сервере
+                                           запускает владелец или его помощник — это и есть «да»)
+        updater.py watch [id]              ход обновления словами, пока не итог или испытание
+
+    Служба (без аргументов) и эти команды работают с одними файлами обмена.
+    """
+    cfg = Config.from_env()
+    shared = Shared(cfg.install / "data")
+    command = argv[0] if argv else ""
+    if command == "status":
+        beat = shared.read(*CTL, protocol.UPDATER_BEAT)
+        fresh = time.time() - _num(beat.get("beat_epoch")) <= 30
+        if fresh and beat.get("ok") is True:
+            print(f"исполнитель готов; стоит {beat.get('current_version') or '?'}")
+            return 0
+        print(str(beat.get("why") or "исполнитель ещё не отметился") if fresh else "исполнитель ещё не отметился")
+        return 1
+    if command == "plan":
+        version = (argv[1] if len(argv) > 1 else "latest").strip().lstrip("vV") or "latest"
+        receipt = shared.read(*CTL, protocol.UPDATE_RECEIPT)
+        if receipt.get("state") in ("checking", "confirmed", "running", "trial"):
+            print(f"сейчас уже идёт обновление ({receipt.get('state')}: {receipt.get('step') or '…'}) — "
+                  "дождись его конца")
+            return 3
+        plan, why = protocol.validate_plan({
+            "id": secrets.token_hex(8), "version": version, "backup": "full", "asked_by": "host",
+            "asked_utc": utc(), "reason": "обновление командой на сервере", "consent": "host"})
+        if plan is None:
+            print(f"план не сложился: {why}")
+            return 2
+        shared.write(*CTL, protocol.UPDATE_PLAN, plan)
+        print(plan["id"])
+        return 0
+    if command == "watch":
+        want = argv[1] if len(argv) > 1 else ""
+        deadline = time.time() + 90 * 60
+        shown, last_state = 0, ""
+        while time.time() < deadline:
+            r = shared.read(*CTL, protocol.UPDATE_RECEIPT)
+            if want and r.get("id") != want:
+                time.sleep(2)
+                continue
+            steps = r.get("steps") if isinstance(r.get("steps"), list) else []
+            shown = min(shown, len(steps))
+            for row in steps[shown:]:
+                if isinstance(row, dict):
+                    print(f"  {'·' if row.get('ok') else '✗'} {clean(str(row.get('step') or ''))}", flush=True)
+            shown = len(steps)
+            state = str(r.get("state") or "")
+            if state != last_state and state == "awaiting":
+                print("  … план ждёт согласия владельца", flush=True)
+            last_state = state
+            if state == "trial":
+                trial = _dict(r.get("trial"))
+                print(f"\n{r.get('to_version')} запущена и работает. Сейчас агент сам проверяет себя "
+                      f"(до {trial.get('minutes') or '?'} мин): если что-то не так, исполнитель вернёт "
+                      "прежнюю версию сам. Больше ничего делать не нужно.")
+                return 0
+            if state in FINAL:
+                print("\n" + clean(str(r.get("summary") or r.get("note") or state)))
+                return 0 if state == "done" else 1
+            time.sleep(2)
+        print("\nобновление идёт дольше полутора часов — смотри окно или: docker logs helene-updater")
+        return 1
+    print(cli.__doc__)
+    return 2
+
+
 def main() -> int:
+    if len(sys.argv) > 1:
+        return cli(sys.argv[1:])
     cfg = Config.from_env()
     updater = Updater(cfg)
     log(f"исполнитель обновлений: установка {cfg.install}, контейнер {cfg.container}, "

@@ -45,6 +45,7 @@ UPDATE_CHECKS = {
 }
 UPDATE_MANDATORY = ("running", "channel", "version", "supervisor", "runner", "config", "code")
 UPDATE_VERDICTS = ("accept", "reject")
+UPDATE_CONSENTS = ("window", "host", "owner-words")
 
 UPDATE_AWAIT_HOURS = 24
 UPDATE_WAIT_MIN = (2, 30)
@@ -95,6 +96,7 @@ def validate_plan(raw) -> tuple[dict | None, str]:
     except (TypeError, ValueError):
         return None, "trial_min — число минут"
     trial_min = max(UPDATE_TRIAL_MIN[0], min(UPDATE_TRIAL_MIN[1], trial_min))
+    consent = str(raw.get("consent") or "").strip().lower()
     return {
         "schema": UPDATE_SCHEMA,
         "id": plan_id,
@@ -108,4 +110,7 @@ def validate_plan(raw) -> tuple[dict | None, str]:
         "asked_by": str(raw.get("asked_by") or "agent")[:40],
         "asked_utc": str(raw.get("asked_utc") or "")[:40],
         "chat": " ".join(str(raw.get("chat") or "").split())[:160],
+        "consent": consent if consent in UPDATE_CONSENTS else "",
+        "consent_words": (" ".join(str(raw.get("consent_words") or "").split())[:500]
+                          if consent in UPDATE_CONSENTS else ""),
     }, ""
