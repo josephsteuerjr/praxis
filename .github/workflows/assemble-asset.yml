@@ -1,0 +1,131 @@
+# Склейка большого актива выпуска из кусков — на стороне GitHub.
+#
+# Зачем (27.09, выкладка 1.2.2): ПК выкладывал по плохой связи — ~250 КБ/с, обрывы,
+# DNS пропадал. Актив выпуска GitHub принимает ОДНИМ запросом без докачки: обрыв на
+# пятой минуте 86-мегабайтного установщика — и всё сначала. Поэтому ПК режет файл на
+# куски по 8 МБ и кладёт их в тот же выпуск активами `<имя>.part001…`: обрыв стоит
+# один кусок (~30 с), а не весь файл. Этот поток на раннере скачивает куски,
+# склеивает, сверяет sha256 с той, что обещал ПК, кладёт `<имя>` в выпуск и снимает
+# куски. Выпуск может быть черновиком: GITHUB_TOKEN с contents: write черновики видит.
+#
+# Сторона ПК — desk-notes/tools-2709-installer/parts-upload.sh; вручную:
+#   gh workflow run assemble-asset.yml -f release_id=<id> -f name=<имя> -f parts=<N> -f sha256=<сумма>
+# Кнопка работает только с ветки по умолчанию (`workflow_dispatch` GitHub видит с `main`).
+name: Склейка актива выпуска
+run-name: "склейка ${{ inputs.name }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: "id выпуска (черновик тоже годится)"
+        type: string
+        required: true
+      name:
+        description: "имя итогового актива; куски — <имя>.part001…"
+        type: string
+        required: true
+      parts:
+        description: "сколько кусков ждать"
+        type: string
+        required: true
+      sha256:
+        description: "sha256 итогового файла — без неё не выкладываем"
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+# Две склейки одного актива разом дрались бы за одно имя в выпуске.
+concurrency:
+  group: assemble-${{ inputs.release_id }}-${{ inputs.name }}
+  cancel-in-progress: false
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RID: ${{ inputs.release_id }}
+      NAME: ${{ inputs.name }}
+      PARTS: ${{ inputs.parts }}
+      WANT: ${{ inputs.sha256 }}
+    steps:
+      - name: Куски на месте
+        run: |
+          set -euo pipefail
+          case "$NAME" in */*|*..*|"") echo "имя актива без путей: '$NAME'"; exit 1;; esac
+          [[ "$PARTS" =~ ^[0-9]+$ ]] && [ "$PARTS" -ge 1 ] && [ "$PARTS" -le 999 ] \
+            || { echo "parts — число 1…999, а пришло '$PARTS'"; exit 1; }
+          [[ "$WANT" =~ ^[0-9a-f]{64}$ ]] || { echo "sha256 — 64 знака hex, а пришло '$WANT'"; exit 1; }
+          gh api "repos/$REPO/releases/$RID/assets?per_page=100" --paginate \
+            --jq '.[] | "\(.id) \(.state) \(.size) \(.name)"' > assets.txt
+          : > ids.txt
+          for i in $(seq -f "%03g" 1 "$PARTS"); do
+            line=$(awk -v n="$NAME.part$i" '$4 == n && $2 == "uploaded"' assets.txt)
+            [ -n "$line" ] || { echo "нет куска $NAME.part$i (или он не догружен)"; exit 1; }
+            echo "$line" | awk '{print $1}' >> ids.txt
+          done
+          echo "кусков: $(wc -l < ids.txt) из $PARTS"
+
+      - name: Склейка и сверка
+        run: |
+          set -euo pipefail
+          mkdir -p parts
+          n=0
+          while read -r id; do
+            n=$((n + 1))
+            curl -fsSL --retry 5 --retry-all-errors \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" \
+              "https://api.github.com/repos/$REPO/releases/assets/$id" -o "parts/$(printf %03d "$n")"
+          done < ids.txt
+          cat parts/* > "$NAME"
+          got=$(sha256sum "$NAME" | cut -c1-64)
+          echo "размер $(stat -c %s "$NAME"), sha256 $got"
+          [ "$got" = "$WANT" ] || { echo "сумма не та: ждали $WANT — в выпуск не кладу"; exit 1; }
+
+      - name: В выпуск
+        run: |
+          set -euo pipefail
+          case "$NAME" in
+            *.exe) ct=application/x-msdownload ;;
+            *.zip) ct=application/zip ;;
+            *.zst) ct=application/x-compressed ;;
+            *) ct=application/octet-stream ;;
+          esac
+          size=$(stat -c %s "$NAME")
+          drop() {  # прежний актив того же имени — целый или недогруженный
+            gh api "repos/$REPO/releases/$RID/assets?per_page=100" --paginate \
+              --jq ".[] | select(.name == \"$NAME\") | .id" | while read -r id; do
+                gh api -X DELETE "repos/$REPO/releases/assets/$id"
+              done
+          }
+          ok=""
+          for try in 1 2 3; do
+            drop
+            if curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: $ct" \
+                 --data-binary @"$NAME" \
+                 "https://uploads.github.com/repos/$REPO/releases/$RID/assets?name=$NAME" > up.json; then
+              ok=1; break
+            fi
+            echo "попытка $try не прошла"; sleep $((10 * try))
+          done
+          [ -n "$ok" ] || { echo "выложить не вышло"; exit 1; }
+          have=$(gh api "repos/$REPO/releases/$RID/assets?per_page=100" --paginate \
+            --jq ".[] | select(.name == \"$NAME\") | \"\(.state) \(.size) \(.digest)\"")
+          echo "в выпуске: $have"
+          [ "$have" = "uploaded $size sha256:$WANT" ] || { echo "выпуск держит не то"; exit 1; }
+
+      - name: Снять куски
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/releases/$RID/assets?per_page=100" --paginate \
+            --jq ".[] | select(.name | startswith(\"$NAME.part\")) | .id" | while read -r id; do
+              gh api -X DELETE "repos/$REPO/releases/assets/$id"
+            done
+          left=$(gh api "repos/$REPO/releases/$RID/assets?per_page=100" --paginate \
+            --jq "[.[] | select(.name | startswith(\"$NAME.part\"))] | length")
+          echo "кусков осталось: $left"
