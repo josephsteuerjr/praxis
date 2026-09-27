@@ -85,6 +85,10 @@ def _desk_token(tree: Path) -> str:
     return token
 
 
+#: Код выхода движка «перезапусти меня» — тот же, что в `localharness/runner.py`,
+#: `shell/src/main.rs` и `svc/src/main.rs`.
+RESTART_EXIT_CODE = 42
+
 #: Имя Linux-бинаря реле в поставке (рядом с `helene-relay.exe` для Windows).
 RELAY_NAME = "helene-relay"
 RELAY_PORT_DEFAULT = 5011
@@ -152,6 +156,48 @@ class Child:
             self.proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             self.proc.kill()
+
+
+def child_env(base: dict, tree: Path, token: str) -> dict:
+    """Среда детей: дерево, ключ канала — и метка «надзор здесь я».
+
+    HELENE_SUPERVISOR: движок с 1.1.0 сам берёт просьбы окна о перезапуске (на Windows и
+    Mac надзор — окно или служба), и в контейнере это были две руки на одном столе:
+    «перезапусти реле» брал движок и отвечал «реле держит не движок». По метке движок
+    стол не трогает; рука обновления по ней же понимает, что она на сервере.
+    """
+    env = dict(base, HELENE_TREE=str(tree), HELENE_TOKEN=token, PYTHONUTF8="1",
+               PYTHONUNBUFFERED="1", HELENE_HOST=base.get("HELENE_HOST", "0.0.0.0"),
+               HELENE_SUPERVISOR="serverboot")
+    env.pop("PRAXIS_DESK_TOKEN", None)
+    return env
+
+
+def settle(child: Child, now: float) -> str:
+    """Ребёнок вышел — решить, что дальше. -> как это названо в журнале.
+
+    Три исхода: код 42 от раннера — его собственная просьба «перезапусти меня» (так он
+    выходит между ходами), поднимаем сразу и без счёта падений; код 2/3 раннера — нет
+    дерева или кривой конфиг, перезапуск не лечит, надзор ждёт правки; всё прочее —
+    падение, и пауза перед подъёмом растёт.
+    """
+    code = child.proc.poll() if child.proc is not None else None
+    child.proc = None
+    if child.key == "runner" and code == RESTART_EXIT_CODE:
+        child.falls, child.retry_at = [], 0.0
+        said = f"раннер попросил перезапуска (код {code}) — поднимаю"
+    elif child.key == "runner" and code in (2, 3):
+        child.halted = ("конфиг или раскладка папки данных" if code == 3
+                        else "нет папки с кодом агента (tree/)")
+        said = (f"раннер вышел с кодом {code}: {child.halted} — перезапуск не поможет, "
+                f"правь и перезапусти контейнер")
+    else:
+        child.falls = [t for t in child.falls if now - t < 600] + [now]
+        pause = min(60.0, 2.0 ** min(len(child.falls), 6))
+        child.retry_at = now + pause
+        said = f"{child.name} завершился (код {code}) — снова через {pause:.0f} с"
+    print(f"[serverboot] {said}", flush=True)
+    return said
 
 
 def relay_child(base: Path, cfg: dict, tree: Path, env: dict) -> "Child | None":
@@ -226,9 +272,7 @@ def main() -> int:
             print(f"[serverboot] снят замок дерева прошлого контейнера: {stale}", flush=True)
         except OSError as exc:
             print(f"[serverboot] замок дерева не снят ({exc}) — раннер может отказаться", flush=True)
-    env = dict(os.environ, HELENE_TREE=str(tree), HELENE_TOKEN=token, PYTHONUTF8="1",
-               PYTHONUNBUFFERED="1", HELENE_HOST=os.environ.get("HELENE_HOST", "0.0.0.0"))
-    env.pop("PRAXIS_DESK_TOKEN", None)
+    env = child_env(os.environ, tree, token)
     children = []
     # Реле первым: пока оно не слушает, первый же ход агента с подпиской
     # ChatGPT уходит в никуда. Порядок тот же, что в плане оболочки.
@@ -339,19 +383,7 @@ def main() -> int:
             if child.alive() or child.halted:
                 continue
             if child.proc is not None:
-                code = child.proc.poll()
-                child.proc = None
-                if child.name == "раннер" and code in (2, 3):
-                    child.halted = ("конфиг или раскладка папки данных" if code == 3
-                                    else "нет папки с кодом агента (tree/)")
-                    print(f"[serverboot] раннер вышел с кодом {code}: {child.halted} — "
-                          f"перезапуск не поможет, правь и перезапусти контейнер", flush=True)
-                    continue
-                child.falls = [t for t in child.falls if now - t < 600] + [now]
-                pause = min(60.0, 2.0 ** min(len(child.falls), 6))
-                child.retry_at = now + pause
-                print(f"[serverboot] {child.name} завершился (код {code}) — снова через {pause:.0f} с",
-                      flush=True)
+                settle(child, now)
                 continue
             if now >= child.retry_at:
                 try:

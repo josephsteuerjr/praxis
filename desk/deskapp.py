@@ -998,6 +998,37 @@ async def _r_supervisor_restart(c: Call):
                                    str((c.body or {}).get("target") or ""))
 
 
+async def _r_update(c: Call):
+    """Обновление на сервере (27.09): есть ли исполнитель, что с планом, что было."""
+    return await asyncio.to_thread(control.update_state, readers.tree())
+
+
+async def _r_update_plan(c: Call):
+    """Владелец сам просит обновление из окна. Исполнитель сверит и спросит «да» отдельно."""
+    body = c.body or {}
+    return await asyncio.to_thread(control.update_plan, readers.tree(),
+                                   str(body.get("version") or "latest"),
+                                   str(body.get("backup") or "full"),
+                                   str(body.get("reason") or ""), "owner-window")
+
+
+async def _r_update_confirm(c: Call):
+    """«Да» или «нет» владельца кнопкой — на ту расписку, что он видит (id и ключ из неё)."""
+    body = c.body or {}
+    return await asyncio.to_thread(control.update_confirm, readers.tree(),
+                                   str(body.get("id") or ""), str(body.get("nonce") or ""),
+                                   str(body.get("decision") or ""), "window")
+
+
+async def _r_update_verdict(c: Call):
+    """Слово владельца на испытании: «принять» или «откатить» — поверх слова агента."""
+    body = c.body or {}
+    return await asyncio.to_thread(control.update_verdict, readers.tree(),
+                                   str(body.get("id") or ""), str(body.get("key") or ""),
+                                   str(body.get("verdict") or ""), "window",
+                                   str(body.get("words") or ""))
+
+
 async def _r_logs(c: Call):
     return await asyncio.to_thread(control.log_names, readers.tree())
 
@@ -1135,6 +1166,12 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/voice", _r_voice),
     Route("GET", "/api/supervisor", _r_supervisor),
     Route("POST", "/api/supervisor/restart", _r_supervisor_restart),
+    # Обновление на сервере: канал только кладёт план и «да» — исполняет сосед снаружи
+    # контейнера (server/updater). Телефону сюда нельзя, как и к перезапуску.
+    Route("GET", "/api/update", _r_update),
+    Route("POST", "/api/update/plan", _r_update_plan),
+    Route("POST", "/api/update/confirm", _r_update_confirm),
+    Route("POST", "/api/update/verdict", _r_update_verdict),
     Route("GET", "/api/logs", _r_logs),
     Route("GET", "/api/log/{name}", _r_log),
     # Комнаты окна (задача A §3): создать, переименовать, убрать в архив.

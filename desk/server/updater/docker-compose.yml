@@ -1,0 +1,45 @@
+# Исполнитель обновлений Hélène — сосед контейнера агента, со своим сокетом докера.
+# Поднимается ОДИН раз, из корня установки на хосте (там, где data/ и helene.json):
+#
+#   docker compose -f server/updater/docker-compose.yml up -d --build
+#
+# Установка не в /opt/helene — скажи ему путь, ТОТ ЖЕ, что на хосте:
+#
+#   HELENE_DIR=/srv/helene docker compose -f server/updater/docker-compose.yml up -d --build
+#
+# Путь обязан совпасть: compose разрешает `../data` агента в путь ХОСТА, и смотри
+# исполнитель на установку другим путём — поднятый им контейнер получил бы пустую
+# data/. Он сверяет это сам (по меткам контейнера агента) и без совпадения не работает,
+# а говорит почему — в окне и в `docker logs helene-updater`.
+#
+# Отдельный проект, а не сервис в compose агента: `up` агента не должен пересоздавать
+# исполнителя посреди его же работы. Никогда не запускать с --remove-orphans.
+name: helene-updater
+
+services:
+  updater:
+    build:
+      context: .
+    container_name: helene-updater
+    restart: unless-stopped
+    # Код — из установки; запасной вход — копия, которую исполнитель держит у себя
+    # (.updater/self): подмена кладёт новую поставку двумя переименованиями, и
+    # перезапуск ровно между ними (хост перезагрузился) без запаса не нашёл бы себя.
+    command:
+      - sh
+      - -c
+      - >-
+        for f in "$$HELENE_DIR/server/updater/updater.py" "$$HELENE_DIR/.updater/self/updater.py";
+        do [ -f "$$f" ] && exec python3 "$$f"; done;
+        echo "updater.py нет ни в server/updater, ни в .updater/self"; exec sleep 3600
+    environment:
+      - HELENE_DIR=${HELENE_DIR:-/opt/helene}
+      # Контейнер агента, которого он обновляет (container_name в server/docker-compose.yml).
+      - HELENE_CONTAINER=${HELENE_CONTAINER:-helene}
+      # Откуда брать выпуски. Намеренно ЗДЕСЬ, а не в helene.json: тот правит агент.
+      - HELENE_UPDATE_RELEASES=${HELENE_UPDATE_RELEASES:-https://api.github.com/repos/josephsteuerjr/praxis/releases}
+      # Сколько прежних версий (код, копия data/, образ) держать для отката.
+      - HELENE_UPDATE_KEEP=${HELENE_UPDATE_KEEP:-2}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../..:${HELENE_DIR:-/opt/helene}
