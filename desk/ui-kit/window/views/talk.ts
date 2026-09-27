@@ -308,7 +308,7 @@ export async function render(container: HTMLElement): Promise<void> {
     ? `<div class="starters">${STARTERS.map((st, i) =>
         `<button class="starter" type="button" data-starter="${i}">${esc(st.label)}</button>`).join("")}</div>`
     : "";
-  container.innerHTML = `<div class="center">${notices}<div class="feed">${
+  container.innerHTML = `<div class="center">${notices}<div data-fold-box></div><div class="feed">${
     feedHTML || (pend ? "" : `<div class="empty"><b>Здесь пока тихо</b>${emptyText}${starters}</div>`)
   }<div class="pending-box">${pend}</div></div></div>`;
   for (const b of container.querySelectorAll<HTMLButtonElement>("[data-go]")) {
@@ -332,9 +332,84 @@ export async function render(container: HTMLElement): Promise<void> {
     });
   }
   bindStopTurn(container);
+  void paintFold(container, peer);
   // Прокрутку ведёт каркас (`homeScroll`): прокручивается общий `#view`, а не наш узел,
   // и просьба «в конец» отсюда была бы записью в поле, которое никто не читает.
   await panel.render();
+}
+
+// ---------------------------------------------------------------- свёртка по кнопке
+
+/** Ответ канала о памяти чата (deskd.control.fold_state, 27.09). */
+interface FoldState {
+  room: string;
+  hot: number | null;
+  keep: number;
+  offer_at: number;
+  hard_at: number;
+  offer: Record<string, unknown> | null;
+  pending: { id?: string; at?: string } | null;
+  receipt: { id?: string; state?: string; note?: string; folded?: number; at?: string } | null;
+}
+
+let foldTimer = 0;
+
+/**
+ * Строка «память чата» над лентой (Егор 27.09: «компактирование… неплохо бы по нажатию»).
+ * Свёртка — ЕЁ (`memory_life.fold_now`, та же, что у её руки): старое сверх горячего хвоста
+ * уходит в сводку её словами, переписка остаётся. Строка видна, только когда есть что
+ * свернуть, идёт свёртка или есть свежая расписка: пустое место в ленте не занимает.
+ */
+async function paintFold(container: HTMLElement, room: string): Promise<void> {
+  const box = container.querySelector<HTMLElement>("[data-fold-box]");
+  if (!box) return;
+  let st: FoldState;
+  try {
+    st = await api<FoldState>(`/api/memory-fold/${encodeURIComponent(room)}`);
+  } catch {
+    return; // канал без этой ручки (старый сервер) — строки просто нет
+  }
+  if (!box.isConnected || S.room !== room) return;
+  const receiptAge = st.receipt?.at ? Date.now() - Date.parse(st.receipt.at) : Infinity;
+  const running = !!st.pending || st.receipt?.state === "running";
+  clearTimeout(foldTimer);
+  if (running) {
+    box.innerHTML = `<div class="notice"><span class="dot live"></span>
+      <span>Сворачиваю память чата — она пишет сводку своими словами. Переписка остаётся на месте.</span></div>`;
+    foldTimer = window.setTimeout(() => void paintFold(container, room), 3000);
+    return;
+  }
+  if (st.receipt && receiptAge < 120_000) {
+    const again = st.receipt.state === "retry" || st.receipt.state === "failed";
+    box.innerHTML = `<div class="notice${st.receipt.state === "failed" ? " err" : ""}">
+      <span class="dot ${st.receipt.state === "failed" ? "failed" : "ok"}"></span>
+      <span>${esc(st.receipt.note || "")}</span>
+      ${again ? `<button class="notice-action" data-fold type="button">Свернуть ещё раз</button>` : ""}</div>`;
+  } else if (st.hot !== null && st.hot > st.keep + 10) {
+    const offered = st.offer ? " Ей уже предложено свернуть." : "";
+    box.innerHTML = `<div class="notice"><span class="dot"></span>
+      <span>В горячей памяти чата ${st.hot} сообщений. Она держит ${st.keep} последних, на ${st.offer_at}
+      предлагает себе свернуть, на ${st.hard_at} сворачивает сама.${offered}</span>
+      <button class="notice-action" data-fold type="button">Свернуть сейчас</button></div>`;
+  } else {
+    box.innerHTML = "";
+    return;
+  }
+  const btn = box.querySelector<HTMLButtonElement>("[data-fold]");
+  btn?.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.textContent = "прошу…";
+    try {
+      const said = await post<{ ok: boolean; note?: string }>("/api/memory-fold", { room });
+      if (!said.ok) throw new Error(said.note || "просьба не записана");
+      void paintFold(container, room);
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = "Свернуть сейчас";
+      const text = box.querySelector("span:not(.dot)");
+      if (text) text.textContent = humanError(e).text;
+    }
+  });
 }
 
 /**

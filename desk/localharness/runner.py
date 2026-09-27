@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import json
 import logging
@@ -1216,6 +1217,81 @@ def _supervisor_tick(tree: Path, control) -> bool:
     else:
         control.receipt(tree, request, False, f"так перезапускать нечего: {target}")
     return False
+
+
+#: Свёртка по кнопке идёт одна за раз: вторая просьба ждёт, пока кончится первая.
+_FOLD_BUSY = [False]
+
+
+def _fold_tick(tree: Path) -> None:
+    """Свёртка памяти чата по кнопке окна (27.09): просьба `memory/.control/fold.json`.
+
+    Раннер берёт её переименованием (второй тик не возьмёт ту же) и сворачивает ФОНОМ:
+    свёртка — вызов модели на десятки секунд, а записка владельца ждать его не должна.
+    Сворачивает её же `memory_life.fold_now` — ровно то, что делает её рука
+    memory_compact(fold); пороги и голос сводки — её. Итог — расписка
+    `memory/.state/fold-receipt.json`, её читает окно (deskd.control.fold_state).
+    """
+    if _life is None or _FOLD_BUSY[0] or not hasattr(_life, "fold_now"):
+        return
+    ctl = Path(tree) / "memory" / ".control"
+    request = ctl / "fold.json"
+    if not request.is_file():
+        return
+    claimed = ctl / "fold.processing.json"
+    try:
+        os.replace(request, claimed)
+        asked = json.loads(claimed.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        with contextlib.suppress(OSError):
+            claimed.unlink()
+        return
+    if not isinstance(asked, dict):
+        asked = {}
+    _FOLD_BUSY[0] = True
+    import threading
+    threading.Thread(target=_fold_run, args=(Path(tree), asked, claimed), name="fold",
+                     daemon=True).start()
+
+
+def _fold_run(tree: Path, asked: dict, claimed: Path) -> None:
+    room = str(asked.get("room") or STREAM)
+    receipt_path = tree / "memory" / ".state" / "fold-receipt.json"
+
+    def put(**fields) -> None:
+        data = {"schema": 1, "id": asked.get("id"), "room": room, "by": asked.get("by"),
+                "asked_at": asked.get("at"),
+                "at": dt.datetime.now(dt.timezone.utc).isoformat(), **fields}
+        try:
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = receipt_path.with_name(".tmp-" + receipt_path.name)
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+            os.replace(tmp, receipt_path)
+        except OSError:
+            log.exception("расписка свёртки не записалась")
+
+    put(state="running", note="сворачиваю — пишу сводку своими словами")
+    log.info("свёртка по кнопке [%s]: начинаю", room)
+    try:
+        out = _life.fold_now(room) or {}
+        folded = int(out.get("folded") or 0)
+        if out.get("ok") is False and out.get("reason") == "state_changed":
+            put(state="retry", note="пока сворачивала, в чат пришло новое — нажми ещё раз")
+        elif folded:
+            put(state="done", folded=folded,
+                note=f"свёрнуто сообщений: {folded} — старое теперь в сводке её словами")
+        else:
+            reason = str((out.get("plan") or {}).get("reason") or out.get("reason") or "")
+            put(state="nothing", reason=reason,
+                note="сворачивать нечего: горячей памяти не больше, чем она держит сама")
+        log.info("свёртка по кнопке [%s]: %s", room, {k: out.get(k) for k in ("ok", "folded", "reason")})
+    except Exception as exc:  # noqa: BLE001 — причина уходит владельцу распиской
+        log.exception("свёртка по кнопке [%s] не прошла", room)
+        put(state="failed", note=f"не свернулось: {type(exc).__name__}: {exc}"[:300])
+    finally:
+        with contextlib.suppress(OSError):
+            claimed.unlink()
+        _FOLD_BUSY[0] = False
 
 
 def _heartbeat_forever(inbox: Path) -> None:
@@ -2567,6 +2643,11 @@ def main() -> None:
             except OSError:
                 continue
             _handle_note(processed / path.name, message, processed)
+        # 27.09: свёртка памяти чата по кнопке окна — между ходами, сама идёт фоном.
+        try:
+            _fold_tick(tree)
+        except Exception:
+            log.exception("просьба свёртки не разобралась")
         # 20.09: replay processed-записок, чей ход не дошёл до модели (краш между
         # переносом в processed и ходом). `.done` — по факту завершения handle_desk без
         # исключения; упавшая записка ждёт следующего прохода. ⚠ 1.0.1: проход — при

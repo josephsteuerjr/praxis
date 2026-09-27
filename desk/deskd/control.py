@@ -124,6 +124,66 @@ def _interrupt_locked(tree: Path, by: str, scope: str, reason: str) -> dict:
                     "уже совершённые действия не отменяются"}
 
 
+# --- свёртка памяти чата по кнопке (27.09) --------------------------------------
+#
+# Егор 27.09: «интересно, как происходит компактирование в мейн чате Элен. Неплохо бы
+# сделать его по нажатию». Свёртка — ЕЁ (`memory_life.fold_now`, та же, что у её руки
+# `memory_compact(fold)`): старое сверх горячего хвоста уходит в сводку её словами, сырые
+# события не удаляются. Канал её не делает — только кладёт просьбу; раннер берёт её между
+# ходами, сворачивает фоном и отвечает распиской. Пороги — её (memory_life.hot_bounds):
+# личка держит 150 горячих, на 250 свёртка ей предлагается, на 300 делается без спроса;
+# комнаты — 250/400/500. Кнопка не срезает больше, чем свернула бы она сама.
+
+FOLD_REQUEST = "fold.json"              # memory/.control — просьба окна
+FOLD_PROCESSING = "fold.processing.json"  # memory/.control — просьбу взял раннер
+FOLD_RECEIPT = "fold-receipt.json"      # memory/.state — ответ раннера
+FOLD_BOUNDS = {"chat": (150, 250, 300), "group": (250, 400, 500)}
+_ROOM_RE = re.compile(r"[\w:.@+-]{1,200}")
+
+
+def fold_bounds(room: str) -> tuple[int, int, int]:
+    """(держит, предлагает, сворачивает сама) — по виду места, как `hot_bounds` ядра."""
+    return FOLD_BOUNDS["group" if str(room).startswith("-") else "chat"]
+
+
+def _life_state(tree: Path, room: str) -> dict:
+    safe = re.sub(r"[^\w-]", "_", str(room)) or "chat"
+    return _read(_state_dir(tree) / "life" / f"{safe}.json")
+
+
+def fold_state(tree: Path, room: str) -> dict:
+    """Сколько в горячей памяти места, её пороги, идёт ли свёртка и чем кончилась.
+    `hot` — None, если состояния памяти этого места ещё нет (или оно не под этим именем)."""
+    room = str(room or "window")
+    keep, offer_at, hard_at = fold_bounds(room)
+    life = _life_state(tree, room)
+    hot = len(life["hot"]) if isinstance(life.get("hot"), list) else None
+    offers = _read(_state_dir(tree) / "fold_offers.json")
+    ctl = Path(tree) / "memory" / ".control"
+    pending = _read(ctl / FOLD_REQUEST) or _read(ctl / FOLD_PROCESSING)
+    receipt = _read(_state_dir(tree) / FOLD_RECEIPT)
+    return {"room": room, "hot": hot, "keep": keep, "offer_at": offer_at, "hard_at": hard_at,
+            "offer": offers.get(room) if isinstance(offers.get(room), dict) else None,
+            "pending": pending if pending.get("room") == room else None,
+            "receipt": receipt if receipt.get("room") == room else None}
+
+
+def fold_request(tree: Path, room: str, by: str = "owner") -> dict:
+    """Попросить раннер свернуть память места сейчас. Просьба одна на всё дерево: новая
+    заменяет лежащую (свёртка идёт по одной, и второе нажатие — то же желание)."""
+    room = str(room or "").strip() or "window"
+    if not _ROOM_RE.fullmatch(room):
+        return {"ok": False, "note": "непонятное имя чата — просьба не записана"}
+    request = {"id": secrets.token_hex(8), "room": room, "by": str(by or "owner")[:40],
+               "at": dt.datetime.now(dt.timezone.utc).isoformat()}
+    try:
+        _write(Path(tree) / "memory" / ".control" / FOLD_REQUEST, request)
+    except OSError as exc:
+        return {"ok": False, "note": f"просьба не записалась: {exc}"}
+    return {"ok": True, "request": request,
+            "note": "просьба записана — свернёт между ходами, сводку пишет своими словами"}
+
+
 def supervisor_state(tree: Path) -> dict:
     """Что известно о надзоре: жив ли, кого держит, можно ли им управлять.
 

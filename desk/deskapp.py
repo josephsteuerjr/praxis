@@ -1114,6 +1114,18 @@ async def _r_interrupt(c: Call):
                                    str(body.get("reason") or ""))
 
 
+async def _r_fold_state(c: Call):
+    """Память чата: сколько горячего, пороги, идёт ли свёртка (27.09, кнопка в окне)."""
+    return await asyncio.to_thread(control.fold_state, readers.tree(), str(c.match.get("room") or "window"))
+
+
+async def _r_fold(c: Call):
+    """Свернуть память чата сейчас — просьба раннеру; телефону не открыто."""
+    body = c.body or {}
+    return await asyncio.to_thread(control.fold_request, readers.tree(),
+                                   str(body.get("room") or "window"), str(c.role or "owner"))
+
+
 ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/runs", _r_runs),
     Route("GET", "/api/run/{run_id}", _r_run),
@@ -1165,6 +1177,8 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/brain-models", _r_brain_models),
     Route("POST", "/api/brain", _r_brain_set),
     Route("POST", "/api/interrupt", _r_interrupt),
+    Route("GET", "/api/memory-fold/{room}", _r_fold_state),
+    Route("POST", "/api/memory-fold", _r_fold),
     Route("GET", "/api/voice", _r_voice),
     Route("GET", "/api/supervisor", _r_supervisor),
     Route("POST", "/api/supervisor/restart", _r_supervisor_restart),
