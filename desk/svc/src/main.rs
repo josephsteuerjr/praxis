@@ -473,9 +473,16 @@ fn spawn_child(
     if let Some(dir) = script.parent() {
         cmd.current_dir(dir);
     }
-    if let Some(log) = child_log(tree, script) {
-        if let Ok(err) = log.try_clone() {
+    // Ввод — пустой явно: у session-host (его запускает планировщик) унаследованные потоки
+    // недействительны, и держаться на том, что Windows простит это для ввода, незачем.
+    cmd.stdin(Stdio::null());
+    match child_log(tree, script).and_then(|log| log.try_clone().ok().map(|err| (log, err))) {
+        Some((log, err)) => {
             cmd.stdout(Stdio::from(log)).stderr(Stdio::from(err));
+        }
+        // Журнал не открылся — не наследовать недействительные потоки, а молчать явно.
+        None => {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
         }
     }
     #[cfg(windows)]
@@ -1512,6 +1519,30 @@ fn spawn_relay(plan: &Plan) -> Result<Option<Child>, String> {
     let python = embedded_python(&base);
     if python.exists() {
         cmd.env("RELAY_PYTHON", &python);
+    }
+    // ⚠ 27.09 (живая проба службы 1.2.2): session-host запускает планировщик — без консоли,
+    // и унаследованные потоки у него недействительны. Реле падало на подъёме с «Неверный
+    // дескриптор (os error 6)», служба больше не пробовала до своего перезапуска, и реле
+    // поднимало только окно — отсюда и «спор за 5011». Потоки реле — явные: ввод пуст,
+    // вывод — в его журнал (там и паника, если будет).
+    cmd.stdin(Stdio::null());
+    let _ = std::fs::create_dir_all(home.join("logs"));
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(home.join("logs").join("relay-console.log"))
+    {
+        Ok(out) => match out.try_clone() {
+            Ok(err) => {
+                cmd.stdout(Stdio::from(out)).stderr(Stdio::from(err));
+            }
+            Err(_) => {
+                cmd.stdout(Stdio::null()).stderr(Stdio::null());
+            }
+        },
+        Err(_) => {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        }
     }
     #[cfg(windows)]
     {
