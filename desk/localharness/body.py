@@ -1142,7 +1142,7 @@ def _system_via_broker(agent_mod, kwargs: dict) -> str:
         ask["timeout_sec"] = timeout_sec
     receipt = hand(**ask)
     return ("execution=system ушёл поручением службе (брокер, «да» владельца в окне, "
-            "исполняет служба правами СИСТЕМЫ):\n" + str(receipt))
+            f"исполняет служба {_rights()}):\n" + str(receipt))
 
 
 def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -> None:
