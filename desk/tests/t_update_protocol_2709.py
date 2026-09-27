@@ -209,6 +209,20 @@ class PlanAndConfirm(unittest.TestCase):
         self.assertFalse(control.update_verdict(self.tree, "aaaa1111", "k3y", "accept")["ok"])
         self.assertFalse((ctl(self.tree) / control.UPDATE_VERDICT).exists())
 
+    def test_согласие_вместе_с_планом(self):
+        beat(self.tree)
+        got = control.update_plan(self.tree, "1.1.1", consent="window")
+        self.assertTrue(got["ok"], got)
+        self.assertEqual(got["plan"]["consent"], "window")
+        self.assertIn("начнёт сам", got["note"])
+        # согласия не из закрытого списка не бывает; слова без согласия не едут
+        plan, _ = control.validate_plan({"id": "ab12cd34ef", "consent": "agent", "consent_words": "да"})
+        self.assertEqual((plan["consent"], plan["consent_words"]), ("", ""))
+        plan, _ = control.validate_plan({"id": "ab12cd34ef", "consent": "OWNER-WORDS",
+                                         "consent_words": "  обновись \n сейчас "})
+        self.assertEqual((plan["consent"], plan["consent_words"]), ("owner-words", "обновись сейчас"))
+        self.assertEqual(control.UPDATER_COMMAND, "sh server/install.sh")
+
     def test_несостоявшийся_ход_по_записке_повторяется(self):
         put(self.tree, control.UPDATE_RECEIPT, {"id": "aaaa1111", "state": "done",
                                                 "finished_epoch": time.time()})

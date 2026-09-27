@@ -405,6 +405,12 @@ UPDATE_CHECKS = {
 #: Эти идут всегда — план может только ДОБАВИТЬ к ним, не убрать: провал любой = откат.
 UPDATE_MANDATORY = ("running", "channel", "version", "supervisor", "runner", "config", "code")
 
+#: Согласие, пришедшее вместе с планом (27.09, «всё максимально просто»): нажатие
+#: «Обновить» в окне, команда на самом сервере или слово владельца агенту («обновись») —
+#: это и есть «да», второго не нужно. Слово владельца рука передаёт только в ходе, который
+#: он начал сам (тот же гейт, что у confirm), и дословно — в `consent_words`.
+UPDATE_CONSENTS = ("window", "host", "owner-words")
+
 UPDATE_ACTIVE = ("checking", "awaiting", "confirmed", "running", "trial")
 UPDATE_FINAL = ("refused", "declined", "expired", "superseded", "done", "rolled_back", "failed")
 #: Что агенту рассказывают запиской и ходом: испытание — ему самому проверить себя,
@@ -422,8 +428,9 @@ UPDATE_WAIT_DEFAULT = 10
 UPDATE_TRIAL_MIN = (10, 120)
 UPDATE_TRIAL_DEFAULT = 30
 
-#: Как поднять исполнителя, если его нет. Из корня установки на хосте.
-UPDATER_COMMAND = "docker compose -f server/updater/docker-compose.yml up -d --build"
+#: Как поднять исполнителя, если его нет: та же одна команда, что ставит и обновляет
+#: Hélène на сервере (из папки установки; повторный запуск ничего не ломает).
+UPDATER_COMMAND = "sh server/install.sh"
 
 _VERSION_RE = re.compile(r"^\d{1,4}\.\d{1,4}\.\d{1,5}$")
 
@@ -477,6 +484,7 @@ def validate_plan(raw) -> tuple[dict | None, str]:
     except (TypeError, ValueError):
         return None, "trial_min — число минут"
     trial_min = max(UPDATE_TRIAL_MIN[0], min(UPDATE_TRIAL_MIN[1], trial_min))
+    consent = str(raw.get("consent") or "").strip().lower()
     return {
         "schema": UPDATE_SCHEMA,
         "id": plan_id,
@@ -490,6 +498,9 @@ def validate_plan(raw) -> tuple[dict | None, str]:
         "asked_by": str(raw.get("asked_by") or "agent")[:40],
         "asked_utc": str(raw.get("asked_utc") or "")[:40],
         "chat": " ".join(str(raw.get("chat") or "").split())[:160],
+        "consent": consent if consent in UPDATE_CONSENTS else "",
+        "consent_words": (" ".join(str(raw.get("consent_words") or "").split())[:500]
+                          if consent in UPDATE_CONSENTS else ""),
     }, ""
 
 
@@ -505,10 +516,11 @@ def updater_state(tree: Path) -> dict:
     elif alive:
         why = str(beat.get("why") or "исполнитель на связи, но говорит, что работать не может")
     elif beat:
-        why = (f"исполнитель молчит {int(age or 0)} с — его контейнер стоит или упал; "
-               f"на хосте: docker logs helene-updater")
+        why = (f"исполнитель обновлений молчит {int(age or 0)} с — похоже, он остановлен. "
+               f"Поднимает его та же команда на сервере, из папки установки: {UPDATER_COMMAND} "
+               "(что с ним было — docker logs helene-updater)")
     else:
-        why = ("исполнителя обновлений рядом нет. Владелец поднимает его один раз, на хосте, "
+        why = ("исполнителя обновлений рядом нет. Его поднимает одна команда на сервере, "
                f"из папки установки: {UPDATER_COMMAND}")
     latest = beat.get("latest") if isinstance(beat.get("latest"), dict) else {}
     return {
@@ -565,8 +577,13 @@ def update_state(tree: Path) -> dict:
 
 def update_plan(tree: Path, version: str = "latest", backup: str = "full", reason: str = "",
                 by: str = "owner", chat: str = "", checks=None, wait_min=None,
-                force_extensions: bool = False, trial_min=None) -> dict:
+                force_extensions: bool = False, trial_min=None, consent: str = "",
+                consent_words: str = "") -> dict:
     """Положить план обновления. Исполнитель сверит его и попросит «да» у человека.
+
+    `consent` — «да» уже дано вместе с планом: владелец нажал «Обновить» в окне
+    («window») или запустил обновление на самом сервере («host»). Тогда исполнитель,
+    сверив выпуск, начинает сразу. Рука агента согласия не передаёт никогда.
 
     Отказы — обычные ответы с причиной: исполнителя нет (и как его поднять), идёт
     другое обновление, поле плана не годится. План, ждущий «да», новый план заменяет:
@@ -583,12 +600,17 @@ def update_plan(tree: Path, version: str = "latest", backup: str = "full", reaso
     raw = {"id": secrets.token_hex(8), "version": version, "backup": backup,
            "checks": list(checks or []), "wait_min": wait_min, "trial_min": trial_min,
            "force_extensions": force_extensions, "reason": reason, "asked_by": by,
-           "asked_utc": _utc(), "chat": chat}
+           "asked_utc": _utc(), "chat": chat, "consent": consent, "consent_words": consent_words}
     plan, why = validate_plan(raw)
     if plan is None:
         return {"ok": False, "note": why}
     _write(_control_dir(tree) / UPDATE_PLAN, plan)
     target = "последнюю версию" if plan["version"] == "latest" else f"версию {plan['version']}"
+    if plan["consent"]:
+        return {"ok": True, "plan": plan,
+                "note": (f"обновляю Hélène на {target}: исполнитель проверит выпуск и начнёт сам. "
+                         "Агент пропадёт на несколько минут; если что-то пойдёт не так, вернётся "
+                         "прежняя версия, память агента не трогается")}
     return {"ok": True, "plan": plan,
             "note": (f"план положен: обновить Hélène на {target}, копия — "
                      f"{UPDATE_BACKUPS[plan['backup']]}. Исполнитель сверит выпуск за несколько "

@@ -109,6 +109,26 @@ class Hand(unittest.TestCase):
         self.assertEqual((confirm["decision"], confirm["by"], confirm["words"], confirm["nonce"]),
                          ("yes", "owner-words", "Да, обновляйся", "n0"))
 
+    def test_обновись_от_владельца_и_есть_да(self):
+        # «всё максимально просто»: одно слово владельца вместо «обновись» + «да»
+        self.put(control.UPDATER_BEAT, {"beat_epoch": time.time(), "ok": True,
+                                        "current_version": "1.1.1", "latest": {"version": "1.1.2"}})
+        _, hand = self.hand()
+        self.owner[0] = False
+        self.assertIn("Не передаю", hand(action="plan", owner_words="обновись"))
+        self.assertFalse(self.ctl(control.UPDATE_PLAN).exists())
+        self.owner[0] = True
+        text = hand(action="plan", version="latest", owner_words="Йоно,  обновись")
+        self.assertIn("Обновление начинается", text)
+        plan = json.loads(self.ctl(control.UPDATE_PLAN).read_text("utf-8"))
+        self.assertEqual((plan["consent"], plan["consent_words"], plan["asked_by"]),
+                         ("owner-words", "Йоно, обновись", "agent"))
+        # без слов владельца — просто просьба, ждёт его «да»
+        self.ctl(control.UPDATE_PLAN).unlink()
+        hand(action="plan", reason="чинит голос")
+        plan = json.loads(self.ctl(control.UPDATE_PLAN).read_text("utf-8"))
+        self.assertEqual((plan["consent"], plan["consent_words"]), ("", ""))
+
     def test_снять_план_можно_и_без_владельца(self):
         self.put(control.UPDATE_RECEIPT, {"id": "aaaa1111", "state": "awaiting", "nonce": "n0"})
         _, hand = self.hand()

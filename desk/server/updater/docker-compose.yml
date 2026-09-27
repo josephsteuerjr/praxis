@@ -1,5 +1,6 @@
 # Исполнитель обновлений Hélène — сосед контейнера агента, со своим сокетом докера.
-# Поднимается ОДИН раз, из корня установки на хосте (там, где data/ и helene.json):
+# Поднимает его `server/install.sh` (одна команда, которая ставит и обновляет Hélène); руками —
+# из корня установки на хосте (там, где data/ и helene.json):
 #
 #   docker compose -f server/updater/docker-compose.yml up -d --build
 #
@@ -40,6 +41,10 @@ services:
       - HELENE_UPDATE_RELEASES=${HELENE_UPDATE_RELEASES:-https://api.github.com/repos/josephsteuerjr/praxis/releases}
       # Сколько прежних версий (код, копия data/, образ) держать для отката.
       - HELENE_UPDATE_KEEP=${HELENE_UPDATE_KEEP:-2}
+      # Только для стенда с поддельным GitHub по http; у владельца пусто.
+      - HELENE_UPDATE_INSECURE=${HELENE_UPDATE_INSECURE:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../..:${HELENE_DIR:-/opt/helene}
