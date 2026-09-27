@@ -191,7 +191,8 @@ export class InstallScene extends FormScene {
     const li = el("li", "sheet-row");
     li.dataset.state = "pending";
     const dot = el("span", "sheet-dot");
-    const words = el("span", "sheet-label", label || PHASE_WORDS[phase] || phase);
+    const own = isPraxis() && phase === "configure" ? "Настройки подключения" : PHASE_WORDS[phase];
+    const words = el("span", "sheet-label", own || label || phase);
     const detail = el("span", "sheet-detail", "");
     li.append(dot, words, detail);
     let bar: HTMLElement | null = null;
@@ -236,11 +237,16 @@ export class InstallScene extends FormScene {
     const can = !!p.cancellable && phase !== "done";
     this.cancelBtn.disabled = !can;
     const why = this.sheetFoot.querySelector<HTMLElement>(".sheet-why")!;
+    const had = !!machine.installed || !!machine.installedFound;
     why.textContent = can
-      ? "Отмена вернёт всё как было: прежняя версия цела, пока новая ложится рядом."
+      ? had
+        ? "Отмена вернёт всё как было: прежняя версия цела, пока новая ложится рядом."
+        : "Отмена уберёт всё разложенное: на диске ничего не останется."
       : phase === "done"
         ? ""
-        : "Сейчас отменить нельзя — это секунды, и прежняя версия уже уступила место.";
+        : had
+          ? "Сейчас отменить нельзя — это секунды, и прежняя версия уже уступила место."
+          : "Сейчас отменить нельзя — это секунды: программа уже встала на место.";
   }
 
   private async cancel() {

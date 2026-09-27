@@ -89,7 +89,7 @@ pub fn install_praxis(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(P
         .filter(|n| n != "helene.json")
         .collect();
     let carry = Carry {
-        drop: &["uninstall.exe", "install.log", crate::install::INSTALL_MARKER],
+        drop: &["uninstall.exe", "install.log", crate::install::INSTALL_MARKER, "КАК-ВЕРНУТЬСЯ.md"],
         old_payload_top: &old_top,
         static_carry: StaticCarry::None,
         keep_runtime: false,

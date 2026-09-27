@@ -3592,7 +3592,9 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     // 6. Подмена — два переименования. Отмены здесь нет: это доли секунды.
     say("swap", "Меняю версии местами", None, None, false, true, progress);
     let carry = Carry {
-        drop: &["uninstall.exe", "install.log", "stop.log", INSTALL_MARKER],
+        // `КАК-ВЕРНУТЬСЯ.md` — записка снятия («программа снята, данные здесь»): после
+        // установки она врала бы (живая проба 27.09 — переехала в новую установку).
+        drop: &["uninstall.exe", "install.log", "stop.log", INSTALL_MARKER, "КАК-ВЕРНУТЬСЯ.md"],
         old_payload_top: &old_top,
         static_carry: match plan {
             StaticPlan::Fresh => StaticCarry::None,
