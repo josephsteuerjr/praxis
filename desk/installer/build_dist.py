@@ -1585,7 +1585,7 @@ def build_praxis_app(args) -> None:
         build_setup_exe(out, version, product=PRAXIS_PRODUCT)
 
 
-def run_stands(skip: bool) -> None:
+def run_stands(skip: bool, tree: Path | None = None) -> None:
     """Прогнать ВСЕ стенды перед сборкой: питон, окно, Rust.
 
     ⚠ Почему это делает сборка, а не человек по списку. Наборов три, и звались
@@ -1603,8 +1603,12 @@ def run_stands(skip: bool) -> None:
     runner = DESK / "tests" / "run_all.py"
     if not runner.is_file():
         raise SystemExit(f"нет прогона стендов: {runner}")
-    print("стенды: питон, окно и Rust…")
-    done = subprocess.run([sys.executable, str(runner), "--rust"], cwd=str(DESK))
+    print("стенды: питон, окно и Rust…" + (f" (дерево — {tree})" if tree else ""))
+    # ⚠ 29.09: стенды звались без HELENE_TREE_SRC и проверяли дерево ПО УМОЛЧАНИЮ — соседний
+    # `live`, стоявший на ветке 19.09, — а в поставку уезжало `--tree` (port-2409). Выпуски
+    # 1.2.x проверялись не на том дереве, что уходило людям. Теперь — ровно на нём.
+    env = dict(os.environ, HELENE_TREE_SRC=str(tree)) if tree else None
+    done = subprocess.run([sys.executable, str(runner), "--rust"], cwd=str(DESK), env=env)
     if done.returncode != 0:
         raise SystemExit("стенды красные — сборка остановлена. "
                          "Чинить, а не собирать: подробности выше.")
@@ -1654,7 +1658,7 @@ def main() -> None:
         print(f"дерево собрано из ядра и слоя: {n} файлов -> {staged_tree}")
         live = staged_tree
 
-    run_stands(args.skip_tests)
+    run_stands(args.skip_tests, live)
 
     print(f"Hélène {version}")
     print(f"дистрибутив -> {out}")
