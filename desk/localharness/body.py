@@ -1052,6 +1052,39 @@ def _owner_turn(agent_mod) -> bool:
     return bool(ctx is not None and getattr(ctx, "owner", False))
 
 
+#: Кто действует рукой в ходе владельца из окна. Дерево знает двоих: самого агента
+#: (`praxis:self`) и человека по числовому Telegram-id; у хода из окна id нет, и 28.09
+#: `act_element` отказал владельцу словами «не опознан principal для ключа действия» —
+#: клик по кнопке установщика так и не состоялся. Строка стабильная: ключ действия
+#: (idempotency) привязан к ней, повтор того же намерения должен давать тот же отпечаток.
+OWNER_PRINCIPAL = "helene:owner"
+
+
+def install_owner_actor(agent_mod) -> bool:
+    """`agent._computer_actor` — владелец в ходе из окна. -> обёртка поставлена сейчас.
+
+    Своё слово дерева (агент или Telegram-id) — первым; пустое в ходе владельца —
+    `OWNER_PRINCIPAL`. Чужой ход без id остаётся без принципала, как и был.
+    """
+    original = getattr(agent_mod, "_computer_actor", None)
+    if not callable(original) or getattr(original, "_helene_owner", False):
+        return False
+
+    def _computer_actor() -> str:
+        try:
+            who = original()
+        except Exception:
+            who = ""
+        if who:
+            return who
+        return OWNER_PRINCIPAL if _owner_turn(agent_mod) else ""
+
+    _computer_actor._helene_owner = True  # type: ignore[attr-defined]
+    _computer_actor.__wrapped__ = original  # type: ignore[attr-defined]
+    agent_mod._computer_actor = _computer_actor
+    return True
+
+
 #: Списки схем тулов у дерева, из которых снимаем `computer` в сборке без тела.
 #: `computer` живёт в `OWNER_TOOLS`, но списки берём с запасом: пусть дерево
 #: переложит его в другой — снимется всё равно. Пустых/отсутствующих не боимся.
@@ -1087,8 +1120,8 @@ def _install_absent(agent_mod) -> None:
 #: Что сказать агенту про маршрут `execution=system` рядом со строкой тела.
 SYSTEM_ROUTE_NOTE = (
     "system в Hélène — не маршрут тела: `run` с execution=system уходит поручением службе "
-    "(broker_request op=exec) — владелец видит команду в окне и говорит «да», служба "
-    "выполняет её правами СИСТЕМЫ и отдаёт квитанцию. Нужна служба и включённая нулевая сессия.")
+    "(broker_request op=exec), и служба сразу выполняет его правами СИСТЕМЫ и отдаёт "
+    "квитанцию. Нужна служба и включённый владельцем тумблер нулевой сессии.")
 
 
 def _rights() -> str:
@@ -1141,8 +1174,8 @@ def _system_via_broker(agent_mod, kwargs: dict) -> str:
     if timeout_sec:
         ask["timeout_sec"] = timeout_sec
     receipt = hand(**ask)
-    return ("execution=system ушёл поручением службе (брокер, «да» владельца в окне, "
-            f"исполняет служба {_rights()}):\n" + str(receipt))
+    return (f"execution=system ушёл поручением службе (исполняет служба {_rights()}):\n"
+            + str(receipt))
 
 
 def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -> None:
@@ -1185,6 +1218,7 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
         agent_mod._is_sovereign_actor = _is_sovereign_actor
     if callable(getattr(agent_mod, "_computer_allowed", None)):
         agent_mod._computer_allowed = _computer_allowed
+    install_owner_actor(agent_mod)
 
     impl = getattr(agent_mod, "TOOL_IMPL", None)
     original = impl.get("computer") if isinstance(impl, dict) else None

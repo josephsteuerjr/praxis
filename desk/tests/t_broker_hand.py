@@ -35,6 +35,10 @@ import broker  # noqa: E402
 # на обе платформы; POSIX-форма разбирается своим стендом (`PosixBorder`).
 broker.HAS_BROKER = True
 broker.POSIX_PATHS = False
+# С 28.09 на Windows поручение идёт службе по трубе напрямую (`broker.DIRECT`,
+# стенд `t_broker_direct_2809.py`); обмен файлами с окном остался путём macOS —
+# его и держит этот стенд на любой машине.
+broker.DIRECT = False
 
 
 def _tree(root: Path) -> Path:
@@ -154,14 +158,20 @@ class PosixBorder(unittest.TestCase):
         mac = broker.tool_schema(mac=True)
         win = broker.tool_schema(mac=False)
         self.assertEqual(mac["name"], win["name"])
-        self.assertEqual(list(mac["input_schema"]["properties"]), list(win["input_schema"]["properties"]))
+        # Одинаковые поля, кроме wait_sec: на Windows ждать владельца не надо —
+        # служба отвечает квитанцией сама (28.09).
+        self.assertEqual([k for k in mac["input_schema"]["properties"] if k != "wait_sec"],
+                         list(win["input_schema"]["properties"]))
+        self.assertIn("wait_sec", mac["input_schema"]["properties"])
         for word in ("Windows", "нулевой сессии", "служба", "СИСТЕМЫ", "macOS"):
             self.assertNotIn(word, mac["description"], word)
             self.assertNotIn(word, mac["input_schema"]["properties"]["op"]["description"], word)
         self.assertIn("/usr/bin", mac["description"])
         self.assertIn("пароль", mac["description"])
         self.assertIn("не ответил» — это не «отказал»", mac["description"])
-        self.assertIn("служба Windows", win["description"])
+        self.assertIn("службе Hélène", win["description"])
+        self.assertIn("тумблер нулевой сессии", win["description"])
+        self.assertNotIn("«да»", win["description"])
         self.assertIn("пароль", broker.exec_words(mac=True))
         self.assertIn("нулевой сессии", broker.exec_words(mac=False))
         self.assertIn("пароль", broker.check("root", "", None, "зачем-то", 60)
@@ -362,9 +372,12 @@ class Absent(unittest.TestCase):
             self.assertEqual(fresh.HAS_BROKER, os.name == "nt" or sys.platform == "darwin")
             self.assertEqual(fresh.POSIX_PATHS, os.name != "nt")
             self.assertEqual(fresh.TOOL, fresh.tool_schema())
+            # Поручение по трубе — только Windows (28.09).
+            self.assertEqual(fresh.DIRECT, os.name == "nt")
         finally:
             fresh.HAS_BROKER = True
             fresh.POSIX_PATHS = False
+            fresh.DIRECT = False
 
 
 if __name__ == "__main__":

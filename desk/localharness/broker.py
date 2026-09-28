@@ -114,6 +114,133 @@ def executor() -> str:
 
 
 # --------------------------------------------------------------------------- #
+#  Windows: поручение идёт СЛУЖБЕ напрямую (28.09, слово Егора)
+# --------------------------------------------------------------------------- #
+#
+# «С включённым тумблером не надо запрашивать у владельца: говорит службе — та
+# делает». Согласие владельца — сам тумблер нулевой сессии: включая его, он читает
+# оговорку (modes.SESSION0_WARNING). Окно подтверждения на каждое поручение было
+# вторым вопросом о том же и держало агента за окном: закрыто окно — поручать
+# некому. Теперь харнесс ходит в трубу службы сам: труба пускает процессы из сессии
+# владельца по токену (`common/broker.rs`), а харнесс живёт именно там.
+#
+# Замки службы остаются её замками и не подчиняются нам: `exec` без тумблера она
+# отклонит своими словами (`svc::broker_exec_allowed`), чужую сессию — тоже.
+# Каждое поручение служба пишет в свой журнал `broker.log`.
+
+#: Поручения по трубе — только Windows: на macOS исполнитель — сама оболочка, и
+#: подписью там служит системный диалог пароля (его не обойти и не нужно).
+DIRECT = os.name == "nt"
+
+#: Сколько ждём свободную трубу (ERROR_PIPE_BUSY) — как `broker_call` в Rust.
+PIPE_BUSY_WAIT = 5.0
+#: Сверх срока самой команды: служба отвечает квитанцией и по таймауту, но убитая
+#: посреди работы служба оставила бы нас висеть на чтении.
+PIPE_SLACK = 20.0
+#: Последние квитанции — для action=list.
+RECENT: list[dict] = []
+RECENT_KEEP = 8
+
+
+def install_root() -> Path:
+    """Корень установки (папка `helene-svc.exe`): `app/localharness/broker.py` → вверх на два."""
+    env = os.environ.get("HELENE_ROOT")
+    return Path(env) if env else Path(__file__).resolve().parents[2]
+
+
+def _norm_root(root) -> str:
+    """Как `broker_norm_path`: без `\\\\?\\`, без хвостового слэша, нижний регистр."""
+    raw = str(root).replace("/", "\\")
+    if raw.startswith("\\\\?\\UNC\\"):
+        raw = "\\\\" + raw[8:]
+    elif raw.startswith("\\\\?\\"):
+        raw = raw[4:]
+    return raw.rstrip("\\").lower()
+
+
+def pipe_name(root) -> str:
+    """`\\\\.\\pipe\\helene-broker-<FNV-1a 64 пути установки>` — как `broker_pipe_name`."""
+    h = 0xCBF29CE484222325
+    for byte in _norm_root(root).encode("utf-8"):
+        h ^= byte
+        h = (h * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return f"\\\\.\\pipe\\helene-broker-{h:016x}"
+
+
+def read_token(tree: Path) -> str | None:
+    """Токен брокера — `memory/.state/broker-token`, те же правила, что `broker_token_read`."""
+    try:
+        raw = (Path(tree) / "memory" / ".state" / "broker-token").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    tok = raw.strip()
+    return tok if 16 <= len(tok) <= 128 and tok.isascii() and tok.isalnum() else None
+
+
+def _frame(payload: bytes) -> bytes:
+    return len(payload).to_bytes(4, "little") + payload
+
+
+def _read_exact(pipe, n: int) -> bytes:
+    out = b""
+    while len(out) < n:
+        chunk = pipe.read(n - len(out))
+        if not chunk:
+            raise OSError("служба закрыла трубу посреди ответа")
+        out += chunk
+    return out
+
+
+def call_service(pipe: str, payload: dict, wait_sec: float) -> dict:
+    """Один запрос в трубу службы -> квитанция словарём. Отказ — исключение с
+    человеческими словами (труба не открылась, оборвалась, не ответила)."""
+    import threading
+    deadline = time.monotonic() + PIPE_BUSY_WAIT
+    handle = None
+    while handle is None:
+        try:
+            handle = open(pipe, "r+b", buffering=0)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 231 and time.monotonic() < deadline:
+                time.sleep(0.12)
+                continue
+            raise OSError(f"служба не отвечает на трубе {pipe}: {exc}. Брокер живёт, "
+                          "только пока стоит служба Hélène") from exc
+    box: dict = {}
+
+    def talk():
+        try:
+            handle.write(_frame(json.dumps(payload, ensure_ascii=False).encode("utf-8")))
+            size = int.from_bytes(_read_exact(handle, 4), "little")
+            if size <= 0 or size > 4 * 1024 * 1024:
+                raise OSError(f"квитанция странного размера: {size} байт")
+            box["receipt"] = json.loads(_read_exact(handle, size).decode("utf-8"))
+        except Exception as exc:                      # отдаём наружу словами
+            box["error"] = exc
+
+    worker = threading.Thread(target=talk, name="broker-pipe", daemon=True)
+    worker.start()
+    worker.join(wait_sec)
+    try:
+        handle.close()
+    except OSError:
+        pass
+    if worker.is_alive():
+        raise OSError(f"служба не ответила за {int(wait_sec)} с — квитанции нет")
+    if "error" in box:
+        raise OSError(str(box["error"]))
+    receipt = box.get("receipt")
+    if not isinstance(receipt, dict):
+        raise OSError("квитанция не разобралась")
+    return receipt
+
+
+def _remember(row: dict) -> None:
+    RECENT.append(row)
+    del RECENT[:-RECENT_KEEP]
+
+
+# --------------------------------------------------------------------------- #
 #  Файлы обмена
 # --------------------------------------------------------------------------- #
 
@@ -414,6 +541,8 @@ class Broker:
         said = check(op, cmd, args, why, timeout_sec)
         if said:
             return f"брокер: {said}. Просьбу не записал — {executor()} отвергла бы её же"
+        if DIRECT:
+            return self.tell_service(op, cmd, args, why, timeout_sec)
         listening, words = self.desk()
         if not listening:
             return (f"брокер: {words}. Просьбу не записал: она протухнет через "
@@ -439,6 +568,37 @@ class Broker:
                     f"владельцу словами, окно ждать не умеет")
         return "брокер: " + describe_answer(answer)
 
+    def tell_service(self, op: str, cmd: str, args: list, why: str, timeout_sec: int) -> str:
+        """Windows: поручение службе по трубе, без окна и без «да» (см. `DIRECT`)."""
+        token = read_token(self.tree)
+        if not token:
+            installed = self.service()
+            return ("брокер: службы Hélène нет — поручать некому" if installed is False else
+                    "брокер: токена службы нет (memory/.state/broker-token) — служба не "
+                    "поставлена или ещё не стартовала")
+        ask_id = _new_id()
+        payload = {"v": V, "id": ask_id, "token": token, "op": op, "cmd": cmd,
+                   "args": [str(a) for a in args], "why": why, "timeout_sec": int(timeout_sec)}
+        log.info("брокер: поручение службе %s (%s): %s · %s", ask_id, op, why,
+                 " ".join([cmd] + [str(a) for a in args])[:300])
+        try:
+            receipt = call_service(pipe_name(install_root()), payload,
+                                   float(timeout_sec) + PIPE_SLACK)
+        except OSError as exc:
+            row = {"id": ask_id, "decision": "failed", "note": str(exc)}
+            _remember(row)
+            return "брокер: " + describe_answer(row)
+        row = {"id": receipt.get("id") or ask_id,
+               "decision": "done" if receipt.get("ok") else "refused",
+               "note": str(receipt.get("note") or "").strip(),
+               "out": receipt.get("out") or "", "err": receipt.get("err") or "",
+               "ms": receipt.get("ms")}
+        if receipt.get("ok") and op != "ping":
+            row["code"] = receipt.get("code")
+        _remember(row)
+        log.info("брокер: квитанция %s: %s", row["id"], row["decision"])
+        return "брокер: " + describe_answer(row)
+
     def wait(self, ask_id: str, wait_sec: int) -> dict | None:
         """Дождаться ответа на свою просьбу. None — не дождались."""
         deadline = time.time() + max(0, int(wait_sec))
@@ -459,6 +619,19 @@ class Broker:
     # --- список ------------------------------------------------------------- #
 
     def listing(self) -> str:
+        if DIRECT:
+            installed = self.service()
+            out = ["Поручения идут службе напрямую: с включённым тумблером нулевой сессии "
+                   "она выполняет exec сразу, без вопроса владельцу. Журнал — broker.log.",
+                   {True: "служба установлена — брокер есть",
+                    False: "службы нет — поручать некому",
+                    None: "стоит ли служба, спросить не у кого"}[installed]]
+            if RECENT:
+                out.append("Последние квитанции:")
+                out += ["  " + describe_answer(r) for r in RECENT]
+            else:
+                out.append("Квитанций в этом запуске ещё не было.")
+            return "\n".join(out)
         rows = self.forget_answered()
         answers = self.answers()[-8:]
         listening, words = self.desk()
@@ -496,7 +669,8 @@ def describe_answer(row: dict) -> str:
     """Квитанция человеческими словами. Не «успех», а что именно вышло."""
     decision = str(row.get("decision") or "")
     head = {"allowed": "владелец разрешил", "refused": "ОТКАЗ",
-            "failed": "разрешено, но не вышло"}.get(decision, decision or "ответ")
+            "done": "служба выполнила",
+            "failed": "не вышло"}.get(decision, decision or "ответ")
     parts = [f"{row.get('id')}: {head}"]
     note = str(row.get("note") or "").strip()
     if note:
@@ -548,40 +722,45 @@ def tool_schema(*, mac: bool | None = None) -> dict:
         cmd_words = "программа абсолютным путём"
     else:
         description = (
-            "Попросить владельца выполнить одну команду с правами, которых у тебя "
-            "нет. Ты не «становишься системой»: просьбу читает владелец в окне "
-            "Windows, видит саму команду и твоё «зачем», и только по его «да» её "
-            "выполняет служба. Отказ тоже записывается.\n"
-            "action=ask — попросить: op = spawn_interactive (правами владельца, в "
-            "его сессии) | exec (правами СИСТЕМЫ; работает, только если владелец "
-            "включил галочку нулевой сессии) | ping (проверка связи, ничего не "
-            "выполняет); cmd — программа ПОЛНЫМ путём (C:\\Windows\\System32\\"
-            "netsh.exe); args — массив строк, никогда одна строка; why — зачем, "
-            "одной строкой, это читает владелец.\n"
-            "action=list — что ждёт ответа и что уже ответили.\n"
-            "Брокера держит служба Windows: не установлена — придёт отказ. Окно "
-            "закрыто — просьбу некому показать, и я скажу об этом сразу. Ответ "
-            "приходит минуты; «владелец не ответил» — это не «отказал».")
+            "Поручить службе Hélène одну команду, которой нужны другие права или "
+            "другой хозяин процесса. Служба выполняет поручение сразу и отдаёт "
+            "квитанцию: код возврата, вывод, ошибки, длительность. Каждое "
+            "поручение — в журнале службы (broker.log).\n"
+            "action=ask — поручить: op = exec (правами СИСТЕМЫ; служба выполняет, "
+            "только если владелец включил в Настройках тумблер нулевой сессии, "
+            "иначе отказ её словами) | spawn_interactive (процесс правами "
+            "владельца в его сессии, отдельно от тебя: он переживает твой "
+            "перезапуск — так запускают установщик Hélène) | ping (проверка связи); "
+            "cmd — программа ПОЛНЫМ путём (C:\\Windows\\System32\\netsh.exe); "
+            "args — массив строк, никогда одна строка; why — зачем, одной строкой, "
+            "это пишется в журнал.\n"
+            "action=list — последние квитанции.\n"
+            "Службы нет — придёт отказ сразу.")
         cmd_words = "программа полным путём"
+    props = {
+        "action": {"type": "string", "enum": ["ask", "list"],
+                   "description": ("ask — попросить, list — ждущие просьбы и ответы" if mac
+                                   else "ask — поручить, list — последние квитанции")},
+        "op": {"type": "string", "enum": list(OPS),
+               "description": "ping | spawn_interactive (правами владельца) | "
+                              + ("exec (правами администратора)" if mac
+                                 else "exec (правами СИСТЕМЫ)")},
+        "cmd": {"type": "string", "description": cmd_words},
+        "args": {"type": "array", "items": {"type": "string"},
+                 "description": "аргументы массивом строк"},
+        "why": {"type": "string", "description": ("зачем, одной строкой — это читает владелец"
+                                                  if mac else "зачем, одной строкой — в журнал службы")},
+        "timeout_sec": {"type": "integer",
+                        "description": f"сколько ждать саму команду, 1..{TIMEOUT_MAX} с"},
+    }
+    if mac:
+        # На Windows ждать некого: служба отвечает квитанцией сама (`DIRECT`).
+        props["wait_sec"] = {"type": "integer",
+                             "description": f"сколько ждать ответа владельца, 0..{WAIT_MAX} с"}
     return {
         "name": "broker_request",
         "description": description,
-        "input_schema": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["ask", "list"],
-                       "description": "ask — попросить, list — ждущие просьбы и ответы"},
-            "op": {"type": "string", "enum": list(OPS),
-                   "description": "ping | spawn_interactive (правами владельца) | "
-                                  + ("exec (правами администратора)" if mac
-                                     else "exec (правами СИСТЕМЫ)")},
-            "cmd": {"type": "string", "description": cmd_words},
-            "args": {"type": "array", "items": {"type": "string"},
-                     "description": "аргументы массивом строк"},
-            "why": {"type": "string", "description": "зачем, одной строкой — это читает владелец"},
-            "timeout_sec": {"type": "integer",
-                            "description": f"сколько ждать саму команду, 1..{TIMEOUT_MAX} с"},
-            "wait_sec": {"type": "integer",
-                         "description": f"сколько ждать ответа владельца, 0..{WAIT_MAX} с"},
-        }},
+        "input_schema": {"type": "object", "properties": props},
     }
 
 
@@ -644,6 +823,13 @@ def install(agent_mod, tree: Path, cfg: dict | None = None) -> None:
         if isinstance(tools, list) and not any(
                 isinstance(t, dict) and t.get("name") == TOOL["name"] for t in tools):
             tools.append(dict(TOOL))
+    if DIRECT:
+        STATE.update({"hand": True, "desk": "", "asks": 0, "answers": 0,
+                      "note": "поручения идут службе напрямую, квитанцией; exec — "
+                              "при включённом тумблере нулевой сессии"})
+        log.info("брокер: рука broker_request выдана агенту · поручения — службе по трубе %s",
+                 pipe_name(install_root()))
+        return
     listening, words = broker.desk()
     left = broker.forget_answered()
     # Файл ответов пишет оболочка, и каждый её `rename` приносит новый файл с
