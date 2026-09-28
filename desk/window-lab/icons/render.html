@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Значки — отрисовка</title>
+<!-- Выбор Егора 28.09: Hélène «А» (терракотовый круг, «é» почерком) и реле «А» (мост:
+     две точки и дуга на листе бумаги). Каждый размер — своя толщина линий: в 16 px тонкий
+     почерк исчез бы. Плитки по 512 px в ряд; icons.py режет, ужимает и собирает .ico. -->
+<style>
+@font-face { font-family: "Zen Kurenaido"; src: url("../../ui-kit/fonts/ZenKurenaido-latin.woff2") format("woff2"); }
+html, body { margin: 0; background: transparent; }
+.row { display: flex; }
+svg { display: block; width: 512px; height: 512px; }
+</style></head><body>
+<div class="row" id="row"></div>
+<script>
+const INK = "#1d1a17", PAPER = "#f4e4cf", TERRA = "#e0915a";
+const which = new URLSearchParams(location.search).get("icon") || "helene";
+// Размеры плиток и толщины: [размер, толщина «é», кегль «é»]
+const HELENE = [[256, 3, 176], [128, 4, 178], [64, 7, 182], [48, 9, 186], [32, 12, 192], [24, 14, 198], [16, 16, 206]];
+// [размер, рамка, дуга, обводка точки, радиус точек]
+const RELAY = [[256, 7, 10, 9, 24], [128, 8, 12, 10, 25], [64, 11, 16, 13, 28], [48, 13, 19, 15, 30], [32, 16, 23, 18, 33], [24, 18, 26, 20, 35], [16, 20, 30, 22, 38]];
+
+function helene([, sw, fs]) {
+  return `<svg viewBox="0 0 256 256"><circle cx="128" cy="128" r="122" fill="${TERRA}"/>
+    <text x="128" y="${128 + fs * 0.28}" font-family="Zen Kurenaido" font-size="${fs}" fill="${INK}" stroke="${INK}" stroke-width="${sw}" stroke-linejoin="round" text-anchor="middle">é</text></svg>`;
+}
+function relay([, border, arc, dot, r]) {
+  const pad = border / 2 + 4;
+  return `<svg viewBox="0 0 256 256"><rect x="${pad}" y="${pad}" width="${256 - 2 * pad}" height="${256 - 2 * pad}" rx="${62 - pad / 3}" fill="${PAPER}" stroke="${INK}" stroke-width="${border}"/>
+    <path d="M70 168C90 68 166 68 186 168" fill="none" stroke="${INK}" stroke-width="${arc}" stroke-linecap="round"/>
+    <circle cx="70" cy="168" r="${r}" fill="${PAPER}" stroke="${INK}" stroke-width="${dot}"/>
+    <circle cx="186" cy="168" r="${r + 2}" fill="${TERRA}"/></svg>`;
+}
+/** Шаблон строки меню macOS: чёрный силуэт с прозрачной «é» — система красит сама. */
+function template(fs, sw) {
+  return `<svg viewBox="0 0 256 256"><defs><mask id="m${fs}"><rect width="256" height="256" fill="#fff"/>
+    <text x="128" y="${128 + fs * 0.28}" font-family="Zen Kurenaido" font-size="${fs}" fill="#000" stroke="#000" stroke-width="${sw}" stroke-linejoin="round" text-anchor="middle">é</text></mask></defs>
+    <circle cx="128" cy="128" r="122" fill="#000" mask="url(#m${fs})"/></svg>`;
+}
+const row = document.getElementById("row");
+if (which === "helene") row.innerHTML = HELENE.map(helene).join("");
+else if (which === "relay") row.innerHTML = RELAY.map(relay).join("");
+else row.innerHTML = template(196, 12) + template(186, 8);
+</script></body></html>

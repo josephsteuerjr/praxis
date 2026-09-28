@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Иконки — варианты</title>
+<style>
+@font-face { font-family: "Zen Kurenaido"; src: url("../../ui-kit/fonts/ZenKurenaido-latin.woff2") format("woff2"); unicode-range: U+0000-00FF; }
+@font-face { font-family: "Zen Kurenaido"; src: url("../../ui-kit/fonts/ZenKurenaido-cyrillic.woff2") format("woff2"); unicode-range: U+0400-045F; }
+@font-face { font-family: "Golos Text"; src: url("../../ui-kit/fonts/GolosText-cyrillic.woff2") format("woff2"); unicode-range: U+0400-045F; }
+@font-face { font-family: "Golos Text"; src: url("../../ui-kit/fonts/GolosText-latin.woff2") format("woff2"); unicode-range: U+0000-00FF; }
+body { margin: 0; background: #f4e4cf; font: 14px "Golos Text", sans-serif; color: #1d1a17; padding: 22px 28px; }
+h2 { font: 400 26px "Zen Kurenaido"; margin: 6px 0 12px; letter-spacing: .02em }
+.row { display: grid; grid-template-columns: 170px 150px 330px 330px; gap: 14px; align-items: center; margin-bottom: 14px }
+.name { font: 400 22px "Zen Kurenaido"; }
+.name small { display: block; font: 12.5px "Golos Text"; color: #6e5f4f; margin-top: 4px }
+.bar { display: flex; align-items: center; gap: 16px; height: 56px; padding: 0 16px; border-radius: 12px; }
+.bar.light { background: #f3f3f3; border: 1px solid #ddd }
+.bar.dark { background: #202020; }
+.bar span { font-size: 11px; color: #888 }
+svg { display: block }
+</style></head><body>
+<h2>Hélène</h2>
+<div id="helene"></div>
+<h2>Реле</h2>
+<div id="relay"></div>
+<script>
+const INK = "#1d1a17", PAPER = "#f4e4cf", TERRA = "#e0915a";
+const hand = (t, x, y, s, fill = INK, extra = "") => `<text x="${x}" y="${y}" font-family="Zen Kurenaido" font-size="${s}" fill="${fill}" text-anchor="middle" ${extra}>${t}</text>`;
+
+// Hélène
+const H = {
+  "А · Солнце и «é»": { note: "терракотовый круг, «é» почерком", svg: (s) => `
+    <svg width="${s}" height="${s}" viewBox="0 0 256 256"><circle cx="128" cy="128" r="120" fill="${TERRA}"/>
+    ${hand("é", 128, 178, 176, INK, `stroke="#1d1a17" stroke-width="${s >= 40 ? 3 : s >= 24 ? 9 : 13}"`)}</svg>` },
+  "Б · Бумага и солнце": { note: "лист бумаги, «H» почерком, солнце", svg: (s) => `
+    <svg width="${s}" height="${s}" viewBox="0 0 256 256"><rect x="10" y="10" width="236" height="236" rx="60" fill="${PAPER}" stroke="${INK}" stroke-width="${s >= 40 ? 7 : 16}"/>
+    <circle cx="178" cy="80" r="${s >= 40 ? 34 : 46}" fill="${TERRA}"/>
+    ${hand("H", 112, 196, 170, INK, `stroke="#1d1a17" stroke-width="${s >= 40 ? 3 : s >= 24 ? 9 : 13}"`)}</svg>` },
+  "В · Горизонт": { note: "солнце над тонкой линией, без букв", svg: (s) => `
+    <svg width="${s}" height="${s}" viewBox="0 0 256 256"><rect x="10" y="10" width="236" height="236" rx="60" fill="${PAPER}" stroke="${INK}" stroke-width="${s >= 40 ? 7 : 16}"/>
+    <circle cx="128" cy="118" r="${s >= 40 ? 62 : 74}" fill="${TERRA}"/>
+    <path d="M40 182h176" stroke="${INK}" stroke-width="${s >= 40 ? 9 : 22}" stroke-linecap="round"/>
+    ${s >= 40 ? `<path d="M76 212h104" stroke="${INK}" stroke-width="6" stroke-linecap="round" opacity=".5"/>` : ""}</svg>` },
+};
+
+// Реле
+const R = {
+  "А · Мост": { note: "две точки и дуга: здесь — там", svg: (s) => `
+    <svg width="${s}" height="${s}" viewBox="0 0 256 256"><rect x="10" y="10" width="236" height="236" rx="60" fill="${PAPER}" stroke="${INK}" stroke-width="${s >= 40 ? 7 : 16}"/>
+    <path d="M70 170C90 70 166 70 186 170" fill="none" stroke="${INK}" stroke-width="${s >= 40 ? 10 : 24}" stroke-linecap="round"/>
+    <circle cx="70" cy="170" r="${s >= 40 ? 24 : 34}" fill="${PAPER}" stroke="${INK}" stroke-width="${s >= 40 ? 9 : 20}"/>
+    <circle cx="186" cy="170" r="${s >= 40 ? 26 : 36}" fill="${TERRA}"/></svg>` },
+  "Б · Встречные": { note: "терракотовый круг, стрелки туда-обратно", svg: (s) => `
+    <svg width="${s}" height="${s}" viewBox="0 0 256 256"><circle cx="128" cy="128" r="120" fill="${TERRA}"/>
+    <g fill="none" stroke="${INK}" stroke-width="${s >= 40 ? 12 : 26}" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M60 104h130M162 76l30 28-30 28"/><path d="M196 156H66M94 128l-30 28 30 28"/></g></svg>` },
+  "В · Солнце-спутник": { note: "как «Горизонт», но солнце с орбитой", svg: (s) => `
+    <svg width="${s}" height="${s}" viewBox="0 0 256 256"><rect x="10" y="10" width="236" height="236" rx="60" fill="${PAPER}" stroke="${INK}" stroke-width="${s >= 40 ? 7 : 16}"/>
+    <ellipse cx="128" cy="134" rx="${s >= 40 ? 96 : 100}" ry="${s >= 40 ? 40 : 46}" fill="none" stroke="${INK}" stroke-width="${s >= 40 ? 8 : 20}" transform="rotate(-18 128 134)"/>
+    <circle cx="128" cy="134" r="${s >= 40 ? 44 : 56}" fill="${TERRA}"/>
+    <circle cx="206" cy="104" r="${s >= 40 ? 14 : 24}" fill="${INK}"/></svg>` },
+};
+
+function rows(set) {
+  return Object.entries(set).map(([name, v]) => `<div class="row">
+    <div class="name">${name}<small>${v.note}</small></div>
+    <div>${v.svg(128)}</div>
+    <div class="bar light">${v.svg(48)}${v.svg(32)}${v.svg(24)}${v.svg(16)}<span>светлая панель</span></div>
+    <div class="bar dark">${v.svg(48)}${v.svg(32)}${v.svg(24)}${v.svg(16)}<span>тёмная панель</span></div>
+  </div>`).join("");
+}
+document.getElementById("helene").innerHTML = rows(H);
+document.getElementById("relay").innerHTML = rows(R);
+</script></body></html>
