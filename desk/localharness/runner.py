@@ -2603,7 +2603,8 @@ def main() -> None:
     try:
         import owner_circle
         owner_circle.install_owner_identity(agent, owner_spoke=lambda: _owner_words[0])
-        owner_circle.install_admit(agent, tree, telegram_on=lambda: _bot is not None)
+        owner_circle.install_admit(agent, tree, telegram_on=lambda: _bot is not None,
+                                   owner_configured=lambda: _bot is None or bool(_bot.owner_id))
     except Exception:
         log.exception("владелец в ходе не опознаётся — admit будет отказывать")
     tg = dict(cfg.get("telegram") or {})

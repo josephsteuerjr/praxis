@@ -21,6 +21,12 @@
 
 Проверку прав не обходит ничто: `admit` по-прежнему решает дерево; здесь только ответ на
 вопрос «кто говорит», которого у издания не было.
+
+Уточнение Арет (29.09, по живой конфигурации Димы): владелец в Hélène записан как
+`telegram.owner_id` в helene.json, а дерево сверяло собеседника с `PRAXIS_OWNER_ID`. Так
+и есть — и потому здесь владелец Telegram берётся из транспорта (он сверяет отправителя с
+`telegram.owner_id`), а переменная не нужна. Если же `telegram.owner_id` пуст, владельца в
+Telegram узнать нечем, и отказ говорит это прямо, а не «впускать может только владелец».
 """
 from __future__ import annotations
 
@@ -34,6 +40,11 @@ log = logging.getLogger("helene.owner_circle")
 
 ADMITTED = ("telegram", "admitted.json")
 _cache: dict[str, tuple[float, set[str]]] = {}
+#: Так дерево отказывает не владельцу (`agent.tool_admit`).
+NOT_OWNER = "Отказ: впускать людей может только владелец"
+OWNER_UNSET = ("Владелец в Telegram не настроен: в helene.json пуст telegram.owner_id, поэтому "
+               "узнать владельца в Telegram нечем и впускать здесь некому. Впустить можно из окна "
+               "программы; чтобы владелец узнавался и в Telegram, в настройках нужен его Telegram id.")
 
 
 def admitted_path(tree: Path) -> Path:
@@ -101,8 +112,10 @@ def install_owner_identity(agent_mod, owner_spoke: Callable[[], bool]) -> bool:
     return True
 
 
-def install_admit(agent_mod, tree: Path, telegram_on: Callable[[], bool]) -> bool:
-    """Рука `admit`: удачный впуск — ещё и в список шлюза Telegram. -> поставлено."""
+def install_admit(agent_mod, tree: Path, telegram_on: Callable[[], bool],
+                  owner_configured: Callable[[], bool] = lambda: True) -> bool:
+    """Рука `admit`: удачный впуск — ещё и в список шлюза Telegram; отказ без владельца в
+    Telegram — с настоящей причиной. -> поставлено."""
     impl = getattr(agent_mod, "TOOL_IMPL", None)
     original = impl.get("admit") if isinstance(impl, dict) else None
     if not callable(original) or getattr(original, "_helene_admit", False):
@@ -112,6 +125,15 @@ def install_admit(agent_mod, tree: Path, telegram_on: Callable[[], bool]) -> boo
         target = str(kwargs.get("id") if "id" in kwargs else (args[1] if len(args) > 1 else "") or "").strip()
         name = str(kwargs.get("name") if "name" in kwargs else (args[0] if args else "") or "").strip()
         out = original(*args, **kwargs)
+        if str(out).startswith(NOT_OWNER):
+            try:
+                ctx = agent_mod._TURN_CHANNEL.get()
+            except Exception:
+                ctx = None
+            in_telegram = ctx is not None and not getattr(ctx, "owner", False)
+            if in_telegram and not owner_configured():
+                return OWNER_UNSET
+            return out
         try:
             import social
             known = social.known_ids()

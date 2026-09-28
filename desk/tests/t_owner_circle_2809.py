@@ -114,6 +114,63 @@ class AdmitOpensTelegram(unittest.TestCase):
         self.assertEqual(owner_circle.admitted_ids(self.tree), set())
 
 
+class OwnerUnset(unittest.TestCase):
+    """Уточнение Арет 29.09: пустой telegram.owner_id — отказ с настоящей причиной."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.tree = Path(self.tmp.name)
+        self.known: dict = {}
+        self.mod = _agent(self.known)
+        self.configured = [False]
+        owner_circle.install_owner_identity(self.mod, owner_spoke=lambda: True)
+        sys.modules["social"] = types.SimpleNamespace(known_ids=lambda: dict(self.known))
+        owner_circle.install_admit(self.mod, self.tree, telegram_on=lambda: True,
+                                   owner_configured=lambda: self.configured[0])
+
+    def tearDown(self):
+        sys.modules.pop("social", None)
+        self.tmp.cleanup()
+
+    def _admit(self, owner: bool) -> str:
+        token = self.mod._TURN_CHANNEL.set(types.SimpleNamespace(owner=owner))
+        try:
+            return self.mod.TOOL_IMPL["admit"](name="Тян", id="555")
+        finally:
+            self.mod._TURN_CHANNEL.reset(token)
+
+    def test_no_owner_in_telegram_is_said_plainly(self):
+        out = self._admit(owner=False)
+        self.assertIn("telegram.owner_id", out)
+        self.assertIn("из окна", out)
+        self.assertEqual(owner_circle.admitted_ids(self.tree), set())
+
+    def test_with_owner_configured_a_stranger_gets_the_plain_refusal(self):
+        self.configured[0] = True
+        self.assertTrue(self._admit(owner=False).startswith(owner_circle.NOT_OWNER))
+
+    def test_the_owner_in_telegram_admits_without_praxis_owner_id(self):
+        # Транспорт сверил отправителя с telegram.owner_id -> ctx.owner (runner.handle_bot);
+        # PRAXIS_OWNER_ID не нужен: дерево без неё ответило бы отказом всем.
+        self.configured[0] = True
+        self.assertIn("Впуск", self._admit(owner=True))
+        self.assertEqual(owner_circle.admitted_ids(self.tree), {"555"})
+
+
+class TelegramOwner(unittest.TestCase):
+    def test_handle_bot_takes_the_owner_from_telegram_owner_id(self):
+        # Владелец хода в Telegram = отправитель, равный telegram.owner_id транспорта (и бота,
+        # и аккаунта: MtprotoTransport наследует BotTransport). Строка — из runner.handle_bot.
+        src = (DESK / "localharness" / "runner.py").read_text("utf-8")
+        self.assertIn("owner = bool(_bot.owner_id) and str(sender_id) == str(_bot.owner_id)", src)
+        import botapi
+        import mtproto
+        self.assertTrue(issubclass(mtproto.MtprotoTransport, botapi.BotTransport))
+        # владелец транспорта читается из telegram.owner_id — строкой
+        self.assertIn('self.owner_id = str(tg.get("owner_id") or "").strip()',
+                      (DESK / "localharness" / "botapi.py").read_text("utf-8"))
+
+
 class Gate(unittest.TestCase):
     def test_bot_gate_lets_admitted_in_and_nobody_else(self):
         import botapi
