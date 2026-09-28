@@ -1,8 +1,6 @@
-// Словарь движения установщика. Одна метафора на всё: ветер.
-//
-// Вперёд — ветер дует слева направо: то, что уходит, уносит вправо, то, что
-// приходит, приносит слева. Назад — ветер меняет сторону. Расстояние
-// передаётся размытием: далёкое размыто, близкое резко.
+// Словарь движения установщика. Была метафора «ветер» — долгие уносы с размытием;
+// 28.09 Егор: «визарды остопиздели ужасно». Осталось направление (вперёд — слева
+// направо), но коротко и тихо: полсекунды, без размытия, небольшой сдвиг.
 import { animate, stagger } from "motion";
 
 export type Dir = 1 | -1;
@@ -37,13 +35,13 @@ export function enterWithWind(
   dir: Dir,
   opts: { delay?: number; step?: number; distance?: number } = {},
 ): Controls {
-  const from = -dir * (opts.distance ?? 72);
+  const from = -dir * Math.min(opts.distance ?? 24, 24);
   return animate(
     els,
-    { x: [from, 0], opacity: [0, 1], filter: ["blur(10px)", "blur(0px)"] },
+    { x: [from, 0], opacity: [0, 1] },
     {
-      duration: 1.35 * T,
-      delay: stagger((opts.step ?? 0.12) * T, { startDelay: (opts.delay ?? 0) * T }),
+      duration: 0.42 * T,
+      delay: stagger(Math.min(opts.step ?? 0.04, 0.04) * T, { startDelay: (opts.delay ?? 0) * T * 0.4 }),
       ease: EASE.out,
     },
   );
@@ -55,13 +53,13 @@ export function leaveWithWind(
   dir: Dir,
   opts: { delay?: number; step?: number; distance?: number } = {},
 ): Controls {
-  const to = dir * (opts.distance ?? 96);
+  const to = dir * Math.min(opts.distance ?? 20, 20);
   return animate(
     els,
-    { x: [0, to], opacity: [1, 0], filter: ["blur(0px)", "blur(8px)"] },
+    { x: [0, to], opacity: [1, 0] },
     {
-      duration: 0.85 * T,
-      delay: stagger((opts.step ?? 0.06) * T, { startDelay: (opts.delay ?? 0) * T }),
+      duration: 0.22 * T,
+      delay: stagger(Math.min(opts.step ?? 0.02, 0.02) * T, { startDelay: (opts.delay ?? 0) * T * 0.4 }),
       ease: EASE.in,
     },
   );

@@ -5,9 +5,10 @@
 // (кнопки окна, тема, поля ввода) четвертям не отдаются. Тема следует системе,
 // ручное переопределение — кнопкой в верхней полосе.
 import "./styles.css";
+// Облик «Почерк» (28.09) — слоем поверх: бумага, линия, терракота, почерк.
+import "./paper.css";
 import { animate } from "motion";
-import { COPY, MIN_SCALE, PRODUCT_NAME, STAGE, isPraxis } from "./config";
-import { AboutScene } from "./scenes/about";
+import { COPY, MIN_SCALE, STAGE, isPraxis } from "./config";
 import { ConstitutionScene } from "./scenes/constitution";
 import { FoundScene, resumable } from "./scenes/found";
 import { InstallScene } from "./scenes/install";
@@ -17,9 +18,7 @@ import { KeysScene } from "./scenes/keys";
 import { LegacyScene } from "./scenes/legacy";
 import { NameScene } from "./scenes/name";
 import { ModeScene } from "./scenes/mode";
-import { TypewriterScene } from "./scenes/typewriter";
 import { WhereScene } from "./scenes/where";
-import { WordmarkScene } from "./scenes/wordmark";
 import { installedSetup, isMac, loadDefaults, machine, setup, uninstallLaunch, type Found, type Setup } from "./setup";
 import { T, sleep, type Dir } from "./wind";
 
@@ -50,9 +49,7 @@ function q<E extends Element>(sel: string): E {
   return el;
 }
 
-const viewport = q<HTMLElement>("#viewport");
 const stage = q<HTMLElement>("#stage");
-const gust = q<HTMLElement>(".gust");
 const hint = q<HTMLElement>("#hint");
 const params = new URLSearchParams(location.search);
 const inTauri = "__TAURI_INTERNALS__" in window;
@@ -127,9 +124,6 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>(".win")) {
 
 // ---------------------------------------------------------------- сцены
 
-const wordmark = new WordmarkScene(q<HTMLElement>(".scene-wordmark"), PRODUCT_NAME);
-const about = new AboutScene(q<HTMLElement>(".scene-about"), COPY.about);
-const typewriter = new TypewriterScene(q<HTMLElement>(".scene-typewriter"), COPY.typewriter);
 const name = new NameScene(q<HTMLElement>(".scene-name"));
 const constitution = new ConstitutionScene(q<HTMLElement>(".scene-constitution"));
 const keys = new KeysScene(q<HTMLElement>(".scene-keys"));
@@ -140,7 +134,7 @@ const uninstall = new UninstallScene(q<HTMLElement>(".scene-uninstall"));
 const installed = new InstalledScene(q<HTMLElement>(".scene-installed"));
 const found = new FoundScene(q<HTMLElement>(".scene-found"));
 const where = new WhereScene(q<HTMLElement>(".scene-where"));
-type Scene = WordmarkScene | AboutScene | TypewriterScene | NameScene | ConstitutionScene | KeysScene | WhereScene | ModeScene | LegacyScene | InstallScene | UninstallScene | InstalledScene | FoundScene;
+type Scene = NameScene | ConstitutionScene | KeysScene | WhereScene | ModeScene | LegacyScene | InstallScene | UninstallScene | InstalledScene | FoundScene;
 // Режим окна задаёт оболочка: установка — все сцены, снятие — одна.
 const uninstallMode = (window as Window & { SETUP_MODE?: string }).SETUP_MODE === "uninstall" || new URLSearchParams(location.search).get("mode") === "uninstall";
 // Сцена «прежняя версия» в маршрут не входит: её вставляет start(), и только
@@ -150,16 +144,18 @@ const uninstallMode = (window as Window & { SETUP_MODE?: string }).SETUP_MODE ==
 // жить, потом что ему можно.
 // Praxis (окно к своему серверу) — короче: ни имени, ни конституции, ни модели — это
 // всё живёт на сервере; адрес и ключ канала окно спросит само при первом запуске.
+// 28.09 (Егор: «визарды остопиздели ужасно»): заставки-слова, презентации и печатной
+// машинки больше нет — мастер начинается сразу с дела.
 const scenes: Scene[] = uninstallMode
-  ? [wordmark, uninstall]
+  ? [uninstall]
   : isPraxis()
-    ? [wordmark, where, install]
-    : [wordmark, about, typewriter, name, constitution, keys, where, mode_, install];
+    ? [where, install]
+    : [name, constitution, keys, where, mode_, install];
 let byName: Record<string, number> = uninstallMode
-  ? { uninstall: 1 }
+  ? { uninstall: 0 }
   : isPraxis()
-    ? { where: 1, install: 2 }
-    : { about: 1, typewriter: 2, name: 3, constitution: 4, keys: 5, where: 6, mode: 7, install: 8 };
+    ? { where: 0, install: 1 }
+    : { name: 0, constitution: 1, keys: 2, where: 3, mode: 4, install: 5 };
 
 /** Вставить сцену в маршрут и пересобрать имена для `?scene=`. */
 function insertScene(scene: Scene, before: Scene, key: string) {
@@ -175,14 +171,18 @@ function insertScene(scene: Scene, before: Scene, key: string) {
 
 function byNameScene(key: string): Scene {
   const table: Record<string, Scene> = {
-    about, typewriter, name, constitution, keys, where, mode: mode_, install, uninstall, legacy, installed, found,
+    name, constitution, keys, where, mode: mode_, install, uninstall, legacy, installed, found,
   };
   return table[key];
 }
-const nextLabel = q<HTMLElement>(".edge-next-label");
+const nextLabel = q<HTMLElement>(".step-next-label");
+const backBtn = q<HTMLButtonElement>(".step-back");
+const nextBtn = q<HTMLButtonElement>(".step-next");
+const stepCount = q<HTMLElement>(".step-count");
+backBtn.addEventListener("click", () => void go(-1));
+nextBtn.addEventListener("click", () => void go(1));
 let index = 0;
 let busy = false;
-let touched = false;
 let hintTimer = 0;
 
 function showHint(text: string, delayMs: number) {
@@ -199,33 +199,13 @@ function hideHint() {
 }
 
 function canGo(dir: Dir): boolean {
-  // В визарде снятия одна сцена: назад к надписи не ходим, край не показываем.
-  if (uninstallMode && dir < 0) return false;
   const n = index + dir;
   return n >= 0 && n < scenes.length;
 }
 
-/** Порыв: широкая мягкая полоса проходит через окно вместе с ветром. */
-function blowGust(dir: Dir) {
-  const w = innerWidth;
-  const from = dir > 0 ? -0.55 * w : 1.2 * w;
-  const to = dir > 0 ? 1.2 * w : -0.55 * w;
-  void animate(
-    gust,
-    { x: [from, to], opacity: [0, 1, 1, 0] },
-    { duration: 1.9 * T, ease: [0.45, 0, 0.55, 1], times: [0, 0.2, 0.7, 1] },
-  );
-}
-
 async function go(dir: Dir): Promise<void> {
-  touched = true;
   hideHint();
   if (busy) return;
-  // Сцена может забрать шаг вперёд себе: машинка сначала дописывает текст.
-  if (dir > 0 && scenes[index] === typewriter && typewriter.finishNow()) {
-    refreshEdge();
-    return;
-  }
   // Сцена с вводом не отпускает вперёд, пока не заполнена; установка началась —
   // назад дороги нет, всё уже пишется на диск.
   const current = scenes[index];
@@ -246,13 +226,11 @@ async function go(dir: Dir): Promise<void> {
   index += dir;
   refreshEdge();
   const leaving = from.leave(dir);
-  if (from === wordmark) blowGust(dir);
-  // Следующее приходит, пока прошлое ещё уносит: склейки нет.
-  await sleep((from === wordmark ? 1.2 : 0.35) * T * 1000);
+  // Следующее приходит, пока прошлое ещё уходит: склейки нет.
+  await sleep(0.12 * T * 1000);
   await Promise.all([leaving, to.enter(dir)]);
   busy = false;
   refreshEdge();
-  if (to === about && !edgeSeen) showHint(COPY.hint, 1800);
 }
 
 /** Прыжок к сцене не по соседству — тем же ветром, что `go`. */
@@ -260,13 +238,12 @@ async function jumpTo(to: Scene): Promise<void> {
   const at = scenes.indexOf(to);
   if (at < 0 || busy) return;
   busy = true;
-  touched = true;
   hideHint();
   const from = scenes[index];
   index = at;
   refreshEdge();
   const leaving = from.leave(1);
-  await sleep(0.35 * T * 1000);
+  await sleep(0.12 * T * 1000);
   await Promise.all([leaving, to.enter(1)]);
   busy = false;
   refreshEdge();
@@ -337,53 +314,31 @@ async function removeInstalled(): Promise<void> {
 
 // ---------------------------------------------------------------- навигация
 
-let lastX = -1;
-let edgeSeen = false;
-
 function isControl(target: EventTarget | null): boolean {
   return target instanceof Element
     ? !!target.closest("[data-control], button, input, textarea, select, a, [contenteditable='true']")
     : false;
 }
 
-/** Курсор на полосе прокрутки длинной сцены: полоса стоит в правой четверти, и
- *  щелчок по ней иначе листал бы сцену вперёд. Кадр масштабирован — сравниваем доли. */
-function onScrollbar(e: MouseEvent): boolean {
-  const t = e.target;
-  if (!(t instanceof HTMLElement) || t.scrollHeight <= t.clientHeight || !t.offsetWidth) return false;
-  const r = t.getBoundingClientRect();
-  return (e.clientX - r.left) / r.width > t.clientWidth / t.offsetWidth;
+/**
+ * Полоса шагов внизу: где ты, сколько осталось, можно ли назад и вперёд.
+ * Сцены со своими кнопками (уже установлена, нашлась память, установка, снятие) ведут
+ * сами — «Далее» там не нужно; начатая установка назад не пускает.
+ */
+function refreshEdge() {
+  const current = scenes[index];
+  const own = current === installed || current === found || current === install || current === uninstall;
+  const locked = (current === install && install.locked) || (current === uninstall && uninstall.locked);
+  backBtn.hidden = !canGo(-1) || locked;
+  nextBtn.hidden = own || !canGo(1);
+  backBtn.disabled = busy;
+  nextBtn.disabled = busy;
+  const steps = scenes.filter((s) => s !== installed && s !== found && s !== legacy);
+  const at = steps.indexOf(current);
+  stepCount.textContent = at >= 0 && steps.length > 1 ? `Шаг ${at + 1} из ${steps.length}` : "";
+  nextLabel.textContent = scenes[index + 1] === install ? "К установке" : "Далее";
 }
 
-function refreshEdge(overControl = false) {
-  let edge = "";
-  if (lastX >= 0 && !overControl && !busy) {
-    const x = lastX / innerWidth;
-    if (x < 0.25 && canGo(-1)) edge = "left";
-    else if (x > 0.75 && canGo(1)) edge = "right";
-  }
-  if (edge) {
-    edgeSeen = true;
-    hideHint();
-  }
-  nextLabel.textContent = scenes[index] === typewriter ? typewriter.nextLabel() : "Далее";
-  viewport.dataset.edge = edge;
-}
-
-viewport.addEventListener("mousemove", (e) => {
-  lastX = e.clientX;
-  refreshEdge(isControl(e.target) || onScrollbar(e));
-});
-viewport.addEventListener("mouseleave", () => {
-  lastX = -1;
-  refreshEdge();
-});
-viewport.addEventListener("click", (e) => {
-  if (isControl(e.target) || onScrollbar(e)) return;
-  const x = e.clientX / innerWidth;
-  if (x < 0.25) void go(-1);
-  else if (x > 0.75) void go(1);
-});
 // Заполнил поле — причина, по которой не пускало, снимается сама.
 document.addEventListener("input", hideHint);
 addEventListener("keydown", (e) => {
@@ -453,7 +408,7 @@ async function start() {
   // 26.09: Hélène уже стоит — первой сценой «уже установлена» (обновить / удалить /
   // настроить заново), а не мастер с именем и конституцией, как при первой установке.
   if (!uninstallMode && machine.installed) {
-    insertScene(installed, isPraxis() ? where : about, "installed");
+    insertScene(installed, scenes[0], "installed");
     installed.bind({
       update: () => void updateInstalled(),
       // На месте (установка NSIS) удаление — его uninstall.exe: он снимет службу,
@@ -484,26 +439,14 @@ async function start() {
   } catch {
     // SCM не ответила — маршрут остаётся прежним, молча ничего не снимаем
   }
+  // Сразу к делу: первая сцена маршрута (или та, что названа в `?scene=`).
   const jump = params.get("scene");
-  if (jump && jump in byName) {
-    index = byName[jump];
-    wordmark.root.hidden = true;
-    const target = scenes[index] as Exclude<Scene, WordmarkScene>;
-    if (params.has("static")) target.setStatic();
-    else await target.enter(1);
-    refreshEdge();
-    return;
-  }
-  if (params.has("static")) {
-    wordmark.root.hidden = false;
-    wordmark.settle();
-    wordmark.state = "settled";
-    return;
-  }
-  const settled = await wordmark.appear();
-  if (!settled) return; // человек уже пошёл дальше сам
-  await sleep(1400 * T);
-  if (wordmark.state === "settled" && !touched) void go(1);
+  if (jump && jump in byName) index = byName[jump];
+  const first = scenes[index];
+  refreshEdge();
+  if (params.has("static")) first.setStatic();
+  else await first.enter(1);
+  refreshEdge();
 }
 
 declare global {
@@ -512,12 +455,11 @@ declare global {
       go: typeof go;
       index: () => number;
       busy: () => boolean;
-      about: AboutScene;
       animate: typeof animate;
     };
   }
 }
 // Отладочная ручка для проверки из встроенного браузера; в продукте безвредна.
-window.__frame = { go, index: () => index, busy: () => busy, about, animate };
+window.__frame = { go, index: () => index, busy: () => busy, animate };
 
 void start();

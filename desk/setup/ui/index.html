@@ -9,15 +9,8 @@
   </head>
   <body>
     <div id="viewport">
-      <div class="gust" aria-hidden="true"><div class="gust-band"></div></div>
-
       <div id="stage">
-        <section class="scene scene-wordmark" data-scene="wordmark">
-          <h1 class="wordmark"></h1>
-        </section>
         <section class="scene scene-form scene-installed" data-scene="installed" hidden></section>
-        <section class="scene scene-about" data-scene="about" hidden></section>
-        <section class="scene scene-typewriter" data-scene="typewriter" hidden></section>
         <section class="scene scene-form scene-name" data-scene="name" hidden></section>
         <section class="scene scene-form scene-constitution" data-scene="constitution" hidden></section>
         <section class="scene scene-form scene-found" data-scene="found" hidden></section>
@@ -29,14 +22,17 @@
         <section class="scene scene-form scene-uninstall" data-scene="uninstall" hidden></section>
       </div>
 
-      <div class="edge edge-left" aria-hidden="true">
-        <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" /></svg>
-        <span>Назад</span>
-      </div>
-      <div class="edge edge-right" aria-hidden="true">
-        <span class="edge-next-label">Далее</span>
-        <svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" /></svg>
-      </div>
+      <!-- 28.09: обычные кнопки вместо невидимых четвертей экрана (Егор: «визарды
+           остопиздели»). Шаг — словами: где ты и сколько осталось. -->
+      <nav class="stepbar" aria-label="Шаги установки">
+        <button class="step-back" data-control type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg><span>Назад</span>
+        </button>
+        <span class="step-count" aria-live="polite"></span>
+        <button class="step-next" data-control type="button">
+          <span class="step-next-label">Далее</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
+        </button>
+      </nav>
 
       <p id="hint" aria-live="polite"></p>
 

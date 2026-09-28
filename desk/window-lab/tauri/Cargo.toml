@@ -1,0 +1,20 @@
+[package]
+name = "helene-window-lab"
+version = "0.0.0"
+edition = "2021"
+description = "Лаборатория окна 28.09: прототип ленты в Tauri (WebView2 / WKWebView / WebKitGTK)"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+# Лёгкая сборка: машине Егора и так тесно по памяти, LTO тут ни к чему.
+[profile.release]
+opt-level = 2
+lto = false
+codegen-units = 16

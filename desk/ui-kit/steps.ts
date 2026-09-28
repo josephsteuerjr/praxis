@@ -58,7 +58,7 @@ export interface StepsOptions {
   lesson?: Record<string, string>;
 }
 
-const ACTIONS: Record<string, string> = {
+export const ACTIONS: Record<string, string> = {
   shell: "Команда", read_file: "Чтение файла", write_file: "Запись файла",
   edit_file: "Правка файла", search: "Поиск", web_search: "Поиск в интернете",
   fetch_url: "Чтение страницы", read_url: "Чтение страницы",
@@ -68,6 +68,9 @@ const ACTIONS: Record<string, string> = {
   coding_process: "Процесс", coding_read: "Чтение кода", coding_search: "Поиск в коде",
   coding_patch: "Правка кода", coding_verify: "Проверка", coding_finish: "Завершение задачи",
   write_skill: "Запись навыка", consolidate_context: "Свёртка контекста",
+  computer: "Компьютер", read_run_result: "Дочитать результат", journal: "Дневник",
+  wake: "Будильник", set_wake: "Будильник", sleep: "Сон", voice: "Голос", speak: "Голос",
+  browser: "Браузер", screenshot: "Снимок экрана", send_file: "Отправка файла",
   "telegram.deliver": "Доставка сообщения",
 };
 const TERMINAL: Record<string, string> = {
@@ -79,7 +82,7 @@ const TERMINAL: Record<string, string> = {
  *  не то же, что «решила промолчать». Ход без руки reply НЕ помечается «без ответа»:
  *  в Hélène слово, написанное текстом, доставляет граница окна, а прогон ядра об этом
  *  не знает — такой ход остаётся просто «Работа завершена». */
-function terminalLabel(status: string, reason: string): { label: string; failed: boolean } {
+export function terminalLabel(status: string, reason: string): { label: string; failed: boolean } {
   const r = (reason || "").toLowerCase();
   if (status === "done" || status === "completed") {
     if (r.includes("max_tokens")) return { label: "Ответ оборван потолком, работа не доведена", failed: true };
@@ -87,10 +90,10 @@ function terminalLabel(status: string, reason: string): { label: string; failed:
   }
   return { label: TERMINAL[status] || status, failed: status === "failed" };
 }
-const clip = (s: string, n: number) => s.length > n ? s.slice(0, n) + "…" : s;
-const pretty = (v: unknown) => typeof v === "string" ? v : JSON.stringify(v, null, 2) || "";
+export const clip = (s: string, n: number) => s.length > n ? s.slice(0, n) + "…" : s;
+export const pretty = (v: unknown) => typeof v === "string" ? v : JSON.stringify(v, null, 2) || "";
 
-function resultText(text: string): string {
+export function resultText(text: string): string {
   try {
     const data = JSON.parse(text);
     return pretty(data);
@@ -99,7 +102,7 @@ function resultText(text: string): string {
   }
 }
 
-function subject(args: unknown): string {
+export function subject(args: unknown): string {
   if (!args || typeof args !== "object") return typeof args === "string" ? args : "";
   const a = args as Record<string, unknown>;
   for (const key of ["command", "cmd", "path", "file_path", "query", "url", "text", "goal", "note", "task", "action"]) {
@@ -171,7 +174,7 @@ const lineCount = (s: string) => s.split("\n").length;
 const needsClip = (text: string) => text.length > CLIP_CHARS || lineCount(text) > CLIP_LINES;
 
 /** Коробка текста: ключ сохраняет раскрытие при перерисовке; data-full — что дочитать. */
-function textBox(key: string, text: string, opts: { truncated?: boolean; ref?: string; run?: string; size?: number | null } = {}): string {
+export function textBox(key: string, text: string, opts: { truncated?: boolean; ref?: string; run?: string; size?: number | null } = {}): string {
   const full = opts.ref && opts.run ? fetched.get(`${opts.run}/${opts.ref}`) : undefined;
   const body = full ?? text;
   const truncated = !!opts.truncated && full === undefined;

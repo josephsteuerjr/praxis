@@ -1,0 +1,558 @@
+/* «Почерк» — облик окна с 28.09 (поток «окно», решения Егора по лаборатории):
+   тёплая бумага (~#f4e4cf) с зерном, тонкая тёмная линия, терракота (~#e0915a),
+   почерк Zen Kurenaido — заголовки и имя агента, текст — Golos. Тёмная тема — та же
+   палитра ночью. Буквальных котиков и лапок нет («конечно, нет»).
+
+   Слой поверх app.css: здесь токены и то, что меняет характер (линии вместо теней,
+   почерк вместо серифа, лента в em ради масштаба). Телефон и мастер установки этот
+   файл не грузят — у них прежние tokens.css. */
+
+:root {
+  color-scheme: light;
+  --paper: var(--u-paper-day, #f4e4cf);
+  --ground: var(--paper);
+  --surface: color-mix(in srgb, var(--paper) 55%, #ffffff);     /* лист поверх бумаги */
+  --surface-2: color-mix(in srgb, var(--paper) 88%, #a07a4a);   /* вдавленное: код, наведение */
+  --panel: color-mix(in srgb, var(--paper) 82%, #ffffff);
+  --ink: #1d1a17;
+  --ink-2: #4a4038;
+  --ink-3: #6e5f4f;
+  --muted: #7d6c5a;
+  --line: rgba(29, 26, 23, 0.14);
+  --line-strong: rgba(29, 26, 23, 0.28);
+  --line-ink: #1d1a17;               /* обводка «пером»: пузыри, карточки, поле ввода */
+  --lw: 1.5px;
+  --terra: var(--u-terra, #e0915a);  /* заливка-акцент: кнопка отправки, точки, отметки */
+  --accent: var(--u-accent-day, #9a4a1e); /* акцент для текста и ссылок: контраст ≥ 4,5 */
+  --accent-ink: #ffffff;
+  --accent-soft: color-mix(in srgb, var(--terra) 20%, transparent);
+  --ok: #4f7a4a;
+  --warn: #9a6a1b;
+  --err: #b0402b;
+  --err-soft: rgba(176, 64, 43, 0.12);
+  --ctrl-hover: rgba(160, 110, 60, 0.12);
+  --gust: rgba(160, 110, 60, 0.06);
+  --shadow: none;
+  --shadow-pop: 0 2px 0 rgba(29, 26, 23, 0.85);
+  --glass: color-mix(in srgb, var(--surface) 94%, transparent);
+  --grain: var(--u-grain-day, 0.1);
+  --serif: "Golos Text", "Segoe UI", system-ui, sans-serif;  /* сериф уходит: текст — Golos */
+  --hand: "Zen Kurenaido", "Neucha", "Segoe Print", cursive;
+  --feed-base: var(--u-feed-base, 15.5px);
+  --zoom: 1;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: var(--u-paper-night, #1d1914);
+    --surface: color-mix(in srgb, var(--paper) 93%, #ffffff);
+    --surface-2: color-mix(in srgb, var(--paper) 87%, #ffffff);
+    --panel: color-mix(in srgb, var(--paper) 96%, #ffffff);
+    --ink: #f1e4d0;
+    --ink-2: #d6c5ad;
+    --ink-3: #ab9982;
+    --muted: #978570;
+    --line: rgba(241, 228, 208, 0.13);
+    --line-strong: rgba(241, 228, 208, 0.26);
+    --line-ink: #e9dbc6;
+    --accent: var(--u-accent-night, #eda676);
+    --accent-ink: #1d1914;
+    --accent-soft: color-mix(in srgb, var(--terra) 16%, transparent);
+    --ok: #93b98d;
+    --warn: #d9ad62;
+    --err: #ec8a74;
+    --err-soft: rgba(236, 138, 116, 0.14);
+    --ctrl-hover: rgba(241, 228, 208, 0.07);
+    --gust: rgba(241, 228, 208, 0.04);
+    --shadow-pop: 0 2px 0 rgba(0, 0, 0, 0.6);
+    --grain: var(--u-grain-night, 0.06);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: var(--u-paper-night, #1d1914);
+  --surface: color-mix(in srgb, var(--paper) 93%, #ffffff);
+  --surface-2: color-mix(in srgb, var(--paper) 87%, #ffffff);
+  --panel: color-mix(in srgb, var(--paper) 96%, #ffffff);
+  --ink: #f1e4d0;
+  --ink-2: #d6c5ad;
+  --ink-3: #ab9982;
+  --muted: #978570;
+  --line: rgba(241, 228, 208, 0.13);
+  --line-strong: rgba(241, 228, 208, 0.26);
+  --line-ink: #e9dbc6;
+  --accent: var(--u-accent-night, #eda676);
+  --accent-ink: #1d1914;
+  --accent-soft: color-mix(in srgb, var(--terra) 16%, transparent);
+  --ok: #93b98d;
+  --warn: #d9ad62;
+  --err: #ec8a74;
+  --err-soft: rgba(236, 138, 116, 0.14);
+  --ctrl-hover: rgba(241, 228, 208, 0.07);
+  --gust: rgba(241, 228, 208, 0.04);
+  --shadow-pop: 0 2px 0 rgba(0, 0, 0, 0.6);
+  --grain: var(--u-grain-night, 0.06);
+}
+
+/* ---------------------------------------------------------------- бумага */
+
+body {
+  background: var(--paper);
+}
+/* Зерно — два слоя шума: волокно и пятна тона. Неподвижно, под всем, без смешения слоёв
+   (смешение над бегущей лентой стоило кадров — стенд лаборатории 28.09). */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: var(--grain);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='260'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .42 0 0 0 0 .3 0 0 0 0 .18 0 0 0 .9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='900' height='900'%3E%3Cfilter id='m'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.006' numOctaves='2' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .5 0 0 0 0 .36 0 0 0 0 .2 0 0 0 .7 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23m)'/%3E%3C/svg%3E");
+}
+#app {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------------------------------------------------------------- полка */
+
+#rail {
+  border-right: var(--lw) solid var(--line-ink);
+}
+.rail-item {
+  font: 400 15px/1 var(--sans);
+  border-radius: 12px;
+}
+.rail-item[aria-current="page"] {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink);
+  font-weight: 500;
+}
+.rail-item[aria-current="page"]::after {
+  content: "";
+  margin-left: auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--terra);
+}
+.rail-item[aria-current="page"] kbd { display: none; }
+.rail-label {
+  font-family: var(--hand);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+.room[aria-current="true"] {
+  background: transparent;
+  border-color: var(--line-ink);
+}
+/* Имя агента почерком — крупно и чётко (Егор: «котик чёткий, а надпись имени — нет»). */
+.room-name.hand {
+  font: 400 21px/1.1 var(--hand);
+  letter-spacing: 0.03em;
+  -webkit-text-stroke: 0.35px currentColor;
+}
+.rail-sign {
+  font-family: var(--hand);
+  font-size: 14px;
+}
+.dot.live,
+.agent-dot {
+  background: var(--terra);
+}
+
+/* ---------------------------------------------------------------- шапка */
+
+.head-kicker {
+  font: 400 12px/1 var(--sans);
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--ink-3);
+}
+.head-title,
+.head-title.hand {
+  font: 400 36px/1.1 var(--hand);
+  letter-spacing: 0.03em;
+  -webkit-text-stroke: 0.4px currentColor;
+}
+.state-pill {
+  border: var(--lw) solid var(--line-ink);
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ---------------------------------------------------------------- лента чата */
+
+/* Колонка ленты в em: масштаб (Ctrl+колесо) растит её вместе с текстом. */
+.center.talk {
+  max-width: none;
+}
+.talk-zoom {
+  font-size: calc(var(--feed-base) * var(--zoom));
+  max-width: 52em;
+  margin: 0 auto;
+}
+/* Промежутки — внутри строки (padding), а не полями: новое сообщение вырастает из нуля
+   целиком, вместе со своим отступом (ui-kit/feed/keyed.ts: grow). */
+.talk .feed {
+  padding-bottom: 0.4em;
+}
+.talk .msg {
+  margin: 0;
+  padding-top: 0.9em;
+}
+.talk .day {
+  display: flex;
+  align-items: center;
+  gap: 0.9em;
+  margin: 0;
+  padding: 1.6em 0 0.2em;
+  font: 400 1.05em/1 var(--hand);
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--ink-3);
+}
+.talk .day::before,
+.talk .day::after {
+  content: "";
+  flex: 1;
+  height: var(--lw);
+  background: var(--line);
+}
+.talk .msg-head {
+  font-size: 0.76em;
+  margin: 0 0.2em 0.25em;
+}
+.talk .msg-head .who-hand {
+  font: 400 1.5em/1 var(--hand);
+  letter-spacing: 0.03em;
+  color: var(--ink);
+}
+.talk .msg-body {
+  font-size: 1em;
+  line-height: 1.6;
+  padding: 0.62em 1em 0.66em;
+  border-radius: 1.3em;
+  border: var(--lw) solid var(--line-ink);
+  background: var(--surface);
+}
+.talk .msg.agent .msg-body {
+  font: 400 1.03em/1.62 var(--sans);
+  padding: 0.1em 0 0.25em;
+  border: 0;
+  background: transparent;
+}
+.talk .msg.own .msg-body {
+  background: var(--surface);
+  border-color: var(--line-ink);
+  border-radius: 1.3em 1.3em 0.4em 1.3em;
+}
+.talk .msg.system .msg-body {
+  font-size: 0.84em;
+  border: var(--lw) dashed var(--line-strong);
+  background: transparent;
+  border-radius: 999px;
+  padding: 0.45em 1.1em;
+}
+.talk .msg.system {
+  align-items: center;
+  align-self: center;
+}
+.talk .msg.silence .msg-body {
+  border-style: dotted;
+}
+.talk .msg-body pre {
+  font-size: 0.82em;
+  border: var(--lw) solid var(--line-ink);
+  border-radius: 0.9em;
+  background: var(--surface);
+  padding: 0.8em 1em;
+}
+.talk .msg-body code {
+  background: var(--surface-2);
+  border-radius: 0.35em;
+}
+.talk .msg-body li::marker {
+  color: var(--terra);
+}
+.talk .msg-note {
+  font-size: 0.74em;
+}
+.talk .empty b {
+  font: 400 1.9em/1.2 var(--hand);
+  letter-spacing: 0.03em;
+}
+.talk-foot .notice {
+  font-size: 0.84em;
+}
+.msg.flash {
+  box-shadow: none;
+}
+.msg.flash .msg-body {
+  outline: 2px solid var(--terra);
+  outline-offset: 3px;
+  transition: outline-color 1.2s ease-out;
+}
+
+/* ---------------------------------------------------------------- плашки, кнопки */
+
+.notice {
+  background: transparent;
+  border: var(--lw) solid var(--line-ink);
+  border-radius: 14px;
+}
+.notice.err {
+  border-color: var(--err);
+}
+.notice-action,
+.starter {
+  border: var(--lw) solid var(--line-ink);
+  background: var(--paper);
+  color: var(--ink);
+}
+.notice-action:hover,
+.starter:hover {
+  border-color: var(--line-ink);
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+/* ---------------------------------------------------------------- поле ввода */
+
+.composer-box {
+  background: var(--surface);
+  border: var(--lw) solid var(--line-ink);
+  border-radius: 22px;
+  box-shadow: none;
+}
+.composer-box:focus-within {
+  box-shadow: var(--shadow-pop);
+  border-color: var(--line-ink);
+}
+.send {
+  background: var(--terra);
+  color: var(--ink);
+  border: var(--lw) solid var(--line-ink);
+}
+.send:hover {
+  background: var(--terra);
+  filter: brightness(1.05);
+}
+
+/* ---------------------------------------------------------------- тянуть ленту */
+
+#view {
+  cursor: default;
+}
+#view.grabbing,
+#view.grabbing * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+#view {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+/* ---------------------------------------------------------------- «Вид» в настройках */
+
+.look-card .look-row {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 6px 14px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: var(--lw) solid var(--line);
+}
+.look-card .look-row:first-of-type {
+  border-top: 0;
+}
+.look-label {
+  font: 400 19px/1.1 var(--hand);
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+.look-swatches,
+.look-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.look-name {
+  grid-column: 2;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  min-height: 1em;
+}
+.look-name:empty {
+  display: none;
+}
+.look-swatch {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  border: var(--lw) solid var(--line-ink);
+  background: var(--sw);
+  cursor: pointer;
+  position: relative;
+  transition: transform var(--dur-1) var(--ease-out);
+}
+/* Кружок бумаги несёт «строчку» — чтобы тон было видно рядом с линией текста. */
+.look-swatch::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 50%;
+  height: 1.5px;
+  background: #1d1a17;
+  opacity: 0.55;
+}
+.look-swatch.night::after {
+  background: #f1e4d0;
+}
+.look-swatches[aria-label="Акцент"] .look-swatch::after {
+  display: none;
+}
+.look-swatch:hover {
+  transform: translateY(-1px);
+}
+.look-swatch[aria-checked="true"] {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+.look-pill {
+  height: 32px;
+  padding: 0 14px;
+  border: var(--lw) solid var(--line-ink);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: 400 13.5px/1 var(--sans);
+  cursor: pointer;
+}
+.look-pill:hover {
+  background: var(--ctrl-hover);
+}
+.look-pill[aria-checked="true"] {
+  background: var(--ink);
+  color: var(--paper);
+}
+.look-reset {
+  margin-top: 12px;
+  height: 32px;
+  padding: 0 14px;
+  border: var(--lw) dashed var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+.look-reset:hover {
+  border-style: solid;
+  color: var(--ink);
+}
+
+/* Карточки настроек и разделов — той же линией, без тени. */
+.card {
+  background: var(--surface);
+  border: var(--lw) solid var(--line-ink);
+  border-radius: 18px;
+}
+.card h3 {
+  font: 400 26px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}
+.settings-tab[aria-selected="true"] {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.settings[data-group="look"] .save-bar {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- рамка фокуса */
+
+/* Физика прокрутки берёт фокус на себя при «тянуть мышью» (чтобы работали стрелки и
+   PageDown) — обводка фокуса вокруг всей средней части выглядела бы рамкой-ошибкой
+   (Егор 28.09: «стало менее няшно»). Фокус у прокрутки есть, рамки нет. */
+#view:focus,
+#view:focus-visible,
+#panel:focus,
+#panel:focus-visible {
+  outline: none;
+}
+
+/* ---------------------------------------------------------------- «Сейчас» */
+
+.now .turn-live,
+.now .activity-card,
+.now-idle,
+.usage-panel,
+.now .frame-strip {
+  background: var(--surface);
+  border: var(--lw) solid var(--line-ink);
+  border-radius: 20px;
+  box-shadow: none;
+}
+.now .activity-card:not([data-status="running"]) {
+  background: var(--surface);
+  border-color: var(--line-ink);
+}
+.now .activity-card[data-status="running"] {
+  background: color-mix(in srgb, var(--surface) 80%, var(--terra) 12%);
+}
+.now .turn-live-head {
+  font: 400 27px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}
+.now .turn-live-head .dot {
+  width: 10px;
+  height: 10px;
+}
+.usage-heading h2 {
+  font: 400 27px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}
+.now .frame-strip-head span,
+.frame-strip-head > span:first-child {
+  font: 400 21px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}
+.section-title {
+  font: 400 32px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}
+.now-idle {
+  font: 400 20px/1.35 var(--hand);
+  letter-spacing: 0.02em;
+}
+.run-message {
+  border-bottom: var(--lw) solid var(--line);
+}
+.now .ev {
+  border-bottom: var(--lw) solid var(--line);
+}
+.empty b {
+  font: 400 28px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}
+.usage-panel.usage-compact {
+  background: var(--surface);
+  border: var(--lw) solid var(--line-ink);
+  border-radius: 20px;
+}
+#view .usage-summary-title {
+  font: 400 27px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}

@@ -244,6 +244,17 @@ html:not(.native) #chrome .controls {
   display: none;
 }
 
+/* Electron (28.09): окно без рамки тянется за шапку; кнопки и поля внутри — не тянут. */
+html.electron #chrome,
+html.electron .chrome-drag {
+  -webkit-app-region: drag;
+}
+html.electron #chrome button,
+html.electron #chrome input,
+html.electron #chrome a {
+  -webkit-app-region: no-drag;
+}
+
 #chrome .controls {
   display: flex;
   height: 100%;

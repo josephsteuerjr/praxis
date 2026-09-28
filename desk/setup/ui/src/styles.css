@@ -110,9 +110,6 @@ button:focus-visible {
   display: grid;
   place-items: center;
   padding-bottom: 5%;
-  /* 28.09: надпись ни на что не нажимается, а слой у неё во всё окно. Застрявшая
-     посреди ухода, она лежала поверх «Обновить до 1.2.4» и забирала клик себе. */
-  pointer-events: none;
 }
 
 .wordmark {
