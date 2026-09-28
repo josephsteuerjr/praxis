@@ -1,0 +1,249 @@
+/* «Почерк» в мастере установки (28.09) — тот же облик, что у окна (ui-kit/window/styles/
+   paper.css): тёплая бумага с зерном, тонкая тёмная линия, терракота, почерк Zen
+   Kurenaido в заголовках, текст Golos. Слой поверх styles.css: токены и характер. */
+
+:root {
+  color-scheme: light;
+  --paper: #f4e4cf;
+  --ground: var(--paper);
+  --surface: color-mix(in srgb, var(--paper) 55%, #ffffff);
+  --surface-2: color-mix(in srgb, var(--paper) 88%, #a07a4a);
+  --ink: #1d1a17;
+  --ink-2: #4a4038;
+  --ink-3: #6e5f4f;
+  --muted: #7d6c5a;
+  --line: rgba(29, 26, 23, 0.16);
+  --line-strong: rgba(29, 26, 23, 0.3);
+  --line-ink: #1d1a17;
+  --lw: 1.5px;
+  --terra: #e0915a;
+  --accent: #9a4a1e;
+  --accent-ink: #ffffff;
+  --accent-soft: color-mix(in srgb, var(--terra) 20%, transparent);
+  --ctrl-hover: rgba(160, 110, 60, 0.12);
+  --grain: 0.1;
+  --serif: "Golos Text", "Segoe UI", system-ui, sans-serif;
+  --hand: "Zen Kurenaido", "Neucha", "Segoe Print", cursive;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #1d1914;
+    --surface: color-mix(in srgb, var(--paper) 93%, #ffffff);
+    --surface-2: color-mix(in srgb, var(--paper) 87%, #ffffff);
+    --ink: #f1e4d0;
+    --ink-2: #d6c5ad;
+    --ink-3: #ab9982;
+    --muted: #978570;
+    --line: rgba(241, 228, 208, 0.14);
+    --line-strong: rgba(241, 228, 208, 0.28);
+    --line-ink: #e9dbc6;
+    --accent: #eda676;
+    --accent-ink: #1d1914;
+    --accent-soft: color-mix(in srgb, var(--terra) 16%, transparent);
+    --ctrl-hover: rgba(241, 228, 208, 0.07);
+    --grain: 0.06;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #1d1914;
+  --surface: color-mix(in srgb, var(--paper) 93%, #ffffff);
+  --surface-2: color-mix(in srgb, var(--paper) 87%, #ffffff);
+  --ink: #f1e4d0;
+  --ink-2: #d6c5ad;
+  --ink-3: #ab9982;
+  --muted: #978570;
+  --line: rgba(241, 228, 208, 0.14);
+  --line-strong: rgba(241, 228, 208, 0.28);
+  --line-ink: #e9dbc6;
+  --accent: #eda676;
+  --accent-ink: #1d1914;
+  --accent-soft: color-mix(in srgb, var(--terra) 16%, transparent);
+  --ctrl-hover: rgba(241, 228, 208, 0.07);
+  --grain: 0.06;
+}
+
+body {
+  background: var(--paper);
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: var(--grain);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='260'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .42 0 0 0 0 .3 0 0 0 0 .18 0 0 0 .9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  /* Только волокно, без крупных пятен тона: «фон ровный, один цвет бумаги без пятен
+     света» — слово владельца (styles.css). */
+}
+/* Лист поверх зерна: у #viewport свой фон был бы непрозрачным и спрятал бы бумагу. */
+#viewport {
+  z-index: 1;
+  background: transparent;
+}
+
+/* ---------------------------------------------------------------- заголовки почерком */
+
+.form-head {
+  font: 400 62px/1.1 var(--hand);
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: 0.6px currentColor;
+}
+.form-sub,
+.explain h3,
+.mode-title,
+.found-name {
+  font-family: var(--hand);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+.form-sub { font-size: 30px; }
+.explain h3 { font-size: 26px; }
+.mode-title { font-size: 32px; }
+.signature {
+  font: 400 44px/1.2 var(--hand);
+  letter-spacing: 0.03em;
+  -webkit-text-stroke: 0.5px currentColor;
+}
+
+/* ---------------------------------------------------------------- линия вместо тени */
+
+.explain {
+  border-top: var(--lw) solid var(--line);
+}
+.choice-item,
+.mode-card,
+.service-card,
+.found-card,
+.legacy-item,
+.sheet,
+.summary {
+  padding: 14px 22px;
+  border: var(--lw) solid var(--line-ink);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: none;
+}
+.choice-item:hover,
+.mode-card:hover,
+.found-card:hover {
+  border-color: var(--line-ink);
+  background: color-mix(in srgb, var(--surface) 70%, var(--terra) 8%);
+}
+.choice-item[aria-checked="true"],
+.mode-card[aria-checked="true"] {
+  border-color: var(--line-ink);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1.5px var(--line-ink);
+}
+.field-input,
+.const-editor {
+  border: var(--lw) solid var(--line-ink);
+  background: var(--surface);
+  border-radius: 14px;
+}
+.field-input:focus,
+.const-editor:focus {
+  outline: none;
+  box-shadow: 0 2px 0 var(--line-ink);
+}
+
+.btn {
+  border: var(--lw) solid var(--line-ink);
+}
+.btn-primary {
+  background: var(--terra);
+  color: #1d1a17;
+}
+.btn-primary:hover {
+  background: color-mix(in srgb, var(--terra) 90%, #ffffff);
+}
+.btn-quiet {
+  border-color: var(--line-ink);
+}
+.btn-quiet:hover {
+  background: var(--ctrl-hover);
+}
+.model-chip[aria-checked="true"],
+.model-chip.on {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* ---------------------------------------------------------------- полоса шагов */
+
+/* Сцена-лист теперь кончается над полосой шагов, а не под краем кадра. */
+.scene-form {
+  padding-bottom: 150px;
+}
+.stepbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 34px 40px 24px;
+  /* Своя бумага с растушёвкой: длинная сцена уходит под полосу, а не сквозь неё. */
+  background: linear-gradient(to top, var(--paper) 62%, color-mix(in srgb, var(--paper) 0%, transparent));
+  pointer-events: none;
+}
+.stepbar button {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 46px;
+  padding: 0 22px;
+  border: var(--lw) solid var(--line-ink);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 500 16px/1 var(--sans);
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+.stepbar button:hover {
+  background: var(--ctrl-hover);
+}
+.stepbar button:active {
+  transform: scale(0.97);
+}
+.stepbar button[hidden] {
+  display: none;
+}
+.stepbar button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.stepbar svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.step-next {
+  margin-left: auto;
+  background: var(--terra) !important;
+  color: #1d1a17 !important;
+}
+.step-count {
+  font: 400 22px/1 var(--hand);
+  letter-spacing: 0.03em;
+  color: var(--ink-3);
+}
+.step-back[hidden] + .step-count {
+  margin-left: 4px;
+}
+#hint {
+  bottom: 96px;
+}

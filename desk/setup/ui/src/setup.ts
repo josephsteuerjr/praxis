@@ -228,11 +228,13 @@ export async function loadDefaults(): Promise<Defaults> {
           { kind: "backup", dir: "C:\\Users\\…\\AppData\\Local\\Helene-backup-20260926", agent: "Мира", owner: "Егор", version: "1.0.3", scope: "", program: false, complete: true, decisions: true, data_mb: 72, last: "2026-09-26", agents: ["Джарвис"] },
         ]
       : [];
+    // `?installed` — глазами сцену «уже установлена» (обновление поверх, 28.09).
+    const installed = q.has("installed") ? { dir: "C:\\Program Files\\Helene", version: "1.2.3", agent: "Джарвис" } : null;
     return {
       dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Helene",
       payload: null,
-      version: "превью",
-      installed: null,
+      version: q.has("installed") ? "1.2.4" : "превью",
+      installed,
       platform: "windows",
       found,
       user_dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Helene",
