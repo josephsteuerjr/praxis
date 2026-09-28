@@ -27,10 +27,13 @@ export interface Feel {
 }
 
 export const FEELS: Record<"brisk" | "smooth" | "syrup", Feel> = {
-  brisk: { wheelTau: 95, padTau: 18, followTau: 110, flingTau: 325, maxFling: 7, springW: 0.012, rubberC: 0.5, rubberD: 0.24 },
-  smooth: { wheelTau: 150, padTau: 30, followTau: 170, flingTau: 460, maxFling: 9, springW: 0.0078, rubberC: 0.5, rubberD: 0.28 },
-  // Возврат 660 мс — значение, которое Егор сам выставил ползунком 28.09.
-  syrup: { wheelTau: 210, padTau: 45, followTau: 240, flingTau: 620, maxFling: 10, springW: 4 / 660, rubberC: 0.5, rubberD: 0.32 },
+  // Возврат после отпускания — в ВИДИМЫХ пикселях и экспонентой с первого кадра
+  // (Егор 28.09: «очень долго отпускается»): 1/springW — постоянная времени, 95% пути
+  // за три таких. Раньше пружина шла в «пальцевом» пространстве резины и трогалась с
+  // места медленно — сжатая кривая «висела», потом доезжала рывком.
+  brisk: { wheelTau: 95, padTau: 18, followTau: 110, flingTau: 325, maxFling: 7, springW: 4 / 320, rubberC: 0.5, rubberD: 0.24 },
+  smooth: { wheelTau: 150, padTau: 30, followTau: 170, flingTau: 460, maxFling: 9, springW: 4 / 420, rubberC: 0.5, rubberD: 0.28 },
+  syrup: { wheelTau: 210, padTau: 45, followTau: 240, flingTau: 620, maxFling: 10, springW: 4 / 520, rubberC: 0.5, rubberD: 0.32 },
 };
 export type FeelName = keyof typeof FEELS;
 
@@ -107,6 +110,7 @@ export class Scroller {
   private raw = 0; // перетяг, показанный сейчас («как тянули»: −верх, +низ)
   private rawVel = 0;
   private pull = 0; // перетяг, который держат пальцы тачпада (к нему плавно идёт raw)
+  private free = false; // отпущен: raw — уже видимые пиксели и тает к нулю
   private mode: Mode = "idle";
   private raf = 0;
   private last = 0;
@@ -168,9 +172,10 @@ export class Scroller {
   }
 
   /** Состояние для журнала жестов лаборатории. */
-  debug(): { pos: number; max: number; raw: number; pull: number; pad: Pad; notch: boolean } {
+  debug(): { pos: number; max: number; raw: number; shown: number; pull: number; pad: Pad; notch: boolean } {
     const r = (v: number) => Math.round(v * 10) / 10;
-    return { pos: Math.round(this.pos), max: Math.round(this.max), raw: r(this.raw), pull: r(this.pull), pad: this.pad, notch: this.notch };
+    const shown = this.free ? this.raw : this.rubber(this.raw);
+    return { pos: Math.round(this.pos), max: Math.round(this.max), raw: r(this.raw), shown: r(shown), pull: r(this.pull), pad: this.pad, notch: this.notch };
   }
 
   get pinned(): boolean {
@@ -370,8 +375,41 @@ export class Scroller {
     clearTimeout(this.holdTimer);
     if (this.pull) {
       this.pull = 0;
-      this.kick();
+      this.letGo();
     }
+  }
+
+  /** Резиновая кривая iOS: сколько протянули → сколько видно. Чем дальше, тем туже. */
+  private rubber(x: number): number {
+    const d = (this.el.clientHeight || 1) * this.feel.rubberD;
+    const a = Math.abs(x);
+    return a ? (1 - 1 / ((a * this.feel.rubberC) / d + 1)) * d * Math.sign(x) : 0;
+  }
+
+  /** Обратно: сколько видно → сколько надо протянуть (чтобы подхватить возврат рукой). */
+  private unrubber(y: number): number {
+    const d = (this.el.clientHeight || 1) * this.feel.rubberD;
+    const a = Math.min(Math.abs(y), d * 0.995);
+    return a ? ((d / (d - a) - 1) * d) / this.feel.rubberC * Math.sign(y) : 0;
+  }
+
+  /** Отпустили: дальше перетяг живёт в видимых пикселях и тает экспонентой с первого кадра. */
+  private letGo() {
+    if (!this.raw) return;
+    if (!this.free) {
+      this.raw = this.rubber(this.raw);
+      this.free = true;
+    }
+    this.rawVel = -this.feel.springW * this.raw;
+    this.kick();
+  }
+
+  /** Рука снова взялась за возвращающийся перетяг — назад в пространство пальцев, без скачка. */
+  private grab() {
+    if (!this.free) return;
+    this.raw = this.unrubber(this.raw);
+    this.free = false;
+    this.rawVel = 0;
   }
 
   /** Страховка удержания: без нулевых событий устройство держит коротко, с ними — долго. */
@@ -424,6 +462,7 @@ export class Scroller {
     // Полоса прокрутки: клик правее содержимого.
     if (e.clientX > this.el.getBoundingClientRect().left + this.el.clientWidth) return;
     e.preventDefault(); // не начинать выделение и не уводить фокус
+    this.grab();
     this.drag = { id: e.pointerId, y0: e.clientY, pos0: this.pos, raw0: this.raw, moved: false, samples: [{ t: e.timeStamp, y: e.clientY }] };
     this.vel = 0;
     this.rawVel = 0;
@@ -485,6 +524,7 @@ export class Scroller {
     } else {
       this.mode = "idle";
     }
+    if (this.raw) this.letGo();
     this.setPinned(this.max - this.pos <= this.pinSlack && v >= 0);
     this.follow = this.pinnedState;
     this.kick();
@@ -532,6 +572,7 @@ export class Scroller {
     if (this.mode === "drag") {
       // Перетяг ведёт указатель напрямую.
     } else if (this.pull) {
+      this.grab();
       // Пальцы держат оттяжку: показанный перетяг плавно идёт за ними; скорость
       // запоминается, чтобы возврат после подъёма пальцев начался без рывка.
       const prev = this.raw;
@@ -552,6 +593,7 @@ export class Scroller {
       if (Math.abs(this.raw) < 0.3 && Math.abs(this.rawVel) < 0.005) {
         this.raw = 0;
         this.rawVel = 0;
+        this.free = false;
       } else busy = true;
     }
 
@@ -570,9 +612,7 @@ export class Scroller {
   private paintOver() {
     const s = this.inner.style;
     const h = this.el.clientHeight || 1;
-    const d = h * this.feel.rubberD;
-    const x = Math.abs(this.raw);
-    const shown = x ? (1 - 1 / ((x * this.feel.rubberC) / d + 1)) * d * Math.sign(this.raw) : 0;
+    const shown = this.free ? this.raw : this.rubber(this.raw);
     if (!shown || Math.abs(shown) < 0.2 || this.overscroll === "none") {
       if (s.transform) { s.transform = ""; s.transformOrigin = ""; }
       return;

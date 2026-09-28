@@ -86,6 +86,14 @@ function start() {
     e.returnValue = channel;
   });
   ipcMain.handle("helene:invoke", (_e, cmd: string, args: Record<string, unknown>) => runCommand(String(cmd), args ?? {}, ctx));
+  ipcMain.on("helene:look", (e, paper: { day?: string; night?: string }) => {
+    try {
+      mkdirSync(app.getPath("userData"), { recursive: true });
+      writeFileSync(lookFile(), JSON.stringify({ day: paper?.day, night: paper?.night }));
+    } catch { /* не запомнится — откроется бумагой по умолчанию */ }
+    const w = BrowserWindow.fromWebContents(e.sender);
+    w?.setBackgroundColor(paperColor());
+  });
   ipcMain.on("helene:win", (e, action: string) => {
     const w = BrowserWindow.fromWebContents(e.sender);
     if (!w) return;
@@ -153,8 +161,17 @@ function saveBounds(w: BrowserWindow) {
   } catch { /* не запомнится — откроется по умолчанию */ }
 }
 
+/** Тон бумаги из «Вида» (окно присылает его само): окно открывается нужного цвета. */
+const lookFile = () => join(app.getPath("userData"), "look.json");
 function paperColor(): string {
-  return nativeTheme.shouldUseDarkColors ? "#1d1914" : "#f4e4cf";
+  let day = "#f4e4cf", night = "#1d1914";
+  try {
+    const p = JSON.parse(readFileSync(lookFile(), "utf8")) as { day?: string; night?: string };
+    const ok = (c?: string) => typeof c === "string" && /^#[0-9a-f]{6}$/i.test(c);
+    if (ok(p.day)) day = p.day!;
+    if (ok(p.night)) night = p.night!;
+  } catch { /* ещё не выбирали — бумага по умолчанию */ }
+  return nativeTheme.shouldUseDarkColors ? night : day;
 }
 
 function icon(name: string): Electron.NativeImage | undefined {

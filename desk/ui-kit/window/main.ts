@@ -16,6 +16,7 @@ import "./styles/turns.css";
 import { api, cfg, connect, electron, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
 import { applyTheme } from "../../ui-kit/dom";
 import * as scroll from "./scroll";
+import * as look from "./look";
 import { watchShellVersion } from "../../ui-kit/version";
 import { setResultFetcher } from "../../ui-kit/steps";
 import { bindFail, esc, failHTML, fmtAge, fmtDur, fmtK, fmtTs, humanError, q, toast } from "../../ui-kit/window/lib";
@@ -75,6 +76,8 @@ export function start(opts: WindowOptions): void {
   // Длинный результат руки или её слово дочитываются файлом прогона по кнопке в ленте шагов.
   setResultFetcher((run, rid) => api(`/api/run/${encodeURIComponent(run)}/result/${encodeURIComponent(rid)}`));
 
+  // «Вид» владельца (палитра, фактура, движение) — до первой отрисовки и до физики.
+  look.apply(look.load());
   const view = q<HTMLElement>("#view");
   // Страницы разделов живут в постоянном узле внутри #view: на нём физика прокрутки
   // (ui-kit/feed, 28.09) рисует перетяг края, а #view остаётся нативной прокруткой.

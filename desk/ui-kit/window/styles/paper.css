@@ -9,7 +9,7 @@
 
 :root {
   color-scheme: light;
-  --paper: #f4e4cf;
+  --paper: var(--u-paper-day, #f4e4cf);
   --ground: var(--paper);
   --surface: color-mix(in srgb, var(--paper) 55%, #ffffff);     /* лист поверх бумаги */
   --surface-2: color-mix(in srgb, var(--paper) 88%, #a07a4a);   /* вдавленное: код, наведение */
@@ -22,10 +22,10 @@
   --line-strong: rgba(29, 26, 23, 0.28);
   --line-ink: #1d1a17;               /* обводка «пером»: пузыри, карточки, поле ввода */
   --lw: 1.5px;
-  --terra: #e0915a;                  /* заливка-акцент: кнопка отправки, точки, отметки */
-  --accent: #9a4a1e;                 /* терракота для текста и ссылок: контраст ≥ 4,5 */
+  --terra: var(--u-terra, #e0915a);  /* заливка-акцент: кнопка отправки, точки, отметки */
+  --accent: var(--u-accent-day, #9a4a1e); /* акцент для текста и ссылок: контраст ≥ 4,5 */
   --accent-ink: #ffffff;
-  --accent-soft: rgba(224, 145, 90, 0.2);
+  --accent-soft: color-mix(in srgb, var(--terra) 20%, transparent);
   --ok: #4f7a4a;
   --warn: #9a6a1b;
   --err: #b0402b;
@@ -35,17 +35,17 @@
   --shadow: none;
   --shadow-pop: 0 2px 0 rgba(29, 26, 23, 0.85);
   --glass: color-mix(in srgb, var(--surface) 94%, transparent);
-  --grain: 0.1;
+  --grain: var(--u-grain-day, 0.1);
   --serif: "Golos Text", "Segoe UI", system-ui, sans-serif;  /* сериф уходит: текст — Golos */
   --hand: "Zen Kurenaido", "Neucha", "Segoe Print", cursive;
-  --feed-base: 15.5px;
+  --feed-base: var(--u-feed-base, 15.5px);
   --zoom: 1;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --paper: #1d1914;
+    --paper: var(--u-paper-night, #1d1914);
     --surface: color-mix(in srgb, var(--paper) 93%, #ffffff);
     --surface-2: color-mix(in srgb, var(--paper) 87%, #ffffff);
     --panel: color-mix(in srgb, var(--paper) 96%, #ffffff);
@@ -56,9 +56,9 @@
     --line: rgba(241, 228, 208, 0.13);
     --line-strong: rgba(241, 228, 208, 0.26);
     --line-ink: #e9dbc6;
-    --accent: #eda676;
+    --accent: var(--u-accent-night, #eda676);
     --accent-ink: #1d1914;
-    --accent-soft: rgba(224, 145, 90, 0.16);
+    --accent-soft: color-mix(in srgb, var(--terra) 16%, transparent);
     --ok: #93b98d;
     --warn: #d9ad62;
     --err: #ec8a74;
@@ -66,12 +66,12 @@
     --ctrl-hover: rgba(241, 228, 208, 0.07);
     --gust: rgba(241, 228, 208, 0.04);
     --shadow-pop: 0 2px 0 rgba(0, 0, 0, 0.6);
-    --grain: 0.06;
+    --grain: var(--u-grain-night, 0.06);
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --paper: #1d1914;
+  --paper: var(--u-paper-night, #1d1914);
   --surface: color-mix(in srgb, var(--paper) 93%, #ffffff);
   --surface-2: color-mix(in srgb, var(--paper) 87%, #ffffff);
   --panel: color-mix(in srgb, var(--paper) 96%, #ffffff);
@@ -82,9 +82,9 @@
   --line: rgba(241, 228, 208, 0.13);
   --line-strong: rgba(241, 228, 208, 0.26);
   --line-ink: #e9dbc6;
-  --accent: #eda676;
+  --accent: var(--u-accent-night, #eda676);
   --accent-ink: #1d1914;
-  --accent-soft: rgba(224, 145, 90, 0.16);
+  --accent-soft: color-mix(in srgb, var(--terra) 16%, transparent);
   --ok: #93b98d;
   --warn: #d9ad62;
   --err: #ec8a74;
@@ -92,7 +92,7 @@
   --ctrl-hover: rgba(241, 228, 208, 0.07);
   --gust: rgba(241, 228, 208, 0.04);
   --shadow-pop: 0 2px 0 rgba(0, 0, 0, 0.6);
-  --grain: 0.06;
+  --grain: var(--u-grain-night, 0.06);
 }
 
 /* ---------------------------------------------------------------- бумага */
@@ -358,4 +358,125 @@ body::before {
 #view {
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
+}
+
+/* ---------------------------------------------------------------- «Вид» в настройках */
+
+.look-card .look-row {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 6px 14px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: var(--lw) solid var(--line);
+}
+.look-card .look-row:first-of-type {
+  border-top: 0;
+}
+.look-label {
+  font: 400 19px/1.1 var(--hand);
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+.look-swatches,
+.look-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.look-name {
+  grid-column: 2;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  min-height: 1em;
+}
+.look-name:empty {
+  display: none;
+}
+.look-swatch {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  border: var(--lw) solid var(--line-ink);
+  background: var(--sw);
+  cursor: pointer;
+  position: relative;
+  transition: transform var(--dur-1) var(--ease-out);
+}
+/* Кружок бумаги несёт «строчку» — чтобы тон было видно рядом с линией текста. */
+.look-swatch::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 50%;
+  height: 1.5px;
+  background: #1d1a17;
+  opacity: 0.55;
+}
+.look-swatch.night::after {
+  background: #f1e4d0;
+}
+.look-swatches[aria-label="Акцент"] .look-swatch::after {
+  display: none;
+}
+.look-swatch:hover {
+  transform: translateY(-1px);
+}
+.look-swatch[aria-checked="true"] {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+.look-pill {
+  height: 32px;
+  padding: 0 14px;
+  border: var(--lw) solid var(--line-ink);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: 400 13.5px/1 var(--sans);
+  cursor: pointer;
+}
+.look-pill:hover {
+  background: var(--ctrl-hover);
+}
+.look-pill[aria-checked="true"] {
+  background: var(--ink);
+  color: var(--paper);
+}
+.look-reset {
+  margin-top: 12px;
+  height: 32px;
+  padding: 0 14px;
+  border: var(--lw) dashed var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+.look-reset:hover {
+  border-style: solid;
+  color: var(--ink);
+}
+
+/* Карточки настроек и разделов — той же линией, без тени. */
+.card {
+  background: var(--surface);
+  border: var(--lw) solid var(--line-ink);
+  border-radius: 18px;
+}
+.card h3 {
+  font: 400 26px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}
+.settings-tab[aria-selected="true"] {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.settings[data-group="look"] .save-bar {
+  display: none;
 }

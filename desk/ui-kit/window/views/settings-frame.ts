@@ -26,6 +26,7 @@ import { bindFail, el, esc, failHTML, humanError, toast } from "../lib";
 import { button, card, field, toggle } from "../../dom";
 import { PRODUCT_NAME, S } from "../state";
 import { hostInfo, type HostInfo } from "../host";
+import { lookCard } from "../look";
 import { isMacPlatform, platformOf } from "../../platform";
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
@@ -154,6 +155,7 @@ export const GROUP = {
   brain: "brain",
   rights: "rights",
   app: "app",
+  look: "look",
 } as const;
 
 /** Пометить карточку группой. Непомеченная не теряется — см. `mountSettings`. */
@@ -219,6 +221,8 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     // кнопки «Сохранить» в этой ветке нет вовсе — человек щёлкал, и ничего не
     // происходило, и никто не говорил, что не происходит.
     center.append(el("div", "card muted", `Настройки доступны в приложении ${PRODUCT_NAME} на том компьютере, где живёт агент: здесь окно смотрит на удалённый код агента. Тема — как в системе.`));
+    // «Вид» — удобство этого окна, а не настройка агента: доступен и здесь.
+    center.append(lookCard());
     mountSettings(container, center);
     return;
   }
@@ -292,7 +296,9 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   auto.append(autoToggle);
   center.append(inGroup(card("Автозапуск", auto), GROUP.app));
 
-  // Тема — только как в системе (слово владельца 07.09): переключателя нет.
+  // Тема — только как в системе (слово владельца 07.09): переключателя нет. Палитры дня
+  // и ночи, фактура, текст и физика ленты — в «Виде» (28.09), применяются сразу.
+  center.append(inGroup(lookCard(), GROUP.look));
 
 
   // --- о программе
@@ -617,6 +623,8 @@ function mountSettings(container: HTMLElement, center: HTMLElement, groups: Sett
         t.setAttribute("aria-selected", String(t.dataset.group === id));
       }
       visible = buckets.get(id) || [];
+      // «Вид» применяется сразу — полоса «Сохранить» там не нужна и закрывала бы низ карточки.
+      wrap.dataset.group = id;
       buildNav();
       try {
         localStorage.setItem("settings.group", id);

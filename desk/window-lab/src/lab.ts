@@ -364,26 +364,29 @@ async function selftest() {
   // 4) пальцы замерли на полторы секунды — оттяжка держится, не сбрасывается
   await wait(1500);
   out.pullAfterHold1500 = raw();
-  // 5) подняли — возврат плавный: перетяг только убывает, без рывков и перелёта
+  // 5) подняли — возврат сразу и быстро (Егор 28.09: «очень долго отпускается»):
+  // видимый перетяг только убывает, с первого кадра, без перелёта; почти весь путь — за полсекунды.
+  const shown = () => scroller.debug().shown;
   lift();
-  let prev = raw(), jerk = 0, overshoot = 0;
-  const steps: number[] = [];
+  const t0 = performance.now();
+  let prev = shown(), jerk = 0, overshoot = 0, firstStep = -1, settledMs = -1;
+  out.shownAtLift = prev;
   for (let i = 0; i < 90; i++) {
     await tick();
-    const r = raw();
-    steps.push(prev - r);
+    const r = shown();
+    if (firstStep < 0) firstStep = prev - r;
     if (r > prev + 0.01) jerk++;
     if (r < -0.5) overshoot++;
+    if (settledMs < 0 && Math.abs(r) < 1) settledMs = Math.round(performance.now() - t0);
     prev = r;
   }
-  // Первый шаг возврата не больше соседних: пружина трогается мягко, не срывается.
-  const firstStep = steps[0] ?? 0;
-  const maxStep = Math.max(...steps);
   out.releaseMonotonic = jerk === 0 && overshoot === 0;
-  out.releaseSoftStart = firstStep <= maxStep * 0.6;
+  out.releaseStartsAtOnce = firstStep > 1;
+  out.settledMs = settledMs;
   out.finalRaw = raw();
   const ok = out.swipeArrivesPeakRaw === 0 && out.parkedAtBottom === true && (out.pullRightAfterPark as number) > 20 &&
-    Math.abs((out.pullAfterHold1500 as number) - (out.pullRightAfterPark as number)) < 1 && out.releaseMonotonic === true && out.finalRaw === 0;
+    Math.abs((out.pullAfterHold1500 as number) - (out.pullRightAfterPark as number)) < 1 && out.releaseMonotonic === true &&
+    out.releaseStartsAtOnce === true && settledMs > 0 && settledMs <= 700 && out.finalRaw === 0;
   console.log("SELFTEST " + JSON.stringify({ ok, ...out }));
 }
 if (new URLSearchParams(location.search).get("selftest") === "1") setTimeout(() => void selftest(), 800);

@@ -20,4 +20,7 @@ contextBridge.exposeInMainWorld("__HELENE__", {
   win(action: "minimize" | "maximize" | "close") {
     ipcRenderer.send("helene:win", action);
   },
+  look(paper: { day: string; night: string }) {
+    ipcRenderer.send("helene:look", paper);
+  },
 });

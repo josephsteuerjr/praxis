@@ -756,6 +756,7 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
       { id: GROUP.brain, label: "Мозг и связь" },
       { id: GROUP.rights, label: "Права на этом ПК" },
       { id: GROUP.app, label: "Программа" },
+      { id: GROUP.look, label: "Вид" },
     ],
     // Подпись у изданий разная: здесь имя агента правит того, кто живёт рядом.
     namesHint:

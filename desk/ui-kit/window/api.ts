@@ -51,6 +51,8 @@ export interface ElectronBridge {
   platform: string;
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
   win(action: "minimize" | "maximize" | "close"): void;
+  /** Тон бумаги — оболочке, чтобы окно открывалось уже нужного цвета (look.ts). */
+  look?(paper: { day: string; night: string }): void;
 }
 export const electron: ElectronBridge | undefined = (window as unknown as { __HELENE__?: ElectronBridge }).__HELENE__;
 /**

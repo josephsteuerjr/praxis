@@ -1,29 +1,36 @@
 // Прокрутка окна: одна физика на общий #view (все разделы) и отдельная на панель ходов.
 // Движок — ui-kit/feed (28.09): плавное колесо, «тянуть и водить» мышью, резинка тачпада
 // по фазе жеста, прилипание к низу только в чате, масштаб ленты Ctrl+колесом.
-import { Scroller, type FeelName, type Overscroll } from "../feed/scroller";
+import { FEELS, Scroller, type FeelName, type Overscroll } from "../feed/scroller";
 import { Zoom } from "../feed/zoom";
 
 let viewScroller: Scroller | null = null;
 let viewZoom: Zoom | null = null;
+/** Все живые физики окна: #view и колонки — выбор «Движение»/«Край» в «Виде» меняет их разом. */
+const all = new Set<Scroller>();
 
-/** Характер и край — из выбора владельца (настройки окна), по умолчанию то, что одобрил Егор. */
+/** Характер и край — выбор владельца (look.ts ставит его до первой отрисовки). */
+let physics: { feel: FeelName; over: Overscroll } = { feel: "syrup", over: "rubber" };
+
 function prefs(): { feel: FeelName; over: Overscroll } {
-  let feel: FeelName = "syrup";
-  let over: Overscroll = "rubber";
-  try {
-    const f = localStorage.getItem("helene.feel");
-    const o = localStorage.getItem("helene.overscroll");
-    if (f === "brisk" || f === "smooth" || f === "syrup") feel = f;
-    if (o === "rubber" || o === "stretch" || o === "none") over = o;
-  } catch { /* хранилища нет — по умолчанию */ }
-  return { feel, over };
+  return physics;
+}
+
+/** Выбор в «Виде»: характер движения и край ленты — всем физикам окна сразу. */
+export function setPhysics(feel: FeelName, over: Overscroll) {
+  physics = { feel, over };
+  for (const s of all) {
+    if (!s.el.isConnected) { all.delete(s); continue; }
+    s.feel = { ...FEELS[feel] };
+    s.overscroll = over;
+  }
 }
 
 /** Поставить физику на #view; страницы разделов живут внутри `inner`. */
 export function mountView(view: HTMLElement, inner: HTMLElement): Scroller {
   const p = prefs();
   viewScroller = new Scroller(view, inner, { feel: p.feel, overscroll: p.over, stick: false });
+  all.add(viewScroller);
   viewZoom = new Zoom(viewScroller, null, { storageKey: "helene.zoom" });
   return viewScroller;
 }
@@ -48,5 +55,7 @@ export function preserve(mutate: () => void) {
 /** Отдельная физика для прокручиваемой колонки (панель ходов). */
 export function mountColumn(el: HTMLElement, inner: HTMLElement): Scroller {
   const p = prefs();
-  return new Scroller(el, inner, { feel: p.feel, overscroll: p.over, stick: false });
+  const s = new Scroller(el, inner, { feel: p.feel, overscroll: p.over, stick: false });
+  all.add(s);
+  return s;
 }
