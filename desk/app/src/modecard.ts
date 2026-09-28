@@ -399,16 +399,39 @@ export function modeCard(
       togglesBox.append(row);
       continue;
     }
-    row.append(switchRow(t.title || t.key, hand.get(), (v) => {
-      hand.set(v);
-      syncToggles();
-    }));
-    if (t.text) row.append(el("p", "field-hint", t.text));
-    // Оговорка — всегда на виду, а не после включения: её читают ДО.
     const warn = t.key === "service.session0"
       ? t.warning || live.session0_warning || SESSION0_WARNING_FALLBACK
       : t.warning;
-    if (warn) row.append(el("p", "receipt err", warn));
+    // Оговорка — в МИГ ВКЛЮЧЕНИЯ (слово Егора 28.09): тумблер с оговоркой не
+    // щёлкает сразу, а показывает её с двумя кнопками; включается только по
+    // «Понимаю, включить». Выключение — сразу, без вопросов.
+    const ask = el("div", "mode-block session0-ask");
+    ask.hidden = true;
+    const sw = switchRow(t.title || t.key, hand.get(), (v) => {
+      if (v && warn) {
+        sw.setAttribute("aria-checked", "false");
+        ask.hidden = false;
+        return;
+      }
+      ask.hidden = true;
+      hand.set(v);
+      syncToggles();
+    });
+    ask.append(
+      el("p", "receipt err", warn),
+      btn("Понимаю, включить", "danger", () => {
+        ask.hidden = true;
+        sw.setAttribute("aria-checked", "true");
+        hand.set(true);
+        syncToggles();
+      }),
+      btn("Не включать", "quiet", () => {
+        ask.hidden = true;
+      }),
+    );
+    row.append(sw);
+    if (t.text) row.append(el("p", "field-hint", t.text));
+    row.append(ask);
     const note = el("p", "field-hint");
     row.append(note);
     toggleView.set(t.key, { row, note });
@@ -423,7 +446,7 @@ export function modeCard(
         ? `Выключено. Ключ service.session0 — его читает сама служба; на ограду «${choiceOf(picked)?.title || live.title}» не влияет.`
         : installed === false
           ? "Включено, но службы нет — дать нулевую сессию некому. Поставь службу кнопкой выше, иначе тумблер остаётся словом в файле."
-          : "Включено: брокер будет выполнять команды агента правами системы, а код агента поднимется под службой, без рабочего стола.";
+          : "Включено: служба выполняет поручения агента правами системы сразу, без вопроса тебе. Журнал — broker.log.";
     }
     const fw = toggleView.get("service.firewall");
     if (fw) {

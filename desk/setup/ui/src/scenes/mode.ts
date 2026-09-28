@@ -74,9 +74,8 @@ const NO_ADMIN =
  *  ДО того, как включит, а не узнать после. Включённая говорит словами самого
  *  харнесса (modes.SESSION0_WARNING) — чтобы окно потом не сказало иначе. */
 const SESSION0_OFF =
-  "Пока выключено: поручений правами системы служба не исполняет. Если включишь — агент так и " +
-  "останется в твоей сессии с рабочим столом, а разовые команды правами системы служба выполнит " +
-  "по его просьбе; слабая модель может не понять, что просит.";
+  "Пока выключено: поручений правами системы служба не исполняет. Агент в любом случае живёт " +
+  "в твоей сессии с рабочим столом.";
 
 /** Галочка нулевой сессии — единственная, которую спрашиваем при установке
  *  (владелец просил ровно её). Вторая галочка опции (`service.firewall`)
@@ -104,6 +103,10 @@ const COMPUTER_NOTE_MACOS =
 
 /** Слово к выключенной опции: чтобы выключенная не выглядела запретом. */
 const COMPUTER_OFF = "Пока выключено: тул `computer` есть, а тела под ним нет — он отказывает словами.";
+
+/** Слово к включённой опции. Оговорки «для энтузиастов» здесь нет (28.09): она у
+ *  нулевой сессии — там агент получает права системы без вопроса. */
+const COMPUTER_ON = "Включено: агент видит экран и водит мышью и клавиатурой в твоей сессии.";
 
 export class ModeScene extends FormScene {
   private cards = new Map<AgentMode, HTMLElement>();
@@ -287,8 +290,9 @@ export class ModeScene extends FormScene {
 
   private syncComputer() {
     this.computerSwitch.setAttribute("aria-checked", String(setup.computer));
-    this.computerText.textContent = setup.computer ? COMPUTER_OPTION.warning : COMPUTER_OFF;
-    this.computerText.classList.toggle("on", setup.computer);
+    this.computerText.textContent = setup.computer ? COMPUTER_OPTION.warning || COMPUTER_ON : COMPUTER_OFF;
+    // Цвет тревоги — только у оговорки; простое «включено» им не красится.
+    this.computerText.classList.toggle("on", setup.computer && !!COMPUTER_OPTION.warning);
   }
 
   private select(name: AgentMode) {
