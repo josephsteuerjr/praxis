@@ -67,6 +67,8 @@ export interface UpdateReceipt {
 
 export interface UpdaterBeat {
   present: boolean;
+  /** 1.2.5: бьётся сторож испытания ПК, а не исполнитель сервера. */
+  desktop?: boolean;
   alive: boolean;
   ok: boolean;
   why: string;
@@ -344,6 +346,9 @@ export function updateCardHTML(
   const fmt = opts.fmt || ((s: string) => s);
   const now = opts.now ?? Date.now();
   const section = (body: string) => `<h3 class="section-title">Обновление</h3>${body}`;
+  // ПК: обновление и его испытание — в Настройках (`deskTrialHTML`); серверный раздел с
+  // «исполнителем» здесь говорил бы неправду.
+  if (u?.updater?.desktop || u?.receipt?.desktop) return "";
   if (opts.offline) {
     if (!opts.inContainer && !u?.updater?.present) return "";
     return section(offlineHTML(u, fmt));

@@ -1933,6 +1933,19 @@ def main() -> None:
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8", newline="\n")
 
+    # 1.2.5: отпечатки кода ЭТОЙ поставки — в её же shipped-code.json (исходный в
+    # репозитории не трогается). Своя чистая копия (pristine/) есть у установки на ПК, но
+    # архиву переноса из контейнера сервера (он не видит .updater/) и установке, у которой
+    # pristine/ пропал, базу для правок агента даст только отпечаток.
+    sys.path.insert(0, str(DESK / "server" / "updater"))
+    import codecarry  # noqa: PLC0415
+    prints_path = out / "server" / "updater" / "shipped-code.json"
+    prints = json.loads(prints_path.read_text("utf-8")) if prints_path.is_file() else {}
+    prints[f"{manifest['version']}/{staged['desk']['flavor']}"] = codecarry.code_prints(out)
+    prints_path.write_text(json.dumps(prints, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+    print(f"  отпечатки кода {manifest['version']}/{staged['desk']['flavor']}: "
+          f"{len(prints[manifest['version'] + '/' + staged['desk']['flavor']])} файлов")
+
     # Гард стоит ПОСЛЕ паспорта и до архива: раньше он был раньше, и последний
     # файл поставки — тот самый, который собирается из git, pip freeze и
     # деклараций среды сборки, — не проверял никто.

@@ -3919,7 +3919,9 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     // 10. Готово. Первая установка — прежней нет. Обновление поверх (1.2.5): прежняя
     // программа не удаляется, а ложится в `backups/program-<версия>` — на неё откатывает
     // испытание: агент проверяет себя в новой версии делом, «сломано» или молчание — откат.
-    if trial_ready {
+    // Та же версия поверх (починка, смена решений) — правки перенесены выше, а испытывать
+    // нечего: «1.2.5 → 1.2.5» агенту на полчаса было бы странной запиской.
+    if trial_ready && old_version != version {
         let from = if old_version.is_empty() { "прежняя".to_string() } else { old_version.clone() };
         prune_kept_programs(&dir);
         match tx.commit_keep(&crate::trial::kept_path(&dir, &from)) {

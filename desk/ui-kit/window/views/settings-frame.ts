@@ -448,6 +448,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         note.className = r.ok ? "receipt ok" : "receipt err";
         note.textContent = r.note;
       }
+      if (r.ok) window.setTimeout(() => void drawTrial(), 4000);
     } catch (e) {
       if (note) {
         note.className = "receipt err";

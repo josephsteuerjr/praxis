@@ -51,6 +51,15 @@ const EXTEND: f64 = 600.0;
 /// Квитанция читателя моложе — движок жив (`deskd/readers.py::READER_FRESH_S`).
 const READER_FRESH: f64 = 45.0;
 const TICK: Duration = Duration::from_secs(3);
+/// Агент договаривает ход (сказал «сломано» и объясняет владельцу) — ждать его конца
+/// до стольких секунд, прежде чем гасить движок (как исполнитель на сервере).
+const IDLE_WAIT: f64 = 180.0;
+/// Откат не удался (папку держит Проводник, антивирус) — столько попыток с паузой; между
+/// ними новая версия снова поднята, агент не лежит.
+const ROLLBACK_TRIES: u32 = 3;
+const ROLLBACK_PAUSE: Duration = Duration::from_secs(90);
+/// Замок сторожа старше — его хозяин умер.
+const LOCK_STALE: f64 = 30.0;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(default)]
@@ -89,6 +98,7 @@ pub struct Trial {
     pub verdict: Value,
     pub rollback_why: String,
     pub rollback_plain: String,
+    pub rollback_tries: u32,
     pub notes: Vec<String>,
 }
 
@@ -276,14 +286,57 @@ fn beat(dir: &Path, t: &Trial, busy: &str) {
     let _ = install::write_atomic_pub(&control(dir, "updater.json"), &row.to_string());
 }
 
-/// Жив ли другой сторож (его биение свежее и не моё).
-fn other_watcher(dir: &Path) -> bool {
-    let Some(b) = install::read_json_pub(&control(dir, "updater.json")) else { return false };
-    let at = b.get("beat_epoch").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let pid = b.get("pid").and_then(|v| v.as_u64()).unwrap_or(0);
-    b.get("desktop").and_then(|v| v.as_bool()) == Some(true)
-        && pid != u64::from(std::process::id())
-        && epoch() - at < 12.0
+/// Замок сторожа: второй (движок позвал, пока первый ещё поднимался) выходит сразу —
+/// иначе двое откатили бы одну установку. Файл не держится открытым (папку откат
+/// переименовывает) — живость по свежести, сторож обновляет его каждый тик.
+struct Lock(PathBuf);
+
+impl Lock {
+    fn path(dir: &Path) -> PathBuf {
+        dir.join("backups").join("update-trial.lock")
+    }
+
+    fn take(dir: &Path) -> Option<Lock> {
+        let path = Lock::path(dir);
+        for _ in 0..2 {
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(_) => {
+                    let lock = Lock(path);
+                    lock.touch(dir);
+                    return Some(lock);
+                }
+                Err(_) => {
+                    let age = std::fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|m| m.elapsed().ok())
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or(f64::MAX);
+                    if age < LOCK_STALE {
+                        return None;
+                    }
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+        None
+    }
+
+    fn touch(&self, dir: &Path) {
+        let _ = std::fs::write(Lock::path(dir), std::process::id().to_string());
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Сторож ушёл насовсем — биение прочь: иначе окно и рука видели бы «исполнителя, который
+/// молчит» (у сервера этим же файлом бьётся исполнитель обновлений).
+fn beat_gone(dir: &Path) {
+    let _ = std::fs::remove_file(control(dir, "updater.json"));
 }
 
 // --------------------------------------------------------------------------- проба
@@ -364,7 +417,9 @@ pub fn spawn_watcher(dir: &Path) -> Result<(), String> {
 #[cfg(windows)]
 fn relocate(dir: &Path, args: &[String]) -> bool {
     let Ok(me) = std::env::current_exe() else { return false };
-    let norm = |p: &Path| p.display().to_string().to_lowercase().replace('/', "\\");
+    // Канонически: `\\?\`, короткие имена 8.3 и регистр иначе прятали бы, что exe — внутри.
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let norm = |p: &Path| canon(p).display().to_string().to_lowercase().replace('/', "\\");
     if !norm(&me).starts_with(&(norm(dir).trim_end_matches('\\').to_string() + "\\")) {
         return false;
     }
@@ -410,9 +465,7 @@ pub fn watch(dir: &Path, args: &[String]) -> i32 {
     if !first.is_open() {
         return 0;
     }
-    if other_watcher(dir) {
-        return 0;
-    }
+    let Some(lock) = Lock::take(dir) else { return 0 };
     log(dir, &format!("сторож {} поднят: {} → {}, фаза {}", std::process::id(), first.from_version, first.to_version, first.phase));
     let started = epoch();
     let mut last_up = started;
@@ -422,6 +475,7 @@ pub fn watch(dir: &Path, args: &[String]) -> i32 {
         if !t.is_open() || t.id != first.id {
             return 0;
         }
+        lock.touch(dir);
         let p = probe(dir);
         let now = epoch();
         if p.channel || p.runner {
@@ -589,18 +643,44 @@ fn finish_accept(dir: &Path, t: &mut Trial) {
     t.phase = "done".into();
     save(dir, t);
     receipt(dir, t, "done", "обновление принято", &note, &summary);
+    beat_gone(dir);
     log(dir, &format!("принято ({by})"));
 }
 
 /// Вернуть прежнюю версию. -> код выхода (0 — вернулась, 1 — нет).
 pub fn do_rollback(dir: &Path, t: &mut Trial) -> i32 {
+    loop {
+        match rollback_once(dir, t) {
+            Ok(()) => return 0,
+            Err(retry) if retry && t.rollback_tries < ROLLBACK_TRIES => {
+                log(dir, &format!("откат не удался (попытка {} из {ROLLBACK_TRIES}) — новая версия снова поднята, повторю", t.rollback_tries));
+                std::thread::sleep(ROLLBACK_PAUSE);
+            }
+            Err(_) => {
+                let why = if t.rollback_why.is_empty() { "откат".to_string() } else { t.rollback_why.clone() };
+                return fail(dir, t, &why);
+            }
+        }
+    }
+}
+
+/// Одна попытка отката. Err(true) — не вышло, но стоит повторить (новая версия снова
+/// поднята); Err(false) — повторять нечего.
+fn rollback_once(dir: &Path, t: &mut Trial) -> Result<(), bool> {
+    t.rollback_tries += 1;
+    save(dir, t);
     let why = if t.rollback_why.is_empty() { "откат".to_string() } else { t.rollback_why.clone() };
     receipt(dir, t, "running", "возвращаю прежнюю версию", &why, "");
     log(dir, &format!("откат: {why}"));
     let kept = PathBuf::from(&t.kept);
     if t.kept.is_empty() || !kept.is_dir() {
         t.notes.push("прежней программы нет — вернуть нечего; стоит новая версия".into());
-        return fail(dir, t, &why);
+        return Err(false);
+    }
+    // 0. Агент мог сказать «сломано» посреди хода и ещё объясняет владельцу — не рвать.
+    let waited_from = epoch();
+    while epoch() - waited_from < IDLE_WAIT && probe(dir).busy {
+        std::thread::sleep(TICK);
     }
     // 1. Правки агента за испытание — ему, пока новая версия на месте.
     let python = install::python_exe(dir);
@@ -621,12 +701,21 @@ pub fn do_rollback(dir: &Path, t: &mut Trial) -> i32 {
         }
     }
     // 2. Остановить новую версию: служба и всё из папки.
-    let had_service = install::service_is_ours_pub(dir);
-    if had_service {
+    let had_service = install::service_is_ours_pub(dir) || (t.service && t.rollback_tries > 1);
+    if had_service && install::service_is_ours_pub(dir) {
         if let Err(e) = install::service_uninstall_pub(dir) {
             t.notes.push(format!("служба не снялась: {e}"));
         }
     }
+    // Не вышло после остановки — поднять новую версию обратно: агент не должен лежать.
+    let back_up = |t: &mut Trial| {
+        if had_service {
+            let state = install::install_service_pub(dir);
+            t.notes.push(format!("новая версия снова поднята, служба: {state}"));
+        }
+        let _ = install::launch_pub(dir);
+        save(dir, t);
+    };
     let mut stopped = install::stop_running(dir);
     for _ in 0..3 {
         if stopped {
@@ -639,7 +728,8 @@ pub fn do_rollback(dir: &Path, t: &mut Trial) -> i32 {
         let busy = install::locked_files_pub(dir);
         if !busy.is_empty() {
             t.notes.push(format!("новая версия не останавливается — держит файлы: {}", busy.join(", ")));
-            return fail(dir, t, &why);
+            back_up(t);
+            return Err(true);
         }
     }
     // 3. Прежняя программа — на место той же транзакцией.
@@ -665,7 +755,8 @@ pub fn do_rollback(dir: &Path, t: &mut Trial) -> i32 {
     })();
     if let Err(e) = swapped {
         t.notes.push(format!("прежняя версия не встала: {e}"));
-        return fail(dir, t, &why);
+        back_up(t);
+        return Err(true);
     }
     t.notes.push(format!("{} возвращена на место", t.from_version));
     // 4. Настройки и запись в «Приложениях» — прежней версии.
@@ -684,15 +775,18 @@ pub fn do_rollback(dir: &Path, t: &mut Trial) -> i32 {
     receipt(dir, t, "rolled_back", "прежняя версия возвращена", &why,
             &format!("обновление до {} откачено: {plain}. Снова стоит {}; память агента не тронута",
                      t.to_version, t.from_version));
+    beat_gone(dir);
     log(dir, "откат закончен");
-    0
+    Ok(())
 }
 
 fn fail(dir: &Path, t: &mut Trial, why: &str) -> i32 {
     t.phase = "failed".into();
     save(dir, t);
     receipt(dir, t, "failed", "откат не удался", why,
-            &format!("вернуть {} не вышло: {}", t.from_version, t.notes.last().cloned().unwrap_or_default()));
+            &format!("вернуть {} не вышло: {}. Стоит {}", t.from_version,
+                     t.notes.last().cloned().unwrap_or_default(), t.to_version));
+    beat_gone(dir);
     log(dir, &format!("откат не удался: {}", t.notes.join("; ")));
     1
 }
@@ -819,6 +913,21 @@ mod tests {
         assert_eq!(t.phase, "rollback");
         assert_eq!(t.rollback_plain, "ты попросил вернуть прежнюю версию");
         assert!(!vpath.exists());
+        let _ = crate::tx::remove_tree(&dir);
+    }
+
+    #[test]
+    fn only_one_watcher_holds_the_lock_and_a_dead_ones_lock_is_taken_over() {
+        let dir = tmp("lock");
+        let first = Lock::take(&dir).expect("первый берёт замок");
+        assert!(Lock::take(&dir).is_none(), "второй сторож выходит");
+        drop(first);
+        assert!(!Lock::path(&dir).exists(), "ушёл — замок снят");
+        // замок умершего сторожа (давний) — берётся
+        std::fs::write(Lock::path(&dir), "1").unwrap();
+        let old = std::time::SystemTime::now() - Duration::from_secs(120);
+        std::fs::File::options().write(true).open(Lock::path(&dir)).unwrap().set_modified(old).unwrap();
+        assert!(Lock::take(&dir).is_some());
         let _ = crate::tx::remove_tree(&dir);
     }
 

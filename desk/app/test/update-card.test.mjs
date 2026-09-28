@@ -204,6 +204,10 @@ assert.equal(updateCardHTML({ updater: { present: false }, receipt: null }, { in
   assert.match(deskTrialHTML({ receipt: done }, { now }), /обновление до 1\.2\.5 прошло/);
   assert.equal(deskTrialHTML({ receipt: { ...done, finished_utc: "2026-09-20T10:00:00Z" } }, { now }), "");
   assert.equal(deskTrialHTML(null), "");
+  // «Система» на ПК серверный раздел не рисует: там он говорил бы про «исполнителя» и
+  // «последнюю версию» (ревью 29.09) — испытание ПК живёт в Настройках.
+  assert.equal(updateCardHTML({ updater: { present: true, ok: true, desktop: true }, receipt: trial }, { inContainer: false }), "");
+  assert.equal(updateCardHTML({ updater: { present: false }, receipt: done }, { inContainer: false }), "");
 }
 
 console.log("update-card: ok");

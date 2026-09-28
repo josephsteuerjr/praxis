@@ -585,6 +585,8 @@ def updater_state(tree: Path) -> dict:
     latest = beat.get("latest") if isinstance(beat.get("latest"), dict) else {}
     return {
         "present": bool(beat),
+        # 1.2.5: этим же файлом бьётся сторож испытания на ПК (установщик) — не исполнитель.
+        "desktop": bool(beat.get("desktop")) if beat else False,
         "alive": alive,
         "ok": healthy,
         "why": why,
