@@ -340,11 +340,16 @@ export class Scroller {
     this.vel = 0;
     const max = this.max;
 
-    // Пальцы повели обратно из оттяжки — сначала съесть её, потом прокручивать.
+    // Пальцы повели обратно из оттяжки — сначала вернуть её, потом прокручивать. Возврат
+    // идёт по ВИДИМОЙ оттяжке, один к одному с пальцами.
+    // ⚠ 29.09, Егор: «верхняя граница застряла на середине и отматывалась чуть выше
+    // середины максимум». Оттяжка копилась в «пространстве пальцев» без предела (на Windows
+    // нет нулевого «пальцы поднялись», и инерция после жеста тоже шла в оттяжку), видимая
+    // резинка насыщалась, а обратный ход съедал весь невидимый запас, почти не двигая ленту.
     if (this.pull && Math.sign(dy) === -Math.sign(this.pull)) {
-      const r = this.pull + dy;
-      if (Math.sign(r) === Math.sign(this.pull)) { this.pull = r; dy = 0; }
-      else { dy = r; this.pull = 0; }
+      const shown = this.rubber(this.pull) + dy;
+      if (Math.sign(shown) === Math.sign(this.pull)) { this.pull = this.unrubber(shown); dy = 0; }
+      else { dy = shown; this.pull = 0; }
     }
 
     const want = this.target + dy;
@@ -361,8 +366,10 @@ export class Scroller {
         // Щелчок мыши в край — едва заметный мягкий толчок, не прыжок.
         if (Math.abs(this.raw) < 4) this.rawVel += Math.sign(excess) * 0.35;
       } else if (this.pad === "fingers") {
-        // Оттягивание пальцами: держится, пока пальцы на тачпаде.
-        this.pull += excess;
+        // Оттягивание пальцами: держится, пока пальцы на тачпаде. Потолок — ¾ предела
+        // резинки: дальше видимое почти не растёт, а запас рос бы без конца (см. выше).
+        const cap = this.unrubber(this.el.clientHeight * this.feel.rubberD * 0.75);
+        this.pull = clamp(this.pull + excess, -cap, cap);
         this.armHold();
       }
       // Инерция доехала до края — упирается: остаток глотаем.
