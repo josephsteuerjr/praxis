@@ -576,7 +576,13 @@ def main() -> None:
 
     print("реле:")
     # OpenSSL внутрь бинаря: libssl.a из libssl-dev сборщика (см. Dockerfile.build).
+    # ⚠ Одного OPENSSL_STATIC мало (первая сборка 28.09): openssl-sys идёт через pkg-config,
+    # тот не называет системный каталог с libssl.a, и сборка МОЛЧА откатывается на libssl.so.1.1
+    # — такое реле не запустится на Debian 12 / Ubuntu 22.04+. С явными каталогами pkg-config
+    # не зовётся вовсе. Сторож ниже (`not_linked_to_libssl`) и поймал откат.
     os.environ["OPENSSL_STATIC"] = "1"
+    os.environ.setdefault("OPENSSL_LIB_DIR", "/usr/lib/x86_64-linux-gnu")
+    os.environ.setdefault("OPENSSL_INCLUDE_DIR", "/usr/include")
     relay_exe, relay = bm.build_relay(cache, args.skip_rust)
     shutil.copy2(relay_exe, out / "helene-relay")
     (out / "helene-relay").chmod(0o755)
