@@ -77,6 +77,8 @@ _speaker = "владелец"
 _title = "Hélène"
 _agent_name = "Агент"
 _tree: Path | None = None
+#: Корень установки (где helene.json) — сторож испытания обновления живёт там (1.2.5).
+_install_root: Path | None = None
 #: Старт процесса — её `sleep.due` не будит сон раньше десяти минут после него.
 _STARTED_AT = time.time()
 #: Как часто спрашивать её `sleep.due`. У неё тик — 30 минут; в издании сон ещё ждёт
@@ -2351,7 +2353,7 @@ def _replay_unclaimed_notes(processed: Path, limit: int = 5,
 
 
 def main() -> None:
-    global _desk, _desks, _bot, _speaker, _title, _agent_name, _tree, _deliver_unspoken, _mode, _continuity, _alarms, _forge_events
+    global _desk, _desks, _bot, _speaker, _title, _agent_name, _tree, _deliver_unspoken, _mode, _continuity, _alarms, _forge_events, _install_root
     parser = argparse.ArgumentParser()
     parser.add_argument("--config")
     # Репетиция обновления (25.09, K): `--check-extensions --data <папка данных>` —
@@ -2387,6 +2389,7 @@ def main() -> None:
     if not args.config:
         parser.error("--config обязателен (кроме --check-extensions)")
     config_path = Path(args.config).resolve()
+    _install_root = config_path.parent
     # POSIX: SIGTERM — мягкий выход (atexit, замок дерева), и сторож родителя:
     # умерла оболочка — уходим вслед, а не живём сиротой с замком на дереве.
     # На Windows обе строки — no-op: там детей держит job-объект оболочки.
@@ -2756,6 +2759,13 @@ def main() -> None:
                 _update_report_due()
             except Exception:
                 log.exception("отчёт об обновлении не прошёл (повтор не делается)")
+            # ПК (1.2.5): испытание не закрыто, а сторожа не слышно — позвать его.
+            try:
+                said = updates.ensure_watcher(_install_root, _tree)
+                if said:
+                    log.info("обновление: %s", said)
+            except Exception:
+                log.exception("сторож испытания не позван")
         # Её сон — последним: живое слово, продолжение задач и будильники вперёд.
         if time.time() - sleep_at > _SLEEP_CHECK_SEC:
             sleep_at = time.time()

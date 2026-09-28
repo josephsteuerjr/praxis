@@ -661,6 +661,12 @@ pub fn stop_for_update(dir: &Path) -> Result<String, String> {
 /// ней надо обновить, иначе «Приложения» показывают прежнюю. HKLM без прав — молча.
 #[cfg(windows)]
 pub fn refresh_registered_version() {
+    set_registered_version(VERSION);
+}
+
+/// Версия в «Приложениях» — любая (1.2.5: откат испытания ставит прежнюю).
+#[cfg(windows)]
+pub fn set_registered_version(version: &str) {
     use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_SET_VALUE, KEY_READ};
     use winreg::RegKey;
     for hive in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
@@ -668,10 +674,13 @@ pub fn refresh_registered_version() {
             format!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{PRODUCT}"),
             KEY_READ | KEY_SET_VALUE,
         ) {
-            let _ = key.set_value("DisplayVersion", &VERSION.to_string());
+            let _ = key.set_value("DisplayVersion", &version.to_string());
         }
     }
 }
+
+#[cfg(not(windows))]
+pub fn set_registered_version(_version: &str) {}
 
 pub fn payload_dir() -> Option<PathBuf> {
     let here = exe_dir();
@@ -2917,6 +2926,11 @@ fn install_legacy(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Recei
         let current = dir.join("app").join("static");
         std::fs::rename(&current, &prev).map_err(|e| io_note(&current, &e))?;
     }
+    // 1.2.5: код агента — в сторону ДО копирования (его правки переносятся ниже).
+    let legacy_from = read_json(&dir.join("helene-build.json"))
+        .and_then(|p| p.get("version").and_then(|v| v.as_str()).map(str::to_string))
+        .unwrap_or_default();
+    let aside = set_aside_agent_code(&dir, &legacy_from);
     // helene.json и data/ поставки не копируем: конфиг пишем свой, данные рождаются здесь.
     let copied = copy_dir_skip(&payload, &dir, &SKIP_FROM_PAYLOAD, &skip_rel)?;
     // macOS: карантин Gatekeeper снимаем со всей папки сразу после копирования,
@@ -2942,6 +2956,16 @@ fn install_legacy(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Recei
     });
     if runtime_kept {
         steps.push(Step { label: "Рантайм".into(), ok: true, note: Some("состав не менялся — не копировался".into()) });
+    }
+    if let Some(aside) = aside {
+        let to = read_json(&dir.join("helene-build.json"))
+            .and_then(|p| p.get("version").and_then(|v| v.as_str()).map(str::to_string))
+            .unwrap_or_default();
+        let (mut step, _) = carry_agent_code(&dir, &aside, &legacy_from, &to);
+        if let Some(note) = step.note.as_mut() {
+            note.push_str(&format!("; прежний код агента — {}", aside.display()));
+        }
+        steps.push(step);
     }
     }
 
@@ -3562,6 +3586,7 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     }
 
     // 4. Репетиция расширений владельца под НОВЫМ движком — уже с диска `.new`.
+    let mut ext_summary = String::new();
     if had_install && !cancel.load(Ordering::Relaxed) {
         let python = if python_exe(&tx.new).is_file() { python_exe(&tx.new) } else { python_exe(&dir) };
         let runner = tx.new.join("app").join("localharness").join("runner.py");
@@ -3571,6 +3596,7 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
                 Ok(Some((ok, summary))) => {
                     say("rehearse", "Проверяю расширения под новой версией", None, None, true, true, progress);
                     steps.push(Step { label: "Расширения".into(), ok, note: Some(summary.clone()) });
+                    ext_summary = summary.clone();
                     if !ok && !s.force_extensions {
                         let _ = tx.rollback();
                         return Err(format!(
@@ -3813,6 +3839,19 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
         }
     }
 
+    // 7б. Правки агента в его коде — на новую версию (1.2.5, «ужесточить приёмку»). До 1.2.5
+    // `tree/` и `app/` менялись целиком, и то, что агент поправил в себе, пропадало. Прежняя
+    // программа сейчас в `.old` — в ней код агента таким, каким он его оставил; переносчик —
+    // из новой поставки (`server/updater/codecarry.py`, тот же, что у исполнителя на сервере).
+    let trial_ready = had_install && dir.join("app").join("localharness").join("runner.py").is_file();
+    let mut agent_code = serde_json::Value::Null;
+    if trial_ready {
+        say("carry", "Переношу правки агента в его коде", None, None, false, false, progress);
+        let (step, report) = carry_agent_code(&dir, &tx.old, &old_version, &version);
+        steps.push(step);
+        agent_code = report;
+    }
+
     // 8. Ярлыки и запись в «Приложениях» — по режиму.
     say("register", "Ярлыки и запись в «Приложениях»", None, None, false, true, progress);
     let exe = shell_exe(&dir);
@@ -3865,10 +3904,61 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
         "skipped".to_string()
     };
 
-    // 10. Готово: прежняя версия уходит в фоне.
-    let cleanup = tx.commit();
-    if let Ok(mut v) = CLEANUP.lock() {
-        v.push(cleanup);
+    // 10. Готово. Первая установка — прежней нет. Обновление поверх (1.2.5): прежняя
+    // программа не удаляется, а ложится в `backups/program-<версия>` — на неё откатывает
+    // испытание: агент проверяет себя в новой версии делом, «сломано» или молчание — откат.
+    if trial_ready {
+        let from = if old_version.is_empty() { "прежняя".to_string() } else { old_version.clone() };
+        prune_kept_programs(&dir);
+        match tx.commit_keep(&crate::trial::kept_path(&dir, &from)) {
+            Ok(kept) => {
+                crate::trial::begin(&dir, crate::trial::Begin {
+                    from_version: &old_version,
+                    to_version: &version,
+                    kept: Some(&kept),
+                    runtime_moved: runtime_kept,
+                    static_plan: match plan {
+                        StaticPlan::Keep => "keep",
+                        StaticPlan::Replace => "to_prev",
+                        StaticPlan::Fresh => "fresh",
+                    },
+                    new_top: manifest.top.clone(),
+                    service: s.wants_service(),
+                    scope: &scope,
+                    agent_code,
+                    extensions: ext_summary.clone(),
+                });
+                steps.push(match crate::trial::spawn_watcher(&dir) {
+                    Ok(()) => Step {
+                        label: "Испытание".into(),
+                        ok: true,
+                        note: Some(format!(
+                            "агент проверит себя в новой версии делом; «сломано» или молчание {} мин — вернётся {} \
+                             (она сохранена в {})",
+                            crate::trial::TRIAL_MIN,
+                            from,
+                            kept.display()
+                        )),
+                    },
+                    Err(e) => Step { label: "Испытание".into(), ok: false, note: Some(format!("{e}; движок позовёт сторожа сам при старте")) },
+                });
+            }
+            Err((e, cleanup)) => {
+                if let Ok(mut v) = CLEANUP.lock() {
+                    v.push(cleanup);
+                }
+                steps.push(Step {
+                    label: "Испытание".into(),
+                    ok: false,
+                    note: Some(format!("прежняя программа не сохранилась ({e}) — испытания и отката не будет")),
+                });
+            }
+        }
+    } else {
+        let cleanup = tx.commit();
+        if let Ok(mut v) = CLEANUP.lock() {
+            v.push(cleanup);
+        }
     }
     say("done", "Готово", Some(1.0), None, false, true, progress);
     Ok(Receipt {
@@ -3999,6 +4089,174 @@ fn rehearse_extensions_with(python: &Path, runner: &Path, host_version: &str, di
     let ok = report.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     let summary = report.get("summary").and_then(|v| v.as_str()).unwrap_or("без итога").to_string();
     Ok(Some((ok, summary)))
+}
+
+// ------------------------------------------------- перенос правок агента (1.2.5)
+
+/// Правки агента в его коде — на новую версию: `server/updater/codecarry.py desk` из уже
+/// поставленной новой версии (её рантайм и её переносчик). `old` — прежняя программа (или
+/// отложенный код агента). -> (строка расписки, отчёт переносчика для испытания).
+fn carry_agent_code(dir: &Path, old: &Path, from: &str, to: &str) -> (Step, serde_json::Value) {
+    let label = "Правки агента в коде".to_string();
+    let python = python_exe(dir);
+    let script = dir.join("server").join("updater").join("codecarry.py");
+    if !python.is_file() || !script.is_file() {
+        let why = "переносчика нет в поставке — правки агента остались в прежней программе";
+        return (Step { label, ok: false, note: Some(why.into()) }, serde_json::json!({"note": why}));
+    }
+    let mut cmd = Command::new(&python);
+    cmd.arg("-X").arg("utf8").arg(&script).arg("desk")
+        .arg("--old").arg(old)
+        .arg("--new").arg(dir)
+        .arg("--from").arg(from)
+        .arg("--to").arg(to)
+        .current_dir(dir)
+        .env("PYTHONIOENCODING", "utf-8");
+    let out = match run_hidden_for(&mut cmd, std::time::Duration::from_secs(300)) {
+        Ok(out) => out,
+        Err(e) => {
+            let why = format!("переносчик не запустился или не уложился: {e}");
+            return (Step { label, ok: false, note: Some(why.clone()) }, serde_json::json!({"note": why}));
+        }
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let Some(report) = text.lines().rev().find_map(|l| serde_json::from_str::<serde_json::Value>(l.trim()).ok()) else {
+        let why = format!("переносчик не дал отчёта: {}", console_text(&out.stderr).trim().chars().take(300).collect::<String>());
+        return (Step { label, ok: false, note: Some(why.clone()) }, serde_json::json!({"note": why}));
+    };
+    if report.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let why = format!("переносчик споткнулся: {}", report.get("why").and_then(|v| v.as_str()).unwrap_or("?"));
+        return (Step { label, ok: false, note: Some(why.clone()) }, serde_json::json!({"note": why}));
+    }
+    let count = |k: &str| report.get(k).and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+    let summary = report.get("summary").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let folder = report.get("folder").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let note = if count("edited") == 0 && report.get("no_base").is_none() {
+        "своих правок в коде у агента не было".to_string()
+    } else if folder.is_empty() {
+        summary
+    } else {
+        format!("{summary}; материалы агенту — data/{folder}")
+    };
+    (Step { label, ok: count("conflicts") == 0, note: Some(note) }, report)
+}
+
+/// Прежние программы прошлых обновлений (`backups/program-*`) — прочь: держим одну, под
+/// откат нынешнего испытания.
+fn prune_kept_programs(dir: &Path) {
+    if let Ok(rd) = std::fs::read_dir(dir.join("backups")) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with(crate::trial::KEPT_PREFIX) && e.path().is_dir() {
+                let _ = crate::tx::remove_tree(&e.path());
+            }
+        }
+    }
+}
+
+/// macOS и установка «на месте» (1.2.5): копирование идёт поверх, прежней программы не
+/// остаётся — поэтому код агента откладывается ДО копирования, и его правки переносятся
+/// тем же переносчиком. Отката на этом пути нет. -> папка отложенного кода.
+fn set_aside_agent_code(dir: &Path, version: &str) -> Option<PathBuf> {
+    if !dir.join("tree").join("agent.py").is_file() {
+        return None;
+    }
+    let aside = dir.join("backups").join(format!("code-{}", if version.is_empty() { "прежняя" } else { version }));
+    if let Ok(rd) = std::fs::read_dir(dir.join("backups")) {
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with("code-") {
+                let _ = crate::tx::remove_tree(&e.path());
+            }
+        }
+    }
+    let skip_app: &[&str] = &["static", "static.prev", "__pycache__"];
+    let ok = copy_dir_skip(&dir.join("tree"), &aside.join("tree"), &["__pycache__"], &[]).is_ok()
+        && copy_dir_skip(&dir.join("app"), &aside.join("app"), skip_app, &[]).is_ok();
+    ok.then_some(aside)
+}
+
+// ------------------------------------------------- для испытания обновления (trial.rs)
+
+pub(crate) fn installed_port_pub(dir: &Path) -> u16 {
+    installed_port(dir)
+}
+
+pub(crate) fn random_hex_pub(bytes: usize) -> Option<String> {
+    random_hex(bytes)
+}
+
+pub(crate) fn run_hidden_for_pub(cmd: &mut Command, limit: std::time::Duration) -> Result<std::process::Output, String> {
+    run_hidden_for(cmd, limit)
+}
+
+pub(crate) fn locked_files_pub(dir: &Path) -> Vec<String> {
+    locked_files(dir)
+}
+
+pub(crate) fn install_service_pub(dir: &Path) -> String {
+    install_service(dir)
+}
+
+pub(crate) fn service_uninstall_pub(dir: &Path) -> Result<(), String> {
+    service_op("uninstall", PRODUCT, Some(&dir.join("uninstall-service.ps1")))
+}
+
+/// Запись без `.bak` (у `write_atomic` он есть ради настроек): расписку и биение сторожа
+/// пишут раз в секунды, и копия рядом была бы мусором.
+pub(crate) fn write_atomic_pub(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| io_note(parent, &e))?;
+    }
+    let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push(format!(".{}.tmp", std::process::id()));
+    let tmp = path.with_file_name(name);
+    std::fs::write(&tmp, text).map_err(|e| io_note(&tmp, &e))?;
+    crate::tx::rename_retry(&tmp, path, 5).map_err(|e| io_note(path, &e))
+}
+
+/// Мастер в установке, от её корня: его зовёт сторож испытания и движок.
+pub(crate) fn setup_rel() -> PathBuf {
+    #[cfg(windows)]
+    {
+        PathBuf::from(SETUP_ENTRY)
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from(SETUP_APP).join("Contents").join("MacOS").join("helene-setup")
+    }
+}
+
+/// После отката: версия в настройках, метке установки и «Приложениях» — прежняя.
+pub(crate) fn mark_version_pub(dir: &Path, scope: &str, version: &str) -> Result<(), String> {
+    let cfg_path = dir.join("helene.json");
+    if let Some(mut cfg) = read_json(&cfg_path) {
+        if let Some(installed) = cfg.get_mut("installed").and_then(|v| v.as_object_mut()) {
+            installed.insert("version".into(), version.into());
+            if dir.join("app").join("static.prev").exists() {
+                installed.insert("static_prev".into(), "app/static.prev".into());
+            } else {
+                installed.remove("static_prev");
+            }
+        }
+        let text = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+        write_atomic(&cfg_path, &(text + "\n"))?;
+    }
+    write_marker(dir, scope, version)?;
+    set_registered_version(version);
+    Ok(())
+}
+
+/// Открыть окно установленной программы (после отката).
+pub(crate) fn launch_pub(dir: &Path) -> Result<(), String> {
+    let exe = shell_exe(dir);
+    #[cfg(windows)]
+    {
+        crate::win::launch_app(&exe).map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        launch_installed(&exe)
+    }
 }
 
 // ------------------------------------------------- для варианта Praxis (praxis.rs)

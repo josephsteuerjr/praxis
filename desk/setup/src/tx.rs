@@ -50,6 +50,11 @@ pub struct Journal {
     pub moves: Vec<Move>,
     pub version: String,
     pub pid: u32,
+    /// 1.2.5, откат испытания: `.new` — не свежая раскладка, а сохранённая прежняя
+    /// программа (`backups/program-<версия>`). Отмена возвращает её туда, а не удаляет:
+    /// без этого прерванный откат стёр бы единственную копию прежней версии.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore_new: Option<String>,
 }
 
 /// Как поступить с прежним интерфейсом окна (`app/static`) — решение принимает
@@ -216,10 +221,34 @@ impl Tx {
                 moves: Vec::new(),
                 version: version.to_string(),
                 pid: std::process::id(),
+                restore_new: None,
             },
             done: false,
         };
         tx.save()?;
+        Ok(tx)
+    }
+
+    /// Откат испытания (1.2.5): новой раскладкой становится готовая прежняя программа
+    /// `prepared` — она переезжает в `.new` под журналом, и дальше всё как у обновления:
+    /// `swap` переносит владельческое из стоящей (отвергнутой) версии и ставит прежнюю на
+    /// место. Отмена и `recover` возвращают `prepared` туда, откуда взяли.
+    pub fn begin_from(dir: &Path, version: &str, prepared: &Path) -> Result<Tx, String> {
+        if !prepared.is_dir() {
+            return Err(format!("сохранённой прежней программы нет: {}", prepared.display()));
+        }
+        let mut tx = Tx::begin(dir, version)?;
+        let _ = std::fs::remove_dir(&tx.new);
+        tx.journal.restore_new = Some(prepared.display().to_string());
+        tx.save()?;
+        if let Err(e) = rename_retry(prepared, &tx.new, 20) {
+            let _ = std::fs::create_dir_all(&tx.new);
+            tx.journal.restore_new = None;
+            let _ = tx.save();
+            let _ = tx.rollback_inner();
+            tx.done = true;
+            return Err(format!("прежняя программа не встаёт на подмену ({}): {e}", prepared.display()));
+        }
         Ok(tx)
     }
 
@@ -379,12 +408,55 @@ impl Tx {
             trouble = self.undo_swap();
         }
         if trouble.is_empty() {
-            if let Err(e) = remove_tree(&self.new) {
-                trouble.push(format!("{} не удалилась: {e}", self.new.display()));
+            match self.journal.restore_new.clone() {
+                Some(back) if self.new.exists() => {
+                    if let Err(e) = rename_retry(&self.new, Path::new(&back), 20) {
+                        trouble.push(format!("прежняя программа не вернулась в {back}: {e} (она в {})", self.new.display()));
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    if let Err(e) = remove_tree(&self.new) {
+                        trouble.push(format!("{} не удалилась: {e}", self.new.display()));
+                    }
+                }
             }
-            let _ = std::fs::remove_file(&self.journal_path);
+            if trouble.is_empty() {
+                let _ = std::fs::remove_file(&self.journal_path);
+            }
         }
         trouble
+    }
+
+    /// Успех обновления с испытанием (1.2.5): прежняя программа не удаляется, а уезжает в
+    /// `keep_at` (обычно `<папка>/backups/program-<версия>`) — на неё откатывает испытание.
+    /// Тот же том — одно переименование. Не вышло — прежняя удаляется, как при `commit`, и
+    /// ответ говорит почему: испытание тогда идёт без отката. -> Ok(куда легла).
+    pub fn commit_keep(mut self, keep_at: &Path) -> Result<PathBuf, (String, std::thread::JoinHandle<()>)> {
+        self.done = true;
+        let moved = (|| -> Result<(), String> {
+            if !self.old.exists() {
+                return Err("прежней программы нет (первая установка)".into());
+            }
+            if let Some(parent) = keep_at.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            if keep_at.exists() {
+                remove_tree(keep_at).map_err(|e| format!("{} не убирается: {e}", keep_at.display()))?;
+            }
+            rename_retry(&self.old, keep_at, 20)
+                .map_err(|e| format!("{} не переезжает в {}: {e}", self.old.display(), keep_at.display()))
+        })();
+        let _ = std::fs::remove_file(&self.journal_path);
+        match moved {
+            Ok(()) => Ok(keep_at.to_path_buf()),
+            Err(e) => {
+                let old = self.old.clone();
+                Err((e, std::thread::spawn(move || {
+                    let _ = remove_tree(&old);
+                })))
+            }
+        }
     }
 
     /// Успех: журнал прочь, `.old` удаляется (в фоне — 15 тысяч файлов это секунды;
@@ -640,6 +712,61 @@ mod tests {
         assert!(res.is_err());
         assert_eq!(read(&dir.join("helene.exe")), "old-exe");
         assert!(!journal_path(&dir).exists());
+        let _ = remove_tree(&r);
+    }
+
+    /// 1.2.5: обновление с испытанием оставляет прежнюю программу в `backups/`, а откат
+    /// ставит её обратно той же транзакцией — с владельческим, которое нажилось за испытание.
+    #[test]
+    fn kept_program_comes_back_by_the_same_transaction() {
+        let r = root("keep");
+        let dir = r.join("Helene");
+        old_install(&dir);
+        let mut tx = Tx::begin(&dir, "1.2.5").unwrap();
+        lay_new(&tx.new);
+        put(&tx.new.join("runtime").join("python.exe"), "new-py");
+        let carry = Carry { drop: &["uninstall.exe"], old_payload_top: &[], static_carry: StaticCarry::ToPrev, keep_runtime: false, extra: &[] };
+        tx.swap(&carry).unwrap();
+        let kept = dir.join("backups").join("program-1.2.4");
+        assert_eq!(tx.commit_keep(&kept).unwrap(), kept);
+        assert_eq!(read(&kept.join("helene.exe")), "old-exe");
+        assert!(!old_path(&dir).exists() && !journal_path(&dir).exists());
+        // за испытание агент кое-что нажил в данных
+        put(&dir.join("data").join("memory").join("new.md"), "за испытание");
+        // откат: прежняя программа — новой раскладкой
+        let mut back = Tx::begin_from(&dir, "1.2.4", &kept).unwrap();
+        assert!(!kept.exists());
+        let top = vec!["helene.exe".to_string(), "app".to_string(), "runtime".to_string()];
+        let extra = vec![("app/static.prev".to_string(), "app/static".to_string())];
+        let carry = Carry { drop: &[], old_payload_top: &top, static_carry: StaticCarry::None, keep_runtime: false, extra: &extra };
+        back.swap(&carry).unwrap();
+        back.commit().join().unwrap();
+        assert_eq!(read(&dir.join("helene.exe")), "old-exe");
+        assert_eq!(read(&dir.join("runtime").join("python.exe")), "old-py");
+        assert_eq!(read(&dir.join("app").join("static").join("index.html")), "old-ui");
+        assert_eq!(read(&dir.join("data").join("memory").join("new.md")), "за испытание");
+        assert_eq!(read(&dir.join("data").join("soul").join("SOUL.md")), "душа");
+        assert!(!dir.join("backups").join("program-1.2.4").exists());
+        assert!(!old_path(&dir).exists() && !journal_path(&dir).exists());
+        let _ = remove_tree(&r);
+    }
+
+    /// Откат прервали посреди: прежняя программа не удаляется, а возвращается на место.
+    #[test]
+    fn interrupted_rollback_returns_the_kept_program() {
+        let r = root("keep-kill");
+        let dir = r.join("Helene");
+        old_install(&dir);
+        let kept = r.join("kept");
+        put(&kept.join("helene.exe"), "prev-exe");
+        let back = Tx::begin_from(&dir, "1.2.4", &kept).unwrap();
+        assert!(!kept.exists());
+        std::mem::forget(back);
+        let said = recover(&dir).expect("журнал найден");
+        assert!(said.contains("раскладке"), "{said}");
+        assert_eq!(read(&kept.join("helene.exe")), "prev-exe", "прежняя программа не стёрта");
+        assert_eq!(read(&dir.join("helene.exe")), "old-exe");
+        assert!(!new_path(&dir).exists() && !journal_path(&dir).exists());
         let _ = remove_tree(&r);
     }
 

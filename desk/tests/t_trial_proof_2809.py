@@ -162,5 +162,53 @@ class Desktop(Base):
         self.assertIn("перенесено 1", note)
 
 
+class Watcher(Base):
+    """Испытание не закрыто, а сторожа не слышно (перезагрузка, окно закрывали) — движок зовёт его."""
+
+    def setUp(self):
+        super().setUp()
+        self.install = self.tree / "Helene"
+        self.data = self.install / "data"
+        (self.install / "backups").mkdir(parents=True)
+        (self.data / "memory" / ".control").mkdir(parents=True)
+        exe = updates._setup_exe(self.install)
+        exe.parent.mkdir(parents=True, exist_ok=True)
+        exe.write_bytes(b"exe")
+        updates._WATCHER_CALLED[0] = 0.0
+        self.calls = []
+
+    def state(self, phase):
+        (self.install / "backups" / "update-trial.json").write_text(
+            json.dumps({"phase": phase, "from_version": "1.2.4", "to_version": "1.2.5"}), "utf-8")
+
+    def beat(self, at, desktop=True):
+        (self.data / "memory" / ".control" / "updater.json").write_text(
+            json.dumps({"beat_epoch": at, "desktop": desktop}), "utf-8")
+
+    def ensure(self, now, env=ON_DESK):
+        with mock.patch.dict(os.environ, env), mock.patch.object(updates.Path, "exists", return_value=False):
+            return updates.ensure_watcher(self.install, self.data, now=now, spawn=self.calls.append)
+
+    def test_open_trial_without_a_heartbeat_calls_the_watcher_once_in_a_while(self):
+        self.state("trial")
+        self.assertIn("позван", self.ensure(1000.0))
+        self.assertEqual(self.calls[0][1:], ["--trial", "--dir", str(self.install)])
+        self.assertEqual(self.ensure(1060.0), "", "не чаще раза в две минуты")
+        self.assertIn("позван", self.ensure(1200.0))
+
+    def test_live_watcher_or_closed_trial_needs_nothing(self):
+        self.state("trial")
+        self.beat(995.0)
+        self.assertEqual(self.ensure(1000.0), "")
+        self.state("done")
+        self.beat(0.0)
+        self.assertEqual(self.ensure(5000.0), "")
+        self.assertEqual(self.calls, [])
+
+    def test_not_on_a_server(self):
+        self.state("trial")
+        self.assertEqual(self.ensure(1000.0, env=ON_SERVER), "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

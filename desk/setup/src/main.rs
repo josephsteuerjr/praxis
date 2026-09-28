@@ -30,6 +30,7 @@ mod payload;
 #[cfg(feature = "praxis")]
 mod praxis;
 mod probe;
+mod trial;
 mod tx;
 #[cfg(windows)]
 mod win;
@@ -618,6 +619,17 @@ fn main() {
     // Мастер и всё, что он породит, — в одном job: вышел или упал — дети умирают с ним.
     #[cfg(windows)]
     let _ = win::adopt_self_into_job();
+    // Сторож испытания новой версии после обновления (1.2.5): без окна, пока испытание не
+    // закрыто. Зовут его установка (`install_tx`) и движок, если сторожа не слышно.
+    if args.iter().any(|a| a == trial::TRIAL_ARG) {
+        let dir = args
+            .iter()
+            .position(|a| a == "--dir")
+            .and_then(|i| args.get(i + 1))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(install::exe_dir);
+        std::process::exit(trial::watch(&dir, &args));
+    }
     if args.iter().any(|a| a == "--configure")
         || install::nsis_root().is_some()
         || install::exe_dir().join(install::INSTALL_MARKER).is_file()

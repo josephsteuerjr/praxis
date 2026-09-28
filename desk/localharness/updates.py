@@ -325,6 +325,80 @@ def install(agent_mod, tree: Path, cfg: dict | None = None, *,
     return True
 
 
+#: Испытание на ПК: состояние сторожа — в папке установки (его пишет установщик).
+TRIAL_STATE = ("backups", "update-trial.json")
+TRIAL_OPEN = ("starting", "trial", "accepting", "rollback")
+#: Биение сторожа старше — сторожа нет (он бьётся раз в три секунды).
+WATCHER_STALE = 30.0
+#: Звать сторожа не чаще (он сам проверяет, нет ли другого).
+WATCHER_RESPAWN = 120.0
+_WATCHER_CALLED = [0.0]
+
+
+def _setup_exe(install: Path) -> Path:
+    if os.name == "nt":
+        return install / "helene-setup.exe"
+    return install / "Helene Setup.app" / "Contents" / "MacOS" / "helene-setup"
+
+
+def ensure_watcher(install: Path | None, tree: Path | None, *, now: float | None = None,
+                   spawn: Callable[[list[str]], None] | None = None) -> str:
+    """Испытание на ПК не закрыто, а сторожа не слышно — позвать его (1.2.5).
+
+    Сторож (`helene-setup --trial`) живёт отдельным процессом и выходит, когда программа
+    долго не запущена; перезагрузка посреди испытания его тоже гасит. Поднялся движок —
+    значит программа снова жива, и сторож нужен: без него ни слово агента, ни молчание до
+    срока ни к чему не приведут. -> что сделано (для журнала), "" — ничего.
+    """
+    import json
+    import time
+    if install is None or tree is None or on_server():
+        return ""
+    try:
+        state = json.loads(Path(install).joinpath(*TRIAL_STATE).read_text("utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(state, dict) or state.get("phase") not in TRIAL_OPEN:
+        return ""
+    now = time.time() if now is None else now
+    try:
+        beat = json.loads((Path(tree) / "memory" / ".control" / "updater.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        beat = {}
+    if beat.get("desktop") and now - float(beat.get("beat_epoch") or 0.0) < WATCHER_STALE:
+        return ""
+    if now - _WATCHER_CALLED[0] < WATCHER_RESPAWN:
+        return ""
+    exe = _setup_exe(Path(install))
+    if not exe.is_file():
+        return f"сторожа испытания звать нечем: нет {exe.name}"
+    _WATCHER_CALLED[0] = now
+    argv = [str(exe), "--trial", "--dir", str(install)]
+    try:
+        (spawn or _spawn_detached)(argv)
+    except OSError as exc:
+        return f"сторож испытания не запустился: {exc}"
+    return f"сторож испытания позван ({state.get('from_version')} → {state.get('to_version')}, {state.get('phase')})"
+
+
+def _spawn_detached(argv: list[str]) -> None:
+    import subprocess
+    if os.name == "nt":
+        flags = 0x00000008 | 0x00000200 | 0x08000000          # DETACHED | NEW_GROUP | NO_WINDOW
+        try:
+            subprocess.Popen(argv, creationflags=flags | 0x01000000, close_fds=True,  # BREAKAWAY
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+            return
+        except OSError:
+            pass                                     # job не отпускает — сторож выйдет из него сам
+        subprocess.Popen(argv, creationflags=flags, close_fds=True, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    subprocess.Popen(argv, start_new_session=True, close_fds=True, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def pending_report(tree: Path) -> dict | None:
     """Испытание или итог, о котором агенту ещё не сказали (или None).
 
