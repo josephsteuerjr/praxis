@@ -81,7 +81,10 @@ class Config(unittest.TestCase):
         self.assertFalse(modes.computer_state({})["explicit"])
         option = modes.computer_option()
         self.assertEqual([s["key"] for s in option["scopes"]], list(body.SCOPES))
-        self.assertIn("слабых моделей", option["warning"])
+        # 28.09 (слово Егора): оговорки «для энтузиастов» у рук экрана нет — она у
+        # тумблера нулевой сессии, в миг включения.
+        self.assertEqual(option["warning"], "")
+        self.assertIn("Слабая модель", modes.SESSION0_WARNING)
 
     def test_device_id_is_route_safe(self):
         value = body.device_id()
@@ -653,18 +656,19 @@ class Platform(unittest.TestCase):
             self.assertEqual(body.mac_pointer_text(said), said, "не идемпотентно")
         self.assertEqual(body.mac_pointer_text(ru), "компьютер владельца (macOS): файлы, zsh, экран, окна, руки")
         self.assertEqual(body.mac_pointer_text(en), "the owner's Mac: files, zsh, screen, app windows, tools")
+        # 1.2.5: блок владельца дерева без серверного блока и без фразы про
+        # `coding_session(scope='windows')` — текст ровно тот, что в дереве издания.
         owner = ("Audit is hash-chained. The Windows PC is your DIRECT body: the `computer` tool is the "
                  "primary path there (read/hash/write/replace files, run/poll/stop PowerShell, observe "
-                 "files and screen, send artifacts, full desktop hands). No task container is required; "
-                 "`coding_session(scope='windows')` is a deprecated keyhole: it still works, existing wcode "
-                 "tasks finish normally, and spawning coding_agent subagents on Windows still goes through "
-                 "it. The PC has no LLM, memory or task store. Leave an evidence trail Yegor reads.\n")
+                 "files and screen, send artifacts, full desktop hands). Receipts bind to your current run "
+                 "automatically; execution identity is explicit: interactive (the owner's session) or system "
+                 "(a task for the Hélène service through `broker_request`, when the owner enabled it). "
+                 "Leave an evidence trail Yegor reads.\n")
         said = body.mac_owner_text(owner)
-        for word in ("Windows PC", "PowerShell", "on Windows", "The PC has"):
+        for word in ("Windows PC", "PowerShell", "on Windows"):
             self.assertNotIn(word, said, f"«{word}» осталось: {said}")
         self.assertIn("This Mac is your DIRECT body", said)
         self.assertIn("run/poll/stop shell (zsh) processes, observe files and screen", said)
-        self.assertIn("The Mac has no LLM, memory or task store", said)
         # Соседние предложения целы, идемпотентно.
         self.assertIn("Audit is hash-chained. This Mac", said)
         self.assertIn("Leave an evidence trail Yegor reads.", said)
