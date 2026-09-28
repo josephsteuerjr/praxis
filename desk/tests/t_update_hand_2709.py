@@ -63,12 +63,16 @@ class Hand(unittest.TestCase):
             self.assertTrue(updates.install(agent, self.tree, {}, owner_spoke=lambda: self.owner[0]))
         return agent, agent.TOOL_IMPL[updates.TOOL_NAME]
 
-    def test_только_на_сервере_и_один_раз(self):
-        agent = fake_agent()
+    def test_на_пк_уже_на_сервере_целиком_и_один_раз(self):
+        # 1.2.5: на ПК рука есть, но только испытание и состояние (обновляет кнопка окна)
+        desk = fake_agent()
         with mock.patch.dict(os.environ, {"HELENE_SUPERVISOR": ""}), \
                 mock.patch.object(updates.Path, "exists", return_value=False):
-            self.assertFalse(updates.install(agent, self.tree, {}))
-        self.assertEqual(agent.TOOL_IMPL, {})
+            self.assertTrue(updates.install(desk, self.tree, {}))
+        schema = desk.BASE_TOOLS[0]["input_schema"]["properties"]["action"]["enum"]
+        self.assertEqual(schema, ["status", "accept", "reject"])
+        self.assertIn("кнопкой в окне", desk.TOOL_IMPL[updates.TOOL_NAME](action="plan"))
+        agent = fake_agent()
         self.hand(agent)
         self.hand(agent)
         self.assertEqual([t["name"] for t in agent.BASE_TOOLS], [updates.TOOL_NAME])

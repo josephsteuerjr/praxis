@@ -27,9 +27,14 @@
 Записки: движок раз в полминуты смотрит, нет ли испытания или итога, о котором агенту ещё
 не сказали, и если есть — кладёт записку в окно и даёт агенту ход, как при рождении.
 
-Рука выдаётся только на сервере (надзор — serverboot): на Windows и Mac обновление —
-кнопка окна «Проверить обновления», и обещать модели руку, которая всегда откажет, хуже,
-чем не иметь её.
+На ПК (1.2.5) рука тоже есть, но уже: `status`, `accept`, `reject`. Обновление там ставит
+владелец кнопкой окна, а испытание ведёт установщик (`setup/src/trial.rs`): он переносит
+правки агента в коде, поднимает новую версию и ждёт слова — тем же протоколом файлами.
+
+Принять — только с доказательством делом (1.2.5, «ужесточить приёмку»): с начала испытания
+хоть одна рабочая рука вернула результат и `recall` что-то нашёл (`trial_proof.py`). Без
+этого `accept` отвечает, чего не хватает. `reject` доказательства не требует — откат
+безопасен; владелец кнопкой в окне принимает без него — его слово поверх.
 """
 from __future__ import annotations
 
@@ -38,6 +43,8 @@ import os
 import sys
 from pathlib import Path
 from typing import Callable
+
+import trial_proof
 
 log = logging.getLogger("helene.updates")
 
@@ -96,6 +103,28 @@ TOOL = {
 }
 
 
+#: Та же рука на ПК: только испытание и состояние — обновление ставит кнопка окна.
+TOOL_DESK = {
+    "name": TOOL_NAME,
+    "description": (
+        "Обновление Hélène на этом компьютере. Ставит его владелец кнопкой в окне (Настройки → "
+        "Обновление); ты можешь предложить ему словами. После обновления установщик переносит "
+        "твои правки в `tree/` и `app/` (что не ляжет — отдаст тебе в workspace/update-<версия>/), "
+        "поднимает новую версию и присылает записку испытания: проверь себя делом и скажи слово.\n"
+        "action=status — какая версия стоит, что с последним обновлением, идёт ли испытание.\n"
+        "action=accept — на испытании: всё живо; report — что проверено. Примется, только если "
+        "с начала испытания хоть одна твоя рабочая рука вернула результат и recall что-то нашёл.\n"
+        "action=reject — на испытании: сломано; report — что именно. По reject (и если промолчишь "
+        "до срока) установщик вернёт прежнюю версию программы; память останется как есть."),
+    "input_schema": {"type": "object", "properties": {
+        "action": {"type": "string", "enum": ["status", "accept", "reject"],
+                   "description": "status | accept | reject"},
+        "report": {"type": "string",
+                   "description": "для accept/reject: что проверено и что видно — ложится в расписку"},
+    }, "required": ["action"]},
+}
+
+
 def on_server() -> bool:
     """Надзор — serverboot (он ставит метку детям) или мы в контейнере."""
     return os.environ.get("HELENE_SUPERVISOR") == "serverboot" or Path("/.dockerenv").exists()
@@ -129,11 +158,16 @@ def receipt_line(receipt: dict) -> str:
     return line + (f"\nКоротко для владельца: {plain}" if plain and plain != detail else "")
 
 
-def status_text(state: dict) -> str:
+def status_text(state: dict, *, desktop: bool = False) -> str:
     up = state.get("updater") or {}
     receipt = state.get("receipt") or {}
     lines = []
-    if up.get("ok"):
+    if desktop:
+        lines.append("Обновление на этом компьютере ставит владелец кнопкой в окне (Настройки → "
+                     "Обновление); предложить ему можно словами.")
+        if up.get("alive") and up.get("busy"):
+            lines.append(f"Установщик сейчас: {up['busy']}.")
+    elif up.get("ok"):
         latest = (up.get("latest") or {}).get("version") or ""
         lines.append(f"Исполнитель обновлений на связи. Стоит {up.get('current') or '?'}; "
                      f"последняя в выпусках — {latest or 'ещё не проверял'}"
@@ -149,8 +183,8 @@ def status_text(state: dict) -> str:
                          "Обновление) или словами тебе — тогда action=confirm с его словами дословно.")
         elif receipt.get("state") == "trial":
             trial = receipt.get("trial") or {}
-            lines.append(f"Испытание до {trial.get('until_utc') or '?'} (UTC): проверь себя и скажи "
-                         "action=accept или action=reject с report. Молчание до срока — откат.")
+            lines.append(f"Испытание до {trial.get('until_utc') or '?'} (UTC): проверь себя делом и "
+                         "скажи action=accept или action=reject с report. Молчание до срока — откат.")
             code = receipt.get("agent_code") or {}
             if code.get("summary"):
                 lines.append("Твои правки кода: " + code["summary"]
@@ -158,8 +192,10 @@ def status_text(state: dict) -> str:
     return "\n".join(lines)
 
 
-def make_hand(tree: Path, owner_spoke: Callable[[], bool], chat_of: Callable[[], str]):
+def make_hand(tree: Path, owner_spoke: Callable[[], bool], chat_of: Callable[[], str], *,
+              desktop: bool = False):
     tree = Path(tree)
+    proof = trial_proof.proof_for(tree)
 
     def update_request(action: str = "status", version: str = "latest", backup: str = "full",
                        reason: str = "", owner_words: str = "", report: str = "") -> str:
@@ -168,7 +204,10 @@ def make_hand(tree: Path, owner_spoke: Callable[[], bool], chat_of: Callable[[],
             action = str(action or "status").strip().lower()
             state = control.update_state(tree)
             if action == "status":
-                return status_text(state)
+                return status_text(state, desktop=desktop)
+            if desktop and action in ("plan", "confirm", "decline"):
+                return ("На этом компьютере обновление ставит владелец кнопкой в окне (Настройки → "
+                        "Обновление). Предложи ему словами, если считаешь, что пора.")
             if action == "plan":
                 words = " ".join(str(owner_words or "").split())
                 if words and not owner_spoke():
@@ -198,9 +237,14 @@ def make_hand(tree: Path, owner_spoke: Callable[[], bool], chat_of: Callable[[],
                 if len(words) < 2:
                     return ("Нужен report: что проверено и что видно — он ложится в расписку, "
                             "и по нему владелец поймёт, почему принято или откачено.")
-                got = control.update_verdict(tree, receipt.get("id", ""),
-                                             (receipt.get("trial") or {}).get("key", ""),
-                                             action, by="agent", words=words)
+                key = (receipt.get("trial") or {}).get("key", "")
+                evidence = proof.evidence(key)
+                if action == "accept" and not evidence["ok"]:
+                    return ("Пока не принимаю: принять можно только с доказательством делом, а его "
+                            "ещё нет — " + "; ".join(evidence["missing"]) + ". Проверь себя делом и "
+                            "скажи accept снова. Если что-то не работает — reject с report.")
+                got = control.update_verdict(tree, receipt.get("id", ""), key, action, by="agent",
+                                             words=words, proof=evidence)
                 if not got.get("ok"):
                     return "Слово не записалось: " + str(got.get("note") or "")
                 if action == "accept":
@@ -240,10 +284,13 @@ def make_hand(tree: Path, owner_spoke: Callable[[], bool], chat_of: Callable[[],
 
 def install(agent_mod, tree: Path, cfg: dict | None = None, *,
             owner_spoke: Callable[[], bool] = lambda: False) -> bool:
-    """Выдать агенту руку обновления — только на сервере. -> выдана ли."""
-    if not on_server():
-        STATE.update(hand=False, note="не сервер: обновление — кнопкой окна")
-        return False
+    """Выдать агенту руку обновления: на сервере — целиком, на ПК — испытание и статус.
+    Там и там — журнал дел для доказательства на испытании. -> выдана ли."""
+    desktop = not on_server()
+    try:
+        trial_proof.install(agent_mod, Path(tree))
+    except Exception:
+        log.exception("испытание: журнал дел не подключился")
     impl = getattr(agent_mod, "TOOL_IMPL", None)
     tools = getattr(agent_mod, "BASE_TOOLS", None)
     if not isinstance(impl, dict) or not isinstance(tools, list):
@@ -263,27 +310,35 @@ def install(agent_mod, tree: Path, cfg: dict | None = None, *,
         return f"{title} ({chat})" if title and chat else (title or chat)
 
     if impl.get(TOOL_NAME) is None:
-        impl[TOOL_NAME] = make_hand(Path(tree), owner_spoke, chat_of)
+        impl[TOOL_NAME] = make_hand(Path(tree), owner_spoke, chat_of, desktop=desktop)
         if not any(isinstance(t, dict) and t.get("name") == TOOL_NAME for t in tools):
-            tools.append(dict(TOOL))
+            tools.append(dict(TOOL_DESK if desktop else TOOL))
         purposes = getattr(agent_mod, "HAND_PURPOSE", None)
         if isinstance(purposes, dict):
-            purposes[TOOL_NAME] = ("обновить себя на сервере: план исполнителю, «да» — у владельца, "
-                                   "после подъёма — слово на испытании")
-    STATE.update(hand=True, note="рука update_request выдана")
-    log.info("обновление: рука update_request выдана (исполнитель — server/updater)")
+            purposes[TOOL_NAME] = (("обновление на этом компьютере: состояние и слово на испытании "
+                                    "после подъёма новой версии") if desktop else
+                                   ("обновить себя на сервере: план исполнителю, «да» — у владельца, "
+                                    "после подъёма — слово на испытании"))
+    STATE.update(hand=True, note="рука update_request выдана" + (" (ПК: испытание)" if desktop else ""))
+    log.info("обновление: рука update_request выдана (%s)",
+             "ПК — испытание ведёт установщик" if desktop else "исполнитель — server/updater")
     return True
 
 
 def pending_report(tree: Path) -> dict | None:
-    """Испытание или итог, о котором агенту ещё не сказали (или None)."""
-    if not on_server():
-        return None
+    """Испытание или итог, о котором агенту ещё не сказали (или None).
+
+    Расписка ПК (её пишет установщик, `desktop: true`) — только на ПК, расписка
+    исполнителя — только на сервере: архив переноса везёт `memory/.control` с собой, и
+    агент, переехавший сразу после обновления, иначе получил бы записку чужого дома."""
     try:
-        return _control().update_unreported(Path(tree))
+        receipt = _control().update_unreported(Path(tree))
     except Exception:
         log.debug("итог обновления не прочитался", exc_info=True)
         return None
+    if receipt is None or bool(receipt.get("desktop")) == on_server():
+        return None
+    return receipt
 
 
 def mark_reported(tree: Path, receipt: dict, **how) -> None:
@@ -346,16 +401,21 @@ def trial_note(receipt: dict, *, owner: str = "владелец") -> str:
              _checks_line("Механика: ", receipt.get("checks"))]
     ext = receipt.get("extensions") or {}
     lines += _code_lines(receipt)
-    lines += ["Что проверить:",
+    back = ("установщик вернёт прежнюю версию программы" if receipt.get("desktop")
+            else "исполнитель вернёт прежнюю версию (код и образ)")
+    lines += ["Что проверить — делом, не словами:",
               "1. Думаешь — этот ход и есть проверка.",
-              "2. Помнишь — вспомни последний разговор с владельцем и свою запись о себе.",
-              "3. Руки — позови две-три свои руки (shell, чтение файла, то, чем пользуешься чаще).",
+              "2. Помнишь — recall: вспомни последний разговор с владельцем и свою запись о себе.",
+              "3. Руки — позови две-три свои рабочие руки (shell, чтение файла, то, чем пользуешься "
+              "чаще) и посмотри, что они вернули.",
               f"4. Расширения — {ext.get('summary') or 'их нет'}.",
               "5. Твои правки кода — работают ли перенесённые так, как у тебя было; что не легло — "
               "решишь позже, это не повод откатывать всё.",
+              "accept примется, только если за испытание хоть одна рабочая рука вернула результат "
+              "и recall что-то нашёл — иначе рука скажет, чего не хватает.",
               "Всё живо — update_request(action=\"accept\", report=\"что проверено\"). Сломано — "
-              "update_request(action=\"reject\", report=\"что именно\"): исполнитель вернёт прежнюю "
-              "версию (код и образ; память останется как есть). Промолчишь до срока — тоже откат.",
+              f"update_request(action=\"reject\", report=\"что именно\"): {back}; память останется "
+              "как есть. Промолчишь до срока — тоже откат.",
               f"Владелец — {owner}: коротко и простыми словами, без технических подробностей, скажи, "
               "что обновление прошло, идёт твоя проверка и чем она закончилась."]
     return "\n".join(line for line in lines if line)

@@ -710,7 +710,7 @@ def update_confirm(tree: Path, plan_id: str, nonce: str, decision: str, by: str 
 
 
 def update_verdict(tree: Path, plan_id: str, key: str, verdict: str, by: str = "agent",
-                   words: str = "") -> dict:
+                   words: str = "", proof: dict | None = None) -> dict:
     """Слово на испытании: «принимаю» — обновление закрывается, «сломано» — откат.
 
     Говорит агент (рука update_request) или владелец кнопкой в окне; первое слово берёт
@@ -733,6 +733,11 @@ def update_verdict(tree: Path, plan_id: str, key: str, verdict: str, by: str = "
     row = {"schema": UPDATE_SCHEMA, "id": str(plan_id), "key": str(key), "verdict": verdict,
            "by": str(by or "agent")[:40], "words": " ".join(str(words or "").split())[:1500],
            "at_utc": _utc(), "at_epoch": time.time()}
+    if isinstance(proof, dict) and proof:
+        # Доказательство делом (1.2.5): что агент сделал в новой версии — для расписки.
+        row["proof"] = {"hands": [str(n)[:60] for n in (proof.get("hands") or [])][:20],
+                        "recall": int(proof.get("recall") or 0),
+                        "line": str(proof.get("line") or "")[:400]}
     _write(_control_dir(tree) / UPDATE_VERDICT, row)
     if verdict == "accept":
         return {"ok": True, "verdict": row,
