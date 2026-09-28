@@ -2539,6 +2539,13 @@ def main() -> None:
         shell_words.install(agent, tree, config_path.parent)
     except Exception:
         log.exception("описание руки shell осталось серверным")
+    # Руки серверного издания (host_ctl, server_*, restart_mailbot…) — снимаются (1.2.5):
+    # серверного тела и почтового бота у агента на компьютере владельца нет.
+    try:
+        import edition_tools
+        edition_tools.install(agent)
+    except Exception:
+        log.exception("руки серверного издания остались в наборе")
     # Модель, закреплённая владельцем (1.2.4): пока стоит галочка, switch_brain агента
     # отказывает словами — агент Дмитрия трижды уходил на мёртвый мозг «по просьбе хозяина».
     try:

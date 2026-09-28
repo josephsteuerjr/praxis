@@ -244,7 +244,118 @@ def _seed_kit(tree: Path, cfg: dict) -> int:
     return planted
 
 
+#: Прежние редакции стартового комплекта (`installer/kit_history.py`): точка в имени —
+#: `_seed_kit` такой файл в дом не кладёт.
+_KIT_HISTORY = _RESOURCES / ".shipped-history.json"
+
+
+def _kit_history() -> dict[str, list[str]]:
+    try:
+        data = json.loads(_KIT_HISTORY.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    files = data.get("files") if isinstance(data, dict) else None
+    return {str(k): [str(t) for t in v if isinstance(t, str)]
+            for k, v in (files or {}).items() if isinstance(v, list)}
+
+
+def refresh_kit(tree: Path, cfg: dict) -> list[str]:
+    """Нетронутые тексты поставки — на новую редакцию. -> что обновлено (пути от дома).
+
+    1.2.5 (28.09, слово Егора): тексты комплекта переписаны — без рода, без чужих имён,
+    путей и контейнеров. `_seed_kit` кладёт только отсутствующее, и у агентов, рождённых
+    раньше, лежали бы прежние слова. Правило: файл, совпадающий СЛОВО В СЛОВО с какой-либо
+    прежней редакцией поставки (после подстановки имён), не правил никто — его меняем;
+    правленый агентом или владельцем не трогаем никогда. Запись о себе (CURRENT) —
+    отдельно: у неё версии, и новая ложится ревизией, а не перезаписью.
+    """
+    history = _kit_history()
+    if not history:
+        return []
+    done: list[str] = []
+    for rel, olds in sorted(history.items()):
+        if rel == "self-day-zero.md":
+            continue
+        src = _SOUL_CANON if rel == "SOUL.md" else _RESOURCES / rel
+        dst = tree / "soul" / "SOUL.md" if rel == "SOUL.md" else tree / rel
+        if not src.is_file() or not dst.is_file():
+            continue
+        try:
+            have = dst.read_text(encoding="utf-8")
+            new = _names(src.read_text(encoding="utf-8"), cfg)
+        except (OSError, UnicodeDecodeError):
+            continue
+        if have == new or have not in {_names(old, cfg) for old in olds}:
+            continue
+        try:
+            dst.write_text(new, encoding="utf-8", newline="\n")
+        except OSError as exc:
+            log.warning("текст поставки %s не обновился: %s", rel, exc)
+            continue
+        done.append(str(dst.relative_to(tree)).replace("\\", "/"))
+    if _refresh_day_zero(tree, cfg, history.get("self-day-zero.md") or []):
+        done.append("soul/self/CURRENT.md")
+    return done
+
+
+def _refresh_day_zero(tree: Path, cfg: dict, olds: list[str]) -> bool:
+    """Запись о себе дня ноль, которую агент ещё не правил, — новой ревизией."""
+    if not olds or not _SELF_DAY_ZERO.is_file():
+        return False
+    current = tree / "soul" / "self" / "CURRENT.md"
+    if not current.is_file():
+        return False
+    self_model = _import_self_model()
+    if self_model is None:
+        return False
+    try:
+        store = self_model._store(tree)
+        meta, body = store._split_current(current.read_text(encoding="utf-8"))
+        if str(meta.get("revision")) != "0":
+            return False                      # агент уже переписывал — его слово
+        if body.strip() not in {_names(old, cfg).strip() for old in olds}:
+            return False
+        new = _names(_SELF_DAY_ZERO.read_text(encoding="utf-8"), cfg)
+        result = store.revise(
+            new, reason="поставка 1.2.5: запись дня ноль теми же словами, только без рода "
+                        "и без чужих имён (агент её ещё не правил)",
+            evidence_refs=["soul/SOUL.md"], by="helene", confidence="uncertain", trigger="birth")
+    except Exception:
+        log.warning("запись дня ноль не обновилась", exc_info=True)
+        return False
+    return bool(result.get("ok"))
+
+
 _SELF_DAY_ZERO = _RESOURCES / "self-day-zero.md"
+
+
+def _import_self_model():
+    """`self_model` из tree/ — или None словами в журнале. Раскладка без ядра не падает.
+
+    ⚠ Руннер вставляет путь к коду в sys.path ПОСЛЕ раскладки (в `_import_agent`), и на
+    первом рождении установленной копии self_model не находился — запись о себе молча не
+    ложилась, кадр жил с дырой. Кандидаты: код рядом с папкой программы (поставка:
+    `<корень>/tree`), дерево разработки (`../live`), и явный HELENE_CODE.
+    """
+    try:
+        import self_model  # noqa: WPS433 — из tree/
+        return self_model
+    except ImportError:
+        root = _RESOURCES.parent.parent
+        for cand in (os.environ.get("HELENE_CODE") or "", root / "tree", root.parent / "live"):
+            cand = Path(cand) if cand else None
+            if cand and (cand / "self_model.py").is_file():
+                sys.path.insert(0, str(cand))
+                break
+        try:
+            import self_model  # noqa: WPS433
+            return self_model
+        except Exception as exc:
+            log.warning("запись о себе: self_model не импортируется (%s)", exc)
+            return None
+    except Exception as exc:
+        log.warning("запись о себе: self_model не импортируется (%s)", exc)
+        return None
 
 
 def seed_self(tree: Path, cfg: dict) -> bool:
@@ -266,27 +377,8 @@ def seed_self(tree: Path, cfg: dict) -> bool:
     legacy = tree / "soul" / "self.md"
     if not legacy.is_file() or not _SELF_DAY_ZERO.is_file():
         return False
-    try:
-        import self_model  # noqa: WPS433 — из tree/, см. докстринг
-    except ImportError:
-        # ⚠ Руннер вставляет путь к коду в sys.path ПОСЛЕ раскладки (в
-        # `_import_agent`), и на первом рождении установленной копии self_model
-        # не находился — запись о себе молча не ложилась, кадр жил с дырой.
-        # Кандидаты: код рядом с папкой программы (поставка: `<корень>/tree`),
-        # дерево разработки (`../live`), и явный HELENE_CODE.
-        root = _RESOURCES.parent.parent
-        for cand in (os.environ.get("HELENE_CODE") or "", root / "tree", root.parent / "live"):
-            cand = Path(cand) if cand else None
-            if cand and (cand / "self_model.py").is_file():
-                sys.path.insert(0, str(cand))
-                break
-        try:
-            import self_model  # noqa: WPS433
-        except Exception as exc:
-            log.warning("запись о себе не легла: self_model не импортируется (%s)", exc)
-            return False
-    except Exception as exc:
-        log.warning("запись о себе не легла: self_model не импортируется (%s)", exc)
+    self_model = _import_self_model()
+    if self_model is None:
         return False
     try:
         if self_model.current_prompt_info(tree).source == "current":
@@ -544,6 +636,10 @@ def ensure_layout(tree: Path, cfg: dict | None = None) -> None:
     planted = _seed_kit(tree, cfg)
     if planted:
         log.info("стартовый комплект: положено файлов в дерево: %d", planted)
+    refreshed = refresh_kit(tree, cfg)
+    if refreshed:
+        log.info("стартовый комплект: обновлены нетронутые тексты поставки — %s",
+                 ", ".join(refreshed))
     if seed_self(tree, cfg):
         log.info("запись о себе: день ноль, soul/self/CURRENT.md")
     # После записи о себе: первый снимок должен застать дом целиком.

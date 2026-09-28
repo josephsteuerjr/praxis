@@ -162,6 +162,12 @@ TREE_EXCLUDE_PATHS = [
     "body/target", "hands/target",
     "memory", "workspace", "soul", "private", "runs", "shadow_traffic", "1500",
     "_archive",
+    # 28.09 (слово Егора: «никаких упоминаний Праксис»): документы корня дерева
+    # описывают другую установку — чужое имя, чужой дом, чужие полномочия. Агент
+    # их читал (forge.py берёт README/AGENTS задачи; навыки отсылали сюда) —
+    # в поставке их нет. Роль модуля — в самом модуле, карта — КАК-УСТРОЕН-HELENE.md.
+    "ARCHITECTURE.md", "CODEMAP.md", "CONTRACTS.md", "CONTRIBUTORS.md", "HOME.md",
+    "README.md", "VISION.md",
 ]
 
 # Имена и маски — на любой глубине: мусор сборки, тесты, её рабочие заметки.

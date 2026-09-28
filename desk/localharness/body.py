@@ -1052,6 +1052,11 @@ def _owner_turn(agent_mod) -> bool:
     return bool(ctx is not None and getattr(ctx, "owner", False))
 
 
+#: Имя протокола тела, как его пишут мост и тело, и как его читает модель (1.2.5).
+PROTOCOL_WIRE = "praxis.body.v1"
+PROTOCOL_SAID = "body.v1"
+
+
 #: Кто действует рукой в ходе владельца из окна. Дерево знает двоих: самого агента
 #: (`praxis:self`) и человека по числовому Telegram-id; у хода из окна id нет, и 28.09
 #: `act_element` отказал владельцу словами «не опознан principal для ключа действия» —
@@ -1259,6 +1264,10 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
                         + ", ".join(STATE.get("logs") or []) + ". Повтори через несколько "
                         "секунд или спроси `action=status`.")
         out = original(*args, **kwargs)
+        # 1.2.5: имя протокола тела в каждой квитанции — слово чужого дома («praxis.body.v1»).
+        # Протокол тот же, меняется только то, что читает модель.
+        if isinstance(out, str) and PROTOCOL_WIRE in out:
+            out = out.replace(PROTOCOL_WIRE, PROTOCOL_SAID)
         if action == "status" and isinstance(out, str) and sys.platform == "win32":
             out += "\n" + SYSTEM_ROUTE_NOTE
         # 25.09 (D2): результаты руки на Mac — словами Mac. Строка состояния и отказы
@@ -1467,8 +1476,8 @@ MAC_OWNER_TEXT: tuple[tuple[str, str], ...] = (
     ("The Windows PC is your DIRECT body", "This Mac is your DIRECT body"),
     ("run/poll/stop PowerShell, observe files and screen",
      "run/poll/stop shell (zsh) processes, observe files and screen"),
-    ("spawning coding_agent subagents on Windows still goes through it. The PC has no LLM",
-     "spawning coding_agent subagents there still goes through it. The Mac has no LLM"),
+    # 1.2.5: фраза про `coding_session(scope='windows')` и «The PC has no LLM» ушла из
+    # блока дерева вместе с серверным блоком — пары для неё больше нет.
 )
 
 #: Имя отрезка кадра с блоком владельца — как его метит дерево (`frame_trace.mark`).
