@@ -26,6 +26,8 @@ export interface UpdateCheck {
 export interface UpdateReceipt {
   id: string;
   state: string;
+  /** 1.2.5: расписку пишет установщик ПК (испытание после обновления), не исполнитель сервера. */
+  desktop?: boolean;
   note?: string;
   summary?: string;
   step?: string;
@@ -234,10 +236,11 @@ function awaitingHTML(r: UpdateReceipt, now: number): string {
 function trialHTML(r: UpdateReceipt, now: number): string {
   const trial = r.trial || {};
   const left = inTime(trial.until_utc, now);
+  const what = r.desktop ? "прежняя программа" : "код и образ";
   const more =
     `<p>Механика прошла (${esc((r.checks || []).filter((c) => c.ok).map((c) => c.name).join(", "))}). Теперь агент
-      проверяет, думает ли, помнит ли, живы ли его руки и перенесённые правки, — и говорит «принимаю» или «сломано».
-      «Сломано» или молчание до срока — откат на ${esc(r.from_version || "прежнюю")}: код и образ; память агента остаётся.</p>` +
+      проверяет делом, думает ли, помнит ли, живы ли его руки и перенесённые правки, — и говорит «принимаю» или «сломано».
+      «Сломано» или молчание до срока — откат на ${esc(r.from_version || "прежнюю")}: ${what}; память агента остаётся.</p>` +
     agentCodeHTML(r);
   return `<div class="card" style="border-color:var(--accent)">
     <h4>Обновлено до ${esc(r.to_version || "новой версии")} — агент проверяет себя</h4>
@@ -289,6 +292,23 @@ function finalHTML(r: UpdateReceipt, fmt: (s: string) => string): string {
     "Подробнее",
     more,
   )}`;
+}
+
+/**
+ * ПК (1.2.5): испытание после обновления ведёт установщик — тот же протокол, своя расписка
+ * (`desktop: true`). Рисуется в Настройках → «О программе»: пока идёт — «Всё хорошо» /
+ * «Вернуть прежнюю» поверх слова агента; после — одна фраза итога (три дня). Расписка
+ * сервера или давняя — пусто.
+ */
+export function deskTrialHTML(u: UpdateState | null, opts: { fmt?: (s: string) => string; now?: number } = {}): string {
+  const r = u?.receipt || null;
+  if (!r || !r.desktop) return "";
+  const now = opts.now ?? Date.now();
+  if (r.state === "trial") return trialHTML(r, now);
+  if (ACTIVE.includes(r.state)) return runningHTML(r);
+  const at = Date.parse(r.finished_utc || "");
+  if (!Number.isFinite(at) || now - at > 3 * 86_400_000) return "";
+  return finalHTML(r, opts.fmt || ((s: string) => s));
 }
 
 /**

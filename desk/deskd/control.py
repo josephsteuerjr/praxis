@@ -739,10 +739,17 @@ def update_verdict(tree: Path, plan_id: str, key: str, verdict: str, by: str = "
                         "recall": int(proof.get("recall") or 0),
                         "line": str(proof.get("line") or "")[:400]}
     _write(_control_dir(tree) / UPDATE_VERDICT, row)
+    desktop = bool(receipt.get("desktop"))
     if verdict == "accept":
         return {"ok": True, "verdict": row,
                 "note": f"слово записано: {receipt.get('to_version') or 'новая версия'} принята. "
-                        "Исполнитель закроет обновление и уберёт старые копии"}
+                        + ("Установщик закроет обновление и уберёт прежнюю программу" if desktop else
+                           "Исполнитель закроет обновление и уберёт старые копии")}
+    if desktop:
+        return {"ok": True, "verdict": row,
+                "note": f"слово записано: сломано — установщик вернёт "
+                        f"{receipt.get('from_version') or 'прежнюю версию'} (прежнюю программу; память "
+                        "остаётся как есть). Окно на минуту закроется и откроется прежней версией"}
     return {"ok": True, "verdict": row,
             "note": f"слово записано: сломано — исполнитель вернёт "
                     f"{receipt.get('from_version') or 'прежнюю версию'} (код и образ; память "

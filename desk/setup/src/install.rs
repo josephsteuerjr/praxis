@@ -3850,6 +3850,18 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
         let (step, report) = carry_agent_code(&dir, &tx.old, &old_version, &version);
         steps.push(step);
         agent_code = report;
+    } else if !carry_from.is_empty() && norm_path(Path::new(carry_from)) != norm_path(&dir) {
+        // «Продолжить с найденной памятью» из другой папки: память скопирована выше, а правки
+        // агента в его коде живут в той установке — их тоже сюда (источник не трогается).
+        let from = PathBuf::from(carry_from);
+        if from.join("tree").join("agent.py").is_file() && dir.join("app").join("localharness").join("runner.py").is_file() {
+            let from_version = read_json(&from.join("helene-build.json"))
+                .and_then(|p| p.get("version").and_then(|v| v.as_str()).map(str::to_string))
+                .unwrap_or_default();
+            say("carry", "Переношу правки агента в его коде", None, None, false, false, progress);
+            let (step, _) = carry_agent_code(&dir, &from, &from_version, &version);
+            steps.push(step);
+        }
     }
 
     // 8. Ярлыки и запись в «Приложениях» — по режиму.

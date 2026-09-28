@@ -644,7 +644,12 @@ def carry_install(old: Path, new: Path, *, data: Path, from_version: str, to_ver
     report: dict = {"desktop": True, "mounted": True, "edited": [], "carried": [], "merged": [],
                     "conflicts": [], "skipped": [], "folder": ""}
     work.mkdir(parents=True, exist_ok=True)
-    base_root = open_pristine(pristine_path(new, from_version), work) if from_version else None
+    # Чистая копия прежней версии: при обновлении она переехала в `new`; при переезде из
+    # другой папки («продолжить с найденной памятью») — лежит у прежней установки.
+    base_root = None
+    for home in (new, old):
+        if base_root is None and from_version:
+            base_root = open_pristine(pristine_path(home, from_version), work)
     table = (None if base_root is not None
              else shipped_prints(from_version, flavor_of(new), prints_path))
     report["base"] = "pristine" if base_root is not None else ("prints" if table else "")

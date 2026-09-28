@@ -6,8 +6,15 @@
 `data/relay/local_auth`, сессия Telegram `data/telegram`) плюс настройки
 `helene.json` (имена, модель с ключом, Telegram, реле) и паспорт
 `helene-carry.json` (кто, откуда, когда, какой версии, что внутри — и где
-лежат секреты). Код (`tree/`, `app/`) и рантайм в архив НЕ входят: это
-поставка, она есть в каждой установке своя.
+лежат секреты). Код (`tree/`, `app/`) и рантайм целиком в архив НЕ входят: это
+поставка, она есть в каждой установке своя. Но ПРАВКИ агента в своём коде — его, и
+с 1.2.5 они едут (`code/` в архиве): «Йоно может вернуться… или её дом переедет с
+ней?» (Егор, 28.09). Правкой считается отличие от чистой версии, с которой агент
+начинал (`pristine/<версия>.zip` у установки на ПК, чистый исходник исполнителя на
+сервере, отпечатки выпуска); на новом месте они ложатся на его код тем же
+переносчиком, что при обновлении (`server/updater/codecarry.py`), а что не легло —
+агенту в `data/workspace/carry-<версия>/`. Сравнить не с чем — едет весь прежний код,
+и агент получает его папкой.
 
 Экспорт — `python carry.py export --config helene.json [--out путь.zip]`,
 та же команда стоит за кнопкой «Экспорт агента» в Настройках и за
@@ -39,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import platform
@@ -47,6 +55,7 @@ import socket
 import stat as _stat
 import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -172,6 +181,168 @@ def _stamp() -> str:
     return dt.datetime.now().strftime("%Y%m%dT%H%M%S")
 
 
+# --- правки агента в своём коде (1.2.5) ---------------------------------------------------
+
+CODE_PREFIX = "code/"
+CODE_MANIFEST = "code/manifest.json"
+
+
+def _codecarry():
+    """Переносчик правок кода — рядом с исполнителем обновлений (он же у установщика ПК)."""
+    here = Path(__file__).resolve()
+    for cand in (here.parents[1] / "server" / "updater", here.parents[2] / "server" / "updater"):
+        if (cand / "codecarry.py").is_file():
+            if str(cand) not in sys.path:
+                sys.path.insert(0, str(cand))
+            import codecarry  # noqa: PLC0415
+            return codecarry
+    return None
+
+
+def _install_version(root: Path, cfg: dict) -> str:
+    version = str((cfg.get("installed") or {}).get("version") or "")
+    if version:
+        return version
+    try:
+        return str(json.loads((root / "helene-build.json").read_text("utf-8-sig")).get("version") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def _code_base(cc, root: Path, version: str, work: Path):
+    """Чистая версия, с которой агент начинал: (папка, отпечатки, откуда) — что нашлось."""
+    base = cc.open_pristine(cc.pristine_path(root, version), work) if version else None
+    if base is not None:
+        return base, None, "pristine"
+    server = root / ".updater" / "pristine" / version
+    if version and all((server / n).is_dir() for n in cc.CODE_DIRS):
+        return server, None, "pristine"
+    prints = cc.shipped_prints(version, cc.flavor_of(root)) if version else None
+    return None, prints, ("prints" if prints else "")
+
+
+def _export_code(zf: zipfile.ZipFile, root: Path, cfg: dict) -> dict:
+    """Правки агента в `tree/` и `app/` — в архив. -> строка для паспорта."""
+    cc = _codecarry()
+    if cc is None:
+        return {"note": "переносчика правок кода нет в этой установке — код не поехал"}
+    if not (root / "tree" / "agent.py").is_file():
+        return {"note": "кода агента рядом с настройками нет — везти нечего"}
+    version = _install_version(root, cfg)
+    work = Path(tempfile.mkdtemp(prefix="helene-carry-code-"))
+    try:
+        base_root, prints, base_kind = _code_base(cc, root, version, work)
+        manifest = {"version": version, "flavor": cc.flavor_of(root), "base": base_kind,
+                    "edited": [], "prints": {}, "whole": False}
+        if not base_kind:
+            # Сравнить не с чем — весь прежний код: пусть агент разберёт сам (как на сервере).
+            manifest["whole"] = True
+            for name in cc.CODE_DIRS:
+                for rel, kind in cc.snapshot(root / name, tuple(cc.DESK_SKIP[name])).items():
+                    blob = cc.read_plain(root / name / rel) if kind[0] == "file" else None
+                    if blob is not None:
+                        zf.writestr(f"{CODE_PREFIX}whole/{name}/{rel}", blob)
+            zf.writestr(CODE_MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=1))
+            return {"base": "", "whole": True, "version": version}
+        for name in cc.CODE_DIRS:
+            skip = tuple(cc.DESK_SKIP[name])
+            snap = cc.hashes_snapshot(prints, name) if base_root is None else None
+            base_dir = base_root / name if base_root is not None else None
+            for rel in cc.code_edits(base_dir, root / name, skip=skip, base_snap=snap):
+                path = f"{name}/{rel}"
+                manifest["edited"].append(path)
+                mine = cc.read_plain(root / name / rel)
+                if mine is not None:
+                    zf.writestr(f"{CODE_PREFIX}mine/{path}", mine)
+                if base_dir is not None:
+                    blob = cc.read_plain(base_dir / rel)
+                    if blob is not None:
+                        zf.writestr(f"{CODE_PREFIX}base/{path}", blob)
+                elif (prints or {}).get(path):
+                    manifest["prints"][path] = prints[path]
+        zf.writestr(CODE_MANIFEST, json.dumps(manifest, ensure_ascii=False, indent=1))
+        return {"base": base_kind, "edited": len(manifest["edited"]), "version": version}
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _import_code(zf: zipfile.ZipFile, root: Path, data: Path) -> dict:
+    """Правки агента из архива — на код этой установки. -> отчёт для расписки."""
+    names = set(zf.namelist())
+    if CODE_MANIFEST not in names:
+        return {}
+    cc = _codecarry()
+    if cc is None:
+        return {"note": "переносчика правок кода нет в этой установке — правки остались в архиве (code/)"}
+    manifest = json.loads(zf.read(CODE_MANIFEST).decode("utf-8"))
+    version = str(manifest.get("version") or "")
+    here = _install_version(root, _read_config(root / CONFIG_NAME)) if (root / CONFIG_NAME).is_file() else ""
+    work = Path(tempfile.mkdtemp(prefix="helene-carry-code-"))
+    try:
+        for name in names:
+            if name.startswith(CODE_PREFIX) and not name.endswith("/") and _safe_member(name) \
+                    and name != CODE_MANIFEST:
+                target = work / name[len(CODE_PREFIX):]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(zf.read(name))
+        if manifest.get("whole"):
+            folder = cc.materials_folder(data, version or "?", tag="carry")
+            shutil.copytree(work / "whole", folder / "old-code")
+            (folder / "README.md").write_text(
+                f"# Переезд: твой прежний код ({version or 'версия неизвестна'})\n\n"
+                "Сравнить его с чистой версией там, откуда ты переехал, было не с чем — поэтому "
+                "здесь, в `old-code/`, он целиком. Сравни с нынешним `tree/` и `app/` сам и "
+                "перенеси своё.\n", "utf-8")
+            return {"whole": True, "folder": f"workspace/{folder.name}",
+                    "summary": "сравнить код было не с чем — прежний код агенту папкой"}
+        report = {"edited": [], "carried": [], "merged": [], "conflicts": [], "skipped": []}
+        materials, diffs = [], []
+        labels = (f"агент ({version})", f"чистая {version}", f"здесь {here or '?'}")
+        budget = [cc.MAX_MATERIALS]
+        prints = manifest.get("prints") or {}
+        edited = [str(p) for p in manifest.get("edited") or []]
+        for name in cc.CODE_DIRS:
+            base_dir = work / "base" / name
+            # Снимок базы — только правленые пути: по содержимому, где оно приехало, иначе по отпечатку.
+            snap = {}
+            head = name + "/"
+            for path in edited:
+                if not path.startswith(head):
+                    continue
+                rel = path[len(head):]
+                blob = cc.read_plain(base_dir / rel)
+                if blob is not None:
+                    snap[rel] = ("file", hashlib.sha256(blob).hexdigest(), None)
+                elif prints.get(path):
+                    snap[rel] = ("file", str(prints[path]), None)
+            rep = cc.carry_code(base_dir if base_dir.is_dir() else None, work / "mine" / name, root / name,
+                                work=work / ".merge", labels=labels, prefix=name, budget=budget,
+                                base_snap=snap, skip=tuple(cc.DESK_SKIP[name]))
+            for key in report:
+                report[key].extend(rep[key])
+            materials.extend(rep["materials"])
+            diffs.extend(rep["diff"])
+        if report["edited"]:
+            folder = cc.materials_folder(data, version or "?", tag="carry")
+            readme = cc.materials_readme(report, version, here or "эту установку").replace(
+                "# Обновление", "# Переезд", 1)
+            cc._put(folder, ["README.md"], readme.encode("utf-8"))
+            cc._put(folder, ["edits.diff"], "".join(diffs).encode("utf-8")[:cc.MAX_DIFF])
+            for row in materials:
+                parts = row["path"].split("/")
+                for side in ("mine", "base", "theirs", "merged"):
+                    blob = row.get(side)
+                    if blob is not None:
+                        cc._put(folder, parts[:-1] + [f"{parts[-1]}.{side}"], blob)
+            report["folder"] = f"workspace/{folder.name}"
+        report["summary"] = (f"правок агента в коде: {len(report['edited'])}; легло "
+                             f"{len(report['carried']) + len(report['merged'])}, не легло "
+                             f"{len(report['conflicts'])}")
+        return report
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def export(config_path: Path, out: Path | None = None) -> dict:
     """Собрать архив переноса. -> паспорт (он же лежит в архиве)."""
     config_path = Path(config_path).resolve()
@@ -217,6 +388,10 @@ def export(config_path: Path, out: Path | None = None) -> dict:
                 print(f"  ⚠ не поехал {arc}: {exc}", file=sys.stderr)
         passport["files"] = files
         passport["bytes"] = total
+        try:
+            passport["code"] = _export_code(zf, config_path.parent, cfg)
+        except Exception as exc:                  # правки кода — не повод терять перенос памяти
+            passport["code"] = {"note": f"правки кода не поехали: {type(exc).__name__}: {exc}"}
         zf.writestr(CONFIG_NAME, json.dumps(exported_cfg, ensure_ascii=False, indent=2) + "\n")
         zf.writestr(PASSPORT, json.dumps(passport, ensure_ascii=False, indent=2) + "\n")
     os.replace(tmp, out)
@@ -292,6 +467,10 @@ def import_(config_path: Path, archive: Path, *, keep_config: bool = False) -> d
             with zf.open(info) as src, open(target, "wb") as dst:
                 shutil.copyfileobj(src, dst)
             written += 1
+        try:
+            receipt["code"] = _import_code(zf, config_path.parent, data)
+        except Exception as exc:                  # данные уже на месте — не отказ всего переноса
+            receipt["code"] = {"note": f"правки кода не легли: {type(exc).__name__}: {exc}"}
     receipt["files"] = written
     if not keep_config and carried_cfg:
         merged = merge_config(local, carried_cfg)
@@ -308,6 +487,13 @@ def _print_passport(p: dict) -> None:
     print(f"откуда: {p.get('host')} · {p.get('platform')} · режим {p.get('agent_mode') or '—'}")
     print(f"снимок данных: git {p.get('data_git_head') or 'нет'} · файлов {p.get('files')} · "
           f"{(p.get('bytes') or 0) / 1e6:.1f} МБ")
+    code = p.get("code") or {}
+    if code.get("whole"):
+        print("правки кода: сравнить было не с чем — едет весь прежний код")
+    elif "edited" in code:
+        print(f"правки агента в коде: {code['edited']} файл(ов)")
+    elif code.get("note"):
+        print(f"правки кода: {code['note']}")
     if p.get("secrets"):
         print("⚠ в архиве секреты: " + "; ".join(p["secrets"]))
         print("  архив — не для пересылки посторонним")
@@ -351,6 +537,10 @@ def main(argv: list[str] | None = None) -> int:
     receipt = import_(Path(args.config), Path(args.archive), keep_config=args.keep_config)
     _print_passport(receipt["passport"])
     print(f"развёрнуто в {receipt['data']}: файлов {receipt['files']}")
+    code = receipt.get("code") or {}
+    if code.get("summary") or code.get("note"):
+        print("код агента: " + str(code.get("summary") or code.get("note"))
+              + (f"; материалы — data/{code['folder']}" if code.get("folder") else ""))
     if receipt["backup"]:
         print(f"прежние данные: {receipt['backup']} (не удалены)")
     print("конфиг: " + ("слит — блоки агента из архива, блоки хоста местные"

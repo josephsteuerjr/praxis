@@ -27,6 +27,7 @@ import { button, card, field, toggle } from "../../dom";
 import { PRODUCT_NAME, S } from "../state";
 import { hostInfo, type HostInfo } from "../host";
 import { lookCard } from "../look";
+import { deskTrialHTML, type UpdateState } from "./update-card";
 import { isMacPlatform, platformOf } from "../../platform";
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
@@ -422,7 +423,43 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   if (prev) {
     about.append(el("p", "field-hint", `Интерфейс обновлён этим выпуском; твоя прежняя версия статики лежит рядом: ${prev}. Ключ исчезнет при следующей установке, если папки нет.`));
   }
+  // Испытание новой версии после обновления (1.2.5): его ведёт установщик, агент проверяет
+  // себя делом; владелец может сказать своё поверх — «Всё хорошо» / «Вернуть прежнюю».
+  const trialBox = el("div");
+  const drawTrial = async () => {
+    try {
+      trialBox.innerHTML = deskTrialHTML(await api<UpdateState>("/api/update"));
+    } catch {
+      trialBox.innerHTML = "";
+    }
+  };
+  trialBox.addEventListener("click", async (ev) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLElement>("[data-update-verdict]");
+    if (!btn) return;
+    const note = trialBox.querySelector<HTMLElement>("#update-note");
+    btn.setAttribute("disabled", "");
+    try {
+      const r = await post<{ ok: boolean; note: string }>("/api/update/verdict", {
+        id: btn.getAttribute("data-id") || "",
+        key: btn.getAttribute("data-key") || "",
+        verdict: btn.getAttribute("data-update-verdict") || "",
+      });
+      if (note) {
+        note.className = r.ok ? "receipt ok" : "receipt err";
+        note.textContent = r.note;
+      }
+    } catch (e) {
+      if (note) {
+        note.className = "receipt err";
+        note.textContent = humanError(e).text;
+      }
+    } finally {
+      btn.removeAttribute("disabled");
+    }
+  });
+  void drawTrial();
   about.append(
+    trialBox,
     aboutRow,
     field("Адрес обновлений", String(draft.update?.url || ""), (v) => (draft.update!.url = v), {
       mono: true,

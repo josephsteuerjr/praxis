@@ -19,7 +19,7 @@ import { stripTypeScriptTypes } from "node:module";
 
 const views = new URL("../../ui-kit/window/views/", import.meta.url);
 const moduleURL = (source) => "data:text/javascript;base64," + Buffer.from(stripTypeScriptTypes(source)).toString("base64");
-const { updateCardHTML, updateActive } = await import(moduleURL(readFileSync(new URL("update-card.ts", views), "utf8")));
+const { updateCardHTML, updateActive, deskTrialHTML } = await import(moduleURL(readFileSync(new URL("update-card.ts", views), "utf8")));
 
 const beat = { present: true, alive: true, ok: true, why: "", current: "1.1.1", latest: { version: "1.1.2" }, newer: true };
 /** Что видно, пока «Подробнее» свёрнуто. */
@@ -186,6 +186,24 @@ assert.equal(updateCardHTML({ updater: { present: false }, receipt: null }, { in
   const summary = updateCardHTML({ updater: beat, receipt: { id: "a", state: "done", summary: "<img src=x onerror=1>" } },
     { inContainer: true });
   assert.doesNotMatch(summary, /<img/);
+}
+
+// ПК (1.2.5): испытание ведёт установщик — кнопки владельца поверх слова агента, в Настройках.
+{
+  const now = Date.parse("2026-09-29T10:00:00Z");
+  const trial = { id: "d1", desktop: true, state: "trial", from_version: "1.2.4", to_version: "1.2.5",
+    checks: [{ name: "runner", ok: true }], trial: { key: "kk", until_utc: "2026-09-29T10:30:00Z" } };
+  const html = deskTrialHTML({ updater: { present: true }, receipt: trial }, { now });
+  assert.match(html, /data-update-verdict="accept" data-id="d1" data-key="kk">Всё хорошо</);
+  assert.match(html, /data-update-verdict="reject" data-id="d1" data-key="kk">Вернуть прежнюю</);
+  assert.match(html, /прежняя программа/);
+  assert.doesNotMatch(html, /код и образ/);
+  // расписка сервера — не здесь; итог — три дня, потом пусто
+  assert.equal(deskTrialHTML({ receipt: { ...trial, desktop: false } }, { now }), "");
+  const done = { ...trial, state: "done", summary: "обновление до 1.2.5 прошло", finished_utc: "2026-09-28T10:00:00Z" };
+  assert.match(deskTrialHTML({ receipt: done }, { now }), /обновление до 1\.2\.5 прошло/);
+  assert.equal(deskTrialHTML({ receipt: { ...done, finished_utc: "2026-09-20T10:00:00Z" } }, { now }), "");
+  assert.equal(deskTrialHTML(null), "");
 }
 
 console.log("update-card: ok");
