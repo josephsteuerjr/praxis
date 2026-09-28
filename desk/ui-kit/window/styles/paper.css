@@ -480,3 +480,79 @@ body::before {
 .settings[data-group="look"] .save-bar {
   display: none;
 }
+
+/* ---------------------------------------------------------------- рамка фокуса */
+
+/* Физика прокрутки берёт фокус на себя при «тянуть мышью» (чтобы работали стрелки и
+   PageDown) — обводка фокуса вокруг всей средней части выглядела бы рамкой-ошибкой
+   (Егор 28.09: «стало менее няшно»). Фокус у прокрутки есть, рамки нет. */
+#view:focus,
+#view:focus-visible,
+#panel:focus,
+#panel:focus-visible {
+  outline: none;
+}
+
+/* ---------------------------------------------------------------- «Сейчас» */
+
+.now .turn-live,
+.now .activity-card,
+.now-idle,
+.usage-panel,
+.now .frame-strip {
+  background: var(--surface);
+  border: var(--lw) solid var(--line-ink);
+  border-radius: 20px;
+  box-shadow: none;
+}
+.now .activity-card:not([data-status="running"]) {
+  background: var(--surface);
+  border-color: var(--line-ink);
+}
+.now .activity-card[data-status="running"] {
+  background: color-mix(in srgb, var(--surface) 80%, var(--terra) 12%);
+}
+.now .turn-live-head {
+  font: 400 27px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}
+.now .turn-live-head .dot {
+  width: 10px;
+  height: 10px;
+}
+.usage-heading h2 {
+  font: 400 27px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}
+.now .frame-strip-head span,
+.frame-strip-head > span:first-child {
+  font: 400 21px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}
+.section-title {
+  font: 400 32px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}
+.now-idle {
+  font: 400 20px/1.35 var(--hand);
+  letter-spacing: 0.02em;
+}
+.run-message {
+  border-bottom: var(--lw) solid var(--line);
+}
+.now .ev {
+  border-bottom: var(--lw) solid var(--line);
+}
+.empty b {
+  font: 400 28px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}
+.usage-panel.usage-compact {
+  background: var(--surface);
+  border: var(--lw) solid var(--line-ink);
+  border-radius: 20px;
+}
+#view .usage-summary-title {
+  font: 400 27px/1.2 var(--hand);
+  letter-spacing: 0.02em;
+}

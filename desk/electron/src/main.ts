@@ -19,7 +19,10 @@ const TOAST_ID = "app.helene.desk"; // тот же AUMID, что у прежне
 const HIDDEN_FREE_MS = 10 * 60_000; // спрятанное окно через 10 минут отпускает память
 
 app.setName("Helene");
-if (process.platform === "win32") app.setAppUserModelId(TOAST_ID);
+// В поставке — тот же AUMID, что у ярлыка программы (значок и уведомления одни). Предпросмотр
+// из разработки — свой: иначе Windows рисует на панели задач значок ярлыка установленной
+// версии, а не окна (Егор 28.09: «значок тот же»).
+if (process.platform === "win32") app.setAppUserModelId(app.isPackaged ? TOAST_ID : TOAST_ID + ".preview");
 
 protocol.registerSchemesAsPrivileged([
   { scheme: "helene", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
