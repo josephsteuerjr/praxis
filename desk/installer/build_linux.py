@@ -8,11 +8,15 @@
 
 Что выходит:
 
-  Helene_<версия>_amd64.deb      пакет: программа в /opt/helene, шаблон службы
-                                 /lib/systemd/system/helene@.service, политика polkit
-                                 /usr/share/polkit-1/actions/app.helene.policy,
-                                 /usr/bin/helene-home (дом владельца)
-  Helene_<версия>_amd64.deb.sha256
+  helene_<версия>_amd64.deb         Debian, Ubuntu, Astra
+  helene-<версия>-1.x86_64.rpm      Fedora/RHEL, РЕД ОС, ROSA, ALT (ALT — apt-rpm, проверить
+                                    отдельно; слово Егора 28.09: «и rpm сделать»)
+  *.sha256
+
+Оба пакета — из ОДНОГО конфига nfpm (`nfpm.yaml` рядом): программа в /opt/helene, шаблон
+службы helene@.service (Debian — /lib/systemd/system, rpm — /usr/lib/systemd/system),
+политика polkit /usr/share/polkit-1/actions/app.helene.policy, /usr/bin/helene-home. Разное у
+семейств — только имена зависимостей и путь юнита.
 
 Раскладка /opt/helene (как у Windows и Mac, без окна — оно ждёт решения потока 1):
 
@@ -76,6 +80,7 @@ FOLDER = "Helene"
 PACKAGE = "helene"                  # имя пакета Debian: строчные, без диакритики
 PROGRAM_ROOT = "/opt/helene"        # то же, что LINUX_SVC_PROGRAM_ROOT в common/linux_service.rs
 MAINTAINER = "Hélène <https://github.com/josephsteuerjr/praxis/issues>"
+RPM_RELEASE = "1"
 
 #: Порог glibc поставки: Debian 10 / Astra 1.7 (догадка про Astra — проверяется в ВМ).
 GLIBC_FLOOR = (2, 28)
@@ -116,13 +121,24 @@ REQUIRED_ROOT = (
 #: xdg-utils (открыть ссылку входа в подписку).
 DEPENDS = ("libc6 (>= 2.28)", "git", "bubblewrap", "procps", "ca-certificates")
 RECOMMENDS = ("at-spi2-core", "pkexec | policykit-1", "xdg-utils")
+#: Те же зависимости именами rpm-семейства (Fedora/RHEL/РЕД ОС/ROSA): glibc 2.28 — это RHEL 8,
+#: ровно наш порог; `procps-ng` — имя procps у Red Hat. Мягкие зависимости rpm (Recommends)
+#: понимает с rpm 4.12 — у RHEL 8 и новее он есть.
+RPM_DEPENDS = ("glibc >= 2.28", "git", "bubblewrap", "procps-ng", "ca-certificates")
+RPM_RECOMMENDS = ("at-spi2-core", "polkit", "xdg-utils")
+#: Куда кладётся юнит: у Debian 10 /lib ещё не слит с /usr/lib, у rpm-семейства путь пакетов —
+#: /usr/lib/systemd/system.
+UNIT_PATHS = {"deb": "/lib/systemd/system/helene@.service",
+              "rpm": "/usr/lib/systemd/system/helene@.service"}
 
 
 # --- чистые функции (идут и на Windows, их держит tests/t_build_linux.py) ------------------
 
 def asset_names(version: str) -> dict[str, str]:
-    stem = f"{FOLDER}_{version}_{ARCH}"
-    return {"deb": stem + ".deb", "sha256": stem + ".deb.sha256",
+    """Имена пакетов — по обычаю каждого семейства: `name_ver_arch.deb`, `name-ver-rel.arch.rpm`."""
+    deb = f"{PACKAGE}_{version}_{ARCH}.deb"
+    rpm = f"{PACKAGE}-{version}-{RPM_RELEASE}.x86_64.rpm"
+    return {"deb": deb, "deb_sha256": deb + ".sha256", "rpm": rpm, "rpm_sha256": rpm + ".sha256",
             "windows_zip": f"{FOLDER}-{version}.zip"}
 
 
@@ -178,28 +194,6 @@ def deb_version(version: str) -> str:
     return version
 
 
-def control_text(version: str, installed_kb: int) -> str:
-    """`DEBIAN/control`. Чистая функция."""
-    return (
-        f"Package: {PACKAGE}\n"
-        f"Version: {deb_version(version)}\n"
-        f"Architecture: {ARCH}\n"
-        f"Maintainer: {MAINTAINER}\n"
-        f"Installed-Size: {installed_kb}\n"
-        f"Depends: {', '.join(DEPENDS)}\n"
-        f"Recommends: {', '.join(RECOMMENDS)}\n"
-        "Section: utils\n"
-        "Priority: optional\n"
-        "Homepage: https://github.com/josephsteuerjr/praxis\n"
-        "Description: Hélène — личный агент на твоём компьютере\n"
-        " Агент с памятью, конституцией и руками: Telegram, телефон, файлы и,\n"
-        " по отдельной опции, окна, экран, клавиатура и мышь (X11 и AT-SPI).\n"
-        " Код агента живёт в /opt/helene, данные владельца — в\n"
-        " ~/.local/share/helene. Служба без входа в систему — шаблон\n"
-        " systemd helene@<имя>.service.\n"
-    )
-
-
 #: Политика polkit: действие, от имени которого `pkexec` спрашивает пароль, когда владелец
 #: ставит или снимает службу. Путь программы — ровно тот, что зовёт `helene-svc service`.
 POLKIT_POLICY = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -238,9 +232,12 @@ fi
 exit 0
 """
 
+# Аргумент сценария у семейств разный: dpkg зовёт prerm с `remove` (и `upgrade` при
+# обновлении), rpm — %preun с числом оставшихся копий пакета (`0` — снятие, `1` — обновление).
 PRERM = """#!/bin/sh
 set -e
-if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
+case "$1" in remove|0) removing=1 ;; *) removing=0 ;; esac
+if [ "$removing" = 1 ] && [ -d /run/systemd/system ]; then
     for unit in $(systemctl list-units --all --plain --no-legend 'helene@*.service' 2>/dev/null | awk '{print $1}'); do
         systemctl disable --now "$unit" >/dev/null 2>&1 || true
     done
@@ -420,7 +417,8 @@ def stage_runtime(out: Path, cache: Path) -> None:
     only = ["--only-binary=:all:"] + [f"--no-binary={name}" for name in bm.SDIST_OK]
     bm.run([*pip, *only, "-r", req], timeout=3600)
     bm.run([py, "-m", "pip", "uninstall", "-y", "-q", "setuptools", "wheel"], check=False, timeout=600)
-    bm.run([py, "-m", "pip", "cache", "purge", "-q"], check=False, timeout=600)
+    # Кэш pip — снаружи поставки (PIP_CACHE_DIR на томе сборщика, см. build-in-docker.sh): в
+    # пакет он не едет, а пересборка не качает сотни мегабайт колёс голоса заново.
 
 
 def runtime_wheel_tags(out: Path) -> list[list[str]]:
@@ -481,40 +479,108 @@ def not_linked_to_libssl(exe: Path) -> None:
         raise SystemExit(f"{exe.name} слинкован с системной OpenSSL — на новых системах не запустится:\n{said}")
 
 
-# --- пакет Debian -----------------------------------------------------------------------
+# --- пакеты (nfpm: .deb и .rpm из одного конфига) ---------------------------------------
 
-def build_deb(out: Path, version: str, dest: Path, unit_text: str) -> Path:
-    """Собрать .deb из папки поставки `out` (она становится /opt/helene)."""
-    stage = dest / "deb-root"
-    shutil.rmtree(stage, ignore_errors=True)
-    program = stage / PROGRAM_ROOT.lstrip("/")
-    program.parent.mkdir(parents=True)
-    shutil.copytree(out, program, symlinks=True)
-    unit = stage / "lib" / "systemd" / "system" / "helene@.service"
-    unit.parent.mkdir(parents=True)
-    unit.write_text(unit_text, encoding="utf-8", newline="\n")
-    policy = stage / "usr" / "share" / "polkit-1" / "actions" / "app.helene.policy"
-    policy.parent.mkdir(parents=True)
-    policy.write_text(POLKIT_POLICY, encoding="utf-8", newline="\n")
-    home = stage / "usr" / "bin" / "helene-home"
-    home.parent.mkdir(parents=True)
-    home.write_text(HELENE_HOME_SCRIPT, encoding="utf-8", newline="\n")
-    home.chmod(0o755)
-    debian = stage / "DEBIAN"
-    debian.mkdir()
-    size_kb = sum(p.stat().st_size for p in stage.rglob("*") if p.is_file() and not p.is_symlink()) // 1024
-    (debian / "control").write_text(control_text(version, size_kb), encoding="utf-8", newline="\n")
-    for name, text in (("postinst", POSTINST), ("prerm", PRERM), ("postrm", POSTRM)):
-        script = debian / name
-        script.write_text(text, encoding="utf-8", newline="\n")
-        script.chmod(0o755)
-    deb = dest / asset_names(version)["deb"]
-    deb.unlink(missing_ok=True)
-    # --root-owner-group: файлы в пакете — root:root, а не uid сборщика.
-    bm.run(["dpkg-deb", "-Zxz", "--root-owner-group", "--build", stage, deb], timeout=3600)
-    bm.run(["dpkg-deb", "--info", deb], timeout=120)
-    shutil.rmtree(stage, ignore_errors=True)
-    return deb
+def program_contents(out: Path, program_root: str = PROGRAM_ROOT) -> list[dict]:
+    """Содержимое /opt/helene для nfpm — перечислением, а не «деревом»: каждый файл со своими
+    правами, симлинк рантайма (`bin/python3 → python3.14`) — симлинком. Чистая функция
+    над файловой системой (её держит стенд на временной папке)."""
+    out = Path(out)
+    items: list[dict] = []
+    for path in sorted(out.rglob("*")):
+        rel = path.relative_to(out).as_posix()
+        dst = f"{program_root}/{rel}"
+        if path.is_symlink():
+            items.append({"src": os.readlink(path), "dst": dst, "type": "symlink"})
+        elif path.is_file():
+            mode = path.stat().st_mode & 0o777
+            items.append({"src": str(path), "dst": dst,
+                          "file_info": {"mode": 0o755 if mode & 0o111 else 0o644}})
+        elif path.is_dir() and not any(path.iterdir()):
+            items.append({"dst": dst, "type": "dir", "file_info": {"mode": 0o755}})
+    return items
+
+
+def nfpm_config(version: str, contents: list[dict], files: dict[str, str]) -> dict:
+    """Конфиг nfpm: общая часть, различия семейств — в `overrides`. `files` — пути
+    подготовленных файлов (юнит, политика, helene-home, сценарии). Чистая функция."""
+    extra = [
+        {"src": files["unit"], "dst": UNIT_PATHS["deb"], "packager": "deb",
+         "file_info": {"mode": 0o644}},
+        {"src": files["unit"], "dst": UNIT_PATHS["rpm"], "packager": "rpm",
+         "file_info": {"mode": 0o644}},
+        {"src": files["policy"], "dst": "/usr/share/polkit-1/actions/app.helene.policy",
+         "file_info": {"mode": 0o644}},
+        {"src": files["home"], "dst": "/usr/bin/helene-home", "file_info": {"mode": 0o755}},
+    ]
+    return {
+        "name": PACKAGE,
+        "arch": ARCH,
+        "platform": "linux",
+        "version": deb_version(version),
+        "release": RPM_RELEASE,
+        "section": "utils",
+        "priority": "optional",
+        "maintainer": MAINTAINER,
+        "vendor": PRODUCT,
+        "homepage": "https://github.com/josephsteuerjr/praxis",
+        "license": "Apache-2.0",
+        "description": ("Hélène — личный агент на твоём компьютере\n"
+                        "Агент с памятью, конституцией и руками: Telegram, телефон, файлы и, по "
+                        "отдельной опции, окна, экран, клавиатура и мышь (X11 и AT-SPI). Код — в "
+                        f"{PROGRAM_ROOT}, данные владельца — в ~/.local/share/helene; служба без "
+                        "входа в систему — шаблон systemd helene@<имя>.service."),
+        "contents": contents + extra,
+        "scripts": {"postinstall": files["postinst"], "preremove": files["prerm"],
+                    "postremove": files["postrm"]},
+        "overrides": {
+            "deb": {"depends": list(DEPENDS), "recommends": list(RECOMMENDS)},
+            "rpm": {"depends": list(RPM_DEPENDS), "recommends": list(RPM_RECOMMENDS)},
+        },
+        "deb": {"compression": "xz"},
+        "rpm": {"compression": "xz", "group": "Applications/System",
+                "summary": "Hélène — личный агент на твоём компьютере"},
+    }
+
+
+def build_packages(out: Path, version: str, dest: Path, unit_text: str) -> dict[str, Path]:
+    """Собрать .deb и .rpm из папки поставки `out` (она становится /opt/helene)."""
+    work = dest / "pkg-work"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    files = {"unit": work / "helene@.service", "policy": work / "app.helene.policy",
+             "home": work / "helene-home", "postinst": work / "postinst",
+             "prerm": work / "prerm", "postrm": work / "postrm"}
+    for key, text in (("unit", unit_text), ("policy", POLKIT_POLICY), ("home", HELENE_HOME_SCRIPT),
+                      ("postinst", POSTINST), ("prerm", PRERM), ("postrm", POSTRM)):
+        files[key].write_text(text, encoding="utf-8", newline="\n")
+    config = nfpm_config(version, program_contents(out), {k: str(v) for k, v in files.items()})
+    conf_path = work / "nfpm.yaml"          # JSON — это валидный YAML
+    conf_path.write_text(json.dumps(config, ensure_ascii=False, indent=1), encoding="utf-8")
+    names = asset_names(version)
+    made: dict[str, Path] = {}
+    for packager in ("deb", "rpm"):
+        target = dest / names[packager]
+        target.unlink(missing_ok=True)
+        bm.run(["nfpm", "package", "--config", conf_path, "--packager", packager, "--target", target],
+               timeout=3600)
+        if not target.is_file():
+            raise SystemExit(f"nfpm не собрал {target.name}")
+        made[packager] = target
+    # Проверка чужими руками: dpkg и rpm читают то, что собрал nfpm.
+    bm.run(["dpkg-deb", "--info", made["deb"]], timeout=120)
+    listing = bm.capture(["dpkg-deb", "-c", made["deb"]], timeout=600)
+    rpm_listing = bm.capture(["rpm", "-qlp", made["rpm"]], timeout=600)
+    bm.run(["rpm", "-qip", "--requires", made["rpm"]], timeout=120)
+    for need in (f".{PROGRAM_ROOT}/helene-svc", f".{PROGRAM_ROOT}/runtime/bin/python3 ->",
+                 f".{UNIT_PATHS['deb']}", "./usr/share/polkit-1/actions/app.helene.policy"):
+        if need not in listing:
+            raise SystemExit(f"в .deb нет {need!r} — пакет собран не тем составом")
+    for need in (f"{PROGRAM_ROOT}/helene-svc", UNIT_PATHS["rpm"], "/usr/bin/helene-home"):
+        if need not in rpm_listing:
+            raise SystemExit(f"в .rpm нет {need!r} — пакет собран не тем составом")
+    shutil.rmtree(work, ignore_errors=True)
+    return made
 
 
 # --- главное ----------------------------------------------------------------------------
@@ -683,11 +749,13 @@ def main() -> None:
     }
     print(f"  просканировано файлов: {bd.scan_for_secrets(out, live, scan_runtime=not args.skip_runtime)} — чисто")
 
-    print("пакет Debian:")
-    deb = build_deb(out, version, out.parent, unit_text)
-    digest = bd.sha256(deb)
-    (out.parent / names["sha256"]).write_text(sha256_line(digest, names["deb"]), encoding="utf-8", newline="\n")
-    print(f"готово: {deb} ({deb.stat().st_size / 1e6:.1f} МБ), sha256 {digest}")
+    print("пакеты (nfpm):")
+    made = build_packages(out, version, out.parent, unit_text)
+    for packager, path in made.items():
+        digest = bd.sha256(path)
+        (out.parent / names[f"{packager}_sha256"]).write_text(
+            sha256_line(digest, path.name), encoding="utf-8", newline="\n")
+        print(f"готово: {path} ({path.stat().st_size / 1e6:.1f} МБ), sha256 {digest}")
     if partial:
         print("⚠ ПОЛУСБОРКА: " + "; ".join(partial))
 

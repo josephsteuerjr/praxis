@@ -17,7 +17,8 @@ git clone -q --depth 1 -b "${TREE_BRANCH:-stream/linux-tree-2809}" file:///live.
 echo "desk: $(git -C /work log --oneline -1)"
 echo "дерево: $(git -C /tree log --oneline -1)"
 cd /work/desk
+export PIP_CACHE_DIR=/cache/pip PIP_ROOT_USER_ACTION=ignore
 python3 installer/build_linux.py --tree /tree --out /cache/out "$@"
-cp /cache/out/Helene_*.deb /cache/out/Helene_*.deb.sha256 /out/
+cp /cache/out/helene_*.deb /cache/out/helene-*.rpm /cache/out/*.sha256 /out/
 cp /cache/out/Helene/helene-build.json /out/helene-build.json
 ls -la /out
