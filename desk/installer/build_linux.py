@@ -512,6 +512,10 @@ def nfpm_config(version: str, contents: list[dict], files: dict[str, str]) -> di
         {"src": files["policy"], "dst": "/usr/share/polkit-1/actions/app.helene.policy",
          "file_info": {"mode": 0o644}},
         {"src": files["home"], "dst": "/usr/bin/helene-home", "file_info": {"mode": 0o755}},
+        # `helene-svc service install|state|remove` — команды владельца из документа первого
+        # запуска: без ссылки в PATH их пришлось бы звать полным путём (поймала проверка
+        # установки в чистом Debian 28.09).
+        {"src": f"{PROGRAM_ROOT}/helene-svc", "dst": "/usr/bin/helene-svc", "type": "symlink"},
     ]
     return {
         "name": PACKAGE,

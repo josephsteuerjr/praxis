@@ -14,7 +14,10 @@ say "== $PRETTY_NAME, glibc $(ldd --version 2>/dev/null | head -1 | awk '{print 
 if [ "$kind" = deb ]; then
     export DEBIAN_FRONTEND=noninteractive
     if grep -q buster /etc/os-release; then
-        printf 'deb http://archive.debian.org/debian buster main\n' > /etc/apt/sources.list
+        # Как у настоящей машины с Debian 10: основной архив И обновления безопасности (без них
+        # у образа базовые пакеты новее архива, и procps «не будет установлен»).
+        printf 'deb http://archive.debian.org/debian buster main\ndeb http://archive.debian.org/debian-security buster/updates main\n' \
+            > /etc/apt/sources.list
         apt-get -o Acquire::Check-Valid-Until=false update -qq
     else
         apt-get update -qq

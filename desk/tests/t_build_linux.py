@@ -71,6 +71,8 @@ class Package(unittest.TestCase):
         self.assertEqual(units, {("deb", "/lib/systemd/system/helene@.service"),
                                  ("rpm", "/usr/lib/systemd/system/helene@.service")})
         self.assertEqual(cfg["scripts"]["preremove"], "/w/prerm")
+        links = {c["dst"]: c["src"] for c in cfg["contents"] if c.get("type") == "symlink"}
+        self.assertEqual(links.get("/usr/bin/helene-svc"), "/opt/helene/helene-svc")
         json.dumps(cfg)  # JSON — это валидный YAML для nfpm
 
     def test_program_contents_keep_modes_and_symlinks(self):
