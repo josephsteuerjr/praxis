@@ -4197,6 +4197,18 @@ pub(crate) fn install_service_pub(dir: &Path) -> String {
     install_service(dir)
 }
 
+/// Служба Hélène стоит и её exe — в ЭТОЙ установке (а не просто «служба с таким именем
+/// есть на машине»): откат испытания трогает только свою.
+#[cfg(windows)]
+pub(crate) fn service_is_ours_pub(dir: &Path) -> bool {
+    legacy_services(Some(dir)).iter().any(|s| s.name.eq_ignore_ascii_case(PRODUCT) && s.ours)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn service_is_ours_pub(_dir: &Path) -> bool {
+    service_state() != "absent"
+}
+
 pub(crate) fn service_uninstall_pub(dir: &Path) -> Result<(), String> {
     service_op("uninstall", PRODUCT, Some(&dir.join("uninstall-service.ps1")))
 }
@@ -4242,9 +4254,31 @@ pub(crate) fn mark_version_pub(dir: &Path, scope: &str, version: &str) -> Result
         write_atomic(&cfg_path, &(text + "\n"))?;
     }
     write_marker(dir, scope, version)?;
-    set_registered_version(version);
+    set_registered_version_for(dir, version);
     Ok(())
 }
+
+/// Версия в «Приложениях» — только у записи ЭТОЙ установки (её `InstallLocation`).
+#[cfg(windows)]
+fn set_registered_version_for(dir: &Path, version: &str) {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE};
+    use winreg::RegKey;
+    let want = norm_path(dir);
+    for hive in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        if let Ok(key) = RegKey::predef(hive).open_subkey_with_flags(
+            format!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{PRODUCT}"),
+            KEY_READ | KEY_SET_VALUE,
+        ) {
+            let at: String = key.get_value("InstallLocation").unwrap_or_default();
+            if !at.is_empty() && norm_path(Path::new(&at)) == want {
+                let _ = key.set_value("DisplayVersion", &version.to_string());
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn set_registered_version_for(_dir: &Path, _version: &str) {}
 
 /// Открыть окно установленной программы (после отката).
 pub(crate) fn launch_pub(dir: &Path) -> Result<(), String> {

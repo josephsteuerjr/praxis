@@ -370,6 +370,14 @@ fn relocate(dir: &Path, args: &[String]) -> bool {
     }
     let home = std::env::temp_dir().join("helene-trial");
     let _ = std::fs::create_dir_all(&home);
+    // Копии прошлых сторожей — прочь (живую Windows удалить не даст: exe занят).
+    if let Ok(rd) = std::fs::read_dir(&home) {
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with("helene-setup-") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
     let copy = home.join(format!("helene-setup-{}.exe", std::process::id()));
     if std::fs::copy(&me, &copy).is_err() {
         return false;
@@ -613,7 +621,7 @@ pub fn do_rollback(dir: &Path, t: &mut Trial) -> i32 {
         }
     }
     // 2. Остановить новую версию: служба и всё из папки.
-    let had_service = install::service_state() != "absent";
+    let had_service = install::service_is_ours_pub(dir);
     if had_service {
         if let Err(e) = install::service_uninstall_pub(dir) {
             t.notes.push(format!("служба не снялась: {e}"));
@@ -665,7 +673,7 @@ pub fn do_rollback(dir: &Path, t: &mut Trial) -> i32 {
         t.notes.push(format!("версия в настройках не записалась: {e}"));
     }
     // 5. Служба — обратно, окно — открыть.
-    if t.service || had_service {
+    if had_service {
         let state = install::install_service_pub(dir);
         t.notes.push(format!("служба: {state}"));
     }
