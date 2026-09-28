@@ -2594,6 +2594,15 @@ def main() -> None:
         updates.install(agent, tree, cfg, owner_spoke=lambda: _owner_words[0])
     except Exception:
         log.exception("рука обновления не выдана")
+    # Кто владелец в ходе (1.2.5, баг Дмитрия): дерево узнаёт владельца только по
+    # PRAXIS_OWNER_ID, которого у издания нет, и `admit` отказывал всем. Владелец — тот,
+    # кто сам говорит в этом ходе; впуск открывает ему и Telegram.
+    try:
+        import owner_circle
+        owner_circle.install_owner_identity(agent, owner_spoke=lambda: _owner_words[0])
+        owner_circle.install_admit(agent, tree, telegram_on=lambda: _bot is not None)
+    except Exception:
+        log.exception("владелец в ходе не опознаётся — admit будет отказывать")
     tg = dict(cfg.get("telegram") or {})
     global _status_message
     _status_message = bool(tg.get("status_message", False))

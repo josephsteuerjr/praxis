@@ -18,10 +18,14 @@ import logging
 
 log = logging.getLogger("helene.edition_tools")
 
-#: Руки серверного издания. Список явный: новая рука сервера в дереве сюда не попадёт
-#: сама — её снимут словом, а не маской.
+#: Руки, которых в издании нет по смыслу. Список явный: новая такая рука в дереве сюда не
+#: попадёт сама — её снимут словом, а не маской.
+#: `computer_access` (1.2.5) — выдача прав на руку `computer` по Telegram-id: в издании
+#: права решают галочки владельца в Настройках (`body._computer_allowed`), и рука правила
+#: список, который никто не читает.
 SERVER_ONLY = ("server_status", "server_logs", "manage_service", "host_ctl",
-               "propose_host_change", "list_host_changes", "restart_mailbot")
+               "propose_host_change", "list_host_changes", "restart_mailbot",
+               "computer_access")
 
 #: Списки схем дерева — те же, что у `body._TOOL_LISTS`.
 TOOL_LISTS = ("BASE_TOOLS", "OWNER_TOOLS", "PRAXIS_SELF_TOOLS", "SHARED_CONTEXT_TOOLS",

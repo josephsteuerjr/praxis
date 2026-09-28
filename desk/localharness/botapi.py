@@ -679,6 +679,14 @@ class BotTransport:
             return True
         if self.allow_from == "listed" and ident in self.allowed_ids:
             return True
+        # 1.2.5: впущенные владельцем рукой `admit` (telegram/admitted.json, пишет харнесс).
+        # Впуск — прямое слово владельца об этом человеке; без этого `admit` ничего не открывал.
+        try:
+            import owner_circle
+            if ident and ident in owner_circle.admitted_ids(self.rooms.tree):
+                return True
+        except Exception:
+            log.debug("список впущенных не прочитался", exc_info=True)
         if not self.owner_id and self.allow_from == "owner":
             # owner_id не задан: владельца в Telegram нет вовсе, и «только
             # владелец» означает «никто». Это честнее, чем «кто угодно», и уже
@@ -981,4 +989,10 @@ def install(agent_mod, desks, bot: BotTransport) -> None:
         "set_profile_photo": _set_avatar,
         "transport_state": _transport_state,
     })
+    # Вступить/выйти (1.2.5): только у транспорта своего аккаунта (MTProto) — бот сам в
+    # группу не входит. Без крючка рука дерева честно отвечает «hook недоступен».
+    for name in ("join_chat", "leave_chat"):
+        fn = getattr(bot, name, None)
+        if callable(fn):
+            hooks[name] = fn
     log.info("транспорт: бот встроен поверх окна (%d крючков)", len(hooks))

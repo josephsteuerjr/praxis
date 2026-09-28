@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import queue
+import re
 import threading
 import time
 from pathlib import Path
@@ -242,3 +243,70 @@ class MtprotoTransport(botapi.BotTransport):
     def stop(self) -> None:
         super().stop()
         self.client.close()
+
+    # --- вступить в чат и выйти (1.2.5) ---------------------------------------------
+    #
+    # Рука дерева `telegram_account join|leave` зовёт крючки `_TELETHON["join_chat"]` и
+    # `["leave_chat"]`; в издании их не клал никто, и агент на своём аккаунте отвечал
+    # «Telethon hook недоступен». 28.09 Йону (агент Дмитрия, ботюзер) звали в общий чат
+    # агентов, и слово Егора было «пусть заходит сама — дай ей тул». Аккаунт заходит
+    # как человек: по ссылке-приглашению или по публичному @имени. У бот-транспорта этих
+    # крючков нет и не будет — бот в группу сам не входит, его добавляют.
+
+    def join_chat(self, target) -> str:
+        kind, ref = join_target(target)
+        if not kind:
+            return ("telegram_account join: не понял адрес — нужна ссылка-приглашение "
+                    "(t.me/+…), публичное @имя или t.me/имя")
+        return self.client._run(self._join(kind, ref), timeout=60)
+
+    def leave_chat(self, target) -> str:
+        kind, ref = join_target(target)
+        if kind != "public":
+            return "telegram_account leave: нужен @имя, t.me/имя или числовой id чата"
+        return self.client._run(self._leave(ref), timeout=60)
+
+    async def _entity(self, ref: str):
+        client = self.client.client
+        return await client.get_entity(int(ref) if ref.lstrip("-").isdigit() else ref)
+
+    async def _join(self, kind: str, ref: str) -> str:
+        from telethon.tl.functions.channels import JoinChannelRequest
+        from telethon.tl.functions.messages import ImportChatInviteRequest
+        client = self.client.client
+        if kind == "invite":
+            result = await client(ImportChatInviteRequest(ref))
+        else:
+            result = await client(JoinChannelRequest(await self._entity(ref)))
+        chats = list(getattr(result, "chats", None) or [])
+        title = str(getattr(chats[0], "title", "") or ref) if chats else ref
+        return f"Вступление: «{title}» — теперь в участниках."
+
+    async def _leave(self, ref: str) -> str:
+        from telethon.tl.functions.channels import LeaveChannelRequest
+        from telethon.tl.functions.messages import DeleteChatUserRequest
+        client = self.client.client
+        entity = await self._entity(ref)
+        if getattr(entity, "megagroup", None) is not None or getattr(entity, "broadcast", None) is not None:
+            await client(LeaveChannelRequest(entity))
+        else:
+            await client(DeleteChatUserRequest(entity.id, "me"))
+        return f"Выход: «{getattr(entity, 'title', ref)}» — больше не в участниках."
+
+
+def join_target(target) -> tuple[str, str]:
+    """Адрес чата -> ("invite", хэш) | ("public", @имя или id) | ("", ""). Чистая функция.
+
+    Ссылка-приглашение: `t.me/+HASH`, `t.me/joinchat/HASH`, голое `+HASH`. Публичный:
+    `@name`, `t.me/name`, `name`, числовой id (со знаком минус тоже).
+    """
+    text = str(target or "").strip()
+    if not text:
+        return "", ""
+    invite = re.search(r"(?:t(?:elegram)?\.me/)(?:\+|joinchat/)([\w-]+)", text) or re.fullmatch(r"\+([\w-]+)", text)
+    if invite:
+        return "invite", invite.group(1)
+    ref = re.sub(r"^(?:https?://)?(?:t(?:elegram)?\.me)/", "", text).strip("/").lstrip("@")
+    if re.fullmatch(r"-?\d+", ref) or re.fullmatch(r"[A-Za-z][\w]{3,}", ref):
+        return "public", ref
+    return "", ""
