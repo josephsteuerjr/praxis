@@ -74,6 +74,131 @@ pub fn adopt_self_into_job() -> bool {
     }
 }
 
+/// Признак копии, поднятой вне чужого job (`escape_foreign_job`): второй раз она не
+/// выходит. Со значением — имя разовой задачи планировщика, которую копия убирает за собой.
+pub const ESCAPED_FLAG: &str = "--escaped-job";
+
+/// Папка разовых задач планировщика, которыми мастер выходит из чужого job.
+const ESCAPE_TASK_DIR: &str = "Helene";
+
+/// Мастер родился внутри чужого job — выйти из него до первого окна. -> `true`: копия
+/// вне job поднята, этому процессу пора выйти.
+///
+/// 28.09, живой случай. Агент Егора запустил установщик рукой `computer run`
+/// (`Start-Process`): тело кладёт каждый прогон в свой job с KILL_ON_JOB_CLOSE и без
+/// права выхода, а сам агент живёт в задаче планировщика службы. Владелец нажал
+/// «Обновить до 1.2.4», мастер остановил службу — служба сняла свою задачу со всеми
+/// процессами, и мастер погиб вместе с программой на полпути: до ручной установки
+/// вечером Hélène стояла мёртвой. Мастер, который гасит программу, не может жить в её
+/// процессах.
+///
+/// Путь первый — штатный: копия с CREATE_BREAKAWAY_FROM_JOB (job разрешает выход).
+/// Второй — разовая задача планировщика в этой же сессии: её процесс рождается у службы
+/// планировщика, вне любых job. Не вышло ни то ни другое — мастер остаётся где был
+/// (лучше мастер в чужом job, чем никакого).
+pub fn escape_foreign_job(args: &[String]) -> bool {
+    if let Some(task) = args.iter().find_map(|a| a.strip_prefix(&format!("{ESCAPED_FLAG}="))) {
+        // Копия, поднятая планировщиком: задача своё сделала. Удаление задачи бегущий
+        // процесс не трогает (проверено 28.09).
+        let _ = schtasks(&["/Delete", "/TN", task, "/F"]);
+        return false;
+    }
+    if args.iter().any(|a| a == ESCAPED_FLAG) {
+        return false;
+    }
+    let mut inside = 0;
+    if unsafe { IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut inside) } == 0 || inside == 0 {
+        return false;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let rest: Vec<String> = args.iter().skip(1).cloned().collect();
+    let mut cmd = Command::new(&exe);
+    cmd.args(&rest).arg(ESCAPED_FLAG).creation_flags(CREATE_BREAKAWAY_FROM_JOB);
+    if cmd.spawn().is_ok() {
+        return true;
+    }
+    relaunch_by_scheduler(&exe, &rest)
+}
+
+/// `schtasks.exe` полным путём, без окна. -> успех.
+fn schtasks(args: &[&str]) -> bool {
+    let root = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    Command::new(root.join("System32").join("schtasks.exe"))
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Аргумент для строки `/TR`: в кавычках, если в нём пробел или кавычка.
+fn tr_quote(arg: &str) -> String {
+    if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
+        return arg.to_string();
+    }
+    format!("\"{}\"", arg.replace('"', "\\\""))
+}
+
+/// Командная строка задачи: exe, аргументы, признак копии с именем задачи. Чистая.
+fn escape_task_line(exe: &Path, rest: &[String], task: &str) -> String {
+    let mut line = tr_quote(&exe.display().to_string());
+    for a in rest {
+        line.push(' ');
+        line.push_str(&tr_quote(a));
+    }
+    line.push(' ');
+    line.push_str(&tr_quote(&format!("{ESCAPED_FLAG}={task}")));
+    line
+}
+
+/// Разовая задача «только при входе, в этой сессии», поднятая сразу. Права — те же,
+/// что у мастера: поднятый мастер ставит задачу с высшими правами, обычный — обычную.
+fn relaunch_by_scheduler(exe: &Path, rest: &[String]) -> bool {
+    let task = format!(r"{ESCAPE_TASK_DIR}\setup-escape-{}", std::process::id());
+    let line = escape_task_line(exe, rest, &task);
+    if line.chars().count() > 261 {
+        return false; // предел /TR у schtasks: длиннее — задача не встанет
+    }
+    let mut create = vec!["/Create", "/TN", task.as_str(), "/TR", line.as_str(), "/SC", "ONCE",
+                          "/ST", "00:00", "/IT", "/F"];
+    if is_elevated() {
+        create.extend(["/RL", "HIGHEST"]);
+    }
+    if !schtasks(&create) {
+        return false;
+    }
+    if schtasks(&["/Run", "/TN", task.as_str()]) {
+        return true;
+    }
+    let _ = schtasks(&["/Delete", "/TN", task.as_str(), "/F"]);
+    false
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::*;
+
+    #[test]
+    fn task_line_quotes_paths_and_carries_the_task_name() {
+        let exe = Path::new(r"C:\Users\Егор\Downloads\Helene-1.2.5-setup.exe");
+        let line = escape_task_line(exe, &["--update".into(), "--dir".into(), r"C:\Program Files\Helene".into()],
+                                    r"Helene\setup-escape-7");
+        assert_eq!(
+            line,
+            r#"C:\Users\Егор\Downloads\Helene-1.2.5-setup.exe --update --dir "C:\Program Files\Helene" --escaped-job=Helene\setup-escape-7"#
+        );
+        let spaced = escape_task_line(Path::new(r"C:\a b\s.exe"), &[], "T");
+        assert!(spaced.starts_with(r#""C:\a b\s.exe" "#), "{spaced}");
+    }
+
+    #[test]
+    fn escaped_copy_never_escapes_again() {
+        assert!(!escape_foreign_job(&["setup.exe".into(), ESCAPED_FLAG.into()]));
+    }
+}
+
 /// Свой job мастера: `spawn_outside` снимает с него KILL_ON_JOB_CLOSE, если выйти из
 /// job всё же не вышло.
 static OUR_JOB: std::sync::atomic::AtomicPtr<core::ffi::c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());

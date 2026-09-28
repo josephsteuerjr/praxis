@@ -48,22 +48,26 @@ export class WordmarkScene {
   async appear(): Promise<boolean> {
     this.root.hidden = false;
     this.state = "appearing";
-    await Promise.all(
-      this.glyphs.map((g, i) =>
-        this.track(
-          animate(
-            g,
-            {
-              opacity: [0, 1],
-              y: [22, 0],
-              scale: [0.98, 1],
-              filter: ["blur(16px)", "blur(0px)"],
-            },
-            { duration: 1.7 * T, delay: (0.35 + i * 0.085) * T, ease: EASE.out },
+    try {
+      await Promise.all(
+        this.glyphs.map((g, i) =>
+          this.track(
+            animate(
+              g,
+              {
+                opacity: [0, 1],
+                y: [22, 0],
+                scale: [0.98, 1],
+                filter: ["blur(16px)", "blur(0px)"],
+              },
+              { duration: 1.7 * T, delay: (0.35 + i * 0.085) * T, ease: EASE.out },
+            ),
           ),
         ),
-      ),
-    );
+      );
+    } catch {
+      return false; // проявление прервали (человек пошёл дальше) — ведёт уже он
+    }
     if (this.state !== "appearing") return false;
     this.state = "settled";
     this.settle();
@@ -76,7 +80,23 @@ export class WordmarkScene {
     this.settle();
     this.state = "blowing";
     const n = this.glyphs.length;
-    await Promise.all(
+    // 28.09: отменённая анимация обрывает ожидание отказом, и слой не прятался —
+    // надпись оставалась поверх следующей сцены. Прячем при любом исходе, если за
+    // время ухода никто не позвал её обратно (`enter` сам снова её покажет).
+    try {
+      await this.blow(dir, n);
+    } catch {
+      // анимацию отменили — исход тот же: надписи на экране быть не должно
+    } finally {
+      if (this.state === "blowing") {
+        this.state = "gone";
+        this.root.hidden = true;
+      }
+    }
+  }
+
+  private blow(dir: Dir, n: number): Promise<unknown> {
+    return Promise.all(
       this.glyphs.map((g, i) => {
         const k = dir > 0 ? i : n - 1 - i;
         const drift = dir * rand(260, 520);
@@ -105,8 +125,6 @@ export class WordmarkScene {
         );
       }),
     );
-    this.state = "gone";
-    this.root.hidden = true;
   }
 
   /** Возврат: буквы слетаются против ветра и успокаиваются. Дальше — руками. */
