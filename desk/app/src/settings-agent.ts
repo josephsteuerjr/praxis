@@ -504,7 +504,18 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
     "Зрячая модель получает ход, в котором есть картинка, если основная её не видит; без поля берётся зрячая из каталога " +
     "того же провайдера. Переключение происходит до вызова, роль и усилие не меняются.");
   spareHint.style.marginTop = "8px";
-  model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint, spareBox, visionGrid, spareHint);
+  // Закрепление модели владельцем (1.2.4): агент Дмитрия трижды сам уходил на gpt-6-sol
+  // «по просьбе хозяина», которой не было. Пока галочка стоит, его switch_brain отказывает
+  // словами (localharness/brain_pin.py), а на старте движка модель голоса возвращается к
+  // этой. Ступень рассуждения — по-прежнему его.
+  let pinnedModel = !!draft.model.pinned;
+  const pinRow = el("div", "actions");
+  pinRow.style.marginTop = "14px";
+  pinRow.append(
+    toggle("Закрепить модель", pinnedModel, (v) => (pinnedModel = v)),
+    el("span", "field-hint", "агент не сменит модель сам — только ты, здесь"),
+  );
+  model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint, pinRow, spareBox, visionGrid, spareHint);
   syncSpare();
   syncPick();
   syncEffort();
@@ -774,6 +785,8 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
     note: () => noKeyNote + mode.note(),
     collect(out: Config): string {
         out.model = keepBlock(out.model, { framework: "openai" });
+        if (pinnedModel) out.model.pinned = true;
+        else delete out.model.pinned;
         // Блок relay СЛИВАЕТСЯ, а не пересобирается: кроме enabled/port в нём
         // живут ручки, которых этот экран не знает (relay.instructions), и
         // `delete out.relay` стирал их при первом же «Сохранить».

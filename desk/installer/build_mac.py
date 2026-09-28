@@ -12,7 +12,7 @@ Windows-архива `Helene-<версия>.zip`):
   Helene/
     Helene.app/               оболочка (крейт shell → бинарь `helene`), app.helene.desk
     Helene Setup.app/         мастер (крейт setup → бинарь `helene-setup`), app.helene.setup
-    helene-relay              реле подписки ChatGPT (praxis-relay @ f8ef18f = 0.8.2)
+    helene-relay              реле подписки ChatGPT (praxis-relay @ 709edbd = 0.8.3)
     helene-svc                служба без входа в систему: `daemon` — супервизор канала, движка и
                               реле под launchd, `plist` — описание демона app.helene.svc (крейт svc)
     helene-bridge             мост тела тула `computer` (praxis-bridge из praxis/body — исходник
@@ -115,7 +115,7 @@ SHA256 = {
 # зеркала живого исходника (`_relay_prod_src`, там ещё трей под cfg(windows));
 # на Mac собирается публичный коммит как есть.
 RELAY_REPO = "https://github.com/josephsteuerjr/praxis-relay"
-RELAY_COMMIT = "f8ef18fccd70d800938b5fcfdcb378073e1c7b60"
+RELAY_COMMIT = "709edbda18b1be0084c8d3d07062bd8ca8110c91"
 RELAY_BIN = "codex-proxy-server"
 
 # Тело тула `computer`: мост и тело — крейты `praxis/body` В ЭТОМ репозитории
@@ -169,7 +169,7 @@ SVC_BIN = "helene-svc"
 # проверенный прод; собирать его на Mac заново значило бы выпустить под одним
 # тегом два разных дерева.
 RELEASE_REPO = "josephsteuerjr/praxis"
-RELEASE_TAG_DEFAULT = "v1.2.3"
+RELEASE_TAG_DEFAULT = "v1.2.4"
 
 # Минимум macOS. Задуман 12.0, но колёса голоса под cp314/arm64 (numpy,
 # onnxruntime, av — проверено `pip download` 19.09.2026) собраны с тегом

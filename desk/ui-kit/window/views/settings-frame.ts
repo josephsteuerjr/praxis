@@ -64,7 +64,7 @@ export interface Config {
   // выключено), хранить `keep` снимков, папка `dir` (пусто — backups рядом с программой).
   backup?: { every_days?: number; keep?: number; dir?: string };
   owner?: { name?: string; room?: string };
-  model?: { framework?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string; fallback_model?: string; fallback_framework?: string; fallback_base_url?: string; fallback_key?: string; vision_model?: string };
+  model?: { framework?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string; fallback_model?: string; fallback_framework?: string; fallback_base_url?: string; fallback_key?: string; vision_model?: string; pinned?: boolean };
   // `instructions` экран не показывает, но обязан сохранить: этой ручкой
   // оболочка гасит 23 КБ чужого системного промпта Codex CLI перед конституцией
   // (shell/src/main.rs, RELAY_INSTRUCTIONS). Раньше блок relay пересобирался
