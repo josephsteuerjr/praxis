@@ -385,6 +385,15 @@ def _orient(chat_id: str) -> str:
     bits = [_WINDOW_ORIENT] if transport.is_room(chat_id) else []
     if _ORIENT_EXTRA:
         bits.append(_ORIENT_EXTRA)
+    # 1.2.5: на чём агент работает сейчас и кто менял последним — в каждом ходе. Без этого
+    # модель узнавалась рукой из снимка раннера, а смена владельцем читалась «обновлением».
+    try:
+        import brain_trail
+        line = brain_trail.orient_line(_tree) if _tree is not None else ""
+        if line:
+            bits.append(line)
+    except Exception:
+        log.debug("строка мозга в кадр не собралась", exc_info=True)
     # Расширения владельца (25.09, K): что подключено и что не загрузилось и почему —
     # агент видит выключенное расширение как строку, а не как исчезновение тула.
     try:
@@ -1041,7 +1050,11 @@ def _config_watch_forever(config_path: Path, tree: Path) -> None:
             log.warning("helene.json изменился, но не читается (%s) — мозг не трогаю", exc)
             continue
         try:
-            log.info("helene.json изменился — %s", boot.project_brain(tree, cfg))
+            # 1.2.5: со следом — кто сменил голос (владелец в Настройках, установщик), чтобы
+            # агент не гадал, чья это воля (Джарвис 29.09: «конфиг стёрло обновление»).
+            import brain_trail
+            log.info("helene.json изменился — %s",
+                     brain_trail.project(tree, config_path, cfg, boot.project_brain))
         except Exception:
             log.exception("мозг из изменённого helene.json не спроецировался")
         _deliver_unspoken = bool((cfg.get("agent") or {}).get("deliver_unspoken", True))
@@ -2476,7 +2489,12 @@ def main() -> None:
     if hasattr(_agent, "BOUNDARY_DELIVERS_UNSPOKEN"):
         _agent.BOUNDARY_DELIVERS_UNSPOKEN = bool(_deliver_unspoken)
 
-    log.info("%s", boot.project_brain(tree, cfg))
+    try:
+        import brain_trail
+        log.info("%s", brain_trail.project(tree, config_path, cfg, boot.project_brain))
+    except Exception:
+        log.exception("след мозга на старте не записался — проецирую без него")
+        log.info("%s", boot.project_brain(tree, cfg))
     # Тело для руки `computer` — ДО импорта дерева: импорт занимает секунды, а
     # тело за них успевает подключиться к мосту. Опция владельца
     # (`computer.enabled`); выключена — только строка в журнал. Токены живут
@@ -2607,6 +2625,12 @@ def main() -> None:
                                    owner_configured=lambda: _bot is None or bool(_bot.owner_id))
     except Exception:
         log.exception("владелец в ходе не опознаётся — admit будет отказывать")
+    # Смена мозга агентом — строкой следа с его «зачем» (brain_trail, 1.2.5).
+    try:
+        import brain_trail
+        brain_trail.install_switch_hook(agent, tree)
+    except Exception:
+        log.exception("след switch_brain не подключился")
     tg = dict(cfg.get("telegram") or {})
     global _status_message
     _status_message = bool(tg.get("status_message", False))
