@@ -74,8 +74,11 @@ function limitsBriefHTML(providers: Allowance[]): string {
   return providers.map(p => {
     const windows = p.windows.filter(w => w.remaining_percent != null);
     const lowest = windows.reduce<Allowance["windows"][number] | undefined>((a, w) => !a || w.remaining_percent! < a.remaining_percent! ? w : a, undefined);
-    const label = lowest ? `${num(lowest.remaining_percent)}% осталось · ${lowest.label}` : "лимит неизвестен";
-    return `<span class="usage-limit-brief ${lowest && lowest.remaining_percent! <= 10 ? "usage-low" : ""}"><b>${esc(p.name)}</b> ${esc(label)}${p.status === "stale" ? " · прежние данные" : ""}</span>`;
+    if (!lowest) return `<span class="usage-limit-brief"><span class="usage-limit-line"><b>${esc(p.name)}</b> лимит неизвестен</span></span>`;
+    const left = clamp(lowest.remaining_percent!);
+    const low = left <= 10;
+    // Дизайнер 29.09: «использовано/осталось» людям — полоской, а не одной строчкой.
+    return `<span class="usage-limit-brief ${low ? "usage-low" : ""}"><span class="usage-limit-line"><b>${esc(p.name)}</b> <span>${esc(lowest.label)}${p.status === "stale" ? " · прежние данные" : ""}</span> <strong>${num(left)}% осталось</strong></span><span class="usage-meter" role="meter" aria-label="${esc(p.name + " · " + lowest.label)}: осталось" aria-valuenow="${left}" aria-valuemin="0" aria-valuemax="100"><i class="${low ? "usage-low" : ""}" style="width:${left}%"></i></span></span>`;
   }).join("");
 }
 

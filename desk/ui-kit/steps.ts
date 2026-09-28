@@ -136,7 +136,7 @@ function originLinks(d: RunDetail | undefined, kind: string, goal: string): stri
   const room = raw === LEGACY_WINDOW_KEY ? "window" : raw;
   const at = d.manifest?.created_at || "";
   const links: string[] = [];
-  if (room) links.push(`<a href="#" data-open-room="${esc(room)}" data-at="${esc(at)}">Открыть в чате</a>`);
+  if (room) links.push(`<a href="#" data-open-room="${esc(room)}" data-at="${esc(at)}">Открыть в чате →</a>`);
   if (room && (kind === "alarm" || kind === "promise")) {
     const g = clip(goal.replace(/\s+/g, " ").trim(), 200);
     links.push(`<a href="#" data-compose="${esc(room)}" data-text="${esc(`Повтори это напоминание через 10 минут: «${g}»`)}">Повторить через 10 минут</a>`);

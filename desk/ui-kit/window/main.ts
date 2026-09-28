@@ -974,6 +974,7 @@ export function start(opts: WindowOptions): void {
   // цифры не выдаём за текущие.
   let pulseHTML = "";
   let pulseStamp = "";
+  let pulseLast = "";
   function paintPulse(connected: boolean) {
     if (!pulseHTML) {
       pulseBox.textContent = "";
@@ -994,12 +995,17 @@ export function start(opts: WindowOptions): void {
       }
       const total = (l.in || 0) + (l.cached || 0);
       const share = total ? Math.round((100 * (l.cached || 0)) / total) : 0;
+      // Дизайнер 29.09: строка перегружена. Время и слово «кэш» — в подсказку; видно
+      // модель, полоску доли кэша, вход → ответ.
       pulseHTML =
-        `${fmtTs(l.ts)} · <b>${esc(l.model || "")}</b> · кэш <span class="cachebar"><i style="width:${share}%"></i></span>${share}% · ` +
+        `<b>${esc(l.model || "")}</b> · <span class="cachebar"><i style="width:${share}%"></i></span>${share}% · ` +
         `${fmtK(total)} → ${fmtK(l.out || 0)}${l.err ? ' · <span class="err-msg">ошибка</span>' : ""}`;
+      pulseLast = `Последний вызов модели — ${fmtTs(l.ts)}: из кэша провайдера ${share}% входа, ` +
+        `вход ${fmtK(total)} → ответ ${fmtK(l.out || 0)}.`;
       pulseStamp = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+      pulseBox.title = pulseLast;
       if (p.calls_day != null) {
-        pulseBox.title = `За сутки: вызовов ${p.calls_day}` +
+        pulseBox.title = pulseLast + ` За сутки: вызовов ${p.calls_day}` +
           (p.cache_day != null ? `, доля кэша ${p.cache_day}%` : "") +
           (p.cache_now != null ? `; сейчас ${p.cache_now}%` : "");
       }

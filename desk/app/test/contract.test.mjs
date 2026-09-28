@@ -39,9 +39,10 @@ assert.ok(/WINDOW_ROOM: string = contract\.rooms\.default/.test(stateTs), "state
 assert.ok(/contract\.rooms\.default/.test(phoneTs), "ui-kit/phone.ts: ключ комнаты окна не из contract.json");
 assert.ok(/LEGACY_WINDOW_KEY: string = contract\.rooms\.legacy/.test(stateTs), "state.ts: старый ключ комнаты не из contract.json");
 assert.ok(/LEGACY_WINDOW_KEY: string = contract\.rooms\.legacy/.test(phoneTs), "ui-kit/phone.ts: старый ключ комнаты не из contract.json");
-// Два общих примитива держат КОПИЮ значения: их грузит actions.test.mjs как data:-модуль,
-// а оттуда относительный импорт JSON не резолвится. Копии сверяем здесь.
-for (const f of ["activity.ts", "steps.ts"]) {
+// Общий примитив держит КОПИЮ значения: его грузит actions.test.mjs как data:-модуль,
+// а оттуда относительный импорт JSON не резолвится. Копию сверяем здесь. (activity.ts
+// ключ больше не держит: с 29.09 имя чата в карточке — текст, не ссылка.)
+for (const f of ["steps.ts"]) {
   const src = readFileSync(join(kit, f), "utf8");
   const m = src.match(/const LEGACY_WINDOW_KEY = "([^"]+)"/);
   assert.ok(m, `ui-kit/${f}: копии старого ключа комнаты нет вовсе`);

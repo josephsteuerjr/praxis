@@ -92,7 +92,7 @@ export function runRowHTML(r: Run, opts: { showRoom?: boolean } = {}): string {
       <span class="dot ${dot}"></span>
       <span class="ev-chevron" aria-hidden="true">›</span>
     </button>
-    ${sub ? `<div class="ev-sub">${esc(sub)}${opts.showRoom && r.chat_id != null && r.chat_title ? ` · <a href="#" data-room="${esc(roomKeyOf(r))}" data-room-name="${esc(r.chat_title)}">открыть чат</a>` : ""}</div>` : ""}
+    ${sub ? `<div class="ev-sub">${esc(sub)}${opts.showRoom && r.chat_id != null && r.chat_title ? ` · <a href="#" data-room="${esc(roomKeyOf(r))}" data-room-name="${esc(r.chat_title)}">открыть чат →</a>` : ""}</div>` : ""}
     <div class="ev-steps" id="run-${esc(r.id)}" ${S.evOpen.has(r.id) ? "" : "hidden"}></div>
   </div>`;
 }

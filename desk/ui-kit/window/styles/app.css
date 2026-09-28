@@ -789,7 +789,9 @@ html.electron #chrome a {
 }
 
 .pulse {
-  font: 400 12px/1 var(--sans);
+  /* Высота строки не 1: при обрезке по коробке `overflow: hidden` резал хвосты g и p
+     (дизайнер 29.09). */
+  font: 400 12px/1.5 var(--sans);
   color: var(--muted);
   white-space: nowrap;
   flex: 0 1 auto;

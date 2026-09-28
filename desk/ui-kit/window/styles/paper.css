@@ -20,7 +20,9 @@
   --muted: #7d6c5a;
   --line: rgba(29, 26, 23, 0.14);
   --line-strong: rgba(29, 26, 23, 0.28);
-  --line-ink: #1d1a17;               /* обводка «пером»: пузыри, карточки, поле ввода */
+  /* обводка «пером»: пузыри, карточки, поле ввода, разделитель полки. Была почти чёрной
+     (#1d1a17); дизайнер 29.09 — нежнее, #997766. */
+  --line-ink: #997766;
   --lw: 1.5px;
   --terra: var(--u-terra, #e0915a);  /* заливка-акцент: кнопка отправки, точки, отметки */
   --accent: var(--u-accent-day, #9a4a1e); /* акцент для текста и ссылок: контраст ≥ 4,5 */
@@ -55,7 +57,7 @@
     --muted: #978570;
     --line: rgba(241, 228, 208, 0.13);
     --line-strong: rgba(241, 228, 208, 0.26);
-    --line-ink: #e9dbc6;
+    --line-ink: #8a7862;
     --accent: var(--u-accent-night, #eda676);
     --accent-ink: #1d1914;
     --accent-soft: color-mix(in srgb, var(--terra) 16%, transparent);
@@ -81,7 +83,7 @@
   --muted: #978570;
   --line: rgba(241, 228, 208, 0.13);
   --line-strong: rgba(241, 228, 208, 0.26);
-  --line-ink: #e9dbc6;
+  --line-ink: #8a7862;
   --accent: var(--u-accent-night, #eda676);
   --accent-ink: #1d1914;
   --accent-soft: color-mix(in srgb, var(--terra) 16%, transparent);
@@ -120,8 +122,23 @@ body::before {
 
 /* ---------------------------------------------------------------- полка */
 
+/* Разделитель полки — одна линия пера на всю высоту окна, сквозь шапку (дизайнер 29.09:
+   «шапка легла поверх разделителя» — линия начиналась под шапкой). Рисует её тот же
+   столбец-подложка, что и бледную линию app.css, — схлопнулась полка, ушла и линия. */
 #rail {
-  border-right: var(--lw) solid var(--line-ink);
+  border-right: 0;
+}
+#app::before {
+  box-shadow: inset calc(-1 * var(--lw)) 0 0 var(--line-ink);
+}
+/* То же справа — у колонки ходов: столбец на обе строки, линия по его левому краю. */
+#app::after {
+  content: "";
+  grid-column: 3;
+  grid-row: 1 / -1;
+  box-shadow: inset var(--lw) 0 0 var(--line-ink);
+  pointer-events: none;
+  z-index: 3;
 }
 .rail-item {
   font: 400 15px/1 var(--sans);
@@ -158,9 +175,13 @@ body::before {
   letter-spacing: 0.03em;
   -webkit-text-stroke: 0.35px currentColor;
 }
+/* Имя и версия — в шапке, рядом с кнопкой полки (дизайнер 29.09), а не внизу полки. */
 .rail-sign {
   font-family: var(--hand);
   font-size: 14px;
+  margin: 0 0 0 6px;
+  line-height: 1.3;
+  white-space: nowrap;
 }
 .dot.live,
 .agent-dot {
@@ -556,3 +577,108 @@ body::before {
   font: 400 27px/1.2 var(--hand);
   letter-spacing: 0.02em;
 }
+
+/* ---------------------------------------------------------------- замечания дизайнера 29.09 */
+
+/* Таксономия. Ржавый — только то, что нажимается. Переход в другое место — ржавый со
+   стрелкой «→»; разворот на месте — серый со стрелкой «⌄» (раскрыт — стрелка вверх). */
+.turn-live-sub {
+  color: var(--muted);
+}
+.run-actions > summary,
+.action-earlier > summary,
+.action-details > summary {
+  list-style: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.run-actions > summary::-webkit-details-marker,
+.action-earlier > summary::-webkit-details-marker,
+.action-details > summary::-webkit-details-marker {
+  display: none;
+}
+.run-actions > summary::after,
+.action-earlier > summary::after,
+.action-details > summary::after {
+  content: "⌄";
+  display: inline-block;
+  margin-left: 0.45em;
+  transition: transform 0.15s ease;
+}
+.run-actions[open] > summary::after,
+.action-earlier[open] > summary::after,
+.action-details[open] > summary::after {
+  transform: rotate(180deg);
+}
+.run-actions > summary:hover,
+.action-earlier > summary:hover,
+.action-details > summary:hover,
+.run-reading-more summary:hover span,
+.usage-summary:hover .usage-summary-toggle {
+  color: var(--ink-2);
+}
+.run-reading-more summary span,
+#view .usage-summary-toggle {
+  color: var(--muted);
+}
+.run-reading-more summary span::after {
+  content: " ⌄";
+}
+.run-reading-more[open] summary span::after {
+  content: " · свернуть ⌃";
+}
+
+/* Точка у заголовка карточки — на середине строчных букв почерка, а не на середине
+   строчной коробки (у Zen Kurenaido буквы сидят ниже неё: замер 29.09 — на 0,22em). */
+.now .turn-live-head .dot {
+  align-self: center;
+  position: relative;
+  top: 0.22em;
+}
+
+/* «Расход и лимиты»: счётчики слева, лимиты справа — на всю ширину, а не всё в левом углу;
+   у лимита «осталось» — полоской, а не одной строчкой. */
+#view .usage-summary {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: end;
+}
+#view .usage-summary-title {
+  grid-column: 1;
+}
+#view .usage-summary-toggle {
+  grid-column: 2;
+  justify-self: end;
+  align-self: center;
+}
+#view .usage-brief {
+  grid-column: 1;
+}
+#view .usage-limits-brief {
+  grid-column: 2;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Полоса кадра — различима и при дейтеранопии: зелёный, ржавый и коричневый одной
+   светлоты сливались. Теперь куски различаются светлотой (кэш — светлый, заново —
+   насыщенный, ответ — средний), а между ними — просвет бумаги. */
+.frame-bar {
+  gap: 2px;
+  background: transparent;
+}
+.frame-bar i {
+  border-radius: 3px;
+}
+.frame-bar .cached,
+.frame-legend .cached i {
+  background: color-mix(in srgb, var(--ok) 45%, var(--paper));
+}
+.frame-bar .fresh,
+.frame-legend .fresh i {
+  background: var(--accent);
+}
+.frame-bar .out,
+.frame-legend .out i {
+  background: color-mix(in srgb, var(--ink) 55%, var(--paper));
+}
+

@@ -46,8 +46,11 @@
 .usage-brief b { font: 500 21px/1.4 var(--sans); color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -.025em; }
 .usage-brief small { font: 12px/1.4 var(--sans); color: var(--ink-3); letter-spacing: 0; }
 .usage-limits-brief { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 5px 20px; font: 11px/1.6 var(--sans); color: var(--ink-3); }
-.usage-limit-brief b { color: var(--ink-2); font-weight: 500; margin-right: 5px; }
-.usage-limit-brief.usage-low { color: var(--err); }
+.usage-limit-brief { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.usage-limit-line { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; font: 12px/1.4 var(--sans); }
+.usage-limit-line b { color: var(--ink-2); font-weight: 500; }
+.usage-limit-line strong { margin-left: auto; font-weight: 500; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.usage-limit-brief.usage-low .usage-limit-line strong { color: var(--err); }
 .usage-expanded { padding: 22px; border-top: 1px solid var(--line); background: var(--surface); border-radius: 0 0 12px 12px; }
 .usage-compact .usage-heading h2 { font-size: 22px; }
 @media(max-width:600px) {

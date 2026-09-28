@@ -1,16 +1,5 @@
 import { esc, fmtTime } from "./text";
 
-/**
- * Старый ключ комнаты окна (до 10.09.2026) — копия `contract.rooms.legacy`.
- *
- * ⚠ Почему КОПИЯ, а не импорт JSON. Этот файл грузит стенд `app/test/actions.test.mjs`:
- * он читает исходник, снимает типы и подключает его как data:-модуль, подменяя один
- * относительный импорт. Из data:-адреса `./contract.json` не резолвится никогда.
- * Копию сверяет `app/test/contract.test.mjs` — тем же способом, каким сверяются копии
- * в Python и Rust.
- */
-const LEGACY_WINDOW_KEY = "pult";
-
 import { renderSteps, stepsHTML, type RunDetail } from "./steps";
 
 export interface ActivityRun { id: string; status: string; kind: string; chat_id?: string | number | null; chat_title?: string; created_at?: string }
@@ -34,11 +23,9 @@ export function activityHTML(run: ActivityRun, detail: RunDetail | undefined,
                              duration: string,
                              opts: { pending?: boolean } = {}): string {
   const d = detail || { manifest: { status: run.status } };
-  const raw = String(run.chat_id ?? "");
-  const key = raw === LEGACY_WINDOW_KEY ? "window" : raw;
   return `<section class="turn-live now-live activity-card" id="turn-live" data-run="${esc(run.id)}" data-status="${esc(d.manifest?.status || run.status)}">
     <div class="turn-live-head"><span class="dot ${d.manifest?.status === "running" ? "live" : ""}"></span><span data-activity-status>${esc(status(d))}</span><span class="t" id="turn-live-t">${esc(duration)}</span></div>
-    ${run.chat_title ? `<div class="turn-live-sub"><a href="#" data-room="${esc(key)}" data-room-name="${esc(run.chat_title)}">${esc(run.chat_title)}</a></div>` : ""}
+    ${run.chat_title ? `<div class="turn-live-sub">${esc(run.chat_title)}</div>` : ""}
     <div class="ev-steps" id="turn-live-steps">${detail ? stepsHTML(detail, { limit: 12, overview: true }) : opts.pending ? '<div class="muted">Читаю действия…</div>' : '<div class="muted">Не удалось прочитать действия. Повторяю подключение…</div>'}</div>
   </section>`;
 }

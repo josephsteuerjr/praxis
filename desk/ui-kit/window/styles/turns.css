@@ -3,7 +3,9 @@
 
 #panel {
   background: transparent;
-  border-left: var(--lw) solid var(--line-ink);
+  /* Линия слева — не здесь, а столбцом на всю высоту окна (`#app::after` в paper.css):
+     как и у полки, иначе шапка прерывала бы её (дизайнер 29.09). */
+  border-left: 0;
   padding: 0;
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
