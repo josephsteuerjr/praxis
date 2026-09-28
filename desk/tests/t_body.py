@@ -450,10 +450,13 @@ class Absent(unittest.TestCase):
         import importlib
         fresh = importlib.reload(body)
         try:
-            # Тело есть на Windows (UIA) и на macOS (Accessibility); прочие POSIX — без.
-            self.assertEqual(fresh.HAS_BODY, os.name == "nt" or sys.platform == "darwin")
+            # Тело есть на Windows (UIA), на macOS (Accessibility) и с 28.09 на Linux (X11 +
+            # AT-SPI); прочие POSIX — без.
+            self.assertEqual(fresh.HAS_BODY, os.name == "nt" or sys.platform == "darwin" or sys.platform.startswith("linux"))
             self.assertEqual(fresh.HAS_BODY, modes.HAS_COMPUTER)
-            self.assertEqual(fresh.ASKS_TCC, sys.platform == "darwin")
+            # Проба desktop.status после body.status — там, где тело говорит о разрешениях
+            # и сеансе (Mac: TCC; Linux: X11/Wayland, доступность).
+            self.assertEqual(fresh.ASKS_TCC, sys.platform == "darwin" or sys.platform.startswith("linux"))
         finally:
             fresh.HAS_BODY = True
 
@@ -571,7 +574,8 @@ class Platform(unittest.TestCase):
         self.assertEqual(body.spawn_kwargs(), body.spawn_kwargs(posix=os.name != "nt"))
 
     def test_default_device_is_not_windows_pc_off_windows(self):
-        self.assertEqual(body.DEFAULT_DEVICE, "windows-pc" if os.name == "nt" else "mac")
+        self.assertEqual(body.DEFAULT_DEVICE, "windows-pc" if os.name == "nt"
+                         else ("mac" if sys.platform == "darwin" else "linux"))
         saved = dict(body._TOKENS)
         body._TOKENS.clear()
         try:

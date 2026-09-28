@@ -340,10 +340,10 @@ class Platform(unittest.TestCase):
     def test_flags_follow_the_platform(self):
         import importlib
         fresh = importlib.reload(modes)
-        # Служба есть на Windows (SCM) и на macOS (демон launchd, 0.8.0); тело —
-        # там же. Галочки службы — механизмы Windows, и только они.
-        self.assertEqual(fresh.HAS_SERVICE, os.name == "nt" or sys.platform == "darwin")
-        self.assertEqual(fresh.HAS_COMPUTER, os.name == "nt" or sys.platform == "darwin")
+        # Служба есть на Windows (SCM), на macOS (демон launchd, 0.8.0) и на Linux
+        # (systemd, 28.09); тело — там же. Галочки службы — механизмы Windows, и только они.
+        self.assertEqual(fresh.HAS_SERVICE, os.name == "nt" or sys.platform == "darwin" or sys.platform.startswith("linux"))
+        self.assertEqual(fresh.HAS_COMPUTER, os.name == "nt" or sys.platform == "darwin" or sys.platform.startswith("linux"))
         self.assertEqual(fresh.HAS_SERVICE_TOGGLES, os.name == "nt")
         self.assertIsNone(fresh.MACOS_TEXTS, "подмена текстов по умолчанию не задана — платформа по sys.platform")
 
