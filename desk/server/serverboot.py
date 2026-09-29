@@ -6,7 +6,8 @@
 Запуск: python server/serverboot.py --config /opt/helene/helene.json
 
 Что делает:
-  * ключ канала — `data/memory/.state/desk-token` (заводится, если нет) — уходит
+  * ключ канала — `data/.serverboot/desk-token` (заводится, если нет; до 1.2.5 лежал в
+    `data/memory/.state/`, оттуда переезжает) — уходит
     каналу в HELENE_TOKEN и печатается один раз строкой для окна:
     в helene.json на ПК владельца — {"mode": "remote", "base": "https://…", "key": "…"};
   * канал `app/deskapp.py <port>` слушает 0.0.0.0 внутри контейнера, наружу её
