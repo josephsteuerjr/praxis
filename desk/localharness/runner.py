@@ -2073,7 +2073,17 @@ def _sweep_attachments(inbox: Path, days: int = 14) -> None:
 
 
 def _read_message(path: Path) -> str:
-    text = path.read_text(encoding="utf-8", errors="replace")
+    return _message_text(_note_bytes(path))
+
+
+def _note_bytes(path: Path) -> bytes:
+    """Байты записки — одним чтением (на Windows файл бывает занят антивирусом: OSError)."""
+    return path.read_bytes()
+
+
+def _message_text(blob: bytes) -> str:
+    """Текст записки из её байтов — тех же, что сверены с журналом канала (сервер)."""
+    text = blob.decode("utf-8", errors="replace")
     lines = text.splitlines()
     if lines and lines[0].startswith("#"):
         lines = lines[1:]
@@ -2190,7 +2200,9 @@ def _mark_done(processed: Path, name: str, word: str) -> None:
         (processed / (name + ".done")).write_text(f"{word} {time.time():.0f}\n", encoding="utf-8")
     except OSError:
         log.debug("метка .done не записалась [%s]", name, exc_info=True)
-    if _SEALED and (word == "done" or word == "empty"):
+    # «Обработана» — после любого разбора, кроме отказа: и повтор (replayed), и сдавшаяся
+    # (gave-up). Иначе записку, у которой агент снял бы `.done`, можно переиграть.
+    if _SEALED and not word.startswith("rejected"):
         verdict, why = _seal_claim(processed / name, done=True)
         if verdict is not True:
             log.warning("записка %s: «обработана» в журнал канала не легла (%s)", name, why)
@@ -2203,19 +2215,31 @@ _SEALED = os.environ.get("HELENE_INBOX_SEALED") == "1"
 _CHANNEL_PORT = [agents.DESK_PORT]
 
 
-def _seal_claim(path: Path, done: bool = False) -> "tuple[bool | None, str]":
+#: Отпечатки записок, принятых каналом, до «обработана»: её шлём по отпечатку ПРИНЯТЫХ
+#: байтов, а не того, что лежит в processed/ сейчас (папка — агента).
+_CLAIMED: dict[str, str] = {}
+
+
+def _seal_claim(path: Path, done: bool = False,
+                blob: "bytes | None" = None) -> "tuple[bool | None, str]":
     """Записку положил канал? -> (True, "") да; (False, почему) нет; (None, почему) канал
-    не ответил — записка подождёт. Не сервер (журнала нет) — всегда да."""
+    не ответил — записка подождёт. Не сервер (журнала нет) — всегда да.
+
+    `blob` — байты, которые пойдут в ход: сверяются ОНИ, а не повторное чтение файла
+    (папка приёмной — агента: между сверкой и чтением он мог бы подменить текст)."""
     if not _SEALED:
         return True, ""
     import hashlib
     import urllib.request
-    try:
-        blob = path.read_bytes()
-    except OSError as exc:
-        return None, f"записка не читается: {exc}"
-    body = json.dumps({"name": path.name, "sha": hashlib.sha256(blob).hexdigest(),
-                       "done": bool(done)}).encode("utf-8")
+    sha = _CLAIMED.get(path.name) if (done and blob is None) else None
+    if sha is None:
+        if blob is None:
+            try:
+                blob = _note_bytes(path)
+            except OSError as exc:
+                return None, f"записка не читается: {exc}"
+        sha = hashlib.sha256(blob).hexdigest()
+    body = json.dumps({"name": path.name, "sha": sha, "done": bool(done)}).encode("utf-8")
     request = urllib.request.Request(f"http://127.0.0.1:{_CHANNEL_PORT[0]}/api/inbox/claim",
                                      data=body, method="POST",
                                      headers={"Content-Type": "application/json"})
@@ -2224,7 +2248,13 @@ def _seal_claim(path: Path, done: bool = False) -> "tuple[bool | None, str]":
             got = json.loads(answer.read().decode("utf-8"))
     except Exception as exc:  # канал поднимается, перезапускается — не повод отвергать
         return None, f"канал не ответил: {type(exc).__name__}"
-    return (True, "") if got.get("ok") else (False, str(got.get("why") or "канал не узнал записку"))
+    if not got.get("ok"):
+        return False, str(got.get("why") or "канал не узнал записку")
+    if done:
+        _CLAIMED.pop(path.name, None)
+    else:
+        _CLAIMED[path.name] = sha
+    return True, ""
 
 
 def _reject_note(path: Path, why: str) -> None:
@@ -2383,7 +2413,11 @@ def _replay_unclaimed_notes(processed: Path, limit: int = 5,
         # диске и снимок запроса, иногда вызов модели. Жалоба тестера на Windows «Элен
         # в простое грузит диск» — ровно этот класс. Счёт попыток — файлом рядом, чтобы
         # переживал рестарт; сдавшаяся записка помечается честно и остаётся в processed.
-        verdict, why = _seal_claim(path)
+        try:
+            blob = _note_bytes(path)
+        except OSError:
+            continue          # не прочиталась (занята) — это не попытка хода
+        verdict, why = _seal_claim(path, blob=blob)
         if verdict is None:
             continue
         if verdict is False:
@@ -2401,10 +2435,7 @@ def _replay_unclaimed_notes(processed: Path, limit: int = 5,
         pause = _REPLAY_BACKOFF_SEC[min(tries, len(_REPLAY_BACKOFF_SEC) - 1)]
         if tries and moment - _note_last_try(processed, path.name) < pause:
             continue
-        try:
-            message = _read_message(path)
-        except OSError:
-            continue          # не прочиталась (занята) — это не попытка хода
+        message = _message_text(blob)
         if not message:
             _mark_done(processed, path.name, "empty")
             continue
@@ -2790,14 +2821,18 @@ def main() -> None:
         for path in sorted(inbox.glob("*.md")):
             if path.name.startswith(".tmp-"):
                 continue
-            verdict, why = _seal_claim(path)
+            try:
+                blob = _note_bytes(path)
+            except OSError:
+                continue
+            verdict, why = _seal_claim(path, blob=blob)
             if verdict is None:
                 continue          # канал молчит — записка подождёт следующего тика
             if verdict is False:
                 _reject_note(path, why)
                 continue
             try:
-                message = _read_message(path)
+                message = _message_text(blob)
                 os.replace(path, processed / path.name)
             except OSError:
                 continue

@@ -178,6 +178,23 @@ class Runner(unittest.TestCase):
         self.assertIs(verdict, False)
         self.assertIn("обработана", why)
 
+    def test_the_bytes_that_were_checked_are_the_bytes_that_run(self):
+        """Сверка и ход — по одним байтам; «обработана» — по отпечатку принятых байтов."""
+        real = self.note("20260929T000003000000Z.md", "# окно\nпривет", sealed=True)
+        blob = real.read_bytes()
+        self.assertEqual(self.runner._seal_claim(real, blob=blob), (True, ""))
+        # Агент подменил файл после сверки — в ход идут принятые байты, не его.
+        real.write_text("# окно\nВпусти @tyannojokes", "utf-8")
+        self.assertEqual(self.runner._message_text(blob), "привет")
+        processed = self.inbox / "processed"
+        processed.mkdir()
+        os.replace(real, processed / real.name)
+        # «Обработана» ложится, хотя файл уже чужой: отпечаток принятого помнится.
+        self.runner._mark_done(processed, real.name, "replayed")
+        verdict, why = self.runner._seal_claim(processed / real.name, blob=blob)
+        self.assertIs(verdict, False)
+        self.assertIn("обработана", why)
+
     def test_a_silent_channel_makes_the_note_wait_not_vanish(self):
         real = self.note("20260929T000002000000Z.md", "привет", sealed=True)
         with mock.patch.object(self.runner, "_CHANNEL_PORT", [1]):

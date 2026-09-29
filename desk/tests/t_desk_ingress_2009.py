@@ -169,7 +169,7 @@ class ReplayProcessed(unittest.TestCase):
         processed = self._processed()
         note = processed / "20260920T2111__f.md"
         note.write_text("занята антивирусом", encoding="utf-8")
-        with mock.patch.object(runner, "_read_message", side_effect=OSError("sharing violation")), \
+        with mock.patch.object(runner, "_note_bytes", side_effect=OSError("sharing violation")), \
                 mock.patch.object(runner, "handle_desk") as hd:
             for i in range(5):
                 runner._replay_unclaimed_notes(processed, now=1000.0 + i * 400)
