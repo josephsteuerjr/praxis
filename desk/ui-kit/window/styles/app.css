@@ -4114,3 +4114,14 @@ body.first-run #state {
 .backup-list .muted {
   color: var(--ink-3);
 }
+
+/* Panel dividers live on the grid, outside the scrolling/re-rendered content. */
+.panel-resize { grid-row: 2; width: 9px; height: 100%; z-index: 5; cursor: col-resize; touch-action: none; }
+.panel-resize-rail { grid-column: 1; justify-self: end; }
+.panel-resize-panel { grid-column: 3; justify-self: start; }
+.panel-resize:hover, .panel-resize:focus-visible { background: var(--line); }
+#app.rail-collapsed .panel-resize-rail,
+#app.panel-collapsed .panel-resize-panel,
+#app:not(.with-panel) .panel-resize-panel { display: none; }
+#app.resizing-panels { transition: none; user-select: none; cursor: col-resize; }
+@media (max-width: 760px) { .panel-resize { display: none; } }

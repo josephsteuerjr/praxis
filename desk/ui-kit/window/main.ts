@@ -17,6 +17,7 @@ import { api, cfg, connect, electron, inTauri, onConnection, onEvent, post, shel
 import { applyTheme } from "../../ui-kit/dom";
 import * as scroll from "./scroll";
 import * as look from "./look";
+import { mountPanelWidths } from "./panel-widths";
 import { watchShellVersion } from "../../ui-kit/version";
 import { setResultFetcher } from "../../ui-kit/steps";
 import { bindFail, esc, failHTML, fmtAge, fmtDur, fmtK, fmtTs, humanError, q, toast } from "../../ui-kit/window/lib";
@@ -420,8 +421,17 @@ export function start(opts: WindowOptions): void {
   }
   setCollapsed("rail", readFlag("frame.rail"));
   setCollapsed("panel", readFlag("frame.panel"));
-  railBtn.addEventListener("click", () => setCollapsed("rail", !app.classList.contains("rail-collapsed"), true));
-  panelBtn.addEventListener("click", () => setCollapsed("panel", !app.classList.contains("panel-collapsed"), true));
+  const disposeWidths = mountPanelWidths(app);
+  window.addEventListener("pagehide", (event: PageTransitionEvent) => {
+    if (!event.persisted) disposeWidths();
+  });
+  function togglePanel(which: "rail" | "panel") {
+    setCollapsed(which, !app.classList.contains(which + "-collapsed"), true);
+    // Focus without scrolling the history or changing the draft/selection.
+    if (S.view === "talk") say.focus({ preventScroll: true });
+  }
+  railBtn.addEventListener("click", () => togglePanel("rail"));
+  panelBtn.addEventListener("click", () => togglePanel("panel"));
 
   document.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
