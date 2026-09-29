@@ -14,6 +14,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -114,7 +115,10 @@ class DirectAsk(unittest.TestCase):
 
     def test_without_a_token_nothing_is_sent(self):
         self._serve({"ok": True})
-        with tempfile.TemporaryDirectory() as tmp:
+        # Служба стоит, токена ещё нет. Без закрепления на macOS (службы Windows там нет)
+        # срабатывала другая честная ветка — «службы нет» (Mac-сборка 1.2.5, 29.09).
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(broker.Broker, "service", return_value=True):
             said = broker.Broker(_tree(Path(tmp), None)).ask(
                 "exec", r"C:\Windows\System32\whoami.exe", [], "проверка", 30, 0)
         self.assertEqual(self.sent, [])
