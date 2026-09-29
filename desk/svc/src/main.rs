@@ -1583,42 +1583,91 @@ include!("../../common/console_text.rs");
 /// переименования осталась бы висеть и поднимать старый exe.
 const SESSION_TASK: &str = "Helene\\session-host";
 
-/// Аргументы `schtasks /Create`. Чистая функция — её накрывает тест, потому что
-/// цена ошибки здесь не «не запустилось», а «запустилось не с теми правами».
+/// Задача планировщика — XML, а не ключи `schtasks /Create`. Чистая функция — её
+/// накрывает тест, потому что цена ошибки здесь не «не запустилось», а «запустилось не
+/// с теми правами» или «молча умерло».
 ///
-/// * `/RU <владелец> /IT` — задача идёт ИНТЕРАКТИВНЫМ токеном владельца. Пароль
-///   не нужен, а без входа в систему она просто не стартует — это и есть
+/// * `InteractiveToken` под владельцем — задача идёт ИНТЕРАКТИВНЫМ токеном владельца.
+///   Пароль не нужен, а без входа в систему она просто не стартует — это и есть
 ///   честная привязка к сессии.
-/// * `/RL LIMITED` — без повышения. Ровно это отличает новый порядок от
-///   старого: права администратора агент теперь просит отдельно (UAC или
-///   брокер), а не получает молча вместе со службой.
-/// * `/SC ONLOGON` — второй, независимый повод подняться: при входе владельца
-///   харнесс стартует сам, даже если служба не разглядела сессию (так бывает
-///   при входе по RDP — консольной сессии там нет).
-/// * `/F` — перезапись. Переустановка и обновление не плодят задач.
+/// * `LeastPrivilege` — без повышения. Права администратора агент просит отдельно
+///   (UAC или брокер), а не получает молча вместе со службой.
+/// * `LogonTrigger` владельца — второй, независимый повод подняться: при его входе
+///   харнесс стартует сам, даже если служба не разглядела сессию (вход по RDP).
 ///
-/// `/TR` собирается ОДНОЙ строкой с кавычками внутри: schtasks разбирает её
-/// сам, и путь с пробелом (`C:\Users\Иван Петров\…`) без кавычек разъехался бы
-/// на два аргумента.
-fn session_task_create_args(exe: &Path, config: &Path, user: &str) -> Vec<String> {
+/// ⚠ 29.09.2026 (ноутбук Егора, 1.2.5). Прежде задача заводилась ключами
+/// (`/SC ONLOGON /RU … /IT /RL LIMITED`), а ключей для остального у schtasks нет — и
+/// задача жила с умолчаниями Windows: НЕ стартовать на батарее, ОСТАНАВЛИВАТЬСЯ при
+/// уходе на батарею, срок работы 72 часа, приоритет ниже обычного. В 14:17:26 ноутбук
+/// ушёл с зарядки — Windows убил харнесс, служба 15 минут просила планировщик поднять
+/// его снова, а планировщик держал задачу в очереди (на батарее старт запрещён).
+/// Агент лежал, пока окно не подняло его запасным ходом. Здесь всё это названо явно.
+fn session_task_xml(exe: &Path, config: &Path, user: &str) -> String {
+    let esc = |s: &str| {
+        s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    };
+    let exe = esc(&plain_path(exe).display().to_string());
+    let config = esc(&plain_path(config).display().to_string());
+    let user = esc(user);
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Principals>
+    <Principal id="Author">
+      <UserId>{user}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <Priority>5</Priority>
+  </Settings>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{user}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Actions Context="Author">
+    <Exec>
+      <Command>"{exe}"</Command>
+      <Arguments>session-host --config "{config}"</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"#
+    )
+}
+
+/// XML задачи — файлом в UTF-16 с BOM: так его читает `schtasks /XML` на любой
+/// кодовой странице системы (путь «C:\Users\Иван Петров» в cp1251/cp866 не ломается).
+fn utf16_with_bom(text: &str) -> Vec<u8> {
+    let mut out = vec![0xFF, 0xFE];
+    for unit in text.encode_utf16() {
+        out.extend_from_slice(&unit.to_le_bytes());
+    }
+    out
+}
+
+/// `/F` — перезапись: переустановка и обновление не плодят задач и чинят старую.
+fn session_task_create_args(xml: &Path) -> Vec<String> {
     vec![
         "/Create".into(),
         "/F".into(),
         "/TN".into(),
         SESSION_TASK.into(),
-        "/SC".into(),
-        "ONLOGON".into(),
-        "/RU".into(),
-        user.into(),
-        "/IT".into(),
-        "/RL".into(),
-        "LIMITED".into(),
-        "/TR".into(),
-        format!(
-            "\"{}\" session-host --config \"{}\"",
-            plain_path(exe).display(),
-            plain_path(config).display()
-        ),
+        "/XML".into(),
+        plain_path(xml).display().to_string(),
     ]
 }
 
@@ -1751,8 +1800,12 @@ fn session_task_install(config: &Path) -> Result<String, String> {
                 .to_string()
         })?,
     };
-    let args = session_task_create_args(&exe, config, &user);
-    match schtasks(&args)? {
+    let xml = std::env::temp_dir().join(format!("helene-session-task-{}.xml", std::process::id()));
+    std::fs::write(&xml, utf16_with_bom(&session_task_xml(&exe, config, &user)))
+        .map_err(|e| format!("задача {SESSION_TASK}: XML не записался ({}): {e}", xml.display()))?;
+    let made = schtasks(&session_task_create_args(&xml));
+    let _ = std::fs::remove_file(&xml);
+    match made? {
         (true, _) => Ok(user),
         (false, said) => Err(format!("задача {SESSION_TASK} не завелась: {said}")),
     }
@@ -3819,65 +3872,120 @@ fn ctrlc_handler(stop: Arc<AtomicBool>) -> Result<(), ()> {
 mod session_tests {
     use super::*;
 
-    fn joined(args: &[String]) -> String {
-        args.join(" ")
+    fn xml_for(exe: &str, config: &str, user: &str) -> String {
+        session_task_xml(Path::new(exe), Path::new(config), user)
     }
 
     /// Главное в задаче — НЕ «запускается», а «запускается под владельцем и без
     /// повышения». Ошибка ровно здесь и была: харнесс наследовал права службы.
     #[test]
     fn task_runs_as_owner_without_elevation() {
-        let args = session_task_create_args(
-            Path::new(r"C:\Users\Иван Петров\AppData\Local\Programs\Helene\helene-svc.exe"),
-            Path::new(r"C:\Users\Иван Петров\AppData\Local\Programs\Helene\helene.json"),
+        let xml = xml_for(
+            r"C:\Users\Иван Петров\AppData\Local\Programs\Helene\helene-svc.exe",
+            r"C:\Users\Иван Петров\AppData\Local\Programs\Helene\helene.json",
             "DESKTOP\\Иван",
         );
-        let line = joined(&args);
-        // Под владельцем, его интерактивным токеном.
-        assert!(args.windows(2).any(|w| w[0] == "/RU" && w[1] == "DESKTOP\\Иван"));
-        assert!(args.iter().any(|a| a == "/IT"));
-        // Без повышения: HIGHEST здесь означал бы ровно ту дыру, которую чиним.
-        assert!(args.windows(2).any(|w| w[0] == "/RL" && w[1] == "LIMITED"));
-        assert!(!line.contains("HIGHEST"));
-        // Пароля не спрашиваем и не храним.
-        assert!(!args.iter().any(|a| a == "/RP"));
-        // Второй повод подняться — вход владельца.
-        assert!(args.windows(2).any(|w| w[0] == "/SC" && w[1] == "ONLOGON"));
-        // Перезапись: переустановка не плодит задач.
-        assert!(args.iter().any(|a| a == "/F"));
-        assert!(args.windows(2).any(|w| w[0] == "/TN" && w[1] == SESSION_TASK));
+        // Под владельцем, его интерактивным токеном; пароля не спрашиваем и не храним.
+        assert!(xml.contains("<UserId>DESKTOP\\Иван</UserId>"));
+        assert!(xml.contains("<LogonType>InteractiveToken</LogonType>"));
+        assert!(!xml.contains("Password"));
+        // Без повышения: HighestAvailable здесь означал бы ровно ту дыру, которую чиним.
+        assert!(xml.contains("<RunLevel>LeastPrivilege</RunLevel>"));
+        assert!(!xml.contains("HighestAvailable"));
+        // Второй повод подняться — вход ВЛАДЕЛЬЦА (не любого, кто вошёл).
+        assert!(xml.contains("<LogonTrigger>"));
+        assert_eq!(xml.matches("<UserId>DESKTOP\\Иван</UserId>").count(), 2);
     }
 
-    /// Пробелы в пути — не редкость, а обычное «C:\Users\Иван Петров». Без
-    /// кавычек schtasks разобрал бы это как две команды.
+    /// 29.09: ноутбук ушёл с зарядки — Windows убил харнесс и не давал поднять снова.
+    #[test]
+    fn task_lives_on_battery_without_a_deadline() {
+        let xml = xml_for(r"C:\H\helene-svc.exe", r"C:\H\helene.json", "U");
+        assert!(xml.contains("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>"));
+        assert!(xml.contains("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>"));
+        // Без строки срок по умолчанию — 72 часа: агент умирал бы на третьи сутки.
+        assert!(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
+        // Без строки приоритет по умолчанию — 7 (ниже обычного).
+        assert!(xml.contains("<Priority>5</Priority>"));
+        assert!(xml.contains("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>"));
+        assert!(xml.contains("<RunOnlyIfIdle>false</RunOnlyIfIdle>"));
+    }
+
+    /// Пробелы в пути — не редкость, а обычное «C:\Users\Иван Петров»: exe в кавычках,
+    /// конфиг в кавычках внутри аргументов. Режим тот самый: не `run` и не `foreground`.
     #[test]
     fn task_command_is_quoted() {
-        let args = session_task_create_args(
-            Path::new(r"C:\Program Files\Helene\helene-svc.exe"),
-            Path::new(r"C:\Program Files\Helene\helene.json"),
+        let xml = xml_for(
+            r"C:\Program Files\Helene\helene-svc.exe",
+            r"C:\Program Files\Helene\helene.json",
             "USER",
         );
-        let at = args.iter().position(|a| a == "/TR").expect("нет /TR");
-        let tr = &args[at + 1];
-        assert_eq!(
-            tr,
-            "\"C:\\Program Files\\Helene\\helene-svc.exe\" session-host --config \"C:\\Program Files\\Helene\\helene.json\""
-        );
-        // Режим тот самый: не `run` (вход SCM) и не `foreground`.
-        assert!(tr.contains("session-host"));
+        assert!(xml.contains("<Command>\"C:\\Program Files\\Helene\\helene-svc.exe\"</Command>"));
+        assert!(xml.contains(
+            "<Arguments>session-host --config \"C:\\Program Files\\Helene\\helene.json\"</Arguments>"
+        ));
+    }
+
+    /// `&` в пути (папка «R&D») — это XML: без экранирования планировщик отверг бы файл.
+    #[test]
+    fn task_xml_escapes_paths_and_user() {
+        let xml = xml_for(r"C:\R&D\helene-svc.exe", r"C:\R&D\helene.json", "R&D\\<Иван>");
+        assert!(xml.contains(r"C:\R&amp;D\helene-svc.exe"));
+        assert!(xml.contains("<UserId>R&amp;D\\&lt;Иван&gt;</UserId>"));
+        assert!(!xml.contains("R&D"));
     }
 
     /// Верватим-путь `\\?\C:\…` планировщик не понимает — снимаем префикс.
     #[test]
     fn task_command_has_no_verbatim_prefix() {
-        let args = session_task_create_args(
-            Path::new(r"\\?\C:\Helene\helene-svc.exe"),
-            Path::new(r"\\?\C:\Helene\helene.json"),
-            "USER",
-        );
-        let tr = &args[args.iter().position(|a| a == "/TR").unwrap() + 1];
-        assert!(!tr.contains(r"\\?\"), "верватим-префикс уехал в задачу: {tr}");
-        assert!(tr.starts_with("\"C:\\Helene\\helene-svc.exe\""));
+        let xml = xml_for(r"\\?\C:\Helene\helene-svc.exe", r"\\?\C:\Helene\helene.json", "USER");
+        assert!(!xml.contains(r"\\?\"), "верватим-префикс уехал в задачу");
+        assert!(xml.contains("<Command>\"C:\\Helene\\helene-svc.exe\"</Command>"));
+    }
+
+    #[test]
+    fn task_is_created_from_the_xml_file_and_overwritten() {
+        let args = session_task_create_args(Path::new(r"C:\Windows\Temp\t.xml"));
+        assert!(args.iter().any(|a| a == "/F"));
+        assert!(args.windows(2).any(|w| w[0] == "/TN" && w[1] == SESSION_TASK));
+        assert!(args.windows(2).any(|w| w[0] == "/XML" && w[1] == r"C:\Windows\Temp\t.xml"));
+        let bytes = utf16_with_bom("<Задача/>");
+        assert_eq!(&bytes[..2], &[0xFF, 0xFE]);
+    }
+
+    /// Живой планировщик принимает этот XML и ставит ровно те настройки. Запуск руками:
+    /// `cargo test --release -- --ignored live_task_xml` (заводит и снимает пробную задачу).
+    #[test]
+    #[ignore]
+    #[cfg(windows)]
+    fn live_task_xml_is_accepted_by_the_scheduler() {
+        let user = active_session_user().expect("за консолью никого");
+        let exe = std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
+        let xml = session_task_xml(Path::new(&exe), Path::new(r"C:\R&D probe\helene.json"), &user);
+        let path = std::env::temp_dir().join("helene-session-task-probe.xml");
+        std::fs::write(&path, utf16_with_bom(&xml)).unwrap();
+        let name = "Helene\\session-host-probe";
+        let mut args = session_task_create_args(&path);
+        let at = args.iter().position(|a| a == SESSION_TASK).unwrap();
+        args[at] = name.into();
+        let (ok, said) = schtasks(&args).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(ok, "планировщик не принял XML: {said}");
+        let out = Command::new(sys_exe("schtasks.exe"))
+            .args(["/Query", "/TN", name, "/XML"])
+            .output()
+            .unwrap();
+        let back = String::from_utf8_lossy(&out.stdout).to_string();
+        let _ = schtasks(&["/Delete".into(), "/F".into(), "/TN".into(), name.into()]);
+        for want in [
+            "<DisallowStartIfOnBatteries>false",
+            "<StopIfGoingOnBatteries>false",
+            "<ExecutionTimeLimit>PT0S",
+            "<Priority>5",
+            "<LogonType>InteractiveToken",
+        ] {
+            assert!(back.contains(want), "в задаче нет {want}:\n{back}");
+        }
     }
 
     #[test]
