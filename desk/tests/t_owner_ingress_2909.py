@@ -220,6 +220,9 @@ class Supervisor(unittest.TestCase):
         (data / "memory" / ".state").mkdir(parents=True)
         (data / "memory" / ".state" / "devices.json").write_text("{}", "utf-8")
         (data / "relay" / "local_auth").mkdir(parents=True)
+        (data / "relay" / "local_auth" / "auth.json").write_text("{}", "utf-8")
+        (data / "relay" / "logs").mkdir()
+        (data / "relay" / "logs" / "relay.jsonl").write_text("", "utf-8")
         (data / "runner.log").write_text("", "utf-8")
         code.mkdir()
         (code / "agent.py").write_text("", "utf-8")
@@ -232,9 +235,35 @@ class Supervisor(unittest.TestCase):
         self.assertEqual(oct(st(data / ".channel").st_mode & 0o777), "0o700")
         self.assertTrue((data / ".channel" / "devices.json").is_file(), "устройства переехали к каналу")
         self.assertEqual(st(data / "relay").st_uid, 0)
+        self.assertEqual(oct(st(data / "relay" / "local_auth").st_mode & 0o777), "0o711")
+        self.assertEqual(oct(st(data / "relay" / "local_auth" / "auth.json").st_mode & 0o777), "0o600")
+        self.assertEqual(oct(st(data / "relay" / "logs" / "relay.jsonl").st_mode & 0o777), "0o640")
+        self.assertEqual(st(data / "relay" / "logs" / "relay.jsonl").st_gid, who["gid"])
         self.assertEqual(st(data / "runner.log").st_uid, 0)
         self.assertTrue(st(data).st_mode & 0o1000, "sticky: чужое не переименовать")
         self.assertEqual(oct(st(cfg).st_mode & 0o777), "0o640")
+        self.assertEqual(st(cfg).st_uid, who["desk"], "Настройки окна пишет канал")
+
+
+class ServerSettings(unittest.TestCase):
+    def test_settings_save_where_the_file_cannot_be_swapped(self):
+        """Одиночный файл, примонтированный в контейнер, не подменить (EBUSY) — пишем на месте."""
+        from deskd import agentcfg
+        tmp = Path(tempfile.mkdtemp(prefix="cfg-"))
+        try:
+            path = tmp / "helene.json"
+            path.write_text(json.dumps({"model": {"model": "old"}, "port": 8094}), "utf-8")
+            busy = OSError(16, "Device or resource busy")
+            with mock.patch.dict(os.environ, {"HELENE_CONFIG": str(path)}), \
+                    mock.patch.object(agentcfg.os, "replace", side_effect=busy):
+                got = agentcfg.save({"model": {"model": "new"}})
+            self.assertTrue(got["ok"], got)
+            saved = json.loads(path.read_text("utf-8"))
+            self.assertEqual(saved["model"]["model"], "new")
+            self.assertEqual(saved["port"], 8094)
+            self.assertFalse(list(tmp.glob(".tmp-*")))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class DesktopFence(unittest.TestCase):

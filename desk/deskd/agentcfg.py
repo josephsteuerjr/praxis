@@ -149,12 +149,23 @@ def save(patch: Any, seen: str | None = None) -> dict:
     try:
         tmp.write_text(text, encoding="utf-8", newline="\n")
         os.replace(tmp, path)
-    except OSError as exc:
+    except OSError:
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
-        return {"ok": False, "code": "write_failed", "error": f"не записалось: {exc}"}
+        # Сервер: helene.json — одиночный файл, примонтированный в контейнер, и подмена
+        # файла на его месте — EBUSY («Device or resource busy»: Настройки на сервере не
+        # сохранялись вовсе, найдено 29.09), а папка установки каналу (с 1.2.5 — не root)
+        # не пишется. Тогда — на месте, тем же текстом.
+        try:
+            with open(path, "r+", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+                fh.truncate()
+                fh.flush()
+                os.fsync(fh.fileno())
+        except OSError as exc:
+            return {"ok": False, "code": "write_failed", "error": f"не записалось: {exc}"}
     return {
         "ok": True,
         "path": str(path),

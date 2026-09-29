@@ -2036,7 +2036,10 @@ def _state_impl() -> dict:
     # порту не опознавалось никогда — предупреждение о невыполненном входе не
     # появлялось, и агент молча получал 401.
     relay_home = base / "relay"
-    relay_auth = (relay_home / "local_auth" / "auth.json").exists()
+    try:
+        relay_auth = (relay_home / "local_auth" / "auth.json").exists()
+    except OSError:     # сервер: дом реле — root; закрыт — значит, не видно
+        relay_auth = False
     base_url = str(model_cfg.get("base_url") or "")
     _, port = _url_host_port(base_url)
     if product:

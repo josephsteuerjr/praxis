@@ -45,8 +45,9 @@ Windows.
     остаётся), `app/` и `helene.json` — только чтение; ключа окна в его среде нет;
   * канал — `desk`: своя папка `data/.channel` (0700) — спаренные устройства и журнал
     записок владельца (`deskd/inbox_seal.py`), раннер сверяет с ним каждую записку;
+    `helene.json` — его (Настройки окна);
   * надзор и реле — root: ключ окна в `data/.serverboot` (0700), дом реле `data/relay`
-    (вход в ChatGPT) агенту закрыт;
+    (вход в ChatGPT) агенту и каналу не прочесть — видно только, есть ли вход, и журналы;
   * `data/` — root, sticky: чужие записи в нём агент не переименует и не подменит.
 Образ старый (пользователей нет) или надзор не root — всё как раньше, с предупреждением.
 """
@@ -173,6 +174,38 @@ def _own(path: Path, uid: int, gid: int) -> int:
     return fixed
 
 
+def _set(path: Path, uid: int, gid: int, dmode: int, fmode: int) -> None:
+    """Дерево — во владение uid:gid ровно с такими правами; ссылки не разыменовываются."""
+    import stat as _st
+
+    def one(p: str) -> None:
+        st = os.lstat(p)
+        os.lchown(p, uid, gid)
+        if not _st.S_ISLNK(st.st_mode):
+            os.chmod(p, dmode if _st.S_ISDIR(st.st_mode) else fmode)
+
+    one(str(path))
+    if path.is_dir() and not path.is_symlink():
+        for base, dirs, files in os.walk(path, followlinks=False):
+            for name in dirs + files:
+                one(os.path.join(base, name))
+
+
+def seal_relay(home: Path, gid: int) -> None:
+    """Дом реле: всё — root и только root, кроме двух вещей для группы данных. Канал
+    показывает, есть ли вход в ChatGPT (`local_auth/auth.json`) — папку входа можно пройти,
+    но не прочесть и не перечислить; и журналы реле (`logs/`) — группе на чтение."""
+    _set(home, 0, 0, 0o700, 0o600)
+    os.chown(home, 0, gid)
+    os.chmod(home, 0o750)
+    auth = home / "local_auth"
+    if auth.is_dir() and not auth.is_symlink():
+        os.chmod(auth, 0o711)
+    logs = home / "logs"
+    if logs.is_dir() and not logs.is_symlink():
+        _set(logs, 0, gid, 0o2750, 0o640)
+
+
 def separate(tree: Path, code: Path, config: Path, who: dict) -> str:
     """Права по ролям (см. шапку). Идемпотентно; на каждом старте, до подъёма детей. -> итог."""
     gid, agent, desk = who["gid"], who["agent"], who["desk"]
@@ -192,15 +225,15 @@ def separate(tree: Path, code: Path, config: Path, who: dict) -> str:
     os.chmod(channel, 0o700)
     relay = tree / "relay"
     if relay.exists():
-        _own(relay, 0, 0)
-        os.chmod(relay, 0o700)
+        seal_relay(relay, gid)
     fixed = 0
     for entry in tree.iterdir():
         if entry.name in (KEEP_DIR, CHANNEL_DIR, "relay") or entry.name.endswith((".log", ".log.1")):
             continue
         fixed += _own(entry, agent, gid)
     fixed += _own(code, agent, gid)
-    os.chown(config, 0, gid)
+    # Настройки окна пишет канал; агент (раннер) читает через группу, но не пишет.
+    os.chown(config, desk, gid)
     os.chmod(config, 0o640)
     return f"агент — {AGENT_USER}, канал — {DESK_USER}; поправлено записей: {fixed}"
 
@@ -241,12 +274,13 @@ def looks_like_local_relay(cfg: dict) -> bool:
 
 class Child:
     def __init__(self, key: str, name: str, argv: list[str], env: dict, cwd: Path, log_path: Path,
-                 user: "int | None" = None, group: "int | None" = None):
+                 user: "int | None" = None, group: "int | None" = None,
+                 umask: "int | None" = None):
         # `key` — то имя, которым ребёнка зовут снаружи (просьба из окна,
         # `deskd/control.py`): «раннер» переводится, `runner` — нет.
         self.key, self.name = key, name
         self.argv, self.env, self.cwd, self.log_path = argv, env, cwd, log_path
-        self.user, self.group = user, group
+        self.user, self.group, self.umask = user, group, umask
         self.proc: subprocess.Popen | None = None
         self.falls: list[float] = []
         self.retry_at = 0.0
@@ -270,6 +304,8 @@ class Child:
         extra = {}
         if self.user is not None:
             extra = {"user": self.user, "group": self.group, "extra_groups": [], "umask": 0o002}
+        elif self.umask is not None:
+            extra = {"umask": self.umask}
         self.proc = subprocess.Popen(self.argv, env=self.env, cwd=str(self.cwd),
                                      stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                                      **extra)
@@ -427,6 +463,11 @@ def main() -> int:
     # ChatGPT уходит в никуда. Порядок тот же, что в плане оболочки.
     relay = relay_child(base, cfg, tree, env)
     if relay is not None:
+        if who is not None:
+            # Вход в ChatGPT, который реле перепишет, не должен стать читаемым для группы:
+            # новые файлы реле — без чтения для других (журналы группе отдаёт setgid logs/).
+            seal_relay(tree / "relay", who["gid"])
+            relay.umask = 0o027
         children.append(relay)
     children += [
         Child("channel", "канал", [sys.executable, "-u", str(app), str(port)], channel_env, app.parent,
