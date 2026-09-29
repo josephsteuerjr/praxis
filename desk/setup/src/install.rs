@@ -1795,13 +1795,23 @@ fn shortcuts_at(exe: &Path, name: &str, icon: Option<&Path>, start: Option<PathB
     let lnk = start.join(format!("{name}.lnk"));
     create_shortcut(&lnk, exe, Some(AUMID), name, icon).map_err(|e| format!("{whose}«Пуск»: {e}"))?;
     let mut note = format!("{whose}«Пуск» ok");
+    let mut made = vec![lnk];
     match desktop {
-        Some(dir) => match create_shortcut(&dir.join(format!("{name}.lnk")), exe, None, name, icon) {
-            Ok(()) => note.push_str(&format!("; {whose}Рабочий стол ok")),
-            Err(e) => note.push_str(&format!("; {whose}Рабочий стол: ярлык не создан: {e}")),
-        },
+        Some(dir) => {
+            let lnk = dir.join(format!("{name}.lnk"));
+            match create_shortcut(&lnk, exe, None, name, icon) {
+                Ok(()) => {
+                    note.push_str(&format!("; {whose}Рабочий стол ok"));
+                    made.push(lnk);
+                }
+                Err(e) => note.push_str(&format!("; {whose}Рабочий стол: ярлык не создан: {e}")),
+            }
+        }
         None => note.push_str(&format!("; Windows не сказала, где {whose}Рабочий стол")),
     }
+    // Значок по прежнему пути мог смениться (обновление) — без этого Проводник и панель
+    // задач показывают старую картинку из своего кэша (29.09, 1.2.5).
+    refresh_shell_icons(&made);
     Ok(note)
 }
 

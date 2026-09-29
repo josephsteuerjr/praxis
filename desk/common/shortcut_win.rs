@@ -138,6 +138,31 @@ unsafe fn shortcut_in_own_apartment(
     Ok(())
 }
 
+/// Сказать Проводнику, что значки сменились.
+///
+/// ⚠ 29.09.2026 (Егор, 1.2.5): после обновления в панели задач и в «Пуске» осталась
+/// СТАРАЯ иконка, хотя в exe, в `helene.ico` и в ярлыках уже лежала новая. Путь к значку
+/// у ярлыка прежний (`…\Helene\helene.ico,0`), а Проводник держит картинки в кэше по
+/// пути: файл подменили — кэш об этом не знает, пока ему не сказать. Здесь — ровно то,
+/// что для этого предусмотрено: «этот ярлык обновлён» по каждому и «ассоциации сменились»
+/// (Проводник сбрасывает кэш значков). Ничего не возвращает: неудача тут — старая
+/// картинка до перезагрузки, а не повод ронять установку.
+#[cfg(windows)]
+#[allow(dead_code)] // окну — только при своём ярлыке, мастеру — всегда
+fn refresh_shell_icons(lnks: &[std::path::PathBuf]) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::UI::Shell::{
+        SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNE_UPDATEITEM, SHCNF_FLUSHNOWAIT, SHCNF_IDLIST, SHCNF_PATHW,
+    };
+    for lnk in lnks {
+        let wide: Vec<u16> = lnk.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        unsafe {
+            SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW | SHCNF_FLUSHNOWAIT, Some(wide.as_ptr() as _), None)
+        };
+    }
+    unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSHNOWAIT, None, None) };
+}
+
 /// AUMID, записанный в ярлыке, — для стенда и для проверки после установки.
 #[cfg(windows)]
 #[allow(dead_code)]
