@@ -143,6 +143,9 @@ _ALLOWED_HOST_SUFFIXES = (".ts.net", ".local")
 # него ещё нет. Без этого списка спаривание физически невозможно — телефон
 # получал 403 на самой первой странице, и в Wi-Fi, и через Tailscale.
 _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
+               # Раннер спрашивает «эта записка твоя?» (deskd/inbox_seal.py) — ключа у него
+               # нет и быть не должно; маршрут только с петли и отвечает да/нет.
+               "/api/inbox/claim",
                # Опознание порта БЕЗ ключа: окно обязано узнать держателя порта
                # ДО того, как предъявит ему ключ дерева (deskd/control.py::who).
                # Секретов в ответе нет — имя продукта, корень установки и pid.
@@ -367,8 +370,12 @@ def _role(request: web.Request) -> str:
             pass
     if _device_ok(supplied):
         return "device"
-    if not TOKEN and _is_loopback(request):
-        return "owner"  # своя машина без токена — как раньше
+    if not TOKEN and _is_loopback(request) and os.environ.get("HELENE_LOOPBACK_OWNER") == "1":
+        # ⚠ 1.2.5 (отчёт Йоны 29.09): «петля без токена = владелец» отдавала роль владельца
+        # любому процессу этой машины — и shell самого агента, и тому, что за прокси приходит
+        # с 127.0.0.1. В продукте ключ ставят всегда (оболочка, служба, надзор сервера);
+        # без ключа — только явная ручка для разработки.
+        return "owner"
     return ""
 
 
@@ -946,7 +953,31 @@ async def _r_mode(c: Call):
 async def _r_say(c: Call):
     body = c.body or {}
     return await _say(body.get("text"), body.get("chat") or "",
-                      attachments=body.get("attachments"))
+                      attachments=body.get("attachments"), via=c.role or "owner")
+
+
+_LEDGER: dict = {"obj": None}
+
+
+def _ledger():
+    """Журнал записок канала (deskd/inbox_seal) — только когда надзор его включил."""
+    from deskd import inbox_seal
+    path = inbox_seal.ledger_path()
+    if path is None:
+        return None
+    if _LEDGER["obj"] is None or _LEDGER["obj"].path != path:
+        _LEDGER["obj"] = inbox_seal.Ledger(path)
+    return _LEDGER["obj"]
+
+
+async def _r_inbox_claim(c: Call):
+    """Раннер: «эта записка твоя?» — имя и sha256 её байтов; `done` — ход прошёл."""
+    ledger = _ledger()
+    if ledger is None:
+        return Fail(409, "журнал записок не ведётся (HELENE_INBOX_SEALED не стоит)")
+    body = c.body or {}
+    return await asyncio.to_thread(ledger.claim, str(body.get("name") or ""),
+                                   str(body.get("sha") or ""), bool(body.get("done")))
 
 
 async def _r_rooms_create(c: Call):
@@ -1164,6 +1195,7 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/who", _r_who),
     Route("GET", "/api/anatomy", _reader(lambda: readers.anatomy())),
     Route("POST", "/api/say", _r_say),
+    Route("POST", "/api/inbox/claim", _r_inbox_claim, local_only=True),
     # Управление харнессом, который живёт не здесь (deskd/control.py). В
     # _DEVICE_PATHS их нет намеренно: перезапуск и журналы — дело владельца, а
     # не спаренного телефона.
@@ -1336,7 +1368,7 @@ def _write_attachments(control: Path, stamp: str, files: list[dict]) -> list[str
     return rel_paths
 
 
-async def _say(text: str, chat: str = "", attachments=None) -> dict:
+async def _say(text: str, chat: str = "", attachments=None, via: str = "owner") -> dict:
     """Сообщение ей. Durable-файл в memory/.control/desk_inbox — и всё.
 
     `chat` — адрес комнаты (слово владельца 31.08: окно — ещё одна дверь владельца в
@@ -1409,8 +1441,18 @@ async def _say(text: str, chat: str = "", attachments=None) -> dict:
         # os.replace — под финальным именем частичный файл не существует никогда,
         # и читатель, захватывающий rename-ом, не может получить обрезанный текст.
         def _publish(target: Path) -> None:
-            tmp = target.with_name(".tmp-" + target.name)
-            tmp.write_text(body_text, encoding="utf-8", newline="\n")
+            blob = body_text.encode("utf-8")
+            # 1.2.5: сначала — в журнал канала (его папка агенту закрыта), потом публикация.
+            # Раннер примет записку, только если она есть в журнале с этими же байтами.
+            ledger = _ledger()
+            if ledger is not None:
+                ledger.seal(target.name, blob, via)
+            # Имя временного файла — случайное и создаётся с O_EXCL: заранее подложенная
+            # в приёмную ссылка с предсказуемым именем не увела бы запись канала мимо.
+            tmp = target.with_name(f".tmp-{secrets.token_hex(8)}-{target.name}")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o664)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(blob)
             os.replace(tmp, target)
 
         if targeted and not reader_alive:

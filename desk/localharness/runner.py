@@ -2190,6 +2190,60 @@ def _mark_done(processed: Path, name: str, word: str) -> None:
         (processed / (name + ".done")).write_text(f"{word} {time.time():.0f}\n", encoding="utf-8")
     except OSError:
         log.debug("метка .done не записалась [%s]", name, exc_info=True)
+    if _SEALED and (word == "done" or word == "empty"):
+        verdict, why = _seal_claim(processed / name, done=True)
+        if verdict is not True:
+            log.warning("записка %s: «обработана» в журнал канала не легла (%s)", name, why)
+
+
+#: Сервер (1.2.5, отчёт Йоны): записку из приёмной принимаем, только если её положил канал —
+#: он заносит каждую в свой журнал (deskd/inbox_seal.py) в папке, куда агенту хода нет.
+_SEALED = os.environ.get("HELENE_INBOX_SEALED") == "1"
+_CHANNEL_PORT = [8094]
+
+
+def _seal_claim(path: Path, done: bool = False) -> "tuple[bool | None, str]":
+    """Записку положил канал? -> (True, "") да; (False, почему) нет; (None, почему) канал
+    не ответил — записка подождёт. Не сервер (журнала нет) — всегда да."""
+    if not _SEALED:
+        return True, ""
+    import hashlib
+    import urllib.request
+    try:
+        blob = path.read_bytes()
+    except OSError as exc:
+        return None, f"записка не читается: {exc}"
+    body = json.dumps({"name": path.name, "sha": hashlib.sha256(blob).hexdigest(),
+                       "done": bool(done)}).encode("utf-8")
+    request = urllib.request.Request(f"http://127.0.0.1:{_CHANNEL_PORT[0]}/api/inbox/claim",
+                                     data=body, method="POST",
+                                     headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as answer:
+            got = json.loads(answer.read().decode("utf-8"))
+    except Exception as exc:  # канал поднимается, перезапускается — не повод отвергать
+        return None, f"канал не ответил: {type(exc).__name__}"
+    return (True, "") if got.get("ok") else (False, str(got.get("why") or "канал не узнал записку"))
+
+
+def _reject_note(path: Path, why: str) -> None:
+    """Записка не от канала: не ход владельца. В `rejected/` рядом — и строкой в окно."""
+    rejected = path.parent / "rejected"
+    try:
+        rejected.mkdir(exist_ok=True)
+        os.replace(path, rejected / path.name)
+    except OSError:
+        try:
+            path.unlink()
+        except OSError:
+            log.warning("отвергнутая записка %s не убрана", path.name)
+    log.warning("записка %s не принята: %s", path.name, why)
+    try:
+        if _desk is not None:
+            _desk.archive(f"В приёмную окна легла записка «{path.name}» не через канал — ходом "
+                          f"владельца она не стала ({why}).", outgoing=False, sender="Hélène")
+    except Exception:
+        log.debug("строка об отвергнутой записке в окно не легла", exc_info=True)
 
 
 def _handle_note(path: Path, message: str, processed: Path) -> None:
@@ -2328,6 +2382,13 @@ def _replay_unclaimed_notes(processed: Path, limit: int = 5,
         # диске и снимок запроса, иногда вызов модели. Жалоба тестера на Windows «Элен
         # в простое грузит диск» — ровно этот класс. Счёт попыток — файлом рядом, чтобы
         # переживал рестарт; сдавшаяся записка помечается честно и остаётся в processed.
+        verdict, why = _seal_claim(path)
+        if verdict is None:
+            continue
+        if verdict is False:
+            _mark_done(processed, path.name, f"rejected: {why}")
+            log.warning("replay записки %s не принят: %s", path.name, why)
+            continue
         tries = _note_tries(processed, path.name)
         if tries >= _REPLAY_MAX_TRIES:
             _mark_done(processed, path.name, f"gave-up after {tries} replays")
@@ -2421,6 +2482,10 @@ def main() -> None:
                   config_path, exc)
         raise SystemExit(3)
 
+    try:
+        _CHANNEL_PORT[0] = int(cfg.get("port") or 8094)
+    except (TypeError, ValueError):
+        pass
     try:
         _mode = _settle_mode(cfg, config_path)
     except Exception:
@@ -2723,6 +2788,12 @@ def main() -> None:
             sys.exit(RESTART_EXIT_CODE)
         for path in sorted(inbox.glob("*.md")):
             if path.name.startswith(".tmp-"):
+                continue
+            verdict, why = _seal_claim(path)
+            if verdict is None:
+                continue          # канал молчит — записка подождёт следующего тика
+            if verdict is False:
+                _reject_note(path, why)
                 continue
             try:
                 message = _read_message(path)
