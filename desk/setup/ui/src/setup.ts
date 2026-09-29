@@ -233,7 +233,7 @@ export async function loadDefaults(): Promise<Defaults> {
     return {
       dir: "C:\\Users\\…\\AppData\\Local\\Programs\\Helene",
       payload: null,
-      version: q.has("installed") ? "1.2.5" : "превью",
+      version: q.has("installed") ? "1.2.6" : "превью",
       installed,
       platform: "windows",
       found,
