@@ -73,6 +73,9 @@ HOST_KEYS = ("mode", "python", "app", "runner", "tree", "code", "port", "agent_m
 #: Что в `data/` не едет: относительные пути (с завершающим `/` — папка целиком)
 #: и маски имён.
 SKIP_PATHS = ("body/", "workspace/mnt/", "workspace/.fence/", "workspace/.tmp/",
+              # 1.2.5, сервер: ключ окна надзора и папка канала (устройства, журнал записок) —
+              # принадлежат этому хосту и каналу, не агенту.
+              ".serverboot/", ".channel/",
               "relay/logs/", "memory/.state/harness.lock", "memory/.state/desk-token",
               "memory/.state/body.json",
               # Модели голоса (`models/whisper`, 0,5–1,6 ГБ) — не агент, а

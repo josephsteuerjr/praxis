@@ -14,6 +14,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && git config --global --add safe.directory '*'
 
+# 1.2.5 (отчёт Йоны): агент — не root. Раннер и его руки — `helene`, канал — `desk`, общая
+# группа данных; надзор (root) раздаёт права при старте (serverboot.separate). git — для
+# всех пользователей (safe.directory), а не только для root.
+RUN groupadd -g 10000 helene-data \
+    && useradd -u 10001 -g 10000 -m -d /home/helene -s /bin/bash helene \
+    && useradd -u 10002 -g 10000 -m -d /home/desk -s /usr/sbin/nologin desk \
+    && git config --system --add safe.directory '*'
 WORKDIR /opt/helene
 COPY requirements.txt server/requirements-server.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-server.txt

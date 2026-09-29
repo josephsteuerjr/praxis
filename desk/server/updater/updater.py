@@ -836,7 +836,10 @@ port = int(cfg.get("port") or 8094)
 tree = pathlib.Path(str(cfg.get("tree") or "data"))
 tree = tree if tree.is_absolute() else root / tree
 try:
-    key = (tree / "memory" / ".state" / "desk-token").read_text("utf-8").strip()
+    try:
+        key = (tree / ".serverboot" / "desk-token").read_text("utf-8").strip()
+    except OSError:
+        key = (tree / "memory" / ".state" / "desk-token").read_text("utf-8").strip()
 except Exception as exc:
     key = ""
     out["key_error"] = str(exc)[:200]

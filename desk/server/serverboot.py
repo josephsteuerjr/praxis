@@ -35,6 +35,19 @@
 
 Вывод детей — `data/deskapp.log`, `data/runner.log` и `data/relay.log`, как на
 Windows.
+
+Права в контейнере (1.2.5, отчёт Йоны — агента Дмитрия, 29.09): «агент может исполнять команды
+с правами root в том же контейнере, где находятся код, секреты и канал входящих сообщений
+владельца». Так и было: всё жило под root, shell агента читал ключ окна и клал записки
+«от владельца» сам. Теперь, если образ знает пользователей (`server/Dockerfile`):
+  * раннер и руки агента — `helene` (не root): его дом `data/` и код `tree/` (самоправка
+    остаётся), `app/` и `helene.json` — только чтение; ключа окна в его среде нет;
+  * канал — `desk`: своя папка `data/.channel` (0700) — спаренные устройства и журнал
+    записок владельца (`deskd/inbox_seal.py`), раннер сверяет с ним каждую записку;
+  * надзор и реле — root: ключ окна в `data/.serverboot` (0700), дом реле `data/relay`
+    (вход в ChatGPT) агенту закрыт;
+  * `data/` — root, sticky: чужие записи в нём агент не переименует и не подменит.
+Образ старый (пользователей нет) или надзор не root — всё как раньше, с предупреждением.
 """
 from __future__ import annotations
 
@@ -70,19 +83,125 @@ def _tree(config: Path, cfg: dict) -> Path:
     return tree if tree.is_absolute() else (config.parent / tree).resolve()
 
 
+#: Папка надзора (root, 0700): ключ окна. Папка канала (desk, 0700): устройства, журнал записок.
+KEEP_DIR = ".serverboot"
+CHANNEL_DIR = ".channel"
+AGENT_USER, DESK_USER = "helene", "desk"
+
+
 def _desk_token(tree: Path) -> str:
-    path = tree / "memory" / ".state" / "desk-token"
-    try:
-        token = path.read_text("utf-8").strip()
+    """Ключ окна. С 1.2.5 — в `data/.serverboot/desk-token`, куда агенту хода нет; прежний
+    `memory/.state/desk-token` (его читал shell агента) переезжает и удаляется."""
+    path = tree / KEEP_DIR / "desk-token"
+    old = tree / "memory" / ".state" / "desk-token"
+    for source in (path, old):
+        try:
+            token = source.read_text("utf-8").strip()
+        except OSError:
+            continue
         if token:
+            if source == old:
+                _keep_token(path, token)
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
             return token
+    token = secrets.token_urlsafe(32)
+    _keep_token(path, token)
+    return token
+
+
+def _keep_token(path: Path, token: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
     except OSError:
         pass
-    path.parent.mkdir(parents=True, exist_ok=True)
-    token = secrets.token_urlsafe(32)
-    path.write_text(token, encoding="utf-8")
-    os.chmod(path, 0o600)
-    return token
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(token)
+
+
+def accounts() -> "dict | None":
+    """Пользователи агента и канала, если образ их знает и надзор — root."""
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return None
+    try:
+        import pwd
+        agent, desk = pwd.getpwnam(AGENT_USER), pwd.getpwnam(DESK_USER)
+    except (ImportError, KeyError):
+        return None
+    return {"agent": agent.pw_uid, "desk": desk.pw_uid, "gid": agent.pw_gid,
+            "agent_home": agent.pw_dir, "desk_home": desk.pw_dir}
+
+
+def _own(path: Path, uid: int, gid: int) -> int:
+    """Дерево — во владение uid:gid, группе — чтение и запись; ссылки не разыменовываются.
+    -> сколько записей поправлено."""
+    fixed = 0
+
+    def one(p: str, is_dir: bool) -> None:
+        nonlocal fixed
+        try:
+            st = os.lstat(p)
+        except OSError:
+            return
+        import stat as _st
+        if _st.S_ISLNK(st.st_mode):
+            if st.st_uid != uid or st.st_gid != gid:
+                os.lchown(p, uid, gid)
+                fixed += 1
+            return
+        want = (st.st_mode | (0o2070 if is_dir else 0o060)) & 0o7777
+        if st.st_uid != uid or st.st_gid != gid:
+            os.lchown(p, uid, gid)
+            fixed += 1
+        if (st.st_mode & 0o7777) != want:
+            os.chmod(p, want)
+
+    if not path.exists() and not path.is_symlink():
+        return 0
+    one(str(path), path.is_dir() and not path.is_symlink())
+    if path.is_dir() and not path.is_symlink():
+        for base, dirs, files in os.walk(path, followlinks=False):
+            for name in dirs:
+                one(os.path.join(base, name), not os.path.islink(os.path.join(base, name)))
+            for name in files:
+                one(os.path.join(base, name), False)
+    return fixed
+
+
+def separate(tree: Path, code: Path, config: Path, who: dict) -> str:
+    """Права по ролям (см. шапку). Идемпотентно; на каждом старте, до подъёма детей. -> итог."""
+    gid, agent, desk = who["gid"], who["agent"], who["desk"]
+    os.chown(tree, 0, gid)
+    os.chmod(tree, 0o3775)
+    keep = tree / KEEP_DIR
+    keep.mkdir(exist_ok=True)
+    os.chown(keep, 0, 0)
+    os.chmod(keep, 0o700)
+    channel = tree / CHANNEL_DIR
+    channel.mkdir(exist_ok=True)
+    # Устройства — данные канала: прежний `memory/.state/devices.json` переезжает к нему.
+    old_devices, new_devices = tree / "memory" / ".state" / "devices.json", channel / "devices.json"
+    if old_devices.is_file() and not new_devices.exists():
+        os.replace(old_devices, new_devices)
+    _own(channel, desk, gid)
+    os.chmod(channel, 0o700)
+    relay = tree / "relay"
+    if relay.exists():
+        _own(relay, 0, 0)
+        os.chmod(relay, 0o700)
+    fixed = 0
+    for entry in tree.iterdir():
+        if entry.name in (KEEP_DIR, CHANNEL_DIR, "relay") or entry.name.endswith((".log", ".log.1")):
+            continue
+        fixed += _own(entry, agent, gid)
+    fixed += _own(code, agent, gid)
+    os.chown(config, 0, gid)
+    os.chmod(config, 0o640)
+    return f"агент — {AGENT_USER}, канал — {DESK_USER}; поправлено записей: {fixed}"
 
 
 #: Код выхода движка «перезапусти меня» — тот же, что в `localharness/runner.py`,
@@ -120,11 +239,13 @@ def looks_like_local_relay(cfg: dict) -> bool:
 
 
 class Child:
-    def __init__(self, key: str, name: str, argv: list[str], env: dict, cwd: Path, log_path: Path):
+    def __init__(self, key: str, name: str, argv: list[str], env: dict, cwd: Path, log_path: Path,
+                 user: "int | None" = None, group: "int | None" = None):
         # `key` — то имя, которым ребёнка зовут снаружи (просьба из окна,
         # `deskd/control.py`): «раннер» переводится, `runner` — нет.
         self.key, self.name = key, name
         self.argv, self.env, self.cwd, self.log_path = argv, env, cwd, log_path
+        self.user, self.group = user, group
         self.proc: subprocess.Popen | None = None
         self.falls: list[float] = []
         self.retry_at = 0.0
@@ -141,9 +262,16 @@ class Child:
                 os.replace(self.log_path, self.log_path.with_suffix(".log.1"))
         except OSError:
             pass
-        out = open(self.log_path, "ab")
+        # Журнал открывает root, а папка — агента: без O_NOFOLLOW подложенная ссылка на месте
+        # журнала повела бы запись root куда угодно.
+        fd = os.open(self.log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        out = os.fdopen(fd, "ab")
+        extra = {}
+        if self.user is not None:
+            extra = {"user": self.user, "group": self.group, "extra_groups": [], "umask": 0o002}
         self.proc = subprocess.Popen(self.argv, env=self.env, cwd=str(self.cwd),
-                                     stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
+                                     stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                                     **extra)
         out.close()
         self.since_utc = _utc()
         print(f"[serverboot] {self.name} поднят, pid {self.proc.pid}", flush=True)
@@ -273,6 +401,26 @@ def main() -> int:
         except OSError as exc:
             print(f"[serverboot] замок дерева не снят ({exc}) — раннер может отказаться", flush=True)
     env = child_env(os.environ, tree, token)
+    code = base / str(cfg.get("code") or "tree")
+    who = accounts()
+    if who is not None:
+        try:
+            print(f"[serverboot] права по ролям: {separate(tree, code, config, who)}", flush=True)
+        except OSError as exc:
+            who = None
+            print(f"[serverboot] ⚠ права по ролям не встали ({exc}) — всё под root, как раньше; "
+                  "записки владельца в приёмной не сверяются", flush=True)
+    else:
+        print("[serverboot] ⚠ образ без пользователей helene/desk (или надзор не root) — агент "
+              "работает под root, как до 1.2.5; пересобери образ из поставки 1.2.5+", flush=True)
+    channel_env, runner_env = dict(env), dict(env)
+    runner_env.pop("HELENE_TOKEN", None)   # ключ окна агенту не нужен, а код агента читает среду
+    channel_user = runner_user = group = None
+    if who is not None:
+        channel_env.update(HELENE_DESK_STATE=str(tree / CHANNEL_DIR), HELENE_INBOX_SEALED="1",
+                           HOME=who["desk_home"], USER=DESK_USER)
+        runner_env.update(HELENE_INBOX_SEALED="1", HOME=who["agent_home"], USER=AGENT_USER)
+        channel_user, runner_user, group = who["desk"], who["agent"], who["gid"]
     children = []
     # Реле первым: пока оно не слушает, первый же ход агента с подпиской
     # ChatGPT уходит в никуда. Порядок тот же, что в плане оболочки.
@@ -280,10 +428,10 @@ def main() -> int:
     if relay is not None:
         children.append(relay)
     children += [
-        Child("channel", "канал", [sys.executable, "-u", str(app), str(port)], env, app.parent,
-              tree / "deskapp.log"),
-        Child("runner", "раннер", [sys.executable, "-u", str(runner), "--config", str(config)], env,
-              runner.parent, tree / "runner.log"),
+        Child("channel", "канал", [sys.executable, "-u", str(app), str(port)], channel_env, app.parent,
+              tree / "deskapp.log", user=channel_user, group=group),
+        Child("runner", "раннер", [sys.executable, "-u", str(runner), "--config", str(config)], runner_env,
+              runner.parent, tree / "runner.log", user=runner_user, group=group),
     ]
     # Управление из окна: протокол и обе его стороны живут в `deskd/control.py`,
     # рядом с каналом — иначе они разъезжаются молча. Импорт поздний, потому что

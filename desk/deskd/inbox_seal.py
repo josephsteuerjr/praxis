@@ -88,9 +88,13 @@ class Ledger:
             self._compact()
 
     def _compact(self) -> None:
+        # Необработанные (не просроченные) — все: они ещё ждут хода. Обработанные — хвост, для
+        # внятной причины отказа; выпавшая обработанная записка и так отвергается («нет в журнале»).
         now = self.clock()
-        keep = sorted(self._rows.items(), key=lambda kv: kv[1]["at"])
-        keep = [kv for kv in keep if not kv[1]["done"] or now - kv[1]["at"] < MAX_AGE][-KEEP:]
+        rows = sorted(self._rows.items(), key=lambda kv: kv[1]["at"])
+        waiting = [kv for kv in rows if not kv[1]["done"] and now - kv[1]["at"] <= MAX_AGE]
+        done = [kv for kv in rows if kv[1]["done"] and now - kv[1]["at"] < MAX_AGE][-KEEP:]
+        keep = sorted(waiting + done, key=lambda kv: kv[1]["at"])
         self._rows = dict(keep)
         tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
         with open(tmp, "w", encoding="utf-8", newline="\n") as fh:

@@ -2198,8 +2198,9 @@ def _mark_done(processed: Path, name: str, word: str) -> None:
 
 #: Сервер (1.2.5, отчёт Йоны): записку из приёмной принимаем, только если её положил канал —
 #: он заносит каждую в свой журнал (deskd/inbox_seal.py) в папке, куда агенту хода нет.
+import agents  # noqa: E402  (порт канала по умолчанию)
 _SEALED = os.environ.get("HELENE_INBOX_SEALED") == "1"
-_CHANNEL_PORT = [8094]
+_CHANNEL_PORT = [agents.DESK_PORT]
 
 
 def _seal_claim(path: Path, done: bool = False) -> "tuple[bool | None, str]":
@@ -2483,7 +2484,7 @@ def main() -> None:
         raise SystemExit(3)
 
     try:
-        _CHANNEL_PORT[0] = int(cfg.get("port") or 8094)
+        _CHANNEL_PORT[0] = int(cfg.get("port") or agents.DESK_PORT)
     except (TypeError, ValueError):
         pass
     try:

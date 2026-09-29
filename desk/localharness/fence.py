@@ -359,7 +359,12 @@ def secret_paths(install_root: Path, tree: Path) -> list[Path]:
             state / "broker-asks.json",
             state / "broker-answers.json",
             Path(tree) / "relay",
-            Path(tree) / "telegram"]
+            Path(tree) / "telegram",
+            # 1.2.5 (отчёт Йоны 29.09): приёмная записок владельца и файлы обмена с
+            # установщиком. Записку в `desk_inbox` раннер принимает как слово владельца —
+            # shell агента в песочнице не должен уметь её положить (и подделать «да» или
+            # слово на испытании). Раннер живёт вне песочницы и ходит сюда как прежде.
+            Path(tree) / "memory" / ".control"]
 
 
 #: Секреты, которых на машине может не быть вовсе, и это НОРМА, а не «ещё не
@@ -368,7 +373,7 @@ def secret_paths(install_root: Path, tree: Path) -> list[Path]:
 #: хоть раз. Без этого списка `_secure_secrets` считал бы установку вечно
 #: недоделанной, не ставил маркер и гонял `icacls` по кругу на каждом старте.
 SECRETS_MAYBE_ABSENT = ("body-token", "broker-token",
-                        "broker-asks.json", "broker-answers.json")
+                        "broker-asks.json", "broker-answers.json", ".control")
 
 
 def shut_out_container(path: Path, *, share_read: bool = False) -> bool:
