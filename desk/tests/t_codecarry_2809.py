@@ -185,6 +185,27 @@ class DeskEntry(Base):
             self.assertEqual(zf.read("tree/llm.py").decode(), "MODEL = 'b'\n")
         self.assertTrue(cc.after_carry_path(self.new, "1.1.0").is_file())
 
+    def test_reinstall_of_the_same_version_other_build_is_not_an_agent_edit(self):
+        # 29.09, ПК Егора: 1.2.5 поверх 1.2.5 другой сборки. Чистую копию 1.2.5 перезаписывали
+        # новой сборкой ДО сверки — база совпала с новой, и разница двух сборок стала «правками
+        # агента»: 13 файлов старой сборки легли поверх новой, а в 1.2.6 так и уехали.
+        shutil.rmtree(self.old)
+        for rel, text in RELEASE_1.items():
+            if not rel.startswith("app/static"):
+                put(self.old, rel, text)
+        build_a = self.tmp / "build-a"
+        for rel, text in RELEASE_1.items():
+            put(build_a, rel, text)
+        cc.write_pristine(build_a, "1.1.0", cc.pristine_path(self.new, "1.1.0"))
+        out = self.run_desk("desk", "--old", str(self.old), "--new", str(self.new),
+                            "--from", "1.1.0", "--to", "1.1.0")
+        self.assertEqual(out["edited"], [], "агент ничего не правил")
+        self.assertEqual(self.read("app/localharness/runner.py"), "RUN = 2\n")
+        self.assertEqual(self.read("tree/llm.py"), "MODEL = 'b'\n")
+        self.assertTrue((self.new / "tree" / "fresh.py").is_file())
+        with zipfile.ZipFile(cc.pristine_path(self.new, "1.1.0")) as zf:
+            self.assertEqual(zf.read("tree/llm.py").decode(), "MODEL = 'b'\n", "копия — новой сборки")
+
     def test_without_any_base_gives_differing_old_code(self):
         out = self.run_desk("desk", "--old", str(self.old), "--new", str(self.new),
                             "--from", "0.9", "--to", "1.1.0")
