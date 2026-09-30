@@ -243,7 +243,7 @@ export class Scroller {
    * Прилипшую ленту не держим — она сама поедет за низом.
    */
   preserve(mutate: () => void) {
-    if (this.pinnedState) {
+    if (this.stick && this.pinnedState) {
       mutate();
       this.contentChanged();
       return;

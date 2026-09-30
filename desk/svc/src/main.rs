@@ -250,6 +250,9 @@ mod job {
     };
 
     pub struct Job(HANDLE);
+    impl Drop for Job {
+        fn drop(&mut self) { unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0); } }
+    }
     unsafe impl Send for Job {}
     unsafe impl Sync for Job {}
 
@@ -269,17 +272,28 @@ mod job {
                     std::mem::size_of_val(&info) as u32,
                 );
                 if ok == 0 {
+                    windows_sys::Win32::Foundation::CloseHandle(handle);
                     return None;
                 }
                 Some(Job(handle))
             }
         }
 
-        pub fn adopt(&self, child: &std::process::Child) {
-            use std::os::windows::io::AsRawHandle;
-            unsafe {
-                AssignProcessToJobObject(self.0, child.as_raw_handle() as HANDLE);
+        pub fn empty(&self) -> bool {
+            use windows_sys::Win32::System::JobObjects::{QueryInformationJobObject, JobObjectBasicAccountingInformation, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION};
+            let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+            unsafe { QueryInformationJobObject(self.0, JobObjectBasicAccountingInformation, &mut info as *mut _ as *mut _, std::mem::size_of_val(&info) as u32, std::ptr::null_mut()) != 0 && info.ActiveProcesses == 0 }
+        }
+        pub fn adopt_handle(&self, handle: HANDLE) -> Result<(), String> {
+            if unsafe { AssignProcessToJobObject(self.0, handle) } == 0 {
+                return Err(std::io::Error::last_os_error().to_string());
             }
+            Ok(())
+        }
+
+        pub fn adopt(&self, child: &std::process::Child) -> Result<(), String> {
+            use std::os::windows::io::AsRawHandle;
+            self.adopt_handle(child.as_raw_handle() as HANDLE)
         }
 
         /// Погасить всё дерево разом — вместе с внуками, о которых служба
@@ -294,6 +308,8 @@ mod job {
 
 #[cfg(windows)]
 static JOB: std::sync::OnceLock<Option<job::Job>> = std::sync::OnceLock::new();
+#[cfg(windows)]
+static SESSION_JOBS: std::sync::Mutex<Vec<job::Job>> = std::sync::Mutex::new(Vec::new());
 
 /// Группы процессов детей (POSIX). Job-объекта здесь нет, а внуки — процессы
 /// питона, ограды seatbelt и реле — переживали бы смерть родителя точно так же,
@@ -303,10 +319,16 @@ static JOB: std::sync::OnceLock<Option<job::Job>> = std::sync::OnceLock::new();
 #[cfg(unix)]
 static PGIDS: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
 
-fn adopt(child: &Child) {
+fn adopt(child: &Child) -> Result<(), String> {
     #[cfg(windows)]
-    if let Some(job) = JOB.get_or_init(job::Job::new).as_ref() {
-        job.adopt(child);
+    {
+        let job = JOB.get_or_init(job::Job::new).as_ref().ok_or("process Job unavailable")?;
+        job.adopt(child)?;
+        if owner_stopped() { return Err("owner stop before resume".into()); }
+        use std::os::windows::io::AsRawHandle;
+        #[link(name = "ntdll")]
+        extern "system" { fn NtResumeProcess(handle: *mut std::ffi::c_void) -> i32; }
+        if unsafe { NtResumeProcess(child.as_raw_handle()) } < 0 { return Err("resume failed".into()); }
     }
     #[cfg(unix)]
     if let Ok(mut list) = PGIDS.lock() {
@@ -317,6 +339,7 @@ fn adopt(child: &Child) {
     }
     #[cfg(not(any(windows, unix)))]
     let _ = child;
+    Ok(())
 }
 
 /// Забыть пожатого ребёнка. ⚠⚠ ЗАЧЕМ (находка судей 19.09): после `wait` номер
@@ -356,6 +379,8 @@ fn unix_alive_leader(pid: i32) -> bool {
 }
 
 fn kill_all_descendants() {
+    #[cfg(windows)]
+    if let Ok(mut jobs) = SESSION_JOBS.lock() { for job in jobs.iter() { job.terminate(); } jobs.clear(); }
     #[cfg(windows)]
     if let Some(job) = JOB.get_or_init(job::Job::new).as_ref() {
         job.terminate();
@@ -456,6 +481,7 @@ fn spawn_child(
     token: &str,
     config: &Path,
 ) -> Result<Child, String> {
+    if owner_stopped() { return Err("Остановлен владельцем".into()); }
     #[cfg(windows)]
     use std::os::windows::process::CommandExt;
     let mut cmd = Command::new(python);
@@ -486,7 +512,7 @@ fn spawn_child(
         }
     }
     #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(CREATE_NO_WINDOW | 0x4);
     // POSIX: своя группа процессов (чтобы `killpg` снял и внуков) и pid
     // родителя — на Mac job-объекта нет, и движок с каналом сторожат его сами
     // (`localharness.boot.watch_parent`). На Windows ни того, ни другого не
@@ -500,7 +526,8 @@ fn spawn_child(
     }
     match cmd.spawn() {
         Ok(child) => {
-            adopt(&child);
+            let mut child = child;
+            if let Err(e) = adopt(&child) { let _ = child.kill(); let _ = child.wait(); return Err(e); }
             Ok(child)
         }
         // Причину раньше глотал `.ok()`, и в журнале оставалось только
@@ -808,6 +835,7 @@ fn same_tree(a: &Path, b: &Path) -> bool {
 include!("../../common/firewall_rule.rs");
 // Штамп журналов и случайные байты — общие с оболочкой и установщиком.
 include!("../../common/stamp.rs");
+include!("../../common/owner_stop.rs");
 include!("../../common/random_hex.rs");
 // Список агентов установки — общий с оболочкой: служба поднимает ВСЕХ, кого
 // оболочка показывает в трее, и берёт оттуда же порт по умолчанию.
@@ -1151,6 +1179,11 @@ fn supervise(
     let mut port_noted: Option<Instant> = None;
 
     while !stop.load(Ordering::Relaxed) {
+        if owner_stopped() {
+            log.line("owner stop: no new children; terminating this supervisor's job");
+            stop.store(true, Ordering::Relaxed);
+            break;
+        }
         let now = Instant::now();
         // Агенты, чей движок вышел кодом RESTART_EXIT: канал гасится и пара
         // поднимается заново ниже, в том же проходе.
@@ -1476,6 +1509,7 @@ fn relay_auth_path(plan: &Plan) -> PathBuf {
 /// (shell/main.rs::spawn_relay): реле живёт в <дерево>/relay, конфигурируется
 /// окружением, консоли не имеет.
 fn spawn_relay(plan: &Plan) -> Result<Option<Child>, String> {
+    if owner_stopped() { return Ok(None); }
     let base = plan
         .config
         .parent()
@@ -1547,11 +1581,12 @@ fn spawn_relay(plan: &Plan) -> Result<Option<Child>, String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.creation_flags(CREATE_NO_WINDOW | 0x4);
     }
     match cmd.spawn() {
         Ok(child) => {
-            adopt(&child);
+            let mut child = child;
+            if let Err(e) = adopt(&child) { let _ = child.kill(); let _ = child.wait(); return Err(e); }
             Ok(Some(child))
         }
         Err(err) => Err(format!("не поднялось: {err}")),
@@ -2417,6 +2452,7 @@ fn broker_wait_child(child: &mut Child, timeout: Duration) -> (Option<i32>, bool
 #[cfg(windows)]
 fn broker_run_as_system(ask: &BrokerAsk) -> Ran {
     let started = Instant::now();
+    if owner_stopped() { return Ran::failed("Остановлен владельцем", started); }
     let Some((out_path, out_file)) = broker_temp("out") else {
         return Ran::failed("не смог завести файл под вывод", started);
     };
@@ -2434,7 +2470,7 @@ fn broker_run_as_system(ask: &BrokerAsk) -> Ran {
         .stderr(Stdio::from(err_file));
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.creation_flags(CREATE_NO_WINDOW | 0x4);
     }
     let mut child = match cmd.spawn() {
         Ok(child) => child,
@@ -2445,7 +2481,7 @@ fn broker_run_as_system(ask: &BrokerAsk) -> Ran {
         }
     };
     let pid = child.id();
-    adopt(&child);
+    if let Err(e) = adopt(&child) { let _ = child.kill(); let _ = child.wait(); return Ran::failed(&e, started); }
     let (code, killed) = broker_wait_child(&mut child, Duration::from_secs(ask.timeout_sec));
     let note = if killed {
         format!("убит по таймауту ({} с)", ask.timeout_sec)
@@ -2551,6 +2587,8 @@ fn broker_spawn_session(ask: &BrokerAsk, cwd: &Path) -> Ran {
     };
 
     let started = Instant::now();
+    if owner_stopped() { return Ran::failed("Остановлен владельцем", started); }
+    let Some(session_job) = job::Job::new() else { return Ran::failed("session Job unavailable", started); };
     let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
 
     let session = unsafe { WTSGetActiveConsoleSessionId() };
@@ -2618,7 +2656,7 @@ fn broker_spawn_session(ask: &BrokerAsk, cwd: &Path) -> Ran {
             std::ptr::null(),
             std::ptr::null(),
             1, // наследовать дескрипторы — ради вывода, см. broker_inheritable
-            CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+            CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | 0x4,
             env,
             dir.as_ptr(),
             &info,
@@ -2635,7 +2673,26 @@ fn broker_spawn_session(ask: &BrokerAsk, cwd: &Path) -> Ran {
         let _ = std::fs::remove_file(&err_path);
         return Ran::failed(&format!("процесс в сессии {session} не поднялся: код {code}"), started);
     }
+    let admitted = session_job.adopt_handle(pi.hProcess).is_ok() && !owner_stopped();
+    if !admitted {
+        unsafe {
+            windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1);
+            CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+        }
+        return Ran::failed("session Job adoption/owner admission failed before resume", started);
+    }
+    if let Ok(mut jobs) = SESSION_JOBS.lock() { jobs.retain(|j| !j.empty()); jobs.push(session_job); }
+    else {
+        session_job.terminate();
+        unsafe { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
+        return Ran::failed("session custody unavailable", started);
+    }
+    let resumed = unsafe { windows_sys::Win32::System::Threading::ResumeThread(pi.hThread) };
     unsafe { CloseHandle(pi.hThread) };
+    if resumed == u32::MAX {
+        unsafe { windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1); CloseHandle(pi.hProcess); }
+        return Ran::failed("session resume failed", started);
+    }
 
     let mut exit: Option<i32> = None;
     let mut note = String::new();
@@ -3256,7 +3313,21 @@ fn supervise_session(plan: &Plan, stop: Arc<AtomicBool>, log: &mut Log, stopping
     let mut probed: Option<Instant> = None;
     let mut alive = false;
 
+    let mut owner_stop_applied = false;
     while !stop.load(Ordering::Relaxed) {
+        if owner_stopped() {
+            // Stay alive as the keeper of the latch; SCM restart must not resume work.
+            // Repeat task End: a logon trigger can race the first observation.
+            let _ = schtasks(&session_task_end_args());
+            kill_all_descendants();
+            if !owner_stop_applied {
+                log.line("owner stop recorded: session task end requested; service remains stopped for work");
+                owner_stop_applied = true;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+            continue;
+        }
+        owner_stop_applied = false;
         let now = Instant::now();
         // Проба порта — раз в три секунды, как и у супервизора детей.
         if probed.is_none_or(|t| now.duration_since(t) >= Duration::from_secs(3)) {
@@ -3328,6 +3399,7 @@ fn supervise_session(plan: &Plan, stop: Arc<AtomicBool>, log: &mut Log, stopping
             log.line(&format!("задача {SESSION_TASK} не остановлена (возможно, и не была запущена): {why}"));
         }
     }
+    kill_all_descendants();
     log.line("служба: остановлена");
 }
 
@@ -3430,6 +3502,12 @@ fn service_main(_arguments: Vec<OsString>) {
         ServiceControl::Stop | ServiceControl::Shutdown | ServiceControl::Preshutdown => {
             stop_handler.store(true, Ordering::Relaxed);
             ServiceControlHandlerResult::NoError
+        }
+        ServiceControl::UserEvent(code) if code.to_raw() == 200 => {
+            match request_owner_stop("cli") {
+                Ok(()) => { kill_all_descendants(); ServiceControlHandlerResult::NoError }
+                Err(_) => ServiceControlHandlerResult::NotImplemented,
+            }
         }
         ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
         _ => ServiceControlHandlerResult::NotImplemented,
@@ -3707,6 +3785,21 @@ fn main() {
 fn cli() {
     let mode = std::env::args().nth(1).unwrap_or_default();
     match mode.as_str() {
+        "panic" | "resume" => {
+            let result = if mode == "panic" { request_owner_stop("cli") } else { resume_owner_stop() };
+            if let Err(error) = result {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+            if mode == "resume" {
+                if let Ok(plan) = load_plan(&config_path()) {
+                    let pause = plan.tree.join("memory/.control/autonomy-paused.json");
+                    if pause.exists() { if let Err(e) = std::fs::remove_file(pause) { eprintln!("pause not cleared: {e}"); std::process::exit(1); } }
+                }
+                let _ = schtasks(&session_task_run_args());
+            }
+            println!("owner stop {}: supervisor observation/teardown is separate", if mode == "panic" { "recorded" } else { "cleared" });
+        }
         "install" => {
             let raw = config_path();
             // Раньше при провале canonicalize подставлялся ОТНОСИТЕЛЬНЫЙ
@@ -3741,6 +3834,10 @@ fn cli() {
         // службы (или по входу владельца). Права здесь — владельца, не системы:
         // задача заведена с /RL LIMITED.
         "session-host" | "foreground" => {
+            if owner_stopped() {
+                eprintln!("agent stopped by owner; explicit helene-svc resume required");
+                std::process::exit(OWNER_STOP_EXIT);
+            }
             let session = mode == "session-host";
             // `expect` здесь ронял программу паникой вместо внятной строки.
             let Some(raw) = arg_after("--config") else {

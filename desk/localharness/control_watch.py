@@ -73,6 +73,11 @@ def consume(tree: Path, manager, statuses) -> dict | None:
         if not scope:
             raise ValueError("interrupt scope is empty")
         result["scope"] = scope
+        import owner_stop
+        import process_scope
+        if scope == "all":
+            owner_stop.configure(tree)
+            owner_stop.pause()
         by = str(request.get("by") or "owner")[:40]
         reason = str(request.get("reason") or "interrupted from the window")[:200]
         for row in manager.list_runs(statuses=tuple(statuses)):
@@ -89,6 +94,7 @@ def consume(tree: Path, manager, statuses) -> dict | None:
                     continue
                 result["requested"].append(rid)
                 with _BOUNDARY_LOCK:
+                    result.setdefault("processes", {})[rid] = process_scope.cancel(rid)
                     receipt = manager.request_cancel(rid, actor=f"desk:{by}", reason=reason)
                 key = ("cancelled" if receipt.get("status") == "cancelled"
                        else "pending_tool_outcomes")
@@ -122,6 +128,8 @@ def start(tree: Path, manager, statuses, *, interval: float = 0.5):
     def watch():
         while not stop.is_set():
             try:
+                import process_scope
+                process_scope.consume_step_request(tree)
                 consume(tree, manager, statuses)
             except Exception:
                 # Keep the claimed request for recovery after an I/O failure.

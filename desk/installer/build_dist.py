@@ -2033,6 +2033,9 @@ def write_payload_manifest(out: Path, version: str, product: str, *, voice: dict
         "bytes": total,
         "kit": kit,
         "top": top,
+        "code_sha256": {f: __import__('hashlib').sha256((out / f).read_bytes()).hexdigest()
+                        for f in files if f.startswith(('tree/', 'app/'))
+                        and '/__pycache__/' not in f and not f.endswith('.pyc')},
     }
     if voice:
         manifest["voice"] = voice

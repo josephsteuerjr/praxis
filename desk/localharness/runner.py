@@ -50,6 +50,7 @@ import voice
 import alarm_clock
 import forge_events
 import updates
+import owner_stop
 
 # Уровень лога — ручкой, а не константой: две главные глухоты продукта (квитанция
 # читателя не пишется; сторож живых файлов сдох) диагностировались строками
@@ -1472,7 +1473,7 @@ def _sleep_due() -> None:
     (`_SLEEP_IDLE_SEC`, 20 минут без ходов) — иначе догон через 48 ч приходился на
     середину разговора, и агент немел на время сна, пока владелец за компьютером.
     """
-    if _agent is None or not _brain_ready() or not _sleep_cycle_on():
+    if owner_stop.paused() or _agent is None or not _brain_ready() or not _sleep_cycle_on():
         return
     import sleep as tree_sleep
     if not tree_sleep.due(None, _STARTED_AT):
@@ -1536,7 +1537,7 @@ def _set_busy(on: bool, run: str = "", *, chat_id: str = "") -> None:
 
 def _resume_due() -> None:
     """Следующий шаг уже существующих задач — в том же потоке, что окно и бот."""
-    if _continuity is None or not _brain_ready():
+    if owner_stop.paused() or _continuity is None or not _brain_ready():
         return
     try:
         _continuity.resume_due()
@@ -1898,7 +1899,7 @@ def _alarm_note(task: dict) -> str:
 
 def _fire_due_tasks() -> None:
     """Адресное срабатывание: claim -> durable run -> погашение намерения."""
-    if _desk is None or _life is None or _alarms is None or not _brain_ready():
+    if owner_stop.paused() or _desk is None or _life is None or _alarms is None or not _brain_ready():
         return
     tasks = _alarms.tasks
     _alarms.reconcile_claims()
@@ -1949,7 +1950,7 @@ def _fire_due_tasks() -> None:
 
 
 def _forge_events_due() -> None:
-    if _forge_events is None or not _brain_ready():
+    if owner_stop.paused() or _forge_events is None or not _brain_ready():
         return
     try:
         _forge_events.tick()
@@ -2292,6 +2293,10 @@ def _handle_note(path: Path, message: str, processed: Path) -> None:
     if not message:
         _mark_done(processed, path.name, "empty")
         return
+    if message.strip() == "/resume":
+        owner_stop.resume()
+        _mark_done(processed, path.name, "autonomy resumed explicitly")
+        return
     target = _inbox_target(path.stem)
     message, attached = _split_attachments(message)
     ingress_id = f"note:{path.stem}"
@@ -2327,6 +2332,8 @@ def _adopt_stale_processed(processed: Path, older_than_sec: int = 1800) -> int:
         return 0
     for path in entries:
         try:
+            if Path(str(path) + '.batch.json').exists():
+                continue  # run-bound input is reconciled by its checkpoint, never by age
             if path.stat().st_mtime < cutoff and not (processed / (path.name + ".done")).exists():
                 _mark_done(processed, path.name, "adopted")
                 adopted += 1
@@ -2405,8 +2412,13 @@ def _replay_unclaimed_notes(processed: Path, limit: int = 5,
     # Фильтр по `.done` — ДО среза: иначе пять старейших разобранных записок
     # закрывали бы дорогу настоящим кандидатам (A6 F1г).
     unclaimed = [path for path in sorted(processed.glob("*.md"))
-                 if not (processed / (path.name + ".done")).exists()]
+                 if not (processed / (path.name + ".done")).exists()
+                 and not Path(str(path) + '.batch.json').exists()]
     for path in unclaimed[:max(0, int(limit or 5))]:
+        if Path(str(path) + '.batch.json').exists():
+            # This input belongs to a recorded run, never replay as a new task.
+            # Its model-boundary consumer reconciles checkpoint/ack after resume.
+            continue
         # ⚠ 1.0.1: попыток не больше _REPLAY_MAX_TRIES. Записка, чей ход падает всякий
         # раз (детерминированная ошибка), переигрывалась бы вечно — а replay звался
         # КАЖДУЮ СЕКУНДУ главного цикла: каждая попытка — полный ход, новый прогон на
@@ -2617,6 +2629,19 @@ def main() -> None:
     except Exception:
         log.exception("голос не поднялся — голосовые останутся нерасшифрованными")
     agent, memory_life = _load_tree(code_dir, tree, cfg)
+    owner_stop.configure(tree)
+    def edition_panic(reason=""):
+        import subprocess
+        exe = config_path.parent / "helene-svc.exe"
+        if os.name != "nt" or not exe.is_file():
+            raise RuntimeError("Native panic is unavailable on this platform; not restarting")
+        done = subprocess.run([str(exe), "panic", "--via", "agent"], capture_output=True, timeout=15)
+        if done.returncode != 0:
+            raise RuntimeError("Native panic refused; use the elevated owner control")
+        return "Стоп-флаг записан; надзор завершает дерево, не перезапускает."
+    agent.panic = edition_panic
+    if isinstance(getattr(agent, "TOOL_IMPL", None), dict):
+        agent.TOOL_IMPL["panic"] = edition_panic
     _name_the_owner(_speaker)
     _announce_git(tree)
     _desks = transport.Desks(tree, _speaker, _title, memory_life=memory_life,
@@ -2628,6 +2653,8 @@ def main() -> None:
         lambda run, chat: _set_busy(True, run, chat_id=chat),
         media_sender=deliver_one_media)
     _continuity.install()
+    import turn_inbox
+    agent.OWNER_INPUT_DRAIN = lambda current, messages: turn_inbox.collect(sys.modules[__name__], current, messages)
     import tasks
     import forge
     import perception
@@ -2747,6 +2774,7 @@ def main() -> None:
         # окно: продукт остаётся рабочим локально, а причина названа в логе.
         try:
             _bot = botapi.BotTransport(agent, tree, memory_life, cfg)
+            _bot.owner_control = lambda: edition_panic("Telegram owner /panic")
             _bot.on_incoming = _note_incoming
             _bot.start()
             botapi.install(agent, _desks, _bot)
@@ -2792,6 +2820,9 @@ def main() -> None:
     # Control must run independently: the main loop is inside the model/tool turn.
     import atexit
     import control_watch
+    import process_scope
+    owner_stop.configure(tree)
+    process_scope.configure_admission(lambda: not owner_stop.stopped())
     control_stop, _control_thread = control_watch.start(
         tree, agent._runs(), agent.run_manager.NONTERMINAL_STATUSES)
     atexit.register(control_stop.set)
@@ -2804,7 +2835,8 @@ def main() -> None:
     _warm_voice_models(cfg)
     # Рождение — после того, как всё поднято и квитанция читателя уже пишется:
     # окно видит «думает», а не мёртвый руннер, пока идёт первый ход.
-    _maybe_birth(tree)
+    if not owner_stop.paused():
+        _maybe_birth(tree)
     _sleep_seed_once()
     alarms_at = 0.0
     resume_at = 0.0
@@ -2812,6 +2844,9 @@ def main() -> None:
     update_at = 0.0
     sleep_at = time.time()
     while True:
+        if owner_stop.stopped():
+            process_scope.cancel_all()
+            sys.exit(owner_stop.OWNER_STOP_EXIT)
         if _restart_wanted[0]:
             # Между ходами: текущий ход дошёл до конца, новый не начат. Дальше — надзор.
             log.warning("перезапуск по просьбе владельца: выхожу кодом %d, надзор поднимет "

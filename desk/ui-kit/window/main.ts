@@ -79,6 +79,18 @@ export function start(opts: WindowOptions): void {
 
   // «Вид» владельца (палитра, фактура, движение) — до первой отрисовки и до физики.
   look.apply(look.load());
+  if (inTauri && opts.localAgent !== false && !clientIsMac(navigator)) {
+    const controls = document.createElement("div");
+    controls.className = "owner-stop-controls";
+    controls.innerHTML = '<button type="button" data-owner-stop="panic">Остановить совсем</button> <button type="button" data-owner-stop="resume">Возобновить</button>';
+    document.querySelector("#rail")?.append(controls);
+    for (const b of controls.querySelectorAll<HTMLButtonElement>("button")) b.addEventListener("click", async () => {
+      b.disabled = true;
+      try { toast(await shell<string>("owner_control", { action: b.dataset.ownerStop })); }
+      catch (e) { toast(humanError(e).text); }
+      finally { b.disabled = false; }
+    });
+  }
   const view = q<HTMLElement>("#view");
   // Страницы разделов живут в постоянном узле внутри #view: на нём физика прокрутки
   // (ui-kit/feed, 28.09) рисует перетяг края, а #view остаётся нативной прокруткой.
@@ -432,6 +444,14 @@ export function start(opts: WindowOptions): void {
   }
   railBtn.addEventListener("click", () => togglePanel("rail"));
   panelBtn.addEventListener("click", () => togglePanel("panel"));
+  addEventListener("frame-live-action", (event) => {
+    const button = document.querySelector("[data-live-runs]");
+    if (button) button.textContent = `Агент: ${(event as CustomEvent<string>).detail} — раскрыть действия`;
+  });
+  addEventListener("frame-live-runs", () => {
+    setCollapsed("panel", false, true);
+    void panel.revealLiveRun();
+  });
 
   document.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
@@ -1049,6 +1069,10 @@ export function start(opts: WindowOptions): void {
     say.style.height = Math.min(say.scrollHeight, 180) + "px";
   }
 
+  function syncComposerNote() {
+    composerNote.textContent = [...S.pending].reverse().find(p => p.room === S.room)?.note || "";
+  }
+  addEventListener("frame-pending", syncComposerNote);
   let composerRoom = "";
   function syncComposer() {
     const room = S.rooms.find((r) => r.key === S.room);
@@ -1062,7 +1086,7 @@ export function start(opts: WindowOptions): void {
       saveDraft(composerRoom, composerRoom ? say.value : "");
       composerRoom = S.room;
       say.value = readDraft(S.room);
-      composerNote.textContent = "";
+      syncComposerNote();
       autoGrow();
     }
   }
@@ -1083,6 +1107,20 @@ export function start(opts: WindowOptions): void {
     }
   });
   send.addEventListener("click", () => void doSend());
+  const readQueued = document.createElement("button");
+  readQueued.type = "button"; readQueued.className = "notice-action"; readQueued.textContent = "Прервать шаг · прочитать очередь";
+  readQueued.title = "Отправляет черновик, прерывает текущие процессы шага и читает очередь вместе. Субагенты не останавливаются; вызов модели дочитывается до границы.";
+  document.querySelector(".composer-hint")?.prepend(readQueued);
+  readQueued.addEventListener("click", async () => {
+    if (sending) return;
+    readQueued.disabled = true;
+    try {
+      if ((say.value.trim() || attachments.length) && !(await doSend())) return;
+      const receipt = await post("/api/interrupt-step", {});
+      toast(String(receipt?.note || "Просьба записана"));
+    } catch (e) { toast(humanError(e).text); }
+    finally { readQueued.disabled = false; }
+  });
 
   let sending = false;
   let pendSeq = 0;
@@ -1156,7 +1194,7 @@ export function start(opts: WindowOptions): void {
       if (files.length) clearFiles();
       pending.state = "queued";
       pending.note = sendNote(chat, !!data?.midturn, !!data?.sleeping);
-      composerNote.textContent = pending.note;
+      syncComposerNote();
       talk.paintPending();
       talk.afterSend();
     } catch (e) {
@@ -1176,6 +1214,7 @@ export function start(opts: WindowOptions): void {
     clearTimeout(slow);
     sending = false;
     send.disabled = false;
+    return pending.state === "queued";
   }
 
   // ---------------------------------------------------------------- события

@@ -86,6 +86,8 @@ async function readArchive(peer: string): Promise<Msg[]> {
 }
 
 /** Ходы, которые не дошли до конца — на месте, под перепиской. */
+const readFailures = new Set<string>();
+try { for (const key of JSON.parse(sessionStorage.getItem("helene-read-failures") || "[]")) readFailures.add(String(key)); } catch { /* storage unavailable */ }
 function failedNotices(): string {
   // Окно суток: иначе один сбой месячной давности висел красной плашкой при
   // каждом открытии Чата.
@@ -93,7 +95,7 @@ function failedNotices(): string {
   const failed = roomRuns().filter((r) => {
     if (r.terminal_status !== "failed" && r.status !== "failed") return false;
     const at = new Date(r.created_at ?? "").getTime();
-    return isNaN(at) || at >= since;
+    return Number.isFinite(at) && at >= since && !readFailures.has(`${S.room}:${r.id}`);
   });
   if (!failed.length) return "";
   const last = failed[0];
@@ -103,7 +105,8 @@ function failedNotices(): string {
   return `<div class="notice err">
     <span class="dot failed"></span>
     <span>Ход ${esc(when)} не дошёл до конца${why}. ${failed.length > 1 ? `Таких ходов за сутки: ${failed.length}.` : ""}</span>
-    <button class="notice-action" data-go="journal" type="button">Открыть журнал</button>
+    <button class="notice-action" data-go="journal" data-read-failures="${esc(failed.map(r => `${S.room}:${r.id}`).join('|'))}" type="button">Открыть журнал</button>
+    <button class="notice-action" data-read-failures="${esc(failed.map(r => `${S.room}:${r.id}`).join('|'))}" type="button">Прочитано</button>
   </div>`;
 }
 
@@ -173,7 +176,7 @@ function turnNotice(): string {
   }
   return `<div class="notice" data-turn-stop-box>
     <span class="dot live"></span>
-    <span>Агент сейчас работает${since} — действия справа.</span>
+    <button class="notice-action" data-live-runs aria-controls="panel" type="button">Агент ведёт ход${since} — раскрыть действия</button>
     <button class="notice-action" data-stop-turn="ask" type="button">Остановить ход</button>
   </div>`;
 }
@@ -362,6 +365,7 @@ function skeleton(page: HTMLElement, peer: string): Dom {
 
 /** Перерисовать только пузыри отправляемого, не трогая ленту. */
 export function paintPending() {
+  dispatchEvent(new Event("frame-pending"));
   if (!root || S.view !== "talk") return;
   const dom = doms.get(root);
   if (!dom) return;
@@ -418,6 +422,15 @@ function paintNotices(dom: Dom, html: string) {
       else dispatchEvent(new CustomEvent("frame-go", { detail: b.dataset.act }));
     });
   }
+  for (const b of dom.notices.querySelectorAll<HTMLButtonElement>("[data-read-failures]")) {
+    b.addEventListener("click", () => {
+      for (const key of (b.dataset.readFailures || "").split('|')) if (key) readFailures.add(key);
+      while (readFailures.size > 500) readFailures.delete(readFailures.values().next().value!);
+      try { sessionStorage.setItem("helene-read-failures", JSON.stringify([...readFailures])); } catch { /* in-memory acknowledgement stays */ }
+      if (root) void render(root);
+    });
+  }
+  for (const b of dom.notices.querySelectorAll("[data-live-runs]")) b.addEventListener("click", () => dispatchEvent(new Event("frame-live-runs")));
   bindFail(dom.notices, () => { if (root) void render(root); });
   bindStopTurn(dom.notices);
 }
@@ -466,6 +479,7 @@ export async function render(container: HTMLElement): Promise<void> {
       return false;
     });
   }
+  dispatchEvent(new Event("frame-pending"));
   const list = buildRows(rows, peer);
   const d = dom;
   scroll.preserve(() => {

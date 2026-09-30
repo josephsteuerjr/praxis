@@ -477,6 +477,9 @@ impl ChildSpec {
     }
 
     fn spawn(&self) -> SpawnOutcome {
+        if owner_stopped() {
+            return SpawnOutcome::Waiting("Агент остановлен владельцем; нужен явный запуск".into());
+        }
         match self {
             ChildSpec::Script { python, script, args, tree, host, token, config } => {
                 match spawn_child(python, script, args, tree, host, token, config) {
@@ -1007,12 +1010,16 @@ mod job {
             }
         }
 
-        pub fn adopt(&self, child: &std::process::Child) {
+        pub fn adopt(&self, child: &std::process::Child) -> Result<(), String> {
             use std::os::windows::io::AsRawHandle;
-            unsafe {
-                if AssignProcessToJobObject(self.0, child.as_raw_handle() as HANDLE) == 0 {
-                    super::log_line("ребёнок не приписан к job-объекту — может остаться сиротой");
-                }
+            if unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle() as HANDLE) } == 0 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            Ok(())
+        }
+        pub fn terminate(&self) {
+            if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1) } == 0 {
+                super::log_line("owner stop: Job termination unconfirmed");
             }
         }
     }
@@ -1025,10 +1032,30 @@ static JOB: std::sync::OnceLock<Option<job::Job>> = std::sync::OnceLock::new();
 fn adopt(child: &Child) {
     #[cfg(windows)]
     if let Some(job) = JOB.get_or_init(job::Job::new).as_ref() {
-        job.adopt(child);
+        if let Err(e) = job.adopt(child) { log_line(&format!("Job adoption failed: {e}")); }
     }
     #[cfg(not(windows))]
     let _ = child;
+}
+
+fn adopt_suspended(child: &mut Child) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        #[link(name="ntdll")]
+        extern "system" { fn NtResumeProcess(handle: *mut std::ffi::c_void) -> i32; }
+        let result = (|| {
+            let job = JOB.get_or_init(job::Job::new).as_ref().ok_or("Job unavailable")?;
+            job.adopt(child)?;
+            if owner_stopped() { return Err("owner stop before resume".into()); }
+            if unsafe { NtResumeProcess(child.as_raw_handle()) } < 0 { return Err("resume failed".into()); }
+            Ok(())
+        })();
+        if result.is_err() { let _ = child.kill(); let _ = child.wait(); }
+        result
+    }
+    #[cfg(not(windows))]
+    { adopt(child); Ok(()) }
 }
 
 /// Секрет трубы. Без него труба (deskapp.py) отдаёт роль ВЛАДЕЛЬЦА каждому
@@ -1204,12 +1231,12 @@ fn spawn_child(python: &Path, script: &Path, args: &[String], tree: &Path, host:
         }
     }
     #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(CREATE_NO_WINDOW | 0x4);
     #[cfg(unix)]
     cmd.process_group(0);
     match cmd.spawn() {
-        Ok(child) => {
-            adopt(&child);
+        Ok(mut child) => {
+            if let Err(e) = adopt_suspended(&mut child) { log_line(&e); return None; }
             Some(child)
         }
         Err(err) => {
@@ -1280,7 +1307,8 @@ fn service_owns_harness() -> bool {
             .unwrap_or(false),
         _ => false,
     };
-    let owns = installed && service_state_blocking() == "running";
+    // Installation owns the lifecycle even while SCM is stopped; no shadow engine.
+    let owns = installed;
     if let Ok(mut seen) = SEEN.lock() {
         *seen = Some((Instant::now(), owns));
     }
@@ -1853,12 +1881,12 @@ fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> RelaySpawn 
         cmd.env("RELAY_PYTHON", &python);
     }
     #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(CREATE_NO_WINDOW | 0x4);
     #[cfg(unix)]
     cmd.process_group(0);
     match cmd.spawn() {
-        Ok(child) => {
-            adopt(&child);
+        Ok(mut child) => {
+            if let Err(e) = adopt_suspended(&mut child) { return RelaySpawn::Unavailable(e); }
             if let Ok(mut seen) = RELAY_LOGIN_SEEN.lock() {
                 *seen = relay_login_generation();
             }
@@ -1972,6 +2000,9 @@ fn build_plans(base: &Path) -> Vec<SpawnPlan> {
 /// НАВЕРХУ: пока его знала только эта функция, окно всё равно строило адрес
 /// вебвью тем же портом и становилось клиентом чужой установки.
 fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Verdict>) {
+    if owner_stopped() || service_owns_harness() {
+        return (Vec::new(), None);
+    }
     // Дерево создаём ДО проверки: иначе canonicalize своего пути падает и
     // сравнение с чужим давало ложное «чужая установка».
     let _ = std::fs::create_dir_all(&plan.tree);
@@ -2846,6 +2877,26 @@ fn service_op_from_window(op: &str) -> Result<String, String> {
     }
 }
 
+/// One explicit owner door; never route resume to the install/uninstall wrapper.
+#[tauri::command]
+fn owner_control(action: String) -> Result<String, String> {
+    if action != "panic" && action != "resume" { return Err("panic | resume".into()); }
+    #[cfg(windows)]
+    {
+        let exe = install_root().join("helene-svc.exe");
+        let file = exe.to_string_lossy().replace('\'', "''");
+        let script = format!("$ErrorActionPreference='Stop'; $p=Start-Process -FilePath '{file}' -ArgumentList '{action}' -Verb RunAs -Wait -PassThru; exit $p.ExitCode");
+        let mut cmd = Command::new(powershell_exe());
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+        let out = run_hidden_for(&mut cmd, Duration::from_secs(120))?;
+        if !out.status.success() { return Err("Команда владельца не выполнена (права/процесс); состояние не подтверждено".into()); }
+        if owner_stopped() != (action == "panic") { return Err("Флаг не подтвердил команду".into()); }
+        Ok(if action == "panic" { "Остановка записана; надзор завершает своё дерево" } else { "Остановка снята явным действием; надзор может запустить агента" }.into())
+    }
+    #[cfg(not(windows))]
+    { Err("Нативный стоп-кран этого выпуска реализован на Windows".into()) }
+}
+
 /// Уведомление Windows из веб-части (заголовок, текст).
 #[tauri::command]
 fn notify(title: String, body: String) {
@@ -3414,6 +3465,7 @@ include!("../../common/service_op.rs");
 // части (`mac_svc_state`, `mac_svc_run_admin`) гейтятся внутри файла.
 include!("../../common/mac_service.rs");
 include!("../../common/stamp.rs");
+include!("../../common/owner_stop.rs");
 include!("../../common/random_hex.rs");
 include!("../../common/run_hidden.rs");
 // Ярлык «Пуска» с AUMID — через COM, без PowerShell (1.2.3).
@@ -5847,6 +5899,10 @@ fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
 }
 
 fn main() {
+    if std::env::args().any(|a| a == "--panic") {
+        if let Err(e) = owner_control("panic".into()) { eprintln!("{e}"); std::process::exit(1); }
+        return;
+    }
     let base = install_root();
     install_panic_hook();
     // Контекст сборки — один раз и до первого слова в журнале: из него имя продукта.
@@ -6023,7 +6079,10 @@ fn main() {
     let builder = tauri::Builder::default()
         // Один экземпляр — ПЕРВЫМ плагином: повторный запуск не доходит до
         // окна, а поднимает и фокусирует уже живое.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if argv.iter().any(|a| a == "--panic") {
+                let _ = owner_control("panic".into());
+            }
             show_main(app);
         }));
     let built = builder
@@ -6037,6 +6096,7 @@ fn main() {
         // Статика окна — с диска (app/static), см. serve_static.
         .register_uri_scheme_protocol("helene", |ctx, request| serve_static(ctx, request))
         .invoke_handler(tauri::generate_handler![
+            owner_control,
             config_save,
             restart_self,
             install_service,
@@ -6131,6 +6191,8 @@ fn main() {
             use tauri::menu::{Menu, MenuItem, Submenu};
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
             let open = MenuItem::with_id(app, "open", format!("Открыть {}", product_ui()), true, None::<&str>)?;
+            let panic_item = MenuItem::with_id(app, "owner-panic", "Остановить агента совсем", cfg!(windows), None::<&str>)?;
+            let resume_item = MenuItem::with_id(app, "owner-resume", "Запустить после остановки", cfg!(windows), None::<&str>)?;
             let quit = MenuItem::with_id(
                 app,
                 "quit",
@@ -6163,9 +6225,9 @@ fn main() {
                 let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
                     rows.iter().map(|r| r as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect();
                 let agents_menu = Submenu::with_items(app, "Агенты", true, &refs)?;
-                Menu::with_items(app, &[&open, &agents_menu, &quit])?
+                Menu::with_items(app, &[&open, &agents_menu, &panic_item, &resume_item, &quit])?
             } else {
-                Menu::with_items(app, &[&open, &quit])?
+                Menu::with_items(app, &[&open, &panic_item, &resume_item, &quit])?
             };
             let tray = TrayIconBuilder::with_id("frame")
                 .icon(tray_icon)
@@ -6176,6 +6238,13 @@ fn main() {
             let tray = tray.icon_as_template(true);
             tray.on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => show_main(app),
+                    "owner-panic" | "owner-resume" => {
+                        let action = if event.id.as_ref() == "owner-panic" { "panic" } else { "resume" };
+                        std::thread::spawn(move || match owner_control(action.into()) {
+                            Ok(note) => toast("Hélène", &note),
+                            Err(note) => toast("Hélène", &note),
+                        });
+                    }
                     "quit" => {
                         let state = app.state::<LocalHarness>();
                         kill_children(&state);
@@ -6485,14 +6554,23 @@ fn watch_children(app: tauri::AppHandle) {
         Halt(String, String),
     }
     let mut last_lift = Instant::now();
-    // С какого момента агента нет на порту при запущенной службе (по агенту): служба
-    // поднимает его сама, окно ждёт минуту и только потом берёт на себя (27.09).
-    let mut svc_gap: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
     loop {
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(500));
         let state = app.state::<LocalHarness>();
         if state.stopping.load(Ordering::Relaxed) {
             return;
+        }
+        if owner_stopped() {
+            #[cfg(windows)]
+            if let Some(job) = JOB.get_or_init(job::Job::new).as_ref() { job.terminate(); }
+            if let Ok(mut children) = state.children.lock() {
+                for child in children.iter_mut().filter_map(|m| m.child.as_mut()) {
+                    stop_child(child);
+                }
+                children.clear();
+            }
+            relay_abort();
+            continue;
         }
         // 1) Осмотр под замком: только try_wait и учёт падений.
         let mut acts: Vec<(usize, Act)> = Vec::new();
@@ -6720,23 +6798,7 @@ fn watch_children(app: tauri::AppHandle) {
                 .unwrap_or_default();
             let owned = service_owns_harness();
             for plan in plans {
-                if owned {
-                    // Служба держит агента: окно не поднимает. Не отвечает он на порту уже
-                    // минуту (задача сессии сломана, служба зависла) — берёт на себя.
-                    if harness_alive(plan.port) {
-                        svc_gap.remove(&plan.agent);
-                        continue;
-                    }
-                    let since = *svc_gap.entry(plan.agent.clone()).or_insert_with(Instant::now);
-                    if since.elapsed() < Duration::from_secs(60) {
-                        continue;
-                    }
-                    log_line(&format!(
-                        "служба запущена, но код агента{} не отвечает уже минуту — поднимаю окном (запасной ход)",
-                        plan.whose()
-                    ));
-                    svc_gap.remove(&plan.agent);
-                }
+                if owned { continue; }
                 let (mut lifted, _) = start_children(&plan, false);
                 if !lifted.is_empty() {
                     let mut installed = false;

@@ -94,6 +94,7 @@ include!("../../common/service_op.rs");
 // состояния. Один текст на службу, окно и мастер — см. common/mac_service.rs.
 include!("../../common/mac_service.rs");
 include!("../../common/random_hex.rs");
+include!("../../common/owner_stop.rs");
 include!("../../common/run_hidden.rs");
 // Ярлыки — через COM из самого мастера (1.2.3): PowerShell с Add-Type у Егора не смог.
 include!("../../common/shortcut_win.rs");
@@ -2220,6 +2221,7 @@ fn service_op(_op: &str, _name: &str, _script: Option<&Path>) -> Result<(), Stri
 /// спрашиваем SCM сами — квитанция о фактическом состоянии, не «запустил».
 #[cfg(windows)]
 fn install_service(dir: &Path) -> String {
+    if owner_stopped() { return "owner-stopped".into(); }
     let script = dir.join("install-service.ps1");
     if !script.exists() || !dir.join("helene-svc.exe").exists() {
         return "missing".into();
@@ -3379,6 +3381,7 @@ struct Before {
 /// (если стояла) ставится обратно, окно (если было открыто) открывается снова.
 #[cfg(windows)]
 fn restore_after_abort(dir: &Path, before: &Before) -> Option<String> {
+    if owner_stopped() { return Some("Остановлен владельцем; восстановление не запускает агента".into()); }
     let mut notes: Vec<String> = Vec::new();
     if before.service && service_state() == "absent" {
         let state = install_service(dir);
@@ -3931,7 +3934,7 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     // испытание: агент проверяет себя в новой версии делом, «сломано» или молчание — откат.
     // Та же версия поверх (починка, смена решений) — правки перенесены выше, а испытывать
     // нечего: «1.2.5 → 1.2.5» агенту на полчаса было бы странной запиской.
-    if trial_ready && old_version != version {
+    if trial_ready {
         let from = if old_version.is_empty() { "прежняя".to_string() } else { old_version.clone() };
         prune_kept_programs(&dir);
         match tx.commit_keep(&crate::trial::kept_path(&dir, &from)) {
@@ -3947,6 +3950,7 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
                         StaticPlan::Fresh => "fresh",
                     },
                     new_top: manifest.top.clone(),
+                    code_sha256: manifest.code_sha256.clone(),
                     service: s.wants_service(),
                     scope: &scope,
                     agent_code,
@@ -3979,6 +3983,9 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
             }
         }
     } else {
+        // Even a repair without a trial must not discard its preimage over an
+        // unverified installed layout. Agent carry remains an explicit mismatch.
+        crate::trial::verify_code_manifest(&dir, &manifest.code_sha256)?;
         let cleanup = tx.commit();
         if let Ok(mut v) = CLEANUP.lock() {
             v.push(cleanup);
@@ -4305,7 +4312,10 @@ fn set_registered_version_for(dir: &Path, version: &str) {
 fn set_registered_version_for(_dir: &Path, _version: &str) {}
 
 /// Открыть окно установленной программы (после отката).
+pub(crate) fn owner_stopped_pub() -> bool { owner_stopped() }
+
 pub(crate) fn launch_pub(dir: &Path) -> Result<(), String> {
+    if owner_stopped() { return Err("Агент остановлен владельцем: обновление не возобновляет его".into()); }
     let exe = shell_exe(dir);
     #[cfg(windows)]
     {

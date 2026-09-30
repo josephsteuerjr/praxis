@@ -124,6 +124,16 @@ def _interrupt_locked(tree: Path, by: str, scope: str, reason: str) -> dict:
                     "уже совершённые действия не отменяются"}
 
 
+def interrupt_step(tree: Path) -> dict:
+    """Interrupt one observed foreground step, never a run or Forge child."""
+    folder = Path(tree) / 'memory/.control'
+    active = _read(folder / 'current-step.json')
+    if not active.get('token'):
+        return {'ok': True, 'note': 'Сообщения накоплены; прочитаю на следующей границе. Вызов модели или непроцессная рука не прерываются этой кнопкой.'}
+    _write(folder / 'step-interrupt.json', {'token': active['token'], 'at': _utc()})
+    return {'ok': True, 'note': 'Просьба прервать текущий шаг записана; субагенты продолжают работу. Сообщения будут прочитаны вместе на следующем обращении к модели.'}
+
+
 # --- свёртка памяти чата по кнопке (27.09) --------------------------------------
 #
 # Егор 27.09: «интересно, как происходит компактирование в мейн чате Элен. Неплохо бы

@@ -79,6 +79,7 @@ pub struct Trial {
     pub static_plan: String,
     /// Имена верхнего уровня новой поставки: при откате они остаются в отвергнутой версии.
     pub new_top: Vec<String>,
+    pub code_sha256: std::collections::BTreeMap<String, String>,
     pub service: bool,
     pub scope: String,
     /// starting | trial | accepting | rollback | done | rolled_back | failed
@@ -177,6 +178,7 @@ pub struct Begin<'a> {
     pub runtime_moved: bool,
     pub static_plan: &'a str,
     pub new_top: Vec<String>,
+    pub code_sha256: std::collections::BTreeMap<String, String>,
     pub service: bool,
     pub scope: &'a str,
     pub agent_code: Value,
@@ -195,6 +197,7 @@ pub fn begin(dir: &Path, b: Begin) -> Trial {
         runtime_moved: b.runtime_moved,
         static_plan: b.static_plan.into(),
         new_top: b.new_top,
+        code_sha256: b.code_sha256,
         service: b.service,
         scope: b.scope.into(),
         phase: "starting".into(),
@@ -476,6 +479,16 @@ pub fn watch(dir: &Path, args: &[String]) -> i32 {
             return 0;
         }
         lock.touch(dir);
+        if install::owner_stopped_pub() {
+            // An intentional stop is neither failed health nor elapsed trial time.
+            let now = epoch();
+            if t.channel_since > 0.0 { t.channel_since = now; }
+            t.last_tick = now;
+            last_up = now;
+            save(dir, &t);
+            std::thread::sleep(TICK);
+            continue;
+        }
         let p = probe(dir);
         let now = epoch();
         if p.channel || p.runner {
@@ -615,7 +628,18 @@ fn clip(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
+include!("../../common/code_manifest.rs");
+
 fn finish_accept(dir: &Path, t: &mut Trial) {
+    if install::owner_stopped_pub() { save(dir, t); return; }
+    if let Err(why) = verify_code_manifest(dir, &t.code_sha256) {
+        t.phase = "failed".into();
+        t.checks.push(check("installed-code", "код соответствует выпуску", false, &why));
+        t.notes.push(why.clone());
+        save(dir, t);
+        receipt(dir, t, "failed", "приёмка кода не подтверждена", &why, "Сохранена прежняя версия; изменённый код не выдан за выпуск.");
+        return;
+    }
     let by = t.verdict.get("by").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let words = t.verdict.get("words").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let (note, summary) = match by.as_str() {
@@ -709,6 +733,7 @@ fn rollback_once(dir: &Path, t: &mut Trial) -> Result<(), bool> {
     }
     // Не вышло после остановки — поднять новую версию обратно: агент не должен лежать.
     let back_up = |t: &mut Trial| {
+        if install::owner_stopped_pub() { save(dir, t); return; }
         if had_service {
             let state = install::install_service_pub(dir);
             t.notes.push(format!("новая версия снова поднята, служба: {state}"));
@@ -763,8 +788,8 @@ fn rollback_once(dir: &Path, t: &mut Trial) -> Result<(), bool> {
     if let Err(e) = install::mark_version_pub(dir, &t.scope, &t.from_version) {
         t.notes.push(format!("версия в настройках не записалась: {e}"));
     }
-    // 5. Служба — обратно, окно — открыть.
-    if had_service {
+    // 5. Old service binaries may not know the stop latch: do not restart them.
+    if had_service && !install::owner_stopped_pub() {
         let state = install::install_service_pub(dir);
         t.notes.push(format!("служба: {state}"));
     }
@@ -818,6 +843,7 @@ mod tests {
             runtime_moved: true,
             static_plan: "keep",
             new_top: vec!["app".into()],
+            code_sha256: Default::default(),
             service: false,
             scope: "user",
             agent_code: json!({"summary": "правок нет"}),

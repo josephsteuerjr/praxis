@@ -17,7 +17,7 @@ import type { Scroller } from "../feed/scroller";
 import { api } from "./api";
 import { bindFail, esc, failHTML, fmtDur, fmtTime, q } from "./lib";
 import { fmtK } from "../text";
-import { ACTIONS, clip, frameStripHTML, lastUsage, pretty, resultText, subject, terminalLabel, textBox, type RunDetail } from "../steps";
+import { renderSteps, ACTIONS, clip, frameStripHTML, lastUsage, pretty, resultText, subject, terminalLabel, textBox, type RunDetail } from "../steps";
 export { stepsHTML, type RunDetail } from "../steps";
 import * as scroll from "./scroll";
 import { LEGACY_WINDOW_KEY, S, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type Run } from "./state";
@@ -413,6 +413,13 @@ async function openTurn(el: HTMLElement, id: string, animate: boolean) {
   }
   setMeta(el, d);
   col?.scroller.preserve(() => steps!.set(stepRows(d, !first), { animate: !!cached }));
+  let full = body.querySelector<HTMLDetailsElement>(".turn-full");
+  if (!full) {
+    full = document.createElement("details"); full.className = "turn-full";
+    full.innerHTML = '<summary>Полный ход</summary><div class="turn-full-body"></div>';
+    body.append(full);
+    full.addEventListener("toggle", () => { if (full!.open) renderSteps(full!.querySelector<HTMLElement>(".turn-full-body")!, S.evCache.get(id) as RunDetail || d); });
+  }
 }
 
 function closeTurn(el: HTMLElement, id: string) {
@@ -591,7 +598,17 @@ async function refreshLive() {
     const meta = el.querySelector<HTMLElement>(".turn-meta");
     if (meta) meta.textContent = [liveSince(id), metaOf(d)].filter(Boolean).join(" · ");
     const steps = openSteps.get(id);
-    if (d && steps && el.isConnected) col.scroller.preserve(() => steps.set(stepRows(d, false), { animate: true }));
+    if (d && el.isConnected) {
+      col.scroller.preserve(() => {
+        if (steps) steps.set(stepRows(d, false), { animate: true });
+        const full = el.querySelector<HTMLDetailsElement>(".turn-full");
+        if (full?.open) renderSteps(full.querySelector<HTMLElement>(".turn-full-body")!, d);
+      });
+      const last = d.iterations?.at(-1);
+      const tool = last?.tools?.find(t => !t.result && !t.error);
+      const label = tool ? (ACTIONS[tool.tool || ""] || tool.tool || "выполняет действие") : last && !last.text && !last.tools?.length ? "думает" : "ведёт ход";
+      dispatchEvent(new CustomEvent("frame-live-action", { detail: label }));
+    }
   } catch {
     // Краткий обрыв связи не должен останавливать обновление действий.
   } finally {
@@ -612,6 +629,13 @@ export function onLlm() {
   if (S.view !== "talk") return;
   clearTimeout(liveTimer);
   liveTimer = window.setTimeout(() => void refreshLive(), 300);
+}
+
+export async function revealLiveRun() {
+  await render();
+  const id = liveRunId();
+  const el = id ? col?.list.element(id) : undefined;
+  if (id && el) { await openTurn(el, id, true); el.querySelector<HTMLElement>(".turn-head")?.focus({ preventScroll: true }); }
 }
 
 export function onRunEvent(runId: string) {

@@ -438,6 +438,7 @@ class BotTransport:
         # (core/notices) ДО хода: пока идёт ход в другом чате, это единственный путь
         # узнать о сообщении в следующем вводе модели. Зовётся из потока приёма.
         self.on_incoming = None
+        self.owner_control = None
         # .strip(): id сверяется СТРОКОЙ (`ident == str(self.owner_id)`), и
         # " 111 " из руками правленного helene.json не совпал бы с "111"
         # никогда — владелец получил бы бота, молчащего лично на него.
@@ -636,6 +637,13 @@ class BotTransport:
         if not (is_dm or self._addressed(message)):
             return
         sender_id = str(sender.get("id") or "")
+        if text == "/panic" and self.owner_id and sender_id == str(self.owner_id):
+            try:
+                if self.owner_control is None: raise RuntimeError("native control unavailable")
+                self.owner_control()
+            except Exception as exc:
+                self.client.call("sendMessage", chat_id=chat_id, text=f"Остановка не подтверждена: {exc}")
+            return
         if not self.is_allowed(sender_id):
             # ⚠ ГЛАВНЫЙ ГЕЙТ ПРОДУКТА, которого здесь не было вовсе.
             # Имя бота от BotFather публично и ищется поиском в Telegram. Любой

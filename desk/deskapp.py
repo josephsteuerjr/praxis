@@ -175,7 +175,7 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
 _DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media",
                  "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
                  "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models",
-                 "/api/interrupt"}
+                 "/api/interrupt", "/api/interrupt-step"}
 _DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/", "/api/chat-turns/", "/api/run/",
                     "/api/container-log/")
 
@@ -1136,6 +1136,10 @@ async def _r_brain_set(c: Call):
                                    fields if isinstance(fields, dict) else {})
 
 
+async def _r_interrupt_step(c: Call):
+    return await asyncio.to_thread(control.interrupt_step, readers.tree())
+
+
 async def _r_interrupt(c: Call):
     """Прервать живой ход агента (12.09): просьба в memory/.control, раннер читает на тике.
     Телефону открыто наравне с перезапуском — это окно владельца."""
@@ -1209,6 +1213,7 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/brain-models", _r_brain_models),
     Route("POST", "/api/brain", _r_brain_set),
     Route("POST", "/api/interrupt", _r_interrupt),
+    Route("POST", "/api/interrupt-step", _r_interrupt_step),
     Route("GET", "/api/memory-fold/{room}", _r_fold_state),
     Route("POST", "/api/memory-fold", _r_fold),
     Route("GET", "/api/voice", _r_voice),
