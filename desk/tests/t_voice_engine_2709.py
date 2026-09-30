@@ -225,6 +225,41 @@ class Engine(unittest.TestCase):
         speech = said["speech"]
         self.assertTrue(speech["library"]["downloadable"])
 
+    def test_обновление_зависимостей_заменяет_старый_движок_без_потери_моделей(self):
+        voice.fetch_engine()
+        marker = voice.engine_home() / voice.INSTALLED
+        old = json.loads(marker.read_text(encoding="utf-8"))
+        old["dists"]["av"] = "19.0.0"
+        marker.write_text(json.dumps(old), encoding="utf-8")
+        model = self.root / "data" / "models" / "whisper" / "owner-model.bin"
+        model.parent.mkdir(parents=True)
+        model.write_bytes(b"owner model")
+        self.assertFalse(voice.library()["present"])
+        self.assertTrue(voice.library()["downloadable"])
+        self.assertIn("обновлённый движок", voice.library()["why"])
+        self.assertNotIn(str(voice.engine_site()), sys.path)
+        refreshed = voice.fetch_engine()
+        self.assertEqual(refreshed["source"], "download")
+        self.assertEqual(refreshed["dists"]["av"], "18.1.0")
+        self.assertTrue(voice.library()["present"])
+        self.assertEqual(model.read_bytes(), b"owner model")
+
+    def test_новая_версия_программы_с_тем_же_движком_не_требует_докачки(self):
+        voice.fetch_engine()
+        self.passport({"version": "10.0.0", "voice_pack": self.rec})
+        self.assertTrue(voice.library()["present"])
+        self.assertEqual(voice.fetch_engine(), {"state": "present"})
+
+    def test_перенесённый_движок_без_версий_сверяется_по_metadata(self):
+        voice.fetch_engine()
+        marker = voice.engine_home() / voice.INSTALLED
+        marker.write_text(json.dumps({"source": "carry", "python": PY}), encoding="utf-8")
+        self.assertTrue(voice.library()["present"])
+        metadata = voice.engine_site() / "av-18.1.0.dist-info" / "METADATA"
+        metadata.write_text(metadata.read_text(encoding="utf-8").replace("18.1.0", "19.0.0"), encoding="utf-8")
+        self.assertFalse(voice.library()["present"])
+        self.assertTrue(voice.library()["downloadable"])
+
     def test_без_записи_в_паспорте_качать_нечего(self):
         self.passport({"version": "9.9.9"})
         lib = voice.library()
