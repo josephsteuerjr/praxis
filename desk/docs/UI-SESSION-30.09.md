@@ -6,6 +6,13 @@
 
 ## Поведение
 
+- В чате Hélène Alt+Enter начинает и заканчивает запись голосового. Оно остаётся
+  вложением до отправки; сочетание не отправляет текстовый черновик. Подсказка
+  микрофона и `aria-keyshortcuts` показывают сочетание. Удержание клавиш, IME и
+  повторный старт во время проверки слуха/разрешения микрофона не запускают
+  вторую запись. Смена комнаты/раздела или остановка движка во время ожидания
+  разрешения отменяет старт и освобождает полученный stream. Уже начатую запись
+  можно закончить после остановки движка. Shared UI безопасен без mic в remote.
 - В шапке окна — перезапуск движка и, когда оболочка поддерживает owner stop,
   одна кнопка остановки/возобновления. Окно и черновик остаются открытыми.
   Переход подтверждается наблюдением, а не ответом «команда принята».
@@ -55,6 +62,7 @@
 
 ```powershell
 npm --prefix app run build
+npm --prefix remote run build
 node --no-warnings --test app/test/*.mjs
 python -X utf8 tests/t_message_identity.py
 python -X utf8 tests/t_reader_activity.py
@@ -89,6 +97,13 @@ Native compile и безопасный unit выполнены на Windows. UI 
 frontend и наблюдаемый контракт, не заменяет UAC/service lifecycle в установленной
 WebView. Native macOS/Linux сборки и canary не запускались. Electron preview по-прежнему
 не реализует Tauri owner commands; неподдерживаемый stop скрывается.
+
+Дополнение 01.10: Alt+Enter проверен исполнением настоящих recording/keydown
+closures с synthetic MediaRecorder. Покрыты порядок textarea→document, повторные
+нажатия/IME, single-flight разрешения, ошибки constructor/start/permission,
+отмена ожидающего старта, поздние события сломанной записи, stop после остановки
+движка и предел пяти минут. Node suite 18/18; обе сборки app/remote проходят.
+Реальный микрофон и системный permission dialog в этих проверках не открывались.
 
 Большие universal uploads (20×50 МБ), мультимодальный batch, voice during tools,
 Python migration и полная CI matrix — следующий отдельный блок. Текущий кандидат

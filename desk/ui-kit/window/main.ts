@@ -323,17 +323,27 @@ export function start(opts: WindowOptions): void {
   const MIC_MAX_SEC = 300;
   let rec: MediaRecorder | null = null;
   let recStream: MediaStream | null = null;
-  let recChunks: Blob[] = [];
-  let recStart = 0;
   let recTick = 0;
+  let micStarting = false;
+  function micCanStart() {
+    return S.view === "talk" && !S.rooms.find(r => r.key === S.room)?.stub
+      && !ownerState?.stopped && !engineOperation;
+  }
+  function syncMicButton() {
+    // Остановить уже начатую запись можно и после остановки движка.
+    // У серверного издания этой кнопки вообще нет.
+    if (micBtn) micBtn.disabled = micStarting || (!rec && !micCanStart());
+  }
   const micIdle = () => {
-    if (!micBtn) return;
-    micBtn.classList.remove("recording");
-    micBtn.title = "Записать голосовое";
-    micBtn.setAttribute("aria-label", "Записать голосовое");
+    micBtn?.classList.remove("recording");
+    if (micBtn) {
+      micBtn.title = "Записать голосовое · Alt+Enter";
+      micBtn.setAttribute("aria-label", "Записать голосовое");
+    }
     if (recTick) { clearInterval(recTick); recTick = 0; }
-    if (recStream) { for (const t of recStream.getTracks()) t.stop(); recStream = null; }
     rec = null;
+    if (recStream) { for (const t of recStream.getTracks()) t.stop(); recStream = null; }
+    syncMicButton();
   };
   async function micToggle() {
     if (!micBtn) return;
@@ -341,54 +351,79 @@ export function start(opts: WindowOptions): void {
       if (rec.state !== "inactive") rec.stop();
       return;
     }
+    if (micStarting || !micCanStart()) return;
+    const room = S.room;
+    micStarting = true;
+    micBtn.title = "Подготовка записи…";
+    micBtn.setAttribute("aria-label", "Подготовка записи");
+    syncMicButton();
     try {
-      const v = await api<{ ready?: boolean; why?: string }>("/api/voice");
-      if (!v.ready) { toast(`Голосовое некому расшифровать: ${v.why || "слух не поднят"}. Настройки → Голос.`); return; }
-    } catch {
-      // Канал не ответил — не запрещаем: причину, если что, назовёт руннер в реплике.
-    }
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      toast("В этом окне нет доступа к микрофону");
-      return;
-    }
-    try {
-      recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (e) {
-      toast("Микрофон не дали: " + humanError(e).text);
-      return;
-    }
-    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
-    try {
-      rec = new MediaRecorder(recStream, mime ? { mimeType: mime } : undefined);
+      try {
+        const v = await api<{ ready?: boolean; why?: string }>("/api/voice");
+        if (!v.ready) { toast(`Голосовое некому расшифровать: ${v.why || "слух не поднят"}. Настройки → Голос.`); return; }
+      } catch {
+        // Канал не ответил — причину, если что, назовёт раннер в реплике.
+      }
+      if (!micCanStart() || S.room !== room) return;
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+        toast("В этом окне нет доступа к микрофону");
+        return;
+      }
+      try { recStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+      catch (e) { toast("Микрофон не дали: " + humanError(e).text); return; }
+      // Пока открыто системное разрешение, можно уйти в другой чат/раздел.
+      if (!micCanStart() || S.room !== room) return;
+      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
+      const recorder = new MediaRecorder(recStream, mime ? { mimeType: mime } : undefined);
+      const chunks: Blob[] = [];
+      const started = Date.now();
+      rec = recorder;
+      recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      recorder.onerror = () => {
+        if (rec !== recorder) return;
+        toast("Запись оборвалась");
+        micIdle();
+      };
+      recorder.onstop = () => {
+        // Позднее завершение сломанного рекордера не трогает новую запись.
+        if (rec !== recorder) return;
+        const seconds = Math.max(1, Math.round((Date.now() - started) / 1000));
+        const type = baseMime(recorder.mimeType || mime || "audio/webm") || "audio/webm";
+        const blob = new Blob(chunks, { type });
+        micIdle();
+        if (blob.size < 1024) { toast("Запись слишком короткая"); return; }
+        const ext = type === "audio/ogg" ? "ogg" : type === "audio/mp4" ? "m4a" : "webm";
+        const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
+        void addFiles([new File([blob], `voice-${stamp}.${ext}`, { type })], seconds);
+      };
+      recorder.start(250);
+      micBtn.classList.add("recording");
+      const paintRecording = () => {
+        const s = Math.round((Date.now() - started) / 1000);
+        micBtn.title = `Идёт запись · ${fmtDur(s)} · Alt+Enter или нажми, чтобы закончить`;
+        micBtn.setAttribute("aria-label", micBtn.title);
+        if (s >= MIC_MAX_SEC && recorder.state !== "inactive") { toast("Пять минут — предел одного голосового"); recorder.stop(); }
+      };
+      paintRecording();
+      recTick = window.setInterval(paintRecording, 500);
     } catch (e) {
       toast("Запись не началась: " + humanError(e).text);
       micIdle();
-      return;
+    } finally {
+      micStarting = false;
+      if (!rec) micIdle();
+      else syncMicButton();
     }
-    recChunks = [];
-    recStart = Date.now();
-    rec.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
-    rec.onerror = () => { toast("Запись оборвалась"); micIdle(); };
-    rec.onstop = () => {
-      const seconds = Math.max(1, Math.round((Date.now() - recStart) / 1000));
-      const type = baseMime(rec?.mimeType || mime || "audio/webm") || "audio/webm";
-      const blob = new Blob(recChunks, { type });
-      micIdle();
-      if (blob.size < 1024 || seconds < 1) { toast("Запись слишком короткая"); return; }
-      const ext = type === "audio/ogg" ? "ogg" : type === "audio/mp4" ? "m4a" : "webm";
-      const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
-      void addFiles([new File([blob], `voice-${stamp}.${ext}`, { type })], seconds);
-    };
-    rec.start(250);
-    micBtn.classList.add("recording");
-    recTick = window.setInterval(() => {
-      const s = Math.round((Date.now() - recStart) / 1000);
-      micBtn.title = `Идёт запись · ${fmtDur(s)} · нажми, чтобы закончить`;
-      micBtn.setAttribute("aria-label", micBtn.title);
-      if (s >= MIC_MAX_SEC && rec && rec.state !== "inactive") { toast("Пять минут — предел одного голосового"); rec.stop(); }
-    }, 500);
+  }
+  function micShortcut(e: KeyboardEvent) {
+    if (e.key !== "Enter" || !e.altKey || e.ctrlKey || e.metaKey || e.shiftKey
+      || e.isComposing || e.defaultPrevented || S.view !== "talk" || !micBtn) return;
+    e.preventDefault();
+    // Удержание клавиш не переключает запись туда-обратно.
+    if (!e.repeat && !micBtn.disabled) void micToggle();
   }
   micBtn?.addEventListener("click", () => void micToggle());
+  document.addEventListener("keydown", micShortcut);
   say.addEventListener("paste", (e) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -1220,7 +1255,7 @@ export function start(opts: WindowOptions): void {
     const blocked = !!ownerState?.stopped || !!engineOperation;
     send.disabled = !!room?.stub || sending || blocked;
     attachBtn.disabled = !!room?.stub || blocked;
-    q<HTMLButtonElement>("#mic").disabled = !!room?.stub || blocked;
+    syncMicButton();
     // Черновик подставляем только при настоящей смене комнаты: событие
     // frame-room летит на каждой перерисовке чата.
     if (composerRoom !== S.room) {
@@ -1240,14 +1275,15 @@ export function start(opts: WindowOptions): void {
   // Первый замер мог пройти до стилей (dev-сервер подключает CSS асинхронно) —
   // поле раздувалось до потолка. Перемеряем, когда страница собралась.
   addEventListener("load", autoGrow);
-  say.addEventListener("keydown", (e) => {
+  function onComposerKeydown(e: KeyboardEvent) {
     // sending и isComposing: без них два быстрых Enter давали два хода агента по
     // одному тексту, а Enter подтверждения IME при кириллице отправлял недописанное.
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !sending) {
+    if (e.key === "Enter" && !e.altKey && !e.shiftKey && !e.isComposing && !sending) {
       e.preventDefault();
       void doSend();
     }
-  });
+  }
+  say.addEventListener("keydown", onComposerKeydown);
   send.addEventListener("click", () => void doSend());
   const readQueued = document.createElement("button");
   readQueued.type = "button"; readQueued.className = "notice-action"; readQueued.textContent = "Прочитать сейчас";
