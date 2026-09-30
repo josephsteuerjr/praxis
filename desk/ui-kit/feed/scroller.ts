@@ -208,6 +208,19 @@ export class Scroller {
     this.setPinned(this.max - t <= this.pinSlack);
     this.follow = this.pinnedState;
     if (!smooth) {
+      // Section navigation is an instantaneous restore, not a continuation of
+      // the outgoing section's fling or rubber band. Gesture physics is unchanged.
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
+      clearTimeout(this.holdTimer);
+      if (this.drag && this.el.hasPointerCapture(this.drag.id)) this.el.releasePointerCapture(this.drag.id);
+      this.drag = null;
+      this.el.classList.remove("grabbing");
+      this.mode = "idle";
+      this.vel = this.raw = this.rawVel = this.pull = 0;
+      this.free = false;
+      this.pad = "none";
+      this.lastWheel = 0;
       this.pos = this.target = t;
       this.write();
       return;

@@ -82,8 +82,8 @@ export interface Look {
   edge: Overscroll;
 }
 
-/** То, что Егор одобрил 28.09: тёплая бумага, терракота, «тягуче», резинка. */
-export const DEFAULT_LOOK: Look = { paperDay: "warm", paperNight: "coal", accent: "terra", grain: "paper", text: "m", feel: "syrup", edge: "rubber" };
+/** Светлая бумага с лёгкой фактурой; сохранённый выбор владельца имеет приоритет. */
+export const DEFAULT_LOOK: Look = { paperDay: "light", paperNight: "coal", accent: "terra", grain: "soft", text: "m", feel: "syrup", edge: "rubber" };
 
 const KEY = "helene.look";
 

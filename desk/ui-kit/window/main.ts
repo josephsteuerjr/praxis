@@ -120,6 +120,15 @@ export function start(opts: WindowOptions): void {
   activityRow.append(activityLabel, turnControls);
   composer.prepend(activityRow);
   talk.mountTurnControls(turnControls);
+  // Status floats above the input, without turning the whole area above it into
+  // an invisible clipping shelf. Reserve room only at the end of the transcript.
+  const statusSize = new ResizeObserver(() => {
+    composer.parentElement!.style.setProperty("--composer-status-h", `${activityRow.getBoundingClientRect().height}px`);
+  });
+  statusSize.observe(activityRow);
+  window.addEventListener("pagehide", (event: PageTransitionEvent) => {
+    if (!event.persisted) statusSize.disconnect();
+  });
 
   const engineControls = document.createElement("div");
   engineControls.className = "engine-controls";
@@ -689,7 +698,7 @@ export function start(opts: WindowOptions): void {
   // своей прокруткой. Картинка встаёт в том же кадре, что и щелчок; перечитывание идёт
   // фоном и подменяет содержимое молча.
   const pages = new Map<View, HTMLElement>();
-  const scrolls = new Map<View, number>();
+  const scrolls = new Map<View, { top: number; pinned: boolean }>();
 
   function pageFor(id: View): HTMLElement {
     let page = pages.get(id);
@@ -741,7 +750,7 @@ export function start(opts: WindowOptions): void {
    */
   function homeScroll(id: View): number {
     const saved = scrolls.get(id);
-    if (saved !== undefined) return saved;
+    if (saved !== undefined) return id === "talk" && saved.pinned ? view.scrollHeight : saved.top;
     return id === "talk" ? view.scrollHeight : 0;
   }
 
@@ -758,7 +767,9 @@ export function start(opts: WindowOptions): void {
     const from = S.view;
     // Прокрутку помним, только если в #view правда лежит узел ТОГО раздела: в него умеет
     // писать напрямую ветка отказа загрузки комнат, и чужая прокрутка уехала бы в память.
-    if (from !== id && pages.get(from)?.parentNode === viewInner) scrolls.set(from, view.scrollTop);
+    if (from !== id && pages.get(from)?.parentNode === viewInner) {
+      scrolls.set(from, { top: view.scrollTop, pinned: scroll.view()?.pinned ?? false });
+    }
     S.view = id;
     syncRail();
     const section = SECTIONS.find((s) => s.id === id) ?? FOOT.find((s) => s.id === id);
@@ -779,12 +790,20 @@ export function start(opts: WindowOptions): void {
     const wasAtEnd = view.scrollHeight - view.scrollTop - view.clientHeight < 80;
     // Смена вкладки — мгновенная: движение владелец просил у панелей, а не здесь.
     app.classList.add("no-anim");
-    if (viewInner.firstChild !== page) viewInner.replaceChildren(page);
+    const mounting = viewInner.firstChild !== page;
+    if (mounting) viewInner.replaceChildren(page);
     // Лента чата липнет к низу и масштабируется; её узел масштаба ставит сама talk.render.
     if (!talking) scroll.sectionShown(false, null);
     else scroll.sectionShown(true, page.querySelector<HTMLElement>(".talk-zoom"));
     if (blank) page.classList.add("page-in");
-    view.scrollTop = opts.quiet ? view.scrollTop : homeScroll(id);
+    // Re-selecting a section (including reconnect) is a refresh, not navigation.
+    // Restore through the physics owner: DOM scroll events arrive too late to
+    // prevent an old follow/animation target from overwriting the saved position.
+    if (mounting) {
+      const scroller = scroll.view();
+      if (scroller) scroller.scrollTo(homeScroll(id), false);
+      else view.scrollTop = homeScroll(id);
+    }
     // Начатую правку фоновое перечитывание не сносит: у «Файлов» это открытый редактор,
     // у «Настроек» — заполненная форма. Раньше их стирало молча, через полсекунды после
     // того, как владелец увидел свой текст на месте.
@@ -797,10 +816,10 @@ export function start(opts: WindowOptions): void {
       await views[id].render(page);
       if (gen !== showSeq) return;
       if (id === "settings") dispatchEvent(new CustomEvent("frame-section", { detail: id }));
-      if (!talking && !opts.quiet) view.scrollTop = homeScroll(id);
+      if (!talking && mounting && !opts.quiet) scroll.view()?.scrollTo(homeScroll(id), false);
       // Chat physics owns the bottom/anchor while rendering. The owner may also
       // have scrolled during await: a measurement from before it is obsolete.
-      else if (!talking && wasAtEnd) view.scrollTop = view.scrollHeight;
+      else if (!talking && opts.quiet && wasAtEnd) scroll.view()?.scrollTo(view.scrollHeight, false);
       announce(section?.label ?? "");
     } catch (e) {
       if (gen !== showSeq) return;
@@ -823,6 +842,10 @@ export function start(opts: WindowOptions): void {
   let renaming = "";
   function selectRoom(room: Room) {
     roomPicked = true;
+    if (room.key === S.room) {
+      void show("talk", { quiet: true });
+      return;
+    }
     S.room = room.key;
     S.roomName = room.name;
     renderRooms();
@@ -1198,11 +1221,10 @@ export function start(opts: WindowOptions): void {
       }
       const total = (l.in || 0) + (l.cached || 0);
       const share = total ? Math.round((100 * (l.cached || 0)) / total) : 0;
-      // Дизайнер 29.09: строка перегружена. Время и слово «кэш» — в подсказку; видно
-      // модель, полоску доли кэша, вход → ответ.
+      // The header identifies the model; detailed usage remains in the tooltip,
+      // context disclosure and System. Keep the conversation visually primary.
       pulseHTML =
-        `<b>${esc(l.model || "")}</b> · <span class="cachebar"><i style="width:${share}%"></i></span>${share}% · ` +
-        `${fmtK(total)} → ${fmtK(l.out || 0)}${l.err ? ' · <span class="err-msg">ошибка</span>' : ""}`;
+        `<b>${esc(l.model || "")}</b>${l.err ? ' · <span class="err-msg">ошибка</span>' : ""}`;
       pulseLast = `Последний вызов модели — ${fmtTs(l.ts)}: из кэша провайдера ${share}% входа, ` +
         `вход ${fmtK(total)} → ответ ${fmtK(l.out || 0)}.`;
       pulseStamp = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
@@ -1239,7 +1261,11 @@ export function start(opts: WindowOptions): void {
   }
   function autoGrow() {
     say.style.height = "auto";
-    say.style.height = Math.min(say.scrollHeight, 180) + "px";
+    say.style.overflowY = "hidden";
+    const height = say.scrollHeight;
+    // Fractional line boxes at Windows scaling must not create an empty scrollbar.
+    say.style.height = Math.min(height + 1, 180) + "px";
+    say.style.overflowY = height > 180 ? "auto" : "hidden";
   }
 
   function syncComposerNote() {

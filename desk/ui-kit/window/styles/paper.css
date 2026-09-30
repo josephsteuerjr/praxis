@@ -1,5 +1,5 @@
 /* «Почерк» — облик окна с 28.09 (поток «окно», решения Егора по лаборатории):
-   тёплая бумага (~#f4e4cf) с зерном, тонкая тёмная линия, терракота (~#e0915a),
+   светлая тёплая бумага с лёгким зерном, тихая линия, терракота (~#e0915a),
    почерк Zen Kurenaido — заголовки и имя агента, текст — Golos. Тёмная тема — та же
    палитра ночью. Буквальных котиков и лапок нет («конечно, нет»).
 
@@ -9,7 +9,7 @@
 
 :root {
   color-scheme: light;
-  --paper: var(--u-paper-day, #f4e4cf);
+  --paper: var(--u-paper-day, #f8eee0);
   --ground: var(--paper);
   --surface: color-mix(in srgb, var(--paper) 55%, #ffffff);     /* лист поверх бумаги */
   --surface-2: color-mix(in srgb, var(--paper) 88%, #a07a4a);   /* вдавленное: код, наведение */
@@ -22,8 +22,8 @@
   --line-strong: rgba(29, 26, 23, 0.28);
   /* обводка «пером»: пузыри, карточки, поле ввода, разделитель полки. Была почти чёрной
      (#1d1a17); дизайнер 29.09 — нежнее, #997766. */
-  --line-ink: #997766;
-  --lw: 1.5px;
+  --line-ink: color-mix(in srgb, var(--ink) 23%, var(--paper));
+  --lw: 1px;
   --terra: var(--u-terra, #e0915a);  /* заливка-акцент: кнопка отправки, точки, отметки */
   --accent: var(--u-accent-day, #9a4a1e); /* акцент для текста и ссылок: контраст ≥ 4,5 */
   --accent-ink: #ffffff;
@@ -35,9 +35,9 @@
   --ctrl-hover: rgba(160, 110, 60, 0.12);
   --gust: rgba(160, 110, 60, 0.06);
   --shadow: none;
-  --shadow-pop: 0 2px 0 rgba(29, 26, 23, 0.85);
+  --shadow-pop: 0 4px 18px rgba(29, 26, 23, 0.08);
   --glass: color-mix(in srgb, var(--surface) 94%, transparent);
-  --grain: var(--u-grain-day, 0.1);
+  --grain: var(--u-grain-day, 0.06);
   --serif: "Golos Text", "Segoe UI", system-ui, sans-serif;  /* сериф уходит: текст — Golos */
   --hand: "Zen Kurenaido", "Neucha", "Segoe Print", cursive;
   --feed-base: var(--u-feed-base, 15.5px);
@@ -57,7 +57,7 @@
     --muted: #978570;
     --line: rgba(241, 228, 208, 0.13);
     --line-strong: rgba(241, 228, 208, 0.26);
-    --line-ink: #8a7862;
+    --line-ink: color-mix(in srgb, var(--ink) 23%, var(--paper));
     --accent: var(--u-accent-night, #eda676);
     --accent-ink: #1d1914;
     --accent-soft: color-mix(in srgb, var(--terra) 16%, transparent);
@@ -67,8 +67,8 @@
     --err-soft: rgba(236, 138, 116, 0.14);
     --ctrl-hover: rgba(241, 228, 208, 0.07);
     --gust: rgba(241, 228, 208, 0.04);
-    --shadow-pop: 0 2px 0 rgba(0, 0, 0, 0.6);
-    --grain: var(--u-grain-night, 0.06);
+    --shadow-pop: 0 4px 18px rgba(0, 0, 0, 0.2);
+    --grain: var(--u-grain-night, 0.04);
   }
 }
 :root[data-theme="dark"] {
@@ -83,7 +83,7 @@
   --muted: #978570;
   --line: rgba(241, 228, 208, 0.13);
   --line-strong: rgba(241, 228, 208, 0.26);
-  --line-ink: #8a7862;
+  --line-ink: color-mix(in srgb, var(--ink) 23%, var(--paper));
   --accent: var(--u-accent-night, #eda676);
   --accent-ink: #1d1914;
   --accent-soft: color-mix(in srgb, var(--terra) 16%, transparent);
@@ -93,8 +93,8 @@
   --err-soft: rgba(236, 138, 116, 0.14);
   --ctrl-hover: rgba(241, 228, 208, 0.07);
   --gust: rgba(241, 228, 208, 0.04);
-  --shadow-pop: 0 2px 0 rgba(0, 0, 0, 0.6);
-  --grain: var(--u-grain-night, 0.06);
+  --shadow-pop: 0 4px 18px rgba(0, 0, 0, 0.2);
+  --grain: var(--u-grain-night, 0.04);
 }
 
 /* ---------------------------------------------------------------- бумага */
@@ -129,14 +129,14 @@ body::before {
   border-right: 0;
 }
 #app::before {
-  box-shadow: inset calc(-1 * var(--lw)) 0 0 var(--line-ink);
+  box-shadow: inset calc(-1 * var(--lw)) 0 0 var(--line);
 }
 /* То же справа — у колонки ходов: столбец на обе строки, линия по его левому краю. */
 #app::after {
   content: "";
   grid-column: 3;
   grid-row: 1 / -1;
-  box-shadow: inset var(--lw) 0 0 var(--line-ink);
+  box-shadow: inset var(--lw) 0 0 var(--line);
   pointer-events: none;
   z-index: 3;
 }
@@ -166,8 +166,8 @@ body::before {
   text-transform: none;
 }
 .room[aria-current="true"] {
-  background: transparent;
-  border-color: var(--line-ink);
+  background: var(--surface);
+  border-color: var(--line);
 }
 /* Имя агента почерком — крупно и чётко (Егор: «котик чёткий, а надпись имени — нет»). */
 .room-name.hand {
@@ -201,12 +201,12 @@ body::before {
 }
 .head-title,
 .head-title.hand {
-  font: 400 36px/1.1 var(--hand);
+  font: 400 32px/1.15 var(--hand);
   letter-spacing: 0.03em;
   -webkit-text-stroke: 0.4px currentColor;
 }
 .state-pill {
-  border: var(--lw) solid var(--line-ink);
+  border: var(--lw) solid transparent;
   background: transparent;
   box-shadow: none;
 }
@@ -219,7 +219,7 @@ body::before {
 }
 .talk-zoom {
   font-size: calc(var(--feed-base) * var(--zoom));
-  max-width: 52em;
+  max-width: 46em;
   margin: 0 auto;
 }
 /* Промежутки — внутри строки (padding), а не полями: новое сообщение вырастает из нуля
@@ -274,14 +274,14 @@ body::before {
 }
 .talk .msg.own .msg-body {
   background: var(--surface);
-  border-color: var(--line-ink);
+  border-color: var(--line);
   border-radius: 1.3em 1.3em 0.4em 1.3em;
 }
 .talk .msg.system .msg-body {
   font-size: 0.84em;
   border: var(--lw) dashed var(--line-strong);
   background: transparent;
-  border-radius: 999px;
+  border-radius: 12px;
   padding: 0.45em 1.1em;
 }
 .talk .msg.system {
@@ -356,8 +356,8 @@ body::before {
   box-shadow: none;
 }
 .composer-box:focus-within {
-  box-shadow: var(--shadow-pop);
-  border-color: var(--line-ink);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  border-color: var(--accent);
 }
 .send {
   background: var(--terra);

@@ -277,7 +277,7 @@ function mountCol(): Col {
   col?.scroller.destroy();
   box.innerHTML = `<div class="turns-inner">
     <div class="turns-head"><span class="turns-title">Ходы</span><span class="turns-room"></span><span class="turns-n"></span></div>
-    <div class="turns-strip"></div>
+    <details class="turns-context" hidden><summary>Контекст и расход</summary><div class="turns-strip"></div></details>
     <div class="turns" role="list"></div>
     <div class="turns-empty" hidden></div>
   </div>`;
@@ -567,10 +567,14 @@ async function paintStrip(rows: TurnRow[]) {
   const c = col;
   if (!c) return;
   const first = rows[0];
-  if (!first) return;
+  if (!first) {
+    c.strip.parentElement!.hidden = true;
+    return;
+  }
   const d = await runDetail(first.id, first.live);
   if (col !== c) return;
   const html = frameStripHTML(d, first.live ? "Кадр сейчас" : "Кадр последнего хода", '<a href="#" data-go="frame">зоны K·E·A·T →</a>');
+  c.strip.parentElement!.hidden = !html;
   if (html === c.stripHTML) return;
   c.stripHTML = html;
   c.scroller.preserve(() => { c.strip.innerHTML = html; });

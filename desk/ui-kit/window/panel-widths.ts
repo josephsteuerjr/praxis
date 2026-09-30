@@ -27,7 +27,8 @@ export function mountPanelWidths(app: HTMLElement): () => void {
       const other = app.querySelector<HTMLElement>(side === "rail" ? "#panel" : "#rail");
       const otherSide = side === "rail" ? "panel" : "rail";
       const occupied = app.classList.contains(`${otherSide}-collapsed`) || (otherSide === "panel" && !app.classList.contains("with-panel")) ? 0 : (other?.getBoundingClientRect().width || 0);
-      const maximum = Math.max(220, Math.min(700, app.clientWidth - occupied - 320));
+      // Leave enough room for prose and the composer before widening sidebars.
+      const maximum = Math.max(220, Math.min(700, app.clientWidth - occupied - 440));
       const width = boundedWidth(desired, maximum);
       app.style.setProperty(variable, `${width}px`);
       handle.setAttribute("aria-valuemin", "220");

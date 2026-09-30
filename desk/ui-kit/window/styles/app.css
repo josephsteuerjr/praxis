@@ -1131,6 +1131,7 @@ html.electron #chrome a {
 /* ---------- композер ---------- */
 
 .composer {
+  position: relative;
   padding: 6px 32px 14px;
 }
 
@@ -1237,6 +1238,12 @@ html.electron #chrome a {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* Author display:flex must not override the native hidden attribute. */
+.composer-files[hidden],
+.composer-status [hidden] {
+  display: none;
 }
 
 .composer-files .chip {
@@ -4133,19 +4140,35 @@ body.first-run #state {
   color: var(--ink-3); font: 400 11px/1.4 var(--sans); padding: 6px 8px; cursor: pointer; }
 .engine-controls button:hover:not(:disabled) { background: var(--surface); color: var(--ink); }
 .engine-controls button:disabled { opacity: .5; cursor: default; }
-.composer-status { max-width: 800px; min-height: 24px; margin: 0 auto 3px; display: flex;
-  align-items: center; gap: 10px; color: var(--muted); font: 400 11px/1.4 var(--sans); }
-.composer-activity { flex: 1 1 auto; min-width: 0; }
+.composer-status { position: absolute; left: 32px; right: 32px; bottom: 100%;
+  max-width: 800px; min-height: 24px; margin: 0 auto 6px; display: flex; pointer-events: none;
+  align-items: center; gap: 10px; color: var(--ink-3); font: 400 12px/1.4 var(--sans); }
+/* No invisible shelf when there is no activity, receipt or available action. */
+.composer-status:not(:has(.composer-activity:not(:empty), .turn-receipt:not(:empty), .composer-turn-controls > button:not([hidden]), > button:not([hidden]))) { display: none; }
+#app.with-panel .view {
+  padding-bottom: calc(var(--composer-status-h, 0px) + 18px);
+  /* Text passes under the independent status controls, fading at the input itself
+     instead of being cut at the rectangular footer boundary above the bubble. */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--composer-status-h, 0px) - 14px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--composer-status-h, 0px) - 14px), transparent 100%);
+}
+.composer-activity { flex: 0 1 auto; min-width: 0; margin-right: auto;
+  background: var(--paper, var(--ground)); border-radius: 5px; padding: 2px 4px; margin-left: -4px; }
+.composer-activity:empty { display: none; }
 .composer-turn-controls { display: flex; align-items: center; gap: 8px; }
-.turn-receipt { max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.composer-status .notice-action { font: inherit; white-space: nowrap; }
+.turn-receipt { max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: var(--paper, var(--ground)); }
+.composer-status .notice-action { font: inherit; white-space: nowrap; pointer-events: auto; }
+@media (max-width: 980px) {
+  .composer-status { left: 18px; right: 18px; }
+}
 @container (max-width: 620px) {
   #head { flex-wrap: wrap; gap: 6px; }
   .head-copy { flex-basis: 100%; }
   .head-side { flex: 1 1 100%; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
   .head-side .pulse { display: none; }
   .composer-status { flex-wrap: wrap; row-gap: 4px; }
-  .composer-activity { flex-basis: 100%; }
+  .composer-activity { flex-basis: auto; }
   .composer-turn-controls { margin-left: auto; }
   .turn-receipt { max-width: 100px; }
 }

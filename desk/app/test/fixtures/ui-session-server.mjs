@@ -7,10 +7,12 @@ import { resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dist = fileURLToPath(new URL('../../dist/', import.meta.url));
+const version = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')).version;
 let pid = 4100, stopped = false, alive = true, busy = true, phase = 'model', room = 'window';
 let run = 'run-20260930T190000000000Z-abcdef01', since = Date.now()/1000;
 let receipt = null, interruptScope = '', voiceReads = 0, voiceInFlight = 0, maxVoiceInFlight = 0;
 let voiceDelay = 0, voiceBusy = 'both', holdInterrupt = false;
+let detailOverride = null, pulseOverride = null;
 const sockets = new Set();
 const messages = Array.from({length:36}, (_, i) => ({timestamp:new Date(Date.now()-(36-i)*60000).toISOString(),
   outgoing: i%2===0, sender_name: i%2===0?'Hélène':'Егор', text: i===35?'Повтор':`Сообщение ${i+1}. Проверка стабильной прокрутки и читаемости переписки.`}));
@@ -42,13 +44,13 @@ async function native(cmd,a={}) {
     return 'Команда принята';
   }
   if(cmd==='engine_restart') {if(stopped)throw Error('Сначала возобнови движок');restart();return 'Перезапуск запрошен';}
-  if(cmd==='app_info') return {version:'1.2.7',exe_dir:'fixture',root:'fixture',log:'fixture.log',platform:'windows',arch:'x86_64'};
+  if(cmd==='app_info') return {version,exe_dir:'fixture',root:'fixture',log:'fixture.log',platform:'windows',arch:'x86_64'};
   if(cmd==='config_load') return {config:structuredClone(config),path:'fixture/helene.json',tree:'fixture/data',exe_dir:'fixture',mtime_ns:1};
   if(cmd==='config_save') return {ok:true,mtime_ns:2};
   if(cmd==='service_state') return 'running';
   if(cmd==='agents_list') return [];
   if(cmd==='backup_list') return {dir:'fixture',items:[]};
-  if(cmd==='update_check') return {current:'1.2.7',latest:'1.2.7',newer:false};
+  if(cmd==='update_check') return {current:version,latest:version,newer:false};
   if(cmd==='voice_fetch') {voiceBusy=a.kind==='speak'?'speech':'model';return 'Скачивание началось';}
   if(cmd==='autostart_get') return false;
   if(cmd==='tailscale_ip'||cmd==='lan_ip') return null;
@@ -59,6 +61,10 @@ async function route(path,method='GET',body=null) {
   if(p==='/__fixture/status') return {fixture:'ui-session-3009',...owner(),busy,phase,room,run,interruptScope,receipt,voiceReads,maxVoiceInFlight};
   if(p==='/__fixture/native') return native(body.cmd,body.args);
   if(p==='/__fixture/set') {
+    if(Array.isArray(body.appendMessages)) messages.push(...body.appendMessages);
+    if(body.detail!==undefined)detailOverride=body.detail;
+    if(body.pulse!==undefined)pulseOverride=body.pulse;
+    if(body.reconnect)for(const socket of sockets)socket.end();
     if(body.phase!==undefined)phase=body.phase;
     if(body.busy!==undefined)busy=body.busy;
     if(body.room!==undefined)room=body.room;
@@ -75,7 +81,8 @@ async function route(path,method='GET',body=null) {
   if(p==='/api/chats') return [{peer_id:'window',title:'Hélène',kind:'window',messages:messages.length,mtime_ns:Date.now()*1e6}];
   if(p==='/api/chat/window') return messages;
   if(p==='/api/chat-turns/window') return [];
-  if(p.startsWith('/api/run/')) return {run:{...runs()[0],context:{kind:'chat_turn',delivery_chat_id:room},iterations:0},events:[],iterations:[]};
+  if(p.startsWith('/api/run/')) return detailOverride || {run:{...runs()[0],context:{kind:'chat_turn',delivery_chat_id:room},iterations:0},events:[],iterations:[]};
+  if(p==='/api/pulse' && pulseOverride) return pulseOverride;
   if(p==='/api/supervisor') return {interrupt_receipt:receipt};
   if(p==='/api/interrupt') {
     interruptScope=body.scope;
@@ -122,7 +129,12 @@ const server=http.createServer(async(req,res)=>{
     const path=resolve(dist,'.'+decodeURIComponent(p==='/'?'/index.html':p));
     if(!path.startsWith(resolve(dist)+sep))throw Object.assign(Error('path outside fixture'),{status:403});
     let bytes=await readFile(path);
-    if(extname(path)==='.html')bytes=Buffer.from(bytes.toString().replace('</head>',injection+'</head>'));
+    if(extname(path)==='.html') {
+      // Test-only theme override; does not change the host OS or saved preferences.
+      const theme = new URL(req.url,'http://fixture').searchParams.get('previewTheme');
+      const themeScript = theme==='dark'||theme==='light' ? `<script>addEventListener('load',()=>{document.documentElement.dataset.theme=${JSON.stringify(theme)}})</script>` : '';
+      bytes=Buffer.from(bytes.toString().replace('</head>',injection+themeScript+'</head>'));
+    }
     res.writeHead(200,{'Content-Type':mime[extname(path)]||'application/octet-stream','Cache-Control':'no-store'});res.end(bytes);
   }catch(e){res.writeHead(e.status||500,{'Content-Type':'text/plain'});res.end(String(e.message));}
 });

@@ -37,6 +37,7 @@ function el(h, sh) {
     clientHeight: h, scrollHeight: sh, scrollTop: 0, style: {}, isConnected: true,
     addEventListener: (t, fn) => { handlers[t] = fn; }, removeEventListener() {},
     hasPointerCapture: () => false, closest: () => null, handlers,
+    classList: { remove() {} },
   };
 }
 
@@ -78,3 +79,24 @@ advance(3000);
 assert.equal(shift(), 0, "оттяжка вернулась");
 
 console.log(`scroller: оттяжка ${peak.toFixed(0)} px (потолок ${(limit * 0.75).toFixed(0)}), обратный ход ${back.toFixed(0)} px из 100 — ok`);
+
+// Returning to a section must discard outgoing motion, not drag its saved
+// position toward the old fling target on the next animation frame.
+s.scrollTo(700, false);
+s.fling(5);
+advance(64);
+s.scrollTo(310, false);
+advance(1200);
+assert.equal(view.scrollTop, 310, "navigation cancels the outgoing fling");
+assert.equal(s.pinned, false, "reading history does not follow incoming messages");
+
+s.scrollTo(0, false);
+for (let i = 0; i < 8; i++) { wheel(-12.5); advance(16); }
+assert.ok(shift() > 0, "rubber still works before navigation");
+s.scrollTo(500, false);
+advance(1200);
+assert.equal(view.scrollTop, 500, "navigation clears outgoing rubber motion");
+assert.equal(shift(), 0, "new section has no inherited transform");
+s.scrollTo(view.scrollHeight, false);
+assert.equal(s.pinned, true, "returning to the end resumes following");
+console.log("scroller: section restoration during fling and rubber — ok");

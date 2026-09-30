@@ -24,7 +24,7 @@ const rail=handles[0];
 const press=key=>rail.events.keydown({key,preventDefault(){}});
 handles[1].events.keydown({key:'Home',preventDefault(){}});
 press('End');
-assert.equal(widths.rail,1000-220-320,'End refreshes bounds after opposite pane changed');
+assert.equal(widths.rail,1000-220-440,'End refreshes bounds and leaves readable central content');
 press('End');
 const maximum=Number(rail.getAttribute('aria-valuemax'));
 assert.equal(widths.rail,maximum);

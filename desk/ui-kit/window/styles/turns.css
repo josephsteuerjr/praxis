@@ -2,6 +2,7 @@
    шаги строками со значками. Облик «Почерк»: бумага, линия, терракота, почерк в заголовке. */
 
 #panel {
+  container-type: inline-size;
   background: transparent;
   /* Линия слева — не здесь, а столбцом на всю высоту окна (`#app::after` в paper.css):
      как и у полки, иначе шапка прерывала бы её (дизайнер 29.09). */
@@ -51,12 +52,35 @@
 .turns-strip .frame-strip {
   margin: 0 4px 12px;
   padding: 10px 12px;
-  border: var(--lw) solid var(--line);
-  border-radius: 14px;
+  border: 0;
+  border-radius: 0;
   background: transparent;
 }
 .turns-strip:empty {
   display: none;
+}
+
+.turns-context {
+  margin: 0 4px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.turns-context > summary {
+  padding: 8px 0 12px;
+  color: var(--ink-3);
+  font: 400 12px/1.4 var(--sans);
+  cursor: pointer;
+}
+.turns-context > summary:hover { color: var(--ink); }
+.turns-context .frame-strip { margin: 0; padding: 2px 0 12px; }
+
+/* Narrow user-sized panels keep labels readable; metadata moves below them. */
+@container (max-width: 280px) {
+  .st-line { flex-wrap: wrap; row-gap: 2px; }
+  .st-line .st-meta { flex-basis: 100%; margin-left: 22px; line-height: 1.4; }
+  .st-line .st-what { flex-basis: 100%; margin-left: 22px; }
+  .st-line .st-state { margin-left: 22px; white-space: normal; }
+  .turn-meta { font-family: var(--sans); line-height: 1.5; }
+  .frame-strip-head { flex-wrap: wrap; }
 }
 
 /* ---------------------------------------------------------------- лента ходов */
@@ -98,7 +122,7 @@
   background: var(--ctrl-hover);
 }
 .turn.open > .turn-head {
-  border-color: var(--line-ink);
+  border-color: var(--line);
   background: var(--surface);
   border-bottom-left-radius: 6px;
   border-bottom-right-radius: 6px;
@@ -174,7 +198,7 @@
   display: none;
 }
 .turn[data-status="live"] .turn-meta {
-  color: var(--accent);
+  color: var(--ink-3);
 }
 
 /* ---------------------------------------------------------------- шаги внутри хода */
@@ -182,7 +206,7 @@
 .turn-body {
   margin: 0 0 8px 0;
   padding: 8px 10px 12px 10px;
-  border: var(--lw) solid var(--line-ink);
+  border: var(--lw) solid var(--line);
   border-top: 0;
   border-radius: 0 0 14px 14px;
   background: var(--surface);
