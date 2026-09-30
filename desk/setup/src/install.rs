@@ -5454,17 +5454,24 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn copy_replaces_files_with_a_new_inode() {
+        use std::io::Read;
         use std::os::unix::fs::MetadataExt;
         let src = temp_dir("ino-src");
         let dst = temp_dir("ino-dst");
         put(&src, "bin/helene", "v1");
         copy_dir_skip(&src, &dst, &[], &[]).unwrap();
+        // Держим старый исполняемый файл открытым: без этого файловая система
+        // вправе повторно выдать освобождённый inode, хотя файл заменён верно.
+        let mut old_reader = std::fs::File::open(dst.join("bin/helene")).unwrap();
         let before = std::fs::metadata(dst.join("bin/helene")).unwrap().ino();
         put(&src, "bin/helene", "v2");
         copy_dir_skip(&src, &dst, &[], &[]).unwrap();
         let after = std::fs::metadata(dst.join("bin/helene")).unwrap();
         assert_ne!(after.ino(), before, "файл переписан в тот же inode");
         assert_eq!(std::fs::read_to_string(dst.join("bin/helene")).unwrap(), "v2");
+        let mut old_bytes = String::new();
+        old_reader.read_to_string(&mut old_bytes).unwrap();
+        assert_eq!(old_bytes, "v1", "открытый читатель должен сохранить прежний файл");
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_dir_all(&dst);
     }

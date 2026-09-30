@@ -836,6 +836,15 @@ mod tests {
     }
 
     fn trial(dir: &Path) -> Trial {
+        use sha2::{Digest, Sha256};
+        let bytes = b"pass\n";
+        let mut code_sha256 = std::collections::BTreeMap::new();
+        for rel in ["tree/agent.py", "app/deskapp.py"] {
+            let path = dir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            code_sha256.insert(rel.into(), format!("{:x}", Sha256::digest(bytes)));
+        }
         begin(dir, Begin {
             from_version: "1.2.4",
             to_version: "1.2.5",
@@ -843,7 +852,7 @@ mod tests {
             runtime_moved: true,
             static_plan: "keep",
             new_top: vec!["app".into()],
-            code_sha256: Default::default(),
+            code_sha256,
             service: false,
             scope: "user",
             agent_code: json!({"summary": "правок нет"}),
@@ -885,6 +894,21 @@ mod tests {
         let r = read_receipt(&dir);
         assert_eq!(r["state"], "done");
         assert!(r["note"].as_str().unwrap().contains("проверь его сам"));
+        let _ = crate::tx::remove_tree(&dir);
+    }
+
+    #[test]
+    fn acceptance_without_code_proof_keeps_previous_program() {
+        let dir = tmp("no-code-proof");
+        let kept = kept_path(&dir, "1.2.4");
+        std::fs::create_dir_all(kept.join("app")).unwrap();
+        let mut t = trial(&dir);
+        t.kept = kept.display().to_string();
+        t.code_sha256.clear();
+        t.verdict = json!({"verdict": "accept", "by": "agent"});
+        finish_accept(&dir, &mut t);
+        assert_eq!(read_receipt(&dir)["state"], "failed");
+        assert!(kept.exists(), "без подтверждения кода прежняя программа остаётся");
         let _ = crate::tx::remove_tree(&dir);
     }
 
