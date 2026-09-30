@@ -1263,6 +1263,7 @@ export function start(opts: WindowOptions): void {
     say.style.height = "auto";
     say.style.overflowY = "hidden";
     const height = say.scrollHeight;
+    composerBox.classList.toggle("multiline", height > 34);
     // Fractional line boxes at Windows scaling must not create an empty scrollbar.
     say.style.height = Math.min(height + 1, 180) + "px";
     say.style.overflowY = height > 180 ? "auto" : "hidden";

@@ -351,13 +351,13 @@ body::before {
 
 .composer-box {
   background: var(--surface);
-  border: var(--lw) solid var(--line-ink);
+  border: 1px solid color-mix(in srgb, var(--ink) 38%, var(--paper));
   border-radius: 22px;
-  box-shadow: none;
+  box-shadow: 0 2px 0 color-mix(in srgb, var(--ink) 45%, var(--paper));
 }
 .composer-box:focus-within {
-  box-shadow: 0 0 0 3px var(--accent-soft);
-  border-color: var(--accent);
+  box-shadow: 0 2px 0 color-mix(in srgb, var(--ink) 55%, var(--paper));
+  border-color: color-mix(in srgb, var(--ink) 55%, var(--paper));
 }
 .send {
   background: var(--terra);
