@@ -59,7 +59,7 @@ def collect(runner, current, messages):
             os.replace(temp, binding)
             os.replace(path, target)
             desk = runner._room(room)
-            desk.archive(text, outgoing=False, now=runner._now())
+            desk.archive(text, outgoing=False, now=runner._now(), source_id='note:' + path.stem)
             desk.life(text, direction='in', actor=runner._speaker, source_id='note:' + path.stem, now=runner._now())
         ready.append((target, message))
     additions = [m for _, m in ready if m not in messages]

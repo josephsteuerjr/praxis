@@ -625,7 +625,7 @@ def handle_desk(message: str, room: str = STREAM, attachments: list[str] | tuple
         message = (message + "\n" + "\n".join(labels)).strip()
     # Восприятие пишет память ДО кадра — как в живом раннере: кадр читает горячий
     # слой, и текущая реплика обязана быть в нём, иначе она отвечала бы на пустоту.
-    desk.archive(message, outgoing=False, now=now)
+    desk.archive(message, outgoing=False, now=now, source_id=source_id)
     desk.life(message, direction="in", actor=_speaker, source_id=source_id, now=now)
     _turn_in_window(source_id, speaker=_speaker, room=room, origin_text=message,
                     media_refs=tuple(refs))

@@ -1336,8 +1336,38 @@ fn ask_engine_restart(tree: &Path, by: &str) -> bool {
         "by": by,
     });
     let path = tree.join("memory").join(".state").join("supervisor-request.json");
-    let _ = std::fs::create_dir_all(path.parent().unwrap_or(tree));
-    std::fs::write(&path, serde_json::to_string_pretty(&request).unwrap_or_default()).is_ok()
+    publish_supervisor_request(&path, &request).is_ok()
+}
+
+/// The watcher must never claim a partially written request. Publish in the same
+/// directory, replacing the previous request atomically on both Windows and POSIX.
+fn publish_supervisor_request(path: &Path, request: &serde_json::Value) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = path.parent().ok_or_else(|| std::io::Error::other("no request directory"))?;
+    std::fs::create_dir_all(parent)?;
+    let tmp = parent.join(format!(".supervisor-{}-{}.tmp", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let result = (|| {
+        file.write_all(&serde_json::to_vec_pretty(request).map_err(std::io::Error::other)?)?;
+        file.sync_all()?;
+        drop(file);
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH};
+            let from: Vec<u16> = tmp.as_os_str().encode_wide().chain(Some(0)).collect();
+            let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) } == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        #[cfg(not(windows))]
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&tmp); }
+    result
 }
 
 /// Секунды эпохи → `ГГГГ-ММ-ДДTчч:мм:ссZ` (гражданский календарь, Хиннант).
@@ -2878,6 +2908,63 @@ fn service_op_from_window(op: &str) -> Result<String, String> {
 }
 
 /// One explicit owner door; never route resume to the install/uninstall wrapper.
+/// Observe the owner marker independently of the API it has stopped.
+#[tauri::command]
+fn owner_state() -> serde_json::Value {
+    let (agent_id, tree) = with_current((BASE_AGENT_ID.to_string(), base_tree()),
+        |c| (c.id.clone(), c.tree.clone().unwrap_or_else(base_tree)));
+    let receipt = std::fs::read(tree.join("memory/.control/desk_inbox/.reader.json"))
+        .ok().and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    let pid = receipt.as_ref().and_then(|v| v.get("pid")).and_then(|v| v.as_u64())
+        .and_then(|n| u32::try_from(n).ok()).filter(|n| *n > 0).unwrap_or(0);
+    let note = owner_stop_note();
+    #[cfg(windows)]
+    let alive = if pid == 0 { None } else { owner_pid_alive(pid,
+        receipt.as_ref().and_then(|v| v.get("at")).and_then(|v| v.as_f64())) };
+    #[cfg(not(windows))]
+    let alive: Option<bool> = None;
+    serde_json::json!({"agent_id": agent_id, "supported": cfg!(windows), "stopped": note.is_some(),
+        "runner_alive": alive, "pid": pid,
+        "note": note.as_ref().map(owner_stop_said).unwrap_or_default()})
+}
+
+/// Read-only Windows process probe. Never use os.kill/TerminateProcess for liveness.
+#[cfg(windows)]
+fn owner_pid_alive(pid: u32, observed_at: Option<f64>) -> Option<bool> {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, FILETIME};
+    use windows_sys::Win32::System::Threading::{GetProcessTimes, OpenProcess, WaitForSingleObject};
+    unsafe {
+        let handle = OpenProcess(0x00100000 | 0x1000, 0, pid); // SYNCHRONIZE + query only
+        if handle.is_null() {
+            return if GetLastError() == 87 { Some(false) } else { None };
+        }
+        let wait = WaitForSingleObject(handle, 0);
+        let mut born: FILETIME = std::mem::zeroed();
+        let mut exited: FILETIME = std::mem::zeroed();
+        let mut kernel: FILETIME = std::mem::zeroed();
+        let mut user: FILETIME = std::mem::zeroed();
+        let times = GetProcessTimes(handle, &mut born, &mut exited, &mut kernel, &mut user);
+        CloseHandle(handle);
+        if wait == 0 { return Some(false); }
+        if wait != 0x102 || times == 0 { return None; }
+        let stamp = observed_at.filter(|n| n.is_finite() && *n > 0.)?;
+        let born_epoch = (((born.dwHighDateTime as u64) << 32) | born.dwLowDateTime as u64) as f64
+            / 10_000_000. - 11_644_473_600.;
+        // A reused PID is not the reader that issued this receipt.
+        Some(born_epoch <= stamp)
+    }
+}
+
+/// Same supervisor request as the API, usable while the channel is reconnecting.
+#[tauri::command]
+fn engine_restart() -> Result<String, String> {
+    if owner_stopped() { return Err("Движок остановлен владельцем — сначала возобнови его".into()); }
+    if !ask_engine_restart(&current_tree(), "window") {
+        return Err("Не удалось записать просьбу о перезапуске".into());
+    }
+    Ok("Перезапуск запрошен; жду готовности движка".into())
+}
+
 #[tauri::command]
 fn owner_control(action: String) -> Result<String, String> {
     if action != "panic" && action != "resume" { return Err("panic | resume".into()); }
@@ -2885,7 +2972,7 @@ fn owner_control(action: String) -> Result<String, String> {
     {
         let exe = install_root().join("helene-svc.exe");
         let file = exe.to_string_lossy().replace('\'', "''");
-        let script = format!("$ErrorActionPreference='Stop'; $p=Start-Process -FilePath '{file}' -ArgumentList '{action}' -Verb RunAs -Wait -PassThru; exit $p.ExitCode");
+        let script = format!("$ErrorActionPreference='Stop'; $p=Start-Process -FilePath '{file}' -ArgumentList '{action}' -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode");
         let mut cmd = Command::new(powershell_exe());
         cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
         let out = run_hidden_for(&mut cmd, Duration::from_secs(120))?;
@@ -6097,6 +6184,8 @@ fn main() {
         .register_uri_scheme_protocol("helene", |ctx, request| serve_static(ctx, request))
         .invoke_handler(tauri::generate_handler![
             owner_control,
+            owner_state,
+            engine_restart,
             config_save,
             restart_self,
             install_service,
@@ -9432,8 +9521,8 @@ mod tests {
     /// а поднимает его надзор службы. Окно своих детей при службе не держит.
     #[test]
     fn engine_restart_request_speaks_the_channel_format() {
-        let tree = std::env::temp_dir().join(format!("helene-ask-restart-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tree);
+        let tree = std::env::temp_dir().join(format!("helene-ask-restart-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         assert!(super::ask_engine_restart(&tree, "window"));
         let raw = std::fs::read_to_string(tree.join("memory/.state/supervisor-request.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
@@ -9443,6 +9532,23 @@ mod tests {
         assert_eq!(v["by"], "window");
         assert!(v["id"].as_str().is_some_and(|s| s.len() == 16));
         assert!(v["asked_utc"].as_str().is_some_and(|s| s.ends_with('Z')));
+        // Windows rename() alone cannot replace an existing file: a second click
+        // must publish a new complete request rather than fail or truncate it.
+        for seq in 0..20 {
+            super::publish_supervisor_request(&tree.join("memory/.state/supervisor-request.json"),
+                &json!({"id":seq,"action":"restart"})).unwrap();
+            let got: serde_json::Value = serde_json::from_slice(&std::fs::read(
+                tree.join("memory/.state/supervisor-request.json")).unwrap()).unwrap();
+            assert_eq!(got["id"], seq);
+        }
+        assert_eq!(std::fs::read_dir(tree.join("memory/.state")).unwrap().count(), 1);
+        #[cfg(windows)]
+        {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+            assert_eq!(super::owner_pid_alive(std::process::id(), Some(now)), Some(true));
+            assert_eq!(super::owner_pid_alive(std::process::id(), Some(1.)), Some(false));
+            assert_eq!(super::owner_pid_alive(std::process::id(), None), None);
+        }
         let _ = std::fs::remove_dir_all(&tree);
     }
 }

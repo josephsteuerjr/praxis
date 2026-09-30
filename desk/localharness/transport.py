@@ -186,7 +186,7 @@ class Desk:
     # ------------------------------------------------------------- запись
     def archive(self, text: str, *, outgoing: bool, now: dt.datetime | None = None,
                 sender: str = "", system: bool = False, kind: str = "",
-                media_path: str = "", media_kind: str = "") -> None:
+                media_path: str = "", media_kind: str = "", source_id: str = "") -> None:
         """Лента комнаты в её формате: memory/groups/<поток>.jsonl + реестр состояния.
 
         Окно читает комнаты именно отсюда (deskd.readers.chats/chat_tail).
@@ -204,6 +204,8 @@ class Desk:
         stamp = (now or dt.datetime.now(dt.timezone.utc)).isoformat(timespec="seconds")
         row = {"timestamp": stamp, "outgoing": bool(outgoing), "text": str(text),
                "sender_name": (self.agent_name if outgoing else (sender or self.speaker))}
+        if source_id:
+            row["source_id"] = str(source_id)
         # Вложение — ПУТЁМ ОТ ДЕРЕВА и видом, а не строкой в тексте. Окно по этим
         # двум полям рисует проигрыватель, канал по первому отдаёт байты, и ни
         # одно из двух не разбирает человеческую фразу «[файл] имя — путь».

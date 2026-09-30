@@ -1791,6 +1791,7 @@ def reader_status(base: Path | None = None, now: float | None = None) -> dict:
     if busy and not run:
         run = _receipt_run(base, receipt, now)
     return {"alive": alive,
+            "pid": _receipt_int(receipt.get("pid")),
             "age_s": None if age is None else round(age, 1),
             "busy": busy,
             "run": run,
@@ -1801,6 +1802,49 @@ def reader_status(base: Path | None = None, now: float | None = None) -> dict:
             # владельца ложится в дерево и ждёт читателя, которого нет. Окно обязано
             # говорить это словами, а не обещать «прочитает в следующий ход».
             "ever": bool(receipt)}
+
+
+def _receipt_int(value) -> int:
+    """Untrusted receipt numbers must not take down /api/state."""
+    try:
+        n = int(value)
+        return n if 0 <= n <= 0xffffffff else 0
+    except (ValueError, TypeError, OverflowError):
+        return 0
+
+
+def runner_activity(runner: dict) -> dict | None:
+    """Small current phase projection, independent of the optional history panel.
+
+    Never infer a phase from authored text or a finished tool. A terminal manifest
+    clears the projection even before the reader heartbeat clears its busy bit.
+    """
+    if not runner.get("alive") or not runner.get("busy"):
+        return None
+    rid = str(runner.get("run") or "")
+    path = run_dir(rid)
+    if path is None:
+        return None
+    manifest = _load_json(path / "manifest.json")
+    if manifest.get("status") != "running":
+        return None
+    phase, tool = "working", ""
+    phases = {"model_started": "model", "tool_started": "tool",
+              "model_completed": "working", "model_failed": "working",
+              "tool_completed": "working", "tool_failed": "working",
+              "tool_reconciled": "working"}
+    for row in reversed(tail_jsonl(path / "events.jsonl", 128)):
+        if row.get("kind") in phases:
+            phase = phases[row["kind"]]
+            tool = str(row.get("tool") or "") if phase == "tool" else ""
+            break
+    ctx = manifest.get("context") or {}
+    if not isinstance(ctx, dict):
+        ctx = {}
+    return {"run_id": rid, "phase": phase, "tool": tool,
+            "chat_id": str(ctx.get("delivery_chat_id") or ctx.get("origin_chat_id") or ""),
+            "kind": str(ctx.get("kind") or ""),
+            "event_seq": _receipt_int(manifest.get("event_seq"))}
 
 
 def _short_error(err) -> str:
@@ -2114,6 +2158,7 @@ def _state_impl() -> dict:
         "phrase": phrase,
         "action": action,
         "runner": runner,
+        "activity": runner_activity(runner),
         # anatomy=False при configured=True значит «снимок устройства не собрался»,
         # а не «модель не настроена»: это разные беды с разными действиями.
         "anatomy": bool(anatomy),

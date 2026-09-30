@@ -1137,7 +1137,8 @@ async def _r_brain_set(c: Call):
 
 
 async def _r_interrupt_step(c: Call):
-    return await asyncio.to_thread(control.interrupt_step, readers.tree())
+    return await asyncio.to_thread(control.interrupt_step, readers.tree(),
+                                   str((c.body or {}).get("run_id") or ""))
 
 
 async def _r_interrupt(c: Call):
@@ -1471,7 +1472,9 @@ async def _say(text: str, chat: str = "", attachments=None, via: str = "owner") 
             written.append("control")
         except OSError:
             log.warning("mid-turn канал недоступен", exc_info=True)
-        return {"written": written, "stamp": stamp, "midturn": reader_alive and not sleeping,
+        return {"written": written, "stamp": stamp,
+                "source_id": "note:" + (f"{stamp}__to__{chat}" if targeted else stamp),
+                "midturn": reader_alive and not sleeping,
                 "sleeping": sleeping,
                 "chat": chat or "window", "attachments": rel_paths}
 

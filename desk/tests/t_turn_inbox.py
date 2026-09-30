@@ -14,7 +14,8 @@ class Inbox(unittest.TestCase):
             for name, text in [('001.md','A'),('002.md','B'),('003.md','C'),('004__other.md','foreign')]:
                 (inbox/name).write_text(text, encoding='utf-8')
             done = []
-            desk = SimpleNamespace(archive=lambda *a,**k:None, life=lambda *a,**k:None)
+            archived = []
+            desk = SimpleNamespace(archive=lambda *a,**k:archived.append(k), life=lambda *a,**k:None)
             runner = SimpleNamespace(_tree=root, _speaker='owner', transport=SimpleNamespace(is_room=lambda r:True),
                 _inbox_target=lambda s:'other' if 'other' in s else 'window',
                 _note_bytes=lambda p:p.read_bytes(), _seal_claim=lambda p,**k:(True,''),
@@ -26,6 +27,7 @@ class Inbox(unittest.TestCase):
             batch, ack=turn_inbox.collect(runner,current,messages)
             self.assertEqual([m['content'].split('\n')[-1] for m in batch],['A','B','C'])
             self.assertEqual(done,[])
+            self.assertEqual([x['source_id'] for x in archived], ['note:001','note:002','note:003'])
             self.assertTrue((inbox/'004__other.md').exists())
             # Sidecar is only routing state, never authoritative owner text.
             import json
