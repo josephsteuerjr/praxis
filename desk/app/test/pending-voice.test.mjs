@@ -40,4 +40,16 @@ assert.equal(confirmedByFeed({ text: "[голосовое]", at }, [{ text: "[г
 // Обычный текст по началу НЕ подтверждается: «при» ≠ «привет».
 assert.equal(confirmedByFeed({ text: "при", at }, [{ text: "привет", timestamp: later }]), false);
 
+// A yesterday's identical word cannot consume a new pending bubble.
+assert.equal(confirmedByFeed({ text: "привет", at }, [{ text: "привет", timestamp: earlier }]), false);
+assert.equal(confirmedByFeed({ text: "look", at }, [{ text: "look\n[image: photo.png]", timestamp: later }]), true);
+// Identity survives STT, attachment captions and skewed clocks. A mismatched ID
+// cannot be replaced by a historical text match.
+assert.equal(confirmedByFeed({ source_id: "note:second", text: "ping", at },
+  [{ source_id: "note:first", text: "ping", timestamp: later }]), false);
+assert.equal(confirmedByFeed({ source_id: "note:voice", text: "[голосовое]", at },
+  [{ source_id: "note:voice", text: "другая расшифровка", timestamp: earlier }]), true);
+assert.equal(confirmedByFeed({ source_id: "note:second", text: "ping", at },
+  [{ text: "ping", timestamp: later }]), false);
+
 console.log("pending-voice: ok");

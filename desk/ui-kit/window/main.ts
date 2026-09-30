@@ -13,11 +13,12 @@ import "./styles/app.css";
 import "./styles/paper.css";
 // Колонка ходов справа (28.09, переделана целиком).
 import "./styles/turns.css";
-import { api, cfg, connect, electron, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
+import { ApiError, api, cfg, connect, electron, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
 import { applyTheme } from "../../ui-kit/dom";
 import * as scroll from "./scroll";
 import * as look from "./look";
 import { mountPanelWidths } from "./panel-widths";
+import { activityWords, engineOperationObserved, engineWords, type EngineOperation, type OwnerState } from "./session";
 import { watchShellVersion } from "../../ui-kit/version";
 import { setResultFetcher } from "../../ui-kit/steps";
 import { bindFail, esc, failHTML, fmtAge, fmtDur, fmtK, fmtTs, humanError, q, toast } from "../../ui-kit/window/lib";
@@ -79,18 +80,6 @@ export function start(opts: WindowOptions): void {
 
   // «Вид» владельца (палитра, фактура, движение) — до первой отрисовки и до физики.
   look.apply(look.load());
-  if (inTauri && opts.localAgent !== false && !clientIsMac(navigator)) {
-    const controls = document.createElement("div");
-    controls.className = "owner-stop-controls";
-    controls.innerHTML = '<button type="button" data-owner-stop="panic">Остановить совсем</button> <button type="button" data-owner-stop="resume">Возобновить</button>';
-    document.querySelector("#rail")?.append(controls);
-    for (const b of controls.querySelectorAll<HTMLButtonElement>("button")) b.addEventListener("click", async () => {
-      b.disabled = true;
-      try { toast(await shell<string>("owner_control", { action: b.dataset.ownerStop })); }
-      catch (e) { toast(humanError(e).text); }
-      finally { b.disabled = false; }
-    });
-  }
   const view = q<HTMLElement>("#view");
   // Страницы разделов живут в постоянном узле внутри #view: на нём физика прокрутки
   // (ui-kit/feed, 28.09) рисует перетяг края, а #view остаётся нативной прокруткой.
@@ -120,6 +109,134 @@ export function start(opts: WindowOptions): void {
   const attachInput = q<HTMLInputElement>("#attach-input");
   const composerFiles = q<HTMLElement>("#composer-files");
   const composerBox = q<HTMLElement>(".composer-box");
+
+  const activityRow = document.createElement("div");
+  activityRow.className = "composer-status";
+  const activityLabel = document.createElement("span");
+  activityLabel.className = "composer-activity";
+  activityLabel.setAttribute("aria-live", "polite");
+  const turnControls = document.createElement("div");
+  turnControls.className = "composer-turn-controls";
+  activityRow.append(activityLabel, turnControls);
+  composer.prepend(activityRow);
+  talk.mountTurnControls(turnControls);
+
+  const engineControls = document.createElement("div");
+  engineControls.className = "engine-controls";
+  engineControls.innerHTML = '<button type="button" data-engine-power hidden></button><button type="button" data-engine-restart>Перезапустить</button>';
+  document.querySelector(".head-side")?.append(engineControls);
+  const powerButton = engineControls.querySelector<HTMLButtonElement>("[data-engine-power]")!;
+  const restartButton = engineControls.querySelector<HTMLButtonElement>("[data-engine-restart]")!;
+  let ownerState: OwnerState | null = null;
+  let engineOperation: EngineOperation | null = null;
+  let engineFailure = "";
+  let unconfirmedOperation: EngineOperation | null = null;
+  let channelAvailable = false;
+  let stateReadStarted = 0;
+  let ownerReading = false;
+  powerButton.addEventListener("click", () => void controlEngine(ownerState?.stopped ? "resume" : "stop"));
+  restartButton.addEventListener("click", () => void restartHarness());
+
+  function paintEngineControls() {
+    powerButton.hidden = !ownerState?.supported;
+    powerButton.textContent = ownerState?.stopped ? "Возобновить" : "Остановить движок";
+    powerButton.title = ownerState?.stopped ? "Запустить остановленный движок" : "Остановить движок и его работу";
+    powerButton.disabled = !!engineOperation;
+    restartButton.hidden = foreignHarness();
+    restartButton.disabled = !!engineOperation || !!ownerState?.stopped;
+    restartButton.title = ownerState?.stopped ? "Сначала возобнови движок" : "Перезапустить движок, сохранив окно";
+    syncComposer();
+  }
+
+  async function refreshOwner() {
+    if (!inTauri || opts.localAgent === false || ownerReading) return;
+    ownerReading = true;
+    const base = cfg.base, key = cfg.key;
+    try {
+      const state = await shell<OwnerState>("owner_state");
+      if (cfg.base === base && cfg.key === key) ownerState = state;
+    }
+    catch { if (cfg.base === base && cfg.key === key) ownerState = null; } // Older/remote shells do not expose a seed stop.
+    finally { ownerReading = false; }
+    reconcileEngine();
+    renderState(S.agentState, channelAvailable);
+    paintActivity();
+  }
+
+  function reconcileEngine() {
+    const op = engineOperation || unconfirmedOperation;
+    if (op && engineOperationObserved(op, ownerState, channelAvailable,
+        !!S.agentState?.runner?.alive, S.agentState?.runner?.pid || ownerState?.pid || 0, stateReadStarted)) {
+      engineOperation = null;
+      unconfirmedOperation = null;
+      engineFailure = "";
+      toast(op.action === "stop" ? "Движок остановлен" : op.action === "resume" ? "Движок на связи" : "Движок перезапущен");
+    } else if (engineOperation && op?.accepted && Date.now() - op.started > 60_000) {
+      unconfirmedOperation = op;
+      engineOperation = null;
+      engineFailure = op.action === "stop" ? "Остановка ещё не подтверждена" : op.action === "resume"
+        ? "Запуск ещё не подтверждён" : "Перезапуск ещё не подтверждён";
+      toast(engineFailure);
+    }
+    paintEngineControls();
+  }
+
+  async function controlEngine(action: EngineOperation["action"]) {
+    if (engineOperation) return;
+    if (ownerState?.stopped && action === "restart") { toast("Сначала возобнови движок"); return; }
+    const op: EngineOperation = { action, agent_id: ownerState?.agent_id, started: Date.now(),
+      previousPid: S.agentState?.runner?.pid || ownerState?.pid || 0, accepted: false };
+    engineOperation = op;
+    unconfirmedOperation = null;
+    engineFailure = "";
+    paintEngineControls();
+    renderState(S.agentState, channelAvailable);
+    paintActivity();
+    try {
+      if (action === "restart") {
+        let accepted = false;
+        try {
+          const answer = await post<{ ok?: boolean; note?: string }>("/api/supervisor/restart", { target: "all" });
+          accepted = answer?.ok === true;
+          if (!accepted) throw new ApiError(answer?.note || "Движок не принял просьбу о перезапуске", 409);
+        } catch (error) {
+          if (!inTauri || opts.localAgent === false) throw error;
+          if (error instanceof ApiError && error.status && error.status < 500
+              && error.status !== 404 && error.status !== 405) throw error;
+          await shell("engine_restart");
+          accepted = true;
+        }
+        if (!accepted) throw new Error("Движок не принял просьбу о перезапуске");
+      } else {
+        await shell("owner_control", { action: action === "stop" ? "panic" : "resume" });
+      }
+      if (engineOperation !== op) return;
+      op.accepted = true;
+      op.acceptedAt = Date.now();
+      void refreshOwner();
+      void refreshState();
+    } catch (error) {
+      if (engineOperation !== op) return;
+      engineOperation = null;
+      engineFailure = humanError(error).text;
+      toast(engineFailure);
+      paintEngineControls();
+      paintActivity();
+      void refreshOwner();
+      renderState(S.agentState, channelAvailable);
+    }
+  }
+
+  function paintActivity() {
+    const blocked = !!ownerState?.stopped || !!engineOperation || !channelAvailable;
+    activityLabel.textContent = blocked ? "" : activityWords(S.agentState?.activity);
+    activityLabel.title = !blocked && S.agentState?.activity?.tool ? S.agentState.activity.tool : "";
+    talk.onStateChange(blocked);
+    readQueued.hidden = blocked || !talk.currentTurn() || !(say.value.trim() || attachments.length
+      || S.pending.some(p => p.room === S.room && p.state === "queued"));
+    syncComposerNote();
+  }
+
 
   // ---------------------------------------------------------------- вложения (0.5.0)
   // Картинка к реплике: скрепка, вставка из буфера, перетаскивание. Файл уезжает в
@@ -160,18 +277,21 @@ export function start(opts: WindowOptions): void {
       }
     }
     paintFiles();
+    paintActivity();
   }
 
   function dropFile(i: number) {
     const [gone] = attachments.splice(i, 1);
     if (gone) URL.revokeObjectURL(gone.url);
     paintFiles();
+    paintActivity();
   }
 
   function clearFiles() {
     for (const a of attachments) URL.revokeObjectURL(a.url);
     attachments = [];
     paintFiles();
+    paintActivity();
   }
 
   function paintFiles() {
@@ -542,6 +662,17 @@ export function start(opts: WindowOptions): void {
       page = document.createElement("div");
       page.className = "page";
       page.dataset.page = id;
+      if (id === "settings") {
+        const changed = () => {
+          page!.dataset.settingsDirty = "1";
+          page!.dataset.settingsRevision = String(Number(page!.dataset.settingsRevision || 0) + 1);
+        };
+        page.addEventListener("input", changed);
+        page.addEventListener("change", changed);
+        page.addEventListener("click", (event) => {
+          if ((event.target as HTMLElement).closest('[role="radio"], [role="switch"]')) changed();
+        });
+      }
       pages.set(id, page);
     }
     return page;
@@ -549,6 +680,7 @@ export function start(opts: WindowOptions): void {
 
   /** Держит ли страница несохранённый ввод владельца. */
   function isDirty(page: HTMLElement): boolean {
+    if (page.dataset.settingsDirty === "1") return true;
     const active = document.activeElement;
     if (active instanceof HTMLElement && page.contains(active)
         && (active.isContentEditable || active.matches("input, textarea, select"))) {
@@ -621,6 +753,7 @@ export function start(opts: WindowOptions): void {
     // Начатую правку фоновое перечитывание не сносит: у «Файлов» это открытый редактор,
     // у «Настроек» — заполненная форма. Раньше их стирало молча, через полсекунды после
     // того, как владелец увидел свой текст на месте.
+    dispatchEvent(new CustomEvent("frame-section", { detail: id }));
     if (!blank && isDirty(page)) {
       announce(section?.label ?? "");
       return;
@@ -628,8 +761,11 @@ export function start(opts: WindowOptions): void {
     try {
       await views[id].render(page);
       if (gen !== showSeq) return;
-      if (!opts.quiet) view.scrollTop = homeScroll(id);
-      else if (wasAtEnd) view.scrollTop = view.scrollHeight;
+      if (id === "settings") dispatchEvent(new CustomEvent("frame-section", { detail: id }));
+      if (!talking && !opts.quiet) view.scrollTop = homeScroll(id);
+      // Chat physics owns the bottom/anchor while rendering. The owner may also
+      // have scrolled during await: a measurement from before it is obsolete.
+      else if (!talking && wasAtEnd) view.scrollTop = view.scrollHeight;
       announce(section?.label ?? "");
     } catch (e) {
       if (gen !== showSeq) return;
@@ -874,38 +1010,7 @@ export function start(opts: WindowOptions): void {
    * поднимала, и перезапуск окна — нулевое действие.
    */
   async function restartHarness() {
-    // 26.09: сначала — просьба движку через канал. Движок сам выходит между ходами
-    // кодом «перезапусти меня», а поднимает его тот, кто держит, — окно или служба, —
-    // с перечитанными настройками. Окно при этом остаётся: перезапуск окна под службой
-    // был нулевым действием («какого чёрта он не перезапускается с ней»).
-    try {
-      const answer = await post<{ ok?: boolean; note?: string }>("/api/supervisor/restart", { target: "all" });
-      if (answer?.ok) {
-        toast("Движок перезапускается — окно остаётся. Секунд через десять агент снова на связи.");
-        return;
-      }
-    } catch {
-      // канал не ответил — движка нет или он не поднялся; ниже — как раньше
-    }
-    let svc = "";
-    // Служба есть на обеих системах (SCM и демон launchd) — спрашиваем всегда.
-    // Вне приложения (Пульт в браузере) ручки нет, и это не служба «не стоит»,
-    // а «спросить не у кого»: пустая строка, и перезапуск идёт как обычно.
-    try {
-      svc = await shell<string>("service_state");
-    } catch {
-      // вне приложения (веб) — служба не при делах
-    }
-    if (svc === "running") {
-      toast(`Агента держит ${isMacPlatform(S.platform) ? "служба" : "служба Windows"}, а движок на просьбу не ответил — служба поднимет его сама. Не поднялся за минуту: Настройки → Режим, сними и поставь службу заново.`);
-      void show("settings");
-      return;
-    }
-    try {
-      await shell("restart_self");
-    } catch (e) {
-      toast("Не перезапустилось: " + humanError(e).text);
-    }
+    await controlEngine("restart");
   }
 
   /**
@@ -927,6 +1032,22 @@ export function start(opts: WindowOptions): void {
 
   function renderState(s: AgentState | null, connected: boolean) {
     paintPulse(connected);
+    const words = engineWords(ownerState, engineOperation);
+    if (words) {
+      statePill.dataset.level = engineOperation || ownerState?.runner_alive ? "live" : "off";
+      stateText.textContent = words;
+      statePill.title = ownerState?.note || words;
+      stateAction.hidden = true;
+      alarmBox.hidden = true;
+      return;
+    }
+    if (engineFailure) {
+      statePill.dataset.level = "warn";
+      stateText.textContent = engineFailure;
+      statePill.title = engineFailure;
+      stateAction.hidden = true;
+      return;
+    }
     if (!connected) {
       statePill.dataset.level = "off";
       stateText.textContent = "Нет связи с кодом агента";
@@ -944,7 +1065,7 @@ export function start(opts: WindowOptions): void {
       return;
     }
     statePill.dataset.level = s.level;
-    stateText.textContent = s.phrase;
+    stateText.textContent = s.level === "live" && s.activity ? "На связи" : s.phrase;
     statePill.title = s.phrase;
     if (s.action) {
       stateAction.hidden = false;
@@ -962,11 +1083,21 @@ export function start(opts: WindowOptions): void {
     alarmBox.innerHTML = alarms.map((a) => `<span>⚠ ${esc(a.text)}</span>`).join(" · ");
   }
 
+  let stateReading = false;
+  let lastStateAttempt = 0;
   async function refreshState() {
+    if (stateReading) return;
+    stateReading = true;
+    lastStateAttempt = Date.now();
+    const started = lastStateAttempt;
+    const identity = cfg.base + "\n" + cfg.key;
     try {
       const s = await api<AgentState>("/api/state");
+      if (identity !== cfg.base + "\n" + cfg.key) return;
       const wasBusy = !!S.agentState?.runner?.busy;
       S.agentState = s;
+      stateReadStarted = started;
+      channelAvailable = true;
       // Имя: снимок харнесса знает его лучше всех; без снимка (чужой харнесс)
       // имя даёт config.js страницы — иначе Праксис звалась бы «Агент».
       const named = s.anatomy === false && (cfg.agent || "").trim() ? (cfg.agent || "").trim() : s.agent;
@@ -986,7 +1117,9 @@ export function start(opts: WindowOptions): void {
         }
       }
       // Связь берём настоящую: api() умеет уйти на HTTP-фолбэк при мёртвом сокете.
-      renderState(s, S.connected);
+      reconcileEngine();
+      renderState(s, channelAvailable);
+      paintActivity();
       paintRailSign();
       const busy = foreignHarness()
         ? S.runs.some((r) => r.status === "running" && runIsRecent(r))
@@ -996,7 +1129,12 @@ export function start(opts: WindowOptions): void {
       }
       now.tick();
     } catch {
-      // связь решает пилюля через onConnection
+      if (identity !== cfg.base + "\n" + cfg.key) return;
+      channelAvailable = false;
+      renderState(S.agentState, false);
+      paintActivity();
+    } finally {
+      stateReading = false;
     }
   }
 
@@ -1072,14 +1210,17 @@ export function start(opts: WindowOptions): void {
   function syncComposerNote() {
     composerNote.textContent = [...S.pending].reverse().find(p => p.room === S.room)?.note || "";
   }
-  addEventListener("frame-pending", syncComposerNote);
+  addEventListener("frame-pending", () => { syncComposerNote(); paintActivity(); });
   let composerRoom = "";
   function syncComposer() {
     const room = S.rooms.find((r) => r.key === S.room);
     composerTarget.textContent = isWindowRoom(S.room) ? "" : `в «${S.roomName}»`;
     say.placeholder = room?.stub ? "Чат-заглушка: писать сюда пока нельзя" : isWindowRoom(S.room) ? "Написать агенту…" : `Написать в «${S.roomName}»…`;
     say.disabled = !!room?.stub;
-    send.disabled = !!room?.stub || sending;
+    const blocked = !!ownerState?.stopped || !!engineOperation;
+    send.disabled = !!room?.stub || sending || blocked;
+    attachBtn.disabled = !!room?.stub || blocked;
+    q<HTMLButtonElement>("#mic").disabled = !!room?.stub || blocked;
     // Черновик подставляем только при настоящей смене комнаты: событие
     // frame-room летит на каждой перерисовке чата.
     if (composerRoom !== S.room) {
@@ -1094,6 +1235,7 @@ export function start(opts: WindowOptions): void {
   say.addEventListener("input", () => {
     autoGrow();
     saveDraft(S.room, say.value);
+    paintActivity();
   });
   // Первый замер мог пройти до стилей (dev-сервер подключает CSS асинхронно) —
   // поле раздувалось до потолка. Перемеряем, когда страница собралась.
@@ -1108,15 +1250,19 @@ export function start(opts: WindowOptions): void {
   });
   send.addEventListener("click", () => void doSend());
   const readQueued = document.createElement("button");
-  readQueued.type = "button"; readQueued.className = "notice-action"; readQueued.textContent = "Прервать шаг · прочитать очередь";
+  readQueued.type = "button"; readQueued.className = "notice-action"; readQueued.textContent = "Прочитать сейчас";
+  readQueued.hidden = true;
   readQueued.title = "Отправляет черновик, прерывает текущие процессы шага и читает очередь вместе. Субагенты не останавливаются; вызов модели дочитывается до границы.";
-  document.querySelector(".composer-hint")?.prepend(readQueued);
+  activityRow.append(readQueued);
   readQueued.addEventListener("click", async () => {
     if (sending) return;
+    const target = talk.currentTurn();
+    if (!target) return;
     readQueued.disabled = true;
     try {
       if ((say.value.trim() || attachments.length) && !(await doSend())) return;
-      const receipt = await post("/api/interrupt-step", {});
+      if (talk.currentTurn()?.key !== target.key) { toast("Ход уже сменился — сообщение осталось в очереди"); return; }
+      const receipt = await post("/api/interrupt-step", { run_id: target.run_id });
       toast(String(receipt?.note || "Просьба записана"));
     } catch (e) { toast(humanError(e).text); }
     finally { readQueued.disabled = false; }
@@ -1130,7 +1276,7 @@ export function start(opts: WindowOptions): void {
     // Ревью 26.09 (W3 S1): сон — не ход; записка ждёт его конца, а не «читается сейчас».
     if (sleeping) return "агент спит — прочтёт, когда проснётся";
     if (chat && !isWindowRoom(chat)) return midturn ? `ушло в «${S.roomName}»` : `ждёт хода в «${S.roomName}»`;
-    if (midturn) return "агент читает сейчас";
+    if (midturn) return "принято — ждёт чтения в текущем ходе";
     const st = S.agentState;
     // «Квитанции не было ни разу» — это не «агент выключен», а «этот агент окно не
     // читает»: так выглядит окно к серверу, где записка ложится в дерево и ждёт
@@ -1141,7 +1287,7 @@ export function start(opts: WindowOptions): void {
   }
 
   async function doSend() {
-    if (sending) return;
+    if (sending || ownerState?.stopped || engineOperation) return;
     const typedText = say.value.trim();
     const files = attachments.slice();
     if (!typedText && !files.length) return;
@@ -1191,6 +1337,7 @@ export function start(opts: WindowOptions): void {
       if (chat) payload.chat = chat;
       if (files.length) payload.attachments = files.map((a) => ({ name: a.name, mime: a.mime, data: a.data }));
       const data = await post("/api/say", payload);
+      pending.source_id = typeof data?.source_id === "string" ? data.source_id : undefined;
       if (files.length) clearFiles();
       pending.state = "queued";
       pending.note = sendNote(chat, !!data?.midturn, !!data?.sleeping);
@@ -1213,7 +1360,8 @@ export function start(opts: WindowOptions): void {
     }
     clearTimeout(slow);
     sending = false;
-    send.disabled = false;
+    syncComposer();
+    paintActivity();
     return pending.state === "queued";
   }
 
@@ -1228,7 +1376,9 @@ export function start(opts: WindowOptions): void {
       });
       void refreshPulse();
     } else {
+      channelAvailable = false;
       renderState(S.agentState, false);
+      paintActivity();
     }
   });
 
@@ -1294,7 +1444,7 @@ export function start(opts: WindowOptions): void {
     if (isMacPlatform(was) !== isMacPlatform(S.platform)) void show(S.view, { quiet: true });
   });
   syncComposer();
-  addEventListener("frame-room", syncComposer);
+  addEventListener("frame-room", () => { syncComposer(); paintActivity(); });
   addEventListener("frame-go", (e) => void show((e as CustomEvent<View>).detail));
   addEventListener("frame-restart", () => void restartHarness());
   // Пока адрес сервера не вписан, связываться не с кем: канал не открываем и
@@ -1378,7 +1528,12 @@ export function start(opts: WindowOptions): void {
   };
   openFirst();
   void refreshPulse();
-  setInterval(() => void refreshState(), 8000);
+  void refreshOwner();
+  setInterval(() => void refreshOwner(), 2000);
+  setInterval(() => {
+    const active = !!engineOperation || (channelAvailable && !!S.agentState?.runner?.busy);
+    if (Date.now() - lastStateAttempt >= (active ? 1500 : 8000)) void refreshState();
+  }, 1500);
   setInterval(() => void refreshPulse(), 20000);
 }
 

@@ -54,6 +54,7 @@ export function mountPanelWidths(app: HTMLElement): () => void {
       drag = null;
       if (handle.hasPointerCapture(id)) handle.releasePointerCapture(id);
       app.classList.remove("resizing-panels");
+      desired = Number(handle.getAttribute("aria-valuenow"));
       save();
     };
     const keydown = (e: KeyboardEvent) => {

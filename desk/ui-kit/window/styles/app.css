@@ -4125,3 +4125,30 @@ body.first-run #state {
 #app:not(.with-panel) .panel-resize-panel { display: none; }
 #app.resizing-panels { transition: none; user-select: none; cursor: col-resize; }
 @media (max-width: 760px) { .panel-resize { display: none; } }
+
+
+/* Session controls share the quiet paper chrome and keep the feed stationary. */
+.engine-controls { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.engine-controls button { border: 1px solid var(--line); border-radius: 8px; background: transparent;
+  color: var(--ink-3); font: 400 11px/1.4 var(--sans); padding: 6px 8px; cursor: pointer; }
+.engine-controls button:hover:not(:disabled) { background: var(--surface); color: var(--ink); }
+.engine-controls button:disabled { opacity: .5; cursor: default; }
+.composer-status { max-width: 800px; min-height: 24px; margin: 0 auto 3px; display: flex;
+  align-items: center; gap: 10px; color: var(--muted); font: 400 11px/1.4 var(--sans); }
+.composer-activity { flex: 1 1 auto; min-width: 0; }
+.composer-turn-controls { display: flex; align-items: center; gap: 8px; }
+.turn-receipt { max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-status .notice-action { font: inherit; white-space: nowrap; }
+@container (max-width: 620px) {
+  #head { flex-wrap: wrap; gap: 6px; }
+  .head-copy { flex-basis: 100%; }
+  .head-side { flex: 1 1 100%; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+  .head-side .pulse { display: none; }
+  .composer-status { flex-wrap: wrap; row-gap: 4px; }
+  .composer-activity { flex-basis: 100%; }
+  .composer-turn-controls { margin-left: auto; }
+  .turn-receipt { max-width: 100px; }
+}
+.save-bar { padding: 8px 12px; }
+.save-bar > .field-hint { margin: 4px 0 0; font-size: 10px; }
+.settings-body { padding-bottom: 32px; }

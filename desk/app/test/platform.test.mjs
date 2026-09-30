@@ -98,12 +98,11 @@ assert.ok(!/Windows не дал/.test(read(desk, "ui-kit", "text.ts")), "text.ts
 // Подписи клавиш — по клиенту, и обработчик слушает metaKey.
 assert.match(chrome, /kbdLabel\("Ctrl\+" \+ key, clientMac\)/, "подпись клавиши в полке снова захардкожена как Ctrl+");
 assert.match(chrome, /e\.ctrlKey \|\| e\.metaKey/, "сочетания перестали слушать ⌘ (metaKey)");
-// Перезапуск: службу спрашиваем на ОБЕИХ системах — она есть и там, и там.
-assert.match(chrome, /svc = await shell<string>\("service_state"\)/, "restartHarness перестал спрашивать про службу");
-assert.ok(
-  !/isMacPlatform\(S\.platform\)\) \{[\s\S]{0,120}"service_state"/.test(chrome),
-  "затвор по macOS вернулся на вопрос о службе — а служба там есть с 0.8.0 (демон launchd)",
-);
+// Restart goes through the actual supervisor on both platforms, without a window restart
+// or a service reinstall being described as an engine restart.
+assert.match(chrome, /"\/api\/supervisor\/restart"/);
+assert.match(chrome, /shell\("engine_restart"\)/);
+assert.ok(!/shell\("restart_self"\)/.test(chrome));
 
 // Каркас настроек: система идёт изданию, автозапуск без слова «Windows», брандмауэр и служба за затвором.
 assert.match(frame, /edition\(\{ draft, saved: c, loaded, host, platform \}\)/, "каркас не отдаёт изданию систему хоста");

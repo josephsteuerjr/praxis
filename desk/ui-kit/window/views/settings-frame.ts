@@ -216,6 +216,7 @@ export const UPDATE_URL_DEFAULT =
   "https://api.github.com/repos/josephsteuerjr/praxis/releases/latest";
 
 export async function render(container: HTMLElement, edition: EditionFactory): Promise<void> {
+  delete container.dataset.settingsDirty; // Explicit reload discards the old draft.
   if (!inTauri) {
     const center = el("div", "center");
     // Тумблер телефона в вебе был пустышкой: черновик выбрасывался в мусор,
@@ -541,6 +542,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   let seenMtime: string | undefined = loaded.mtime_ns != null ? String(loaded.mtime_ns) : undefined;
   class StaleConfig extends Error {}
   const writeConfig = async (out: Config, force = false): Promise<string> => {
+    const revision = container.dataset.settingsRevision;
     const args: Record<string, unknown> = { config: JSON.stringify(out) };
     if (seenMtime && !force) args.mtimeNs = seenMtime;
     try {
@@ -548,7 +550,9 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       // КОНТРАКТ A→B §1: `{ok: false, code: "stale", mtime_ns, error}` — файл
       // менял кто-то ещё, черновик не записан.
       if (r && typeof r === "object" && r.ok === false && r.code === "stale") throw new StaleConfig(r.error || "stale");
+      if (r && typeof r === "object" && r.ok === false) throw new Error(r.error || "Настройки не сохранились");
       if (r && typeof r === "object" && r.mtime_ns != null) seenMtime = String(r.mtime_ns);
+      if (revision === container.dataset.settingsRevision) delete container.dataset.settingsDirty;
       // 25.09: оболочка применила настройки реле сразу и сказала, что сделала.
       return r && typeof r === "object" && typeof r.relay === "string" ? r.relay : "";
     } catch (e) {

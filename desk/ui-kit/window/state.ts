@@ -7,7 +7,8 @@ export interface AgentState {
   level: "ok" | "live" | "warn" | "error";
   phrase: string;
   action: { label: string; target: string } | null;
-  runner: { alive: boolean; age_s: number | null; busy: boolean; run: string; since: number; ever?: boolean };
+  runner: { alive: boolean; age_s: number | null; busy: boolean; run: string; since: number; ever?: boolean; pid?: number };
+  activity?: { run_id: string; phase: "model" | "tool" | "working"; tool: string; chat_id: string; kind: string; event_seq: number } | null;
   brain: {
     configured: boolean;
     model: string;
@@ -88,6 +89,7 @@ export type View = "now" | "talk" | "plans" | "wakes" | "frame" | "files" | "jou
 /** Реплика владельца, которую он уже отправил, а лента ещё не подтвердила. */
 export interface Pending {
   id: number;
+  source_id?: string;
   room: string;
   text: string;
   at: string;
