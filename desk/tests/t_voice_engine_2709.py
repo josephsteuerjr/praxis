@@ -65,7 +65,8 @@ def fake_runtime(site: Path) -> None:
     dist(site, "idna", "3.10", [], {"idna/__init__.py": "i"})
     dist(site, "typing-extensions", "4.15.0", [], {
         "typing_extensions.py": "te", "__pycache__/typing_extensions.cpython-314.pyc": "pyc"})
-    dist(site, "faster-whisper", "1.2.1", ["ctranslate2", "huggingface-hub>=0.21",
+    dist(site, "av", "18.1.0", [], {"av/__init__.py": "av"})
+    dist(site, "faster-whisper", "1.2.1", ["av>=11", "ctranslate2", "huggingface-hub>=0.21",
                                            "tokenizers; extra == 'dev'", "typing-extensions"],
          {"faster_whisper/__init__.py": "fw"})
     dist(site, "ctranslate2", "4.6.0", ["numpy", "pyyaml"], {"ctranslate2/ctranslate2.dll": "dll"})
@@ -82,7 +83,7 @@ def fake_runtime(site: Path) -> None:
     (site / "numpy" / "__pycache__" / "__init__.cpython-314.pyc").write_text("late", encoding="utf-8")
 
 
-VOICE_ONLY = {"faster-whisper", "ctranslate2", "numpy", "pyyaml", "huggingface-hub",
+VOICE_ONLY = {"faster-whisper", "av", "ctranslate2", "numpy", "pyyaml", "huggingface-hub",
               "packaging", "piper-tts", "onnxruntime", "protobuf"}
 
 

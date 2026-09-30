@@ -3494,8 +3494,21 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     // 2. Снимок памяти перед обновлением.
     let mut backup: Option<String> = None;
     if had_install && dir.join("data").is_dir() {
-        say("backup", "Снимок памяти агента", None, None, true, true, progress);
-        match crate::backup::snapshot(&dir, &dir.join("backups"), &format!("before-{version}"), cancel) {
+        say("backup", "Снимок памяти агента", None, Some("Считаю файлы…".into()), true, true, progress);
+        let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let mut on_backup = |p: crate::backup::BackupProgress| {
+            if p.files < p.total_files && last_emit.elapsed() < std::time::Duration::from_millis(120) { return; }
+            last_emit = std::time::Instant::now();
+            // Живые файлы могут поменять размер после metadata. До завершения
+            // всех файлов не показываем 100%; байты в подписи — фактически прочитанные.
+            let frac = if p.files == p.total_files { 1.0 }
+                else if p.total_bytes > 0 { (p.bytes as f64 / p.total_bytes as f64).min(0.99) }
+                else { 0.0 };
+            say("backup", "Снимок памяти агента", Some(frac),
+                Some(format!("{} / {} файлов · {:.1} / {:.1} МБ", p.files, p.total_files,
+                    p.bytes as f64 / 1_048_576.0, p.total_bytes as f64 / 1_048_576.0)), true, false, progress);
+        };
+        match crate::backup::snapshot_with_progress(&dir, &dir.join("backups"), &format!("before-{version}"), cancel, &mut on_backup) {
             Ok((path, files)) => {
                 let gone = crate::backup::prune(&dir.join("backups"), "-before-", 10);
                 steps.push(Step {

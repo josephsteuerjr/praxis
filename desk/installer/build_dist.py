@@ -124,7 +124,10 @@ TREE_DEPS = [
 # не входит: 61 МБ на каждый, качает владелец из окна тем же помощником.
 # ⚠ Не Edge и не Silero: Edge — это голос Микрософта ПО СЕТИ, то есть текст
 # ответа агента уходил бы наружу на каждую фразу, а Silero тянет torch (~2 ГБ).
-VOICE_DEPS = ["faster-whisper", "piper-tts"]
+# faster-whisper 1.2.1 передаёт metadata_errors в av.open; PyAV 19 убрал
+# этот аргумент. Под CPython 3.14 нет колёс av<15 из requirements ядра:
+# совместимые колёса 15–18 поддерживают прежний API.
+VOICE_DEPS = ["faster-whisper", "piper-tts", "av<19"]
 
 # Зависимости ПОСТАВКИ = дерево + пакет desk (канал просит aiohttp, раннер —
 # telethon). Свой список desk объявляет сам (deskpkg.DEPS_*), и сервер ставит
@@ -612,14 +615,26 @@ def split_voice(site: Path, stage: Path) -> dict:
 
 
 def smoke_voice(out: Path, stage: Path) -> None:
-    """База живёт БЕЗ голосового набора, а голос — с ним: оба утверждения проверяются."""
+    """Голос импортируется и декодирует WAV; модель и сеть не нужны."""
     py = out / "runtime" / "python.exe"
     code = f"import sys; sys.path.insert(0, {str(stage)!r}); import " + ", ".join(
-        VOICE_IMPORTS + VOICE_SMOKE_EXTRA)
+        VOICE_IMPORTS + VOICE_SMOKE_EXTRA) + "\n" + """
+import io, wave
+from faster_whisper.audio import decode_audio
+source = io.BytesIO()
+with wave.open(source, "wb") as wav:
+    wav.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+    wav.writeframes(bytes(32000))
+source.seek(0)
+audio = decode_audio(source)
+assert audio.shape == (16000,) and audio.dtype == numpy.float32
+print("voice decode: 16000 samples, float32")
+"""
     r = subprocess.run([str(py), "-c", code], capture_output=True, text=True,
                        timeout=300, encoding="utf-8", errors="replace")
     if r.returncode != 0:
-        raise SystemExit("голосовой набор не импортируется рантаймом:\n" + (r.stderr or "").strip())
+        raise SystemExit("голосовой набор не импортируется или не декодирует аудио:\n" + (r.stderr or "").strip())
+    print("  " + r.stdout.strip())
 
 
 def pack_voice(stage: Path, dest: Path, meta: dict, *, level: int = 19) -> dict:
