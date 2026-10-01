@@ -1114,7 +1114,10 @@ def _dialogue(snap: dict) -> list[Own]:
     if available is not None and int(available) > delivered:
         bits.append(own("из " + str(int(available)) + " — ОБРЕЗАНО сверху"))
     elif available is not None:
-        bits.append(own("это весь сохранённый разговор"))
+        # `available` counts the history supplied to the frame builder. The
+        # runner may already have folded hot memory and applied tape_window.
+        # Equality proves this local slice is whole, not that the archive is.
+        bits.append(own("переданная история целиком; полнота архива не установлена"))
     limit = snap.get("tape_limit")
     if limit is not None:
         bits.append(own("предел выборки " + str(int(limit))))
