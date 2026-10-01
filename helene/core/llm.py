@@ -1334,6 +1334,16 @@ _SIGHTED_GLM_V_RE = re.compile(r"(?i)^glm-\d+(?:\.\d+)?v(?:$|-flashx?$)")
 # hallucinate. flashx is NOT covered (1311, outside subscription).
 _SIGHTED_GLM_FLASH_RE = re.compile(r"(?i)^glm-(?:4\.6|5(?:\.\d)?)-flash$")
 
+# Бюджет изображений на ОДИН запрос по ногам (01.10). Числа из фактов, не из док:
+# живые пробы glm-5.3-flash (рецепты desk-notes/evidence/UI-01.10/vision-canary-glm-*)
+# — транспорт принимает и 10 картинок, но совместная точность падает с числом:
+# 3 — стабильно, 4–5 — по одной ошибке, 10 — развал ответа. Кодекс-подписка
+# закончилась, живой проверки openai-ноги больше нет: владельцем назначены
+# статические 10 (спул и так даёт 10 на ход). ~5 МБ на картинку — общая прикидка
+# обеих ног; крупнее — честным маркером, а не молчаливым отрезанием.
+IMAGE_REQUEST_BUDGET: dict[str, int] = {"anthropic": 3, "openai": 10}
+IMAGE_REQUEST_MAX_BYTES = 5 * 1024 * 1024
+
 
 def role_model(role: str = "voice") -> str:
     """Имя модели роли по конфигу (без ротации каталога): для честных сообщений в кадре."""
@@ -1624,7 +1634,7 @@ def _route_image_leg(role: str, framework: str, model: str, messages):
     if not _has_image_blocks(messages):
         return model, messages, False, False
     if accepts_images(model=model):
-        return model, _canonicalize_image_blocks(messages), False, False
+        return model, _sighted_messages(framework, messages), False, False
     replacement = vision_model(role, model, framework)
     # ⚠ 20.09.2026. Замена должна принадлежать ЭТОЙ ноге. `vision_model` умеет отдать
     # зрячую модель СОСЕДНЕГО фреймворка — это её контракт, им пользуется кросс-нога
@@ -1638,8 +1648,73 @@ def _route_image_leg(role: str, framework: str, model: str, messages):
                     _ROLE_RU[role], replacement, framework)
         replacement = ""
     if replacement:
-        return replacement, _canonicalize_image_blocks(messages), True, False
+        return replacement, _sighted_messages(framework, messages), True, False
     return model, _omit_image_blocks(messages, model), False, True
+
+
+_IMAGE_BUDGET_MARKER = (
+    "[image omitted before model call: the {framework} leg request budget keeps the "
+    "last {kept} images (live-verified joint-vision accuracy); this one was not shown "
+    "and must not be described]")
+
+
+def _image_block_bytes(block) -> int:
+    """Размер пикселей блока: base64-источник или файл по пути; нечитаемое — сверх лимита."""
+    source = block.get("source") if isinstance(block, dict) else None
+    if isinstance(source, dict) and source.get("type") == "base64":
+        return int(len(str(source.get("data") or "")) * 3 / 4)
+    try:
+        return os.path.getsize(str(block.get("path") or ""))
+    except OSError:
+        return IMAGE_REQUEST_MAX_BYTES + 1
+
+
+def _sighted_messages(framework: str, messages):
+    """Зрячая лента: канонические блоки + бюджет ноги, отрезанное — честным маркером.
+
+    Бюджет — «последние N», как в `agent._media_prompt` и спуле: свежий контекст
+    важнее старого. Сверхлимитный по размеру файл не везем молча — тем же маркером.
+    Маркер стоит в самой ленте: его видит модель и не выдумывает содержимое, а
+    владелец видит его в ответе — этот же приём использует `_omit_image_blocks`."""
+    msgs = _canonicalize_image_blocks(messages)
+    budget = int(IMAGE_REQUEST_BUDGET.get(framework) or 0)
+    if budget <= 0:
+        return msgs
+    seats: list[tuple[int, int]] = []
+    oversize: set[tuple[int, int]] = set()
+    for i, message in enumerate(msgs):
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for j, block in enumerate(content):
+            if not _is_image_block(block):
+                continue
+            if _image_block_bytes(block) > IMAGE_REQUEST_MAX_BYTES:
+                oversize.add((i, j))
+            else:
+                seats.append((i, j))
+    dropped = set(seats[:-budget]) if len(seats) > budget else set()
+    if not dropped and not oversize:
+        return msgs
+    if dropped or oversize:
+        log.warning("llm: %s — бюджет изображений: показаны последние %d из %d, "
+                    "сверхлимитных по размеру %d", framework, budget,
+                    len(seats) - len(dropped), len(oversize))
+    out = []
+    for i, message in enumerate(msgs):
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            out.append(message)
+            continue
+        blocks = []
+        for j, block in enumerate(content):
+            if _is_image_block(block) and ((i, j) in dropped or (i, j) in oversize):
+                blocks.append({"type": "text", "text": _IMAGE_BUDGET_MARKER.format(
+                    framework=framework, kept=budget)})
+            else:
+                blocks.append(block)
+        out.append(dict(message, content=blocks))
+    return out
 
 
 _NO_PIXELS_RESPONSE = (
