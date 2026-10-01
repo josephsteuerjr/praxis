@@ -1,6 +1,7 @@
 // Файлы: память агента как она есть — маркдауны по группам, чтение справа.
 import { ApiError, api, post } from "../api";
 import { bindFail, esc, failHTML, fmtAge, humanError, md, q, safeRender, toast } from "../lib";
+import * as scroll from "../scroll";
 import { S } from "../state";
 
 interface Group {
@@ -29,6 +30,38 @@ interface Doc {
 /** Отпечаток, который можно вернуть трубе без потери точности. */
 function exactStamp(v: unknown): string | undefined {
   return typeof v === "string" && /^\d+$/.test(v) ? v : undefined;
+}
+
+/**
+ * Парковка чтения: позиция КАЖДОГО файла переживает уход из раздела и возврат.
+ *
+ * Живой случай 01.10 (скриншот владельца): раздел восстанавливает сохранённый
+ * scrollTop в момент показа — а дерево и документ грузятся асинхронно ПОСЛЕ, и
+ * позиция клампится в верх; длинный файл приходится искать заново. Лечится
+ * повторным применением ПОСЛЕ рендера документа, по кадру.
+ */
+const mdScroll: Record<string, number> = {};
+let parkingWatched = false;
+
+function watchParking(): void {
+  if (parkingWatched) return;
+  parkingWatched = true;
+  document.getElementById("view")?.addEventListener(
+    "scroll",
+    () => {
+      const el = document.getElementById("view");
+      if (S.view === "files" && S.mdSel && el) mdScroll[S.mdSel] = el.scrollTop;
+    },
+    { passive: true });
+}
+
+function parkAfterRender(path: string): void {
+  const want = mdScroll[path] ?? 0;
+  requestAnimationFrame(() => {
+    const sc = scroll.view();
+    if (sc) sc.scrollTo(want, false);
+    else document.getElementById("view")?.scrollTo({ top: want });
+  });
 }
 
 /** Последнее дерево файлов: по нему ищем прошлые версии души. */
@@ -118,6 +151,7 @@ function diffHTML(before: string, after: string): string {
 }
 
 export async function render(container: HTMLElement): Promise<void> {
+  watchParking();
   const groups = await api<Group[]>("/api/md-tree");
   lastGroups = groups;
   if (!groups.length) {
@@ -207,6 +241,7 @@ async function open(container: HTMLElement, path: string) {
       <div id="md-conflict" hidden></div>
     </div>`;
   if (prev) bindDiff(main, prev.path, text);
+  parkAfterRender(path);  // после рендера документа — см. парковку выше
   if (readonly) return;
   const editor = q<HTMLTextAreaElement>(".md-editor", main);
   const viewBox = q<HTMLElement>("#md-view", main);

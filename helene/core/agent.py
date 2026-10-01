@@ -6436,9 +6436,78 @@ def tool_group_context(action: str = "context", query: str = "",
         return f"group_context: {exc}"
 
 
+_OWNER_MARK_PREFIX = "> [правка владельца · "
+_OWNER_MARK_GROUPS = ("memory/notes", "memory/journal", "workspace", "workspace/inbox",
+                      "soul", "memory/work", "memory/desires")
+
+
+def tool_clear_owner_marks(action: str = "list", path: str = "") -> str:
+    """Марки правок владельца: показать или убрать (провенанс — служба, не памятник).
+
+    Окно (deskd/readers._owner_provenance) кладёт одну строку-цитату рядом с
+    каждой ручной правкой владельца в правимых группах. Агент видит её в самом
+    тексте файла; усвоив правку, убирает метку этим тулом. Атомарно; текст без
+    марок не переписывается вовсе.
+    """
+    roots = []
+    if str(path or "").strip():
+        rel = str(path).strip().replace("\\", "/").lstrip("/")
+        if ".." in rel.split("/"):
+            return "clear_owner_marks: путь с «..» не рассматриваю"
+        base = BASE / rel
+        try:
+            base.resolve().relative_to(BASE.resolve())
+        except ValueError:
+            return "clear_owner_marks: путь вне дерева"
+        if not str(base).endswith(".md") or not base.is_file():
+            return f"clear_owner_marks: {rel} — не .md файл"
+        roots = [base]
+    else:
+        for group in _OWNER_MARK_GROUPS:
+            folder = BASE / group
+            if folder.is_dir():
+                roots.extend(sorted(folder.rglob("*.md")))
+    found: list[tuple[Path, list[str]]] = []
+    for file in roots:
+        try:
+            lines = file.read_text(encoding="utf8", errors="replace").split("\n")
+        except OSError:
+            continue
+        marks = [line for line in lines if line.startswith(_OWNER_MARK_PREFIX)]
+        if marks:
+            found.append((file, marks))
+    if action != "clear":
+        if not found:
+            return "Марок правок владельца нет ни в одном файле."
+        out = [f"Файлов с марками: {len(found)}."]
+        for file, marks in found[:20]:
+            rel = file.relative_to(BASE).as_posix()
+            out.append(f"— {rel}: {len(marks)} марк.; например: {marks[0][:160]}")
+        return "\n".join(out)
+    cleared = 0
+    for file, _marks in found:
+        try:
+            lines = file.read_text(encoding="utf8", errors="replace").split("\n")
+            # Только строки-марки; пустые и содержательные строки владельца/агента
+            # не трогаем вовсе — контракт тула: «остальной текст не меняется».
+            kept = [line for line in lines if not line.startswith(_OWNER_MARK_PREFIX)]
+            body = "\n".join(kept)
+            tmp = file.with_name(".tmp-marks-" + file.name)
+            tmp.write_text(body, encoding="utf8", newline="\n")
+            os.replace(tmp, file)
+            cleared += 1
+        except OSError:
+            return f"clear_owner_marks: не переписался {file.relative_to(BASE).as_posix()}"
+    if not cleared:
+        return "Марок не было — убирать нечего."
+    plural = "файлов" if cleared % 10 in (0, 5, 6, 7, 8, 9) or 11 <= cleared % 100 <= 14 else "файла" if cleared % 10 in (2, 3, 4) else "файл"
+    return f"Марки убраны в {cleared} {plural}; правки владельца теперь часть текста без служебных строк."
+
+
 TOOL_IMPL = {
     "recall": tool_recall,
     "remember": tool_remember,
+    "clear_owner_marks": tool_clear_owner_marks,
     "journal": tool_journal,
     "manage_notes": tool_manage_notes,
     "memory_compact": tool_memory_compact,
@@ -6554,6 +6623,25 @@ BASE_TOOLS = [
                            "description": "показать сводку эксперимента вместо поиска"},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "clear_owner_marks",
+        "description": (
+            "Убрать марки правок владельца («> [правка владельца · …]»), которые окно оставляет "
+            "в твоих файлах рядом с каждой ручной правкой (провенанс: что, когда, кем изменено — "
+            "удалено/вставлено). Прочитала и усвоила правку — убери отработанную метку этим тулом; "
+            "вечных памятников она не предполагает. action=list (по умолчанию) показывает файлы с "
+            "марками и их текст; clear — убирает марки (в одном path или во всех правимых окном "
+            "группах), атомарно, остальной текст не меняется."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "clear"]},
+                "path": {"type": "string",
+                         "description": "относительный путь (например soul/self/CURRENT.md); пусто — все группы"},
+            },
         },
     },
     {

@@ -20,6 +20,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -2188,6 +2189,70 @@ def _state_impl() -> dict:
     }
 
 
+_OWNER_MARK_PREFIX = "> [правка владельца · "
+
+
+def _mark_quote(lines: list, verb: str, cap: int = 200) -> str:
+    if not lines:
+        return ""
+    text = " ⏎ ".join(line.strip() for line in lines if line.strip())
+    if len(text) > cap:
+        text = text[:cap].rstrip() + "…"
+    note = f" ({len(lines)} стр.)" if len(lines) > 1 else ""
+    return f"{verb}: «{text}»{note}"
+
+
+def _owner_provenance(rel: str, old, new: str):
+    """Вставить марку провенанса в текст, которым владелец правит файл агента.
+
+    Правка файлов агента из окна была для агента невидимой (слово владельца
+    01.10: «дичайшее нарушение провенанса»). Теперь в месте правки остаётся
+    ОДНА строка-цитата: кто, когда, что удалено/вставлено. Метки убирает сам
+    агент тулом clear_owner_marks — она служба, а не памятник. Возврат:
+    (текст с маркой, число добавленных марок). Дифф — общий префикс/суффикс по
+    строкам, как «Что изменилось» в самом окне: участок назван участком.
+
+    База сравнения — текст БЕЗ марок: марка служебная, и повторное сохранение
+    того же содержимого не должно ни плодить новые марки, ни отмечать «удалена
+    старая марка». Прежние марки владельца в новом тексте сохраняются как есть.
+    """
+    stamp = time.strftime("%Y-%m-%d %H:%M")
+    if old is None:
+        mark = f"{_OWNER_MARK_PREFIX}{stamp} · окно] файл создан владельцем\n"
+        return mark + new, 1
+    full_b = new.split("\n")
+    a = [line for line in str(old).split("\n") if not line.startswith(_OWNER_MARK_PREFIX)]
+    b = [line for line in full_b if not line.startswith(_OWNER_MARK_PREFIX)]
+    head = 0
+    while head < len(a) and head < len(b) and a[head] == b[head]:
+        head += 1
+    tail = 0
+    while (tail < len(a) - head and tail < len(b) - head
+           and a[len(a) - 1 - tail] == b[len(b) - 1 - tail]):
+        tail += 1
+    gone = a[head:len(a) - tail]
+    came = b[head:len(b) - tail]
+    if not gone and not came:
+        return new, 0
+    parts = [p for p in (_mark_quote(gone, "удалено"), _mark_quote(came, "вставлено")) if p]
+    mark = f"{_OWNER_MARK_PREFIX}{stamp} · окно] " + " · ".join(parts)
+    # Позиция в ПОЛНОМ новом тексте: перед первой изменившейся строкой контента,
+    # приклеена к предыдущей содержательной строке, а не к пустому разделителю.
+    insert_at = len(full_b)
+    seen = 0
+    for i, line in enumerate(full_b):
+        if line.startswith(_OWNER_MARK_PREFIX):
+            continue
+        if seen == head:
+            insert_at = i
+            break
+        seen += 1
+    while insert_at > 0 and full_b[insert_at - 1].strip() == "":
+        insert_at -= 1
+    full_b.insert(insert_at, mark)
+    return "\n".join(full_b), 1
+
+
 def safe_write_md(rel: str, text: str, mtime_ns=None) -> dict:
     """Записать маркдаун по тем же правилам, по каким safe_read_md читает.
 
@@ -2226,6 +2291,14 @@ def safe_write_md(rel: str, text: str, mtime_ns=None) -> dict:
     body = str(text or "").replace("\r\n", "\n")
     if not body.endswith("\n"):
         body += "\n"
+    # Провенанс: марка встаёт в текст ДО записи, рядом с изменившимся участком.
+    old = None
+    if stat is not None:
+        try:
+            old = path.read_text(encoding="utf8", errors="replace")
+        except OSError:
+            old = None
+    body, marks = _owner_provenance(clean, old, body)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         if stat is not None:
@@ -2242,4 +2315,4 @@ def safe_write_md(rel: str, text: str, mtime_ns=None) -> dict:
         written = str(path.stat().st_mtime_ns)   # строкой — см. safe_read_md
     except OSError:
         written = None
-    return {"path": clean, "size": len(body.encode("utf-8")), "mtime_ns": written}
+    return {"path": clean, "size": len(body.encode("utf-8")), "mtime_ns": written, "marks": marks}

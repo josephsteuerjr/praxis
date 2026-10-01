@@ -2416,16 +2416,81 @@ select.field-input {
   scroll-margin-top: 8px;
 }
 
+/* ---------- Система: материалы леджера — вытяжные полоски ----------
+   Слово владельца 01.10: леджер — горизонтальными полосками вдлинь, каждая
+   раскрывается в подробности. Полоска тянется на всю ширину центра; имя
+   материала забирает свободное место, размеру — табличные цифры. */
+.material-strips {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 10px 0 4px;
+}
+
+.material-strip summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  cursor: pointer;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper, var(--ground));
+  transition: border-color var(--dur-1) var(--ease-out);
+}
+
+.material-strip summary:hover {
+  border-color: var(--ink-3);
+}
+
+.material-strip[open] summary {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.material-strip .fold-body {
+  border: 1px solid var(--line);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  padding: 8px 12px;
+}
+
+.material-strip .strip-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.material-strip .strip-size {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* ---------- настройки: группы вкладками ----------
    Вкладки появляются, только если издание объявило группы И живых групп больше
    одной (settings-frame.ts::mountSettings). У Praxis их нет — он получает
    прежний плоский список, а не четыре вкладки, одна из которых пустая. */
 
 .settings-tabs {
+  /* Плашки групп не уезжают при прокрутке: смена группы — действие первого
+     уровня, доступное с любого места страницы (слово владельца 01.10).
+     Рецепт фона — как у прилипшей save-bar: полупрозрачная бумага + blur. */
+  position: sticky;
+  top: 0;
+  z-index: 4;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   margin: 0 0 16px;
+  padding: 8px 2px;
+  background: color-mix(in srgb, var(--ground) 92%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 
 .settings-tab {

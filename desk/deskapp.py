@@ -859,6 +859,43 @@ async def _r_md(c: Call):
     return await asyncio.to_thread(readers.safe_read_md, c.query.get("path") or "")
 
 
+_RETENTION_CACHE: dict = {}
+
+
+def _retention_module():
+    """localharness/retention.py по пути файла: имя слишком общее для sys.path."""
+    if "mod" not in _RETENTION_CACHE:
+        import importlib.util
+        path = Path(__file__).resolve().parent / "localharness" / "retention.py"
+        spec = importlib.util.spec_from_file_location("desk_retention", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _RETENTION_CACHE["mod"] = mod
+    return _RETENTION_CACHE["mod"]
+
+
+async def _r_retention(c: Call):
+    """Леджер ретенции рабочих материалов (слово владельца 01.10).
+
+    GET — отчёт без изменений на диске; POST {action:"sweep"} — уборка
+    однозначного мусора (staging старых обновлений) с записью леджера.
+    Проекты, runs и модели не удаляются никоем действием этой ручки.
+    """
+    action = str((c.body or {}).get("action") or "report")
+
+    def run():
+        mod = _retention_module()
+        root = readers.tree()
+        if action == "sweep":
+            return mod.sweep(root)
+        return {"schema": mod.SCHEMA, "entries": mod.classify(root), "removed": []}
+
+    try:
+        return await asyncio.to_thread(run)
+    except Exception as exc:
+        return Fail(500, f"леджер не собрался: {exc}", "retention")
+
+
 async def _r_md_write(c: Call):
     """Правка маркдауна агента из окна: конституция, навыки, заметки.
 
@@ -1186,6 +1223,8 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/chat-turns/{peer}", _r_chat_turns),
     Route("GET", "/api/md", _r_md),
     Route("POST", "/api/md", _r_md_write),
+    Route("GET", "/api/retention", _r_retention),
+    Route("POST", "/api/retention", _r_retention),
     Route("GET", "/api/media", _r_media),
     Route("GET", "/api/agent-config", _r_agent_config),
     Route("POST", "/api/agent-config", _r_agent_config_save),
