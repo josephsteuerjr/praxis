@@ -74,6 +74,9 @@ use windows_service::{define_windows_service, service_dispatcher};
 #[cfg(target_os = "macos")]
 mod daemon;
 
+#[cfg(not(target_os = "macos"))]
+mod resume;
+
 const SERVICE_NAME: &str = "Helene";  // идентификатор в SCM — латиницей
 /// Порт встроенного реле по умолчанию — как в `ui-kit/contract.json`.
 const RELAY_PORT: u16 = 5011;
@@ -3778,6 +3781,76 @@ fn main() {
     cli();
 }
 
+#[cfg(windows)]
+fn prepare_service_resume() -> Result<(), String> {
+    // Do not release the stop latch when the installation lost its task/service.
+    let (ok, said) = schtasks(&session_task_query_args())?;
+    if !ok {
+        return Err(format!("Задача {SESSION_TASK} недоступна: {said}. Восстанови службу через настройки; стоп сохранён."));
+    }
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        .map_err(|e| format!("SCM: {e}; стоп сохранён"))?;
+    let service = manager.open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS | ServiceAccess::START)
+        .map_err(|e| format!("Служба недоступна: {e}. Восстанови её через настройки; стоп сохранён."))?;
+    let state = service.query_status().map_err(|e| e.to_string())?.current_state;
+    if state == ServiceState::Stopped {
+        service.start::<&str>(&[]).map_err(|e| format!("Служба не запускается: {e}; стоп сохранён"))?;
+    } else if state != ServiceState::Running && state != ServiceState::StartPending {
+        return Err(format!("Служба занята переходом {state:?}; повтори возобновление позже"));
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if service.query_status().map_err(|e| e.to_string())?.current_state == ServiceState::Running {
+            return Ok(());
+        }
+        if Instant::now() >= deadline { return Err("Служба не вышла в Running; стоп сохранён".into()); }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resume_agent(config: &Path) -> Result<(), String> {
+    let plan = load_plan(config)?;
+    plan_usable(&plan)?;
+    let bytes = std::fs::read(config).map_err(|e| e.to_string())?;
+    let cfg: serde_json::Value = serde_json::from_str(&decode_config(&bytes)?)
+        .map_err(|e| e.to_string())?;
+    let service_owned = cfg.pointer("/installed/service").and_then(|v| v.as_bool()).unwrap_or(false);
+    resume::run(
+        || {
+            if service_owned {
+                #[cfg(windows)]
+                return prepare_service_resume();
+                #[cfg(not(windows))]
+                return Err("Windows service resume is unavailable on this platform".into());
+            }
+            Ok(())
+        },
+        || {
+            let pause = plan.tree.join("memory/.control/autonomy-paused.json");
+            match std::fs::remove_file(pause) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(format!("Пауза не снята: {e}")),
+            }
+        },
+        resume_owner_stop,
+        || {
+            if service_owned {
+                let (ok, said) = schtasks(&session_task_run_args())?;
+                if !ok { return Err(format!("задача {SESSION_TASK}: {said}")); }
+            }
+            Ok(())
+        },
+    )?;
+    println!("{}", if service_owned {
+        "Стоп снят; служба работает, планировщик принял запуск. Готовность агента проверь в окне."
+    } else {
+        "Стоп снят; запуском агента управляет окно."
+    });
+    Ok(())
+}
+
 /// Разбор командной строки на Windows (и на прочих не-macOS, где собирается
 /// только каркас). Вынесено из `main` ради платформенной развилки — тело
 /// функции то же, что было.
@@ -3786,19 +3859,14 @@ fn cli() {
     let mode = std::env::args().nth(1).unwrap_or_default();
     match mode.as_str() {
         "panic" | "resume" => {
-            let result = if mode == "panic" { request_owner_stop("cli") } else { resume_owner_stop() };
+            let result = if mode == "panic" { request_owner_stop("cli") } else { resume_agent(&config_path()) };
             if let Err(error) = result {
                 eprintln!("{error}");
                 std::process::exit(1);
             }
-            if mode == "resume" {
-                if let Ok(plan) = load_plan(&config_path()) {
-                    let pause = plan.tree.join("memory/.control/autonomy-paused.json");
-                    if pause.exists() { if let Err(e) = std::fs::remove_file(pause) { eprintln!("pause not cleared: {e}"); std::process::exit(1); } }
-                }
-                let _ = schtasks(&session_task_run_args());
+            if mode == "panic" {
+                println!("owner stop recorded: supervisor observation/teardown is separate");
             }
-            println!("owner stop {}: supervisor observation/teardown is separate", if mode == "panic" { "recorded" } else { "cleared" });
         }
         "install" => {
             let raw = config_path();

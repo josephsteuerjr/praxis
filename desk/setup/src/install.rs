@@ -2221,7 +2221,8 @@ fn service_op(_op: &str, _name: &str, _script: Option<&Path>) -> Result<(), Stri
 /// спрашиваем SCM сами — квитанция о фактическом состоянии, не «запустил».
 #[cfg(windows)]
 fn install_service(dir: &Path) -> String {
-    if owner_stopped() { return "owner-stopped".into(); }
+    // Registration survives owner stop: the service is a keeper of the latch,
+    // and session-host checks it before starting children. Never clear it here.
     let script = dir.join("install-service.ps1");
     if !script.exists() || !dir.join("helene-svc.exe").exists() {
         return "missing".into();
@@ -3381,7 +3382,6 @@ struct Before {
 /// (если стояла) ставится обратно, окно (если было открыто) открывается снова.
 #[cfg(windows)]
 fn restore_after_abort(dir: &Path, before: &Before) -> Option<String> {
-    if owner_stopped() { return Some("Остановлен владельцем; восстановление не запускает агента".into()); }
     let mut notes: Vec<String> = Vec::new();
     if before.service && service_state() == "absent" {
         let state = install_service(dir);
@@ -3391,7 +3391,9 @@ fn restore_after_abort(dir: &Path, before: &Before) -> Option<String> {
             format!("служба не вернулась ({state}) — поставь её в настройках окна")
         });
     }
-    if before.running && !before.service {
+    if owner_stopped() {
+        notes.push("Остановлен владельцем; восстановление не запускает агента".into());
+    } else if before.running && !before.service {
         match crate::win::launch_app(&shell_exe(dir)) {
             Ok(()) => notes.push("окно открыто снова".into()),
             Err(e) => notes.push(format!("окно не открылось само: {e}")),
