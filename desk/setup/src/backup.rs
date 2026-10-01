@@ -20,6 +20,8 @@ mod tests {
         put("helene.json", "{}");
         put("data/soul/SOUL.md", "душа");
         put("data/memory/2026-09-27.md", "день");
+        put("data/memory/.state/retention.json", "{\"schema\":\"praxis.retention.v1\"}");
+        put("data/workspace/inbox/pending.md", "необработанный ввод владельца");
         put("data/workspace/notes.md", "заметки");
         put("data/runner.log", "журнал");
         put("data/relay/local_auth/auth.json", "секрет");
@@ -37,23 +39,31 @@ mod tests {
         put("agents/mira/data/runner.log", "журнал соседа");
         put("agents/mira/data/models/whisper/model.bin", "модель соседа");
         put("agents/mira/data/workspace/node_modules/pkg/index.js", "зависимость соседа");
+        put("agents/mira/data/workspace/project/main.rs", "проект соседа");
         let never = AtomicBool::new(false);
         let (path, n) = snapshot(&r, &r.join("backups"), "before-1.2.0", &never).unwrap();
         assert!(path.file_name().unwrap().to_string_lossy().ends_with("-before-1.2.0.zip"));
         let file = std::fs::File::open(&path).unwrap();
         let mut z = zip::ZipArchive::new(file).unwrap();
         let names: Vec<String> = (0..z.len()).map(|i| z.by_index(i).unwrap().name().to_string()).collect();
-        for want in ["helene.json", "data/soul/SOUL.md", "data/memory/2026-09-27.md", "data/workspace/notes.md",
+        // Худой состав (01.10): память, душа, конфиги, манифест леджера и
+        // необработанный inbox. Рабочие проекты — материалы леджера, их байты
+        // и .git в снимок не ездят.
+        for want in ["helene.json", "data/soul/SOUL.md", "data/memory/2026-09-27.md",
+                     "data/memory/.state/retention.json", "data/workspace/inbox/pending.md",
                      "agents/mira/helene.json", "agents/mira/data/soul/SOUL.md",
-                     "data/models/custom/weights.bin", "data/workspace/project/.git/objects/object",
-                     "data/workspace/project/build/design.md"] {
+                     "data/models/custom/weights.bin"] {
             assert!(names.iter().any(|n| n == want), "нет {want}: {names:?}");
         }
         for never_in in ["data/runner.log", "data/relay/local_auth/auth.json", "data/voice/model.bin",
                          "agents/mira/data/runner.log", "data/models/whisper/model.bin", "data/models/piper/voice.onnx",
+                         "data/workspace/notes.md",
                          "data/workspace/project/node_modules/module.js", "data/workspace/project/.venv/pyvenv.cfg",
-                         "data/workspace/project/__pycache__/module.pyc", "agents/mira/data/models/whisper/model.bin",
-                         "agents/mira/data/workspace/node_modules/pkg/index.js"] {
+                         "data/workspace/project/__pycache__/module.pyc", "data/workspace/project/.git/objects/object",
+                         "data/workspace/project/build/design.md",
+                         "agents/mira/data/models/whisper/model.bin",
+                         "agents/mira/data/workspace/node_modules/pkg/index.js",
+                         "agents/mira/data/workspace/project/main.rs"] {
             assert!(!names.iter().any(|n| n == never_in), "лишнее {never_in}: {names:?}");
         }
         assert_eq!(n as usize, names.len());

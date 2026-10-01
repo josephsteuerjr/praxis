@@ -46,10 +46,23 @@ pub fn skip_rel(rel: &str) -> bool {
     {
         return true;
     }
-    // Вложенные зависимости и кэши пересоздаются. .git, исходники и файлы
-    // проектов сохраняются; общие имена build/dist не считаем кэшем.
+    // 01.10, слово владельца после живого замера (5,5 ГБ материалов, бэкап
+    // 772 МБ): рабочие проекты и их история — МАТЕРИАЛЫ, не память. Байты
+    // проектов в снимке не ездят — рядом в том же снимке лежит манифест
+    // леджера ретенции (memory/.state/retention.json); полный снимок рабочих
+    // папок делается отдельно. Исключение — workspace/inbox: необработанный
+    // ввод владельца обязан переживать обновление. Сам каталог workspace
+    // (один компонент) не срезается — иначе пропадёт и inbox.
+    if first.eq_ignore_ascii_case("workspace") && parts.len() > 1
+        && !parts[1].eq_ignore_ascii_case("inbox")
+    {
+        return true;
+    }
+    // Вложенные зависимости и кэши пересоздаются. История .git сама по себе
+    // тяжелее рабочих копий (замер 01.10: 367 МБ из 545) — не её объём
+    // переживать в КАЖДОМ снимке.
     if parts.iter().any(|part| ["node_modules", ".venv", "__pycache__", ".cache",
-        ".pytest_cache", ".mypy_cache", ".ruff_cache"].iter().any(|p| part.eq_ignore_ascii_case(p))) {
+        ".git", ".pytest_cache", ".mypy_cache", ".ruff_cache"].iter().any(|p| part.eq_ignore_ascii_case(p))) {
         return true;
     }
     // Журналы верхнего уровня data/ (runner.log, deskapp.log, service.log…) и их ротации.
