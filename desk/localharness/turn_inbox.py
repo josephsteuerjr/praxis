@@ -9,7 +9,7 @@ import json
 import os
 
 
-def _message(runner, name, text, messages, *, replay):
+def _message(runner, name, text, messages, *, replay, current):
     prefix = '[Сообщение владельца; inbox ' + name + ']\n'
     if replay:
         # Only the run's checkpoint is authoritative for already prepared input.
@@ -17,14 +17,23 @@ def _message(runner, name, text, messages, *, replay):
         # transcribe again after a crash between checkpoint and ACK.
         for message in messages:
             content = message.get('content')
-            if (message.get('role') == 'user' and isinstance(content, str)
-                    and content.startswith(prefix)):
-                return message, content[len(prefix):]
+            head = content if isinstance(content, str) else (
+                content[0].get('text', '') if isinstance(content, list) and content
+                and isinstance(content[0], dict) and content[0].get('type') == 'text' else '')
+            if message.get('role') == 'user' and head.startswith(prefix):
+                return message, head[len(prefix):]
     body, attached = runner._split_attachments(text)
     heard, remaining = runner._hear_attachments(attached) if attached else ([], [])
     if heard:
         body = (body + '\n' + '\n'.join(heard)).strip()
-    content = body + ('\nВложения сохранены: ' + ', '.join(remaining) if remaining else '')
+    if remaining:
+        content, archive = runner._batch_images(
+            prefix + body, remaining, room=str(current.delivery_chat_id),
+            source_id='note:' + Path(name).stem, run_id=current.run_id)
+        if archive.startswith(prefix):
+            archive = archive[len(prefix):]
+        return {'role': 'user', 'content': content}, archive
+    content = body
     # The next turn reads life history: store the words we delivered, not just
     # the audio filename. Keep the original note on disk as source evidence.
     return {'role': 'user', 'content': prefix + content}, content if heard else text
@@ -60,7 +69,7 @@ def collect(runner, current, messages):
             if valid is not True:
                 continue
             text = runner._message_text(blob)
-            message, _archive = _message(runner, path.name, text, messages, replay=True)
+            message, _archive = _message(runner, path.name, text, messages, replay=True, current=current)
             if path.parent == inbox: os.replace(path, target)
         else:
             blob = runner._note_bytes(path)
@@ -68,7 +77,7 @@ def collect(runner, current, messages):
             if valid is not True:
                 continue
             text = runner._message_text(blob)
-            message, archive = _message(runner, path.name, text, messages, replay=False)
+            message, archive = _message(runner, path.name, text, messages, replay=False, current=current)
             # Exact source is durable before rename; attachment paths remain in source.
             record = {'run_id': current.run_id, 'message': message}
             temp = Path(str(binding) + '.tmp')

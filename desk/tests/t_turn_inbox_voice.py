@@ -41,6 +41,8 @@ class VoiceBatch(unittest.TestCase):
             _note_bytes=lambda p: p.read_bytes(), _seal_claim=lambda p, **kw: (True, ''),
             _message_text=runner._message_text, _split_attachments=runner._split_attachments,
             _hear_attachments=runner._hear_attachments,
+            _batch_images=lambda text, paths, **kw: (text + '\n' + ', '.join(paths),
+                                                       text + '\n' + ', '.join(paths)),
             _room=lambda room: desk, _now=lambda: None,
             _mark_done=lambda p, n, why: (self.done.append(n), (p / (n + '.done')).write_text(why)))
         self.current = SimpleNamespace(run_id='test-run', delivery_chat_id='window')

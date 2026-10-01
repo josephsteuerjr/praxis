@@ -342,7 +342,8 @@ def _transcribe_note(rel: str) -> str:
     return f"[голосовое]: {text}" if text else "[голосовое: расшифровка пустая — тишина или не разобрать]"
 
 
-def _ingest_attachments(paths: list[str], *, chat_id: str, message_id: str) -> tuple[list, list[str]]:
+def _ingest_attachments(paths: list[str], *, chat_id: str, message_id: str,
+                        move: bool = True) -> tuple[list, list[str]]:
     """Файлы окна -> медиа-спул дерева (`ingest_path`, перенос) -> ссылки для кадра.
 
     Дерево кладёт картинку в кадр само (`_media_prompt`: блок `image` рядом с текстом)
@@ -375,11 +376,51 @@ def _ingest_attachments(paths: list[str], *, chat_id: str, message_id: str) -> t
             continue
         try:
             refs.append(spool.ingest_path(src, kind="photo", chat_id=chat_id,
-                                          message_id=message_id, scope="owner", move=True))
+                                          message_id=message_id, scope="owner", move=move))
         except Exception as exc:  # MediaValidationError и родня — словами
             log.warning("вложение окна отвергнуто спулом [%s]", rel, exc_info=True)
             notes.append(f"[вложение не прочитано: {src.name} — {type(exc).__name__}: {exc}]")
     return refs, notes
+
+
+def _batch_images(text: str, paths: list[str], *, room: str, source_id: str,
+                  run_id: str) -> tuple[str | list[dict], str]:
+    """Use normal image admission/rendering, then make every pixel durable.
+
+    Keep inbox files until the ordinary sweeper: a crash before checkpoint must
+    be replayable from source, without trusting a derived binding sidecar.
+    """
+    refs, notes = _ingest_attachments(paths, chat_id=room, message_id=source_id, move=False)
+    caption = (text + ('\n' + '\n'.join(notes) if notes else '')).strip()
+    if not refs:
+        return caption, caption
+    # `_media_prompt` показывает последние max_turn_media и молча режет первые —
+    # для владельца это должно быть словами в той же реплике, а не тишиной.
+    try:
+        limit = _agent._media_spool().max_turn_media
+    except Exception:
+        limit = None
+    if limit is not None and len(refs) > limit:
+        dropped = ', '.join(Path(r.path).name for r in refs[:-limit])
+        caption = (caption + '\n' + f'[вложений больше лимита хода: {len(refs)} > {limit}; '
+                   f'показаны последние {limit}, не показаны: {dropped}]').strip()
+    ctx = _agent.ChannelContext(chat_id=room, is_dm=True, owner=True, known=True)
+    _augmented, content = _agent._media_prompt(caption, tuple(refs), ctx)
+    if not run_id:
+        raise RuntimeError('active image intake requires a durable run')
+    archived = _agent._archive_run_media(run_id, refs, prefix='inbox', strict=True)
+    if isinstance(content, list):
+        for block in content:
+            if block.get('type') == 'image':
+                replacement = archived.get(str(block.get('path') or ''))
+                if replacement is None:
+                    raise RuntimeError('active image was not archived')
+                block['path'] = str(replacement)
+    # Future text history can locate the exact durable media, without pretending
+    # it contains pixels. The current model input carries the image blocks.
+    locators = [f'[изображение: {path}]' for path in archived.values()]
+    archive = (caption + '\n' + '\n'.join(locators)).strip()
+    return content, archive
 
 
 def _orient(chat_id: str) -> str:
