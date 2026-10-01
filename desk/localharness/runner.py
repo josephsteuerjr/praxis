@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import platform
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -302,6 +303,10 @@ def _split_attachments(message: str) -> tuple[str, list[str]]:
 
 _AUDIO_EXT = frozenset({".webm", ".ogg", ".oga", ".opus", ".m4a", ".mp3", ".wav"})
 
+#: Расширения, которые руннер пробует показать модели пикселями (те же типы,
+#: что `_MODEL_IMAGE_MIME` дерева). Всё прочее — материал хода, не зрение.
+_IMAGE_EXT = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
+
 
 def _hear_attachments(paths: list[str]) -> tuple[list[str], list[str]]:
     """Голосовые из окна (0.6.0) -> строки расшифровки; остальные пути — обратно.
@@ -381,6 +386,36 @@ def _ingest_attachments(paths: list[str], *, chat_id: str, message_id: str,
             log.warning("вложение окна отвергнуто спулом [%s]", rel, exc_info=True)
             notes.append(f"[вложение не прочитано: {src.name} — {type(exc).__name__}: {exc}]")
     return refs, notes
+
+
+def _batch_files(paths: list[str], *, run_id: str) -> list[str]:
+    """Файлы окна без слуха и зрения -> папка настоящего хода, агент работает ими руками.
+
+    Слово владельца 01.10: вложения — просто папка хода с артефактами. Копия,
+    не перенос: записка и исходник остаются source evidence до обычного sweep-а,
+    повтор до checkpoint идемпотентен (то же имя и размер — не трогаем)."""
+    if not paths:
+        return []
+    inbox = (Path(_tree) / "memory" / ".control" / "desk_inbox").resolve()
+    try:
+        folder = _agent._runs().path(str(run_id or "")) / "files"
+        folder.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        log.warning("папка хода недоступна — файлы названы исходными путями", exc_info=True)
+        return [f"[файл: {Path(p).name} — папка хода недоступна]" for p in paths]
+    lines: list[str] = []
+    for rel in paths:
+        src = (inbox / rel).resolve()
+        if inbox not in src.parents or not src.is_file():
+            lines.append(f"[файл не найден: {Path(rel).name}]")
+            continue
+        target = folder / src.name
+        if not target.exists() or target.stat().st_size != src.stat().st_size:
+            tmp = target.with_name(target.name + ".part")
+            shutil.copyfile(src, tmp)
+            os.replace(tmp, target)
+        lines.append(f"[файл хода: {target}]")
+    return lines
 
 
 def _batch_images(text: str, paths: list[str], *, room: str, source_id: str,

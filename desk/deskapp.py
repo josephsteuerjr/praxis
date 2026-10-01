@@ -1310,9 +1310,10 @@ def _attachments_in(raw) -> list[dict]:
     """Вложения из тела запроса: `[{name, mime, data(base64)}]` -> проверенные байты.
 
     Картинки (те, что читает модель — см. `_MODEL_IMAGE_MIME` в дереве) и
-    голосовые (расшифровывает руннер), до четырёх, до 8 МБ каждое. Всё остальное —
-    отказ словами: окно показало бы «отправлено», а руннер молча выбросил бы файл,
-    который модель не прочтёт.
+    голосовые (расшифровывает руннер) — как раньше. Любой ДРУГОЙ файл тоже
+    принимается (01.10, слово владельца: вложения — просто папка хода):
+    руннер копирует его в runs/<id>/files, агент работает им руками; расширение
+    неизвестных типов берём из имени, без расширения — честное `.bin`.
     """
     if raw in (None, "", []):
         return []
@@ -1327,10 +1328,6 @@ def _attachments_in(raw) -> list[dict]:
         # `audio/webm;codecs=opus` — так называет запись MediaRecorder; параметры
         # после «;» типу не принадлежат.
         mime = str(item.get("mime") or "").strip().lower().split(";", 1)[0].strip()
-        if mime not in _ATTACH_MIME:
-            raise web.HTTPBadRequest(
-                text=f"вложение #{i}: тип {mime or '?'} не читается моделью — "
-                     "можно PNG, JPEG, WebP, GIF или голосовое (webm/ogg/m4a/mp3/wav)")
         try:
             data = base64.b64decode(str(item.get("data") or ""), validate=True)
         except (ValueError, TypeError):
@@ -1340,10 +1337,16 @@ def _attachments_in(raw) -> list[dict]:
         if len(data) > _ATTACH_MAX_BYTES:
             raise web.HTTPBadRequest(text=f"вложение #{i}: больше 8 МБ")
         name = re.sub(r"[^\w.\-]+", "_", str(item.get("name") or "").strip(), flags=re.UNICODE)
-        name = name.strip("._") or (f"voice{i}" if mime in _ATTACH_AUDIO else f"image{i}")
-        if not name.lower().endswith(_ATTACH_MIME[mime]) and not (
-                mime == "image/jpeg" and name.lower().endswith(".jpeg")):
-            name += _ATTACH_MIME[mime]
+        if mime in _ATTACH_MIME:
+            name = name.strip("._") or (f"voice{i}" if mime in _ATTACH_AUDIO else f"image{i}")
+            if not name.lower().endswith(_ATTACH_MIME[mime]) and not (
+                    mime == "image/jpeg" and name.lower().endswith(".jpeg")):
+                name += _ATTACH_MIME[mime]
+        else:
+            # Материал хода: руннер положит файл в папку прогона по имени.
+            name = name.strip("._") or f"file{i}"
+            if not Path(name).suffix:
+                name += ".bin"
         out.append({"name": name[:120], "mime": mime, "data": data})
     return out
 

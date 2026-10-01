@@ -26,9 +26,17 @@ def _message(runner, name, text, messages, *, replay, current):
     heard, remaining = runner._hear_attachments(attached) if attached else ([], [])
     if heard:
         body = (body + '\n' + '\n'.join(heard)).strip()
-    if remaining:
+    # Слово владельца 01.10: вложения — папка хода. Зрение — только картинкам;
+    # прочие файлы копируются в runs/<id>/files и называются путями, без
+    # притворства, что модель их «видит».
+    images = [p for p in remaining if Path(p).suffix.lower() in runner._IMAGE_EXT]
+    files = [p for p in remaining if p not in images]
+    if files:
+        body = (body + '\n' + '\n'.join(
+            runner._batch_files(files, run_id=current.run_id))).strip()
+    if images:
         content, archive = runner._batch_images(
-            prefix + body, remaining, room=str(current.delivery_chat_id),
+            prefix + body, images, room=str(current.delivery_chat_id),
             source_id='note:' + Path(name).stem, run_id=current.run_id)
         if archive.startswith(prefix):
             archive = archive[len(prefix):]

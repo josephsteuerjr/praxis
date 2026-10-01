@@ -44,10 +44,11 @@ class AttachmentsIn(unittest.TestCase):
         self.assertEqual(deskapp._attachments_in(None), [])
         self.assertEqual(deskapp._attachments_in([]), [])
 
-    def test_refuses_what_the_model_cannot_read(self):
-        with self.assertRaises(web.HTTPBadRequest) as cm:
-            deskapp._attachments_in([{"name": "a.pdf", "mime": "application/pdf", "data": PNG}])
-        self.assertIn("не читается моделью", cm.exception.text)
+    def test_unknown_type_becomes_turn_material_not_a_refusal(self):
+        # 01.10, слово владельца: вложения — папка хода; произвольный файл
+        # принимается и ложится в runs/<id>/files, а не отвергается границей.
+        (item,) = deskapp._attachments_in([{"name": "a.pdf", "mime": "application/pdf", "data": PNG}])
+        self.assertEqual(item["name"], "a.pdf")
         with self.assertRaises(web.HTTPBadRequest):
             deskapp._attachments_in([{"name": "a.png", "mime": "image/png", "data": "not base64!"}])
         with self.assertRaises(web.HTTPBadRequest):
@@ -207,8 +208,9 @@ class VoiceNotes(unittest.TestCase):
         files = deskapp._attachments_in([{"name": "", "mime": "audio/webm;codecs=opus", "data": PNG}])
         self.assertEqual(files[0]["mime"], "audio/webm")
         self.assertEqual(files[0]["name"], "voice1.webm")
-        with self.assertRaises(web.HTTPBadRequest):
-            deskapp._attachments_in([{"name": "a.flac", "mime": "audio/flac", "data": PNG}])
+        # flac слух не расшифрует — но это материал хода, не отказ.
+        (item,) = deskapp._attachments_in([{"name": "a.flac", "mime": "audio/flac", "data": PNG}])
+        self.assertEqual(item["name"], "a.flac")
 
     def test_recording_becomes_text_in_the_reply_and_pictures_go_on(self):
         heard, rest = runner._hear_attachments(["attachments/st2/voice-1.webm", "attachments/st1/кот.png"])
