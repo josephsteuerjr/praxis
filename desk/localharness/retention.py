@@ -82,6 +82,12 @@ def classify(data: Path, work: Path | None = None) -> list[dict]:
             folder = root / sub
             if folder.is_dir():
                 entries.append(_entry(origin, folder, kind))
+        # Снимки перед обновлениями лежат РЯДОМ с data/ (и лягут рядом же после
+        # переезда в профиль): главная часть «занятого пространства» не должна
+        # пропадать из леджера — 02.10, слово владельца.
+        backups = root.parent / "backups"
+        if origin == "data" and backups.is_dir():
+            entries.append(_entry(origin, backups, "backups"))
     return entries
 
 
@@ -123,6 +129,7 @@ def sweep(data: Path, work: Path | None = None) -> dict:
                   "project": "только отчёт; удаление — слово владельца",
                   "run_artifacts": "только отчёт; отдельная политика по медиа — после переезда раскладки",
                   "models": "только отчёт",
+                  "backups": "только отчёт; снимки чистит владелец руками",
                   "spool_cache": "только отчёт (у спула свой TTL)"}}
     _write_ledger(data, ledger)
     return ledger

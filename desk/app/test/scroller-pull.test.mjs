@@ -100,3 +100,66 @@ assert.equal(shift(), 0, "new section has no inherited transform");
 s.scrollTo(view.scrollHeight, false);
 assert.equal(s.pinned, true, "returning to the end resumes following");
 console.log("scroller: section restoration during fling and rubber — ok");
+
+// --- 02.10, Егор: «после оттягивания содержимое зависает» -------------------------------
+// Два живых кейса, которых стенд не касался:
+//
+//  A) Обратный ход до смены знака съедает pull в ноль, и когда пальцы подняли,
+//     release() не зовёт мягкий возврат (он под `if (this.pull)`): видимая
+//     оттяжка остаётся в «тугом» пальцевом пространстве и висит почти без
+//     движения — снаружи это «лента зависла после оттяжки».
+//  B) Устройство, которое РАНЬШЕ присылало нулевое «пальцы подняли» (sawLift),
+//     потеряло ноль после жеста: страховка HOLD_SAFETY держит оттяжку 8 секунд.
+//
+// Кейс A: жест вверх за край, обратный ход через ноль, подъём пальцев (ноль).
+view.scrollTop = 0;
+s.scrollTo(0, false);
+wheel(0); // научили: это устройство присылает нулевое «подняли»
+for (let i = 0; i < 40; i++) { wheel(-12.5); advance(16); }
+const aPeak = shift();
+assert.ok(aPeak > 60, `кейс A: оттяжка видна (${aPeak.toFixed(1)} px)`);
+for (let i = 0; i < 40; i++) { wheel(12.5); advance(16); } // вернули за ноль и дальше
+wheel(0); advance(16); // пальцы подняли
+advance(300);
+const aAfter = Math.abs(shift());
+assert.ok(aAfter < 8, `кейс A: через 300 мс после подъёма пальцев оттяжки нет (осталось ${aAfter.toFixed(1)} px)`);
+advance(1500);
+assert.equal(shift(), 0, "кейс A: возврат дошёл до конца");
+
+// Кейс B: ноль после жеста ПОТЕРЯН — тишина сама значит «отпустили» (02.10,
+// слово владельца: висеть при отпущенных пальцах нельзя ни секунды).
+view.scrollTop = 0;
+s.scrollTo(0, false);
+wheel(0); // sawLift=true
+for (let i = 0; i < 40; i++) { wheel(-12.5); advance(16); }
+const bPeak = shift();
+assert.ok(bPeak > 60, `кейс B: оттяжка видна (${bPeak.toFixed(1)} px)`);
+advance(700);
+assert.ok(Math.abs(shift()) < bPeak * 0.5, `кейс B: тишина 700 мс — оттяжка уже тает (${Math.abs(shift()).toFixed(1)} из ${bPeak.toFixed(0)})`);
+advance(800);
+const bAfter = Math.abs(shift());
+assert.ok(bAfter < 8, `кейс B: потерянный ноль не держит оттяжку (осталось ${bAfter.toFixed(1)} px)`);
+advance(800);
+assert.equal(shift(), 0, "кейс B: лента вернулась");
+
+// Кейс C (02.10, слово владельца): контроль пальцами вернулся во время возврата —
+// движение продолжается с места подхвата, а не начинается заново: лента не доедает
+// до нуля и не скачет, оттяжка дальше растёт от пойманного положения.
+view.scrollTop = 0;
+s.scrollTo(0, false);
+wheel(0);
+for (let i = 0; i < 40; i++) { wheel(-12.5); advance(16); }
+const cPeak = shift();
+assert.ok(cPeak > 60, `кейс C: оттяжка видна (${cPeak.toFixed(1)} px)`);
+advance(380); // отпустили: возврат только начался, лента ещё на середине пути
+const cMid = Math.abs(shift());
+assert.ok(cMid > cPeak * 0.3 && cMid < cPeak, `кейс C: возврат в пути (${cMid.toFixed(1)} из ${cPeak.toFixed(0)})`);
+// пальцы вернулись и тянут дальше — с МЕСТА, не с нуля
+for (let i = 0; i < 4; i++) { wheel(-12.5); advance(16); }
+const cGrab = Math.abs(shift());
+assert.ok(cGrab > cMid, `кейс C: подхват не уронил ленту к нулю (${cGrab.toFixed(1)} > ${cMid.toFixed(1)})`);
+for (let i = 0; i < 60; i++) { wheel(-12.5); advance(16); }
+assert.ok(Math.abs(shift()) >= cPeak, `кейс C: оттяжка продолжила расти от места подхвата (${Math.abs(shift()).toFixed(1)} >= ${cPeak.toFixed(0)})`);
+advance(2000);
+assert.equal(shift(), 0, "кейс C: финальный возврат дошёл до конца");
+console.log(`scroller: подъём после обратного хода и потерянный ноль — ok (A: ${aPeak.toFixed(0)}→${aAfter.toFixed(0)}, B: ${bPeak.toFixed(0)}→${bAfter.toFixed(1)}, C: подхват ${cMid.toFixed(0)}→${cGrab.toFixed(0)}→${Math.abs(shift()).toFixed(0)})`);

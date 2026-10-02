@@ -87,6 +87,22 @@ class Retention(unittest.TestCase):
         again = retention.sweep(self.data)
         self.assertEqual(again["removed"], [])
 
+    def test_backups_are_reported_but_never_swept(self):
+        # 02.10, слово владельца: снимки-бэкапы — главная часть занятого места,
+        # леджер обязан их показывать; удаляет владелец руками, sweep не трогает.
+        # Песочница со своей обёрткой: backups ищется у РОДИТЕЛЯ data/.
+        root = self.data.parent / "retention-backups-case"
+        data = root / "data"
+        (root / "backups" / "2026-10-01_before").mkdir(parents=True)
+        (root / "backups" / "2026-10-01_before" / "snap.zip").write_bytes(b"b" * 5000)
+        classes = {Path(e["path"]).name: e["class"] for e in retention.classify(data)}
+        self.assertEqual(classes.get("backups"), "backups")
+        ledger = retention.sweep(data)
+        self.assertIn("backups", [e["class"] for e in ledger["entries"]])
+        self.assertEqual(ledger["removed"], [])
+        self.assertTrue((root / "backups" / "2026-10-01_before" / "snap.zip").exists())
+        self.assertIn("снимки чистит владелец", json.dumps(ledger["policies"], ensure_ascii=False))
+
     def test_cli_report_prints_and_never_writes(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):

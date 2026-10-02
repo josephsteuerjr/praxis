@@ -65,12 +65,12 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       # На push inputs пусты — тег по умолчанию тот же, что у build_mac.py.
-      TAG: ${{ inputs.tag || 'v1.3.0' }}
+      TAG: ${{ inputs.tag || 'v1.3.1' }}
       # Откуда дерево агента: Windows-архив ЭТОГО выпуска. На push (проверочный
       # прогон) выпуска новой версии ещё нет — дерево берётся из последнего
       # существующего (тот же снимок прода), а сборка называется по TAG.
       # Выкладка (кнопка) требует TREE_TAG == TAG — см. шаг «Выложить в выпуск».
-      TREE_TAG: ${{ inputs.tag || 'v1.3.0' }}
+      TREE_TAG: ${{ inputs.tag || 'v1.3.1' }}
       HOME_DIR: /Users/runner/Applications/Helene
     steps:
       - uses: actions/checkout@v4

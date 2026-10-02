@@ -29,6 +29,7 @@ const RETENTION_CLASS_RU: Record<string, string> = {
   spool_cache: "кэш спула",
   models: "модели",
   run_artifacts: "артефакты ходов",
+  backups: "снимки-бэкапы",
 };
 
 function fmtMB(bytes: number): string {
@@ -57,6 +58,7 @@ function materialsHTML(r: RetentionReport | null): string {
         : e.class === "run_artifacts" ? "хранятся; политика медиа — отдельно"
         : e.class === "models" ? "перекачиваемые, в копии не ездят"
         : e.class === "spool_cache" ? "чистит спул по своему TTL"
+        : e.class === "backups" ? "снимки перед обновлениями; чистит владелец руками"
         : e.sweepable ? "мусор — уберётся кнопкой ниже" : "уберётся сама по возрасту";
       return `<details class="material-strip">
         <summary><span class="strip-name">${esc(name)}</span><span class="muted">${esc(cls)}</span>
