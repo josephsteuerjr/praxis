@@ -1,14 +1,19 @@
 //! Standalone native WebView probe. No harness, service, user data or agent.
 #[path = "../src/scroll_port.rs"]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod scroll_port;
 #[path = "../src/scroll_session.rs"]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod scroll_session;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use tauri::Manager;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn log_line(s: &str) {
     println!("{s}");
 }
 
 #[tauri::command]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn phase(app: tauri::AppHandle, kind: String, seq: u64) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let (state, source) = (
@@ -45,6 +50,7 @@ fn phase(app: tauri::AppHandle, kind: String, seq: u64) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn finish(app: tauri::AppHandle, result: serde_json::Value) {
     let ok = result.get("ok").and_then(|v| v.as_bool()) == Some(true);
     let text = serde_json::to_string_pretty(&result).unwrap();
@@ -55,6 +61,7 @@ fn finish(app: tauri::AppHandle, result: serde_json::Value) {
     app.exit(if ok { 0 } else { 1 });
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![phase, finish])
@@ -77,4 +84,9 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("native scroll probe failed");
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn main() {
+    eprintln!("This probe exercises WKWebView/WebKitGTK. Windows contact tests are separate.");
 }

@@ -345,7 +345,7 @@ export class Scroller {
     // принимать за новый захват по знаку/скорости wheel: это повторно накачивает
     // уже отпущенную резинку. Внутри ленты хвост едет, у края его цель ограничена
     // границей; координата и скорость сохраняются, импульс снимает вязкость.
-    if ((e as WheelEvent & { momentum?: boolean }).momentum === true || session?.momentum === true) {
+    if ((e as WheelEvent & { momentum?: boolean }).momentum === true || (!this.notch && session?.momentum === true)) {
       if (!this.momentum) this.target = clamp(this.target,0,max);
       this.momentum = true; this.wheelActive = false;
       const pending = Math.max(1,this.el.clientHeight)*1.5;

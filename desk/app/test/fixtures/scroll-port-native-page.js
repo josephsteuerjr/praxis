@@ -3,7 +3,11 @@
 (async()=>{
   const invoke=window.__TAURI_INTERNALS__.invoke;
   const wait=ms=>new Promise(r=>setTimeout(r,ms));let seq=0,checks=0;
-  const phase=async kind=>{await invoke('phase',{kind,seq:++seq});await wait(20);};
+  const phase=async kind=>{
+    const next=++seq;await invoke('phase',{kind,seq:next});
+    const until=Date.now()+1500;
+    while(window.__HELENE_SCROLL_SESSION?.seq!==next){if(Date.now()>until)throw Error('native phase bridge did not acknowledge');await wait(5);}
+  };
   const assert=(v,message)=>{checks++;if(!v)throw Error(message);};
   const cases=[];
   try {
@@ -22,8 +26,7 @@
     const held=cases.map(shown);
     for(let i=0;i<45;i++){await wait(100);await phase('stationary');wheel(0);}
     cases.forEach((c,i)=>assert(shown(c)>=held[i]-2,`${c.name}: stationary session slipped`));
-    const pv=cases.map(c=>[c.s.pos,c.s.vel]);
-    await invoke('phase',{kind:'end',seq:++seq});await wait(20);
+    await phase('end');
     // Native eval is asynchronous. Continuity is checked exactly by unit tests;
     // this probe checks that release is already moving without a quiet delay.
     await wait(160);cases.forEach((c,i)=>{if(c.over!=='none')assert(shown(c)<held[i]-5,`${c.name}: release delayed`);});
