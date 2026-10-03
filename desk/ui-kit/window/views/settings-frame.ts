@@ -247,6 +247,16 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   draft.telegram = draft.telegram || {};
   const center = el("div", "center");
 
+  // Первый запуск: без ключа модели движок не поднимается вовсе (это контракт
+  // харнесса, не моя догадка), а человек видит «нет связи с агентом» и не знает,
+  // что делать. Экран обязан сказать это вслух до того, как человек начнёт тыкать.
+  if (cfg.needs_local_setup) {
+    center.append(el("div", "notice",
+      "Первый запуск. Чтобы агент поднялся, заполни карточку «Модель» в разделе «Мозг и связь»: " +
+      "выбери пресет, вставь ключ и сохрани. Без ключа модели движок не запускается, " +
+      "и окно останется без связи с агентом. Имена и остальные разделы можно заполнить потом."));
+  }
+
   // Система агента — от оболочки, один раз (host.ts): на macOS автозапуск
   // зовётся иначе, службы и брандмауэра нет, и издание прячет свои карточки
   // по тому же слову.
@@ -527,7 +537,18 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
           "Сохранено. Модель и ключ движок применит сам через несколько секунд, реле — сразу." +
           relayWords + restartNote + modeNote;
         if (cfg.needs_local_setup) saveOut.textContent = "Настройки сохранены. Перезапусти окно кнопкой ниже, чтобы впервые запустить агента.";
-        restartBtn.hidden = !(modeNote || restartNote || cfg.needs_local_setup);
+        // Пустой ключ при первом запуске — не «настройки сохранены», а полдела:
+        // движок поднимется, но агент без мозга молчит. Обещать «впервые запустить
+        // агента» здесь было бы ложью; кнопка перезапуска в этой тропе не нужна.
+        if (cfg.needs_local_setup && !String(out.model?.key || "").trim()) {
+          saveOut.className = "receipt err";
+          saveOut.textContent =
+            "Сохранено, но ключ модели пуст — агент не сможет думать и отвечать. " +
+            "Вставь ключ в карточке «Модель», сохрани снова и перезапусти окно.";
+          restartBtn.hidden = true;
+        } else {
+          restartBtn.hidden = !(modeNote || restartNote || cfg.needs_local_setup);
+        }
         S.agent = String(out.agent?.name || S.agent);
       } catch (e) {
         if (e instanceof StaleConfig) {
