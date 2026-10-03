@@ -33,7 +33,10 @@ class ActiveImages(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        # RunManager режет базы с симлинк-компонентами, а на macOS TMPDIR живёт
+        # под /var → /private/var: канонизируем, иначе стенд мёртв на любом Mac
+        # (упал в полном прогоне выпуска 1.3.3, run 37087943313).
+        self.root = Path(self.tmp.name).resolve()
         self.inbox = self.root / 'memory/.control/desk_inbox'
         files = self.inbox / 'attachments/one'
         files.mkdir(parents=True)
