@@ -1630,8 +1630,10 @@ LINUX_OWNER_TEXT: tuple[tuple[str, str], ...] = (
     ("The Windows PC is your DIRECT body", "This Linux computer is your DIRECT body"),
     ("run/poll/stop PowerShell, observe files and screen",
      "run/poll/stop shell (bash) processes, observe files and screen"),
-    ("spawning coding_agent subagents on Windows still goes through it. The PC has no LLM",
-     "spawning coding_agent subagents there still goes through it. The computer has no LLM"),
+    # Прежняя третья пара («…spawning coding_agent subagents on Windows still goes
+    # through it. The PC has no LLM…») умерла изданием 1.3.x: пассаж про устаревший
+    # keyhole `coding_session(scope='windows')` вышел из блока владельца целиком.
+    # Словарь следует живому дереву — мёртвых пар не держим (t_tool_text_linux).
 )
 
 
