@@ -54,11 +54,25 @@ fn owner_stop_dir() -> Option<std::path::PathBuf> {
         let base = found.unwrap_or_else(|| std::path::PathBuf::from(r"C:\ProgramData"));
         Some(base.join("Helene"))
     }
-    // Mac и Linux в 1.2.7 не делаем (слово Егора): флага там нет, и никто его не ждёт.
+    // 03.10, слово Егора («остановить/запустить — можно и нужно»): на Linux движок
+    // всегда идёт от имени владельца (окно или helene@<имя>.service с User=%i), поэтому
+    // флагу не нужно ничего защищать от него — место в XDG-state владельца, ВНЕ дерева
+    // данных: снос дерева агента не должен снимать стоп. HOME, а не $XDG_STATE_HOME:
+    // у службы из юнита есть HOME, а XDG-переменных сеанса нет — два читателя обязаны
+    // смотреть в одну точку. macOS остаётся без флага (как в 1.2.7).
     #[cfg(not(windows))]
     {
-        None
+        linux_owner_stop_dir(std::env::var_os("HOME"))
     }
+}
+
+/// Чистая половина пути Linux: без среды — стенд проверяет разбор, не трогая
+/// переменные процесса (в edition 2024 set_var небезопасен, гонок не заводим).
+#[allow(dead_code)]
+#[cfg(not(windows))]
+fn linux_owner_stop_dir(home: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    let home = home.filter(|h| !h.is_empty())?;
+    Some(std::path::PathBuf::from(home).join(".local").join("state").join("helene"))
 }
 
 #[allow(dead_code)]
@@ -156,5 +170,21 @@ fn resume_owner_stop() -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("cannot clear owner stop; use an elevated owner command: {e}")),
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod owner_stop_tests {
+    use super::*;
+
+    #[test]
+    fn linux_dir_is_owner_state_outside_the_data_tree() {
+        // XDG-state, не дерево данных: снос data/ не должен снимать стоп владельца.
+        assert_eq!(
+            linux_owner_stop_dir(Some("/home/egor".into())),
+            Some(std::path::PathBuf::from("/home/egor/.local/state/helene"))
+        );
+        assert_eq!(linux_owner_stop_dir(Some("".into())), None);
+        assert_eq!(linux_owner_stop_dir(None), None);
     }
 }

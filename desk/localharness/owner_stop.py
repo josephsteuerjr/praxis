@@ -17,7 +17,15 @@ _tree = None
 
 def seed_file():
     if os.name != 'nt':
-        return None
+        # Linux (03.10, слово владельца): движок всегда идёт от имени владельца,
+        # флаг лежит в его XDG-state — ВНЕ дерева данных, чтобы снос дерева не
+        # снимал стоп. HOME, не $XDG_STATE_HOME: у службы systemd из юнита есть
+        # HOME, а XDG-переменных сеанса нет — Rust и Python смотрят в одну точку
+        # (common/owner_stop.rs: linux_owner_stop_dir).
+        home = os.environ.get('HOME')
+        if not home:
+            return None
+        return Path(home) / '.local' / 'state' / 'helene' / 'stop.json'
     # CSIDL_COMMON_APPDATA is the same known folder as Rust's FOLDERID_ProgramData.
     buf = ctypes.create_unicode_buffer(32768)
     fn = ctypes.WinDLL('shell32').SHGetFolderPathW

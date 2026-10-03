@@ -2965,7 +2965,7 @@ fn owner_state() -> serde_json::Value {
         receipt.as_ref().and_then(|v| v.get("at")).and_then(|v| v.as_f64())) };
     #[cfg(not(windows))]
     let alive: Option<bool> = None;
-    serde_json::json!({"agent_id": agent_id, "supported": cfg!(windows), "stopped": note.is_some(),
+    serde_json::json!({"agent_id": agent_id, "supported": cfg!(any(windows, target_os = "linux")), "stopped": note.is_some(),
         "runner_alive": alive, "pid": pid,
         "note": note.as_ref().map(owner_stop_said).unwrap_or_default()})
 }
@@ -3007,9 +3007,25 @@ fn engine_restart() -> Result<String, String> {
     Ok("Перезапуск запрошен; жду готовности движка".into())
 }
 
+/// Стоп-кран владельца. Windows просит согласие UAC и кладёт флаг службой; Linux
+/// пишет флаг сам (движок там всегда от имени владельца — прав не нужно), а детей
+/// гасит и поднимает надзор `watch_children` своими полусекундными тиками.
 #[cfg_attr(feature = "desktop", tauri::command)]
 fn owner_control(action: String) -> Result<String, String> {
     if action != "panic" && action != "resume" { return Err("panic | resume".into()); }
+    #[cfg(target_os = "linux")]
+    {
+        return match action.as_str() {
+            "panic" => {
+                request_owner_stop("window")?;
+                Ok("Остановка записана. Движок и канал погаснут в ближайшую секунду; надзор не поднимет их, пока не нажмёшь «Возобновить».".into())
+            }
+            _ => {
+                resume_owner_stop()?;
+                Ok("Стоп снят. Надзор поднимет агента в ближайшие секунды.".into())
+            }
+        };
+    }
     #[cfg(windows)]
     {
         let exe = install_root().join("helene-svc.exe");
@@ -3032,8 +3048,8 @@ fn owner_control(action: String) -> Result<String, String> {
         if owner_stopped() != (action == "panic") { return Err("Флаг не подтвердил команду".into()); }
         Ok(if action == "panic" { "Остановка записана; надзор завершает своё дерево" } else { "Остановка снята явным действием; надзор может запустить агента" }.into())
     }
-    #[cfg(not(windows))]
-    { Err("Нативный стоп-кран этого выпуска реализован на Windows".into()) }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    { Err("Нативный стоп-кран этого выпуска реализован на Windows и Linux".into()) }
 }
 
 /// Уведомление Windows из веб-части (заголовок, текст).

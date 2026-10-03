@@ -1188,9 +1188,42 @@ fn supervise(
 
     while !stop.load(Ordering::Relaxed) {
         if owner_stopped() {
-            log.line("owner stop: no new children; terminating this supervisor's job");
-            stop.store(true, Ordering::Relaxed);
-            break;
+            #[cfg(target_os = "linux")]
+            {
+                // systemd Restart=always поднял бы вышедшую службу снова через 10 с, и
+                // стоп владельца превратился бы в вечную чехарду перезапусков. Поэтому
+                // стоим: дети погашены, флаг опрашиваем раз в секунду, resume продолжает
+                // надзор и поднимает пару заново. Флаг пишет окно правами владельца.
+                log.line("owner stop: гашу детей и жду снятия стопа (кнопка «Возобновить» в окне)");
+                for kid in kids.iter_mut() {
+                    if let Some(child) = kid.child.as_mut() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        forget_child(child);
+                    }
+                    kid.child = None;
+                    kid.started = None;
+                }
+                if let Some(child) = relay.as_mut() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                relay = None;
+                while !stop.load(Ordering::Relaxed) && owner_stopped() {
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                log.line("owner stop снят — поднимаю детей заново");
+                continue;
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                log.line("owner stop: no new children; terminating this supervisor's job");
+                stop.store(true, Ordering::Relaxed);
+                break;
+            }
         }
         let now = Instant::now();
         // Агенты, чей движок вышел кодом RESTART_EXIT: канал гасится и пара
