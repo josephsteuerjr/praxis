@@ -60,6 +60,13 @@ pub fn run_host() {
     let Some(raw) = arg_after("--root") else { eprintln!("helene-host requires --root"); std::process::exit(2) };
     let root = PathBuf::from(raw);
     if !root.is_absolute() || !root.is_dir() { eprintln!("host root must be an existing absolute directory"); std::process::exit(2) }
+    #[cfg(unix)]
+    let parent = unsafe { libc::getppid() };
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGTERM, host_signal as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGINT, host_signal as *const () as libc::sighandler_t);
+    }
     let Some(boot) = bootstrap() else { return };
     let app = ShellHandle::new(LocalHarness {
         children: Mutex::new(boot.children), plans: Mutex::new(boot.plans),
@@ -75,12 +82,9 @@ pub fn run_host() {
     // A crashed/killed Electron parent must not leave its engine/relay behind.
     #[cfg(unix)]
     {
-        // Signal handler only sets a flag; cleanup runs on a normal Rust thread.
-        unsafe {
-            libc::signal(libc::SIGTERM, host_signal as *const () as libc::sighandler_t);
-            libc::signal(libc::SIGINT, host_signal as *const () as libc::sighandler_t);
-        }
-        let parent = unsafe { libc::getppid() }; let guardian = app.clone();
+        // Keep the original parent across bootstrap. Signals only set a flag;
+        // cleanup runs on a normal Rust thread after startup owns its children.
+        let guardian = app.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_secs(1));
             if unsafe { libc::getppid() } != parent || HOST_EXIT.load(std::sync::atomic::Ordering::Relaxed) {

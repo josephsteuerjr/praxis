@@ -47,6 +47,33 @@ class GlibcFloor(unittest.TestCase):
 
 
 class Package(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux", "package mode round trip needs Linux")
+    def test_chromium_sandbox_mode_survives_real_deb_and_rpm(self):
+        import shutil
+        import subprocess
+        import tempfile
+        if not all(shutil.which(tool) for tool in ("nfpm", "dpkg-deb", "rpm")):
+            self.skipTest("nfpm/dpkg-deb/rpm required")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); program = root / "program"; program.mkdir()
+            sandbox = program / "chrome-sandbox"; sandbox.write_text("fixture"); sandbox.chmod(0o4755)
+            files = {}
+            for name in ("unit", "policy", "home", "postinst", "prerm", "postrm"):
+                file = root / name; file.write_text("#!/bin/sh\nexit 0\n"); files[name] = str(file)
+            config = root / "nfpm.json"
+            config.write_text(json.dumps(bl.nfpm_config("1.3.4", bl.program_contents(program), files)))
+            for kind in ("deb", "rpm"):
+                package = root / ("fixture." + kind)
+                subprocess.run(["nfpm", "package", "--config", str(config), "--packager", kind,
+                    "--target", str(package)], check=True, capture_output=True)
+                if kind == "deb":
+                    extracted = root / "extracted"
+                    subprocess.run(["dpkg-deb", "-x", str(package), str(extracted)], check=True)
+                    self.assertEqual((extracted / "opt/helene/chrome-sandbox").stat().st_mode & 0o7777, 0o4755)
+                else:
+                    listing = subprocess.check_output(["rpm", "-qplv", str(package)], text=True)
+                    self.assertTrue(any("/opt/helene/chrome-sandbox" in line and "rwsr-xr-x" in line for line in listing.splitlines()), listing)
+
     def test_names_follow_each_family(self):
         names = bl.asset_names("1.2.3")
         self.assertEqual(names["deb"], "helene_1.2.3_amd64.deb")

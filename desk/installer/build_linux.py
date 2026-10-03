@@ -126,16 +126,16 @@ REQUIRED_ROOT = (
 #: Рекомендации: шина доступности (дерево окна), polkit (пароль администратора окном),
 #: xdg-utils (открыть ссылку входа в подписку).
 DEPENDS = ("libc6 (>= 2.28)", "git", "bubblewrap", "procps", "ca-certificates",
-           "libgtk-3-0", "libnss3", "libgbm1", "libasound2 | libasound2t64",
+           "libstdc++6", "libgtk-3-0 | libgtk-3-0t64", "libnss3", "libgbm1", "libasound2 | libasound2t64",
            "libx11-6", "libxcomposite1", "libxdamage1", "libxext6", "libxfixes3",
-           "libxrandr2", "libxcb1", "libxkbcommon0", "libatk1.0-0", "libatk-bridge2.0-0",
-           "libcups2", "libdrm2", "libpango-1.0-0", "libcairo2")
+           "libxrandr2", "libxcb1", "libxkbcommon0", "libatk1.0-0 | libatk1.0-0t64", "libatk-bridge2.0-0 | libatk-bridge2.0-0t64",
+           "libcups2 | libcups2t64", "libdrm2", "libpango-1.0-0", "libcairo2")
 RECOMMENDS = ("at-spi2-core", "pkexec | policykit-1", "xdg-utils")
 #: Те же зависимости именами rpm-семейства (Fedora/RHEL/РЕД ОС/ROSA): glibc 2.28 — это RHEL 8,
 #: ровно наш порог; `procps-ng` — имя procps у Red Hat. Мягкие зависимости rpm (Recommends)
 #: понимает с rpm 4.12 — у RHEL 8 и новее он есть.
 RPM_DEPENDS = ("glibc >= 2.28", "git", "bubblewrap", "procps-ng", "ca-certificates",
-               "gtk3", "nss", "mesa-libgbm", "alsa-lib", "libX11", "libXcomposite",
+               "libstdc++", "gtk3", "nss", "mesa-libgbm", "alsa-lib", "libX11", "libXcomposite",
                "libXdamage", "libXext", "libXfixes", "libXrandr", "libxcb", "libxkbcommon",
                "atk", "at-spi2-atk", "cups-libs", "libdrm", "pango", "cairo")
 RPM_RECOMMENDS = ("at-spi2-core", "polkit", "xdg-utils")

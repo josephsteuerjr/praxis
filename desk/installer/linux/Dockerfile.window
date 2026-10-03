@@ -1,0 +1,13 @@
+# A real Electron/X11 desktop smoke environment. Package install runs as root;
+# the window and its engine run as an ordinary owner. No owner files are mounted.
+FROM helene-linux-desk
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnss3 libgbm1 libasound2 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libcups2 \
+    libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 libxcb1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=helene-linux-build /opt/node /opt/node
+ENV PATH=/opt/node/bin:/opt/cargo/bin:$PATH
+RUN useradd --create-home --uid 1000 tester
+WORKDIR /test
+
