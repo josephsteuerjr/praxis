@@ -8,4 +8,5 @@ praxis/body/target/
 
 # сборка тела (installer/body_src.py --build) и байткод проверок — не исходники
 _body_target/
+_relay_prod_src/
 __pycache__/
