@@ -68,7 +68,7 @@ export interface ModeCard {
  *        значило бы молча стирать выбор владельца
  * @param onPick  зовётся при смене ограды: соседним карточкам (песочница,
  *        монтирование) надо обновить свои строки состояния
- * @param mac     агент живёт на macOS: служба там есть с 0.8.0, но это демон
+ * @param posix     агент живёт на macOS: служба там есть с 0.8.0, но это демон
  *        launchd, а не служба Windows — секция рисуется словами харнесса, без
  *        UAC и брандмауэра, а галочек у неё нет вовсе (`service.toggles` пуст:
  *        нулевая сессия и правило брандмауэра — механизмы Windows). Галочки
@@ -80,7 +80,8 @@ export function modeCard(
   failure: unknown,
   stored: StoredService,
   onPick: (name: string, sandbox: boolean, title: string) => void,
-  mac = false,
+  posix = false,
+  linux = false,
 ): ModeCard {
   const box = el("section", "card");
   box.append(el("h3", "", "Режим"));
@@ -167,7 +168,7 @@ export function modeCard(
     const svc = installed === null ? "спросить не удалось" : installed ? "установлена" : "не установлена";
     // Хвост про службу — только там, где служба бывает, и её собственным
     // именем: «Служба Windows» на Mac было бы словом не про эту машину.
-    const svcTail = ` ${mac ? "Служба" : "Служба Windows"}: ${svc}.`;
+    const svcTail = ` ${posix ? "Служба" : "Служба Windows"}: ${svc}.`;
     if (legacyPipe) {
       // Врать «Сейчас: Служба» нельзя: службы-режима не существует, а какая
       // ограда стоит на самом деле, этот харнесс не сказал.
@@ -231,7 +232,7 @@ export function modeCard(
         el(
           "p",
           "field-hint",
-          `${mac ? "Служба" : "Служба Windows"} останется на месте: она не режим, ограду не снимает и не включает. ` +
+          `${posix ? "Служба" : "Служба Windows"} останется на месте: она не режим, ограду не снимает и не включает. ` +
             "Снимать её ради смены ограды не нужно — но настройки она читает при своём старте, " +
             "поэтому после сохранения перезапусти её (кнопки ниже).",
         ),
@@ -245,7 +246,7 @@ export function modeCard(
   // старее окна: своих не пишем, говорим об этом прямо и галочки не трогаем —
   // они уедут в файл ровно такими, какими лежали.
   const option = live.service;
-  svcBox.append(el("h4", "", option?.title || live.service_title || (mac ? "Служба" : "Служба Windows")));
+  svcBox.append(el("h4", "", option?.title || live.service_title || (posix ? "Служба" : "Служба Windows")));
   const svcText = option?.text || live.service_text || "";
   if (svcText) svcBox.append(el("p", "choice-text", svcText));
   else {
@@ -274,7 +275,7 @@ export function modeCard(
     // На macOS пробы прав нет и быть не может: администратором здесь становятся
     // вводом пароля в системном диалоге, а не членством в группе, проверенным
     // заранее. Запирать кнопку по нашей слепоте — отнимать выбор.
-    if (mac) return "";
+    if (posix) return "";
     if (admin.known && !admin.canElevate) {
       return "Служба недоступна: у этой учётной записи нет прав администратора. Служба ставится один раз — " +
         "попроси того, кто хозяин компьютера, или войди под его учётной записью. " +
@@ -305,7 +306,7 @@ export function modeCard(
             // Кто поднимает тело под службой — разное на разных системах:
             // на macOS это окно (TCC живёт у Helene.app), на Windows тело
             // поднимает сам движок в интерактивной половине (`session-host`).
-            (mac ? " Тело тула `computer` поднимает окно, пока оно открыто." : "")
+            (posix ? " Тело тула `computer` поднимает окно, пока оно открыто." : "")
           : "";
       // Ответ оболочки свежее ответа трубы: пересобираем всё, что от него зависит.
       installed = st !== "absent";
@@ -355,16 +356,18 @@ export function modeCard(
     installBtn.setAttribute("aria-disabled", String(!!why));
     if (installed === true) {
       svcAdmin.className = "field-hint";
-      svcAdmin.textContent = mac
+      svcAdmin.textContent = posix
         ? "Служба уже стоит. Снять её можно кнопкой выше — система спросит пароль администратора."
         : "Служба уже стоит. Снять её можно кнопкой выше — Windows спросит права администратора.";
       return;
     }
-    if (mac) {
+    if (posix) {
       svcAdmin.className = "field-hint";
       svcAdmin.textContent =
-        "Система спросит пароль администратора: положить описание службы в /Library/LaunchDaemons " +
-        "может только он. Больше ничего под этими правами не делается.";
+        (linux
+          ? "Система спросит пароль администратора для установки службы systemd."
+          : "Система спросит пароль администратора: положить описание службы в /Library/LaunchDaemons может только он.") +
+        " Больше ничего под этими правами не делается.";
       return;
     }
     if (why) {
@@ -478,7 +481,7 @@ export function modeCard(
   syncAdmin();
   syncToggles();
   void svcRefresh();
-  if (!mac) {
+  if (!posix) {
     // Права спрашиваем после отрисовки: ответа может не быть вовсе, и ждать его
     // экрану незачем — как придёт, секция службы перерисуется сама. На macOS
     // спрашивать нечего: администратором там становятся вводом пароля.
@@ -504,7 +507,7 @@ export function modeCard(
         );
       }
       // На macOS нулевой сессии нет — как и службы, которой её давать.
-      if (!mac && session0 && installed === false) {
+      if (!posix && session0 && installed === false) {
         bits.push("Нулевая сессия включена, но служба не установлена — дать её некому.");
       }
       if (legacyPipe) {

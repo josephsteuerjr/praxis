@@ -37,7 +37,7 @@
 // уезжает домашний путь владельца, а бинарь молча получает статус dev-сборки.
 // Отличить его грепом нельзя, build_dist.py копирует exe вслепую, CI нет.
 // Пусть такая сборка просто не соберётся.
-#[cfg(all(not(debug_assertions), not(feature = "custom-protocol")))]
+#[cfg(all(feature = "desktop", not(debug_assertions), not(feature = "custom-protocol")))]
 compile_error!(
     "релизная сборка оболочки без --features custom-protocol вшивает в exe путь папки сборки \
      и метит бинарь как dev; собирай `cargo build --release --features custom-protocol` или `tauri build`"
@@ -49,13 +49,23 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "desktop")]
 use tauri::Manager;
+#[cfg(feature = "desktop")]
+use tauri::{AppHandle as ShellHandle, State as ShellState};
+#[cfg(feature = "desktop")]
+use tauri as shell_adapter;
+#[cfg(feature = "host")]
+#[path = "host_adapter.rs"]
+mod shell_adapter;
+#[cfg(feature = "host")]
+use shell_adapter::{ShellHandle, ShellState};
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "desktop"))]
 mod touchpad;
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 mod scroll_session;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(all(feature = "desktop", any(target_os = "macos", target_os = "linux")))]
 mod scroll_port;
 
 #[cfg(windows)]
@@ -107,6 +117,7 @@ struct ProductIdentity {
 
 static PRODUCT_RT: std::sync::OnceLock<ProductIdentity> = std::sync::OnceLock::new();
 
+#[cfg(feature = "desktop")]
 fn init_product(config: &tauri::Config) {
     let name = config
         .product_name
@@ -205,7 +216,12 @@ fn toast(title: &str, body: &str) {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(all(target_os = "linux", feature = "host"))]
+fn toast(title: &str, body: &str) {
+    shell_adapter::event("notify", serde_json::json!({"title": title, "body": body}));
+}
+
+#[cfg(not(any(windows, target_os = "macos", all(target_os = "linux", feature = "host"))))]
 fn toast(_title: &str, _body: &str) {}
 
 /// Строковый литерал AppleScript: обратный слэш и кавычка экранируются,
@@ -316,11 +332,15 @@ fn message_box_info(title: &str, text: &str) {
 /// Прочие POSIX: окна нет, но текст не пропадает — он в журнале.
 #[cfg(not(any(windows, target_os = "macos")))]
 fn message_box(title: &str, text: &str) {
+    #[cfg(feature = "host")]
+    shell_adapter::event("message", serde_json::json!({"title": title, "message": text, "type": "error"}));
     log_line(&format!("окно с сообщением показать нечем; текст был: {title} — {text}"));
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
 fn message_box_info(title: &str, text: &str) {
+    #[cfg(feature = "host")]
+    shell_adapter::event("message", serde_json::json!({"title": title, "message": text, "type": "info"}));
     log_line(&format!("окно с сообщением показать нечем; текст был: {title} — {text}"));
 }
 
@@ -602,7 +622,11 @@ fn exe_dir() -> PathBuf {
 /// Правило одно на оболочку и мастер установки (`setup/`).
 fn install_root() -> PathBuf {
     static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    ROOT.get_or_init(|| install_root_from(&exe_dir())).clone()
+    ROOT.get_or_init(|| {
+        #[cfg(feature = "host")]
+        if let Some(raw) = arg_after("--root") { return PathBuf::from(raw); }
+        install_root_from(&exe_dir())
+    }).clone()
 }
 
 /// Чистая половина `install_root`: правило подъёма отдельно, чтобы его можно
@@ -755,6 +779,7 @@ fn cache_rule(mime: &str) -> &'static str {
     if mime.starts_with("text/html") { "no-store" } else { "no-cache" }
 }
 
+#[cfg(feature = "desktop")]
 fn serve_static<R: tauri::Runtime>(
     ctx: tauri::UriSchemeContext<'_, R>,
     request: tauri::http::Request<Vec<u8>>,
@@ -1296,7 +1321,7 @@ fn rotate_child_log(path: &Path) -> bool {
 /// она запущена. Тогда окно — только смотрит: своих детей не поднимает ни при старте, ни
 /// надзором, а просьбы о перезапуске кладёт движку. Ответ живёт 10 с — надзор спрашивает
 /// каждые 5 с, и sc.exe на каждый его тик был бы лишним процессом.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn service_owns_harness() -> bool {
     static SEEN: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
     if let Ok(seen) = SEEN.lock() {
@@ -1323,7 +1348,7 @@ fn service_owns_harness() -> bool {
 }
 
 /// Вне Windows служба устроена иначе (launchd поднимает движок сам) — правило не нужно.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn service_owns_harness() -> bool {
     false
 }
@@ -1676,7 +1701,7 @@ fn note_relay_login() {
 /// и поднимается заново по свежему конфигу (или не поднимается, если relay.enabled
 /// снят). Чужое реле (порт держит служба или прежняя копия) не трогаем — им занимается
 /// его хозяин: служба перечитывает helene.json и auth.json сама.
-fn reconcile_relay(state: &tauri::State<LocalHarness>, cfg: &serde_json::Value, why: &str) -> String {
+fn reconcile_relay(state: &ShellState<LocalHarness>, cfg: &serde_json::Value, why: &str) -> String {
     let base_config = install_root().join(CONFIG_NAME);
     // Ревью 25.09 (A4 F3/F4). Записи детей НЕ удаляются и не переставляются: надзор
     // (`watch_children`) держит индексы записей между двумя захватами замка, и `remove`
@@ -1774,9 +1799,9 @@ fn reconcile_relay(state: &tauri::State<LocalHarness>, cfg: &serde_json::Value, 
 /// Живое реле о себе: применённый вход (какой слот активен, сколько настроено). Это
 /// ответ на «применится перезапуском», которое висело вечно: файл auth.json — не факт
 /// применения, факт — слово самого реле (25.09, C.3).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn relay_account() -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(relay_account_blocking)
+    shell_adapter::async_runtime::spawn_blocking(relay_account_blocking)
         .await
         .map_err(|e| e.to_string())?
 }
@@ -2162,8 +2187,8 @@ fn file_mtime_ns(path: &Path) -> Option<String> {
 /// устарел: отвечаем `{ok:false, code:"stale"}` с текущим отпечатком и не
 /// пишем, как `safe_write_md` у маркдаунов (ревью 06.09, §3, решение 3).
 /// Старое окно без отпечатка пишет как раньше.
-#[tauri::command]
-fn config_save(app: tauri::AppHandle, config: String, mtime_ns: Option<String>) -> Result<serde_json::Value, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn config_save(app: ShellHandle, config: String, mtime_ns: Option<String>) -> Result<serde_json::Value, String> {
     // Файл ТОГО агента, которого показывает окно: у корневого — рядом с
     // программой, у соседа — его собственный. Иначе настройки второго агента
     // молча уезжали бы в конфиг первого.
@@ -2228,8 +2253,9 @@ fn config_save_at(target: &Path, config: &str, mtime_ns: Option<&str>) -> Result
 /// заставал живого (single-instance) и выходил сам, либо успевал увидеть ещё
 /// не убитых детей старого и оставался окном без харнесса. Теперь: гасим
 /// детей, отдаём запуск отложенному хвосту cmd и только потом выходим.
-#[tauri::command]
-fn restart_self(app: tauri::AppHandle) {
+#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+fn restart_self(app: ShellHandle) {
     let Ok(exe) = std::env::current_exe() else {
         log_line("перезапуск: не узнал собственный путь");
         return;
@@ -2298,6 +2324,15 @@ fn restart_self(app: tauri::AppHandle) {
     }
     app.exit(0);
 }
+#[cfg(feature = "host")]
+fn restart_self(app: ShellHandle) {
+    let state = app.state::<LocalHarness>();
+    if service_owns_harness() { let _ = ask_engine_restart(&current_tree(), "window"); }
+    kill_children(&state);
+    relay_abort();
+    shell_adapter::event("relaunch", serde_json::Value::Null);
+}
+
 
 /// Бандл `.app`, внутри которого лежит этот бинарь: `X.app/Contents/MacOS/x`
 /// → `X.app`. Не в бандле (сборка из cargo) — None.
@@ -2427,14 +2462,14 @@ fn may_signal_group(reaped: bool, alive_leader: bool) -> bool {
 /// Тело, поднятое окном под службой. Отдельно от `LocalHarness.children`: у
 /// этого ребёнка другое условие жизни (он появляется, когда движок уже жив у
 /// службы) и другой владелец решения — опция «Управление компьютером».
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 static SERVICE_BODY: Mutex<Option<Child>> = Mutex::new(None);
 
 /// Погасить тело, поднятое окном. Зовётся из `kill_children`: выход из строки
 /// меню и ⌘Q обязаны уносить его с собой, иначе оно осталось бы висеть на
 /// мосту службы после закрытия окна — то есть агент «видел бы экран», когда
 /// владелец его закрыл.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn stop_service_body() {
     if let Ok(mut guard) = SERVICE_BODY.lock() {
         if let Some(child) = guard.as_mut() {
@@ -2448,7 +2483,7 @@ fn stop_service_body() {
 /// перезаписывается движком на каждом старте и лежит правами 0600 — читает его
 /// только владелец. Пустой или обрезанный файл — это НЕ токен: пустая строка в
 /// `PRAXIS_BODY_TOKEN` означала бы тело, которое мост пускает без ключа.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn service_body_token(tree: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(tree.join("memory").join(".state").join("body-token")).ok()?;
     let token = raw.trim().to_string();
@@ -2463,7 +2498,7 @@ fn service_body_token(tree: &Path) -> Option<String> {
 /// мосту, которого уже нет, а окно поднимало бы тело раз за разом в пустоту —
 /// с растущей паузой и строкой в журнал на каждый круг. Адрес моста берём
 /// оттуда же, откуда его возьмёт тело, — из его конфига.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn service_bridge_alive(body_json: &Path) -> bool {
     let Ok(raw) = std::fs::read_to_string(body_json) else { return false };
     let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&raw) else { return false };
@@ -2486,8 +2521,8 @@ fn service_bridge_alive(body_json: &Path) -> bool {
 ///   * `helene-body` в поставке есть.
 /// Не сложилось — ждём молча (одна строка в журнал на смену состояния): это
 /// обычная жизнь, а не сбой.
-#[cfg(target_os = "macos")]
-fn watch_service_body(app: tauri::AppHandle, tree: PathBuf, config: PathBuf) {
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn watch_service_body(app: ShellHandle, tree: PathBuf, config: PathBuf) {
     use std::sync::atomic::Ordering;
     let exe = install_root().join("helene-body");
     let body_json = tree.join("body").join("body.json");
@@ -2617,9 +2652,9 @@ fn relay_home() -> PathBuf {
     base_tree().join("relay")
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn relay_login() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(relay_login_blocking)
+    shell_adapter::async_runtime::spawn_blocking(relay_login_blocking)
         .await
         .map_err(|e| e.to_string())?
 }
@@ -2677,7 +2712,7 @@ fn relay_login_blocking() -> Result<String, String> {
 /// «Ждём вход в браузере» — открыть своей рукой или скопировать. Пока помощник жив.
 static LOGIN_URL: Mutex<Option<String>> = Mutex::new(None);
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn relay_login_url() -> Option<String> {
     let pending = login_lock().as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None)));
     if !pending {
@@ -2687,14 +2722,14 @@ fn relay_login_url() -> Option<String> {
 }
 
 /// Открыть страницу входа рукой самого окна — только ту ссылку, что напечатал помощник.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn open_login_page() -> Result<(), String> {
     let url = relay_login_url().ok_or("вход не идёт или ссылки ещё нет — нажми «Войти в ChatGPT» ещё раз")?;
     open_path(url)
 }
 
-#[tauri::command]
-fn relay_status(app: tauri::AppHandle) -> String {
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn relay_status(app: ShellHandle) -> String {
     let auth = relay_home().join("local_auth").join("auth.json");
     // (жив ли помощник, вышел ли успехом)
     let (pending, helper_ok) = {
@@ -2753,13 +2788,13 @@ fn relay_status(app: tauri::AppHandle) -> String {
 }
 
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn install_service() -> Result<String, String> {
     // Опциональная служба: один UAC. Само окно прав не требует и не получает;
     // рецепт — установщика (`common/service_op.rs`): ждём поднятый процесс,
     // читаем его код и спрашиваем SCM. Раньше результат не читался, и
     // «запрошено» значило «сделано» — отказ в UAC выглядел успехом.
-    tauri::async_runtime::spawn_blocking(|| service_op_from_window("install"))
+    shell_adapter::async_runtime::spawn_blocking(|| service_op_from_window("install"))
         .await
         .unwrap_or_else(|_| Err("вызов службы прерван".into()))
 }
@@ -2768,19 +2803,19 @@ async fn install_service() -> Result<String, String> {
 /// системным диалогом пароля (`osascript … with administrator privileges`),
 /// а на машине с беспарольным sudo (раннер CI) через `sudo -n`.
 #[cfg(target_os = "macos")]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn install_service() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| mac_service_op("install"))
+    shell_adapter::async_runtime::spawn_blocking(|| mac_service_op("install"))
         .await
         .unwrap_or_else(|_| Err("вызов службы прерван".into()))
 }
 
 /// Службы на этой платформе нет; окно её карточку прячет (`app_info.platform`),
 /// а до этих ручек из интерфейса не дойти — ответ словами на всякий случай.
-#[cfg(not(any(windows, target_os = "macos")))]
-#[tauri::command]
+#[cfg(target_os = "linux")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn install_service() -> Result<String, String> {
-    Err("службы на этой платформе нет".into())
+    shell_adapter::async_runtime::spawn_blocking(|| linux_service_op("install")).await.unwrap_or_else(|_| Err("service operation interrupted".into()))
 }
 
 /// Поставить или снять демон launchd. Одна функция на обе кнопки: описание
@@ -2916,7 +2951,7 @@ fn service_op_from_window(op: &str) -> Result<String, String> {
 
 /// One explicit owner door; never route resume to the install/uninstall wrapper.
 /// Observe the owner marker independently of the API it has stopped.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn owner_state() -> serde_json::Value {
     let (agent_id, tree) = with_current((BASE_AGENT_ID.to_string(), base_tree()),
         |c| (c.id.clone(), c.tree.clone().unwrap_or_else(base_tree)));
@@ -2963,7 +2998,7 @@ fn owner_pid_alive(pid: u32, observed_at: Option<f64>) -> Option<bool> {
 }
 
 /// Same supervisor request as the API, usable while the channel is reconnecting.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn engine_restart() -> Result<String, String> {
     if owner_stopped() { return Err("Движок остановлен владельцем — сначала возобнови его".into()); }
     if !ask_engine_restart(&current_tree(), "window") {
@@ -2972,7 +3007,7 @@ fn engine_restart() -> Result<String, String> {
     Ok("Перезапуск запрошен; жду готовности движка".into())
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn owner_control(action: String) -> Result<String, String> {
     if action != "panic" && action != "resume" { return Err("panic | resume".into()); }
     #[cfg(windows)]
@@ -3002,13 +3037,13 @@ fn owner_control(action: String) -> Result<String, String> {
 }
 
 /// Уведомление Windows из веб-части (заголовок, текст).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn notify(title: String, body: String) {
     toast(&title, &body);
 }
 
 /// Конфиг целиком для экрана настроек плюс где он лежит и где данные.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn config_load() -> Result<serde_json::Value, String> {
     let base = install_root();
     let path = current_config_path();
@@ -3037,9 +3072,9 @@ fn config_load() -> Result<serde_json::Value, String> {
 /// async: синхронная команда Tauri исполняется на главном потоке, и висящий
 /// sc.exe вешал бы окно целиком (а опрашивают его каждые 2,5 с).
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn service_state() -> String {
-    tauri::async_runtime::spawn_blocking(service_state_blocking)
+    shell_adapter::async_runtime::spawn_blocking(service_state_blocking)
         .await
         .unwrap_or_else(|_| "absent".to_string())
 }
@@ -3048,9 +3083,9 @@ async fn service_state() -> String {
 /// `unknown`. Прав не требует (`launchctl print` — чтение), но может и не
 /// ответить, и тогда ответ честный «не знаю», а не выдуманное «нет».
 #[cfg(target_os = "macos")]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn service_state() -> String {
-    tauri::async_runtime::spawn_blocking(mac_svc_state_said)
+    shell_adapter::async_runtime::spawn_blocking(mac_svc_state_said)
         .await
         .unwrap_or_else(|_| "unknown".to_string())
 }
@@ -3080,10 +3115,10 @@ fn mac_svc_state_said() -> String {
 
 /// Вне Windows и macOS службы нет как механизма — `missing`, а не `absent`:
 /// второе значит «можно поставить», и окно рисовало бы под него кнопку.
-#[cfg(not(any(windows, target_os = "macos")))]
-#[tauri::command]
+#[cfg(target_os = "linux")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn service_state() -> String {
-    "missing".to_string()
+    linux_svc_state(&linux_owner_name())
 }
 
 /// Ответ SCM о службе продукта: running | stopped | absent. С дедлайном —
@@ -3124,25 +3159,25 @@ fn service_state_blocking() -> String {
 }
 
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn remove_service() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| service_op_from_window("uninstall"))
+    shell_adapter::async_runtime::spawn_blocking(|| service_op_from_window("uninstall"))
         .await
         .unwrap_or_else(|_| Err("вызов службы прерван".into()))
 }
 
 #[cfg(target_os = "macos")]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn remove_service() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| mac_service_op("remove"))
+    shell_adapter::async_runtime::spawn_blocking(|| mac_service_op("remove"))
         .await
         .unwrap_or_else(|_| Err("вызов службы прерван".into()))
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
-#[tauri::command]
+#[cfg(target_os = "linux")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn remove_service() -> Result<String, String> {
-    Err("службы на этой платформе нет".into())
+    shell_adapter::async_runtime::spawn_blocking(|| linux_service_op("remove")).await.unwrap_or_else(|_| Err("service operation interrupted".into()))
 }
 
 /// Что вообще можно отдать Проводнику. Проводник не «показывает», а ЗАПУСКАЕТ
@@ -3190,7 +3225,7 @@ fn plain_path(path: &Path) -> PathBuf {
 
 /// Открыть папку в Проводнике (или ссылку в браузере).
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn open_path(path: String) -> Result<(), String> {
     let target = open_target(&path)?;
     Command::new(explorer_exe())
@@ -3202,7 +3237,7 @@ fn open_path(path: String) -> Result<(), String> {
 
 /// macOS: `open` — папку в Finder, ссылку в браузере. Прочие POSIX: `xdg-open`.
 #[cfg(not(windows))]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn open_path(path: String) -> Result<(), String> {
     let target = open_target(&path)?;
     let tool = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
@@ -3218,7 +3253,7 @@ fn open_path(path: String) -> Result<(), String> {
 
 /// Показать файл в Проводнике с выделением — для собранных логов.
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn reveal_path(path: String) -> Result<(), String> {
     let target = open_target(&path)?;
     let mut cmd = Command::new(explorer_exe());
@@ -3231,7 +3266,7 @@ fn reveal_path(path: String) -> Result<(), String> {
 
 /// macOS: `open -R` — Finder с выделенным файлом. Прочие POSIX: открыть папку.
 #[cfg(not(windows))]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn reveal_path(path: String) -> Result<(), String> {
     let target = open_target(&path)?;
     let mut cmd = if cfg!(target_os = "macos") {
@@ -3257,7 +3292,7 @@ fn reveal_path(path: String) -> Result<(), String> {
 /// системное окно, галочку ставит владелец сам: выдать разрешение TCC
 /// программно нельзя, и это правильно. Окно зовёт команду только на macOS
 /// (карточка рисует кнопки по `tcc` в снимке тела).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn open_privacy_pane(kind: String) -> Result<(), String> {
     let Some(url) = privacy_pane_url(&kind) else {
         return Err(format!("не знаю такого раздела разрешений: «{kind}»"));
@@ -3362,7 +3397,7 @@ fn startup_lnk() -> Option<PathBuf> {
 
 /// Автозапуск — ярлык в папке автозагрузки пользователя, без реестра и прав.
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn autostart_get() -> bool {
     startup_lnk().map(|p| p.exists()).unwrap_or(false)
 }
@@ -3371,15 +3406,15 @@ fn autostart_get() -> bool {
 /// <идентификатор>.plist`; есть файл — есть автозапуск, ровно как ярлык
 /// в автозагрузке Windows. Идентификатор — сборки (`app.helene.desk`), а не
 /// продукт латиницей: у варианта Праксис свой, и агенты не спорят за имя.
-#[cfg(not(windows))]
-#[tauri::command]
+#[cfg(target_os = "macos")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn autostart_get() -> bool {
     launch_agent_plist().map(|p| p.is_file()).unwrap_or(false)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn autostart_set(on: bool) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || autostart_set_blocking(on))
+    shell_adapter::async_runtime::spawn_blocking(move || autostart_set_blocking(on))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -3434,7 +3469,7 @@ fn launch_agent_text(label: &str, program: &str) -> String {
 /// автозапуск → тумблер в любую сторону → Hélène исчезает с экрана. Поймано
 /// адверсаркой до живой пробы. Старый путь бинаря в уже загруженном задании
 /// доживает до выхода из системы — при следующем входе launchd прочитает файл.
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 fn autostart_set_blocking(on: bool) -> Result<(), String> {
     let plist = launch_agent_plist().ok_or("не нашёл домашнюю папку (HOME)")?;
     if !on {
@@ -3489,7 +3524,7 @@ fn autostart_set_blocking(on: bool) -> Result<(), String> {
 
 /// Адрес этой машины в локальной сети — для QR телефону. Сокет не отправляет
 /// ничего: connect на внешний адрес лишь выбирает интерфейс.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn lan_ip() -> Option<String> {
     let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     sock.connect("8.8.8.8:80").ok()?;
@@ -3499,9 +3534,9 @@ fn lan_ip() -> Option<String> {
 /// Адрес этой машины в сети Tailscale (100.64.0.0/10), если он установлен и
 /// включён: телефон с Tailscale в том же аккаунте достучится из любой сети,
 /// не только из этой Wi-Fi. Спрашиваем у их же CLI, ничего не угадываем.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn tailscale_ip() -> Option<String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    shell_adapter::async_runtime::spawn_blocking(|| {
         // Голого "tailscale.exe" в списке больше нет: по голому имени Windows
         // взяла бы файл из папки программы, а туда пишет и сам агент.
         let mut candidates: Vec<PathBuf> = Vec::new();
@@ -3568,6 +3603,10 @@ include!("../../common/service_op.rs");
 // model_probe: стенды сборки plist и экранирования идут и на Windows, а живые
 // части (`mac_svc_state`, `mac_svc_run_admin`) гейтятся внутри файла.
 include!("../../common/mac_service.rs");
+#[cfg(target_os = "linux")]
+include!("../../common/linux_service.rs");
+#[cfg(target_os = "linux")]
+include!("linux_window.rs");
 include!("../../common/stamp.rs");
 include!("../../common/owner_stop.rs");
 include!("../../common/random_hex.rs");
@@ -3633,9 +3672,9 @@ fn backup_ticker() {
 }
 
 /// «Сделать копию сейчас» в настройках. -> путь к снимку.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn backup_now() -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    shell_adapter::async_runtime::spawn_blocking(|| {
         let root = install_root();
         let cfg = match read_config(&root.join(CONFIG_NAME)) {
             ConfigRead::Ok(v) => Some(v),
@@ -3652,7 +3691,7 @@ async fn backup_now() -> Result<serde_json::Value, String> {
 }
 
 /// Снимки в папке копий — для карточки «Копии памяти».
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn backup_list() -> serde_json::Value {
     let root = install_root();
     let cfg = match read_config(&root.join(CONFIG_NAME)) {
@@ -3916,7 +3955,7 @@ fn token_elevation_type() -> i32 {
 ///
 /// Ручку просит app/src/mode.ts::adminProbe: без неё экран режимов отвечает
 /// честным «не знаю».
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn admin_state() -> serde_json::Value {
     admin_verdict(process_is_elevated(), token_elevation_type())
 }
@@ -4353,9 +4392,9 @@ fn netsh_batch(
 /// Разрешить входящие к трубе в брандмауэре Windows. Нужны права
 /// администратора; без них — честная ошибка, а не тишина.
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn firewall_allow(port: u16) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || firewall_allow_blocking(port))
+    shell_adapter::async_runtime::spawn_blocking(move || firewall_allow_blocking(port))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -4364,7 +4403,7 @@ async fn firewall_allow(port: u16) -> Result<String, String> {
 /// спрашивает владельца про входящие к питону при первом подключении. Не
 /// ошибка — телефон от этого не ломается, — но строка в журнале остаётся.
 #[cfg(not(windows))]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn firewall_allow(port: u16) -> Result<String, String> {
     log_line(&format!(
         "брандмауэр: правило для порта {port} на этой платформе не ставится — система спросит сама"
@@ -4418,15 +4457,15 @@ fn firewall_allow_blocking(port: u16) -> Result<String, String> {
 /// Во всём продукте до этого был только `add rule` и ни одного `delete`:
 /// дыра переживала и выключение телефона, и удаление программы.
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn firewall_clear(port: u16) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || firewall_clear_blocking(port))
+    shell_adapter::async_runtime::spawn_blocking(move || firewall_clear_blocking(port))
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[cfg(not(windows))]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn firewall_clear(port: u16) -> Result<String, String> {
     log_line(&format!("брандмауэр: правила для порта {port} на этой платформе нет — снимать нечего"));
     Ok(format!("порт {port}: правила брандмауэра здесь нет — снимать нечего"))
@@ -5699,9 +5738,9 @@ fn watch_broker_wishes(tree: PathBuf) {
 /// Живая проверка адреса и ключа — тем же кодом, что установщик
 /// (`common/model_probe.rs`): 200 без списка моделей — не «ok», как отвечал
 /// прежний вариант окна на неверный ключ z.ai.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn probe_model(base_url: String, key: String, framework: Option<String>) -> serde_json::Value {
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = shell_adapter::async_runtime::spawn_blocking(move || {
         probe_model_blocking(&base_url, &key, framework.as_deref().unwrap_or(""))
     })
     .await
@@ -5781,7 +5820,7 @@ fn ensure_start_menu_shortcut(_identifier: &str, _name: &str, _icon: Option<&Pat
 /// Windows держит уведомления в Центре уведомлений и по умолчанию показывает
 /// их на экране блокировки: с выключенным тумблером приходит только «новое
 /// сообщение», без текста разговора.
-fn watch_outbound(app: tauri::AppHandle, tree: PathBuf, agent: String, show_text: bool) {
+fn watch_outbound(app: ShellHandle, tree: PathBuf, agent: String, show_text: bool) {
     std::thread::spawn(move || {
         let archive = tree
             .join("memory")
@@ -5981,7 +6020,7 @@ fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
     p.setAttribute("style", "white-space:pre-wrap;opacity:.85;margin:0 0 22px");
     box.appendChild(h);
     box.appendChild(p);
-    var api = window.__TAURI_INTERNALS__;
+    var api = window.__TAURI_INTERNALS__ || window.__HELENE__;
     if (api && typeof api.invoke === "function") {{
       var btn = document.createElement("button");
       btn.textContent = "Перезапустить Hélène";
@@ -6002,16 +6041,15 @@ fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
     )
 }
 
-fn main() {
+fn bootstrap() -> Option<Boot> {
     if std::env::args().any(|a| a == "--panic") {
         if let Err(e) = owner_control("panic".into()) { eprintln!("{e}"); std::process::exit(1); }
-        return;
+        return None;
     }
     let base = install_root();
     install_panic_hook();
     // Контекст сборки — один раз и до первого слова в журнале: из него имя продукта.
-    let context = tauri::generate_context!();
-    init_product(context.config());
+
     log_line(&format!("старт {} {} ({})", product_fs(), env!("CARGO_PKG_VERSION"), toast_id()));
     let read = read_config(&base.join(CONFIG_NAME));
     let broken = matches!(read, ConfigRead::Broken(_));
@@ -6037,7 +6075,7 @@ fn main() {
     // (его нет вовсе или он читается): поставка приезжает с шаблоном
     // helene.json, и первый запуск обязан открывать визард.
     if !broken && unconfigured(&cfg) && hand_over_to_setup(&base) {
-        return;
+        return None;
     }
     let configured = !unconfigured(&cfg);
 
@@ -6180,6 +6218,25 @@ fn main() {
             .unwrap_or_else(|| install_root().join(CONFIG_NAME)),
     });
 
+    #[cfg(feature = "host")]
+    if init_script.is_empty() {
+        init_script = format!("window.DESK_CONFIG_OVERRIDE = {};", serde_json::json!({
+            "base": "", "key": "", "agent": agent, "product": product_ui(), "needs_local_setup": !configured,
+        }));
+    }
+    Some(Boot { base, children, plans, init_script, tree, notify_text })
+}
+
+struct Boot {
+    base: PathBuf, children: Vec<Managed>, plans: Vec<SpawnPlan>,
+    init_script: String, tree: Option<PathBuf>, notify_text: bool,
+}
+
+#[cfg(feature = "desktop")]
+fn main() {
+    let context = tauri::generate_context!();
+    init_product(context.config());
+    let Some(Boot { base, children, plans, init_script, tree, notify_text }) = bootstrap() else { return };
     let builder = tauri::Builder::default()
         // Один экземпляр — ПЕРВЫМ плагином: повторный запуск не доходит до
         // окна, а поднимает и фокусирует уже живое.
@@ -6529,6 +6586,7 @@ fn webview2_present() -> bool {
 /// спрашиваем то же самое. Прочитать не удалось — считаем, что памяти нет:
 /// «не знаю» тут безопаснее трактовать как первый запуск, иначе окно откроется
 /// крошечным посреди экрана.
+#[cfg(feature = "desktop")]
 fn window_state_remembered<M: tauri::Manager<tauri::Wry>>(manager: &M) -> bool {
     manager
         .path()
@@ -6548,6 +6606,7 @@ fn window_state_remembered<M: tauri::Manager<tauri::Wry>>(manager: &M) -> bool {
 /// появляется НИКОГДА — процесс жив, дети подняты, журнал чист, окна нет.
 /// Поймано живой пробой 11.09; из `switch_agent` (цикл уже крутится) годится
 /// и `AppHandle`.
+#[cfg(feature = "desktop")]
 fn open_window<M: tauri::Manager<tauri::Wry>>(
     manager: &M,
     init_script: &str,
@@ -6616,7 +6675,14 @@ fn open_window<M: tauri::Manager<tauri::Wry>>(
     Ok(())
 }
 
-fn show_main(app: &tauri::AppHandle) {
+#[cfg(feature = "desktop")]
+fn replace_main(app: &ShellHandle, script: &str) -> Result<(), String> {
+    open_window(app, script, None).map_err(|e| e.to_string())
+}
+#[cfg(feature = "host")]
+fn replace_main(app: &ShellHandle, script: &str) -> Result<(), String> { app.replace(script) }
+
+fn show_main(app: &ShellHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -6626,7 +6692,7 @@ fn show_main(app: &tauri::AppHandle) {
     }
 }
 
-fn kill_children(state: &tauri::State<LocalHarness>) {
+fn kill_children(state: &ShellState<LocalHarness>) {
     state.stopping.store(true, std::sync::atomic::Ordering::Relaxed);
     if let Ok(mut guard) = state.children.lock() {
         for m in guard.iter_mut() {
@@ -6641,7 +6707,7 @@ fn kill_children(state: &tauri::State<LocalHarness>) {
     relay_abort();
     // И тело, поднятое окном под службой: движок службы переживёт выход из
     // окна, а тело обязано уйти вместе с окном — владелец закрыл программу.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     stop_service_body();
 }
 
@@ -6656,7 +6722,7 @@ fn kill_children(state: &tauri::State<LocalHarness>) {
 /// Здесь же — вторая попытка поднять СВОЙ харнесс, когда своих детей нет
 /// вовсе: порт был занят (служба, чужая программа, зомби прежней установки).
 /// Раньше это состояние было необратимым до перезапуска exe.
-fn watch_children(app: tauri::AppHandle) {
+fn watch_children(app: ShellHandle) {
     use std::sync::atomic::Ordering;
     /// Что делать с ребёнком после осмотра — решение принимается под замком,
     /// а исполняется без него.
@@ -6957,7 +7023,7 @@ fn watch_children(app: tauri::AppHandle) {
 /// применяет на лету, а его перезапуск ронял бы вход в подписку посреди хода.
 /// Старые дети гасятся, порт ждём до трёх секунд, потом `start_children`, как при
 /// старте окна.
-fn restart_agent_children(state: &tauri::State<LocalHarness>, agent: &str) {
+fn restart_agent_children(state: &ShellState<LocalHarness>, agent: &str) {
     use std::sync::atomic::Ordering;
     let base = install_root();
     let Some(full) = build_plans(&base).into_iter().find(|p| p.agent == agent) else {
@@ -7020,8 +7086,8 @@ fn restart_agent_children(state: &tauri::State<LocalHarness>, agent: &str) {
 /// «Поднят» считается по ЖИВЫМ детям этого процесса, а не по конфигу: агент,
 /// чей порт занят чужой программой, в конфиге включён — и молчаливая галочка
 /// «работает» была бы враньём.
-#[tauri::command]
-fn agents_list(state: tauri::State<LocalHarness>) -> serde_json::Value {
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn agents_list(state: ShellState<LocalHarness>) -> serde_json::Value {
     let base = install_root();
     let raised: Vec<String> = state
         .children
@@ -7046,8 +7112,8 @@ fn agents_list(state: tauri::State<LocalHarness>) -> serde_json::Value {
 /// заново с init-скриптом того агента (адрес канала + его ключ). Детей при
 /// этом никто не гасит: остальные агенты продолжают жить, и переписка в них
 /// идёт своим чередом — окно просто смотрит в другую сторону.
-#[tauri::command]
-fn switch_agent(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn switch_agent(app: ShellHandle, id: String) -> Result<serde_json::Value, String> {
     let base = install_root();
     let Some(agent) = find_agent(&base, &id) else {
         return Err(format!("агента «{id}» в этой установке нет"));
@@ -7087,7 +7153,7 @@ fn switch_agent(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, 
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        let made = open_window(&handle, &script, None);
+        let made = replace_main(&handle, &script);
         // Флаг снимаем ПОСЛЕ постройки: пока он поднят, смерть окна не гасит
         // детей — а до этой строки как раз и умирает старое.
         SWITCHING.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -7107,8 +7173,8 @@ fn switch_agent(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, 
 /// в списке. Дом агента засевает раннер при первом старте — второй реализации
 /// засева здесь нет и не будет. Мозг и ограда наследуются от корневого (владелец
 /// настроил их один раз), бот и тело — нет: они у каждого свои.
-#[tauri::command]
-async fn agent_add(app: tauri::AppHandle, name: String) -> Result<serde_json::Value, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn agent_add(app: ShellHandle, name: String) -> Result<serde_json::Value, String> {
     let base = install_root();
     let named = name.trim().to_string();
     if named.is_empty() {
@@ -7123,7 +7189,7 @@ async fn agent_add(app: tauri::AppHandle, name: String) -> Result<serde_json::Va
         return Err(format!("в этой сборке нет {}", script.display()));
     }
     let named_for_cmd = named.clone();
-    let made: serde_json::Value = tauri::async_runtime::spawn_blocking(move || {
+    let made: serde_json::Value = shell_adapter::async_runtime::spawn_blocking(move || {
         // Заводит агента ПИТОН — тот самый модуль, которым список читают раннер
         // и канал. Второй реализации правил (slug, свободный порт, что
         // наследуется) в Rust нет: разъезд двух «завести агента» стоил бы
@@ -7161,7 +7227,7 @@ async fn agent_add(app: tauri::AppHandle, name: String) -> Result<serde_json::Va
 /// ним окно прячет карточки того, чего на этой системе нет (служба, тело,
 /// брандмауэр); `root` — корень установки, `exe_dir` оставлен под старым
 /// именем с тем же значением: окно показывает его как «папку программы».
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn app_info() -> serde_json::Value {
     let base = install_root();
     serde_json::json!({
@@ -7270,9 +7336,9 @@ fn pick_update_zip(
 /// Рядом лежит `.sha256`; внутри архива в корне — `install.sh`.
 const UPDATE_MAC_SUFFIX: &str = "-macos-arm64.zip";
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn update_check(url: String) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(move || update_check_blocking(&url))
+    shell_adapter::async_runtime::spawn_blocking(move || update_check_blocking(&url))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -7314,7 +7380,7 @@ fn update_check_blocking(url: &str) -> Result<serde_json::Value, String> {
         let asset = v
             .get("assets")
             .and_then(|a| a.as_array())
-            .and_then(|a| pick_update_zip(a, product_fs(), product_fs() == PRODUCT, macos));
+            .and_then(|a| if cfg!(target_os = "linux") { None } else { pick_update_zip(a, product_fs(), product_fs() == PRODUCT, macos) });
         let current = env!("CARGO_PKG_VERSION");
         // macOS: версия новее есть, а сборки для Mac в ней нет — сказать это
         // словами, а не подсовывать страницу релиза с Windows-архивом. Когда
@@ -7460,7 +7526,7 @@ fn update_autocheck() {
     if notify {
         toast(
             product_ui(),
-            &format!("Есть версия {latest}. Настройки → О программе → «Скачать и установить»."),
+            &format!("Есть версия {latest}. Настройки → О программе → «{}».", if cfg!(target_os = "linux") { "Открыть выпуск Linux" } else { "Скачать и установить" }),
         );
         log_line(&format!("проверка обновлений при старте: есть версия {latest}"));
     }
@@ -7523,7 +7589,7 @@ fn update_file_name(url: &str) -> Result<String, String> {
 /// релиза). Не совпала — файл удаляется, ответ отказ: подписи кода у поставки
 /// нет, и сумма — единственная проверка, что скачано то, что выложено.
 /// `sha_ok`: true — совпала; null — сверять было не с чем (сумма не пришла).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn update_download(url: String, sha256: Option<String>) -> Result<serde_json::Value, String> {
     // Отказ обязан оставить след. 20.09.2026: у владельца кнопка отвечала
     // «Не получилось.», а в helene.log не было НИ ОДНОЙ строки об этом — успех
@@ -7547,7 +7613,7 @@ async fn update_download_inner(url: String, sha256: Option<String>) -> Result<se
     if !expected.is_empty() && (expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit())) {
         return Err("контрольная сумма релиза не похожа на sha256".into());
     }
-    tauri::async_runtime::spawn_blocking(move || {
+    shell_adapter::async_runtime::spawn_blocking(move || {
         use sha2::{Digest, Sha256};
         use std::io::{Read, Write};
         let dir = downloads_dir();
@@ -7617,8 +7683,9 @@ async fn update_download_inner(url: String, sha256: Option<String>) -> Result<se
 /// полторы секунды (ответ окну успевает дойти). Скрипту передаётся
 /// `HELENE_OLD_PID`, чтобы он мог дождаться нашей смерти, прежде чем менять
 /// файлы под ногами.
-#[tauri::command]
-async fn update_install(app: tauri::AppHandle, path: String, force_extensions: Option<bool>) -> Result<serde_json::Value, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn update_install(app: ShellHandle, path: String, force_extensions: Option<bool>) -> Result<serde_json::Value, String> {
+    if cfg!(target_os = "linux") { return Err("На Linux установи новый .deb/.rpm через пакетный менеджер.".into()); }
     let force_extensions = force_extensions.unwrap_or(false);
     let archive = PathBuf::from(path.trim())
         .canonicalize()
@@ -7637,7 +7704,7 @@ async fn update_install(app: tauri::AppHandle, path: String, force_extensions: O
     // Windows программу гасит сам установщик.
     #[cfg(windows)]
     let _ = app;
-    tauri::async_runtime::spawn_blocking(move || {
+    shell_adapter::async_runtime::spawn_blocking(move || {
         #[cfg(windows)]
         {
             let stem = archive.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Helene".into());
@@ -7741,7 +7808,7 @@ fn install_script_entry(listing: &str) -> Option<String> {
 /// потом install.sh распаковывал zip второй раз. Смысл Windows-ветки тот же:
 /// архив рядом с собой → установщик из него → оболочка отдаёт дело и выходит.
 #[cfg(not(windows))]
-fn update_install_posix(app: tauri::AppHandle, archive: &Path, force_extensions: bool) -> Result<serde_json::Value, String> {
+fn update_install_posix(app: ShellHandle, archive: &Path, force_extensions: bool) -> Result<serde_json::Value, String> {
     let unzip = posix_tool("unzip");
     let mut list = Command::new(&unzip);
     list.arg("-Z1").arg(archive);
@@ -7827,7 +7894,7 @@ fn update_install_posix(app: tauri::AppHandle, archive: &Path, force_extensions:
 
 /// Вход агента в Telegram своим аккаунтом: шаги status / send / code / logout
 /// выполняет помощник на встроенном Python; ответ — его JSON как есть.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn telegram_account(
     step: String,
     api_id: String,
@@ -7841,7 +7908,7 @@ async fn telegram_account(
     // процесса: запущенный не ярлыком helene.exe клал сессию Telethon в чужое
     // место, и руннер не находил её никогда.
     let tree = current_tree();
-    tauri::async_runtime::spawn_blocking(move || {
+    shell_adapter::async_runtime::spawn_blocking(move || {
         let python = bundled_python(&base);
         let script = base.join("app").join("localharness").join("mtproto_login.py");
         if !python.exists() || !script.exists() {
@@ -7887,7 +7954,7 @@ async fn telegram_account(
 /// его читает канал и показывает окно. Ребёнок усыновляется job-объектом, как
 /// остальные: закрыл окно — качать некому, и окно об этом скажет, увидев
 /// протухшую запись, вместо вечного «качаю…».
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn voice_fetch(model: String, kind: Option<String>) -> Result<String, String> {
     let base = install_root();
     let python = bundled_python(&base);
@@ -7934,10 +8001,10 @@ fn voice_fetch(model: String, kind: Option<String>) -> Result<String, String> {
 /// путь к архиву; окно показывает его в Проводнике. Импорт на ПК — только из
 /// консоли при закрытой программе: подменять data/ под живым харнессом нельзя,
 /// и команды на это у окна намеренно нет.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn carry_export() -> Result<String, String> {
     let base = install_root();
-    tauri::async_runtime::spawn_blocking(move || {
+    shell_adapter::async_runtime::spawn_blocking(move || {
         let python = bundled_python(&base);
         let script = base.join("app").join("localharness").join("carry.py");
         if !python.exists() || !script.exists() {
@@ -7988,12 +8055,12 @@ async fn carry_export() -> Result<String, String> {
 /// Собрать логи для поддержки в один zip во временной папке: helene.log,
 /// вывод харнесса, службы и реле. Файлы сперва копируются: дети держат свои
 /// логи открытыми, и архиватор напрямую их не читает.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn logs_bundle() -> Result<String, String> {
     // Дерево берём то, с которым это окно живёт (Identity), а не считаем
     // заново от текущей папки процесса.
     let tree = current_tree();
-    tauri::async_runtime::spawn_blocking(move || logs_bundle_blocking(tree))
+    shell_adapter::async_runtime::spawn_blocking(move || logs_bundle_blocking(tree))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -9577,3 +9644,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tree);
     }
 }
+
+#[cfg(feature = "host")]
+include!("host_rpc.rs");
+
+#[cfg(target_os = "linux")]
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn autostart_get() -> bool { linux_autostart_path().is_some_and(|p| p.is_file()) }
+#[cfg(target_os = "linux")]
+fn autostart_set_blocking(on: bool) -> Result<(), String> { linux_autostart_set(on) }

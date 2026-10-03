@@ -1068,6 +1068,10 @@ export function start(opts: WindowOptions): void {
    * поднимала, и перезапуск окна — нулевое действие.
    */
   async function restartHarness() {
+    if (cfg.needs_local_setup) {
+      await shell("restart_self").catch((e) => toast(humanError(e).text));
+      return;
+    }
     await controlEngine("restart");
   }
 
@@ -1573,6 +1577,12 @@ export function start(opts: WindowOptions): void {
   // Первый запуск издания: занял экран — окно не подключается и комнат не
   // грузит, потому что подключаться пока не к чему.
   if (opts.firstRun?.(view)) return;
+  if (cfg.needs_local_setup) {
+    // The local engine intentionally waits for a configured provider/model.
+    // Native settings remain available without a running agent or API channel.
+    void show("settings");
+    return;
+  }
   connect();
   void refreshState();
   // 26.09: окно, открытое мастером сразу после установки, заставало канал ещё не

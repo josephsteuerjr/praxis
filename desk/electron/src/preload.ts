@@ -4,6 +4,10 @@ import { contextBridge, ipcRenderer } from "electron";
 
 const channel = ipcRenderer.sendSync("helene:config");
 contextBridge.exposeInMainWorld("DESK_CONFIG_OVERRIDE", channel);
+// Electron currently exposes no verified physical contact/axis_stop source here.
+if (process.platform === "linux") contextBridge.exposeInMainWorld("__HELENE_SCROLL_SUPPORT", {
+  hold: "unavailable", source: process.argv.includes("--helene-session=wayland") ? "wayland" : "x11",
+});
 
 contextBridge.exposeInMainWorld("__HELENE__", {
   shell: "electron",

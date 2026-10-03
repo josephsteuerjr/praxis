@@ -9,5 +9,6 @@ fn main() {
     let icons = std::env::var("HELENE_ICON_DIR").unwrap_or_else(|_| "icons".to_string());
     println!("cargo:rustc-env=HELENE_ICON_DIR={icons}");
     println!("cargo:rerun-if-changed={icons}");
+    #[cfg(feature = "desktop")]
     tauri_build::build()
 }

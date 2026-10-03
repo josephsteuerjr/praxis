@@ -255,6 +255,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   const host = await hostInfo();
   const platform = platformOf(host) || S.platform;
   const mac = isMacPlatform(platform);
+  const linux = platform === "linux";
 
   // Издание приносит свои карточки и свою часть записи в конфиг. Всё, что
   // ему нужно спросить у трубы (режим, снимок устройства), оно спрашивает
@@ -338,8 +339,13 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // удалён); `sha_ok: null` — сверять было не с чем. Установщик гасит
   // программу — «установщик запущен» говорим ДО вызова. Старая оболочка без
   // этих команд — кнопка честно открывает ссылку на выпуск.
-  const dlBtn = button("Скачать и установить", "primary", async () => {
+  const dlBtn = button(linux ? "Открыть выпуск Linux" : "Скачать и установить", "primary", async () => {
     if (!updUrl) return;
+    if (linux) {
+      await shell("open_path", { path: updUrl }).catch((e) => toast(humanError(e).text));
+      updOut.textContent = "Установи новый .deb/.rpm через пакетный менеджер. Данные останутся в твоём доме.";
+      return;
+    }
     dlBtn.disabled = true;
     updOut.className = "receipt";
     updOut.textContent = "Скачиваю в «Загрузки»…";
@@ -384,7 +390,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
           updUrl = r.url || "";
           updSha = r.sha256 || "";
           dlBtn.hidden = !updUrl;
-          forceToggle.hidden = !updUrl;
+          forceToggle.hidden = linux || !updUrl;
         } else {
           updOut.textContent = `Это последняя версия (${r.current}).`;
           updUrl = "";
@@ -519,7 +525,8 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         saveOut.textContent =
           "Сохранено. Модель и ключ движок применит сам через несколько секунд, реле — сразу." +
           relayWords + restartNote + modeNote;
-        restartBtn.hidden = !(modeNote || restartNote);
+        if (cfg.needs_local_setup) saveOut.textContent = "Настройки сохранены. Перезапусти окно кнопкой ниже, чтобы впервые запустить агента.";
+        restartBtn.hidden = !(modeNote || restartNote || cfg.needs_local_setup);
         S.agent = String(out.agent?.name || S.agent);
       } catch (e) {
         if (e instanceof StaleConfig) {

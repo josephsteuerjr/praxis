@@ -18,8 +18,10 @@
 политика polkit /usr/share/polkit-1/actions/app.helene.policy, /usr/bin/helene-home. Разное у
 семейств — только имена зависимостей и путь юнита.
 
-Раскладка /opt/helene (как у Windows и Mac, без окна — оно ждёт решения потока 1):
+Раскладка /opt/helene: окно Electron и общий Rust-хост, затем движок и данные:
 
+  helene  electron/          окно Electron
+  helene-host               общий Rust-хост оболочки
   helene-relay  helene-svc  helene-bridge  helene-body     Rust, glibc ≤ 2.28
   runtime/                  CPython 3.14.7 (python-build-standalone) + пакеты, голос включая
   app/                      пакет desk вида linux (deskpkg.build)
@@ -42,8 +44,8 @@ git в поставку не кладётся: у Debian-семейства он
                                      [--allow-partial]
 
 Правило то же, что у build_dist/build_mac: сборка либо выпускает ПОЛНЫЙ пакет, либо падает
-понятной строкой. Пока движок окна под Linux не выбран (ПОТОКИ-28.09.md, «Решения»), пакет
-без окна — это полусборка: паспорт говорит `complete: false` и называет причину.
+понятной строкой. Окно Electron обязательно: complete:true означает полный состав,
+а аппаратная приёмка указывается отдельно в поле window паспорта.
 """
 from __future__ import annotations
 
@@ -72,6 +74,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import deskpkg  # noqa: E402
 import build_dist as bd  # noqa: E402 — отбор дерева, гард, лицензии, зависимости
 import build_mac as bm  # noqa: E402 — дерево из выпуска, реле, тело, их лицензии
+from build_window_linux import stage_window
 
 PLATFORM = "linux"
 ARCH = "amd64"                      # имя архитектуры Debian (dpkg --print-architecture)
@@ -98,13 +101,16 @@ PBS_URL = f"{PBS_BASE}/{PBS_NAME}"
 PBS_SHA256 = "0ab3305457051cd3e7c031857e005f1bda17c218a1990567dacaaac6dd1d14f0"
 
 #: Что в корне поставки — от Rust. Каждый обязан быть ELF и не требовать glibc новее порога.
-ROOT_BINARIES = ("helene-relay", "helene-svc", "helene-bridge", "helene-body")
+ROOT_BINARIES = ("helene-relay", "helene-svc", "helene-bridge", "helene-body", "helene-host")
 SVC_CRATE = DESK / "svc"
 SVC_BIN = "helene-svc"
 
-#: Без чего пакет — не пакет (кроме окна: оно ждёт решения потока 1).
+#: Обязательный состав, включая окно и общий хост.
 REQUIRED_ROOT = (
     "helene-relay", "helene-svc", "helene-bridge", "helene-body",
+    "helene", "helene-host", "electron/helene-window", "electron/resources/app/package.json",
+    "electron/resources/app/out/main.js", "electron/resources/app/out/preload.js",
+    "electron/LICENSE", "electron/LICENSES.chromium.html",
     "runtime/bin/python3",
     "app/deskapp.py", "app/desk.json", "app/static/index.html", "app/mobile/index.html",
     "app/localharness/runner.py", "app/localharness/body.py", "app/resources/SOUL.md",
@@ -119,12 +125,19 @@ REQUIRED_ROOT = (
 #: правок), bubblewrap — ограда тула shell (`fence_posix`), procps — `ps` для тела и стендов.
 #: Рекомендации: шина доступности (дерево окна), polkit (пароль администратора окном),
 #: xdg-utils (открыть ссылку входа в подписку).
-DEPENDS = ("libc6 (>= 2.28)", "git", "bubblewrap", "procps", "ca-certificates")
+DEPENDS = ("libc6 (>= 2.28)", "git", "bubblewrap", "procps", "ca-certificates",
+           "libgtk-3-0", "libnss3", "libgbm1", "libasound2 | libasound2t64",
+           "libx11-6", "libxcomposite1", "libxdamage1", "libxext6", "libxfixes3",
+           "libxrandr2", "libxcb1", "libxkbcommon0", "libatk1.0-0", "libatk-bridge2.0-0",
+           "libcups2", "libdrm2", "libpango-1.0-0", "libcairo2")
 RECOMMENDS = ("at-spi2-core", "pkexec | policykit-1", "xdg-utils")
 #: Те же зависимости именами rpm-семейства (Fedora/RHEL/РЕД ОС/ROSA): glibc 2.28 — это RHEL 8,
 #: ровно наш порог; `procps-ng` — имя procps у Red Hat. Мягкие зависимости rpm (Recommends)
 #: понимает с rpm 4.12 — у RHEL 8 и новее он есть.
-RPM_DEPENDS = ("glibc >= 2.28", "git", "bubblewrap", "procps-ng", "ca-certificates")
+RPM_DEPENDS = ("glibc >= 2.28", "git", "bubblewrap", "procps-ng", "ca-certificates",
+               "gtk3", "nss", "mesa-libgbm", "alsa-lib", "libX11", "libXcomposite",
+               "libXdamage", "libXext", "libXfixes", "libXrandr", "libxcb", "libxkbcommon",
+               "atk", "at-spi2-atk", "cups-libs", "libdrm", "pango", "cairo")
 RPM_RECOMMENDS = ("at-spi2-core", "polkit", "xdg-utils")
 #: Куда кладётся юнит: у Debian 10 /lib ещё не слит с /usr/lib, у rpm-семейства путь пакетов —
 #: /usr/lib/systemd/system.
@@ -292,9 +305,15 @@ FIRST_RUN_LINUX = f"""# Hélène · первый запуск на Linux (Debian
 
 ## Окно
 
-⚠ Окна под Linux в этой сборке ещё нет: движок окна (Tauri/WebKitGTK или Electron)
-выбирается отдельно. До него агент живёт службой: Telegram и телефон отвечают, а
-настройки правятся в `~/.local/share/helene/helene.json` (модель и ключ, Telegram).
+Открой Hélène из меню приложений или командой `helene`. При первом запуске появятся
+настройки модели. Окно Electron использует общий Rust-хост: тот же движок, настройки,
+резервные копии и управление агентами. Закрытие окна прячет его к часам; «Выйти» в меню
+значка завершает его дочерние процессы. Установленная служба работает независимо.
+
+Неподвижное удержание края пальцами на тачпаде в Linux Electron пока недоступно
+(и X11, и Wayland). Обычная прокрутка и возврат края используют общую физику;
+аппаратная проверка Linux-тачпада ещё не выполнена. Обновление — новым .deb/.rpm
+через пакетный менеджер, а не Windows/Mac установщиком из окна.
 
 ## Работать без входа в систему (служба)
 
@@ -339,7 +358,8 @@ THIRD_PARTY_LINUX = """# Лицензии третьих сторон (сбор�
 
 Hélène собрана из открытых компонентов. Полные тексты — внутри поставки:
 
-- крейты службы (`helene-svc`) — `licenses/rust/`;
+- крейты службы и общего хоста (`helene-svc`, `helene-host`) — `licenses/rust/`;
+- Electron — `electron/LICENSE`, Chromium — `electron/LICENSES.chromium.html`;
 - крейты реле подписки ChatGPT (`helene-relay`, MIT) — `licenses/relay/`;
 - крейты моста и тела тула `computer` (`helene-bridge`, `helene-body`) — `licenses/body/`
   (среди них x11rb, zbus и arboard — MIT или Apache-2.0);
@@ -493,9 +513,9 @@ def program_contents(out: Path, program_root: str = PROGRAM_ROOT) -> list[dict]:
         if path.is_symlink():
             items.append({"src": os.readlink(path), "dst": dst, "type": "symlink"})
         elif path.is_file():
-            mode = path.stat().st_mode & 0o777
+            mode = path.stat().st_mode & 0o7777
             items.append({"src": str(path), "dst": dst,
-                          "file_info": {"mode": 0o755 if mode & 0o111 else 0o644}})
+                          "file_info": {"mode": mode}})
         elif path.is_dir() and not any(path.iterdir()):
             items.append({"dst": dst, "type": "dir", "file_info": {"mode": 0o755}})
     return items
@@ -516,7 +536,13 @@ def nfpm_config(version: str, contents: list[dict], files: dict[str, str]) -> di
         # запуска: без ссылки в PATH их пришлось бы звать полным путём (поймала проверка
         # установки в чистом Debian 28.09).
         {"src": f"{PROGRAM_ROOT}/helene-svc", "dst": "/usr/bin/helene-svc", "type": "symlink"},
+        {"src": f"{PROGRAM_ROOT}/helene", "dst": "/usr/bin/helene", "type": "symlink"},
     ]
+    if "desktop" in files:
+        extra.extend([
+            {"src": files["desktop"], "dst": "/usr/share/applications/helene.desktop", "file_info": {"mode": 0o644}},
+            {"src": files["icon"], "dst": "/usr/share/icons/hicolor/128x128/apps/helene.png", "file_info": {"mode": 0o644}},
+        ])
     return {
         "name": PACKAGE,
         "arch": ARCH,
@@ -558,6 +584,9 @@ def build_packages(out: Path, version: str, dest: Path, unit_text: str) -> dict[
     for key, text in (("unit", unit_text), ("policy", POLKIT_POLICY), ("home", HELENE_HOME_SCRIPT),
                       ("postinst", POSTINST), ("prerm", PRERM), ("postrm", POSTRM)):
         files[key].write_text(text, encoding="utf-8", newline="\n")
+    files["desktop"] = work / "helene.desktop"
+    files["desktop"].write_text("[Desktop Entry]\nType=Application\nName=Hélène\nComment=Личный агент\nExec=/usr/bin/helene\nIcon=helene\nTerminal=false\nCategories=Utility;\nStartupWMClass=Helene\n", encoding="utf-8")
+    files["icon"] = DESK / "shell/icons/128x128.png"
     config = nfpm_config(version, program_contents(out), {k: str(v) for k, v in files.items()})
     conf_path = work / "nfpm.yaml"          # JSON — это валидный YAML
     conf_path.write_text(json.dumps(config, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -627,15 +656,16 @@ def main() -> None:
             (shutil.rmtree(item) if item.is_dir() and not item.is_symlink() else item.unlink())
     out.mkdir(parents=True, exist_ok=True)
     cache.mkdir(parents=True, exist_ok=True)
-    missing: list[str] = [
-        "окна нет: движок окна под Linux ещё не выбран (ПОТОКИ-28.09.md, «Решения»)",
-    ]
+    missing: list[str] = []
 
     print("фронты:")
     if args.skip_fronts:
         print("  не собираются (--skip-fronts)")
     else:
         bm.build_fronts()
+
+    print("окно Electron и общий Rust-хост:")
+    window = stage_window(out, cache, version, args.skip_rust)
 
     print("служба:")
     shutil.copy2(build_svc(args.skip_rust), out / SVC_BIN)
@@ -700,8 +730,8 @@ def main() -> None:
                      ("installer/ЛИЦЕНЗИЯ.md", "ЛИЦЕНЗИЯ.md"), ("installer/NOTICE", "NOTICE")):
         bd.copy_text_lf(DESK / src, out / dst)
     (out / "ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md").write_text(THIRD_PARTY_LINUX, encoding="utf-8", newline="\n")
-    n = bd.collect_rust_licenses(out, args.allow_partial, live, parts=("svc",), include_body=False,
-                                 exes="helene-svc")
+    n = bd.collect_rust_licenses(out, args.allow_partial, live, parts=("svc", "shell"), include_body=False,
+                                 exes="helene-svc, helene-host")
     print(f"  лицензии крейтов службы: {n}")
     relay_src_dir = cache / "praxis-relay"
     print(f"  лицензии крейтов реле: {bm.collect_relay_licenses(out, relay_src_dir, args.allow_partial)}")
@@ -719,7 +749,7 @@ def main() -> None:
     lost = [rel for rel in missing_in_root(out) if rel != "helene-build.json"]
     partial = missing + [f"нет в сборке: {rel}" for rel in lost] + \
         [f"пакет desk без {s['name']}" for s in pkg["skipped"]]
-    blocking = [p for p in partial if not p.startswith("окна нет")]
+    blocking = partial
     if blocking and not args.allow_partial:
         raise SystemExit("сборка неполная:\n  " + "\n  ".join(blocking))
     manifest = {
@@ -736,7 +766,7 @@ def main() -> None:
         "glibc": glibc, "builder_glibc": host_glibc,
         "tree_files": staged_tree["tree_files"],
         "static": pkg["static"],
-        "relay": relay, "body": body_info,
+        "relay": relay, "body": body_info, "window": window,
         "desk": {"version": pkg["version"], "flavor": pkg["flavor"], "digest": pkg["digest"],
                  "files": len(pkg["files"]), "skipped": [s["name"] for s in pkg["skipped"]]},
         "program_root": PROGRAM_ROOT,

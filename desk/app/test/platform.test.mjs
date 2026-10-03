@@ -102,7 +102,8 @@ assert.match(chrome, /e\.ctrlKey \|\| e\.metaKey/, "сочетания пере�
 // or a service reinstall being described as an engine restart.
 assert.match(chrome, /"\/api\/supervisor\/restart"/);
 assert.match(chrome, /shell\("engine_restart"\)/);
-assert.ok(!/shell\("restart_self"\)/.test(chrome));
+assert.equal((chrome.match(/shell\("restart_self"\)/g) || []).length, 1, "перезапуск окна разрешён только для первого запуска");
+assert.match(chrome, /if \(cfg\.needs_local_setup\) \{\s*await shell\("restart_self"\)[\s\S]*?return;\s*\}\s*await controlEngine\("restart"\)/, "обычный перезапуск должен идти через надзор движка");
 
 // Каркас настроек: система идёт изданию, автозапуск без слова «Windows», брандмауэр и служба за затвором.
 assert.match(frame, /edition\(\{ draft, saved: c, loaded, host, platform \}\)/, "каркас не отдаёт изданию систему хоста");
@@ -135,13 +136,13 @@ assert.ok(computerTs.includes("«Запись экрана и системног
 assert.match(computerTs, /\["accessibility", "accessibility", "Универсальный доступ"\]/, "строки про «Универсальный доступ» нет");
 assert.match(computerTs, /tccBox\.hidden = !tcc \|\| typeof tcc !== "object"/, "строки про разрешения рисуются без слова тела (по догадке)");
 assert.ok(!/helene-body\.exe и helene-bridge\.exe рядом/.test(computerTs), "имена тела в карточке снова захардкожены с .exe");
-assert.match(agent, /\}, mac\);\s*cards\.push\(inGroup\(mode\.el/, "карточке режима не передают систему хоста");
+assert.match(agent, /\}, mac \|\| platform === "linux", platform === "linux"\);\s*cards\.push\(inGroup\(mode\.el/, "карточке режима не передают систему хоста");
 // Секция службы рисуется на обеих системах; на Mac у неё свои слова, и
 // галочек там нет — их список приходит от харнесса (`service.toggles` пуст).
-assert.ok(!/if \(!mac\) box\.append\(svcBox\)/.test(modecard), "секция службы снова спрятана на macOS — а служба там есть");
+assert.ok(!/if \(!posix\) box\.append\(svcBox\)/.test(modecard), "секция службы снова спрятана на macOS — а служба там есть");
 assert.match(modecard, /^\s*box\.append\(svcBox\);/m, "секция службы не добавляется в карточку вовсе");
-assert.match(modecard, /mac \? "Служба" : "Служба Windows"/, "строка «Сейчас» на Mac снова говорит «служба Windows»");
-assert.ok(!/if \(!mac\) \{\s*void svcRefresh\(\)/.test(modecard), "карточка режима снова не спрашивает службу на macOS");
+assert.match(modecard, /posix \? "Служба" : "Служба Windows"/, "строка «Сейчас» на Mac снова говорит «служба Windows»");
+assert.ok(!/if \(!posix\) \{\s*void svcRefresh\(\)/.test(modecard), "карточка режима снова не спрашивает службу на macOS");
 assert.match(modecard, /^\s*void svcRefresh\(\);/m, "карточка режима перестала спрашивать состояние службы");
 assert.match(modecard, /st === "unknown"/, "четвёртый ответ о службе («спросить не вышло») снова слит с «Службы нет»");
 assert.match(modecard, /option\?\.warning \|\| live\.service_warning/, "оговорка опции службы не берётся у харнесса");

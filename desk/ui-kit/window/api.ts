@@ -9,6 +9,7 @@ export interface Cfg {
   product?: string;
   /** Поставка распакована, но адрес сервера ещё не вписан: окно спрашивает его само. */
   needs_remote?: boolean;
+  needs_local_setup?: boolean;
 }
 
 declare global {

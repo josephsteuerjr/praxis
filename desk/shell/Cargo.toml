@@ -4,14 +4,26 @@ version = "1.3.4"
 edition = "2021"
 description = "Frame — нативная оболочка основной программы: окно + WebView2, трей, уведомления, один экземпляр. Говорит с харнессом агента по frame.desk.v1: локально (дети окна) или удалённо."
 
+[[bin]]
+name = "helene"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[[bin]]
+name = "helene-host"
+path = "src/bin/helene-host.rs"
+required-features = ["host"]
+
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
-tauri-plugin-window-state = "2"
-tauri-plugin-single-instance = "2"
+tauri = { version = "2", features = ["tray-icon", "image-png"], optional = true }
+tauri-plugin-window-state = { version = "2", optional = true }
+tauri-plugin-single-instance = { version = "2", optional = true }
 serde_json = "1"
+serde = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "time", "net"], optional = true }
 # native-certs: без него ureq носит с собой webpki-roots и не знает корней
 # Windows — на машине с антивирусом, разбирающим TLS, «Проверить ключ» и
 # «Проверить обновления» врали «Нет связи» там, где браузер работает.
@@ -46,8 +58,8 @@ objc2-core-graphics = { version = "0.3", default-features = false, features = ["
 objc2-app-kit = { version = "0.3", default-features = false, features = ["objc2-core-graphics"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gtk = "0.18"
-webkit2gtk = { version = "2", features = ["v2_40"] }
+gtk = { version = "0.18", optional = true }
+webkit2gtk = { version = "2", features = ["v2_40"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
@@ -68,4 +80,7 @@ strip = true
 # вшитой страницы. `tauri build` включает её сам; при `cargo build` — руками:
 # cargo build --release --features custom-protocol
 [features]
-custom-protocol = ["tauri/custom-protocol"]
+default = ["desktop"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-window-state", "dep:tauri-plugin-single-instance", "dep:gtk", "dep:webkit2gtk"]
+host = ["dep:tokio"]
+custom-protocol = ["desktop", "tauri/custom-protocol"]

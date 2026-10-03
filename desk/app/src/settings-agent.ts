@@ -671,7 +671,7 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
     // всё, что доступно учётке (слово владельца 06.09), и карточке здесь нечего
     // показывать; список в конфиге живёт и оживает вместе с песочницей.
     mounts.el.hidden = !sandbox;
-  }, mac);
+  }, mac || platform === "linux", platform === "linux");
   cards.push(inGroup(mode.el, GROUP.rights));
 
   // --- песочница: сеть контейнера остаётся выбором владельца, ограду ставит режим

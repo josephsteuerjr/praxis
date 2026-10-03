@@ -122,7 +122,8 @@ class Package(unittest.TestCase):
 
     def test_first_run_text_is_honest_about_the_window_and_wayland(self):
         text = bl.FIRST_RUN_LINUX
-        self.assertIn("Окна под Linux в этой сборке ещё нет", text)
+        self.assertIn("Окно Electron использует общий Rust-хост", text)
+        self.assertIn("тачпаде в Linux Electron пока недоступно", text)
         self.assertIn("Wayland", text)
         self.assertIn("helene-svc service install", text)
 

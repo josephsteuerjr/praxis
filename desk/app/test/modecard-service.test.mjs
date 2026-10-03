@@ -41,13 +41,13 @@ assert.ok(from > 0 && till > from, "секция службы не нашлас�
 const section = source.slice(from, till);
 
 /** Исполнить секцию с подставными окном и коробкой; вернуть напечатанные строки. */
-function render({ service, service_title = "", service_text = "", service_warning = "", mac = false }) {
+function render({ service, service_title = "", service_text = "", service_warning = "", mac = false, linux = false }) {
   const printed = [];
   const el = (tag, cls, text) => ({ tag, cls, text });
   const svcBox = { append: (node) => printed.push(node) };
   const live = { service, service_title, service_text, service_warning };
   // eslint-disable-next-line no-new-func
-  new Function("el", "svcBox", "live", "mac", section)(el, svcBox, live, mac);
+  new Function("el", "svcBox", "live", "posix", "linux", section)(el, svcBox, live, mac || linux, linux);
   return printed;
 }
 
@@ -94,6 +94,7 @@ const old = render({ service: undefined });
 assert.ok(said(old).includes(OLD_HARNESS), "без описания окно обязано сказать, что своих слов не пишет");
 assert.equal(old[0].text, "Служба Windows", "без ответа кода агента заголовок — виндовый");
 assert.equal(render({ service: undefined, mac: true })[0].text, "Служба", "на Mac служба не «Windows»");
+assert.equal(render({ service: undefined, linux: true })[0].text, "Служба", "Linux не обещает службу Windows");
 
 // Описания нет, а оговорка есть — печатаются ОБЕ строки, не одна вместо другой.
 const both = render({ service: { title: "", text: "", warning: "Окон и экрана нет…" }, mac: true });

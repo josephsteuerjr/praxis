@@ -107,16 +107,15 @@ def main() -> int:
             failed.append("rust · cargo не найден")
         else:
             for crate in CRATES:
-                if crate == "svc" and os.name != "nt" and sys.platform != "darwin":
-                    # Служба собирается на Windows (SCM, ACL, session-host) и с
-                    # 0.8.0 на macOS (демон launchd, `svc/src/daemon.rs`). На
-                    # прочих системах крейта нет, и это не падение, а состав
-                    # платформы. Строка обязательна: молчаливый пропуск
-                    # неотличим от «прогнали и всё зелёное».
-                    print(f"пропуск  rust · {crate}  (крейт только для Windows и macOS — служба)",
+                if crate == "setup" and sys.platform == "linux":
+                    # Linux first run lives in the Electron settings window.
+                    print(f"пропуск  rust · {crate}  (мастер Tauri не входит в Linux-пакет)",
                           flush=True)
                     continue
-                ok, name = run([cargo, "test", "--offline"], DESK / crate,
+                command = [cargo, "test", "--offline", "--locked"]
+                if crate == "shell" and sys.platform == "linux":
+                    command += ["--no-default-features", "--features", "host", "--bin", "helene-host"]
+                ok, name = run(command, DESK / crate,
                                f"rust · {crate}", args.quiet)
                 if not ok:
                     failed.append(name)
