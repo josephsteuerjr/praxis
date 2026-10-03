@@ -39,11 +39,11 @@ check('a touchpad run-up and system tail leave only a small edge deformation',()
 });
 for(const at of [12,60,180]) check(`hand pickup at ${at}ms preserves position and velocity`,()=>{
   const h=fixture();h.s.scrollTo(20,false);h.s.fling(-4);h.advance(at);
-  const position=h.s.pos,velocity=h.s.vel;
+  const position=h.s.pos,velocity=h.s.vel,shown=h.shown();
   h.pointer('pointerdown',100);
   assert.equal(h.s.pos,position);assert.equal(h.s.vel,velocity);
   h.pointer('pointermove',180);h.advance(200);
-  assert.ok(h.shown()>Math.abs(position)+5,'pickup did not transfer control to the hand');
+  assert.ok(h.shown()>shown+5,'pickup did not transfer control to the hand');
   h.pointer('pointerup',180);h.advance(1600);assert.equal(h.shown(),0);h.s.destroy();
 });
 check('a small wheel pickup during absorption keeps its motion and responds',()=>{

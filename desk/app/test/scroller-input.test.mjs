@@ -28,10 +28,12 @@ check('reversing direction discards queued travel from the old gesture',()=>{
   for(let i=0;i<8;i++)h.wheel(-10);
   h.advance(180);assert.ok(h.view.scrollTop<atTurn,'opposite input kept travelling the old way');h.s.destroy();
 });
-check('a long tiny tail cannot keep a large pull parked at the limit',()=>{
+check('a long native momentum tail cannot keep a large pull parked at the limit',()=>{
   const h=fixture();for(let i=0;i<20;i++)h.wheel(-100);
   const peak=h.shown();assert.ok(peak>70);
-  for(let i=0;i<150;i++)h.wheel(-0.5);
+  // Small deltas can also be moving fingers. Only the platform inertia flag
+  // distinguishes this released tail from the hand-hold acceptance case.
+  for(let i=0;i<150;i++)h.wheel(-0.5,16,{momentum:true});
   assert.ok(h.shown()<10,`tiny tail kept ${h.shown()} of ${peak}px`);
   h.advance(1500);assert.equal(h.shown(),0);h.s.destroy();
 });

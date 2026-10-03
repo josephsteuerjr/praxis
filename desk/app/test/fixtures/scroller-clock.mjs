@@ -56,5 +56,8 @@ export function fixture(options = {}) {
     view.handlers[type]?.({type,pointerId:1,pointerType:'mouse',button:0,buttons:type==='pointerup'?0:1,
       clientX:100,clientY:y,timeStamp:clock,target:view,preventDefault(){},...extra});
   }
-  return { s, view, inner, advance, wheel, pointer, windowHandlers, shown: () => Math.abs(s.debug().shown) };
+  function contact(contacts, available = true) {
+    windowHandlers['helene-touchpad-contact']?.({detail:{contacts,available}});
+  }
+  return { s, view, inner, advance, wheel, pointer, contact, windowHandlers, shown: () => Math.abs(s.debug().shown) };
 }

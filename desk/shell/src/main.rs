@@ -52,6 +52,9 @@ use std::time::{Duration, Instant};
 use tauri::Manager;
 
 #[cfg(windows)]
+mod touchpad;
+
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 // POSIX: `process_group(0)` — каждый ребёнок в своей группе процессов, чтобы
 // остановить его вместе с внуками одним `killpg` (замена job-объекту Windows).
@@ -6255,6 +6258,8 @@ fn main() {
             )))?;
             debug_assert_eq!(app.config().identifier, toast_id());
             open_window(app, &init_script, Some(window_icon))?;
+            #[cfg(windows)]
+            touchpad::start(app.handle().clone());
             // Передний план: Windows отдаёт его неохотно, когда запустивший нас
             // процесс (установщик) уже вышел, — окно появлялось позади других,
             // и казалось, что не открылось. Короткий «поверх всех» лечит.

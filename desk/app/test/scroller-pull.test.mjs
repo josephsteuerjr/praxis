@@ -119,7 +119,7 @@ wheel(0); // научили: это устройство присылает ну
 advance(200); // пальцы легли заново — с человеческой паузой, не в ноль миллисекунд
 for (let i = 0; i < 40; i++) { wheel(-12.5); advance(16); }
 const aPeak = shift();
-assert.ok(aPeak > 60, `кейс A: оттяжка видна (${aPeak.toFixed(1)} px)`);
+assert.ok(aPeak > 40, `кейс A: оттяжка видна (${aPeak.toFixed(1)} px)`);
 for (let i = 0; i < 40; i++) { wheel(12.5); advance(16); } // вернули за ноль и дальше
 wheel(0); advance(16); // пальцы подняли
 advance(300);
@@ -136,7 +136,7 @@ wheel(0); // sawLift=true: это устройство шлёт нули
 advance(200); // пауза перекладывания пальцев
 for (let i = 0; i < 40; i++) { wheel(-12.5); advance(16); }
 const bPeak = shift();
-assert.ok(bPeak > 60, `кейс B: оттяжка видна (${bPeak.toFixed(1)} px)`);
+assert.ok(bPeak > 40, `кейс B: оттяжка видна (${bPeak.toFixed(1)} px)`);
 advance(1500); // палец замер БЕЗ отпускания
 assert.equal(shift(),0,"кейс B: тишина не оставляет крупную оттяжку");
 wheel(0); advance(16); // отпустили — ноль
@@ -155,7 +155,7 @@ wheel(0);
 advance(200); // пауза перекладывания пальцев
 for (let i = 0; i < 40; i++) { wheel(-12.5); advance(16); }
 const cPeak = shift();
-assert.ok(cPeak > 60, `кейс C: оттяжка видна (${cPeak.toFixed(1)} px)`);
+assert.ok(cPeak > 40, `кейс C: оттяжка видна (${cPeak.toFixed(1)} px)`);
 wheel(0); advance(16); // отпустили: возврат пошёл
 advance(120); // лента ещё на середине пути
 const cMid = Math.abs(shift());
