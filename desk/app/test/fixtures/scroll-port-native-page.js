@@ -49,5 +49,5 @@
     userAgent:navigator.userAgent,
     samples:cases.map(c=>({name:c.name,debug:c.s.debug(),pos:c.s.pos,target:c.s.target,vel:c.s.vel,
       session:c.s.session,sessionAt:c.s.sessionAt,now:performance.now(),wheelActive:c.s.wheelActive,
-      notch:c.s.notch,releaseAt:c.s.releaseAt,top:c.view.scrollTop,written:c.s.written})))} });}
+      notch:c.s.notch,releaseAt:c.s.releaseAt,top:c.view.scrollTop,written:c.s.written}))}});}
 })();
