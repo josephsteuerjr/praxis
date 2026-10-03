@@ -2,7 +2,7 @@
   "name": "helene",
   "productName": "Hélène",
   "private": true,
-  "version": "1.3.4",
+  "version": "1.3.5",
   "description": "Hélène — окно и значок у часов на Electron; «сердце» программы — helene-host (Rust)",
   "main": "out/main.js",
   "scripts": {
