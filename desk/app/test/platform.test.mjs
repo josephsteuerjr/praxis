@@ -107,8 +107,9 @@ assert.match(chrome, /if \(cfg\.needs_local_setup\) \{\s*await shell\("restart_s
 
 // Каркас настроек: система идёт изданию, автозапуск без слова «Windows», брандмауэр и служба за затвором.
 assert.match(frame, /edition\(\{ draft, saved: c, loaded, host, platform \}\)/, "каркас не отдаёт изданию систему хоста");
-assert.match(frame, /mac \? "Запускать при входе в систему" : "Запускать при входе в Windows"/, "подпись автозапуска на Mac говорит про Windows");
-assert.match(frame, /if \(inTauri && !mac\) \{[\s\S]{0,80}"firewall_allow"/, "правило брандмауэра просится и на macOS");
+assert.match(frame, /const posix = mac \|\| linux;/, "Linux должен использовать системные подписи и POSIX пути");
+assert.match(frame, /posix \? "Запускать при входе в систему" : "Запускать при входе в Windows"/, "подпись автозапуска на POSIX говорит про Windows");
+assert.match(frame, /if \(inTauri && !posix\) \{[\s\S]{0,80}"firewall_allow"/, "правило Windows просится на macOS/Linux");
 assert.ok(
   !/if \(!mac\) \{[\s\S]{0,120}"service_state"/.test(frame),
   "расписка «Сохранено» снова не спрашивает службу на macOS — а она там есть",

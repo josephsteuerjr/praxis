@@ -305,7 +305,7 @@ function makeTray() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: `Открыть ${PRODUCT_UI}`, click: () => show() },
     { type: "separator" },
-    { label: "Выход (агент остаётся под службой)", click: () => { quitting = true; app.quit(); } },
+    { label: "Выйти", click: () => { quitting = true; app.quit(); } },
   ]));
   tray.on("click", () => show());
 }

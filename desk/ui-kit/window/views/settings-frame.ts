@@ -256,6 +256,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   const platform = platformOf(host) || S.platform;
   const mac = isMacPlatform(platform);
   const linux = platform === "linux";
+  const posix = mac || linux;
 
   // Издание приносит свои карточки и свою часть записи в конфиг. Всё, что
   // ему нужно спросить у трубы (режим, снимок устройства), оно спрашивает
@@ -276,10 +277,10 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
 
   for (const box of built.cards) center.append(box);
 
-  center.append(inGroup(phoneCard(draft, !!c.phone?.enabled, built.phoneBase, built.qrSvg, mac), GROUP.brain));
+  center.append(inGroup(phoneCard(draft, !!c.phone?.enabled, built.phoneBase, built.qrSvg, posix), GROUP.brain));
 
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
-  center.append(inGroup(transferCard(draft, mac), GROUP.app));
+  center.append(inGroup(transferCard(draft, posix), GROUP.app));
 
   // --- копии памяти (1.2): расписание, «сейчас», последние снимки
   center.append(inGroup(backupCard(draft), GROUP.app));
@@ -287,7 +288,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // --- автозапуск
   const auto = el("div");
   // На macOS это LaunchAgent при входе в систему — «Windows» в подписи был бы чужим словом.
-  const autoToggle = toggle(mac ? "Запускать при входе в систему" : "Запускать при входе в Windows", false, async (v) => {
+  const autoToggle = toggle(posix ? "Запускать при входе в систему" : "Запускать при входе в Windows", false, async (v) => {
     try {
       await shell("autostart_set", { on: v });
       toast(v ? "Автозапуск включён" : "Автозапуск выключен");
@@ -835,12 +836,12 @@ function backupCard(draft: Config): HTMLElement {
   return card("Копии памяти", box);
 }
 
-function transferCard(draft: Config, mac = false): HTMLElement {
+function transferCard(draft: Config, posix = false): HTMLElement {
   const box = el("div");
   // Команда обратного импорта — путём питона ЭТОЙ системы (runtime/python.exe
   // против runtime/bin/python3): подсказка, которую копируют в консоль, обязана
   // работать как есть.
-  const importCmd = mac
+  const importCmd = posix
     ? "runtime/bin/python3 app/localharness/carry.py import --config helene.json --archive <архив>"
     : "runtime\\python.exe app\\localharness\\carry.py import --config helene.json --archive <архив>";
   const exportOut = el("span", "receipt");
@@ -916,7 +917,7 @@ function transferCard(draft: Config, mac = false): HTMLElement {
  * локальный адрес, куда телефону идти незачем.
  */
 function phoneCard(draft: Config, savedEnabled: boolean, remoteBase: string,
-                   qrSvg: (text: string) => Promise<string>, mac = false): HTMLElement {
+                   qrSvg: (text: string) => Promise<string>, posix = false): HTMLElement {
   draft.phone = draft.phone || {};
   const remote = !!remoteBase;
   const phone = el("div");
@@ -1009,7 +1010,7 @@ function phoneCard(draft: Config, savedEnabled: boolean, remoteBase: string,
         </div>`;
       // Правило брандмауэра — Windows: на macOS входящие на порт пользователя
       // и так открыты, правила нет, и QR работает без него.
-      if (inTauri && !mac) {
+      if (inTauri && !posix) {
         const fw = await shell<string>("firewall_allow", { port: Number(port) }).catch((e) => humanError(e).text);
         toast(fw);
       }
