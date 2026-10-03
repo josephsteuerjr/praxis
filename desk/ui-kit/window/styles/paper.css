@@ -528,6 +528,8 @@ body::before {
   border: var(--lw) solid var(--line-ink);
   border-radius: 20px;
   box-shadow: none;
+  /* Настоящая смена статуса (running → завершён) должна таять, а не щёлкать. */
+  transition: background-color var(--dur-1) var(--ease-out);
 }
 .now .activity-card:not([data-status="running"]) {
   background: var(--surface);

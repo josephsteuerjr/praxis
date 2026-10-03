@@ -64,5 +64,29 @@ class Activity(unittest.TestCase):
         self.assertEqual(d["iterations"][0]["tools"][0]["status"], "failed")
 
 
+    def test_hollow_manifest_read_is_retried(self):
+        # Манифест переписывается на каждом событии хода; чтение в момент подмены
+        # файла на Windows даёт мимолётный {} — run_detail обязан перечитать,
+        # иначе карточка «Сейчас» на такт теряет статус и заливка мигает.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "manifest.json").write_text(json.dumps({"status": "running"}), encoding="utf-8")
+            (root / "events.jsonl").write_text(json.dumps({"kind": "model_started", "call_id": "m"}), encoding="utf-8")
+            real = readers._load_json
+            calls = {"manifest": 0}
+
+            def flaky(path):
+                if path.name == "manifest.json":
+                    calls["manifest"] += 1
+                    if calls["manifest"] == 1:
+                        return {}
+                return real(path)
+
+            with patch.object(readers, "run_dir", return_value=root),                  patch.object(readers, "_load_json", side_effect=flaky):
+                d = readers.run_detail("run-test")
+            self.assertEqual(d["manifest"]["status"], "running")
+            self.assertGreaterEqual(calls["manifest"], 2, "пустое чтение манифеста должно перечитываться")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

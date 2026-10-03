@@ -848,6 +848,13 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
     if path is None:
         return {}
     manifest = _load_json(path / "manifest.json")
+    if not manifest.get("status"):
+        # manifest.json переписывается на каждом событии хода (run_manager.append_event).
+        # Чтение, попавшее в подмену файла, на Windows ловит sharing violation —
+        # _load_json молча даёт {}, и карточка «Сейчас» на такт теряла статус:
+        # заливка running гасла и мигала. Одно повторное чтение снимает гонку.
+        time.sleep(0.04)
+        manifest = _load_json(path / "manifest.json")
     iterations: list[dict] = []
     current: dict | None = None
     tools_by_call: dict[str, dict] = {}
