@@ -17,17 +17,21 @@ const evidence = { source: passport.git, version: passport.version, hardwareAcce
 let app;
 try {
   // No --no-sandbox: inability to start the sandbox must be reported, never hidden.
+  // Playwright's own default (chromiumSandbox:false) silently injects --no-sandbox —
+  // opt out, and prove it by reading the real command line of the browser process.
   app = await _electron.launch({ executablePath: '/opt/helene/electron/helene-window', args: [],
-    env: { ...process.env, XDG_SESSION_TYPE: 'x11' }, timeout: 60_000 });
+    chromiumSandbox: true, env: { ...process.env, XDG_SESSION_TYPE: 'x11' }, timeout: 60_000 });
   const page = await app.firstWindow();
-  const native = await app.evaluate(({ app, BrowserWindow }) => ({
+  const native = await app.evaluate(({ app, BrowserWindow, process }) => ({
     packaged: app.isPackaged, preferences: BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences(),
+    argv: process.argv,
   }));
   assert.equal(native.packaged, true, 'stand must exercise the installed package');
+  assert.ok(!native.argv.includes('--no-sandbox'), 'browser process must not run with --no-sandbox: ' + native.argv.join(' '));
   assert.equal(native.preferences.sandbox, true);
   assert.equal(native.preferences.contextIsolation, true);
   assert.equal(native.preferences.nodeIntegration, false);
-  evidence.checks.push('packaged entry', 'sandbox configured');
+  evidence.checks.push('packaged entry', 'sandbox configured', 'chromium sandbox on (no --no-sandbox in argv)');
   await page.waitForLoadState('domcontentloaded');
   await page.getByText('Настройки', { exact: true }).first().waitFor({ timeout: 30_000 });
   await page.getByRole('button', { name: 'Сохранить', exact: true }).first().waitFor({ timeout: 30_000 });
