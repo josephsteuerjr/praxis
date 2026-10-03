@@ -22,7 +22,7 @@ fn mac_fixture(kind: &str) -> Result<scroll_session::Session, String> {
         "stationary" => (CGScrollPhase::Changed, CGMomentumScrollPhase::None, 0),
         "end" => (CGScrollPhase::Ended, CGMomentumScrollPhase::None, 0),
         "cancel" => (CGScrollPhase::Cancelled, CGMomentumScrollPhase::None, 0),
-        "inertia" => (CGScrollPhase::None, CGMomentumScrollPhase::Begin, 2),
+        "inertia" => (CGScrollPhase(0), CGMomentumScrollPhase::Begin, 2),
         _ => return Ok(scroll_session::Session::default()),
     };
     let cg = CGEvent::new_scroll_wheel_event2(None, CGScrollEventUnit::Pixel, 1, delta, 0, 0)
