@@ -2,6 +2,21 @@
 use crate::scroll_session::Session;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "macos")]
+pub(crate) fn mac_event(e: &objc2_app_kit::NSEvent) -> Session {
+    if e.modifierFlags()
+        .contains(objc2_app_kit::NSEventModifierFlags::Control)
+    {
+        Session::default()
+    } else {
+        Session::mac(
+            e.phase().0,
+            e.momentumPhase().0,
+            e.hasPreciseScrollingDeltas(),
+        )
+    }
+}
+
 fn support(hold: &str, source: &str) -> String {
     format!(
         "window.__HELENE_SCROLL_SUPPORT={};",
@@ -71,18 +86,7 @@ mod mac {
                     .as_ref()
                     .is_some_and(|w| Some(Retained::as_ptr(w).cast_mut().cast()) == ours);
                 if same_window {
-                    let phase = if e
-                        .modifierFlags()
-                        .contains(objc2_app_kit::NSEventModifierFlags::Control)
-                    {
-                        Session::default()
-                    } else {
-                        Session::mac(
-                            e.phase().0,
-                            e.momentumPhase().0,
-                            e.hasPreciseScrollingDeltas(),
-                        )
-                    };
+                    let phase = mac_event(e);
                     if let Ok(mut guard) = callback_state.lock() {
                         guard.0 = phase;
                         guard.1 += 1;
@@ -164,19 +168,22 @@ pub use mac::start;
 pub fn attach(window: &tauri::WebviewWindow) {
     use gtk::{gdk, glib, prelude::*};
     use std::{cell::Cell, rc::Rc, time::Duration};
-    let target = window.clone();
+    use webkit2gtk::WebViewExt;
+    // Don't call Tauri dispatchers from with_webview/GTK signal callbacks.
+    // The dispatcher can still hold its window-id mutex. Use WebKit directly.
+    fn emit(view: &webkit2gtk::WebView, js: &str) {
+        view.evaluate_javascript(js, None, None, None::<&gtk::gio::Cancellable>, |_| {});
+    }
     let result = window.with_webview(move |platform| {
         let view = platform.inner();
         let wayland = view.display().type_().name().contains("Wayland");
         if !wayland {
             crate::log_line("scroll: X11 has no verified gesture end; wheel fallback");
-            let _ = target.eval(&support("unavailable", "x11"));
             return;
         }
         let state = Rc::new(Cell::new((Session::default(), 0u64)));
         let input = state.clone();
-        let input_window = target.clone();
-        view.connect_scroll_event(move |_, event| {
+        view.connect_scroll_event(move |view, event| {
             let touchpad = event
                 .source_device()
                 .is_some_and(|d| d.source() == gdk::InputSource::Touchpad);
@@ -187,24 +194,27 @@ pub fn attach(window: &tauri::WebviewWindow) {
             );
             let seq = input.get().1 + 1;
             input.set((phase, seq));
-            let _ = input_window.eval(&script(phase, seq, "wayland"));
+            emit(view, &script(phase, seq, "wayland"));
             glib::Propagation::Proceed
         });
         let lost = state.clone();
-        let lost_window = target.clone();
-        view.connect_focus_out_event(move |_, _| {
+        view.connect_focus_out_event(move |view, _| {
             let seq = lost.get().1 + 1;
             lost.set((Session::default(), seq));
-            let _ = lost_window.eval(&script(Session::default(), seq, "wayland"));
+            emit(view, &script(Session::default(), seq, "wayland"));
             glib::Propagation::Proceed
         });
         let weak_view = view.downgrade();
         glib::timeout_add_local(Duration::from_millis(100), move || {
-            let Some(_) = weak_view.upgrade() else {
+            let Some(view) = weak_view.upgrade() else {
                 return glib::ControlFlow::Break;
             };
             let mut changed = false;
-            if !target.is_focused().unwrap_or(false) || !target.is_visible().unwrap_or(false) {
+            let focused = view
+                .toplevel()
+                .and_then(|w| w.downcast::<gtk::Window>().ok())
+                .is_some_and(|w| w.is_active() && w.is_visible());
+            if !focused {
                 let (old, seq) = state.get();
                 if old != Session::default() {
                     state.set((Session::default(), seq + 1));
@@ -213,7 +223,7 @@ pub fn attach(window: &tauri::WebviewWindow) {
             }
             let (phase, seq) = state.get();
             if changed || phase.active || phase.momentum {
-                let _ = target.eval(&script(phase, seq, "wayland"));
+                emit(&view, &script(phase, seq, "wayland"));
             }
             glib::ControlFlow::Continue
         });

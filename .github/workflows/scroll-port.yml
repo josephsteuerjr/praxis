@@ -47,14 +47,23 @@ jobs:
         if: runner.os == 'macOS'
         env:
           SCROLL_PROBE_RESULT: ${{ runner.temp }}/scroll-mac.json
-        run: python3 -c 'import subprocess; subprocess.run(["desk/shell/target/debug/examples/scroll-port-probe"], timeout=90, check=True)'
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          p = subprocess.run(["desk/shell/target/debug/examples/scroll-port-probe"], timeout=90, capture_output=True, text=True)
+          print(p.stdout); print(p.stderr)
+          p.check_returncode()
+          assert "macOS phase observer ready" in p.stdout
+          PY
       - name: WebKitGTK X11 fallback probe
         if: runner.os == 'Linux'
         env:
           SCROLL_PROBE_RESULT: ${{ runner.temp }}/scroll-x11.json
           GDK_BACKEND: x11
           WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
-        run: timeout 90 xvfb-run -a desk/shell/target/debug/examples/scroll-port-probe
+        run: |
+          timeout 90 xvfb-run -a desk/shell/target/debug/examples/scroll-port-probe | tee "$RUNNER_TEMP/scroll-x11.log"
+          grep -q 'X11 has no verified gesture end; wheel fallback' "$RUNNER_TEMP/scroll-x11.log"
       - name: WebKitGTK Wayland bridge probe
         if: runner.os == 'Linux'
         env:
@@ -68,11 +77,13 @@ jobs:
           for i in $(seq 1 50); do [ -S "$XDG_RUNTIME_DIR/wayland-scroll" ] && break; sleep .1; done
           export WAYLAND_DISPLAY=wayland-scroll GDK_BACKEND=wayland
           export SCROLL_PROBE_RESULT="$RUNNER_TEMP/scroll-wayland.json"
-          timeout 90 desk/shell/target/debug/examples/scroll-port-probe
+          timeout 90 desk/shell/target/debug/examples/scroll-port-probe | tee "$RUNNER_TEMP/scroll-wayland.log"
+          grep -q 'Wayland phase observer ready' "$RUNNER_TEMP/scroll-wayland.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: scroll-port-${{ matrix.os }}-${{ github.sha }}
           path: |
             ${{ runner.temp }}/scroll-*.json
+            ${{ runner.temp }}/scroll-*.log
             ${{ runner.temp }}/weston-scroll.log

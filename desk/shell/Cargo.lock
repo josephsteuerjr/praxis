@@ -1494,6 +1494,7 @@ dependencies = [
  "notify-rust",
  "objc2",
  "objc2-app-kit",
+ "objc2-core-graphics",
  "serde_json",
  "sha2",
  "tauri",
@@ -1502,6 +1503,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "tauri-winrt-notification",
  "ureq",
+ "webkit2gtk",
  "windows",
  "windows-sys 0.59.0",
  "winreg",
@@ -2271,6 +2273,7 @@ dependencies = [
  "block2",
  "objc2",
  "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation",
 ]
 

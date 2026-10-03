@@ -12,21 +12,52 @@ fn log_line(s: &str) {
     println!("{s}");
 }
 
+#[cfg(target_os = "macos")]
+fn mac_fixture(kind: &str) -> Result<scroll_session::Session, String> {
+    use objc2_core_graphics::{
+        CGEvent, CGEventField, CGMomentumScrollPhase, CGScrollEventUnit, CGScrollPhase,
+    };
+    let (phase, momentum, delta) = match kind {
+        "manual" => (CGScrollPhase::Began, CGMomentumScrollPhase::None, 12),
+        "stationary" => (CGScrollPhase::Changed, CGMomentumScrollPhase::None, 0),
+        "end" => (CGScrollPhase::Ended, CGMomentumScrollPhase::None, 0),
+        "cancel" => (CGScrollPhase::Cancelled, CGMomentumScrollPhase::None, 0),
+        "inertia" => (CGScrollPhase::None, CGMomentumScrollPhase::Begin, 2),
+        _ => return Ok(scroll_session::Session::default()),
+    };
+    let cg = CGEvent::new_scroll_wheel_event2(None, CGScrollEventUnit::Pixel, 1, delta, 0, 0)
+        .ok_or("CGEvent fixture unavailable")?;
+    CGEvent::set_integer_value_field(
+        Some(&cg),
+        CGEventField::ScrollWheelEventScrollPhase,
+        phase.0.into(),
+    );
+    CGEvent::set_integer_value_field(
+        Some(&cg),
+        CGEventField::ScrollWheelEventMomentumPhase,
+        momentum.0.into(),
+    );
+    let e = objc2_app_kit::NSEvent::eventWithCGEvent(&cg)
+        .ok_or("NSEvent fixture conversion unavailable")?;
+    let s = scroll_port::mac_event(&e);
+    let valid = match kind {
+        "manual" | "stationary" => s.available && s.active,
+        "inertia" => s.available && s.momentum,
+        _ => s.available && !s.active && !s.momentum,
+    };
+    if !valid {
+        return Err(format!(
+            "CGEvent -> NSEvent phase mismatch for {kind}: {s:?}"
+        ));
+    }
+    Ok(s)
+}
+
 #[tauri::command]
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn phase(app: tauri::AppHandle, kind: String, seq: u64) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    let (state, source) = (
-        match kind.as_str() {
-            "manual" => scroll_session::Session::mac(1, 0, true),
-            "stationary" => scroll_session::Session::mac(2, 0, true),
-            "end" => scroll_session::Session::mac(8, 0, true),
-            "cancel" => scroll_session::Session::mac(16, 0, true),
-            "inertia" => scroll_session::Session::mac(0, 1, true),
-            _ => scroll_session::Session::default(),
-        },
-        "macos",
-    );
+    let (state, source) = (mac_fixture(&kind)?, "macos");
     #[cfg(target_os = "linux")]
     let (state, source) = (
         match kind.as_str() {
@@ -66,6 +97,7 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![phase, finish])
         .setup(|app| {
+            let expected = std::env::var("GDK_BACKEND").unwrap_or_else(|_| "macos".into());
             let window = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
@@ -74,6 +106,10 @@ fn main() {
             .title("Scroll port automated probe")
             .inner_size(1000.0, 700.0)
             .initialization_script(&scroll_port::initial_support())
+            .initialization_script(&format!(
+                "window.__SCROLL_PROBE_EXPECT={};",
+                serde_json::to_string(&expected)?
+            ))
             .build()?;
             #[cfg(target_os = "macos")]
             scroll_port::start(app.handle().clone());

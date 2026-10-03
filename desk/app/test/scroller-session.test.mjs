@@ -35,4 +35,8 @@ for(const loss of ['lease','blur','unavailable','old-seq','old-time']) {
   for(let i=0;i<20;i++){h.advance(100);h.session(true);}
   assert.equal(h.shown(),0,'mouse notch was held by gesture channel');h.s.destroy();checks++;
 }
+{
+  const h=fixture();h.session(false,true);h.wheel(-3,16,{deltaMode:1});
+  assert.equal(h.s.momentum,false,'line mouse wheel inherited a native inertia phase');h.s.destroy();checks++;
+}
 console.log(`${checks} scroll session cases passed`);

@@ -13,6 +13,8 @@
   try {
     const support=window.__HELENE_SCROLL_SUPPORT;
     assert(!!support,'native support status missing');
+    assert(support.source===window.__SCROLL_PROBE_EXPECT,'wrong native display backend');
+    assert(support.hold===(support.source==='x11'?'unavailable':'unverified'),'wrong platform support claim');
     assert(['unverified','unavailable'].includes(support.hold),'physical acceptance claimed');
     for(const feel of ['brisk','smooth','syrup'])for(const over of ['rubber','stretch','none'])for(const dir of [-1,1]){
       const view=document.createElement('div');view.className='view';
