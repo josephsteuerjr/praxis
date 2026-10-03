@@ -22,12 +22,12 @@ try {
   app = await _electron.launch({ executablePath: '/opt/helene/electron/helene-window', args: [],
     chromiumSandbox: true, env: { ...process.env, XDG_SESSION_TYPE: 'x11' }, timeout: 60_000 });
   const page = await app.firstWindow();
-  const native = await app.evaluate(({ app, BrowserWindow, process }) => ({
+  const spawned = app.process()?.spawnargs ?? [];
+  assert.ok(!spawned.includes('--no-sandbox'), 'browser process must not run with --no-sandbox: ' + spawned.join(' '));
+  const native = await app.evaluate(({ app, BrowserWindow }) => ({
     packaged: app.isPackaged, preferences: BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences(),
-    argv: process.argv,
   }));
   assert.equal(native.packaged, true, 'stand must exercise the installed package');
-  assert.ok(!native.argv.includes('--no-sandbox'), 'browser process must not run with --no-sandbox: ' + native.argv.join(' '));
   assert.equal(native.preferences.sandbox, true);
   assert.equal(native.preferences.contextIsolation, true);
   assert.equal(native.preferences.nodeIntegration, false);
