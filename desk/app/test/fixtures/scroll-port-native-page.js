@@ -30,8 +30,14 @@
       cases.push({s,view,dir,name:`${feel}/${over}/${dir}`,over});
     }
     const wheel=dy=>{for(const c of cases)c.view.dispatchEvent(new WheelEvent('wheel',{deltaY:c.dir*dy,cancelable:true}));};
+    const hand=async count=>{
+      // Production observers keep the phase bridge alive every 100ms during
+      // motion too. A one-shot fixture can expire on a slower renderer before
+      // its thirty manual wheel updates finish; that's a lost bridge, not hold.
+      for(let i=0;i<count;i++){if(i%4===0)await phase(i?'stationary':'manual');wheel(12.5);await wait(16);}
+    };
     const shown=c=>Math.abs(c.s.debug().shown);
-    await phase('manual');for(let i=0;i<30;i++){wheel(12.5);await wait(16);}await wait(80);
+    await hand(30);await wait(80);
     const held=cases.map(shown);window.__PROBE_HELD=held;
     for(let i=0;i<45;i++){await wait(100);await phase('stationary');wheel(0);}
     cases.forEach((c,i)=>assert(shown(c)>=held[i]-2,`${c.name}: stationary session slipped`));
@@ -40,13 +46,13 @@
     // this probe checks that release is already moving without a quiet delay.
     await wait(160);cases.forEach((c,i)=>{if(c.over!=='none')assert(shown(c)<held[i]-5,`${c.name}: release delayed`);});
     await wait(1700);cases.forEach(c=>assert(shown(c)<1,`${c.name}: edge stuck`));
-    await phase('manual');for(let i=0;i<25;i++){wheel(12.5);await wait(16);}
+    await hand(25);
     await phase('inertia');for(let i=0;i<18;i++){wheel(2);await wait(40);await phase('inertia');}
     cases.forEach(c=>assert(shown(c)<8,`${c.name}: native inertia pumped edge`));
-    await phase('manual');for(let i=0;i<16;i++){wheel(12.5);await wait(16);}
+    await hand(16);
     cases.forEach(c=>{if(c.over!=='none')assert(shown(c)>40,`${c.name}: pickup blocked`);});
     await phase('cancel');await wait(1800);cases.forEach(c=>assert(shown(c)<1,`${c.name}: cancel stuck`));
-    await phase('manual');for(let i=0;i<16;i++){wheel(12.5);await wait(16);}await wait(2300);
+    await hand(16);await wait(2300);
     cases.forEach(c=>assert(shown(c)<1,`${c.name}: dead bridge stuck`));
     for(const c of cases)c.s.destroy();
     await invoke('finish',{result:{ok:true,checks,cases:cases.length,support,hardwareAccepted:false,
