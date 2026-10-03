@@ -580,7 +580,11 @@ def seed_git(tree: Path, cfg: dict) -> bool:
         else:
             _top_up_ignore(ignore)
         steps = (
-            ("init", "-q", "-b", "main"),
+            # `init -b main` появился в git 2.28, а на Debian 10 (заявленный порог
+            # поставки) системный git 2.20: unborn HEAD переставляется на main
+            # `symbolic-ref`'ом — это работает у всех, от 2.20 до новых.
+            ("init", "-q"),
+            ("symbolic-ref", "HEAD", "refs/heads/main"),
             ("config", "user.name", agent_name(cfg)),
             ("config", "user.email", _agent_email(cfg)),
             ("config", "core.autocrlf", "false"),
