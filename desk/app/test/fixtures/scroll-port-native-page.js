@@ -20,6 +20,13 @@
       const view=document.createElement('div');view.className='view';
       const inner=document.createElement('div');inner.className='inner';view.append(inner);lab.append(view);
       const s=new Scroller(view,inner,{feel,overscroll:over,stick:false});s.scrollTo(dir<0?0:99999,false);
+      const events=[];s.__PROBE_EVENTS=events;
+      const release=s.release.bind(s);
+      s.release=()=>{if(events.length<30)events.push({event:'release',t:performance.now(),active:s.wheelActive,
+        releaseAt:s.releaseAt,sessionAt:s.sessionAt,session:s.session,stack:new Error().stack});release();};
+      view.addEventListener('scroll',()=>{if(events.length<30)events.push({event:'scroll',t:performance.now(),
+        top:view.scrollTop,written:s.written,pos:s.pos,target:s.target,active:s.wheelActive});},true);
+      window.addEventListener('blur',()=>{if(events.length<30)events.push({event:'blur',t:performance.now()});},true);
       cases.push({s,view,dir,name:`${feel}/${over}/${dir}`,over});
     }
     const wheel=dy=>{for(const c of cases)c.view.dispatchEvent(new WheelEvent('wheel',{deltaY:c.dir*dy,cancelable:true}));};
@@ -49,5 +56,6 @@
     userAgent:navigator.userAgent,
     samples:cases.map(c=>({name:c.name,debug:c.s.debug(),pos:c.s.pos,target:c.s.target,vel:c.s.vel,
       session:c.s.session,sessionAt:c.s.sessionAt,now:performance.now(),wheelActive:c.s.wheelActive,
-      notch:c.s.notch,releaseAt:c.s.releaseAt,top:c.view.scrollTop,written:c.s.written}))}});}
+      notch:c.s.notch,releaseAt:c.s.releaseAt,top:c.view.scrollTop,written:c.s.written,
+      events:c.s.__PROBE_EVENTS}))}});}
 })();
