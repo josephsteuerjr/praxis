@@ -510,6 +510,7 @@ export async function render(container: HTMLElement): Promise<void> {
   dispatchEvent(new Event("frame-pending"));
   const list = buildRows(rows, peer);
   const d = dom;
+  const firstPaint = !d.painted;
   scroll.preserve(() => {
     d.feed.set(list, {
       animate: d.painted,
@@ -520,6 +521,9 @@ export async function render(container: HTMLElement): Promise<void> {
   d.painted = true;
   paintEmpty(d, list.length > 0);
   paintNotices(d, stubNotice() + brainNotice() + failedNotices());
+  // История пришла после начального homeScroll на пустой странице. Ставим
+  // низ до первого кадра с сообщениями; последующие обновления следуют плавно.
+  if (firstPaint && S.view === "talk" && container.isConnected) scroll.view()?.toBottom(false);
   void paintFold(container, peer);
   // Прокрутку ведёт каркас (`homeScroll`) и физика окна: прилипшая лента сама едет к новому.
   await panel.render();

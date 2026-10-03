@@ -162,5 +162,12 @@ server.on('upgrade',(req,socket)=>{
   });
   socket.on('error',()=>{});socket.on('close',()=>sockets.delete(socket));
 });
-server.listen(0,'127.0.0.1',()=>console.log('UI_FIXTURE_URL=http://127.0.0.1:'+server.address().port));
-process.on('SIGINT',()=>{for(const s of sockets)s.destroy();server.close(()=>process.exit(0));});
+export const ready = new Promise(resolve => server.listen(0,'127.0.0.1',()=>resolve('http://127.0.0.1:'+server.address().port)));
+export function close() {
+  for(const s of sockets)s.destroy();
+  return new Promise(resolve=>server.close(resolve));
+}
+if(typeof process !== 'undefined' && process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
+  ready.then(url=>console.log('UI_FIXTURE_URL='+url));
+  process.on('SIGINT',()=>void close().then(()=>process.exit(0)));
+}
