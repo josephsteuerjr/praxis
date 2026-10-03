@@ -82,6 +82,11 @@ const IMPACT_SPEED = 1.1; // px/мс: быстрый вход из ленты в
 const IMPACT_INPUT = 0.12; // остаточная податливость края после удара
 const IMPACT_MEMORY = 60; // мс: хвост не накачивает удар обратно в ручную тягу
 
+interface ScrollSession {
+  available: boolean; active: boolean; momentum: boolean;
+  source: "macos" | "wayland"; seq: number; sentAt: number;
+}
+
 export class Scroller {
   readonly el: HTMLElement;
   readonly inner: HTMLElement;
@@ -111,6 +116,9 @@ export class Scroller {
   private wheelActive = false;
   private momentum = false; // достоверная фаза браузера, когда WheelEvent её сообщает
   private padHeld = false; // два настоящих контакта от нативной оболочки
+  // Mac/Wayland report a gesture lifetime, not a physical contact count.
+  private session: ScrollSession | null = null;
+  private sessionAt = 0;
   private notch = false;
   private releaseTimer = 0;
   private releaseAt = 0;
@@ -146,6 +154,9 @@ export class Scroller {
     window.addEventListener?.("helene-touchpad-contact", this.onPadContact);
     const contact = (window as Window & { __HELENE_TOUCHPAD_CONTACT?: { available: boolean; contacts: number; sentAt: number } }).__HELENE_TOUCHPAD_CONTACT;
     if (contact && Date.now()-contact.sentAt <= CONTACT_LEASE) this.padHeld = contact.available && contact.contacts >= 2;
+    window.addEventListener?.("helene-scroll-session", this.onScrollSession);
+    const session = (window as Window & { __HELENE_SCROLL_SESSION?: ScrollSession }).__HELENE_SCROLL_SESSION;
+    if (session) this.onScrollSession({detail: session} as CustomEvent<ScrollSession>);
     el.addEventListener("keydown", this.onKey);
     this.ro = new ResizeObserver(() => this.contentChanged());
     this.ro.observe(inner); this.ro.observe(el);
@@ -167,6 +178,7 @@ export class Scroller {
     window.removeEventListener?.("pointercancel", this.onUp, true);
     window.removeEventListener?.("blur", this.onBlur);
     window.removeEventListener?.("helene-touchpad-contact", this.onPadContact);
+    window.removeEventListener?.("helene-scroll-session", this.onScrollSession);
     this.el.removeEventListener("keydown", this.onKey);
   }
 
@@ -314,7 +326,7 @@ export class Scroller {
     if (e.ctrlKey || e.defaultPrevented || !Number.isFinite(e.deltaY) || !Number.isFinite(e.deltaX)) return;
     if (!e.deltaY && !e.deltaX) {
       // Нулевая дельта не означает подъём, если оболочка всё ещё видит пальцы.
-      if (this.wheelActive && !(this.padHeld && !this.notch && !this.momentum)) this.armRelease(ZERO_QUIET,false);
+      if (this.wheelActive && !(this.handHeld && !this.notch && !this.momentum)) this.armRelease(ZERO_QUIET,false);
       return;
     }
     let dy = e.deltaY;
@@ -325,14 +337,15 @@ export class Scroller {
     e.preventDefault();
     const now = performance.now(), gap = now-this.lastWheel, dir = Math.sign(dy);
     this.lastWheel = now;
-    this.notch = e.deltaMode !== 0 || (gap > WHEEL_QUIET && (Math.abs(dy)%120 === 0 || Math.abs(dy)%100 === 0));
+    const session = this.currentSession;
+    this.notch = e.deltaMode !== 0 || (!session && gap > WHEEL_QUIET && (Math.abs(dy)%120 === 0 || Math.abs(dy)%100 === 0));
     this.endDrag();
     const max = this.max;
     // Современный Chromium сообщает платформенную инерцию прямо. Её нельзя
     // принимать за новый захват по знаку/скорости wheel: это повторно накачивает
     // уже отпущенную резинку. Внутри ленты хвост едет, у края его цель ограничена
     // границей; координата и скорость сохраняются, импульс снимает вязкость.
-    if ((e as WheelEvent & { momentum?: boolean }).momentum === true) {
+    if ((e as WheelEvent & { momentum?: boolean }).momentum === true || session?.momentum === true) {
       if (!this.momentum) this.target = clamp(this.target,0,max);
       this.momentum = true; this.wheelActive = false;
       const pending = Math.max(1,this.el.clientHeight)*1.5;
@@ -380,7 +393,7 @@ export class Scroller {
     this.target = this.limitOver(clamp(this.target,this.pos-pending,this.pos+pending));
     if (dir < 0) { this.follow = false; this.setPinned(max-clamp(this.target,0,max) <= this.pinSlack); }
     else { this.setPinned(max-clamp(this.target,0,max) <= this.pinSlack); this.follow = this.pinnedState; }
-    this.armRelease(this.padHeld && !this.notch ? CONTACT_LEASE : WHEEL_QUIET,true);
+    this.armRelease(this.handHeld && !this.notch ? CONTACT_LEASE : WHEEL_QUIET,true);
     this.kick();
   };
   private onPadContact = (e: Event) => {
@@ -391,6 +404,27 @@ export class Scroller {
     if (this.drag || !this.wheelActive || this.momentum || this.notch) return;
     if (this.padHeld) this.armRelease(CONTACT_LEASE,true);
     else if (wasHeld) this.release(); // подъём пальцев приходит отдельным сигналом
+  };
+  private get currentSession(): ScrollSession | null {
+    return this.session?.available && performance.now()-this.sessionAt < CONTACT_LEASE ? this.session : null;
+  }
+  private get handHeld(): boolean { return this.padHeld || this.currentSession?.active === true; }
+  private onScrollSession = (e: Event) => {
+    const v = (e as CustomEvent<ScrollSession>).detail;
+    if (!v || typeof v.available !== "boolean" || typeof v.active !== "boolean" || typeof v.momentum !== "boolean"
+      || (v.source !== "macos" && v.source !== "wayland") || !Number.isSafeInteger(v.seq) || v.seq < 0
+      || !Number.isFinite(v.sentAt) || Date.now()-v.sentAt > CONTACT_LEASE || v.sentAt-Date.now() > CONTACT_LEASE
+      || (v.active && v.momentum) || (this.session && (v.seq < this.session.seq || v.sentAt < this.session.sentAt))) return;
+    const wasActive = this.currentSession?.active;
+    this.session = v; this.sessionAt = performance.now();
+    if (this.drag || this.notch) return;
+    if (v.available && v.momentum && (this.wheelActive || this.momentum)) {
+      // Also absorb a phase that arrives just after its DOM wheel event.
+      this.release(); this.momentum = true; this.armRelease(WHEEL_QUIET,true);
+    } else if (this.wheelActive && !this.momentum) {
+      if (v.available && v.active) this.armRelease(CONTACT_LEASE,true);
+      else if (wasActive) this.release();
+    }
   };
   private clearRelease() {
     clearTimeout(this.releaseTimer); this.releaseTimer = 0; this.releaseAt = 0;
@@ -480,7 +514,7 @@ export class Scroller {
     this.setPinned(this.max-clamp(this.pos,0,this.max) <= this.pinSlack && v >= 0);
     this.follow = this.pinnedState;
   };
-  private onBlur = () => {this.padHeld=false;this.endDrag();this.release();};
+  private onBlur = () => {this.padHeld=false;this.session=null;this.endDrag();this.release();};
 
   private kick() {
     if (this.raf) return;

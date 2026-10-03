@@ -59,5 +59,9 @@ export function fixture(options = {}) {
   function contact(contacts, available = true) {
     windowHandlers['helene-touchpad-contact']?.({detail:{contacts,available}});
   }
-  return { s, view, inner, advance, wheel, pointer, contact, windowHandlers, shown: () => Math.abs(s.debug().shown) };
+  let seq=0;
+  function session(active, momentum=false, extra={}) {
+    windowHandlers['helene-scroll-session']?.({detail:{available:true,active,momentum,source:'macos',seq:++seq,sentAt:Date.now(),...extra}});
+  }
+  return { s, view, inner, advance, wheel, pointer, contact, session, windowHandlers, shown: () => Math.abs(s.debug().shown) };
 }

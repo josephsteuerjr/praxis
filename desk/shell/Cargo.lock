@@ -1488,8 +1488,12 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 name = "helene"
 version = "1.3.4"
 dependencies = [
+ "block2",
+ "gtk",
  "libc",
  "notify-rust",
+ "objc2",
+ "objc2-app-kit",
  "serde_json",
  "sha2",
  "tauri",

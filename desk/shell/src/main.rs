@@ -53,6 +53,10 @@ use tauri::Manager;
 
 #[cfg(windows)]
 mod touchpad;
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+mod scroll_session;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod scroll_port;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -6260,6 +6264,8 @@ fn main() {
             open_window(app, &init_script, Some(window_icon))?;
             #[cfg(windows)]
             touchpad::start(app.handle().clone());
+            #[cfg(target_os = "macos")]
+            scroll_port::start(app.handle().clone());
             // Передний план: Windows отдаёт его неохотно, когда запустивший нас
             // процесс (установщик) уже вышел, — окно появлялось позади других,
             // и казалось, что не открылось. Короткий «поверх всех» лечит.
@@ -6602,7 +6608,11 @@ fn open_window<M: tauri::Manager<tauri::Wry>>(
     if !init_script.is_empty() {
         builder = builder.initialization_script(init_script);
     }
-    builder.build()?;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    { builder = builder.initialization_script(&scroll_port::initial_support()); }
+    let _window = builder.build()?;
+    #[cfg(target_os = "linux")]
+    scroll_port::attach(&_window);
     Ok(())
 }
 

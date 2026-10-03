@@ -1,0 +1,78 @@
+name: Scroll physics port checks
+on:
+  push:
+    branches: [port/scroll-physics-0310]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: scroll-port-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desk/app/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desk/shell
+          cache-on-failure: true
+      - name: GTK and headless compositor
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf xvfb weston
+      - name: Frontend and deterministic phase checks
+        run: |
+          npm ci --prefix desk/app
+          npm --prefix desk/app run build
+          for f in desk/app/test/*.test.mjs; do node "$f"; done
+          node desk/app/test/fixtures/make-scroll-port-probe.mjs
+      - name: Native compile and phase tests
+        working-directory: desk/shell
+        run: |
+          cargo check --locked --features custom-protocol
+          cargo test --locked --features custom-protocol scroll_session
+          cargo build --locked --features custom-protocol --example scroll-port-probe
+      - name: WKWebView native bridge probe
+        if: runner.os == 'macOS'
+        env:
+          SCROLL_PROBE_RESULT: ${{ runner.temp }}/scroll-mac.json
+        run: python3 -c 'import subprocess; subprocess.run(["desk/shell/target/debug/examples/scroll-port-probe"], timeout=90, check=True)'
+      - name: WebKitGTK X11 fallback probe
+        if: runner.os == 'Linux'
+        env:
+          SCROLL_PROBE_RESULT: ${{ runner.temp }}/scroll-x11.json
+          GDK_BACKEND: x11
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
+        run: timeout 90 xvfb-run -a desk/shell/target/debug/examples/scroll-port-probe
+      - name: WebKitGTK Wayland bridge probe
+        if: runner.os == 'Linux'
+        env:
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/scroll-wayland"
+          mkdir -m 700 "$XDG_RUNTIME_DIR"
+          weston --backend=headless-backend.so --renderer=pixman --socket=wayland-scroll --idle-time=0 > "$RUNNER_TEMP/weston-scroll.log" 2>&1 &
+          compositor=$!
+          trap 'kill "$compositor" 2>/dev/null || true' EXIT
+          for i in $(seq 1 50); do [ -S "$XDG_RUNTIME_DIR/wayland-scroll" ] && break; sleep .1; done
+          export WAYLAND_DISPLAY=wayland-scroll GDK_BACKEND=wayland
+          export SCROLL_PROBE_RESULT="$RUNNER_TEMP/scroll-wayland.json"
+          timeout 90 desk/shell/target/debug/examples/scroll-port-probe
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scroll-port-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/scroll-*.json
+            ${{ runner.temp }}/weston-scroll.log
