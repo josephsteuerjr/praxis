@@ -246,7 +246,11 @@ function createWindow(): BrowserWindow {
   if (b.maximized) w.maximize();
   w.once("ready-to-show", () => w.show());
   const visibility = () => void host.invoke("host_visibility", { visible: w.isVisible(), focused: w.isFocused() }).catch((e) => log(String(e)));
-  for (const event of ["show", "hide", "focus", "blur"] as const) w.on(event, visibility);
+  // Четыре отдельных вызова: общий union имён не выбирает одну перегрузку BrowserWindow.on.
+  w.on("show", visibility);
+  w.on("hide", visibility);
+  w.on("focus", visibility);
+  w.on("blur", visibility);
   w.webContents.on("did-finish-load", () => {
     // Bootstrap owns this code. It may render the explicit foreign-port refusal.
     void w.webContents.executeJavaScript(initScript).catch((e) => log(String(e)));
