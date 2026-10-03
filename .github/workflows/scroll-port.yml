@@ -54,6 +54,8 @@ jobs:
           print(p.stdout); print(p.stderr)
           p.check_returncode()
           assert "macOS phase observer ready" in p.stdout
+          import json, os
+          assert json.load(open(os.environ["SCROLL_PROBE_RESULT"]))["ok"] is True
           PY
       - name: WebKitGTK X11 fallback probe
         if: runner.os == 'Linux'
@@ -64,6 +66,7 @@ jobs:
         run: |
           timeout 90 xvfb-run -a desk/shell/target/debug/examples/scroll-port-probe | tee "$RUNNER_TEMP/scroll-x11.log"
           grep -q 'X11 has no verified gesture end; wheel fallback' "$RUNNER_TEMP/scroll-x11.log"
+          python3 -c 'import json,os; assert json.load(open(os.environ["SCROLL_PROBE_RESULT"]))["ok"] is True'
       - name: WebKitGTK Wayland bridge probe
         if: runner.os == 'Linux'
         env:
@@ -79,6 +82,7 @@ jobs:
           export SCROLL_PROBE_RESULT="$RUNNER_TEMP/scroll-wayland.json"
           timeout 90 desk/shell/target/debug/examples/scroll-port-probe | tee "$RUNNER_TEMP/scroll-wayland.log"
           grep -q 'Wayland phase observer ready' "$RUNNER_TEMP/scroll-wayland.log"
+          python3 -c 'import json,os; assert json.load(open(os.environ["SCROLL_PROBE_RESULT"]))["ok"] is True'
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -25,7 +25,7 @@
     const wheel=dy=>{for(const c of cases)c.view.dispatchEvent(new WheelEvent('wheel',{deltaY:c.dir*dy,cancelable:true}));};
     const shown=c=>Math.abs(c.s.debug().shown);
     await phase('manual');for(let i=0;i<30;i++){wheel(12.5);await wait(16);}await wait(80);
-    const held=cases.map(shown);
+    const held=cases.map(shown);window.__PROBE_HELD=held;
     for(let i=0;i<45;i++){await wait(100);await phase('stationary');wheel(0);}
     cases.forEach((c,i)=>assert(shown(c)>=held[i]-2,`${c.name}: stationary session slipped`));
     await phase('end');
@@ -44,5 +44,10 @@
     for(const c of cases)c.s.destroy();
     await invoke('finish',{result:{ok:true,checks,cases:cases.length,support,hardwareAccepted:false,
       evidence:'Native phase conversion and bridge in system WebView; synthetic wheel motion',userAgent:navigator.userAgent}});
-  }catch(e){await invoke('finish',{result:{ok:false,checks,error:String(e),hardwareAccepted:false}});}
+  }catch(e){await invoke('finish',{result:{ok:false,checks,error:String(e),hardwareAccepted:false,
+    phase:window.__HELENE_SCROLL_SESSION,now:Date.now(),held:window.__PROBE_HELD,
+    userAgent:navigator.userAgent,
+    samples:cases.map(c=>({name:c.name,debug:c.s.debug(),pos:c.s.pos,target:c.s.target,vel:c.s.vel,
+      session:c.s.session,sessionAt:c.s.sessionAt,now:performance.now(),wheelActive:c.s.wheelActive,
+      notch:c.s.notch,releaseAt:c.s.releaseAt,top:c.view.scrollTop,written:c.s.written})))} });}
 })();
