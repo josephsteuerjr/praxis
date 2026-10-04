@@ -315,10 +315,12 @@ class Truth(WindowsToggles, unittest.TestCase):
             top = rungs[2]
             self.assertIsNone(top["sandbox"], "ступень ограду не меняет")
             self.assertTrue(top.get("requires_service"), "ступени нужен исполнитель")
-            for words in (top["text"], top["warning"]):
-                self.assertIn("правами систем", words.lower())
-            self.assertIn("перестаёт", top["warning"],
-                          "ворнинг обязан сказать про песочницу вслух")
+            # 04.10, слова владельца: ступень называет службу и права СИСТЕМЫ,
+            # оговорка — «права выше ваших» и «один раз при установке».
+            self.assertIn("helene-svc", top["text"])
+            self.assertIn("права СИСТЕМЫ", top["text"])
+            self.assertIn("права выше", top["warning"])
+            self.assertIn("один раз", top["warning"])
         else:
             self.assertEqual(len(names), 2,
                              "без исполнителя ступени быть не может")

@@ -89,9 +89,11 @@ class LadderDoesNotLie(unittest.TestCase):
     """Подпись верхней ступени обязана говорить вслух про песочницу."""
 
     def test_session0_warning_names_the_fence_truth(self):
-        self.assertIn("перестаёт", modes.LADDER_SESSION0_WARNING)
-        self.assertIn("правами систем", modes.LADDER_SESSION0_WARNING.lower())
-        self.assertIn("журнал", modes.LADDER_SESSION0_WARNING)
+        """Слова владельца 04.10: «права выше ваших собственных» и «один раз
+        при установке» — оговорка обязана называть и цену, и когда спросят."""
+        self.assertIn("права выше", modes.LADDER_SESSION0_WARNING)
+        self.assertIn("один раз", modes.LADDER_SESSION0_WARNING)
+        self.assertIn("не будут", modes.LADDER_SESSION0_WARNING)
 
     def test_catalogue_of_fences_is_untouched_for_the_installer(self):
         """Установщик по-прежнему видит ДВЕ ограды — третья ступень выбор

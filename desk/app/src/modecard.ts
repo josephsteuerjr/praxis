@@ -272,12 +272,23 @@ export function modeCard(
     pickRow.append(b);
     askBox.append(
       el("p", "receipt err", warning),
-      btn("Понимаю, включить", "danger", () => {
+      // 04.10, слово владельца: подтверждение называется тем, что разрешает,
+      // и ставит службу само, если её ещё нет (администратора спросят ОДИН
+      // раз — при установке службы, словами оговорки).
+      btn("Разрешить права СИСТЕМЫ", "danger", async () => {
         askBox.hidden = true;
         session0 = true;
         syncToggles();
+        if (installed === false) {
+          try {
+            toast(await shell<string>("install_service"));
+            afterService();
+          } catch (e) {
+            toast(`Служба не поставилась: ${humanError(e).text} — ступень останется словами в файле до следующей попытки.`);
+          }
+        }
       }),
-      btn("Оставить как было", "quiet", () => {
+      btn("Не разрешать", "quiet", () => {
         askBox.hidden = true;
         picked = fencePicked;
         syncPick();
