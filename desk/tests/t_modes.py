@@ -392,10 +392,12 @@ class Platform(unittest.TestCase):
         import importlib
         fresh = importlib.reload(modes)
         # Служба есть на Windows (SCM), на macOS (демон launchd, 0.8.0) и на Linux
-        # (systemd, 28.09); тело — там же. Галочки службы — механизмы Windows, и только они.
+        # (systemd, 28.09); тело — там же. 04.10: третья ступень лестницы (нулевая
+        # сессия) теперь есть и на Linux — там построен корневой брокер; на macOS
+        # её по-прежнему нет (демон идёт от имени владельца).
         self.assertEqual(fresh.HAS_SERVICE, os.name == "nt" or sys.platform == "darwin" or sys.platform.startswith("linux"))
         self.assertEqual(fresh.HAS_COMPUTER, os.name == "nt" or sys.platform == "darwin" or sys.platform.startswith("linux"))
-        self.assertEqual(fresh.HAS_SERVICE_TOGGLES, os.name == "nt")
+        self.assertEqual(fresh.HAS_SERVICE_TOGGLES, os.name == "nt" or sys.platform.startswith("linux"))
         self.assertIsNone(fresh.MACOS_TEXTS, "подмена текстов по умолчанию не задана — платформа по sys.platform")
 
     def test_pipe_keeps_the_computer_section_without_a_service(self):
