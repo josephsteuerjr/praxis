@@ -92,6 +92,11 @@ export function modeCard(
   // всё ещё присылает её третьим пунктом, не должен уводить окно в запись
   // "service" в `agent_mode`. Ровно эта запись и снимала песочницу молча.
   const fences = (live?.choices || []).filter((c) => c && c.name && c.name !== LEGACY_SERVICE);
+  // 04.10: третья ступень лестницы — «Нулевая сессия» (name="session0",
+  // sandbox отсутствует). Присылает её только харнесс, у которого ступень
+  // существует (Windows); старый харнесс её не пришлёт — и лестница честно
+  // остаётся из двух ступеней, как раньше.
+  const session0Rung = fences.find((c) => c.name === "session0");
 
   // --- труба не ответила, режим не прочитался или выбирать не из чего
   //
@@ -137,10 +142,17 @@ export function modeCard(
   // в две стороны, и они не равны: лишняя ограда чинится одним щелчком, а
   // молча снятая — это и есть та беда, ради которой всё переписано. То же
   // правило и у харнесса: без следов ограды `modes.infer` выбирает песочницу.
-  let picked = choiceOf(live.name)?.name
+  let picked = (live as ModeState & { ladder_name?: string }).ladder_name
+    && choiceOf((live as ModeState & { ladder_name?: string }).ladder_name as string)?.name
+    || choiceOf(live.name)?.name
     || (legacyPipe
       ? choiceOf("sandbox")?.name || fences[0].name
       : fences.find((c) => c.sandbox === !!live.sandbox)?.name || fences[0].name);
+  // Ограда под верхней ступенью: «Нулевая сессия» ограду не меняет, и для
+  // песочницы/записи в файл нужен тот забор, что стоял до неё.
+  let fencePicked = picked === "session0"
+    ? (choiceOf(live.name)?.name || choiceOf("sandbox")?.name || fences[0].name)
+    : picked;
   let session0 = stored.session0;
   let firewall = stored.firewall;
   // Стоит ли служба. Пришло от трубы (SCM на Windows, файл демона на macOS),
@@ -176,13 +188,22 @@ export function modeCard(
       return;
     }
     const src = live.explicit ? live.source : `записи в файле ещё нет, ограда выведена — ${live.source}`;
-    now.textContent = `Сейчас: ${live.title}.${svcTail} Источник: ${src}.`;
+    // Верхняя ступень побеждает в словах: включённая нулевая сессия — главное
+    // в «сейчас», называть вместо неё ограду значило бы умолчать о доверии.
+    const ladder = live as ModeState & { ladder_title?: string };
+    const nowTitle = ladder.ladder_title || live.title;
+    const root = nowTitle !== live.title ? ` (ограда — ${live.title})` : "";
+    now.textContent = `Сейчас: ${nowTitle}${root}.${svcTail} Источник: ${src}.`;
   };
 
   const syncPick = () => {
     for (const b of pickRow.querySelectorAll<HTMLButtonElement>(".choice-item")) {
       b.setAttribute("aria-checked", String(b.dataset.value === picked));
     }
+    // Выбор ограды = сход с верхней ступени: session0 выключается сам,
+    // молча оставить её включённой под «Песочницей» значило бы вернуть
+    // вторую правду, из-за которой галочку и растворили в лестницу.
+    if (picked !== "session0") session0 = false;
     syncPlan();
   };
 
@@ -190,7 +211,8 @@ export function modeCard(
   // Запирать здесь нечего: ни песочница, ни интерактивный прав администратора
   // не требуют (`needs_admin: false` у обеих) — админ нужен только службе, и
   // спрашивают его там, в её секции.
-  for (const c of fences) {
+  const fenceRun = fences.filter((c) => c.name !== "session0");
+  for (const c of fenceRun) {
     const b = el("button", "choice-item");
     b.type = "button";
     b.setAttribute("role", "radio");
@@ -198,10 +220,72 @@ export function modeCard(
     b.append(el("span", "choice-title", c.title), el("span", "choice-text", c.text));
     b.addEventListener("click", () => {
       picked = c.name;
+      fencePicked = c.name;
+      askBox.hidden = true;
       syncPick();
       onPick(picked, c.sandbox, c.title);
     });
     pickRow.append(b);
+  }
+  // --- третья ступень: доверие с журналом. Выбор просит подтверждения один
+  // раз (слово Егора 28.09 о согласии), выключение — сразу. Без службы
+  // ступень заперта и говорит, где службу поставить.
+  const askBox = el("div", "mode-block session0-ask");
+  askBox.hidden = true;
+  if (session0Rung) {
+    const warning = (session0Rung as ModeChoice & { warning?: string }).warning
+      || live.session0_warning || SESSION0_WARNING_FALLBACK;
+    const b = el("button", "choice-item");
+    b.type = "button";
+    b.setAttribute("role", "radio");
+    b.dataset.value = "session0";
+    b.append(
+      el("span", "choice-title", session0Rung.title),
+      el("span", "choice-text", session0Rung.text),
+    );
+    const whyLocked = installed === false;
+    if (whyLocked) {
+      b.setAttribute("aria-disabled", "true");
+      b.append(el("span", "choice-text", "Служба не установлена — поставить можно ниже в этой карточке."));
+      b.addEventListener("click", () => {
+        toast("Сначала поставь службу — ступени нечем исполнять.");
+      });
+    } else {
+      b.addEventListener("click", () => {
+        if (picked !== "session0") {
+          picked = "session0";
+          syncPick();
+          askBox.hidden = false;
+          // Ограду НЕ меняем: верхняя ступень её сохраняет как страховку.
+          onPick(picked, !!choiceOf(fencePicked)?.sandbox, session0Rung.title);
+          return;
+        }
+        // Повторный щелчок по уже выбранной ступени — выключить её,
+        // вернувшись к ограде (как выключение прежней галочки — сразу).
+        picked = fencePicked;
+        askBox.hidden = true;
+        syncPick();
+        const fence = choiceOf(fencePicked);
+        if (fence) onPick(fence.name, fence.sandbox, fence.title);
+      });
+    }
+    pickRow.append(b);
+    askBox.append(
+      el("p", "receipt err", warning),
+      btn("Понимаю, включить", "danger", () => {
+        askBox.hidden = true;
+        session0 = true;
+        syncToggles();
+      }),
+      btn("Оставить как было", "quiet", () => {
+        askBox.hidden = true;
+        picked = fencePicked;
+        syncPick();
+        const fence = choiceOf(fencePicked);
+        if (fence) onPick(fence.name, fence.sandbox, fence.title);
+      }),
+    );
+    pickRow.append(askBox);
   }
 
   // --- что ещё надо сделать, чтобы выбор не остался на бумаге
@@ -460,6 +544,19 @@ export function modeCard(
     }
   };
 
+  // Журнал брокера — свидетель верхней ступени. Кнопка показывает файл
+  // broker.log в папке данных: он появляется с первым поручением.
+  if (session0Rung) {
+    const jRow = el("div", "actions");
+    jRow.append(
+      btn("Журнал поручений", "quiet", () => {
+        void shell("reveal_path", { path: "data/broker.log" }).catch((e) =>
+          toast(`Журнал не открылся: ${humanError(e).text}`));
+      }),
+      el("span", "field-hint", "Каждая просьба агента к службе — с исходом."),
+    );
+    svcBox.append(jRow);
+  }
   svcBox.append(svcRow, svcClient, svcAdmin, togglesBox);
 
   box.append(now, pickRow, planBox);
@@ -493,9 +590,12 @@ export function modeCard(
 
   return {
     el: box,
-    name: () => choiceOf(picked)?.name || "",
-    title: () => choiceOf(picked)?.title || "",
-    sandbox: () => !!choiceOf(picked)?.sandbox,
+    // В `agent_mode` пишется ОГРАДА; верхняя ступень живёт отдельным ключом
+    // service.session0 (его служба читает сама). Карточка возвращает ограду
+    // под текущей ступеней, а название — той ступени, что выбрана.
+    name: () => (picked === "session0" ? (choiceOf(fencePicked)?.name || "") : (choiceOf(picked)?.name || "")),
+    title: () => (picked === "session0" ? (session0Rung?.title || "") : (choiceOf(picked)?.title || "")),
+    sandbox: () => (picked === "session0" ? !!choiceOf(fencePicked)?.sandbox : !!choiceOf(picked)?.sandbox),
     session0: () => session0,
     firewall: () => firewall,
     note: () => {

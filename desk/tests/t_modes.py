@@ -198,7 +198,7 @@ class TwoDoorsOfTheService(unittest.TestCase):
         picture = modes.resolve(cfg, installed=True)
         self.assertTrue(picture["session0"])
         self.assertFalse(picture["firewall"])
-        self.assertEqual(picture["session0_warning"], modes.SESSION0_WARNING)
+        self.assertEqual(picture["session0_warning"], modes.LADDER_SESSION0_WARNING)
 
     def test_both_are_words_without_the_service(self):
         cfg = {"agent_mode": "sandbox", "service": {"session0": True}}
@@ -290,16 +290,54 @@ class Truth(WindowsToggles, unittest.TestCase):
             self.assertFalse(card["needs_admin"], "ограда админа не требует")
             self.assertTrue(card["title"] and card["text"])
 
-    def test_service_option_carries_both_toggles(self):
+    def test_service_option_carries_only_the_firewall_toggle(self):
+        """04.10: галочка нулевой сессии стала третьей ступенью лестницы прав.
+
+        Отдельный тумблер поверх ограды врал устройством — лестница один выбор.
+        Ключ в файле прежний (`service.session0`), его читает служба; у опции
+        службы остаётся одна дверь — брандмауэр.
+        """
         option = modes.service_option()
         self.assertTrue(option["needs_admin"])
         keys = [t["key"] for t in option["toggles"]]
-        self.assertEqual(keys, ["service.session0", "service.firewall"])
-        by_key = {t["key"]: t for t in option["toggles"]}
-        self.assertIs(by_key["service.session0"]["default"], False)
-        self.assertIs(by_key["service.firewall"]["default"], True)
-        self.assertEqual(by_key["service.session0"]["warning"],
-                         modes.SESSION0_WARNING)
+        self.assertEqual(keys, ["service.firewall"])
+        self.assertIs(option["toggles"][0]["default"], True)
+
+    def test_ladder_has_the_session0_rung_with_honest_words(self):
+        """Верхняя ступень существует, называет «права системы» и говорит,
+        что песочница перестаёт быть границей — без этих слов карточка врала
+        бы ровно в момент самого доверительного выбора (слово Егора 04.10)."""
+        rungs = modes.ladder()
+        names = [r["name"] for r in rungs]
+        self.assertEqual(names[:2], ["sandbox", "interactive"])
+        if modes.HAS_SERVICE_TOGGLES:
+            self.assertEqual(names[2], "session0")
+            top = rungs[2]
+            self.assertIsNone(top["sandbox"], "ступень ограду не меняет")
+            self.assertTrue(top.get("requires_service"), "ступени нужен исполнитель")
+            for words in (top["text"], top["warning"]):
+                self.assertIn("правами систем", words.lower())
+            self.assertIn("перестаёт", top["warning"],
+                          "ворнинг обязан сказать про песочницу вслух")
+        else:
+            self.assertEqual(len(names), 2,
+                             "без исполнителя ступени быть не может")
+
+    def test_resolve_names_the_top_rung_of_the_ladder(self):
+        """Включённая нулевая сессия побеждает в названии «сейчас»: молчать о
+        главном — вторая правда, из-за которой всё и переделано."""
+        cfg = {"agent_mode": "sandbox", "service": {"session0": True}}
+        picture = modes.resolve(cfg)
+        self.assertEqual(picture["name"], "sandbox", "ограда в файле не тронута")
+        self.assertEqual(picture["ladder_name"], "session0")
+        self.assertEqual(picture["ladder_title"], modes.LADDER_SESSION0_TITLE)
+        off = modes.resolve({"agent_mode": "sandbox"})
+        self.assertEqual(off["ladder_name"], "sandbox")
+        self.assertEqual(off["ladder_title"], modes.TITLES["sandbox"])
+        # 04.10: оворнинг нулевой сессии переехал со службы на ступень лестницы;
+        # прежняя константа остаётся источником согласия (28.09) и проверяется
+        # своей ступенью (см. test_ladder_has_the_session0_rung_with_honest_words).
+        self.assertTrue(modes.LADDER_SESSION0_WARNING, "оворнинг ступени не пуст")
 
 
 class Describe(WindowsToggles, unittest.TestCase):

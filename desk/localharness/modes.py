@@ -316,6 +316,30 @@ def service_texts() -> tuple[str, str, str]:
     return SERVICE_TITLE, SERVICE_TEXT, ""
 
 
+#: Третья ступень лестницы прав (04.10, слово Егора: «если уж разрешил нулевую
+#: сессию — это уже не UAC и не интерактивчик»). Это НЕ ограда и не отдельная
+#: галочка службы: это верхняя ступень выбора «кем агент работает». Подпись
+#: обязана говорить вслух, что ограда при этом перестаёт быть границей, —
+#: иначе карточка врала бы ровно там, где владелец принимает самое доверительное
+#: решение. Слова согласованы с владельцем в ASCII-макете 04.10.
+LADDER_SESSION0_TITLE = "Нулевая сессия"
+
+LADDER_SESSION0_TEXT = ("Агент просит — служба делает сама, правами "
+                        "системы: ставит программы, правит настройки, без "
+                        "подтверждения каждого шага. Каждая просьба — в "
+                        "журнале. Подходит, когда агенту нужно работать с "
+                        "системным, а спрашивать тебя каждый раз — не хочется.")
+
+#: Оговорка ступени — её показывает подтверждение в МИГ выбора, как раньше
+#: показывала галочка (слово Егора 28.09: согласие одно, без диалога на каждый шаг).
+LADDER_SESSION0_WARNING = ("Служба будет выполнять просьбы агента правами "
+                           "системы, без предупреждения. Это полный доступ к "
+                           "компьютеру: песочница при этом перестаёт "
+                           "ограничивать агента. Остаётся журнал, куда "
+                           "попадает каждая просьба. Включай, только если "
+                           "доверяешь: слабая модель может не понять, что "
+                           "просит.")
+
 SESSION0_TITLE = "Разрешить агенту нулевую сессию"
 
 SESSION0_TEXT = ("Поручения службе: агент живёт в твоей сессии, как обычно, и "
@@ -834,8 +858,13 @@ def resolve(cfg: dict, *, installed: bool | None = None) -> dict:
         notes.append("service.firewall = false — правило брандмауэра служба не "
                      "ставит: кнопка «Телефон» спросит права окном Windows")
 
+    # Лестница: верхняя ступень побеждает в названии — если агенту открыта
+    # нулевая сессия, говорить «сейчас: песочница» значило бы умолчать о главном.
+    ladder_name = "session0" if effective_session0 else name
     return {
         "name": name,
+        "ladder_name": ladder_name,
+        "ladder_title": LADDER_SESSION0_TITLE if effective_session0 else TITLES[name],
         "title": TITLES[name],
         "text": texts()[name],
         "sandbox": want_sandbox,
@@ -849,7 +878,7 @@ def resolve(cfg: dict, *, installed: bool | None = None) -> dict:
         "service_warning": service_texts()[2] if service_here else "",
         "session0": effective_session0,
         "session0_set": stored_session0,
-        "session0_warning": SESSION0_WARNING if effective_session0 else "",
+        "session0_warning": LADDER_SESSION0_WARNING if effective_session0 else "",
         "firewall": effective_firewall,
         "firewall_set": stored_firewall,
         "legacy_service": legacy,
@@ -1038,6 +1067,35 @@ def catalogue() -> list[dict]:
     } for name in MODES]
 
 
+def ladder() -> list[dict]:
+    """Ступени «кем агент работает» — одна лестница вместо оград + галочки.
+
+    Слово Егора 04.10: режим — ЛЕСТНИЦА. «Песочница» и «Интерактивный» — выбор
+    ограды; «Нулевая сессия» — верхняя ступень поверх любой из них (галочка
+    `service.session0`, растворённая в лестницу). Выбор верхней ступени НЕ
+    меняет ограду в файле: песочница остаётся страховкой от случайностей, а
+    подпись ступени честно говорит, что границей она больше не является.
+
+    Третья ступень существует только там, где её кому исполнить
+    (`HAS_SERVICE_TOGGLES`): на macOS демоны идут от имени владельца, на Linux
+    root-резидент ещё не построен — там лестница пока из двух ступеней, и это
+    решает харнесс, а не окно.
+    """
+    rungs = catalogue()
+    if not HAS_SERVICE_TOGGLES:
+        return rungs
+    return rungs + [{
+        "name": "session0",
+        "title": LADDER_SESSION0_TITLE,
+        "text": LADDER_SESSION0_TEXT,
+        "warning": LADDER_SESSION0_WARNING,
+        "needs_admin": False,
+        # ограду НЕ меняем: у ступени нет своего sandbox
+        "sandbox": None,
+        "requires_service": True,
+    }]
+
+
 def service_option() -> dict:
     """Опция службы с двумя её галочками — для тех же экранов.
 
@@ -1048,14 +1106,11 @@ def service_option() -> dict:
     # Галочки — механизмы Windows: нулевая сессия (служба под LocalSystem) и
     # правило брандмауэра (netsh). На macOS их нет, и пустой список честнее
     # серых переключателей, которые ничего не меняют.
+    # 04.10: галочка «нулевая сессия» ушла из этой секции — она стала третьей
+    # ступенью лестницы прав (см. `ladder()`), отдельный тумблер поверх ограды
+    # врал устройством: лестница — один выбор, а не два независимых. Ключ в
+    # файле прежний (`service.session0`), его продолжает читать служба.
     toggles = [] if not HAS_SERVICE_TOGGLES else [
-        {
-            "key": "service.session0",
-            "title": SESSION0_TITLE,
-            "text": SESSION0_TEXT,
-            "warning": SESSION0_WARNING,
-            "default": False,
-        },
         {
             "key": "service.firewall",
             "title": FIREWALL_TITLE,
