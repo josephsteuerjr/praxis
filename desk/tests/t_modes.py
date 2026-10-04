@@ -329,11 +329,18 @@ class Truth(WindowsToggles, unittest.TestCase):
         cfg = {"agent_mode": "sandbox", "service": {"session0": True}}
         picture = modes.resolve(cfg)
         self.assertEqual(picture["name"], "sandbox", "ограда в файле не тронута")
-        self.assertEqual(picture["ladder_name"], "session0")
-        self.assertEqual(picture["ladder_title"], modes.LADDER_SESSION0_TITLE)
         off = modes.resolve({"agent_mode": "sandbox"})
         self.assertEqual(off["ladder_name"], "sandbox")
         self.assertEqual(off["ladder_title"], modes.TITLES["sandbox"])
+        if modes.HAS_SERVICE_TOGGLES:
+            self.assertEqual(picture["ladder_name"], "session0")
+            self.assertEqual(picture["ladder_title"], modes.LADDER_SESSION0_TITLE)
+        else:
+            # На платформе без исполнителя ступени (Linux до root-резидента,
+            # macOS) ключ — слова в файле: лестница обязана называть ограду,
+            # а не обещать несуществующую ступень.
+            self.assertEqual(picture["ladder_name"], "sandbox")
+            self.assertEqual(picture["ladder_title"], modes.TITLES["sandbox"])
         # 04.10: оворнинг нулевой сессии переехал со службы на ступень лестницы;
         # прежняя константа остаётся источником согласия (28.09) и проверяется
         # своей ступенью (см. test_ladder_has_the_session0_rung_with_honest_words).
