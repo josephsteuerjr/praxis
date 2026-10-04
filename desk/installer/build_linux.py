@@ -137,7 +137,7 @@ RECOMMENDS = ("at-spi2-core", "pkexec | policykit-1", "xdg-utils")
 RPM_DEPENDS = ("glibc >= 2.28", "git", "bubblewrap", "procps-ng", "ca-certificates",
                "libstdc++", "gtk3", "nss", "mesa-libgbm", "alsa-lib", "libX11", "libXcomposite",
                "libXdamage", "libXext", "libXfixes", "libXrandr", "libxcb", "libxkbcommon",
-               "atk", "at-spi2-atk", "cups-libs", "libdrm", "pango", "cairo")
+               "atk", "at-spi2-atk", "cups-libs", "libdrm", "pango", "libcairo")
 RPM_RECOMMENDS = ("at-spi2-core", "polkit", "xdg-utils")
 #: Куда кладётся юнит: у Debian 10 /lib ещё не слит с /usr/lib, у rpm-семейства путь пакетов —
 #: /usr/lib/systemd/system.
