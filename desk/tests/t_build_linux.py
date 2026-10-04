@@ -161,10 +161,12 @@ class Package(unittest.TestCase):
         self.assertIn("SUDO_USER", bl.POSTINST)
         self.assertIn("PKEXEC_UID", bl.POSTINST)
         self.assertIn("loginctl list-sessions", bl.POSTINST)
-        # Граница честности — дом агента: на машине с домами демон молчит
-        # (выключенное владельцем не включается). Живость экземпляров — по
-        # wants-ссылкам и list-units, не по list-unit-files (там всегда шаблон).
-        self.assertIn("/home/*/.local/share/helene", bl.POSTINST)
+        # Граница честности — ЯВНЫЙ отказ: снятие службы программой пишет
+        # installed.service=false, и только это останавливает демона (вечер
+        # 04.10: граница «дом есть» лишала службу всех обновляющихся — слово
+        # владельца). Живость экземпляров — по wants-ссылкам и list-units.
+        self.assertIn('"service"', bl.POSTINST)
+        self.assertIn("false", bl.POSTINST)
         self.assertIn("multi-user.target.wants", bl.POSTINST)
         # имя владельца валидируется перед подстановкой в имя юнита
         self.assertIn("*[!A-Za-z0-9_.-]*", bl.POSTINST)

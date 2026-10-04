@@ -247,16 +247,16 @@ if [ -d /run/systemd/system ]; then
     for unit in $(systemctl list-units --plain --no-legend 'helene@*.service' 2>/dev/null | awk '{print $1}'); do
         systemctl try-restart "$unit" >/dev/null 2>&1 || true
     done
-    # Установочный демон (04.10): fresh-машина — ставим службу владельцу сами.
-    # Граница честности — ДОМ АГЕНТА: на живой машине он есть у каждого, кто хоть
-    # раз пользовался (включая выключившего службу сознательно), и тогда демон
-    # молчит — включить выключенное без слова владельца значило бы предать его
-    # выбор. Шаблон юнита в list-unit-files непригоден как признак: он числится
-    # всегда, даже без экземпляров.
-    homes=$(ls -d /home/*/.local/share/helene /root/.local/share/helene 2>/dev/null | grep -c . || true)
+    # Установочный демон (04.10, вечер): ставит службу, если её некому держать
+    # и владелец ЯВНО не отказывался. Граница честности — не «здесь жили» (дом
+    # есть у каждого обновляющегося, и те никогда не получали службу), а отметка
+    # отказа: снятие службы программой пишет в конфиг installed.service=false —
+    # вот это свято. Выключенное голым systemctl без программы отметки не
+    # оставляет: такой случай демон сочтёт «не отказывался» и включит — цена
+    # границы, о ней сказано в контракте тестом.
     have=$(ls /etc/systemd/system/multi-user.target.wants/helene@*.service 2>/dev/null | grep -c . || true)
     running=$(systemctl list-units --all --plain --no-legend 'helene@*.service' 2>/dev/null | grep -c . || true)
-    if [ "$homes" = "0" ] && [ "$have" = "0" ] && [ "$running" = "0" ]; then
+    if [ "$have" = "0" ] && [ "$running" = "0" ]; then
         owner=""
         # 1) кто ставил: терминал с sudo или pkexec
         if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
@@ -278,7 +278,13 @@ if [ -d /run/systemd/system ]; then
             esac
         fi
         if [ -n "$owner" ]; then
-            systemctl enable --now "helene@$owner.service" >/dev/null 2>&1 || true
+            # Явный отказ владельца (служба снята программой) — не включаем.
+            cfg="/home/$owner/.local/share/helene/helene.json"
+            if [ -f "$cfg" ] && grep -q '"service"[[:space:]]*:[[:space:]]*false' "$cfg"; then
+                :
+            else
+                systemctl enable --now "helene@$owner.service" >/dev/null 2>&1 || true
+            fi
         fi
     fi
 fi
