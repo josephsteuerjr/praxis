@@ -182,7 +182,7 @@ class Hand(unittest.TestCase):
                        rollback={"ok": True, "notes": ["прежний код на месте",
                                                       "данные агента не трогал"]})
         note = updates.report_note(receipt, owner="Дмитрий")
-        self.assertIn("ответа от тебя до срока не было", note)
+        self.assertIn("ответа до срока не было — новая версия оставлена", note)
         self.assertIn("данные агента не трогал", note)
         for word in ("проверил", "ответил", "клала", "сама "):
             self.assertNotIn(word, note + updates.TOOL["description"])

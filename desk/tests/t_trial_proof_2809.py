@@ -156,10 +156,12 @@ class Desktop(Base):
                    "to_version": "1.2.5", "trial": {"until_utc": "2026-09-29T12:00:00Z", "minutes": 30},
                    "agent_code": {"mounted": True, "edited": ["tree/llm.py"], "carried": ["tree/llm.py"],
                                   "merged": [], "conflicts": [], "folder": "workspace/update-1.2.5"}}
+        # 04.10: записка испытания — одна строка владельца; что делать, рука
+        # знает из описания, чек-лист в записке убран (жалоба на простыню).
         note = updates.trial_note(receipt)
-        self.assertIn("делом", note)
-        self.assertIn("установщик вернёт прежнюю версию программы", note)
-        self.assertIn("перенесено 1", note)
+        self.assertIn("Системное сообщение: проверь обновление 1.2.4 -> 1.2.5", note)
+        self.assertIn("на работоспособность и совместимость со своими правками.", note)
+        self.assertNotIn("делом", note)
 
 
 class Watcher(Base):

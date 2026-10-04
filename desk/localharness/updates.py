@@ -184,7 +184,8 @@ def status_text(state: dict, *, desktop: bool = False) -> str:
         elif receipt.get("state") == "trial":
             trial = receipt.get("trial") or {}
             lines.append(f"Испытание до {trial.get('until_utc') or '?'} (UTC): проверь себя делом и "
-                         "скажи action=accept или action=reject с report. Молчание до срока — откат.")
+                         "скажи action=accept или action=reject с report. Молчание до срока — новая версия "
+                         "остаётся работать, откат не принудительный.")
             code = receipt.get("agent_code") or {}
             if code.get("summary"):
                 lines.append("Твои правки кода: " + code["summary"]
@@ -494,7 +495,8 @@ def report_note(receipt: dict, *, owner: str = "владелец") -> str:
     trial = receipt.get("trial") or {}
     verdict = trial.get("verdict") or {}
     if verdict.get("verdict") == "timeout":
-        lines.append("На испытании ответа от тебя до срока не было — поэтому откат.")
+        lines.append("На испытании ответа до срока не было — новая версия оставлена "
+                    "работать, откат не принудительный (04.10, слово владельца).")
     elif verdict.get("verdict"):
         who = "ты" if verdict.get("by") == "agent" else "владелец"
         lines.append(f"Слово на испытании: {who} — «{verdict.get('verdict')}»"
