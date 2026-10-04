@@ -326,8 +326,12 @@ class Truth(WindowsToggles, unittest.TestCase):
     def test_resolve_names_the_top_rung_of_the_ladder(self):
         """Включённая нулевая сессия побеждает в названии «сейчас»: молчать о
         главном — вторая правда, из-за которой всё и переделано."""
+        # Явный шов SCM (`installed=True`): миксин этого класса принудительно
+        # включает виндовые флаги на любой платформе, а живой опрос службы на
+        # Linux отвечает «не стоит» — ступень обязана проверяться при СТОЯЩЕЙ
+        # службе, иначе тест гоняется от SCM-погоды, а не от своей мысли.
         cfg = {"agent_mode": "sandbox", "service": {"session0": True}}
-        picture = modes.resolve(cfg)
+        picture = modes.resolve(cfg, installed=True)
         self.assertEqual(picture["name"], "sandbox", "ограда в файле не тронута")
         off = modes.resolve({"agent_mode": "sandbox"})
         self.assertEqual(off["ladder_name"], "sandbox")
