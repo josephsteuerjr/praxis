@@ -248,13 +248,15 @@ if [ -d /run/systemd/system ]; then
         systemctl try-restart "$unit" >/dev/null 2>&1 || true
     done
     # Установочный демон (04.10): fresh-машина — ставим службу владельцу сами.
-    # Экземпляры уже есть (обновление/выключено владельцем) — не вмешиваемся.
-    # ⚠ list-unit-files непригоден: ШАБЛОН helene@.service числится в нём всегда,
-    # даже без единого экземпляра, и граница «свежести» ломалась об него. Реальная
-    # жизнь экземпляров видна во включённых ссылках wants/ и в list-units.
+    # Граница честности — ДОМ АГЕНТА: на живой машине он есть у каждого, кто хоть
+    # раз пользовался (включая выключившего службу сознательно), и тогда демон
+    # молчит — включить выключенное без слова владельца значило бы предать его
+    # выбор. Шаблон юнита в list-unit-files непригоден как признак: он числится
+    # всегда, даже без экземпляров.
+    homes=$(ls -d /home/*/.local/share/helene /root/.local/share/helene 2>/dev/null | grep -c . || true)
     have=$(ls /etc/systemd/system/multi-user.target.wants/helene@*.service 2>/dev/null | grep -c . || true)
     running=$(systemctl list-units --all --plain --no-legend 'helene@*.service' 2>/dev/null | grep -c . || true)
-    if [ "$have" = "0" ] && [ "$running" = "0" ]; then
+    if [ "$homes" = "0" ] && [ "$have" = "0" ] && [ "$running" = "0" ]; then
         owner=""
         # 1) кто ставил: терминал с sudo или pkexec
         if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
@@ -264,19 +266,11 @@ if [ -d /run/systemd/system ]; then
         fi
         # 2) кто за графическим сеансом (App Center ставит от root без переменных)
         if [ -z "$owner" ] && command -v loginctl >/dev/null 2>&1; then
-            seats=$(loginctl list-sessions --no-legend 2>/dev/null | awk '$4=="seat0" && $5=="active" {print $3}' | sort -u)
+            # Колонки list-sessions: SESSION UID USER SEAT TTY (STATE в ней нет).
+            seats=$(loginctl list-sessions --no-legend 2>/dev/null | awk '$4=="seat0" {print $3}' | sort -u)
             count=$(printf '%s
 ' "$seats" | grep -c . || true)
             if [ "$count" = "1" ]; then owner="$seats"; fi
-        fi
-        # 3) единственный дом агента на машине (ставили из окна раньше)
-        if [ -z "$owner" ]; then
-            homes=$(ls -d /home/*/.local/share/helene 2>/dev/null || true)
-            count=$(printf '%s
-' "$homes" | grep -c . || true)
-            if [ "$count" = "1" ]; then
-                owner=$(stat -c %U "$homes" 2>/dev/null || true)
-            fi
         fi
         if [ -n "$owner" ] && [ "$owner" != "root" ]; then
             case "$owner" in
