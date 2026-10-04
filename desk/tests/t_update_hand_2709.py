@@ -170,11 +170,13 @@ class Hand(unittest.TestCase):
                                   "conflicts": [{"path": "tree/agent.py", "why": "одни строки"}],
                                   "folder": "workspace/update-1.1.2", "summary": "…"}}
         note = updates.report_note(receipt, owner="Дмитрий")
-        for piece in ("[Hélène · испытание]", "до 2026-09-27T12:00:00Z UTC", "✓ агент (раннер) жив",
-                      "все 1 расширений грузятся", "не легло 1", "tree/agent.py — одни строки",
-                      "workspace/update-1.1.2/README.md", 'action=\\"accept\\"'.replace("\\", ""),
-                      "action=\"reject\"", "Промолчишь до срока — тоже откат", "Владелец — Дмитрий"):
+        # 04.10: записка испытания — одна строка владельца, без простыни
+        # (жалоба на чек-лист, который агент читал вместо дела).
+        for piece in ("Системное сообщение: проверь обновление 1.1.1 -> 1.1.2",
+                      "на работоспособность и совместимость со своими правками."):
             self.assertIn(piece, note)
+        self.assertNotIn("[Hélène · испытание]", note)
+        self.assertNotIn("делом, не словами", note)
         # после отката по молчанию — итоговая записка говорит почему
         receipt.update(state="rolled_back", note="откат", trial={"verdict": {"verdict": "timeout"}},
                        rollback={"ok": True, "notes": ["прежний код на месте",
@@ -260,7 +262,7 @@ class EngineWiring(unittest.TestCase):
             (ctl / control.UPDATE_RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
             runner._update_report_due()
         self.assertEqual(len(archived), 2)
-        self.assertIn("[Hélène · испытание]", archived[0])
+        self.assertIn("Системное сообщение: проверь обновление", archived[0])
         self.assertIn("не прошло и откачено", archived[1])
 
     def report_run(self, receipt: dict, outcomes: list[str]):
