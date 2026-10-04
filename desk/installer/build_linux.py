@@ -249,7 +249,10 @@ if [ -d /run/systemd/system ]; then
     done
     # Установочный демон (04.10): fresh-машина — ставим службу владельцу сами.
     # Экземпляры уже есть (обновление/выключено владельцем) — не вмешиваемся.
-    have=$(systemctl list-unit-files --plain --no-legend 'helene@*.service' 2>/dev/null | grep -c . || true)
+    # ⚠ list-unit-files непригоден: ШАБЛОН helene@.service числится в нём всегда,
+    # даже без единого экземпляра, и граница «свежести» ломалась об него. Реальная
+    # жизнь экземпляров видна во включённых ссылках wants/ и в list-units.
+    have=$(ls /etc/systemd/system/multi-user.target.wants/helene@*.service 2>/dev/null | grep -c . || true)
     running=$(systemctl list-units --all --plain --no-legend 'helene@*.service' 2>/dev/null | grep -c . || true)
     if [ "$have" = "0" ] && [ "$running" = "0" ]; then
         owner=""
