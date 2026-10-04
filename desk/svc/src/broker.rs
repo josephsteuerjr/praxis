@@ -103,6 +103,11 @@ pub fn handle(request: &str, cred: Option<libc::ucred>) -> Value {
         return json!({"ok": false, "error": "нет SO_PEERCRED — кто ты?"});
     };
     let uid = cred.uid;
+    // Системные uid — мимо всегда, включая ping: присутствие брокера само
+    // по себе не чужое дело (тот же закон, что у трубы Windows).
+    if uid < MIN_HUMAN_UID {
+        return json!({"ok": false, "error": format!("uid {uid} — системный: брокер обслуживает людей, не службы")});
+    }
     let parsed: Value = match serde_json::from_str(request) {
         Ok(v) => v,
         Err(e) => {
