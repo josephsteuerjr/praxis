@@ -71,6 +71,8 @@ use windows_service::{define_windows_service, service_dispatcher};
 /// присмотром launchd и без единой строки Win32. Отдельным модулем, а не
 /// ветками в этом файле: монолит службы Windows — проверенный код, и
 /// переписывать его ради второй платформы значит рисковать первой.
+#[cfg(target_os = "linux")]
+mod broker;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod daemon;
 

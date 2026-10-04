@@ -277,7 +277,10 @@ def mode_state() -> dict:
     except Exception:
         log.exception("режим не разобрался")
         return mode_unknown("режим не разобрался — смотри helene.log")
-    picture["choices"] = mod.catalogue()
+    # 04.10: каналу отдаётся ЛЕСТНИЦА (ограды + нулевая сессия там, где она есть).
+    # Прежний `catalogue()` — две ограды, и третья ступень, построенная в modes.ladder(),
+    # до окна не доезжала вовсе: карточка рисует только то, что здесь прислано.
+    picture["choices"] = getattr(mod, "ladder", mod.catalogue)()
     # Секции службы и тела — только там, где они есть: служба — Windows и macOS
     # (`modes.HAS_SERVICE`), тело — там же (`modes.HAS_COMPUTER`). Где чего нет — None вместо текстов,
     # и окно карточки не рисует (прячет по `app_info.platform`; `service_here` —

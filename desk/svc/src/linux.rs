@@ -148,6 +148,11 @@ fn engine_alive(config: &Path) -> Option<bool> {
 pub fn main() {
     let mode = std::env::args().nth(1).unwrap_or_default();
     match mode.as_str() {
+        "broker" => {
+            // Корневой резидент нулевой сессии (04.10): сокет /run/helene/broker.sock,
+            // SO_PEERCRED, exec правами root за включённой ступенью. Юнит — пакетный.
+            std::process::exit(super::broker::run());
+        }
         "daemon" => {
             let config = match (arg_after("--config"), arg_after("--owner")) {
                 (Some(raw), _) => PathBuf::from(raw),
@@ -277,14 +282,21 @@ pub fn main() {
                 "disable" => vec!["disable", "--now"],
                 _ => fail("service-root enable|disable <имя>"),
             };
-            let out = std::process::Command::new("/bin/systemctl")
-                .args(&args)
-                .arg(linux_svc_instance(&owner))
-                .output()
-                .unwrap_or_else(|e| fail(format!("systemctl не запустился: {e}")));
-            print!("{}", String::from_utf8_lossy(&out.stdout));
-            eprint!("{}", String::from_utf8_lossy(&out.stderr));
-            std::process::exit(out.status.code().unwrap_or(1));
+            // 04.10: одним подтверждением polkit включаются обе службы: надзорная
+            // helene@владелец и корневой брокер нулевой сессии (дверь по умолчанию
+            // закрыта; exec пускает только при service.session0=true в конфиге).
+            let mut codes = vec![];
+            for unit in [linux_svc_instance(&owner), "helene-broker.service".to_string()] {
+                let out = std::process::Command::new("/bin/systemctl")
+                    .args(&args)
+                    .arg(&unit)
+                    .output()
+                    .unwrap_or_else(|e| fail(format!("systemctl не запустился: {e}")));
+                print!("{}", String::from_utf8_lossy(&out.stdout));
+                eprint!("{}", String::from_utf8_lossy(&out.stderr));
+                codes.push(out.status.code().unwrap_or(1));
+            }
+            std::process::exit(*codes.iter().max().unwrap());
         }
         _ => {
             eprintln!(
@@ -293,7 +305,8 @@ pub fn main() {
                  daemon --owner <имя>        супервизор канала, движка и реле (зовёт systemd)\n\
                  home                        завести дом владельца {LINUX_SVC_HOME_REL}\n\
                  unit                        шаблон юнита {LINUX_SVC_TEMPLATE}\n\
-                 service install|remove|state  поставить/снять службу (пароль спросит polkit)"
+                 service install|remove|state  поставить/снять службу (пароль спросит polkit)
+                 broker                      корневой резидент нулевой сессии (зовёт systemd)"
             );
             std::process::exit(2);
         }

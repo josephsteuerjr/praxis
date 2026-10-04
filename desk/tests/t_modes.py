@@ -481,7 +481,9 @@ class Platform(unittest.TestCase):
                                          "HELENE_TREE": str(Path(tmp) / "data")}):
                 picture = readers.mode_state()
         self.assertEqual(picture["name"], "sandbox")
-        self.assertEqual(picture["choices"], modes.catalogue(), "ограды есть на любой платформе")
+        # 04.10: канал отдаёт ЛЕСТНИЦУ (ladder), не голый catalogue — иначе третья
+        # ступень не доезжает до окна ни на одной платформе.
+        self.assertEqual(picture["choices"], modes.ladder(), "лестница доезжает до окна")
         self.assertIsNone(picture["service"])
         self.assertIsNone(picture["computer"])
         self.assertIsNone(picture["computer_option"])

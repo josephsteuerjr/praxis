@@ -239,6 +239,28 @@ POLKIT_POLICY = f"""<?xml version="1.0" encoding="UTF-8"?>
 #: карточка окна (pkexec) тем же путём. При удалении пакета гасятся все экземпляры,
 #: чтобы systemd не держал юнит на снятой программе; обновление их НЕ гасит: программа
 #: меняется под работающей службой, и systemd перезапускает её сам (`try-restart` ниже).
+
+#: Корневой резидент нулевой сессии (04.10). Ставится пакетом ВЫКЛЮЧЕННЫМ:
+#: дверь открывает только третья ступень лестницы (service.session0=true),
+#: и включают её тем же подтверждением polkit, что и надзорную службу.
+BROKER_UNIT = """[Unit]
+Description=Hélène — корневой брокер нулевой сессии
+Documentation=file:///opt/helene/КАК-УСТРОЕН-HELENE.md
+After=systemd-sysctl.service
+ConditionPathExists=/opt/helene/helene-svc
+
+[Service]
+Type=simple
+ExecStart=/opt/helene/helene-svc broker
+Restart=always
+RestartSec=10
+TimeoutStopSec=20
+# Журнал — в journald (stderr) и в /var/lib/helene/broker.log самой службой.
+
+[Install]
+WantedBy=multi-user.target
+"""
+
 POSTINST = """#!/bin/sh
 set -e
 if [ -d /run/systemd/system ]; then
@@ -302,6 +324,7 @@ if [ "$removing" = 1 ] && [ -d /run/systemd/system ]; then
     for unit in $(systemctl list-units --all --plain --no-legend 'helene@*.service' 2>/dev/null | awk '{print $1}'); do
         systemctl disable --now "$unit" >/dev/null 2>&1 || true
     done
+    systemctl disable --now helene-broker.service >/dev/null 2>&1 || true
 fi
 exit 0
 """
@@ -577,6 +600,9 @@ def nfpm_config(version: str, contents: list[dict], files: dict[str, str]) -> di
          "file_info": {"mode": 0o644}},
         {"src": files["unit"], "dst": UNIT_PATHS["rpm"], "packager": "rpm",
          "file_info": {"mode": 0o644}},
+        *([] if "broker_unit" not in files else [
+            {"src": files["broker_unit"], "dst": "/lib/systemd/system/helene-broker.service",
+             "file_info": {"mode": 0o644}}]),
         {"src": files["policy"], "dst": "/usr/share/polkit-1/actions/app.helene.policy",
          "file_info": {"mode": 0o644}},
         {"src": files["home"], "dst": "/usr/bin/helene-home", "file_info": {"mode": 0o755}},
@@ -626,10 +652,13 @@ def build_packages(out: Path, version: str, dest: Path, unit_text: str) -> dict[
     work = dest / "pkg-work"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
-    files = {"unit": work / "helene@.service", "policy": work / "app.helene.policy",
+    files = {"unit": work / "helene@.service",
+             "broker_unit": work / "helene-broker.service",
+             "policy": work / "app.helene.policy",
              "home": work / "helene-home", "postinst": work / "postinst",
              "prerm": work / "prerm", "postrm": work / "postrm"}
-    for key, text in (("unit", unit_text), ("policy", POLKIT_POLICY), ("home", HELENE_HOME_SCRIPT),
+    for key, text in (("unit", unit_text), ("broker_unit", BROKER_UNIT),
+                      ("policy", POLKIT_POLICY), ("home", HELENE_HOME_SCRIPT),
                       ("postinst", POSTINST), ("prerm", PRERM), ("postrm", POSTRM)):
         files[key].write_text(text, encoding="utf-8", newline="\n")
     files["desktop"] = work / "helene.desktop"

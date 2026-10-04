@@ -123,7 +123,7 @@ HAS_COMPUTER = os.name == "nt" or sys.platform == "darwin" or sys.platform.start
 #: от имени владельца, а брандмауэр система спрашивает сама — там галочек нет ни
 #: в каком положении. Отдельная константа, а не `os.name` по месту: стенды
 #: подменяют её, чтобы разобрать обе картины на любой машине.
-HAS_SERVICE_TOGGLES = os.name == "nt"
+HAS_SERVICE_TOGGLES = os.name == "nt" or sys.platform.startswith("linux")
 #: Тексты по платформе (`texts()`, `service_texts()`, `computer_texts()`):
 #: `None` — по `sys.platform` (как и было), `True`/`False` — подмена стендом, чтобы
 #: разобрать картину Windows на раннере macOS и наоборот (как HAS_SERVICE/HAS_COMPUTER).
