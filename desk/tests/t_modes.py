@@ -297,11 +297,13 @@ class Truth(WindowsToggles, unittest.TestCase):
         Ключ в файле прежний (`service.session0`), его читает служба; у опции
         службы остаётся одна дверь — брандмауэр.
         """
-        option = modes.service_option()
-        self.assertTrue(option["needs_admin"])
-        keys = [t["key"] for t in option["toggles"]]
-        self.assertEqual(keys, ["service.firewall"])
-        self.assertIs(option["toggles"][0]["default"], True)
+        for linux in (False, True):
+            with self.subTest(linux=linux), patch.object(modes, "LINUX_TEXTS", linux):
+                option = modes.service_option()
+                self.assertTrue(option["needs_admin"])
+                keys = [t["key"] for t in option["toggles"]]
+                self.assertEqual(keys, [] if linux else ["service.firewall"])
+                if not linux: self.assertIs(option["toggles"][0]["default"], True)
 
     def test_ladder_has_the_session0_rung_with_honest_words(self):
         """Верхняя ступень существует, называет «права системы» и говорит,
@@ -318,7 +320,7 @@ class Truth(WindowsToggles, unittest.TestCase):
             # 04.10, слова владельца: ступень называет службу и права СИСТЕМЫ,
             # оговорка — «права выше ваших» и «один раз при установке».
             self.assertIn("helene-svc", top["text"])
-            self.assertIn("права СИСТЕМЫ", top["text"])
+            self.assertIn("от root" if modes._linux_texts() else "права СИСТЕМЫ", top["text"])
             self.assertIn("права выше", top["warning"])
             self.assertIn("один раз", top["warning"])
         else:

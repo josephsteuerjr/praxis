@@ -57,6 +57,15 @@
 команды — POSIX: абсолютный путь, без `..`, программа на месте (`check_cmd`).
 Файлы обмена, квитанция и слова «владелец не ответил» — те же.
 
+## Linux
+
+При service.session0=true агент обращается к root-службе по Unix-сокету;
+SO_PEERCRED определяет владельца, служба проверяет его сохранённое согласие.
+Окно, polkit и пароль для поручений не нужны. При выключенной нулевой сессии
+просьбу читает окно, которое запускает отдельный broker-root через pkexec:
+каждая exec требует пароль администратора. Обе двери возвращают квитанцию
+и пишут поручение в журнал. spawn_interactive на Linux не предлагается.
+
 Модуль без зависимостей, кроме стандартной библиотеки и соседей по харнессу.
 """
 from __future__ import annotations
@@ -64,6 +73,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import socket
 import sys
 import time
 import unicodedata
@@ -99,9 +109,11 @@ OPS = ("ping", "spawn_interactive", "exec")
 STATE: dict = {"hand": False, "desk": "", "asks": 0, "answers": 0, "note": ""}
 
 #: Брокер есть на Windows (просьбы исполняет служба `svc`) и на macOS (исполняет
-#: сама оболочка, пароль администратора спрашивает система). На прочих POSIX
-#: его нет. Стенды подменяют флаг, чтобы разбирать тул на любой машине.
-HAS_BROKER = os.name == "nt" or sys.platform == "darwin"
+#: сама оболочка, пароль администратора спрашивает система), а на Linux —
+#: Unix-сокет или pkexec. Стенды подменяют флаг на любой машине.
+HAS_BROKER = os.name == "nt" or sys.platform == "darwin" or sys.platform.startswith("linux")
+LINUX = sys.platform.startswith("linux")
+LINUX_SOCKET = "/run/helene/broker.sock"
 #: Форма пути к программе — POSIX (`/usr/bin/…`) или Windows (`C:\…`, UNC).
 #: Стенды передают её явно, чтобы разобрать обе на любой машине.
 POSIX_PATHS = os.name != "nt"
@@ -111,6 +123,22 @@ def executor() -> str:
     """Кто исполняет подписанную просьбу — для слов агенту: на Windows служба,
     на macOS сама оболочка."""
     return "служба" if os.name == "nt" else "оболочка"
+
+
+def call_linux(payload: dict, wait_sec: float) -> dict:
+    """One bounded JSON-line exchange with the root service; no polkit fallback."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
+        peer.settimeout(wait_sec)
+        peer.connect(LINUX_SOCKET)
+        peer.sendall(json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n")
+        with peer.makefile("rb") as response:
+            line = response.readline(1024 * 1024)
+        if not line.endswith(b"\n"):
+            raise OSError("брокер закрыл связь или прислал слишком большой ответ")
+        reply = json.loads(line)
+        if not isinstance(reply, dict):
+            raise OSError("ответ брокера — не объект")
+        return reply
 
 
 # --------------------------------------------------------------------------- #
@@ -541,6 +569,12 @@ class Broker:
         said = check(op, cmd, args, why, timeout_sec)
         if said:
             return f"брокер: {said}. Просьбу не записал — {executor()} отвергла бы её же"
+        if LINUX and POSIX_PATHS:
+            if op == "spawn_interactive":
+                return "брокер Linux: доступны exec и ping; обычные процессы запускай тулом shell"
+            import modes
+            if modes.session0(self.cfg):
+                return self.tell_linux(op, cmd, args, why, timeout_sec)
         if DIRECT:
             return self.tell_service(op, cmd, args, why, timeout_sec)
         listening, words = self.desk()
@@ -567,6 +601,23 @@ class Broker:
                     f"позже — broker_request(action=\"list\"). Торопит — скажи "
                     f"владельцу словами, окно ждать не умеет")
         return "брокер: " + describe_answer(answer)
+
+    def tell_linux(self, op: str, cmd: str, args: list, why: str, timeout_sec: int) -> str:
+        ask_id = _new_id()
+        try:
+            reply = call_linux({"op": op, "argv": [cmd, *args] if op != "ping" else [],
+                                "why": why, "timeout_sec": timeout_sec}, timeout_sec + PIPE_SLACK)
+            row = {"id": ask_id, "decision": "done" if reply.get("ok") else "refused",
+                   "note": reply.get("error") or reply.get("note") or "",
+                   "out": reply.get("out") or "", "err": reply.get("err") or "",
+                   "ms": reply.get("ms")}
+            if op != "ping" and reply.get("ok"):
+                row["code"] = reply.get("code")
+        except (OSError, ValueError) as exc:
+            row = {"id": ask_id, "decision": "failed",
+                   "note": f"{exc}. Включи брокер через выбор нулевой сессии в настройках"}
+        _remember(row)
+        return "брокер: " + describe_answer(row)
 
     def tell_service(self, op: str, cmd: str, args: list, why: str, timeout_sec: int) -> str:
         """Windows: поручение службе по трубе, без окна и без «да» (см. `DIRECT`)."""
@@ -619,6 +670,12 @@ class Broker:
     # --- список ------------------------------------------------------------- #
 
     def listing(self) -> str:
+        if LINUX and POSIX_PATHS:
+            import modes
+            if modes.session0(self.cfg):
+                return "\n".join(["Нулевая сессия: root-брокер выполняет exec без polkit и пароля. "
+                                  "Журнал: /var/lib/helene/broker.log.",
+                                  *[describe_answer(r) for r in RECENT]])
         if DIRECT:
             installed = self.service()
             out = ["Поручения идут службе напрямую: с включённым тумблером нулевой сессии "
@@ -692,13 +749,26 @@ def describe_answer(row: dict) -> str:
 #  Схема руки и выдача её агенту
 # --------------------------------------------------------------------------- #
 
-def tool_schema(*, mac: bool | None = None) -> dict:
+def tool_schema(*, mac: bool | None = None, linux: bool | None = None) -> dict:
     """Схема тула по платформе. На Windows просьбу исполняет служба, на macOS —
     само окно, а права администратора выдаёт системный диалог пароля; слова
     «служба Windows» и «нулевая сессия» на Mac были бы обещанием того, чего нет.
     """
+    linux = (LINUX and mac is None) if linux is None else linux
     mac = (sys.platform == "darwin") if mac is None else mac
-    if mac:
+    if linux:
+        description = (
+            "Выполнить команду с правами root через broker_request. action=ask: "
+            "op=exec (команда) или ping (проверка связи), cmd — абсолютный путь "
+            "(/usr/bin/id), args — массив строк, why — зачем, одной строкой. "
+            "При service.session0=true поручение идёт root-службе напрямую, "
+            "без polkit, пароля и открытого окна; журнал /var/lib/helene/broker.log. "
+            "При выключенной нулевой сессии просьбу исполняет открытое окно Hélène: "
+            "для каждого exec система спрашивает пароль администратора через polkit; "
+            "отмена — отказ. action=list — квитанции или ждущие просьбы. "
+            "Квитанция содержит код возврата, stdout, stderr и длительность.")
+        cmd_words = "программа абсолютным путём"
+    elif mac:
         description = (
             "Попросить владельца выполнить одну команду с правами, которых у тебя "
             "нет. Ты не «становишься администратором»: просьбу читает владелец в "
@@ -741,9 +811,9 @@ def tool_schema(*, mac: bool | None = None) -> dict:
         "action": {"type": "string", "enum": ["ask", "list"],
                    "description": ("ask — попросить, list — ждущие просьбы и ответы" if mac
                                    else "ask — поручить, list — последние квитанции")},
-        "op": {"type": "string", "enum": list(OPS),
-               "description": "ping | spawn_interactive (правами владельца) | "
-                              + ("exec (правами администратора)" if mac
+        "op": {"type": "string", "enum": ["ping", "exec"] if linux else list(OPS),
+               "description": ("ping | " if linux else "ping | spawn_interactive (правами владельца) | ")
+                              + ("exec (правами root)" if linux else "exec (правами администратора)" if mac
                                  else "exec (правами СИСТЕМЫ)")},
         "cmd": {"type": "string", "description": cmd_words},
         "args": {"type": "array", "items": {"type": "string"},
@@ -753,7 +823,7 @@ def tool_schema(*, mac: bool | None = None) -> dict:
         "timeout_sec": {"type": "integer",
                         "description": f"сколько ждать саму команду, 1..{TIMEOUT_MAX} с"},
     }
-    if mac:
+    if mac or linux:
         # На Windows ждать некого: служба отвечает квитанцией сама (`DIRECT`).
         props["wait_sec"] = {"type": "integer",
                              "description": f"сколько ждать ответа владельца, 0..{WAIT_MAX} с"}
@@ -823,6 +893,15 @@ def install(agent_mod, tree: Path, cfg: dict | None = None) -> None:
         if isinstance(tools, list) and not any(
                 isinstance(t, dict) and t.get("name") == TOOL["name"] for t in tools):
             tools.append(dict(TOOL))
+    # Owner requested the complete schema in the model frame, also with tool pointers on.
+    native = getattr(agent_mod, "NATIVE_HAND_NAMES", None)
+    if isinstance(native, (set, frozenset)):
+        agent_mod.NATIVE_HAND_NAMES = frozenset(native) | {TOOL["name"]}
+    if LINUX and POSIX_PATHS:
+        STATE.update({"hand": True, "desk": "", "asks": 0, "answers": 0,
+                      "note": "Linux: нулевая сессия — root-сокет без пароля; интерактивный exec — пароль через окно"})
+        log.info("брокер: схема broker_request добавлена; Linux root-сокет и интерактивный polkit")
+        return
     if DIRECT:
         STATE.update({"hand": True, "desk": "", "asks": 0, "answers": 0,
                       "note": "поручения идут службе напрямую, квитанцией; exec — "

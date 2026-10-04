@@ -1197,6 +1197,7 @@ fn supervise(
                 // стоим: дети погашены, флаг опрашиваем раз в секунду, resume продолжает
                 // надзор и поднимает пару заново. Флаг пишет окно правами владельца.
                 log.line("owner stop: гашу детей и жду снятия стопа (кнопка «Возобновить» в окне)");
+                kill_all_descendants();
                 for kid in kids.iter_mut() {
                     if let Some(child) = kid.child.as_mut() {
                         let _ = child.kill();

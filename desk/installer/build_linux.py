@@ -216,12 +216,12 @@ POLKIT_POLICY = f"""<?xml version="1.0" encoding="UTF-8"?>
   <vendor>Hélène</vendor>
   <vendor_url>https://github.com/josephsteuerjr/praxis</vendor_url>
   <action id="app.helene.service">
-    <description>Поставить или снять службу агента Hélène</description>
-    <message>Hélène просит пароль администратора: поставить или снять службу агента (работа без входа в систему). Агент останется работать от твоего имени, не от root.</message>
+    <description>Управление службой или команда администратора Hélène</description>
+    <message>Hélène просит пароль администратора для операции службы или одной команды агента. Подтверждение относится только к этой операции.</message>
     <defaults>
       <allow_any>auth_admin</allow_any>
       <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin_keep</allow_active>
+      <allow_active>auth_admin</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">{PROGRAM_ROOT}/helene-svc</annotate>
   </action>
@@ -265,6 +265,26 @@ POSTINST = """#!/bin/sh
 set -e
 if [ -d /run/systemd/system ]; then
     systemctl daemon-reload >/dev/null 2>&1 || true
+    # Обновление сохраняет ранее данное согласие на нулевую сессию. Старый
+    # пакет мог сохранить флаг, но оставить корневой брокер выключенным.
+    if /opt/helene/runtime/bin/python3 -I -c '
+import json, pwd
+from pathlib import Path
+for user in pwd.getpwall():
+    if not 1000 <= user.pw_uid < 60000:
+        continue
+    try:
+        cfg = json.loads((Path(user.pw_dir) / ".local/share/helene/helene.json").read_text())
+        service = cfg.get("service", {})
+        if service.get("session0") is True and service.get("broker") is not False:
+            raise SystemExit(0)
+    except (OSError, ValueError, AttributeError):
+        continue
+raise SystemExit(1)
+'; then
+        systemctl enable --now helene-broker.service >/dev/null 2>&1 || true
+    fi
+    systemctl try-restart helene-broker.service >/dev/null 2>&1 || true
     # Обновление: работающие службы владельцев — на новую программу.
     for unit in $(systemctl list-units --plain --no-legend 'helene@*.service' 2>/dev/null | awk '{print $1}'); do
         systemctl try-restart "$unit" >/dev/null 2>&1 || true

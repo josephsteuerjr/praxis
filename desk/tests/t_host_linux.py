@@ -115,6 +115,49 @@ class HostContract(unittest.TestCase):
                         if status.exists(): self.assertIn("State:\tZ", status.read_text(), f"orphan process {pid}")
                 finally: host.close()
 
+    def test_owner_stop_resume_and_restart_have_real_pid_receipts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); cfg = self.fixture(root, local=True)
+            cfg["runner"] = "runner.py"
+            (root / "helene.json").write_text(json.dumps(cfg))
+            (root / "runner.py").write_text(
+                "import json,os,subprocess,sys,time\nfrom pathlib import Path\n"
+                "tree=Path('data'); receipt=tree/'memory/.control/desk_inbox/.reader.json'\n"
+                "receipt.parent.mkdir(parents=True,exist_ok=True)\n"
+                "receipt.write_text(json.dumps({'pid':os.getpid(),'at':time.time()}))\n"
+                "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)'])\n"
+                "(tree/'grandchild.pid').write_text(str(p.pid))\n"
+                "ask=tree/'memory/.state/supervisor-request.json'\n"
+                "while True:\n"
+                " if ask.exists():\n"
+                "  ask.unlink(); sys.exit(6)\n"
+                " time.sleep(.05)\n")
+            host = Pipe(root)
+            def wait_for(predicate):
+                deadline = time.monotonic() + 12
+                while time.monotonic() < deadline:
+                    value = host.request("owner_state")["result"]
+                    if predicate(value): return value
+                    time.sleep(.1)
+                self.fail("owner state never confirmed lifecycle operation")
+            try:
+                before = wait_for(lambda s: s["runner_alive"] is True)
+                pid = before["pid"]
+                restarted = host.request("engine_restart")
+                self.assertNotIn("error", restarted)
+                after = wait_for(lambda s: s["runner_alive"] is True and s["pid"] != pid)
+                self.assertNotEqual(pid, after["pid"])
+                grandchild = int((root / "data/grandchild.pid").read_text())
+                self.assertNotIn("error", host.request("owner_control", action="panic"))
+                stopped = wait_for(lambda s: s["stopped"] and s["runner_alive"] is False)
+                status = Path(f"/proc/{grandchild}/status")
+                if status.exists(): self.assertIn("State:\tZ", status.read_text(), "stop left a running descendant")
+                self.assertIn("error", host.request("engine_restart"))
+                self.assertNotIn("error", host.request("owner_control", action="resume"))
+                resumed = wait_for(lambda s: not s["stopped"] and s["runner_alive"] is True)
+                self.assertNotEqual(stopped["pid"], resumed["pid"])
+            finally: host.close()
+
     def test_parent_crash_reaps_host_and_children(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); self.fixture(root, local=True)

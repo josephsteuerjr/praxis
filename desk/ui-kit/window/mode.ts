@@ -54,7 +54,9 @@ export interface ModeChoice {
   title: string;
   text: string;
   needs_admin: boolean;
-  sandbox: boolean;
+  sandbox: boolean | null;
+  warning?: string;
+  requires_service?: boolean;
 }
 
 /** Галочка внутри опции службы: `modes.service_option().toggles[]`. */
@@ -149,6 +151,8 @@ export interface ComputerLive {
  */
 export interface ModeState {
   name: string;
+  ladder_name?: string;
+  ladder_title?: string;
   title: string;
   text: string;
   sandbox: boolean;

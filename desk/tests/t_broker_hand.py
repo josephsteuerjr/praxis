@@ -369,7 +369,7 @@ class Absent(unittest.TestCase):
         import importlib
         fresh = importlib.reload(broker)
         try:
-            self.assertEqual(fresh.HAS_BROKER, os.name == "nt" or sys.platform == "darwin")
+            self.assertEqual(fresh.HAS_BROKER, os.name == "nt" or sys.platform == "darwin" or sys.platform.startswith("linux"))
             self.assertEqual(fresh.POSIX_PATHS, os.name != "nt")
             self.assertEqual(fresh.TOOL, fresh.tool_schema())
             # Поручение по трубе — только Windows (28.09).

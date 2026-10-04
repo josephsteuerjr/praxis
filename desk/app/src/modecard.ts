@@ -142,7 +142,7 @@ export function modeCard(
   // в две стороны, и они не равны: лишняя ограда чинится одним щелчком, а
   // молча снятая — это и есть та беда, ради которой всё переписано. То же
   // правило и у харнесса: без следов ограды `modes.infer` выбирает песочницу.
-  let picked = (live as ModeState & { ladder_name?: string }).ladder_name
+  let picked = stored.session0 && session0Rung ? "session0" : (live as ModeState & { ladder_name?: string }).ladder_name
     && choiceOf((live as ModeState & { ladder_name?: string }).ladder_name as string)?.name
     || choiceOf(live.name)?.name
     || (legacyPipe
@@ -223,7 +223,7 @@ export function modeCard(
       fencePicked = c.name;
       askBox.hidden = true;
       syncPick();
-      onPick(picked, c.sandbox, c.title);
+      onPick(picked, !!c.sandbox, c.title);
     });
     pickRow.append(b);
   }
@@ -266,7 +266,7 @@ export function modeCard(
         askBox.hidden = true;
         syncPick();
         const fence = choiceOf(fencePicked);
-        if (fence) onPick(fence.name, fence.sandbox, fence.title);
+        if (fence) onPick(fence.name, !!fence.sandbox, fence.title);
       });
     }
     pickRow.append(b);
@@ -275,11 +275,11 @@ export function modeCard(
       // 04.10, слово владельца: подтверждение называется тем, что разрешает,
       // и ставит службу само, если её ещё нет (администратора спросят ОДИН
       // раз — при установке службы, словами оговорки).
-      btn("Разрешить права СИСТЕМЫ", "danger", async () => {
+      btn(linux ? "Разрешить права root" : "Разрешить права СИСТЕМЫ", "danger", async () => {
         askBox.hidden = true;
         session0 = true;
         syncToggles();
-        if (installed === false) {
+        if (linux || installed === false) {
           try {
             toast(await shell<string>("install_service"));
             afterService();
@@ -293,7 +293,7 @@ export function modeCard(
         picked = fencePicked;
         syncPick();
         const fence = choiceOf(fencePicked);
-        if (fence) onPick(fence.name, fence.sandbox, fence.title);
+        if (fence) onPick(fence.name, !!fence.sandbox, fence.title);
       }),
     );
     pickRow.append(askBox);
@@ -362,7 +362,7 @@ export function modeCard(
   // Чего служба НЕ даёт — рядом с тем, что даёт, и ДО кнопки. На macOS это
   // окна и экран: их у процесса вне сеанса нет.
   const svcWarn = option?.warning || live.service_warning || "";
-  if (svcWarn) svcBox.append(el("p", "receipt err", svcWarn));
+  if (svcWarn) svcBox.append(el("p", "field-hint", svcWarn));
 
   /** Заперта ли установка службы и почему. Пустая строка — можно ставить. */
   const lockedWhy = (): string => {
@@ -397,7 +397,7 @@ export function modeCard(
       svcClient.textContent =
         st === "running"
           ? "Движок и канал держит служба — это окно работает клиентом: своих процессов оно не " +
-            "поднимает, и «Перезапустить» их не тронет." +
+            "поднимает. Кнопки движка передают команды её надзору." +
             // Кто поднимает тело под службой — разное на разных системах:
             // на macOS это окно (TCC живёт у Helene.app), на Windows тело
             // поднимает сам движок в интерактивной половине (`session-host`).

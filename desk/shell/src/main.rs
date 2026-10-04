@@ -1340,7 +1340,14 @@ fn service_owns_harness() -> bool {
         _ => false,
     };
     // Installation owns the lifecycle even while SCM is stopped; no shadow engine.
+    #[cfg(windows)]
     let owns = installed;
+    #[cfg(target_os = "linux")]
+    let owns = match linux_svc_state(&linux_owner_name()).as_str() {
+        "running" | "stopped" => true,
+        "absent" => false,
+        _ => installed,
+    };
     if let Ok(mut seen) = SEEN.lock() {
         *seen = Some((Instant::now(), owns));
     }
@@ -2963,7 +2970,10 @@ fn owner_state() -> serde_json::Value {
     #[cfg(windows)]
     let alive = if pid == 0 { None } else { owner_pid_alive(pid,
         receipt.as_ref().and_then(|v| v.get("at")).and_then(|v| v.as_f64())) };
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    let alive = if pid == 0 { Some(false) } else { linux_owner_pid_alive(pid,
+        receipt.as_ref().and_then(|v| v.get("at")).and_then(|v| v.as_f64())) };
+    #[cfg(not(any(windows, target_os = "linux")))]
     let alive: Option<bool> = None;
     serde_json::json!({"agent_id": agent_id, "supported": cfg!(any(windows, target_os = "linux")), "stopped": note.is_some(),
         "runner_alive": alive, "pid": pid,
@@ -2998,9 +3008,16 @@ fn owner_pid_alive(pid: u32, observed_at: Option<f64>) -> Option<bool> {
 }
 
 /// Same supervisor request as the API, usable while the channel is reconnecting.
+#[cfg(target_os = "linux")]
+static OWNER_RESUME_LIFT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 fn engine_restart() -> Result<String, String> {
     if owner_stopped() { return Err("Движок остановлен владельцем — сначала возобнови его".into()); }
+    #[cfg(target_os = "linux")]
+    if service_owns_harness() && linux_svc_state(&linux_owner_name()) == "stopped" {
+        return linux_service_op("start");
+    }
     if !ask_engine_restart(&current_tree(), "window") {
         return Err("Не удалось записать просьбу о перезапуске".into());
     }
@@ -3021,7 +3038,12 @@ fn owner_control(action: String) -> Result<String, String> {
                 Ok("Остановка записана. Движок и канал погаснут в ближайшую секунду; надзор не поднимет их, пока не нажмёшь «Возобновить».".into())
             }
             _ => {
+                if service_owns_harness() && linux_svc_state(&linux_owner_name()) == "stopped" {
+                    // Keep the stop marker if systemd could not be started.
+                    linux_service_op("start")?;
+                }
                 resume_owner_stop()?;
+                OWNER_RESUME_LIFT.store(true, std::sync::atomic::Ordering::Relaxed);
                 Ok("Стоп снят. Надзор поднимет агента в ближайшие секунды.".into())
             }
         };
@@ -3621,6 +3643,8 @@ include!("../../common/service_op.rs");
 include!("../../common/mac_service.rs");
 #[cfg(target_os = "linux")]
 include!("../../common/linux_service.rs");
+#[cfg(target_os = "linux")]
+include!("../../common/linux_broker.rs");
 #[cfg(target_os = "linux")]
 include!("linux_window.rs");
 include!("../../common/stamp.rs");
@@ -5061,7 +5085,7 @@ fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
         }
         // `ping` ничего не выполняет — спрашивать владельца не о чем. Это
         // единственное исключение, и оно ровно такое же, как у службы.
-        if refusal.is_none() && wish.op != BrokerOp::Ping {
+        if refusal.is_none() && wish.op != BrokerOp::Ping && !cfg!(target_os = "linux") {
             if shown >= BROKER_WISH_PER_PASS {
                 all = false;
                 known.remove(&wish.id);
@@ -5164,9 +5188,9 @@ fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
 /// Что нужно, чтобы исполнить подписанную просьбу.
 #[cfg(windows)]
 type BrokerPrepared = BrokerAsk;
-#[cfg(all(not(windows), not(target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 type BrokerPrepared = BrokerWish;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 type BrokerPrepared = MacPrepared;
 
 /// macOS: подписанная просьба И ОТПЕЧАТОК ФАЙЛА, который она зовёт.
@@ -5182,7 +5206,7 @@ type BrokerPrepared = MacPrepared;
 /// и сверяется перед исполнением. Для системных путей (`/usr`, `/bin`, `/sbin`,
 /// `/System`, `/opt/homebrew`) отпечатка нет: туда без root не пишут, а лишняя
 /// строка в окне подтверждения — это шум, за которым перестают читать нужное.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Clone)]
 struct MacPrepared {
     wish: BrokerWish,
@@ -5213,7 +5237,7 @@ fn broker_prepare(tree: &Path, wish: &BrokerWish) -> Result<BrokerPrepared, Stri
 
 /// macOS: та же граница, что у службы, только путь — POSIX; программа обязана
 /// быть на месте — просьбу о несуществующей команде владельцу показывать незачем.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn broker_prepare(_tree: &Path, wish: &BrokerWish) -> Result<BrokerPrepared, String> {
     // Выключатель владельца — ПЕРВЫМ и на каждой просьбе: конфиг читается
     // заново, значит «выключил» действует немедленно, а не «после перезапуска
@@ -5223,6 +5247,10 @@ fn broker_prepare(_tree: &Path, wish: &BrokerWish) -> Result<BrokerPrepared, Str
         return Err(BROKER_OFF_SAID.to_string());
     }
     mac_wish_check(wish)?;
+    #[cfg(target_os = "linux")]
+    if wish.op == BrokerOp::SpawnInteractive {
+        return Err("брокер Linux: exec | ping; обычные процессы запускай тулом shell".into());
+    }
     if !wish.op.runs() {
         return Ok(MacPrepared { wish: wish.clone(), digest: None });
     }
@@ -5253,7 +5281,7 @@ fn broker_prepare(_tree: &Path, wish: &BrokerWish) -> Result<BrokerPrepared, Str
 /// причине — выключенный по умолчанию брокер был бы мёртвым кодом.
 ///
 /// Читается ЗАНОВО на каждой просьбе: «действует немедленно» значит именно это.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn mac_broker_enabled() -> bool {
     match read_config(&install_root().join(CONFIG_NAME)) {
         ConfigRead::Ok(v) => v
@@ -5289,7 +5317,7 @@ fn broker_prepared_note(_prepared: &BrokerPrepared) -> String {
     String::new()
 }
 
-#[cfg(all(not(windows), not(target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn broker_prepared_note(_prepared: &BrokerPrepared) -> String {
     String::new()
 }
@@ -5298,7 +5326,7 @@ fn broker_prepared_note(_prepared: &BrokerPrepared) -> String {
 /// даётся отпечаток — по нему он может сверить файл сам. Восемь знаков, а не
 /// шестьдесят четыре: длинную строку не читают вовсе, а восьми хватает, чтобы
 /// заметить подмену, и они же стоят в журнале.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn broker_prepared_note(prepared: &BrokerPrepared) -> String {
     match &prepared.digest {
         Some(hex) => format!(
@@ -5310,7 +5338,7 @@ fn broker_prepared_note(prepared: &BrokerPrepared) -> String {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn broker_prepare(_tree: &Path, _wish: &BrokerWish) -> Result<BrokerPrepared, String> {
     Err("брокера на этой платформе нет: повышать права некому".to_string())
 }
@@ -5329,7 +5357,12 @@ fn broker_execute(prepared: &BrokerPrepared, _wish: &BrokerWish) -> BrokerRun {
     mac_broker_run(prepared)
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(target_os = "linux")]
+fn broker_execute(prepared: &BrokerPrepared, _wish: &BrokerWish) -> BrokerRun {
+    linux_broker_run(prepared)
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn broker_execute(_prepared: &BrokerPrepared, _wish: &BrokerWish) -> BrokerRun {
     BrokerRun::Failed("брокера на этой платформе нет".to_string())
 }
@@ -6767,6 +6800,11 @@ fn watch_children(app: ShellHandle) {
             }
             relay_abort();
             continue;
+        }
+        #[cfg(target_os = "linux")]
+        if OWNER_RESUME_LIFT.swap(false, Ordering::Relaxed) {
+            last_lift = Instant::now() - Duration::from_secs(30);
+            if let Ok(mut plans) = state.plans.lock() { *plans = build_plans(&install_root()); }
         }
         // 1) Осмотр под замком: только try_wait и учёт падений.
         let mut acts: Vec<(usize, Act)> = Vec::new();

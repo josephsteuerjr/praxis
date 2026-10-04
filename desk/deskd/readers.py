@@ -216,6 +216,7 @@ _MODE_UNKNOWN: dict = {
     "service_installed": None, "service_title": "", "service_text": "",
     "service_warning": "",
     "session0": False, "session0_set": False, "session0_warning": "",
+    "ladder_name": "", "ladder_title": "",
     "firewall": False, "firewall_set": False, "legacy_service": False,
     "notes": [], "choices": [], "service": None, "config": "",
 }

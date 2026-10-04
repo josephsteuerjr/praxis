@@ -194,6 +194,11 @@ const LINUX_SVC_DEADLINE_SEC: u64 = 300;
 #[allow(dead_code)]
 #[cfg(target_os = "linux")]
 fn linux_svc_run_admin(argv: &[String]) -> Result<String, String> {
+    linux_svc_run_admin_for(argv, LINUX_SVC_DEADLINE_SEC)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_svc_run_admin_for(argv: &[String], wait_sec: u64) -> Result<String, String> {
     use std::process::{Command, Stdio};
     let ci = std::env::var("GITHUB_ACTIONS").ok();
     let forced = std::env::var("HELENE_ADMIN_NOPROMPT").ok();
@@ -227,7 +232,7 @@ fn linux_svc_run_admin(argv: &[String]) -> Result<String, String> {
             let _ = std::fs::remove_file(&out_path);
             format!("не запустилось {}: {e}", full[0])
         })?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(LINUX_SVC_DEADLINE_SEC);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(wait_sec);
     let code = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status.code(),
@@ -239,7 +244,7 @@ fn linux_svc_run_admin(argv: &[String]) -> Result<String, String> {
             let _ = child.wait();
             let _ = std::fs::remove_file(&out_path);
             return Err(format!(
-                "не дождался за {LINUX_SVC_DEADLINE_SEC} с — диалог пароля так и не закрыли"
+                "не дождался за {wait_sec} с — подтверждение или команда не завершились"
             ));
         }
         std::thread::sleep(std::time::Duration::from_millis(200));

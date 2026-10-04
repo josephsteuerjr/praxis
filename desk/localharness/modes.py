@@ -285,9 +285,9 @@ SERVICE_TEXT_LINUX = ("Ставится один раз, система спро
                       "вошёл в систему. Упавшее — поднимается само. Ограду это не "
                       "меняет: режим ты выбираешь отдельно, и он работает так же.")
 
-SERVICE_WARNING_LINUX = ("Окон и экрана у такого агента нет: процесс вне твоего "
-                         "сеанса не видит рабочего стола. Тул `computer` оживает, "
-                         "когда ты откроешь окно Helene — тело поднимает оно.")
+SERVICE_WARNING_LINUX = ("После выхода из графического сеанса управление рабочим "
+                         "столом недоступно. Пока окно Hélène открыто, оно поднимает "
+                         "тело тула `computer` для движка службы.")
 
 
 def service_texts() -> tuple[str, str, str]:
@@ -1012,6 +1012,8 @@ def describe(picture: dict) -> dict:
     return {
         "name": picture.get("name") or DEFAULT_MODE,
         "title": picture.get("title") or TITLES[DEFAULT_MODE],
+        "ladder_name": picture.get("ladder_name") or picture.get("name") or DEFAULT_MODE,
+        "ladder_title": picture.get("ladder_title") or picture.get("title") or TITLES[DEFAULT_MODE],
         "text": picture.get("text") or texts()[DEFAULT_MODE],
         "sandbox": bool(picture.get("sandbox")),
         "explicit": bool(picture.get("explicit")),
@@ -1061,8 +1063,7 @@ def ladder() -> list[dict]:
 
     Третья ступень существует только там, где её кому исполнить
     (`HAS_SERVICE_TOGGLES`): на macOS демоны идут от имени владельца, на Linux
-    root-резидент ещё не построен — там лестница пока из двух ступеней, и это
-    решает харнесс, а не окно.
+    есть корневой брокер systemd. Состав решает харнесс, а не окно.
     """
     rungs = catalogue()
     if not HAS_SERVICE_TOGGLES:
@@ -1070,7 +1071,8 @@ def ladder() -> list[dict]:
     return rungs + [{
         "name": "session0",
         "title": LADDER_SESSION0_TITLE,
-        "text": LADDER_SESSION0_TEXT,
+        "text": ("Служба helene-svc поднимает движок после падения, а отдельный брокер "
+                 "выполняет поручения агента от root без polkit и пароля.") if _linux_texts() else LADDER_SESSION0_TEXT,
         "warning": LADDER_SESSION0_WARNING,
         "needs_admin": False,
         # ограду НЕ меняем: у ступени нет своего sandbox
@@ -1093,7 +1095,7 @@ def service_option() -> dict:
     # ступенью лестницы прав (см. `ladder()`), отдельный тумблер поверх ограды
     # врал устройством: лестница — один выбор, а не два независимых. Ключ в
     # файле прежний (`service.session0`), его продолжает читать служба.
-    toggles = [] if not HAS_SERVICE_TOGGLES else [
+    toggles = [] if not HAS_SERVICE_TOGGLES or _linux_texts() else [
         {
             "key": "service.firewall",
             "title": FIREWALL_TITLE,

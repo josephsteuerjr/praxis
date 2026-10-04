@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use super::daemon;
 
 include!("../../common/linux_service.rs");
+include!("../../common/linux_broker.rs");
 
 fn arg_after(flag: &str) -> Option<String> {
     super::arg_after(flag)
@@ -148,6 +149,17 @@ fn engine_alive(config: &Path) -> Option<bool> {
 pub fn main() {
     let mode = std::env::args().nth(1).unwrap_or_default();
     match mode.as_str() {
+        "broker-root" => {
+            if unsafe { libc::geteuid() } != 0 { fail("broker-root требует подтверждение администратора"); }
+            let uid = std::env::var("PKEXEC_UID").or_else(|_| std::env::var("SUDO_UID"))
+                .ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+            let (_, home) = super::broker::owner_of_uid(uid).unwrap_or_else(|e| fail(e));
+            let cfg = home.join(LINUX_SVC_HOME_REL).join("helene.json");
+            if !super::broker::broker_enabled(&cfg) { fail("брокер выключен владельцем"); }
+            let raw = std::env::args().nth(2).unwrap_or_default();
+            let request = serde_json::from_str(&raw).unwrap_or_else(|e| fail(format!("просьба не разобралась: {e}")));
+            json_line(super::broker::execute(&request, uid));
+        }
         "broker" => {
             // Корневой резидент нулевой сессии (04.10): сокет /run/helene/broker.sock,
             // SO_PEERCRED, exec правами root за включённой ступенью. Юнит — пакетный.
@@ -212,8 +224,11 @@ pub fn main() {
             let root_op = match op.as_str() {
                 "install" => Some("enable"),
                 "remove" => Some("disable"),
+                "start" => Some("start"),
+                "stop" => Some("stop"),
+                "restart" => Some("restart"),
                 "state" => None,
-                _ => fail("service install|remove|state [--owner <имя>]"),
+                _ => fail("service install|remove|start|stop|restart|state [--owner <имя>]"),
             };
             let mut said = String::new();
             if let Some(root_op) = root_op {
@@ -229,7 +244,14 @@ pub fn main() {
                     root_op.into(),
                     owner.clone(),
                 ];
-                match linux_svc_run_admin(&argv) {
+                let result = if super::broker::session0_opened(&config) && op != "install" && op != "remove" {
+                    linux_broker_call(&serde_json::json!({"op": "service", "action": root_op}),
+                                      std::time::Duration::from_secs(60)).and_then(|reply| {
+                        if reply["ok"].as_bool() == Some(true) { Ok(reply.to_string()) }
+                        else { Err(reply["error"].as_str().unwrap_or("брокер отказал").to_string()) }
+                    })
+                } else { linux_svc_run_admin(&argv) };
+                match result {
                     Ok(out) => said = out,
                     Err(why) => fail(why),
                 }
@@ -280,13 +302,18 @@ pub fn main() {
             let args: Vec<&str> = match op.as_str() {
                 "enable" => vec!["enable", "--now"],
                 "disable" => vec!["disable", "--now"],
-                _ => fail("service-root enable|disable <имя>"),
+                "start" => vec!["start"],
+                "stop" => vec!["stop"],
+                "restart" => vec!["restart"],
+                _ => fail("service-root enable|disable|start|stop|restart <имя>"),
             };
             // 04.10: одним подтверждением polkit включаются обе службы: надзорная
             // helene@владелец и корневой брокер нулевой сессии (дверь по умолчанию
             // закрыта; exec пускает только при service.session0=true в конфиге).
             let mut codes = vec![];
-            for unit in [linux_svc_instance(&owner), "helene-broker.service".to_string()] {
+            let mut units = vec![linux_svc_instance(&owner)];
+            if op == "enable" || op == "disable" { units.push("helene-broker.service".into()); }
+            for unit in units {
                 let out = std::process::Command::new("/bin/systemctl")
                     .args(&args)
                     .arg(&unit)

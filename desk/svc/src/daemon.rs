@@ -40,6 +40,9 @@ use super::{load_plan, plan_usable, Log};
 // оболочкой и мастером: расхождение здесь означало бы «поставили не тот демон».
 include!("../../common/mac_service.rs");
 
+#[cfg(target_os = "linux")]
+pub(crate) fn command_digest(bytes: &[u8]) -> String { mac_svc_sha256(bytes) }
+
 /// Просьба остановиться от launchd (SIGTERM) или от человека (Ctrl+C).
 /// `static`, а не канал: обработчик сигнала — это код, который исполняется
 /// между инструкциями, и всё, что ему можно, — записать флаг.

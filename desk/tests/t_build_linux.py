@@ -132,6 +132,7 @@ class Package(unittest.TestCase):
                       bl.POLKIT_POLICY)
         self.assertIn('id="app.helene.service"', bl.POLKIT_POLICY)
         self.assertIn("auth_admin", bl.POLKIT_POLICY)
+        self.assertNotIn("auth_admin_keep", bl.POLKIT_POLICY)
 
     def test_maintainer_scripts_never_touch_owner_data(self):
         """Письмо и дух: данные владельца пакет не трогает.
