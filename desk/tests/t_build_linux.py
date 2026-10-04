@@ -161,9 +161,11 @@ class Package(unittest.TestCase):
         self.assertIn("SUDO_USER", bl.POSTINST)
         self.assertIn("PKEXEC_UID", bl.POSTINST)
         self.assertIn("loginctl list-sessions", bl.POSTINST)
-        self.assertIn("stat -c %U", bl.POSTINST)
-        # вход только на свежей машине: нет включённых и нет живых экземпляров
-        self.assertIn("list-unit-files", bl.POSTINST)
+        # Граница честности — дом агента: на машине с домами демон молчит
+        # (выключенное владельцем не включается). Живость экземпляров — по
+        # wants-ссылкам и list-units, не по list-unit-files (там всегда шаблон).
+        self.assertIn("/home/*/.local/share/helene", bl.POSTINST)
+        self.assertIn("multi-user.target.wants", bl.POSTINST)
         # имя владельца валидируется перед подстановкой в имя юнита
         self.assertIn("*[!A-Za-z0-9_.-]*", bl.POSTINST)
 
