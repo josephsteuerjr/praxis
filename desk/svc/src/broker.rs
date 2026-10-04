@@ -23,6 +23,7 @@
 //! абсолютный: голое имя root искал бы в своём PATH (правило трубы Windows).
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 
@@ -174,7 +175,7 @@ pub fn run() -> i32 {
     }
     let dir = Path::new(SOCKET_PATH).parent().unwrap();
     if let Err(e) = std::fs::create_dir_all(dir) {
-        fail(&format!("не завёлся {dir}: {e}"));
+        fail(&format!("не завёлся {dir:?}: {e}"));
     }
     let _ = std::fs::remove_file(SOCKET_PATH);
     let listener = match UnixListener::bind(SOCKET_PATH) {
@@ -206,7 +207,7 @@ pub fn peer_cred(stream: &std::os::unix::net::UnixStream) -> Option<libc::ucred>
     let len = std::mem::size_of::<libc::ucred>() as u32;
     let rc = unsafe {
         libc::getsockopt(
-            stream.as_raw_fd(),
+            stream.as_fd().as_raw_fd(),
             libc::SOL_SOCKET,
             libc::SO_PEERCRED,
             &mut cred as *mut _ as *mut libc::c_void,
