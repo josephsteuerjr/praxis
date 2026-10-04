@@ -267,7 +267,9 @@ if [ -d /run/systemd/system ]; then
         # 2) кто за графическим сеансом (App Center ставит от root без переменных)
         if [ -z "$owner" ] && command -v loginctl >/dev/null 2>&1; then
             # Колонки list-sessions: SESSION UID USER SEAT TTY (STATE в ней нет).
-            seats=$(loginctl list-sessions --no-legend 2>/dev/null | awk '$4=="seat0" {print $3}' | sort -u)
+            # Только настоящие люди: uid>=1000 отсекает служебный сеанс приветствия
+            # gdm (uid~120), который тоже сидит на seat0 и ломал «ровно один сеанс».
+            seats=$(loginctl list-sessions --no-legend 2>/dev/null | awk '$4=="seat0" && $2>=1000 && $2<60000 {print $3}' | sort -u)
             count=$(printf '%s
 ' "$seats" | grep -c . || true)
             if [ "$count" = "1" ]; then owner="$seats"; fi
