@@ -739,16 +739,21 @@ class Trial(Base):
         self.assertEqual(r["state"], "rolled_back")
         self.assertIn("владелец на испытании сказал «сломано»", r["note"])
 
-    def test_молчание_до_срока_откат(self):
+    def test_молчание_до_срока_не_откат(self):
+        """04.10, слово владельца: «откат лучше не делать принудительный».
+
+        Молчание до срока — новая версия ОСТАЁТСЯ работать; расписка говорит
+        владельцу, что испытание не отвечено. Вернуть прежнюю — план на неё.
+        """
         self.run_update()
         self.now[0] += control.UPDATE_TRIAL_DEFAULT * 60 + 1
         self.u.tick()
         r = self.receipt()
-        self.assertEqual(r["state"], "rolled_back", r.get("note"))
-        self.assertIn("не ответил на испытании", r["note"])
+        self.assertEqual(r["state"], "done", r.get("note"))
+        self.assertIn("откат не принудительный", r["note"])
         self.assertEqual(r["trial"]["verdict"]["verdict"], "timeout")
-        # старая версия получит записку об откате
-        self.assertEqual(control.update_unreported(self.install / "data")["state"], "rolled_back")
+        # агенту новой версии придёт записка «не отвечено — версия оставлена»
+        self.assertEqual(control.update_unreported(self.install / "data")["state"], "done")
 
     def test_занятому_агенту_срок_продлевается_но_не_бесконечно(self):
         self.run_update(trial_min=10)
@@ -763,8 +768,9 @@ class Trial(Base):
         self.assertEqual(r["trial"]["extended"], up.TRIAL_EXTEND)
         self.now[0] += up.TRIAL_EXTEND + 1
         self.u.tick()
-        self.assertEqual(self.receipt()["state"], "rolled_back")
+        self.assertEqual(self.receipt()["state"], "done")
         self.assertIn("с продлением", self.receipt()["note"])
+        self.assertIn("откат не принудительный", self.receipt()["note"])
 
     def test_испытание_переживает_перезапуск_исполнителя(self):
         self.run_update()
