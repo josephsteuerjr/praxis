@@ -9,3 +9,7 @@ praxis/body/target/
 # сборка тела (installer/body_src.py --build) и байткод проверок — не исходники
 _body_target/
 __pycache__/
+
+# рантайм-замеры тестов и черновой аудит теневых пар — не для зеркала
+.praxis_test_durations.json
+workspace/shadow_pairs_audit.py
