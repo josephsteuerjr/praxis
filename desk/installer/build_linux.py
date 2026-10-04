@@ -228,11 +228,17 @@ POLKIT_POLICY = f"""<?xml version="1.0" encoding="UTF-8"?>
 </policyconfig>
 """
 
-#: Сценарии dpkg. Пакет не знает, кто владелец (их может быть несколько), поэтому
-#: postinst службы не включает — её включает владелец (`helene-svc service install` или
-#: карточка окна); при удалении пакета — гасятся все экземпляры, чтобы systemd не держал
-#: юнит на снятой программе. Обновление (`upgrade`) их НЕ гасит: программа меняется под
-#: работающей службой, и systemd перезапускает её сам (`try-restart` ниже).
+#: Сценарии dpkg. 04.10, слово владельца («apt install не ставит службу — установочного
+#: демона просто нет»): postinst САМ ставит службу владельцу этого компьютера. Кого
+#: поднимать: кто ставил (SUDO_USER / PKEXEC_UID — терминал), кто за активным графическим
+#: сеансом seat0 (App Center ставит от root, переменных нет), наконец — единственный
+#: пользователь с уже заведённым домом агента. На fresh-машине без ни одного
+#: экземпляра — включаем; если экземпляры уже есть (обновление или владелец сознательно
+#: выключил) — НЕ трогаем: включить выключенное без слова владельца значило бы
+#: предавать его выбор. Не определили владельца — служба не включена, её поставит
+#: карточка окна (pkexec) тем же путём. При удалении пакета гасятся все экземпляры,
+#: чтобы systemd не держал юнит на снятой программе; обновление их НЕ гасит: программа
+#: меняется под работающей службой, и systemd перезапускает её сам (`try-restart` ниже).
 POSTINST = """#!/bin/sh
 set -e
 if [ -d /run/systemd/system ]; then
@@ -241,6 +247,43 @@ if [ -d /run/systemd/system ]; then
     for unit in $(systemctl list-units --plain --no-legend 'helene@*.service' 2>/dev/null | awk '{print $1}'); do
         systemctl try-restart "$unit" >/dev/null 2>&1 || true
     done
+    # Установочный демон (04.10): fresh-машина — ставим службу владельцу сами.
+    # Экземпляры уже есть (обновление/выключено владельцем) — не вмешиваемся.
+    have=$(systemctl list-unit-files --plain --no-legend 'helene@*.service' 2>/dev/null | grep -c . || true)
+    running=$(systemctl list-units --all --plain --no-legend 'helene@*.service' 2>/dev/null | grep -c . || true)
+    if [ "$have" = "0" ] && [ "$running" = "0" ]; then
+        owner=""
+        # 1) кто ставил: терминал с sudo или pkexec
+        if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+            owner="$SUDO_USER"
+        elif [ -n "$PKEXEC_UID" ]; then
+            owner=$(getent passwd "$PKEXEC_UID" 2>/dev/null | cut -d: -f1)
+        fi
+        # 2) кто за графическим сеансом (App Center ставит от root без переменных)
+        if [ -z "$owner" ] && command -v loginctl >/dev/null 2>&1; then
+            seats=$(loginctl list-sessions --no-legend 2>/dev/null | awk '$4=="seat0" && $5=="active" {print $3}' | sort -u)
+            count=$(printf '%s
+' "$seats" | grep -c . || true)
+            if [ "$count" = "1" ]; then owner="$seats"; fi
+        fi
+        # 3) единственный дом агента на машине (ставили из окна раньше)
+        if [ -z "$owner" ]; then
+            homes=$(ls -d /home/*/.local/share/helene 2>/dev/null || true)
+            count=$(printf '%s
+' "$homes" | grep -c . || true)
+            if [ "$count" = "1" ]; then
+                owner=$(stat -c %U "$homes" 2>/dev/null || true)
+            fi
+        fi
+        if [ -n "$owner" ] && [ "$owner" != "root" ]; then
+            case "$owner" in
+                *[!A-Za-z0-9_.-]*|"") owner="" ;;
+            esac
+        fi
+        if [ -n "$owner" ]; then
+            systemctl enable --now "helene@$owner.service" >/dev/null 2>&1 || true
+        fi
+    fi
 fi
 exit 0
 """

@@ -134,13 +134,38 @@ class Package(unittest.TestCase):
         self.assertIn("auth_admin", bl.POLKIT_POLICY)
 
     def test_maintainer_scripts_never_touch_owner_data(self):
+        """Письмо и дух: данные владельца пакет не трогает.
+
+        04.10: postinst теперь ЧИТАЕТ перечень домов (`ls -d` + `stat %U`), чтобы
+        понять, кому ставить службу — это чтение для узнавания владельца, не
+        изменение. Запрещены команды, меняющие данные: rm/mv/cp/chown/chmod и
+        запись в дом. Сама строка пути в скрипте присутствовать может.
+        """
+        import re
         for script in (bl.POSTINST, bl.PRERM, bl.POSTRM):
             self.assertTrue(script.startswith("#!/bin/sh\n"))
-            self.assertNotIn(".local/share/helene", script.replace("# Данные владельцев (~/.local/share/helene)", ""))
-            self.assertNotIn("rm -rf", script)
+            for verb in ("rm ", "rmdir ", "mv ", "cp ", "chown ", "chmod ", "touch ",
+                         "mkdir ", "tee ", ">>"):
+                self.assertNotRegex(script, re.compile(r"(?<![\w/.-])" + re.escape(verb)))
         # Снятие пакета гасит службы владельцев; обновление — перезапускает, не гасит.
         self.assertIn('remove|0', bl.PRERM)
         self.assertIn("try-restart", bl.POSTINST)
+
+    def test_postinst_installs_the_service_for_the_detected_owner(self):
+        """04.10, слово владельца: «apt install не ставит службу — установочного
+        демона просто нет». Пакет ставит службу сам на fresh-машине: находит
+        владельца (SUDO_USER/PKEXEC_UID → активный seat0 → единственный дом),
+        включает helene@владелец --now. Экземпляры уже есть — не вмешивается:
+        выключенное владельцем не включается молча."""
+        self.assertIn("enable --now", bl.POSTINST)
+        self.assertIn("SUDO_USER", bl.POSTINST)
+        self.assertIn("PKEXEC_UID", bl.POSTINST)
+        self.assertIn("loginctl list-sessions", bl.POSTINST)
+        self.assertIn("stat -c %U", bl.POSTINST)
+        # вход только на свежей машине: нет включённых и нет живых экземпляров
+        self.assertIn("list-unit-files", bl.POSTINST)
+        # имя владельца валидируется перед подстановкой в имя юнита
+        self.assertIn("*[!A-Za-z0-9_.-]*", bl.POSTINST)
 
     def test_the_config_template_points_at_the_linux_python(self):
         cfg = json.loads(bl.helene_json_linux())
