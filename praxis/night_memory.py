@@ -543,6 +543,7 @@ def verify_pass(candidates: list[dict]) -> dict:
                 head = [f"### room:{place}", "профиль/лента не прочитались"]
             blocks.append("\n".join(head))
     verdicts: list[dict] = []
+    data_parsed_ok = True
     voice_ok = _llm().configured("voice")
     if voice_ok:
         try:
@@ -550,6 +551,8 @@ def verify_pass(candidates: list[dict]) -> dict:
                                messages=[{"role": "user", "content": "\n\n".join(blocks)[:60000]}],
                                max_tokens=2400)
             data = _json_obj(resp.text)
+            if not re.search(r"\{.*\}", str(resp.text or ""), re.S):
+                data_parsed_ok = False   # ответ вообще не JSON — голос не ответил
             verdicts = [v for v in (data.get("verdicts") or [])[:24]
                         if isinstance(v, dict) and v.get("subject")]
         except Exception:
@@ -565,14 +568,40 @@ def verify_pass(candidates: list[dict]) -> dict:
         return {**counts, "failed": len(cands), "deferred": deferred,
                 "lines": [f"{c.get('slug') or c.get('place')}: не сверено ({reason})"
                           for c in cands]}
-    # Гарантированный минимум: непокрытые кандидаты = unverifiable с причиной
-    seen_subjects = {str(v.get("subject")) for v in verdicts}
-    for cand in cands:
-        subj = (cand.get("slug") if cand.get("kind") == "person"
-                else f"room:{cand.get('place')}")
-        if subj not in seen_subjects:
-            verdicts.append({"subject": subj, "verdict": "unverifiable",
-                             "against": "голос не ответил — считаю несверённым"})
+    # Скоуп ночи (судейский фикс): голос решает только по предъявленным
+    # кандидатам — вердикт о субъекте вне списка не применяется, иначе одна
+    # ночь получала бы право писать в любые досье, включая фантомы.
+    allowed = {(cand.get("slug") if cand.get("kind") == "person"
+                else f"room:{cand.get('place')}") for cand in cands}
+    stray = [v for v in verdicts if str(v.get("subject")) not in allowed]
+    if stray:
+        receipt(_run_id(), _day_key(), "verify_scope", "skipped",
+                reason=(f"голос ответил по {len(stray)} субъектам вне списка "
+                        f"кандидатов — не применено"))
+        verdicts = [v for v in verdicts if str(v.get("subject")) in allowed]
+    if not verdicts and data_parsed_ok is False:
+        # Мусорный ответ голоса (JSON не разобрался / ни одного вердикта) — честный
+        # failed: «не проверяемо» здесь лгало бы, сбрасывая таймер свежести
+        # несверённых досье на месяц без единой проверки.
+        receipt(_run_id(), _day_key(), "verify", "failed",
+                reason=f"голос не дал ни одного вердикта — {len(cands)} кандидатов "
+                       f"не сверены, канон не тронут")
+        return {**counts, "failed": len(cands), "deferred": deferred,
+                "lines": [f"{c.get('slug') or c.get('place')}: не сверено (голос промолчал)"
+                          for c in cands]}
+    # Гарантированного синтеза «unverifiable» для непокрытых кандидатов НЕТ:
+    # пометка сверки — решение голоса; кандидат без явного вердикта остаётся
+    # несверённым и вернётся следующей ночью (канон не трогаем).
+    covered = {str(v.get("subject")) for v in verdicts}
+    uncovered = [cand for cand in cands
+                 if ((cand.get("slug") if cand.get("kind") == "person"
+                      else f"room:{cand.get('place')}") not in covered)]
+    if uncovered:
+        receipt(_run_id(), _day_key(), "verify_uncovered", "skipped",
+                reason=f"голос не ответил по {len(uncovered)} из {len(cands)} кандидатов — "
+                       f"они не сверены и вернутся следующей ночью")
+        lines = [f"{c.get('slug') or c.get('place')}: не сверено (голос не ответил)"
+                 for c in uncovered]
     for v in verdicts:
         subj = str(v.get("subject"))
         verdict = str(v.get("verdict") or "unverifiable").lower()

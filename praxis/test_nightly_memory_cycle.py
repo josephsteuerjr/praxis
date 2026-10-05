@@ -234,10 +234,20 @@ class TestVerifyPass(NightBase):
         raw3 = people.read_text("p3")
         self.assertIn("не проверяемо", raw3)
 
-    def test_unanswered_candidate_is_unverifiable(self):
+    def test_unanswered_candidate_stays_unverified(self):
+        """Кандидат без явного вердикта голоса НЕ получает синтетическое
+        «не проверяемо»: пометка сверки — решение голоса, а непокрытый
+        кандидат остаётся несверённым и вернётся следующей ночью."""
         self.seed_person("px", "Икс", ["факт"])
+        self.llm_responses.append(json.dumps({"verdicts": []}))  # валидный пустой ответ
         out = nm.verify_pass([{"kind": "person", "slug": "px", "age_days": 99}])
-        self.assertEqual(out["unverifiable"], 1)
+        self.assertEqual(out["unverifiable"], 0)
+        self.assertFalse(people.last_verified("px")[0],
+                         "пустой ответ голоса записал сверку")
+        rows = [r for r in nm.receipts() if r.get("step") == "verify_uncovered"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "skipped")
+        self.assertTrue(out["lines"] and "не сверено" in out["lines"][0])
 
     def test_refuted_matches_only_old_fragments(self):
         """B2: mark_superseded матчит ТОЛЬКО дословные old_fragments, не against."""
@@ -262,6 +272,35 @@ class TestVerifyPass(NightBase):
         raw = people.read_text("pn")
         self.assertNotIn("~~устарело~~", raw, "без old_fragments строки не помечаются")
         self.assertIn("сверка", raw, "факт-запись о противоречии не добавлена")
+
+    def test_stray_subject_verdict_not_applied(self):
+        """Скоуп ночи: вердикт о субъекте вне кандидатов не применяется (нет фантомов)."""
+        self.seed_person("inscope", "Ин", ["факт ин"])
+        self.llm_responses.append(json.dumps({"verdicts": [
+            {"subject": "outsider", "verdict": "confirmed", "against": "лента"},
+            {"subject": "inscope", "verdict": "confirmed", "against": "лента"},
+        ]}))
+        out = nm.verify_pass([{"kind": "person", "slug": "inscope", "age_days": 40}])
+        self.assertEqual(out["confirmed"], 1)
+        self.assertFalse((people.PEOPLE_DIR / "outsider.md").exists(),
+                         "фантомное досье создано вердиктом вне скоупа")
+        self.assertTrue(people.last_verified("inscope")[0],
+                        "вердикт по кандидату не применён")
+        rows = [r for r in nm.receipts() if r.get("step") == "verify_scope"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "skipped")
+
+    def test_empty_verdicts_failed_not_unverifiable(self):
+        """Пустой ответ голоса — failed, канон не тронут (таймер свежести не сбрасывается)."""
+        self.seed_person("quiet", "Кв", ["факт кв"])
+        self.llm_responses.append("{не json вовсе")
+        out = nm.verify_pass([{"kind": "person", "slug": "quiet", "age_days": 40}])
+        self.assertEqual(out.get("failed"), 1)
+        self.assertEqual(out["unverifiable"], 0)
+        self.assertFalse(people.last_verified("quiet")[0],
+                         "пустой ответ голоса записал сверку")
+        rows = [r for r in nm.receipts() if r.get("step") == "verify"]
+        self.assertTrue(any(r.get("status") == "failed" for r in rows))
 
     def test_no_voice_no_canon_writes(self):
         """B3: без голосового хода канон не трогается (ни шапок, ни superseded)."""
