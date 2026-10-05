@@ -878,8 +878,12 @@ async def _r_retention(c: Call):
     """Леджер ретенции рабочих материалов (слово владельца 01.10).
 
     GET — отчёт без изменений на диске; POST {action:"sweep"} — уборка
-    однозначного мусора (staging старых обновлений) с записью леджера.
-    Проекты, runs и модели не удаляются никоем действием этой ручки.
+    однозначного мусора (staging старых обновлений) с записью леджера;
+    POST {action:"delete", path} — удалить ОДНУ папку свежего снимка (05.10,
+    «никак не чистится»): слово владельца кнопкой. Путь сверяется со свежей
+    классификацией на месте — произвольного удаления по пути нет; модели и
+    снимки кнопка не трогает. Телефону ручка не открыта: до этих путей
+    устройство не пускает scope-гейт middleware.
     """
     action = str((c.body or {}).get("action") or "report")
 
@@ -888,6 +892,8 @@ async def _r_retention(c: Call):
         root = readers.tree()
         if action == "sweep":
             return mod.sweep(root)
+        if action == "delete":
+            return mod.delete_entry(root, None, str((c.body or {}).get("path") or ""))
         return {"schema": mod.SCHEMA, "entries": mod.classify(root), "removed": []}
 
     try:

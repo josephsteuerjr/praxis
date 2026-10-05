@@ -37,41 +37,49 @@ function fmtMB(bytes: number): string {
 }
 
 /**
- * Материалы леджером — вытяжными полосками вдлинь (слово владельца 01.10):
- * каждая полоса тянется на всю ширину и раскрывается в подробности. Полоски
- * показывают ЧТО лежит и почём; удаляют этот экран только staging — проекты
- * и артефакты ходов не трогает никто, кроме слова владельца.
+ * Материалы — диаграммой на полосках в бумажном стиле (слово владельца 05.10:
+ * «не выглядит диаграммой — можно было бы красивые полоски в общем бумажном
+ * стиле»). Длина полоски — доля веса среди материалов, тон — чернильная
+ * заливка поверх бумаги. Щелчок разворачивает подробности и действия: у
+ * удаляемых классов — «Удалить папку» с подтверждением вторым щелчком (слово
+ * владельца 01.10 и есть политика удаления, 05.10 — «никак не чистится»);
+ * staging убирает общая кнопка по возрасту.
  */
+const DELETABLE_CLASSES = new Set(["project", "spool_cache", "run_artifacts"]);
+
 function materialsHTML(r: RetentionReport | null): string {
   if (!r || !r.entries?.length) {
     return `<h3 class="section-title">Материалы</h3><p class="muted">Леджер ретенции пуст: вторичных материалов не нашлось.</p>`;
   }
   const total = r.entries.reduce((s, e) => s + (e.bytes || 0), 0);
+  const heaviest = Math.max(...r.entries.map((e) => e.bytes || 0), 1);
   const strips = r.entries
     .slice()
     .sort((a, b) => (b.bytes || 0) - (a.bytes || 0))
     .map((e) => {
       const name = e.path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || e.path;
       const cls = RETENTION_CLASS_RU[e.class] || e.class;
+      const fill = Math.max(2, Math.round(((e.bytes || 0) / heaviest) * 100));
+      const deletable = DELETABLE_CLASSES.has(e.class);
       const policy =
-        e.class === "project" ? "удаляется только владельцем"
-        : e.class === "run_artifacts" ? "хранятся; политика медиа — отдельно"
+        deletable ? "удаляется здесь, твоим словом"
         : e.class === "models" ? "перекачиваемые, в копии не ездят"
-        : e.class === "spool_cache" ? "чистит спул по своему TTL"
         : e.class === "backups" ? "снимки перед обновлениями; чистит владелец руками"
         : e.sweepable ? "мусор — уберётся кнопкой ниже" : "уберётся сама по возрасту";
-      return `<details class="material-strip">
-        <summary><span class="strip-name">${esc(name)}</span><span class="muted">${esc(cls)}</span>
+      return `<details class="material-strip${e.sweepable ? " sweep" : ""}" data-path="${esc(e.path)}">
+        <summary><span class="strip-fill" style="--fill:${fill}%"></span>
+          <span class="strip-name">${esc(name)}</span><span class="muted">${esc(cls)}</span>
           <span class="strip-size">${fmtMB(e.bytes || 0)}</span><span class="muted">${fmtN(e.files || 0)} ф.</span><span class="muted">${fmtN(Math.round(e.age_days || 0))} дн.</span></summary>
-        <div class="fold-body"><p class="mono field-hint">${esc(e.path)}</p><p class="field-hint">${esc(policy)}</p></div>
+        <div class="fold-body"><p class="mono field-hint">${esc(e.path)}</p><p class="field-hint">${esc(policy)}</p>
+          ${deletable ? `<div class="actions"><button class="btn btn-danger" data-retention-delete="${esc(e.path)}" type="button">Удалить папку</button><span class="receipt"></span></div>` : ""}
+        </div>
       </details>`;
     })
     .join("");
   const sweepable = r.entries.filter((e) => e.sweepable).length;
   return `<h3 class="section-title">Материалы <span class="muted">${fmtMB(total)} · ${fmtN(r.entries.length)}</span></h3>
     <div class="material-strips">${strips}</div>
-    ${sweepable ? `<div class="actions" style="margin:8px 0 4px"><button class="btn btn-quiet" id="retention-sweep" type="button">Убрать мусор обновлений (${fmtN(sweepable)})</button><span class="receipt" id="retention-receipt"></span></div>` : ""}
-    <p class="field-hint">Места и политики — Настройки → Место хранения. Проекты и артефакты ходов этот экран не удаляет.</p>`;
+    ${sweepable ? `<div class="actions" style="margin:8px 0 4px"><button class="btn btn-quiet" id="retention-sweep" type="button">Убрать мусор обновлений (${fmtN(sweepable)})</button><span class="receipt" id="retention-receipt"></span></div>` : ""}`;
 }
 
 const INTRO: Array<[string, string]> = [
@@ -380,10 +388,9 @@ export async function render(container: HTMLElement): Promise<void> {
        · тулов предложено: <b>${tools.length}</b> · снято ${esc(fmtTime(a.written_at))}. Живой список сборщика, не пересказ.</p>`
     : '<p class="muted">Снимка ещё нет: движок пишет его при старте.</p>';
   container.innerHTML = `<div class="center">
-    ${meta}${modeBox}${fenceBox}
+    ${meta}${materials}${modeBox}${fenceBox}
     <div id="supervisor-box"></div>
     ${spend}
-    ${materials}
     ${intro}
     ${cutsBox}
     <h3 class="section-title">Разбор живого хода</h3>
@@ -401,6 +408,48 @@ export async function render(container: HTMLElement): Promise<void> {
   const supervisorBox = q<HTMLElement>("#supervisor-box", container);
   safeRender(supervisorBox, () => mountSupervisor(supervisorBox));
   const sweepBtn = container.querySelector<HTMLButtonElement>("#retention-sweep");
+  // Полоски разворачиваются ЯВНЫМ обработчиком (05.10, «не разворачивается»):
+  // нативный toggle details у владельца не срабатывал — теперь открытие и
+  // закрытие держим сами, и никакой проглоченный клик их не снимет.
+  for (const strip of container.querySelectorAll<HTMLDetailsElement>(".material-strip")) {
+    strip.querySelector("summary")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      strip.open = !strip.open;
+    });
+  }
+  // Удаление папки — слово владельца двумя щелчками: первый взводит и честно
+  // переспрашивает, второй исполняет. Отказ канала показывается на месте.
+  for (const btn of container.querySelectorAll<HTMLButtonElement>("[data-retention-delete]")) {
+    btn.addEventListener("click", () => {
+      if (btn.dataset.armed === "1") {
+        const receipt = btn.parentElement?.querySelector<HTMLElement>(".receipt");
+        if (receipt) receipt.textContent = "удаляю…";
+        btn.disabled = true;
+        void post<{ ok?: boolean; note?: string }>("/api/retention",
+            { action: "delete", path: btn.dataset.retentionDelete || "" })
+          .then((r) => {
+            if (!r?.ok) throw new Error(r?.note || "не вышло");
+            toast("Папка удалена");
+            void render(container);
+          })
+          .catch((e) => {
+            btn.disabled = false;
+            btn.dataset.armed = "";
+            btn.textContent = "Удалить папку";
+            if (receipt) receipt.textContent = humanError(e).text;
+          });
+        return;
+      }
+      btn.dataset.armed = "1";
+      btn.textContent = "Точно удалить? Нажми ещё раз";
+      window.setTimeout(() => {
+        if (btn.dataset.armed === "1") {
+          btn.dataset.armed = "";
+          btn.textContent = "Удалить папку";
+        }
+      }, 4000);
+    });
+  }
   if (sweepBtn) {
     const receipt = container.querySelector<HTMLElement>("#retention-receipt");
     sweepBtn.addEventListener("click", () => {

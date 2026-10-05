@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -119,18 +120,68 @@ def sweep(data: Path, work: Path | None = None) -> dict:
                             "files": entry["files"]})
         except OSError:
             continue  # занято/нет прав — останется в леджере на следующий раз
+    return _ledger_after(data, work, removed)
+
+
+#: Классы, которые владелец может удалить кнопкой в окне (05.10: «никак не
+#: чистится» — его слово и есть та самая политика удаления из решения 01.10).
+#: Модели и снимки остаются за ручным управлением: первые перекачиваемы и едут
+#: версионно, вторые — страховка на случай плохого обновления.
+OWNER_DELETABLE = {"project", "spool_cache", "run_artifacts"}
+
+
+def delete_entry(data: Path, work: Path | None, path: str) -> dict:
+    """Удалить ОДНУ папку леджера — по слову владельца (кнопка в окне, 05.10).
+
+    Путь обязан совпасть с записью СВЕЖЕГО снимка: леджер — единственная правда
+    о том, что вообще можно убрать, произвольного удаления по пути снаружи нет.
+    Класс обязан быть удаляемым: staging убирает sweep по возрасту, модели и
+    снимки — только руками. Git-объекты внутри приходят read-only — снимаем.
+    """
+    import shutil
+    import stat
+    entries = classify(data, work)
+    match = [e for e in entries if e["path"] == str(path)]
+    if not match:
+        return {"ok": False, "note": "этой папки в свежем снимке нет — обнови экран и повтори"}
+    entry = match[0]
+    if entry["class"] not in OWNER_DELETABLE:
+        who = {
+            "update_staging": "убирает «Убрать мусор обновлений», когда состарится",
+            "models": "модели перекачиваемы — удаляй руками, зная вес",
+            "backups": "снимки — страховка на случай плохого обновления; чистит владелец руками",
+        }.get(entry["class"], "этот класс кнопкой не удаляется")
+        return {"ok": False, "note": f"{entry['class']}: {who}"}
+
+    def _force(func, target, _exc):
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    # 3.12+ зовёт onexc, старые — onerror; один обработчик годится обоим.
+    rmtree_kwargs = {"onexc": _force} if sys.version_info >= (3, 12) else {"onerror": _force}
+    try:
+        shutil.rmtree(Path(entry["path"]), **rmtree_kwargs)
+    except OSError as exc:
+        return {"ok": False, "note": f"не вышло удалить: {exc}"}
+    ledger = _ledger_after(data, work, [{"path": entry["path"], "bytes": entry["bytes"],
+                                         "files": entry["files"]}])
+    return {"ok": True, **ledger}
+
+
+def _ledger_after(data: Path, work: Path | None, removed: list[dict]) -> dict:
+    """Свежий леджер после уборки/удаления: без удалённого, с политиками."""
+    gone = {r["path"] for r in removed}
     ledger = {"schema": SCHEMA, "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
               "data_root": str(data), "work_root": str(work) if work else "",
-              "entries": [e for e in entries
-                          if not any(r["path"] == e["path"] for r in removed)],
+              "entries": [e for e in classify(data, work) if e["path"] not in gone],
               "removed": removed,
               "policies": {
                   "update_staging": f"auto >= {STAGING_TTL_DAYS} дней (и не моложе {STAGING_MIN_AGE_DAYS})",
-                  "project": "только отчёт; удаление — слово владельца",
-                  "run_artifacts": "только отчёт; отдельная политика по медиа — после переезда раскладки",
+                  "project": "удаляется владельцем кнопкой; автополитики нет",
+                  "run_artifacts": "удаляется владельцем кнопкой; политика медиа — после переезда раскладки",
                   "models": "только отчёт",
                   "backups": "только отчёт; снимки чистит владелец руками",
-                  "spool_cache": "только отчёт (у спула свой TTL)"}}
+                  "spool_cache": "удаляется владельцем кнопкой; у спула свой TTL"}}
     _write_ledger(data, ledger)
     return ledger
 
@@ -155,10 +206,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--data", default=str(Path(__file__).resolve().parents[1] / "data"),
                     help="корень данных агента (по умолчанию — data/ у программы)")
     ap.add_argument("--work", default="", help="корень рабочих материалов (если уже разнесён)")
-    ap.add_argument("action", choices=["report", "sweep"])
+    ap.add_argument("action", choices=["report", "sweep", "delete"])
+    ap.add_argument("--path", default="", help="удаляемая папка — только запись свежего снимка")
     args = ap.parse_args(argv)
     data = Path(args.data)
     work = Path(args.work) if args.work else None
+    if args.action == "delete":
+        result = delete_entry(data, work, args.path)
+        print("удалено" if result.get("ok") else f"отказ: {result.get('note')}")
+        return 0 if result.get("ok") else 1
     if args.action == "report":
         entries = classify(data, work)
         total = sum(e["bytes"] for e in entries)

@@ -91,9 +91,11 @@ class Retention(unittest.TestCase):
         # 02.10, слово владельца: снимки-бэкапы — главная часть занятого места,
         # леджер обязан их показывать; удаляет владелец руками, sweep не трогает.
         # Песочница со своей обёрткой: backups ищется у РОДИТЕЛЯ data/.
+        import shutil
         root = self.data.parent / "retention-backups-case"
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         data = root / "data"
-        (root / "backups" / "2026-10-01_before").mkdir(parents=True)
+        (root / "backups" / "2026-10-01_before").mkdir(parents=True, exist_ok=True)
         (root / "backups" / "2026-10-01_before" / "snap.zip").write_bytes(b"b" * 5000)
         classes = {Path(e["path"]).name: e["class"] for e in retention.classify(data)}
         self.assertEqual(classes.get("backups"), "backups")
@@ -112,6 +114,51 @@ class Retention(unittest.TestCase):
         self.assertIn("только отчёт", out.getvalue())
         self.assertIsNone(retention.load_ledger(self.data),
                           "report не пишет леджер")
+
+    # ---- удаление по слову владельца (05.10: «никак не чистится») ----------
+
+    def test_delete_entry_removes_project_by_owner_word(self):
+        ledger = retention.delete_entry(self.data, None, str(self.project))
+        self.assertTrue(ledger.get("ok"), ledger.get("note"))
+        self.assertFalse(self.project.exists(), "папка проекта должна уйти")
+        kept = {e["path"] for e in ledger["entries"]}
+        self.assertNotIn(str(self.project), kept)
+        stored = retention.load_ledger(self.data)
+        self.assertEqual(stored["removed"][0]["path"], str(self.project),
+                         "удаление обязано попасть в леджер")
+
+    def test_delete_entry_refuses_paths_outside_the_fresh_snapshot(self):
+        stranger = self.data / "memory" / "soul"
+        stranger.mkdir(parents=True)
+        result = retention.delete_entry(self.data, None, str(stranger))
+        self.assertFalse(result.get("ok"), "чужой путь удалён — дыра")
+        self.assertTrue(stranger.exists())
+        self.assertIn("снимке", result.get("note", ""))
+
+    def test_delete_entry_refuses_models_and_backups(self):
+        import contextlib
+        models = self.data / "models"
+        result = retention.delete_entry(self.data, None, str(models))
+        self.assertFalse(result.get("ok"))
+        self.assertTrue(models.exists(), "модели кнопке не подотчётны")
+        backups = self.data.parent / "backups"
+        with contextlib.suppress(FileExistsError):
+            backups.mkdir(parents=True)
+        result = retention.delete_entry(self.data, None, str(backups))
+        self.assertFalse(result.get("ok"))
+        self.assertTrue(backups.exists(), "снимки — страховка, кнопка их не ест")
+
+    def test_delete_entry_removes_readonly_git_objects(self):
+        import stat as stat_mod
+        obj = self.project / ".git" / "objects" / "ab"
+        obj.mkdir(parents=True)
+        blob = obj / "cdef1234"
+        blob.write_bytes(b"g" * 40)
+        os.chmod(blob, stat_mod.S_IREAD)
+        ledger = retention.delete_entry(self.data, None, str(self.project))
+        self.assertTrue(ledger.get("ok"), ledger.get("note"))
+        self.assertFalse(self.project.exists(),
+                         "read-only git-объекты не должны спасать папку")
 
 
 if __name__ == "__main__":

@@ -2416,10 +2416,10 @@ select.field-input {
   scroll-margin-top: 8px;
 }
 
-/* ---------- Система: материалы леджера — вытяжные полоски ----------
-   Слово владельца 01.10: леджер — горизонтальными полосками вдлинь, каждая
-   раскрывается в подробности. Полоска тянется на всю ширину центра; имя
-   материала забирает свободное место, размеру — табличные цифры. */
+/* ---------- Система: материалы леджера — полоски-диаграмма ----------
+   Слово владельца 05.10: «можно было бы красивые полоски в общем бумажном
+   стиле» — длина заливки показывает долю веса материала, тон чернильный
+   поверх бумаги; sweep-мусор отличают более густой заливкой. */
 .material-strips {
   display: flex;
   flex-direction: column;
@@ -2437,7 +2437,30 @@ select.field-input {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--paper, var(--ground));
+  position: relative;
+  overflow: hidden;
   transition: border-color var(--dur-1) var(--ease-out);
+}
+
+/* Заливка-диаграмма лежит под текстом: она позиционирована и первая, текст
+ * позиционирован позже — потому рисуется поверх заливки. */
+.material-strip .strip-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--fill, 0%);
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  border-right: 1px solid var(--line);
+  pointer-events: none;
+}
+
+.material-strip.sweep .strip-fill {
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+.material-strip summary > span:not(.strip-fill) {
+  position: relative;
 }
 
 .material-strip summary:hover {
