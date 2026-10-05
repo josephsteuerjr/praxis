@@ -252,7 +252,7 @@ def resolve_fold_offers(offers: dict | None = None) -> dict:
 
 _GNOME_SYS_HEAD = (
     "Ты — узкий аудитор памяти Praxis. Ты видишь ТОЛЬКО срез артефактов с ID и "
-    "датами; дневников, диалогов и сокровенного в промпте нет и быть не может. "
+    "датами; сырых исповедей и переписок в этом промпте нет и быть не может. "
     "Верни STRICT JSON без объяснений. Значения на русском. "
 )
 
@@ -545,10 +545,19 @@ def verify_pass(candidates: list[dict]) -> dict:
                     people.set_last_verified(subj, today, mark)
                 elif verdict == "refuted":
                     # канон — только голосовым путём: пометка устаревшего + новый факт
-                    # с источником «сверка» штатной рукой (append_fact = remember-механизм)
-                    people.mark_superseded(subj, against[:60] or subj)
+                    # с источником «сверка» штатной рукой (append_fact = remember-механизм).
+                    # Голос называет в against, что именно опровергнуто; помечаем те
+                    # строки фактов, что он назвал (фрагменты через ';').
+                    marked = 0
+                    for frag in re.split(r"[;]", against):
+                        frag = re.sub(r"^\s*старое\s*:\s*", "", frag.strip(),
+                                      flags=re.I).strip()
+                        if len(frag) >= 8 and people.mark_superseded(subj, frag):
+                            marked += 1
                     people.append_fact(subj, subj, f"сверка {today}: досье противоречило живым "
-                                       f"источникам — {against or 'детали в квитанции ночи'}",
+                                       f"источникам — {against or 'детали в квитанции ночи'}"
+                                       + (f" (помечено устаревшим: {marked})"
+                                          if marked else ""),
                                        source_ref=f"night-verify-{today}")
         except Exception:
             log.warning("night: применение вердикта %s/%s упало", subj, verdict, exc_info=True)
