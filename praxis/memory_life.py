@@ -155,7 +155,7 @@ def fold_offers() -> dict:
     return dict(_fold_offers_read())
 
 
-def _note_fold_offer(place: str | int, plan: dict) -> None:
+def _note_fold_offer(place: str | int, plan: dict, *, hard: bool = False) -> None:
     key = str(place)
     lo, hi, hard_hi, _cap = hot_bounds(key)
     with _FOLD_OFFERS_LOCK:
@@ -165,11 +165,27 @@ def _note_fold_offer(place: str | int, plan: dict) -> None:
         data[key] = {"place": key, "count": int(plan.get("count") or 0),
                      "tokens": int(plan.get("tokens") or 0), "fold": int(plan.get("fold") or 0),
                      "keep": lo, "hi": hi, "hard_hi": hard_hi,
+                     "hard": bool(hard),
+                     "reason": str(plan.get("reason") or ""),
                      "since": (prev or {}).get("since") or now, "updated": now}
         _fold_offers_write(data)
     if prev is None:
-        log.info("свёртка предлагается [%s]: горячих %s ≥ %s — жду руку memory_compact(fold); "
-                 "без неё сверну сама на %s", key, plan.get("count"), hi, hard_hi)
+        log.info("свёртка предлагается [%s]: горячих %s — жду руку memory_compact(fold) "
+                 "или ночное решение голоса", key, plan.get("count"))
+
+
+def reject_fold(place: str | int, reason: str = "") -> bool:
+    """Снять предложение свёртки с причиной (решение голоса). -> было ли предложение."""
+    with _FOLD_OFFERS_LOCK:
+        data = _fold_offers_read()
+        key = str(place)
+        if key not in data:
+            return False
+        data.pop(key, None)
+        _fold_offers_write(data)
+    append_event("fold_offer", chat_id=place, text=f"отклонено голосом: {reason or 'без причины'}",
+                 source="night_memory")
+    return True
 
 
 def clear_fold_offer(place: str | int) -> bool:
@@ -2212,10 +2228,14 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
                 clear_fold_offer(chat_id)      # окно снова в норме — предложение снято
             return {"ok": True, "folded": 0, "plan": plan,
                     "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
-        if not force and fold_offer_enabled() and not plan.get("hard"):
-            # 25.09, слово Егора: на мягком пороге свёртка ПРЕДЛАГАЕТСЯ, а не делается.
-            _note_fold_offer(chat_id, plan)
-            return {"ok": True, "folded": 0, "offered": True, "plan": plan,
+        if not force and fold_offer_enabled():
+            # 05.10 (ночной цикл честности памяти): и мягкий, и ЖЁСТКИЙ порог днём
+            # только предлагают свёртку — решает голос в том же ходе (рука
+            # memory_compact(fold)/ночная сборка resolve_fold_offers). Причина
+            # давления едет в оффере, чтобы решение было осмысленным.
+            hard = bool(plan.get("hard"))
+            _note_fold_offer(chat_id, plan, hard=hard)
+            return {"ok": True, "folded": 0, "offered": True, "hard": hard, "plan": plan,
                     "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
         fold = int(plan["fold"])
         inputs = provable[:fold]

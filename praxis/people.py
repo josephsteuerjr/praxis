@@ -190,6 +190,8 @@ def parse(text: str) -> tuple[str, dict[str, str]]:
     cur: str | None = None
     aliases_line = ""
     role_line = ""
+    verified_line = ""
+    verified_raw = ""
     telegram_id_lines: list[str] = []
     for line in text.splitlines():
         if cur is None and not name and line.startswith("# "):
@@ -203,6 +205,18 @@ def parse(text: str) -> tuple[str, dict[str, str]]:
             mr = _ROLE_LINE.match(line.strip())
             if mr:
                 role_line = mr.group(1).strip()
+                continue
+        if cur is None and not verified_line:
+            mv = _VERIFIED_LINE.match(line.strip())
+            if mv:
+                # 05.10: шапка свежести — как role, обязательная parse-ветка, иначе
+                # parse/render молча сотрёт строку при первой же перезаписи досье.
+                verified_line = line.strip()[len("last_verified:"):].strip()
+                continue
+            if verified_raw == "" and line.strip().lower().startswith("last_verified:"):
+                # A8 fail-closed: рукописная строка без канонической даты — сохранить
+                # дословно; set_last_verified канонической записью её заменяет.
+                verified_raw = line.strip()
                 continue
         if cur is None and _TELEGRAM_ID_PREFIX.match(line.strip()):
             telegram_id_lines.append(line.strip())
@@ -218,6 +232,10 @@ def parse(text: str) -> tuple[str, dict[str, str]]:
         body[ALIASES_KEY] = aliases_line
     if role_line:
         body[ROLE_KEY] = role_line.lower()
+    if verified_line:
+        body[VERIFIED_KEY] = verified_line
+    if verified_raw and not verified_line:
+        body[VERIFIED_RAW_KEY] = verified_raw
     if len(telegram_id_lines) == 1:
         mt = _TELEGRAM_ID_LINE.fullmatch(telegram_id_lines[0])
         if mt:
@@ -233,6 +251,10 @@ def render(name: str, body: dict[str, str]) -> str:
     hdr: list[str] = []
     if (body.get(ROLE_KEY) or "").strip():
         hdr.append(f"role: {body[ROLE_KEY].strip().lower()}")
+    if (body.get(VERIFIED_KEY) or "").strip():
+        hdr.append(f"last_verified: {body[VERIFIED_KEY].strip()}")
+    elif (body.get(VERIFIED_RAW_KEY) or "").strip():
+        hdr.append(body[VERIFIED_RAW_KEY].strip())
     telegram_id = _normalise_telegram_id(body.get(TELEGRAM_ID_KEY))
     if telegram_id:
         hdr.append(f"telegram_id: {telegram_id}")
@@ -337,6 +359,41 @@ def set_role(slug: str, name: str, role: str) -> None:
     else:
         body.pop(ROLE_KEY, None)
     write(slug, nm or name, body)
+
+
+# --- 05.10, ночной цикл честности памяти: свежесть досье ------------------- #
+# Служебная строка шапки `last_verified: YYYY-MM-DD [against: …]` — когда и на чём
+# досье последний раз сверялось ЖИВЫМИ источниками. Пишет ТОЛЬКО инструментальная
+# рука внутри голосового хода сверки (night_memory.verify_pass); часы её не трогают.
+# Отсутствие строки = «не сверено» — кадр показывает это как есть.
+VERIFIED_KEY = "_last_verified"
+_VERIFIED_LINE = re.compile(r"(?im)^last_verified:\s*(\d{4}-\d{2}-\d{2})"
+                            r"(?:\s+\[against:\s*([^\]]*)\])?\s*$")
+# 05.10 A8: рукописная строка свежести без даты — не парсится как дата, но и
+# НЕ теряется при parse/render (fail-closed): сохраняется дословно и
+# выводится обратно последней строкой шапки.
+VERIFIED_RAW_KEY = "_last_verified_raw"
+
+
+def last_verified(slug: str) -> tuple[str, str]:
+    """(дата YYYY-MM-DD, against) из шапки; ('', '') — не сверено."""
+    m = _VERIFIED_LINE.search(_read(path_for(slug)))
+    if not m:
+        return "", ""
+    against = (m.group(2) or "").strip()
+    return m.group(1), against
+
+
+def set_last_verified(slug: str, date_iso: str, against: str = "") -> None:
+    """Записать/обновить строку свежести через parse/render (round-trip гарантирован).
+    Пустая дата снимает строку. Инструментальная запись — не канон-контент голоса."""
+    nm, body = read(slug)
+    date_iso = (date_iso or "").strip()
+    if date_iso:
+        body[VERIFIED_KEY] = f"{date_iso} [against: {against.strip()}]".rstrip()
+    else:
+        body.pop(VERIFIED_KEY, None)
+    write(slug, nm, body)
 
 
 def telegram_id(slug: str) -> str:

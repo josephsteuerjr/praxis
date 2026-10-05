@@ -1176,6 +1176,21 @@ def _render_lifted(header: str, src: dict | None,
         return header, []
     path, raw, sha, body = src["path"], src["raw"], src["sha"], src["body"]
     private_hidden = int(src.get("private_hidden") or 0)
+    # 05.10 (C4): маркер свежести досье — сколько дней назад шапка сверялась с живыми
+    # источниками; считается кодом из `last_verified:` по praxis_time, без модели.
+    fresh_mark = ""
+    try:
+        import datetime as _dt
+        import people as _people
+        import praxis_time as _pt
+        verified, _against = _people.last_verified(path.stem)
+        if verified:
+            age = (_pt.today() - _dt.date.fromisoformat(verified)).days
+            fresh_mark = f" · сверено: {age}д"
+        else:
+            fresh_mark = " · не сверено"
+    except Exception:
+        fresh_mark = ""
 
     def assemble(shown: str, cut: bool) -> str:
         # ЕЁ слово 21.08 (№8): «вся будущая обрезка только явно, с исходным размером,
@@ -1191,7 +1206,7 @@ def _render_lifted(header: str, src: dict | None,
                          f"считан по файлу целиком]")
         return (header + "\n"
                 f"↓ [досье собеседника · {path.name} · {len(raw)} байт · "
-                f"sha256 {sha[:12]} · перенос: {src['transfer']}]\n"
+                f"sha256 {sha[:12]}{fresh_mark} · перенос: {src['transfer']}]\n"
                 "   поднято кодом (черновик): собеседник этого потока · на границе эпохи\n"
                 f"——— тело {path.name}, байты как в файле ———\n"
                 f"{shown}{cut_note}\n"

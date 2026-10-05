@@ -269,6 +269,10 @@ CONTEXT_HOT_MAX = 1000
 CONTEXT_SUMMARY_MAX = 80_000
 BACKFILL_MAX = 5_000
 HEADER_KEYS = ("mode", "mode_reason", "mode_until", "mode_set_by",
+               # 05.10, ночной цикл: служебная строка свежести места — когда профиль
+               # последний раз сверялся голосом с живой лентой. Пишет только
+               # инструментальная рука внутри голосового хода сверки.
+               "last_verified",
                # disclosure меняет ЕЁ голос (визитка), поэтому у него тот же провенанс,
                # что у режима: она вправе знать, сама ли открылась здесь или это не она.
                "disclosure", "disclosure_set_by",
@@ -296,7 +300,7 @@ _HEADER_RE = re.compile(
     # machine metadata into Praxis's prose.  The next write drops them.
     # disclosure_set_by стоит ПЕРЕД disclosure: альтернатива выбирается первой подошедшей,
     # и «disclosure» съело бы префикс более длинного ключа.
-    r"^(mode|mode_reason|mode_until|mode_set_by|disclosure_set_by|disclosure|"
+    r"^(mode|mode_reason|mode_until|mode_set_by|last_verified|disclosure_set_by|disclosure|"
     r"membership|left_at|drift|drift_seen|drift_sig|greeted|"
     r"engagement|context_hot|context_summary_chars|cross_topics|backfill_limit|"
     # transfer_set_by/transfer_at раньше transfer — то же правило префикса, что у
