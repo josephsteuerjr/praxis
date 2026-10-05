@@ -8,6 +8,7 @@
 import { el, humanError, toast } from "../../ui-kit/window/lib";
 import { button as btn, toggle as switchRow } from "../../ui-kit/dom";
 import { shell } from "../../ui-kit/window/api";
+import { persistSession0 } from "./session0-persist";
 import { LEGACY_SERVICE, SESSION0_WARNING_FALLBACK,
          type ModeChoice, type ModeState, type StoredService } from "../../ui-kit/window/mode";
 
@@ -40,6 +41,16 @@ async function adminProbe(): Promise<{ known: boolean; canElevate: boolean }> {
     return { known: false, canElevate: false };
   }
 }
+
+/**
+ * Записать ключ верхней ступени немедленно, мимо черновика экрана настроек.
+ *
+ * ⚠ Отпечаток файла после записи экрану НЕ сообщаем (ревью 05.10): черновик
+ * остаётся от своей загрузки, и «подтвердить» его чужим отпечатком значило бы
+ * молча легализовать затирание правок, сделанных в файле между загрузкой и
+ * согласием. Если такие правки были — «Сохранить» честно спросит про конфликт;
+ * это правильный вопрос, а не сбой.
+ */
 
 export interface ModeCard {
   /** Готовая карточка для экрана Настроек. */
@@ -155,6 +166,34 @@ export function modeCard(
     : picked;
   let session0 = stored.session0;
   let firewall = stored.firewall;
+  // Что СЕЙЧАС лежит в файле по ключу верхней ступени, и что владелец хочет
+  // видеть там. Записи идут СТРОГО ПО ОДНОЙ (очередь): два быстрых щелчка
+  // вкл-выкл больше не гонятся за одним файлом — вторая запись читает файл уже
+  // после первой и не падает в конфликт свежести с собственной карточкой
+  // (ревью 05.10). Меняется session0InFile только по факту записи.
+  let session0InFile = stored.session0;
+  let session0Want: boolean | null = null;
+  let session0Busy = false;
+  const putSession0 = (v: boolean) => {
+    session0Want = v;
+    if (session0Busy) return;   // запись в полёте — досмотрит свежее желание, выйдя из неё
+    session0Busy = true;
+    const drain = async (): Promise<void> => {
+      while (session0Want !== null && session0Want !== session0InFile) {
+        const want = session0Want;
+        session0Want = null;
+        try {
+          await persistSession0(shell, want);
+          session0InFile = want;
+        } catch (e) {
+          session0Want = null;
+          toast(`Выбор в файл не записался (${humanError(e).text}) — нажми «Сохранить», иначе ступень слетит при перезапуске.`);
+        }
+      }
+      session0Busy = false;
+    };
+    void drain();
+  };
   // Стоит ли служба. Пришло от трубы (SCM на Windows, файл демона на macOS),
   // но живой ответ оболочки свежее: после «Поставить»/«Снять» он меняется, а
   // ответ трубы остаётся с загрузки.
@@ -223,6 +262,10 @@ export function modeCard(
       fencePicked = c.name;
       askBox.hidden = true;
       syncPick();
+      // Сход с верхней ступени оградой — тоже согласие наоборот: ключ прав
+      // системы в файле пережить не должен (ревью 05.10: до сих пор файл
+      // молча держал session0=true при выбранной «Песочнице» на экране).
+      putSession0(false);
       onPick(picked, !!c.sandbox, c.title);
     });
     pickRow.append(b);
@@ -243,32 +286,31 @@ export function modeCard(
       el("span", "choice-title", session0Rung.title),
       el("span", "choice-text", session0Rung.text),
     );
-    const whyLocked = installed === false;
-    if (whyLocked) {
-      b.setAttribute("aria-disabled", "true");
-      b.append(el("span", "choice-text", "Служба не установлена — поставить можно ниже в этой карточке."));
-      b.addEventListener("click", () => {
-        toast("Сначала поставь службу — ступени нечем исполнять.");
-      });
-    } else {
-      b.addEventListener("click", () => {
-        if (picked !== "session0") {
-          picked = "session0";
-          syncPick();
-          askBox.hidden = false;
-          // Ограду НЕ меняем: верхняя ступень её сохраняет как страховку.
-          onPick(picked, !!choiceOf(fencePicked)?.sandbox, session0Rung.title);
-          return;
-        }
-        // Повторный щелчок по уже выбранной ступени — выключить её,
-        // вернувшись к ограде (как выключение прежней галочки — сразу).
-        picked = fencePicked;
-        askBox.hidden = true;
-        syncPick();
-        const fence = choiceOf(fencePicked);
-        if (fence) onPick(fence.name, !!fence.sandbox, fence.title);
-      });
+    // Ступень НЕ заперта и без службы (05.10, слово владельца «так и не
+    // ставится»): подтверждение «Разрешить права СИСТЕМЫ» само ставит службу —
+    // один пароль администратора, ровно как договорились 04.10. Запирая
+    // ступень, мы запирали единственную кнопку, которая службу ставит.
+    if (installed === false) {
+      b.append(el("span", "choice-text", "Службы ещё нет — подтверждение ниже поставит её само."));
     }
+    b.addEventListener("click", () => {
+      if (picked !== "session0") {
+        picked = "session0";
+        syncPick();
+        askBox.hidden = false;
+        // Ограду НЕ меняем: верхняя ступень её сохраняет как страховку.
+        onPick(picked, !!choiceOf(fencePicked)?.sandbox, session0Rung.title);
+        return;
+      }
+      // Повторный щелчок по уже выбранной ступени — выключить её,
+      // вернувшись к ограде (как выключение прежней галочки — сразу).
+      picked = fencePicked;
+      askBox.hidden = true;
+      syncPick();
+      putSession0(false);
+      const fence = choiceOf(fencePicked);
+      if (fence) onPick(fence.name, !!fence.sandbox, fence.title);
+    });
     pickRow.append(b);
     askBox.append(
       el("p", "receipt err", warning),
@@ -279,6 +321,9 @@ export function modeCard(
         askBox.hidden = true;
         session0 = true;
         syncToggles();
+        // Согласие — не черновик: ключ уезжает в файл сейчас, а не кнопкой
+        // «Сохранить», которую после явного «разрешаю» никто не ищет (05.10).
+        putSession0(true);
         if (linux || installed === false) {
           try {
             toast(await shell<string>("install_service"));
@@ -321,7 +366,7 @@ export function modeCard(
       for (const n of live.notes) planBox.append(el("p", "receipt err", n));
       return;
     }
-    planBox.append(el("p", "receipt", "Ограда сменится после сохранения и перезапуска программы."));
+    planBox.append(el("p", "receipt", "Ограда сменится после сохранения и перезапуска движка — окна это не трогает."));
     if (installed) {
       planBox.append(
         el(
@@ -581,7 +626,7 @@ export function modeCard(
       "field-hint",
       "Ограда и служба — два разных вопроса. Ограду выбираешь здесь, и она раскладывается в ручки сама " +
         "(отдельного тумблера песочницы больше нет). Служба ставится поверх любой ограды и ни одну из них не снимает. " +
-        "Применяется перезапуском программы.",
+        "Применяется перезапуском движка.",
     ),
   );
   syncNow();

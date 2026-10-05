@@ -613,7 +613,15 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     }),
   );
   conflictBox.append(conflictRow);
-  const restartBtn = button("Перезапустить сейчас", "quiet", () => dispatchEvent(new Event("frame-restart")));
+  const restartBtn = button("Перезапустить сейчас", "quiet", () => {
+    // 05.10: кнопка обязана уходить с экрана в момент нажатия — иначе владелец
+    // жмёт её снова и снова, не зная, взялся ли перезапуск. Движок выйдет на
+    // границе хода и поднимется с новыми настройками; ошибки придут тостом.
+    restartBtn.hidden = true;
+    saveOut.className = "receipt";
+    saveOut.textContent = "Перезапускаю движок — настройки применятся на его старте.";
+    dispatchEvent(new Event("frame-restart"));
+  });
   restartBtn.hidden = true;
   save.append(restartBtn);
   const saveCard = el("section", "card save-bar");
