@@ -70,11 +70,17 @@ class NightBase(unittest.TestCase):
             mock.patch.object(llm, "chat", self._fake_chat),
             mock.patch.object(llm, "configured", self._fake_configured),
         ]
+        import os
+        # стенд (_standenv) снимает PRAXIS_*-переменные прода; рычаг офферов нужен
+        # всем тестам этого файла — ставим его явно, как делает test_room_memory_2509
+        self._env = mock.patch.dict(os.environ, {"PRAXIS_FOLD_OFFER": "on"})
+        self._env.start()
         for p in self._patchers:
             p.start()
         self.addCleanup(self._restore)
 
     def _restore(self):
+        self._env.stop()
         for p in self._patchers:
             p.stop()
         ml.__dict__.update(self._orig_ml)
@@ -144,10 +150,13 @@ class TestReceiptsAndIdempotency(NightBase):
 class TestHardThresholdOffer(NightBase):
     def test_hard_pressure_creates_offer_not_autofold(self):
         """План 2: жёсткое давление → offer, авто-свёртки нет."""
+        import os
         place = "-1001"
         lo, hi, hard_hi, _cap = ml.hot_bounds(place)
         self.seed_hot(place, hard_hi + 5)
-        out = ml.compact_if_due(place)
+        # стенд снимает PRAXIS_*-переменные (_standenv) — рычаг ставим явно
+        with mock.patch.dict(os.environ, {"PRAXIS_FOLD_OFFER": "on"}):
+            out = ml.compact_if_due(place)
         self.assertTrue(out.get("offered"), f"ожидался offer, получено: {out}")
         self.assertIn(place, ml.fold_offers())
         self.assertEqual(out.get("hot"), hard_hi + 5, "авто-свёртка не должна была случиться")
