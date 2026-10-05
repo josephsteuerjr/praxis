@@ -755,6 +755,12 @@ def _assign_secret(text: str) -> str:
             continue
         if v.lower() in _ASSIGN_PLACEHOLDER:
             continue
+        # 05.10: пример из документации — значение, ОБОРВАННОЕ явным
+        # многоточием сразу после захвата («object_key": "runs/sha256/…» в
+        # docs/run_retention.md): класс захвата не-ASCII не ест, поэтому
+        # смотрим текст после. Живой секрет с «…» на конце не пишут.
+        if text[m.end():m.end() + 3].startswith(("…", "...")):
+            continue
         return "присвоение секрета (" + m.group(0).split("=")[0].split(":")[0].strip()[:40] + "=…)"
     return ""
 

@@ -29,6 +29,15 @@ class Plan(unittest.TestCase):
         self.assertLess(text.index("crates"), text.index("body"))
         self.assertLess(text.index("body"), text.index("dist"))
 
+    def test_secret_guard_knows_documentation_ellipsis(self):
+        # 05.10: docs/run_retention.md вёз пример «object_key": "runs/sha256/…"
+        # и 256-е три цифры роняли выпуск. Многоточие — пример, не секрет;
+        # настоящий цифровой секрет по-прежнему ловится.
+        import build_dist
+        self.assertEqual(build_dist._assign_secret('{"object_key": "runs/sha256/…"}'), "")
+        self.assertEqual(build_dist._assign_secret('key = "hunter2pass123"')[:9], "присвоени")
+        self.assertNotEqual(build_dist._assign_secret('token: "abc123def456"'), "")
+
     def test_foreign_tree_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             fake = Path(tmp) / "not-a-tree"
