@@ -186,64 +186,83 @@ FOLD_RESOLVE_SYS = (
 def resolve_fold_offers(offers: dict | None = None) -> dict:
     """Ночь, шаг 1: один голосовой ход по всем открытым офферам.
 
-    -> {"accepted": n, "rejected": n, "decisions": [...]}. Принятое — та же
-    транзакция `fold_now` (voice-роль внутри `compact_if_due`); отклонённое —
-    статус rejected + причина в квитанции ночи. Инвариант «утро без зависших
-    offers»: после шага открытых предложений не остаётся.
+    -> {"accepted": n, "rejected": n, "failed": n, "decisions": [...]}. Принятое —
+    та же транзакция `fold_now` (voice-роль внутри `compact_if_due`); отклонённое
+    голосом — reject_fold; НЕ отклоняем без голоса: если voice не настроен или
+    ход упал, офферы остаются открытыми до следующей ночи (failed-счётчик,
+    причина в решении). «Утро без зависших offers» держит голос, не враньё.
     """
     ml = _memory_life()
     offers = dict(offers if offers is not None else open_offers())
     if not offers:
-        return {"accepted": 0, "rejected": 0, "decisions": []}
+        return {"accepted": 0, "rejected": 0, "failed": 0, "decisions": []}
+    if not _llm().configured("voice"):
+        return {"accepted": 0, "rejected": 0, "failed": len(offers), "decisions": [],
+                "reason": "voice не настроен — предложения свёртки оставлены открытыми"}
     decisions: list[dict] = []
-    if _llm().configured("voice"):
-        user_lines = []
-        for place, off in sorted(offers.items()):
-            if not isinstance(off, dict):
-                continue
-            user_lines.append(
-                f"- place {place}: горячих {off.get('count')}, токенов {off.get('tokens')}, "
-                f"предлагаю свернуть первые {off.get('fold')} (мягкий порог {off.get('hi')}, "
-                f"жёсткий {off.get('hard_hi')}, предложение с {off.get('since')})")
-        try:
-            resp = _llm().chat("voice", system=FOLD_RESOLVE_SYS,
-                               messages=[{"role": "user", "content": "\n".join(user_lines)[:40000]}],
-                               max_tokens=1200)
-            data = _json_obj(resp.text)
-            for d in (data.get("decisions") or [])[:64]:
-                if isinstance(d, dict) and d.get("place"):
-                    decisions.append({"place": str(d["place"]),
-                                      "accept": bool(d.get("accept")),
-                                      "reason": str(d.get("reason") or "")[:120]})
-        except Exception:
-            log.warning("night: голосовой ход по офферам упал — отклоняю всё с причиной",
-                        exc_info=True)
-    accepted = rejected = 0
+    user_lines = []
+    for place, off in sorted(offers.items()):
+        if not isinstance(off, dict):
+            continue
+        user_lines.append(
+            f"- place {place}: горячих {off.get('count')}, токенов {off.get('tokens')}, "
+            f"предлагаю свернуть первые {off.get('fold')} (мягкий порог {off.get('hi')}, "
+            f"жёсткий {off.get('hard_hi')}, предложение с {off.get('since')})")
+    try:
+        resp = _llm().chat("voice", system=FOLD_RESOLVE_SYS,
+                           messages=[{"role": "user", "content": "\n".join(user_lines)[:40000]}],
+                           max_tokens=1200)
+        data = _json_obj(resp.text)
+        for d in (data.get("decisions") or [])[:64]:
+            if isinstance(d, dict) and d.get("place"):
+                decisions.append({"place": str(d["place"]),
+                                  "accept": bool(d.get("accept")),
+                                  "reason": str(d.get("reason") or "")[:120]})
+    except Exception:
+        log.warning("night: голосовой ход по офферам упал — предложения остаются открытыми",
+                    exc_info=True)
+        return {"accepted": 0, "rejected": 0, "failed": len(offers), "decisions": [],
+                "reason": "голосовой ход по офферам упал — оставлены открытыми до следующей ночи"}
+    accepted = rejected = failed = 0
     by_place = {d["place"]: d for d in decisions}
     for place in sorted(offers):
         d = by_place.get(place)
         if d is None:
-            # голос не ответил про место — честное отклонение с причиной, не тишина
-            d = {"place": place, "accept": False, "reason": "голос не ответил — оставляю окно живым"}
+            # голос промолчал про место — НЕ отклоняем (окно могло ещё жить):
+            # предложение остаётся открытым, вернётся следующей ночью
+            failed += 1
+            decisions.append({"place": place, "accept": False,
+                              "reason": "голос не ответил — предложение остаётся открытым"})
+            continue
         if d["accept"]:
             try:
                 out = ml.fold_now(place)
                 if out.get("folded"):
                     accepted += 1
                     continue
-                # не свернулось (state_changed/окно сдвинулось) — считаем отклонённым
-                # с фактической причиной; предложение остаётся у memory_life.
-                d = dict(d, reason=f"fold_now: {out.get('reason') or 'не свернулось'}")
+                # не свернулось (state_changed/окно сдвинулось) — честный failed,
+                # не «отклонено»: предложение остаётся у memory_life
+                failed += 1
+                decisions[decisions.index(d)] = dict(
+                    d, reason=f"fold_now не свернул: {out.get('reason') or 'без причины'}")
+                continue
             except Exception:
                 log.warning("night: fold_now(%s) упал", place, exc_info=True)
-                d = dict(d, reason="fold_now упал — предложение остаётся открытым")
+                failed += 1
+                decisions[decisions.index(d)] = dict(
+                    d, reason="fold_now упал — предложение остаётся открытым")
+                continue
         else:
             try:
                 ml.reject_fold(place, d.get("reason") or "отклонено голосом ночью")
             except AttributeError:
-                pass  # старый memory_life без reject_fold: предложение остаётся
+                log.warning("night: reject_fold отсутствует в memory_life — "
+                            "предложение %s остаётся открытым", place)
+                failed += 1
+                continue
         rejected += 1
-    return {"accepted": accepted, "rejected": rejected, "decisions": decisions}
+    return {"accepted": accepted, "rejected": rejected, "failed": failed,
+            "decisions": decisions}
 
 
 # --------------------------------------------------------------------------- #
@@ -320,7 +339,8 @@ def gnome_compact_audit(day: str | None = None) -> list[dict]:
         cid = str(meta.get("id") or "")
         if not cid or _gnome_done("compacts", cid, day):
             continue
-        # сырьё: исходные события по source_event_ids
+        # сырьё — только МЕТАДАННЫЕ исходных событий (id/salience/тип/дата):
+        # сырые тексты переписок гному не дают (B4); судит по сводке компакта
         lines: list[str] = []
         try:
             events = {str(e.get("id")): e for e in
@@ -328,9 +348,13 @@ def gnome_compact_audit(day: str | None = None) -> list[dict]:
             for sid in (meta.get("source_event_ids") or [])[:120]:
                 ev = events.get(str(sid))
                 if ev is not None:
-                    text = str(ev.get("text") or "").strip()
-                    if text:
-                        lines.append(f"- [{sid}] {text[:300]}")
+                    try:
+                        ts = time.strftime("%Y-%m-%d %H:%M",
+                                           time.gmtime(float(ev.get("ts") or 0)))
+                    except (TypeError, ValueError):
+                        ts = "?"
+                    lines.append(f"- [{sid}] salience s{ev.get('salience')} · "
+                                 f"{str(ev.get('kind') or 'event')} · {ts}")
         except Exception:
             log.debug("gnome/compacts: события %s не прочитались", cid, exc_info=True)
         body = ""
@@ -343,8 +367,11 @@ def gnome_compact_audit(day: str | None = None) -> list[dict]:
         sysmsg = (_GNOME_SYS_HEAD +
                   "Формат: {\"compact_id\":\"...\",\"verdict\":\"ok|meaning_loss|status_softening\","
                   "\"detail\":\"одна строка\"}. ok — если суть сохранена и статусы не смягчены.")
-        user = (f"Компакт {cid} (tier {meta.get('tier')}, degraded={meta.get('degraded')}):\n"
-                "## Суть\n" + (body or "(тело недоступно)") + "\n\n## Сырьё (события)\n"
+        user = (f"Компакт {cid} (tier {meta.get('tier')}, degraded={meta.get('degraded')}, "
+                f"событий {meta.get('event_count')}):\n"
+                "## Суть (сводка компакта — главный предмет аудита)\n"
+                + (body or "(тело недоступно)")
+                + "\n\n## Метаданные исходных событий (текстов в этой вырезке нет)\n"
                 + ("\n".join(lines[:120]) or "(пусто)"))
         data = _gnome_ask(sysmsg, user)
         verdict = {"verdict": str(data.get("verdict") or "unverifiable"),
@@ -448,7 +475,8 @@ VERIFY_SYS = (
     "unverifiable — живых источников недостаточно. STRICT JSON: "
     "{\"verdicts\":[{\"subject\":\"<slug или room:place>\","
     "\"verdict\":\"confirmed|refuted|unverifiable\",\"against\":\"что и где проверено, "
-    "коротко\"}]}"
+    "коротко\",\"old_fragments\":[\"дословные фрагменты строк фактов, которые "
+    "опровергнуты — только при verdict=refuted\"]}}"
 )
 
 
@@ -468,10 +496,17 @@ def verify_pass(candidates: list[dict]) -> dict:
     counts = {"confirmed": 0, "refuted": 0, "unverifiable": 0}
     lines: list[str] = []
     if not candidates:
-        return {**counts, "lines": []}
+        return {**counts, "failed": 0, "deferred": 0, "lines": []}
+    # B5: кандидаты сверх лимита не исчезают молча — квитанция + отложенный счёт
+    cands = candidates[:12]
+    deferred = len(candidates) - len(cands)
+    if deferred > 0:
+        receipt(_run_id(), _day_key(), "verify_candidates", "skipped",
+                reason=f"кандидатов {len(candidates)}, обработано {len(cands)} — "
+                       f"остаток {deferred} вернётся следующей ночью")
     # Сборка материалов по кандидатам — читаем всё живое, что есть
     blocks: list[str] = []
-    for cand in candidates[:12]:
+    for cand in cands:
         if cand.get("kind") == "person":
             slug = str(cand.get("slug") or "")
             nm, body = people.read(slug)
@@ -508,7 +543,8 @@ def verify_pass(candidates: list[dict]) -> dict:
                 head = [f"### room:{place}", "профиль/лента не прочитались"]
             blocks.append("\n".join(head))
     verdicts: list[dict] = []
-    if _llm().configured("voice"):
+    voice_ok = _llm().configured("voice")
+    if voice_ok:
         try:
             resp = _llm().chat("voice", system=VERIFY_SYS,
                                messages=[{"role": "user", "content": "\n\n".join(blocks)[:60000]}],
@@ -517,10 +553,21 @@ def verify_pass(candidates: list[dict]) -> dict:
             verdicts = [v for v in (data.get("verdicts") or [])[:24]
                         if isinstance(v, dict) and v.get("subject")]
         except Exception:
-            log.warning("night: сверка-ход голоса упал", exc_info=True)
+            log.warning("night: сверка-ход голоса упал — канон не трогаю", exc_info=True)
+            voice_ok = False
+    if not voice_ok:
+        # B3: без голосового хода ничего не применяется к канону (ни шапок, ни
+        # superseded) — честный failed, кандидаты вернутся следующей ночью
+        reason = ("voice не настроен" if not _llm().configured("voice")
+                  else "голосовой ход сверки упал")
+        receipt(_run_id(), _day_key(), "verify", "failed",
+                reason=f"{reason} — {len(cands)} кандидатов не сверены, канон не тронут")
+        return {**counts, "failed": len(cands), "deferred": deferred,
+                "lines": [f"{c.get('slug') or c.get('place')}: не сверено ({reason})"
+                          for c in cands]}
     # Гарантированный минимум: непокрытые кандидаты = unverifiable с причиной
     seen_subjects = {str(v.get("subject")) for v in verdicts}
-    for cand in candidates[:12]:
+    for cand in cands:
         subj = (cand.get("slug") if cand.get("kind") == "person"
                 else f"room:{cand.get('place')}")
         if subj not in seen_subjects:
@@ -538,7 +585,7 @@ def verify_pass(candidates: list[dict]) -> dict:
                 place = subj[len("room:"):]
                 if verdict in ("confirmed", "unverifiable"):
                     mark = against if verdict == "confirmed" else f"не проверяемо: {against}"
-                    rooms.profile_update(place, last_verified=f"{today} {mark}"[:180])
+                    rooms.profile_update(place, last_verified=f"{today} {mark}")
             else:
                 if verdict in ("confirmed", "unverifiable"):
                     mark = against if verdict == "confirmed" else f"не проверяемо: {against}"
@@ -546,14 +593,18 @@ def verify_pass(candidates: list[dict]) -> dict:
                 elif verdict == "refuted":
                     # канон — только голосовым путём: пометка устаревшего + новый факт
                     # с источником «сверка» штатной рукой (append_fact = remember-механизм).
-                    # Голос называет в against, что именно опровергнуто; помечаем те
-                    # строки фактов, что он назвал (фрагменты через ';').
+                    # B2: помечаем ТОЛЬКО дословные фрагменты из old_fragments —
+                    # свободный текст against не матчится к строкам фактов.
                     marked = 0
-                    for frag in re.split(r"[;]", against):
-                        frag = re.sub(r"^\s*старое\s*:\s*", "", frag.strip(),
-                                      flags=re.I).strip()
+                    for frag in (v.get("old_fragments") or []):
+                        if not isinstance(frag, str):
+                            continue
+                        frag = frag.strip()
                         if len(frag) >= 8 and people.mark_superseded(subj, frag):
                             marked += 1
+                    if not (v.get("old_fragments") or []):
+                        log.warning("night: refuted без old_fragments (%s) — строки не "
+                                    "помечены, факт-запись с against зафиксирует суть", subj)
                     people.append_fact(subj, subj, f"сверка {today}: досье противоречило живым "
                                        f"источникам — {against or 'детали в квитанции ночи'}"
                                        + (f" (помечено устаревшим: {marked})"
@@ -562,7 +613,7 @@ def verify_pass(candidates: list[dict]) -> dict:
         except Exception:
             log.warning("night: применение вердикта %s/%s упало", subj, verdict, exc_info=True)
         lines.append(f"{subj}: {verdict} ({against or 'без деталей'})")
-    return {**counts, "lines": lines}
+    return {**counts, "failed": 0, "deferred": deferred, "lines": lines}
 
 
 def _json_obj(text: str) -> dict:
@@ -583,7 +634,7 @@ def _json_obj(text: str) -> dict:
 
 def night_report(day: str, fold: dict, gnomes: dict, verify: dict, deferred: list[str]) -> str:
     f = (f"фолднуто {fold.get('accepted', 0)} (принято голосом), "
-         f"отклонено {fold.get('rejected', 0)}")
+         f"отклонено {fold.get('rejected', 0)}, не решено {fold.get('failed', 0)}")
     v = (f"свёрено {sum(verify.get(k, 0) for k in ('confirmed', 'refuted', 'unverifiable'))} "
          f"(подтвердилось {verify.get('confirmed', 0)}, опровергнуто "
          f"{verify.get('refuted', 0)}, не проверяемо {verify.get('unverifiable', 0)})")

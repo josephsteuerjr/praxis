@@ -37,7 +37,8 @@ class NightBase(unittest.TestCase):
         self._orig_ml = {name: getattr(ml, name) for name in
                          ("BASE", "MEM_DIR", "LIFE_DIR", "EVENTS_DIR", "COMPACTS_DIR",
                           "EPISODES_DIR", "CLAIMS_DIR", "PATCHES_DIR", "REFLECTIONS_DIR",
-                          "STATE_DIR", "LEGACY_SUMMARIES_DIR", "DIALOGUES_DIR")}
+                          "STATE_DIR", "LEGACY_SUMMARIES_DIR", "DIALOGUES_DIR",
+                          "_FOLD_OFFERS")}
         ml.BASE = self.tmp
         ml.MEM_DIR = self.tmp / "memory"
         ml.LIFE_DIR = ml.MEM_DIR / "life"
@@ -48,6 +49,7 @@ class NightBase(unittest.TestCase):
         ml.PATCHES_DIR = ml.LIFE_DIR / "patches"
         ml.REFLECTIONS_DIR = ml.LIFE_DIR / "reflections"
         ml.STATE_DIR = ml.MEM_DIR / ".state" / "life"
+        ml._FOLD_OFFERS = ml.MEM_DIR / ".state" / "fold_offers.json"
         ml.LEGACY_SUMMARIES_DIR = ml.MEM_DIR / ".summaries"
         ml.DIALOGUES_DIR = ml.MEM_DIR / "dialogues"
         self._orig_nm = {name: getattr(nm, name) for name in
@@ -91,6 +93,11 @@ class NightBase(unittest.TestCase):
 
     def _fake_configured(self, role: str = "") -> bool:
         return True
+
+    def _voice_off(self):
+        """Заглушка «голос не настроен» для тестов деградированных путей."""
+        import llm
+        return mock.patch.object(llm, "configured", lambda role="": role != "voice")
 
     def _fake_chat(self, role: str, system: str = "", messages=None, max_tokens: int = 0):
         self.llm_calls.append({"role": role, "system": system,
@@ -203,7 +210,8 @@ class TestVerifyPass(NightBase):
         self.seed_person("p3", "Третья", ["работает врачом"])
         self.llm_responses.append(json.dumps({"verdicts": [
             {"subject": "p1", "verdict": "confirmed", "against": "упоминания в ленте"},
-            {"subject": "p2", "verdict": "refuted", "against": "лента: переехала; старое: живёт в Москве"},
+            {"subject": "p2", "verdict": "refuted", "against": "лента: переехала",
+             "old_fragments": ["живёт в Москве"]},
             {"subject": "p3", "verdict": "unverifiable", "against": "нет живых источников"},
         ]}))
         out = nm.verify_pass([
@@ -230,6 +238,58 @@ class TestVerifyPass(NightBase):
         self.seed_person("px", "Икс", ["факт"])
         out = nm.verify_pass([{"kind": "person", "slug": "px", "age_days": 99}])
         self.assertEqual(out["unverifiable"], 1)
+
+    def test_refuted_matches_only_old_fragments(self):
+        """B2: mark_superseded матчит ТОЛЬКО дословные old_fragments, не against."""
+        self.seed_person("pr", "Пэ", ["живёт в Москве"])
+        self.llm_responses.append(json.dumps({"verdicts": [
+            {"subject": "pr", "verdict": "refuted", "against": "лента: переехала",
+             "old_fragments": ["живёт в Москве"]},
+        ]}))
+        nm.verify_pass([{"kind": "person", "slug": "pr", "age_days": 40}])
+        raw = people.read_text("pr")
+        self.assertEqual(raw.count("~~устарело~~"), 1,
+                         "old_fragments пометил не ровно одну строку")
+        self.assertIn("устарело", raw, "old_fragments не пометил устаревшее")
+
+    def test_refuted_without_fragments_marks_nothing_but_records(self):
+        """B2: пустые old_fragments — строки фактов не помечаются, факт-запись есть."""
+        self.seed_person("pn", "Пэн", ["работает врачом"])
+        self.llm_responses.append(json.dumps({"verdicts": [
+            {"subject": "pn", "verdict": "refuted", "against": "лента: больше не врач"},
+        ]}))
+        nm.verify_pass([{"kind": "person", "slug": "pn", "age_days": 40}])
+        raw = people.read_text("pn")
+        self.assertNotIn("~~устарело~~", raw, "без old_fragments строки не помечаются")
+        self.assertIn("сверка", raw, "факт-запись о противоречии не добавлена")
+
+    def test_no_voice_no_canon_writes(self):
+        """B3: без голосового хода канон не трогается (ни шапок, ни superseded)."""
+        self.seed_person("nv1", "Нва", ["факт один"])
+        self.seed_person("nv2", "Нвб", ["факт два"])
+        before = {p.name: p.read_bytes() for p in people.PEOPLE_DIR.glob("*.md")}
+        with self._voice_off():
+            out = nm.verify_pass([{"kind": "person", "slug": "nv1", "age_days": 90},
+                                  {"kind": "person", "slug": "nv2", "age_days": 90}])
+        self.assertEqual(out["confirmed"], 0)
+        self.assertEqual(out["unverifiable"], 0)
+        self.assertEqual(out.get("failed"), 2)
+        after = {p.name: p.read_bytes() for p in people.PEOPLE_DIR.glob("*.md")}
+        self.assertEqual(before, after, "без голоса канон изменён")
+        rows = [r for r in nm.receipts() if r.get("step") == "verify"]
+        self.assertTrue(any(r.get("status") == "failed" for r in rows),
+                        "нет failed-квитанции сверки")
+
+    def test_candidates_over_limit_get_skipped_receipt(self):
+        """B5: кандидаты сверх 12 — квитанция skipped, остаток посчитан."""
+        cands = [{"kind": "person", "slug": f"s{i}", "age_days": 90} for i in range(14)]
+        out = nm.verify_pass(cands)
+        self.assertEqual(out.get("deferred"), 2)
+        rows = [r for r in nm.receipts() if r.get("step") == "verify_candidates"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "skipped")
+        self.assertIn("14", rows[0]["reason"])
+        self.assertIn("12", rows[0]["reason"])
 
 
 class TestGnomes(NightBase):
@@ -267,6 +327,93 @@ class TestGnomes(NightBase):
         nm.gnome_contradiction_audit(day)
         n2 = len(nm._read_jsonl(nm.GNOME_VERDICTS_PATH))
         self.assertEqual(n1, n2, "повторный прогон того же дня продублировал вердикты")
+
+    def test_gnome_compact_prompt_has_no_raw_event_texts(self):
+        """B4: в промпте гнома-1 нет дословных текстов событий — только метаданные."""
+        self.seed_hot("-1006", 3)
+        texts = [f"u{i}: сообщение {i} в -1006" for i in range(3)]
+        ids = [e.get("id") for e in ml.iter_events(chat_id="-1006", limit=10)]
+        meta = ml._write_compact("-1006", {
+            "summary": "разговор о чае", "open_threads": [], "claims": [], "episodes": [],
+        }, tier=1, depth=1, source_events=ids, source_compacts=[], event_count=len(ids),
+           continued=False, first_ts="2026-10-05T00:00:00.000Z",
+           last_ts="2026-10-05T00:01:00.000Z")
+        self.llm_responses.append(json.dumps({"verdict": "ok", "detail": "суть сохранена"}))
+        nm.gnome_compact_audit("2026-10-05")
+        prompts = [c["system"] + c["user"] for c in self.llm_calls]
+        self.assertTrue(prompts, "гном-1 не вызван")
+        blob = prompts[0]
+        for t in texts:
+            self.assertNotIn(t, blob, f"сырой текст события утёк в промпт гнома: {t!r}")
+        self.assertNotIn("сообщение 0", blob)
+        self.assertIn("Метаданные исходных событий", blob)
+
+
+class TestFoldOffersDegraded(NightBase):
+    """B1/A1: поведение офферов без голоса и при неудачном fold_now."""
+
+    def test_no_voice_leaves_offers_open(self):
+        ml._note_fold_offer("-3001", {"count": 300, "tokens": 10, "fold": 100,
+                                      "reason": "token_cap"})
+        with self._voice_off():
+            out = nm.resolve_fold_offers()
+        self.assertEqual(out["rejected"], 0)
+        self.assertEqual(out["failed"], 1)
+        self.assertIn("-3001", ml.fold_offers(), "оффер убит без голоса")
+
+    def test_voice_error_leaves_offers_open(self):
+        import llm
+        ml._note_fold_offer("-3002", {"count": 300, "tokens": 10, "fold": 100,
+                                      "reason": "token_cap"})
+        def _boom(*a, **k):
+            raise RuntimeError("сеть легла")
+        with mock.patch.object(llm, "chat", _boom):
+            out = nm.resolve_fold_offers()
+        self.assertEqual(out["failed"], 1)
+        self.assertEqual(out["rejected"], 0)
+        self.assertIn("-3002", ml.fold_offers(), "оффер убит при упавшем голосе")
+
+    def test_unanswered_place_leaves_offer_open(self):
+        ml._note_fold_offer("-3003", {"count": 300, "tokens": 10, "fold": 100,
+                                      "reason": "token_cap"})
+        self.llm_responses.append(json.dumps({"decisions": []}))  # голос промолчал
+        out = nm.resolve_fold_offers()
+        self.assertEqual(out["failed"], 1)
+        self.assertIn("-3003", ml.fold_offers())
+
+    def test_fold_now_failure_counts_failed_not_rejected(self):
+        """A1: fold_now не свернул — failed, оффер открыт, не «отклонено»."""
+        ml._note_fold_offer("-3004", {"count": 300, "tokens": 10, "fold": 100,
+                                      "reason": "token_cap"})
+        self.llm_responses.append(json.dumps({
+            "decisions": [{"place": "-3004", "accept": True, "reason": "свёртываем"}]}))
+        with mock.patch.object(ml, "fold_now",
+                               lambda p: {"folded": 0, "reason": "state_changed"}):
+            out = nm.resolve_fold_offers()
+        self.assertEqual(out["accepted"], 0)
+        self.assertEqual(out["failed"], 1)
+        self.assertEqual(out["rejected"], 0)
+        self.assertIn("-3004", ml.fold_offers())
+
+
+class TestPeopleHeaderFailClosed(NightBase):
+    def test_handwritten_last_verified_without_date_survives(self):
+        """A8: рукописная строка без даты не теряется при parse/render."""
+        p = people.path_for("hand")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# Рукопись\n\nlast_verified: где-то весной, по словам\n\n## Факты\n- факт\n",
+                     encoding="utf-8")
+        v, against = people.last_verified("hand")
+        self.assertEqual((v, against), ("", ""), "рукопись без даты не должна считаться датой")
+        nm_, body = people.read("hand")
+        people.write("hand", nm_, body)          # перезапись parse→render
+        self.assertIn("где-то весной", people.read_text("hand"),
+                      "рукописная строка свежести потеряна при перезаписи")
+        # каноническая запись заменяет рукописную
+        people.set_last_verified("hand", "2026-10-05", "лента")
+        raw = people.read_text("hand")
+        self.assertIn("2026-10-05", raw)
+        self.assertNotIn("где-то весной", raw)
 
 
 class TestPeopleHeaderRoundTrip(NightBase):

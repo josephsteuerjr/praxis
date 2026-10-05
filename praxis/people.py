@@ -191,6 +191,7 @@ def parse(text: str) -> tuple[str, dict[str, str]]:
     aliases_line = ""
     role_line = ""
     verified_line = ""
+    verified_raw = ""
     telegram_id_lines: list[str] = []
     for line in text.splitlines():
         if cur is None and not name and line.startswith("# "):
@@ -212,6 +213,11 @@ def parse(text: str) -> tuple[str, dict[str, str]]:
                 # parse/render молча сотрёт строку при первой же перезаписи досье.
                 verified_line = line.strip()[len("last_verified:"):].strip()
                 continue
+            if verified_raw == "" and line.strip().lower().startswith("last_verified:"):
+                # A8 fail-closed: рукописная строка без канонической даты — сохранить
+                # дословно; set_last_verified канонической записью её заменяет.
+                verified_raw = line.strip()
+                continue
         if cur is None and _TELEGRAM_ID_PREFIX.match(line.strip()):
             telegram_id_lines.append(line.strip())
             continue
@@ -228,6 +234,8 @@ def parse(text: str) -> tuple[str, dict[str, str]]:
         body[ROLE_KEY] = role_line.lower()
     if verified_line:
         body[VERIFIED_KEY] = verified_line
+    if verified_raw and not verified_line:
+        body[VERIFIED_RAW_KEY] = verified_raw
     if len(telegram_id_lines) == 1:
         mt = _TELEGRAM_ID_LINE.fullmatch(telegram_id_lines[0])
         if mt:
@@ -245,6 +253,8 @@ def render(name: str, body: dict[str, str]) -> str:
         hdr.append(f"role: {body[ROLE_KEY].strip().lower()}")
     if (body.get(VERIFIED_KEY) or "").strip():
         hdr.append(f"last_verified: {body[VERIFIED_KEY].strip()}")
+    elif (body.get(VERIFIED_RAW_KEY) or "").strip():
+        hdr.append(body[VERIFIED_RAW_KEY].strip())
     telegram_id = _normalise_telegram_id(body.get(TELEGRAM_ID_KEY))
     if telegram_id:
         hdr.append(f"telegram_id: {telegram_id}")
@@ -359,6 +369,10 @@ def set_role(slug: str, name: str, role: str) -> None:
 VERIFIED_KEY = "_last_verified"
 _VERIFIED_LINE = re.compile(r"(?im)^last_verified:\s*(\d{4}-\d{2}-\d{2})"
                             r"(?:\s+\[against:\s*([^\]]*)\])?\s*$")
+# 05.10 A8: рукописная строка свежести без даты — не парсится как дата, но и
+# НЕ теряется при parse/render (fail-closed): сохраняется дословно и
+# выводится обратно последней строкой шапки.
+VERIFIED_RAW_KEY = "_last_verified_raw"
 
 
 def last_verified(slug: str) -> tuple[str, str]:
