@@ -30,6 +30,7 @@ import logging
 import os
 import re
 import contextvars as _cv
+import threading
 import time as _time
 import tool_offerings
 from dataclasses import dataclass, field
@@ -2346,13 +2347,94 @@ def _fallbackable(e: Exception) -> bool:
 EMPTY_RETRIES = max(0, int(os.getenv("PRAXIS_EMPTY_RETRIES", "2") or 0))
 EMPTY_RETRY_PAUSE_SEC = float(os.getenv("PRAXIS_EMPTY_RETRY_PAUSE_SEC", "2.0") or 0.0)
 
+# 05.10, слово владельца: «при проблемах с сетью — новые вызовы с тем же
+# контекстом». До сегодня единственной реакцией на обрыв сети был фолбэк на
+# ДРУГОЙ фреймворк; своего канала это не касалось вовсе. Здесь — транспортный
+# ретрай тем же каналом и тем же контекстом для ошибок соединения/таймаута: от
+# канала в этих случаях не приехало НИ байта ответа, переспрашивать не поверх
+# сказанного. Пустой ответ — отдельная, уже существующая лестница выше;
+# оборванный стрим (TornStreamError) этими ретраями не трогается никогда —
+# граница та же, что у пустых: держит её тип исключения, а не память читателя.
+NET_RETRIES = max(0, int(os.getenv("PRAXIS_NET_RETRIES", "2") or 0))
+NET_RETRY_PAUSE_SEC = float(os.getenv("PRAXIS_NET_RETRY_PAUSE_SEC", "2.0") or 0.0)
+# ⚠ Граница «ответа не было ВОВСЕ» держится на ИМЕНАХ классов обоих SDK. Живые
+# пробы (адверсарное ревью 05.10): коннект-фаза у openai поднимает именно
+# APIConnectionError, обрыв СРЕДИ стрима выходит голыми httpx-именами — и в
+# этот набор НЕ попадает, так что частичный текст не переспрашивается никогда.
+# Сменит SDK обёртку — первым звоночком должен стать этот набор, а не дубль.
+_NET_ERROR_NAMES = {"APIConnectionError", "APITimeoutError", "TimeoutError"}
+
+
+def _is_network_error(exc: BaseException) -> bool:
+    """Ошибка ТРАНСПОРТА: ответа не было вовсе, повтор тем же контекстом безопасен.
+
+    По имени класса — как `_FALLBACK_ERRORS` выше: у обоих SDK имена совпадают,
+    встроенный TimeoutError входит сюда же.
+    """
+    return type(exc).__name__ in _NET_ERROR_NAMES
+
+
+# ─────────────── призраки брошенных вызовов (терминальная остановка) ─────────
+# 05.10: остановленный ход бросает вызов модели в фоне (model_watch), и тот
+# доделывается вхолостую десятки минут — со своими сетевыми ретраями. Поздний
+# СБОЙ такого призрака не имеет права трогать состояние канала: удержание
+# эндпойнта, здоровье «мозга» и last_error принадлежат живым ходам, а не мёртвым
+# (найдено адверсарным ревью 05.10: призрак упирался в лимит реле и запирал
+# эндпойнт — следующий ход владельца молча получал синтетический отказ).
+# Идентификаторы нитей даёт model_watch (on_abandon/on_settle); снимает пометку
+# сама нить по завершении — ident переиспользуется новыми нитями.
+_ABANDONED_THREADS: set[int] = set()
+
+
+def abandon_call(ident: int) -> None:
+    """Пометить нить вызова брошенной: её поздний сбой — фон, не событие канала."""
+    _ABANDONED_THREADS.add(int(ident))
+
+
+def settle_call(ident: int) -> None:
+    """Брошенная нить доделалась — снять пометку до того, как ident переиспользуют."""
+    _ABANDONED_THREADS.discard(int(ident))
+
+
+def call_abandoned() -> bool:
+    """Этот вызов — брошенный призрак? Только для гигиены состояния при сбое."""
+    return threading.get_ident() in _ABANDONED_THREADS
+
+
+def _call_retrying_net(fw: str, model: str, retries: int | None = None, **kw):
+    """(ответ, сетевых повторов, пустых повторов). Сеть — тем же каналом и контекстом.
+
+    Оборачивает `_call_retrying_empty`: каждая попытка — полный вызов со всеми
+    его прежними правилами (включая повтор пустоты). Пауза между сетевыми
+    попытками растёт — коррелированный всплеск переживается временем, не числом
+    попыток (тот же вывод, что у пустых 10.08). Исчерпались — наверх уходит
+    ПОСЛЕДНЯЯ ошибка, и её встречает прежний фолбэк-путь без единой правки.
+    """
+    attempt = 0
+    while True:
+        try:
+            resp, empty_attempts = _call_retrying_empty(fw, model, retries=retries,
+                                                        _resolved=True, **kw)
+            return resp, attempt, empty_attempts
+        except Exception as exc:
+            # Призрак брошенного хода ретраев не гоняет: его ответ выброшен,
+            # а каждая попытка — это живая сеть и живые деньги (ревью 05.10).
+            if not _is_network_error(exc) or attempt >= NET_RETRIES or call_abandoned():
+                raise
+            attempt += 1
+            _time.sleep(NET_RETRY_PAUSE_SEC * attempt)
+            log.warning("llm: сеть на %s/%s (%s) — транспортный повтор %d из %d "
+                        "тем же контекстом", fw, model, type(exc).__name__,
+                        attempt, NET_RETRIES)
+
 
 def _call_retrying_empty(fw: str, model: str, retries: int | None = None,
                          *, _resolved: bool = False, **kw):
     """(ответ, сколько повторов понадобилось). Повторяет ТОЛЬКО EmptyResponseError.
 
-    Любая другая ошибка уходит наверх немедленно и попадает в прежний фолбэк-путь:
-    таймаут, 429 и падение авторизации повторять по тому же каналу бессмысленно.
+    Любая другая ошибка уходит наверх немедленно: 429 и падение авторизации по
+    тому же каналу бессмысленны, а сеть/таймаут ловит своей лестницей
+    `_call_retrying_net` (05.10) — затем прежний фолбэк-путь.
 
     ⭐ И `TornStreamError` — тоже «любая другая». Он НЕ потомок EmptyResponseError именно
     затем, чтобы сюда не попасть: там текст уже приехал, и повтор был бы переспросом
@@ -2490,17 +2572,26 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
                     code=str(_hold.get("code") or ""), slot=str(_hold.get("slot") or ""),
                     resets_at=_hold.get("until"), synthetic=True)
             _hold["probed_at"] = _time.time()
-        resp, empty_retries = _call_retrying_empty(
-            fw, model, retries=(1 if end_after_spoken else None), _resolved=True,
+        resp, net_retries, empty_retries = _call_retrying_net(
+            fw, model, retries=(1 if end_after_spoken else None),
             system=system, messages=messages, tools=tools,
             max_tokens=mt, thinking=thinking, reasoning_effort=role_effort)
-        if _hold is not None:
+        # Призрак брошенного хода доделался успешно? Расход запишем ниже честно
+        # — поход в сеть был. Но удержание эндпойнта он снять не может: снимок
+        # `_hold` принадлежит мёртвому ходу, а за это время живой ход мог
+        # поставить своё — снять чужое было бы отравлением в обратную сторону.
+        if _hold is not None and not call_abandoned():
             _release_endpoint(fw)
         if empty_retries:
             # Повтор — не бесплатная тишина: он попадает в её журнал, иначе «стало реже
             # падать» будет неотличимо от «мы это спрятали».
             _journal("%s: канал отдал пустой ответ, помог повтор №%d по тому же каналу"
                      % (_ROLE_RU[role], empty_retries))
+        if net_retries:
+            # Сетевой ретрай — в тот же журнал и по той же причине: помог или нет,
+            # владелец должен видеть строкой, а не додумывать по «стало реже висеть».
+            _journal("%s: сеть моргнула, помог транспортный повтор №%d тем же контекстом"
+                     % (_ROLE_RU[role], net_retries))
         # Обрыв потолком — факт этой роли. Раньше он ставился внутри `_call_openai`, то
         # есть anthropic-путь обрыва не замечал вовсе, а `ping()` замечал лишний.
         _note_truncation(resp, role)
@@ -2521,7 +2612,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         _call_trace(role, resp.model or model, ok=True,
                     cached=_u.get("cache_read", 0), prompt=_u.get("in", 0),
                     out_tokens=_u.get("out", 0), latency_ms=_lat,
-                    retries=empty_retries, gap_sec=_gap, tools_digest=_tools,
+                    retries=empty_retries + net_retries, gap_sec=_gap, tools_digest=_tools,
                     effort=_sent_effort(fw, model, thinking, role_effort),
                     stop=str(getattr(resp, "stop_reason", "") or ""),
                     vision=vision_used,
@@ -2529,6 +2620,14 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
                     cc=(int(_u["cache_creation"]) if "cache_creation" in _u else -1))
         return resp
     except Exception as e:
+        if call_abandoned():
+            # Ход, заказавший этот вызов, уже остановлен; вызов — призрак,
+            # доделывающийся в фоне. Его сбой не событие канала: ни удержаний
+            # эндпойнтов, ни здоровья «мозга», ни дневника — иначе призрак
+            # запирал бы эндпойт живому следующему ходу (ревью 05.10).
+            log.warning("llm: брошенный вызов %s упал (%s) — состояние канала не трогаю",
+                        _ROLE_RU.get(role, role), type(e).__name__)
+            raise
         _synthetic = bool(getattr(e, "synthetic", False))
         if isinstance(e, RelayTerminalError) and not _synthetic:
             # Реле назвало лимит/вход кодом: эндпойнт закрываем до часа восстановления и
