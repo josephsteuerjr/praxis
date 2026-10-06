@@ -4694,6 +4694,41 @@ const BROKER_SHOWN_MAX: usize = 1200;
 /// харнесс отличал «владелец ещё не ответил» от «слушать некому — окна нет».
 static BROKER_WATCH_SINCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+/// Судейский фикс P1 (06.10): наблюдатели ставятся на ДЕРЕВО, а не на подъём.
+/// Реестр живых деревьев под мьютексом: старт и `lift_agent` ставят пару
+/// `watch_outbound` + `watch_broker_wishes` только когда дерево новое. Раньше
+/// цикл «погасить → поднять» плодил сторожей просьб: у дерева два потока,
+/// каждый со своим стоп-кадром, и одна просьба брокера рождала ДВА одинаковых
+/// окна подтверждения — двойное «да» исполняло подписанную команду дважды.
+static WATCHED_TREES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+/// Один проход сторожа просьб на всё дерево одновременно. Даже если пара
+/// наблюдателей когда-нибудь задублируется (например, старым процессом), второй
+/// вход в `broker_pass` подождёт здесь, перечитает ответы и увидит уже
+/// записанное решение — диалог не повторится.
+static BROKER_PASS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Поставить пару наблюдателей, если дерево ещё не смотрится. `true` — пара
+/// только что создана. Одна точка входа для старта и для подъёма.
+fn watch_agent_tree(app: &ShellHandle, tree: PathBuf, name: String, notify_text: bool) -> bool {
+    let fresh = WATCHED_TREES
+        .lock()
+        .map(|mut g| claim_watch(&mut g, &tree))
+        .unwrap_or(true);
+    if fresh {
+        watch_outbound(app.clone(), tree.clone(), name, notify_text);
+        watch_broker_wishes(tree);
+    }
+    fresh
+}
+
+/// Чистая половина реестра: дерево заявлено первым проходом — `true`,
+/// повторно (старт уже смотрел, подъём повторяет) — `false`.
+fn claim_watch(guard: &mut std::collections::HashSet<PathBuf>, tree: &Path) -> bool {
+    guard.insert(tree.to_path_buf())
+}
+
 /// Местное время в том же виде, что в `service.log` и `broker.log`: журнал у
 /// владельца один, и две половины одной строки не должны быть в разных
 /// часовых поясах.
@@ -5136,6 +5171,10 @@ fn broker_answer_row(
 /// команду между вопросом и выполнением — классический TOCTOU, и подпись
 /// владельца стояла бы под чужим текстом.
 fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
+    // Судейский фикс P1 (06.10): проход один на дерево за раз. Стоп-кадр у
+    // каждого потока свой, поэтому без замка два сторожа одного дерева могли
+    // прочитать одну просьбу до записи ответа и показать два одинаковых окна.
+    let _pass = BROKER_PASS_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let wishes = broker_wishes(raw);
     if wishes.is_empty() {
         return true;
@@ -6622,11 +6661,7 @@ fn main() {
             // Уведомление подписано его именем — оно же стоит в заголовке.
             if tree.is_some() {
                 for a in raisable(&base) {
-                    watch_outbound(app.handle().clone(), a.tree.clone(), a.name.clone(), notify_text);
-                    // …и его просьба к брокеру — окном подтверждения. Тоже не через
-                    // вебвью: просьба приходит, когда владелец занят другим, а окно
-                    // продукта в этот момент чаще всего в трее.
-                    watch_broker_wishes(a.tree.clone());
+                    watch_agent_tree(app.handle(), a.tree.clone(), a.name.clone(), notify_text);
                 }
             }
             Ok(())
@@ -7445,12 +7480,10 @@ fn lift_agent(app: &ShellHandle, agent: &str) -> Result<Option<String>, String> 
     };
     // Фикс-волна 06.10 (F3): наблюдатели ставились ТОЛЬКО на старте (setup) —
     // погашенный и поднятый агент оставался без уведомлений и окон брокера
-    // до перезапуска всей программы. Ставим здесь, идемпотентно: повторный
-    // подъём лишь добавляет ещё одного читателя хвоста архива (каждый поток
-    // держит свой offset), а сторож просьб отвечает только на свежее
-    // (стоп-кадр по факту ответа) — дублей подтверждений это не рождает.
-    watch_outbound(app.clone(), full.tree.clone(), full.name.clone(), agent_notify_text(&full.config));
-    watch_broker_wishes(full.tree.clone());
+    // до перезапуска всей программы. Ставим здесь — через общий реестр
+    // `watch_agent_tree`: дерево уже смотрится (старт) — пара не плодится,
+    // дерево новое — пара ставится. Один сторож просьб на дерево, всегда.
+    watch_agent_tree(app, full.tree.clone(), full.name.clone(), agent_notify_text(&full.config));
     let relay_alive = state
         .children
         .lock()
@@ -9003,6 +9036,20 @@ mod tests {
         assert!(why.contains("больше нет"), "{why}");
         // Нет ни ярлыка, ни файла выбора — корневой молча, как было всегда.
         assert_eq!(startup_pick(None, None, &roster), (None, None));
+    }
+
+    /// Судейский фикс P1 (06.10): реестр наблюдателей — дерево заявлено один
+    /// раз. Старт посмотрел — подъём пару не плодит; чужое дерево — новая пара.
+    #[test]
+    fn watched_trees_registry_is_one_pair_per_tree() {
+        let mut g = std::collections::HashSet::new();
+        assert!(claim_watch(&mut g, std::path::Path::new("C:/agents/main")));
+        // Повторный подъём того же агента: пара уже стоит — вторую не ставим.
+        assert!(!claim_watch(&mut g, std::path::Path::new("C:/agents/main")));
+        // Другое дерево — своя пара, свой сторож.
+        assert!(claim_watch(&mut g, std::path::Path::new("C:/agents/mira")));
+        assert!(!claim_watch(&mut g, std::path::Path::new("C:/agents/mira")));
+        assert_eq!(g.len(), 2);
     }
 
     /// 06.10 (фикс-волна, F1): конституция доезжает ОБЕИМИ формами — вложенной
