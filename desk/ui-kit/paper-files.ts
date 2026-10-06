@@ -88,7 +88,7 @@ export function fileDialog(access: FileAccess, options: { save?: string; count?:
           else {
             const max = options.count ?? 16, budget = options.bytes ?? FILE_TOTAL;
             if (f.size > FILE_BYTES) { receipt.textContent = `${f.name}: больше 64 МБ. Выбери файл поменьше.`; return; }
-            if (selected.size >= max) { receipt.textContent = `Можно добавить ещё ${max} файлов. Убери один из выбранных.`; return; }
+            if (selected.size >= max) { receipt.textContent = `Лимит для этого выбора: ${max}. Убери один из выбранных файлов.`; return; }
             if ([...selected.values()].reduce((s, a) => s + a.size, f.size) > budget) { receipt.textContent = "Вложения вместе превышают 128 МБ. Убери один из выбранных."; return; }
             selected.set(f.path, f);
           }
@@ -103,7 +103,7 @@ export function fileDialog(access: FileAccess, options: { save?: string; count?:
         row.append(icon, label, detail); rows.append(row);
       }
       info.textContent = !filtered.length ? (search.value ? "Совпадений нет — попробуй другое имя." : "Папка пуста.")
-        : filtered.length > 500 ? `Показано 500 из ${filtered.length}. Введи часть имени в поиске.` : `${filtered.length} объектов`;
+        : filtered.length > 500 ? `Показано 500 из ${filtered.length}. Введи часть имени в поиске.` : `Файлов и папок: ${filtered.length}`;
     }
     search.addEventListener("input", paint);
     hiddenFiles.addEventListener("change", paint);
