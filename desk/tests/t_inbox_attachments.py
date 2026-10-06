@@ -18,6 +18,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
@@ -52,11 +53,18 @@ class AttachmentsIn(unittest.TestCase):
         with self.assertRaises(web.HTTPBadRequest):
             deskapp._attachments_in([{"name": "a.png", "mime": "image/png", "data": "not base64!"}])
         with self.assertRaises(web.HTTPBadRequest):
-            deskapp._attachments_in([{"name": "a.png", "mime": "image/png", "data": PNG}] * 5)
-        big = base64.b64encode(b"\x00" * (8 * 1024 * 1024 + 1)).decode("ascii")
-        with self.assertRaises(web.HTTPBadRequest) as cm:
-            deskapp._attachments_in([{"name": "a.png", "mime": "image/png", "data": big}])
-        self.assertIn("8 МБ", cm.exception.text)
+            deskapp._attachments_in([{"name": "a.png", "mime": "image/png", "data": PNG}] * (deskapp._ATTACH_MAX_FILES + 1))
+        # Exercise the exact byte boundary without allocating a production-size file.
+        with patch.object(deskapp, "_ATTACH_MAX_BYTES", 8):
+            exact = base64.b64encode(b"x" * 8).decode("ascii")
+            self.assertEqual(len(deskapp._attachments_in([{"name":"a.bin","data":exact}])[0]["data"]), 8)
+            over = base64.b64encode(b"x" * 9).decode("ascii")
+            with self.assertRaises(web.HTTPBadRequest):
+                deskapp._attachments_in([{"name":"a.bin","data":over}])
+        with patch.object(deskapp, "_ATTACH_MAX_TOTAL", 4):
+            small = {"name":"a.bin","data":base64.b64encode(b"xx").decode("ascii")}
+            self.assertEqual(len(deskapp._attachments_in([small, small])), 2)
+            with self.assertRaises(web.HTTPBadRequest): deskapp._attachments_in([small, small, small])
 
 
 class WriteAndSplit(unittest.TestCase):

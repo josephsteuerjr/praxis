@@ -7,7 +7,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-ROOTS = ("media/artifacts", "workspace/media", "memory/.control/desk_inbox/attachments")
+ROOTS = ("media", "workspace/media", "memory/.control/desk_inbox/attachments")
 
 def display_name(path):
     name = Path(path).name

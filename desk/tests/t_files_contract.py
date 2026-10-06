@@ -87,6 +87,13 @@ class FileHTTP(unittest.IsolatedAsyncioTestCase):
                     response = await client.get("/api/media", params={"path": image.relative_to(tree).as_posix()}, headers={"Authorization": "Bearer test-owner"})
                     self.assertEqual(response.status, 200)
                     self.assertEqual(await response.read(), image.read_bytes())
+                    legacy = tree / "media/screenshots/shot.png"
+                    legacy.parent.mkdir(parents=True)
+                    legacy.write_bytes(image.read_bytes())
+                    response = await client.get("/api/artifact", params={"path": legacy.relative_to(tree).as_posix(), "preview":"1"}, headers={"Authorization":"Bearer test-owner"})
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(await response.read(), legacy.read_bytes())
+                    self.assertTrue(response.headers["Content-Type"].startswith("image/png"))
                     response = await client.get("/api/artifact", params={"path": rel})
                     self.assertEqual(response.status, 403)
                 finally:

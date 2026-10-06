@@ -177,14 +177,23 @@ class WindowTurn(unittest.TestCase):
 
     def test_media_does_not_swallow_the_word(self):
         # 06.09: снимок ушёл, отчёт остался в заметке — окно показало один «[файл]».
-        shot = self.tree / "shot.png"
+        shot = self.tree / "media/screenshots/shot.png"
+        shot.parent.mkdir(parents=True)
         shot.write_bytes(b"png")
         outcome, rows, _ = self._turn(
             {"held": "unspoken", "note": "done: Снимок сделала, строка в Блокноте верная."},
             _Envelope("run-2", outbound=[_Media(str(shot))]))
         self.assertEqual(outcome, "spoken")
         texts = [r["text"] for r in rows if r.get("outgoing")]
-        self.assertTrue(any(t.startswith("[файл] shot.png") for t in texts), texts)
+        media = next(r for r in rows if r.get("media_path"))
+        self.assertEqual(media["media_path"], shot.relative_to(self.tree).as_posix())
+        self.assertEqual(media["media_kind"], "image")
+        self.assertEqual(media["media_name"], "shot.png")
+        self.assertNotIn(str(shot), "\n".join(texts))
+        from deskd import artifacts
+        admitted, why = artifacts.resolve(self.tree, media["media_path"])
+        self.assertFalse(why)
+        self.assertEqual(admitted.read_bytes(), shot.read_bytes())
         self.assertIn("Снимок сделала, строка в Блокноте верная.", texts)
 
     def test_declared_silence_shows_a_grey_plaque(self):
