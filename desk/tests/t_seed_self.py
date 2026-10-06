@@ -69,7 +69,8 @@ class SeedSelf(unittest.TestCase):
         self.assertTrue(voice.is_file(), "VOICE.md не лёг — зона K без голоса")
         self.assertNotIn("{{", voice.read_text(encoding="utf-8"))
         skills = sorted(p.name for p in (self.tmp / "soul" / "skills").glob("*.md") if p.name != "INDEX.md")
-        self.assertEqual(len(skills), 20, skills)
+        expected = sorted(p.name for p in (boot._RESOURCES / "soul" / "skills").glob("*.md") if p.name != "INDEX.md")
+        self.assertEqual(skills, expected)
         index = (self.tmp / "soul" / "skills" / "INDEX.md").read_text(encoding="utf-8")
         for name in skills:
             self.assertIn(f"({name})", index, f"навык {name} не назван в INDEX")

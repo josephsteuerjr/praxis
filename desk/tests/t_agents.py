@@ -400,6 +400,7 @@ class RemoveAgent(unittest.TestCase):
         self.assertTrue((self.root / "agents" / "mira" / "helene.json").is_file(),
                         "агент остался на месте")
 
+    @unittest.skipUnless(os.name == "nt", "Windows refuses renaming a directory held as a process cwd")
     def test_busy_agent_refuses_whole_and_leaves_no_half_in_attic(self):
         # Живой случай 06.10: пока процесс агента держит папку (тут — открытый
         # cwd), перенос обязан отказать ЦЕЛИКОМ: ни половины агента в чердаке,
