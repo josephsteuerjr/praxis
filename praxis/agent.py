@@ -4448,7 +4448,9 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
                         target: str = "self", isolation: str = "auto", scope: str = "self",
                         priority: str = "normal",
                         title: str = "", review: str = "", checked: str = "",
-                        submit: bool = True, reviewer: str = "") -> str:
+                        submit: bool = True, reviewer: str = "",
+                        success_criteria: list[str] | None = None,
+                        verify_commands: list[str] | None = None) -> str:
     """Жизненный цикл coding-задачи: открыть, увидеть, закончить или перечислить.
     scope='host' открывает задачу НА ХОСТЕ от рута; scope='windows' — deprecated прокси
     (PASS 30 Этап 3: прямой путь на Windows — глаголы computer.*)."""
@@ -4479,7 +4481,8 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
                 )
             return out
         out = forge.start(goal, target=target, isolation=isolation, priority=priority,
-                          origin_chat=origin)
+                          origin_chat=origin,
+                          success_criteria=success_criteria, verify_commands=verify_commands)
         if out.startswith("coding-задача "):
             tool_journal(f"[forge] открыла coding-задачу: {goal[:180]}", salience=2)
         return out
@@ -7653,13 +7656,19 @@ FORGE_TOOLS = [
          "isolated git worktree (target=self or a visible directory). status/list survive "
          "restarts; finish assembles evidence, runs the reviewer gate and for self-code "
          "submits the proposal after own diff review. abandon closes WITHOUT integrating; "
-         "needs `review` as the reason."),
+         "needs `review` as the reason. start optionally takes success_criteria and "
+         "verify_commands — a visible task contract shown first in orientation and summed "
+         "up at finish as an advisory met/unmet/unknown receipt, never a gate."),
      "input_schema": _obj({
          "action": {"type": "string", "enum": ["start", "status", "list", "finish", "abandon"]},
          "task_id": {"type": "string"}, "goal": {"type": "string"},
          "target": {"type": "string", "description": "self or a directory path; scope=host an absolute Linux host path, scope=windows an absolute Windows path"},
          "isolation": {"type": "string", "enum": ["auto", "worktree", "direct"]},
          "priority": {"type": "string", "enum": ["normal", "urgent"], "description": "urgent = разбуди меня немедленно при завершении воркера; normal = в ближайшем часовом окне"},
+         "success_criteria": {"type": "array", "items": {"type": "string"},
+                               "description": "start: optional readiness criteria; stored in the task contract, shown first in orientation and summed up at finish (advisory, not a gate)"},
+         "verify_commands": {"type": "array", "items": {"type": "string"},
+                             "description": "start: optional check commands; stored in the task contract and summed up at finish (met/unmet/unknown), not auto-run"},
          "scope": {"type": "string", "enum": ["self", "host", "windows"],
                    "description": "self = container repo; host = server root via praxis-serverd; windows = DEPRECATED proxy to the local PC (direct computer.* verbs are the primary path). All scopes stay in the same canonical Forge."},
          "title": {"type": "string"}, "review": {"type": "string"},

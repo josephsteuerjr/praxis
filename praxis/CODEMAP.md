@@ -97,6 +97,7 @@
 | `forge_swarm.py` | Persistent worker DAG, mailbox и advisory ownership. |
 | `forge_verify.py` | Detached verification matrix с bounded parallelism и независимыми logs. |
 | `forge_learning.py` | Evidence-linked reusable lessons завершённых задач. |
+| `test_forge_contract_0610.py` | Контракт задачи (критерии + verify_commands), дедуп верификации по tree-sha и честный finish: regression-набор PR oro/forge-contract-0610. |
 | `workshop.py` | Python file/shell/dev-tool surface, используемая model tools. |
 | `hands.py` | Мост к компилируемому filesystem/process floor с Python fallback. |
 | `hands/` | Rust `praxis-hands`, path/write/output rails и генератор согласованного Python registry. |

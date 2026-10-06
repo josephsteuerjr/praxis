@@ -61,6 +61,21 @@ def _run_one(index: int, check: dict, root: Path, directory: Path, default_timeo
              observation: dict | None = None) -> dict:
     cid = _safe_id(check.get("id", ""), f"check-{index + 1}")
     command = str(check.get("command") or "").strip()
+    # 06.10, дедуп (PR oro/forge-contract-0610): forge.verify уже пометил команду зелёной
+    # НА ЭТОМ ЖЕ ДЕРЕВЕ — запускать её повторно значит платить за то же доказательство.
+    # Пишем расписку со ссылкой на прежний юнит, процесс не спавним.
+    if check.get("skip"):
+        skip_status = str(check.get("skip_status") or "skipped_already_green")
+        result = {"id": cid, "status": skip_status, "exit": 0, "duration_s": 0,
+                  "command": command, "kind": check.get("kind", "check"),
+                  "source": check.get("source", ""), "scope": check.get("scope", ""),
+                  "dedup": True,
+                  "skip_reference": str(check.get("skip_reference") or ""),
+                  "tree_sha": str((observation or {}).get("tree_sha") or "")}
+        with lock:
+            state["checks"][cid] = result
+            _write(directory / "state.json", state)
+        return result
     rel_cwd = str(check.get("cwd") or ".")
     cwd = root if scope == "windows" else (root / rel_cwd).resolve()
     if scope not in {"host", "windows"}:
@@ -190,10 +205,15 @@ def run(request_path: Path) -> int:
         failed = [row for row in results if row.get("status") in {"failed", "error"}]
         skipped = [row for row in results if row.get("status") == "timed_out"]
         passed = [row for row in results if row.get("status") == "passed"]
+        # 06.10, дедуп: зелёное-на-том-же-дереве из прошлой матрицы — это зелёное,
+        # просто доказанное раньше. Считается в passed, а не в skips: иначе матрица с
+        # полностью дедупнутыми проверками выглядела бы «с пропусками» при нуле гонявших.
+        deduped = [row for row in results if row.get("status") == "skipped_already_green"]
         final_status = "failed" if failed else ("passed_with_skips" if skipped else "passed")
         final = {"status": final_status, "finished": _now(),
                  "duration_s": round(time.monotonic() - started, 3), "checks": results,
-                 "passed": len(passed), "skipped": len(skipped), "failed": len(failed),
+                 "passed": len(passed) + len(deduped), "skipped": len(skipped),
+                 "failed": len(failed),
                  # Срок виден в самом отчёте, а не только в логах отдельных проверок:
                  # `timed_out` без названного предела читается как «упало само».
                  "matrix_deadline_s": timeout,
