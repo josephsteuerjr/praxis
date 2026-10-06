@@ -665,6 +665,12 @@ EN: dict[str, dict] = {
               "task_id": "the task to act on",
               "goal": "what the task is for",
               "isolation": "auto | worktree | direct",
+              "success_criteria": "start: optional readiness criteria, one line each; stored "
+                                  "as a visible task contract, shown first in orientation "
+                                  "and summed up at finish (advisory, never a gate)",
+              "verify_commands": "start: optional check commands; stored in the task "
+                                 "contract and summed up at finish as met/unmet/unknown "
+                                 "from verification runs, not auto-run",
               "title": "finish: what the change does",
               "review": "finish: your verdict on your diff",
               "checked": "finish: how you verified it",
