@@ -152,7 +152,27 @@ function diffHTML(before: string, after: string): string {
 
 export async function render(container: HTMLElement): Promise<void> {
   watchParking();
-  const groups = await api<Group[]>("/api/md-tree");
+  // Отказ дерева — словами и с повтором, а не тихой пустотой: молчаливое
+  // «Файлов пока нет» при мёртвом канале выглядело потерей памяти агента
+  // (живой случай 06.10: «опять не открываются маркдауны»).
+  let groups: Group[];
+  try {
+    groups = await api<Group[]>("/api/md-tree");
+  } catch (e) {
+    container.innerHTML = "";
+    const fail = document.createElement("div");
+    fail.className = "empty";
+    fail.textContent = humanError(e).text;
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn btn-quiet";
+    retry.style.marginTop = "10px";
+    retry.textContent = "Повторить";
+    retry.addEventListener("click", () => void render(container));
+    fail.append(document.createElement("br"), retry);
+    container.append(fail);
+    return;
+  }
   lastGroups = groups;
   if (!groups.length) {
     container.innerHTML = '<div class="empty"><b>Файлов пока нет</b>Память появится после первых ходов.</div>';
@@ -200,7 +220,16 @@ async function open(container: HTMLElement, path: string) {
   }
   const main = q<HTMLElement>("#md-main", container);
   main.innerHTML = '<div class="empty">читаю…</div>';
-  const doc = await api<Doc>("/api/md?path=" + encodeURIComponent(path));
+  // Чтение файла может отказать тоже — и правая половина не должна застревать
+  // в вечном «читаю…» (тот же живой случай: отказ маскировался молчанием).
+  let doc: Doc;
+  try {
+    doc = await api<Doc>("/api/md?path=" + encodeURIComponent(path));
+  } catch (e) {
+    main.innerHTML = failHTML(humanError(e).text, { retry: false });
+    bindFail(main);
+    return;
+  }
   if (doc.error) {
     // Труба отдаёт сырое `FileNotFoundError: [WinError 2] … 'C:\…'`; владельцу
     // нужно слово, а не имя класса исключения. Сырое — в складку.
