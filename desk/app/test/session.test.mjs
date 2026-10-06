@@ -28,6 +28,16 @@ assert.equal(engineWords({...owner, stopped: true, runner_alive: false}, null), 
 assert.equal(engineWords(owner, {...op, action: "restart"}), "Перезапускается — ждёт границы текущего хода");
 assert.equal(engineWords(owner, {...op, action: "stop"}), "Останавливается…");
 assert.equal(engineWords(owner, {...op, action: "resume"}), "Запускается…");
+// 1.4.1, живой случай 06.10: снятый агент при служебной установке — слова
+// объясняют состояние и кто его изменит, вместо молчаливой «горящей» кнопки.
+assert.equal(engineWords({...owner, enabled: false, service: true}, null),
+  "Агент снят в настройках; его держит служба — отпустит перезапуск службы («Система» → «Перезапустить»)");
+assert.equal(engineWords({...owner, enabled: false, service: false}, null),
+  "Агент снят в настройках — движок не поднимется, пока не вернёшь галочку");
+// стоп-кран сильнее снятия: stopped=true говорит своё слово, даже если enabled=false
+assert.equal(engineWords({...owner, enabled: false, stopped: true, runner_alive: false}, null), "Движок остановлен");
+// старая оболочка без полей — прежнее поведение, никаких новых слов
+assert.equal(engineWords({...owner}, null), "");
 assert.equal(activityWords(null), "");
 assert.equal(activityWords({phase: "model"}), "Думает...");
 assert.equal(activityWords({phase: "tool"}), "Работает...");

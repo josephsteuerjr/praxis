@@ -148,9 +148,20 @@ export function start(opts: WindowOptions): void {
 
   function paintEngineControls() {
     powerButton.hidden = !ownerState?.supported;
-    powerButton.textContent = ownerState?.stopped ? "Возобновить" : "Остановить движок";
-    powerButton.title = ownerState?.stopped ? "Запустить остановленный движок" : "Остановить движок и его работу";
-    powerButton.disabled = !!engineOperation;
+    // Снятый агент (1.4.1): «остановить движок» здесь гасил бы ВСЮ установку —
+    // чужое действие в окне погашенного. Кнопка честно выключена и объясняет,
+    // что произошло и кто исполнит подъём. Старая оболочка (нет enabled) — как было.
+    const disarmed = ownerState?.enabled === false && !ownerState?.stopped;
+    if (disarmed) {
+      powerButton.textContent = ownerState?.service ? "Агент снят · служба держит" : "Агент снят в настройках";
+      powerButton.title = ownerState?.service
+        ? "Агент снят; его процессы отпустит перезапуск службы («Система» → «Перезапустить»)"
+        : "Верни галочку в настройках агента — движок поднимется сам";
+    } else {
+      powerButton.textContent = ownerState?.stopped ? "Возобновить" : "Остановить движок";
+      powerButton.title = ownerState?.stopped ? "Запустить остановленный движок" : "Остановить движок и его работу";
+    }
+    powerButton.disabled = !!engineOperation || disarmed;
     restartButton.hidden = foreignHarness();
     restartButton.disabled = !!engineOperation || !!ownerState?.stopped;
     restartButton.title = ownerState?.stopped ? "Сначала возобнови движок" : "Перезапустить движок, сохранив окно";

@@ -3043,9 +3043,32 @@ fn owner_state() -> serde_json::Value {
         receipt.as_ref().and_then(|v| v.get("at")).and_then(|v| v.as_f64())) };
     #[cfg(not(any(windows, target_os = "linux")))]
     let alive: Option<bool> = None;
+    // ⚠ Живой случай 06.10: окно СНЯТОГО агента при служебной установке. «Погасить»
+    // в настройках пишет только флаг enabled=false — процессы держит служба и
+    // отпускает их своим перезапуском. Кнопка движка не знала ни того, ни
+    // другого и выглядела сломанной: движок честно жив, а окно молчит. Отдаём
+    // оба факта: `enabled` — флаг из конфига агента, `service` — служебная ли
+    // это установка (тогда гашение/подъём исполняет служба, не окно).
+    let enabled = with_current(true, |c| {
+        c.tree.as_ref().map(|t| agent_enabled_flag(&c.config, t)).unwrap_or(true)
+    });
     serde_json::json!({"agent_id": agent_id, "supported": cfg!(any(windows, target_os = "linux")), "stopped": note.is_some(),
         "runner_alive": alive, "pid": pid,
+        "enabled": enabled, "service": service_owns_harness(),
         "note": note.as_ref().map(owner_stop_said).unwrap_or_default()})
+}
+
+/// Флаг enabled агента по ЕГО конфигу. Корневой всегда включён; недочитаемый
+/// конфиг — «включён»: кнопке движка лучше честное «работает», чем ложное
+/// «снят» из-за битого файла настроек.
+fn agent_enabled_flag(config: &Path, tree: &Path) -> bool {
+    if tree == base_tree() {
+        return true;
+    }
+    match read_config(config) {
+        ConfigRead::Ok(v) => v.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true),
+        _ => true,
+    }
 }
 
 /// Read-only Windows process probe. Never use os.kill/TerminateProcess for liveness.
@@ -9157,8 +9180,29 @@ mod tests {
         assert!(why.contains("в окне") || why.contains("переключись"), "{why}");
     }
 
+    /// Флаг enabled для owner_state (1.4.1, живой случай 06.10): корневой и
+    /// битый конфиг — «включён»; снятый сосед — false. Чистая половина: файлы
+    /// во временном корне, никаких живых установок.
+    #[test]
+    fn owner_state_enabled_flag_reads_the_agent_config() {
+        let root = std::env::temp_dir().join(format!("helene-owner-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("agents/mira")).unwrap();
+        // Корневое дерево — всегда включён, что бы ни лежало в конфигах.
+        assert!(agent_enabled_flag(&root.join("helene.json"), &base_tree()));
+        // Конфиг соседа без ключа enabled — включён (унаследованное умолчание).
+        std::fs::write(&root.join("agents/mira/helene.json"), br#"{"agent": {"name": "mira"}}"#).unwrap();
+        assert!(agent_enabled_flag(&root.join("agents/mira/helene.json"), &root.join("agents/mira/data")));
+        // Снятый сосед — false; битый/отсутствующий конфиг — снова включён.
+        std::fs::write(&root.join("agents/mira/helene.json"), br#"{"enabled": false}"#).unwrap();
+        assert!(!agent_enabled_flag(&root.join("agents/mira/helene.json"), &root.join("agents/mira/data")));
+        std::fs::write(&root.join("agents/mira/helene.json"), b"not json").unwrap();
+        assert!(agent_enabled_flag(&root.join("agents/mira/helene.json"), &root.join("agents/mira/data")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     use super::{
-        admin_verdict, agent_enabled_refusal, agent_name, agent_remove_refusal, blocked_script, broker_answer_row, broker_confirm_text,
+        admin_verdict, agent_enabled_flag, agent_enabled_refusal, agent_name, agent_remove_refusal, blocked_script, broker_answer_row, broker_confirm_text,
         broker_wish_ask, broker_wish_id, broker_wishes, decode_config, ensure_desk_token,
         startup_pick, resolve_target, unconfigured, version_newer, BrokerOp,
         BrokerReceipt, BrokerWish,
