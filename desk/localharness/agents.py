@@ -32,6 +32,7 @@ import json
 import os
 import re
 import shutil
+import errno
 import time
 import unicodedata
 from dataclasses import dataclass, field
@@ -383,8 +384,29 @@ def remove_agent(base_dir: Path, agent_id: str, attic: Path | None = None) -> Pa
         dest = attic / f"{wanted}-{stamp}-{n}"
         n += 1
     try:
-        shutil.move(str(dir_), str(dest))
+        # ⚠ Живой случай 06.10 (четыре половинки в attic установки): у агента,
+        # чьи процессы ещё живы (служебная установка отпускает их только своим
+        # перезапуском), shutil.move ловит отказ rename и молча деградирует в
+        # copytree+rmtree — половина файлов уезжает в чердак, rmtree спотыкается
+        # об открытый процессом файл, и в attic остаётся ПОЛОВИНА агента, которую
+        # владелец принимает за целую. rename на одном диске атомарен: либо папка
+        # уехала целиком, либо не тронута вовсе — третьего нет. Чердак живёт
+        # рядом с agents/ (Rust передаёт <установка>/agents-attic, дефолт —
+        # соседняя _state/attic), то есть на том же диске; чужой диск (EXDEV) —
+        # экзотика, и там честнее отказать с словом, чем тихо кромсать.
+        os.rename(dir_, dest)
     except OSError as exc:
+        if getattr(exc, "winerror", None) == 5 or isinstance(exc, PermissionError):
+            raise RuntimeError(
+                f"Система не дала перенести папку агента — его движок ещё "
+                f"работает. Погаси агента (и перезапусти службу, если она его "
+                f"держит), затем удаляй снова. Агент не тронут. ({exc})"
+            ) from exc
+        if getattr(exc, "errno", None) == errno.EXDEV:
+            raise RuntimeError(
+                f"чердак на другом диске, чем установка ({dir_} → {dest}): "
+                f"перенос агента с живыми процессами небезопасен — погаси "
+                f"агента и повтори") from exc
         raise RuntimeError(f"перенос в чердак не удался ({dir_} → {dest}): {exc} — "
                            f"агент остался на месте") from exc
     return dest

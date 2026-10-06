@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -335,6 +336,30 @@ class RemoveAgent(unittest.TestCase):
             agents.remove_agent(self.root, "mira", blocker / "attic")
         self.assertTrue((self.root / "agents" / "mira" / "helene.json").is_file(),
                         "агент остался на месте")
+
+    def test_busy_agent_refuses_whole_and_leaves_no_half_in_attic(self):
+        # Живой случай 06.10: пока процесс агента держит папку (тут — открытый
+        # cwd), перенос обязан отказать ЦЕЛИКОМ: ни половины агента в чердаке,
+        # ни стёртого источника. shutil.move в том же месте молча кромсал.
+        attic = self.root / "attic"
+        held_dir = str(self.root / "agents" / "mira").replace("'", r"\'")
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import os, time; os.chdir(r'%s'); print('held', flush=True); time.sleep(60)"
+             % held_dir],
+            stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            with self.assertRaises(RuntimeError) as caught:
+                agents.remove_agent(self.root, "mira", attic)
+            self.assertIn("движок ещё работает", str(caught.exception))
+            self.assertTrue((self.root / "agents" / "mira" / "helene.json").is_file(),
+                            "агент остался на месте")
+            self.assertFalse(attic.exists() and any(attic.iterdir()),
+                            "в чердаке не осталось половинки")
+        finally:
+            holder.kill()
+            holder.wait()
 
 
 if __name__ == "__main__":
