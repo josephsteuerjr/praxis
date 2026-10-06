@@ -1225,18 +1225,21 @@ fn startup_pick(
     saved: Option<String>,
     roster: &[(String, String, bool)],
 ) -> (Option<String>, Option<String>) {
-    if flag.is_some() {
-        return (flag, None); // ярлык не сверяется с сохранённым: он и есть воля владельца сейчас
-    }
-    let Some(said) = saved else { return (None, None) };
+    // 06.10 (F10, судейский фикс): ярлык сильнее сохранённого выбора, но снятый агент
+    // не открывает мёртвое окно ни от ярлыка, ни от сохранённого — отказ словами из
+    // одной точки решения. Неизвестный ярлык проходит нарочно: «нет такого агента»
+    // скажет проверка ниже по коду, у неё своё слово и откат к корневому.
+    let Some(said) = flag.clone().or(saved) else { return (None, None) };
     match roster.iter().find(|(id, _, _)| *id == said) {
         Some((_, _, true)) => (Some(said), None),
         Some((_, name, false)) => (
             None,
             Some(format!(
-                "Ты просил открывать «{name}» всегда, но сейчас он снят в его настройках и подниматься не может."
+                "{} «{name}», но сейчас он снят в его настройках и подниматься не может.",
+                if flag.is_some() { "Ярлык просит агента" } else { "Ты просил открывать" }
             )),
         ),
+        None if flag.is_some() => (Some(said), None),
         None => (
             None,
             Some(format!(
@@ -6250,24 +6253,9 @@ fn bootstrap() -> Option<Boot> {
         .collect();
     let (wanted, saved_refused) = startup_pick(arg_after("--agent"), agent_default_id(), &entries);
     // Фикс-волна 06.10 (F10): ярлык на СНЯТОГО агента раньше открывал мёртвое
-    // окно без единого слова. Снятый агент в ростере есть — startup_pick его
-    // пропускает молча (это его работа для сохранённого выбора), здесь же
-    // ярлык: воля владельца на сей раз, и её отказ обязан звучать так же,
-    // как у сохранённого выбора — слово плюс откат к корневому.
-    let mut flag_refused: Option<String> = None;
-    let wanted = wanted.or_else(|| {
-        let said = arg_after("--agent")?;
-        match entries.iter().find(|(id, _, _)| *id == said) {
-            Some((_, _, true)) => Some(said),
-            Some((_, name, false)) => {
-                flag_refused = Some(format!(
-                    "Ярлык просит агента «{name}», но сейчас он снят в его настройках и подниматься не может."
-                ));
-                None
-            }
-            None => Some(said), // нет в ростере — скажет проверка ниже
-        }
-    });
+    // окно без единого слова. Решение о снятом — одна точка: startup_pick
+    // проверяет и ярлык, и сохранённый выбор одним гвардом ростера, отказ
+    // словами приходит вторым элементом пары и звучит здесь одинаково.
     let mut current = wanted
         .as_deref()
         .and_then(|id| find_agent(&base, id))
@@ -6281,7 +6269,7 @@ fn bootstrap() -> Option<Boot> {
             );
         }
     }
-    if let Some(why) = flag_refused.take().or(saved_refused) {
+    if let Some(why) = saved_refused {
         log_line("выбор агента не вышел — открываю корневого");
         message_box_async(
             format!("{}: агент не открылся", product_ui()),
@@ -8984,6 +8972,17 @@ mod tests {
         assert_eq!(
             startup_pick(Some("mira".into()), Some("main".into()), &roster),
             (Some("mira".into()), None)
+        );
+        // F10 (судейский фикс): ярлык на СНЯТОГО — мёртвого окна нет, отказ словами.
+        let (who, why) = startup_pick(Some("off".into()), None, &roster);
+        assert_eq!(who, None);
+        let why = why.expect("снятый с ярлыка обязан объясниться");
+        assert!(why.contains("Ярлык просит"), "{why}");
+        assert!(why.contains("Снятый"), "{why}");
+        // Ярлык на неизвестного проходит нарочно — «нет такого» скажет проверка ниже.
+        assert_eq!(
+            startup_pick(Some("ghost".into()), None, &roster),
+            (Some("ghost".into()), None)
         );
         // Сохранённый жив и включён — он и открывается.
         assert_eq!(
