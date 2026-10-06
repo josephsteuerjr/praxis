@@ -749,11 +749,26 @@ export async function agentEdition({ draft, loaded, platform, freshness }: Editi
   cards.push(inGroup(extensionsCard(modeLive, loaded.tree).el, GROUP.agent));
 
   // --- данные
-  const data = el("div", "actions");
-  data.append(
+  //
+  // Две строки, а не одна: рядом с домом агента — путь к его конституции
+  // (soul/SOUL.md живёт в дереве всегда, но целого пути к ней не знал ни один
+  // экран). Хвостовые разделители срезаем, чтобы строка не читалась
+  // «C:\…\data\/soul/SOUL.md».
+  const soulPath = String(loaded.tree || "").replace(/[\\/]+$/, "") + "/soul/SOUL.md";
+  const data = el("div");
+  const homeRow = el("div", "actions");
+  homeRow.append(
     el("span", "mono", loaded.tree),
     button("Открыть папку", "quiet", () => void shell("open_path", { path: loaded.tree }).catch((e) => toast(humanError(e).text))),
   );
+  const soulRow = el("div", "actions");
+  soulRow.style.marginTop = "8px";
+  soulRow.append(
+    el("span", "field-hint", "Конституция:"),
+    el("span", "mono", soulPath),
+    button("Показать файл", "quiet", () => void shell("open_path", { path: soulPath }).catch((e) => toast(humanError(e).text))),
+  );
+  data.append(homeRow, soulRow);
   cards.push(inGroup(card("Данные агента", data, "Память, дневник, конституция и настройки лежат здесь. Перенос агента на другую машину — перенос этой папки вместе с программой."), GROUP.agent));
 
   return {
