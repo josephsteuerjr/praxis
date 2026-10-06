@@ -553,7 +553,9 @@ def append_fact(slug: str, name: str, fact: str, visibility: str = "public", sal
     for l in facts.splitlines():
         if _BULLET.match(l.strip()) and "~~устарело~~" not in l and fact_body(l) == key:
             return fresh  # дубль — не плодим
-    source = re.sub(r"[^\w:.-]", "", str(source_ref or ""))[:120]
+    # 06.10: в фильтре выживает и «|» — formation пишет confidence в маркер
+    # (clm-…|observed); прежде черта молча вырезалась и маркер терял суффикс.
+    source = re.sub(r"[^\w:.\-|]", "", str(source_ref or ""))[:120]
     bullet = f"- [{visibility}] (s{salience}) {fact.strip()} _({_today()})_"
     if source:
         bullet += f" [source:{source}]"
