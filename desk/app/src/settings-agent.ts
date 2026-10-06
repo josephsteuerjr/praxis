@@ -58,7 +58,7 @@ function renderModels(box: HTMLElement, models: string[], current: string, pick:
 }
 
 /** Карточки местного агента и его часть записи в конфиг. */
-export async function agentEdition({ draft, loaded, platform }: EditionContext): Promise<Edition> {
+export async function agentEdition({ draft, loaded, platform, freshness }: EditionContext): Promise<Edition> {
   // Агент живёт на macOS: службы Windows и тела тула `computer` там нет по
   // построению. Карточки про них не рисуются — не «недоступно», а нет
   // (решение владельца). Двойная страховка: движок на не-Windows и сам не
@@ -671,7 +671,7 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
     // всё, что доступно учётке (слово владельца 06.09), и карточке здесь нечего
     // показывать; список в конфиге живёт и оживает вместе с песочницей.
     mounts.el.hidden = !sandbox;
-  }, mac || platform === "linux", platform === "linux");
+  }, mac || platform === "linux", platform === "linux", (base, fresh) => freshness.accept?.(base, fresh));
   cards.push(inGroup(mode.el, GROUP.rights));
 
   // --- песочница: сеть контейнера остаётся выбором владельца, ограду ставит режим

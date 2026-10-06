@@ -45,11 +45,13 @@ async function adminProbe(): Promise<{ known: boolean; canElevate: boolean }> {
 /**
  * Записать ключ верхней ступени немедленно, мимо черновика экрана настроек.
  *
- * ⚠ Отпечаток файла после записи экрану НЕ сообщаем (ревью 05.10): черновик
- * остаётся от своей загрузки, и «подтвердить» его чужим отпечатком значило бы
- * молча легализовать затирание правок, сделанных в файле между загрузкой и
- * согласием. Если такие правки были — «Сохранить» честно спросит про конфликт;
- * это правильный вопрос, а не сбой.
+ * Отпечаток записи сообщается экрану ПАРОЙ base/fresh (ревью 06.10): base —
+ * отпечаток, по которому запись читала файл. Экран принимает fresh как свой
+ * только при совпадении base со своим отпечатком открытия — черновик от этого
+ * не «подтверждается» чужим состоянием, а правки, сделанные в файле между
+ * загрузкой экрана и согласием (Блокнот), НЕ легализуются: их всё равно
+ * честно спросит «Сохранить». Это уточнение ревью 05.10, не его отмена:
+ * подтверждать черновик чужим отпечатком по-прежнему нельзя.
  */
 
 export interface ModeCard {
@@ -93,6 +95,7 @@ export function modeCard(
   onPick: (name: string, sandbox: boolean, title: string) => void,
   posix = false,
   linux = false,
+  onConfigWrite: (base: string | null, fresh: string | null) => void = () => {},
 ): ModeCard {
   const box = el("section", "card");
   box.append(el("h3", "", "Режим"));
@@ -171,6 +174,10 @@ export function modeCard(
   // вкл-выкл больше не гонятся за одним файлом — вторая запись читает файл уже
   // после первой и не падает в конфликт свежести с собственной карточкой
   // (ревью 05.10). Меняется session0InFile только по факту записи.
+  // Успешная запись отдаёт рамке экрана ПАРУ отпечатков (base/fresh, ревью
+  // 06.10): base — по чему читали, fresh — что стало. Рамка принимает fresh
+  // как свой ТОЛЬКО при совпадении base со своим отпечатком — иначе «Сохранить»
+  // честно спросит про конфликт, а не молча легализует затирание чужой правки.
   let session0InFile = stored.session0;
   let session0Want: boolean | null = null;
   let session0Busy = false;
@@ -183,8 +190,9 @@ export function modeCard(
         const want = session0Want;
         session0Want = null;
         try {
-          await persistSession0(shell, want);
+          const stamp = await persistSession0(shell, want);
           session0InFile = want;
+          onConfigWrite(stamp.base, stamp.fresh);
         } catch (e) {
           session0Want = null;
           toast(`Выбор в файл не записался (${humanError(e).text}) — нажми «Сохранить», иначе ступень слетит при перезапуске.`);
