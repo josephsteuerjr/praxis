@@ -367,7 +367,12 @@ export function modeCard(
       );
       return;
     }
-    if (picked === live.name) {
+    // Ограда с оградой, а не ступень с оградой (аудит 06.10): picked бывает
+    // "session0" (верхняя ступень лестницы), а live.name — всегда забор.
+    // Прямое сравнение обещало «ограда сменится после сохранения» всякий раз,
+    // когда ступень и забор согласованы, — и с ним вечная кнопка перезапуска.
+    const pickedFence = picked === "session0" ? fencePicked : picked;
+    if (pickedFence === live.name) {
       // Предупреждения о текущем состоянии берём готовыми у харнесса: там уже
       // написано человеческими словами и «sandbox.enabled разошлась с режимом»,
       // и «session0 включена, а службы нет».
@@ -679,7 +684,7 @@ export function modeCard(
           `Харнесс называл режимом службу — записал ограду «${choiceOf(picked)?.title || ""}». Проверь, та ли она.`,
         );
       }
-      if (picked !== live.name && installed) {
+      if ((picked === "session0" ? fencePicked : picked) !== live.name && installed) {
         bits.push("Служба читает настройки при своём старте — перезапусти её, иначе ограда сменится только в окне.");
       }
       return bits.length ? " " + bits.join(" ") : "";

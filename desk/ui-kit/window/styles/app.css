@@ -382,6 +382,13 @@ html.electron #chrome a {
   box-shadow: var(--shadow-pop);
 }
 
+/* display:flex не имеет права побеждать родной hidden: переключатель агентов
+   (agents.ts) прячет меню именно атрибутом, и без гварда оно висело открытым
+   всегда, поверх навигации. Тот же паттерн, что .menu[hidden] ниже по файлу. */
+.agent-menu[hidden] {
+  display: none;
+}
+
 .agent-row {
   display: flex;
   flex-direction: column;

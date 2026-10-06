@@ -248,7 +248,10 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     bindFail(container, () => void render(container, edition));
     return;
   }
-  const c = loaded.config;
+  // Срез «как лежит файл» — let: рамка тянет его вперёд за записями самой
+  // карточки (freshness.accept ниже); черновик и издание остаются при срезе
+  // открытия, а базой расписки перезапуска становится живой файл.
+  let c = loaded.config;
   // Обязательные блоки заводим ЗДЕСЬ и объявляем это типом `Draft`: издание
   // опирается на них полутора сотнями строк карточек, и «наверное, есть» в
   // каждой из них было бы глушением проверки на настоящей гарантии.
@@ -594,7 +597,23 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // легализацией. Пустые base/fresh — старая оболочка без отпечатков: там
   // stale-механизма нет вовсе, принимать нечего.
   freshness.accept = (base, fresh) => {
-    if (base != null && fresh != null && base === seenMtime) seenMtime = fresh;
+    if (base != null && fresh != null && base === seenMtime) {
+      seenMtime = fresh;
+      // Срез файла тянем за своей записью (аудит 06.10). Без этого «Сохранить»
+      // сравнивал черновик со срезом ОТКРЫТИЯ экрана, и немедленная запись
+      // ступени самой карточкой навсегда выглядела «изменением чужих
+      // настроек»: хвост «применится перезапуском» при нулевой чистой смене.
+      // У «Перезаписать своим» база — свежий config_load; здесь та же база,
+      // но принять её можно только по совпавшему отпечатку: не сошёлся mtime —
+      // файл менял не этот экран, срез не трогаем (чужую правку не легализуем).
+      void shell<Loaded>("config_load").then((r) => {
+        if (r && typeof r === "object" && r.config && typeof r.config === "object"
+          && r.mtime_ns != null && String(r.mtime_ns) === seenMtime) c = r.config;
+      }).catch(() => {
+        // Не перечиталось — срез остаётся срезом открытия; худшее, что даёт
+        // эта миллисекундная гонка, — один лишний хвост у расписки.
+      });
+    }
   };
   class StaleConfig extends Error {}
   const writeConfig = async (out: Config, force = false): Promise<string> => {
