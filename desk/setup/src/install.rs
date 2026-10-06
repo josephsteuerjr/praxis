@@ -3421,6 +3421,17 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     use crate::payload::{Skip, Stop};
     use crate::tx::{Carry, StaticCarry, Tx};
     validate_setup(s)?;
+    // 06.10, 1.4.1: повторный запуск поверх ОТКРЫТОГО испытания запрещён. Второй процесс
+    // затирает состояние/слепок первого и ломает его сторожа (кейс Егора: клик обновления
+    // в 16:07 поверх испытания 1.4.0, начатого в 15:51 → «код отличается» и самооткат).
+    if let Some(open) = crate::trial::open_trial(&target_dir(s)?) {
+        return Err(format!(
+            "в этой установке уже идёт испытание обновления {} → {}. \
+             Дождись его конца (кнопка «Принять»/откат в окне) или закрой программу — \
+             сторож доведёт испытание сам. Повторный запуск сейчас сломает приёмку.",
+            open.from_version, open.to_version
+        ));
+    }
     let source = source().ok_or_else(|| {
         "в установщике нет поставки — файл скачался не целиком? Скачай Helene-<версия>-setup.exe заново".to_string()
     })?;
@@ -3887,8 +3898,9 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
                 .and_then(|p| p.get("version").and_then(|v| v.as_str()).map(str::to_string))
                 .unwrap_or_default();
             say("carry", "Переношу правки агента в его коде", None, None, false, false, progress);
-            let (step, _) = carry_agent_code(&dir, &from, &from_version, &version);
+            let (step, report) = carry_agent_code(&dir, &from, &from_version, &version);
             steps.push(step);
+            if agent_code.is_null() { agent_code = report; }
         }
     }
 
@@ -3954,6 +3966,9 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
         prune_kept_programs(&dir);
         match tx.commit_keep(&crate::trial::kept_path(&dir, &from)) {
             Ok(kept) => {
+                // Слепок кода снимается ПОСЛЕ переноса правок агента (шаг 7б): перенесённое —
+                // часть установки; сверка на приёмке ловит всё, что изменилось уже в испытании.
+                let checked = crate::trial::collect_code_hashes(&dir).unwrap_or_else(|_| manifest.code_sha256.clone());
                 crate::trial::begin(&dir, crate::trial::Begin {
                     from_version: &old_version,
                     to_version: &version,
@@ -3965,7 +3980,7 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
                         StaticPlan::Fresh => "fresh",
                     },
                     new_top: manifest.top.clone(),
-                    code_sha256: manifest.code_sha256.clone(),
+                    code_sha256: checked,
                     service: s.wants_service(),
                     scope: &scope,
                     agent_code,
@@ -4000,7 +4015,11 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     } else {
         // Even a repair without a trial must not discard its preimage over an
         // unverified installed layout. Agent carry remains an explicit mismatch.
-        crate::trial::verify_code_manifest(&dir, &manifest.code_sha256)?;
+        let skip: Vec<String> = agent_code.get("carried")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        crate::trial::verify_code_manifest_except(&dir, &manifest.code_sha256, &skip)?;
         let cleanup = tx.commit();
         if let Ok(mut v) = CLEANUP.lock() {
             v.push(cleanup);

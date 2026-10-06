@@ -139,6 +139,13 @@ pub fn state_path(dir: &Path) -> PathBuf {
     dir.join(STATE_REL[0]).join(STATE_REL[1])
 }
 
+/// Открытое испытание в этой установке: повторный запуск установщика поверх него запрещён —
+/// второй процесс затирает состояние/слепок и ломает сторожа (06.10, 1.4.0 поверх висящего
+/// испытания 1.4.0 → «код отличается» и самооткат живой установки).
+pub fn open_trial(dir: &Path) -> Option<Trial> {
+    load(dir).filter(|t| t.is_open())
+}
+
 pub fn kept_path(dir: &Path, version: &str) -> PathBuf {
     dir.join("backups").join(format!("{KEPT_PREFIX}{version}"))
 }
@@ -1005,6 +1012,41 @@ mod tests {
         assert_eq!(r["state"], "done");
         let hist = std::fs::read_to_string(control(&dir, "update-history.jsonl")).unwrap();
         assert!(hist.contains("\"done\""));
+        let _ = crate::tx::remove_tree(&dir);
+    }
+
+    #[test]
+    fn carried_agent_edits_are_part_of_the_checked_snapshot_not_a_mismatch() {
+        // 06.10: правки агента, перенесённые установщиком, — часть установки. Слепок
+        // снимается ПОСЛЕ переноса, и приёмка сверяется со слепком, а не с манифестом релиза.
+        let dir = tmp("carry-snapshot");
+        let mut t = trial(&dir);
+        // Порядок установщика: правка «перенесена», затем снят слепок.
+        std::fs::write(dir.join("tree/agent.py"), b"print('edited by agent')\n").unwrap();
+        t.code_sha256 = collect_code_hashes(&dir).unwrap();
+        t.verdict = json!({"verdict": "accept", "by": "agent"});
+        std::fs::create_dir_all(dir.join("pristine")).unwrap();
+        finish_accept(&dir, &mut t);
+        assert_eq!(read_receipt(&dir)["state"], "done", "перенесённая правка не ломает приёмку");
+        // А изменение ПОСЛЕ слепка — ловится: код трогали уже в испытании.
+        let mut t2 = trial(&dir);
+        t2.code_sha256 = collect_code_hashes(&dir).unwrap();
+        std::fs::write(dir.join("tree/agent.py"), b"print('tampered during trial')\n").unwrap();
+        assert!(verify_code_manifest(&dir, &t2.code_sha256).is_err());
+        let _ = crate::tx::remove_tree(&dir);
+    }
+
+    #[test]
+    fn an_open_trial_blocks_a_second_installer_run() {
+        // 06.10: повторный клик обновления поверх висящего испытания — отказ словами.
+        let dir = tmp("second-run");
+        let t = trial(&dir);
+        assert_eq!(t.phase, "starting");
+        assert!(open_trial(&dir).is_some(), "испытание открыто");
+        let mut closed = t.clone();
+        closed.phase = "done".into();
+        std::fs::write(state_path(&dir), serde_json::to_string(&closed).unwrap()).unwrap();
+        assert!(open_trial(&dir).is_none(), "закрытое испытание не мешает новой установке");
         let _ = crate::tx::remove_tree(&dir);
     }
 }
