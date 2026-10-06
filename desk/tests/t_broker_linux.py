@@ -13,6 +13,8 @@ import broker
 import modes
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"),
+                     "живой стенд брокера Linux — прогоняет линукс-гейт в Docker")
 class LinuxBroker(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("HELENE_TREE_SRC"), "requires actual packaged agent tree")
     def test_actual_agent_frame_offers_the_full_schema_with_pointers_on(self):

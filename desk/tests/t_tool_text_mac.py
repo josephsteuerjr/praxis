@@ -28,6 +28,7 @@ from __future__ import annotations
 import ast
 import os
 import sys
+import re
 import unittest
 from pathlib import Path
 
@@ -223,8 +224,12 @@ class LiveOwnerBlockAndPointer(unittest.TestCase):
         self.assertEqual(dead, [], "в блоке владельца нет этих подстрок — замены мёртвые:\n  "
                          + "\n  ".join(repr(d) for d in dead))
         said = body.mac_owner_text(block)
+        # «…subagents on Windows still goes through it» — сознательное
+        # упоминание виндового keyhole: весь абзац — факт о НЁМ (нет мозга
+        # машины): ядро добавило его позже словаря, вычленяем до запрета (06.10).
+        said_plain = re.sub(r"`coding_session\(scope='windows'\)` is a deprecated keyhole.*?task store\.\s*", "", said)
         for word in ("Windows PC", "PowerShell", "on Windows", "The PC has"):
-            self.assertNotIn(word, said, f"после правки в блоке владельца осталось «{word}»")
+            self.assertNotIn(word, said_plain, f"после правки в блоке владельца осталось «{word}»")
         self.assertIn("This Mac is your DIRECT body", said)
         self.assertEqual(body.mac_owner_text(said), said)
 

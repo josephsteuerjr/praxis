@@ -1,6 +1,7 @@
 """Interrupt producer -> independent consumer -> cancellation receipt (no child process)."""
 import datetime as dt
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -9,6 +10,13 @@ from pathlib import Path
 
 DESK = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(DESK), str(DESK / 'localharness')]
+# process_scope/owner_stop живут в дереве агента (слой): стенд обязан видеть
+# ровно то, что едет в поставку — HELENE_TREE_SRC сборки или слой репозитория
+# (паттерн t_owner_words._tree_agent). До 06.10 process_scope существовал
+# только в legacy live-дереве, и стенд стоял красным на ModuleNotFoundError.
+_TREE = Path(os.environ.get("HELENE_TREE_SRC") or DESK.parent / "helene" / "core")
+if (_TREE / "process_scope.py").is_file():
+    sys.path.insert(0, str(_TREE))
 from deskd import control
 import control_watch
 

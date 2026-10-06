@@ -13,6 +13,7 @@ PowerShell и UI Automation и зовёт несуществующее. Здес
 from __future__ import annotations
 
 import sys
+import re
 import unittest
 from pathlib import Path
 
@@ -66,8 +67,12 @@ class LiveOwnerBlockAndPointer(unittest.TestCase):
         dead = [old for old, _ in body.LINUX_OWNER_TEXT if old not in block]
         self.assertEqual(dead, [], "в блоке владельца нет этих подстрок:\n  " + "\n  ".join(map(repr, dead)))
         said = body.linux_owner_text(block)
+        # «…subagents on Windows still goes through it» — сознательное
+        # упоминание виндового keyhole: весь абзац — факт о НЁМ (нет мозга
+        # машины): ядро добавило его позже словаря, вычленяем до запрета (06.10).
+        said_plain = re.sub(r"`coding_session\(scope='windows'\)` is a deprecated keyhole.*?task store\.\s*", "", said)
         for word in ("Windows PC", "PowerShell", "on Windows", "The PC has"):
-            self.assertNotIn(word, said, f"после правки осталось «{word}»")
+            self.assertNotIn(word, said_plain, f"после правки осталось «{word}»")
         self.assertIn("This Linux computer is your DIRECT body", said)
         self.assertEqual(body.linux_owner_text(said), said)
 

@@ -121,7 +121,9 @@ class Package(unittest.TestCase):
             self.assertEqual(items["/opt/helene/runtime/bin/python3"]["src"], "python3.14")
             if os.name != "nt":
                 self.assertEqual(items["/opt/helene/runtime/bin/python3.14"]["file_info"]["mode"], 0o755)
-            self.assertEqual(items["/opt/helene/helene.json"]["file_info"]["mode"], 0o644)
+                # На NTFS права не дискретны: файл рождается 0666 без umask,
+                # и проверка прав здесь — дело линукс-гейта в Docker.
+                self.assertEqual(items["/opt/helene/helene.json"]["file_info"]["mode"], 0o644)
             self.assertEqual(items["/opt/helene/data"]["type"], "dir")
 
     def test_prerm_understands_both_dpkg_and_rpm(self):
