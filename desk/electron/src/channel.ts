@@ -4,7 +4,7 @@
 // Пока «сердце» программы (helene-host) не переехало из Tauri, Electron читает то же сам:
 // helene.json установки → дерево агента → memory/.state/desk-token. Детей он не поднимает:
 // агента держит служба или прежнее окно; окно Electron только подключается к каналу.
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 export const CONFIG_NAME = "helene.json";
@@ -76,6 +76,95 @@ function deskToken(tree: string): string {
   }
 }
 
+/** Имя агента: agent.name → telegram.agent_name → fallback (у соседа — его id,
+ *  у корневого — «Агент»), как agent_title в common/agents.rs. */
+function titleOf(cfg: Record<string, unknown> | null, fallback: string): string {
+  const got = str((cfg?.agent as Record<string, unknown>)?.name) || str((cfg?.telegram as Record<string, unknown>)?.agent_name);
+  return got || fallback;
+}
+
+/** id папки годится, как и в common/agents.rs: латиница-цифры-дефис, ≤32. */
+function idOk(name: string): boolean {
+  return /^[a-z0-9][a-z0-9-]{0,31}$/.test(name);
+}
+
+/** Один агент установки: как AgentEntry в common/agents.rs — порт, дерево, включён. */
+export interface RosterAgent {
+  id: string;
+  name: string;
+  port: number;
+  enabled: boolean;
+  conflict: string;
+  base: boolean;
+  tree: string;
+}
+
+const ROSTER_DIR = "agents"; // common/agents.rs: ROSTER_DIR
+
+/**
+ * Все агенты установки — то же правило, что `roster()` в common/agents.rs:
+ * корневой первым (порт из его helene.json или 8094), соседи по алфавиту из
+ * agents/<id>/helene.json (порт из конфига или 8094+index). Спор за порт не
+ * прячет агента из списка: он показывается с пометкой conflict.
+ */
+export function rosterFor(root: string): RosterAgent[] {
+  const baseConfig = join(root, CONFIG_NAME);
+  const baseRead = readConfig(baseConfig);
+  const baseCfg = baseRead.kind === "ok" ? baseRead.value : null;
+  const basePort =
+    typeof baseCfg?.port === "number" && baseCfg.port >= 1 && baseCfg.port <= 65535
+      ? baseCfg.port
+      : DESK_PORT;
+  const out: RosterAgent[] = [
+    {
+      id: BASE_AGENT_ID,
+      name: titleOf(baseCfg, "Агент"),
+      port: basePort,
+      enabled: baseCfg?.enabled !== false,
+      conflict: "",
+      base: true,
+      tree: treeOf(baseConfig, baseCfg), // конфига нет/бит — всё равно data рядом с ним
+    },
+  ];
+  const taken: Array<{ port: number; id: string }> = [{ port: basePort, id: BASE_AGENT_ID }];
+  let kids: string[] = [];
+  try {
+    kids = readdirSync(join(root, ROSTER_DIR), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+  } catch {
+    // папки соседей нет — в установке один корневой, это не ошибка
+  }
+  let index = 0;
+  for (const name of kids) {
+    if (!idOk(name) || name === BASE_AGENT_ID) continue;
+    const config = join(root, ROSTER_DIR, name, CONFIG_NAME);
+    if (!existsSync(config)) continue;
+    index += 1;
+    const read = readConfig(config);
+    const cfg = read.kind === "ok" ? read.value : null;
+    const port =
+      typeof cfg?.port === "number" && cfg.port >= 1 && cfg.port <= 65535
+        ? cfg.port
+        : DESK_PORT + index;
+    let conflict = "";
+    const holder = taken.find((t) => t.port === port);
+    if (holder) conflict = holder.id;
+    else taken.push({ port, id: name });
+    out.push({
+      id: name,
+      name: titleOf(cfg, name),
+      port,
+      enabled: cfg?.enabled !== false,
+      conflict,
+      base: false,
+      tree: treeOf(config, cfg), // битый конфиг — агент всё равно при своём data
+    });
+  }
+  return out;
+}
+
 export function channelFor(root: string, product: string): { channel: Channel; note: string } {
   const path = join(root, CONFIG_NAME);
   const read = readConfig(path);
@@ -95,9 +184,20 @@ export function channelFor(root: string, product: string): { channel: Channel; n
   const port = typeof cfg.port === "number" ? cfg.port : DESK_PORT;
   const tree = treeOf(path, cfg);
   const key = deskToken(tree);
-  const me = { id: BASE_AGENT_ID, name: agent, port, enabled: true, conflict: "", base: true };
+  const roster = rosterFor(root);
+  const me = roster.find((a) => a.id === BASE_AGENT_ID)!;
   return {
-    channel: { ...empty, base: `http://127.0.0.1:${port}`, key, agents: [me] },
-    note: key ? `канал 127.0.0.1:${port}, ключ из ${tree}` : `ключ канала не прочитан из ${tree} — окно получит 403`,
+    channel: {
+      ...empty,
+      base: `http://127.0.0.1:${port}`,
+      key,
+      agents: roster.map(({ id, name, port: p, enabled, conflict, base }) => ({
+        id, name, port: p, enabled, conflict, base,
+      })),
+      agent_id: me.id,
+    },
+    note: key
+      ? `канал 127.0.0.1:${port}, агентов ${roster.length}, ключ из ${tree}`
+      : `ключ канала не прочитан из ${tree} — окно получит 403`,
   };
 }

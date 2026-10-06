@@ -1181,6 +1181,71 @@ fn current_id() -> String {
     with_current(BASE_AGENT_ID.to_string(), |c| c.id.clone())
 }
 
+/// Кого открывать при старте, когда ярлык молчит: файл установки
+/// `agent-default.json` вида {"id": "..."}. Пишет его ТОЛЬКО команда
+/// `agent_default_set` — переключатель окна (`switch_agent`) его не трогает:
+/// «открыл руками» и «открывать всегда» — два разных выбора владельца.
+fn agent_default_path() -> PathBuf {
+    install_root().join("agent-default.json")
+}
+
+/// Чистая половина чтения: любой брак (нет файла, не JSON, нет id) — None,
+/// а не отказ: поломанный файл выбора не имеет права прятать корневого.
+fn agent_default_id_from(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let id = value.get("id")?.as_str()?.trim().to_lowercase();
+    (!id.is_empty()).then_some(id)
+}
+
+fn agent_default_id() -> Option<String> {
+    agent_default_id_from(&agent_default_path())
+}
+
+/// Чистая половина записи: атомарно (tmp + rename), как config_save_at.
+fn agent_default_write_at(path: &Path, id: &str) -> Result<(), String> {
+    let pretty = serde_json::to_string_pretty(&serde_json::json!({ "id": id }))
+        .map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, pretty).map_err(|e| format!("не записалось: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("не подменилось: {e}"))?;
+    Ok(())
+}
+
+fn agent_default_write(id: &str) -> Result<(), String> {
+    agent_default_write_at(&agent_default_path(), id)
+}
+
+/// Чистая половина выбора при старте: ярлык сильнее сохранённого выбора, а
+/// сохранённый годится только если агент в ростере и включён. Снятое или
+/// пропавшее — откат к корневому со словом (второй элемент), а не молча.
+/// Возвращает id, которым окно и займется (None = корневой).
+fn startup_pick(
+    flag: Option<String>,
+    saved: Option<String>,
+    roster: &[(String, String, bool)],
+) -> (Option<String>, Option<String>) {
+    if flag.is_some() {
+        return (flag, None); // ярлык не сверяется с сохранённым: он и есть воля владельца сейчас
+    }
+    let Some(said) = saved else { return (None, None) };
+    match roster.iter().find(|(id, _, _)| *id == said) {
+        Some((_, _, true)) => (Some(said), None),
+        Some((_, name, false)) => (
+            None,
+            Some(format!(
+                "Ты просил открывать «{name}» всегда, но сейчас он снят в его настройках и подниматься не может."
+            )),
+        ),
+        None => (
+            None,
+            Some(format!(
+                "Сохранённый выбор «открывать всегда» зовёт агента «{said}», но в этой установке его больше нет."
+            )),
+        ),
+    }
+}
+
 /// Файл настроек текущего агента. У корневого это `helene.json` рядом с
 /// программой — то же место, что и до 11.09.
 fn current_config_path() -> PathBuf {
@@ -3223,6 +3288,14 @@ async fn remove_service() -> Result<String, String> {
 /// из ответа сервера обновлений (кнопка «Скачать» подставляет его url).
 /// Поэтому — белый список: http(s)-ссылка либо путь внутри папки программы,
 /// дерева данных или %TEMP%.
+///
+/// Относительный путь — от дерева ТЕКУЩЕГО агента, а не от папки процесса:
+/// окно второго агента просит показать «свой» broker.log, и «свой» решает
+/// текущий, а не то, из какой папки запустили exe. Окно раньше (до мультиагентов)
+/// слало пути от корня установки — они остались в старых сборках веб-части и в
+/// строках, где имя дерева вшито в путь («data/broker.log» у корневого, чьё
+/// дерево и есть `data`), поэтому кандидат с уже существующим файлом в корне
+/// установки выигрывает у дерева, а не наоборот: живой файл лучше угаданного.
 fn open_target(path: &str) -> Result<std::ffi::OsString, String> {
     let raw = path.trim();
     if raw.is_empty() {
@@ -3235,9 +3308,7 @@ fn open_target(path: &str) -> Result<std::ffi::OsString, String> {
         }
         return Ok(raw.into());
     }
-    let target = PathBuf::from(raw)
-        .canonicalize()
-        .map_err(|_| format!("нет такого пути: {raw}"))?;
+    let target = resolve_target(raw, current_tree())?;
     for root in [install_root(), tree_dir(), std::env::temp_dir()] {
         if let Ok(root) = root.canonicalize() {
             if target.starts_with(&root) {
@@ -3246,6 +3317,38 @@ fn open_target(path: &str) -> Result<std::ffi::OsString, String> {
         }
     }
     Err("этот путь вне папок программы — не открываю".into())
+}
+
+/// Куда физически смотрит строка из окна: абсолютный путь — сам по себе;
+/// относительный — от дерева текущего агента, а если такого файла нет — от
+/// корня установки (старая семантика, живая в прежних сборках веб-части).
+/// Разрешён только существующий файл: canonicalize и не может иначе, а значит
+/// «угадывания» в отличие от старого поведения нет — есть два честных места.
+fn resolve_target(raw: &str, tree: PathBuf) -> Result<PathBuf, String> {
+    let direct = PathBuf::from(raw);
+    if direct.is_absolute() {
+        return direct
+            .canonicalize()
+            .map_err(|_| format!("нет такого пути: {raw}"));
+    }
+    let from_tree = tree.join(&direct);
+    if let Ok(got) = from_tree.canonicalize() {
+        return Ok(got);
+    }
+    // Строка «data/broker.log» — это путь от КОРНЯ установки времён одного
+    // агента (дерево корневого тогда и называлось «data»). У соседей дерево
+    // другое, и тот же журнал лежит в нём без префикса: пробуем и так.
+    // strip_prefix сравнивает по ЦЕЛЫМ компонентам — «database.log» не тронет.
+    if let Ok(stripped) = Path::new(raw).strip_prefix("data") {
+        let no_prefix = tree.join(stripped);
+        if let Ok(got) = no_prefix.canonicalize() {
+            return Ok(got);
+        }
+    }
+    install_root()
+        .join(&direct)
+        .canonicalize()
+        .map_err(|_| format!("нет такого пути: {raw}"))
 }
 
 /// Убрать префикс `\\?\`, который добавляет canonicalize: Проводник такой
@@ -6138,11 +6241,17 @@ fn bootstrap() -> Option<Boot> {
         .and_then(|n| n.get("text"))
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
-    // Кого показывать: `--agent <id>` из ярлыка, иначе корневой. Неизвестный id
-    // не подменяется корневым молча — ярлык на удалённого агента обязан сказать
-    // об этом, иначе владелец пишет не тому.
-    let wanted = arg_after("--agent");
-    let mut current = find_agent(&base, wanted.as_deref().unwrap_or(BASE_AGENT_ID))
+    // Кого показывать: `--agent <id>` из ярлыка, иначе сохранённый выбор
+    // «открывать всегда» (agent-default.json), иначе корневой. Само решение —
+    // в чистой `startup_pick` (её проверяет стенд), здесь только слова к окну.
+    let entries: Vec<(String, String, bool)> = roster(&base)
+        .into_iter()
+        .map(|a| (a.id, a.name, a.enabled))
+        .collect();
+    let (wanted, saved_refused) = startup_pick(arg_after("--agent"), agent_default_id(), &entries);
+    let mut current = wanted
+        .as_deref()
+        .and_then(|id| find_agent(&base, id))
         .or_else(|| find_agent(&base, BASE_AGENT_ID));
     if let Some(said) = wanted.as_deref() {
         if find_agent(&base, said).is_none() {
@@ -6152,6 +6261,13 @@ fn bootstrap() -> Option<Boot> {
                 format!("Ярлык просит агента «{said}», но в этой установке его нет. Открываю того, кто здесь первый."),
             );
         }
+    }
+    if let Some(why) = saved_refused {
+        log_line("сохранённый выбор агента не вышел — открываю корневого");
+        message_box_async(
+            format!("{}: агент не открылся", product_ui()),
+            format!("{why} Открываю корневого; выбор можно перевести на него в карточке «Агенты»."),
+        );
     }
     let agent = current.as_ref().map(|a| a.name.clone()).unwrap_or(agent);
     // Без настройки харнесс не поднимаем: без ключа модели дети бесполезны.
@@ -6342,7 +6458,10 @@ fn main() {
             carry_export,
             agents_list,
             switch_agent,
-            agent_add
+            agent_add,
+            agent_default_set,
+            agent_enabled_set,
+            agent_remove
         ])
         .setup(move |app| {
             // Продукт зовётся своим именем: заголовок, ярлык, значок, уведомления —
@@ -7148,12 +7267,16 @@ fn agents_list(state: ShellState<LocalHarness>) -> serde_json::Value {
         .lock()
         .map(|g| g.iter().filter(|m| m.child.is_some()).map(|m| m.agent.clone()).collect())
         .unwrap_or_default();
+    let default_id = agent_default_id();
     let list: Vec<serde_json::Value> = roster(&base)
         .iter()
         .map(|a| {
             let mut got = a.as_json();
             got["raised"] = serde_json::Value::Bool(raised.contains(&a.id));
             got["current"] = serde_json::Value::Bool(a.id == current_id());
+            // Кого открывать при старте (radio в карточке): отсутствие поля или
+            // false у всех = выбор не задан (файла нет или сломан).
+            got["default"] = serde_json::Value::Bool(default_id.as_deref() == Some(a.id.as_str()));
             got
         })
         .collect();
@@ -7175,6 +7298,15 @@ fn switch_agent(app: ShellHandle, id: String) -> Result<serde_json::Value, Strin
     if agent.id == current_id() {
         show_main(&app);
         return Ok(serde_json::json!({ "ok": true, "same": true }));
+    }
+    if !agent.enabled {
+        // Окно к снятому агенту — пустое: его харнесс не поднялся и не поднимется,
+        // каждый запрос окна получит отказ. Отказ словами до пересборки окна,
+        // а не мёртвое окно после него.
+        return Err(format!(
+            "агент «{}» снят в настройках — вернуть его можно галочкой в его настройках",
+            agent.name
+        ));
     }
     if !agent.conflict.is_empty() {
         return Err(format!(
@@ -7221,36 +7353,131 @@ fn switch_agent(app: ShellHandle, id: String) -> Result<serde_json::Value, Strin
     Ok(serde_json::json!({ "ok": true, "id": agent.id, "name": agent.name }))
 }
 
-/// Завести ещё одного агента в этой же установке.
+/// Чистая половина отказа agent_enabled_set: корневой не гасится. None — можно.
+fn agent_enabled_refusal(base: bool, enabled_is_new: bool) -> Option<String> {
+    if !base {
+        return None;
+    }
+    let what = if enabled_is_new {
+        "поднять корневой принудительно"
+    } else {
+        "снять корневого"
+    };
+    Some(format!(
+        "корневой агент живёт всегда — {what} нельзя, а «Hélène без агента» не бывает"
+    ))
+}
+
+/// Чистая половина отказа agent_remove: корневой, текущий в окне, поднятый —
+/// нельзя. None — можно.
+fn agent_remove_refusal(base: bool, raised: bool, current: bool) -> Option<String> {
+    if base {
+        return Some("корневой агент — это сама установка; удалить нельзя".into());
+    }
+    if current {
+        return Some("этот агент сейчас в окне — переключись на другого, потом удаляй".into());
+    }
+    if raised {
+        return Some("этот агент сейчас работает — погаси его (сними галочку в настройках), потом удаляй".into());
+    }
+    None
+}
+
+/// Погасить агента: остановить ЕГО детей и вычеркнуть его план.
 ///
-/// Делает ровно две вещи: папку с конфигом (`agents/<id>/helene.json`) и запись
-/// в списке. Дом агента засевает раннер при первом старте — второй реализации
-/// засева здесь нет и не будет. Мозг и ограда наследуются от корневого (владелец
-/// настроил их один раз), бот и тело — нет: они у каждого свои.
-#[cfg_attr(feature = "desktop", tauri::command)]
-async fn agent_add(app: ShellHandle, name: String) -> Result<serde_json::Value, String> {
+/// Это НЕ owner_control: стоп владельца гасит всю установку и живёт в своём
+/// файле у семени; здесь владелец снял одного. План — то, по чему надзор
+/// считает «чьих детей нет» и поднимает снова: убрав план, мы убираем и
+/// пересчёт (помеченных halted надзор не трогает, но и план им больше не
+/// выдаст — объекта нет), и это работает на всех платформах, а не только
+/// там, где планы можно перестроить по-живому.
+fn stop_agent_children(state: &ShellState<LocalHarness>, agent: &str) -> usize {
+    let mut stopped = 0;
+    if let Ok(mut guard) = state.children.lock() {
+        let mut keep = Vec::new();
+        for mut m in guard.drain(..) {
+            if m.agent == agent {
+                if let Some(child) = m.child.as_mut() {
+                    stop_child(child);
+                    stopped += 1;
+                }
+                // halted и без child: надзор такой спеку не поднимет, но пусть
+                // её и не будет в списке — агент снят, его строка в журнале
+                // падений больше никому не принадлежит.
+            } else {
+                keep.push(m);
+            }
+        }
+        *guard = keep;
+    }
+    if let Ok(mut plans) = state.plans.lock() {
+        plans.retain(|p| p.agent != agent);
+    }
+    stopped
+}
+
+/// Поднять одного агента по свежему плану с диска (конфиг уже включён).
+/// Возвращает слово для журнала. Реле трогаем только если оно не живо:
+/// реле одно на установку, и его перезапуск ронял бы вход в подписку.
+fn lift_agent(state: &ShellState<LocalHarness>, agent: &str) -> Result<Option<String>, String> {
     let base = install_root();
-    let named = name.trim().to_string();
-    if named.is_empty() {
-        return Err("у агента должно быть имя — им он подписывает свои слова".into());
+    let Some(mut full) = build_plans(&base).into_iter().find(|p| p.agent == agent) else {
+        return Ok(None); // не настроен или не local — поднимать нечего, это не ошибка
+    };
+    let relay_alive = state
+        .children
+        .lock()
+        .map(|g| {
+            g.iter()
+                .any(|m| matches!(m.spec, ChildSpec::Relay { .. }) && m.child.is_some())
+        })
+        .unwrap_or(false);
+    if relay_alive {
+        full.specs.retain(|s| !matches!(s, ChildSpec::Relay { .. }));
     }
-    if roster(&base).len() >= 16 {
-        return Err("шестнадцать агентов в одной установке — это уже сервер, а не рабочий стол".into());
+    let (mut lifted, _) = start_children(&full, true);
+    let mut installed = false;
+    if let Ok(mut guard) = state.children.lock() {
+        if !state.stopping.load(std::sync::atomic::Ordering::Relaxed) {
+            guard.append(&mut lifted);
+            installed = true;
+        }
     }
+    if let Ok(mut plans) = state.plans.lock() {
+        match plans.iter_mut().find(|p| p.agent == agent) {
+            Some(slot) => *slot = full.clone(),
+            None => plans.push(full.clone()),
+        }
+    }
+    if installed {
+        Ok(Some(full.whose()))
+    } else {
+        for m in lifted.iter_mut() {
+            if let Some(child) = m.child.as_mut() {
+                stop_child(child);
+            }
+        }
+        Err("окно уже закрывается — агент не поднят".into())
+    }
+}
+
+/// Запустить питон-CLI агентов (agents_cli.py) и разобрать его ответ.
+/// Одна строка JSON в stdout; жалобы — stderr и ненулевой код. Образец —
+/// `agent_add`: тот же питон, те же ключи окружения, то же отсутствие окна.
+async fn run_agents_cli(args: &[String]) -> Result<serde_json::Value, String> {
+    let base = install_root();
     let python = python_path(&base, &config_value().unwrap_or(serde_json::json!({})));
     let script = base.join("app").join("localharness").join("agents_cli.py");
     if !script.exists() {
         return Err(format!("в этой сборке нет {}", script.display()));
     }
-    let named_for_cmd = named.clone();
-    let made: serde_json::Value = shell_adapter::async_runtime::spawn_blocking(move || {
-        // Заводит агента ПИТОН — тот самый модуль, которым список читают раннер
-        // и канал. Второй реализации правил (slug, свободный порт, что
-        // наследуется) в Rust нет: разъезд двух «завести агента» стоил бы
-        // владельцу папки с чужим именем и порта, занятого дважды.
+    let mut argv: Vec<String> = vec!["-u".into(), script.to_string_lossy().into_owned()];
+    argv.extend_from_slice(args);
+    argv.push("--base".into());
+    argv.push(base.to_string_lossy().into_owned());
+    shell_adapter::async_runtime::spawn_blocking(move || {
         let mut cmd = Command::new(&python);
-        cmd.arg("-u").arg(&script).arg("add").arg("--name").arg(&named_for_cmd)
-            .arg("--base").arg(&base)
+        cmd.args(&argv)
             .env("PYTHONUTF8", "1")
             .env("HELENE_PARENT_PID", std::process::id().to_string())
             .stdout(Stdio::piped())
@@ -7267,7 +7494,245 @@ async fn agent_add(app: ShellHandle, name: String) -> Result<serde_json::Value, 
             .map_err(|e| format!("ответ не разобрался ({e}): {text}"))
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())?
+}
+
+/// Сохранённый выбор «открывать всегда»: agent-default.json у установки.
+/// Пишется ТОЛЬКО здесь — переключатель окна его не трогает, поэтому файл и
+/// есть воля владельца, а не след последнего просмотра.
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn agent_default_set(id: String) -> Result<serde_json::Value, String> {
+    let base = install_root();
+    let wanted = id.trim().to_lowercase();
+    let Some(agent) = find_agent(&base, &wanted) else {
+        return Err(format!("агента «{wanted}» в этой установке нет"));
+    };
+    if !agent.enabled {
+        return Err(format!(
+            "агент «{}» снят в настройках — его нельзя назначать тем, кто откроется при старте",
+            agent.name
+        ));
+    }
+    agent_default_write(&agent.id)?;
+    log_line(&format!(
+        "при старте теперь открывается «{}» ({})",
+        agent.name, agent.id
+    ));
+    Ok(serde_json::json!({ "ok": true, "id": agent.id, "name": agent.name }))
+}
+
+/// Погасить или поднять ОДНОГО агента. Флаг в его конфиге пишет питон
+/// (agents_cli set-enabled — правила одни на всех читателей), оркестрация —
+/// здесь: погасить значит остановить его детей и убрать его из планов;
+/// поднять — собрать план заново с только что включённым конфигом.
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn agent_enabled_set(
+    app: ShellHandle,
+    id: String,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    let base = install_root();
+    let wanted = id.trim().to_lowercase();
+    let Some(agent) = find_agent(&base, &wanted) else {
+        return Err(format!("агента «{wanted}» в этой установке нет"));
+    };
+    if let Some(why) = agent_enabled_refusal(agent.base, enabled) {
+        return Err(why);
+    }
+    if agent.enabled == enabled {
+        return Ok(serde_json::json!({ "ok": true, "same": true, "id": agent.id }));
+    }
+    let name = agent.name.clone();
+    run_agents_cli(&[
+        "set-enabled".into(),
+        "--id".into(),
+        agent.id.clone(),
+        "--enabled".into(),
+        if enabled { "true".into() } else { "false".into() },
+    ])
+    .await?;
+    // Служба держит детей своими планами и читает их при СВОЁМ старте: слово
+    // владельца записано в конфиг, но исполняет его служба после перезапуска.
+    // Молчать об этом нельзя — иначе «погасил», а агент жив.
+    if service_owns_harness() {
+        let said = if enabled {
+            format!("«{name}» включён в настройках. Его держит служба — поднимет его перезапуск службы («Система» → «Перезапустить»).")
+        } else {
+            format!("«{name}» снят в настройках. Его держит служба — отпустит его перезапуск службы («Система» → «Перезапустить»).")
+        };
+        log_line(&said);
+        toast(product_ui(), &said);
+        return Ok(serde_json::json!({ "ok": true, "id": agent.id, "enabled": enabled, "service": true }));
+    }
+    let state = app.state::<LocalHarness>();
+    if enabled {
+        match lift_agent(&state, &agent.id) {
+            Ok(Some(whose)) => {
+                log_line(&format!("агент «{name}»{} поднят по слову владельца", whose));
+                toast(product_ui(), &format!("«{name}» снова работает."));
+            }
+            Ok(None) => {
+                log_line(&format!(
+                    "агент «{name}» включён, но его не поднять: не настроен или живёт не здесь"
+                ));
+            }
+            Err(why) => return Err(why),
+        }
+    } else {
+        let stopped = stop_agent_children(&state, &agent.id);
+        log_line(&format!(
+            "агент «{name}» снят в настройках — детей остановлено {stopped}, из планов вычеркнут"
+        ));
+        toast(product_ui(), &format!("«{name}» погашен и больше не поднимется, пока не вернёшь галочку."));
+    }
+    Ok(serde_json::json!({ "ok": true, "id": agent.id, "enabled": enabled }))
+}
+
+/// Удалить агента установки: папка agents/<id> с домом уезжает на чердак
+/// (решение питона), окно получает свежий список. Отказ — корневой, текущий
+/// в окне, поднятый: удалять то, что исполняется, Windows не даст, а
+/// полудобавленный чердак хуже честного «сначала погаси».
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn agent_remove(app: ShellHandle, id: String) -> Result<serde_json::Value, String> {
+    let base = install_root();
+    let wanted = id.trim().to_lowercase();
+    let Some(agent) = find_agent(&base, &wanted) else {
+        return Err(format!("агента «{wanted}» в этой установке нет"));
+    };
+    let state = app.state::<LocalHarness>();
+    let raised_here = state
+        .children
+        .lock()
+        .map(|g| g.iter().any(|m| m.agent == agent.id && m.child.is_some()))
+        .unwrap_or(false);
+    if let Some(why) = agent_remove_refusal(agent.base, raised_here, agent.id == current_id()) {
+        return Err(format!("«{}»: {why}", agent.name));
+    }
+    if agent.enabled && service_owns_harness() {
+        return Err(format!(
+            "«{}» поднимает служба — сними галочку в настройках агента и дай службе его отпустить, потом удаляй",
+            agent.name
+        ));
+    }
+    // План мог остаться от прошлой сессии надзора — вычеркиваем и его.
+    stop_agent_children(&state, &agent.id);
+    let attic = base.join("agents-attic");
+    let name = agent.name.clone();
+    let made = run_agents_cli(&[
+        "remove".into(),
+        "--id".into(),
+        agent.id.clone(),
+        "--attic".into(),
+        attic.to_string_lossy().into_owned(),
+    ])
+    .await?;
+    log_line(&format!(
+        "агент «{name}» удалён: папка увезена на чердак {}",
+        attic.display()
+    ));
+    toast(product_ui(), &format!("«{name}» удалён; его папка — на чердаке agents-attic, если что-то забыто."));
+    // Сохранённый «открывать всегда» не может звать удалённого: откат к корневому,
+    // молча — потому что окно уже сказало своё слово удалением.
+    if agent_default_id().as_deref() == Some(agent.id.as_str()) {
+        let _ = std::fs::remove_file(agent_default_path());
+    }
+    Ok(made)
+}
+
+/// Завести ещё одного агента в этой же установке.
+///
+/// Делает ровно две вещи: папку с конфигом (`agents/<id>/helene.json`) и запись
+/// в списке. Дом агента засевает раннер при первом старте — второй реализации
+/// засева здесь нет и не будет. Мозг и ограда наследуются от корневого (владелец
+/// настроил их один раз), бот и тело — нет: они у каждого свои.
+///
+/// Конституция (договор с волной A и B1): `soul_kind` — "canonical" | "inherit"
+/// | "text". Текст конституции НЕ едет через argv (32 КБ — предел командной
+/// строки Windows): он пишется во временный файл и передаётся как --soul-file,
+/// файл стирается после ответа питона. "inherit" без текста — питон сам берёт
+/// soul/SOUL.md донора (--soul-from); "inherit" С текстом — это "text".
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn agent_add(
+    app: ShellHandle,
+    name: String,
+    soul_kind: Option<String>,
+    soul_text: Option<String>,
+    soul_from: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let base = install_root();
+    let named = name.trim().to_string();
+    if named.is_empty() {
+        return Err("у агента должно быть имя — им он подписывает свои слова".into());
+    }
+    if roster(&base).len() >= 16 {
+        return Err("шестнадцать агентов в одной установке — это уже сервер, а не рабочий стол".into());
+    }
+    // Конституция (договор с волной A и B1): один проход — (флаги питона,
+    // временный файл). «inherit» С текстом — это «text»: владелец уже прошёл
+    // редактор наследования и прислал то, что хочет видеть. Текст НЕ едет
+    // через argv (32 КБ — предел командной строки Windows): только через файл.
+    let text_supplied = soul_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let kind = soul_kind
+        .map(|k| k.trim().to_lowercase())
+        .filter(|k| !k.is_empty());
+    let mut argv: Vec<String> = vec!["add".into(), "--name".into(), named.clone()];
+    let soul_tmp: Option<PathBuf> = match kind.as_deref() {
+        None => None,
+        Some("canonical") => {
+            argv.extend(["--soul-kind".into(), "canonical".into()]);
+            None
+        }
+        Some("text" | "inherit") if text_supplied.is_some() => {
+            let path = std::env::temp_dir().join(format!(
+                "helene-soul-{}-{}.md",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            std::fs::write(&path, text_supplied.unwrap_or(""))
+                .map_err(|e| format!("текст конституции не записался: {e}"))?;
+            argv.extend([
+                "--soul-kind".into(),
+                "text".into(),
+                "--soul-file".into(),
+                path.to_string_lossy().into_owned(),
+            ]);
+            Some(path)
+        }
+        Some("inherit") => {
+            let donor = soul_from
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(BASE_AGENT_ID)
+                .to_string();
+            if find_agent(&base, &donor).is_none() {
+                return Err(format!("агента-донора «{donor}» в этой установке нет"));
+            }
+            argv.extend([
+                "--soul-kind".into(),
+                "inherit".into(),
+                "--soul-from".into(),
+                donor,
+            ]);
+            None
+        }
+        Some(other) => {
+            return Err(format!("такого вида конституции нет: «{other}»"));
+        }
+    };
+    let made: serde_json::Value = {
+        let result = run_agents_cli(&argv).await;
+        if let Some(path) = &soul_tmp {
+            let _ = std::fs::remove_file(path);
+        }
+        result?
+    };
     let id = made.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
     log_line(&format!("заведён агент «{named}» ({id}) — поднимется после перезапуска"));
     // Поднимать его прямо сейчас нечем: детей заводит план, а план строится на
@@ -8397,10 +8862,115 @@ mod tests {
         }
     }
 
+    /// 06.10 (волна C): сохранённый «открывать всегда» — приоритет ниже ярлыка,
+    /// и годится только для живого включённого агента. Снятое и пропавшее —
+    /// откат к корневому СО СЛОВОМ (второй элемент пары), а не молча.
+    #[test]
+    fn startup_pick_order_and_refusals() {
+        let roster = vec![
+            ("main".to_string(), "Агент".to_string(), true),
+            ("mira".to_string(), "Мира".to_string(), true),
+            ("off".to_string(), "Снятый".to_string(), false),
+        ];
+        // Ярлык сильнее сохранённого — и не сверяется с ним.
+        assert_eq!(
+            startup_pick(Some("mira".into()), Some("main".into()), &roster),
+            (Some("mira".into()), None)
+        );
+        // Сохранённый жив и включён — он и открывается.
+        assert_eq!(
+            startup_pick(None, Some("mira".into()), &roster),
+            (Some("mira".into()), None)
+        );
+        // Сохранённый снят — корневой, и слово об этом.
+        let (who, why) = startup_pick(None, Some("off".into()), &roster);
+        assert_eq!(who, None);
+        let why = why.expect("снятый сохранённый обязан объясниться");
+        assert!(why.contains("Снятый"), "{why}");
+        assert!(why.contains("снят"), "{why}");
+        // Сохранённый пропал (агент удалён) — корневой, слово другое.
+        let (who, why) = startup_pick(None, Some("ghost".into()), &roster);
+        assert_eq!(who, None);
+        let why = why.expect("пропавший сохранённый обязан объясниться");
+        assert!(why.contains("ghost"), "{why}");
+        assert!(why.contains("больше нет"), "{why}");
+        // Нет ни ярлыка, ни файла выбора — корневой молча, как было всегда.
+        assert_eq!(startup_pick(None, None, &roster), (None, None));
+    }
+
+    /// agent-default.json: чтение терпимо к браку, запись атомарна и читается
+    /// обратно ровно тем же кодом, что и старт.
+    #[test]
+    fn agent_default_file_roundtrip_and_garbage() {
+        let dir = std::env::temp_dir().join(format!("helene-def-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        use super::{agent_default_id_from, agent_default_write_at};
+        let path = dir.join("agent-default.json");
+        assert_eq!(agent_default_id_from(&path), None, "файла нет — None, не отказ");
+        agent_default_write_at(&path, "Mira ").unwrap(); // регистр и хвост — терпимы
+        assert_eq!(agent_default_id_from(&path).as_deref(), Some("mira"));
+        // Брак — это «выбора нет», а не ошибка старта.
+        std::fs::write(&path, "{ не json").unwrap();
+        assert_eq!(agent_default_id_from(&path), None);
+        std::fs::write(&path, r#"{"id": ""}"#).unwrap();
+        assert_eq!(agent_default_id_from(&path), None);
+        std::fs::write(&path, r#"{"id": 7}"#).unwrap();
+        assert_eq!(agent_default_id_from(&path), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 06.10 (волна C): относительный путь из окна — от дерева ТЕКУЩЕГО агента.
+    /// «data/broker.log» — строка времён одного агента: у корневого дерево и
+    /// есть data/, у соседа тот же журнал лежит без префикса. Кандидат с
+    /// живым файлом в дереве выигрывает у мёртвой догадки.
+    #[test]
+    fn relative_targets_resolve_from_the_current_tree() {
+        let stamp = format!("helene-rel-{}-{}", std::process::id(), line!());
+        let root = std::env::temp_dir().join(&stamp);
+        let agent_tree = root.join("agents").join("mira").join("data");
+        let install_root = root.join("install");
+        std::fs::create_dir_all(&agent_tree).unwrap();
+        std::fs::create_dir_all(&install_root).unwrap();
+        std::fs::write(agent_tree.join("broker.log"), "журнал миры").unwrap();
+        // Окно второго агента просит «свой» журнал: строка с префиксом data/…
+        let got = resolve_target("data/broker.log", agent_tree.clone()).unwrap();
+        assert!(got.ends_with("broker.log"), "{got:?}");
+        assert!(
+            got.starts_with(agent_tree.canonicalize().unwrap()),
+            "должен открыться журнал миры, а не корневого: {got:?}"
+        );
+        // Префикс не глотает похожие имена: database.log не превращается в base.log.
+        std::fs::write(agent_tree.join("database.log"), "не журнал").unwrap();
+        let got = resolve_target("database.log", agent_tree.clone()).unwrap();
+        assert!(got.ends_with("database.log"), "{got:?}");
+        // Чужой относительный путь без файла в дереве — отказ, а не угадывание.
+        assert!(resolve_target("нет-такого.log", agent_tree.clone()).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Кого можно погасить/удалить, а кого нельзя — сама развилка, словами
+    /// отказа (живьём эти ветки требуют живых детей и окон).
+    #[test]
+    fn base_agent_is_never_disabled_or_removed() {
+        // Корневой — всегда нельзя: он и есть установка.
+        let why = agent_enabled_refusal(true, false).expect("корневой нельзя гасить");
+        assert!(why.contains("корневой"), "{why}");
+        let why = agent_remove_refusal(true, false, false).expect("корневой нельзя удалять");
+        assert!(why.contains("установка"), "{why}");
+        // Сосед: гасить можно, удалять — только негорящего и не в окне.
+        assert_eq!(agent_enabled_refusal(false, true), None);
+        assert_eq!(agent_remove_refusal(false, false, false), None);
+        let why = agent_remove_refusal(false, true, false).expect("работающего нельзя");
+        assert!(why.contains("работает") || why.contains("погаси"), "{why}");
+        let why = agent_remove_refusal(false, false, true).expect("текущего нельзя");
+        assert!(why.contains("в окне") || why.contains("переключись"), "{why}");
+    }
+
     use super::{
-        admin_verdict, agent_name, blocked_script, broker_answer_row, broker_confirm_text,
+        admin_verdict, agent_enabled_refusal, agent_name, agent_remove_refusal, blocked_script, broker_answer_row, broker_confirm_text,
         broker_wish_ask, broker_wish_id, broker_wishes, decode_config, ensure_desk_token,
-        mask_secrets, parse_version, read_desk_token, unconfigured, version_newer, BrokerOp,
+        startup_pick, resolve_target, agent_default_id_from, agent_default_write_at, unconfigured, version_newer, BrokerOp,
         BrokerReceipt, BrokerWish,
     };
     // Брандмауэр, UAC, PowerShell и кодировка консоли — только Windows: этих
