@@ -1157,6 +1157,20 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
     let Some(serde_json::Value::Object(old)) = existing else { return fresh };
     let serde_json::Value::Object(new) = fresh else { return serde_json::Value::Object(old) };
     let mut out = old;
+    // Images use the relay independently of the voice provider. Preserve its
+    // address and loop credentials before the wizard updates the voice model.
+    let image_relay = if out.get("images").and_then(|v| v.get("enabled")).and_then(|v| v.as_bool()) == Some(true) {
+        out.get("relay").and_then(|v| v.as_object()).cloned().map(|mut relay| {
+            if relay.get("key").and_then(|v| v.as_str()).unwrap_or("").trim().is_empty()
+                && relay.get("enabled").and_then(|v| v.as_bool()) == Some(true) {
+                if let Some(key) = out.get("model").and_then(|v| v.get("key")).and_then(|v| v.as_str()).filter(|v| !v.trim().is_empty()) {
+                    relay.insert("key".into(), key.into());
+                }
+            }
+            relay.insert("enabled".into(), false.into());
+            serde_json::Value::Object(relay)
+        })
+    } else { None };
     // Свой движок владельца переживает обновление: см. `keep_own_runner`.
     let own_runner = keep_own_runner(
         out.get("runner").and_then(|v| v.as_str()),
@@ -1195,13 +1209,17 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
         }
         out.insert("model".into(), serde_json::Value::Object(model));
     }
-    // Реле: появилось — ставим, провайдер сменился — убираем.
+    // A non-relay voice still needs the owner's auxiliary image relay.
     match new.get("relay") {
         Some(v) => {
             out.insert("relay".into(), v.clone());
         }
         None => {
-            out.remove("relay");
+            if let Some(relay) = image_relay {
+                out.insert("relay".into(), relay);
+            } else {
+                out.remove("relay");
+            }
         }
     }
     // Telegram: визард владеет только двумя полями и только когда их заполнили —
@@ -5590,6 +5608,26 @@ mod tests {
         let s = setup_for("api");
         let out = merge_config(Some(old), config_json(&s, None, RELAY_PORT), &s);
         assert!(out.get("relay").is_none());
+    }
+
+    #[test]
+    fn merge_keeps_image_relay_when_voice_is_glm() {
+        let s = setup_for("anthropic");
+        for (enabled, explicit_key) in [(false, true), (true, false)] {
+            let mut old = serde_json::json!({
+                "images": {"enabled": true, "quality": "high"},
+                "relay": {"enabled": enabled, "port": 5129, "instructions": "owner-choice"},
+                "model": {"framework": "openai", "key": "legacy-loop"},
+            });
+            if explicit_key { old["relay"]["key"] = "image-loop".into(); }
+            let out = merge_config(Some(old), config_json(&s, None, RELAY_PORT), &s);
+            assert_eq!(out["relay"]["enabled"], false);
+            assert_eq!(out["relay"]["port"], 5129);
+            assert_eq!(out["relay"]["instructions"], "owner-choice");
+            assert_eq!(out["relay"]["key"], if explicit_key { "image-loop" } else { "legacy-loop" });
+            assert_eq!(out["model"]["framework"], "anthropic");
+            assert_eq!(out["images"]["quality"], "high");
+        }
     }
 
     /// Адрес обновлений: без него окно отказывает всегда, а умолчания не было
