@@ -8,6 +8,12 @@
 // заперта, сход со ступени любой оградой тоже пишет false — иначе файл молча
 // держал права СИСТЕМЫ при выбранной «Песочнице» на экране (ревью 05.10).
 //
+// 06.10: запись карточки — не «чужой писатель». Успешная запись возвращает
+// свежий отпечаток файла, карточка отдаёт его рамке экрана (onConfigWrite),
+// и «Сохранить» после выбора ограды больше не падает в конфликт с самой
+// программой (живая жалоба владельца «кажется, кто-то переписал ваши
+// настройки»).
+//
 // Чистая часть испытывается на прямую (как keepBlock в config-blocks.test.mjs):
 // модуль без DOM, shell подставной, сети нет. Проводка карточки — якорями по
 // исходнику: уедет строка — стенд покраснеет, а не замолчит.
@@ -23,6 +29,8 @@ import { persistSession0 } from "../src/session0-persist.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(here, "..", "src", "modecard.ts"), "utf8");
+const frameSource = readFileSync(join(here, "..", "..", "ui-kit", "window", "views", "settings-frame.ts"), "utf8");
+const agentSource = readFileSync(join(here, "..", "src", "settings-agent.ts"), "utf8");
 
 /** Подставной мир: что лежит в файле, что сказала оболочка на запись. */
 function stand({ fileConfig, saveReply, saveThrows } = {}) {
@@ -44,17 +52,19 @@ function stand({ fileConfig, saveReply, saveThrows } = {}) {
 const FILE = { model: { key: "sk-живой" }, service: { firewall: true }, owner: { name: "Егор" } };
 
 // --------------------------------------------------------------------------
-// 1. Согласие: один ключ дописан, всё соседнее не тронуто.
+// 1. Согласие: один ключ дописан, всё соседнее не тронуто, отпечаток ПАРОЙ.
 // --------------------------------------------------------------------------
 {
   const s = stand({ fileConfig: FILE });
-  await persistSession0(s.shell, true);
+  const stamp = await persistSession0(s.shell, true);
   assert.deepEqual(s.calls, ["config_load", "config_save"], "ровно один заход на чтение и один на запись");
   const saved = JSON.parse(s.saves[0].config);
   assert.equal(saved.service.session0, true, "ключ верхней ступени записан");
   assert.equal(saved.service.firewall, true, "соседняя галочка службы не тронута");
   assert.equal(saved.model.key, "sk-живой", "чужие блоки конфига не тронуты");
   assert.equal(s.saves[0].mtimeNs, "111", "пишем по отпечатку, который только что прочитали");
+  assert.deepEqual(stamp, { base: "111", fresh: "222" },
+    "успешная запись вернула пару: по чему читали + что стало (ревью 06.10, P1)");
 }
 
 // --------------------------------------------------------------------------
@@ -62,9 +72,10 @@ const FILE = { model: { key: "sk-живой" }, service: { firewall: true }, own
 // --------------------------------------------------------------------------
 {
   const s = stand({ fileConfig: { model: { key: "k" } } });
-  await persistSession0(s.shell, false);
+  const stamp = await persistSession0(s.shell, false);
   const saved = JSON.parse(s.saves[0].config);
   assert.deepEqual(saved.service, { session0: false }, "блок service создан с одним ключом");
+  assert.equal(stamp.fresh, "222", "свежий отпечаток возвращён и при создании блока");
 }
 
 // --------------------------------------------------------------------------
@@ -82,15 +93,22 @@ const FILE = { model: { key: "sk-живой" }, service: { firewall: true }, own
 
 // --------------------------------------------------------------------------
 // 4. Пустого конфига нет — согласие не создаёт файл из одной галочки.
+//    Старая оболочка без отпечатка в ответе — рамке уходит null, та перечитает.
 // --------------------------------------------------------------------------
 {
   const s = stand({ fileConfig: {} });
   await assert.rejects(() => persistSession0(s.shell, true), /не прочитались/);
   assert.deepEqual(s.saves, [], "в пустой файл писать нечего — и не писали");
 }
+{
+  const s = stand({ fileConfig: FILE, saveReply: { ok: true } });
+  const stamp = await persistSession0(s.shell, true);
+  assert.deepEqual(stamp, { base: "111", fresh: null },
+    "оболочка без отпечатка в ответе — fresh пуст, base честный: рамке принимать нечего");
+}
 
 // --------------------------------------------------------------------------
-// 5. Проводка: согласие, сходы и очередь — якорями по карточке.
+// 5. Проводка: согласие, сходы, очередь и отпечаток рамке — якорями по коду.
 // --------------------------------------------------------------------------
 assert.ok(source.includes("putSession0(true);"),
   "кнопка согласия больше не пишет ключ немедленно — выбор снова слетит при перезапуске");
@@ -102,7 +120,22 @@ assert.ok(source.includes("session0Want !== session0InFile"),
   "защита от лишних записей пропала — карточка будет писать файл на каждый щелчок");
 assert.ok(source.includes("await persistSession0(shell, want);"),
   "записи ключа не выстроены в очередь — быстрые щелчки гонятся за одним файлом");
-assert.ok(!source.includes("settings-fresh-mtime"),
-  "отпечаток файла сообщается экрану — черновик легализует затирание чужих правок (ревью 05.10)");
+assert.ok(source.includes("onConfigWrite(stamp.base, stamp.fresh);"),
+  "свежий отпечаток своей записи не уходит рамке — «Сохранить» назовёт её чужой и покажет конфликт (06.10)");
 
-console.log("session0-persist: OK — согласие пишет ключ немедленно, ступень не заперта");
+// --------------------------------------------------------------------------
+// 6. Рамка принимает свою запись ТОЛЬКО по совпадению базы и не требует
+//    перезапуска из-за ничего.
+// --------------------------------------------------------------------------
+assert.ok(frameSource.includes("freshness.accept = (base, fresh) =>"),
+  "рамка не сверяет базу отпечатка — своя запись или легализует чужую правку, или врёт конфликтом");
+assert.ok(frameSource.includes("base === seenMtime") && frameSource.includes("seenMtime = fresh"),
+  "принятие fresh возможно мимо сверки с отпечатком открытия — легализация чужих правок (ревью 06.10, P1)");
+assert.ok(agentSource.includes("freshness.accept?.(base, fresh)"),
+  "издание не прокидывает пару отпечатков в карточку режима");
+assert.ok(!frameSource.includes("Перезаписано. Чтобы применить, перезапусти программу."),
+  "«Перезаписать своим» снова требует перезапуск всегда — даже без единого изменения (06.10)");
+assert.ok(frameSource.includes("const restartBlocks = blocksNeedingRestart(before, out);"),
+  "расписка перезаписи не смотрит на реальные изменения блоков");
+
+console.log("session0-persist: OK — согласие пишет ключ немедленно, отпечаток парой по базе, перезапуск по делу");

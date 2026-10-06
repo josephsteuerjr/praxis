@@ -187,6 +187,44 @@ def _hostname(raw: str) -> str:
     return raw.rsplit(":", 1)[0] if ":" in raw else raw
 
 
+# Хост из `phone.external` (внешний адрес канала, 06.10). Кэш по отпечатку
+# файла — ПАРЕ (mtime_ns, size), как у соседнего кэша устройств: на файловых
+# системах с грубым mtime (сетевые диски) одна только метка времени могла не
+# заметить подмену адреса. Host-гейт спрашивается на КАЖДОМ запросе, и читать
+# helene.json с диска ради него было бы лишним. Пусто — адреса нет.
+_EXTERNAL_HOST_CACHE: dict = {"stamp": None, "host": ""}
+
+
+def _phone_external_host() -> str:
+    cfg_path = readers.config_path()
+    if cfg_path is None:
+        return ""
+    try:
+        st = cfg_path.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return ""
+    if _EXTERNAL_HOST_CACHE["stamp"] == stamp:
+        return str(_EXTERNAL_HOST_CACHE["host"] or "")
+    raw = readers._load_json(cfg_path)
+    url = str(((raw.get("phone") or {}) if isinstance(raw, dict) else {}).get("external") or "").strip()
+    host = ""
+    if url:
+        # Схема — только http/https: фронт строит QR по тем же правилам, и
+        # ftp://host в гейте открыл бы имя, на котором QR-ссылка битая.
+        m = re.match(r"^https?://([^/:?#]+)", url, re.I)
+        candidate = (m.group(1) if m else ("" if "://" in url else url.split("/")[0])).split(":")[0]
+        candidate = _hostname(candidate).strip().lower()
+        # Внешний адрес — имя с точкой (FQDN). IP пускается гейтом и без этой
+        # ручки, однобуквенные огрызки схемы («http://» без хоста) и wildcard
+        # в разрешённые не тащим — только точное имя.
+        if candidate and "*" not in candidate and "." in candidate:
+            host = candidate
+    _EXTERNAL_HOST_CACHE["stamp"] = stamp
+    _EXTERNAL_HOST_CACHE["host"] = host
+    return host
+
+
 def _host_ok(request: web.Request) -> bool:
     raw = request.headers.get("Host") or ""
     if not raw:
@@ -195,6 +233,10 @@ def _host_ok(request: web.Request) -> bool:
     if name in ("localhost", "") or name in _ALLOWED_HOSTS:
         return True
     if name.endswith(_ALLOWED_HOST_SUFFIXES):
+        return True
+    # Внешний адрес канала (`phone.external`, 06.10): телефон приходит по нему
+    # через сервер с белым IP ровно за тем ключом, которого у него ещё нет.
+    if name and name == _phone_external_host():
         return True
     try:
         import ipaddress
@@ -242,13 +284,14 @@ def _cors(origin: str) -> dict:
 # ------------------------------------------------------------- телефон
 # Спаривание по QR: окно просит одноразовую пару (с петли), телефон открывает
 # ссылку /m/?pair=<токен> и меняет токен на свой ключ устройства. Токен живёт
-# десять минут и годится ДВАЖДЫ: на iPhone страница в Safari и установленное
-# на экран «Домой» приложение — разные хранилища, и второй обмен нужен ровно
-# для него. Ключи устройств лежат хэшами в memory/.state/devices.json.
+# десять минут и годится ТРИЖДЫ (06.10, слово владельца: двух не хватало,
+# когда телефон по умолчанию открывает Firefox — браузер и «Установить
+# приложение» успевают съесть оба захода ещё до значка на «Домой»). Ключи
+# устройств лежат хэшами в memory/.state/devices.json.
 
 _PAIRS: dict[str, dict] = {}
 _PAIR_TTL = 600
-_PAIR_USES = 2
+_PAIR_USES = 3
 
 
 def _devices_path() -> Path:
@@ -531,7 +574,8 @@ def _redeem(token: str, ua: str, addr: str) -> dict:
 
 
 async def api_pair_redeem(request):
-    """Телефон меняет токен на ключ устройства. Токен годится дважды (iPhone)."""
+    """Телефон меняет токен на ключ устройства. Токен годится трижды (iPhone
+    и браузер по умолчанию; 06.10 — слово владельца про Firefox)."""
     token = str(request.query.get("token") or "")
     peer = request.transport.get_extra_info("peername") if request.transport else None
     got = await asyncio.to_thread(

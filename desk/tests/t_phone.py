@@ -225,5 +225,89 @@ class AgentName(unittest.TestCase):
             readers.anatomy, readers.product_config = saved
 
 
+class ExternalHostAndPairUses(unittest.TestCase):
+    """Внешний адрес канала (`phone.external`, 06.10) и лимит пары.
+
+    Телефон приходит по внешнему имени через сервер с белым IP ровно за тем
+    ключом, которого у него ещё нет: Host-гейт обязан пускать РОВНО это имя
+    и ничего сверх него. Пара живёт три захода (слово владельца 06.10: с
+    Firefox по умолчанию двух не хватало — браузер и «Установить» съедали
+    оба ещё до значка на «Домой»).
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = Path(self.tmp.name) / "helene.json"
+        self.saved_config_path = readers.config_path
+        readers.config_path = lambda: self.cfg if self.cfg.is_file() else None
+        deskapp._EXTERNAL_HOST_CACHE["stamp"] = None
+        deskapp._EXTERNAL_HOST_CACHE["host"] = ""
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        readers.config_path = self.saved_config_path
+        deskapp._EXTERNAL_HOST_CACHE["stamp"] = None
+        deskapp._EXTERNAL_HOST_CACHE["host"] = ""
+        self.tmp.cleanup()
+
+    def _write_cfg(self, payload: dict) -> None:
+        self.cfg.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        # Кэш живёт по отпечатку файла: новое содержание обязано его сбить.
+        deskapp._EXTERNAL_HOST_CACHE["stamp"] = None
+
+    @staticmethod
+    def _request_with_host(name: str):
+        return type("R", (), {"headers": {"Host": name}})()
+
+    def test_external_host_from_url_and_bare(self):
+        self._write_cfg({"phone": {"external": "https://helene.209.222.251.74.nip.io"}})
+        self.assertEqual(deskapp._phone_external_host(), "helene.209.222.251.74.nip.io")
+        self._write_cfg({"phone": {"external": "helene.example.com"}})
+        self.assertEqual(deskapp._phone_external_host(), "helene.example.com")
+        self._write_cfg({"phone": {}})
+        self.assertEqual(deskapp._phone_external_host(), "")
+        self._write_cfg({})
+        self.assertEqual(deskapp._phone_external_host(), "")
+
+    def test_external_host_ignores_garbage(self):
+        for junk in ("*", "*.*", "  ", "://", "http://", "ftp://tunnel.example.com"):
+            self._write_cfg({"phone": {"external": junk}})
+            self.assertEqual(deskapp._phone_external_host(), "", repr(junk))
+
+    def test_external_host_rejects_foreign_schemes(self):
+        """Схема — только http/https: фронт строит QR по тем же правилам, и
+        ftp:// в гейте открыл бы имя, на котором ссылка битая (ревью 06.10)."""
+        self._write_cfg({"phone": {"external": "ftp://helene.example.com"}})
+        self.assertEqual(deskapp._phone_external_host(), "")
+        self.assertFalse(deskapp._host_ok(self._request_with_host("helene.example.com")))
+
+    def test_host_gate_admits_exactly_the_external_name(self):
+        self._write_cfg({"phone": {"external": "https://helene.example.com"}})
+        self.assertTrue(deskapp._host_ok(self._request_with_host("helene.example.com")))
+        self.assertTrue(deskapp._host_ok(self._request_with_host("helene.example.com:8094")))
+        # Чужие имена рядом с разрешённым — не пускаются: гейт не расширился.
+        self.assertFalse(deskapp._host_ok(self._request_with_host("evil.example.com")))
+        self.assertFalse(deskapp._host_ok(self._request_with_host("helene.example.com.evil.net")))
+        # А то, что пускалось и раньше, продолжает пускаться.
+        self.assertTrue(deskapp._host_ok(self._request_with_host("192.168.1.5:8094")))
+        self.assertTrue(deskapp._host_ok(self._request_with_host("localhost:8094")))
+
+    def test_pair_lives_three_redemptions(self):
+        saved_tree = readers.tree
+        readers.tree = lambda: Path(self.tmp.name) / "tree"
+        try:
+            pair = deskapp._new_pair()
+            self.assertEqual(pair["uses"], 3, "слово владельца 06.10: три захода")
+            keys = [deskapp._redeem(pair["token"], "Android Firefox", "10.0.0.7")
+                    for _ in range(3)]
+            self.assertTrue(all(g.get("key") for g in keys))
+            self.assertEqual(keys[0]["key"], keys[-1]["key"], "тот же токен — тот же ключ")
+            with self.assertRaises(Exception):
+                deskapp._redeem(pair["token"], "Android", "10.0.0.7")
+        finally:
+            readers.tree = saved_tree
+            deskapp._DEVICES_CACHE["stamp"] = None
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

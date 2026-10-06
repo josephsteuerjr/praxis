@@ -23,6 +23,11 @@ assert.equal(engineOperationObserved(stop, {...owner, stopped: true, runner_aliv
 assert.equal(engineOperationObserved({...op, action: "resume"}, {...owner, stopped: true}, true, true, 101), false);
 assert.equal(engineWords({...owner, stopped: true}, null), "Останавливается…");
 assert.equal(engineWords({...owner, stopped: true, runner_alive: false}, null), "Движок остановлен");
+// 06.10: restart не мгновенен — движок выходит на границу текущего хода, и
+// слово обязано это говорить, а не висеть молчаливым «Перезапускается…».
+assert.equal(engineWords(owner, {...op, action: "restart"}), "Перезапускается — ждёт границы текущего хода");
+assert.equal(engineWords(owner, {...op, action: "stop"}), "Останавливается…");
+assert.equal(engineWords(owner, {...op, action: "resume"}), "Запускается…");
 assert.equal(activityWords(null), "");
 assert.equal(activityWords({phase: "model"}), "Думает...");
 assert.equal(activityWords({phase: "tool"}), "Работает...");

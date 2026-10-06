@@ -60,7 +60,9 @@ export function blocksNeedingRestart(before: unknown, after: unknown): string[] 
 
 export interface Config {
   agent?: { name?: string };
-  phone?: { enabled?: boolean };
+  // `external` — внешний адрес канала (06.10): сервер с белым IP, под которым
+  // этот компьютер виден из любой сети. QR по нему работает и вне этой Wi-Fi.
+  phone?: { enabled?: boolean; external?: string };
   update?: { url?: string };
   // 1.2: копии памяти по расписанию (common/backup.rs): раз в `every_days` дней (0 —
   // выключено), хранить `keep` снимков, папка `dir` (пусто — backups рядом с программой).
@@ -131,6 +133,16 @@ export interface EditionContext {
   /** Система агента по контракту (`windows` | `macos` | `linux`); "" — неизвестно.
    *  По ней издание прячет карточки того, чего на системе нет. */
   platform: string;
+  /**
+   * Признать запись в helene.json, сделанную САМОЙ карточкой этого экрана
+   * (немедленная запись верхней ступени, 05.10): пара `base`/`fresh`, где
+   * base — отпечаток, по которому карточка читала файл. Рамка принимает
+   * fresh как свой только при совпадении base со своим отпечатком открытия —
+   * так своя запись не рождает ложный конфликт (06.10), а чужие правки файла
+   * по-прежнему легализовать нельзя. Заполняется рамкой ПОСЛЕ построения
+   * издания: до этого звонить некому.
+   */
+  freshness: { accept: ((base: string | null, fresh: string | null) => void) | null };
 }
 
 /**
@@ -271,7 +283,10 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // Издание приносит свои карточки и свою часть записи в конфиг. Всё, что
   // ему нужно спросить у трубы (режим, снимок устройства), оно спрашивает
   // само: каркасу это знать незачем, а изданию к серверу — и подавно.
-  const built = await edition({ draft, saved: c, loaded, host, platform });
+  // Свежесть — коробка на момент построения: рамка заполнит accept ниже,
+  // когда заведёт seenMtime (карточки зовут её позже, по факту своей записи).
+  const freshness: { accept: ((base: string | null, fresh: string | null) => void) | null } = { accept: null };
+  const built = await edition({ draft, saved: c, loaded, host, platform, freshness });
 
 
   // --- имена
@@ -287,7 +302,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
 
   for (const box of built.cards) center.append(box);
 
-  center.append(inGroup(phoneCard(draft, !!c.phone?.enabled, built.phoneBase, built.qrSvg, posix), GROUP.brain));
+  center.append(inGroup(phoneCard(draft, !!c.phone?.enabled, String(c.phone?.external || ""), built.phoneBase, built.qrSvg, posix), GROUP.brain));
 
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
   center.append(inGroup(transferCard(draft, posix), GROUP.app));
@@ -569,6 +584,18 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // расхождении оболочка отвечает `stale:<mtime>` (КОНТРАКТ-B→A §2). Старая
   // оболочка отпечатка не шлёт — тогда пишем как раньше.
   let seenMtime: string | undefined = loaded.mtime_ns != null ? String(loaded.mtime_ns) : undefined;
+  // Свои записи карточек (немедленная запись верхней ступени) — не чужие, но
+  // и не «подтверждение черновика»: fresh принимается ТОЛЬКО при совпадении
+  // base с отпечатком открытия (ревью 06.10, P1). Без сверки файл мог править
+  // Блокнот между открытием экрана и согласием — принятие свежего отпечатка
+  // молча легализовало бы затирание его правки ближайшим «Сохранить». base не
+  // совпал (чужая правка или «Сохранить» успело первым) — отпечаток НЕ
+  // трогаем: конфликт покажется честно, перечитывание тут было бы той же
+  // легализацией. Пустые base/fresh — старая оболочка без отпечатков: там
+  // stale-механизма нет вовсе, принимать нечего.
+  freshness.accept = (base, fresh) => {
+    if (base != null && fresh != null && base === seenMtime) seenMtime = fresh;
+  };
   class StaleConfig extends Error {}
   const writeConfig = async (out: Config, force = false): Promise<string> => {
     const revision = container.dataset.settingsRevision;
@@ -602,10 +629,57 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     button("Перезаписать своим", "quiet", async () => {
       conflictBox.hidden = true;
       try {
-        await writeConfig(JSON.parse(JSON.stringify(draft)), true);
+        // Что лежит в файле ПРЯМО СЕЙЧАС: перезапись затирает именно это, и
+        // предложение перезапуска обязано зависеть от разницы с черновиком.
+        // До 06.10 кнопка говорила «перезапусти программу» ВСЕГДА — даже
+        // когда владелец перезаписывал файл самим собой, не изменив ничего.
+        let before: unknown = c;
+        try {
+          const fresh = await shell<Loaded>("config_load");
+          if (fresh && typeof fresh === "object" && fresh.config && typeof fresh.config === "object") {
+            before = fresh.config;
+            if (fresh.mtime_ns != null) seenMtime = String(fresh.mtime_ns);
+          }
+        } catch {
+          // Не перечитался — причину скажет сама запись ниже; сравнивать
+          // остаётся с тем, что было на открытии экрана.
+        }
+        const out: Config = JSON.parse(JSON.stringify(draft));
+        // Тот же путь записи, что у «Сохранить»: отказ издания — словами и
+        // без записи файла, дальние ключи (mode/base/key) — по тем же правилам.
+        const refused = built.collect(out);
+        if (refused) {
+          saveOut.className = "receipt err";
+          saveOut.textContent = refused;
+          // Кнопка перезапуска от прошлой расписки не должна висеть рядом с
+          // отказом: файл не записан, перезапускать нечего (ревью 06.10).
+          restartBtn.hidden = true;
+          return;
+        }
+        out.phone = keepBlock(out.phone, { enabled: !!draft.phone?.enabled });
+        const remoteBase = String(draft.base || "").trim();
+        const remoteOn = draft.mode === "remote" && !!remoteBase;
+        out.mode = remoteOn ? "remote" : "local";
+        if (remoteBase) out.base = remoteBase;
+        else delete out.base;
+        const remoteKey = String(draft.key || "").trim();
+        if (remoteKey) out.key = remoteKey;
+        else delete out.key;
+        out.setup_complete = true;
+        const relayNote = await writeConfig(out, true);
         saveOut.className = "receipt ok";
-        saveOut.textContent = "Перезаписано. Чтобы применить, перезапусти программу.";
-        restartBtn.hidden = false;
+        const modeNote = built.note();
+        const restartBlocks = blocksNeedingRestart(before, out);
+        const restartNote = restartBlocks.length
+          ? ` ${restartBlocks.join(", ")} — применится перезапуском движка (кнопка ниже).`
+          : "";
+        saveOut.textContent =
+          "Перезаписано. Модель и ключ движок применит сам через несколько секунд, реле — сразу." +
+          (relayNote ? ` ${relayNote}.` : "") + restartNote + modeNote;
+        // Первый запуск — те же слова, что у «Сохранить»: кнопка ниже зовёт
+        // restart_self и поднимает агента впервые (симметрия, ревью 06.10).
+        if (cfg.needs_local_setup) saveOut.textContent = "Настройки перезаписаны. Перезапусти окно кнопкой ниже, чтобы впервые запустить агента.";
+        restartBtn.hidden = !(modeNote || restartNote || cfg.needs_local_setup);
       } catch (e) {
         saveOut.className = "receipt err";
         saveOut.textContent = humanError(e).text;
@@ -945,8 +1019,8 @@ function transferCard(draft: Config, posix = false): HTMLElement {
  * «только с этой машины (403)», а если бы и получила пару — свела бы QR на
  * локальный адрес, куда телефону идти незачем.
  */
-function phoneCard(draft: Config, savedEnabled: boolean, remoteBase: string,
-                   qrSvg: (text: string) => Promise<string>, posix = false): HTMLElement {
+function phoneCard(draft: Config, savedEnabled: boolean, savedExternal: string,
+                   remoteBase: string, qrSvg: (text: string) => Promise<string>, posix = false): HTMLElement {
   draft.phone = draft.phone || {};
   const remote = !!remoteBase;
   const phone = el("div");
@@ -954,6 +1028,34 @@ function phoneCard(draft: Config, savedEnabled: boolean, remoteBase: string,
     draft.phone!.enabled = v;
     syncPhone();
   });
+  // Внешний адрес (06.10, слово владельца «ремоут не в одной локальной сети»):
+  // сервер с белым IP, который приводит соединения к этому компьютеру
+  // (туннель + Caddy). По нему QR живёт в любой сети, и он не требует открывать
+  // канал соседям: туннель выходит из машины сам, а соединения приходят по нему.
+  // Ревью 06.10 (P1): и кнопка, и ссылка живут по СОХРАНЁННОМУ адресу — гейт
+  // канала читает helene.json с диска, и QR по несохранённому черновику вёл
+  // телефон в 403 «чужой адрес» на первом же запросе.
+  const externalField = field("Внешний адрес (сервер с белым IP)", String(draft.phone.external || ""), (v) => {
+    draft.phone!.external = v.trim();
+    syncPhone();
+  }, {
+    mono: true,
+    placeholder: "https://helene.209.222.251.74.nip.io",
+    hint: "Адрес, под которым этот компьютер виден из любой сети: например, туннель с твоего сервера через Caddy. QR по нему работает и вне этой Wi-Fi, перезапуск не нужен. Пусто — телефон ходит только по этой сети.",
+  });
+  // Нормализация одна на кнопку и QR: http(s) — как есть, без схемы — https
+  // (внешний вход через белый IP — это всегда он), прочие схемы (ftp://…) —
+  // мимо: канал такой гейт не открывает, и ссылка была бы битой.
+  const normalizeExternal = (raw: string): string => {
+    const v = String(raw || "").trim();
+    if (!v || (v.includes("://") && !/^https?:\/\//i.test(v))) return "";
+    const withScheme = /^https?:\/\//i.test(v) ? v : "https://" + v.replace(/^\/+/, "");
+    return withScheme.replace(/\/+$/, "");
+  };
+  // Телефон в этой сети: LAN/Tailscale-адреса и правило брандмауэра честны
+  // только когда тумблер включён И сохранён — иначе канал слушает петлю, и QR
+  // вёл бы на адрес, где никто не отвечает (ревью 06.10).
+  const lanOn = () => !!draft.phone?.enabled && savedEnabled;
   // Честно про шифрование: соединение идёт открытым текстом по http://, и в
   // общей Wi-Fi (кафе, отель, коворкинг) ключ устройства и вся переписка с
   // агентом видны соседям. Прежняя подсказка обещала «доступ только по ключу»
@@ -1002,26 +1104,40 @@ function phoneCard(draft: Config, savedEnabled: boolean, remoteBase: string,
           <div class="qr-text"><p><b>Телефон пойдёт на сервер.</b></p>
             <p class="mono qr-url">${esc(link)}</p></div></div>` +
           `<div class="qr-text">
-            <p>Открой камеру телефона и наведи на код. Ссылка живёт десять минут и годится дважды.</p>
-            <p><b>iPhone:</b> страница откроется в Safari; нажми «Поделиться» → «На экран „Домой“». Второе открытие из значка допишет ключ, поэтому код и двухразовый.</p>
+            <p>Открой камеру телефона и наведи на код. Ссылка живёт десять минут и годится трижды.</p>
+            <p><b>iPhone:</b> страница откроется в Safari; нажми «Поделиться» → «На экран „Домой“». Второе открытие из значка допишет ключ, поэтому код и трёхразовый.</p>
           </div>`;
         void drawDevices();
         return;
       }
       const port = new URL(cfg.base || "http://127.0.0.1:8094").port || "8094";
+      // Внешний адрес — первый блок QR: телефон берёт его в любой сети.
+      // Берём СОХРАНЁННЫЙ адрес: гейт канала пускает Host по helene.json
+      // на диске, и черновик здесь обещал бы то, чего канал ещё не умеет.
+      const external = normalizeExternal(savedExternal);
       // Оба адреса, а не выбор за владельца: Tailscale мог быть запущен для
       // других дел, а телефон в тайлнет не добавлен — тогда QR со 100.x.y.z
       // ведёт туда, куда телефон не дойдёт, и локальный адрес не предлагался
-      // никогда.
+      // никогда. Только когда канал правда слушает сеть (тумблер включён и
+      // сохранён): иначе это красивые QR на адрес, где никто не отвечает.
       const addrs: Array<{ host: string; note: string }> = [];
-      if (inTauri) {
+      if (inTauri && lanOn()) {
         const ts = await shell<string | null>("tailscale_ip").catch(() => null);
         const lan = await shell<string | null>("lan_ip").catch(() => null);
         if (lan) addrs.push({ host: lan + ":" + port, note: "В этой Wi-Fi: телефон должен быть в той же сети." });
         if (ts) addrs.push({ host: ts + ":" + port, note: "Через Tailscale: телефон с Tailscale в том же аккаунте достучится из любой сети." });
       }
-      if (!addrs.length) addrs.push({ host: location.host, note: "" });
+      if (!addrs.length && !external) addrs.push({ host: location.host, note: "" });
       const blocks: string[] = [];
+      if (external) {
+        const link = external + pair.path;
+        // Белый фон модулей задан явно: карточка .qr и так белая, но так код
+        // остаётся читаемым камерой, даже если карточку когда-нибудь затемнят.
+        const svg = await qrSvg(link);
+        blocks.push(`<div class="qr-pair"><div class="qr">${svg}</div>
+          <div class="qr-text"><p><b>Из любой сети.</b> Через сервер с белым адресом.</p>
+            <p class="mono qr-url">${esc(link)}</p></div></div>`);
+      }
       for (const a of addrs) {
         const link = "http://" + a.host + pair.path;
         // Белый фон модулей задан явно: карточка .qr и так белая, но так код
@@ -1034,12 +1150,13 @@ function phoneCard(draft: Config, savedEnabled: boolean, remoteBase: string,
       qrOut.hidden = false;
       qrOut.innerHTML = blocks.join("") +
         `<div class="qr-text">
-          <p>Открой камеру телефона и наведи на код. Ссылка живёт десять минут и годится дважды.</p>
-          <p><b>iPhone:</b> страница откроется в Safari; нажми «Поделиться» → «На экран „Домой“». Второе открытие из значка допишет ключ, поэтому код и двухразовый.</p>
+          <p>Открой камеру телефона и наведи на код. Ссылка живёт десять минут и годится трижды.</p>
+          <p><b>iPhone:</b> страница откроется в Safari; нажми «Поделиться» → «На экран „Домой“». Второе открытие из значка допишет ключ, поэтому код и трёхразовый.</p>
         </div>`;
-      // Правило брандмауэра — Windows: на macOS входящие на порт пользователя
-      // и так открыты, правила нет, и QR работает без него.
-      if (inTauri && !posix) {
+      // Правило брандмауэра — только для LAN-пути: внешний идёт туннелем с
+      // самой машины, и правила для него не нужно (а UAC-вопрос на порт,
+      // который не слушается, — это вопрос ни о чём).
+      if (inTauri && !posix && lanOn()) {
         const fw = await shell<string>("firewall_allow", { port: Number(port) }).catch((e) => humanError(e).text);
         toast(fw);
       }
@@ -1050,8 +1167,10 @@ function phoneCard(draft: Config, savedEnabled: boolean, remoteBase: string,
     }
   });
   // Кнопка не смотрела ни на тумблер, ни на то, был ли перезапуск: труба всё
-  // ещё слушала 127.0.0.1, владелец получал красивый QR на адрес, где никто не
-  // отвечает, а телефон обвинял в этом Wi-Fi.
+  // ещё слушала 127.0.0.1, владелец получал красивый QR на адрес, где никто
+  // не отвечает, а телефон обвинял в этом Wi-Fi. Внешний адрес — исключение:
+  // туннель выходит из машины сам, и соседям сеть не открывается; но и он
+  // считается по СОХРАНЁННОМУ значению — гейт канала читает файл.
   const syncPhone = () => {
     if (remote) {
       // Сервер уже слушает сеть — иначе это окно к нему не ходило бы.
@@ -1060,18 +1179,25 @@ function phoneCard(draft: Config, savedEnabled: boolean, remoteBase: string,
       return;
     }
     const on = !!draft.phone?.enabled;
-    qrBtn.disabled = !on || !savedEnabled;
+    const externalSaved = !!normalizeExternal(savedExternal);
+    const draftExternal = String(draft.phone?.external || "").trim();
+    const unsaved = !!draftExternal && draftExternal !== savedExternal.trim();
+    qrBtn.disabled = externalSaved ? false : (!on || !savedEnabled);
     qrWhy.className = "receipt";
-    qrWhy.textContent = !on
-      ? "Включи тумблер, сохрани и перезапусти — тогда канал начнёт слушать сеть."
-      : !savedEnabled
-        ? "Сохрани и перезапусти программу: пока канал слушает только эту машину, и QR вёл бы туда, где никто не отвечает."
-        : "";
+    qrWhy.textContent = unsaved
+      ? "Адрес ещё не сохранён — нажми «Сохранить», и QR пойдёт по нему."
+      : externalSaved
+        ? ""
+        : !on
+          ? "Включи тумблер, сохрани и перезапусти — тогда канал начнёт слушать сеть."
+          : !savedEnabled
+            ? "Сохрани и перезапусти программу: пока канал слушает только эту машину, и QR вёл бы туда, где никто не отвечает."
+            : "";
   };
   qrRow.append(qrBtn, qrWhy);
   syncPhone();
   if (remote) phone.append(phoneHint, qrRow, qrOut, devicesBox);
-  else phone.append(phoneToggle, phoneHint, qrRow, qrOut, devicesBox);
+  else phone.append(phoneToggle, phoneHint, externalField, qrRow, qrOut, devicesBox);
   void drawDevices();
   return card("Телефон", phone);
 

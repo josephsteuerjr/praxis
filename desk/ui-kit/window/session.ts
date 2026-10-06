@@ -30,8 +30,12 @@ export function engineOperationObserved(op: EngineOperation, owner: OwnerState |
 }
 
 export function engineWords(owner: OwnerState | null, op: EngineOperation | null): string {
+  // Restart — не мгновенное действие: движок принимает просьбу и выходит на
+  // границе ТЕКУЩЕГО хода (06.10, живая жалоба владельца «харнесс не
+  // торопится»). Молчаливое «Перезапускается…» в это время неотличимо от
+  // зависания — говорим прямо, чего ждём.
   if (op) return op.action === "stop" ? "Останавливается…"
-    : op.action === "resume" ? "Запускается…" : "Перезапускается…";
+    : op.action === "resume" ? "Запускается…" : "Перезапускается — ждёт границы текущего хода";
   if (owner?.stopped) return owner.runner_alive === false ? "Движок остановлен"
     : owner.runner_alive === true ? "Останавливается…" : "Остановка включена";
   return "";

@@ -106,10 +106,14 @@ assert.equal((chrome.match(/shell\("restart_self"\)/g) || []).length, 1, "пер
 assert.match(chrome, /if \(cfg\.needs_local_setup\) \{\s*await shell\("restart_self"\)[\s\S]*?return;\s*\}\s*await controlEngine\("restart"\)/, "обычный перезапуск должен идти через надзор движка");
 
 // Каркас настроек: система идёт изданию, автозапуск без слова «Windows», брандмауэр и служба за затвором.
-assert.match(frame, /edition\(\{ draft, saved: c, loaded, host, platform \}\)/, "каркас не отдаёт изданию систему хоста");
+// 06.10: рядом с системой изданию уходит и коробка свежести (своя запись верхней
+// ступени), — якорь ждёт её ровно на этом месте.
+assert.match(frame, /edition\(\{ draft, saved: c, loaded, host, platform, freshness \}\)/, "каркас не отдаёт изданию систему хоста");
 assert.match(frame, /const posix = mac \|\| linux;/, "Linux должен использовать системные подписи и POSIX пути");
 assert.match(frame, /posix \? "Запускать при входе в систему" : "Запускать при входе в Windows"/, "подпись автозапуска на POSIX говорит про Windows");
-assert.match(frame, /if \(inTauri && !posix\) \{[\s\S]{0,80}"firewall_allow"/, "правило Windows просится на macOS/Linux");
+// 06.10: правило — только для LAN-пути (тумблер включён и сохранён): внешний
+// адрес идёт туннелем с самой машины, и UAC-вопрос ему не нужен.
+assert.match(frame, /if \(inTauri && !posix && lanOn\(\)\) \{[\s\S]{0,240}"firewall_allow"/, "правило Windows просится на macOS/Linux");
 assert.ok(
   !/if \(!mac\) \{[\s\S]{0,120}"service_state"/.test(frame),
   "расписка «Сохранено» снова не спрашивает службу на macOS — а она там есть",
@@ -137,7 +141,9 @@ assert.ok(computerTs.includes("«Запись экрана и системног
 assert.match(computerTs, /\["accessibility", "accessibility", "Универсальный доступ"\]/, "строки про «Универсальный доступ» нет");
 assert.match(computerTs, /tccBox\.hidden = !tcc \|\| typeof tcc !== "object"/, "строки про разрешения рисуются без слова тела (по догадке)");
 assert.ok(!/helene-body\.exe и helene-bridge\.exe рядом/.test(computerTs), "имена тела в карточке снова захардкожены с .exe");
-assert.match(agent, /\}, mac \|\| platform === "linux", platform === "linux"\);\s*cards\.push\(inGroup\(mode\.el/, "карточке режима не передают систему хоста");
+// 06.10: седьмым аргументом карточке уходит приёмник свежести своей записи
+// (пара base/fresh) — якорь ждёт его ровно здесь, за затвором платформы.
+assert.match(agent, /\}, mac \|\| platform === "linux", platform === "linux", \(base, fresh\) => freshness\.accept\?\.\(base, fresh\)\);\s*cards\.push\(inGroup\(mode\.el/, "карточке режима не передают систему хоста");
 // Секция службы рисуется на обеих системах; на Mac у неё свои слова, и
 // галочек там нет — их список приходит от харнесса (`service.toggles` пуст).
 assert.ok(!/if \(!posix\) box\.append\(svcBox\)/.test(modecard), "секция службы снова спрятана на macOS — а служба там есть");

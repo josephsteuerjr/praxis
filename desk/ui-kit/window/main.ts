@@ -183,8 +183,10 @@ export function start(opts: WindowOptions): void {
     } else if (engineOperation && op?.accepted && Date.now() - op.started > 60_000) {
       unconfirmedOperation = op;
       engineOperation = null;
+      // Слово обязано объяснить, ЧТО именно тянется (06.10): движок выходит на
+      // границе хода, и «ещё не подтверждён» без причины читался как зависание.
       engineFailure = op.action === "stop" ? "Остановка ещё не подтверждена" : op.action === "resume"
-        ? "Запуск ещё не подтверждён" : "Перезапуск ещё не подтверждён";
+        ? "Запуск ещё не подтверждён" : "Перезапуск ждёт: движение ещё не вышло на границу хода";
       toast(engineFailure);
     }
     paintEngineControls();
