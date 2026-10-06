@@ -2370,7 +2370,24 @@ def _handle_note(path: Path, message: str, processed: Path) -> None:
         _mark_done(processed, path.name, "empty")
         return
     if message.strip() == "/resume":
-        owner_stop.resume()
+        # ⚠ 1.4.0: живой семенной стоп — RuntimeError, и прежде он ронял ГЛАВНЫЙ
+        # цикл движка: записка /resume в окно стопа убивала агента целиком.
+        # Теперь владелец получает записку-ошибку (как снять — словами в ней),
+        # движок живёт, а записка помечается разобранной: повторная доставка
+        # говорила бы одно и то же три раза, а потом врала бы «не дошла».
+        try:
+            owner_stop.resume()
+        except RuntimeError as exc:
+            log.error("записка /resume не прошла: %s", exc)
+            try:
+                _room(STREAM).deliver(
+                    f"⚠ /resume не прошёл: {exc}. Семенной стоп снимает только владелец "
+                    f"нативной командой Resume — передай ему это, записка здесь бессильна.",
+                    system=True)
+            except Exception:
+                log.exception("записка-ошибка о непринятом /resume не легла в окно")
+            _mark_done(processed, path.name, "resume refused: seed stop wants native Resume")
+            return
         _mark_done(processed, path.name, "autonomy resumed explicitly")
         return
     target = _inbox_target(path.stem)
@@ -2622,7 +2639,19 @@ def main() -> None:
         # а selfgit и _git_state ниже зовут голое `git`.
         git_from = boot.arm_git()
         log.info("git: %s", git_from or "не найден — снимков правок не будет")
-        boot.ensure_layout(tree, cfg)
+        # 1.4.0: сид души — `soul-seed.md` рядом с конфигом (кладёт agents.create;
+        # файл НЕ удаляем — это запись о рождении). BOM-толерантно, как конфиг:
+        # файл мог пройти через руки владельца.
+        seed_path = config_path.with_name(agents.SEED_NAME)
+        soul_seed: str | None = None
+        try:
+            if seed_path.is_file():
+                soul_seed = boot.read_config_text(seed_path)
+        except (OSError, ValueError) as exc:
+            log.warning("сид души не читается (%s): родится каноническая конституция — %s",
+                        seed_path, exc)
+            soul_seed = None
+        boot.ensure_layout(tree, cfg, soul_seed=soul_seed)
     except boot.LayoutError as exc:
         log.error("папка данных не готова: %s", exc)
         raise SystemExit(3)

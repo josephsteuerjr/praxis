@@ -608,7 +608,7 @@ def seed_git(tree: Path, cfg: dict) -> bool:
     return True
 
 
-def ensure_layout(tree: Path, cfg: dict | None = None) -> None:
+def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None = None) -> None:
     """Составляющие кадра — каждая в своей папке (слово владельца 30.08).
 
     Создаём только то, чего дерево само не заводит по дороге: дом конституции,
@@ -618,7 +618,10 @@ def ensure_layout(tree: Path, cfg: dict | None = None) -> None:
 
     Конституция и весь комплект пишутся ТОЛЬКО если их ещё нет: принятый при
     установке текст и всё, что владелец или сам агент правил после, здесь не
-    трогаются.
+    трогаются. `soul_seed` (1.4.0) — текст рождения из `agents/<id>/soul-seed.md`,
+    который раннер читает рядом с конфигом: он ложится вместо канона ТОЖЕ только
+    при отсутствии души; живая душа сильнее сида. Подстановка имён — та же,
+    `{{agent}}`/`{{owner}}`, и только они: сид — текст, а не макрос.
 
     ⚠ Неписуемая папка (диск только для чтения, чужие права, антивирус) роняла
     руннер здесь голым PermissionError — оболочка видела «упал» и перезапускала
@@ -633,8 +636,13 @@ def ensure_layout(tree: Path, cfg: dict | None = None) -> None:
             raise LayoutError(f"не создаётся папка {tree / rel}: {exc}") from exc
     soul = tree / "soul" / "SOUL.md"
     if not soul.exists():
+        text = soul_text(cfg)
+        if soul_seed and soul_seed.strip():
+            # Сид рождения сильнее канона — но слабее живой души: файл существует,
+            # значит слово о себе уже сказано, и мы его не переписываем.
+            text = _names(soul_seed, cfg)
         try:
-            soul.write_text(soul_text(cfg), encoding="utf-8", newline="\n")
+            soul.write_text(text, encoding="utf-8", newline="\n")
         except OSError as exc:
             raise LayoutError(f"не пишется конституция {soul}: {exc}") from exc
     planted = _seed_kit(tree, cfg)

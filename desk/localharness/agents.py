@@ -31,6 +31,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import time
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,6 +42,7 @@ from pathlib import Path
 # рантайме нельзя: в поставке `ui-kit/` нет, там живёт только `app/`.
 ROSTER_DIR = "agents"               # как в ui-kit/contract.json (tests/t_contract.py)
 BASE_ID = "main"                    # id корневого агента — там же
+SEED_NAME = "soul-seed.md"          # сид души: рядом с конфигом, до первого старта
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 DESK_PORT = 8094                    # порт канала по умолчанию — там же
 BODY_PORT = 9480                    # порт моста тела — там же
@@ -241,13 +244,129 @@ _NOT_INHERITED = {
 }
 
 
-def create(base_dir: Path, name: str, *, brain_from_base: bool = True) -> Agent:
+def _write_config(config: Path, cfg: dict) -> None:
+    """Конфиг агента на диск — атомарно (временный файл + replace), UTF-8/LF."""
+    text = json.dumps(cfg, ensure_ascii=False, indent=2) + "\n"
+    tmp = config.with_name(f".tmp-{config.name}")
+    tmp.write_text(text, encoding="utf-8", newline="\n")
+    os.replace(tmp, config)
+
+
+def _soul_seed_text(base_dir: Path, soul: dict | None, donor_id: str | None) -> str | None:
+    """Текст сида души по параметрам create(). None — каноническая конституция.
+
+    Сид — отдельный файл `soul-seed.md` РЯДОМ с конфигом, не ключ в нём: конфиг
+    пишут машина и визард, а душу выбирает владелец, и смешивать их хранение —
+    значит подарить визарду случай затереть чужое решение. Файл читает раннер
+    до `ensure_layout` и НЕ удаляет: это запись о рождении.
+
+    `inherit` с непустым `text` — это `text` (контракт UI-волны B1: текст всегда
+    в поле text, донора Rust резолвит сам и зовёт CLI с --soul-from).
+    """
+    if not isinstance(soul, dict) or not soul:
+        return None
+    kind = str(soul.get("kind") or "").strip().lower()
+    text = soul.get("text")
+    if kind == "inherit" and isinstance(text, str) and text.strip():
+        kind = "text"
+    if kind == "canonical":
+        return None
+    if kind == "text":
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("soul.kind=text требует непустой soul.text — пустой текст "
+                             "души не заводится")
+        return text
+    if kind == "inherit":
+        donor = find(base_dir, donor_id or BASE_ID)
+        if donor is None:
+            raise ValueError(f"агент-донор не найден: {donor_id or BASE_ID} — унаследовать "
+                             "душу не у кого")
+        src = donor.tree / "soul" / "SOUL.md"
+        try:
+            got = src.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ValueError(f"у донора {donor.id} ещё нет души ({src}) — его дом не "
+                             f"создан; запусти донора хоть раз или выбери text") from exc
+        if not got.strip():
+            raise ValueError(f"донор {donor.id}: душа пуста ({src}) — наследовать нечего")
+        return got
+    raise ValueError(f"soul.kind должен быть canonical | inherit | text, а не {kind!r}")
+
+
+def set_enabled(base_dir: Path, agent_id: str, enabled: bool) -> Agent:
+    """Погасить/поднять ОДНОГО агента — флаг `enabled` в его конфиге, атомарно.
+
+    До 1.4.0 флаг был (его читает `raisable`), но менять его было нечем: кнопки
+    окна гасили всю установку разом. -> обновлённый агент.
+    """
+    base_dir = Path(base_dir)
+    got = find(base_dir, agent_id)
+    if got is None:
+        raise ValueError(f"агент не найден: {(agent_id or '').strip() or '?'}")
+    if got.base:
+        raise ValueError("корневой агент — это сама установка: флаг enabled у него "
+                         "не гасится, погасить установку может только владелец")
+    cfg = read_config(got.config)
+    cfg["enabled"] = bool(enabled)
+    _write_config(got.config, cfg)
+    fresh = find(base_dir, got.id)
+    assert fresh is not None               # только что переписали — не найтись не может
+    return fresh
+
+
+def remove_agent(base_dir: Path, agent_id: str, attic: Path | None = None) -> Path:
+    """Убрать агента: папку `agents/<id>` ЦЕЛИКОМ — в чердак. -> куда легла.
+
+    Не стирается, а переносится (слово владельца 06.10: «возможность полностью
+    удалить папку агента» — с сохранением нажитого): конфиг, сид души и дом с
+    памятью уезжают в `<чердак>/<id>-<UTC-штамп>/`; повторное удаление того же
+    id даёт новую папку — ничего не затирается. Отказ: корневой агент (он и есть
+    установка), отсутствующий id, недоступный чердак — тогда агент остаётся на
+    месте, а не исчезает молча.
+    """
+    base_dir = Path(base_dir)
+    wanted = (agent_id or "").strip().lower()
+    if not wanted:
+        raise ValueError("не назван агент: пустой id")
+    if wanted == BASE_ID:
+        raise ValueError("корневой агент — это сама установка; удалить его нельзя")
+    if not ID_PATTERN.match(wanted):
+        raise ValueError(f"имя агента не по правилу: {wanted!r}")
+    dir_ = base_dir / ROSTER_DIR / wanted
+    if not dir_.is_dir():
+        raise ValueError(f"агента нет: папки {dir_} не существует")
+    attic = Path(attic) if attic else base_dir.parent / "_state" / "attic"
+    try:
+        attic.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(f"чердак недоступен ({attic}): {exc} — агент не тронут") from exc
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    dest = attic / f"{wanted}-{stamp}"
+    n = 1
+    while dest.exists():
+        dest = attic / f"{wanted}-{stamp}-{n}"
+        n += 1
+    try:
+        shutil.move(str(dir_), str(dest))
+    except OSError as exc:
+        raise RuntimeError(f"перенос в чердак не удался ({dir_} → {dest}): {exc} — "
+                           f"агент остался на месте") from exc
+    return dest
+
+
+def create(base_dir: Path, name: str, *, brain_from_base: bool = True,
+           soul: dict | None = None, donor_id: str | None = None) -> Agent:
     """Завести нового агента: папка, конфиг, свободный порт. Ничего не поднимает.
 
     Дом (`data/`) не создаём и не засеваем: это делает раннер при первом старте
     (`boot.ensure_layout`), и второй реализации того же засева здесь не будет.
+    `soul` — {kind: canonical|inherit|text, text?}: каким текстом родится душа
+    (см. `_soul_seed_text`); сид ложится файлом `soul-seed.md` рядом с конфигом,
+    конфиг души не знает. Проверка сида — ДО любых записей: отказ не оставляет
+    половину агента.
     """
     base_dir = Path(base_dir)
+    seed_text = _soul_seed_text(base_dir, soul, donor_id)
     others = roster(base_dir)
     agent_id = slug(name, {a.id for a in others} | {BASE_ID})
     dir_ = base_dir / ROSTER_DIR / agent_id
@@ -283,8 +402,10 @@ def create(base_dir: Path, name: str, *, brain_from_base: bool = True) -> Agent:
     # Своего реле второй агент не поднимает: подписка одна, порт один, и
     # поднятое дважды реле дерётся за него само с собой.
     cfg["relay"] = {"enabled": False}
-    text = json.dumps(cfg, ensure_ascii=False, indent=2) + "\n"
-    (dir_ / CONFIG_NAME).write_text(text, encoding="utf-8", newline="\n")
+    _write_config(dir_ / CONFIG_NAME, cfg)
+    if seed_text is not None:
+        # Запись о рождении: раннер прочтёт её до ensure_layout и НЕ удалит.
+        (dir_ / SEED_NAME).write_text(seed_text, encoding="utf-8", newline="\n")
     got = find(base_dir, agent_id)
     assert got is not None                # только что записали — не найтись не может
     return got

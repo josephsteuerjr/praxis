@@ -970,7 +970,42 @@ class Updater:
             try:
                 self.shared.write(*CTL, protocol.UPDATE_RECEIPT, self.receipt())
             except OSError as exc:
+                # ⚠ 1.4.0: расписка — то, по чему окно и агент судят «идёт обновление».
+                # Прежде провал писался в журнал и МОЛЧА: у окна оставалась СТАРАЯ
+                # расписка о живом обновлении. Теперь — попытка №2: та же расписка
+                # файлом `.failed-<UTC>` рядом (в папке исполнителя), чтобы следующий
+                # save(), которому повезёт, доложил нормальную, а человек мог найти
+                # след. Полный диск не должен прятать идущее обновление.
                 log(f"расписка в дерево агента не записалась: {exc}")
+                self._save_receipt_failed(exc)
+
+    def _save_receipt_failed(self, exc: Exception) -> None:
+        """Расписка, не лёгшая в дерево агента, — второй попыткой рядом, потом дома.
+
+        Провал мог быть привязан к ИМЕНИ (подменённый путь), а не к диску — поэтому
+        первая попытка пишет ту же расписку свежим именем
+        `update-plan.receipt.failed-<UTC>.json` в ту же папку дерева. Не вышло и
+        там (диск, права) — копия ложится в дом исполнителя (`.updater/`), чтобы
+        человек мог найти след. Полный провал — только журнал: молчать нельзя,
+        ронять себя — тоже.
+        """
+        row = {"at_utc": utc(self.clock()), "error": f"{type(exc).__name__}: {exc}"[:300],
+               "receipt": self.receipt()}
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(self.clock()))
+        near = f"{Path(protocol.UPDATE_RECEIPT).stem}.failed-{stamp}.json"
+        try:
+            self.shared.write(*CTL, near, row)
+            log(f"расписка положена резервным файлом рядом: {near}")
+            return
+        except OSError:
+            pass
+        try:
+            self.home.mkdir(parents=True, exist_ok=True)
+            (self.home / f"receipt.failed-{stamp}.json").write_text(
+                json.dumps(row, ensure_ascii=False, indent=1), encoding="utf-8")
+            log("расписка не в дереве — резервная копия легла в папку исполнителя")
+        except OSError as inner:
+            log(f"и резервная запись провалившейся расписки не легла: {inner}")
 
     def receipt(self) -> dict:
         """Что видят окно и агент. Внутренние пути отката — только в моей папке."""
