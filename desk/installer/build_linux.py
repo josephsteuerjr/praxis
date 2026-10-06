@@ -726,6 +726,7 @@ def arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-fronts", action="store_true",
                         help="не собирать фронты (они уже собраны) — отладка")
     parser.add_argument("--skip-tests", action="store_true")
+    parser.add_argument("--skip-smokes", action="store_true", help="не исполнять импортный смоук рантайма")
     parser.add_argument("--allow-partial", action="store_true")
     return parser
 
@@ -808,8 +809,8 @@ def main() -> None:
     else:
         print("runtime:")
         stage_runtime(out, cache)
-    freeze = bm.smoke_runtime(out)
-    print(f"  импорты живы, пакетов: {len(freeze.splitlines())}")
+    freeze = bd.runtime_inventory(out) if args.skip_smokes else bm.smoke_runtime(out)
+    print(f"  состав пакетов: {len(freeze.splitlines())}; смоук: {'пропущен по запросу' if args.skip_smokes else 'пройден'}")
 
     print("desk:")
     pkg = deskpkg.build(out / "app", deskpkg.LINUX, allow_partial=args.allow_partial, log=print)
@@ -853,6 +854,7 @@ def main() -> None:
         "product": PRODUCT, "platform": PLATFORM, "arch": ARCH, "version": version,
         "built_utc": _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "complete": not partial, "partial_reason": partial,
+        "validation": {"runtime_smoke": "skipped_by_request" if args.skip_smokes else "passed"},
         "git": {"desk": desk_head, "desk_dirty": desk_dirty,
                 "tree": staged_tree.get("tree_head", ""), "tree_dirty": staged_tree.get("tree_dirty", False),
                 "dirty": desk_dirty or bool(staged_tree.get("tree_dirty"))},

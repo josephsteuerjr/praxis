@@ -373,7 +373,7 @@ def relay_child(base: Path, cfg: dict, tree: Path, env: dict) -> "Child | None":
     архив переноса привозил `data/relay/local_auth` и `model.base_url` на
     петлю, а поднимать реле на той стороне было нечем.
     """
-    if not _relay_block(cfg).get("enabled"):
+    if not (_relay_block(cfg).get("enabled") or (cfg.get("images") or {}).get("enabled") is True):
         if looks_like_local_relay(cfg):
             print("[serverboot] ⚠ мозг агента смотрит в локальное реле, но relay.enabled "
                   "не стоит — реле не поднимаю, и модель отвечать не будет", flush=True)
@@ -401,7 +401,7 @@ def relay_child(base: Path, cfg: dict, tree: Path, env: dict) -> "Child | None":
     # ставит оболочка (shell/src/main.rs::spawn_relay).
     instructions = str(_relay_block(cfg).get("instructions") or "").strip() or "minimal"
     relay_env["RELAY_INSTRUCTIONS"] = instructions
-    key = str((cfg.get("model") or {}).get("key") or "").strip()
+    key = str(_relay_block(cfg).get("key") or ((cfg.get("model") or {}).get("key") if _relay_block(cfg).get("enabled") else "") or "").strip()
     if key:
         # Ключ мозга = ключ петли: реле требует его Bearer-ом на /chat/completions.
         relay_env["RELAY_API_KEY"] = key

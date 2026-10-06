@@ -47,6 +47,8 @@
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[path = "../../common/relay_policy.rs"]
+mod relay_policy;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -682,22 +684,13 @@ fn load_plan(config_path: &Path) -> Result<Plan, String> {
         config: config_path.to_path_buf(),
         tree,
         port: cfg.get("port").and_then(|v| v.as_u64()).unwrap_or(8094) as u16,
-        relay_enabled: cfg
-            .get("relay")
-            .and_then(|r| r.get("enabled"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
+        relay_enabled: relay_policy::needed(&cfg),
         relay_port: cfg
             .get("relay")
             .and_then(|r| r.get("port"))
             .and_then(|v| v.as_u64())
             .unwrap_or(RELAY_PORT as u64) as u16,
-        relay_key: cfg
-            .get("model")
-            .and_then(|m| m.get("key"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
+        relay_key: relay_policy::key(&cfg).to_string(),
         relay_instructions: cfg
             .get("relay")
             .and_then(|r| r.get("instructions"))

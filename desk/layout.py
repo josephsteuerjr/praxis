@@ -65,5 +65,5 @@ def body_target() -> Path:
 
 
 def relay_mirror() -> Path:
-    """Зеркало живого исходника реле (копия `/opt/relay/Code`)."""
+    """Зеркало живого исходника реле (копия `/opt/relay/current`)."""
     return neighbour("_relay_prod_src")

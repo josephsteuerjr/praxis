@@ -55,3 +55,12 @@
 
 Заголовок, который эта рука ищет в файле, — `## Написаны мной`, ровно тот, что
 выше: новые навыки лягут под ним.
+
+## Telegram / Telethon
+
+| [telegram-mtproto-raw](telegram-mtproto-raw.md) | точный raw-конструктор, параметры и проверяемый профиль |
+| [telegram-search-history](telegram-search-history.md) | адресный поиск по комнате, теме и автору |
+| [telegram-reconnect-delivery](telegram-reconnect-delivery.md) | таймаут, outbox и подтверждённая доставка |
+| [telegram-thread-hygiene](telegram-thread-hygiene.md) | закрытие темы, follow-up и свежая проверка процесса |
+| [telegram-mtproto-moderation](telegram-mtproto-moderation.md) | реестр модерации, текущие права и журнал действий |
+| [telegram-history-archaeology](telegram-history-archaeology.md) | источник прошлого отдельно от адреса новой реплики |

@@ -62,6 +62,7 @@ def main() -> int:
     ap.add_argument("--skip-crates", action="store_true")
     ap.add_argument("--skip-body", action="store_true")
     ap.add_argument("--skip-dist", action="store_true", help="собрать всё, но не паковать (отладка крейтов)")
+    ap.add_argument("--skip-smokes", action="store_true", help="пропустить смоуки рантайма/голоса в упаковщике")
     args = ap.parse_args()
     tree = Path(args.tree).resolve()
     if not (tree / "agent.py").is_file():
@@ -109,7 +110,8 @@ def main() -> int:
     if not args.skip_dist:
         t0 = time.time()
         subprocess.run([sys.executable, str(DESK / "installer" / "build_dist.py"),
-                        "--tree", str(tree), "--skip-runtime", "--skip-tests"], check=True)
+                        "--tree", str(tree), "--skip-runtime", "--skip-tests",
+                        *(["--skip-smokes"] if args.skip_smokes else [])], check=True)
         log(f"dist     готов за {time.time() - t0:.0f} с")
 
     log(f"итого {time.time() - started:.0f} с")

@@ -1523,6 +1523,16 @@ def _brain_config(cfg: dict) -> dict:
     pricing = cfg.get("pricing")
     if isinstance(pricing, dict) and pricing:
         out["pricing"] = pricing
+    images = cfg.get("images") if isinstance(cfg.get("images"), dict) else {}
+    out["images"] = {"enabled": images.get("enabled") is True,
+                     "model": str(images.get("model") or "gpt-image-2"),
+                     "quality": str(images.get("quality") or "auto"),
+                     "size": str(images.get("size") or "auto"),
+                     "background": str(images.get("background") or "opaque")}
+    relay = cfg.get("relay") if isinstance(cfg.get("relay"), dict) else {}
+    relay_port = _int_or(relay.get("port") or 5011, 5011, what="relay.port")
+    relay_key = str(relay.get("key") or (voice.get("key") if relay.get("enabled") else "") or "")
+    out["image_channel"] = {"base_url": f"http://127.0.0.1:{relay_port}", "api_key": relay_key}
     return out
 
 

@@ -506,7 +506,8 @@ def create(base_dir: Path, name: str, *, brain_from_base: bool = True,
                                       or COMPUTER_SCOPES)}
     # Своего реле второй агент не поднимает: подписка одна, порт один, и
     # поднятое дважды реле дерётся за него само с собой.
-    cfg["relay"] = {"enabled": False}
+    # Auxiliary images reuse the subscription port/key when inherited.
+    cfg["relay"] = {**(root.get("relay") or {}), "enabled": False}
     _write_config(dir_ / CONFIG_NAME, cfg)
     if seed_text is not None:
         # Запись о рождении: раннер прочтёт её до ensure_layout и НЕ удалит.

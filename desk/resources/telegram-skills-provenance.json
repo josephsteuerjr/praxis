@@ -1,0 +1,73 @@
+{
+  "author": "Praxis",
+  "source_head": "e2a4a50e1d52422f763311708abd53abaae2a57c",
+  "captured_date": "2026-10-06",
+  "adapted_for": "Hélène bundled birth skills; existing authored skills win",
+  "skills": [
+    {
+      "target": "telegram-mtproto-raw.md",
+      "path": "soul/skills/raw-mtproto-verify-people.md",
+      "size": 2563,
+      "sha256": "dfee8cbdc17ccf0be2bac6687ebae0cbe8b92d34c54b385da3953b897abba7c7",
+      "terms": [
+        "telethon",
+        "telegram_account"
+      ],
+      "target_sha256": "6b40de9783f8ecc6171646f422f6d8c5468ae3a5ef1b0ed96ed63f90548a6859"
+    },
+    {
+      "target": "telegram-search-history.md",
+      "path": "soul/skills/search-relevant-chat-history.md",
+      "size": 3831,
+      "sha256": "675cd86dcaba08cf3218f7d369c92ef804f12078a22f30f6edd4e32dd87731c9",
+      "terms": [
+        "telegram_account"
+      ],
+      "target_sha256": "91164792ecf09349943295d1943091293fec52b699bcc44a226d1aae3e12f4dd"
+    },
+    {
+      "target": "telegram-reconnect-delivery.md",
+      "path": "soul/skills/reply-timeout-on-reconnect.md",
+      "size": 1527,
+      "sha256": "06aacd63ce9aefd32f6103fa12c9f5f8bcc774e8c58cb261be943c9588e5ea3f",
+      "terms": [
+        "telethon"
+      ],
+      "target_sha256": "1fd7cc6fcd44e6b279b30f292d2d7f0c2aa69a60ee8130e631a5184695c0af31"
+    },
+    {
+      "target": "telegram-thread-hygiene.md",
+      "path": "soul/skills/followup-thread-hygiene.md",
+      "size": 2127,
+      "sha256": "ed71a3d4c94fe7e5cd5bf3194016c23fdba86ae782b8707c23ce5ab97a9932ae",
+      "terms": [
+        "telegram_account"
+      ],
+      "target_sha256": "6d79019c7c9e77093f969e5b0e89c4a0e8bfae12e24f8faae6d6a89fd5a03520"
+    },
+    {
+      "target": "telegram-mtproto-moderation.md",
+      "path": "soul/skills/abstractdl-mtproto-moderation.md",
+      "size": 3848,
+      "sha256": "ea00156754a7cd4b6d78ebf60cef1533c34e119d772bcd790e2524c6bab71b0e",
+      "terms": [
+        "telegram_account"
+      ],
+      "target_sha256": "a4294e41a41540162de1fd65407440e6820e45ec47458c0eeb8b9f7defde4af2"
+    },
+    {
+      "target": "telegram-history-archaeology.md",
+      "path": "soul/skills/telegram-history-archaeology.md",
+      "size": 6908,
+      "sha256": "74afc9d19b0099ba9b69e1e2bdef201e0c01c6e6ae87274d9b931745a704c485",
+      "terms": [
+        "telegram_account"
+      ],
+      "target_sha256": "5c8e5f815a579f4876069c86f1ff54c0b8034d49cb4d985193e25e6d29cce219"
+    }
+  ],
+  "excluded": {
+    "auto_join_owner_rooms.md": "installation-specific automatic participation policy",
+    "tasking.md": "general task workflow, not a new Telethon recipe"
+  }
+}

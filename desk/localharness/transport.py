@@ -384,7 +384,7 @@ class Desk:
         return str(message_id)
 
     def deliver(self, text: str, *, source_id: str = "", label: str = "",
-                system: bool = False, kind: str = "") -> str:
+                system: bool = False, kind: str = "", media_path: str = "", media_kind: str = "") -> str:
         """Её слово доехало до окна. Возвращаем расписку в том же виде, что транспорт.
 
         Расписка — не косметика: рука `reply` дописывает к ней подсказку про `end_turn`,
@@ -399,7 +399,8 @@ class Desk:
         """
         now = dt.datetime.now(dt.timezone.utc)
         body = str(text or "")
-        self.archive(body, outgoing=True, now=now, system=system, kind=kind)
+        self.archive(body, outgoing=True, now=now, system=system, kind=kind,
+                     media_path=media_path, media_kind=media_kind)
         if system:
             return f"Показано в окне → {label or self.title} (плашка продукта)"
         self.life(body, direction="out", actor=self.agent_name,

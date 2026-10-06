@@ -24,6 +24,7 @@ import { modeCard } from "./modecard";
 import { mountsCard, type LiveSandbox } from "./mounts";
 import { voiceCard } from "./voicecard";
 import { agentsCard } from "./agentscard";
+import { imagesCard } from "./imagescard";
 import { extensionsCard } from "./extensionscard";
 import { RELAY_PORT, relayBaseUrl, relayProbeUrl, newRelayKey } from "./relay";
 import type { Config, Edition, EditionContext } from "../../ui-kit/window/views/settings-frame";
@@ -743,6 +744,8 @@ export async function agentEdition({ draft, loaded, platform, freshness }: Editi
   //
   // Карточка стоит перед «Данными агента» намеренно: сразу за ней идёт папка
   // ЭТОГО агента, и владелец видит, чей дом ему показывают.
+  const images = imagesCard(draft, () => loginBtn.click());
+  cards.push(inGroup(images.el, GROUP.brain));
   cards.push(inGroup(agentsCard(mac).el, GROUP.agent));
 
   // --- расширения владельца (25.09, K): модули с манифестом, не патчи дерева
@@ -857,6 +860,12 @@ export async function agentEdition({ draft, loaded, platform, freshness }: Editi
         if (provider !== "chatgpt") {
           if (Object.keys(relayBlock).length) out.relay = { ...relayBlock, enabled: false };
           else delete out.relay;
+        }
+        const imageError = images.collect(out);
+        if (imageError) return imageError;
+        if (provider === "chatgpt") out.relay = keepBlock(out.relay, { key: out.model.key });
+        if (images.enabled() && !String(out.relay?.key || "").trim()) {
+          out.relay = keepBlock(out.relay, { key: keys.chatgpt || newRelayKey(), port: Number(relayBlock.port) || RELAY_PORT });
         }
         // Ключи неактивных провайдеров переживают смену вкладки.
         out.model.keys = keys;

@@ -110,7 +110,7 @@ import core_src  # noqa: E402 — ядро, слой издания и расх�
 # Aiogram/paramiko/stt — другие тела, в продукт не едут; cryptography не нужна
 # (telegram_confirmation агентом не импортируется — проверено грепом 31.08).
 TREE_DEPS = [
-    "anthropic", "openai", "httpx", "python-dotenv", "pillow",
+    "anthropic", "openai", "httpx>=0.27,<1", "python-dotenv", "pillow",
     "pypdf", "trafilatura", "charset-normalizer",
 ]
 
@@ -452,6 +452,20 @@ def _run_timed(args: list[str], *, check: bool, timeout: int):
         raise SystemExit(
             f"шаг сборки рантайма не ответил за {timeout // 60} мин: {args[0]} …\n"
             "скорее всего недоступен индекс PyPI — сборка остановлена") from None
+
+
+def runtime_inventory(out: Path) -> str:
+    """Installed package metadata without executing or importing the runtime."""
+    import email.parser
+    rows = set()
+    for metadata in (out / "runtime").rglob("*.dist-info/METADATA"):
+        message = email.parser.Parser().parsestr(metadata.read_text(encoding="utf-8", errors="replace"))
+        name, version = message.get("Name"), message.get("Version")
+        if name and version:
+            rows.add(f"{name}=={version}")
+    if not rows:
+        raise SystemExit("нет метаданных пакетов рантайма; состав сборки неизвестен")
+    return "\n".join(sorted(rows, key=str.lower))
 
 
 def smoke_runtime(out: Path, imports: list[str] | tuple[str, ...] = SMOKE_IMPORTS) -> str:
@@ -1651,6 +1665,8 @@ def main() -> None:
                         help="не собирать <Продукт>-<версия>-setup.exe (отладка)")
     parser.add_argument("--skip-tests", action="store_true",
                         help="не гонять стенды перед сборкой (отладка); в выпуске — никогда")
+    parser.add_argument("--skip-smokes", action="store_true",
+                        help="пропустить импортные смоуки рантайма/голоса; записать это в паспорт")
     parser.add_argument("--from-core", action="store_true",
                         help="собрать дерево как «ядро (../praxis) + слой (../helene/core)», "
                              "а не из рабочей копии. Откажется, пока слой не описывает "
@@ -1721,11 +1737,15 @@ def main() -> None:
     print("  голосовой набор — отдельно от рантайма…")
     voice_split = split_voice(out / "runtime" / "Lib" / "site-packages", voice_stage)
     print(f"  голосу — {len(voice_split['dists'])} пакетов, передвинуто файлов: {voice_split['moved']}")
-    print("  дымовой тест рантайма (без голоса)…")
-    freeze = smoke_runtime(out, [m for m in SMOKE_IMPORTS if m not in VOICE_IMPORTS])
-    print(f"  импорты живы, пакетов: {len(freeze.splitlines())}")
-    smoke_voice(out, voice_stage)
-    print("  голос импортируется из набора")
+    if args.skip_smokes:
+        freeze = runtime_inventory(out)
+        print("  смоуки рантайма и голоса пропущены по --skip-smokes; состав взят из METADATA")
+    else:
+        print("  дымовой тест рантайма (без голоса)…")
+        freeze = smoke_runtime(out, [m for m in SMOKE_IMPORTS if m not in VOICE_IMPORTS])
+        print(f"  импорты живы, пакетов: {len(freeze.splitlines())}")
+        smoke_voice(out, voice_stage)
+        print("  голос импортируется из набора")
 
     # busybox лежит ПРЯМО РЯДОМ с python.exe, не в подпапке и не в PATH:
     # CreateProcess ищет команду в каталоге приложения и System32 РАНЬШЕ PATH,
@@ -1914,6 +1934,8 @@ def main() -> None:
         "version": version,
         "built_utc": _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "complete": not (missing or not staged["phone"]),
+        "validation": {"runtime_smoke": "skipped_by_request" if args.skip_smokes else "passed",
+                       "voice_smoke": "skipped_by_request" if args.skip_smokes else "passed"},
         "partial_reason": missing + ([] if staged["phone"] else ["телефон (mobile/dist)"]),
         # Хэш с суффиксом -dirty и отдельный флаг: по хэшу без суффикса сборку
         # нельзя было отличить от сборки самого коммита.

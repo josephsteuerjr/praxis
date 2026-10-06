@@ -21,6 +21,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -146,6 +147,39 @@ class Brain(unittest.TestCase):
         self.assertFalse(said["ok"], "менять можно только объявленные поля")
         raw = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertNotIn("api_key", raw["roles"]["voice"])
+
+    def test_image_settings_preserve_voice_keys_and_receipt(self):
+        original = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertFalse(deskctl.brain_state()["images"]["enabled"])
+        result = deskctl.brain_set("images", {"enabled": True, "model": "gpt-image-2", "quality": "low"})
+        self.assertTrue(result["ok"], result)
+        actual = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(actual["roles"], original["roles"])
+        self.assertEqual(actual["frameworks"], original["frameworks"])
+        self.assertEqual(actual["pricing"], original["pricing"])
+        self.assertTrue(deskctl.brain_state()["images"]["enabled"])
+        self.assertEqual(deskctl.brain_state()["images"]["quality"], "low")
+        self.assertTrue((self.path.parent / result["backup"]).is_file())
+        receipt = json.loads((self.path.parent / ".state" / "image_config_events.jsonl").read_text())
+        self.assertEqual(receipt["by"], "owner:miniapp")
+        self.assertEqual(receipt["now"]["enabled"], True)
+        for key in ("живой-ключ-1", "живой-ключ-2"):
+            self.assertNotIn(key, json.dumps(deskctl.brain_state(), ensure_ascii=False))
+        for change in ({"enabled": "true"}, {"quality": "not-real"}, {"api_key": "steal"}):
+            self.assertFalse(deskctl.brain_set("images", change)["ok"])
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8")), actual)
+
+    def test_image_settings_saved_even_if_event_append_fails(self):
+        original_open = Path.open
+        def open_with_failed_receipt(path, *args, **kwargs):
+            if path.name == "image_config_events.jsonl":
+                raise OSError("fixture receipt failure")
+            return original_open(path, *args, **kwargs)
+        with mock.patch.object(Path, "open", autospec=True, side_effect=open_with_failed_receipt):
+            result = deskctl.brain_set("images", {"enabled": True})
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(json.loads(self.path.read_text(encoding="utf-8"))["images"]["enabled"])
+        self.assertIn("OSError", result["note"])
 
 
 class Door(unittest.TestCase):

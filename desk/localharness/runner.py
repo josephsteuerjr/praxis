@@ -653,7 +653,16 @@ def deliver_one_media(item, chat_id: str) -> str:
             voice_note=bool(getattr(item, "voice_note", False))))
     note = f"[файл] {Path(item.path).name} — {item.path}"
     caption = str(getattr(item, "caption", "") or "").strip()
-    return str(_room(target).deliver(note + ("\n" + caption if caption else "")))
+    room = _room(target)
+    try:
+        relative = Path(item.path).resolve().relative_to(room.tree.resolve()).as_posix()
+    except (ValueError, OSError):
+        relative = ""
+    media_kind = str(getattr(item, "kind", "document") or "document")
+    if media_kind == "photo":
+        media_kind = "image"
+    return str(room.deliver(note + ("\n" + caption if caption else ""),
+                            media_path=relative, media_kind=media_kind if relative else ""))
 
 
 def _deliver_outbound(envelope, chat_id: str) -> int:

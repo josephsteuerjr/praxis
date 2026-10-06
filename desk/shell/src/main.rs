@@ -45,6 +45,8 @@ compile_error!(
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+#[path = "../../common/relay_policy.rs"]
+mod relay_policy;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -1674,10 +1676,7 @@ fn harness_verdict(port: u16, tree: &Path, key: &str) -> Verdict {
 /// ребёнком, когда helene.json просит: relay.enabled. Дом реле — data/relay:
 /// учётные данные живут в папке продукта и переезжают вместе с ней.
 fn relay_enabled(cfg: &serde_json::Value) -> bool {
-    cfg.get("relay")
-        .and_then(|r| r.get("enabled"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
+    relay_policy::needed(cfg)
 }
 
 fn relay_port(cfg: &serde_json::Value) -> u16 {
@@ -1700,11 +1699,7 @@ enum RelaySpawn {
 /// Отпечаток настроек реле: по нему окно после «Сохранить» решает, поднимать ли своё
 /// реле заново (25.09, C.1 — смена мозга и реле без перезапуска окна и службы).
 fn relay_fingerprint(cfg: &serde_json::Value) -> String {
-    let key = cfg
-        .get("model")
-        .and_then(|m| m.get("key"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let key = relay_policy::key(cfg);
     let instructions = cfg
         .get("relay")
         .and_then(|r| r.get("instructions"))
@@ -2006,12 +2001,8 @@ fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> RelaySpawn 
     // Ключ мозга = ключ реле: сгенерированный при установке ключ обязателен
     // Bearer-ом на /chat/completions — открытый локальный порт позволял бы
     // любому процессу на машине жечь подписку владельца.
-    if let Some(key) = cfg
-        .get("model")
-        .and_then(|m| m.get("key"))
-        .and_then(|v| v.as_str())
-        .filter(|k| !k.trim().is_empty())
-    {
+    let key = relay_policy::key(cfg);
+    if !key.trim().is_empty() {
         cmd.env("RELAY_API_KEY", key);
     }
     if python.exists() {
