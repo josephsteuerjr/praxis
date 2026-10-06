@@ -3347,8 +3347,59 @@ def _finish_survey(task_id: str, beat=None) -> dict:
     return survey
 
 
+def _reviewer_evidence(task_id: str) -> str:
+    """След адверсарного ревьюера (гнома) из леджера задачи — для гейта submit.
+
+    #43746: пока запуск ревью — отдельное решение, оно конкурирует с решением его
+    пропустить; след, который инструмент ставит сам, надёжнее. finish берёт свежий
+    done-вердикт reviewer-юнита и подставляет его в reviewer= сам; она вправе
+    перезаписать это явным reviewer= в coding_session(finish) или задать skip.
+
+    Свежесть — юниту не больше 48ч и он done ПОСЛЕ последнего коммита worktree-ветки:
+    гном, смотревший старую версию диффа, не освобождает новую.
+    """
+    try:
+        rows = _units(task_id, "agents")
+    except Exception:
+        return ""
+    reviewers = [r for r in rows if str(r.get("role") or "") == "reviewer"]
+    if not reviewers:
+        return ""
+    task, _root, _err = _task_root(task_id)
+    branch = str((task or {}).get("branch") or "")
+    latest_commit = ""
+    if branch:
+        git = (task or {}).get("source_git") or ""
+        if git:
+            latest_commit = _git_text(Path(git), "log", "-1", "--format=%cI", branch).strip()
+    best = ""
+    for r in reviewers:
+        if str(r.get("status")) != "done":
+            continue
+        finished = str(r.get("finished") or "")
+        if not finished:
+            continue
+        try:
+            age_h = (time.time() - _dt.datetime.fromisoformat(finished).timestamp()) / 3600
+        except ValueError:
+            age_h = -1.0
+        if age_h < 0 or age_h > 48:
+            continue
+        if latest_commit:
+            try:
+                if _dt.datetime.fromisoformat(finished) < _dt.datetime.fromisoformat(latest_commit):
+                    continue      # вердикт старше последнего коммита — не считается
+            except (ValueError, TypeError):
+                pass
+        result = str(r.get("result") or "").strip()
+        if result:
+            best = result
+    return best[:6000]
+
+
 def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: str = "",
-                     submit: bool = True, survey: dict | None = None, beat=None) -> str:
+                     submit: bool = True, survey: dict | None = None, beat=None,
+                     reviewer: str = "") -> str:
     task, root, err = _task_root(task_id)
     if err:
         return err
@@ -3374,16 +3425,27 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
     elif submit and task.get("proposal_id"):
         if not str(review or "").strip():
             return "Для submit собственного кода нужен review: твой вердикт после coding_inspect(diff)."
-        # Объявленный долгий шаг: внутри submit крутится гейт тестов
+        # 28.09, гномье ревью в рельсе (#43746): finish подставляет свежий вердикт
+        # reviewer-юнита этой же задачи сам — след, который инструмент ставит без
+        # «не забыть». Она вправе перезаписать: coding_session(finish, reviewer=…).
+        reviewer_evidence = str(reviewer or "").strip() or _reviewer_evidence(task_id)
+        # Объявленный долгый шаг: внутри submit крутится гейт тестов
         # (PRAXIS_PROPOSAL_TEST_TIMEOUT, по умолчанию 600с), полтора десятка вызовов git и
         # ревью иммунитета моделью. Один вызов, разбить его на удары нечем — поэтому лизинг
         # честно объявляется заранее и считается по срокам самого submit (_submit_lease).
         beat(_submit_lease())
         submission = selfdev.submit(str(task["proposal_id"]), title or task.get("goal") or task_id,
-                                    why=task.get("goal") or "", review=review, checked=checked)
+                                    why=task.get("goal") or "", review=review, checked=checked,
+                                    reviewer=reviewer_evidence)
         beat()
         lower = submission.lower()
-        if lower.startswith("не ") or "отказ" in lower or "нет изменений" in lower:
+        # Классификатор статуса по тексту ответа submit. Порядок важен: сначала
+        # блокировки («НЕ смёржено», «Стоп», «отказ», «нет изменений») — только потом
+        # «смёрж». Раньше «НЕ смёржено» матчилось в «смёрж» и штамповало done
+        # поверх заблокированного гейтом мёржа (красные тесты, BLOCKED гнома).
+        if (lower.startswith("не ") or lower.startswith("стоп")
+                or "отказ" in lower or "нет изменений" in lower
+                or "не смёржено" in lower or "не смёрж" in lower):
             new_status = "active"
         elif "смёрж" in lower:
             new_status = "done"
@@ -3499,7 +3561,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
 
 
 def finish(task_id: str, title: str = "", review: str = "", checked: str = "",
-           submit: bool = True) -> str:
+           submit: bool = True, reviewer: str = "") -> str:
     try:
         # Замок берётся ПЕРВЫМ и только потом идут удалённые вызовы осмотра. Иначе
         # (проверено пробой) занятый замок всё равно отказывает, но три RPC в демон
@@ -3522,7 +3584,7 @@ def finish(task_id: str, title: str = "", review: str = "", checked: str = "",
                 return str(survey["blocked"])
             beat()          # осмотр кончился — дальше снова мерится тишина, не работа
             return _finish_unlocked(task_id, title=title, review=review, checked=checked,
-                                    submit=submit, survey=survey, beat=beat)
+                                    submit=submit, survey=survey, beat=beat, reviewer=reviewer)
     except TimeoutError as exc:
         return f"Finish не начался: {exc}. Другой worker ещё фиксирует изменение."
 

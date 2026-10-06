@@ -1,6 +1,8 @@
 """Почта: send форматирует письмо и логинится; fetch парсит. Сеть замокана."""
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import mailer
@@ -84,6 +86,65 @@ class TestFetch(unittest.TestCase):
         self.assertIn("hello there", msgs[0]["body"])
         self.assertIn("Hope", msgs[0]["from"])
         self.assertEqual(msgs[0]["subject"], "Re: agents")
+
+    def test_send_attachments(self):
+        sent = {}
+
+        class FakeSMTP:
+            def __init__(self, host, port, context=None, timeout=None):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def login(self, addr, pw):
+                pass
+
+            def send_message(self, msg):
+                sent["msg"] = msg
+
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "data.log"
+            f.write_text("line1\nline2\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"PRAXIS_EMAIL_ADDR": "s@e.invalid", "PRAXIS_EMAIL_PASS": "pw"}), \
+                    mock.patch.object(mailer, "SMTP_SSL", FakeSMTP):
+                status = mailer.send("x@y.zz", "тема", "тело", attachments=[str(f)])
+        self.assertIn("Отправлено", status)
+        self.assertIn("data.log (12 б)", status)
+        msg = sent["msg"]
+        self.assertTrue(msg.is_multipart())
+        names = [p.get_filename() for p in msg.iter_attachments()]
+        self.assertEqual(names, ["data.log"])
+
+    def test_send_attachment_missing_file(self):
+        sent = {}
+
+        class FakeSMTP:
+            def __init__(self, host, port, context=None, timeout=None):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def login(self, addr, pw):
+                pass
+
+            def send_message(self, msg):
+                sent["msg"] = msg
+
+        with mock.patch.dict(os.environ, {"PRAXIS_EMAIL_ADDR": "s@e.invalid", "PRAXIS_EMAIL_PASS": "pw"}), \
+                mock.patch.object(mailer, "SMTP_SSL", FakeSMTP):
+            status = mailer.send("x@y.zz", "тема", "тело",
+                                 attachments=["/nonexistent/zzz.bin"])
+        self.assertIn("Не отправилось", status)
+        self.assertIn("не читается", status)
+        self.assertNotIn("msg", sent)
 
 
 if __name__ == "__main__":

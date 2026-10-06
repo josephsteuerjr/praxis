@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import contextvars as _cv
 import time as _time
 import tool_offerings
@@ -1532,6 +1533,135 @@ _VISION_PREPASS_SYS = (
 )
 _VISION_PREPASS_ASK = "Опиши, что на этой картинке, и дословно перепиши весь текст на ней."
 
+#: 05.10: глубина мышления узкого взгляда. Описание картинки — не её собственная мысль,
+#: и glm-«high» роли voice не имеет права съедать потолок 1200 изнутри: за один вечер
+#: 04.10 26 описаний были обрезаны до нуля или полуслова именно так.
+VISION_PREPASS_EFFORT = "low"
+#: 05.10: кэш описаний по контенту картинки. Одна и та же картинка в ленте комнаты
+#: пересматривалась КАЖДОЙ итерацией хода (100 описаний одних и тех же стикеров за вечер):
+#: файловый идемпотентный кэш под memory/.state, TTL честный — контент меняется редко,
+#: но вечный кэш описаний лгал бы о комнате, где картинку заменили.
+# 05.10: v2 — смена файла после гномьего ревью: в старом могли лежать записи,
+# подписанные запрошенной моделью, а снятые другой (блокер №2), и «NO pixels»-тексты
+# (блокер №1). Кэш — не память: чистый старт дешевле вычитания легаси.
+VISION_PREPASS_CACHE = MEM_DIR / ".state" / "vision_prepass_cache_v2.json"
+VISION_PREPASS_TTL_SEC = 14 * 24 * 3600
+
+
+def _vision_cache_load() -> dict:
+    try:
+        raw = json.loads(VISION_PREPASS_CACHE.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            return raw
+    except Exception:
+        pass
+    return {}
+
+
+def _vision_cache_save(cache: dict) -> None:
+    tmp_name: str | None = None
+    try:
+        VISION_PREPASS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        # 05.10 (гном-ревью, неблокирующее): уникальный tmp вместо общего файла —
+        # параллельные ходы с картинками не дерутся за один vision_prepass_cache.tmp
+        # и не шумят WARNING-трейсбеками на os.replace.
+        fd, tmp_name = tempfile.mkstemp(dir=str(VISION_PREPASS_CACHE.parent),
+                                        prefix="vision_prepass_cache.",
+                                        suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(cache, ensure_ascii=False))
+        os.replace(tmp_name, VISION_PREPASS_CACHE)
+        tmp_name = None
+    except Exception:
+        log.warning("узкий взгляд: кэш описаний не записан", exc_info=True)
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+
+
+def _vision_block_key(block: dict, model: str = "") -> str:
+    """Стабильный ключ контента картинки: (модель, mime, пиксели).
+
+    Модель входит в ключ: маркер подмены называет зрячую модель, и текст из кэша
+    обязан быть снят именно ею — смена зрячей модели не подаёт чужое описание
+    под новым именем.
+
+    05.10 (гном-ревью, блокер): прежний ключ читал только block["source"], а живой
+    прод-путь подаёт картинки в path-форме (фото из чата, computer-observe) — все
+    они коллапсировали в ОДИН ключ, и вторая картинка получала чужое описание, ни
+    разу не увидев зрячую модель. Ключ строится по фактическому контенту через
+    _image_payload: path- и base64-форма одной картинки дают один ключ, разные
+    файлы — разные. Контент недоступен — пустой ключ: под него ничего не пишется
+    (chat() падает тем же чтением), читать нечего, prepass честно отступает.
+    """
+    payload = ""
+    try:
+        mime, data = _image_payload(block)
+        payload = mime + "\x00" + data
+    except Exception:
+        pass
+    if not payload:
+        # 05.10 (гном-ревью, блокер №3): контент недоступен — общий сентинел, не
+        # sha1(model+"\x00"): файл может появиться между ключом и chat(), и разные
+        # картинки не должны склеиваться общим «пустым» ключом. Под сентинел никто
+        # не пишет и никто не читает — prepass честно отступает (см. _look_once).
+        return _VISION_UNAVAILABLE_KEY
+    return hashlib.sha1(
+        (str(model or "") + "\x00" + payload).encode("utf-8", "replace")
+    ).hexdigest()
+
+
+# Ключ недоступного контента: под него не пишется и не читается ничего.
+_VISION_UNAVAILABLE_KEY = hashlib.sha1(b"__pixels_unavailable__").hexdigest()
+
+
+def _vision_cache_get(key: str) -> str | None:
+    """Описание из кэша; None — мимо (или протухло). Неудачные описания не кэшируем."""
+    hit = _vision_cache_load().get(key)
+    if not isinstance(hit, dict):
+        return None
+    # 05.10 (гном-ревью, блокер №4): одна битая запись ("ts": "2026-10-05") не имеет
+    # права валить ход с картинкой: float() вне try убивал chat(). Битая ts = промах.
+    try:
+        ts = float(hit.get("ts") or 0)
+    except (TypeError, ValueError):
+        return None
+    text = str(hit.get("text") or "")
+    if not text or (_time.time() - ts) > VISION_PREPASS_TTL_SEC:
+        return None
+    if text.startswith(_NO_PIXELS_RESPONSE):
+        # 05.10 (гном-ревью раунд-3, блокер №1): отравленная запись (не-описание)
+        # читается как промах — какой бы путь её ни записал. ПРЕФИКСНЫЙ тест:
+        # _mark_no_pixels_response ставит маркер В НАЧАЛО ответа; честное описание
+        # скриншота может ЦИТИРОВАТЬ сентинел в середине (промпт сам требует
+        # «дословно перепиши весь текст») — подстрочный тест отверг бы его.
+        return None
+    return text
+
+
+def _vision_cache_put(key: str, text: str) -> None:
+    if not text:
+        return
+    cache = _vision_cache_load()
+    cache[key] = {"text": text[:6000], "ts": _time.time()}
+    # 05.10: кэш живёт в одном файле и только растёт, если не чистить. При записи
+    # выметаем протухшее и ограничиваем объём: редкая запись — дешёвая уборка,
+    # частая — сама не даст файлу разжиреться.
+    now = _time.time()
+    def _ts(v):
+        try:
+            return float(v.get("ts") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    cache = {k: v for k, v in cache.items()
+             if isinstance(v, dict) and now - _ts(v) <= VISION_PREPASS_TTL_SEC}
+    if len(cache) > 2000:
+        keep = sorted(cache.items(), key=lambda kv: -_ts(kv[1]))[:2000]
+        cache = dict(keep)
+    _vision_cache_save(cache)
+
 
 def vision_prepass_enabled() -> bool:
     """Рычаг узкого взгляда. Умолчание — ВЫКЛЮЧЕНО: кадр прежний байт-в-байт."""
@@ -1540,6 +1670,9 @@ def vision_prepass_enabled() -> bool:
 
 
 def _vision_prepass_marker(model: str, text: str) -> str:
+    # 05.10 (гном-ревью, блокер №2): маркер обязан называть модель, которая ФАКТИЧЕСКИ
+    # смотрела. Раньше сюда приходило запрошенное имя, а описание снимала другая
+    # (фолбэк-нога) — текст подавался под чужим именем.
     return ("[эту картинку посмотрела зрячая модель " + str(model or "?")
             + " отдельным узким обращением: твоего кадра она не видела, и пикселей в "
             "ЭТОМ кадре нет — ниже её описание, а не твоё зрение]\n" + text)
@@ -1577,12 +1710,12 @@ def _describe_images_narrowly(role: str, framework: str, model: str, messages):
                 if not _is_image_block(block):
                     blocks.append(block)
                     continue
-                text = _look_once(role, sighted, block)
+                text, author = _look_once(role, sighted, block)
                 if not text:
                     # Ни одной подмены в этом сообщении: пусть едет прежним путём.
                     return messages, 0
                 blocks.append({"type": "text",
-                               "text": _vision_prepass_marker(sighted, text)})
+                               "text": _vision_prepass_marker(author, text)})
                 described += 1
             out.append(dict(message, content=blocks))
     finally:
@@ -1590,20 +1723,50 @@ def _describe_images_narrowly(role: str, framework: str, model: str, messages):
     return (out, described) if described else (messages, 0)
 
 
-def _look_once(role: str, sighted: str, block: dict) -> str:
-    """Одно обращение к зрячей модели: картинка и просьба. Пусто — значит не вышло."""
+def _look_once(role: str, sighted: str, block: dict) -> tuple[str, str]:
+    """Одно обращение к зрячей модели: (описание, модель-автор). Пусто — не вышло.
+
+    05.10: кэш по контенту (одна картинка в ленте — одно описание за TTL) и явная
+    глубина мышления low — вспомогательный вызов не наследует glm-«high» роли voice,
+    иначе мышление съедает потолок 1200 изнутри и описание режется до нуля.
+    """
+    key = _vision_block_key(block, sighted)
+    if key == _VISION_UNAVAILABLE_KEY:
+        # 05.10 (гном-ревью, блокер №3): контент недоступен — читать нечего и писать
+        # некуда; картинка поедет прежним путём (зрячая подмена или честное снятие).
+        return "", ""
+    cached = _vision_cache_get(key)
+    if cached is not None:
+        return cached, sighted
     try:
         answer = chat(role, system=_VISION_PREPASS_SYS,
                       messages=[{"role": "user", "content": [
                           block, {"type": "text", "text": _VISION_PREPASS_ASK}]}],
-                      max_tokens=VISION_PREPASS_MAX_TOKENS, model=sighted)
+                      max_tokens=VISION_PREPASS_MAX_TOKENS, model=sighted,
+                      reasoning_effort=VISION_PREPASS_EFFORT)
     except Exception:
         log.warning("узкий взгляд упал — картинка поедет прежним путём", exc_info=True)
-        return ""
+        return "", ""
     text = str(getattr(answer, "text", "") or "").strip()
-    if not text:
-        log.warning("узкий взгляд вернул пустое — картинка поедет прежним путём")
-    return text
+    if not text or text.startswith(_NO_PIXELS_RESPONSE):
+        # 05.10 (гном-ревью раунд-3, блокер №1): не-описание («NO pixels…» в начале)
+        # не имеет права стать кэшированным описанием. ПРЕФИКСНЫЙ тест: маркер ставится
+        # в начало ответа; честное описание, цитирующее сентинел в середине, проходит.
+        log.warning("узкий взгляд вернул пустое/без пикселей — картинка поедет прежним путём")
+        return "", ""
+    if str(getattr(answer, "stop_reason", "")) == "max_tokens":
+        # Обрезанное описание хуже, чем поездка прежним путём: полукадр «на картинке
+        # слева виден фрагм» хуже честной подмены модели. Не кэшируем и отступаем.
+        log.warning("узкий взгляд обрезан потолком (%d симв.) — картинка поедет прежним "
+                    "путём, обрезок не кэширую", len(text))
+        return "", ""
+    # 05.10 (гном-ревью, блокер №2): ключ и маркер — по модели, которая ФАКТИЧЕСКИ
+    # ответила (resp.model после возможной ротации), иначе описание ляжет под чужим
+    # именем и переживёт смену зрячей модели.
+    answered = str(getattr(answer, "model", "") or "").strip() or sighted
+    actual_key = key if answered == sighted else _vision_block_key(block, answered)
+    _vision_cache_put(actual_key, text)
+    return text, answered
 
 
 def _route_image_leg(role: str, framework: str, model: str, messages):
@@ -1862,6 +2025,18 @@ def _note_truncation(out: "LLMResponse", role: str) -> None:
     гадания по часам (см. turns.clear_truncation).
     """
     truncated = str(getattr(out, "stop_reason", "")) == "max_tokens"
+    if _IN_VISION_PREPASS.get():
+        # 05.10: это ВСПОМОГАТЕЛЬНЫЙ вызов (узкий взгляд описывает картинку), не её
+        # фраза. Писать его обрыв в кольцо ходов значило «ответ оборван» о ходе, где
+        # её собственный ответ ещё не начинался: за вечер 04.10 кольцо набрало 26 таких
+        # ложных «обрывов её фразы». Стирать чужую отметку успехом описания — тоже
+        # нельзя: описание — не «полный ответ роли». Лог WARNING остаётся, биография
+        # хода не трогается ни в одну сторону.
+        if truncated:
+            log.warning("обрыв вспомогательного узкого взгляда (%s, %d симв.) — в кольцо "
+                        "не пишу: это не её фраза",
+                        getattr(out, "model", "?"), len(out.text or ""))
+        return
     if truncated:
         log.warning("ответ оборван потолком max_tokens (роль %s, %s): %d символов, "
                     "блоков %d — это НЕ законченная фраза",
@@ -2323,7 +2498,8 @@ def _resolve_requested_model(role: str, requested: str) -> tuple[str, str]:
 
 def chat(role: str, *, system=None, messages: list, tools: list | None = None,
          max_tokens: int | None = None, thinking: int | None = None,
-         end_after_spoken: bool = False, model: str | None = None) -> LLMResponse:
+         end_after_spoken: bool = False, model: str | None = None,
+         reasoning_effort: str | None = None) -> LLMResponse:
     """Вызов модели по роли, с необязательным адресным override без смены роли.
 
     Фолбэк на противоположный фреймворк — один повтор, честно в дневник.
@@ -2368,7 +2544,14 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     mt = int(max_tokens or rc.get("max_tokens") or DEFAULT_MAX_TOKENS[role])
     # ЕЁ фоновая ступень рассуждения роли (switch_brain action=reasoning, 19.08).
     # Явный thinking вызывающего кода сильнее — правило в _effective_effort.
-    role_effort = str(rc.get("reasoning_effort") or "").strip() or None
+    # 05.10: и явный reasoning_effort вызывающего кода тоже сильнее роли. Вспомогательный
+    # вызов (узкий взгляд и ему подобные) — не голос роли: его глубина мышления задаётся
+    # самим вызовом, иначе glm-«high» роли съедает маленький потолок изнутри (26 описаний
+    # за вечер резались о 1200 токенов до первого текстового блока).
+    if reasoning_effort is not None:
+        role_effort = str(reasoning_effort).strip().lower() or None
+    else:
+        role_effort = str(rc.get("reasoning_effort") or "").strip() or None
     st = _STATE[role]
     t0 = _time.time()
     # Пауза до этого вызова — рядом с исходом. Префикс остывает ВРЕМЕНЕМ, и
@@ -2423,6 +2606,11 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         # (после ротации _resolve_model конфигное имя может врать в by-model разрезе).
         resp.vision = bool(vision_used)
         if pixels_omitted:
+            # 05.10 (гном-ревью, блокер №1): слепая нога в prepass-режиме тоже маркируется —
+            # маркер нужен ФИЛЬТРУ во _look_once (без него галлюцинация слепой ноги
+            # закэшировалась бы как описание). Без raise: подъём исключения до _usage_add
+            # потерял бы учёт потраченных токенов и размножал бы сторож пустых ответов
+            # за пределы _guard_answer (инвариант OneGuardNotFourCopies).
             _mark_no_pixels_response(resp)
         _usage_add(role, resp.usage, model=(resp.model or model), vision=vision_used)
         _lat = (_time.time() - t0) * 1000
@@ -2436,6 +2624,12 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
                     cc=(int(_u["cache_creation"]) if "cache_creation" in _u else -1))
         return resp
     except Exception as e:
+        if _IN_VISION_PREPASS.get():
+            # 05.10 (гном-ревью, блокер №1): узкий взгляд — вспомогательный вызов, не
+            # голос роли. Фолбэк-нога может быть слепой или другой моделью, её ответ
+            # (включая «NO pixels…») не имеет права стать описанием картинки. Падение
+            # уходит наверх: _look_once честно отступит, картинка поедет прежним путём.
+            raise
         _synthetic = bool(getattr(e, "synthetic", False))
         if isinstance(e, RelayTerminalError) and not _synthetic:
             # Реле назвало лимит/вход кодом: эндпойнт закрываем до часа восстановления и

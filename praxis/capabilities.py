@@ -108,7 +108,7 @@ def _services_state() -> str:
 
 
 def _hostops_state() -> str:
-    """PASS 17.C: что она может на верхней ступени — только стейджить заявку (снимок кодом)."""
+    """PASS 17.C (legacy транспорт): эта рука только стейджит заявку; суверенные руки на хост — host_ctl/Forge (снимок кодом)."""
     try:
         import hostops
         return hostops.state_line()

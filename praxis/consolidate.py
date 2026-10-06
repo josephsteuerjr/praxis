@@ -45,7 +45,8 @@ def _create(*, system: str, user: str, max_tokens: int) -> "llm.LLMResponse":
                             max_tokens=max(max_tokens, budget + 1024), thinking=budget)
         except Exception:
             log.info("consolidate: thinking не принят эндпойнтом — без него")
-    return llm.chat("voice", system=system, messages=messages, max_tokens=max_tokens)
+    return llm.chat("voice", system=system, messages=messages, max_tokens=max_tokens,
+                    reasoning_effort="low")
 
 
 MARKER = agent.MEM_DIR / ".consolidated.json"

@@ -1,11 +1,21 @@
 {
  "mirror": "praxis",
- "source": "/opt/praxis (прод) через локальный чекаут её дерева @ 0c88f77",
- "head": "0c88f77",
+ "source": "/opt/praxis (live working-tree source snapshot, private/runtime/soul excluded)",
+ "head": "2514439b76c144f48df634ad5337659092ef99fc",
  "dirty": false,
- "taken_at": "2026-09-26T01:03:13+00:00",
- "files": 603,
- "digest": "a121b1a4cb624c24ee31cfbd172445c58ed311ae777b79e3ee7dfb10c44ef126",
- "by": "installer/core_src.py --export-core",
- "note": "выпуск 1.0.3 (26.09): её живой master 0c88f77 = ea0ba38 + кандидат memory-role-2609 (свёртку памяти пишет её голос; роль memory только из llm.ROLES); путь чекаута на машине сборки снят из записи"
+ "source_checkout_dirty": true,
+ "source_dirty_scope": "workspace/projects subrepositories only; exported source unchanged during capture",
+ "taken_at": "2026-10-06T13:15:51.363177+00:00",
+ "files": 615,
+ "digest": "e22bcfc4ca7239d6dfba2f488b0347732892622b628801da32fb61fe6d96f9ea",
+ "by": "installer/core_src.py --export-core; verified tracked source snapshot",
+ "sanitization": {
+  "excluded_private_helper_count": 1,
+  "redacted_comment_docstring_files": [
+   "agent.py",
+   "cjk_vkladki.py",
+   "test_sanitize_scripts.py"
+  ],
+  "behavior_preserved": "AST verified excluding docstrings; other exported bytes match source after LF normalization"
+ }
 }

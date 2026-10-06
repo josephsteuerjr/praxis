@@ -419,7 +419,7 @@ def rem_pass(rng: random.Random | None = None, *, apply: bool = True) -> tuple[i
     user = (f"Nodes and their neighbors:\n" + "\n".join(lines))[:budget_chars]
     try:
         resp = llm.chat("voice", system=REM_SYS, max_tokens=min(500, REM_MAX_TOKENS),
-                        messages=[{"role": "user", "content": user}])
+                        messages=[{"role": "user", "content": user}], reasoning_effort="low")
     except Exception:
         log.warning("сон/РЕМ: вызов упал", exc_info=True)
         return 0, False
@@ -607,7 +607,12 @@ def run(depth: str | None = None) -> str:
     PASS 18.4: depth — МОЙ план из договора об аппетитах (appetite.sleep_depth):
     light = без REM-кандидатов и journal diagnostics.  Durable people/graph
     projections always pass formation; self revision consumes supported claims.
-    Отчёт называет фактический расход и что пропущено."""
+    Отчёт называет фактический расход и что пропущено.
+
+    05.10 (ТЗ ночного цикла честности памяти): перед прежними фазами — три шага
+    идемпотентной ночи (fold_offers → gnomes → verify), каждый под квитанцией;
+    повторный прогон того же дня пропускает завершённые шаги (нулевые дубли).
+    """
     if depth is None:
         try:
             depth = appetite.sleep_depth()
@@ -617,6 +622,62 @@ def run(depth: str | None = None) -> str:
         spent0 = appetite.usage_delta()
     except Exception:
         spent0 = None
+    # --- 05.10: шаги ночного цикла честности памяти (C1) ------------------- #
+    night_lines: list[str] = []
+    try:
+        import night_memory
+        import praxis_time
+        day = praxis_time.today().strftime("%Y-%m-%d")
+        run_id = night_memory._run_id()
+        state = _state_load()
+        steps = state.get("steps") if isinstance(state.get("steps"), dict) else {}
+        day_steps = steps.get(day) if isinstance(steps.get(day), dict) else {}
+
+        def _step(name: str, fn):
+            """Единая обёртка: skip завершённого шага этого дня; квитанция на каждый исход."""
+            prev = day_steps.get(name)
+            if prev in ("ok", "failed"):
+                night_memory.receipt(run_id, day, name, "skipped",
+                                     reason=f"шаг уже {prev} в прогоне этого дня")
+                return None
+            day_steps[name] = "in_progress"
+            steps[day] = day_steps
+            _state_save(steps=steps)
+            try:
+                out = fn()
+                day_steps[name] = "ok"
+                night_memory.receipt(run_id, day, name, "ok")
+                return out
+            except Exception as e:
+                day_steps[name] = "failed"
+                night_memory.receipt(run_id, day, name, "failed",
+                                     reason=f"{type(e).__name__}: {str(e)[:160]}")
+                log.exception("сон: шаг ночи %s упал", name)
+                return None
+            finally:
+                _state_save(steps=steps)
+
+        fold_out = _step("fold_offers", lambda: night_memory.resolve_fold_offers())
+        gnome_out = {}
+        def _gnomes():
+            gnome_out["compacts"] = night_memory.gnome_compact_audit(day)
+            gnome_out["contradictions"] = night_memory.gnome_contradiction_audit(day)
+            gnome_out["freshness"] = night_memory.freshness_candidates(day)
+            return gnome_out
+        _step("gnomes", _gnomes)
+        verify_out = _step("verify", lambda: night_memory.verify_pass(
+            (gnome_out.get("freshness") or [])))
+        deferred = [f"{r['step']}: {r['reason']}" for r in night_memory.receipts(day)
+                    if r.get("run_id") == run_id and r.get("status") in ("skipped", "failed")]
+        if fold_out is not None or verify_out is not None:
+            _journal(night_memory.night_report(
+                day, fold_out or {}, gnome_out, verify_out or {}, deferred), salience=2)
+        else:
+            night_lines.append("ночь этого дня уже прошла — шаги пропущены")
+    except Exception:
+        log.exception("сон: блок ночного цикла честности упал целиком")
+        night_lines.append("ночной цикл честности: сбой блока (сырьё сохранено)")
+    # --- конец шагов C1 ---------------------------------------------------- #
     svs = consolidate.run()
     try:  # PASS 19: после forward harvest — итеративное копание по fresh compact frontier
         formed = formation.run("light" if depth == "light" else "full", reason="сон")
@@ -714,6 +775,8 @@ def run(depth: str | None = None) -> str:
               f"формирование: {formation_line}; личность: {identity_line}; "
               f"карта компьютера: {inventory_line}; {runs_line}; "
               "durable mutations — только через formation claims")
+    if night_lines:
+        report += "; " + "; ".join(night_lines)
     if surprises:
         report += "; ⚠ СНЯТАЯ ФАЗА СРАБОТАЛА — " + "; ".join(surprises)
     if depth == "light":  # 18.4: причина остановки — мой план, не тихий пропуск

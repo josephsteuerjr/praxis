@@ -191,6 +191,11 @@ class CancelDoesNotDeliver(_RunScaffold):
 class LateAcceptanceReturnsToHer(_RunScaffold):
     """Граница 2: приёмка после терминала хода возвращается journal-строкой."""
 
+    def _start_send(self, run_id: str, call_id: str) -> None:
+        self.manager.start_tool(
+            run_id, call_id, "send_file", {"path": "/tmp/x", "caption": ""},
+            side_effect=True, idempotency_key=f"telegram-outbox:{run_id}:tool:{call_id}")
+
     def _accepted_entry(self, run_id: str, call_id: str) -> dict:
         entry = self._pending_file_entry(run_id, call_id)
         return runner._direct_outbox().mark_accepted(
@@ -211,6 +216,63 @@ class LateAcceptanceReturnsToHer(_RunScaffold):
         self.assertIn("archive-part.txt", text)
         self.assertIn("4444", text)
         self.assertEqual(journal.call_args.kwargs.get("salience"), 2)
+
+    def test_turn_that_closed_its_call_gets_no_journal_line(self):
+        # 29.09: ход отправил, рамка получила расписку (проекция + результат), ход
+        # закончился — и следующий тик outbox писал в дневник «ход считал его упавшим».
+        # На её данных за 30 ч так выглядели все 161 приёмки; ни одной настоящей.
+        context = self._create_run("knew")
+        call_id = "call-knew"
+        self._start_send(context.run_id, call_id)
+        accepted = self._accepted_entry(context.run_id, call_id)
+        self.manager.store_result(
+            context.run_id, '{"message_id": 4444}', call_id=call_id,
+            name="telegram-outbox-projection", event_kind="direct_outbox_projection",
+            idempotent=True)
+        self.manager.store_result(
+            context.run_id, "Отправила файл, message_id 4444.", call_id=call_id,
+            name="send_file")
+        self.manager.transition(context.run_id, "failed", expected="running")
+        journal = mock.Mock(return_value="Записала в дневник.")
+        with mock.patch.object(agent, "tool_journal", journal):
+            ok = asyncio.run(runner._reconcile_direct_outbox_entry(accepted))
+            # Перезапуск (набор объявленных — в памяти) не должен повторить ничего.
+            runner._LATE_ACCEPTANCE_ANNOUNCED.discard(accepted["key"])
+            runner._DIRECT_OUTBOX_RECONCILED.discard(accepted["key"])
+            asyncio.run(runner._reconcile_direct_outbox_entry(accepted))
+        self.assertTrue(ok)
+        journal.assert_not_called()
+
+    def test_result_without_receipt_is_still_announced(self):
+        # Рамка закрыла вызов ошибкой (расписки у неё не было), а приёмка случилась
+        # позже — вот это настоящая поздняя приёмка.
+        context = self._create_run("noreceipt")
+        call_id = "call-noreceipt"
+        self._start_send(context.run_id, call_id)
+        accepted = self._accepted_entry(context.run_id, call_id)
+        self.manager.store_result(
+            context.run_id, "Не отправилось: истёк потолок ожидания.", call_id=call_id,
+            name="send_file")
+        self.manager.transition(context.run_id, "failed", expected="running")
+        journal = mock.Mock(return_value="Записала в дневник.")
+        with mock.patch.object(agent, "tool_journal", journal):
+            asyncio.run(runner._reconcile_direct_outbox_entry(accepted))
+        journal.assert_called_once()
+        self.assertIn("поздняя приёмка", journal.call_args.args[0])
+
+    def test_open_call_of_a_live_run_is_not_announced(self):
+        # Тик outbox между приёмкой и результатом рамки: ход жив, вызов открыт,
+        # сверка «не состоялась» — объявлять рано, и ключ не запоминается.
+        context = self._create_run("race")
+        accepted = self._accepted_entry(context.run_id, "call-race")
+        journal = mock.Mock(return_value="Записала в дневник.")
+        with (
+            mock.patch.object(agent, "tool_journal", journal),
+            mock.patch.object(agent, "run_direct_outbox_accepted", return_value=False),
+        ):
+            asyncio.run(runner._reconcile_direct_outbox_entry(accepted))
+        journal.assert_not_called()
+        self.assertNotIn(accepted["key"], runner._LATE_ACCEPTANCE_ANNOUNCED)
 
     def test_live_run_gets_no_duplicate_journal_line(self):
         # Живому ходу тул-результат доедет своим маршрутом — дублировать нечего.

@@ -108,6 +108,16 @@ class VisionPrepass(Base):
         client = mock.patch.object(llm, "_client_for", return_value=object())
         client.start()
         self.addCleanup(client.stop)
+        # 05.10: кэш описаний изолирован и в базовом классе — иначе прогон всего файла
+        # нёс бы описание одной картинки из чужого теста в чужой ход.
+        import tempfile, shutil as _sh
+        from pathlib import Path as _P
+        _d = tempfile.mkdtemp(prefix="praxis-vp-base-")
+        self.addCleanup(_sh.rmtree, _d, True)
+        _cp = mock.patch.object(llm, "VISION_PREPASS_CACHE",
+                                _P(_d) / "vision_prepass_cache.json")
+        _cp.start()
+        self.addCleanup(_cp.stop)
         os.environ.pop(LEVER, None)
         self.addCleanup(lambda: os.environ.pop(LEVER, None))
 
@@ -192,6 +202,338 @@ class VisionPrepass(Base):
         t = _Transport()
         self._run(t, lever="1")
         self.assertEqual(len(t.to_sighted), 1, "второго взгляда внутри взгляда не бывает")
+
+
+class VisionPrepassCacheAndEffort(Base):
+    """05.10: кэш описаний по контенту, явный effort low, гейт кольца на обрыв описания."""
+
+    def setUp(self):
+        super().setUp()
+        cfg = llm._from_env()
+        cfg["frameworks"]["anthropic"]["api_key"] = "zai-test"
+        cfg["roles"]["voice"].update(framework="anthropic", model=PRIMARY,
+                                     fallback_model="", fallback_framework="")
+        cfg["roles"]["voice"]["reasoning_effort"] = "high"   # как в проде
+        llm.save_config(cfg)
+        self.stack = mock.patch.object(
+            llm, "_available_models",
+            side_effect=lambda fw: [PRIMARY, SIGHTED] if fw == "anthropic" else [])
+        self.stack.start()
+        self.addCleanup(self.stack.stop)
+        client = mock.patch.object(llm, "_client_for", return_value=object())
+        client.start()
+        self.addCleanup(client.stop)
+        os.environ.pop(LEVER, None)
+        self.addCleanup(lambda: os.environ.pop(LEVER, None))
+        # изолированный кэш на тест
+        self.cache_path = mock.patch.object(
+            llm, "VISION_PREPASS_CACHE",
+            self.tmp_path() / "vision_prepass_cache.json")
+        self.cache_path.start()
+        self.addCleanup(self.cache_path.stop)
+
+    def tmp_path(self):
+        import tempfile
+        d = tempfile.mkdtemp(prefix="praxis-vp-test-")
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        from pathlib import Path
+        return Path(d)
+
+    def _run(self, transport, messages=None):
+        with mock.patch.dict(os.environ, {LEVER: "1"}), \
+                mock.patch.object(llm, "_call", side_effect=transport):
+            return llm.chat("voice", messages=messages or _room_tape())
+
+    def test_the_narrow_look_carries_explicit_low_effort(self):
+        """glm-«high» роли voice не наследуется вспомогательным вызовом: за вечер 04.10
+        мышление съедало потолок 1200 изнутри и 26 описаний резались до нуля/полуслова."""
+        t = _Transport()
+        self._run(t)
+        narrow = t.to_sighted
+        self.assertEqual(len(narrow), 1)
+        self.assertEqual(narrow[0].get("reasoning_effort"), "low",
+                         "узкий взгляд обязан идти с явным low, не high роли")
+
+    def test_the_same_picture_is_described_once_across_calls(self):
+        """Одна и та же картинка в ленте пересматривалась КАЖДОЙ итерацией хода
+        (100 описаний одних стикеров за вечер). Теперь — кэш по контенту."""
+        t = _Transport()
+        self._run(t)
+        self._run(t)   # второй ход, та же лента
+        self.assertEqual(len(t.to_sighted), 1,
+                         "вторая поездка той же картинки обязана брать кэш")
+
+    def test_a_truncated_description_is_not_cached_and_falls_back(self):
+        """Обрезанное о потолок описание не кэшируется и не подставляется:
+        полукадр «на картинке слева виден фрагм» хуже честной поездки прежним путём."""
+        t = _Transport(sighted_answer="на картинке кот в каске и длинный-длинный текст",
+                       fail=False)
+        # transport отвечает end_turn; подменим на обрыв
+        def cut_answer(framework, model, **kw):
+            resp = t.__call__(framework, model, **kw)
+            if model == SIGHTED and len(kw.get("messages") or []) == 1:
+                resp = llm.LLMResponse(text=resp.text[:40], model=model,
+                                       framework=framework, stop_reason="max_tokens")
+            return resp
+        with mock.patch.dict(os.environ, {LEVER: "1"}), \
+                mock.patch.object(llm, "_call", side_effect=cut_answer):
+            resp = llm.chat("voice", messages=_room_tape())
+        # описание не встало в ленту: ход поехал прежним путём — модели видно
+        self.assertTrue(any(c["model"] == SIGHTED and len(c["messages"]) > 1
+                            for c in t.calls),
+                        "обрезанное описание обязано отступить к прежнему пути")
+
+    def test_a_truncated_description_does_not_become_her_cut_phrase(self):
+        """Обрыв описания не пишется в кольцо ходов как «её фраза оборвана»."""
+        recorded = []
+        import turns as turns_mod
+        with mock.patch.object(turns_mod, "note_truncated",
+                               side_effect=lambda **kw: recorded.append(kw)):
+            def cut(framework, model, **kw):
+                if model == SIGHTED and len(kw.get("messages") or []) == 1:
+                    return llm.LLMResponse(text="фраг", model=model, framework=framework,
+                                           stop_reason="max_tokens")
+                return llm.LLMResponse(text="её ответ", model=model, framework=framework)
+            with mock.patch.dict(os.environ, {LEVER: "1"}), \
+                    mock.patch.object(llm, "_call", side_effect=cut):
+                llm.chat("voice", messages=_room_tape())
+        self.assertFalse(recorded, "обрыв вспомогательного взгляда — не её фраза")
+
+    def test_path_form_pictures_do_not_share_a_description(self):
+        """Гном-ревью ffb58ba4 (блокер): ключ кэша читал только block["source"], а
+        живой прод-путь подаёт картинки в path-форме (фото из чата, computer-observe).
+        Все path-блоки коллапсировали в ОДИН ключ — вторая картинка получала чужое
+        описание, ни разу не увидев зрячую модель. Хуже, чем до рычага.
+
+        Здесь — прод-форма ленты и ДВА разных файла."""
+        d = self.tmp_path()
+
+        def pic(content: bytes, name: str) -> dict:
+            p = d / name
+            p.write_bytes(content)
+            return {"type": "image", "path": str(p), "mime": "image/png",
+                    "detail": "auto"}
+
+        def tape(block: dict):
+            return [{"role": "user", "content": [
+                {"type": "text", "text": "Егор: глянь"}, block]}]
+
+        # один файл — одно описание за TTL (кэш и в path-форме работает)
+        same = _Transport()
+        self._run(same, messages=tape(pic(b"\x89PNG\r\n\x1a\nAAAA", "a.png")))
+        self._run(same, messages=tape(pic(b"\x89PNG\r\n\x1a\nAAAA", "a.png")))
+        self.assertEqual(len(same.to_sighted), 1,
+                         "та же картинка в path-форме обязана брать кэш")
+
+        # ДРУГОЙ файл — СВОЁ узкое обращение, а не чужое описание из кэша
+        other = _Transport()
+        self._run(other, messages=tape(pic(b"\x89PNG\r\n\x1a\nBBBB", "b.png")))
+        self.assertEqual(len(other.to_sighted), 1,
+                         "другая картинка обязана сама попасть к зрячей модели")
+
+
+
+def _narrow(t):
+    """Узкие вызовы: узнаются по их system (узкая просьба), не по длине ленты."""
+    return [c for c in t.calls if c.get("system") == llm._VISION_PREPASS_SYS]
+
+
+class VisionPrepassGnomeBlockers(Base):
+    """05.10 (гном-ревью agent-7028ce55): кэш не врёт — четыре блокера, четыре испытания.
+
+    Б1: слепая нога узкого вызова («NO pixels…») не становится описанием и не кэшируется.
+    Б2: описание подписано моделью, которая ФАКТИЧЕСКИ смотрела (resp.model).
+    Б3: недоступный контент — общий сентинел; под него никто не пишет и не читает.
+    Б4: битая ts в кэше — промах, а не падение хода.
+    """
+
+    def setUp(self):
+        super().setUp()
+        cfg = llm._from_env()
+        cfg["frameworks"]["anthropic"]["api_key"] = "zai-test"
+        cfg["roles"]["voice"].update(framework="anthropic", model=PRIMARY,
+                                     fallback_model="", fallback_framework="")
+        llm.save_config(cfg)
+        self.stack = mock.patch.object(
+            llm, "_available_models",
+            side_effect=lambda fw: [PRIMARY, SIGHTED] if fw == "anthropic" else [])
+        self.stack.start()
+        self.addCleanup(self.stack.stop)
+        client = mock.patch.object(llm, "_client_for", return_value=object())
+        client.start()
+        self.addCleanup(client.stop)
+        import tempfile, shutil as _sh
+        from pathlib import Path as _P
+        _d = tempfile.mkdtemp(prefix="praxis-vp-gnome-")
+        self.addCleanup(_sh.rmtree, _d, True)
+        _cp = mock.patch.object(llm, "VISION_PREPASS_CACHE",
+                                _P(_d) / "vision_prepass_cache_v2.json")
+        _cp.start()
+        self.addCleanup(_cp.stop)
+
+    def tmp_path(self):
+        import tempfile
+        d = tempfile.mkdtemp(prefix="praxis-vp-gnome-")
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        from pathlib import Path
+        return Path(d)
+
+    def _run(self, transport, messages=None):
+        with mock.patch.dict(os.environ, {LEVER: "1"}), \
+                mock.patch.object(llm, "_call", side_effect=transport):
+            return llm.chat("voice", messages=messages or _room_tape())
+
+    def test_blind_leg_answer_is_not_a_description_and_not_cached(self):
+        """Б1: зрячая нога пустеет → без фолбэка; «NO pixels» не пишется в кэш.
+        Ход 2 обязан СНОВА позвать зрячую модель, а не кормить отравой из кэша."""
+        # нога 1: узкий вызов падает (зрячая недоступна) — без фолбэка сразу наверх
+        t1 = _Transport(fail=True)
+        resp = self._run(t1)
+        # узкий вызов был (ровно один, с одним сообщением) и не породил фолбэк-ноги
+        self.assertEqual(len(_narrow(t1)), 1, "узкий вызов был, ровно один")
+        self.assertEqual(len(t1.calls), 2,
+                         "без описания лента едет прежним путём: узкий + подменённый ход")
+        self.assertNotIn("NO pixels",
+                         _flat_text([m for c in t1.calls for m in (c.get("messages") or [])]),
+                         "отрава не попала ни в одну ленту")
+        self.assertNotIn("NO pixels", resp.text, "отрава не попала в ответ роли")
+        # нога 2: та же картинка, каналы живы — зрячая зовётся ЗАНОВО, кэш чист
+        t2 = _Transport()
+        self._run(t2)
+        self.assertEqual(len(_narrow(t2)), 1,
+                         "после провала кэш пуст: зрячая модель зовётся снова")
+        self.assertIn("на картинке кот в каске",
+                      _flat_text(t2.to_primary[0]["messages"]),
+                      "описание встало в ленту главного хода (он остался на её модели)")
+
+    def test_description_is_signed_by_the_model_that_actually_looked(self):
+        """Б2: transport отвечает от имени ДРУГОЙ модели (ротация) — маркер и ключ
+        обязаны называть её, не запрошенную."""
+        answers = {"model": None}
+
+        def rotating(framework, model, **kw):
+            t.calls.append({"framework": framework, "model": model, **kw})
+            if kw.get("system") == llm._VISION_PREPASS_SYS:
+                answers["model"] = "glm-4.7v"   # ротация: ответила не запрошенная
+                return llm.LLMResponse(text="на картинке морж в берете", model="glm-4.7v",
+                                       framework=framework)
+            return llm.LLMResponse(text="её ответ", model=model, framework=framework)
+
+        t = _Transport()
+        t.__class__ = type("Rot", (_Transport,), {"__call__": staticmethod(rotating)})
+        self._run(t)
+        # маркер едет в ленту главного вызова, не в ответ роли
+        self.assertTrue(t.to_primary, "главный ход состоялся")
+        self.assertIn("glm-4.7v", _flat_text(t.to_primary[0]["messages"]),
+                      "маркер называет фактически ответившую модель")
+
+    def test_unavailable_content_is_one_shared_sentinel(self):
+        """Б3: контент недоступен (файл исчез) — все такие картинки получают ОДИН
+        сентинел-ключ; под него ничего не пишется, зрячая не зовётся зря."""
+        d = self.tmp_path()
+        gone = d / "gone.png"
+
+        def pic(exists: bool) -> dict:
+            p = d / ("here.png" if exists else "gone.png")
+            if exists:
+                p.write_bytes(b"\x89PNG\r\n\x1a\nQQQ")
+            return {"type": "image", "path": str(p), "mime": "image/png",
+                    "detail": "auto"}
+
+        t = _Transport()
+        # обе картинки: файл второй отсутствует
+        tape = [{"role": "user", "content": [
+            {"type": "text", "text": "Егор: глянь"}, pic(True)]}]
+        tape_gone = [{"role": "user", "content": [
+            {"type": "text", "text": "Егор: глянь"}, pic(False)]}]
+        self._run(t, messages=tape)        # живая картинка — описана, кэш написан
+        self._run(t, messages=tape_gone)   # мёртвая — сентинел, не описание
+        import json as _json
+        cache = _json.loads(llm.VISION_PREPASS_CACHE.read_text(encoding="utf-8"))
+        self.assertEqual(len(cache), 1, "под сентинел ничего не пишется")
+        self.assertEqual(len(_narrow(t)), 1,
+                         "мёртвый контент не зовёт зрячую УЗКИМ вызовом (прежний путь — можно)")
+
+    def test_broken_ts_entry_is_a_miss_not_a_crash(self):
+        """Б4: запись с "ts": "2026-10-05" (валидный JSON, битая ts) — промах.
+        Ход обязан дожить до зрячей модели и получить свежее описание."""
+        import json as _json
+        d = self.tmp_path()
+        key = llm._vision_block_key(_PIXEL, SIGHTED)
+        llm.VISION_PREPASS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        llm.VISION_PREPASS_CACHE.write_text(
+            _json.dumps({key: {"text": "отравленное старое описание", "ts": "2026-10-05"}}),
+            encoding="utf-8")
+        t = _Transport()
+        self._run(t)
+        self.assertEqual(len(_narrow(t)), 1,
+                         "битая запись = промах: зрячая модель зовётся заново")
+        self.assertIn("на картинке кот в каске", _flat_text(t.to_primary[0]["messages"]),
+                      "свежее описание встало в ленту главного вызова")
+        fresh = _json.loads(llm.VISION_PREPASS_CACHE.read_text(encoding="utf-8"))
+        self.assertEqual(fresh[key]["text"], "на картинке кот в каске",
+                         "свежее описание затирает битую запись")
+
+    def test_honest_description_quoting_the_sentinel_is_not_rejected(self):
+        """Б5 (гном-3, блокер-1): честное описание скриншота, ЦИТИРУЮЩЕЕ сентинел
+        в середине (промпт сам требует «дословно перепиши весь текст»), обязано
+        пройти фильтр. Краснеет, если фильтр вернули к подстрочному поиску:
+        тогда ход уезжает целым кадром в зрячую модель — её УЗКИЙ вызов
+        отбракован, и в ленте главного вызова нет описания с цитатой."""
+        quoted = ("на скриншоте лога: 'Error: "
+                  + llm._NO_PIXELS_RESPONSE.rstrip(".") + "; check the cable' "
+                  "и рядом кот в каске")
+        t = _Transport(sighted_answer=quoted)
+        self._run(t)
+        self.assertEqual(len(_narrow(t)), 1, "узкий вызов состоялся")
+        # описание ПРИНЯТО: в ленте главного вызова (на её модели) есть текст описания,
+        # а не полный кадр с пикселями в зрячей модели
+        self.assertTrue(t.to_primary, "главный ход на её модели состоялся")
+        self.assertIn("check the cable", _flat_text(t.to_primary[0]["messages"]),
+                      "честное описание с цитатой сентинела обязано попасть в ленту")
+        import json as _json
+        cache = _json.loads(llm.VISION_PREPASS_CACHE.read_text(encoding="utf-8"))
+        self.assertTrue(any("check the cable" in str(v.get("text") or "")
+                            for v in cache.values()),
+                        "честное описание с цитатой кэшируется")
+
+    def test_narrow_call_never_falls_back_to_a_foreign_leg(self):
+        """Б6 (гном-3, мутация М2): узкий вызов, упавший фолбэк-классной ошибкой
+        (RateLimitError), НЕ уходит на фолбэк-ногу — падение поднимается наверх,
+        _look_once отступает, картинка едет прежним путём. Краснеет, если re-raise
+        узкого вызова в except chat() выкачан: тогда слепая/чужая фолбэк-нога
+        «опишет» картинку и лжет в маркере."""
+        cfg = llm._config()
+        cfg["roles"]["voice"].update(fallback_model=SIGHTED,
+                                     fallback_framework="anthropic")
+        llm.save_config(cfg)
+
+        class RateLimitError(Exception):
+            pass
+        llm._FALLBACK_ERRORS = set(llm._FALLBACK_ERRORS) | {"RateLimitError"}
+
+        def leg(framework, model, **kw):
+            t.calls.append({"framework": framework, "model": model, **kw})
+            narrow = (model == SIGHTED and len(kw.get("messages") or []) == 1)
+            if narrow:
+                raise RateLimitError("зрячая нога удержана лимитом")
+            return llm.LLMResponse(text="чужой ответ фолбэк-ноги", model=model,
+                                   framework=framework)
+
+        t = _Transport()
+        t.__class__ = type("Leg", (_Transport,), {"__call__": staticmethod(leg)})
+        self._run(t)
+        # узких вызовов РОВНО ОДИН: re-raise поднял падение до фолбэк-логики, и
+        # фолбэк-нога узкому НЕ отвечала. Без re-raise chat() уводил бы узкий вызов
+        # на fallback_model=SIGHTED (второй вызов с одним сообщением).
+        narrow_calls = [c for c in t.calls
+                        if c["model"] == SIGHTED and len(c.get("messages") or []) == 1]
+        self.assertEqual(len(narrow_calls), 1,
+                         "узкий вызов один; фолбэк узкому не отвечал")
+        # и ни в одной ленте нет «чужого описания» от фолбэк-ноги
+        self.assertNotIn("чужой ответ фолбэк-ноги",
+                         _flat_text([m for c in t.calls for m in (c.get("messages") or [])]),
+                         "фолбэк-нога не описывала картинку")
 
 
 if __name__ == "__main__":       # pragma: no cover
