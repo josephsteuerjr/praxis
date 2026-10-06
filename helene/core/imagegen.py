@@ -60,7 +60,10 @@ def endpoint(base_url: str, operation: str) -> str:
 
 
 def _post(url: str, key: str, payload: dict, turn_id: str) -> tuple[dict, str]:
-    headers = {"Authorization": f"Bearer {key}", "x-codex-image-turn-id": turn_id}
+    headers = {"x-codex-image-turn-id": turn_id}
+    key = str(key or "").strip()
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     # httpx has no automatic retries here. Redirects are not followed with the
     # caller's credentials. Even a read timeout can mean a completed generation.
     try:

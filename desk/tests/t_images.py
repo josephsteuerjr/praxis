@@ -26,6 +26,23 @@ class Images(unittest.TestCase):
         self.assertFalse(built['images']['enabled'])
         self.assertEqual(built['image_channel']['api_key'],'')
 
+    def test_projection_preserves_authored_image_key_and_clears_its_own(self):
+        cfg={'model':{'framework':'anthropic','model':'glm-5.3','key':'voice-secret'},'images':{'enabled':True}}
+        built=boot._brain_config(cfg)
+        current={'image_channel':{'base_url':'http://127.0.0.1:5011','api_key':'authored-loop','custom':'keep'}}
+        merged=boot._merge_brain(current,built,{})
+        self.assertEqual(merged['image_channel']['api_key'],'authored-loop')
+        self.assertEqual(merged['image_channel']['custom'],'keep')
+        self.assertEqual(current['image_channel']['api_key'],'authored-loop')
+        managed=boot._brain_config({**cfg,'relay':{'key':'managed-loop'}})
+        receipt=boot._projected_fields(managed)
+        self.assertIn('api_key',receipt['_image_channel'])
+        merged=boot._merge_brain(current,managed,{})
+        self.assertEqual(merged['image_channel']['api_key'],'managed-loop')
+        cleared=boot._merge_brain(merged,built,receipt)
+        self.assertNotIn('api_key',cleared['image_channel'])
+        self.assertEqual(cleared['image_channel']['custom'],'keep')
+
     def test_window_receipt_archives_image_metadata_for_existing_renderer(self):
         with tempfile.TemporaryDirectory() as folder:
             room=Desk(Path(folder),'window','Owner','Window')

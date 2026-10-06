@@ -1593,6 +1593,9 @@ def _projected_fields(built: dict) -> dict[str, list[str]]:
             fields = sorted(k for k, v in sub.items() if v not in (None, ""))
             if fields:
                 out[str(name)] = fields
+    channel = built.get("image_channel")
+    if isinstance(channel, dict):
+        out["_image_channel"] = sorted(k for k, v in channel.items() if v not in (None, ""))
     return out
 
 
@@ -1633,6 +1636,15 @@ def _merge_brain(current: dict, built: dict, previously_projected: dict | None =
                 else:
                     block[name] = sub
             merged[key] = block
+        elif key == "image_channel" and isinstance(cur, dict) and isinstance(value, dict):
+            slot = dict(cur)
+            mine = set(prev.get("_image_channel") or ())
+            for field, val in value.items():
+                if val not in (None, "") or field not in slot:
+                    slot[field] = val
+                elif field in mine:
+                    slot.pop(field, None)
+            merged[key] = slot
         elif key == "roles" and isinstance(cur, dict) and isinstance(value, dict):
             block = dict(cur)
             for name, sub in value.items():
