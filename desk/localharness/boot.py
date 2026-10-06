@@ -1530,6 +1530,9 @@ def _brain_config(cfg: dict) -> dict:
                      "size": str(images.get("size") or "auto"),
                      "background": str(images.get("background") or "opaque")}
     relay = cfg.get("relay") if isinstance(cfg.get("relay"), dict) else {}
+    app_dir = str(Path(__file__).resolve().parent.parent)
+    if app_dir not in sys.path:
+        sys.path.insert(1, app_dir)
     from deskd.readers import RELAY_PORT_DEFAULT
     relay_port = _int_or(relay.get("port") or RELAY_PORT_DEFAULT, RELAY_PORT_DEFAULT, what="relay.port")
     relay_key = str(relay.get("key") or (voice.get("key") if relay.get("enabled") else "") or "")
