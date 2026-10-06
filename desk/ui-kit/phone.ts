@@ -16,6 +16,8 @@ import { frameStripHTML, setResultFetcher, stepsHTML, type RunDetail } from "./s
 import { activityHTML, selectActivity, updateActivity } from "./activity";
 import contract from "./contract.json";
 import { mountUsage, usageShell } from "./usage";
+import { artifactCaption, mediaDescriptor, paperMediaHTML, mountPaperMedia } from "./paper-media";
+import { artifactBytes, browserSave } from "./paper-transfer";
 
 export type Level = "ok" | "live" | "warn" | "error" | "off";
 
@@ -342,17 +344,13 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     const rel = String(m.media_path || "").trim();
     if (!rel) return "";
     const src = mediaURL(rel);
-    const name = m.media_name || rel.split("/").pop() || "Вложение";
-    const artifact = (preview: boolean) => withKey(`/api/artifact?path=${encodeURIComponent(rel)}${preview ? "&preview=1" : ""}`);
     if (String(m.media_kind || "") === "audio") {
       return `<div class="msg-media"><audio controls preload="none" src="${esc(src)}"></audio></div>`;
     }
-    if (String(m.media_kind || "") === "image") {
-      return `<div class="msg-media"><img loading="lazy" alt="Изображение" src="${esc(src)}"><a href="${esc(artifact(false))}" download>Скачать</a></div>`;
-    }
-    const size = m.media_size ? `${(m.media_size / 1024 / 1024).toFixed(1)} МБ` : "";
-    return `<div class="msg-media artifact"><b>${esc(name)}</b><span>${size}</span><div><a href="${esc(artifact(true))}" target="_blank" rel="noreferrer">Открыть</a> · <a href="${esc(artifact(false))}" download>Скачать</a></div></div>`;
+    return paperMediaHTML(mediaDescriptor(m)!);
   }
+  const artifact = (path: string) => withKey("/api/artifact?path=" + encodeURIComponent(path) + "&preview=1");
+  mountPaperMedia(root, { key: m => artifact(m.path), bytes: m => artifactBytes(artifact(m.path)), save: browserSave });
 
   /** Ручка из области окна: 403 запоминаем и больше не спрашиваем. null — не отдаётся / не прочиталось. */
   async function scoped<T>(path: string, mark: string): Promise<T | null> {
@@ -863,7 +861,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
         : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}</span>`;
       const media = mediaBlock(m)
         || (m.media ? ` <span class="muted">[${esc(m.media)}]</span>` : "");
-      const text = m.media_path ? String(m.text || "").replace(/^\[(?:файл|голос)\][^\n]*(?:\n\s*)?/, "") : m.text || "";
+      const text = artifactCaption(m.text || "", m.media_path);
       html.push(`<div class="msg ${cls}" data-at="${esc(m.timestamp || "")}"><div class="msg-head">${head}</div><div class="msg-body">${md(text)}${media}</div></div>`);
     }
     const next = html.join("");
@@ -931,6 +929,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     });
   }
 
+  attach.setAttribute("aria-label", "Приложить файлы");
   attach.addEventListener("click", () => attachInput.click());
   attachInput.addEventListener("change", async () => {
     for (const f of Array.from(attachInput.files || [])) {

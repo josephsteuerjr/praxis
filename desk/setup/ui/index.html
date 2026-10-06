@@ -10,6 +10,10 @@
   <body>
     <div id="viewport">
       <div id="stage">
+        <section id="setup-boot" class="scene scene-form" aria-live="polite">
+          <h2 class="form-head">Подготовка</h2>
+          <p class="form-lead">Проверяю установленную версию…</p>
+        </section>
         <section class="scene scene-form scene-installed" data-scene="installed" hidden></section>
         <section class="scene scene-form scene-name" data-scene="name" hidden></section>
         <section class="scene scene-form scene-constitution" data-scene="constitution" hidden></section>
@@ -19,12 +23,13 @@
         <section class="scene scene-form scene-legacy" data-scene="legacy" hidden></section>
         <section class="scene scene-form scene-mode" data-scene="mode" hidden></section>
         <section class="scene scene-form scene-install" data-scene="install" hidden></section>
+        <section class="scene scene-form scene-update" data-scene="update" hidden></section>
         <section class="scene scene-form scene-uninstall" data-scene="uninstall" hidden></section>
       </div>
 
       <!-- 28.09: обычные кнопки вместо невидимых четвертей экрана (Егор: «визарды
            остопиздели»). Шаг — словами: где ты и сколько осталось. -->
-      <nav class="stepbar" aria-label="Шаги установки">
+      <nav class="stepbar" aria-label="Шаги установки" hidden>
         <button class="step-back" data-control type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg><span>Назад</span>
         </button>

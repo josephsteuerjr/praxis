@@ -27,6 +27,7 @@ import { hostInfo } from "../../ui-kit/window/host";
 import { clientIsMac, isMacPlatform, kbdLabel, platformOf } from "../../ui-kit/platform";
 import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "../../ui-kit/window/rooms";
 import { mountSwitch } from "../../ui-kit/window/agents";
+import { mountWindowMedia, pickPaperFiles } from "./paper-files";
 import * as panel from "../../ui-kit/window/panel";
 import * as now from "../../ui-kit/window/views/now";
 import * as talk from "../../ui-kit/window/views/talk";
@@ -88,6 +89,7 @@ export function start(opts: WindowOptions): void {
   view.replaceChildren(viewInner);
   scroll.mountView(view, viewInner);
   const app = q<HTMLElement>("#app");
+  mountWindowMedia(app, opts.localAgent !== false);
   const railNav = q<HTMLElement>("#rail-nav");
   const railBottom = q<HTMLElement>("#rail-bottom");
   const railSign = q<HTMLElement>("#rail-sign");
@@ -329,7 +331,19 @@ export function start(opts: WindowOptions): void {
     });
   }
 
-  attachBtn.addEventListener("click", () => attachInput.click());
+  attachBtn.setAttribute("aria-label", "Приложить файлы");
+  attachBtn.title = "Приложить файлы · можно вставить из буфера или перетащить";
+  let pickingFiles = false;
+  attachBtn.addEventListener("click", async () => {
+    if (pickingFiles) return;
+    pickingFiles = true;
+    try {
+      const selected = await pickPaperFiles(opts.localAgent !== false, ATTACH_MAX - attachments.length,
+        ATTACH_TOTAL - attachments.reduce((s,a) => s + a.size, 0));
+      await addFiles(selected);
+    } catch (e) { toast("Не удалось приложить файлы: " + humanError(e).text); }
+    finally { pickingFiles = false; }
+  });
   attachInput.addEventListener("change", () => {
     void addFiles(attachInput.files ? Array.from(attachInput.files) : []);
     attachInput.value = "";

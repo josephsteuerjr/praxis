@@ -48,6 +48,11 @@ use std::path::{Path, PathBuf};
 #[path = "../../common/relay_policy.rs"]
 mod relay_policy;
 mod relay_transfer;
+mod local_files;
+#[cfg(feature = "desktop")]
+use tauri::async_runtime as file_runtime;
+#[cfg(feature = "host")]
+use tokio::task as file_runtime;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -2730,6 +2735,19 @@ async fn relay_auth_transfer(replace: bool) -> Result<serde_json::Value, String>
     let key = cfg.get("key").and_then(|v| v.as_str()).unwrap_or("").to_owned();
     shell_adapter::async_runtime::spawn_blocking(move || relay_transfer::transfer(&relay_home(), &base, &key, replace))
         .await.map_err(|_| "Передача входа не завершилась".to_string())?
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn local_files_list(path: String) -> Result<serde_json::Value, String> {
+    file_runtime::spawn_blocking(move || local_files::list(&path)).await.map_err(|e| e.to_string())?
+}
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn local_files_read(path: String) -> Result<serde_json::Value, String> {
+    file_runtime::spawn_blocking(move || local_files::read(&path)).await.map_err(|e| e.to_string())?
+}
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn local_files_save(folder: String, name: String, data: String, overwrite: bool) -> Result<serde_json::Value, String> {
+    file_runtime::spawn_blocking(move || local_files::save(&folder, &name, &data, overwrite)).await.map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -6518,6 +6536,9 @@ fn main() {
             relay_status,
             relay_account,
             relay_auth_transfer,
+            local_files_list,
+            local_files_read,
+            local_files_save,
             notify,
             app_info,
             update_check,

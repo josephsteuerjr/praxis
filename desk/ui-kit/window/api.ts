@@ -62,11 +62,12 @@ export const electron: ElectronBridge | undefined = (window as unknown as { __HE
  */
 export const inTauri = "__TAURI_INTERNALS__" in window || !!electron;
 
-function url(path: string): string {
+export function channelURL(path: string): string {
   const full = (cfg.base || "") + path;
   if (!cfg.key) return full;
   return full + (path.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(cfg.key);
 }
+const url = channelURL;
 
 /**
  * Отказ трубы вместе с КОДОМ, а не только словами.

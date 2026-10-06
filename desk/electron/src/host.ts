@@ -48,7 +48,8 @@ export class HostClient extends EventEmitter {
     if (this.dead) return Promise.reject(new Error("Движок оболочки не работает. Перезапусти окно."));
     const id = ++this.seq;
     const line = JSON.stringify({ id, command, args }) + "\n";
-    if (Buffer.byteLength(line) > 16 * 1024 * 1024) return Promise.reject(new Error("Слишком большой запрос к оболочке."));
+    const maxBytes = command === "local_files_save" ? Math.ceil(64 * 1024 * 1024 / 3) * 4 + 65536 : 16 * 1024 * 1024;
+    if (Buffer.byteLength(line) > maxBytes) return Promise.reject(new Error("Слишком большой запрос к оболочке."));
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.child.stdin.write(line, (error) => {

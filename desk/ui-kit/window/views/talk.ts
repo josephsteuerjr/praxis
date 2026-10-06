@@ -8,7 +8,8 @@
 // событие хода — отсюда прыжки и «сообщение уходит вниз» (слово Егора 28.09). Плашки хода
 // и ошибок стоят ВНИЗУ, у поля ввода: наверху 250 сообщений их никто не видел.
 import { KeyedList } from "../../feed/keyed";
-import { api, artifactURL, mediaURL, post } from "../api";
+import { api, mediaURL, post } from "../api";
+import { artifactCaption, mediaDescriptor, paperMediaHTML } from "../../paper-media";
 import { STARTERS } from "./learn";
 import { bindFail, esc, failHTML, fmtDay, fmtTime, humanError, md, q } from "../lib";
 import * as panel from "../panel";
@@ -259,15 +260,10 @@ function mediaBlock(m: Msg): string {
   const rel = String(m.media_path || "").trim();
   if (!rel) return "";
   const src = mediaURL(rel);
-  const name = m.media_name || (rel.split("/").pop() || "Файл").replace(/^(?:msg-[a-f0-9]{10}-[a-f0-9]{12}-)+/, "");
   if (String(m.media_kind || "") === "audio") {
     return `<div class="msg-media"><audio controls preload="none" src="${esc(src)}"></audio></div>`;
   }
-  if (String(m.media_kind || "") === "image") {
-    return `<div class="msg-media"><a href="${esc(artifactURL(rel, true))}" target="_blank" rel="noreferrer"><img loading="lazy" alt="Изображение" src="${esc(src)}"></a><a class="artifact-download" href="${esc(artifactURL(rel))}" download>Скачать изображение</a></div>`;
-  }
-  const size = typeof m.media_size === "number" ? (m.media_size >= 1048576 ? (m.media_size / 1048576).toFixed(1) + " МБ" : Math.ceil(m.media_size / 1024) + " КБ") : "";
-  return `<div class="msg-media artifact-card"><span class="artifact-icon" aria-hidden="true">📄</span><div><strong>${esc(name)}</strong><span class="artifact-size">${esc(size)}</span><div class="artifact-actions"><a href="${esc(artifactURL(rel, true))}" target="_blank" rel="noreferrer">Открыть</a><a href="${esc(artifactURL(rel))}" download>Скачать</a></div></div></div>`;
+  return paperMediaHTML(mediaDescriptor(m)!);
 }
 
 // ---------------------------------------------------------------- строки ленты
@@ -312,7 +308,7 @@ function buildRows(rows: Msg[], peer: string): Row[] {
     const head = m.outgoing
       ? `<span class="who-hand">${esc(S.agent)}</span><span>${fmtTime(m.timestamp)}${edited}</span>`
       : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}${edited}</span>`;
-    const visibleText = m.media_path ? (m.text || "").replace(/^\[(?:файл|голос)\][^\n]*(?:\n|$)/, "") : m.text || "";
+    const visibleText = artifactCaption(m.text || "", m.media_path);
     const body = birth
       ? `<details><summary>Первый запуск: ${esc(PRODUCT_NAME)} рассказала агенту, кто он, где его дом и кто владелец</summary>${md(m.text || "")}</details>`
       : md(visibleText);

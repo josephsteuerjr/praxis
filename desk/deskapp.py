@@ -1051,6 +1051,29 @@ async def _r_relay_auth_status(c: Call):
         raise web.HTTPBadRequest(text=str(exc))
 
 
+async def _r_local_files(c: Call):
+    if c.role != "owner" or not c.local or os.environ.get("HELENE_SERVER_AUTH_IMPORT") == "1":
+        raise web.HTTPForbidden(text="Файлы компьютера выбирают из локального окна владельца")
+    from deskd import local_files
+    try:
+        if c.body is None:
+            return await asyncio.to_thread(local_files.listing, c.query.get("path") or "")
+        body = c.body
+        if not isinstance(body, dict):
+            raise ValueError("Файловый диалог не получил действие")
+        if body.get("action") == "read":
+            return await asyncio.to_thread(local_files.read_file, str(body.get("path") or ""))
+        if body.get("action") == "save":
+            return await asyncio.to_thread(local_files.save_file, readers.tree(),
+                                          str(body.get("rel") or ""), str(body.get("folder") or ""),
+                                          str(body.get("name") or ""), body.get("overwrite") is True, body.get("data"))
+        raise ValueError("Неизвестное действие файлового диалога")
+    except FileExistsError:
+        raise web.HTTPConflict(text="Файл с этим именем уже существует")
+    except (OSError, ValueError) as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+
+
 async def _r_home(c: Call):
     """Чьё это дерево. Оболочка спрашивает перед тем, как признать живой на
     порту харнесс своим: осиротевший процесс прежней установки держал порт, и
@@ -1321,6 +1344,8 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/artifact", _r_artifact),
     Route("POST", "/api/relay/auth/import", _r_relay_auth_import),
     Route("GET", "/api/relay/auth/status", _r_relay_auth_status),
+    Route("GET", "/api/local-files", _r_local_files, local_only=True),
+    Route("POST", "/api/local-files", _r_local_files, local_only=True),
     Route("GET", "/api/agent-config", _r_agent_config),
     Route("POST", "/api/agent-config", _r_agent_config_save),
     Route("GET", "/api/md-tree", _reader(lambda: readers.md_tree())),

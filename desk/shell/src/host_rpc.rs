@@ -6,6 +6,9 @@ fn argument<T: serde::de::DeserializeOwned>(args: &serde_json::Value, snake: &st
 
 async fn host_command(app: &ShellHandle, name: &str, args: &serde_json::Value) -> Result<serde_json::Value, String> {
     match name {
+        "local_files_list" => local_files_list(argument::<String>(args, "path", "path")?).await,
+        "local_files_read" => local_files_read(argument::<String>(args, "path", "path")?).await,
+        "local_files_save" => local_files_save(argument::<String>(args, "folder", "folder")?, argument::<String>(args, "name", "name")?, argument::<String>(args, "data", "data")?, argument::<bool>(args, "overwrite", "overwrite")?).await,
         "owner_control" => serde_json::to_value(owner_control(argument::<String>(args, "action", "action")?)?).map_err(|e| e.to_string()),
         "owner_state" => serde_json::to_value(owner_state()).map_err(|e| e.to_string()),
         "engine_restart" => serde_json::to_value(engine_restart()?).map_err(|e| e.to_string()),
@@ -113,14 +116,19 @@ pub fn run_host() {
     loop {
         let mut line = String::new();
         // Bound frames before allocating arbitrary input from the renderer.
-        match (&mut input).take(16 * 1024 * 1024 + 1).read_line(&mut line) {
+        const FILE_FRAME: u64 = (64 * 1024 * 1024_u64).div_ceil(3) * 4 + 65536;
+        match (&mut input).take(FILE_FRAME + 1).read_line(&mut line) {
             Ok(0) | Err(_) => break,
-            Ok(_) if line.len() > 16 * 1024 * 1024 || !line.ends_with('\n') => break,
+            Ok(_) if line.len() as u64 > FILE_FRAME || !line.ends_with('\n') => break,
             _ => {}
         }
         let Ok(request) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
         let Some(id) = request.get("id").and_then(|v| v.as_u64()) else { continue };
         let name = request.get("command").and_then(|v| v.as_str()).unwrap_or("");
+        if name != "local_files_save" && line.len() > 16 * 1024 * 1024 {
+            shell_adapter::send(&serde_json::json!({"id":id,"error":"Слишком большой запрос к оболочке"}));
+            continue;
+        }
         let args = request.get("args").cloned().unwrap_or_else(|| serde_json::json!({}));
         if name == "host_visibility" {
             app.visibility(args["visible"].as_bool().unwrap_or(false), args["focused"].as_bool().unwrap_or(false));

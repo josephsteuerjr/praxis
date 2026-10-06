@@ -53,12 +53,17 @@ export class InstallScene extends FormScene {
   private current = "";
   private started = false;
   private receipt: Receipt | null = null;
+  private note: HTMLElement;
+  private preparation = false;
+  private running = false;
 
-  constructor(root: HTMLElement) {
+  constructor(root: HTMLElement, private updating = false) {
     super(root);
     this.head = el("h2", "form-head");
+    this.head.setAttribute("aria-live", "polite");
     this.head.append(el("span", "line", "Готово к установке"));
     this.summary = el("dl", "summary");
+    this.note = el("p", "form-lead", ""); this.note.hidden = true;
     this.actions = el("div", "install-actions");
     this.actions.append(button("Установить", "primary", () => void this.run()));
     this.sheet = el("ol", "sheet");
@@ -69,16 +74,35 @@ export class InstallScene extends FormScene {
     this.sheetFoot.append(this.cancelBtn, el("span", "sheet-why", ""));
     this.result = el("div", "install-result");
     this.result.hidden = true;
-    this.mount(this.head, this.summary, this.actions, this.sheet, this.sheetFoot, this.result);
+    this.mount(this.head, this.note, this.summary, this.actions, this.sheet, this.sheetFoot, this.result);
   }
 
   get locked(): boolean {
     return this.started;
   }
+  get isRunning(): boolean { return this.running; }
+  get canCancel(): boolean { return this.running && !this.cancelBtn.disabled; }
+  requestCancel() { if (this.canCancel) void this.cancel(); }
 
   /** Запустить установку без кнопки — «Обновить» со сцены «уже установлена». */
   start() {
+    this.preparation = false;
     void this.run();
+  }
+
+  prepare(version: string) {
+    this.preparation = true;
+    this.head.replaceChildren(el("span", "line", "Подготовка обновления"));
+    const old = machine.installed?.version;
+    this.note.textContent = `${old ? "Версия " + old : "Установленная версия"}${version ? " → " + version : ""}. Читаю текущие настройки. Память и конституция останутся на месте.`;
+    this.note.hidden = false; this.summary.hidden = true; this.actions.hidden = true;
+  }
+  preparationFailed(error: string, retry: () => void, back: () => void) {
+    this.preparation = false;
+    this.head.replaceChildren(el("span", "line", "Обновление пока не началось"));
+    this.note.textContent = error; this.note.hidden = false;
+    this.actions.replaceChildren(button("Повторить", "primary", retry), button("Вернуться", "quiet", back));
+    this.actions.hidden = false;
   }
 
   private row(term: string, value: string) {
@@ -88,6 +112,7 @@ export class InstallScene extends FormScene {
   }
 
   protected beforeEnter() {
+    if (this.updating || this.preparation) return;
     if (this.started) return;
     this.summary.replaceChildren();
     if (isPraxis()) {
@@ -191,7 +216,7 @@ export class InstallScene extends FormScene {
     const li = el("li", "sheet-row");
     li.dataset.state = "pending";
     const dot = el("span", "sheet-dot");
-    const own = isPraxis() && phase === "configure" ? "Настройки подключения" : PHASE_WORDS[phase];
+    const own = this.updating && phase === "configure" ? "Сохранение текущих настроек" : isPraxis() && phase === "configure" ? "Настройки подключения" : PHASE_WORDS[phase];
     const words = el("span", "sheet-label", own || label || phase);
     const detail = el("span", "sheet-detail", "");
     li.append(dot, words, detail);
@@ -252,16 +277,19 @@ export class InstallScene extends FormScene {
   private async cancel() {
     this.cancelBtn.disabled = true;
     this.cancelBtn.textContent = "Отменяю…";
-    await cancelInstall();
+    try { await cancelInstall(); }
+    catch (e) { this.cancelBtn.disabled = false; this.cancelBtn.textContent = "Отмена"; this.sheetFoot.querySelector<HTMLElement>(".sheet-why")!.textContent = "Отмена не подтверждена: " + String(e); }
   }
 
   private async run() {
     if (this.started) return;
     this.started = true;
+    this.running = true;
     this.actions.hidden = true;
     this.summary.hidden = true;
     this.result.hidden = true;
     this.head.replaceChildren(el("span", "line", machine.installed ? "Обновляю" : "Ставлю"));
+    if (this.updating) { this.note.hidden = false; this.note.textContent = "Новая версия готовится рядом. Память, настройки и твои правки сохраняются."; }
     this.buildSheet();
     this.sheet.hidden = false;
     this.sheetFoot.hidden = false;
@@ -287,21 +315,24 @@ export class InstallScene extends FormScene {
         if (this.current) this.mark(this.current, "failed");
         this.showFailure(text);
       }
-    }
+    } finally { this.running = false; }
   }
 
   /** Отмена — спокойный итог, не авария. */
   private showCancelled(text: string) {
+    this.note.hidden = true;
     this.head.replaceChildren(el("span", "line", "Отменено"));
     this.result.hidden = false;
     this.result.replaceChildren();
     const lines = el("p", "", machine.installed ? text : "Ничего не установлено: новая версия убрана, на диске её не осталось.");
-    const again = button("Начать снова", "primary", () => this.reset());
+    const again = button(this.updating ? "Повторить обновление" : "Начать снова", "primary", () => { this.reset(); if (this.updating) void this.run(); });
     this.result.append(lines, again);
     this.reveal(this.result);
+    again.focus({ preventScroll: true });
   }
 
   private showFailure(text: string) {
+    this.note.hidden = true;
     this.head.replaceChildren(el("span", "line", "Не вышло"));
     this.result.hidden = false;
     this.result.replaceChildren();
@@ -322,6 +353,7 @@ export class InstallScene extends FormScene {
     actions.append(again, copy);
     this.result.append(p, actions);
     this.reveal(this.result);
+    again.focus({ preventScroll: true });
   }
 
   private reset() {
@@ -329,8 +361,8 @@ export class InstallScene extends FormScene {
     this.sheet.hidden = true;
     this.sheetFoot.hidden = true;
     this.result.hidden = true;
-    this.summary.hidden = false;
-    this.actions.hidden = false;
+    this.summary.hidden = this.updating;
+    this.actions.hidden = this.updating;
     this.head.replaceChildren(el("span", "line", "Готово к установке"));
     this.beforeEnter();
   }
@@ -359,6 +391,7 @@ export class InstallScene extends FormScene {
       isPraxis() ? `Praxis стоит в ${r.dir}. При первом запуске окно спросит адрес сервера и ключ канала, если их ещё нет.` : `${setup.agent.trim() || "Агент"} живёт в ${r.dir}. ${service}`.trim(),
     );
     this.result.append(lines);
+    if (this.updating) { this.note.hidden = true; this.result.append(el("p", "", "Память, настройки и конституция сохранены.")); }
     if (r.backup) this.result.append(el("p", "muted", `Копия памяти до обновления: ${r.backup}`));
     // Предупреждение службы печатаем ТЕКСТОМ здесь: сама служба сказать этого
     // не может — её ставят скрытым поднятым процессом.
@@ -381,5 +414,6 @@ export class InstallScene extends FormScene {
     });
     this.result.append(open);
     this.reveal(this.result);
+    open.focus({ preventScroll: true });
   }
 }

@@ -1165,6 +1165,11 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
     );
     for k in WIZARD_KEYS {
         if let Some(v) = new.get(k) {
+            // The wizard has no controls for storage/code locations. Updating
+            // its binaries must not point an existing agent at an empty default tree.
+            if (k == "tree" || k == "code") && out.get(k).and_then(|v| v.as_str()).is_some_and(|s| !s.trim().is_empty()) {
+                continue;
+            }
             if k == "model" {
                 continue; // ниже, по полям
             }
@@ -1727,8 +1732,13 @@ pub fn setup_from_installed(cfg: &serde_json::Value, soul: &str, dir: &str) -> O
 /// правила — в `setup_from_installed`.
 pub fn setup_from_dir(dir: &Path) -> Option<Setup> {
     let cfg = read_json(&dir.join("helene.json"))?;
-    let soul = std::fs::read_to_string(dir.join("data").join("soul").join("SOUL.md")).unwrap_or_default();
+    let soul = std::fs::read_to_string(configured_tree(dir, &cfg).join("soul").join("SOUL.md")).unwrap_or_default();
     setup_from_installed(&cfg, &soul, &dir.display().to_string())
+}
+
+fn configured_tree(dir: &Path, cfg: &serde_json::Value) -> PathBuf {
+    let path = PathBuf::from(cfg.get("tree").and_then(|v| v.as_str()).filter(|v| !v.trim().is_empty()).unwrap_or("data"));
+    if path.is_absolute() { path } else { dir.join(path) }
 }
 
 pub fn installed_info() -> Option<Installed> {
@@ -3826,7 +3836,7 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
         }
         let cfg = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
         write_atomic(&cfg_path, &(cfg + "\n"))?;
-        let soul_path = dir.join("data").join("soul").join("SOUL.md");
+        let soul_path = configured_tree(&dir, &merged).join("soul").join("SOUL.md");
         let soul_exists = std::fs::read_to_string(&soul_path).map(|t| !t.trim().is_empty()).unwrap_or(false);
         let mut note = existing.as_ref().map(|_| "настройки обновлены, прежние решения сохранены".to_string());
         if let Some(runner) = merged.get("runner").and_then(|v| v.as_str()) {
@@ -5029,6 +5039,24 @@ mod tests {
         // Имя из пробелов — то же, что отсутствие имени.
         let blank = serde_json::json!({"agent": {"name": "  "}, "owner": {"name": "Б"}});
         assert!(setup_from_installed(&blank, "с", "d").is_none());
+    }
+
+    #[test]
+    fn update_keeps_storage_paths_and_reads_the_current_constitution() {
+        let root = std::env::temp_dir().join(format!("helene-update-paths-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let data = root.join("owner-data");
+        std::fs::create_dir_all(data.join("soul")).unwrap();
+        std::fs::write(data.join("soul/SOUL.md"), "Конституция владельца").unwrap();
+        let old = serde_json::json!({"agent":{"name":"А"},"owner":{"name":"Б"},"tree":"owner-data","code":"authored-core","port":9999});
+        std::fs::write(root.join("helene.json"), old.to_string()).unwrap();
+        let setup = setup_from_dir(&root).unwrap();
+        assert_eq!(setup.constitution, "Конституция владельца");
+        let merged = merge_config(Some(old), serde_json::json!({"tree":"data","code":"tree","agent":{"name":"А"}}), &setup);
+        assert_eq!(merged["tree"],"owner-data"); assert_eq!(merged["code"],"authored-core"); assert_eq!(merged["port"],9999);
+        assert_eq!(configured_tree(&root,&merged),data);
+        let absolute = serde_json::json!({"tree":data});
+        assert_eq!(configured_tree(&root,&absolute),data);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// ⚠⚠ Обновление возвращало штатный движок поверх своего.
