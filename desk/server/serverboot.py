@@ -396,6 +396,7 @@ def relay_child(base: Path, cfg: dict, tree: Path, env: dict) -> "Child | None":
     relay_env = dict(env)
     relay_env["RELAY_PORT"] = str(port)
     relay_env["RELAY_LOG_DIR"] = str(home / "logs")
+    relay_env["RELAY_LOCAL"] = "1"
     # Инструкции: без этого реле кладёт перед конституцией агента 23 КБ чужого
     # системного промпта («ты кодинг-агент Codex CLI») — то же значение, что
     # ставит оболочка (shell/src/main.rs::spawn_relay).
@@ -451,6 +452,7 @@ def main() -> int:
         print("[serverboot] ⚠ образ без пользователей helene/desk (или надзор не root) — агент "
               "работает под root, как до 1.2.5; пересобери образ из поставки 1.2.5+", flush=True)
     channel_env, runner_env = dict(env), dict(env)
+    channel_env["HELENE_SERVER_AUTH_IMPORT"] = "1"
     runner_env.pop("HELENE_TOKEN", None)   # ключ окна агенту не нужен, а код агента читает среду
     channel_user = runner_user = group = None
     if who is not None:
@@ -549,11 +551,37 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
+    from deskd import relay_auth
+    relay_auth.prepare(tree, who["desk"] if who else None, who["gid"] if who else None)
     for child in children:
         child.spawn()
+
+    def activate_auth(save):
+        picked = next((child for child in children if child.key == "relay"), None)
+        if picked is None:
+            save()
+            return False
+        picked.stop()
+        picked.proc = None
+        try:
+            save()
+        finally:
+            restart(picked)
+        return picked.alive()
+
     while not stopping:
         time.sleep(3)
         now = time.monotonic()
+        reader = tree / "memory/.control/desk_inbox/.reader.json"
+        try:
+            state = json.loads(reader.read_text(encoding="utf8"))
+            idle = state.get("busy") is False and time.time() - reader.stat().st_mtime < 45
+        except (OSError, ValueError):
+            idle = not any(child.key == "runner" and child.alive() for child in children)
+        relay_auth.apply_pending(tree, idle=idle, activate=activate_auth,
+                                 uid=who["desk"] if who else None,
+                                 gid=who["gid"] if who else None,
+                                 running=lambda: any(child.key == "relay" and child.alive() for child in children))
         if control is not None:
             # Сначала просьба, потом записка о себе — и в записке уже виден
             # новый pid перезапущенного ребёнка. В обратном порядке окно ещё

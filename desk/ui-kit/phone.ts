@@ -43,6 +43,8 @@ export interface Msg {
   /** Путь ОТ ДЕРЕВА агента и вид вложения — по ним рисуется проигрыватель. */
   media_path?: string;
   media_kind?: string;
+  media_name?: string;
+  media_size?: number;
 }
 
 export interface Room {
@@ -220,7 +222,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       <div id="composer-files" class="composer-files" hidden></div>
       <div class="composer-row">
         <button id="attach" class="attach" type="button" aria-label="Приложить картинку"><svg viewBox="0 0 20 20" aria-hidden="true">${ICON.attach}</svg></button>
-        <input id="attach-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+        <input id="attach-input" type="file" multiple hidden>
         <textarea id="say" rows="1" placeholder="Написать…" enterkeyhint="send"></textarea>
         <button id="send" class="send" type="button" aria-label="Отправить"><svg viewBox="0 0 20 20" aria-hidden="true">${ICON.send}</svg></button>
       </div>
@@ -340,14 +342,16 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     const rel = String(m.media_path || "").trim();
     if (!rel) return "";
     const src = mediaURL(rel);
-    const name = rel.split("/").pop() || rel;
+    const name = m.media_name || rel.split("/").pop() || "Вложение";
+    const artifact = (preview: boolean) => withKey(`/api/artifact?path=${encodeURIComponent(rel)}${preview ? "&preview=1" : ""}`);
     if (String(m.media_kind || "") === "audio") {
       return `<div class="msg-media"><audio controls preload="none" src="${esc(src)}"></audio></div>`;
     }
     if (String(m.media_kind || "") === "image") {
-      return `<div class="msg-media"><img loading="lazy" alt="${esc(name)}" src="${esc(src)}"></div>`;
+      return `<div class="msg-media"><img loading="lazy" alt="Изображение" src="${esc(src)}"><a href="${esc(artifact(false))}" download>Скачать</a></div>`;
     }
-    return `<div class="msg-media"><a href="${esc(src)}" target="_blank" rel="noreferrer">${esc(name)}</a></div>`;
+    const size = m.media_size ? `${(m.media_size / 1024 / 1024).toFixed(1)} МБ` : "";
+    return `<div class="msg-media artifact"><b>${esc(name)}</b><span>${size}</span><div><a href="${esc(artifact(true))}" target="_blank" rel="noreferrer">Открыть</a> · <a href="${esc(artifact(false))}" download>Скачать</a></div></div>`;
   }
 
   /** Ручка из области окна: 403 запоминаем и больше не спрашиваем. null — не отдаётся / не прочиталось. */
@@ -859,7 +863,8 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
         : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}</span>`;
       const media = mediaBlock(m)
         || (m.media ? ` <span class="muted">[${esc(m.media)}]</span>` : "");
-      html.push(`<div class="msg ${cls}" data-at="${esc(m.timestamp || "")}"><div class="msg-head">${head}</div><div class="msg-body">${md(m.text || "")}${media}</div></div>`);
+      const text = m.media_path ? String(m.text || "").replace(/^\[(?:файл|голос)\][^\n]*(?:\n\s*)?/, "") : m.text || "";
+      html.push(`<div class="msg ${cls}" data-at="${esc(m.timestamp || "")}"><div class="msg-head">${head}</div><div class="msg-body">${md(text)}${media}</div></div>`);
     }
     const next = html.join("");
     if (next === lastFeed && feedReady) return false;
@@ -899,13 +904,12 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   });
   // -------------------------------------------------------------- картинка с телефона
   // Тот же контракт, что у окна (/api/say с `attachments`): камера или галерея —
-  // одна кнопка, снимок едет в кадр агента и включает зрячую модель. Только то,
-  // что читает модель: PNG, JPEG, WebP, GIF, до четырёх, до 8 МБ.
+  // одна кнопка. Снимок едет в зрение, документ — в рабочую папку хода.
   const attach = q<HTMLButtonElement>("#attach", root);
   const attachInput = q<HTMLInputElement>("#attach-input", root);
   const filesBox = q<HTMLElement>("#composer-files", root);
   const SHOT_MIME = ["image/png", "image/jpeg", "image/webp", "image/gif"];
-  let shots: Array<{ name: string; mime: string; data: string; url: string }> = [];
+  let shots: Array<{ name: string; mime: string; data: string; url: string; size: number }> = [];
 
   function clearShots() {
     for (const s of shots) URL.revokeObjectURL(s.url);
@@ -916,7 +920,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   function paintShots() {
     filesBox.hidden = shots.length === 0;
     filesBox.innerHTML = shots
-      .map((s, i) => `<span class="chip"><img src="${s.url}" alt=""><button type="button" data-i="${i}" aria-label="Убрать">×</button></span>`)
+      .map((s, i) => `<span class="chip">${SHOT_MIME.includes(s.mime) ? `<img src="${s.url}" alt="">` : `<span>${esc(s.name)}</span>`}<button type="button" data-i="${i}" aria-label="Убрать">×</button></span>`)
       .join("");
     filesBox.querySelectorAll<HTMLButtonElement>("button[data-i]").forEach((b) => {
       b.addEventListener("click", () => {
@@ -930,9 +934,9 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   attach.addEventListener("click", () => attachInput.click());
   attachInput.addEventListener("change", async () => {
     for (const f of Array.from(attachInput.files || [])) {
-      if (!SHOT_MIME.includes(f.type)) { toast("Модель читает только PNG, JPEG, WebP и GIF."); continue; }
-      if (f.size > 8 * 1024 * 1024) { toast("Картинка больше 8 МБ — не влезет."); continue; }
-      if (shots.length >= 4) { toast("Не больше четырёх картинок за раз."); break; }
+      if (f.size > 64 * 1024 * 1024) { toast("Файл больше 64 МБ."); continue; }
+      if (shots.reduce((sum, s) => sum + s.size, 0) + f.size > 128 * 1024 * 1024) { toast("Вложения вместе больше 128 МБ."); continue; }
+      if (shots.length >= 16) { toast("Не больше 16 файлов за раз."); break; }
       try {
         const data = await new Promise<string>((resolve, reject) => {
           const r = new FileReader();
@@ -940,9 +944,9 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
           r.onload = () => resolve(String(r.result || "").split(",", 2)[1] || "");
           r.readAsDataURL(f);
         });
-        shots.push({ name: f.name || "снимок", mime: f.type, data, url: URL.createObjectURL(f) });
+        shots.push({ name: f.name || "файл", mime: f.type || "application/octet-stream", data, url: URL.createObjectURL(f), size: f.size });
       } catch {
-        toast("Картинка не прочиталась.");
+        toast("Файл не прочитался.");
       }
     }
     attachInput.value = "";

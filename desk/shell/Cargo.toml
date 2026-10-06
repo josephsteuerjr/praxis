@@ -22,6 +22,7 @@ tauri = { version = "2", features = ["tray-icon", "image-png"], optional = true 
 tauri-plugin-window-state = { version = "2", optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
 serde_json = "1"
+url = "2"
 serde = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "net"], optional = true }
 # native-certs: без него ureq носит с собой webpki-roots и не знает корней

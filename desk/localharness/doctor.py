@@ -443,6 +443,9 @@ def diagnose_agent(tree: Path, now: float | None = None) -> dict:
     checks["updater"] = decide_beat(read_updater(tree), UPDATER_STALE_S, now,
                                     "исполнитель обновлений")
     checks["reader"] = decide_reader(read_reader(tree), now)
+    relay = read_probe(Path(tree) / "relay/auth-status.json")
+    if relay["state"] != "missing":
+        checks["relay_auth"] = decide_relay_auth(relay)
     restarts = read_restarts(tree, now)
     checks["restarts"] = decide_restarts(restarts)
     quiet_raw = read_quiet_and_skips(tree, now)
@@ -469,6 +472,40 @@ def diagnose_agent(tree: Path, now: float | None = None) -> dict:
         if tail:
             result["runner_tail"] = tail
     return result
+
+
+def decide_relay_auth(probe: dict) -> dict:
+    if probe["state"] != "ok":
+        return {"verdict": VERDICT_WATCH, "note": "Прибор входа реле пуст или повреждён; вход не подтверждён"}
+    data = probe["data"]
+    notes = []
+    watch = False
+    if not data.get("login_present"):
+        notes.append("В relay/local_auth нет сохранённого входа ChatGPT")
+        watch = True
+    else:
+        notes.append("Файл входа есть в relay/local_auth")
+    if data.get("relay_running") is False:
+        watch = True
+        notes.append("Процесс реле сейчас не поднят")
+    phase = data.get("phase")
+    if phase in ("queued", "saved", "failed", "conflict"):
+        watch = True
+    if phase:
+        # Only known state labels; never trust arbitrary text from a patient file.
+        notes.append({"queued": "Ждём окончания хода", "saved": "Вход сохранён, запуск реле не подтверждён",
+                      "active": "Надзор сохранил вход и поднял реле", "failed": "Приём входа не завершился",
+                      "conflict": "На сервере другой вход; требуется явная замена"}.get(phase, "Неизвестный результат приёма"))
+    mount = data.get("persistence")
+    if mount == "container-layer":
+        watch = True
+        notes.append("Данные находятся в слое контейнера: при пересоздании вход будет потерян. Нужен постоянный том")
+    elif mount == "unknown":
+        watch = True
+        notes.append("Постоянное хранение не подтверждено")
+    elif isinstance(mount, str) and mount.startswith("mounted:"):
+        notes.append("Папка данных находится на смонтированной файловой системе; сохранность тома при обновлении зависит от конфигурации Docker")
+    return {"verdict": VERDICT_WATCH if watch else VERDICT_HEALTHY, "note": "; ".join(notes)}
 
 
 def diagnose_install(base: Path, agent_id: str | None = None) -> dict:

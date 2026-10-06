@@ -212,6 +212,8 @@ class Desk:
         if media_path:
             row["media_path"] = str(media_path)
             row["media_kind"] = str(media_kind or "file")
+            from deskd import artifacts
+            row.update(artifacts.metadata(self.tree, str(media_path)))
         if system:
             # Служебная плашка продукта, а не слово агента: окно её показывает,
             # память жизни (и значит кадр модели) её не получает. `kind` — вид
@@ -579,29 +581,19 @@ def install(agent_mod, desks: Desks) -> None:
         desk = desks.current(agent_mod) if target in ("", desks.speaker) else desks.find(target)
         if desk is None:
             return _refusal(target)
-        # Файл ВНУТРИ дерева окно умеет показать само: канал отдаёт байты по пути
-        # от дерева (`/api/media`), окно рисует проигрыватель. Так приезжает голос
-        # агента: `media_audio` кладёт WAV в `<дерево>/media/tts`.
-        #
-        # ⚠ Файл СНАРУЖИ дерева остаётся строкой с путём, и это не лень: канал,
-        # отдающий любой путь с диска, — файловый сервер на весь компьютер, а не
-        # окно агента. Владелец откроет такой файл сам.
-        rel = ""
-        try:
-            rel = src.resolve().relative_to(Path(desks.tree).resolve()).as_posix()
-        except (ValueError, OSError):
-            rel = ""
+        # Снимок выбранного рукой файла: в URL попадает только путь внутри
+        # зарегистрированной папки артефактов, включая внешние исходники.
+        from deskd import artifacts
+        rel = artifacts.stage(desks.tree, src)
         kind = str(media_kind or "document")
         if voice_note or kind in ("audio", "voice"):
             kind = "audio"
-        note = f"[{'голос' if kind == 'audio' else 'файл'}] {src.name}"
-        if not rel:
-            note += f" — {src}"
-        if str(caption or "").strip():
-            note += "\n" + str(caption).strip()
+        elif kind == "photo":
+            kind = "image"
+        note = str(caption or "").strip()
         if rel:
             desk.archive(note, outgoing=True, media_path=rel, media_kind=kind)
-            desk.life(note, direction="out", actor=desk.agent_name,
+            desk.life(note or f"[вложение: {src.name}]", direction="out", actor=desk.agent_name,
                       source_id=f"file-{int(time.time() * 1000)}")
             desk.sent.append(note)
             return f"Отправлено → {desks.speaker} (окно Hélène, вложение {src.name})"

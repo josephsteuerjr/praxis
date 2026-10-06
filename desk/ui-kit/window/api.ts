@@ -87,6 +87,10 @@ export function mediaURL(rel: string): string {
   return cfg.key ? base + "&key=" + encodeURIComponent(cfg.key) : base;
 }
 
+export function artifactURL(rel: string, preview = false): string {
+  return url("/api/artifact?path=" + encodeURIComponent(rel) + (preview ? "&preview=1" : ""));
+}
+
 export class ApiError extends Error {
   status?: number;
   code?: string;
@@ -211,7 +215,9 @@ export async function del<T = any>(path: string): Promise<T> {
 }
 
 async function request<T>(method: string, path: string, body: unknown): Promise<T> {
-  if (ready && sock) return tunnelCall<T>(path, method, body);
+  // Files use HTTP's bounded body reader instead of the small event socket.
+  const hasFiles = body != null && typeof body === "object" && Array.isArray((body as { attachments?: unknown }).attachments) && (body as { attachments: unknown[] }).attachments.length > 0;
+  if (ready && sock && !hasFiles) return tunnelCall<T>(path, method, body);
   const r = await fetch(url(path), {
     method,
     headers: body == null ? {} : { "Content-Type": "application/json" },

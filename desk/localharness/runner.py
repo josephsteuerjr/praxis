@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+from contextvars import ContextVar
 import datetime as dt
 import json
 import logging
@@ -65,6 +66,7 @@ logging.basicConfig(level=_LOG_LEVEL,
 log = logging.getLogger("frame.runner")
 
 STREAM = "window"          # комната окна: ключ архива memory/groups/window.jsonl
+_INITIAL_FILES = ContextVar("helene_initial_files", default=None)
 _POLL_SEC = 1.0
 _HEARTBEAT_SEC = 10.0
 
@@ -393,7 +395,8 @@ def _batch_files(paths: list[str], *, run_id: str) -> list[str]:
 
     Слово владельца 01.10: вложения — просто папка хода с артефактами. Копия,
     не перенос: записка и исходник остаются source evidence до обычного sweep-а,
-    повтор до checkpoint идемпотентен (то же имя и размер — не трогаем)."""
+    повтор до checkpoint идемпотентен по содержимому. Одноимённые файлы
+    разных записок не заменяют друг друга."""
     if not paths:
         return []
     inbox = (Path(_tree) / "memory" / ".control" / "desk_inbox").resolve()
@@ -410,12 +413,40 @@ def _batch_files(paths: list[str], *, run_id: str) -> list[str]:
             lines.append(f"[файл не найден: {Path(rel).name}]")
             continue
         target = folder / src.name
-        if not target.exists() or target.stat().st_size != src.stat().st_size:
+        import hashlib
+        with src.open("rb") as file:
+            digest = hashlib.file_digest(file, "sha256").hexdigest()
+        def identical(path):
+            if not path.is_file():
+                return False
+            with path.open("rb") as file:
+                return hashlib.file_digest(file, "sha256").hexdigest() == digest
+        if target.exists() and not identical(target):
+            target = folder / (src.stem + "-" + digest[:24] + src.suffix)
+        if not identical(target):
             tmp = target.with_name(target.name + ".part")
             shutil.copyfile(src, tmp)
+            if not identical(tmp):
+                tmp.unlink(missing_ok=True)
+                raise ValueError("вложение изменилось во время копирования")
             os.replace(tmp, target)
         lines.append(f"[файл хода: {target}]")
     return lines
+
+
+def _drain_owner_inputs(current, messages):
+    """Initial files and later inbox batches enter the same durable run."""
+    import turn_inbox
+    additions, ack = turn_inbox.collect(sys.modules[__name__], current, messages)
+    initial = _INITIAL_FILES.get()
+    if current is not None and initial and str(current.delivery_chat_id) == initial["room"]:
+        prefix = "[Файлы сообщения владельца; " + initial["source_id"] + "]\n"
+        if not any(isinstance(m.get("content"), str) and m["content"].startswith(prefix)
+                   for m in messages):
+            lines = _batch_files(initial["paths"], run_id=current.run_id)
+            if lines:
+                additions.insert(0, {"role": "user", "content": prefix + "\n".join(lines)})
+    return additions, ack
 
 
 def _batch_images(text: str, paths: list[str], *, room: str, source_id: str,
@@ -651,7 +682,6 @@ def deliver_one_media(item, chat_id: str) -> str:
             caption=str(getattr(item, "caption", "") or ""),
             media_kind=str(getattr(item, "kind", "document") or "document"),
             voice_note=bool(getattr(item, "voice_note", False))))
-    note = f"[файл] {Path(item.path).name} — {item.path}"
     caption = str(getattr(item, "caption", "") or "").strip()
     room = _room(target)
     try:
@@ -661,7 +691,10 @@ def deliver_one_media(item, chat_id: str) -> str:
     media_kind = str(getattr(item, "kind", "document") or "document")
     if media_kind == "photo":
         media_kind = "image"
-    return str(room.deliver(note + ("\n" + caption if caption else ""),
+    if not relative:
+        raise ValueError("исходящее вложение вне дерева агента")
+    note = caption
+    return str(room.deliver(note,
                             media_path=relative, media_kind=media_kind if relative else ""))
 
 
@@ -703,17 +736,30 @@ def handle_desk(message: str, room: str = STREAM, attachments: list[str] | tuple
     now = _now()
     source_id = str(ingress_id or "").strip() or f"{room}-{int(now.timestamp() * 1000)}"
     desk = _room(room)
-    heard, pictures = _hear_attachments(list(attachments or ()))
-    refs, notes = _ingest_attachments(pictures, chat_id=room, message_id=source_id)
-    labels = heard + [f"[изображение: {Path(r.path).name}]" for r in refs] + notes
+    display_text = message
+    heard, remaining = _hear_attachments(list(attachments or ()))
+    pictures = [path for path in remaining if Path(path).suffix.lower() in _IMAGE_EXT]
+    files = [path for path in remaining if path not in pictures]
+    refs, notes = _ingest_attachments(pictures, chat_id=room, message_id=source_id, move=False)
+    labels = heard + [f"[изображение: {Path(r.path).name}]" for r in refs] + notes + [f"[файл: {Path(path).name}]" for path in files]
     if labels:
         message = (message + "\n" + "\n".join(labels)).strip()
     # Восприятие пишет память ДО кадра — как в живом раннере: кадр читает горячий
     # слой, и текущая реплика обязана быть в нём, иначе она отвечала бы на пустоту.
-    desk.archive(message, outgoing=False, now=now, source_id=source_id)
+    if display_text.strip() or not attachments:
+        desk.archive(display_text, outgoing=False, now=now, source_id=source_id)
+    for index, path in enumerate(attachments):
+        rel = "memory/.control/desk_inbox/" + str(path).replace("\\", "/")
+        kind = "image" if Path(path).suffix.lower() in _IMAGE_EXT else "file"
+        desk.archive("", outgoing=False, now=now, source_id=source_id + f"-file-{index}",
+                     media_path=rel, media_kind=kind)
     desk.life(message, direction="in", actor=_speaker, source_id=source_id, now=now)
-    _turn_in_window(source_id, speaker=_speaker, room=room, origin_text=message,
-                    media_refs=tuple(refs))
+    token = _INITIAL_FILES.set({"room": room, "source_id": source_id, "paths": list(attachments)} if attachments else None)
+    try:
+        _turn_in_window(source_id, speaker=_speaker, room=room, origin_text=message,
+                        media_refs=tuple(refs))
+    finally:
+        _INITIAL_FILES.reset(token)
 
 
 def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
@@ -2782,7 +2828,7 @@ def main() -> None:
         media_sender=deliver_one_media)
     _continuity.install()
     import turn_inbox
-    agent.OWNER_INPUT_DRAIN = lambda current, messages: turn_inbox.collect(sys.modules[__name__], current, messages)
+    agent.OWNER_INPUT_DRAIN = _drain_owner_inputs
     import tasks
     import forge
     import perception

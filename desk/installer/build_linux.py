@@ -661,8 +661,8 @@ def nfpm_config(version: str, contents: list[dict], files: dict[str, str]) -> di
             "deb": {"depends": list(DEPENDS), "recommends": list(RECOMMENDS)},
             "rpm": {"depends": list(RPM_DEPENDS), "recommends": list(RPM_RECOMMENDS)},
         },
-        "deb": {"compression": "xz"},
-        "rpm": {"compression": "xz", "group": "Applications/System",
+        "deb": {"compression": "gzip"},
+        "rpm": {"compression": "gzip", "group": "Applications/System",
                 "summary": "Hélène — личный агент на твоём компьютере"},
     }
 
@@ -696,12 +696,20 @@ def build_packages(out: Path, version: str, dest: Path, unit_text: str) -> dict[
                timeout=3600)
         if not target.is_file():
             raise SystemExit(f"nfpm не собрал {target.name}")
+        if packager == "rpm":
+            import rpm_archive_size
+            print("RPM archive-size:", rpm_archive_size.repair(target))
         made[packager] = target
     # Проверка чужими руками: dpkg и rpm читают то, что собрал nfpm.
     bm.run(["dpkg-deb", "--info", made["deb"]], timeout=120)
     listing = bm.capture(["dpkg-deb", "-c", made["deb"]], timeout=600)
     rpm_listing = bm.capture(["rpm", "-qlp", made["rpm"]], timeout=600)
     bm.run(["rpm", "-qip", "--requires", made["rpm"]], timeout=120)
+    bm.run(["rpm", "-Kv", "--nosignature", made["rpm"]], timeout=120)
+    # Drain stdout without buffering the >1GiB archive in memory; require exit0.
+    with subprocess.Popen(["rpm2cpio", str(made["rpm"])], stdout=subprocess.DEVNULL) as check:
+        if check.wait(timeout=600) != 0:
+            raise SystemExit("rpm2cpio не принял архив RPM")
     for need in (f".{PROGRAM_ROOT}/helene-svc", f".{PROGRAM_ROOT}/runtime/bin/python3 ->",
                  f".{UNIT_PATHS['deb']}", "./usr/share/polkit-1/actions/app.helene.policy"):
         if need not in listing:

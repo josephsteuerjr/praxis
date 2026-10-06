@@ -29,6 +29,7 @@ import { hostInfo, type HostInfo } from "../host";
 import { lookCard } from "../look";
 import { deskTrialHTML, type UpdateState } from "./update-card";
 import { isMacPlatform, platformOf } from "../../platform";
+import { relayAuthCard } from "../relay-auth-card";
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
 export const RESTART_BLOCKS: Array<[string, string]> = [
@@ -310,6 +311,9 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
 
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
   center.append(inGroup(transferCard(draft, posix), GROUP.app));
+  if (c.mode === "remote" && c.base) {
+    center.append(inGroup(relayAuthCard(String(c.base)), GROUP.app));
+  }
 
   // --- копии памяти (1.2): расписание, «сейчас», последние снимки
   center.append(inGroup(backupCard(draft), GROUP.app));

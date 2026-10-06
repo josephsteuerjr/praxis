@@ -267,11 +267,12 @@ export function start(opts: WindowOptions): void {
   // Только то, что модель читает (PNG/JPEG/WebP/GIF), до четырёх и до 8 МБ.
   // Голосовое (0.6.0) — запись микрофона тем же путём: руннер расшифровывает её
   // whisper-ом, как голосовые из Telegram, и кладёт текст в реплику.
-  interface Attachment { name: string; mime: string; data: string; url: string; size: number; kind: "image" | "audio"; seconds?: number }
+  interface Attachment { name: string; mime: string; data: string; url: string; size: number; kind: "image" | "audio" | "file"; seconds?: number }
   const ATTACH_MIME = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
   const AUDIO_MIME = new Set(["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "audio/x-wav"]);
-  const ATTACH_MAX = 4;
-  const ATTACH_BYTES = 8 * 1024 * 1024;
+  const ATTACH_MAX = 16;
+  const ATTACH_BYTES = 64 * 1024 * 1024;
+  const ATTACH_TOTAL = 128 * 1024 * 1024;
   let attachments: Attachment[] = [];
   const baseMime = (t: string) => String(t || "").split(";", 1)[0].trim().toLowerCase();
 
@@ -287,13 +288,13 @@ export function start(opts: WindowOptions): void {
   async function addFiles(files: Iterable<File>, seconds?: number) {
     for (const f of files) {
       const mime = baseMime(f.type);
-      const kind: Attachment["kind"] = AUDIO_MIME.has(mime) ? "audio" : "image";
-      if (kind === "image" && !ATTACH_MIME.has(mime)) { toast(`${f.name || "файл"}: модель читает только PNG, JPEG, WebP и GIF; голосовое — кнопкой микрофона`); continue; }
-      if (f.size > ATTACH_BYTES) { toast(`${f.name || "файл"}: больше 8 МБ`); continue; }
+      const kind: Attachment["kind"] = AUDIO_MIME.has(mime) ? "audio" : ATTACH_MIME.has(mime) ? "image" : "file";
+      if (f.size > ATTACH_BYTES) { toast(`${f.name || "файл"}: больше 64 МБ`); continue; }
+      if (attachments.reduce((sum, item) => sum + item.size, 0) + f.size > ATTACH_TOTAL) { toast("Вложения вместе больше 128 МБ"); continue; }
       if (attachments.length >= ATTACH_MAX) { toast(`Не больше ${ATTACH_MAX} вложений за раз`); break; }
       try {
         const data = await fileToBase64(f);
-        attachments.push({ name: f.name || (kind === "audio" ? "voice" : "image"), mime, data, url: URL.createObjectURL(f), size: f.size, kind, seconds });
+        attachments.push({ name: f.name || (kind === "audio" ? "voice" : "file"), mime, data, url: URL.createObjectURL(f), size: f.size, kind, seconds });
       } catch (e) {
         toast("Не прочиталось: " + humanError(e).text);
       }
@@ -321,7 +322,7 @@ export function start(opts: WindowOptions): void {
     composerFiles.innerHTML = attachments
       .map((a, i) => a.kind === "audio"
         ? `<span class="chip chip-voice"><span class="chip-ico" aria-hidden="true">🎤</span><span>голосовое${a.seconds ? " · " + fmtDur(a.seconds) : ""}</span> <span class="muted">${fmtK(a.size)}</span><button type="button" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></span>`
-        : `<span class="chip"><img src="${a.url}" alt=""><span>${esc(a.name)}</span> <span class="muted">${fmtK(a.size)}</span><button type="button" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></span>`)
+        : `<span class="chip">${a.kind === "image" ? `<img src="${a.url}" alt="">` : `<span class="chip-ico" aria-hidden="true">📄</span>`}<span>${esc(a.name)}</span> <span class="muted">${fmtK(a.size)}</span><button type="button" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></span>`)
       .join("");
     composerFiles.querySelectorAll<HTMLButtonElement>("button[data-i]").forEach((b) => {
       b.addEventListener("click", () => dropFile(Number(b.dataset.i)));

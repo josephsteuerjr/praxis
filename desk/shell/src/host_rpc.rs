@@ -29,6 +29,7 @@ async fn host_command(app: &ShellHandle, name: &str, args: &serde_json::Value) -
         "open_login_page" => serde_json::to_value(open_login_page()?).map_err(|e| e.to_string()),
         "relay_status" => serde_json::to_value(relay_status(app.clone())).map_err(|e| e.to_string()),
         "relay_account" => serde_json::to_value(relay_account().await?).map_err(|e| e.to_string()),
+        "relay_auth_transfer" => relay_auth_transfer(argument::<bool>(args, "replace", "replace")?).await,
         "notify" => serde_json::to_value(notify(argument::<String>(args, "title", "title")?, argument::<String>(args, "body", "body")?)).map_err(|e| e.to_string()),
         "app_info" => serde_json::to_value(app_info()).map_err(|e| e.to_string()),
         "update_check" => serde_json::to_value(update_check(argument::<String>(args, "url", "url")?).await?).map_err(|e| e.to_string()),

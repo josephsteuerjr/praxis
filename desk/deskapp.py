@@ -35,6 +35,7 @@ import secrets
 import threading
 import time
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any, Awaitable, Callable
 
 from aiohttp import web
@@ -43,6 +44,7 @@ from aiohttp.abc import AbstractAccessLogger
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from deskd import agentcfg
+from deskd import artifacts
 from deskd import control
 from deskd import readers
 from deskd import rooms
@@ -172,7 +174,7 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
 # «перезапустить» в том, чтобы она была под рукой, когда до компьютера не
 # дойти; закрытая от телефона, она бесполезна ровно в этом случае. Что можно
 # трогать — решает служба на сервере закрытым списком, а не эта строка.
-_DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media",
+_DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media", "/api/artifact",
                  "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
                  "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models",
                  "/api/interrupt", "/api/interrupt-step"}
@@ -400,7 +402,8 @@ def _is_loopback(request: web.Request) -> bool:
 
 def _role(request: web.Request) -> str:
     """"owner" — окно/эта машина, "device" — спаренный телефон, "" — никто."""
-    supplied = request.query.get("key") or request.cookies.get(COOKIE) or ""
+    bearer = request.headers.get("Authorization", "")
+    supplied = (bearer[7:] if bearer.startswith("Bearer ") else "") or request.query.get("key") or request.cookies.get(COOKIE) or ""
     if TOKEN and supplied:
         try:
             if secrets.compare_digest(supplied, TOKEN):
@@ -1009,6 +1012,45 @@ async def _r_media(c: Call):
                                            "Cache-Control": "private, max-age=3600"})
 
 
+async def _r_artifact(c: Call):
+    path, why = artifacts.resolve(readers.tree(), c.query.get("path") or "")
+    if path is None:
+        return Fail(404, why, "no_artifact")
+    details = artifacts.metadata(readers.tree(), c.query.get("path") or "")
+    mime = details.get("media_mime") or "application/octet-stream"
+    preview = c.query.get("preview") == "1"
+    safe_inline = mime in {"application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp"} or mime.startswith("text/")
+    if preview and mime.startswith("text/"):
+        mime = "text/plain; charset=utf-8"
+    disposition = "inline" if preview and safe_inline else "attachment"
+    filename = quote(details.get("media_name") or path.name, safe="")
+    return web.FileResponse(path, headers={"Content-Type": mime,
+        "Content-Disposition": disposition + "; filename*=UTF-8''" + filename,
+        "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600",
+        "Content-Security-Policy": "sandbox; default-src 'none'"})
+
+
+async def _r_relay_auth_import(c: Call):
+    if c.role != "owner" or os.environ.get("HELENE_SERVER_AUTH_IMPORT") != "1":
+        raise web.HTTPForbidden(text="Приём входа доступен владельцу на сервере")
+    from deskd import relay_auth
+    try:
+        return relay_auth.enqueue(readers.tree(), (c.body or {}).get("auth"),
+                                  (c.body or {}).get("replace") is True)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+
+
+async def _r_relay_auth_status(c: Call):
+    if c.role != "owner" or os.environ.get("HELENE_SERVER_AUTH_IMPORT") != "1":
+        raise web.HTTPForbidden(text="Статус входа доступен владельцу на сервере")
+    from deskd import relay_auth
+    try:
+        return relay_auth.receipt(readers.tree(), c.query.get("id"))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+
+
 async def _r_home(c: Call):
     """Чьё это дерево. Оболочка спрашивает перед тем, как признать живой на
     порту харнесс своим: осиротевший процесс прежней установки держал порт, и
@@ -1276,6 +1318,9 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/retention", _r_retention),
     Route("POST", "/api/retention", _r_retention),
     Route("GET", "/api/media", _r_media),
+    Route("GET", "/api/artifact", _r_artifact),
+    Route("POST", "/api/relay/auth/import", _r_relay_auth_import),
+    Route("GET", "/api/relay/auth/status", _r_relay_auth_status),
     Route("GET", "/api/agent-config", _r_agent_config),
     Route("POST", "/api/agent-config", _r_agent_config_save),
     Route("GET", "/api/md-tree", _reader(lambda: readers.md_tree())),
@@ -1368,6 +1413,8 @@ def _http_handler(route: Route):
                     query={k: request.query.get(k) for k in request.query},
                     body=body, local=_is_loopback(request), role=_role(request))
         result = await route.handler(call)
+        if isinstance(result, web.StreamResponse):
+            return result
         if isinstance(result, Fail):
             # Текстом, как прежние HTTPConflict/HTTPBadRequest: клиенты читают
             # причину из тела ответа словами.
@@ -1382,8 +1429,9 @@ _SAY_RE = re.compile(r"[^\w\-]+")
 _CHAT_KEY_RE = re.compile(r"^-?\d+(?:__topic__\d+)?$")
 
 
-_ATTACH_MAX_FILES = 4
-_ATTACH_MAX_BYTES = 8 * 1024 * 1024
+_ATTACH_MAX_FILES = 16
+_ATTACH_MAX_BYTES = 64 * 1024 * 1024
+_ATTACH_MAX_TOTAL = 128 * 1024 * 1024
 _ATTACH_MIME = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
                 "image/gif": ".gif",
                 # Голосовое из окна (0.6.0): запись микрофона едет тем же подвалом
@@ -1411,6 +1459,7 @@ def _attachments_in(raw) -> list[dict]:
     if len(raw) > _ATTACH_MAX_FILES:
         raise web.HTTPBadRequest(text=f"не больше {_ATTACH_MAX_FILES} вложений за раз")
     out: list[dict] = []
+    total_bytes = 0
     for i, item in enumerate(raw, 1):
         if not isinstance(item, dict):
             raise web.HTTPBadRequest(text=f"вложение #{i}: не объект")
@@ -1424,7 +1473,10 @@ def _attachments_in(raw) -> list[dict]:
         if not data:
             raise web.HTTPBadRequest(text=f"вложение #{i}: пустой файл")
         if len(data) > _ATTACH_MAX_BYTES:
-            raise web.HTTPBadRequest(text=f"вложение #{i}: больше 8 МБ")
+            raise web.HTTPBadRequest(text=f"вложение #{i}: больше 64 МБ")
+        total_bytes += len(data)
+        if total_bytes > _ATTACH_MAX_TOTAL:
+            raise web.HTTPBadRequest(text="вложения вместе больше 128 МБ")
         name = re.sub(r"[^\w.\-]+", "_", str(item.get("name") or "").strip(), flags=re.UNICODE)
         if mime in _ATTACH_MIME:
             name = name.strip("._") or (f"voice{i}" if mime in _ATTACH_AUDIO else f"image{i}")
@@ -1932,7 +1984,8 @@ def _mobile_file(name: str):
 
 
 def build_app() -> web.Application:
-    app = web.Application(middlewares=[auth_middleware])
+    app = web.Application(middlewares=[auth_middleware],
+                          client_max_size=_ATTACH_MAX_TOTAL * 4 // 3 + 1024 * 1024)
     app.router.add_get("/", index)
     # Все ручки API — из одной таблицы (та же, что у канала).
     for route in ROUTES:

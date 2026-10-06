@@ -1505,6 +1505,7 @@ dependencies = [
  "tauri-winrt-notification",
  "tokio",
  "ureq",
+ "url",
  "webkit2gtk",
  "windows",
  "windows-sys 0.59.0",

@@ -47,6 +47,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 #[path = "../../common/relay_policy.rs"]
 mod relay_policy;
+mod relay_transfer;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -2716,6 +2717,19 @@ fn relay_home() -> PathBuf {
     // установку (§ build_plan), и после переключения агента в окне кнопка
     // «Войти в подписку» иначе писала бы вход туда, где реле его не ищет.
     base_tree().join("relay")
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn relay_auth_transfer(replace: bool) -> Result<serde_json::Value, String> {
+    // Destination comes from the saved native configuration, not renderer input.
+    let cfg = config_value().ok_or("Нет настроек подключения")?;
+    if cfg.get("mode").and_then(|v| v.as_str()) != Some("remote") {
+        return Err("Сначала сохрани подключение приложения к серверу в карточке «Перенос»".into());
+    }
+    let base = cfg.get("base").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+    let key = cfg.get("key").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+    shell_adapter::async_runtime::spawn_blocking(move || relay_transfer::transfer(&relay_home(), &base, &key, replace))
+        .await.map_err(|_| "Передача входа не завершилась".to_string())?
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -6503,6 +6517,7 @@ fn main() {
             relay_login, relay_login_url, open_login_page,
             relay_status,
             relay_account,
+            relay_auth_transfer,
             notify,
             app_info,
             update_check,

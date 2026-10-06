@@ -1369,7 +1369,7 @@ MEDIA_TYPES = {
 
 #: Откуда разрешено отдавать. Не «всё дерево»: в дереве лежат её память,
 #: конституция и `helene.json` соседей — там нечего проигрывать.
-MEDIA_ROOTS = ("media", "memory/.control/desk_inbox/attachments")
+MEDIA_ROOTS = ("media", "workspace/media", "memory/.control/desk_inbox/attachments")
 
 
 def media_file(rel: str) -> tuple[pathlib.Path | None, str, str]:

@@ -2,6 +2,8 @@
 @import "./tokens.css";
 @import "./actions.css";
 
+.msg-media.artifact { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 12px; padding: 12px; overflow-wrap: anywhere; }
+
 /* Телефон и мини-апп Telegram — один язык с окном: та же бумага, сериф для
    слова агента и заголовков, гротеск для интерфейса, почерк для имени. Одна
    колонка; комнаты, ходы и настройки — листами снизу. */
