@@ -221,6 +221,69 @@ class CreateSoul(unittest.TestCase):
         self.assertEqual([a.id for a in agents.roster(self.root)], ["main"],
                          "отказ не оставляет половину агента")
 
+
+class CreateDoctor(unittest.TestCase):
+    """kind=doctor (1.4.1): канон — сидом, знания — skills-seed/, всё из поставки."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        # Мини-поставка: канон доктора и его знания, как их кладёт сборка
+        # (resources/ и app/resources/ — оба корня ищутся).
+        res = self.root / "resources"
+        (res / "souls").mkdir(parents=True)
+        (res / "souls" / "doctor.md").write_text("# Канон доктора\n", encoding="utf-8")
+        (res / "doctor-skills").mkdir(parents=True)
+        (res / "doctor-skills" / "silent-places.md").write_text(
+            "# Три нуля различаются всегда\n", encoding="utf-8")
+        lay_out(self.root, {"helene.json": {"agent": {"name": "Hélène"}, "port": 8094}})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_doctor_seeds_canon_and_knowledge_from_the_installation(self):
+        made = agents.create(self.root, "Доктор", soul={"kind": "doctor"})
+        seed = made.dir / agents.SEED_NAME
+        self.assertTrue(seed.is_file(), "канон доктора лежит сидом")
+        self.assertEqual(seed.read_text(encoding="utf-8"), "# Канон доктора\n")
+        skills = made.dir / "skills-seed" / "silent-places.md"
+        self.assertTrue(skills.is_file(), "знания доктора едут рядом с сидом")
+        self.assertIn("Три нуля", skills.read_text(encoding="utf-8"))
+        # Конфиг души не знает: рождение — файлами, не ключами.
+        cfg = json.loads((made.dir / "helene.json").read_text(encoding="utf-8"))
+        self.assertNotIn("soul", cfg)
+
+    def test_missing_canon_refuses_before_any_writes(self):
+        (self.root / "resources" / "souls" / "doctor.md").unlink()
+        with self.assertRaises(ValueError) as caught:
+            agents.create(self.root, "Доктор", soul={"kind": "doctor"})
+        self.assertIn("канон доктора не найден", str(caught.exception))
+        self.assertEqual([a.id for a in agents.roster(self.root)], ["main"],
+                         "отказ не оставляет половину доктора")
+
+    def test_missing_knowledge_is_not_an_error(self):
+        import shutil as _shutil
+        _shutil.rmtree(self.root / "resources" / "doctor-skills")
+        made = agents.create(self.root, "Доктор", soul={"kind": "doctor"})
+        self.assertTrue((made.dir / agents.SEED_NAME).is_file(), "канон есть")
+        self.assertFalse((made.dir / "skills-seed").exists(),
+                         "знаний в поставке нет — папки нет")
+
+
+class InheritSoul(unittest.TestCase):
+    """Наследование души (перенесено из CreateSoul, чтобы CreateDoctor был
+    только про доктора): донор, отказ без донора, inherit с текстом = text."""
+
+    SEED = "своя душа со своим текстом\n"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        lay_out(self.root, {"helene.json": {"agent": {"name": "Hélène"}, "port": 8094}})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
     def test_inherit_takes_the_donor_soul(self):
         donor = agents.create(self.root, "Донор")
         soul = donor.tree / "soul" / "SOUL.md"

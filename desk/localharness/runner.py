@@ -2651,7 +2651,21 @@ def main() -> None:
             log.warning("сид души не читается (%s): родится каноническая конституция — %s",
                         seed_path, exc)
             soul_seed = None
-        boot.ensure_layout(tree, cfg, soul_seed=soul_seed)
+        # Знания рождения (1.4.1, доктор): skills-seed/ рядом с конфигом. Раннер
+        # только переносит — КУДА ложить, знает ensure_layout; неудача чтения
+        # не роняет старт (канон без знаний живёт), но говорится aloud.
+        skills_seed: dict[str, str] = {}
+        skills_dir = config_path.with_name("skills-seed")
+        try:
+            if skills_dir.is_dir():
+                for path in sorted(skills_dir.glob("*.md")):
+                    skills_seed[path.name] = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            log.warning("знания рождения не читаются (%s): агент родится без них — %s",
+                        skills_dir, exc)
+            skills_seed = {}
+        boot.ensure_layout(tree, cfg, soul_seed=soul_seed,
+                           skills_seed=skills_seed or None)
     except boot.LayoutError as exc:
         log.error("папка данных не готова: %s", exc)
         raise SystemExit(3)

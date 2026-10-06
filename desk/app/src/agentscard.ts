@@ -173,6 +173,31 @@ export function agentsCard(mac = false): { el: HTMLElement } {
   });
   add.append(addBtn);
 
+  // Доктор одним кликом (1.4.1). Канон души и знания о харнессе читает
+  // программа из поставки (resources/souls/doctor.md, doctor-skills/) —
+  // окно шлёт одно слово, никаких текстов через argv. Имя — «Доктор»: его
+  // подписи и папка; занято — оболочка откажет словами, и это честнее
+  // тихого «доктор-2» без спроса.
+  const docBtn = button("Завести доктора", "quiet", () => {
+    if (busy) return;
+    busy = true;
+    docBtn.disabled = true;
+    void shell<{ id: string; name: string; port: number; dir: string }>("agent_add", {
+      name: "Доктор",
+      soul: { kind: "doctor" },
+    })
+      .then((got) => {
+        toast(`Доктор заведён: папка ${got.dir}. Поднимется после перезапуска программы — спроси его о состоянии харнесса.`);
+        void paint();
+      })
+      .catch(shellToast)
+      .finally(() => {
+        busy = false;
+        docBtn.disabled = false;
+      });
+  });
+  add.append(docBtn);
+
   async function paint(): Promise<void> {
     try {
       const got = await shell<{ agents: AgentRow[]; current: string }>("agents_list");

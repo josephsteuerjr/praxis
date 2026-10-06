@@ -608,7 +608,8 @@ def seed_git(tree: Path, cfg: dict) -> bool:
     return True
 
 
-def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None = None) -> None:
+def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None = None,
+                  skills_seed: dict[str, str] | None = None) -> None:
     """Составляющие кадра — каждая в своей папке (слово владельца 30.08).
 
     Создаём только то, чего дерево само не заводит по дороге: дом конституции,
@@ -622,6 +623,9 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
     который раннер читает рядом с конфигом: он ложится вместо канона ТОЖЕ только
     при отсутствии души; живая душа сильнее сида. Подстановка имён — та же,
     `{{agent}}`/`{{owner}}`, и только они: сид — текст, а не макрос.
+    `skills_seed` (1.4.1) — знания рождения из `agents/<id>/skills-seed/`:
+    ложатся в `soul/skills/` тоже только при отсутствии своего файла — живое
+    сильнее рождения, всегда.
 
     ⚠ Неписуемая папка (диск только для чтения, чужие права, антивирус) роняла
     руннер здесь голым PermissionError — оболочка видела «упал» и перезапускала
@@ -648,6 +652,19 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
     planted = _seed_kit(tree, cfg)
     if planted:
         log.info("стартовый комплект: положено файлов в дерево: %d", planted)
+    # Знания рождения (1.4.1, доктор): каждый файл — только при отсутствии
+    # своего места в soul/skills/; живое сильнее рождения.
+    if skills_seed:
+        skills_root = tree / "soul" / "skills"
+        try:
+            skills_root.mkdir(parents=True, exist_ok=True)
+            for fname, text in skills_seed.items():
+                target = skills_root / fname
+                if target.exists():
+                    continue
+                target.write_text(text, encoding="utf-8", newline="\n")
+        except OSError as exc:
+            raise LayoutError(f"не пишутся знания рождения {skills_root}: {exc}") from exc
     refreshed = refresh_kit(tree, cfg)
     if refreshed:
         log.info("стартовый комплект: обновлены нетронутые тексты поставки — %s",

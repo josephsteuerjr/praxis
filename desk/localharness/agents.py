@@ -289,6 +289,9 @@ def _soul_seed_text(base_dir: Path, soul: dict | None, donor_id: str | None) -> 
 
     `inherit` с непустым `text` — это `text` (контракт UI-волны B1: текст всегда
     в поле text, донора Rust резолвит сам и зовёт CLI с --soul-from).
+    `doctor` (1.4.1) — канон доктора из поставки (`resources/souls/doctor.md`):
+    едет сидом, а не молчаливым каноном, чтобы рождение доктора лежало в его
+    папке тем же файлом, что и рождение любого другого агента.
     """
     if not isinstance(soul, dict) or not soul:
         return None
@@ -298,6 +301,13 @@ def _soul_seed_text(base_dir: Path, soul: dict | None, donor_id: str | None) -> 
         kind = "text"
     if kind == "canonical":
         return None
+    if kind == "doctor":
+        canon = resource_text(base_dir, ("souls", "doctor.md"))
+        if canon is None:
+            raise ValueError("канон доктора не найден в поставке "
+                             "(resources/souls/doctor.md) — переустанови или "
+                             "обнови программу")
+        return canon
     if kind == "text":
         if not isinstance(text, str) or not text.strip():
             raise ValueError("soul.kind=text требует непустой soul.text — пустой текст "
@@ -317,7 +327,44 @@ def _soul_seed_text(base_dir: Path, soul: dict | None, donor_id: str | None) -> 
         if not got.strip():
             raise ValueError(f"донор {donor.id}: душа пуста ({src}) — наследовать нечего")
         return got
-    raise ValueError(f"soul.kind должен быть canonical | inherit | text, а не {kind!r}")
+    raise ValueError(f"soul.kind должен быть canonical | inherit | text | doctor, "
+                     f"а не {kind!r}")
+
+
+def resource_text(base_dir: Path, parts: tuple[str, ...]) -> str | None:
+    """Текст ресурса поставки: resources/<parts> от корня установки. None — нет.
+
+    `base_dir` здесь — тот же корень, что в roster/create (папка с agents/).
+    Ищем и `resources/`, и `app/resources/`: каналы сборки кладут комплект в
+    разные места, а отказ «не нашёл» по неправильному корню ломал бы кнопку
+    доктора на ровном месте.
+    """
+    root = Path(base_dir).resolve()
+    for prefix in ("resources", "app/resources"):
+        cand = root.joinpath(prefix, *parts)
+        try:
+            return cand.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+    return None
+
+
+def resource_files(base_dir: Path, folder: tuple[str, ...]) -> list[tuple[str, str]]:
+    """Все .md-файлы папки ресурсов: [(имя, текст)]. Пусто — папки нет."""
+    root = Path(base_dir).resolve()
+    found: list[tuple[str, str]] = []
+    for prefix in ("resources", "app/resources"):
+        cand = root.joinpath(prefix, *folder)
+        if not cand.is_dir():
+            continue
+        for path in sorted(cand.glob("*.md")):
+            try:
+                found.append((path.name, path.read_text(encoding="utf-8")))
+            except (OSError, UnicodeDecodeError):
+                continue
+        if found:
+            break
+    return found
 
 
 def set_enabled(base_dir: Path, agent_id: str, enabled: bool) -> Agent:
@@ -464,6 +511,17 @@ def create(base_dir: Path, name: str, *, brain_from_base: bool = True,
     if seed_text is not None:
         # Запись о рождении: раннер прочтёт её до ensure_layout и НЕ удалит.
         (dir_ / SEED_NAME).write_text(seed_text, encoding="utf-8", newline="\n")
+    # Знания рождения (1.4.1, доктор): kind=doctor кладёт рядом с сидом души
+    # папку skills-seed/ — раннер по первому старту отнесёт их в soul/skills/.
+    # Тот же принцип, что у сида: файл рождения, а не ключ конфига; ничего не
+    # удаляем. Отсутствие знаний — не ошибка: канон без знаний честнее кнопки,
+    # которая молча не работает.
+    kind = str((soul or {}).get("kind") or "").strip().lower()
+    if kind == "doctor":
+        for fname, text in resource_files(base_dir, ("doctor-skills",)):
+            seed_dir = dir_ / "skills-seed"
+            seed_dir.mkdir(exist_ok=True)
+            (seed_dir / fname).write_text(text, encoding="utf-8", newline="\n")
     got = find(base_dir, agent_id)
     assert got is not None                # только что записали — не найтись не может
     return got

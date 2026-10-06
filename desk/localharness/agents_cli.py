@@ -57,12 +57,17 @@ def _read_soul_file(raw: str) -> str:
 def _soul_args(args) -> dict | None:
     """Собрать `soul` для create() из флагов. Отказ — внятной ошибкой, не тишиной."""
     kind = (args.soul_kind or "").strip().lower() or "canonical"
-    if kind not in ("canonical", "inherit", "text"):
-        raise ValueError(f"--soul-kind: canonical | inherit | text, а не {kind!r}")
+    if kind not in ("canonical", "inherit", "text", "doctor"):
+        raise ValueError(f"--soul-kind: canonical | inherit | text | doctor, а не {kind!r}")
     if kind == "canonical":
         if args.soul_file or args.soul_from:
             raise ValueError("--soul-kind canonical не берёт ни --soul-file, ни --soul-from")
         return None
+    if kind == "doctor":
+        if args.soul_file or args.soul_from:
+            raise ValueError("--soul-kind doctor не берёт ни --soul-file, ни --soul-from: "
+                             "канон доктора читает сама программа из поставки")
+        return {"kind": "doctor"}
     if kind == "text":
         if args.soul_from:
             raise ValueError("--soul-from — для inherit; для text душа берётся из --soul-file")

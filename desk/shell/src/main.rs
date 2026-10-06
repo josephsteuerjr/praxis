@@ -7833,6 +7833,12 @@ async fn agent_add(
     let mut argv: Vec<String> = vec!["add".into(), "--name".into(), named.clone()];
     let soul_tmp: Option<PathBuf> = match kind.as_deref() {
         None => None,
+        // Доктор (1.4.1): канон и знания читает питон из поставки — ни текста,
+        // ни донора через argv не едет.
+        Some("doctor") => {
+            argv.extend(["--soul-kind".into(), "doctor".into()]);
+            None
+        }
         Some("canonical") => {
             argv.extend(["--soul-kind".into(), "canonical".into()]);
             None
