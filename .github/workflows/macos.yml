@@ -31,7 +31,7 @@
 #     совпасть с `version`.
 # Выкладка — ТОЛЬКО кнопкой и только после влития в `main` (`workflow_dispatch`
 # GitHub видит только с ветки по умолчанию):
-#       gh workflow run macos.yml -f tag=v1.3.7 -f upload=true
+#       gh workflow run macos.yml -f tag=v1.4.1 -f upload=true
 #       — тот же прогон, плюс шаг «Выложить в выпуск» (--clobber в тот же тег;
 #       Windows-архив не трогается).
 # Прогон от push в port/macos или port/macos-body — проверочный: inputs на push
@@ -97,6 +97,9 @@ jobs:
           else
             echo "ARTIFACT_NAME=Helene-$TAG-macos-arm64-tree-$TREE_TAG" >> "$GITHUB_ENV"
           fi
+
+      - name: Проверить Windows-архив этого выпуска
+        run: python3 desk/installer/mac_ci_preflight.py --repo "$GITHUB_REPOSITORY" --tag "$TREE_TAG"
 
       - uses: dtolnay/rust-toolchain@stable
 
