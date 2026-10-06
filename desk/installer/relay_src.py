@@ -2,7 +2,7 @@
 """Исходник реле для поставки: сверить с живым и обновить зеркало.
 
 Реле в поставке (`helene-relay.exe`) собирается из `_relay_prod_src/` рядом с
-репозиториями — это КОПИЯ живого исходника с сервера (`/opt/relay/Code`), и до
+репозиториями — это КОПИЯ живого исходника с сервера (`/opt/relay/current`), и до
 10.09 она обновлялась руками и без следа. Класс ошибки уже стрелял: 09.09 в
 поставке лежал бинарь от 03.09, а починка ссылок была от 09.09 — узнали об этом
 случайно, потому что сверять было нечем.
@@ -48,7 +48,9 @@ LINUX_BUILT = "RELAY-BUILD-LINUX.json"
 LINUX_REL = ("target", "linux", "helene-relay")
 LINUX_IMAGE = "helene-relay-build:local"
 LINUX_IN_IMAGE = "/usr/src/codex/target/release/codex-proxy-server"
-REMOTE_DEFAULT = "/opt/relay/Code"
+# Stable source pointer to the immutable release used by the live relay.
+# /opt/relay/Code is a preserved legacy checkout and no longer the build source.
+REMOTE_DEFAULT = "/opt/relay/current"
 
 # Что считается исходником реле: то, из чего собирается бинарь. Каталог target/
 # и логи не в счёт — это следы сборки, а не она сама.

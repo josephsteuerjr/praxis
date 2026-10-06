@@ -22,6 +22,20 @@ Telegram-контур, durable runs, задачи Forge, workers и обучен
 Praxis. LocalSystem service владеет единственным исходящим WSS; пользовательский session host
 получает desktop-envelope через локальный ACL/token-bound pipe.
 
+### Генерация изображений через реле
+
+`generate_image` — одна серверная рука для любой основной модели, включая GLM.
+Она вызывает standalone `/images/generations` или `/images/edits` через настроенный
+`frameworks.openai`, а отдельный блок `images` задаёт включение, image model,
+качество, размер и фон. Изменение этого блока не меняет voice/evaluator и их fallback.
+
+Реле использует существующий Codex subscription login. Unknown outcome не повторяется
+автоматически; image quota не объявляет исчерпанной текстовую подписку. Praxis проверяет
+реальный MIME, dimensions, size и SHA-256, сохраняет scoped media и immutable run artifact.
+Модель получает компактную metadata и pixels только при поддержке vision; Telegram получает
+изображение через штатную media/outbox очередь. Resume читает проверенный artifact, не запускает
+новую генерацию и не помещает base64 в текстовые результаты инструментов.
+
 ### Изолированный TTS
 
 `media_audio.py` сохраняет прежние `edge`/`piper` backends и добавляет только opt-in

@@ -23,6 +23,7 @@
 | `tool_offerings.py` | Детерминированное формирование полного набора tools для owner, Praxis self и scoped trusted humans. |
 | `brain.py`, `appetite.py` | Наблюдаемый выбор model role и учёт/интерпретация вычислительного аппетита без скрытого veto. |
 | `media.py` | Typed inbound/outbound media, guarded spool, durable media receipts и cleanup. |
+| `imagegen.py` | Standalone Codex Images API через OpenAI-канал реле, отдельные настройки images, проверка реального изображения и scoped artifact; общая рука generate_image для GLM и relay voice. |
 | `media_audio.py` | Local STT и TTS facade/backends с атомарными аудио-артефактами; Silero подключается только opt-in. |
 | `silero_tts_client.py`, `silero_tts_worker.py` | Lazy process-isolated Silero v5_ru: verified local model SHA, JSONL supervisor, timeout/RSS/recycle/parent-death и Piper fallback без импорта PyTorch в runner. |
 | `requirements-silero.txt`, `scripts/provision_silero.py` | Отдельная worker-only Python-среда и verified model provisioning; основной `requirements.txt` остаётся без PyTorch. |

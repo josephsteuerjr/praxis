@@ -1,14 +1,14 @@
 {
  "mirror": "praxis",
- "source": "/opt/praxis (live working-tree source snapshot, private/runtime/soul excluded)",
- "head": "2514439b76c144f48df634ad5337659092ef99fc",
- "dirty": false,
+ "source": "/opt/praxis (deployed; sanitized working-tree export)",
+ "head": "e2a4a50e1d52422f763311708abd53abaae2a57c",
+ "dirty": true,
  "source_checkout_dirty": true,
- "source_dirty_scope": "workspace/projects subrepositories only; exported source unchanged during capture",
- "taken_at": "2026-10-06T13:15:51.363177+00:00",
- "files": 615,
- "digest": "e22bcfc4ca7239d6dfba2f488b0347732892622b628801da32fb61fe6d96f9ea",
- "by": "installer/core_src.py --export-core; verified tracked source snapshot",
+ "source_dirty_scope": "STATUS.md operational update after tested deployment; private runtime/workspace excluded",
+ "taken_at": "2026-10-06T17:30:59.036926+00:00",
+ "files": 617,
+ "digest": "7ddcc2dcf96f45a2f51bf21baef5f6c4aaad0faeb4cbec7add15d7338154cfc6",
+ "by": "verified deployed bytes; installer/core_src.py digest; public ancestry only",
  "sanitization": {
   "excluded_private_helper_count": 1,
   "redacted_comment_docstring_files": [
@@ -16,6 +16,8 @@
    "cjk_vkladki.py",
    "test_sanitize_scripts.py"
   ],
-  "behavior_preserved": "AST verified excluding docstrings; other exported bytes match source after LF normalization"
- }
+  "behavior_preserved": "Sanitization only: 3 redacted comment/docstring files AST-equivalent to deployed source excluding docstrings; other exported bytes match deployed source after LF normalization"
+ },
+ "base_live_head": "2514439b76c144f48df634ad5337659092ef99fc",
+ "state": "deployed"
 }

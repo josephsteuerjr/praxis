@@ -33,7 +33,7 @@
    `cargo build --release` в `svc`.
 
    Реле — отдельным шагом, потому что его исходник лежит ВНЕ репозиториев
-   (`_relay_prod_src/` — копия живого `/opt/relay/Code`):
+   (`_relay_prod_src/` — копия живого `/opt/relay/current`, указателя на immutable release):
 
        python installer/relay_src.py --check --host <адрес>   # зеркало = живой?
        python installer/relay_src.py --pull  --host <адрес>   # если разошлось

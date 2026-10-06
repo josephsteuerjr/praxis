@@ -468,6 +468,11 @@ def _normalize(cfg: dict) -> dict:
     # PASS 9.2: блок иммунитета (second_opinion — задел, дефолт false) — тоже пропускаем
     if isinstance(cfg.get("immune"), dict):
         out["immune"] = cfg["immune"]
+    # Images are an independent resource, never a text/evaluator role.
+    # Absent config stays disabled; deployment installs explicit values and receipt.
+    if isinstance(cfg.get("images"), dict):
+        import imagegen
+        out["images"] = imagegen.normalize(cfg["images"])
     return out
 
 
@@ -504,6 +509,10 @@ def _journal(msg: str) -> None:
 
 def _diff_roles(old: dict, new: dict) -> list[str]:
     out = []
+    if old.get("images") != new.get("images"):
+        image = new.get("images") or {}
+        out.append(f"изображения: {'включены' if image.get('enabled') else 'выключены'}, "
+                   f"{image.get('model') or 'не настроены'}, качество {image.get('quality') or 'auto'}")
     for role in ROLES:
         o, n = (old.get("roles") or {}).get(role) or {}, (new.get("roles") or {}).get(role) or {}
         if (o.get("model"), o.get("framework")) != (n.get("model"), n.get("framework")):
@@ -640,6 +649,9 @@ def update_config(changes: dict) -> dict:
                 cfg.setdefault(sect, {}).setdefault(k, {}).update(v)
     if isinstance(changes.get("limits"), dict):
         cfg.setdefault("limits", {}).update(changes["limits"])
+    if isinstance(changes.get("images"), dict):
+        import imagegen
+        cfg.setdefault("images", {}).update(imagegen.validate(changes["images"]))
     save_config(cfg)
     fresh = _normalize(cfg)
     try:

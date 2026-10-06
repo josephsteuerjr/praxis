@@ -5844,6 +5844,59 @@ def _stage_turn_media(source: str | Path, *, kind: str, caption: str = "",
         return f"Медиа не подготовлено: {type(e).__name__}"
 
 
+def tool_generate_image(prompt: str, image_paths: list[str] | None = None,
+                        caption: str = "", send: bool = True) -> "ToolObservation | str":
+    """Generate/edit with the independent image model, from any voice provider."""
+    import imagegen
+    import uuid
+    paths = []
+    for raw in image_paths or []:
+        path = workshop._resolve_read(str(raw))
+        if path is None or not path.is_file():
+            return json.dumps({"ok": False, "error": "исходное изображение не найдено в доме"}, ensure_ascii=False)
+        paths.append(path)
+    current = run_context.current_run()
+    execution = current_tool_execution() or {}
+    turn_id = str(execution.get("call_id") or (current.run_id if current else "") or uuid.uuid4())
+    try:
+        config = llm._config()
+        result = imagegen.generate(prompt, refs=paths, spool=_media_spool(),
+                                   scope=_active_scope(), chat_id=_active_chat() or f"run-{turn_id}",
+                                   config=config.get("images") or {},
+                                   framework=config["frameworks"]["openai"],
+                                   turn_id=turn_id, caption=caption)
+        if current is not None:
+            artifact = _runs().store_artifact(
+                current.run_id, Path(result["path"]), name="generated-image" + Path(result["path"]).suffix,
+                media_type=result["mime"], idempotency_key=f"image:{turn_id}",
+                expected_sha256=result["sha256"], expected_size=result["size"])
+            result["artifact"] = artifact
+            result["path"] = str(_runs().path(current.run_id) / artifact["path"])
+        # The normal media boundary queues the visible image, with the same
+        # privacy/acceptance/outbox path as other photos. A non-Telegram run
+        # retains the artifact for send_media/send_file or a later edit.
+        ctx = _TURN_CHANNEL.get()
+        if send is not False and ctx is not None and ctx.chat_id is not None:
+            before = len(_TURN_OUTBOUND.get() or [])
+            note = _stage_turn_media(result["path"], kind="photo", caption=caption)
+            result["delivery"] = "staged" if len(_TURN_OUTBOUND.get() or []) > before else "not_staged"
+            result["delivery_note"] = note
+        else:
+            result["delivery"] = "saved"
+        result["pixels_to_voice"] = llm.can_see("voice")
+        text = json.dumps(result, ensure_ascii=False)
+        if result["pixels_to_voice"]:
+            path, mime = _model_view_image(Path(result["path"]), source_mime=result["mime"])
+            return ToolObservation(text=text, images=({"type": "image", "path": str(path),
+                                                       "mime": mime, "detail": "auto",
+                                                       "origin": "generated-image"},))
+        return text
+    except Exception as exc:
+        # Never return provider payloads, credentials or base64 into run evidence.
+        error = str(exc) if isinstance(exc, ValueError) else f"генерация не завершилась: {type(exc).__name__}"
+        return json.dumps({"ok": False, "error": error}, ensure_ascii=False)
+
+
 def tool_send_media(path: str, kind: str, caption: str = "", voice_note: bool = False,
                     to: str = "") -> str:
     """Guarded file from home -> current Telegram chat, or an explicitly named one.
@@ -6361,6 +6414,7 @@ def tool_group_context(action: str = "context", query: str = "",
 
 
 TOOL_IMPL = {
+    "generate_image": tool_generate_image,
     "recall": tool_recall,
     "remember": tool_remember,
     "journal": tool_journal,
@@ -6460,6 +6514,12 @@ TOOL_IMPL = {
 }
 
 BASE_TOOLS = [
+    {"name": "generate_image",
+     "description": "Generate an image from a prompt or edit 1-5 local reference images with the independent Codex image model. Available while your voice is GLM or a relay model. The result contains the saved path, actual dimensions and hash; send=true queues the visible image to the current Telegram chat through the normal media outbox. Use send_media for another recipient. Never claim delivery from generation alone.",
+     "input_schema": {"type": "object", "properties": {
+         "prompt": {"type": "string", "description": "Describe the image or the requested edit and what must stay unchanged."},
+         "image_paths": {"type": "array", "items": {"type": "string"}, "maxItems": 5, "description": "Local source image paths for editing; omit for new generation."},
+         "caption": {"type": "string", "description": "Optional caption accompanying the generated image in the current chat."}, "send": {"type": "boolean", "description": "Queue the result to the current chat; defaults to true."}}, "required": ["prompt"]}},
     {
         "name": "recall",
         "description": (
@@ -8663,7 +8723,7 @@ CALL_TOOL = {
 # Группы указателя — порядок чтения; имя, которого нет в группах, уходит в «прочее».
 HAND_GROUPS = (
     ("разговор и жесты", ("reply", "end_turn", "stay_silent", "say", "task_control", "react",
-                          "narrate", "speak", "send_message", "send_file", "send_media",
+                          "narrate", "speak", "send_message", "send_file", "send_media", "generate_image",
                           "set_avatar", "update_profile")),
     ("память и я", ("recall", "remember", "journal", "update_self", "manage_identity",
                     "manage_notes", "manage_loop", "connections", "add_alias",
@@ -8694,6 +8754,7 @@ HAND_GROUPS = (
 
 # Назначение одной строкой, от первого лица. Нет в словаре — первая фраза описания.
 HAND_PURPOSE = {
+    "generate_image": "сгенерировать или изменить изображение отдельной моделью через реле",
     "reply": "ответить собеседнику; только так реплика уходит человеку",
     "end_turn": "закрыть ход явным исходом: done / wait / blocked",
     "stay_silent": "осознанно промолчать, записав себе причину",
@@ -14296,9 +14357,10 @@ def _tool_result_metadata(before: tuple[dict, ...]) -> dict:
 
 def _resume_result_image(run_id: str, call_name: str, call_input: dict,
                          result_ref: dict) -> tuple[dict, ...]:
-    """Restore a completed computer.observe pixel block from its ArtifactRef."""
+    """Restore completed observation/generated pixels from an immutable ArtifactRef."""
 
-    if call_name != "computer" or str(call_input.get("action") or "").lower() != "observe":
+    generated = call_name == "generate_image"
+    if not generated and (call_name != "computer" or str(call_input.get("action") or "").lower() != "observe"):
         return ()
     try:
         payload = run_resume.read_full_result_bytes(
@@ -14317,6 +14379,10 @@ def _resume_result_image(run_id: str, call_name: str, call_input: dict,
         raise DurableExecutionError("computer.observe ArtifactRef is malformed") from exc
     if text[start + consumed:].strip():
         raise DurableExecutionError("computer.observe result has trailing mutable data")
+    if generated:
+        if not isinstance(artifact, dict) or not artifact.get("ok") or not artifact.get("pixels_to_voice"):
+            return ()
+        artifact = artifact.get("artifact")
     if (not isinstance(artifact, dict)
             or artifact.get("schema") != "praxis.artifact-ref.v1"
             or artifact.get("run_id") != run_id
@@ -14342,7 +14408,7 @@ def _resume_result_image(run_id: str, call_name: str, call_input: dict,
         raise DurableExecutionError("computer.observe artifact integrity changed")
     return ({"type": "image", "path": str(path),
              "mime": str(artifact.get("media_type")), "detail": "auto",
-             "origin": "computer-observe"},)
+             "origin": "generated-image" if generated else "computer-observe"},)
 
 
 def _media_outlives_an_empty_draft(outbound, draft: str, silence: dict | None) -> bool:

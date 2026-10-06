@@ -1,5 +1,6 @@
 anthropic>=0.39
 openai>=1.40
+httpx>=0.27,<1
 python-dotenv>=1.0
 cryptography>=43,<49
 aiogram>=3.4

@@ -12,7 +12,7 @@ Windows-архива `Helene-<версия>.zip`):
   Helene/
     Helene.app/               оболочка (крейт shell → бинарь `helene`), app.helene.desk
     Helene Setup.app/         мастер (крейт setup → бинарь `helene-setup`), app.helene.setup
-    helene-relay              реле подписки ChatGPT (praxis-relay @ 709edbd = 0.8.3)
+    helene-relay              реле подписки ChatGPT (praxis-relay @ e46f35a = 0.8.4)
     helene-svc                служба без входа в систему: `daemon` — супервизор канала, движка и
                               реле под launchd, `plist` — описание демона app.helene.svc (крейт svc)
     helene-bridge             мост тела тула `computer` (praxis-bridge из praxis/body — исходник
@@ -115,7 +115,7 @@ SHA256 = {
 # зеркала живого исходника (`_relay_prod_src`, там ещё трей под cfg(windows));
 # на Mac собирается публичный коммит как есть.
 RELAY_REPO = "https://github.com/josephsteuerjr/praxis-relay"
-RELAY_COMMIT = "709edbda18b1be0084c8d3d07062bd8ca8110c91"
+RELAY_COMMIT = "e46f35a20d6b26b0e101a1701b6a64d05ded853e"
 RELAY_BIN = "codex-proxy-server"
 
 # Тело тула `computer`: мост и тело — крейты `praxis/body` В ЭТОМ репозитории

@@ -567,20 +567,23 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     const role = spot.getAttribute("data-brain-apply");
     if (role) {
       const form = screen.querySelector<HTMLElement>(`[data-brain-form="${role}"]`);
-      const fields: Record<string, string> = {};
+      const fields: Record<string, string | boolean> = {};
       form?.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-f]").forEach((el) => {
         const key = el.getAttribute("data-f") || "";
-        if (key && el.value.trim() !== (el.getAttribute("data-was") ?? "")) fields[key] = el.value.trim();
+        if (key && el.value.trim() !== (el.getAttribute("data-was") ?? "")) {
+          fields[key] = role === "images" && key === "enabled" ? el.value === "true" : el.value.trim();
+        }
       });
       if (!Object.keys(fields).length) {
         say("ничего не изменено");
         return;
       }
-      say(`меняю роль ${role}: ${Object.keys(fields).join(", ")}…`);
+      say(role === "images" ? "сохраняю настройки изображений…" : `меняю роль ${role}: ${Object.keys(fields).join(", ")}…`);
       try {
         const answer = await post<{ ok: boolean; note?: string }>("/api/brain", { role, fields });
         say(answer.ok
-          ? `${role}: ${Object.entries(fields).map(([k, v]) => `${k}=${v || "—"}`).join(", ")}. ${answer.note || ""}`
+          ? role === "images" ? answer.note || "настройки изображений сохранены"
+            : `${role}: ${Object.entries(fields).map(([k, v]) => `${k}=${v || "—"}`).join(", ")}. ${answer.note || ""}`
           : answer.note || "не вышло", !answer.ok);
         if (answer.ok) setTimeout(() => void renderSystem(), 1500);
       } catch (e) {
@@ -1009,7 +1012,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     screen.innerHTML = '<div class="empty">читаю…</div>';
     const [boxes, brain, models] = await Promise.all([
       scoped<{ available: boolean; why: string; containers: Array<{ name: string; up: boolean; status: string; image: string }> }>("/api/containers", "containers"),
-      scoped<{ ok: boolean; note?: string; roles?: Record<string, Record<string, string>>; frameworks?: Record<string, unknown> }>("/api/brain", "brain"),
+      scoped<{ ok: boolean; note?: string; roles?: Record<string, Record<string, string>>; frameworks?: Record<string, unknown>; images?: Record<string, string | boolean>; image_models?: string[] }>("/api/brain", "brain"),
       scoped<{ ok: boolean; by_framework?: Record<string, { ok: boolean; models?: string[] }> }>("/api/brain-models", "brain"),
     ]);
     if (!guard()) return;
@@ -1055,7 +1058,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       `<label style="display:flex;flex-direction:column;gap:2px;padding:4px 0"><span class="muted">${label}</span>${control}</label>`;
     const datalist = `<datalist id="brain-models">${[...new Set(live)].map((m) => `<option value="${esc(m)}"></option>`).join("")}</datalist>`;
     const brainRows = brain?.ok
-      ? datalist + Object.entries(brain.roles || {})
+      ? datalist + Object.entries(brain.roles || {}).filter(([role]) => role !== "evaluator" && role !== "memory")
           .map(([role, spec]) => {
             const f = (k: string) => String(spec[k] ?? "");
             const input = (k: string, placeholder = "") =>
@@ -1074,10 +1077,23 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
           })
           .join("")
       : `<div class="empty">${esc(brain?.note || "мозг отсюда не читается")}</div>`;
+    const imageConfig = brain?.images || { enabled: false, model: "gpt-image-2", quality: "auto", size: "auto", background: "opaque" };
+    const imageValue = (key: string) => String(imageConfig[key] ?? "");
+    const imageSelect = (key: string, choices: Array<[string, string]>) => `<select data-f="${key}" data-was="${esc(imageValue(key))}">${choices.map(([value, title]) => `<option value="${esc(value)}"${imageValue(key) === value ? " selected" : ""}>${esc(title)}</option>`).join("")}</select>`;
+    const imageRows = brain?.ok ? `<div class="task-row" data-brain-form="images">
+      <div class="task-head"><b>Изображения</b></div>
+      <div class="muted">Генерация и правка через реле — доступна и когда основной голос работает на GLM.</div>
+      ${field("Генерация", imageSelect("enabled", [["true", "Включена"], ["false", "Выключена"]]))}
+      ${field("Модель", `<input data-f="model" data-was="${esc(imageValue("model"))}" value="${esc(imageValue("model"))}" list="image-models" autocapitalize="off" autocorrect="off" spellcheck="false"><datalist id="image-models">${(brain.image_models || ["gpt-image-2"]).map(model => `<option value="${esc(model)}"></option>`).join("")}</datalist>`)}
+      ${field("Качество", imageSelect("quality", [["auto", "Автоматически"], ["low", "Черновик"], ["medium", "Среднее"], ["high", "Высокое"]]))}
+      ${field("Размер", `<input data-f="size" data-was="${esc(imageValue("size"))}" value="${esc(imageValue("size"))}" placeholder="auto или 1024x1024" spellcheck="false">`)}
+      ${field("Фон", imageSelect("background", [["opaque", "Обычный"], ["transparent", "Прозрачный"], ["auto", "Автоматически"]]))}
+      <div class="actions"><button type="button" class="chip" data-brain-apply="images">Применить</button></div>
+    </div>` : "";
     screen.innerHTML = interruptHTML +
       `<div class="screen-title">Контейнеры <span class="n">${boxes.containers.length}</span></div>${rows}` +
       `<p class="muted" style="padding:0 14px">Идёт мимо агента: перезапуск нужен тогда, когда он не отвечает.</p>` +
-      `<div class="screen-title">Мозг</div>${brainRows}` +
+      `<div class="screen-title">Мозг</div>${brainRows}${imageRows}` +
       `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
       `<pre class="mono" id="sys-log" style="padding:0 14px;white-space:pre-wrap;overflow:auto;max-height:50vh" hidden></pre>`;
   }

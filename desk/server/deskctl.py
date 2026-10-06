@@ -66,6 +66,37 @@ CONTAINERS = tuple(name.strip() for name in
 #: Роли мозга, которые вправе менять окно. Остальные ключи `llm.json` — не наше
 #: дело: там ключи провайдеров и цены.
 BRAIN_FIELDS = ("model", "fallback_model", "framework", "fallback_framework", "reasoning_effort")
+IMAGE_DEFAULTS = {"enabled": False, "model": "gpt-image-2", "quality": "auto", "size": "auto", "background": "opaque"}
+
+
+def image_settings(raw: dict) -> dict:
+    value = raw.get("images") if isinstance(raw.get("images"), dict) else {}
+    return {**IMAGE_DEFAULTS, **{key: value[key] for key in IMAGE_DEFAULTS if key in value}}
+
+
+def validate_image_fields(fields: dict) -> dict:
+    import re
+    if not isinstance(fields, dict) or set(fields) - set(IMAGE_DEFAULTS):
+        raise ValueError("неизвестные настройки изображений")
+    change = {}
+    for key, value in fields.items():
+        if key == "enabled":
+            if not isinstance(value, bool):
+                raise ValueError("enabled: нужно true/false")
+            change[key] = value
+        elif isinstance(value, str):
+            change[key] = value.strip()
+        else:
+            raise ValueError(f"{key}: нужна строка")
+    if "model" in change and (not change["model"] or len(change["model"]) > 200):
+        raise ValueError("нужна модель изображений")
+    if "quality" in change and change["quality"] not in ("auto", "low", "medium", "high"):
+        raise ValueError("качество: auto, low, medium или high")
+    if "background" in change and change["background"] not in ("auto", "opaque", "transparent"):
+        raise ValueError("фон: auto, opaque или transparent")
+    if "size" in change and change["size"] != "auto" and not re.fullmatch(r"[1-9]\d{0,4}x[1-9]\d{0,4}", change["size"]):
+        raise ValueError("размер: auto или ШИРИНАxВЫСОТА")
+    return change
 
 
 def _utc() -> str:
@@ -212,6 +243,7 @@ def brain_state() -> dict:
             frameworks[name] = {"base_url": spec.get("base_url", ""),
                                 "key_present": bool(str(spec.get("api_key") or "").strip())}
     return {"ok": True, "path": str(path), "roles": roles, "frameworks": frameworks,
+            "images": image_settings(raw), "image_models": ["gpt-image-2"],
             "writable": os.access(path, os.W_OK)}
 
 
@@ -252,6 +284,34 @@ def brain_set(role: str, fields: dict) -> dict:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         return {"ok": False, "note": f"мозг не прочитался: {exc}"}
+    if role == "images":
+        try:
+            change = validate_image_fields(fields)
+        except ValueError as exc:
+            return {"ok": False, "note": str(exc)}
+        if not change:
+            return {"ok": False, "note": "настройки изображений не изменены"}
+        was = {key: image_settings(raw)[key] for key in change}
+        backup = path.with_name(f"llm.json.before-images-{dt.datetime.now().strftime('%Y%m%dT%H%M%S%f')}")
+        try:
+            shutil.copy2(path, backup)
+            raw["images"] = {**image_settings(raw), **change}
+            tmp = path.with_name(".tmp-images-llm.json")
+            tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except OSError as exc:
+            return {"ok": False, "note": f"настройки изображений не записались: {type(exc).__name__}"}
+        receipt_warning = ""
+        try:
+            # Observable config change, without keys or image/prompt content.
+            state = path.parent / ".state"; state.mkdir(exist_ok=True)
+            with (state / "image_config_events.jsonl").open("a", encoding="utf-8") as events:
+                events.write(json.dumps({"at": _utc(), "by": "owner:miniapp", "was": was, "now": change}, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            receipt_warning = f"; запись события не удалась: {type(exc).__name__}"
+        return {"ok": True, "role": role, "was": was, "now": change, "backup": backup.name,
+                "note": "настройки изображений сохранены; следующий вызов использует их" + receipt_warning}
     roles = raw.get("roles")
     if not isinstance(roles, dict) or role not in roles:
         return {"ok": False, "note": f"роли «{role}» в мозге нет "
