@@ -110,6 +110,32 @@ def read_config(path: Path) -> dict:
     return {}
 
 
+def _config_readable(path: Path) -> bool:
+    """Конфиг ЦЕЛ для перезаписи? True — отсутствует, пуст или разбирается в
+    объект. False — файл есть и не разобрался (битый JSON): `read_config`
+    вернул бы `{}`, и запись поверх стёрла бы всё (фикс F2). Лестница
+    кодировок — та же, что у `read_config`: конфиг, который список умеет
+    читать, перезаписи мешать не должен.
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return True          # нет файла — писаться будет новый, это не порча
+    if not raw.strip():
+        return True          # пустой файл — пустой конфиг, не чужие настройки
+    for encoding in ("utf-8-sig", "utf-16", "cp1251"):
+        try:
+            text = raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+        try:
+            got = json.loads(text)
+        except ValueError:
+            return False     # разобралось текстом, но не JSON — вот это порча
+        return isinstance(got, dict)
+    return False
+
+
 def agent_name(cfg: dict, fallback: str = "Агент") -> str:
     """Имя агента: как у оболочки — `agent.name`, потом старое место, потом честное."""
     for got in ((cfg.get("agent") or {}).get("name"),
@@ -298,6 +324,12 @@ def set_enabled(base_dir: Path, agent_id: str, enabled: bool) -> Agent:
 
     До 1.4.0 флаг был (его читает `raisable`), но менять его было нечем: кнопки
     окна гасили всю установку разом. -> обновлённый агент.
+
+    Битый JSON конфига — ОТКАЗ, а не «пустой конфиг» (фикс-волна 06.10, F2):
+    `read_config` на непустом, но нечитаемом файле возвращает `{}`, и прежний
+    путь `cfg["enabled"] = ... → _write_config` стирал ВСЁ — модель, бота,
+    владельца — до одного ключа. Теперь: файл есть, непустой и не разобрался —
+    стоп словами; починит руки владельца, а не наша запись.
     """
     base_dir = Path(base_dir)
     got = find(base_dir, agent_id)
@@ -306,6 +338,10 @@ def set_enabled(base_dir: Path, agent_id: str, enabled: bool) -> Agent:
     if got.base:
         raise ValueError("корневой агент — это сама установка: флаг enabled у него "
                          "не гасится, погасить установку может только владелец")
+    if not _config_readable(got.config):
+        raise ValueError(f"конфиг {got.config.name} агента «{got.id}» не разбирается "
+                         f"как JSON — правь его руками, запись поверх стёрла бы "
+                         f"настройки целиком")
     cfg = read_config(got.config)
     cfg["enabled"] = bool(enabled)
     _write_config(got.config, cfg)

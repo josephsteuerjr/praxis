@@ -241,9 +241,16 @@ export function agentsCard(mac = false): { el: HTMLElement } {
                 toast(`Не совпало: введи id «${a.id}» точно — удаление неотвратимо.`);
                 return;
               }
-              void shell("agent_remove", { id: a.id })
-                .then(() => {
-                  toast(`Агент «${a.name}» удалён: папка уехала в чердак _state/attic.`);
+              // Путь чердака — из ОТВЕТА оболочки (фикс-волна 06.10, F5):
+              // питон возвращает dest, и Rust передаёт его дальше. Тексты на
+              // экране про «_state/attic» врали: настоящий чердак — папка
+              // agents-attic рядом с agents/ у корня установки.
+              void shell<{ attic?: string }>("agent_remove", { id: a.id })
+                .then((made) => {
+                  const where = made && typeof made.attic === "string" && made.attic.trim()
+                    ? `папка уехала в ${made.attic}`
+                    : "папка уехала на чердак agents-attic рядом с папкой agents";
+                  toast(`Агент «${a.name}» удалён: ${where}.`);
                   void paint();
                 })
                 .catch(shellToast);
@@ -252,7 +259,7 @@ export function agentsCard(mac = false): { el: HTMLElement } {
           );
           kill.append(
             el("p", "field-hint",
-              `Удаление из окна неотвратимо: дом агента уезжает в чердак _state/attic установки, и вернуть его оттуда можно только руками. ` +
+              `Удаление из окна неотвратимо: дом агента уезжает на чердак — папка agents-attic рядом с папкой agents у корня установки, — и вернуть его оттуда можно только руками. ` +
               `Если он сейчас поднят — сначала погаси его кнопкой выше.`),
             killField,
             killRow,

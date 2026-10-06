@@ -28,6 +28,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { strict as assert } from "node:assert";
+import { stripTypeScriptTypes } from "node:module";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(here, "..", "src", "modecard.ts"), "utf8");
@@ -110,3 +111,108 @@ assert.ok(said(both).includes("Окон и экрана нет…"));
 const ru = JSON.parse(readFileSync(join(here, "..", "..", "lang", "ru.json"), "utf8"));
 assert.ok(!ru["settings.service.warning.macos"].includes("FileVault"), "FileVault вернулся в каталог языка");
 assert.ok(ru["settings.service.warning.macos"].includes("Окон и экрана"), "оговорка потеряла главное");
+
+// --------------------------------------------------------------------------
+// 5. Фикс-волна 06.10 (P2-1): тумблер «Нулевая сессия» следует за ФАКТОМ.
+//    Ступень лестницы меняет session0 ПРОГРАММНО (radio-confirm → true,
+//    fence-click/second-click → false), и несинхронный aria-checked показывал
+//    выкл при включённой ступени — и наоборот. Секция тумблеров исполняется
+//    той же вырезкой исходника, что и секция службы выше.
+// --------------------------------------------------------------------------
+
+const T_FROM = "// --- галочки службы";
+const T_TILL = "// Журнал брокера";
+const tFrom = source.indexOf(T_FROM);
+const tTill = source.indexOf(T_TILL, tFrom);
+assert.ok(tFrom > 0 && tTill > tFrom, "секция тумблеров не нашлась в modecard.ts — стенд отстал от файла");
+// Секция содержит TS-типы (Map<string, …>) — вырезку исполняет new Function,
+// поэтому типы срезаются тем же инструментом, что компилирует модуль.
+const togglesSection = stripTypeScriptTypes(source.slice(tFrom, tTill));
+
+/** Переключатель как в форм-ките (dom.ts toggle): клик сам тумблерит aria-checked. */
+const makeSwitch = (label, initial, onChange) => {
+  const sw = {
+    tag: "button",
+    attrs: { "aria-checked": String(initial) },
+    listeners: {},
+    setAttribute(k, v) {
+      this.attrs[k] = String(v);
+    },
+    getAttribute(k) {
+      return this.attrs[k];
+    },
+    addEventListener(ev, fn) {
+      (this.listeners[ev] ||= []).push(fn);
+    },
+    click() {
+      const next = this.getAttribute("aria-checked") !== "true";
+      this.setAttribute("aria-checked", String(next));
+      onChange(next);
+    },
+  };
+  return sw;
+};
+
+function toggles({ initial0 = false, toggles: list }) {
+  const btn = (text, kind, onClick) => ({ text, kind, click: onClick });
+  const el = (tag, cls, text) => ({ tag, cls, text, children: [], append(...cs) { this.children.push(...cs); } });
+  const live = { title: "Песочница", session0_warning: "Оговорка нулевой сессии" };
+  const choiceOf = () => ({ title: "Песочница" });
+  const picked = "sandbox";
+  const togglesBox = { children: [], append(...cs) { this.children.push(...cs); } };
+  const factory = new Function(
+    "el", "btn", "switchRow", "option", "live", "choiceOf", "picked", "installed", "SESSION0_WARNING_FALLBACK", "initial0", "togglesBox",
+    `let session0 = initial0;
+     let firewall = false;
+     ${togglesSection}
+     return { syncToggles, toggleView, get session0() { return session0; }, set session0(v) { session0 = v; } };`,
+  );
+  return factory(el, btn, makeSwitch, { toggles: list }, live, choiceOf, picked, null, "Оговорка", initial0, togglesBox);
+}
+
+{
+  const made = toggles({
+    initial0: false,
+    toggles: [
+      { key: "service.session0", title: "Нулевая сессия", text: "Права системы без вопроса", warning: "Оговорка" },
+      { key: "service.firewall", title: "Телефон из любой сети", text: "Правило брандмауэра" },
+    ],
+  });
+  const s0 = made.toggleView.get("service.session0");
+  const fw = made.toggleView.get("service.firewall");
+  assert.ok(s0 && s0.sw, "переключатель session0 не сохранён в карте (P2-1)");
+
+  // Ядро P2-1: программное включение (radio-confirm «Разрешить права СИСТЕМЫ»)
+  // меняет факт — тумблер обязан показать его. И выключение — тоже.
+  made.session0 = true;
+  made.syncToggles();
+  assert.equal(s0.sw.getAttribute("aria-checked"), "true", "тумблер не показал программное ВКЛЮЧЕНИЕ");
+  made.session0 = false;
+  made.syncToggles();
+  assert.equal(s0.sw.getAttribute("aria-checked"), "false", "тумблер не показал программное ВЫКЛЮЧЕНИЕ");
+  made.session0 = true;
+  made.syncToggles();
+  assert.equal(s0.sw.getAttribute("aria-checked"), "true", "обратное включение — снова правда на экране");
+  made.session0 = false;
+  made.syncToggles();
+
+  // Прямой клик по тумблеру С оговоркой — не включает сразу (слово Егора
+  // 28.09): сброс в false + диалог подтверждения. Факт не меняется.
+  s0.sw.click(); // flips → true внутри клика, но оговорка обязана вернуть
+  assert.equal(s0.sw.getAttribute("aria-checked"), "false", "оговорка не вернула тумблер");
+  assert.equal(made.session0, false, "клик мимо подтверждения включил ступень");
+
+  // Подтверждение «Понимаю, включить» — единственный путь включения кликом.
+  const ask = s0.row.children.find((c) => c.children && c.children.some((x) => x.text === "Понимаю, включить"));
+  assert.ok(ask, "диалог подтверждения не собрался");
+  ask.children.find((x) => x.text === "Понимаю, включить").click();
+  assert.equal(made.session0, true, "подтверждение не включило");
+  assert.equal(s0.sw.getAttribute("aria-checked"), "true", "после подтверждения тумблер врёт");
+
+  // Firewall — без оговорки: клик работает напрямую, синхронизация следует.
+  fw.sw.click();
+  made.syncToggles();
+  assert.equal(fw.sw.getAttribute("aria-checked"), "true", "клик по firewall не отразился");
+}
+
+console.log("modecard-service: секция службы и тумблеры — OK");

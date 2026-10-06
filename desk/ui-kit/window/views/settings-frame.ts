@@ -628,6 +628,21 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       if (r && typeof r === "object" && r.ok === false) throw new Error(r.error || "Настройки не сохранились");
       if (r && typeof r === "object" && r.mtime_ns != null) seenMtime = String(r.mtime_ns);
       if (revision === container.dataset.settingsRevision) delete container.dataset.settingsDirty;
+      // Фикс-волна 06.10 (P3-2): срез `c` тянем за СОБСТВЕННОЙ записью тем же
+      // гребнем, что freshness.accept. Без этого «Сохранить» сравнивал черновик
+      // со срезом открытия, а легаси-нормализация collect оставляла вечный
+      // хвост «ключей, которых нет в черновике» — перезапуск предлагался при
+      // нулевой чистой смене. base для «Сохранить» — не отпечаток открытия, а
+      // только что возвращённый mtime записи: срез тянет ровно та запись.
+      await shell<Loaded>("config_load").then((r2) => {
+        if (r2 && typeof r2 === "object" && r2.config && typeof r2.config === "object"
+          && r2.mtime_ns != null && seenMtime != null && String(r2.mtime_ns) === seenMtime) {
+          c = r2.config;
+        }
+      }).catch(() => {
+        // Не перечиталось — срез остаётся прежним; худшее, что даёт эта
+        // миллисекундная гонка, — один лишний хвост у расписки.
+      });
       // 25.09: оболочка применила настройки реле сразу и сказала, что сделала.
       return r && typeof r === "object" && typeof r.relay === "string" ? r.relay : "";
     } catch (e) {

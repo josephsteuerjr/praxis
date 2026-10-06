@@ -3,6 +3,7 @@ fn argument<T: serde::de::DeserializeOwned>(args: &serde_json::Value, snake: &st
     serde_json::from_value(args.get(camel).or_else(|| args.get(snake)).cloned().unwrap_or(serde_json::Value::Null))
         .map_err(|e| format!("invalid argument {camel}: {e}"))
 }
+
 async fn host_command(app: &ShellHandle, name: &str, args: &serde_json::Value) -> Result<serde_json::Value, String> {
     match name {
         "owner_control" => serde_json::to_value(owner_control(argument::<String>(args, "action", "action")?)?).map_err(|e| e.to_string()),
@@ -43,7 +44,7 @@ async fn host_command(app: &ShellHandle, name: &str, args: &serde_json::Value) -
         "carry_export" => serde_json::to_value(carry_export().await?).map_err(|e| e.to_string()),
         "agents_list" => serde_json::to_value(agents_list(app.state::<LocalHarness>())).map_err(|e| e.to_string()),
         "switch_agent" => serde_json::to_value(switch_agent(app.clone(), argument::<String>(args, "id", "id")?)?).map_err(|e| e.to_string()),
-        "agent_add" => serde_json::to_value(agent_add(app.clone(), argument::<String>(args, "name", "name")?, argument::<Option<String>>(args, "soul_kind", "soulKind")?, argument::<Option<String>>(args, "soul_text", "soulText")?, argument::<Option<String>>(args, "soul_from", "soulFrom")?).await?).map_err(|e| e.to_string()),
+        "agent_add" => serde_json::to_value(agent_add(app.clone(), argument::<String>(args, "name", "name")?, argument::<Option<serde_json::Value>>(args, "soul", "soul")?, argument::<Option<String>>(args, "soul_kind", "soulKind")?, argument::<Option<String>>(args, "soul_text", "soulText")?, argument::<Option<String>>(args, "soul_from", "soulFrom")?).await?).map_err(|e| e.to_string()),
         "agent_default_set" => serde_json::to_value(agent_default_set(argument::<String>(args, "id", "id")?)?).map_err(|e| e.to_string()),
         "agent_enabled_set" => serde_json::to_value(agent_enabled_set(app.clone(), argument::<String>(args, "id", "id")?, argument::<bool>(args, "enabled", "enabled")?).await?).map_err(|e| e.to_string()),
         "agent_remove" => serde_json::to_value(agent_remove(app.clone(), argument::<String>(args, "id", "id")?).await?).map_err(|e| e.to_string()),

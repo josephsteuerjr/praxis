@@ -166,6 +166,27 @@ class SetEnabled(Base):
         self.assertEqual(done.returncode, 2)
         self.assertIn("не найден", done.stderr)
 
+    def test_broken_json_refuses_instead_of_wiping_the_config(self):
+        # Фикс-волна 06.10 (F2): read_config битого JSON давал {} — запись
+        # enabled поверх стирала бы ВЕСЬ конфиг до одного ключа. Теперь:
+        # отказ словами, файл не тронут.
+        cfg = self.root / "agents" / "mira" / "helene.json"
+        broken = '{ "agent": { "name": "Мира", }  лишняя запятая'
+        cfg.write_text(broken, encoding="utf-8", newline="\n")
+        done = run_cli("set-enabled", "--id", "mira", "--enabled", "false", base=self.root)
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIn("не разбирается", done.stderr)
+        self.assertEqual(cfg.read_text(encoding="utf-8"), broken,
+                         "отказ обязан оставить битый конфиг как был")
+        # Пустой файл и отсутствие файла — НЕ битые: писаться может новый.
+        cfg.write_text("", encoding="utf-8", newline="\n")
+        done = run_cli("set-enabled", "--id", "mira", "--enabled", "true", base=self.root)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        cfg.write_text("не-json-вовсе", encoding="utf-8", newline="\n")
+        done = run_cli("set-enabled", "--id", "mira", "--enabled", "false", base=self.root)
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("не разбирается", done.stderr)
+
 
 class Remove(Base):
     def setUp(self):

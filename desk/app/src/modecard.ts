@@ -194,7 +194,11 @@ export function modeCard(
           session0InFile = want;
           onConfigWrite(stamp.base, stamp.fresh);
         } catch (e) {
-          session0Want = null;
+          // Фикс-волна 06.10 (P3-1): здесь НЕ гасим желание. Второй быстрый
+          // щелчок ставит его ВО ВРЕМЯ await выше — прежний catch затирал и
+          // его вместе с отказом первого, и файл не узнавал о втором решении.
+          // Теперь отказ первого не мешает: цикл увидит живое желание и
+          // запишет его; без желаний — выйдет. Повтор только по щелчку.
           toast(`Выбор в файл не записался (${humanError(e).text}) — нажми «Сохранить», иначе ступень слетит при перезапуске.`);
         }
       }
@@ -252,6 +256,9 @@ export function modeCard(
     // вторую правду, из-за которой галочку и растворили в лестницу.
     if (picked !== "session0") session0 = false;
     syncPlan();
+    // P2-1: сюда приходят radio-cancel, щелчок по ограде и выключение ступени
+    // — все программные смены session0. Тумблер службы обязан показать их.
+    syncToggles();
   };
 
   // --- две ограды: названия и описания ЦЕЛИКОМ из `modes.catalogue()`.
@@ -539,7 +546,12 @@ export function modeCard(
   // Рисуем по списку из трубы (`service.toggles`), а не своим перечнем: харнесс
   // знает и умолчания, и оговорки. Ключи, которых окно писать не умеет, честно
   // называем — молча съесть галочку хуже, чем сказать «правь руками».
-  const toggleView = new Map<string, { row: HTMLElement; note: HTMLElement }>();
+  // ⚠ В карте — сам переключатель, а не только подписи (фикс-волна 06.10,
+  // P2-1): тумблер «Нулевая сессия» обязан следовать за ФАКТОМ в файле —
+  // ступень лестницы меняет его программно (radio-confirm/radio-cancel/
+  // fence-click → putSession0), и несинхронный aria-checked показывал выкл
+  // при включённой ступени и наоборот.
+  const toggleView = new Map<string, { row: HTMLElement; note: HTMLElement; sw?: HTMLButtonElement }>();
   const known: Record<string, { get(): boolean; set(v: boolean): void }> = {
     "service.session0": { get: () => session0, set: (v) => (session0 = v) },
     "service.firewall": { get: () => firewall, set: (v) => (firewall = v) },
@@ -590,13 +602,17 @@ export function modeCard(
     row.append(ask);
     const note = el("p", "field-hint");
     row.append(note);
-    toggleView.set(t.key, { row, note });
+    toggleView.set(t.key, { row, note, sw });
     togglesBox.append(row);
   }
 
   const syncToggles = () => {
     const s0 = toggleView.get("service.session0");
     if (s0) {
+      // Тумблер следует за ФАКТОМ (P2-1): его перевели программно — ступень
+      // лестницы (radio-confirm → session0=true, fence-click/radio-cancel →
+      // putSession0(false)) — и aria-checked обязан показать то же, что файл.
+      if (s0.sw) s0.sw.setAttribute("aria-checked", String(!!session0));
       s0.note.className = session0 && installed === false ? "receipt err" : "field-hint";
       s0.note.textContent = !session0
         ? `Выключено. Ключ service.session0 — его читает сама служба; на ограду «${choiceOf(picked)?.title || live.title}» не влияет.`
@@ -606,6 +622,9 @@ export function modeCard(
     }
     const fw = toggleView.get("service.firewall");
     if (fw) {
+      // Тот же гребень, что у нулевой сессии: программных смен у firewall нет,
+      // но синхронизация по факту стоит копейки и страхует будущие.
+      if (fw.sw) fw.sw.setAttribute("aria-checked", String(!!firewall));
       fw.note.className = "field-hint";
       fw.note.textContent = firewall
         ? "Включено (умолчание). Кнопка «Телефон» откроет порт через службу; прав системы агенту это не даёт и с нулевой сессией не связано."

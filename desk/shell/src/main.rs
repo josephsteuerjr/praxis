@@ -6249,6 +6249,25 @@ fn bootstrap() -> Option<Boot> {
         .map(|a| (a.id, a.name, a.enabled))
         .collect();
     let (wanted, saved_refused) = startup_pick(arg_after("--agent"), agent_default_id(), &entries);
+    // Фикс-волна 06.10 (F10): ярлык на СНЯТОГО агента раньше открывал мёртвое
+    // окно без единого слова. Снятый агент в ростере есть — startup_pick его
+    // пропускает молча (это его работа для сохранённого выбора), здесь же
+    // ярлык: воля владельца на сей раз, и её отказ обязан звучать так же,
+    // как у сохранённого выбора — слово плюс откат к корневому.
+    let mut flag_refused: Option<String> = None;
+    let wanted = wanted.or_else(|| {
+        let said = arg_after("--agent")?;
+        match entries.iter().find(|(id, _, _)| *id == said) {
+            Some((_, _, true)) => Some(said),
+            Some((_, name, false)) => {
+                flag_refused = Some(format!(
+                    "Ярлык просит агента «{name}», но сейчас он снят в его настройках и подниматься не может."
+                ));
+                None
+            }
+            None => Some(said), // нет в ростере — скажет проверка ниже
+        }
+    });
     let mut current = wanted
         .as_deref()
         .and_then(|id| find_agent(&base, id))
@@ -6262,8 +6281,8 @@ fn bootstrap() -> Option<Boot> {
             );
         }
     }
-    if let Some(why) = saved_refused {
-        log_line("сохранённый выбор агента не вышел — открываю корневого");
+    if let Some(why) = flag_refused.take().or(saved_refused) {
+        log_line("выбор агента не вышел — открываю корневого");
         message_box_async(
             format!("{}: агент не открылся", product_ui()),
             format!("{why} Открываю корневого; выбор можно перевести на него в карточке «Агенты»."),
@@ -7416,14 +7435,34 @@ fn stop_agent_children(state: &ShellState<LocalHarness>, agent: &str) -> usize {
     stopped
 }
 
+/// Разрешено ли агенту показывать текст уведомлений (notifications.text).
+/// Настраивается в ЕГО конфиге: у второго агента свои люди и свой Telegram,
+/// и его слово в трее живёт по его же настройке, а не по чужой.
+fn agent_notify_text(config: &Path) -> bool {
+    agent_config(config)
+        .get("notifications")
+        .and_then(|n| n.get("text"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
 /// Поднять одного агента по свежему плану с диска (конфиг уже включён).
 /// Возвращает слово для журнала. Реле трогаем только если оно не живо:
 /// реле одно на установку, и его перезапуск ронял бы вход в подписку.
-fn lift_agent(state: &ShellState<LocalHarness>, agent: &str) -> Result<Option<String>, String> {
+fn lift_agent(app: &ShellHandle, agent: &str) -> Result<Option<String>, String> {
+    let state = app.state::<LocalHarness>();
     let base = install_root();
     let Some(mut full) = build_plans(&base).into_iter().find(|p| p.agent == agent) else {
         return Ok(None); // не настроен или не local — поднимать нечего, это не ошибка
     };
+    // Фикс-волна 06.10 (F3): наблюдатели ставились ТОЛЬКО на старте (setup) —
+    // погашенный и поднятый агент оставался без уведомлений и окон брокера
+    // до перезапуска всей программы. Ставим здесь, идемпотентно: повторный
+    // подъём лишь добавляет ещё одного читателя хвоста архива (каждый поток
+    // держит свой offset), а сторож просьб отвечает только на свежее
+    // (стоп-кадр по факту ответа) — дублей подтверждений это не рождает.
+    watch_outbound(app.clone(), full.tree.clone(), full.name.clone(), agent_notify_text(&full.config));
+    watch_broker_wishes(full.tree.clone());
     let relay_alive = state
         .children
         .lock()
@@ -7539,10 +7578,37 @@ async fn agent_enabled_set(
     if let Some(why) = agent_enabled_refusal(agent.base, enabled) {
         return Err(why);
     }
+    let name = agent.name.clone();
     if agent.enabled == enabled {
+        // Фикс-волна 06.10 (F7): «уже включён» раньше отвечал молчаливым
+        // no-op — но конфиг мог подправить руками Блокнот, а сами дети при
+        // этом давно умерли или никогда не поднимались. Слово владельца
+        // «Поднять» обязано значить «чтобы работал»: проверяем план/детей
+        // и поднимаем, кого недосчитались.
+        if enabled {
+            let missing = app
+                .state::<LocalHarness>()
+                .children
+                .lock()
+                .map(|g| !g.iter().any(|m| m.agent == agent.id && m.child.is_some()))
+                .unwrap_or(true);
+            if missing {
+                match lift_agent(&app, &agent.id) {
+                    Ok(Some(whose)) => {
+                        log_line(&format!("агент «{}»{} был включён в конфиге, но не работал — поднят по слову владельца", name, whose));
+                        toast(product_ui(), &format!("«{name}» был включён в настройках, но не работал — теперь работает."));
+                    }
+                    Ok(None) => {
+                        log_line(&format!(
+                            "агент «{name}» включён, но его не поднять: не настроен или живёт не здесь"
+                        ));
+                    }
+                    Err(why) => return Err(why),
+                }
+            }
+        }
         return Ok(serde_json::json!({ "ok": true, "same": true, "id": agent.id }));
     }
-    let name = agent.name.clone();
     run_agents_cli(&[
         "set-enabled".into(),
         "--id".into(),
@@ -7566,7 +7632,7 @@ async fn agent_enabled_set(
     }
     let state = app.state::<LocalHarness>();
     if enabled {
-        match lift_agent(&state, &agent.id) {
+        match lift_agent(&app, &agent.id) {
             Ok(Some(whose)) => {
                 log_line(&format!("агент «{name}»{} поднят по слову владельца", whose));
                 toast(product_ui(), &format!("«{name}» снова работает."));
@@ -7583,7 +7649,19 @@ async fn agent_enabled_set(
         log_line(&format!(
             "агент «{name}» снят в настройках — детей остановлено {stopped}, из планов вычеркнут"
         ));
-        toast(product_ui(), &format!("«{name}» погашен и больше не поднимется, пока не вернёшь галочку."));
+        // Фикс-волна 06.10 (F6): гашение агента, чьё окно сейчас открыто,
+        // убивает связь ЭТОГО окна. Молчание здесь выглядело как «пропало
+        // соединение» без причины. Говорим тем же тостом — действие не
+        // блокируем: владелец уже принял решение, предупреждение — про
+        // последствия, а не ещё один вопрос.
+        if agent.id == current_id() {
+            toast(
+                product_ui(),
+                &format!("«{name}» погашен — окно этого агента потеряет связь; переключись на другого или продолжи."),
+            );
+        } else {
+            toast(product_ui(), &format!("«{name}» погашен и больше не поднимется, пока не вернёшь галочку."));
+        }
     }
     Ok(serde_json::json!({ "ok": true, "id": agent.id, "enabled": enabled }))
 }
@@ -7651,14 +7729,44 @@ async fn agent_remove(app: ShellHandle, id: String) -> Result<serde_json::Value,
 /// строки Windows): он пишется во временный файл и передаётся как --soul-file,
 /// файл стирается после ответа питона. "inherit" без текста — питон сам берёт
 /// soul/SOUL.md донора (--soul-from); "inherit" С текстом — это "text".
+///
+/// Вложенная форма `soul:{kind,text,from}` (карточка «Агенты») сильнее плоских
+/// `soul_kind/soul_text/soul_from`: смешение двух форм не должно тихо
+/// предпочесть не ту. Канон — ни той, ни другой: все трое None, питон получит
+/// «как раньше». Пустая строка в любой форме — как отсутствие (не сказано).
+/// Разворот общий для обеих труб (Tauri/Electron) и живёт здесь.
+fn merge_soul_forms(
+    soul: Option<&serde_json::Value>,
+    flat_kind: Option<String>,
+    flat_text: Option<String>,
+    flat_from: Option<String>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let field = |key: &str| -> Option<String> {
+        soul.filter(|v| v.is_object())
+            .and_then(|n| n.get(key))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .filter(|v| !v.trim().is_empty())
+    };
+    let nonempty = |v: Option<String>| v.filter(|s| !s.trim().is_empty());
+    (
+        nonempty(field("kind").or(flat_kind)),
+        nonempty(field("text").or(flat_text)),
+        nonempty(field("from").or(flat_from)),
+    )
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn agent_add(
     app: ShellHandle,
     name: String,
+    soul: Option<serde_json::Value>,
     soul_kind: Option<String>,
     soul_text: Option<String>,
     soul_from: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let (soul_kind, soul_text, soul_from) =
+        merge_soul_forms(soul.as_ref(), soul_kind, soul_text, soul_from);
     let base = install_root();
     let named = name.trim().to_string();
     if named.is_empty() {
@@ -8898,6 +9006,42 @@ mod tests {
         assert_eq!(startup_pick(None, None, &roster), (None, None));
     }
 
+    /// 06.10 (фикс-волна, F1): конституция доезжает ОБЕИМИ формами — вложенной
+    /// `soul:{kind,text,from}` (карточка) и плоскими ключами (старый колер).
+    /// Вложенная сильнее; канон — все трое None, «как раньше».
+    #[test]
+    fn soul_forms_both_reach_the_seed() {
+        use super::merge_soul_forms;
+        // Канон: ни одной формы — питон не получит ни флага, ни файла.
+        let (k, t, f) = merge_soul_forms(None, None, None, None);
+        assert!((k, t, f) == (None, None, None));
+        // Вложенная форма карточки — как есть.
+        let soul = serde_json::json!({"kind": "text", "text": "Моя конституция"});
+        let (k, t, f) = merge_soul_forms(Some(&soul), None, None, None);
+        assert_eq!(k.as_deref(), Some("text"));
+        assert_eq!(t.as_deref(), Some("Моя конституция"));
+        assert_eq!(f, None);
+        // Плоская форма (camel или snake у трубы) — тот же результат.
+        let (k, t, f) = merge_soul_forms(None, Some("inherit".into()), Some("Наследство".into()), Some("mira".into()));
+        assert_eq!(k.as_deref(), Some("inherit"));
+        assert_eq!(t.as_deref(), Some("Наследство"));
+        assert_eq!(f.as_deref(), Some("mira"));
+        // Смешение: вложенная форма сильнее — плоские не перебивают её.
+        let soul = serde_json::json!({"kind": "text", "text": "Вложенная"});
+        let (k, t, _) = merge_soul_forms(Some(&soul), Some("canonical".into()), Some("Плоская".into()), None);
+        assert_eq!(k.as_deref(), Some("text"), "вложенный kind обязан победить плоский");
+        assert_eq!(t.as_deref(), Some("Вложенная"), "вложенный text обязан победить плоский");
+        // Пустые строки и не-объект — как отсутствие формы (канон молчит).
+        let (k, t, f) = merge_soul_forms(Some(&serde_json::json!("строка")), Some("  ".into()), None, None);
+        assert_eq!((k, t, f), (None, None, None), "пустота и не-объект — не конституция");
+        // Частичный вложенный (только kind) добирает остальное из плоских.
+        let soul = serde_json::json!({"kind": "inherit"});
+        let (k, t, f) = merge_soul_forms(Some(&soul), None, None, Some("main".into()));
+        assert_eq!(k.as_deref(), Some("inherit"));
+        assert_eq!(t, None);
+        assert_eq!(f.as_deref(), Some("main"));
+    }
+
     /// agent-default.json: чтение терпимо к браку, запись атомарна и читается
     /// обратно ровно тем же кодом, что и старт.
     #[test]
@@ -8970,7 +9114,7 @@ mod tests {
     use super::{
         admin_verdict, agent_enabled_refusal, agent_name, agent_remove_refusal, blocked_script, broker_answer_row, broker_confirm_text,
         broker_wish_ask, broker_wish_id, broker_wishes, decode_config, ensure_desk_token,
-        startup_pick, resolve_target, agent_default_id_from, agent_default_write_at, unconfigured, version_newer, BrokerOp,
+        startup_pick, resolve_target, unconfigured, version_newer, BrokerOp,
         BrokerReceipt, BrokerWish,
     };
     // Брандмауэр, UAC, PowerShell и кодировка консоли — только Windows: этих

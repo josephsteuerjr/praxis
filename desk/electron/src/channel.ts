@@ -165,6 +165,16 @@ export function rosterFor(root: string): RosterAgent[] {
   return out;
 }
 
+/**
+ * Фикс-волна 06.10 (F4): канал окна собирает НЕ этот файл. Единственный
+ * живой путь — init-script от Rust-оболочки (channel_script в main.rs):
+ * она же поднимает и держит агентов, и ключ/порт окна обязаны приходить от
+ * неё, а не от второго читателя helene.json, который разошёлся бы с первым.
+ * `rosterFor` остаётся живым (roster для канала зовёт bootstrapChannel);
+ * ЭТА функция — не экспорт поведения, а справочник протокола для стендов
+ * Electron-лейна. Задел под «второй читатель» (agent_id всегда main внутри)
+ * был миной: любой будущий вызов подсвечивал бы не того агента.
+ */
 export function channelFor(root: string, product: string): { channel: Channel; note: string } {
   const path = join(root, CONFIG_NAME);
   const read = readConfig(path);

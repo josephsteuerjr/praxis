@@ -118,6 +118,7 @@ globalThis.window = {
       shellCalls.push([cmd, args]);
       if (shellErrors[cmd]) throw shellErrors[cmd];
       if (cmd === "agents_list") return agentsFixture;
+      if (cmd === "agent_remove") return { ok: true, attic: "C:\\install\\agents-attic\\mira-20261006T000000Z" };
       return { ok: true };
     },
   },
@@ -336,7 +337,15 @@ const soulParts = (soulBox) => soulBox.children; // [label, pick, textarea, warn
   btnByText(kill.children[2], "Удалить навсегда").click();
   await tick();
   assert.deepEqual(shellCalls.find(([c]) => c === "agent_remove")[1], { id: "mira" });
-  assert.match(toastText(), /чердак/);
+  // Фикс-волна 06.10 (F5): путь чердака — из ответа agent_remove (attic);
+  // запасной текст обязан называть НАСТОЯЩИЙ чердак (agents-attic), а не
+  // выдуманный «_state/attic».
+  const said = toastText();
+  assert.ok(
+    said.includes("agents-attic\\mira") || said.includes("чердак"),
+    "тост не назвал ни путь из ответа, ни чердак",
+  );
+  assert.ok(!said.includes("_state"), "тост назвал выдуманный чердак _state/attic");
 }
 
 // --------------------------------------------------------------------------
