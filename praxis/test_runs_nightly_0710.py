@@ -93,7 +93,10 @@ class _Sandbox(unittest.TestCase):
         runs_nightly.TASKS_DIR = forge.TASKS_DIR
         runs_nightly.FORGE_STATE = forge.STATE_DIR
         runs_nightly.PATTERNS_PATH = forge.STATE_DIR / "patterns.jsonl"
-        runs_nightly.FORMATION_RUNS_PATH = self.tmp / "memory" / ".state" / "formation_runs.json"
+        # тот же каталог, что и в проде после фикса шва приёмки 07.10:
+        # memory/.state/life/ — его глобит formation._frontier_metas и
+        # читает formation._pending_run_digests.
+        runs_nightly.FORMATION_RUNS_PATH = self.tmp / "memory" / ".state" / "life" / "formation_runs.json"
         import os
         os.environ.pop("PRAXIS_RUNS_NIGHTLY", None)
         self.addCleanup(self._restore)
@@ -305,6 +308,26 @@ class CollapseBumpsCounterNotLessons(_Sandbox):
 
 class FormationIntegration(_Sandbox):
     """run_digest входит в pending_compacts; потребление — тем же processed."""
+
+    def test_publish_then_pending_reads_same_file(self):
+        """Шов целиком, приёмка 07.10: publish_for_formation пишет ровно туда,
+        откуда читает formation._pending_run_digests — файл НЕ подкладывается
+        руками (дефект: публикатор писал memory/.state/, читатель ждал
+        memory/.state/life/; их прежний тест подкладывал файл сам и шов не
+        проверял)."""
+        import formation
+        _task("code-seam01", status="done", criteria=["зелёные"],
+              commands=["pytest -q"])
+        digest = runs_nightly.digest_task(forge.get("code-seam01"))
+        with mock.patch.object(formation.life, "STATE_DIR",
+                               self.tmp / "memory" / ".state" / "life"):
+            published = runs_nightly.publish_for_formation([digest])
+            self.assertEqual(published, 1)
+            with mock.patch.object(formation, "_frontier_metas", return_value=[]):
+                pending = formation.pending_compacts()
+        ids = [str(m.get("id")) for m in pending]
+        self.assertIn("run-digest-code-seam01", ids,
+                      "publish_for_formation -> pending_compacts: один файл, шов живой")
 
     def test_pending_run_digests_flow(self):
         import formation

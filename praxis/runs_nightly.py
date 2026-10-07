@@ -15,7 +15,8 @@ skipped_already_green, отложенные финиши) в материал, �
 * рычаг PRAXIS_RUNS_NIGHTLY = off | dry | on, умолчание off — закон 2: поведенческий
   дефолт включает только она. dry — репетиция: дайджест считается и пишется рядом
   с задачей (RUN-DIGEST.md), в формирование НЕ попадает; on — ещё и публикует
-  дайджесты formation-готовым фронтиром (``memory/.state/formation_runs.json``),
+  дайджесты formation-готовым фронтиром (``memory/.state/life/formation_runs.json`` —
+  тот же каталог, который глобит formation._frontier_metas),
   откуда formation.pending_compacts берёт их как обычные источники.
 * Вердикт контракта — из ЕДИНОГО источника: forge._contract_evidence +
   forge_learning.contract_status (те же, что finish и урок). Никаких вторых
@@ -44,7 +45,13 @@ BASE = Path(os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent)
 FORGE_STATE = BASE / "memory" / ".forge"
 TASKS_DIR = FORGE_STATE / "tasks"
 PATTERNS_PATH = FORGE_STATE / "patterns.jsonl"
-FORMATION_RUNS_PATH = BASE / "memory" / ".state" / "formation_runs.json"
+# Фронтир дайджестов: тот же файл, который читает formation.pending_compacts
+# (life.STATE_DIR / "formation_runs.json", см. formation.py::_pending_run_digests).
+# Импорт на уровне модуля создал бы цикл praxis.runs_nightly -> formation ->
+# (heartbeat и др.), поэтому путь выводится из memory_life.STATE_DIR — SSOT каталога.
+import memory_life as _life  # noqa: E402  (после BASE, до констант)
+
+FORMATION_RUNS_PATH = _life.STATE_DIR / "formation_runs.json"
 
 #: окно отбора задач: терминальные finished за последние N часов (чуть больше
 #: суток, чтобы «догонная» ночь после пропущенной тоже видела вчерашнее).
@@ -385,7 +392,8 @@ def write_dry_digest(digest: dict, *, tasks_dir: Path | None = None) -> Path | N
 def publish_for_formation(digests: list[dict], *, path: Path | None = None) -> int:
     """on: дайджесты становятся formation-готовым фронтиром (frontier-меты).
 
-    Файл лежит в ``memory/.state/`` рядом с остальными frontier-файлами;
+    Файл лежит в ``memory/.state/life/`` — тот же каталог ``life.STATE_DIR``, который
+    глобит formation._frontier_metas (остальные frontier-файлы лежат там же);
     formation.pending_compacts берёт оттуда меты kind=run_digest (см. правку
     formation.py), а formation.run() пометит их обработанными тем же
     processed_compacts — дайджест потребляется один раз, как компакт.
