@@ -255,11 +255,75 @@ def _expire_pending(items: list[dict], *, now: float) -> bool:
     return changed
 
 
+def priority_prefix() -> str:
+    """Приоритетный маркер (07.10): «!» умолчанием, свой — PRAXIS_PRIORITY_PREFIX,
+    «off»/«none»/«0» — выключить (байт-в-байт прежнее поведение). Живёт здесь,
+    а не в раннере: у леджера нет тяжёлых импортов, и тест префикса не должен
+    тянуть Telethon."""
+    raw = str(os.environ.get("PRAXIS_PRIORITY_PREFIX") or "").strip()
+    if raw.casefold() in ("off", "none", "0"):
+        return ""
+    return raw or "!"
+
+
+def split_priority(text: str) -> tuple[bool, str]:
+    """(приоритетно?, текст без префикса). Префикс — только в самом начале строки."""
+    marker = priority_prefix()
+    value = str(text or "")
+    if not marker:
+        return False, value
+    stripped = value.lstrip()
+    if stripped.startswith(marker) and len(stripped) > len(marker):
+        rest = stripped[len(marker):].lstrip(" \u00a0")
+        if rest:
+            return True, rest
+    return False, value
+
+
+def _dedup_window_sec() -> float:
+    """Окно повтора отправки (07.10): повторная реплика тому же адресату с тем же
+    текстом внутри окна — не новая нить, а дубль. Рычаг `PRAXIS_FOLLOWUP_DEDUP_SEC`
+    (0 выключает дедуп), умолчание 1 час — её же TRACE-масштаб пульса."""
+    try:
+        value = float((os.environ.get("PRAXIS_FOLLOWUP_DEDUP_SEC") or "").strip())
+    except Exception:
+        return 3600.0
+    return max(0.0, value)
+
+
 class FollowUpLedger:
     """Small synchronized facade, with an injectable path for tests."""
 
     def __init__(self, path: str | Path = STATE_PATH):
         self.path = Path(path)
+
+    def recent_same_text(
+        self, *, target_peer_id: str | int, text: str, now: float | None = None,
+        window_sec: float | None = None,
+    ) -> dict | None:
+        """Повтор этой же реплики этому адресату уже внутри окна дедупа? (07.10)
+
+        Считает по её собственным отправленным словам (`sent_excerpt`), не по чужой
+        просьбе: именно повтор её речи порождал три письма Роме (17:27, 17:39, 18:15)
+        с одним текстом. Возвращает найденную нить или None.
+        """
+        current = float(now if now is not None else time.time())
+        window = float(window_sec if window_sec is not None else _dedup_window_sec())
+        said = str(text or "").strip()
+        if not said or window <= 0:
+            return None
+        with _LOCK:
+            for item in reversed(_load(self.path)["items"]):
+                if str(item.get("target_peer_id")) != str(target_peer_id):
+                    continue
+                if item.get("status") != "pending":
+                    continue
+                if str(item.get("sent_excerpt") or item.get("sent_text") or "").strip() != said:
+                    continue
+                sent_at = float(item.get("sent_at") or 0)
+                if 0 < sent_at and (current - sent_at) <= window:
+                    return dict(item)
+        return None
 
     def create(
         self,
@@ -497,6 +561,55 @@ class FollowUpLedger:
                 # окна между матчем и отправкой и без знания OWNER_ID внутри модуля.
                 item["notice_skipped"] = "ответил сам Егор"
                 item["notice_skipped_at"] = now
+            # ⚠ 07.10: раньше один входящий ответ закрывал ровно ОДНУ — самую свежую —
+            # нить, а 4-5 её же более ранних реплик тому же человеку оставались
+            # pending до TRACE_TTL и всплывали в каждом пульсе как «открытые
+            # обязательства»: она докладывала одно и то же снова и снова. В личке
+            # позднейшее сообщение адресата — ответ ВСЕМ прежним репликам к нему:
+            # закрываем каждую более старую pending-нить того же адресата тем же
+            # ответом. Заказанный Егором отчёт (notify_owner) при этом остаётся
+            # должен — намерение не гаснет возрастом; закрытию подлежит только след.
+            winner_sent_at = float(item.get("sent_at") or 0)
+            for other in state["items"]:
+                if other is item or str(other.get("target_peer_id")) != peer:
+                    continue
+                if other.get("status") != "pending":
+                    continue
+                other_target = other.get("target_user_id")
+                if not other_target or str(other_target) != sender:
+                    continue
+                if float(other.get("sent_at") or 0) >= winner_sent_at:
+                    continue
+                other["status"] = "answered"
+                other["response"] = {
+                    "peer_id": peer, "sender_id": sender,
+                    "sender_name": str(sender_name or "")[:120],
+                    "message_id": mid, "reply_to_message_id": reply_mid,
+                    "text": str(text or "")[:4000], "received_at": now,
+                    "revision_source_id": str(mid),
+                    "revisions": [{
+                        "kind": "message", "source_id": str(mid),
+                        "text": str(text or "")[:4000], "observed_at": now,
+                    }],
+                    "superseded_by_later_message": True,
+                }
+                other["answered_by_later_message_at"] = now
+            # Один входящий ответ — не больше ОДНОГО письма Егору, сколько бы
+            # заказанных отчётов он ни закрыл: иначе тот же замкнутый цикл
+            # вернётся почтой. Обязательство гасим не молча, а названной причиной.
+            owed_swept = [
+                other for other in state["items"]
+                if other is not item and _owes_owner_notice(other)
+                and other.get("answered_by_later_message_at") == now
+            ]
+            if owed_swept:
+                carrier = (item if _owes_owner_notice(item)
+                           else max(owed_swept, key=lambda x: float(x.get("sent_at") or 0)))
+                for other in owed_swept:
+                    if other is carrier:
+                        continue
+                    other["notice_skipped"] = "тот же ответ — отчёт уходит по свежей нити"
+                    other["notice_skipped_at"] = now
             _save(state, self.path)
             return dict(item)
 
