@@ -10,3 +10,6 @@ praxis/body/target/
 _body_target/
 _relay_prod_src/
 __pycache__/
+
+# локальная сборка ядра для фокусных тестов (слой + зеркало), не исходники
+.oro-assembled/
