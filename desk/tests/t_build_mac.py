@@ -192,6 +192,48 @@ class ArchiveMembers(unittest.TestCase):
         self.assertIsNone(build_mac.core_summary({"core": None}))
 
 
+class GeneratedAgentFiles(unittest.TestCase):
+    def test_cleanup_preserves_staged_inputs_and_removes_only_generated_additions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp)
+            (tree / "memory").mkdir()
+            (tree / "memory/authored.json").write_text("authored", encoding="utf-8")
+            (tree / "agent.py").write_text("pass", encoding="utf-8")
+            original = {"agent.py", "memory/authored.json"}
+            (tree / "__pycache__").mkdir()
+            (tree / "__pycache__/agent.cpython-314.pyc").write_bytes(b"generated")
+            (tree / "memory/llm.json").write_text("generated", encoding="utf-8")
+            self.assertEqual(build_mac.clean_generated_agent_files(tree, original), 2)
+            self.assertEqual({p.relative_to(tree).as_posix() for p in tree.rglob("*") if p.is_file()}, original)
+            self.assertEqual((tree / "memory/authored.json").read_text(encoding="utf-8"), "authored")
+            self.assertFalse((tree / "__pycache__").exists())
+
+    def test_unknown_addition_fails_before_any_removal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp)
+            (tree / "memory").mkdir()
+            (tree / "memory/llm.json").write_text("generated", encoding="utf-8")
+            (tree / "unexpected.py").write_text("unexpected", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                build_mac.clean_generated_agent_files(tree, set())
+            self.assertTrue((tree / "memory/llm.json").exists())
+            self.assertTrue((tree / "unexpected.py").exists())
+
+    def test_staged_model_configuration_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp)
+            (tree / "memory").mkdir()
+            config = tree / "memory/llm.json"
+            config.write_text("authored settings", encoding="utf-8")
+            self.assertEqual(build_mac.clean_generated_agent_files(tree, {"memory/llm.json"}), 0)
+            self.assertEqual(config.read_text(encoding="utf-8"), "authored settings")
+
+    def test_missing_staged_input_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit):
+                build_mac.clean_generated_agent_files(Path(tmp), {"agent.py"})
+
+
 class MachO(unittest.TestCase):
     def test_magic(self):
         with tempfile.TemporaryDirectory() as tmp:
