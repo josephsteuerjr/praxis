@@ -109,7 +109,7 @@ class Chronicler(unittest.TestCase):
                 return True
 
             @staticmethod
-            def chat(role, system, messages, max_tokens):
+            def chat(role, system, messages, max_tokens, **kw):  # 05.10: терпит новые kwargs живого llm.chat (reasoning_effort и проч.)
                 captured.update(role=role, system=system, max_tokens=max_tokens)
                 return _Resp()
         import sys

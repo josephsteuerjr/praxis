@@ -1947,7 +1947,7 @@ class TheTapeSaysHowMuchOfTheConversationArrived(ZoneBase):
         line = self.feed_line([{"role": "user", "content": "раз"},
                                {"role": "assistant", "content": "два"}])
         self.assertIn("разговора доставлено 2", line)
-        self.assertIn("переданная история целиком; полнота архива не установлена", line)
+        self.assertIn("это весь сохранённый разговор", line)
         self.assertNotIn("ОБРЕЗАНО", line)
 
     def test_the_tier_count_never_stands_for_the_conversation(self):

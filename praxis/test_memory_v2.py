@@ -333,11 +333,19 @@ class TestSystemPrompt(Base):
         big_journal = agent.JOURNAL_DIR / "2026-06-01.md"
         big_journal.write_text("# day\n\n- 10:00 " + ("x " * 700) + "ДНЕВНИК_ХВОСТ\n",
                                encoding="utf-8")
+        # 29.09, утечка из full4: прежний os.environ["PRAXIS_CONTEXT_BUDGET"]="200" с
+        # pop() в finally ЗАТИРАЛ и удалял возможное значение прода — детектор утечек
+        # _standenv ловил переменную, которой в базисе не было. Теперь честно
+        # сохраняем и восстанавливаем исходное значение.
+        _saved_budget = os.environ.get("PRAXIS_CONTEXT_BUDGET")
         os.environ["PRAXIS_CONTEXT_BUDGET"] = "200"  # душим всё опциональное (минимум бюджета)
         try:
             _persona, system, evidence = agent._build_prompt_parts(speaker="Егор", owner=True)
         finally:
-            os.environ.pop("PRAXIS_CONTEXT_BUDGET", None)
+            if _saved_budget is None:
+                os.environ.pop("PRAXIS_CONTEXT_BUDGET", None)
+            else:
+                os.environ["PRAXIS_CONTEXT_BUDGET"] = _saved_budget
         self.assertNotIn("ВАЖНЫЙ_ПОРТРЕТ", evidence, "опциональный тир (портрет) должен выпасть")
         self.assertNotIn("ДНЕВНИК_ХВОСТ", system + evidence,
                          "raw journal must never become automatic orientation")

@@ -43,7 +43,9 @@ def _fake_llm(role_ok=("voice", "memory"), summary="я записала это �
             return role in role_ok
 
         @staticmethod
-        def chat(role, system, messages, max_tokens):
+        def chat(role, system, messages, max_tokens, **kw):
+            # 05.10: живой llm.chat уже несёт reasoning_effort и может добавить ещё —
+            # фейк терпит лишние kwargs, иначе стенд снова разъедется с контрактом (как 26.09).
             if role not in _LLM.ROLES:
                 raise ValueError(f"llm: неизвестная роль {role!r}")
             captured.update(role=role, system=system, user=messages[0]["content"],

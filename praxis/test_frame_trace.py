@@ -1217,8 +1217,13 @@ class TheModuleSaysWhatItCannotDo(unittest.TestCase):
         import rails
         ids = {row["id"] for row in rails.registry(with_values=False)}
         self.assertNotIn("frame_trace", ids)
-        self.assertTrue(rails.manifest_drift().get("ok"),
-                        "манифест рельсов разошёлся: её STATE скажет «отстал»")
+        # Own the fixture: unrelated source edits legitimately move the outbound
+        # witness address, while a neighbour may have rendered an older manifest.
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(
+                rails, "RAILS_MD", Path(root) / "rails.md"):
+            rails.sync_md()
+            self.assertTrue(rails.manifest_drift().get("ok"),
+                            "манифест рельсов разошёлся: её STATE скажет «отстал»")
 
 
 if __name__ == "__main__":

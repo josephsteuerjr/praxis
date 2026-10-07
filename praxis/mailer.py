@@ -21,6 +21,12 @@ import smtplib
 import ssl
 from email.header import decode_header, make_header
 from email.message import EmailMessage
+from pathlib import Path
+
+# Суммарный кап на вложения (байты, до base64-накрутки ~33%+). Mailfence реально
+# принимает сильно больше, но необъявленный гигантский файл в исходящем — это не
+# «отправка письма», а сюрприз адресату; выше кап — отказ ДО соединения, целиком.
+_ATTACH_TOTAL_MAX = 20 * 1024 * 1024
 
 log = logging.getLogger("praxis-mail")
 
@@ -79,8 +85,12 @@ def _clip_reason(text: object, limit: int = _REASON_CHARS) -> str:
     return head.rstrip(" ,;:.—-") + f" […обрезано, полная причина в логе praxis-mail; кап {limit} симв.]"
 
 
-def send(to: str, subject: str, body: str) -> str:
+def send(to: str, subject: str, body: str, attachments: list[str] | None = None) -> str:
     """Отправить письмо. -> человекочитаемый статус.
+
+    attachments — пути файлов, которые приложить (суммарно ≤ _ATTACH_TOTAL_MAX байт).
+    Файл, который не читается/не существует, — отказ ДО соединения, весь целиком:
+    молча отправить письмо без заявленного вложения хуже, чем не отправить ничего.
 
     ⚠ Раньше ЛЮБОЕ исключение становилось строкой «Не отправилось: <тип>: <160 символов>».
     Две лжи в одной строке (та же болезнь, что чинили в `agent._direct_send_outcome` и
@@ -100,6 +110,31 @@ def send(to: str, subject: str, body: str) -> str:
     msg["To"] = to
     msg["Subject"] = subject or "(без темы)"
     msg.set_content(body or "")
+    # Вложения проверяются ДО соединения: каждое должно существовать и читаться,
+    # суммарно влезать в кап. Любая проблема — честный отказ по всему письму
+    # (адресат не должен получить «письмо», из которого тихо выпал файл).
+    attached: list[tuple[str, int]] = []
+    total = 0
+    for path in (attachments or []):
+        p = Path(path)
+        try:
+            data = p.read_bytes()
+        except OSError as e:
+            return (f"Не отправилось: вложение не читается — {p} "
+                    f"({_clip_reason(f'{type(e).__name__}: {e}')}). Письмо не уходило.")
+        total += len(data)
+        if total > _ATTACH_TOTAL_MAX:
+            return (f"Не отправилось: вложения суммарно {total} байт > кап "
+                    f"{_ATTACH_TOTAL_MAX} ({', '.join(str(Path(a)) for a in attachments or [])}). "
+                    f"Письмо не уходило.")
+        import mimetypes
+        mime, _enc = mimetypes.guess_type(p.name)
+        main, sub = (mime or "application/octet-stream").split("/", 1)
+        msg.add_attachment(data, maintype=main, subtype=sub, filename=p.name)
+        attached.append((p.name, len(data)))
+    # Ветки ответа строятся из одного источника, до try: ветка исключения
+    # «закрытие соединения» обязана собрать ту же строку, что и счастливый путь.
+    _att_line = (" Вложения: " + ", ".join(f"{n} ({sz} б)" for n, sz in attached) + "." if attached else "")
     # На какой стадии упало: до передачи письма отправки не было по построению.
     stage = "соединение с SMTP"
     try:
@@ -116,7 +151,7 @@ def send(to: str, subject: str, body: str) -> str:
         log.warning("send упал на стадии «%s»", stage, exc_info=True)
         reason = _clip_reason(f"{type(e).__name__}: {e}")
         if stage == "закрытие соединения":
-            return (f"Отправлено → {to}: «{msg['Subject']}» (сервер принял письмо). "
+            return (f"Отправлено → {to}: «{msg['Subject']}» (сервер принял письмо{_att_line[1:] if _att_line else ""}). "
                     f"Соединение закрылось с ошибкой уже после этого ({reason}) — "
                     f"на доставку это не влияет, повторять НЕ надо.")
         if stage != "передача письма" or isinstance(e, _REFUSED):
@@ -128,7 +163,7 @@ def send(to: str, subject: str, body: str) -> str:
         return (f"НЕ ЗНАЮ, ушло ли письмо → {to}: связь оборвалась на передаче ({reason}). "
                 f"Сервер мог принять письмо и не успеть ответить. Прежде чем повторять — "
                 f"загляни в «Отправленные» или спроси адресата: повтор может дать второе письмо.")
-    return f"Отправлено → {to}: «{msg['Subject']}»."
+    return f"Отправлено → {to}: «{msg['Subject']}»{_att_line}"
 
 
 def _extract_body(m) -> str:

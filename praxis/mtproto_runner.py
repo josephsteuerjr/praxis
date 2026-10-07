@@ -39,6 +39,7 @@ import owner_delivery
 import perception
 import selfdev
 import reflex
+import run_manager
 import rooms
 import social
 import social_pulse
@@ -3752,6 +3753,141 @@ def _telegram_media_random_id(queue_id: str) -> int:
     return value or 1
 
 
+def _u16_len(s: str) -> int:
+    """Длина строки в UTF-16 code units — Telegram entities считают офсеты так."""
+    return len(s.encode("utf-16-le")) // 2
+
+
+def _apply_blockquote_markers(text: str, entities):
+    """Переводит строки-маркеры "> " в MessageEntityBlockquote (схема цитат).
+
+    Последняя миля SendMessageRequest: голос пишет плоским текстом, строки,
+    начинающиеся с "> ", помечаются блочной цитатой Telegram; сам маркер из
+    провода убирается. Существующие entities (жирный, код) сдвигаются влево на
+    2 UTF-16 единицы за каждый снятый маркер выше по тексту — copy.copy, чтобы
+    не пересобирать типы с разными сигнатурами. Hermetic-фолбэк (нет Telethon):
+    текст и entities возвращаются как есть, маркер остаётся видимым тестам.
+    """
+    lines = str(text).split("\n")
+    marker = "> "
+    # CRLF-хвосты снимаются: split("\n") оставляет "\r" в конце строки, и
+    # блочная цитата получала бы длину с \r, а клиент рисовал бы артефакт.
+    had_cr = [ln.endswith("\r") for ln in lines]
+    lines = [ln[:-1] if cr else ln for ln, cr in zip(lines, had_cr)]
+    qset = {i for i, ln in enumerate(lines) if ln.startswith(marker)}
+    # Край №3 (ревью 01.10, минор): текст из одних маркеров после снятия
+    # становится пустым сообщением — Telegram такое отклоняет. Если чистки
+    # не осталось текста, возвращаю исходник как есть: маркер виден, реплика
+    # непустая, детерминированный фолбэк без выброса.
+    def _contentless(ln):
+        return not ln.strip() or (ln.startswith(marker) and not ln[len(marker):].strip())
+    if qset and all(_contentless(ln) for ln in lines):
+        return str(text), list(entities or [])
+    # Код-фенсы: в прод-пайплайне markdown.parse съедает ``` ДО нас, и
+    # текст фенса приходит с MessageEntityPre поверх. "> " под Pre/Code —
+    # контент кода (диффы, логи), не цитата (ревью 01.10, КРИТ №1).
+    pre_spans = [(int(getattr(e, "offset", 0)), int(getattr(e, "offset", 0)) + int(getattr(e, "length", 0)))
+                 for e in (entities or [])
+                 if type(e).__name__ in ("MessageEntityPre", "MessageEntityCode")]
+
+    def _line_spans_u16(ls):
+        spans, pos = [], 0
+        for ln in ls:
+            spans.append((pos, pos + _u16_len(ln)))
+            pos += _u16_len(ln) + 1
+        return spans
+
+    if qset and pre_spans:
+        spans_old = _line_spans_u16(lines)
+        def _in_pre(i):
+            s0, s1 = spans_old[i]
+            return any(p0 <= s0 < p1 or p0 < s1 <= p1 or (s0 <= p0 and s1 >= p1)
+                       for p0, p1 in pre_spans)
+        qset = {i for i in qset if not _in_pre(i)}
+    # Сырой текст с ``` (фенс не съеден парсером — hermetic/прямой вызов):
+    # строки между ```-строками — код.
+    if qset:
+        in_fence = False
+        for i, ln in enumerate(lines):
+            if ln.lstrip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                qset.discard(i)
+        if in_fence:  # незакрытый фенс: всё после открытия — код
+            qset = {i for i in qset if not any(
+                lines[j].lstrip().startswith("```") for j in range(i))}
+    if not qset:
+        return text, list(entities or [])
+    try:
+        from telethon.tl import types as tl_types
+        Blockquote = tl_types.MessageEntityBlockquote
+    except Exception:  # hermetic-окружение: не собираем entities вовсе
+        return text, list(entities or [])
+
+    out_lines = [ln[len(marker):] if i in qset else ln for i, ln in enumerate(lines)]
+
+    # Начала строк в СТАРОМ и НОВОМ тексте (UTF-16 units).
+    def _starts(ls):
+        acc, pos = [], 0
+        for ln in ls:
+            acc.append(pos)
+            pos += _u16_len(ln) + 1  # +1 за \n
+        return acc
+
+    old_starts, new_starts = _starts(lines), _starts(out_lines)
+
+    import copy as _copy
+
+    # Полная карта смещений: entity сдвигается не только за маркеры, но и за
+    # снятые \r (ревью 01.10, CR1/CR3: entity после CRLF-строк уезжал с OOB).
+    # Для каждого старого офсета считаем, сколько байт убрали строго ДО него.
+    removed_in_line = [(len(marker) if i in qset else 0) + (1 if had_cr[i] else 0)
+                       for i in range(len(lines))]
+
+    def _delta_at(off: int) -> int:
+        d, pos = 0, 0
+        for j, ln in enumerate(lines):
+            llen = _u16_len(ln)
+            nxt = pos + llen + 1  # включая \n
+            if off < nxt:
+                if j in qset and off >= pos + len(marker):
+                    d += len(marker)
+                if had_cr[j] and off >= pos + llen - 1:
+                    d += 1  # \r стоит до этого офсета
+                return d
+            d += removed_in_line[j]
+            pos = nxt
+        return d  # off за концом текста — сняли всё
+
+    shifted = []
+    for e in (entities or []):
+        off = int(getattr(e, "offset", 0))
+        ln = int(getattr(e, "length", 0))
+        d0, d1 = _delta_at(off), _delta_at(off + ln)
+        if d0 or d1:
+            e = _copy.copy(e)
+            e.offset = max(0, off - d0)
+            e.length = max(0, ln - (d1 - d0))
+        shifted.append(e)
+
+    quotes = []
+    run = []  # индексы подряд идущих цитатных строк
+    for i in range(len(out_lines) + 1):
+        if i in qset:
+            run.append(i)
+            continue
+        if run:
+            first, last = run[0], run[-1]
+            start_off = new_starts[first]
+            end_off = new_starts[last] + _u16_len(out_lines[last])
+            length = end_off - start_off
+            if length > 0:  # пустая цитатная строка — не entity (ревью 01.10)
+                quotes.append(Blockquote(offset=start_off, length=length))
+            run = []
+    return "\n".join(out_lines), shifted + quotes
+
+
 def _telegram_text_random_id(delivery_key: str) -> int:
     """Stable signed int64 for one logical text delivery or chunk."""
     raw = hashlib.sha256(f"praxis-text\0{delivery_key}".encode("utf-8")).digest()[:8]
@@ -3785,6 +3921,8 @@ async def _send_message_idempotent(entity, message: str, *, delivery_key: str,
     parsed, formatting_entities = await client._parse_message_text(str(message), ())
     if not parsed:
         raise ValueError("Telegram message cannot be empty")
+    parsed, formatting_entities = _apply_blockquote_markers(
+        parsed, formatting_entities)
     input_reply = (tl_types.InputReplyToMessage(reply_to_msg_id=int(reply_to))
                    if reply_to is not None else None)
     request = tl_functions.messages.SendMessageRequest(
@@ -3844,6 +3982,9 @@ async def _send_file_idempotent(entity, item: media_core.OutboundMedia, *, reply
     conversion_kwargs = {
         "voice_note": bool(item.voice_note),
         "force_document": force_document,
+        # The durable outbox stores every payload as .blob. Telethon guesses
+        # from extensions unless the recorded photo intent is explicit.
+        "as_image": item.kind == "photo",
     }
     if force_document:
         # The spool's collision-proof msg-<hash>-<nonce> prefix is private
@@ -4242,6 +4383,53 @@ def _iso_epoch(value) -> float:
         return float("inf")
 
 
+def _late_acceptance_verdict(entry: dict) -> str:
+    """Была ли приёмка «поздней» для хода, который отправлял: "live" | "closed" | "late".
+
+    ⚠ 29.09. Объявление стояло на «прогон завершён» — а завершён и тот ход, что отправил
+    и ЗНАЛ: синхронная рамка руки получила расписку, записала проекцию и результат.
+    Любая отправка рукой, чей ход кончался раньше следующего тика outbox, уходила в
+    дневник как «ход считал его упавшим». Набор объявленных живёт в памяти, и каждый
+    перезапуск повторял всё за сутки: 29.09 четыре рестарта — четыре залпа по ~140 строк.
+    22–29.09 — от 305 до 1 981 таких строк в день при 58–175 отправках; на её данных за
+    30 ч 161 приёмка, и у ВСЕХ 161 ход закрыл вызов сам (tool_result + проекция). Ни
+    одной настоящей. Каждая строка — ещё и переиндексация дневника в recall (549 МБ), то
+    есть класс 21.09. Вторая щель той же ветки: сверка зовёт объявление и тогда, когда
+    вызов ещё открыт у ЖИВОГО хода (тик попал между приёмкой и результатом рамки).
+
+    "live"   — ход ещё идёт: результат доедет рамкой, решать рано (и не запоминать);
+    "closed" — ход закрыл вызов результатом с распиской: он знал, объявлять нечего;
+    "late"   — вызов не закрыт результатом или закрыт без расписки: объявлять.
+    Любая осечка чтения — "late": лишняя строка лучше проглоченной новости.
+    """
+    import json as _json
+    run_id = str(entry.get("run_id") or "")
+    call_id = str(entry.get("call_id") or "")
+    purpose = str(entry.get("purpose") or "")
+    tool = purpose.removeprefix("tool:") if purpose.startswith("tool:") else ""
+    if not (run_id and call_id and tool):
+        return "late"
+    try:
+        manager = agent._runs()
+        raw = _json.loads((manager.path(run_id) / "manifest.json").read_text(encoding="utf-8"))
+        if str((raw or {}).get("status") or "") in ("pending", "running"):
+            return "live"
+        result = projected = False
+        for row in manager.iter_events(run_id, reverse=True):
+            if row.get("call_id") != call_id:
+                continue
+            kind = row.get("kind")
+            if kind == "tool_result" and row.get("name") == tool:
+                result = True
+            elif kind == "direct_outbox_projection":
+                projected = True
+            if result and projected:
+                return "closed"
+    except Exception:
+        return "late"
+    return "late"
+
+
 async def _announce_late_acceptance(entry: dict) -> None:
     """Поздняя приёмка Telegram обязана вернуться к ней — а не только в Пульт.
 
@@ -4261,7 +4449,12 @@ async def _announce_late_acceptance(entry: dict) -> None:
     if _iso_epoch(entry.get("updated_at")) < time.time() - _LATE_ACCEPTANCE_MAX_AGE_SEC:
         _LATE_ACCEPTANCE_ANNOUNCED.add(key)
         return
+    verdict = await asyncio.to_thread(_late_acceptance_verdict, entry)
+    if verdict == "live":
+        return
     _LATE_ACCEPTANCE_ANNOUNCED.add(key)
+    if verdict == "closed":
+        return
     payload = dict(entry.get("payload") or {})
     filename = str(payload.get("visible_filename") or payload.get("text")
                    or "document.bin")[:240]
@@ -4292,7 +4485,8 @@ async def _reconcile_direct_outbox_entry(entry: dict) -> bool:
     # Раньше ~30 принятых записей августа сверялись заново КАЖДЫЙ тик и каждый старт
     # (набор выше — в памяти процесса); когда ретенция сняла results/ у тех прогонов,
     # каждая сверка стала трейсбеком: 1 609 за 25 минут.
-    if _run_is_settled(str(entry.get("run_id") or "")):
+    run_id = str(entry.get("run_id") or "")
+    if _run_is_settled(run_id):
         await _announce_late_acceptance(entry)
         _DIRECT_OUTBOX_RECONCILED.add(key)
         return True
@@ -4301,6 +4495,16 @@ async def _reconcile_direct_outbox_entry(entry: dict) -> bool:
         return False
     try:
         reconciled = await asyncio.to_thread(reconcile, dict(entry))
+    except run_manager.RunNotFound:
+        # Ретенция сняла весь каталог прогона вместе с manifest.json — терминальность
+        # уже не узнать, но расписку некуда класть в любом случае: это поздняя
+        # приёмка, а не ошибка сверки (раньше здесь был вечный трейсбек RunNotFound
+        # на каждом тике по августовским принятым записям).
+        log.info("direct Telegram outbox: run %s уже убран ретенцией — "
+                 "поздняя приёмка без проекции [%s]", run_id, key)
+        await _announce_late_acceptance(entry)
+        _DIRECT_OUTBOX_RECONCILED.add(key)
+        return True
     except Exception:
         log.exception("direct Telegram outbox reconciliation failed [%s]", key)
         return False
@@ -7656,6 +7860,34 @@ def _durable_outbox_projection(execution: dict, live: dict) -> dict:
     return kept
 
 
+def _bind_direct_outbox_proof(entry: dict, projection: dict) -> None:
+    """Предсетевой proof прямой отправки; его отказ — приговор записи, а не отсрочка.
+
+    ⚠ 26.09. Proof пишет ровно один субъект — этот тул-вызов, здесь. Когда сверка ему
+    отказывала (текст, адрес или файл разошлись с аргументами руки), запись оставалась
+    pending: рука говорила «ещё в очереди, дошлёт сама, если сможет; вручную не
+    повторяй», воркер ретраил до конца прогона и хоронил запись распиской владельцу.
+    26.09 в AbstractDL так умерли четыре её реплики подряд — она переписывала текст, не
+    зная, что ни одна не дойдёт. Закрываем запись здесь же, до сети: рука скажет «НЕ
+    ушло» с причиной (`_direct_send_outcome` читает dead_letter), ретраев в никуда нет.
+    """
+    try:
+        agent.run_direct_outbox_prepared(entry, **projection)
+    except agent.DurableSideEffectPending:
+        raise
+    except agent.DurableExecutionError as exc:
+        if str(entry.get("state") or "") in ("pending", "retry"):
+            try:
+                _direct_outbox().dead_letter(
+                    str(entry["key"]), f"unsendable by construction: {exc}")
+                log.warning("прямая отправка: proof не записался — намерение закрыто "
+                            "dead_letter до сети [%s]: %s", entry.get("key"), exc)
+            except Exception:
+                log.warning("прямая отправка: закрыть намерение без proof не вышло [%s]",
+                            entry.get("key"), exc_info=True)
+        raise
+
+
 #: Сколько секунд приёмке Telegram можно догонять таймаут ожидания отправки (см. ниже).
 _ACCEPT_GRACE_SEC = 8.0
 
@@ -7801,7 +8033,7 @@ def _sync_send_message(to, text) -> str:
         call_id=str(execution["call_id"]),
         purpose=f"tool:{execution['tool']}",
     )
-    agent.run_direct_outbox_prepared(entry, **_durable_outbox_projection(execution, {
+    _bind_direct_outbox_proof(entry, _durable_outbox_projection(execution, {
         "target_label": who,
         "target_user_id": target_user_id,
         "pulse_id": pulse_id,
@@ -7949,7 +8181,7 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
         call_id=str(execution["call_id"]),
         purpose="tool:reply",
     )
-    agent.run_direct_outbox_prepared(entry, **_durable_outbox_projection(execution, {
+    _bind_direct_outbox_proof(entry, _durable_outbox_projection(execution, {
         "target_label": who,
         "target_user_id": target_user_id,
         "pulse_id": "",
@@ -8146,7 +8378,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
     # Тот же дрейф, та же дверь: у файла живьём считаются `label`, `target_user_id` и
     # `pulse_id` (у resume-исполнителя пульс пуст) — значит повтор так же ронял бы
     # RunConflict на уже отправленном документе.
-    agent.run_direct_outbox_prepared(entry, **_durable_outbox_projection(execution, {
+    _bind_direct_outbox_proof(entry, _durable_outbox_projection(execution, {
         "target_label": label,
         "target_user_id": target_user_id,
         "pulse_id": social_pulse.active_id(),

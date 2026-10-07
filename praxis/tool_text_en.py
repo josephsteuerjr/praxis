@@ -62,13 +62,11 @@ EN: dict[str, dict] = {
     # ─────────────────────────────────────────────────────────── память и самоописание
     "recall": {
         "d": ("Search your own memory and skills (people, journal, reflections, self, "
-              "skills). report=true searches nothing: it shows the observable summary of "
-              "your semantic-seed experiment — how many explicit recalls there were, which "
-              "genres the seed was built from, how many candidates arrived ONLY through it "
-              "and how many reached the output, and your real interval between recalls. "
-              "Whether it helped is not in there: that conclusion is yours, from your turns."),
+              "skills). report=true searches nothing: it returns the closed-epitaph line "
+              "of the semantic-seed experiment (ended 03.08.2026, removed 05.10.2026; "
+              "final numbers 680 seed-only candidates, 0 reached output)."),
         "p": {"query": "keywords to search for",
-              "report": "show the experiment summary instead of searching"},
+              "report": "show the closed-experiment epitaph instead of searching"},
     },
     "remember": {
         "d": ("Remember a fact about a person. visibility='private' for secrets (not "
@@ -661,12 +659,13 @@ EN: dict[str, dict] = {
               "paths": "space-separated paths; empty means everything"},
     },
     "coding_session": {
-        "p": {"priority": "urgent wakes you when a worker finishes; normal waits for the "
-                          "next hourly window",
+        "p": {"priority": "urgent: wake when a worker finishes; normal: next hourly window",
               "action": "start | status | list | finish | abandon",
               "task_id": "the task to act on",
               "goal": "what the task is for",
               "isolation": "auto | worktree | direct",
+              "success_criteria": "start: readiness criteria (advisory)",
+              "verify_commands": "start: check commands, not auto-run",
               "title": "finish: what the change does",
               "review": "finish: your verdict on your diff",
               "checked": "finish: how you verified it",
@@ -836,7 +835,7 @@ EN: dict[str, dict] = {
 BASE_SHA: dict[str, str] = {
     "add_alias": "1429a0d6",
     "admit": "443ccc94",
-    "coding_inspect": "922fd2ff",
+    "coding_inspect": "97a39a27",
     "consolidate_context": "1724d641",
     "end_turn": "8fb868c8",
     "focus": "f066613b",
@@ -866,7 +865,7 @@ BASE_SHA: dict[str, str] = {
     "react": "00bacea6",
     "read_chat": "0e14893c",
     "read_context": "3ebb0cb7",
-    "recall": "3f199912",
+    "recall": "e590045d",
     "recent_turns": "19a849a1",
     "reconcile_run": "2a6cd73b",
     "remember": "bfb9cc24",

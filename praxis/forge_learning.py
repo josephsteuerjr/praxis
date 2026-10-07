@@ -74,9 +74,28 @@ def recall(state_dir: Path, goal: str, root: Path, *, limit: int = 5) -> list[di
     return [{**row, "score": round(score, 3)} for score, row in scored[:max(1, min(limit, 20))]]
 
 
+def contract_status(contract: dict | None) -> str:
+    """Вердикт контракта одним словом: выполнен / не выполнен / неизвестно.
+
+    06.10. Единственный источник вердикта: и finish-ответ, и урок зовут его, чтобы
+    одна и та же сводка met/unmet/unknown не обретала два разных прочтения.
+    unmet>0 — не выполнен (есть доказанный провал); met>0 и unknown==0 — выполнен;
+    всё остальное (нет прогонов, только таймауты, контракта нет вовсе) — неизвестно."""
+    verify = (contract or {}).get("verify") or {}
+    met = int(verify.get("met") or 0)
+    unmet = int(verify.get("unmet") or 0)
+    unknown = int(verify.get("unknown") or 0)
+    if unmet > 0:
+        return "не выполнен"
+    if met > 0 and unknown == 0:
+        return "выполнен"
+    return "неизвестно"
+
+
 def record(state_dir: Path, *, task: dict, root: Path, events: Iterable[dict],
            changed: list[str], verification: dict | None = None, lesson: str = "",
-           regression: str = "", outcome: str = "") -> dict:
+           regression: str = "", outcome: str = "",
+           contract: dict | None = None) -> dict:
     event_rows = list(events)
     commands = []
     failures = []
@@ -102,10 +121,19 @@ def record(state_dir: Path, *, task: dict, root: Path, events: Iterable[dict],
             explicit = "Targeted probes и итоговый gate согласились; повторять тот же evidence-path для сходных изменений."
         else:
             explicit = "Задача завершилась без файлового diff; сначала проверять, нужен ли кодовый change вообще."
+    if contract and not str(lesson or "").strip():
+        # 06.10: к автоматическому уроку дописывается вердикт контракта — иначе recall
+        # (он ищет по тексту урока) не отличит закрытую-по-контракту задачу от прочих,
+        # а verdict-поле contract останется невидимым для поиска похожих уроков.
+        explicit = (explicit + "\nконтракт " + contract_status(contract)).strip()
     row = {
         "id": "lesson-" + uuid.uuid4().hex[:10], "at": _now(), "task_id": task.get("id"),
         "project": root.name, "root": str(root), "goal": task.get("goal", ""),
         "outcome": outcome or task.get("status", ""), "changed": changed[:200],
+        # 06.10: признак контракта отдельным полем — «выполнен/не выполнен/неизвестно»,
+        # пусто = контракта не было. Recall ищет по целям и файлам, а вердикт контракта
+        # обязан остаться различимым даже для задач с одинаковыми целями.
+        "contract": contract_status(contract) if contract else "",
         "lesson": explicit, "regression": str(regression or "").strip(),
         "commands": commands[-30:], "verification": matrix[-30:],
         "failures": failures[-20:],

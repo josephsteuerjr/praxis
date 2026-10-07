@@ -579,7 +579,7 @@ def explain_generate(rel: str, func: str = "", force: bool = False) -> dict | No
         return {"status": "error", "error": "мозг не настроен (плитка «Мозг»)"}
     what = f"{rel}::{func}" if func else rel
     try:
-        resp = llm.chat("voice", max_tokens=900, system=_EXPLAIN_SYS,
+        resp = llm.chat("voice", max_tokens=900, system=_EXPLAIN_SYS, reasoning_effort="low",
                         messages=[{"role": "user",
                                    "content": f"File: {what}\n\n```\n{ctx[:EXPLAIN_MAX_CHARS]}\n```"}])
         text, model = resp.text.strip(), resp.model
@@ -604,7 +604,7 @@ def ask(rel: str, question: str) -> dict:
         return {"status": "error", "error": "мозг не настроен (плитка «Мозг»)"}
     ctx = file_source(rel) or "(файл не найден)"
     try:
-        resp = llm.chat("voice", max_tokens=700, system=_ASK_SYS,
+        resp = llm.chat("voice", max_tokens=700, system=_ASK_SYS, reasoning_effort="low",
                         messages=[{"role": "user",
                                    "content": f"Node: {rel}\n\n```\n{ctx[:ASK_MAX_CHARS]}\n```\n\n"
                                               f"Owner's question: {question}"}])
@@ -1592,7 +1592,10 @@ def llm_get() -> dict:
         if (other in model_options and fallback and fallback not in model_options[other]
                 and fallback not in _LLM_RETIRED_MODEL_ALIASES.get(other, set())):
             model_options[other].append(fallback)
+    import imagegen
     return {"frameworks": frameworks, "roles": roles,
+            "images": imagegen.normalize(cfg.get("images")),
+            "image_model_options": [imagegen.DEFAULTS["model"]],
             "model_options": model_options,
             "limits": dict(cfg.get("limits") or {})}
 
@@ -1618,6 +1621,12 @@ def _llm_validate(changes: dict) -> tuple[dict, list[str]]:
     """Отвалидировать и НОРМАЛИЗОВАТЬ изменения для llm.update_config. -> (clean, errors)."""
     clean: dict = {}
     errors: list[str] = []
+    if "images" in changes:
+        import imagegen
+        try:
+            clean["images"] = imagegen.validate(changes["images"])
+        except ValueError as exc:
+            errors.append(str(exc))
     for fw, f in (changes.get("frameworks") or {}).items():
         if fw not in _LLM_FRAMEWORKS:
             errors.append(f"фреймворк {fw!r}: не знаю такого")
@@ -1695,6 +1704,9 @@ def _llm_validate(changes: dict) -> tuple[dict, list[str]]:
 def _llm_diff_summary(old: dict, clean: dict) -> str:
     """Краткий дифф для дневника — БЕЗ значений ключей."""
     parts = []
+    for key, value in (clean.get("images") or {}).items():
+        if value != (old.get("images") or {}).get(key):
+            parts.append(f"images.{key}: {(old.get('images') or {}).get(key)} → {value}")
     for fw, f in (clean.get("frameworks") or {}).items():
         if "base_url" in f and f["base_url"] != (old["frameworks"].get(fw) or {}).get("base_url"):
             parts.append(f"{fw}.base_url → {f['base_url']}")

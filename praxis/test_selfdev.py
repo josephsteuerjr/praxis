@@ -80,7 +80,7 @@ class SelfdevFlow(unittest.TestCase):
 
     def test_submit_review_zone_merges_her_reviewed_decision(self):
         pid = self._begin_and_edit("core.py", "VALUE = 2\n")
-        msg = selfdev.submit(pid, "поднять VALUE", "для дела", review=RV)
+        msg = selfdev.submit(pid, "поднять VALUE", "для дела", review=RV, reviewer=GN)
         self.assertIn("смёржила сама", msg)
         t = selfdev.get(pid)
         self.assertEqual(t["status"], "merged")
@@ -90,8 +90,14 @@ class SelfdevFlow(unittest.TestCase):
         self.assertIn("VALUE = 2", (self.repo / "core.py").read_text())
 
     def test_submit_merges_and_requests_restart(self):
+        # 26.09: VALUE=99 роняет smoke-гейт — иммунитет блокирует автомёрж.
         pid = self._begin_and_edit("core.py", "VALUE = 99\n")
-        msg = selfdev.submit(pid, "поднять VALUE", review=RV)
+        msg = selfdev.submit(pid, "поднять VALUE", review=RV, reviewer=GN)
+        self.assertIn("НЕ смёржено", msg)
+        self.assertEqual(selfdev.get(pid)["status"], "proposed")
+        # осознанный override_reason открывает мёрж; рестарт просится как раньше
+        msg = selfdev.submit(pid, "поднять VALUE", review=RV, reviewer=GN,
+                             override_reason="smoke в песочнице не относится к диффу")
         self.assertIn("смёржила сама", msg)
         self.assertIn("VALUE = 99", (self.repo / "core.py").read_text(encoding="utf-8"))
         self.assertEqual(selfdev.get(pid)["status"], "merged")
@@ -100,24 +106,38 @@ class SelfdevFlow(unittest.TestCase):
 
     def test_auto_zone_merges_itself(self):
         pid = self._begin_and_edit("soul/note.md", "# n\nновая строка\n")
-        msg = selfdev.submit(pid, "дописать заметку", review=RV)
+        msg = selfdev.submit(pid, "дописать заметку", review=RV, reviewer=GN)
         self.assertIn("смёржила сама", msg)
         self.assertEqual(selfdev.get(pid)["status"], "merged")
         self.assertIn("новая строка", (self.repo / "soul" / "note.md").read_text(encoding="utf-8"))
 
-    def test_red_tests_automerge_with_post_factum_warning(self):
+    def test_red_tests_block_automerge_immune(self):
+        # 26.09: красный гейт блокирует автомёрж (слово Егора). Без override_reason
+        # предложение остаётся proposed, красные тесты видны, master не тронут.
         pid = self._begin_and_edit("core.py", "VALUE = 99\n")  # smoke-тест упадёт
-        msg = selfdev.submit(pid, "сломать всё", review=RV)
+        msg = selfdev.submit(pid, "сломать всё", review=RV, reviewer=GN)
         t = selfdev.get(pid)
-        self.assertEqual(t["status"], "merged")
+        self.assertEqual(t["status"], "proposed")
         self.assertFalse(t["tests"]["ok"])
         self.assertIn("ПАДЕНИЯ", t["tests"]["summary"])
-        self.assertIn("предупреждение постфактум", msg)
+        self.assertIn("НЕ смёржено", msg)
+        self.assertIn("иммунитет", msg.lower())
+        # master живой код не получил VALUE = 99
+        self.assertNotIn("99", (self.repo / "core.py").read_text(encoding="utf-8"))
+
+    def test_red_tests_merge_with_conscious_override(self):
+        # override_reason — осознанный обход: мёрж проходит, красное остаётся provenance.
+        pid = self._begin_and_edit("core.py", "VALUE = 99\n")
+        msg = selfdev.submit(pid, "сломать всё", review=RV, reviewer=GN,
+                             override_reason="красный smoke не относится к диффу: старый known-fail")
+        t = selfdev.get(pid)
+        self.assertEqual(t["status"], "merged")
+        self.assertIn("смёржила сама", msg)
         self.assertIn("VALUE = 99", (self.repo / "core.py").read_text(encoding="utf-8"))
 
     def test_protected_zone_is_risk_evidence_not_a_veto(self):
         pid = self._begin_and_edit("bootguard.py", "x = 1\n")
-        msg = selfdev.submit(pid, "трогаю рельсы", review=RV)
+        msg = selfdev.submit(pid, "трогаю рельсы", review=RV, reviewer=GN)
         t = selfdev.get(pid)
         self.assertEqual(t["zone"], "protected")
         self.assertEqual(t["status"], "merged")
@@ -134,7 +154,7 @@ class SelfdevFlow(unittest.TestCase):
             "summary": "тесты не уложились в 1200s — проверки нет",
         }
         with mock.patch.object(selfdev, "run_tests", return_value=timeout_result):
-            msg = selfdev.submit(pid, "поднять VALUE", review=RV)
+            msg = selfdev.submit(pid, "поднять VALUE", review=RV, reviewer=GN)
         item = selfdev.get(pid)
         self.assertEqual(item["status"], "proposed")
         self.assertEqual(item["tests"]["status"], "timed_out")
@@ -146,7 +166,7 @@ class SelfdevFlow(unittest.TestCase):
         with mock.patch.object(selfdev, "run_tests",
                                return_value={"ok": True, "status": "passed", "blocking": False,
                                              "summary": "1 тестов, зелёные"}):
-            msg = selfdev.submit(pid, "поднять VALUE", review=RV)
+            msg = selfdev.submit(pid, "поднять VALUE", review=RV, reviewer=GN)
         item = selfdev.get(pid)
         self.assertEqual(item["status"], "merged")
         self.assertIn("тесты зелёные", msg)
@@ -173,7 +193,7 @@ class SelfdevFlow(unittest.TestCase):
     def test_red_checks_can_be_explicitly_overridden_with_provenance(self):
         pid = self._begin_and_edit("core.py", "VALUE = 99\n")
         reason = "smoke фиксирует старый диапазон; новая семантика намеренно расширяет его"
-        msg = selfdev.submit(pid, "осознанно расширить VALUE", review=RV,
+        msg = selfdev.submit(pid, "осознанно расширить VALUE", review=RV, reviewer=GN,
                              override_reason=reason)
         self.assertIn("объяснение", msg)
         item = selfdev.get(pid)
@@ -205,7 +225,7 @@ class SelfdevFlow(unittest.TestCase):
 
     def test_notifications_flow(self):
         pid = self._begin_and_edit("core.py", "VALUE = 2\n")
-        selfdev.submit(pid, "поднять VALUE", review=RV)
+        selfdev.submit(pid, "поднять VALUE", review=RV, reviewer=GN)
         ids = [t["id"] for t in selfdev.unnotified()]
         self.assertIn(pid, ids)
         selfdev.mark_notified(pid)
@@ -254,7 +274,8 @@ class ReviewIsHers(unittest.TestCase):
 
     def test_review_and_checked_reach_ledger_and_journal(self):
         pid = self._begin_and_edit("core.py", "VALUE = 2\n")
-        selfdev.submit(pid, "поднять VALUE", review=RV, checked="тесты + прогнала smoke руками")
+        selfdev.submit(pid, "поднять VALUE", review=RV, checked="тесты + прогнала smoke руками",
+                       reviewer=GN)
         t = selfdev.get(pid)
         self.assertEqual(t["review"], RV)
         self.assertIn("smoke", t["checked"])
@@ -286,13 +307,75 @@ class ReviewIsHers(unittest.TestCase):
                             fingerprint=rejected[-1], title="поднять VALUE")
             selfdev._cleanup(pid, drop_branch=True)
         pid4 = self._begin_and_edit("core.py", "VALUE = 99\n")
-        msg = selfdev.submit(pid4, "поднять VALUE", review=RV)
+        msg = selfdev.submit(pid4, "поднять VALUE", review=RV, reviewer=GN)
         self.assertIn("подход", msg, "4-я подача того же диффа должна упереться в кап")
         self.assertEqual(selfdev.get(pid4)["status"], "building")
         # изменившийся дифф обнуляет счёт — мёржится как новое собственное решение
-        pid5 = self._begin_and_edit("core.py", "VALUE = 98  # другой путь\n")
-        msg5 = selfdev.submit(pid5, "поднять VALUE иначе", review=RV)
+        pid5 = self._begin_and_edit("core.py", "VALUE = 2  # другой путь\n")
+        msg5 = selfdev.submit(pid5, "поднять VALUE иначе", review=RV, reviewer=GN)
         self.assertEqual(selfdev.get(pid5)["status"], "merged", msg5)
+
+
+class GnomeGate(SelfdevFlow):
+    """28.09 (#43744/#43746): гномье ревью — гейт мёржа наравне с тестами, в самой рельсе."""
+
+    def test_missing_reviewer_refused_before_commit(self):
+        # Пустой reviewer — отказ ДО коммита и тестов, предложение не burned.
+        pid = self._begin_and_edit("core.py", "VALUE = 2\n")
+        msg = selfdev.submit(pid, "поднять VALUE", review=RV)
+        self.assertIn("гномье ревью", msg)
+        self.assertEqual(selfdev.get(pid)["status"], "building", "гейт сработал до коммита")
+        self.assertIn("VALUE = 1", (self.repo / "core.py").read_text(encoding="utf-8"))
+
+    def test_skip_without_reason_refused(self):
+        pid = self._begin_and_edit("core.py", "VALUE = 2\n")
+        msg = selfdev.submit(pid, "поднять VALUE", review=RV, reviewer="skip:")
+        self.assertIn("право пропуска", msg)
+        self.assertEqual(selfdev.get(pid)["status"], "building")
+
+    def test_skip_with_reason_merges(self):
+        pid = self._begin_and_edit("core.py", "VALUE = 2\n")
+        msg = selfdev.submit(pid, "поднять VALUE", review=RV,
+                             reviewer="skip: тривиальная правка одной константы, гном не нужен по пакетной приёмке 12.09")
+        self.assertIn("смёржила сама", msg)
+        self.assertIn("гном пропущен", msg)
+        self.assertEqual(selfdev.get(pid)["status"], "merged")
+        self.assertIn("skip", str(selfdev.get(pid).get("reviewer", "")))
+
+    def test_blocked_verdict_needs_override(self):
+        pid = self._begin_and_edit("core.py", "VALUE = 2\n")
+        msg = selfdev.submit(pid, "поднять VALUE", review=RV,
+                             reviewer="VERDICT: BLOCKED — гном нашёл дыру в проверке ветвления")
+        self.assertIn("BLOCKED", msg)
+        self.assertEqual(selfdev.get(pid)["status"], "building")
+        self.assertNotIn("VALUE = 2", (self.repo / "core.py").read_text(encoding="utf-8"))
+        # осознанный override открывает мёрж с provenance
+        msg = selfdev.submit(pid, "поднять VALUE", review=RV,
+                             reviewer="VERDICT: BLOCKED — гном нашёл дыру в проверке ветвления",
+                             override_reason="находка гнома относится к другому файлу, не к этому диффу")
+        self.assertEqual(selfdev.get(pid)["status"], "merged", msg)
+        self.assertIn("VALUE = 2", (self.repo / "core.py").read_text(encoding="utf-8"))
+
+    def test_token_reviewer_verdict_refused(self):
+        pid = self._begin_and_edit("core.py", "VALUE = 2\n")
+        msg = selfdev.submit(pid, "поднять VALUE", review=RV, reviewer="ок")
+        self.assertIn("отписка", msg)
+        self.assertEqual(selfdev.get(pid)["status"], "building")
+
+    def test_verdict_extraction_variants(self):
+        for text, expect in [
+            ("VERDICT: APPROVED — чисто", "approved"),
+            ("Вердикт: BLOCKED по трём пунктам", "blocked"),
+            ("## Вердикт: **BLOCKED**", "blocked"),
+            ("смотрел, всё чисто, замечаний нет", None),
+            ("VERDICT: CLEAR", "approved"),
+        ]:
+            self.assertEqual(selfdev.reviewer_gate(text).get("verdict"), expect, text)
+            self.assertEqual(selfdev.reviewer_gate(text)["status"], "ok", text)
+        # skip-формы
+        self.assertEqual(selfdev.reviewer_gate("")["status"], "missing")
+        self.assertEqual(selfdev.reviewer_gate("skip: причина длиннее сорока символов, осознанная")["status"], "skip")
+        self.assertEqual(selfdev.reviewer_gate("skip: коротко")["status"], "missing")
 
 
 class ReconcileShells(SelfdevFlow):
@@ -309,7 +392,7 @@ class ReconcileShells(SelfdevFlow):
         selfdev.run_tests = gate_crash
         try:
             with self.assertRaises(RuntimeError):
-                selfdev.submit(pid, "поднять VALUE", "для дела", review=RV)
+                selfdev.submit(pid, "поднять VALUE", "для дела", review=RV, reviewer=GN)
         finally:
             selfdev.run_tests = orig
         row = selfdev.get(pid)
@@ -415,6 +498,11 @@ class ReconcileShells(SelfdevFlow):
         row = selfdev.get(pid)
         self.assertEqual(row["status"], "building")
         self.assertEqual(row["title"], "настоящая работа")
+
+
+# Живой вердикт гнома для тестов (длиннее REVIEW_MIN_CHARS, содержит маркер APPROVED).
+GN = ("Гном смотрел дифф целиком (свежий контекст): VERDICT: APPROVED — блокирующих "
+      "находок нет, ход мысли в комментариях прикладываю")
 
 
 if __name__ == "__main__":

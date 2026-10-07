@@ -13,7 +13,25 @@
 >
 > Проверять расхождение: `git -C /opt/praxis rev-parse --short HEAD` против шапки ниже.
 
-## Live update 2026-08-06: Praxis Mini App/PWA сняты
+## Live update 2026-10-06: Codex image generation
+
+- Tested core `e2a4a50e1d52422f763311708abd53abaae2a57c` deployed fast-forward from
+  `2514439b`. Full Linux gate: 6190 tests, 6 skips, twice on this exact commit.
+- Relay 0.8.4: standalone generation/edit JSON routes, separate image-model catalog,
+  and the documented `/v1/chat/completions` alias. Final Rust source `a262932`:
+  109 tests and Clippy with warnings denied; released server binary receipt records its SHA-256.
+- Real isolated canary: GLM 5.3 selected `generate_image`; Codex `gpt-6-astra` selected
+  an edit of that artifact. Both returned verified PNG files with actual dimensions and hashes.
+- Telegram System serves `index-C4Ikaf0V.js` with the Images card replacing the old folding-model
+  card. Live API read/write/reload passed; `images.enabled=true`, model `gpt-image-2`,
+  quality/size `auto`, background `opaque`. Voice remains GLM 5.3; text roles/frameworks preserved.
+- Rollback: `rollback-images-pre-20261006T163635Z`; private source/config/relay/UI archives in
+  `/root/praxis-imagegen-rollbacks/20261006T163635Z`. Immutable core release ref:
+  `refs/releases/codex-images-20261006-e2a4a50`. Soul files were not edited.
+- Hélène integration is a separate next stage. Real phone UI interaction and visible Telegram
+  delivery have not yet been accepted on-device; installed API/artifact checks do not claim that.
+
+## Historical update 2026-08-06: Praxis Mini App/PWA сняты
 
 - Implementation commit `e1a846aeb2e7cc1c232860bd93c0ae08a3289d2c` развёрнут fast-forward от
   прежнего live `be1c82891cf503e9dd4e72c6c2c7e37f4b9657d8`.

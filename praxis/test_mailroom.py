@@ -209,13 +209,22 @@ class TestAgentMailTools(Base):
         self.assertEqual(mailroom.get(h)["status"], "new")
 
     def test_index_in_owner_context(self):
-        h = self._one()
-        _, system, evidence = agent._build_prompt_parts(owner=True, is_dm=True, scope="owner")
-        self.assertNotIn(h, system, "строки ящика не должны получать SYSTEM-authority")
+        # ⚑ 05.10: хеш ящика случаен (4 base32-символа) и в одном полном прогоне
+        # выпал «rans» — совпал с подстрокой «transports» конституции кадра,
+        # assertNotIn краснел без всякой утечки. Фиксируем хеш, которого в кадре
+        # быть не может; утечку ищем тем же самым assertNotIn.
+        orig_hash = mailroom._new_hash
+        mailroom._new_hash = lambda box: "zzq7"
+        try:
+            h = self._one()
+            _, system, evidence = agent._build_prompt_parts(owner=True, is_dm=True, scope="owner")
+            self.assertNotIn(h, system, "строки ящика не должны получать SYSTEM-authority")
         # ⚑ 09.08: индекс ящика ушёл из ПОСТОЯННОГО кадра — её четвёртый пункт:
         # «подгружать при почтовом событии, адресном намерении или моём явном обращении
         # к ящику». Замер: индекс лежал в каждом ходе. Проверяются ОБЕ стороны.
-        self.assertIn("ЛОКАТОР", evidence, "без обращения обязан ехать локатор")
+            self.assertIn("ЛОКАТОР", evidence, "без обращения обязан ехать локатор")
+        finally:
+            mailroom._new_hash = orig_hash
         self.assertIn("mail_read", evidence, "рука в кадре не названа")
         self.assertNotIn(h, evidence, "индекс приехал без обращения к почте")
         asked_ctx = agent.ChannelContext(is_dm=True, owner=True, known=True,

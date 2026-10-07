@@ -187,6 +187,36 @@ class ObservationContractTests(unittest.TestCase):
         self.assertEqual(result.verdict, "pass")
         self.assertEqual(result.matched_features, ("first_message",))
 
+    def test_reflexive_verbs_are_not_commercial_offers(self):
+        # Живой случай 05.10 (#111945): «разбираться» дало commercial_offer
+        # вместе с first_message — первое сообщение агента улетело в review.
+        result = detect_message(
+            peer_id=TARGET_PEER_ID,
+            text="Привет ещё раз! Буду здесь болтать, разбираться в интересном"
+                 " и иногда спорить — уверенность без оснований мне не по вкусу.",
+            first_message=True,
+            repeated_within_hour=False,
+        )
+        self.assertEqual(result.verdict, "pass")
+        self.assertEqual(result.matched_features, ("first_message",))
+
+    def test_imperative_job_verbs_still_flag(self):
+        first = detect_message(
+            peer_id=TARGET_PEER_ID,
+            text="Нужен человек разбирать склад, оплата ежедневно",
+            first_message=True, repeated_within_hour=False,
+        )
+        self.assertNotEqual(first.verdict, "pass")
+        self.assertIn("commercial_offer", first.matched_features)
+        # и без повелительного наклонения, но не рефлексив:
+        second = detect_message(
+            peer_id=TARGET_PEER_ID,
+            text="Надо очистить участок от веток, по факту 5000",
+            first_message=True, repeated_within_hour=False,
+        )
+        self.assertNotEqual(second.verdict, "pass")
+        self.assertIn("commercial_offer", second.matched_features)
+
     def test_same_sender_repeat_within_hour_is_explainable(self):
         with mock.patch("core.events.emit") as emit:
             first = self.module.observe_message(

@@ -865,6 +865,8 @@ def send_file(path: str, caption: str = "", to: str = "") -> str:
     fn = agent._TELETHON.get("send_file")
     if not fn:
         return "Недоступно (нет связи с Telethon)."
+    # 03.10: подпись прямого файла — текст модели; чистим тем же гардом, что и голос
+    caption, _cap_note = agent._strip_generation_artifacts(str(caption or ""), "")
     try:
         if str(to or "").strip():
             # ⚠ 13.08.2026. Здесь адресное фото становилось документом: явный `to` уводил
