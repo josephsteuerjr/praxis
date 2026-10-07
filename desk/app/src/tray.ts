@@ -18,6 +18,10 @@ const element = <K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, tex
   const node = document.createElement(tag); node.className = cls; node.textContent = text; return node;
 };
 const hide = () => shell('tray_hide').catch(() => {});
+const focusControl = (node: HTMLElement | null) => {
+  node?.focus({ preventScroll: true });
+  (node?.dataset.action === 'exit' ? node.parentElement : node)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+};
 
 async function action(run: () => Promise<unknown>, close = true) {
   if (pending) return;
@@ -29,7 +33,7 @@ async function action(run: () => Promise<unknown>, close = true) {
     if (!document.hasFocus()) void shell('notify', { title: 'Hélène', body: error }).catch(() => {});
   } finally {
     pending = false; if (!close && !error) await refresh(); paint();
-    if (focusKey && document.hasFocus()) root.querySelector<HTMLElement>(`[data-action="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+    if (focusKey && document.hasFocus()) focusControl(root.querySelector<HTMLElement>(`[data-action="${CSS.escape(focusKey)}"]`));
   }
 }
 
@@ -43,10 +47,10 @@ function paint() {
   const scrollTop = root.scrollTop;
   const agentsScroll = root.querySelector('.tray-agents')?.scrollTop || 0;
   root.replaceChildren();
-  root.style.maxHeight = state?.max_height ? Math.max(160, state.max_height - 48) + 'px' : '';
+  root.style.maxHeight = Math.max(160, Math.min(580, state?.max_height ?? window.innerHeight) - 48) + 'px';
   root.append(element('div', 'tray-brand', 'Hélène'));
   if (!state) {
-    root.append(element('p', 'tray-status', error || 'Уточняю состояние…'));
+    root.append(element('p', 'tray-status', error ? 'Не удалось уточнить состояние' : 'Уточняю состояние…'));
   } else {
     const current = state.agents.find(a => a.id === state!.current);
     const name = element('h1', 'tray-name', current?.name || 'Агент'); name.title = name.textContent || '';
@@ -83,7 +87,7 @@ function paint() {
   root.append(footer);
   root.scrollTop = scrollTop;
   const list = root.querySelector('.tray-agents'); if (list) list.scrollTop = agentsScroll;
-  if (focused) root.querySelector<HTMLElement>(`[data-action="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  if (focused) focusControl(root.querySelector<HTMLElement>(`[data-action="${CSS.escape(focused)}"]`));
   if (document.hasFocus()) void fit();
 }
 
@@ -128,7 +132,7 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'Home') next = 0;
   else if (e.key === 'End') next = buttons.length - 1;
   else if (e.key === 'Tab') next = (index + (e.shiftKey ? -1 : 1) + buttons.length) % buttons.length;
-  if (next !== undefined) { e.preventDefault(); buttons[next].focus({ preventScroll: true }); }
+  if (next !== undefined) { e.preventDefault(); focusControl(buttons[next]); }
 });
 apply(load()); paint();
 if (document.hasFocus()) opened();
