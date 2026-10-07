@@ -3184,14 +3184,10 @@ def tool_search_private_messages(query: str, limit: int = 20) -> str:
         return f"[поиск по личкам не удался] {e}"
 
 
-_NAME_RE = re.compile(
-    r"(?iu)(?<![\w@])(?:praxis|пракс(?:ис)?|@praxis_?intelligence)(?!\w)"
-)
-
-
 def _named(text: str) -> bool:
-    """Названа ли Praxis отдельным именем/username, а не частью другого слова."""
-    return bool(_NAME_RE.search(text or ""))
+    """The active transport owns the current name and authenticated handle."""
+    named = _TELETHON.get("is_named")
+    return bool(named(text or "")) if callable(named) else False
 
 
 def _room_mode_key(word: str) -> str:

@@ -18,8 +18,9 @@ class TelegramSelfIdentity(unittest.TestCase):
     def bot(self, cls=botapi.BotTransport, username='own_bot', ident=123):
         bot = cls.__new__(cls)
         bot.me = {'id': ident, 'username': username, 'is_bot': True,
-                  'token': 'never-export-this', 'first_name': 'Authored display name'}
+                  'token': 'never-export-this', 'first_name': 'Telegram display name'}
         bot.username = username
+        bot.client = types.SimpleNamespace(_proxy_url='')
         return bot
 
     def orientation(self, bot, room='-1007'):
@@ -39,7 +40,8 @@ class TelegramSelfIdentity(unittest.TestCase):
                     self.assertIn('123', line)
                     self.assertIn('Твой', line)
                     self.assertNotIn('never-export-this', line)
-                    self.assertNotIn('Authored display name', line)
+                    self.assertIn('Telegram display name', line)
+                    self.assertIn('Bot API' if cls is botapi.BotTransport else 'Telethon', line)
 
     def test_current_profile_is_read_on_each_turn(self):
         bot = self.bot()
@@ -60,6 +62,7 @@ class TelegramSelfIdentity(unittest.TestCase):
 
     def test_missing_profile_does_not_invent_a_username(self):
         bot = self.bot(username='', ident=None)
+        bot.me.pop('first_name')
         self.assertNotIn('Твой Telegram', self.orientation(bot))
         self.assertNotIn('Твой Telegram', self.orientation(None))
 

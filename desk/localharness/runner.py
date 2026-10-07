@@ -502,6 +502,9 @@ def _orient(chat_id: str) -> str:
             line = identity() if callable(identity) else ""
             if isinstance(line, str) and line:
                 bits.append(line)
+            status = getattr(_bot, "status_line", None)
+            if callable(status):
+                bits.append(status())
         except Exception:
             log.debug("профиль Telegram не вошёл в контекст", exc_info=True)
     # 1.2.5: на чём агент работает сейчас и кто менял последним — в каждом ходе. Без этого
@@ -925,7 +928,7 @@ def handle_bot(chat_id: str) -> None:
     """Ход в бот-чате: сообщение уже в памяти (его записал поток приёма)."""
     meta = _bot.rooms.meta(chat_id)
     is_dm = bool(meta.get("is_dm", True))
-    sender_name, sender_id = meta.get("last_sender") or ("кто-то", "")
+    sender_name, sender_id = _bot.wake_sender(chat_id)
     owner = bool(_bot.owner_id) and str(sender_id) == str(_bot.owner_id)
     convo = "\n".join(_bot.rooms.lines(chat_id, _last_n()))
     if not convo.strip():
@@ -1201,6 +1204,8 @@ def _config_watch_forever(config_path: Path, tree: Path) -> None:
         except Exception:
             log.exception("мозг из изменённого helene.json не спроецировался")
         _deliver_unspoken = bool((cfg.get("agent") or {}).get("deliver_unspoken", True))
+        if _bot is not None:
+            _bot.set_agent_name(boot.agent_name(cfg))
         if _agent is not None and hasattr(_agent, "BOUNDARY_DELIVERS_UNSPOKEN"):
             _agent.BOUNDARY_DELIVERS_UNSPOKEN = bool(_deliver_unspoken)
         # Ревью 25.09 (A6 F11): галочка «Пост «думаю…»» тоже читается на тике — расписка

@@ -1353,7 +1353,7 @@ def chat_tail(peer_id: str, n: int = 200) -> list[dict]:
             rel = row["archive"].replace("\\", "/").lstrip("/")
             if ".." in rel.split("/") or not rel.startswith("memory/groups/"):
                 return []
-            return tail_jsonl(tree() / rel, n)
+            return [item for item in tail_jsonl(tree() / rel, n) if not item.get('deleted')]
     return []
 
 

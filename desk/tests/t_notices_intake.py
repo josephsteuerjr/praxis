@@ -82,6 +82,8 @@ class BotHook(unittest.TestCase):
         bot.last_incoming = {}
         bot._topic_names = {}
         bot._muted = set()
+        bot._queue_lock = __import__('threading').Lock()
+        bot._wake_senders = {}
         bot.allow_from = "owner"
         bot.owner_id = "777"
         bot.rooms = mock.Mock()

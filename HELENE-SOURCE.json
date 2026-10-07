@@ -1,14 +1,14 @@
 {
-  "version": "1.4.2",
-  "frozen_tree": "fb929656c4803ddfb04b1ef620bd9e709fbca348",
+  "version": "1.4.3",
+  "frozen_tree": "bb46697aadf3770a65632828ad7f98127d14218e",
   "praxis_base_source": "4f86cc9fb44b0a7da1cfaf77b048f1475c9d6501",
-  "frozen_tree_digest": "e282d624f3d7c0fd5b80701f407184014d58be80d1d5c3a66ad74a3026d08eb9",
+  "frozen_tree_digest": "76cb05ceae8d0d1b63d4d0301cdaa5aa93fda091dc4f5511f258e8b95030221d",
   "frozen_tree_files": {
     ".dockerignore": "428940d8d886786dce2a4c91bce9b27aac22f52f2e73841dc50cbfa1ad8d569d",
     ".env.example": "98a350964b445a30036d9d16f9c14c315016fa9e7882284e8f52c712db8f27db",
     ".gitattributes": "066ea1b66070539e6165ef10d0cb566f703ccfb03e2b571f8fe876942a9540c2",
     "absence.py": "295f3d67f08b59557b33f84334c4002f6fd830c63c9a4499a858658badfe22c9",
-    "agent.py": "927ed3e1526b65efa24ca085b4eeea3bd70b10ce931be2bb66c84a1e58d4e028",
+    "agent.py": "3d08e105470960f36bd91c90fa76739323a87b861ae82a115e9eaf8edca2999a",
     "AGENTS.md": "aadf18377a65bcec731d2100e6cd4820247c8b10bb2857875350dc5b6be090a2",
     "appetite.py": "194966b865581b4450c554d7f530c85aca229d0d7a2492b43a4ebc43a6c16d91",
     "ARCHITECTURE.md": "11bdbc67989f4366cda775b2417a96a865a0144da301b27c6f06f0004fce26a9",
@@ -671,5 +671,10 @@
     "ci_desk": "aad144b54ce9cb3e041abb27997df3414b9edf64"
   },
   "desk_source": "This public checkout; exact build head is recorded in helene-build.json",
-  "public_parent": "aec5bc1dbd4e42fac2df5065d11336fde2b87f9c"
+  "public_parent": "aec5bc1dbd4e42fac2df5065d11336fde2b87f9c",
+  "telegram_candidate_core": "bb46697aadf3770a65632828ad7f98127d14218e",
+  "previous_frozen_tree": {
+    "head": "fb929656c4803ddfb04b1ef620bd9e709fbca348",
+    "digest": "e282d624f3d7c0fd5b80701f407184014d58be80d1d5c3a66ad74a3026d08eb9"
+  }
 }
