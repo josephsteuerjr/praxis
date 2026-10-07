@@ -25,5 +25,6 @@ export default defineConfig({
   // его спасал случайный node_modules в домашней папке, на раннере — ничем.
   // dedupe заставляет брать пакет из корня проекта; tsconfig — paths для tsc.
   resolve: { dedupe: ["@tauri-apps/api"] },
-  build: { outDir: "dist", emptyOutDir: true, target: "chrome120", assetsInlineLimit: 0 },
+  build: { outDir: "dist", emptyOutDir: true, target: "chrome120", assetsInlineLimit: 0,
+    rollupOptions: { input: { main: "index.html", tray: "tray.html" } } },
 });

@@ -824,7 +824,7 @@ class MacService(unittest.TestCase):
         for bad in ("windows", "uac", "брандмауэр", "нулев", "администраторам"):
             self.assertNotIn(bad, low, f"в словах службы на Mac слово не про эту машину: {bad}")
         # И наоборот: обещание, ради которого служба и ставится, названо.
-        self.assertIn("без входа в систему", modes.SERVICE_TITLE_MACOS.lower())
+        self.assertIn("после выхода из", modes.SERVICE_TEXT_MACOS.lower())
         self.assertIn("launchd", modes.SERVICE_TEXT_MACOS)
 
     def test_the_warning_says_what_the_service_does_not_give(self):

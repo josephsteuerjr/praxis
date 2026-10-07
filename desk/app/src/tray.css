@@ -1,0 +1,20 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+body { padding: 24px; color: var(--ink); font-family: var(--sans); font-size: 15px; }
+#tray { padding: 19px 12px 12px; overflow-y: auto; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--paper); box-shadow: var(--shadow-pop); }
+.tray-brand { padding: 0 10px; color: var(--ink-3); font-size: 12px; letter-spacing: .035em; }
+.tray-name { margin: 6px 10px 5px; font-family: var(--hand); font-size: 25px; line-height: 1.25; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tray-status { display: flex; align-items: center; gap: 7px; margin: 0 10px 15px; color: var(--ink-3); font-size: 12px; }
+.tray-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.tray-dot.ok { background: var(--ok); }
+.tray-action { display: block; width: 100%; border: 0; border-radius: 9px; background: transparent; color: inherit; text-align: left; font: inherit; padding: 10px; cursor: pointer; transition: background-color .12s; }
+.tray-action:hover, .tray-action:focus-visible { background: var(--ctrl-hover); }
+.tray-action:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tray-action:disabled { opacity: .5; cursor: default; }
+.tray-agents { max-height: 134px; overflow-y: auto; margin: 4px 0 9px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 5px 0; }
+.tray-agent { font-size: 13px; padding-block: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tray-agent.current { background: var(--accent-soft); color: var(--accent); }
+.tray-footer { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.tray-note { margin: 5px 10px 3px; color: var(--ink-3); font-size: 11px; line-height: 1.5; }
+.tray-error { margin: 8px 10px; color: var(--err); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) { .tray-action { transition: none; } }

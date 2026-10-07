@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import mimetypes
 import os
 import threading
@@ -496,6 +497,21 @@ class BotTransport:
     def connected(self) -> bool:
         return (time.time() - self._last_poll_ok) < _STALE_SEC
 
+    def identity_line(self) -> str:
+        """Own Telegram identity from getMe, without changing authored identity."""
+        profile = getattr(self, "me", None)
+        if not isinstance(profile, dict):
+            return ""
+        username = str(profile.get("username") or "").strip().lstrip("@")
+        ident = str(profile.get("id") or "")
+        parts = []
+        if re.fullmatch(r"[A-Za-z0-9_]+", username):
+            parts.append(f"ник @{username}")
+        if ident.isascii() and ident.isdecimal() and int(ident) > 0:
+            parts.append(f"ID {ident}")
+        return ("Твой Telegram-аккаунт (подтверждён транспортом): "
+                + "; ".join(parts) + ".") if parts else ""
+
     def pop_pending(self) -> str | None:
         with self._queue_lock:
             if not self._pending:
@@ -595,8 +611,14 @@ class BotTransport:
         chat = message.get("chat") or {}
         sender = message.get("from") or {}
         chat_id = str(chat.get("id") or "")
-        if not chat_id or bool(sender.get("is_bot")):
-            return                      # чужих ботов не слушаем: петли и эхо
+        if not chat_id:
+            return
+        self_id = str((getattr(self, "me", None) or {}).get("id") or "")
+        if self_id and str(sender.get("id") or "") == self_id:
+            return                      # своё эхо уже записано при отправке
+        # Другие боты — тоже участники разговора. Их сообщения попадают в
+        # память до гейтов адресации и допуска, как сообщения людей; эти
+        # гейты ниже решают только, запускать ли ход.
         is_dm = str(chat.get("type") or "") == "private"
         sender_name = " ".join(x for x in (sender.get("first_name"),
                                            sender.get("last_name")) if x).strip() \

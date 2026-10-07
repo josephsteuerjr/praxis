@@ -1,12 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Helene",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "identifier": "app.helene.desk",
   "build": {
     "frontendDist": "../app/dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "withGlobalTauri": false,
     "windows": [],
     "security": {

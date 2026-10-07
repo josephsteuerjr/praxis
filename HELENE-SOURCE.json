@@ -1,8 +1,5 @@
 {
-  "version": "1.4.1",
-  "windows_desk": "d71054b0c575678ee9287ea86f7e8cf02fc1e4c6",
-  "linux_desk": "6ff3c06d708136166b495c02026efbd0a9500f22",
-  "ci_desk": "aad144b54ce9cb3e041abb27997df3414b9edf64",
+  "version": "1.4.2",
   "frozen_tree": "fb929656c4803ddfb04b1ef620bd9e709fbca348",
   "praxis_base_source": "4f86cc9fb44b0a7da1cfaf77b048f1475c9d6501",
   "frozen_tree_digest": "e282d624f3d7c0fd5b80701f407184014d58be80d1d5c3a66ad74a3026d08eb9",
@@ -667,5 +664,12 @@
     "agent.py",
     "llm.py",
     "model_watch.py"
-  ]
+  ],
+  "historical_1.4.1_desk_inputs": {
+    "windows_desk": "d71054b0c575678ee9287ea86f7e8cf02fc1e4c6",
+    "linux_desk": "6ff3c06d708136166b495c02026efbd0a9500f22",
+    "ci_desk": "aad144b54ce9cb3e041abb27997df3414b9edf64"
+  },
+  "desk_source": "This public checkout; exact build head is recorded in helene-build.json",
+  "public_parent": "aec5bc1dbd4e42fac2df5065d11336fde2b87f9c"
 }

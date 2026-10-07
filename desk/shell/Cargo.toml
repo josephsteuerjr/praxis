@@ -1,6 +1,6 @@
 [package]
 name = "helene"
-version = "1.4.1"
+version = "1.4.2"
 edition = "2021"
 description = "Frame — нативная оболочка основной программы: окно + WebView2, трей, уведомления, один экземпляр. Говорит с харнессом агента по frame.desk.v1: локально (дети окна) или удалённо."
 
@@ -18,7 +18,7 @@ required-features = ["host"]
 tauri-build = { version = "2", features = [], optional = true }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"], optional = true }
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"], optional = true }
 tauri-plugin-window-state = { version = "2", optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
 serde_json = "1"

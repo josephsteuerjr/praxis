@@ -233,7 +233,10 @@ def texts() -> dict[str, str]:
 #  Служба: тексты опции, а не режима
 # --------------------------------------------------------------------------- #
 
-SERVICE_TITLE = "Поставить службу Windows"
+SERVICE_TITLE = "Работать в фоне"
+SERVICE_BACKGROUND_NOTICE = "Запущенные агенты продолжат работу после закрытия Элен."
+SERVICE_BACKGROUND_DETAIL = ("Они смогут принимать сообщения и выполнять задачи. "
+                             "Чтобы приостановить агента, выбери «Остановить движок» в окне Элен.")
 
 #: ⚠ Здесь было ДВЕ неправды, обе поправлены 04.09 по коду службы:
 #:   1. «агент живёт, пока включён компьютер» — нет: без нулевой сессии харнесс
@@ -255,7 +258,9 @@ SERVICE_TEXT = ("Ставится один раз, под администрат
 #: механизм другой — демон launchd от имени владельца. Форма та же, что у
 #: SERVICE_TITLE/SERVICE_TEXT: строковые литералы, которые разбирает сборка
 #: установщика (`setup/ui/vite.config.ts`). ⚠ Имена констант разбирает она же.
-SERVICE_TITLE_MACOS = "Работать без входа в систему"
+SERVICE_TITLE_MACOS = "Работать в фоне"
+SERVICE_BACKGROUND_DETAIL_MACOS = ("Они смогут принимать сообщения и выполнять задачи. "
+                                   "Отключить фон можно в настройках Элен, сняв службу.")
 
 SERVICE_TEXT_MACOS = ("Ставится один раз, система спросит пароль администратора. "
                       "Код агента поднимает launchd: Telegram и телефон отвечают, "
@@ -277,7 +282,7 @@ SERVICE_WARNING_MACOS = ("Окон и экрана у такого агента 
 
 #: Та же опция словами Linux: служба systemd от имени владельца (шаблон
 #: `helene@.service` из пакета). ⚠ Форма — та же, что у `*_MACOS`.
-SERVICE_TITLE_LINUX = "Работать без входа в систему"
+SERVICE_TITLE_LINUX = "Работать в фоне"
 
 SERVICE_TEXT_LINUX = ("Ставится один раз, система спросит пароль администратора. "
                       "Код агента поднимает systemd от твоего имени: Telegram и "
@@ -1108,6 +1113,8 @@ def service_option() -> dict:
         "name": "service",
         "title": title,
         "text": text,
+        "notice": SERVICE_BACKGROUND_NOTICE,
+        "notice_detail": SERVICE_BACKGROUND_DETAIL_MACOS if _mac_texts() else SERVICE_BACKGROUND_DETAIL,
         "warning": warning,
         "needs_admin": True,
         "toggles": toggles,

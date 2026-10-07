@@ -28,7 +28,7 @@
 # скрипт идёт у человека, чьё окружение мы не знаем.
 set -eu
 
-HELENE_TAG_DEFAULT="v1.4.1"   # вписывает сборка (build_mac.stamp_install_sh); HELENE_TAG в среде — сильнее
+HELENE_TAG_DEFAULT="v1.4.2"   # вписывает сборка (build_mac.stamp_install_sh); HELENE_TAG в среде — сильнее
 HELENE_MACOS_MIN="14"         # тоже сборка: MACOS_MIN в build_mac.py (колёса голоса собраны под macOS 14)
 REPO="josephsteuerjr/praxis"
 PRODUCT="Hélène"

@@ -37,6 +37,8 @@ declare module "virtual:helene-modes" {
   export interface ServiceOption {
     title: string;
     text: string;
+    notice: string;
+    notice_detail: string;
     /** Чего служба НЕ даёт. Пусто на Windows (там всё сказано описанием); на
      *  macOS — окон и экрана у неё нет: тело тула `computer` поднимает окно.
      *  FileVault сюда не едет — он в документах поставки. */

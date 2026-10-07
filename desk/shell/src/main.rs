@@ -6557,7 +6557,8 @@ fn main() {
             agent_add,
             agent_default_set,
             agent_enabled_set,
-            agent_remove
+            agent_remove,
+            tray_context, tray_hide, tray_fit, tray_open_main, tray_exit
         ])
         .setup(move |app| {
             // Продукт зовётся своим именем: заголовок, ярлык, значок, уведомления —
@@ -6617,92 +6618,21 @@ fn main() {
             // Копии памяти по расписанию (1.2): раз в неделю по умолчанию.
             std::thread::spawn(backup_ticker);
 
-            // Трей: закрытие окна прячет его, харнесс-дети живут дальше;
-            // настоящий выход — только из меню трея.
-            use tauri::menu::{Menu, MenuItem, Submenu};
+            // A separate paper view keeps the existing agent controllers.
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-            let open = MenuItem::with_id(app, "open", format!("Открыть {}", product_ui()), true, None::<&str>)?;
-            let panic_item = MenuItem::with_id(app, "owner-panic", "Остановить агента совсем", cfg!(windows), None::<&str>)?;
-            let resume_item = MenuItem::with_id(app, "owner-resume", "Запустить после остановки", cfg!(windows), None::<&str>)?;
-            let quit = MenuItem::with_id(
-                app,
-                "quit",
-                if service_owns_harness() { "Выход (агент остаётся под службой)" } else { "Выход (остановить агентов)" },
-                true,
-                None::<&str>,
-            )?;
-            // Агенты в трее — только когда их больше одного: у единственного
-            // подменю из одной строки было бы шумом, а не выбором.
-            let here = roster(&base);
-            let menu = if here.len() > 1 {
-                let mut rows: Vec<MenuItem<tauri::Wry>> = Vec::new();
-                for a in &here {
-                    let mark = if a.id == current_id() { "• " } else { "   " };
-                    let tail = if !a.conflict.is_empty() {
-                        format!("  — спорит за порт с «{}»", a.conflict)
-                    } else if !a.enabled {
-                        "  — снят".to_string()
-                    } else {
-                        String::new()
-                    };
-                    rows.push(MenuItem::with_id(
-                        app,
-                        format!("agent:{}", a.id),
-                        format!("{mark}{}{tail}", a.name),
-                        a.conflict.is_empty(),
-                        None::<&str>,
-                    )?);
-                }
-                let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
-                    rows.iter().map(|r| r as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect();
-                let agents_menu = Submenu::with_items(app, "Агенты", true, &refs)?;
-                Menu::with_items(app, &[&open, &agents_menu, &panic_item, &resume_item, &quit])?
-            } else {
-                Menu::with_items(app, &[&open, &panic_item, &resume_item, &quit])?
-            };
-            let tray = TrayIconBuilder::with_id("frame")
-                .icon(tray_icon)
-                .tooltip(product_ui())
-                .menu(&menu)
-                .show_menu_on_left_click(false);
+            let tray = TrayIconBuilder::with_id("frame").icon(tray_icon)
+                .tooltip(product_ui()).show_menu_on_left_click(false);
             #[cfg(target_os = "macos")]
             let tray = tray.icon_as_template(true);
-            tray.on_menu_event(|app, event| match event.id.as_ref() {
-                    "open" => show_main(app),
-                    "owner-panic" | "owner-resume" => {
-                        let action = if event.id.as_ref() == "owner-panic" { "panic" } else { "resume" };
-                        std::thread::spawn(move || match owner_control(action.into()) {
-                            Ok(note) => toast("Hélène", &note),
-                            Err(note) => toast("Hélène", &note),
-                        });
+            tray.on_tray_icon_event(|tray, event| {
+                if let TrayIconEvent::Click { button, button_state: MouseButtonState::Up, position, .. } = event {
+                    match button {
+                        MouseButton::Left => show_main(tray.app_handle()),
+                        MouseButton::Right => request_tray_popup(tray.app_handle().clone(), position.x, position.y),
+                        _ => {}
                     }
-                    "quit" => {
-                        let state = app.state::<LocalHarness>();
-                        kill_children(&state);
-                        app.exit(0);
-                    }
-                    other => {
-                        if let Some(id) = other.strip_prefix("agent:") {
-                            // Из трея переключаемся так же, как из окна: одна
-                            // дорога, один журнал, одни и те же отказы.
-                            if let Err(err) = switch_agent(app.clone(), id.to_string()) {
-                                log_line(&format!("переключение на «{id}» не вышло: {err}"));
-                                toast(product_ui(), &err);
-                            }
-                        }
-                    }
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        show_main(tray.app_handle());
-                    }
-                })
-                .build(app)?;
+                }
+            }).build(app)?;
 
             // Слово агента, когда окно не перед глазами, — уведомлением.
             // ⚠ Смотрим за КАЖДЫМ поднятым агентом, а не только за тем, кто в
@@ -6717,6 +6647,15 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == TRAY_POPUP {
+                match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => { api.prevent_close(); let _ = window.hide(); }
+                    tauri::WindowEvent::Focused(false) => { let _ = window.hide(); }
+                    _ => {}
+                }
+                return;
+            }
+            if window.label() != "main" { return; }
             match event {
                 // Закрыть окно ≠ убить организм: окно в трей, дети живут.
                 tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -6855,6 +6794,9 @@ fn window_state_remembered<M: tauri::Manager<tauri::Wry>>(manager: &M) -> bool {
         .map(|path| path.is_file())
         .unwrap_or(false)
 }
+
+#[cfg(feature = "desktop")]
+include!("tray_popup.rs");
 
 /// Построить окно. Вынесено из `setup` целиком, потому что переключение агента
 /// строит его ЗАНОВО: init-скрипт (адрес канала и ключ) задаётся только при

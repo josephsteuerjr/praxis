@@ -4281,3 +4281,6 @@ body.first-run #state {
 .save-bar { padding: 8px 12px; }
 .save-bar > .field-hint { margin: 4px 0 0; font-size: 10px; }
 .settings-body { padding-bottom: 32px; }
+.service-notice { line-height: 1.5; }
+.service-notice strong { display: block; font-weight: 600; }
+.service-notice .field-hint { display: block; margin-top: 6px; }

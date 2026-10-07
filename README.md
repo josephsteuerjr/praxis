@@ -19,6 +19,9 @@ voice, files and a dedicated Doctor. An agent can run locally or on your server.
   edit an existing constitution, or write your own. Inspect the actual constitution file.
 - **Individual controls.** Start and stop one agent. Keep another running. Changes to the
   agent list appear immediately, and files open from the selected agent's own tree.
+- **Clear background work.** Setup and settings explain that active agents can keep
+  receiving messages and doing tasks after the window closes. A paper tray card shows
+  the selected agent, engine status, agent switching and explicit open, stop and exit actions.
 - **Recoverable removal.** Removal requires the agent ID and moves its files into an
   archive instead of silently erasing its memory.
 - **A Doctor.** Create a dedicated diagnostic agent from the Agents card. It measures

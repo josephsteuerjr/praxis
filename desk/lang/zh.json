@@ -156,7 +156,7 @@
   "setup.uninstall.keep_body": "数据留下的话，下次装到同一个文件夹，智能体会带着它的记忆回来。同一个文件夹里还留着要紧的东西：模型密钥、ChatGPT 的登录和你的 Telegram 会话。以后想删，把整个文件夹移走即可；旁边会有一张字条 КАК-ВЕРНУТЬСЯ.md。",
   "setup.uninstall.purge_body": "data 文件夹会随程序一起消失：记忆、日记、宪章，以及智能体写下的关于自己和关于人的一切——不可挽回，不进回收站；程序旁 backups 里的记忆副本也一并删除。也不会有 КАК-ВЕРНУТЬСЯ.md 这张字条：已经无处可回。想把记忆带走，就关掉这个窗口，在程序旁边运行 `helene-setup.exe --export`——它会打包出一份迁移存档，之后再卸载。",
   "setup.uninstall.purge_body.macos": "data 文件夹会随程序一起消失：记忆、日记、宪章，以及智能体写下的关于自己和关于人的一切——不可挽回，不进回收站；程序旁 backups 里的记忆副本也一并删除。也不会有 КАК-ВЕРНУТЬСЯ.md 这张字条：已经无处可回。想把记忆带走，就关掉这个窗口，在程序旁边运行 `\"Helene Setup.app/Contents/MacOS/helene-setup\" --export`——它会打包出一份迁移存档，之后再卸载。",
-  "settings.service.title.macos": "在你未登录时也继续工作",
+  "settings.service.title.macos": "在后台继续工作",
   "settings.service.text.macos": "只需安装一次，系统会询问管理员密码。之后由 launchd 启动智能体：窗口关着时 Telegram 和手机照样有回应，你退出登录后也仍然有回应。进程崩了会自己起来。这不改变围栏：模式是单独选择的，工作方式不变。",
   "settings.service.warning.macos": "这样的智能体没有窗口也没有屏幕：在你的会话之外的进程看不到桌面。`computer` 工具要等你打开 Helene 窗口才会活过来——身体是由窗口启动的。",
   "setup.uninstall.explain_title": "会留下什么",

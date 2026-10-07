@@ -7,13 +7,14 @@
 //
 // Страница окна приходит своим протоколом helene://localhost — этот origin канал агента
 // уже пускает (deskapp.py: _SHELL_SCHEMES), правки в харнессе не нужны.
-import { BrowserWindow, Menu, Tray, Notification, app, dialog, ipcMain, nativeImage, nativeTheme, net, protocol, screen } from "electron";
+import { BrowserWindow, Tray, Notification, app, dialog, ipcMain, nativeImage, nativeTheme, net, protocol, screen } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { dirname, extname, join, normalize, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { HostClient } from "./host";
 import { bootstrapChannel, initOwner, ownerRoot, programRoot } from "./layout";
 import { runCommand, type Ctx } from "./commands";
+import { placeTray, type PopupPoint } from "../../ui-kit/tray-position";
 
 const PRODUCT_UI = "Hélène";
 const TOAST_ID = "app.helene.desk"; // тот же AUMID, что у прежней оболочки: ярлык и уведомления одни
@@ -79,6 +80,8 @@ if (!app.requestSingleInstanceLock()) {
 
 let win: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let trayPopup: BrowserWindow | null = null;
+let trayAnchor: PopupPoint | null = null;
 let quitting = false;
 let freeTimer: NodeJS.Timeout | undefined;
 
@@ -126,6 +129,10 @@ async function start() {
   });
   ipcMain.handle("helene:invoke", (e, cmd: string, args: Record<string, unknown>) => {
     if (!trustedSender(e) || String(cmd).startsWith("host_")) throw new Error("Недоступный вызов оболочки");
+    if (String(cmd).startsWith("tray_")) {
+      if (BrowserWindow.fromWebContents(e.sender) !== trayPopup) throw new Error("Недоступный вызов карточки");
+      return trayCommand(String(cmd), args ?? {});
+    }
     return runCommand(String(cmd), args ?? {}, ctx);
   });
   ipcMain.on("helene:look", (e, paper: { day?: string; night?: string }) => {
@@ -135,7 +142,7 @@ async function start() {
       writeFileSync(lookFile(), JSON.stringify({ day: paper?.day, night: paper?.night }));
     } catch { /* не запомнится — откроется бумагой по умолчанию */ }
     const w = BrowserWindow.fromWebContents(e.sender);
-    w?.setBackgroundColor(paperColor());
+    if (w && w === win) w.setBackgroundColor(paperColor());
   });
   ipcMain.on("helene:win", (e, action: string) => {
     if (!trustedSender(e)) return;
@@ -306,12 +313,57 @@ function makeTray() {
   if (process.platform === "darwin") img.setTemplateImage(true);
   tray = new Tray(img);
   tray.setToolTip(PRODUCT_UI);
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: `Открыть ${PRODUCT_UI}`, click: () => show() },
-    { type: "separator" },
-    { label: "Выйти", click: () => { quitting = true; app.quit(); } },
-  ]));
+  tray.on("right-click", () => showTrayPopup());
   tray.on("click", () => show());
+}
+
+function popupArea() {
+  const point = trayAnchor || screen.getCursorScreenPoint();
+  return { point, area: screen.getDisplayNearestPoint(point).workArea };
+}
+
+function fitTray(height: number) {
+  if (!trayPopup || trayPopup.isDestroyed()) return;
+  const { point, area } = popupArea();
+  const box = placeTray(point, area, height);
+  const current = trayPopup.getBounds();
+  if (current.x !== box.x || current.y !== box.y || current.width !== box.width || current.height !== box.height) trayPopup.setBounds(box);
+}
+
+function showTrayPopup() {
+  if (quitting) return;
+  if (trayPopup?.isVisible() && trayPopup.isFocused()) { trayPopup.hide(); return; }
+  trayAnchor = screen.getCursorScreenPoint();
+  if (!trayPopup || trayPopup.isDestroyed()) {
+    trayPopup = new BrowserWindow({ width: 368, height: 320, show: false, frame: false,
+      transparent: true, backgroundColor: '#00000000', hasShadow: false, alwaysOnTop: true,
+      skipTaskbar: true, resizable: false,
+      webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    const popup = trayPopup;
+    popup.on('blur', () => popup.hide());
+    popup.on('close', e => { if (!quitting) { e.preventDefault(); popup.hide(); } });
+    popup.on('closed', () => { if (trayPopup === popup) trayPopup = null; });
+    popup.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    popup.webContents.on('will-navigate', (e, url) => { if (url !== 'helene://localhost/tray.html') e.preventDefault(); });
+    popup.once('ready-to-show', () => { if (!quitting) { fitTray(320); popup.show(); popup.focus(); } });
+    void popup.loadURL('helene://localhost/tray.html').catch(e => { log(String(e)); show(); });
+  } else { fitTray(trayPopup.getBounds().height); trayPopup.show(); trayPopup.focus(); }
+}
+
+async function trayCommand(command: string, args: Record<string, unknown>) {
+  if (command === 'tray_hide') { trayPopup?.hide(); return; }
+  if (command === 'tray_fit') { fitTray(Number(args.height)); return; }
+  if (command === 'tray_open_main') { trayPopup?.hide(); show(); return; }
+  if (command === 'tray_exit') { quitting = true; app.quit(); return; }
+  if (command === 'tray_context') {
+    const [owner, list] = await Promise.all([host.invoke('owner_state'), host.invoke('agents_list')]);
+    let background: boolean | null = null;
+    try { background = !!JSON.parse(readFileSync(join(ROOT, 'helene.json'), 'utf8')).installed?.service; } catch { /* unknown */ }
+    const { area } = popupArea();
+    const agents = list as { agents: unknown[]; current: string };
+    return { owner, background, agents: agents.agents, current: agents.current, max_height: area.height + 32 };
+  }
+  throw new Error('Неизвестное действие карточки');
 }
 
 app.on("before-quit", (event) => {

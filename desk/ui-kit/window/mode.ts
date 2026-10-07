@@ -75,6 +75,8 @@ export interface ServiceOption {
   name: string;
   title: string;
   text: string;
+  notice?: string;
+  notice_detail?: string;
   /** Чего служба НЕ даёт. Пусто на Windows (там всё сказано описанием); на
    *  macOS — окон и экрана у неё нет: тело тула `computer` поднимает окно.
    *  ⚠ FileVault сюда НЕ едет (19.09): «диск заперт до первого входа» —
