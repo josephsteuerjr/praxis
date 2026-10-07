@@ -258,6 +258,14 @@ class AccountAdapter(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ConnectionError):
             self.client.call('getUpdates', timeout=1)
 
+    async def test_sdk_logical_connected_flag_does_not_hide_reconnect_failure(self):
+        self.client.client.is_connected.return_value = True
+        self.client._run = mock.Mock(side_effect=ConnectionError('wire disconnected'))
+        with mock.patch.object(self.client, '_updates', return_value=[]):
+            with self.assertRaises(ConnectionError):
+                self.client.call('getUpdates', timeout=1)
+        self.client._run.assert_called_once()
+
     async def test_adapter_replays_batch_until_offset_acknowledges_it(self):
         self.client._queue.put({'update_id': 1, 'message': {'text': 'one'}})
         first = self.client._updates(.001)

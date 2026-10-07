@@ -243,8 +243,16 @@ class MtprotoClient:
         if method == "getUpdates":
             if not self.client.is_connected():
                 raise ConnectionError("MTProto is disconnected")
-            return self._updates(float(params.get("timeout") or 20),
+            rows = self._updates(float(params.get("timeout") or 20),
                                  int(params.get("offset") or 0))
+            if not rows:
+                # Telethon is_connected means "the user requested a connection";
+                # it stays true during automatic reconnect. An empty RAM queue
+                # therefore needs an actual RPC before declaring reception alive.
+                profile = self.call("getMe", _http_timeout=_http_timeout)
+                if not profile.get("id"):
+                    raise ConnectionError("MTProto profile is not confirmed")
+            return rows
         if method == "sendMessage":
             return self._run(self._send_message(params), timeout=_http_timeout)
         # 25.09 (F): у аккаунта тоже видно, что агент думает — «печатает…» идёт
