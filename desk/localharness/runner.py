@@ -493,6 +493,17 @@ def _orient(chat_id: str) -> str:
     bits = [_WINDOW_ORIENT] if transport.is_room(chat_id) else []
     if _ORIENT_EXTRA:
         bits.append(_ORIENT_EXTRA)
+    # Addressing knows the authenticated handle; the voice must know it too.
+    # Read the active transport on every turn rather than teaching a nickname
+    # through authored memory or changing the agent's name/constitution.
+    if _bot is not None:
+        try:
+            identity = getattr(_bot, "identity_line", None)
+            line = identity() if callable(identity) else ""
+            if isinstance(line, str) and line:
+                bits.append(line)
+        except Exception:
+            log.debug("профиль Telegram не вошёл в контекст", exc_info=True)
     # 1.2.5: на чём агент работает сейчас и кто менял последним — в каждом ходе. Без этого
     # модель узнавалась рукой из снимка раннера, а смена владельцем читалась «обновлением».
     try:
