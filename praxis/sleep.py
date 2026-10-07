@@ -667,6 +667,24 @@ def run(depth: str | None = None) -> str:
         _step("gnomes", _gnomes)
         verify_out = _step("verify", lambda: night_memory.verify_pass(
             (gnome_out.get("freshness") or [])))
+        # 07.10 (oro/runs-nightly-0710): прогоны → ночная память. Дайджесты
+        # Forge-задач из durable-материала; рычаг PRAXIS_RUNS_NIGHTLY = off|dry|on
+        # (off — честный skip с причиной, dry — репетиция рядом с задачей, on —
+        # публикация formation-фронтиром). Тот же шаг-каркас: квитанция на каждый
+        # исход, повтор ночи того же дня — ноль дублей.
+        try:
+            import runs_nightly
+            runs_out = {}
+            def _runs():
+                runs_out["summary"] = runs_nightly.night_pass(day)
+                return runs_out["summary"]
+            _step("runs_nightly", _runs)
+            if runs_out.get("summary", {}).get("tasks"):
+                night_lines.append(
+                    "прогоны: " + json.dumps(runs_out["summary"], ensure_ascii=False))
+        except Exception:
+            log.exception("сон: шаг прогоны→память упал")
+            night_lines.append("прогоны→память: сбой шага (сырьё сохранено)")
         deferred = [f"{r['step']}: {r['reason']}" for r in night_memory.receipts(day)
                     if r.get("run_id") == run_id and r.get("status") in ("skipped", "failed")]
         if fold_out is not None or verify_out is not None:

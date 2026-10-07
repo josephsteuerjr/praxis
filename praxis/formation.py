@@ -122,7 +122,33 @@ def pending_compacts(limit: int = SOURCE_LIMIT) -> list[dict]:
         resolved = memory_provenance.compact_evidence(compact_id, evidence)
         if resolved.get("automatic"):
             eligible.append(meta)
+    eligible += _pending_run_digests(done)
     return eligible[-limit:]
+
+
+def _pending_run_digests(done: set[str]) -> list[dict]:
+    """07.10 (oro/runs-nightly-0710): дайджесты прогонов как источники формирования.
+
+    Фронтир пишет runs_nightly.publish_for_formation (только при
+    PRAXIS_RUNS_NIGHTLY=on); потребляются тем же processed_compacts — один
+    дайджест, как один компакт. Не automatic-компакт: у него свой text, и
+    claim-evidence к нему не применяется (это не диалоговое событие).
+    """
+    path = life.STATE_DIR / "formation_runs.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out = []
+    for meta in (data or {}).get("frontier") or []:
+        if not isinstance(meta, dict) or meta.get("kind") != "run_digest":
+            continue
+        if str(meta.get("id") or "") in done:
+            continue
+        out.append({"id": str(meta.get("id") or ""), "kind": "run_digest",
+                    "created_at": meta.get("created_at"),
+                    "task_id": meta.get("task_id"), "text": meta.get("text")})
+    return out
 
 
 def _harvest(source_text: str) -> dict:
@@ -276,6 +302,20 @@ def _source_bundle(metas: list[dict]) -> tuple[str, set[str]]:
     for meta in metas:
         cid = str(meta.get("id") or "")
         if not cid:
+            continue
+        if meta.get("kind") == "run_digest":
+            # 07.10 (oro/runs-nightly-0710): дайджест прогона — свой собственный
+            # источник: event-строки уже в мете (runs_nightly.digest_events);
+            # claim-evidence диалогов к нему не применяется.
+            for event in meta.get("events") or []:
+                event_id = str(event.get("id") or "")
+                if not event_id:
+                    continue
+                allowed.add(event_id)
+                chunks.append(json.dumps({
+                    "id": event_id, "kind": event.get("kind"),
+                    "text": str(event.get("text") or "")[:4000],
+                }, ensure_ascii=False, separators=(",", ":")))
             continue
         resolved = memory_provenance.compact_evidence(cid, evidence)
         if not resolved.get("automatic"):
