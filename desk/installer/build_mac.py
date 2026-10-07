@@ -1072,6 +1072,30 @@ def deps() -> list[str]:
     return list(bd.TREE_DEPS) + list(bd.VOICE_DEPS) + deskpkg.requirements(flavor)
 
 
+def clean_generated_agent_files(tree: Path, original: set[str]) -> int:
+    """Keep staged inputs; reject unexpected additions before deleting import artifacts."""
+    current = {p.relative_to(tree).as_posix(): p for p in tree.rglob("*") if p.is_file()}
+    missing = original - current.keys()
+    extra = current.keys() - original
+    generated = {"memory/llm.json", "memory/.state/notices.lock"}
+    unexpected = {name for name in extra
+                  if not (("__pycache__" in Path(name).parts and name.endswith(".pyc"))
+                          or name in generated)}
+    if missing or unexpected:
+        raise SystemExit(f"agent tree changed during build: missing={sorted(missing)}, "
+                         f"unexpected={sorted(unexpected)}")
+    for name in extra:
+        current[name].unlink()
+    for directory in sorted((p for p in tree.rglob("*") if p.is_dir()),
+                            key=lambda p: len(p.parts), reverse=True):
+        relative = directory.relative_to(tree).as_posix()
+        if ("__pycache__" in directory.relative_to(tree).parts or relative == "memory" or relative.startswith("memory/")) \
+                and not any(name.startswith(relative + "/") for name in original):
+            if not any(directory.iterdir()):
+                directory.rmdir()
+    return len(extra)
+
+
 def runtime_python(out: Path) -> Path:
     return out / "runtime" / "bin" / "python3"
 
@@ -1697,6 +1721,8 @@ def main() -> None:
         source_release = staged_tree
     live = out / "tree"
 
+    original_agent_files = {p.relative_to(live).as_posix() for p in live.rglob("*") if p.is_file()}
+
     print("тело:")
     body_info: dict | None = None
     if args.skip_body:
@@ -1786,6 +1812,8 @@ def main() -> None:
     (out / "data").mkdir(exist_ok=True)
 
     print("подпись ad-hoc:")
+    generated_files = clean_generated_agent_files(live, original_agent_files)
+    print(f"дерево агента: удалено {generated_files} файлов, созданных проверкой импортов")
     signed = codesign_all(out)
 
     print("паспорт сборки:")
