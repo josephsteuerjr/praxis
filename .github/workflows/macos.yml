@@ -136,7 +136,9 @@ jobs:
             desk/miniapp/package-lock.json
 
       - name: Сборка (build_mac.py)
-        run: python3 desk/installer/build_mac.py --from-release "$TREE_TAG" --tag "$TAG" --out "$BUILD"
+        run: |
+          mkdir -p "$LOGS"
+          python3 desk/installer/build_mac.py --from-release "$TREE_TAG" --tag "$TAG" --out "$BUILD" 2>&1 | tee "$LOGS/build.log"
 
       # Стенды питона и окна сборка уже прогнала рантаймом, который собрала
       # (build_mac.run_stands). Здесь — то, чего она не зовёт: Rust трёх крейтов.
