@@ -1,11 +1,11 @@
 {
   "mirror": "praxis",
-  "source": "/opt/praxis; source-only sanitized snapshot",
-  "head": "4f86cc9fb44b0a7da1cfaf77b048f1475c9d6501",
+  "source": "/opt/praxis; source-only sanitized snapshot (delta over 4f86cc9f)",
+  "head": "faa6dacb7639c948e4a1173fc32c5415bac50055",
   "dirty": false,
-  "taken_at": "2026-10-07T00:01:38.074117+00:00",
-  "files": 623,
-  "digest": "7081ec12ab4f11b7264205555d5b842d0acd7e88a25218dc0a85e809a87f21c5",
+  "taken_at": "2026-10-07T17:04:07+00:00",
+  "files": 625,
+  "digest": "e8d94b0e34246c392194401b43387d57308ba2ccf4df8ad092fb541f8170e0aa",
   "private_history_published": false,
   "excluded_runtime": true,
   "sanitization": {
@@ -13,6 +13,15 @@
       "agent.py",
       "test_sanitize_scripts.py"
     ],
-    "behavior_preserved": true
+    "behavior_preserved": true,
+    "delta_basis": "4f86cc9fb44b0a7da1cfaf77b048f1475c9d6501",
+    "delta_files": [
+      "addressed_threads.py",
+      "agent.py",
+      "frame_layout.py",
+      "mtproto_runner.py",
+      "test_addressed_threads.py",
+      "test_outbox_settled_1309.py"
+    ]
   }
 }

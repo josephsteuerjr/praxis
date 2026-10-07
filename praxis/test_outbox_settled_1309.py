@@ -69,6 +69,22 @@ class SettledRuns(unittest.TestCase):
         self.assertFalse(mr._run_is_settled(""))
         self.assertTrue(mr._run_is_settled("run-done"))
 
+    def test_retention_removed_run_is_late_acceptance_not_error(self):
+        # Ретенция сняла весь каталог прогона: manifest.json нет, reconciler
+        # кидает RunNotFound. Это должно сводить запись как позднюю приёмку
+        # (без трейсбека на каждом тике), а не падать вечно.
+        import run_manager
+        def gone(entry):
+            raise run_manager.RunNotFound(str(entry.get("run_id")))
+        with mock.patch.object(agent, "run_direct_outbox_accepted", gone, create=True):
+            entry = {"key": "k-gone", "purpose": "tool:reply", "run_id": "run-gone", "kind": "text"}
+            mr._DIRECT_OUTBOX_RECONCILED.discard("k-gone")
+            try:
+                self.assertTrue(asyncio.run(mr._reconcile_direct_outbox_entry(entry)))
+                self.assertIn("k-gone", mr._DIRECT_OUTBOX_RECONCILED)
+            finally:
+                mr._DIRECT_OUTBOX_RECONCILED.discard("k-gone")
+
 
 class _Spool:
     """Спул медиа для стенда: только то, что зовёт `_media_cleanup_once`."""

@@ -39,6 +39,7 @@ import owner_delivery
 import perception
 import selfdev
 import reflex
+import run_manager
 import rooms
 import social
 import social_pulse
@@ -4484,7 +4485,8 @@ async def _reconcile_direct_outbox_entry(entry: dict) -> bool:
     # Раньше ~30 принятых записей августа сверялись заново КАЖДЫЙ тик и каждый старт
     # (набор выше — в памяти процесса); когда ретенция сняла results/ у тех прогонов,
     # каждая сверка стала трейсбеком: 1 609 за 25 минут.
-    if _run_is_settled(str(entry.get("run_id") or "")):
+    run_id = str(entry.get("run_id") or "")
+    if _run_is_settled(run_id):
         await _announce_late_acceptance(entry)
         _DIRECT_OUTBOX_RECONCILED.add(key)
         return True
@@ -4493,6 +4495,16 @@ async def _reconcile_direct_outbox_entry(entry: dict) -> bool:
         return False
     try:
         reconciled = await asyncio.to_thread(reconcile, dict(entry))
+    except run_manager.RunNotFound:
+        # Ретенция сняла весь каталог прогона вместе с manifest.json — терминальность
+        # уже не узнать, но расписку некуда класть в любом случае: это поздняя
+        # приёмка, а не ошибка сверки (раньше здесь был вечный трейсбек RunNotFound
+        # на каждом тике по августовским принятым записям).
+        log.info("direct Telegram outbox: run %s уже убран ретенцией — "
+                 "поздняя приёмка без проекции [%s]", run_id, key)
+        await _announce_late_acceptance(entry)
+        _DIRECT_OUTBOX_RECONCILED.add(key)
+        return True
     except Exception:
         log.exception("direct Telegram outbox reconciliation failed [%s]", key)
         return False

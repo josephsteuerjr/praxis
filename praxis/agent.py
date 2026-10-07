@@ -10944,8 +10944,16 @@ def _build_prompt_parts(
     frame_trace.note_budget(limit=budget, used_start=len(persona) + len(tail_text),
                             used_final=used, offered=len(tiers), included=len(chosen),
                             dropped=len(dropped))
+    # Адресный рефлекс (desire-a03780224e): транспорт назвал людей — их открытые
+    # нити поднимаются в кадр с источником. Пусто = названная пустота, не подстановка.
+    try:
+        import addressed_threads
+        _threads = addressed_threads.collect(ctx)
+    except Exception:
+        _threads = ()
     frame_layout.stash(tiers_offered=len(tiers), tiers_included=len(chosen), writing=bool(writing),
-                       tiers_dropped=len(dropped), dossier=bool(participant_cards))
+                       tiers_dropped=len(dropped), dossier=bool(participant_cards),
+                       addressed_threads=_threads)
     if dropped:
         # P1: не режем молча — называем, что не влезло (можно достать через recall)
         chosen.append(frame_trace.mark("evidence.omitted_marker", "evidence", "marker",
