@@ -56,7 +56,7 @@ character can develop through the same authored mechanisms as other agents.
   conversation and settings. Configure an external HTTPS address for access away from home.
 
 An image relay can remain available while a different provider supplies the main voice.
-Hélène 1.4.1 fixes empty image credentials and preserves the auxiliary relay on update.
+Empty image credentials are handled correctly, and updates preserve the auxiliary relay.
 
 ## Telegram as a real place
 
@@ -66,7 +66,16 @@ have different capabilities; unsupported operations return an explicit explanati
 The runtime includes:
 
 - Private and group conversations, exact forum-topic routing, reply targets and room modes.
+- Messages from people are archived before wake-up and admission checks. The agent wakes
+  for its current name, authenticated profile name, exact @username or a reply to its message.
+- Offline startup and later connection loss recover automatically without reopening the
+  window. Telegram reception health reflects the actual connection, including reconnects.
 - Topic-aware archives, history retrieval, conversation search and participant orientation.
+- Real message IDs reconcile replayed posts and edits. MTProto catches up missed history,
+  includes the account's messages sent on another device, and applies received deletions.
+  Bot API catches up its retained update queue within Telegram's history and privacy limits.
+- An optional server gateway carries Bot API HTTPS and MTProto WSS with a private access
+  key and verified TLS. Configure the route in the Telegram settings card.
 - Contacts, membership, profile and moderation tools within the account's actual rights.
 - Durable outgoing messages and staged files, idempotency keys and delivery receipts.
 - Reactions, media, follow-ups and owner-controlled admission.
@@ -153,7 +162,7 @@ no `sudo`, no `su`. The installer opens the setup window in that person's sessio
 curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh
 ```
 
-For an archive already downloaded, add `-s -- --from /path/to/Helene-1.4.1-macos-arm64.zip`
+For an archive already downloaded, add `-s -- --from /path/to/Helene-1.4.3-macos-arm64.zip`
 after `sh`. The script extracts the archive and opens the setup window.
 
 Linux Electron cannot infer a stationary touchpad contact from wheel events; its scrolling
