@@ -1,0 +1,98 @@
+/* «Почерк» — облик окна с 28.09 (поток «окно», решения Егора по лаборатории):
+   светлая тёплая бумага с лёгким зерном, тихая линия, терракота (~#e0915a),
+   почерк Zen Kurenaido — заголовки и имя агента, текст — Golos. Тёмная тема — та же
+   палитра ночью. Буквальных котиков и лапок нет («конечно, нет»).
+
+   Слой поверх app.css: здесь токены и то, что меняет характер (линии вместо теней,
+   почерк вместо серифа, лента в em ради масштаба). Телефон и мастер установки этот
+   файл не грузят — у них прежние tokens.css. */
+
+:root {
+  color-scheme: light;
+  --paper: var(--u-paper-day, #f8eee0);
+  --ground: var(--paper);
+  --surface: color-mix(in srgb, var(--paper) 55%, #ffffff);     /* лист поверх бумаги */
+  --surface-2: color-mix(in srgb, var(--paper) 88%, #a07a4a);   /* вдавленное: код, наведение */
+  --panel: color-mix(in srgb, var(--paper) 82%, #ffffff);
+  --ink: #1d1a17;
+  --ink-2: #4a4038;
+  --ink-3: #6e5f4f;
+  --muted: #7d6c5a;
+  --line: rgba(29, 26, 23, 0.14);
+  --line-strong: rgba(29, 26, 23, 0.28);
+  /* обводка «пером»: пузыри, карточки, поле ввода, разделитель полки. Была почти чёрной
+     (#1d1a17); дизайнер 29.09 — нежнее, #997766. */
+  --line-ink: color-mix(in srgb, var(--ink) 23%, var(--paper));
+  --lw: 1px;
+  --terra: var(--u-terra, #e0915a);  /* заливка-акцент: кнопка отправки, точки, отметки */
+  --accent: var(--u-accent-day, #9a4a1e); /* акцент для текста и ссылок: контраст ≥ 4,5 */
+  --accent-ink: #ffffff;
+  --accent-soft: color-mix(in srgb, var(--terra) 20%, transparent);
+  --ok: #4f7a4a;
+  --warn: #9a6a1b;
+  --err: #b0402b;
+  --err-soft: rgba(176, 64, 43, 0.12);
+  --ctrl-hover: rgba(160, 110, 60, 0.12);
+  --gust: rgba(160, 110, 60, 0.06);
+  --shadow: none;
+  --shadow-pop: 0 4px 18px rgba(29, 26, 23, 0.08);
+  --glass: color-mix(in srgb, var(--surface) 94%, transparent);
+  --grain: var(--u-grain-day, 0.06);
+  --serif: "Golos Text", "Segoe UI", system-ui, sans-serif;  /* сериф уходит: текст — Golos */
+  --hand: "Zen Kurenaido", "Neucha", "Segoe Print", cursive;
+  --feed-base: var(--u-feed-base, 15.5px);
+  --zoom: 1;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: var(--u-paper-night, #1d1914);
+    --surface: color-mix(in srgb, var(--paper) 93%, #ffffff);
+    --surface-2: color-mix(in srgb, var(--paper) 87%, #ffffff);
+    --panel: color-mix(in srgb, var(--paper) 96%, #ffffff);
+    --ink: #f1e4d0;
+    --ink-2: #d6c5ad;
+    --ink-3: #ab9982;
+    --muted: #978570;
+    --line: rgba(241, 228, 208, 0.13);
+    --line-strong: rgba(241, 228, 208, 0.26);
+    --line-ink: color-mix(in srgb, var(--ink) 23%, var(--paper));
+    --accent: var(--u-accent-night, #eda676);
+    --accent-ink: #1d1914;
+    --accent-soft: color-mix(in srgb, var(--terra) 16%, transparent);
+    --ok: #93b98d;
+    --warn: #d9ad62;
+    --err: #ec8a74;
+    --err-soft: rgba(236, 138, 116, 0.14);
+    --ctrl-hover: rgba(241, 228, 208, 0.07);
+    --gust: rgba(241, 228, 208, 0.04);
+    --shadow-pop: 0 4px 18px rgba(0, 0, 0, 0.2);
+    --grain: var(--u-grain-night, 0.04);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: var(--u-paper-night, #1d1914);
+  --surface: color-mix(in srgb, var(--paper) 93%, #ffffff);
+  --surface-2: color-mix(in srgb, var(--paper) 87%, #ffffff);
+  --panel: color-mix(in srgb, var(--paper) 96%, #ffffff);
+  --ink: #f1e4d0;
+  --ink-2: #d6c5ad;
+  --ink-3: #ab9982;
+  --muted: #978570;
+  --line: rgba(241, 228, 208, 0.13);
+  --line-strong: rgba(241, 228, 208, 0.26);
+  --line-ink: color-mix(in srgb, var(--ink) 23%, var(--paper));
+  --accent: var(--u-accent-night, #eda676);
+  --accent-ink: #1d1914;
+  --accent-soft: color-mix(in srgb, var(--terra) 16%, transparent);
+  --ok: #93b98d;
+  --warn: #d9ad62;
+  --err: #ec8a74;
+  --err-soft: rgba(236, 138, 116, 0.14);
+  --ctrl-hover: rgba(241, 228, 208, 0.07);
+  --gust: rgba(241, 228, 208, 0.04);
+  --shadow-pop: 0 4px 18px rgba(0, 0, 0, 0.2);
+  --grain: var(--u-grain-night, 0.04);
+}

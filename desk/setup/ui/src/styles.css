@@ -842,6 +842,10 @@ button:focus-visible {
   min-width: 0;
 }
 
+.service-notice { margin: 0; line-height: 1.45; }
+.service-notice strong { display: block; font-weight: 600; }
+.service-notice .mode-note { display: block; margin-top: 5px; }
+
 .switch:disabled {
   cursor: default;
 }

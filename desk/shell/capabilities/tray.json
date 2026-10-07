@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "tray",
+  "description": "Paper tray card, controlled by the Hélène shell",
+  "windows": ["tray-popup"],
+  "permissions": ["core:default"]
+}

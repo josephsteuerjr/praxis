@@ -119,6 +119,7 @@ export class ModeScene extends FormScene {
   /** Описание, примечание и оговорка опции службы — на Mac их подменяют
    *  слова macOS, не пересобирая блок. */
   private serviceDesc!: HTMLElement;
+  private serviceNotice!: HTMLElement;
   private serviceNote!: HTMLElement;
   private serviceWarn!: HTMLElement;
   /** Блок нулевой сессии: на macOS её нет как механизма — блока там нет тоже
@@ -234,12 +235,14 @@ export class ModeScene extends FormScene {
       },
     });
     this.serviceDesc = el("p", "mode-text", SERVICE_OPTION.text);
+    this.serviceNotice = el("p", "service-notice");
+    this.serviceNotice.append(el("strong", "", SERVICE_OPTION.notice), el("span", "mode-note", SERVICE_OPTION.notice_detail));
     this.serviceNote = el("p", "mode-note", SERVICE_NOTE);
     // Чего служба НЕ даёт — рядом с тем, что даёт. Пусто на Windows (там всё
     // сказано описанием), на Mac — окна и экран без открытого окна Helene.
     this.serviceWarn = el("p", "mode-warn", "");
     this.serviceWarn.hidden = true;
-    main.append(this.serviceSwitch, this.serviceDesc, this.serviceNote, this.serviceWarn);
+    main.append(this.serviceSwitch, this.serviceNotice, this.serviceDesc, this.serviceNote, this.serviceWarn);
     this.serviceWhy = el("p", "mode-why", NO_ADMIN);
     this.serviceWhy.hidden = true;
     main.append(this.serviceWhy);
@@ -352,6 +355,7 @@ export class ModeScene extends FormScene {
     const label = this.serviceSwitch.querySelector<HTMLElement>(".switch-label");
     if (label) label.textContent = service.title;
     this.serviceDesc.textContent = service.text;
+    this.serviceNotice.replaceChildren(el("strong", "", service.notice), el("span", "mode-note", service.notice_detail));
     this.serviceNote.textContent = mac ? SERVICE_NOTE_MACOS : SERVICE_NOTE;
     this.serviceWarn.textContent = service.warning || "";
     this.serviceWarn.hidden = !service.warning;

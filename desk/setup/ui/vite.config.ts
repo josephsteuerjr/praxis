@@ -149,6 +149,8 @@ function modesFromPython(): Plugin {
       const option = {
         title: constantText(py, "SERVICE_TITLE"),
         text: constantText(py, "SERVICE_TEXT"),
+        notice: constantText(py, "SERVICE_BACKGROUND_NOTICE"),
+        notice_detail: constantText(py, "SERVICE_BACKGROUND_DETAIL"),
         toggles: [
           {
             key: "service.session0",
@@ -184,6 +186,7 @@ function modesFromPython(): Plugin {
             ...option,
             title: constantText(py, "SERVICE_TITLE_MACOS"),
             text: constantText(py, "SERVICE_TEXT_MACOS"),
+            notice_detail: constantText(py, "SERVICE_BACKGROUND_DETAIL_MACOS"),
             warning: constantText(py, "SERVICE_WARNING_MACOS"),
             toggles: [],
           }

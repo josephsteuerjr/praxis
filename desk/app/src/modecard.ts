@@ -407,6 +407,12 @@ export function modeCard(
   // они уедут в файл ровно такими, какими лежали.
   const option = live.service;
   svcBox.append(el("h4", "", option?.title || live.service_title || (posix ? "Служба" : "Служба Windows")));
+  if (option?.notice) {
+    const notice = el("p", "service-notice");
+    notice.append(el("strong", "", option.notice));
+    if (option.notice_detail) notice.append(el("span", "field-hint", option.notice_detail));
+    svcBox.append(notice);
+  }
   const svcText = option?.text || live.service_text || "";
   if (svcText) svcBox.append(el("p", "choice-text", svcText));
   else {
