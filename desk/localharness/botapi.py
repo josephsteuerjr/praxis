@@ -38,6 +38,7 @@ import threading
 
 import boot
 import telegram_proxy
+import addressing
 import time
 import urllib.error
 import urllib.parse
@@ -540,6 +541,14 @@ class BotTransport:
         self._thread = None
         self._start_lock = threading.Lock()
         self._wake_senders: dict[str, tuple[str, str]] = {}
+        # 07.10 (Джарвис): приоритетная реплика чата — следующий ход этого чата
+        # открывается баннером «ПРИОРИТЕТ». Ключ чата: пока ход не начался;
+        # handle_bot снимает флаг себе в locals ДО чтения очереди сообщений.
+        self._wake_priority: dict[str, bool] = {}
+        # 07.10: гист приоритетной реплики — для баннера фокус-окна. История
+        # хода несёт строки «Имя: текст», парсить её задним числом ненадёжно;
+        # гист фиксируется в момент приёма, вместе с флагом.
+        self._wake_priority_gist: dict[str, str] = {}
         self._stop = threading.Event()
         self.sent_now: list[tuple[str, str]] = []   # (chat_id, text) этого хода
         if not self.owner_id and self.allow_from != "any":
@@ -596,9 +605,17 @@ class BotTransport:
             if re.search(r"(?<![\w@])/[A-Za-z0-9_]+@" + re.escape(username)
                          + r"(?![\w@])", str(text or ""), re.IGNORECASE):
                 return True
-        return any(re.search(r"(?<![\w@])" + re.escape(name) + r"(?![\w@])",
-                             str(text or ""), re.IGNORECASE)
-                   for name in set(names) if name)
+        strict = any(re.search(r"(?<![\w@])" + re.escape(name) + r"(?![\w@])",
+                               str(text or ""), re.IGNORECASE)
+                     for name in set(names) if name)
+        if strict:
+            return True
+        # 07.10 (Джарвис): имя «не в чистом виде» — рычаг PRAXIS_WAKE_ON_NAME.
+        # loose: «Джарвиса»/«джарвисом» будят (строгий матчинг их пропускал —
+        # в общем чате агент молчал, пока владелец не реплайнул). off = прежнее.
+        if addressing.wake_on_name() == "loose":
+            return addressing.name_matches_loose(text, [n for n in names if n])
+        return False
 
     def wake_sender(self, chat_id: str) -> tuple[str, str]:
         with self._queue_lock:
@@ -842,6 +859,12 @@ class BotTransport:
                 log.debug("крючок приёма (уведомления) упал [%s]", conversation, exc_info=True)
         with self._queue_lock:
             self._wake_senders[conversation] = (sender_name, sender_id)
+            # 07.10: приоритетная реплика (префикс в начале) поднимает следующий
+            # ход чата с баннером; флаг ест и не-владелец, если гейт пустил.
+            urgent, gist = addressing.split_priority(text)
+            if urgent:
+                self._wake_priority[conversation] = True
+                self._wake_priority_gist[conversation] = str(gist)[:600]
         self._enqueue(conversation)
 
     def is_allowed(self, sender_id) -> bool:
@@ -875,9 +898,13 @@ class BotTransport:
 
     def _addressed(self, message: dict) -> bool:
         """В группе ход начинается с актуального имени, @username или своего reply.
-        Всё остальное она видит памятью, но не отвечает — v1 без самоинициативы."""
+        Всё остальное она видит памятью, но не отвечает — v1 без самоинициативы.
+        07.10 (Джарвис): приоритетный префикс в начале реплики тоже будит ход —
+        срочная реплика не должна ждать, пока кто-то догадается @унуть."""
         text = str(message.get("text") or message.get("caption") or "")
         if self.is_named(text):
+            return True
+        if addressing.split_priority(text)[0]:
             return True
         replied = (message.get("reply_to_message") or {}).get("from") or {}
         own_id = str(self.me.get("id") or "")

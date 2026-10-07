@@ -537,7 +537,8 @@ def _read_passport(home: Path) -> str:
         return ""
 
 
-def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = ()) -> "object | None":
+def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (),
+              priority_note: str = "") -> "object | None":
     """Один её ход с уже собранным контекстом. -> envelope или None (упал).
 
     `media_refs` — картинки из окна (0.5.0); без них вызов дерева тот же, что и
@@ -568,9 +569,14 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
         # передаёт его «да» исполнителю обновлений. Служебные ходы (рождение, будильник,
         # отчёт об обновлении) тоже идут с owner=True в окне, но их повод пишет «Hélène».
         _owner_words[0] = bool(getattr(ctx, "owner", False)) and speaker != updates.SYSTEM_SPEAKER
+        # 07.10 (Джарвис): приоритетный баннер встаёт ПЕРВОЙ строкой orient —
+        # кадр открывается «сработал приоритет, требуется действие».
+        turn_orient = orient
+        if priority_note:
+            turn_orient = str(priority_note) + "\n\n" + str(orient or "")
         envelope = _agent.voice_turn_envelope(
             chat_id, convo, speaker, ctx=ctx, history=history, current_text=current,
-            orient=orient, **extra)
+            orient=turn_orient, **extra)
         return envelope
     except Exception:
         log.exception("ход упал в дереве [%s]", chat_id)
@@ -930,6 +936,18 @@ def handle_bot(chat_id: str) -> None:
     is_dm = bool(meta.get("is_dm", True))
     sender_name, sender_id = _bot.wake_sender(chat_id)
     owner = bool(_bot.owner_id) and str(sender_id) == str(_bot.owner_id)
+    # 07.10 (Джарвис): фокус-окно. Приоритетная реплика (префикс) открывает
+    # кадр секцией «ПРИОРИТЕТ — требуется действие»: в любом состоянии следующим
+    # ходом агент видит, что сработал приоритет и что его просят сделать.
+    # Гист зафиксирован в момент приёма (история хода несёт «Имя: текст» —
+    # парсить её задним числом ненадёжно).
+    priority_note = ""
+    with _bot._queue_lock:
+        if _bot._wake_priority.pop(str(chat_id), False):
+            gist = str(_bot._wake_priority_gist.pop(str(chat_id), "") or "")
+            if gist:
+                import addressing as _addressing
+                priority_note = _addressing.priority_banner(sender_name, gist)
     convo = "\n".join(_bot.rooms.lines(chat_id, _last_n()))
     if not convo.strip():
         return
@@ -944,6 +962,18 @@ def handle_bot(chat_id: str) -> None:
                                 addressed=True,
                                 title=_room_title(chat_id) or str(chat_id))
     _bot.sent_now.clear()
+    # 07.10: приоритетный баннер — в orient ЭТОГО хода (первая секция кадра).
+    # Реплику ищем в истории хода: префикс остаётся в тексте для людей, здесь
+    # вырезаем его для сути. Не нашли (флаг устарел) — баннера нет, ход обычный.
+    if priority_note:
+        import addressing as _addressing
+        for line in reversed(convo.splitlines()):
+            urgent, gist = _addressing.split_priority(line)
+            if urgent and gist:
+                priority_note = _addressing.priority_banner(sender_name, gist)
+                break
+        else:
+            priority_note = ""
     started = time.time()
     _set_busy(True, chat_id=chat_id)
     # 25.09 (F): видно, что агент думает, — «печатает…» всё время хода (раньше один
@@ -954,7 +984,8 @@ def handle_bot(chat_id: str) -> None:
                                  status=bool(_status_message)).start()
     failed = ""
     try:
-        envelope = _run_turn(chat_id, convo, sender_name, ctx)
+        envelope = _run_turn(chat_id, convo, sender_name, ctx,
+                             priority_note=priority_note)
         if envelope is None:
             failed = "ход не дошёл до конца"
     except BaseException as exc:
