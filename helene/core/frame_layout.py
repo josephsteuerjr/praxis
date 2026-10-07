@@ -1122,7 +1122,7 @@ def _dialogue(snap: dict) -> list[Own]:
     if available is not None and int(available) > delivered:
         bits.append(own("из " + str(int(available)) + " — ОБРЕЗАНО сверху"))
     elif available is not None:
-        bits.append(own("это весь сохранённый разговор"))
+        bits.append(own("полнота архива не установлена"))
     limit = snap.get("tape_limit")
     if limit is not None:
         bits.append(own("предел выборки " + str(int(limit))))
